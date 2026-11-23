@@ -205,6 +205,29 @@ const notesClient = HttpApiClient.make(api, {
   )
 );
 
+/** A client method, sent the request parts `operationRequest` builds. */
+interface RequestSender {
+  send(request: OperationRequest): Effect.Effect<string, unknown>;
+}
+
+/**
+ * Each name's client method, sent the request parts `operationRequest` builds
+ * for that name's route.
+ */
+const sendersOf = (
+  client: Effect.Success<typeof notesClient>
+): { readonly [Name in keyof NoteOperations]: RequestSender } => ({
+  // listNotes takes no input, so its request carries no parts.
+  listNotes: { send: () => client.listNotes() },
+  getNote: { send: client.getNote },
+  searchNotes: { send: client.searchNotes },
+  createNote: { send: client.createNote },
+  editNote: { send: client.editNote },
+  archiveNote: { send: client.archiveNote },
+  renameNote: { send: client.renameNote },
+  previewNote: { send: client.previewNote },
+});
+
 /** What the client sends for `name`'s input, and what the operation receives. */
 const call = <Name extends keyof NoteOperations>(
   name: Name,
@@ -212,12 +235,7 @@ const call = <Name extends keyof NoteOperations>(
 ) =>
   notesClient.pipe(
     Effect.flatMap((client) =>
-      // Each name's method takes that operation's request parts.
-      (
-        client[name] as unknown as (
-          request: OperationRequest
-        ) => Effect.Effect<string, unknown>
-      )(operationRequest(Notes, name, input))
+      sendersOf(client)[name].send(operationRequest(Notes, name, input))
     ),
     Effect.runPromise
   );
