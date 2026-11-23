@@ -46,11 +46,7 @@ export const emailTriggerFieldCatalogue: Readonly<
   "unlimited-ending": unlimitedEndingFields,
 };
 
-export const isEmailTriggerEvent = (
-  value: unknown
-): value is EmailTriggerEvent =>
-  typeof value === "string" &&
-  (emailTriggerEvents as readonly string[]).includes(value);
+export const isEmailTriggerEvent = Schema.is(EmailTriggerEvent);
 
 export const emailTriggerFields = (
   trigger: EmailTriggerEvent
@@ -75,8 +71,8 @@ export const isEmailTriggerUrlField = (
   field: EmailTriggerField | undefined
 ): boolean => field !== undefined && field.kind === "url";
 
-const isHttpsUrl = (value: unknown): value is string =>
-  typeof value === "string" && URL.parse(value)?.protocol === "https:";
+const isHttpsUrl = (value: Schema.Json): boolean =>
+  Predicate.isString(value) && URL.parse(value)?.protocol === "https:";
 
 const matchesFieldValue = (
   field: EmailTriggerField,

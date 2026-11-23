@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import {
   type AudienceAttributeDefinition,
   type AudienceAttributeKind,
+  type AudienceConditionEncodedIn,
   type AudienceConditionIn,
   booleanAttribute,
   campaignSourceParam,
@@ -319,6 +320,9 @@ export type AudienceAttributeOfKind<Kind extends AudienceAttributeKind> = {
 }[AudienceAttribute];
 
 export type AudienceCondition = AudienceConditionIn<AudienceAttributeCatalogue>;
+/** A catalogued condition as the wire carries it. */
+export type AudienceConditionEncoded =
+  AudienceConditionEncodedIn<AudienceAttributeCatalogue>;
 
 /** The condition shape of one attribute. */
 export type AudienceConditionOf<Attribute extends AudienceAttribute> = Extract<
@@ -364,28 +368,30 @@ export const makeAudienceFilterSchemas = <
     readonly extraLeaves?: readonly Schema.Codec<Leaf, LeafEncoded>[];
   }
 ) => {
-  type Condition = AudienceConditionIn<Catalogue>;
-  type Node = Condition | Leaf;
-  const definitions: readonly AudienceAttributeDefinition[] =
-    Object.values(catalogue);
-  // Each entry's shapes decode to its own attribute's conditions.
-  const members = definitions.flatMap(
+  type Entry = Catalogue[keyof Catalogue];
+  type Member = Entry["conditions"][number];
+  type Node = Member["Type"] | Leaf;
+  type NodeEncoded = Member["Encoded"] | LeafEncoded;
+  type Filter = Schema.Codec<
+    AudienceFilterOf<Node>,
+    AudienceFilterOf<NodeEncoded>
+  >;
+  const entries: readonly Entry[] = Object.values(catalogue);
+  const members: readonly Member[] = entries.flatMap(
     ({ conditions }) => conditions
-  ) as readonly Schema.Codec<Condition>[];
-  // Like the catalogue's members, the tree is typed by its decoded shapes.
-  const extraLeaves = (options?.extraLeaves ??
-    []) as unknown as readonly Schema.Codec<Leaf>[];
+  );
+  const extraLeaves = options?.extraLeaves ?? [];
   const group = Schema.TaggedStruct("Group", {
     operator: Schema.Literals(["and", "or"]),
-    filters: Schema.Array(
-      Schema.suspend((): Schema.Codec<AudienceFilterOf<Node>> => filter)
-    ),
+    filters: Schema.Array(Schema.suspend((): Filter => filter)),
   });
-  const filter: Schema.Codec<AudienceFilterOf<Node>> = Schema.Union<
-    readonly Schema.Codec<AudienceFilterOf<Node>>[]
-  >([...members, ...extraLeaves, group]).annotate({
+  const filter: Filter = Schema.Union([
+    ...members,
+    ...extraLeaves,
+    group,
+  ]).annotate({
     identifier: "AudienceFilter",
-    description: `Nested AND/OR tree of attribute conditions: ${definitions
+    description: `Nested AND/OR tree of attribute conditions: ${entries
       .map(({ label }) => label.toLowerCase())
       .join(", ")}.`,
   });
@@ -395,12 +401,17 @@ export const makeAudienceFilterSchemas = <
 const schemas = makeAudienceFilterSchemas(audienceAttributeCatalogue);
 
 /** One condition on one catalogued customer attribute. */
-export const AudienceCondition: Schema.Codec<AudienceCondition> =
-  schemas.condition;
+export const AudienceCondition: Schema.Codec<
+  AudienceCondition,
+  AudienceConditionEncoded
+> = schemas.condition;
 
 /**
  * The filter tree a campaign audience selects its recipients with. Workspace
  * stores and evaluates this schema, and the administration API carries it, so
  * it has one definition.
  */
-export const AudienceFilter: Schema.Codec<AudienceFilter> = schemas.filter;
+export const AudienceFilter: Schema.Codec<
+  AudienceFilter,
+  AudienceFilterOf<AudienceConditionEncoded>
+> = schemas.filter;

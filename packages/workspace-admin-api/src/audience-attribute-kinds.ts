@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Schema, Struct } from "effect";
 import { AdministrationCampaignId } from "./campaign-identifiers";
 import type { AdministrationCampaignLocale } from "./campaign-locale-and-purpose";
 import { DatePeriod } from "./date-period";
@@ -308,8 +308,13 @@ type ProductFields<Product extends boolean> = Product extends true
   ? { readonly product: typeof productField }
   : Record<never, never>;
 
-const productFields = <Product extends boolean>(product: Product | undefined) =>
-  (product ? { product: productField } : {}) as ProductFields<Product>;
+/** An omitted reservation-product flag infers `Product` as `false`. */
+function productFields<Product extends boolean>(
+  product: Product | undefined
+): ProductFields<Product>;
+function productFields(product: boolean | undefined): ProductFields<boolean> {
+  return product ? { product: productField } : {};
+}
 
 type Simplify<T> = { readonly [Key in keyof T]: T[Key] };
 
@@ -318,20 +323,32 @@ type CountParamsFields<
   Product extends boolean,
 > = Simplify<
   {
-    readonly [Param in keyof Params]: Params[Param]["field"];
+    readonly [Param in keyof Params]: Struct.Apply<
+      AudienceParamField,
+      Params[Param]
+    >;
   } & ProductFields<Product>
 >;
+
+/** The schema field of each param, preserving its param's key. */
+interface AudienceParamField extends Struct.Lambda {
+  <Param extends AudienceParam>(param: Param): Param["field"];
+  readonly "~lambda.out": this["~lambda.in"] extends AudienceParam
+    ? this["~lambda.in"]["field"]
+    : never;
+}
+
+const audienceParamField = Struct.lambda<AudienceParamField>(
+  (param) => param.field
+);
 
 const countParamsFields = <Params extends CountParams, Product extends boolean>(
   params: Params,
   product: Product | undefined
-) =>
-  ({
-    ...Object.fromEntries(
-      Object.entries(params).map(([key, param]) => [key, param.field])
-    ),
-    ...productFields(product),
-  }) as CountParamsFields<Params, Product>;
+): CountParamsFields<Params, Product> => ({
+  ...Struct.map(params, audienceParamField),
+  ...productFields(product),
+});
 
 /**
  * A count attribute, such as reservations or campaign emails received. Its
@@ -402,6 +419,22 @@ type DateParamsFields<Product extends boolean> = Product extends true
     }
   : Record<never, never>;
 
+/** An omitted reservation-product flag infers `Product` as `false`. */
+function dateParamsFields<Product extends boolean>(
+  product: Product | undefined
+): DateParamsFields<Product>;
+function dateParamsFields(
+  product: boolean | undefined
+): DateParamsFields<boolean> {
+  return product
+    ? {
+        params: Schema.optionalKey(
+          Schema.Struct({ product: ReservationProductFilter })
+        ),
+      }
+    : {};
+}
+
 /**
  * A date attribute, such as the last visit. A condition puts its value in a
  * period, outside one, or requires it to be missing. The summary reads
@@ -430,15 +463,7 @@ export const dateAttribute = <
       | { readonly operator: "none" };
   }
 ) => {
-  const params = (
-    definition.reservationProduct
-      ? {
-          params: Schema.optionalKey(
-            Schema.Struct({ product: ReservationProductFilter })
-          ),
-        }
-      : {}
-  ) as DateParamsFields<Product>;
+  const params = dateParamsFields(definition.reservationProduct);
   return {
     kind: "date" as const,
     attribute,
@@ -612,12 +637,20 @@ type ConditionBase = {
   readonly _tag: "Condition";
 };
 
+/** A choice, period, campaign or product value of a count condition's params. */
+type AudienceCountParamValue =
+  | string
+  | DatePeriod
+  | CampaignEmailSource
+  | ReservationProductFilter
+  | undefined;
+
 /** What every condition of a kind has, whatever its attribute. */
 export type AudienceCountCondition = ConditionBase & {
   readonly params: {
     readonly period: DatePeriod;
     readonly product?: ReservationProductFilter;
-    readonly [param: string]: unknown;
+    readonly [param: string]: AudienceCountParamValue;
   };
   readonly operator: AudienceCountOperator;
   readonly value: number;
@@ -730,6 +763,17 @@ export type AudienceConditionIn<
   },
 > = {
   readonly [Attribute in keyof Catalogue]: Catalogue[Attribute]["conditions"][number]["Type"];
+}[keyof Catalogue];
+
+/** The encoded form of a catalogue's conditions, before brands apply. */
+export type AudienceConditionEncodedIn<
+  Catalogue extends {
+    readonly [Attribute in keyof Catalogue]: {
+      readonly conditions: ConditionShapes;
+    };
+  },
+> = {
+  readonly [Attribute in keyof Catalogue]: Catalogue[Attribute]["conditions"][number]["Encoded"];
 }[keyof Catalogue];
 
 /** The condition defaults of one entry, for a new condition. */
