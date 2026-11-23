@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { LoggerProvider } from "@opentelemetry/api-logs";
 import type { registerOTel as registerVercelOTel } from "@vercel/otel";
+import { Layer } from "effect";
 
 // Nothing here reaches a real OpenTelemetry or PostHog endpoint: the OTel
 // registration, the global logger provider and the Workspace telemetry are
@@ -28,10 +29,29 @@ const workspaceLoggerProvider = mock(() =>
 const workspaceTelemetry = await import(
   "./shared/backend/observability/workspace-telemetry"
 );
+// The standalone observability a Cloud Logging log format gives; undefined
+// for the default logfmt.
+const syntheticStandaloneObservability = Layer.empty;
+let cloudLoggingFormat = false;
+const workspaceStandaloneObservabilityLive = mock(() =>
+  cloudLoggingFormat ? syntheticStandaloneObservability : undefined
+);
 mock.module("./shared/backend/observability/workspace-telemetry", () => ({
   ...workspaceTelemetry,
   workspaceLoggerProvider,
   workspaceOTelRegistration,
+  workspaceStandaloneObservabilityLive,
+}));
+
+const setStandaloneWorkspaceObservability = mock(
+  (_layer: Layer.Layer<never>) => undefined
+);
+const standaloneRunner = await import(
+  "./shared/backend/standalone-workspace-effect"
+);
+mock.module("./shared/backend/standalone-workspace-effect", () => ({
+  ...standaloneRunner,
+  setStandaloneWorkspaceObservability,
 }));
 
 const installRuntimeShutdown = mock(
@@ -66,6 +86,7 @@ beforeEach(() => {
   onRuntimeShutdown.mockClear();
   registerOTel.mockClear();
   setGlobalLoggerProvider.mockClear();
+  setStandaloneWorkspaceObservability.mockClear();
   workspaceLoggerProvider.mockClear();
 });
 
@@ -115,6 +136,30 @@ describe("register", () => {
     expect(setGlobalLoggerProvider).toHaveBeenCalledWith(
       syntheticLoggerProvider as never
     );
+  });
+
+  test("gives standalone runs the Cloud Logging format on any host that asks for it", async () => {
+    process.env.NEXT_RUNTIME = "nodejs";
+    cloudLoggingFormat = true;
+
+    try {
+      await register();
+    } finally {
+      cloudLoggingFormat = false;
+    }
+
+    expect(setStandaloneWorkspaceObservability).toHaveBeenCalledWith(
+      syntheticStandaloneObservability
+    );
+    expect(installRuntimeShutdown).not.toHaveBeenCalled();
+  });
+
+  test("keeps standalone runs on logfmt by default", async () => {
+    process.env.NEXT_RUNTIME = "nodejs";
+
+    await register();
+
+    expect(setStandaloneWorkspaceObservability).not.toHaveBeenCalled();
   });
 
   test("leaves shutdown to Vercel on the default host", async () => {

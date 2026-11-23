@@ -151,7 +151,7 @@ export const WorkspaceObservabilityLive: Layer.Layer<never> = Layer.unwrap(
 );
 
 /**
- * Observability for standalone runs in a container that logs Cloud Logging
+ * Observability for standalone runs of a process that logs Cloud Logging
  * JSON: the censoring structured console logger, without the PostHog
  * export, and the tracer over the registered provider, so a record carries
  * the trace and span it was written in. Undefined for any other log format,

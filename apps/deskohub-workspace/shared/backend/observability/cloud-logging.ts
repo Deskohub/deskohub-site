@@ -70,6 +70,8 @@ const logAnnotations = (options: Logger.Options<unknown>) =>
  */
 export interface CloudLoggingRecord {
   readonly severity: string;
+  /** The stable name of what happened, for queries and alerts. */
+  readonly event: string;
   readonly message: string;
   readonly time: string;
   readonly "logging.googleapis.com/labels": CloudLoggingLabels;
@@ -111,6 +113,21 @@ const logSpanDurations = (options: Logger.Options<unknown>) => {
 };
 
 /**
+ * The record's stable event name: the call's `event` annotation, such as
+ * `runtime.shutdown.started`, or else its static message as a key, such as
+ * `checkout_provider_slow` for "Checkout provider slow.".
+ */
+const eventName = (annotations: LogAnnotations, message: string) => {
+  const annotated = annotations.event;
+  if (Predicate.isString(annotated) && annotated) return annotated;
+  const key = message
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return key || "log";
+};
+
+/**
  * The censored structured record of one log call. The message is the static
  * text of the call; values the call passes beside it go under `details`.
  */
@@ -124,10 +141,12 @@ export const cloudLoggingRecord = (
     : [options.message];
   const details = parts.filter((part) => !Predicate.isString(part));
   const annotations = logAnnotations(options);
+  const message = parts.filter(Predicate.isString).join(" ");
 
   return {
     severity: cloudLoggingSeverity(options.logLevel),
-    message: parts.filter(Predicate.isString).join(" "),
+    event: eventName(annotations, message),
+    message,
     time: options.date.toISOString(),
     "logging.googleapis.com/labels": {
       environment: identity.deploymentStage,
@@ -150,6 +169,7 @@ export const cloudLoggingRecord = (
 const unserializableRecord = (record: CloudLoggingRecord) =>
   JSON.stringify({
     severity: record.severity,
+    event: record.event,
     message: record.message,
     time: record.time,
     "logging.googleapis.com/labels": record["logging.googleapis.com/labels"],

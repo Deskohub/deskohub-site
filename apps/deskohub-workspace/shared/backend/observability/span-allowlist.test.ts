@@ -124,6 +124,13 @@ const recordUnsafeSpans = (provider: BasicTracerProvider) => {
       "http.status_code": 200,
     }
   );
+  // Next.js names a request by its path before it knows the route; a short
+  // parameter looks like a static segment.
+  record("GET /api/customers/sample-slug", {
+    "http.method": "GET",
+    "http.route": "/api/customers/[customerId]",
+  });
+  record("POST /api/customers/sample-slug", {});
   // A client address or credential where only a host belongs.
   record("http.client POST", {
     "http.request.method": "POST",
@@ -179,7 +186,8 @@ describe("Workspace span allowlist", () => {
     const spans = await recordedSpans();
     const exported = exportedFields(spans);
 
-    expect(spans).toHaveLength(9);
+    expect(spans).toHaveLength(11);
+    expect(exported).not.toContain("sample-slug");
     for (const marker of leakingMarkers) {
       expect(exported).not.toContain(marker);
     }
@@ -196,6 +204,8 @@ describe("Workspace span allowlist", () => {
       sql,
       client,
       fetchSpan,
+      routed,
+      unrouted,
       invalidHost,
     ] = await recordedSpans();
 
@@ -248,6 +258,8 @@ describe("Workspace span allowlist", () => {
       "net.peer.port": 443,
       "http.status_code": 200,
     });
+    expect(routed?.name).toBe("GET /api/customers/[customerId]");
+    expect(unrouted?.name).toBe("span");
     expect(invalidHost?.attributes).toEqual({
       "http.request.method": "POST",
     });

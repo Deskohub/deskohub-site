@@ -1,6 +1,7 @@
 import type {
   Attributes,
   AttributeValue,
+  SpanContext,
   SpanStatus,
   TimeInput,
 } from "@opentelemetry/api";
@@ -283,18 +284,33 @@ const stringAttribute = (attributes: Attributes, ...keys: string[]) => {
   return undefined;
 };
 
+const httpMethodName = /^(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) /;
+
 /**
- * The span's own name when the allowlist accepts it, else the most specific
- * stable name its sanitized attributes support: method and route template,
- * Next.js span type, method and provider host, method, or `span`.
+ * Whether `name` names an HTTP request by its path, such as Next.js's
+ * `GET /cs-CZ/reservation/abc` before it knows the route. Its static-looking
+ * segments can still be path parameters, so only a route template may stand
+ * in for the path.
+ */
+const isRequestPathName = (name: string, method: string | undefined) =>
+  name.split(" ").some((word) => word.includes("/")) &&
+  (method !== undefined || httpMethodName.test(name));
+
+/**
+ * The span's own name when the allowlist accepts it and it is no request
+ * path, else the most specific stable name its sanitized attributes support:
+ * method and route template, Next.js span type, method and provider host,
+ * method, or `span`.
  */
 const allowedSpanName = (name: string, attributes: Attributes) => {
-  if (isAllowedSpanName(name)) return name;
   const method = stringAttribute(
     attributes,
     "http.request.method",
     "http.method"
   );
+  if (isAllowedSpanName(name) && !isRequestPathName(name, method)) {
+    return name;
+  }
   const route = stringAttribute(attributes, "http.route", "next.route");
   const host = stringAttribute(attributes, "server.address", "net.peer.name");
   const candidates = [
@@ -392,6 +408,16 @@ const allowedResourceAttributes = new Set([
   "telemetry.sdk.version",
 ]);
 
+/**
+ * A span context with its trace and span ids and flags, without its W3C
+ * trace state: a caller's `tracestate` header sets it, and its entries can
+ * hold any text, URLs among them.
+ */
+const withoutTraceState = ({
+  traceState: _traceState,
+  ...context
+}: SpanContext): SpanContext => context;
+
 const allowlistedCopy = (attributes: Attributes | undefined) => {
   const copy: Attributes = { ...attributes };
   sanitizeAttributesInPlace(copy);
@@ -434,17 +460,19 @@ const toAllowlistedSpan = (span: ReadableSpan): ReadableSpan => {
     kind: span.kind,
     links: span.links.map((link) => ({
       ...link,
+      context: withoutTraceState(link.context),
       attributes: allowlistedCopy(link.attributes),
     })),
     name: allowedSpanName(span.name, attributes),
-    parentSpanContext: span.parentSpanContext,
+    parentSpanContext:
+      span.parentSpanContext && withoutTraceState(span.parentSpanContext),
     resource: resourceFromAttributes(
       resourceAttributes,
       span.resource.schemaUrl
         ? { schemaUrl: span.resource.schemaUrl }
         : undefined
     ),
-    spanContext: () => span.spanContext(),
+    spanContext: () => withoutTraceState(span.spanContext()),
     startTime: span.startTime,
     status: { code: span.status.code },
   };

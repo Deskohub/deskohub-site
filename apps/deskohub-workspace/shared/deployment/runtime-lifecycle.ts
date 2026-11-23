@@ -162,6 +162,9 @@ const drainPending = (lifecycle: RuntimeLifecycle): Effect.Effect<void> =>
         );
   });
 
+/** Names a shutdown log record's event for structured log queries. */
+const shutdownEvent = (event: string) => Effect.annotateLogs({ event });
+
 const runHook = (hook: RuntimeShutdownHook) =>
   Effect.tryPromise({
     try: hook.run,
@@ -170,7 +173,7 @@ const runHook = (hook: RuntimeShutdownHook) =>
     Effect.catchTag("RuntimeShutdownHookError", ({ hook: name }) =>
       Effect.logWarning("Workspace runtime shutdown hook failed.", {
         hook: name,
-      })
+      }).pipe(shutdownEvent("runtime.shutdown.hook_failed"))
     )
   );
 
@@ -189,7 +192,7 @@ const runStage = (
       orElse: () =>
         Effect.logWarning("Workspace runtime shutdown stage ran out of time.", {
           stage,
-        }),
+        }).pipe(shutdownEvent("runtime.shutdown.stage_timed_out")),
     })
   );
 
@@ -203,7 +206,7 @@ export const shutdownRuntime = Effect.fn("runtime.shutdown")(function* (
   const lifecycle = runtimeLifecycle();
   yield* Effect.logInfo("Workspace runtime shutdown started.", {
     pending: lifecycle.pending.size,
-  });
+  }).pipe(shutdownEvent("runtime.shutdown.started"));
   yield* drainPending(lifecycle).pipe(
     Effect.timeoutOrElse({
       duration: budget.drain,
@@ -211,12 +214,14 @@ export const shutdownRuntime = Effect.fn("runtime.shutdown")(function* (
         Effect.logWarning(
           "Workspace runtime shutdown stopped waiting for in-flight work.",
           { pending: lifecycle.pending.size }
-        ),
+        ).pipe(shutdownEvent("runtime.shutdown.drain_timed_out")),
     })
   );
   yield* runStage(lifecycle, "flush", budget.flush);
   yield* runStage(lifecycle, "close", budget.close);
-  yield* Effect.logInfo("Workspace runtime shutdown finished.");
+  yield* Effect.logInfo("Workspace runtime shutdown finished.").pipe(
+    shutdownEvent("runtime.shutdown.finished")
+  );
 });
 
 export interface RuntimeShutdownInstallation {

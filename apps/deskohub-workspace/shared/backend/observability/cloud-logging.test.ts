@@ -61,6 +61,22 @@ describe("cloudLoggingRecord", () => {
     expect(Number.isNaN(Date.parse(record?.time ?? ""))).toBe(false);
   });
 
+  test("names each record's event: its event annotation, else its static message", async () => {
+    const records = await recordsOf(
+      Effect.all([
+        Effect.logInfo("Workspace runtime shutdown started.").pipe(
+          Effect.annotateLogs({ event: "runtime.shutdown.started" })
+        ),
+        Effect.logInfo("Checkout provider slow.", { attempt: 2 }),
+      ])
+    );
+
+    expect(records.map(({ event }) => event)).toEqual([
+      "runtime.shutdown.started",
+      "checkout_provider_slow",
+    ]);
+  });
+
   test("links the record to the active trace and span", async () => {
     let spanIds: { traceId: string; spanId: string } | undefined;
     const [record] = await recordsOf(

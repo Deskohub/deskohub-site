@@ -27,12 +27,14 @@ export async function register() {
   const loggerProvider = workspaceLoggerProvider();
   if (loggerProvider) logs.setGlobalLoggerProvider(loggerProvider);
 
-  // A container keeps serving until SIGTERM; Vercel ends invocations itself.
-  if (env.WORKSPACE_RUNTIME_HOST !== "container") return;
+  // Standalone runs log in the format WORKSPACE_LOG_FORMAT names, on any host.
   const standaloneObservability = workspaceStandaloneObservabilityLive();
   if (standaloneObservability) {
     setStandaloneWorkspaceObservability(standaloneObservability);
   }
+
+  // A container keeps serving until SIGTERM; Vercel ends invocations itself.
+  if (env.WORKSPACE_RUNTIME_HOST !== "container") return;
   // Loaded here, not at the top: only a container flushes analytics itself.
   const { flushServerAnalytics } = await import(
     "./shared/backend/analytics/analytics-event-delivery.service"
