@@ -277,7 +277,7 @@ describe("LottieDocument", () => {
 
   test("reads a loading die document's fields by name", () => {
     const field: string = "fr";
-    const document: LottieDocument = brandDocument("tumble");
+    const document = brandDocument("tumble");
     expect(document[field]).toBe(loadingDieTiming.framesPerSecond);
   });
 });
