@@ -300,4 +300,78 @@ describe("EdgeSecurityPolicy provider", () => {
     });
     expect(Exit.isSuccess(rerules) && rerules.value).toBeUndefined();
   });
+  test("clears WAF exclusions the edge never declares", async () => {
+    const live = converged(policyProps(true));
+    const rules = live.rules as ReadonlyArray<Live>;
+    const compute = fake({
+      existing: [
+        {
+          ...live,
+          rules: rules.map((rule) =>
+            rule.priority === 1000
+              ? {
+                  ...rule,
+                  preconfiguredWafConfig: {
+                    exclusions: [{ targetRuleSet: "sqli-v33-stable" }],
+                  },
+                }
+              : rule
+          ),
+        },
+      ],
+    });
+    const exit = await run(compute, (provider) =>
+      reconcile(provider, policyProps(true))
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(mutations(compute.calls)).toEqual([
+      "POST workspace-sandbox-edge/patchRule?priority=1000",
+    ]);
+    const patch = compute.calls.find((call) =>
+      call.path.endsWith("/patchRule")
+    )?.body;
+    expect(patch?.preconfiguredWafConfig).toEqual({ exclusions: [] });
+  });
+
+  test("an insert conflict with its own policy converges it", async () => {
+    const compute = fake({ appearOnInsert: [converged(policyProps(true))] });
+    const exit = await run(compute, (provider) =>
+      reconcile(provider, policyProps(false))
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(mutations(compute.calls)).toEqual([
+      "POST global/securityPolicies",
+      "POST workspace-sandbox-edge/patchRule?priority=1000",
+    ]);
+  });
+
+  test("never changes or deletes a same-name policy someone else recreated", async () => {
+    const admitted = {
+      project,
+      name: "workspace-sandbox-edge",
+      id: "5678",
+    } as EdgeSecurityPolicyAttributes;
+    const compute = fake({
+      existing: [{ ...converged(policyProps(true), description), id: "9999" }],
+    });
+    const exit = await run(compute, (provider) =>
+      Effect.gen(function* () {
+        const update = yield* Effect.exit(
+          reconcile(provider, policyProps(false), admitted)
+        );
+        yield* provider.delete({
+          ...lifecycleInput,
+          olds: policyProps(true),
+          output: admitted,
+        });
+        return update;
+      })
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(failureTag(exit.value)).toBe("EdgeComputeResourceUnowned");
+    }
+    expect(mutations(compute.calls)).toEqual([]);
+    expect(compute.objects.size).toBe(1);
+  });
 });

@@ -65,8 +65,9 @@ const releasePlatform = (config: WorkspaceStackConfig) =>
  * only the release command's own runs touch the stack. Preview declares no
  * release-owned services and stays lock-free (#1455).
  *
- * A config with `edge` also declares the stage's load balancer, Cloud Armor
- * policy and token-route log exclusion, and outputs `edgeIpAddress`,
+ * Once a release serves, a config with `edge` also declares the stage's
+ * load balancer, Cloud Armor policy and token-route log exclusion in front
+ * of the web service, and outputs `edgeIpAddress`,
  * `edgeProtocol`, `securityPolicy`, `backendServices` and
  * `tokenRouteExclusionFilter`.
  */
@@ -113,15 +114,16 @@ export default Alchemy.Stack(
       // preview stops the deploy before any service is planned.
       Effect.orDie
     );
-    // The edge follows the services: its endpoint group names the declared
-    // web service, so it is created after it and destroyed before it.
+    // The edge fronts the declared web service: its endpoint group names
+    // the service's output, so it is created after it and destroyed before
+    // it. Before the first release serves there is no service and no edge.
     const edge =
-      config.edge === undefined
+      config.edge === undefined || services === undefined
         ? {}
         : yield* declareWorkspaceEdge(
             config,
             config.edge,
-            services?.webServiceId
+            services.webServiceId
           );
     return { ...foundation, services, ...edge };
   })

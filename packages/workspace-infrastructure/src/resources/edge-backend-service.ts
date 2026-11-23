@@ -9,6 +9,7 @@ import {
   computeRoot,
   EdgeComputeResourceNotConverged,
   EdgeComputeResourceUnowned,
+  isAdmitted,
   isOwnedDescription,
   makeEdgeComputeApi,
   ownedDescription,
@@ -299,12 +300,16 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
     const url = backendServiceUrl(project, name);
     const description = yield* ownedDescription(id, news.description);
     const body = desiredBody(news, description);
+    // Every readback must still be the object admitted below.
+    let admittedId: string | undefined;
     const read = (operation: string) =>
-      api
-        .get(resource, url, decodeBackend)
-        .pipe(
-          Effect.flatMap((live) => requirePresent(resource, operation, live))
-        );
+      api.get(resource, url, decodeBackend).pipe(
+        Effect.flatMap((live) => requirePresent(resource, operation, live)),
+        Effect.filterOrFail(
+          (live) => admittedId === undefined || live.id === admittedId,
+          () => new EdgeComputeResourceUnowned({ resource })
+        )
+      );
 
     let live = yield* api.get(resource, url, decodeBackend);
     if (live === undefined) {
@@ -325,13 +330,13 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
       ) {
         return yield* new EdgeComputeResourceUnowned({ resource });
       }
-    } else if (
-      output === undefined &&
-      !(yield* isOwnedDescription(id, live.description))
-    ) {
-      // Never take over a foreign backend; adoption arrives with `output`.
+    } else if (!(yield* isAdmitted(id, output?.id, live))) {
+      // Never take over a foreign backend: adoption admits only the object
+      // it read, by ID.
       return yield* new EdgeComputeResourceUnowned({ resource });
     }
+
+    admittedId = live.id;
 
     if (live.loadBalancingScheme !== news.loadBalancingScheme) {
       return yield* new EdgeComputeResourceNotConverged({
@@ -402,12 +407,16 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
     return toAttributes(project, live);
   }),
 
-  delete: Effect.fn(function* ({ output }) {
+  delete: Effect.fn(function* ({ id, output }) {
     const api = yield* makeEdgeComputeApi();
-    const deleted = yield* api.delete(
-      `Backend service ${output.name}`,
-      backendServiceUrl(output.project, output.name)
-    );
+    const resource = `Backend service ${output.name}`;
+    const url = backendServiceUrl(output.project, output.name);
+    // A same-name object someone else recreated is not ours to delete.
+    const live = yield* api.get(resource, url, decodeBackend);
+    if (live === undefined || !(yield* isAdmitted(id, output.id, live))) {
+      return;
+    }
+    const deleted = yield* api.delete(resource, url);
     if (deleted !== "gone") {
       yield* settleGlobalOperation(output.project, deleted, {
         ignore: ["RESOURCE_NOT_FOUND"],

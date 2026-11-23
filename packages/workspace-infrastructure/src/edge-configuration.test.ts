@@ -69,13 +69,13 @@ const edgeOf = (config: WorkspaceStackConfig): WorkspaceEdgeConfig => {
 const declare = (
   config: WorkspaceStackConfig,
   overrides: Partial<WorkspaceEdgeConfig> = {},
-  webService?: Parameters<typeof declareWorkspaceEdge>[2]
+  webServiceId: Parameters<typeof declareWorkspaceEdge>[2] = "workspace-web"
 ) =>
   evaluate(
     declareWorkspaceEdge(
       config,
       { ...edgeOf(config), ...overrides },
-      webService
+      webServiceId
     )
   );
 
@@ -100,7 +100,6 @@ describe("edge configuration", () => {
     const plainHttp = { domains: [], enableHttps: false };
     for (const input of [
       { ...sandboxConfigInput, edge: plainHttp },
-      { ...sharedInput, stage: "preview", edge: plainHttp },
       { ...sharedInput, stage: "production", edge: plainHttp },
     ]) {
       const rejected = rejection(input);
@@ -120,6 +119,40 @@ describe("edge configuration", () => {
     expect(
       rejection({ ...sandboxConfigInput, edge: { domains: ["Not A Host"] } })
         ?.reason
+    ).toBe("schema");
+  });
+
+  test("declares no edge on preview, which serves no web service yet", () => {
+    expect(
+      rejection({ ...sharedInput, stage: "preview", edge: { domains } })
+    ).toMatchObject({ reason: "edge", paths: ["edge"] });
+  });
+
+  test("routes wildcard hosts only without the managed certificate", () => {
+    const wildcard = ["*.example.com"];
+    expect(
+      decoded({
+        ...proofInput,
+        edge: { domains: wildcard, enableHttps: false },
+      }).edge?.domains
+    ).toEqual(wildcard);
+    expect(
+      rejection({ ...sandboxConfigInput, edge: { domains: wildcard } })
+    ).toMatchObject({ reason: "edge", paths: ["edge.domains.0"] });
+  });
+
+  test("takes any positive auth rate limit", () => {
+    expect(
+      decoded({
+        ...sandboxConfigInput,
+        edge: { domains, authRateLimitPerMinute: 10_001 },
+      }).edge?.authRateLimitPerMinute
+    ).toBe(10_001);
+    expect(
+      rejection({
+        ...sandboxConfigInput,
+        edge: { domains, authRateLimitPerMinute: 0 },
+      })?.reason
     ).toBe("schema");
   });
 

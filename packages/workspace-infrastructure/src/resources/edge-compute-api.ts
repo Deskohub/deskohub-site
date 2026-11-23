@@ -309,3 +309,18 @@ export const requirePresent = <A>(
         })
       )
     : Effect.succeed(live);
+
+/**
+ * Whether this resource may change the live object: it is the very object
+ * Alchemy admitted (created, or adopted after a read), by its Compute ID,
+ * or it carries this resource's ownership marker. A same-name object
+ * someone else recreated has a new ID and no marker.
+ */
+export const isAdmitted = (
+  id: string,
+  admittedId: string | undefined,
+  live: { readonly id?: string; readonly description?: string }
+) =>
+  admittedId !== undefined && admittedId !== "" && live.id === admittedId
+    ? Effect.succeed(true)
+    : isOwnedDescription(id, live.description);

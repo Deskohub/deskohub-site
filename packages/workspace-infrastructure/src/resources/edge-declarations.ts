@@ -12,7 +12,6 @@ import {
   EdgeSecurityPolicy,
   type EdgeSecurityPolicyProps,
 } from "./edge-security-policy";
-import { workspaceWebServiceId } from "./workload-names";
 
 /**
  * The immutable build-asset paths, the only routes the static backend and
@@ -216,8 +215,8 @@ const declaredLink = (resource: string) =>
  * The stage's edge: an external Application Load Balancer in front of the
  * web service with Cloud Armor, opt-in Cloud CDN on static assets and a
  * project exclusion for token-route request logs. The serverless NEG names
- * the declared web service when there is one, so it is created after the
- * service and destroyed before it.
+ * the declared web service's ID output, so it is created after the service
+ * and destroyed before it.
  *
  * By default port 443 serves HTTPS with a managed certificate and port 80
  * only redirects. A sandbox proof without DNS turns HTTPS off: port 80 then
@@ -227,7 +226,7 @@ export const declareWorkspaceEdge = (
   config: WorkspaceStackConfig,
   edge: WorkspaceEdgeConfig,
   /** The declared web service's ID (not its full resource name). */
-  webServiceId: Input<string> | undefined
+  webServiceId: Input<string>
 ) =>
   Effect.gen(function* () {
     const address = yield* Compute.GlobalAddress("EdgeAddress", {
@@ -240,7 +239,7 @@ export const declareWorkspaceEdge = (
         networkEndpointGroupName: edgeResourceName(config, "web"),
         region: config.region,
         networkEndpointType: "SERVERLESS",
-        cloudRun: { service: webServiceId ?? workspaceWebServiceId },
+        cloudRun: { service: webServiceId },
       }
     );
     const policy = yield* EdgeSecurityPolicy(

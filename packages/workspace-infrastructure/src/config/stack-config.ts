@@ -157,15 +157,22 @@ export const GcpProjectNumber = Schema.String.check(
 );
 export type GcpProjectNumber = typeof GcpProjectNumber.Type;
 
-/** A lowercase DNS hostname the edge certificate covers and routes. */
-export const EdgeHostname = Schema.String.check(
+/**
+ * A host the edge's URL map routes: a lowercase DNS hostname, or a
+ * `*.`-prefixed wildcard, which only an edge without its managed
+ * certificate may route.
+ */
+export const EdgeHost = Schema.String.check(
   Schema.isPattern(
-    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
+    /^(?=.{1,253}$)(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
   )
 ).annotate({
-  identifier: "EdgeHostname",
-  description: "A lowercase DNS hostname such as workspace.example.com.",
+  identifier: "EdgeHost",
+  description:
+    "A lowercase hostname such as workspace.example.com, or *.example.com.",
 });
+
+const isWildcardHost = (host: string) => host.startsWith("*.");
 
 /**
  * The only project whose sandbox edge may serve plain HTTP, for a hosted
@@ -183,7 +190,7 @@ export const WorkspaceEdgeConfig = Schema.Struct({
    * Hostnames of the managed certificate and the URL map. Empty only
    * while HTTPS is off, when any host matches.
    */
-  domains: Schema.Array(EdgeHostname),
+  domains: Schema.Array(EdgeHost),
   /**
    * HTTPS with a managed certificate and a port 80 redirect. Only the
    * sandbox stage in `plainHttpEdgeProject` may turn it off.
@@ -200,9 +207,9 @@ export const WorkspaceEdgeConfig = Schema.Struct({
     Schema.withDecodingDefaultKey(Effect.succeed(true))
   ),
   /** Requests per minute per client IP to `/api/auth/` before throttling. */
-  authRateLimitPerMinute: Schema.Int.check(
-    Schema.isBetween({ minimum: 1, maximum: 10_000 })
-  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed(120))),
+  authRateLimitPerMinute: Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(120))
+  ),
 }).annotate({ identifier: "WorkspaceEdgeConfig" });
 export type WorkspaceEdgeConfig = typeof WorkspaceEdgeConfig.Type;
 
@@ -393,13 +400,17 @@ export const decodeWorkspaceStackConfig = (input: unknown) =>
   });
 
 /**
- * Plain HTTP is a sandbox proof mode in its approved project only, and an
- * HTTPS edge needs at least one hostname for its certificate.
+ * Preview declares no web service for an edge to front (#1455). Plain HTTP
+ * is a sandbox proof mode in its approved project only. An HTTPS edge needs
+ * at least one hostname, and no wildcard, for its managed certificate.
  */
 const edgeProblems = (config: WorkspaceStackConfig) => {
   const edge = config.edge;
   if (edge === undefined) {
     return [];
+  }
+  if (config.stage === "preview") {
+    return ["edge"];
   }
   if (!edge.enableHttps) {
     return config.stage === "sandbox" &&
@@ -407,7 +418,12 @@ const edgeProblems = (config: WorkspaceStackConfig) => {
       ? []
       : ["edge.enableHttps"];
   }
-  return edge.domains.length > 0 ? [] : ["edge.domains"];
+  if (edge.domains.length === 0) {
+    return ["edge.domains"];
+  }
+  return edge.domains.flatMap((host, index) =>
+    isWildcardHost(host) ? [`edge.domains.${index}`] : []
+  );
 };
 
 /**

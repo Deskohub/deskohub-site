@@ -8,6 +8,7 @@ import {
   computeRoot,
   EdgeComputeResourceNotConverged,
   EdgeComputeResourceUnowned,
+  isAdmitted,
   isOwnedDescription,
   makeEdgeComputeApi,
   ownedDescription,
@@ -101,6 +102,12 @@ const LiveRule = Schema.Struct({
       ),
     })
   ),
+  /** Never declared by the edge; any live exclusion is drift. */
+  preconfiguredWafConfig: Schema.optional(
+    Schema.Struct({
+      exclusions: Schema.optional(Schema.Array(Schema.Unknown)),
+    })
+  ),
   rateLimitOptions: Schema.optional(
     Schema.Struct({
       conformAction: Schema.optional(Schema.String),
@@ -138,6 +145,10 @@ const decodePolicy = Schema.decodeUnknownEffect(LiveSecurityPolicy);
 export const comparedRule = (rule: LiveRule | EdgeSecurityPolicyRule) => {
   const match = rule.match as LiveRule["match"];
   const limit = rule.rateLimitOptions;
+  const wafExclusions =
+    "preconfiguredWafConfig" in rule
+      ? (rule.preconfiguredWafConfig?.exclusions ?? [])
+      : [];
   return JSON.stringify({
     priority: rule.priority,
     action: rule.action ?? "",
@@ -146,6 +157,7 @@ export const comparedRule = (rule: LiveRule | EdgeSecurityPolicyRule) => {
     expression: match?.expr?.expression ?? "",
     versionedExpr: match?.versionedExpr ?? "",
     srcIpRanges: [...(match?.config?.srcIpRanges ?? [])].sort(),
+    wafExclusions,
     rateLimit:
       limit === undefined
         ? null
@@ -214,8 +226,11 @@ const policyDrift = (
   ];
 };
 
-/** The rule as written: `preview` is always sent, false included. */
-const ruleBody = (rule: EdgeSecurityPolicyRule) => ({
+/**
+ * The rule as written: `preview` is always sent, false included. A live
+ * rule with WAF exclusions the edge never declares gets them cleared.
+ */
+const ruleBody = (rule: EdgeSecurityPolicyRule, live?: LiveRule) => ({
   priority: rule.priority,
   action: rule.action,
   description: rule.description,
@@ -224,6 +239,9 @@ const ruleBody = (rule: EdgeSecurityPolicyRule) => ({
   ...(rule.rateLimitOptions === undefined
     ? {}
     : { rateLimitOptions: rule.rateLimitOptions }),
+  ...((live?.preconfiguredWafConfig?.exclusions?.length ?? 0) > 0
+    ? { preconfiguredWafConfig: { exclusions: [] } }
+    : {}),
 });
 
 const policiesUrl = (project: string) =>
@@ -279,12 +297,16 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
     const resource = `Security policy ${name}`;
     const url = `${policiesUrl(project)}/${name}`;
     const description = yield* ownedDescription(id, news.description);
+    // Every readback must still be the object admitted below.
+    let admittedId: string | undefined;
     const read = (operation: string) =>
-      api
-        .get(resource, url, decodePolicy)
-        .pipe(
-          Effect.flatMap((live) => requirePresent(resource, operation, live))
-        );
+      api.get(resource, url, decodePolicy).pipe(
+        Effect.flatMap((live) => requirePresent(resource, operation, live)),
+        Effect.filterOrFail(
+          (live) => admittedId === undefined || live.id === admittedId,
+          () => new EdgeComputeResourceUnowned({ resource })
+        )
+      );
     const write = (
       operation: string,
       request: HttpClientRequest.HttpClientRequest
@@ -301,7 +323,7 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
         name,
         description,
         type: news.type,
-        rules: news.rules.map(ruleBody),
+        rules: news.rules.map((rule) => ruleBody(rule)),
       });
       if (inserted !== "conflict") {
         yield* settleGlobalOperation(project, inserted);
@@ -313,12 +335,11 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
       ) {
         return yield* new EdgeComputeResourceUnowned({ resource });
       }
-    } else if (
-      output === undefined &&
-      !(yield* isOwnedDescription(id, live.description))
-    ) {
+    } else if (!(yield* isAdmitted(id, output?.id, live))) {
       return yield* new EdgeComputeResourceUnowned({ resource });
     }
+
+    admittedId = live.id;
 
     if (live.type !== news.type) {
       return yield* new EdgeComputeResourceNotConverged({
@@ -352,7 +373,12 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
         "patchRule",
         HttpClientRequest.post(`${url}/patchRule`).pipe(
           HttpClientRequest.setUrlParam("priority", String(rule.priority)),
-          HttpClientRequest.bodyJsonUnsafe(ruleBody(rule))
+          HttpClientRequest.bodyJsonUnsafe(
+            ruleBody(
+              rule,
+              live.rules?.find((current) => current.priority === rule.priority)
+            )
+          )
         )
       );
     }
@@ -376,12 +402,16 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
     return toAttributes(project, live);
   }),
 
-  delete: Effect.fn(function* ({ output }) {
+  delete: Effect.fn(function* ({ id, output }) {
     const api = yield* makeEdgeComputeApi();
-    const deleted = yield* api.delete(
-      `Security policy ${output.name}`,
-      `${policiesUrl(output.project)}/${output.name}`
-    );
+    const resource = `Security policy ${output.name}`;
+    const url = `${policiesUrl(output.project)}/${output.name}`;
+    // A same-name object someone else recreated is not ours to delete.
+    const live = yield* api.get(resource, url, decodePolicy);
+    if (live === undefined || !(yield* isAdmitted(id, output.id, live))) {
+      return;
+    }
+    const deleted = yield* api.delete(resource, url);
     if (deleted !== "gone") {
       yield* settleGlobalOperation(output.project, deleted, {
         ignore: ["RESOURCE_NOT_FOUND"],

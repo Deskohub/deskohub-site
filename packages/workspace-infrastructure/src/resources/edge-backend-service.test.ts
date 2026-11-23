@@ -352,8 +352,8 @@ describe("EdgeBackendService provider", () => {
     );
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(fake.objects.size).toBe(0);
+    // The second delete reads nothing there and sends nothing.
     expect(mutations(fake.calls)).toEqual([
-      "DELETE backendServices/workspace-sandbox-dynamic",
       "DELETE backendServices/workspace-sandbox-dynamic",
     ]);
   });
@@ -442,5 +442,56 @@ describe("EdgeBackendService provider", () => {
     expect(fake.objects.get("workspace-sandbox-dynamic")?.logConfig).toEqual({
       enable: false,
     });
+  });
+  test("never changes or deletes a same-name backend someone else recreated", async () => {
+    const admitted = {
+      project,
+      name: "workspace-sandbox-dynamic",
+      id: "1234",
+    } as EdgeBackendServiceAttributes;
+    const recreated = {
+      ...converged(dynamicProps, ""),
+      id: "9999",
+      logConfig: { enable: true },
+    };
+    const fake = fakeCompute({ existing: [recreated] });
+    const exit = await run(fake, (provider) =>
+      Effect.gen(function* () {
+        const update = yield* Effect.exit(
+          reconcile(provider, dynamicProps, admitted)
+        );
+        yield* provider.delete({
+          ...lifecycleInput,
+          olds: dynamicProps,
+          output: admitted,
+        });
+        return update;
+      })
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(failureTag(exit.value)).toBe("EdgeComputeResourceUnowned");
+    }
+    expect(mutations(fake.calls)).toEqual([]);
+    expect(fake.objects.get("workspace-sandbox-dynamic")?.id).toBe("9999");
+  });
+
+  test("updates its own backend recreated under a new ID", async () => {
+    const fake = fakeCompute({
+      existing: [
+        { ...converged(dynamicProps), id: "9999", logConfig: { enable: true } },
+      ],
+    });
+    const exit = await run(fake, (provider) =>
+      reconcile(provider, dynamicProps, {
+        project,
+        name: "workspace-sandbox-dynamic",
+        id: "1234",
+      } as EdgeBackendServiceAttributes)
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(mutations(fake.calls)).toEqual([
+      "PATCH backendServices/workspace-sandbox-dynamic",
+    ]);
   });
 });

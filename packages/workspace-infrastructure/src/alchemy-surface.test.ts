@@ -273,17 +273,17 @@ describe("Alchemy beta.87 surface", () => {
             wafPreview: true,
             authRateLimitPerMinute: 120,
           },
-          services?.webServiceId
+          services?.webServiceId ?? "missing-web-service"
         );
       })
     );
     expect(served.exit._tag).toBe("Success");
     const { resources } = served;
-    // The NEG takes the short ID, the same as its fallback, by reference.
+    // The NEG takes the web service's short ID attribute, by reference.
     expect(resources.WorkspaceWeb?.Props.serviceId).toBe("workspace-web");
-    expect(
-      isOutput(resources.EdgeWebEndpointGroup?.Props.cloudRun.service)
-    ).toBe(true);
+    const service = resources.EdgeWebEndpointGroup?.Props.cloudRun.service;
+    expect(isOutput(service)).toBe(true);
+    expect(Bun.inspect(service)).toBe("WorkspaceWeb.serviceId");
   });
 
   test("declares services only from the record at the fenced generation", async () => {
