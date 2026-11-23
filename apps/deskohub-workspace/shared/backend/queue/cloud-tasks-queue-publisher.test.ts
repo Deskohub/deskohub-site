@@ -48,9 +48,11 @@ const publish = async (
   {
     respond = () => Response.json({}),
     token = Effect.succeed(accessToken),
+    workerUrl = settings.workerUrl,
   }: {
     respond?: () => Response | Promise<Response>;
     token?: Effect.Effect<string, GoogleAccessTokenError>;
+    workerUrl?: string;
   } = {}
 ) => {
   const requests: SentRequest[] = [];
@@ -75,7 +77,7 @@ const publish = async (
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        CloudTasksQueuePublisher(settings).pipe(
+        CloudTasksQueuePublisher({ ...settings, workerUrl }).pipe(
           Layer.provide(
             Layer.succeed(GoogleAccessToken, {
               get: token,
@@ -226,6 +228,57 @@ describe("CloudTasksQueuePublisher", () => {
     expect(result).toMatchObject({
       failure: { cause: { _tag: "CloudTasksPublishError", reason: "timeout" } },
     });
+  });
+
+  test.each([
+    ["another status", { error: { code: 409, status: "ABORTED" } }],
+    ["no status", {}],
+  ])("fails a conflict with %s", async (_, body) => {
+    const { result } = await publish(publication, {
+      respond: () => Response.json(body, { status: 409 }),
+    });
+
+    expect(result).toMatchObject({
+      failure: { cause: { reason: "status", httpStatus: 409 } },
+    });
+  });
+
+  test("drops an error status outside the Google RPC codes", async () => {
+    const { result } = await publish(publication, {
+      respond: () =>
+        Response.json({ error: { status: "order-1 detail" } }, { status: 400 }),
+    });
+
+    expect(result).toMatchObject({
+      failure: { cause: { reason: "status", httpStatus: 400 } },
+    });
+    expect(JSON.stringify(result)).not.toContain("order-1");
+  });
+
+  test.each([
+    ["a value JSON cannot encode", { amount: 1n }],
+    ["no value", undefined],
+  ])("rejects a message with %s", async (_, message) => {
+    const { result, requests } = await publish({ ...publication, message });
+
+    expect(result).toMatchObject({
+      failure: {
+        _tag: "QueueMessageSendError",
+        cause: { _tag: "CloudTasksPublishError", reason: "invalid-message" },
+      },
+    });
+    expect(requests).toHaveLength(0);
+  });
+
+  test("rejects a worker URL that does not parse", async () => {
+    const { result, requests } = await publish(publication, {
+      workerUrl: "not a url",
+    });
+
+    expect(result).toMatchObject({
+      failure: { cause: { reason: "invalid-worker-url" } },
+    });
+    expect(requests).toHaveLength(0);
   });
 
   test("fails when the request does not reach Cloud Tasks", async () => {

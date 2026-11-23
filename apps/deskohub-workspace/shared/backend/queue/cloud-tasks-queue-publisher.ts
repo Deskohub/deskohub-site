@@ -38,6 +38,8 @@ export class CloudTasksPublishError extends Data.TaggedError(
 )<{
   readonly reason:
     | "unknown-topic"
+    | "invalid-message"
+    | "invalid-worker-url"
     | "invalid-delay"
     | "delay-beyond-horizon"
     | "transport"
@@ -45,8 +47,29 @@ export class CloudTasksPublishError extends Data.TaggedError(
     | "status";
   readonly httpStatus?: number | undefined;
   /** The Google API error status, such as `PERMISSION_DENIED`. */
-  readonly status?: string | undefined;
+  readonly status?: GoogleRpcStatus | undefined;
 }> {}
+
+/** The canonical Google RPC error statuses. */
+const googleRpcStatuses = [
+  "CANCELLED",
+  "UNKNOWN",
+  "INVALID_ARGUMENT",
+  "DEADLINE_EXCEEDED",
+  "NOT_FOUND",
+  "ALREADY_EXISTS",
+  "PERMISSION_DENIED",
+  "RESOURCE_EXHAUSTED",
+  "FAILED_PRECONDITION",
+  "ABORTED",
+  "OUT_OF_RANGE",
+  "UNIMPLEMENTED",
+  "INTERNAL",
+  "UNAVAILABLE",
+  "DATA_LOSS",
+  "UNAUTHENTICATED",
+] as const;
+type GoogleRpcStatus = (typeof googleRpcStatuses)[number];
 
 /** Cloud Tasks rejects a schedule time further ahead than this. */
 export const cloudTasksScheduleHorizon = Duration.days(30);
@@ -73,7 +96,7 @@ type HttpTask = {
 };
 
 const GoogleApiErrorBody = Schema.Struct({
-  error: Schema.Struct({ status: Schema.String }),
+  error: Schema.Struct({ status: Schema.Literals(googleRpcStatuses) }),
 });
 
 /**
@@ -102,18 +125,27 @@ export const CloudTasksQueuePublisher = (
             (status) => status >= 200 && status < 300,
             () => Effect.succeed<QueuePublishOutcome>("published")
           ),
-          Match.when(409, () =>
-            Effect.succeed<QueuePublishOutcome>("duplicate")
-          ),
           Match.orElse(() =>
-            rejection(response).pipe(
+            rejectionStatus(response).pipe(
               Effect.tap(() =>
                 Effect.when(
                   accessToken.invalidate(token),
                   Effect.succeed(response.status === 401)
                 )
               ),
-              Effect.flatMap(Effect.fail)
+              // Only a decoded ALREADY_EXISTS proves the task exists; any
+              // other 409 fails so the caller retries.
+              Effect.filterOrFail(
+                (status) =>
+                  response.status === 409 && status === "ALREADY_EXISTS",
+                (status) =>
+                  new CloudTasksPublishError({
+                    reason: "status",
+                    httpStatus: response.status,
+                    status,
+                  })
+              ),
+              Effect.as<QueuePublishOutcome>("duplicate")
             )
           )
         );
@@ -160,7 +192,7 @@ export const CloudTasksQueuePublisher = (
           ),
           // `retentionSeconds` has no per-task form: a Cloud Tasks queue
           // bounds every task's retries with its own `maxRetryDuration`.
-          Effect.let("task", ({ topic, scheduleTime }) =>
+          Effect.bind("task", ({ topic, scheduleTime }) =>
             httpTask({
               settings,
               topic,
@@ -242,35 +274,66 @@ const httpTask = ({
   readonly settings: CloudTasksQueueSettings;
   readonly topic: WorkspaceQueueTopic;
   readonly scheduleTime: string | undefined;
-  readonly message: unknown;
+  readonly message: QueuePublication["message"];
   readonly idempotencyKey: string;
-}): HttpTask => ({
-  name: `${queuePath(settings, topic)}/tasks/${taskId(idempotencyKey)}`,
-  scheduleTime,
-  httpRequest: {
-    url: new URL(workspaceQueueTopics[topic], settings.workerUrl).href,
-    httpMethod: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: Buffer.from(JSON.stringify(message)).toString("base64"),
-    oidcToken: {
-      serviceAccountEmail: settings.invokerServiceAccountEmail,
-      audience: settings.audience,
-    },
-  },
-});
+}) =>
+  Effect.Do.pipe(
+    Effect.bind("url", () => workerUrl({ settings, topic })),
+    Effect.bind("body", () => encodedMessage(message)),
+    Effect.map(
+      ({ url, body }): HttpTask => ({
+        name: `${queuePath(settings, topic)}/tasks/${taskId(idempotencyKey)}`,
+        scheduleTime,
+        httpRequest: {
+          url,
+          httpMethod: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          oidcToken: {
+            serviceAccountEmail: settings.invokerServiceAccountEmail,
+            audience: settings.audience,
+          },
+        },
+      })
+    )
+  );
+
+const workerUrl = ({
+  settings,
+  topic,
+}: {
+  readonly settings: CloudTasksQueueSettings;
+  readonly topic: WorkspaceQueueTopic;
+}) =>
+  Option.fromNullishOr(
+    URL.parse(workspaceQueueTopics[topic], settings.workerUrl)
+  ).pipe(
+    Option.match({
+      onNone: () =>
+        Effect.fail(
+          new CloudTasksPublishError({ reason: "invalid-worker-url" })
+        ),
+      onSome: ({ href }) => Effect.succeed(href),
+    })
+  );
+
+/** The message as base64 JSON; a value JSON cannot encode fails typed. */
+const encodedMessage = (message: QueuePublication["message"]) =>
+  Effect.try({
+    try: (): string | undefined => JSON.stringify(message),
+    catch: () => new CloudTasksPublishError({ reason: "invalid-message" }),
+  }).pipe(
+    Effect.filterOrFail(
+      (json): json is string => json !== undefined,
+      () => new CloudTasksPublishError({ reason: "invalid-message" })
+    ),
+    Effect.map((json) => Buffer.from(json).toString("base64"))
+  );
 
 /** A failed response's Google API status, read without its message. */
-const rejection = (response: HttpClientResponse.HttpClientResponse) =>
+const rejectionStatus = (response: HttpClientResponse.HttpClientResponse) =>
   response.json.pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(GoogleApiErrorBody)),
     Effect.map(({ error }) => error.status),
-    Effect.orElseSucceed(() => undefined),
-    Effect.map(
-      (status) =>
-        new CloudTasksPublishError({
-          reason: "status",
-          httpStatus: response.status,
-          status,
-        })
-    )
+    Effect.orElseSucceed(() => undefined)
   );

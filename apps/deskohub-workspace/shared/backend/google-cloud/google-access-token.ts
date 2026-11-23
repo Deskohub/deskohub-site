@@ -55,7 +55,7 @@ const retries = 2;
 const expiryMargin = Duration.minutes(1);
 
 const TokenResponse = Schema.Struct({
-  access_token: Schema.String,
+  access_token: Schema.NonEmptyString,
   expires_in: Schema.Finite,
 });
 type TokenResponse = typeof TokenResponse.Type;
