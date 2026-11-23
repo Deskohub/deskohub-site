@@ -3,12 +3,13 @@ import {
   paidFulfillmentRedelivery,
   paidFulfillmentTopic,
 } from "@/features/checkout/backend/fulfillment";
-import { defineVercelQueueRoute } from "@/shared/backend/queue/vercel-queue-consumer";
+import { defineQueueRoute } from "@/shared/backend/queue/queue-route";
 
 export const maxDuration = 300;
 
-export const POST = defineVercelQueueRoute(
+export const POST = defineQueueRoute(
   "paidFulfillmentQueue",
+  paidFulfillmentTopic.topic,
   paidFulfillmentTopic.consume(
     consumePaidFulfillmentMessage,
     paidFulfillmentRedelivery

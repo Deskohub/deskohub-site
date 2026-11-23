@@ -3,6 +3,7 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { Cause, Data, Duration, Effect, Match } from "effect";
 import { isDatabaseUnavailable } from "@/db/database-unavailable";
 import { censorLogValue } from "@/shared/backend/logging/censorship";
+import type { DeploymentStage } from "@/shared/deployment/deployment-stage";
 
 /** How a consumer wants the queue to treat one of its failures. */
 export type QueueRedelivery = Data.TaggedEnum<{
@@ -20,7 +21,15 @@ export const QueueRedelivery = Data.taggedEnum<QueueRedelivery>();
 
 export type QueueDeliveryMode = "preview" | "durable";
 
-interface QueueDelivery {
+/**
+ * The delivery mode for a deployment stage, whatever transport delivers:
+ * preview deployments run on synthetic, disposable data.
+ */
+export const queueDeliveryModeForStage = (
+  stage: DeploymentStage
+): QueueDeliveryMode => (stage === "preview" ? "preview" : "durable");
+
+export interface QueueDelivery {
   readonly payload: unknown;
   readonly topic: string;
   readonly messageId: string;

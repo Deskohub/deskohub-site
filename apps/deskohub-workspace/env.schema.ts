@@ -383,7 +383,17 @@ export const workspaceServerEnvSchema = Schema.Struct({
   // The source commit the build was made from, on a host other than Vercel.
   WORKSPACE_REVISION_SHA: optionalNonEmptyStringSchema,
   WORKSPACE_RUNTIME_HOST: toEnvSchema(Schema.optional(runtimeHostSchema)),
+  // The Cloud Scheduler worker's OIDC audience and the service account whose
+  // Google-signed token every cron request on a container host must carry.
+  // Unset, a container host rejects every cron request.
+  WORKSPACE_SCHEDULER_AUDIENCE: toEnvSchema(Schema.optional(urlStringSchema)),
+  WORKSPACE_SCHEDULER_INVOKER_EMAIL: optionalEmailAddressSchema,
   WORKSPACE_SERVICE_ROLE: toEnvSchema(Schema.optional(serviceRoleSchema)),
+  // The Cloud Tasks worker's OIDC audience and the service account whose
+  // Google-signed token every queue delivery on a container host must carry.
+  // Unset, a container host rejects every queue delivery.
+  WORKSPACE_TASKS_AUDIENCE: toEnvSchema(Schema.optional(urlStringSchema)),
+  WORKSPACE_TASKS_INVOKER_EMAIL: optionalEmailAddressSchema,
   // The Google Cloud project whose traces structured logs link to.
   WORKSPACE_TRACE_PROJECT_ID: optionalNonEmptyStringSchema,
   // The lowercase header the trusted ingress sets to the client address on a
