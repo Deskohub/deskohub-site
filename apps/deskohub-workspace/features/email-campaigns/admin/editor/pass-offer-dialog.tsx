@@ -78,19 +78,21 @@ const toPassOfferAttributes = ({
   detail: detail.trim() || null,
 });
 
+// An invalid size stays, so validation names it until a size is chosen.
+const toPassOfferFormSize = (size: PassOfferAttributes["size"] | undefined) => {
+  if (size === undefined || size === null) {
+    return defaultSize;
+  }
+  return isCampaignPassOfferSize(size) ? `${size}` : invalidSize;
+};
+
 const toPassOfferForm = (
   attributes: PassOfferAttributes | undefined
 ): PassOfferForm => ({
   product: Predicate.isString(attributes?.product)
     ? attributes.product
     : "entry-pack",
-  // An invalid size stays, so validation names it until a size is chosen.
-  size:
-    attributes?.size === undefined || attributes.size === null
-      ? defaultSize
-      : isCampaignPassOfferSize(attributes.size)
-        ? `${attributes.size}`
-        : invalidSize,
+  size: toPassOfferFormSize(attributes?.size),
   headline: campaignPassOfferText(attributes?.headline) ?? "",
   detail: campaignPassOfferText(attributes?.detail) ?? "",
 });
