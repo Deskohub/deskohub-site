@@ -252,6 +252,10 @@ export const stage = Effect.fn("WorkspaceRelease.stage")(function* (
         ...record,
         generation,
         trafficGeneration: record.trafficGeneration + 1,
+        // The unsettled release's template may already run on Cloud Run.
+        materialized: templateIs(input.liveTemplate, record.candidate)
+          ? deploymentOf(record.candidate)
+          : record.materialized,
         candidate: deployment,
         pendingApply: {
           operation: "promote",
@@ -503,7 +507,8 @@ export interface RefreshTemplateInput extends TemplateInput {
 /**
  * Decide the template a plain deploy declares, before it runs. It keeps
  * the template Cloud Run runs when that is ready and current, and an
- * unlanded candidate, which the deploy creates from the current spec.
+ * unlanded candidate, whose new revision name the deploy creates from the
+ * current spec.
  * Otherwise the active release's image gets a template under a fresh name,
  * and a candidate declared from an older spec is dropped: re-declaring its
  * revision name with another spec would be refused.
@@ -515,8 +520,7 @@ export const refreshTemplate = Effect.fn("WorkspaceRelease.refreshTemplate")(
     const active = record.active;
     const candidateUnlanded =
       record.candidate !== null &&
-      input.liveTemplate?.revision !== record.candidate.revision &&
-      keepsTemplate(input, record.materialized);
+      input.liveTemplate?.revision !== record.candidate.revision;
     if (
       active === null ||
       candidateUnlanded ||

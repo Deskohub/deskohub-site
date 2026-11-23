@@ -598,15 +598,45 @@ describe("declared web template", () => {
     );
     expect(refreshed.candidate).toBeNull();
     expect(refreshed.materialized?.releaseId).toBe("r4-bbbbbbb" as ReleaseId);
-    // An unlanded candidate is created from the current spec instead.
-    expect(
-      run(
-        refreshTemplate(staged, {
-          expectedGeneration: staged.generation,
-          liveTemplate: templateOf(staged.materialized),
-          specFingerprintOf,
-        })
-      )
-    ).toEqual(staged);
+    // An unlanded candidate is created from the current spec instead,
+    // whether or not the spec changed.
+    for (const fingerprint of [specFingerprintOf, () => "spec-b"]) {
+      expect(
+        run(
+          refreshTemplate(staged, {
+            expectedGeneration: staged.generation,
+            liveTemplate: templateOf(staged.materialized),
+            specFingerprintOf: fingerprint,
+          })
+        )
+      ).toEqual(staged);
+    }
+  });
+
+  test("restaging an unsettled first release keeps its landed template", () => {
+    const staged = stageRelease(emptyReleaseRecord, shaA, digestA);
+    const pending = run(
+      promote(staged.record, {
+        expectedGeneration: staged.record.generation,
+        releaseId: staged.releaseId,
+        now: t0,
+        candidateReadback: null,
+      })
+    );
+    const restaged = run(
+      stage(pending, {
+        expectedGeneration: pending.generation,
+        sha: shaB,
+        imageDigest: digestB,
+        origin: "cloud-run",
+        liveTemplate: templateOf(pending.candidate),
+        now: t0,
+      })
+    );
+    expect(restaged.promoted).toBe(true);
+    expect(restaged.record.materialized?.releaseId).toBe(staged.releaseId);
+    expect(restaged.record.pendingApply?.target.releaseId).toBe(
+      restaged.releaseId
+    );
   });
 });

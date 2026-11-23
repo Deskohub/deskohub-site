@@ -162,20 +162,36 @@ export const webTraffic = (
  * one keeps serving, and promote and restore change traffic only. Nothing
  * is declared before a release serves.
  */
+/**
+ * The revision name and image the web template is declared with: the
+ * candidate, else the materialized template under the name the record
+ * declared it, else the serving release. Null before a release serves.
+ */
+export const declaredWebTemplate = (record: ReleaseRecord) => {
+  const serving = servingDeployment(record);
+  if (serving === null) {
+    return null;
+  }
+  const template = record.candidate ?? record.materialized ?? serving;
+  return {
+    revision:
+      template === record.materialized
+        ? templateRevisionOf(record.materialized)
+        : template.revision,
+    imageDigest: template.imageDigest,
+  };
+};
+
 export const webServiceProps = (
   config: WorkspaceStackConfig,
   record: ReleaseRecord,
   now: DateTime.Utc
 ): ServiceProps | undefined => {
-  const serving = servingDeployment(record);
-  if (serving === null) {
+  const template = declaredWebTemplate(record);
+  if (template === null) {
     return undefined;
   }
-  const template = record.candidate ?? record.materialized ?? serving;
-  const revision =
-    template === record.materialized
-      ? templateRevisionOf(record.materialized)
-      : template.revision;
+  const { revision } = template;
   return {
     serviceId: workloadServiceIds.web,
     location: config.region,

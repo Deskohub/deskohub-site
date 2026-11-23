@@ -131,11 +131,8 @@ export class HeldReleaseWriter extends Context.Service<
  * `take` writes the lock with a compare-and-set on the version those
  * checks read.
  */
-const prepareReleaseWriter = (
-  config: WorkspaceStackConfig,
-  operation: ReleaseOperation
-) =>
-  Effect.gen(function* () {
+const prepareReleaseWriter = Effect.fn("WorkspaceRelease.prepareReleaseWriter")(
+  function* (config: WorkspaceStackConfig, operation: ReleaseOperation) {
     yield* refusePreview(config);
     const store = yield* ReleaseRecordStore;
     const current = yield* store.read;
@@ -172,14 +169,15 @@ const prepareReleaseWriter = (
         current.version
       ),
     };
-  });
+  }
+);
 
 /**
  * Release the lock, or mark it in doubt when an apply's outcome is
  * unknown. A lock this writer no longer holds is left alone.
  */
-const releaseReleaseWriter = (writer: ReleaseWriter, inDoubt: boolean) =>
-  Effect.gen(function* () {
+const releaseReleaseWriter = Effect.fn("WorkspaceRelease.releaseReleaseWriter")(
+  function* (writer: ReleaseWriter, inDoubt: boolean) {
     const store = yield* ReleaseRecordStore;
     const current = yield* store.read;
     const held = current.record.writer;
@@ -193,7 +191,8 @@ const releaseReleaseWriter = (writer: ReleaseWriter, inDoubt: boolean) =>
       },
       current.version
     );
-  });
+  }
+);
 
 /**
  * Run one operation as the stage's only writer. The lock has no expiry and
@@ -263,8 +262,8 @@ export const runLockedReleaseStep = <A, E, R>(
  * run that ends leaves the lock in doubt; `plan` changes nothing, so it
  * never does.
  */
-export const applyAsWriter = (request: Omit<StackApplyRequest, "writer">) =>
-  Effect.gen(function* () {
+export const applyAsWriter = Effect.fn("WorkspaceRelease.applyAsWriter")(
+  function* (request: Omit<StackApplyRequest, "writer">) {
     const { writer, applyInFlight } = yield* HeldReleaseWriter;
     const platform = yield* ReleaseServiceApply;
     yield* Ref.set(applyInFlight, request.action === "deploy");
@@ -283,7 +282,8 @@ export const applyAsWriter = (request: Omit<StackApplyRequest, "writer">) =>
       yield* Ref.set(applyInFlight, false);
     }
     return yield* exit;
-  });
+  }
+);
 
 /**
  * Break-glass: clear a lock whose holder an operator has confirmed stopped
@@ -294,28 +294,26 @@ export const applyAsWriter = (request: Omit<StackApplyRequest, "writer">) =>
  * Residual risk: Cloud Run accepts a service write without an etag, so a
  * write the old holder sent before it stopped (a lost response, a frozen
  * process) can still land after the unlock and over a newer decision.
- * Neither the quiet-readback check nor any later check can rule that out;
- * only the operator's confirmation that the holder is gone does.
+ * Neither the quiet-readback check, the operator's confirmation that the
+ * holder stopped, nor any later check can rule that out.
  */
-export const unlockReleaseWriter = (
-  config: WorkspaceStackConfig,
-  fingerprint: string
-) =>
-  Effect.gen(function* () {
-    yield* refusePreview(config);
-    const store = yield* ReleaseRecordStore;
-    const current = yield* store.read;
-    const held = current.record.writer;
-    if (held === null || writerFingerprint(held.holderDigest) !== fingerprint) {
-      return yield* new ReleaseWriterNotHeld({
-        fingerprint,
-        heldFingerprint: heldFingerprint(current.record),
-      });
-    }
-    yield* requireQuietReleaseServices;
-    yield* store.write({ ...current.record, writer: null }, current.version);
-    return describeLock(held);
-  });
+export const unlockReleaseWriter = Effect.fn(
+  "WorkspaceRelease.unlockReleaseWriter"
+)(function* (config: WorkspaceStackConfig, fingerprint: string) {
+  yield* refusePreview(config);
+  const store = yield* ReleaseRecordStore;
+  const current = yield* store.read;
+  const held = current.record.writer;
+  if (held === null || writerFingerprint(held.holderDigest) !== fingerprint) {
+    return yield* new ReleaseWriterNotHeld({
+      fingerprint,
+      heldFingerprint: heldFingerprint(current.record),
+    });
+  }
+  yield* requireQuietReleaseServices;
+  yield* store.write({ ...current.record, writer: null }, current.version);
+  return describeLock(held);
+});
 
 /** A lock as an operator sees it: the fingerprint, never the digest. */
 export const describeLock = ({ holderDigest, ...lock }: ReleaseWriterLock) => ({
@@ -341,26 +339,27 @@ export const describeStoredRecord = ({
  * declares no release-owned services and stays lock-free (#1455). Returns
  * the record read under the lock with that lock, or null for preview.
  */
-export const requireStackWriter = (
+export const requireStackWriter = Effect.fn(
+  "WorkspaceRelease.requireStackWriter"
+)(function* (
   config: WorkspaceStackConfig,
   token: Option.Option<Redacted.Redacted<string>>
-) =>
-  Effect.gen(function* () {
-    if (config.stage === "preview") {
-      return null;
-    }
-    if (Option.isNone(token)) {
-      return yield* new ReleaseWriterRequired();
-    }
-    const { record } = yield* (yield* ReleaseRecordStore).read;
-    const lock = record.writer;
-    if (lock === null || !holds(record, writerDigestOf(token.value))) {
-      return yield* new ReleaseWriterLost({
-        heldFingerprint: heldFingerprint(record),
-      });
-    }
-    return { record, lock };
-  });
+) {
+  if (config.stage === "preview") {
+    return null;
+  }
+  if (Option.isNone(token)) {
+    return yield* new ReleaseWriterRequired();
+  }
+  const { record } = yield* (yield* ReleaseRecordStore).read;
+  const lock = record.writer;
+  if (lock === null || !holds(record, writerDigestOf(token.value))) {
+    return yield* new ReleaseWriterLost({
+      heldFingerprint: heldFingerprint(record),
+    });
+  }
+  return { record, lock };
+});
 
 /**
  * The mode the lock grants a stack run. `deploy` and `plan` declare the
@@ -369,11 +368,11 @@ export const requireStackWriter = (
  * `deliver`, `restore` and `recover` declare only the record at their
  * fenced generation.
  */
-export const requireStackMode = (
-  { record, lock }: { record: ReleaseRecord; lock: ReleaseWriterLock },
-  generation: number | null
-) =>
-  Effect.gen(function* () {
+export const requireStackMode = Effect.fn("WorkspaceRelease.requireStackMode")(
+  function* (
+    { record, lock }: { record: ReleaseRecord; lock: ReleaseWriterLock },
+    generation: number | null
+  ) {
     const plain = lock.operation === "deploy" || lock.operation === "plan";
     if (plain === (generation !== null)) {
       return yield* new ReleaseWriterModeMismatch({
@@ -386,4 +385,5 @@ export const requireStackMode = (
         releaseId: record.pendingApply.target.releaseId,
       });
     }
-  });
+  }
+);

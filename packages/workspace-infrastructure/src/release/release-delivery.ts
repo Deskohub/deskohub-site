@@ -16,6 +16,7 @@ import {
   trafficReadback,
 } from "../readback";
 import {
+  declaredWebTemplate,
   releaseTrafficTag,
   webTemplateSpecFingerprint,
 } from "../resources/service-declarations";
@@ -138,14 +139,25 @@ const unavailableTraffic: TrafficReadback = {
 
 /**
  * A service's drift from its fixed contract. A service that does not exist
- * yet has no contract to drift from: traffic readback reports it as not
- * serving, so settlement retries until the apply's rollout shows it.
+ * yet has no contract to drift from, and one still rolling out may not
+ * report its URL yet: traffic readback reports either as not serving, so
+ * settlement retries until the rollout shows it. Ingress and invoker IAM
+ * are checked on every observation.
  */
 const contractDrift = (
   config: WorkspaceStackConfig,
   service: ObservedService | null
-): ReadonlyArray<ReadbackDrift> =>
-  service === null ? [] : serviceReadbackDrift(config, service);
+): ReadonlyArray<ReadbackDrift> => {
+  if (service === null) {
+    return [];
+  }
+  const settled =
+    !service.reconciling &&
+    service.terminalConditionState === "CONDITION_SUCCEEDED";
+  return serviceReadbackDrift(config, service).filter(
+    (drift) => settled || drift.field !== "url"
+  );
+};
 
 /**
  * Read every release-owned service back and settle the pending traffic
@@ -195,6 +207,7 @@ const applyAndSettle = (
   policy: ReleaseReadbackPolicy
 ) =>
   Effect.gen(function* () {
+    yield* requireDeclarableTemplate(config);
     yield* applyAsWriter({ action: "deploy", generation });
     const settled = yield* settleFromReadback(config, generation).pipe(
       Effect.retry(retryWhile(policy, "ReleaseApplyNotObserved"))
@@ -207,6 +220,54 @@ const applyAndSettle = (
     }
     return serving;
   });
+
+/** The web service's live template as Cloud Run reports it now. */
+const readLiveTemplate = Effect.gen(function* () {
+  const readback = yield* ReleaseServiceReadback;
+  return liveTemplateOf(yield* readback.service("web"));
+});
+
+/**
+ * The record would re-declare the revision name Cloud Run's live template
+ * already has, from a different spec (a config change since it was
+ * created). Cloud Run never re-creates a revision name with another spec,
+ * so nothing is applied: `restore` (or `deploy` when nothing is pending)
+ * decides a fresh template name first.
+ */
+export class ReleaseTemplateSpecChanged extends Data.TaggedError(
+  "ReleaseTemplateSpecChanged"
+)<{
+  readonly revision: string;
+  readonly liveSpecFingerprint: string | null;
+  readonly declaredSpecFingerprint: string;
+}> {}
+
+/**
+ * Refuse a fenced apply whose template re-declares the live revision name
+ * from another spec. A name Cloud Run has not created yet is safe to
+ * declare from the current spec.
+ */
+const requireDeclarableTemplate = Effect.fn(
+  "WorkspaceRelease.requireDeclarableTemplate"
+)(function* (config: WorkspaceStackConfig) {
+  const { record } = yield* (yield* ReleaseRecordStore).read;
+  const declared = declaredWebTemplate(record);
+  const live = yield* readLiveTemplate;
+  if (declared === null || live?.revision !== declared.revision) {
+    return;
+  }
+  const declaredSpecFingerprint = webTemplateSpecFingerprint(
+    config,
+    declared.imageDigest
+  );
+  if (live.specFingerprint !== declaredSpecFingerprint) {
+    return yield* new ReleaseTemplateSpecChanged({
+      revision: declared.revision,
+      liveSpecFingerprint: live.specFingerprint,
+      declaredSpecFingerprint,
+    });
+  }
+});
 
 /**
  * The web service still sends all traffic to the active release, and the
@@ -263,12 +324,6 @@ export interface DeliverReleaseInput {
   readonly sha: GitSha;
   readonly imageDigest: ImageDigest;
 }
-
-/** The web service's live template as Cloud Run reports it now. */
-const readLiveTemplate = Effect.gen(function* () {
-  const readback = yield* ReleaseServiceReadback;
-  return liveTemplateOf(yield* readback.service("web"));
-});
 
 /**
  * Ship one digest-pinned build: stage it, materialize it as a zero-traffic

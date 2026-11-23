@@ -97,6 +97,15 @@ describe("workspace stack configuration", () => {
     ).toEqual(["serviceAccounts.deployer"]);
   });
 
+  test("requires the project's own state bucket, which holds its one release lock", () => {
+    expect(
+      decodeFailure({
+        ...sandboxConfigInput,
+        stateBucket: "deskohub-ws-sandbox-other-state",
+      })
+    ).toMatchObject({ reason: "identity", paths: ["stateBucket"] });
+  });
+
   test("requires a distinct service account per role in the stage's project", () => {
     const foreign = decodeFailure({
       ...sandboxConfigInput,

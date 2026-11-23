@@ -100,6 +100,8 @@ interface CloudRunFaults {
   splitTraffic?: boolean;
   /** Workers stay missing for this many reads after the next apply. */
   missingWorkerReads?: number;
+  /** Workers report a rollout without a URL for this many reads. */
+  unsettledWorkerReads?: number;
   /** Services report a rollout in progress. */
   reconciling?: boolean;
   /** The live web template's revision is not ready. */
@@ -123,6 +125,12 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
     let lagReads = 0;
     let workerDigest: ImageDigest | null = null;
     let missingWorkerReads = 0;
+    let unsettledWorkerReads = 0;
+    /** Every web template the applies declared: name and spec fingerprint. */
+    const declaredTemplates: Array<{
+      readonly revision: string | undefined;
+      readonly specFingerprint: string | undefined;
+    }> = [];
 
     const apply = ReleaseServiceApply.of({
       apply: (request) =>
@@ -224,6 +232,12 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
           };
           lagReads = options.trafficLagReads ?? 0;
           missingWorkerReads = faults.missingWorkerReads ?? 0;
+          unsettledWorkerReads = faults.unsettledWorkerReads ?? 0;
+          declaredTemplates.push({
+            revision: props.template?.revision,
+            specFingerprint:
+              props.template?.annotations?.[templateSpecAnnotation],
+          });
         }),
     });
 
@@ -254,9 +268,19 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
               missingWorkerReads -= 1;
               return null;
             }
-            return workerDigest === null
-              ? null
-              : worker(workload, workerDigest);
+            if (workerDigest === null) {
+              return null;
+            }
+            if (unsettledWorkerReads > 0) {
+              unsettledWorkerReads -= 1;
+              return {
+                ...worker(workload, workerDigest),
+                uri: undefined,
+                urls: [],
+                reconciling: true,
+              };
+            }
+            return worker(workload, workerDigest);
           }
           if (lagReads > 0) {
             lagReads -= 1;
@@ -287,7 +311,7 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
         ),
     });
 
-    return { apply, readback, applies, faults };
+    return { apply, readback, applies, faults, declaredTemplates };
   });
 
 const setup = (options?: FakeCloudRunOptions) =>
@@ -312,6 +336,7 @@ const setup = (options?: FakeCloudRunOptions) =>
       store,
       applies: cloudRun.applies,
       faults: cloudRun.faults,
+      declaredTemplates: cloudRun.declaredTemplates,
       provide,
     };
   });
@@ -1404,5 +1429,95 @@ describe("declared web template", () => {
     );
     expect(result.second.materialized).toEqual(result.first.materialized);
     expect(result.second.generation).toBe(result.first.generation);
+  });
+
+  test("recovery refuses to re-declare a landed template name from a changed spec", async () => {
+    const changed: WorkspaceStackConfig = {
+      ...sandboxConfig,
+      capacity: {
+        ...sandboxConfig.capacity,
+        webMaxInstances: sandboxConfig.capacity.webMaxInstances + 1,
+      },
+    };
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, applies, declaredTemplates, provide } =
+          yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        yield* provide(deliver(shaB, digestB));
+        // The restore's web template lands, but its workers never show up.
+        faults.failedTemplate = true;
+        faults.missingWorkerReads = 100;
+        yield* provide(
+          restoreFirst((yield* store.read).record.generation).pipe(Effect.exit)
+        );
+        faults.failedTemplate = false;
+        faults.missingWorkerReads = 0;
+        const landed = (yield* store.read).record;
+        // The config changes before anyone recovers.
+        faults.config = changed;
+        const appliesBefore = applies.length;
+        const refused = yield* provide(
+          recoverRelease(changed, policy).pipe(Effect.exit)
+        );
+        const newApplies = applies.length - appliesBefore;
+        // A fresh restore decides a new template name, then settles.
+        const served = yield* provide(
+          restoreRelease(
+            changed,
+            {
+              releaseId: ReleaseId.make("r1-aaaaaaa"),
+              expectedGeneration: (yield* store.read).record.generation,
+            },
+            policy
+          )
+        );
+        return {
+          landed,
+          refused,
+          newApplies,
+          served,
+          declaredTemplates,
+          record: (yield* store.read).record,
+        };
+      })
+    );
+    expect(result.landed.pendingApply?.operation).toBe("restore");
+    expect(errorOf(result.refused)).toMatchObject({
+      _tag: "ReleaseTemplateSpecChanged",
+      revision: "workspace-web-r1-aaaaaaa-t7",
+    });
+    expect(result.newApplies).toBe(0);
+    expect(result.served.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
+    expect(result.record.materialized?.template?.revision).not.toBe(
+      "workspace-web-r1-aaaaaaa-t7"
+    );
+    // Cloud Run never saw one revision name declared from two specs.
+    const specsByName = new Map<string | undefined, Set<string | undefined>>();
+    for (const { revision, specFingerprint } of result.declaredTemplates) {
+      specsByName.set(
+        revision,
+        (specsByName.get(revision) ?? new Set()).add(specFingerprint)
+      );
+    }
+    for (const specs of specsByName.values()) {
+      expect(specs.size).toBe(1);
+    }
+  });
+});
+
+describe("worker readback during a rollout", () => {
+  test("a worker still rolling out without a URL is retried, not drift", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, provide } = yield* setup();
+        // One settle attempt reads both workers once.
+        faults.unsettledWorkerReads = 2;
+        const served = yield* provide(deliver(shaA, digestA));
+        return { served, record: (yield* store.read).record };
+      })
+    );
+    expect(result.served.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
+    expect(result.record.pendingApply).toBeNull();
   });
 });
