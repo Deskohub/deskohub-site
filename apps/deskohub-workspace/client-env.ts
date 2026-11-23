@@ -4,6 +4,7 @@ import {
   postHogBrowserEnvironmentCheck,
   workspaceClientEnvSchema,
 } from "./client-env.schema";
+import { selectDeploymentStageSetting } from "./shared/deployment/deployment-stage-setting.js";
 
 const validateClientEnv = () =>
   createEnv({
@@ -15,7 +16,12 @@ const validateClientEnv = () =>
       NEXT_PUBLIC_POSTHOG_HOST: process.env.NEXT_PUBLIC_POSTHOG_HOST,
       NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN:
         process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN,
-      NEXT_PUBLIC_VERCEL_ENV: process.env.NEXT_PUBLIC_VERCEL_ENV,
+      // The deployment stage, whichever host sets it (`next.config.mjs`).
+      NEXT_PUBLIC_VERCEL_ENV: selectDeploymentStageSetting({
+        WORKSPACE_DEPLOYMENT_STAGE:
+          process.env.NEXT_PUBLIC_WORKSPACE_DEPLOYMENT_STAGE,
+        VERCEL_ENV: process.env.NEXT_PUBLIC_VERCEL_ENV,
+      }),
     },
     createFinalSchema: (fields) =>
       Schema.toStandardSchemaV1(

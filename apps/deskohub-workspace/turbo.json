@@ -55,7 +55,8 @@
     },
     "build:source-maps": {
       "cache": false,
-      "dependsOn": ["build:compile"]
+      "dependsOn": ["build:compile"],
+      "passThroughEnv": ["WORKSPACE_DEPLOYMENT_STAGE", "WORKSPACE_REVISION_SHA"]
     },
     "build:generate": {
       "cache": false,

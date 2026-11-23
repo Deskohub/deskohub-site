@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { withBotId } from "botid/next/config";
 import { assertMobileWebAppExported } from "./features/mobile-web-app/mobile-web-app-export.js";
 import { configureWorkspaceBotId } from "./shared/bot-protection/bot-protection.policy.js";
+import { selectDeploymentStageSetting } from "./shared/deployment/deployment-stage-setting.js";
 
 const localeRedirectPattern = inlangSettings.locales.join("|");
-const workspaceBotIdVercelEnvironment =
-  process.env.VERCEL_ENV ?? "development";
+/** The stage this build serves, as the server resolves it at runtime. */
+const workspaceDeploymentStage =
+  selectDeploymentStageSetting(process.env) ?? "development";
 
 /**
  * WebMCP origin-trial tokens from a comma-separated list, for the production
@@ -32,9 +34,24 @@ const workspaceBuildOutput =
     ? { output: /** @type {const} */ ("standalone") }
     : {};
 
+/**
+ * A host that sets `WORKSPACE_DEPLOYMENT_STAGE` hands it to the browser
+ * bundle, as Vercel hands over `NEXT_PUBLIC_VERCEL_ENV`, so `client-env.ts`
+ * resolves the same stage that gates BotID here.
+ */
+const workspaceClientDeploymentStage = process.env.WORKSPACE_DEPLOYMENT_STAGE
+  ? {
+      env: {
+        NEXT_PUBLIC_WORKSPACE_DEPLOYMENT_STAGE:
+          process.env.WORKSPACE_DEPLOYMENT_STAGE,
+      },
+    }
+  : {};
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   ...workspaceBuildOutput,
+  ...workspaceClientDeploymentStage,
   cacheLife: {
     advertisedPricingSources: {
       stale: 30,
@@ -92,7 +109,7 @@ const nextConfig = {
       bodySizeLimit: "4mb",
     },
     exposeTestingApiInProductionBuild:
-      workspaceBotIdVercelEnvironment === "preview",
+      workspaceDeploymentStage === "preview",
     instantInsights: {
       validationLevel: "manual-warning",
     },
@@ -100,7 +117,7 @@ const nextConfig = {
   partialPrefetching: true,
   // `build:source-maps` uploads production browser source maps to PostHog and
   // deletes them before generation, so they are never deployed.
-  productionBrowserSourceMaps: process.env.VERCEL_ENV === "production",
+  productionBrowserSourceMaps: workspaceDeploymentStage === "production",
   reactCompiler: true,
   // The app installed under /app/ has the scope `/app/`, which Next's built-in
   // redirect would strip to `/app`. `redirects()` repeats that redirect for
@@ -241,6 +258,6 @@ const nextConfig = {
 
 export default configureWorkspaceBotId(
   nextConfig,
-  workspaceBotIdVercelEnvironment,
+  workspaceDeploymentStage,
   withBotId
 );

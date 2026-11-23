@@ -21,6 +21,10 @@ describe("sourceMapUpload", () => {
     ["preview", { ...productionEnv, VERCEL_ENV: "preview" }],
     ["development", { ...productionEnv, VERCEL_ENV: "development" }],
     ["local or CI", { ...productionEnv, VERCEL_ENV: undefined }],
+    [
+      "container preview",
+      { ...productionEnv, WORKSPACE_DEPLOYMENT_STAGE: "preview" },
+    ],
   ])("uploads nothing from a %s build", (_name, env) => {
     expect(sourceMapUpload(env, "/app/.next")).toBeUndefined();
   });
@@ -47,6 +51,25 @@ describe("sourceMapUpload", () => {
       POSTHOG_CLI_PROJECT_ID: "12345",
     });
     expect(upload?.args.join(" ")).not.toContain("phx_synthetic");
+  });
+
+  test("names a container production build's release by its Workspace revision", () => {
+    const { VERCEL_ENV, VERCEL_GIT_COMMIT_SHA, ...postHogEnv } = productionEnv;
+    const releaseVersion = (env: Record<string, string>) => {
+      const args = sourceMapUpload(env, "/app/.next")?.args ?? [];
+      return args[args.indexOf("--release-version") + 1];
+    };
+
+    expect(
+      releaseVersion({
+        ...postHogEnv,
+        WORKSPACE_DEPLOYMENT_STAGE: "production",
+        WORKSPACE_REVISION_SHA: "def456",
+      })
+    ).toBe("def456");
+    expect(
+      releaseVersion({ ...productionEnv, WORKSPACE_REVISION_SHA: "def456" })
+    ).toBe("def456");
   });
 
   test.each(["POSTHOG_API_KEY", "POSTHOG_API_HOST", "POSTHOG_PROJECT_ID"])(

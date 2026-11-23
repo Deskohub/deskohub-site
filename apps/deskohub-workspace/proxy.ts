@@ -50,6 +50,7 @@ import { classifyAgentTraffic } from "./shared/agent-traffic/agent-traffic";
 import { scheduleAgentPageRequest } from "./shared/backend/agent-traffic/agent-page-request";
 import { resolveWorkspaceRuntimeCallbackOrigin } from "./shared/backend/config/workspace-url.config";
 import { withRequestPathname } from "./shared/backend/utils/request-pathname";
+import { addressedOrigin } from "./shared/deployment/addressed-origin";
 import { isOpenedFromApp } from "./shared/utils/opened-from-app";
 import { markPrivateResponse } from "./shared/utils/private-response";
 import { workspaceSiteOrigin } from "./shared/utils/site-constants";
@@ -496,15 +497,21 @@ const customerAgentSignInRedirect = (request: NextRequest) => {
   );
 };
 
-// Production also answers on its `*.vercel.app` aliases. Their page loads move
-// permanently to the canonical origin, so search engines index one host.
-// Preview deployments serve their own hosts.
+// Production also answers on its `*.vercel.app` aliases, and a container on
+// its host's service URL. Their page loads move permanently to the canonical
+// origin, so search engines index one host. Preview deployments serve their
+// own hosts.
 const canonicalHostRedirect = (request: NextRequest) => {
   if (env.VERCEL_ENV !== "production" || !isPageLoad(request)) {
     return undefined;
   }
   const canonicalOrigin = new URL(workspaceSiteOrigin);
-  if (request.nextUrl.host === canonicalOrigin.host) return undefined;
+  if (
+    addressedOrigin(request, env.WORKSPACE_RUNTIME_HOST).host ===
+    canonicalOrigin.host
+  ) {
+    return undefined;
+  }
 
   return NextResponse.redirect(
     new URL(
@@ -584,7 +591,12 @@ const previewCallbackOriginRedirect = (request: NextRequest) => {
   const callbackOrigin = Result.getOrThrow(
     resolveWorkspaceRuntimeCallbackOrigin()
   );
-  if (request.nextUrl.origin === callbackOrigin.origin) return undefined;
+  if (
+    addressedOrigin(request, env.WORKSPACE_RUNTIME_HOST).origin ===
+    callbackOrigin.origin
+  ) {
+    return undefined;
+  }
 
   const redirectUrl = new URL(
     `${request.nextUrl.pathname}${request.nextUrl.search}`,

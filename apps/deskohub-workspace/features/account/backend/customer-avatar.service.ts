@@ -14,6 +14,7 @@ import {
 import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { env } from "@/env";
 import { WorkspaceCloudinaryLayer } from "@/shared/backend/cloudinary";
+import { resolveDeploymentIdentity } from "@/shared/deployment/deployment-identity";
 import type {
   CustomerAccountAccessError,
   CustomerAccountId,
@@ -100,7 +101,9 @@ export class CustomerAvatarSettings extends Context.Service<
   static Live = Layer.sync(this, () => ({
     namespace: deriveCustomerAvatarNamespace({
       vercelEnvironment: env.VERCEL_ENV,
-      deploymentId: Option.fromUndefinedOr(env.VERCEL_GIT_COMMIT_SHA),
+      deploymentId: Option.fromUndefinedOr(
+        resolveDeploymentIdentity(env).revisionSha
+      ),
     }),
   }));
 }

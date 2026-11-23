@@ -21,6 +21,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Console, Data, Effect, Match, Schedule } from "effect";
 import { runStandaloneWorkspaceEffect } from "@/shared/backend/standalone-workspace-effect";
+import { resolveDeploymentIdentity } from "@/shared/deployment/deployment-identity";
+import { selectDeploymentStageSetting } from "@/shared/deployment/deployment-stage-setting.js";
 import { runCommand } from "./shared/command";
 import {
   describeSourceMapUploadFailure,
@@ -77,8 +79,8 @@ export const sourceMapUpload = (
   env: Readonly<Record<string, string | undefined>>,
   distDir: string
 ): SourceMapUpload | undefined => {
-  if (env.VERCEL_ENV !== "production") return undefined;
-  const release = env.VERCEL_GIT_COMMIT_SHA;
+  if (selectDeploymentStageSetting(env) !== "production") return undefined;
+  const release = resolveDeploymentIdentity(env).revisionSha;
   return {
     args: [
       "sourcemap",

@@ -73,8 +73,17 @@ const inspectedResponses = (result: { readonly stdout: string }) =>
     )
   );
 
-const inspectCheckoutEntry = (
-  deploymentEnvironment: "preview" | "production" | "development"
+type InspectedRequest = readonly [
+  url: string,
+  init: {
+    readonly method?: string;
+    readonly headers?: Readonly<Record<string, string>>;
+  },
+];
+
+const inspectProxyResponses = (
+  requests: readonly InspectedRequest[],
+  env: Readonly<Record<string, string | undefined>>
 ) =>
   runCommand(
     [
@@ -85,26 +94,8 @@ const inspectCheckoutEntry = (
       `
         const { NextRequest } = await import("next/server");
         const { proxy } = await import("./proxy.ts");
-        const requests = [
-          ["https://branch-preview.vercel.app/en-US/checkout/pay?state=synthetic%2Bsummary", {}],
-          ["https://branch-preview.vercel.app/cs-CZ/checkout/pay?state=synthetic-summary", { method: "HEAD" }],
-          ["https://branch-preview.vercel.app/checkout/pay?state=synthetic-summary", {}],
-          ["https://immutable-preview.vercel.app/en-US/checkout/pay", {}],
-          ["https://branch-preview.vercel.app/en-US/cowork", {}],
-          ["https://branch-preview.vercel.app/en-US/checkout/pay/return/synthetic-order", {}],
-          ["https://branch-preview.vercel.app/en-US/checkout/pay", { method: "POST", headers: { "next-action": "synthetic-action" } }],
-          ["https://branch-preview.vercel.app/en-US/checkout/pay?state=synthetic-summary", { headers: { rsc: "1" } }],
-          ["https://branch-preview.vercel.app/en-US/account", {}],
-          ["https://immutable-preview.vercel.app/en-US/account", { headers: { cookie: "better-auth.session_token=synthetic-session" } }],
-          ["https://branch-preview.vercel.app/en-US", {}],
-          ["https://branch-preview.vercel.app/en-US/reservation/cowork", {}],
-          ["https://workspace.deskohub.cz/en-US/checkout/pay?state=synthetic-summary", {}],
-          ["https://immutable-preview.vercel.app/en/faq?utm_source=synthetic", {}],
-          ["https://branch-preview.vercel.app/en-US/admin", { method: "HEAD" }],
-          ["https://branch-preview.vercel.app/cs-CZ/reservation/access/synthetic-order?accessToken=synthetic-token", {}],
-        ];
         const results = [];
-        for (const [url, options] of requests) {
+        for (const [url, options] of ${JSON.stringify(requests)}) {
           const response = await proxy(new NextRequest(url, options));
           results.push({
             status: response.status,
@@ -116,19 +107,72 @@ const inspectCheckoutEntry = (
         process.stdout.write("\\n${inspectionMarker}" + JSON.stringify(results));
       `,
     ],
-    {
-      cwd: import.meta.dir,
-      env: {
-        ...process.env,
-        VERCEL_ENV: deploymentEnvironment,
-        // Deployed environments require a Resend key; the test env omits it.
-        EMAIL_API_KEY: "re_test",
-        VERCEL_URL: "immutable-preview.vercel.app",
-        VERCEL_PROJECT_PRODUCTION_URL: "workspace.example",
-        VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-preview-bypass",
-      },
-    }
+    { cwd: import.meta.dir, env }
   );
+
+const checkoutEntryRequests: readonly InspectedRequest[] = [
+  [
+    "https://branch-preview.vercel.app/en-US/checkout/pay?state=synthetic%2Bsummary",
+    {},
+  ],
+  [
+    "https://branch-preview.vercel.app/cs-CZ/checkout/pay?state=synthetic-summary",
+    { method: "HEAD" },
+  ],
+  [
+    "https://branch-preview.vercel.app/checkout/pay?state=synthetic-summary",
+    {},
+  ],
+  ["https://immutable-preview.vercel.app/en-US/checkout/pay", {}],
+  ["https://branch-preview.vercel.app/en-US/cowork", {}],
+  [
+    "https://branch-preview.vercel.app/en-US/checkout/pay/return/synthetic-order",
+    {},
+  ],
+  [
+    "https://branch-preview.vercel.app/en-US/checkout/pay",
+    { method: "POST", headers: { "next-action": "synthetic-action" } },
+  ],
+  [
+    "https://branch-preview.vercel.app/en-US/checkout/pay?state=synthetic-summary",
+    { headers: { rsc: "1" } },
+  ],
+  ["https://branch-preview.vercel.app/en-US/account", {}],
+  [
+    "https://immutable-preview.vercel.app/en-US/account",
+    { headers: { cookie: "better-auth.session_token=synthetic-session" } },
+  ],
+  ["https://branch-preview.vercel.app/en-US", {}],
+  ["https://branch-preview.vercel.app/en-US/reservation/cowork", {}],
+  [
+    "https://workspace.deskohub.cz/en-US/checkout/pay?state=synthetic-summary",
+    {},
+  ],
+  ["https://immutable-preview.vercel.app/en/faq?utm_source=synthetic", {}],
+  ["https://branch-preview.vercel.app/en-US/admin", { method: "HEAD" }],
+  [
+    "https://branch-preview.vercel.app/cs-CZ/reservation/access/synthetic-order?accessToken=synthetic-token",
+    {},
+  ],
+  // On Vercel the request URL names the visited host; Host doesn't override it.
+  [
+    "https://workspace-alias.vercel.app/en-US/faq",
+    { headers: { host: "workspace.deskohub.cz" } },
+  ],
+];
+
+const inspectCheckoutEntry = (
+  deploymentEnvironment: "preview" | "production" | "development"
+) =>
+  inspectProxyResponses(checkoutEntryRequests, {
+    ...process.env,
+    VERCEL_ENV: deploymentEnvironment,
+    // Deployed environments require a Resend key; the test env omits it.
+    EMAIL_API_KEY: "re_test",
+    VERCEL_URL: "immutable-preview.vercel.app",
+    VERCEL_PROJECT_PRODUCTION_URL: "workspace.example",
+    VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-preview-bypass",
+  });
 
 // Each environment needs its own process because `env` captures VERCEL_ENV at
 // load; tests share one inspection per environment.
@@ -230,6 +274,7 @@ test("moves Production alias page loads to the canonical origin with their path 
       15,
       "https://workspace.deskohub.cz/cs-CZ/reservation/access/synthetic-order?accessToken=synthetic-token",
     ],
+    [16, "https://workspace.deskohub.cz/en-US/faq"],
   ]);
   for (const [index, canonicalUrl] of canonicalUrls) {
     expect(responses[index].status).toBe(308);
@@ -255,6 +300,94 @@ test("lets Preview deployments serve a bare language on their own host", async (
   expect(response.status).toBe(308);
   expect(response.location).toBe(
     "https://immutable-preview.vercel.app/en-US/faq?utm_source=synthetic"
+  );
+});
+
+// Behind TLS termination a container's server sees its listen address in the
+// request URL, and the protocol Next derives from X-Forwarded-Proto.
+const containerRequests: readonly InspectedRequest[] = [
+  [
+    "https://0.0.0.0:8080/en-US/faq",
+    { headers: { host: "workspace.deskohub.cz" } },
+  ],
+  [
+    "https://0.0.0.0:8080/en-US/faq",
+    { headers: { host: "workspace-preview.example" } },
+  ],
+  [
+    "https://0.0.0.0:8080/en-US/faq?utm_source=synthetic",
+    { headers: { host: "workspace-service.run.example" } },
+  ],
+  // A client can set X-Forwarded-Host; only Host names the addressed host.
+  [
+    "https://0.0.0.0:8080/en-US/faq",
+    {
+      headers: {
+        host: "workspace-service.run.example",
+        "x-forwarded-host": "workspace.deskohub.cz",
+      },
+    },
+  ],
+  [
+    "https://0.0.0.0:8080/en-US/faq",
+    {
+      headers: {
+        host: "workspace-service.run.example",
+        "x-forwarded-host": "workspace-preview.example",
+      },
+    },
+  ],
+  // Plain HTTP that reached the server without TLS.
+  [
+    "http://0.0.0.0:8080/en-US/faq",
+    { headers: { host: "workspace-preview.example" } },
+  ],
+];
+
+const inspectContainer = (deploymentStage: "preview" | "production") =>
+  inspectProxyResponses(containerRequests, {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(([name]) => !name.startsWith("VERCEL"))
+    ),
+    EMAIL_API_KEY: "re_test",
+    WORKSPACE_DEPLOYMENT_STAGE: deploymentStage,
+    WORKSPACE_PUBLIC_ORIGIN: "https://workspace-preview.example",
+    WORKSPACE_RUNTIME_HOST: "container",
+    WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER: "x-client-address",
+  });
+
+test("serves a TLS-terminated container Preview on its public origin and moves other hosts there", async () => {
+  const result = await inspectContainer("preview");
+  expect(result.exitCode).toBe(0);
+  const responses = inspectedResponses(result);
+  expect(responses[1]).toMatchObject({ status: 200, location: null });
+  expect(responses[2].location).toBe(
+    "https://workspace-preview.example/en-US/faq?utm_source=synthetic"
+  );
+  expect(responses[3].location).toBe(
+    "https://workspace-preview.example/en-US/faq"
+  );
+  expect(responses[4].location).toBe(
+    "https://workspace-preview.example/en-US/faq"
+  );
+  expect(responses[5].location).toBe(
+    "https://workspace-preview.example/en-US/faq"
+  );
+});
+
+test("serves a TLS-terminated container Production on the canonical host and moves other hosts there", async () => {
+  const result = await inspectContainer("production");
+  expect(result.exitCode).toBe(0);
+  const responses = inspectedResponses(result);
+  expect(responses[0]).toMatchObject({ status: 200, location: null });
+  for (const index of [1, 3]) {
+    expect(responses[index]).toMatchObject({
+      status: 308,
+      location: "https://workspace.deskohub.cz/en-US/faq",
+    });
+  }
+  expect(responses[2].location).toBe(
+    "https://workspace.deskohub.cz/en-US/faq?utm_source=synthetic"
   );
 });
 

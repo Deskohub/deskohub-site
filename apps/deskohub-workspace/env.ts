@@ -5,7 +5,7 @@ import {
   createEnvironmentSchema,
   workspaceServerEnvSchema,
 } from "./env.schema";
-import { selectDeploymentStageSetting } from "./shared/deployment/deployment-stage";
+import { selectDeploymentStageSetting } from "./shared/deployment/deployment-stage-setting.js";
 
 // Next only transforms statically named environment accesses. Key rotation is
 // additive: configure the new variable, add its direct access here, deploy,
