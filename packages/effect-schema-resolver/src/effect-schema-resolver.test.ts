@@ -33,7 +33,10 @@ import type {
   FieldValues,
   ResolverOptions,
 } from "react-hook-form";
-import { effectSchemaResolver } from "./index";
+import {
+  effectSchemaResolver,
+  effectSchemaResolverWithServices,
+} from "./index";
 
 const resolverOptions = <Values extends FieldValues>(
   options: {
@@ -190,9 +193,11 @@ describe("effectSchemaResolver", () => {
     );
 
     const resolverMessages = [
-      ...Object.values(
-        (result.errors as Record<string, { types?: object }>).extra?.types ?? {}
-      ).flat(),
+      ...Object.entries(result.errors).flatMap(([name, error]) =>
+        name === "extra" && error && "types" in error
+          ? Object.values(error.types ?? {}).flat()
+          : []
+      ),
       result.errors.username?.message,
       ...Object.values(result.errors.password?.types ?? {}).flat(),
       ...Object.values(result.errors.age?.types ?? {}).flat(),
@@ -369,7 +374,7 @@ describe("effectSchemaResolver", () => {
     // @ts-expect-error Service-requiring schemas need explicit services.
     effectSchemaResolver(schema, undefined, { mode: "sync" });
 
-    const resolver = effectSchemaResolver(schema, undefined, { services });
+    const resolver = effectSchemaResolverWithServices(schema, services);
 
     expect(
       await resolver({ username: "joe" }, undefined, resolverOptions())

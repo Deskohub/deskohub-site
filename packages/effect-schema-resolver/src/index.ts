@@ -1,1 +1,4 @@
-export { effectSchemaResolver } from "./effect-schema-resolver";
+export {
+  effectSchemaResolver,
+  effectSchemaResolverWithServices,
+} from "./effect-schema-resolver";

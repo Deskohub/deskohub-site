@@ -7,7 +7,8 @@ import {
 } from "./internal/shared-layer";
 
 interface NextEffectBaseOptions {
-  readonly mapError?: (error: unknown) => unknown;
+  /** Maps the failure of any run, whatever its error type. */
+  readonly mapError?: <E>(error: E) => unknown;
 }
 
 interface NextEffectRunnableOptions extends NextEffectBaseOptions {
