@@ -285,6 +285,46 @@ describe("Alchemy beta.87 surface", () => {
     }
   });
 
+  test("a plain deploy refuses a pending traffic change but keeps a candidate", async () => {
+    const plain = (record: ReleaseRecord) =>
+      evaluate(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(
+            heldBy(record, "deploy")
+          );
+          return yield* declareRecordedWorkspaceServices(
+            sandboxConfig,
+            runAsHolder(null)
+          ).pipe(Effect.provideService(ReleaseRecordStore, store));
+        })
+      );
+    const serving = servingRecord();
+    const { record: candidate, releaseId } = Effect.runSync(
+      stage(serving, {
+        expectedGeneration: serving.generation,
+        sha: GitSha.make("b".repeat(40)),
+        imageDigest: digest,
+        origin: "cloud-run",
+        liveTemplate: null,
+        now,
+      })
+    );
+    const pending = Effect.runSync(
+      promote(candidate, {
+        expectedGeneration: candidate.generation,
+        releaseId,
+        now,
+        candidateReadback: candidate.candidate,
+      })
+    );
+
+    const staged = await plain(candidate);
+    expect(staged.exit._tag).toBe("Success");
+    const refused = await plain(pending);
+    expect(String(refused.exit)).toContain("ReleaseApplyPending");
+    expect(refused.resources).toEqual({});
+  });
+
   test("refuses an empty record while the web service is live", async () => {
     const liveWeb = (live: boolean) =>
       ReleaseServiceReadback.of({
@@ -396,13 +436,12 @@ describe("Alchemy beta.87 surface", () => {
     const record = servingRecord();
     const declare = (
       operation: "deploy" | "deliver",
-      generation: number | null,
-      stored: ReleaseRecord = record
+      generation: number | null
     ) =>
       evaluate(
         Effect.gen(function* () {
           const store = yield* makeInMemoryReleaseRecordStore(
-            heldBy(stored, operation)
+            heldBy(record, operation)
           );
           return yield* declareRecordedWorkspaceServices(
             sandboxConfig,
@@ -417,24 +456,6 @@ describe("Alchemy beta.87 surface", () => {
     const unfenced = await declare("deliver", null);
     expect(String(unfenced.exit)).toContain("ReleaseWriterModeMismatch");
     expect(unfenced.resources).toEqual({});
-    // A plain deploy leaves a pending traffic change to recover or restore.
-    const active = record.active;
-    if (active === null) {
-      throw new Error("expected a serving release");
-    }
-    const pending = {
-      ...record,
-      pendingApply: {
-        operation: "restore" as const,
-        target: active,
-        trafficGeneration: record.trafficGeneration + 1,
-        startedAt: "2026-11-22T10:00:00Z",
-      },
-    };
-    expect(pending.pendingApply).not.toBeNull();
-    const plainOverPending = await declare("deploy", null, pending);
-    expect(String(plainOverPending.exit)).toContain("ReleaseApplyPending");
-    expect(plainOverPending.resources).toEqual({});
   });
 
   test("plans private workers by digest with distinct audiences", () => {
