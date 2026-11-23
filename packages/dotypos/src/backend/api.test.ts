@@ -10,8 +10,8 @@ const request = HttpClientRequest.get("https://api.dotykacka.test/v2/x");
 const response = (status: number) =>
   HttpClientResponse.fromWeb(request, new Response(null, { status }));
 
-const fromAddressedRequest = (error: unknown) =>
-  toDotyposWireFailure(error, { fromAccessToken: false });
+const fromAddressedRequest = (cause: unknown) =>
+  toDotyposWireFailure(cause, { fromAccessToken: false });
 
 describe("toDotyposWireFailure", () => {
   test.each([

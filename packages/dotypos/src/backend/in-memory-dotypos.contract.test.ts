@@ -5,6 +5,7 @@ import {
   DotyposRuntimeConfigSchema,
   makeDotyposRuntimeConfigLayer,
 } from "../config";
+import type { DotyposFailure } from "../errors";
 import type { Customer, Reservation } from "../generated/effect.gen";
 import {
   DotyposCustomerIdSchema,
@@ -97,7 +98,7 @@ const fixtureFetch = (): typeof globalThis.fetch => {
   const { customers, reservations } = fixtures();
   const versions = new Map<string, number>();
   const notFound = () => new Response(null, { status: 404 });
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const answer = async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.pathname === "/signin/token") {
@@ -115,20 +116,22 @@ const fixtureFetch = (): typeof globalThis.fetch => {
     }
     const records = collection === "customers" ? customers : reservations;
     const index = records.findIndex((record) => record.id === id);
-    if (id === undefined || index === -1) return notFound();
+    const record = records[index];
+    if (id === undefined || record === undefined) return notFound();
     const version = versions.get(id) ?? 0;
     const etag = `"v${version}"`;
     if (request.method === "PATCH") {
       if (request.headers.get("If-Match") !== etag) {
         return new Response(null, { status: 412 });
       }
-      const patched = { ...records[index]!, ...(await request.json()) };
+      const patched = { ...record, ...(await request.json()) };
       records[index] = patched;
       versions.set(id, version + 1);
       return Response.json(patched, { headers: { ETag: `"v${version + 1}"` } });
     }
-    return Response.json(records[index], { headers: { ETag: etag } });
-  }) as typeof globalThis.fetch;
+    return Response.json(record, { headers: { ETag: etag } });
+  };
+  return Object.assign(answer, { preconnect: globalThis.fetch.preconnect });
 };
 
 const liveLayer = () =>
@@ -158,28 +161,27 @@ const inMemoryLayer = () => {
 };
 
 /** The outcome a caller can branch on: the value, or the failure's tag, reason and request. */
-const outcome = <A>(exit: Exit.Exit<A, unknown>) =>
+const outcome = <A>(exit: Exit.Exit<A, DotyposFailure>) =>
   Exit.match(exit, {
     onSuccess: (value) => ({ value }),
     onFailure: (cause) => {
-      const failure = Option.getOrUndefined(Exit.findErrorOption(exit)) as
-        | Record<string, unknown>
-        | undefined;
+      const failure = Option.getOrUndefined(Exit.findErrorOption(exit));
       return failure
         ? {
             failure: {
               _tag: failure._tag,
-              reason: failure.reason,
-              operation: failure.operation,
-              request: failure.request,
-              reservationId: failure.reservationId,
+              reason: "reason" in failure ? failure.reason : undefined,
+              operation: "operation" in failure ? failure.operation : undefined,
+              request: "request" in failure ? failure.request : undefined,
+              reservationId:
+                "reservationId" in failure ? failure.reservationId : undefined,
             },
           }
         : { defect: String(cause) };
     },
   });
 
-const agree = async <A, E>(
+const agree = async <A, E extends DotyposFailure>(
   scenario: Effect.Effect<A, E, DotyposService>,
   normalize: (value: A) => unknown = (value) => value
 ) => {

@@ -1,6 +1,6 @@
-import { Match } from "effect";
 import {
   type DotyposOperation,
+  type DotyposReadFailure,
   DotyposRejected,
   type DotyposRequest,
   DotyposUnavailable,
@@ -9,7 +9,6 @@ import {
 } from "../errors";
 import type { DotyposWireFailure } from "./api";
 import {
-  type DotyposAttemptFailure,
   type DotyposRequestFailure,
   dotyposRequestProfiles,
 } from "./request-profiles";
@@ -37,6 +36,20 @@ const requestKind = (request: DotyposRequest): DotyposRequestKind => {
   return profile.repeat === "conditional" ? "conditional" : "write";
 };
 
+/** Only a write may have been applied, so only a write's failure can be uncertain. */
+const surfacesUncertainty = <Request extends DotyposRequest>(
+  request: Request,
+  failure: DotyposUncertain
+): failure is DotyposUncertain & DotyposRequestFailure<Request> =>
+  requestKind(request) !== "read";
+
+/** Only a conditional write can meet a version conflict. */
+const surfacesVersionConflict = <Request extends DotyposRequest>(
+  request: Request,
+  failure: DotyposVersionConflict
+): failure is DotyposVersionConflict & DotyposRequestFailure<Request> =>
+  requestKind(request) === "conditional";
+
 const connectionFailedMessage = "Failed to connect to Dotypos";
 
 /**
@@ -49,58 +62,66 @@ export const classifyWireFailure = <Request extends DotyposRequest>(
   failure: DotyposWireFailure,
   call: DotyposCall<Request>
 ): DotyposRequestFailure<Request> => {
-  const fields: DotyposFailureFields = {
+  const fields = {
     operation: call.operation,
     request: call.request,
     ...(failure.cause !== undefined && { cause: failure.cause }),
   };
-  const kind = failure.fromAccessToken ? "read" : requestKind(call.request);
-  const outcome: DotyposAttemptFailure = Match.value(failure.outcome).pipe(
-    Match.discriminatorsExhaustive("kind")({
-      status: ({ status }) =>
-        failure.fromAccessToken
-          ? classifyAccessTokenStatus(status, fields)
-          : classifyStatus(status, kind, fields),
-      transport: () =>
-        unavailableOrUncertain(kind, "transport", {
-          ...fields,
-          message: connectionFailedMessage,
-        }),
-      unreadable: () => rejectedOrUncertain(kind, fields),
-    })
-  );
-  return outcome as DotyposRequestFailure<Request>;
+  const { outcome } = failure;
+  switch (outcome.kind) {
+    case "status":
+      return failure.fromAccessToken
+        ? classifyAccessTokenStatus(outcome.status, fields)
+        : classifyStatus(outcome.status, fields);
+    case "transport":
+      return failure.fromAccessToken
+        ? new DotyposUnavailable({
+            ...fields,
+            reason: "transport",
+            message: connectionFailedMessage,
+          })
+        : unavailableOrUncertain("transport", {
+            ...fields,
+            message: connectionFailedMessage,
+          });
+    case "unreadable":
+      return failure.fromAccessToken
+        ? new DotyposRejected({ ...fields, reason: "invalid-response" })
+        : rejectedOrUncertain(fields);
+  }
 };
 
-const classifyStatus = (
+const classifyStatus = <Request extends DotyposRequest>(
   status: number,
-  kind: DotyposRequestKind,
-  base: DotyposFailureFields
-): DotyposAttemptFailure => {
+  base: DotyposFailureFields & { readonly request: Request }
+): DotyposRequestFailure<Request> => {
   const fields = {
     ...base,
     httpStatus: status,
     message: "Dotypos API request failed",
   };
-  if (status < 400) return rejectedOrUncertain(kind, fields);
-  if (status >= 500) return unavailableOrUncertain(kind, "server", fields);
-  return classifyClientErrorStatus(status, kind, fields);
+  if (status < 400) return rejectedOrUncertain(fields);
+  if (status >= 500) return unavailableOrUncertain("server", fields);
+  return classifyClientErrorStatus(status, fields);
 };
 
 /** A 4xx answer: Dotypos refused the request without applying it. */
-const classifyClientErrorStatus = (
+const classifyClientErrorStatus = <Request extends DotyposRequest>(
   status: number,
-  kind: DotyposRequestKind,
-  fields: DotyposFailureFields & { readonly httpStatus: number }
-): DotyposAttemptFailure => {
+  fields: DotyposFailureFields & {
+    readonly request: Request;
+    readonly httpStatus: number;
+  }
+): DotyposRequestFailure<Request> => {
   if (status === 401 || status === 403) {
     return new DotyposRejected({ ...fields, reason: "unauthorized" });
   }
   if (status === 404) {
     return new DotyposRejected({ ...fields, reason: "not-found" });
   }
-  if ((status === 409 || status === 412) && kind === "conditional") {
-    return new DotyposVersionConflict(fields);
+  if (status === 409 || status === 412) {
+    const conflict = new DotyposVersionConflict(fields);
+    if (surfacesVersionConflict(fields.request, conflict)) return conflict;
   }
   if (status === 429) {
     return new DotyposUnavailable({ ...fields, reason: "rate-limited" });
@@ -112,7 +133,7 @@ const classifyClientErrorStatus = (
 const classifyAccessTokenStatus = (
   status: number,
   base: DotyposFailureFields
-): DotyposAttemptFailure => {
+): DotyposReadFailure => {
   const fields = {
     ...base,
     httpStatus: status,
@@ -130,31 +151,36 @@ const classifyAccessTokenStatus = (
   return new DotyposRejected({ ...fields, reason: "unauthorized" });
 };
 
-const unavailableOrUncertain = (
-  kind: DotyposRequestKind,
+const unavailableOrUncertain = <Request extends DotyposRequest>(
   reason: "server" | "transport" | "timeout",
-  fields: DotyposFailureFields
-) =>
-  kind === "read"
-    ? new DotyposUnavailable({ ...fields, reason })
-    : new DotyposUncertain({ ...fields, reason });
+  fields: DotyposFailureFields & { readonly request: Request }
+): DotyposRequestFailure<Request> => {
+  const uncertain = new DotyposUncertain({ ...fields, reason });
+  return surfacesUncertainty(fields.request, uncertain)
+    ? uncertain
+    : new DotyposUnavailable({ ...fields, reason });
+};
 
-const rejectedOrUncertain = (
-  kind: DotyposRequestKind,
-  fields: DotyposFailureFields
-) =>
-  kind === "read"
-    ? new DotyposRejected({ ...fields, reason: "invalid-response" })
-    : new DotyposUncertain({ ...fields, reason: "invalid-response" });
+const rejectedOrUncertain = <Request extends DotyposRequest>(
+  fields: DotyposFailureFields & { readonly request: Request }
+): DotyposRequestFailure<Request> => {
+  const uncertain = new DotyposUncertain({
+    ...fields,
+    reason: "invalid-response",
+  });
+  return surfacesUncertainty(fields.request, uncertain)
+    ? uncertain
+    : new DotyposRejected({ ...fields, reason: "invalid-response" });
+};
 
 /** The per-request timeout fired. A write may already have been sent. */
 export const dotyposTimeout = <Request extends DotyposRequest>(
   call: DotyposCall<Request>
 ): DotyposRequestFailure<Request> =>
-  unavailableOrUncertain(requestKind(call.request), "timeout", {
+  unavailableOrUncertain("timeout", {
     ...call,
     message: connectionFailedMessage,
-  }) as DotyposRequestFailure<Request>;
+  });
 
 /**
  * Dotypos answered 2xx with a body the package cannot use. `httpStatus` is set
@@ -168,10 +194,10 @@ export const dotyposInvalidResponse = <Request extends DotyposRequest>(
     readonly cause?: unknown;
   }
 ): DotyposRequestFailure<Request> =>
-  rejectedOrUncertain(requestKind(call.request), {
+  rejectedOrUncertain({
     ...call,
     ...details,
-  }) as DotyposRequestFailure<Request>;
+  });
 
 /** The caller's input is invalid, so no request was sent. */
 export const dotyposInvalidRequest = (

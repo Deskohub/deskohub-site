@@ -1,46 +1,64 @@
 import { expect, test } from "bun:test";
+import {
+  type CSSProperties,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import type { Table } from "./generated";
 import { TableMap } from "./table-map";
 
-type ReactElementLike = {
-  readonly props: {
-    readonly "aria-label"?: string;
-    readonly children: ReactElementLike | readonly ReactElementLike[];
-    readonly className?: string;
-    readonly color?: string;
-    readonly d?: string;
-    readonly fill?: string;
-    readonly height?: number;
-    readonly onClick?: () => void;
-    readonly onKeyDown?: (event: {
-      readonly key: string;
-      readonly preventDefault: () => void;
-    }) => void;
-    readonly points?: string;
-    readonly role?: string;
-    readonly stroke?: string;
-    readonly strokeOpacity?: number;
-    readonly strokeWidth?: number;
-    readonly style?: Record<string, unknown>;
-    readonly tabIndex?: number;
-    readonly transform?: string;
-    readonly viewBox?: string;
-    readonly width?: number;
-    readonly x?: number;
-    readonly x1?: number;
-    readonly x2?: number;
-    readonly y?: number;
-    readonly y1?: number;
-    readonly y2?: number;
-  };
+type ElementProps = {
+  readonly "aria-label"?: string;
+  readonly children?: ReactNode;
+  readonly className?: string;
+  readonly color?: string;
+  readonly d?: string;
+  readonly fill?: string;
+  readonly height?: number;
+  readonly onClick?: () => void;
+  readonly onKeyDown?: (event: {
+    readonly key: string;
+    readonly preventDefault: () => void;
+  }) => void;
+  readonly points?: string;
+  readonly role?: string;
+  readonly stroke?: string;
+  readonly strokeOpacity?: number;
+  readonly strokeWidth?: number;
+  readonly style?: CSSProperties;
+  readonly tabIndex?: number;
+  readonly transform?: string;
+  readonly viewBox?: string;
+  readonly width?: number;
+  readonly x?: number;
+  readonly x1?: number;
+  readonly x2?: number;
+  readonly y?: number;
+  readonly y1?: number;
+  readonly y2?: number;
 };
+
+type ReactElementLike = ReactElement<ElementProps>;
+
+const element = (node: ReactNode): ReactElementLike => {
+  if (!isValidElement<ElementProps>(node)) {
+    throw new Error("Expected a React element");
+  }
+  return node;
+};
+
+/** The element's single child element. */
+const onlyChild = (parent: ReactElementLike) => element(parent.props.children);
 
 const childrenOf = (element: ReactElementLike) => {
   if (!Array.isArray(element.props.children)) {
     throw new Error("Expected element children array");
   }
 
-  return element.props.children;
+  return element.props.children.map((child: ReactNode) =>
+    isValidElement<ElementProps>(child) ? child : undefined
+  );
 };
 
 const firstChild = (element: ReactElementLike) => {
@@ -61,19 +79,21 @@ test("renders positioned tables with classes and click handlers", () => {
   };
   const clicks: Table[] = [];
 
-  const svg = TableMap({
-    tables: [table],
-    tableLabelStyle: () => "label-selected",
-    tableLabelInlineStyle: () => ({ fill: "white" }),
-    tableShapeInlineStyle: () => ({ fill: "navy" }),
-    tableStyle: () => "is-selected",
-    onTableClick: (clickedTable) => clicks.push(clickedTable),
-  }) as ReactElementLike;
+  const svg = element(
+    TableMap({
+      tables: [table],
+      tableLabelStyle: () => "label-selected",
+      tableLabelInlineStyle: () => ({ fill: "white" }),
+      tableShapeInlineStyle: () => ({ fill: "navy" }),
+      tableStyle: () => "is-selected",
+      onTableClick: (clickedTable) => clicks.push(clickedTable),
+    })
+  );
   const group = firstChild(svg);
-  const shapeGroup = group.props.children as ReactElementLike;
+  const shapeGroup = onlyChild(group);
   const label = childrenOf(svg)[1];
   if (!label) throw new Error("Expected table label");
-  const circle = shapeGroup.props.children as ReactElementLike;
+  const circle = onlyChild(shapeGroup);
 
   expect(svg.props.viewBox).toBe("-34 -24 88 88");
   expect(circle.props.className).toBe("is-selected");
@@ -97,17 +117,19 @@ test("renders a rectangular room layout behind tables", () => {
     name: "T1",
   };
 
-  const svg = TableMap({
-    tables: [table],
-    tableStyle: () => "is-muted",
-    roomLayout: {
-      x: -100,
-      y: -50,
-      width: 300,
-      height: 200,
-      className: "room-outline",
-    },
-  }) as ReactElementLike;
+  const svg = element(
+    TableMap({
+      tables: [table],
+      tableStyle: () => "is-muted",
+      roomLayout: {
+        x: -100,
+        y: -50,
+        width: 300,
+        height: 200,
+        className: "room-outline",
+      },
+    })
+  );
   const room = firstChild(firstChild(svg));
 
   expect(svg.props.viewBox).toBe("-120 -70 340 240");
@@ -119,24 +141,26 @@ test("renders a rectangular room layout behind tables", () => {
 });
 
 test("renders a bottom entrance door with a right hinge and arrow", () => {
-  const svg = TableMap({
-    tables: [],
-    tableStyle: () => "is-muted",
-    roomLayout: {
-      x: 0,
-      y: 0,
-      width: 100,
-      height: 100,
-      doors: [
-        {
-          wall: "bottom",
-          offset: 10,
-          width: 30,
-          showEntranceArrow: true,
-        },
-      ],
-    },
-  }) as ReactElementLike;
+  const svg = element(
+    TableMap({
+      tables: [],
+      tableStyle: () => "is-muted",
+      roomLayout: {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+        doors: [
+          {
+            wall: "bottom",
+            offset: 10,
+            width: 30,
+            showEntranceArrow: true,
+          },
+        ],
+      },
+    })
+  );
   const roomGroup = firstChild(svg);
   const doorGroup = childrenOf(roomGroup)[1];
   if (!doorGroup) throw new Error("Expected door group");
@@ -169,17 +193,19 @@ test("rotates geometry while keeping labels upright", () => {
     positionY: "20",
   };
 
-  const svg = TableMap({
-    tables: [table],
-    tableStyle: () => "is-muted",
-    rotation: 90,
-    roomLayout: {
-      x: 0,
-      y: 0,
-      width: 100,
-      height: 50,
-    },
-  }) as ReactElementLike;
+  const svg = element(
+    TableMap({
+      tables: [table],
+      tableStyle: () => "is-muted",
+      rotation: 90,
+      roomLayout: {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 50,
+      },
+    })
+  );
   const [rotationGroup, label] = childrenOf(svg);
   if (!(rotationGroup && label)) throw new Error("Expected rotated map label");
   const tableGroup = childrenOf(rotationGroup)[1];
@@ -198,11 +224,13 @@ test("activates a table from Enter or Space and ignores other keys", () => {
   const clicks: Table[] = [];
   const prevented: string[] = [];
 
-  const svg = TableMap({
-    tables: [table],
-    tableStyle: () => "is-muted",
-    onTableClick: (clickedTable) => clicks.push(clickedTable),
-  }) as ReactElementLike;
+  const svg = element(
+    TableMap({
+      tables: [table],
+      tableStyle: () => "is-muted",
+      onTableClick: (clickedTable) => clicks.push(clickedTable),
+    })
+  );
   const group = firstChild(svg);
 
   for (const key of ["Enter", " ", "Tab", "a"]) {
@@ -226,10 +254,12 @@ test("renders a static image and labels unnamed interactive tables", () => {
     type: "ROUND",
   };
 
-  const staticSvg = TableMap({
-    tables: [unnamed],
-    tableStyle: () => "is-muted",
-  }) as ReactElementLike;
+  const staticSvg = element(
+    TableMap({
+      tables: [unnamed],
+      tableStyle: () => "is-muted",
+    })
+  );
   const geometry = firstChild(staticSvg);
 
   expect(staticSvg.props.role).toBe("img");
@@ -237,11 +267,13 @@ test("renders a static image and labels unnamed interactive tables", () => {
   expect(geometry.props.transform).toBe("translate(0 5)");
   expect(staticSvg.props.viewBox).toBe("-52 -47 104 104");
 
-  const interactiveSvg = TableMap({
-    tables: [unnamed, { ...unnamed, id: "table-blank", name: "  " }],
-    tableStyle: () => "is-muted",
-    onTableClick: () => undefined,
-  }) as ReactElementLike;
+  const interactiveSvg = element(
+    TableMap({
+      tables: [unnamed, { ...unnamed, id: "table-blank", name: "  " }],
+      tableStyle: () => "is-muted",
+      onTableClick: () => undefined,
+    })
+  );
   const [first, second] = childrenOf(interactiveSvg);
 
   expect(first?.props["aria-label"]).toBe("Table");
@@ -249,11 +281,13 @@ test("renders a static image and labels unnamed interactive tables", () => {
 });
 
 test("frames an empty map in a unit view box", () => {
-  const svg = TableMap({
-    tables: [],
-    tableStyle: () => "is-muted",
-    ariaLabel: "Empty room",
-  }) as ReactElementLike;
+  const svg = element(
+    TableMap({
+      tables: [],
+      tableStyle: () => "is-muted",
+      ariaLabel: "Empty room",
+    })
+  );
 
   expect(svg.props.viewBox).toBe("0 0 1 1");
   expect(svg.props["aria-label"]).toBe("Empty room");
