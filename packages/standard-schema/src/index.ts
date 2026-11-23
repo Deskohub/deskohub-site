@@ -5,7 +5,7 @@ const isAsyncResult = <Output>(
     | StandardSchemaV1.Result<Output>
     | Promise<StandardSchemaV1.Result<Output>>
 ): result is Promise<StandardSchemaV1.Result<Output>> =>
-  "then" in result && result.then instanceof Function;
+  "then" in result && typeof result.then === "function";
 
 const getSchemaValidationResult = <Input, Output>(
   schema: StandardSchemaV1<Input, Output>,
