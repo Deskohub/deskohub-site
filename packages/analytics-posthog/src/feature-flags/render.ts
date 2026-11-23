@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect";
+import { Effect, Option, Predicate, Schema } from "effect";
 import Mustache from "mustache";
 import type { PostHogFeatureFlagDefinition } from "./definitions";
 import { PostHogFeatureFlagError } from "./errors";
@@ -119,7 +119,7 @@ const renderPayloadTypeForFlag = (definition: PostHogFeatureFlagDefinition) =>
   ]);
 
 const inferPayloadType = (payload: Schema.Json): PayloadType => {
-  if (typeof payload !== "string") return inferJsonPayloadType(payload, 0);
+  if (!Predicate.isString(payload)) return inferJsonPayloadType(payload, 0);
   if (isRedactedPayload(payload)) return { kind: "unknown" };
 
   const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(
@@ -142,35 +142,28 @@ const inferJsonPayloadType = (
   if (depth > 6) return { kind: "unknown" };
   if (value === null) return { kind: "null" };
 
-  switch (typeof value) {
-    case "boolean":
-      return { kind: "boolean" };
-    case "number":
-      return { kind: "number" };
-    case "string":
-      return { kind: "string" };
-    case "object": {
-      if (isJsonArray(value)) {
-        return {
-          kind: "array",
-          items:
-            value.length > 50
-              ? [{ kind: "unknown" }]
-              : value.map((item) => inferJsonPayloadType(item, depth + 1)),
-        };
-      }
-
-      return {
-        kind: "object",
-        properties: Object.entries(value)
-          .map(([key, property]) => ({
-            key,
-            value: inferJsonPayloadType(property, depth + 1),
-          }))
-          .toSorted((left, right) => left.key.localeCompare(right.key)),
-      };
-    }
+  if (Predicate.isBoolean(value)) return { kind: "boolean" };
+  if (Predicate.isNumber(value)) return { kind: "number" };
+  if (Predicate.isString(value)) return { kind: "string" };
+  if (isJsonArray(value)) {
+    return {
+      kind: "array",
+      items:
+        value.length > 50
+          ? [{ kind: "unknown" }]
+          : value.map((item) => inferJsonPayloadType(item, depth + 1)),
+    };
   }
+
+  return {
+    kind: "object",
+    properties: Object.entries(value)
+      .map(([key, property]) => ({
+        key,
+        value: inferJsonPayloadType(property, depth + 1),
+      }))
+      .toSorted((left, right) => left.key.localeCompare(right.key)),
+  };
 };
 
 const isJsonArray = (value: Schema.Json): value is readonly Schema.Json[] =>

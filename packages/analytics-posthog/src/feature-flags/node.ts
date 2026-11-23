@@ -39,21 +39,19 @@ export const makePostHogNodeFeatureFlagService = <
 ) => {
   let client: PostHog | undefined;
 
-  const getClient = Effect.fn("PostHogNodeFeatureFlags.getClient")(() =>
-    Effect.suspend(() => {
-      if (client) {
-        return Effect.succeed(client);
-      }
+  const getClient = Effect.suspend(() => {
+    if (client) {
+      return Effect.succeed(client);
+    }
 
-      return createPostHogClient({ config }).pipe(
-        Effect.tap((createdClient) =>
-          Effect.sync(() => {
-            client = createdClient;
-          })
-        )
-      );
-    })
-  );
+    return createPostHogClient({ config }).pipe(
+      Effect.tap((createdClient) =>
+        Effect.sync(() => {
+          client = createdClient;
+        })
+      )
+    );
+  }).pipe(Effect.withSpan("PostHogNodeFeatureFlags.getClient"));
 
   const evaluateFlags = Effect.fn("PostHogNodeFeatureFlags.evaluateFlags")(
     (
@@ -62,7 +60,7 @@ export const makePostHogNodeFeatureFlagService = <
       TypedPostHogFeatureFlagEvaluationSnapshot<Definitions>,
       PostHogFeatureFlagEvaluationError
     > =>
-      getClient().pipe(
+      getClient.pipe(
         Effect.flatMap((postHogClient) => {
           const options = {
             ...config.defaultEvaluationOptions,

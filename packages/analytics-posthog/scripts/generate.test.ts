@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as JsonSchemaGenerator from "@effect/openapi-generator/JsonSchemaGenerator";
 import * as OpenApiGenerator from "@effect/openapi-generator/OpenApiGenerator";
-import { Effect, Schema } from "effect";
+import { Effect, JsonSchema, Schema } from "effect";
 import type { OpenAPISpec } from "effect/http-api/OpenApi";
 
 const recursiveSpec = {
@@ -327,7 +327,7 @@ const writeAndImport = async (fileName: string, source: string) => {
 
 const expectDecodeEncodeRoundTrip = (
   schema: Schema.Codec<unknown>,
-  value: unknown
+  value: Schema.Json
 ): void => {
   const decode = Schema.decodeUnknownSync(schema);
   const decoded = decode(value);
@@ -649,35 +649,34 @@ test("typeOnly generation emits the same type aliases as runtime generation", ()
 const specWithRoot = (
   title: string,
   root: string,
-  schemas: Record<string, unknown>
-) =>
-  ({
-    openapi: "3.1.0",
-    info: { title, version: "1.0.0" },
-    security: [],
-    tags: [],
-    paths: {
-      "/root": {
-        get: {
-          operationId: "getRoot",
-          parameters: [],
-          security: [],
-          tags: ["root"],
-          responses: {
-            "200": {
-              description: "OK",
-              content: {
-                "application/json": {
-                  schema: { $ref: `#/components/schemas/${root}` },
-                },
+  schemas: JsonSchema.Definitions
+): OpenAPISpec => ({
+  openapi: "3.1.0",
+  info: { title, version: "1.0.0" },
+  security: [],
+  tags: [],
+  paths: {
+    "/root": {
+      get: {
+        operationId: "getRoot",
+        parameters: [],
+        security: [],
+        tags: ["root"],
+        responses: {
+          "200": {
+            description: "OK",
+            content: {
+              "application/json": {
+                schema: { $ref: `#/components/schemas/${root}` },
               },
             },
           },
         },
       },
     },
-    components: { securitySchemes: {}, schemas },
-  }) as unknown as OpenAPISpec;
+  },
+  components: { securitySchemes: {}, schemas },
+});
 
 // `A -> B -> A` plus `A -> C -> B`, rooted at `C` with `c` declared before `b`.
 // The generator's own cycle search then renders `C` as a non-recursive

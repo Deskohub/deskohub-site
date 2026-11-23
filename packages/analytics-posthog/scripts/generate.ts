@@ -1,6 +1,6 @@
 import * as OpenApiGenerator from "@effect/openapi-generator/OpenApiGenerator";
 import * as OpenApiPatch from "@effect/openapi-generator/OpenApiPatch";
-import { Config, Data, Effect } from "effect";
+import { Config, Data, Effect, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import type { OpenAPISpec } from "effect/http-api/OpenApi";
 
@@ -95,6 +95,22 @@ const downloadSchema = (schemaUrl: URL) =>
     })
   );
 
+/**
+ * The top-level OpenAPI fields the generator reads without a fallback. The
+ * nested operation and schema objects stay JSON for the generator to parse.
+ */
+const OpenApiDocumentShape = Schema.Struct({
+  openapi: Schema.String,
+  info: Schema.Struct({ title: Schema.String, version: Schema.String }),
+  paths: Schema.Record(Schema.String, Schema.Json),
+});
+
+const isOpenApiDocument = Schema.is(OpenApiDocumentShape);
+
+const OpenApiDocument = Schema.declare<OpenAPISpec>(
+  (document): document is OpenAPISpec => isOpenApiDocument(document)
+);
+
 const generatePostHogClient = Effect.gen(function* () {
   const schemaUrl = yield* Config.URL("POSTHOG_OPENAPI_SCHEMA_URL").pipe(
     Config.withDefault(
@@ -120,17 +136,25 @@ const generatePostHogClient = Effect.gen(function* () {
         })
     )
   );
-  const generator = yield* OpenApiGenerator.OpenApiGenerator;
-  const generatedClient = yield* generator.generate(
-    compatibleSchema as unknown as OpenAPISpec,
-    {
-      // Keeps objects that omit `additionalProperties` as `Schema.Struct`s
-      // with `.fields` instead of open records of JSON values.
-      closeObjects: true,
-      format: "httpclient",
-      name: "PostHogClient",
-    }
+  const openApiDocument = yield* Schema.decodeUnknownEffect(OpenApiDocument)(
+    compatibleSchema
+  ).pipe(
+    Effect.mapError(
+      (cause) =>
+        new PostHogOpenApiGenerationError({
+          message: "PostHog's OpenAPI schema is not an OpenAPI document.",
+          cause,
+        })
+    )
   );
+  const generator = yield* OpenApiGenerator.OpenApiGenerator;
+  const generatedClient = yield* generator.generate(openApiDocument, {
+    // Keeps objects that omit `additionalProperties` as `Schema.Struct`s
+    // with `.fields` instead of open records of JSON values.
+    closeObjects: true,
+    format: "httpclient",
+    name: "PostHogClient",
+  });
   yield* writeGeneratedClient(generatedClient);
 });
 

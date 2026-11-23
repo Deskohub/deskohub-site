@@ -1,32 +1,42 @@
 import { describe, expect, mock, test } from "bun:test";
 import { Effect } from "effect";
+import type {
+  AllFlagsOptions,
+  OverrideFeatureFlagsOptions,
+  PostHogOptions,
+} from "posthog-node";
 import { PostHogDistinctId } from "../identifiers";
 import { definePostHogFeatureFlags } from "./contract";
 
-const evaluateFlags = mock((_distinctId: string, _options?: unknown) =>
+const evaluateFlags = mock((_distinctId: string, _options?: AllFlagsOptions) =>
   Promise.resolve({
     getFlag: () => true,
     getFlagPayload: () => undefined,
     isEnabled: () => true,
   })
 );
-const getAllFlagsAndPayloads = mock((_distinctId: string, _options?: unknown) =>
-  Promise.resolve({
-    featureFlags: {
-      meeting_room_page: true,
-      room_experience: "treatment",
-    },
-    featureFlagPayloads: {
-      room_experience: { capacity: 8 },
-    },
-  })
+const getAllFlagsAndPayloads = mock(
+  (_distinctId: string, _options?: AllFlagsOptions) =>
+    Promise.resolve({
+      featureFlags: {
+        meeting_room_page: true,
+        room_experience: "treatment",
+      },
+      featureFlagPayloads: {
+        room_experience: { capacity: 8 },
+      },
+    })
 );
 const shutdown = mock(() => Promise.resolve());
-const createClient = mock((_projectToken: string, _options: unknown) => {});
-const overrideFeatureFlags = mock((_overrides: unknown) => {});
+const createClient = mock(
+  (_projectToken: string, _options?: PostHogOptions) => {}
+);
+const overrideFeatureFlags = mock(
+  (_overrides: OverrideFeatureFlagsOptions) => {}
+);
 
 mock.module("posthog-node", () => ({
-  PostHog: function PostHog(projectToken: string, options: unknown) {
+  PostHog: function PostHog(projectToken: string, options?: PostHogOptions) {
     createClient(projectToken, options);
 
     return {
