@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Credentials } from "@alchemy.run/gcp";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -85,7 +86,16 @@ const withStore = <A, E>(
         Effect.result,
         Effect.forkChild
       );
-      yield* TestClock.adjust("10 minutes");
+      // Let real response-body promises settle before each tick, so a
+      // tick never times out an attempt that has already answered.
+      for (
+        let tick = 0;
+        tick < 600 && fiber.pollUnsafe() === undefined;
+        tick += 1
+      ) {
+        yield* TestClock.withLive(Effect.sleep("1 millis"));
+        yield* TestClock.adjust("1 second");
+      }
       return yield* Fiber.join(fiber);
     }).pipe(
       Effect.provide(Layer.mergeAll(fake.layer, credentials, TestClock.layer()))
@@ -371,6 +381,153 @@ describe("Cloud Storage release record store", () => {
       `GET ${objectPath}`,
     ]);
     expect(storedObject(fake)).toBeUndefined();
+  });
+
+  test("bounds each attempt at 30 seconds", async () => {
+    const delayed =
+      (seconds: number): Interceptor =>
+      ({ forward }) =>
+        Effect.andThen(Effect.sleep(`${seconds} seconds`), forward);
+    const fake = makeFakeCloudStorage();
+    fake.intercept(delayed(29));
+    expect(success(await withStore(fake, read)).version).toBe("0");
+    expect(fake.requests).toHaveLength(1);
+    fake.intercept(delayed(31));
+    expect(success(await withStore(fake, read)).version).toBe("0");
+    expect(fake.requests).toHaveLength(3);
+  });
+
+  test("gives up on a write that never answers, saying it may have landed", async () => {
+    const fake = makeFakeCloudStorage();
+    fake.intercept(...Array.from({ length: 5 }, () => () => Effect.never));
+    expect(
+      failure(
+        await withStore(fake, write(staged(emptyReleaseRecord, shaA), "0"))
+      )
+    ).toMatchObject({
+      _tag: "ReleaseStoreUnavailable",
+      operation: "write",
+      status: null,
+    });
+    expect(fake.requests).toHaveLength(5);
+  });
+
+  test("keeps an earlier unknown outcome in a later refusal", async () => {
+    const certainFake = makeFakeCloudStorage();
+    certainFake.intercept(respondWith(403));
+    const certain = failure(
+      await withStore(certainFake, write(emptyReleaseRecord, "0"))
+    );
+    const fake = makeFakeCloudStorage();
+    fake.intercept(respondWith(503), respondWith(403));
+    const uncertain = failure(
+      await withStore(fake, write(emptyReleaseRecord, "0"))
+    );
+    expect([certain, uncertain]).toMatchObject([
+      { _tag: "ReleaseStoreUnavailable", operation: "write", status: 403 },
+      { _tag: "ReleaseStoreUnavailable", operation: "write", status: 403 },
+    ]);
+    expect(fake.requests).toHaveLength(2);
+    expect(uncertain).not.toEqual(certain);
+  });
+
+  test("reports a failed confirmation read as an uncertain write", async () => {
+    const fake = makeFakeCloudStorage();
+    fake.intercept(
+      ({ request, forward }) =>
+        Effect.andThen(forward, transportFailure(request)),
+      ({ forward }) => forward,
+      respondWith(401)
+    );
+    expect(
+      failure(
+        await withStore(fake, write(staged(emptyReleaseRecord, shaA), "0"))
+      )
+    ).toMatchObject({
+      _tag: "ReleaseStoreUnavailable",
+      operation: "write",
+      status: 401,
+    });
+    expect(requestLines(fake)).toEqual([
+      `POST ${uploadPath} if=0`,
+      `POST ${uploadPath} if=0`,
+      `GET ${objectPath}`,
+    ]);
+  });
+
+  test("counts an equal record from another writer as this write, and a superseded one as a conflict", async () => {
+    const ours = staged(emptyReleaseRecord, shaA);
+    const theirs = JSON.stringify(staged(emptyReleaseRecord, shaB));
+
+    const coalesced = makeFakeCloudStorage();
+    coalesced.intercept(({ request }) => {
+      coalesced.put(location.bucket, location.object, JSON.stringify(ours));
+      return transportFailure(request);
+    });
+    expect(success(await withStore(coalesced, write(ours, "0")))).toEqual({
+      record: ours,
+      version: String(
+        coalesced.get(location.bucket, location.object)?.generation
+      ),
+    });
+
+    const superseded = makeFakeCloudStorage();
+    superseded.intercept(({ request, forward }) =>
+      Effect.andThen(
+        forward,
+        Effect.suspend(() => {
+          superseded.put(location.bucket, location.object, theirs);
+          return transportFailure(request);
+        })
+      )
+    );
+    expect(
+      failure(await withStore(superseded, write(ours, "0")))
+    ).toMatchObject({ _tag: "ReleaseRecordConflict", expectedVersion: "0" });
+    expect(superseded.get(location.bucket, location.object)?.body).toBe(theirs);
+  });
+
+  test("sends nothing when credentials fail or never resolve", async () => {
+    let tokenRequests = 0;
+    const refused = Layer.succeed(
+      Credentials,
+      // The token error class is internal to the credentials package.
+      Effect.suspend(() => {
+        tokenRequests += 1;
+        return Effect.fail({ _tag: "GCPCredentialsError" });
+      }) as unknown as Credentials["Service"]
+    );
+    const stalled = Layer.succeed(Credentials, Effect.never);
+    for (const credentials of [refused, stalled]) {
+      const fake = makeFakeCloudStorage();
+      expect(
+        failure(
+          await withStore(fake, write(emptyReleaseRecord, "0"), credentials)
+        )
+      ).toMatchObject({
+        _tag: "ReleaseStoreUnavailable",
+        operation: "write",
+        status: null,
+      });
+      expect(fake.requests).toHaveLength(0);
+    }
+    // A refused token exchange is not retried.
+    expect(tokenRequests).toBe(1);
+  });
+
+  test("dies with a fixed message, without the record, when a record does not encode", async () => {
+    const fake = makeFakeCloudStorage();
+    const invalid = { ...emptyReleaseRecord, generation: -987_654 };
+    const exit = await withStore(
+      fake,
+      Effect.exit(write(invalid as ReleaseRecord, "0"))
+    ).then(success);
+    if (exit._tag !== "Failure") {
+      throw new Error("expected the write to die");
+    }
+    expect(Cause.hasDies(exit.cause)).toBe(true);
+    expect(Cause.pretty(exit.cause)).not.toContain("987654");
+    expect(fake.requests).toHaveLength(0);
   });
 
   test("treats a lost precondition after a throttled attempt as a conflict", async () => {

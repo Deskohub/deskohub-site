@@ -375,6 +375,34 @@ export const makeGcsReleaseRecordStore = Effect.fn(
       )
     );
 
+  /**
+   * Once any attempt's outcome is unknown, every later refusal says so:
+   * the write may have landed, and only a re-read shows it.
+   */
+  const keepUncertainty =
+    (outcomeUnknown: Ref.Ref<boolean>) => (failure: ReleaseStoreUnavailable) =>
+      Ref.get(outcomeUnknown).pipe(
+        Effect.flatMap((unknown) =>
+          Effect.fail(
+            unknown
+              ? new ReleaseStoreUnavailable({
+                  operation: "write",
+                  status: failure.status,
+                  reason: `${failure.reason}; an earlier attempt may have landed`,
+                })
+              : failure
+          )
+        )
+      );
+
+  /**
+   * Compare-and-set on the object generation. After an attempt whose
+   * outcome is unknown, success means a read found this record at a newer
+   * generation: an equal record from another writer counts as this one,
+   * which is harmless because the stored decision is the same. A conflict
+   * may follow a write that landed and was then superseded; either way the
+   * caller re-reads and decides again.
+   */
   const write = (
     record: ReleaseRecord,
     ifVersion: string
@@ -385,14 +413,26 @@ export const makeGcsReleaseRecordStore = Effect.fn(
     Effect.Do.pipe(
       Effect.let("record", () => record),
       Effect.let("ifVersion", () => ifVersion),
-      // The record type guarantees a valid encoding; a failure is a defect.
-      Effect.bind("body", () => Effect.orDie(encodeStoredRecord(record))),
+      // The record type guarantees a valid encoding, so a failure is a
+      // defect; its message stays fixed so no record value leaks.
+      Effect.bind("body", () =>
+        encodeStoredRecord(record).pipe(
+          Effect.mapError(
+            () => new Error("the release record to write does not encode")
+          ),
+          Effect.orDie
+        )
+      ),
       Effect.bind("outcomeUnknown", () => Ref.make(false)),
       Effect.flatMap((input) =>
         upload(input).pipe(
           Effect.map((version): StoredReleaseRecord => ({ record, version })),
           Effect.catchTag("PreconditionLost", () =>
             settleLostPrecondition(input)
+          ),
+          Effect.catchTag(
+            "ReleaseStoreUnavailable",
+            keepUncertainty(input.outcomeUnknown)
           )
         )
       ),
