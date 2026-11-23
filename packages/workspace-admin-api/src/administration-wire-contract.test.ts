@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { Context, Option, Schema, SchemaAST } from "effect";
+import { Context, Option, Predicate, Schema, SchemaAST } from "effect";
+import type { HttpMethod } from "effect/http";
 import {
   HttpApi,
   HttpApiEndpoint,
   HttpApiGroup,
+  type HttpApiMiddleware,
   HttpApiSchema,
   OpenApi,
 } from "effect/http-api";
@@ -35,8 +37,24 @@ type Json =
   | ReadonlyArray<Json>
   | { readonly [key: string]: Json };
 
+/**
+ * An annotation value the contract can record: JSON, an `Option` of one, or
+ * an object or array of them whose missing fields are `undefined`. A
+ * `Context` holds its values untyped, so anything else still reaches
+ * `toJson` at runtime and fails there.
+ */
+type AnnotationValue =
+  | Json
+  | undefined
+  | Option.None<AnnotationValue>
+  | AnnotationSome
+  | ReadonlyArray<AnnotationValue>
+  | { readonly [key: string]: AnnotationValue };
+
+interface AnnotationSome extends Option.Some<AnnotationValue> {}
+
 /** Annotation values as JSON; an annotation that has no JSON form fails. */
-const toJson = (value: unknown, at: string): Json => {
+const toJson = (value: AnnotationValue, at: string): Json => {
   if (Option.isOption(value)) {
     return Option.match(value, {
       onNone: () => ({ _tag: "None" }),
@@ -46,21 +64,22 @@ const toJson = (value: unknown, at: string): Json => {
   if (Array.isArray(value)) {
     return value.map((item, index) => toJson(item, `${at}[${index}]`));
   }
-  switch (typeof value) {
-    case "string":
-    case "number":
-    case "boolean":
-      return value;
-    case "object":
-      if (value === null) return null;
-      return Object.fromEntries(
-        Object.entries(value)
-          .filter(([, field]) => field !== undefined)
-          .map(([key, field]) => [key, toJson(field, `${at}.${key}`)])
-      );
-    default:
-      throw new Error(`${at} has no JSON form to record.`);
+  if (
+    value === null ||
+    Predicate.isString(value) ||
+    Predicate.isNumber(value) ||
+    Predicate.isBoolean(value)
+  ) {
+    return value;
   }
+  if (Predicate.isObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, field]) => field !== undefined)
+        .map(([key, field]) => [key, toJson(field, `${at}.${key}`)])
+    );
+  }
+  throw new Error(`${at} has no JSON form to record.`);
 };
 
 /**
@@ -68,8 +87,10 @@ const toJson = (value: unknown, at: string): Json => {
  * them, and each union member's own.
  */
 const parseOptionsOf = (ast: SchemaAST.AST): Json => {
+  const parseOptions =
+    SchemaAST.resolveAt<SchemaAST.ParseOptions>("parseOptions")(ast);
   const own = toJson(
-    SchemaAST.resolveAt<SchemaAST.ParseOptions>("parseOptions")(ast) ?? null,
+    parseOptions === undefined ? null : { ...parseOptions },
     "parseOptions"
   );
   return SchemaAST.isUnion(ast)
@@ -85,20 +106,20 @@ const decodedSchemaOf = (schema: Schema.Top | undefined) =>
 const componentReference = /^#\/components\/schemas\/(.+)$/;
 
 /** The component schemas `roots` reach through `$ref`, sorted by name. */
-const reachableComponents = (
-  roots: ReadonlyArray<unknown>,
-  components: Readonly<Record<string, unknown>>
+const reachableComponents = <Component>(
+  roots: ReadonlyArray<OpenApi.OpenAPISpecOperation>,
+  components: Readonly<Record<string, Component>>
 ) => {
   const names = new Set<string>();
-  const pending = [...roots];
+  const pending: Array<unknown> = [...roots];
   while (pending.length > 0) {
     const node = pending.pop();
     if (Array.isArray(node)) {
       pending.push(...node);
-    } else if (typeof node === "object" && node !== null) {
+    } else if (Predicate.isObject(node)) {
       for (const [key, field] of Object.entries(node)) {
         const name =
-          key === "$ref" && typeof field === "string"
+          key === "$ref" && Predicate.isString(field)
             ? componentReference.exec(field)?.[1]
             : undefined;
         if (name === undefined) {
@@ -118,6 +139,79 @@ const reachableComponents = (
   );
 };
 
+/** Each OpenAPI method name by the HTTP method it documents. */
+const openApiMethods = {
+  GET: "get",
+  POST: "post",
+  PUT: "put",
+  DELETE: "delete",
+  PATCH: "patch",
+  HEAD: "head",
+  OPTIONS: "options",
+  TRACE: "trace",
+  QUERY: undefined,
+} as const satisfies Record<
+  HttpMethod.HttpMethod,
+  OpenApi.OpenAPISpecMethodName | undefined
+>;
+
+/** The recorded contract of one endpoint, as `wireContractOf` describes. */
+const endpointContractOf = (recorded: {
+  readonly reference: string;
+  readonly endpoint: HttpApiEndpoint.Top;
+  readonly mergedAnnotations: Context.Context<never>;
+  readonly middleware: ReadonlySet<HttpApiMiddleware.AnyService>;
+  readonly operation: OpenApi.OpenAPISpecOperation;
+}) => {
+  const { reference, endpoint, mergedAnnotations, middleware, operation } =
+    recorded;
+  return {
+    method: endpoint.method,
+    path: endpoint.path,
+    parseOptions: {
+      headers:
+        endpoint.headers === undefined
+          ? null
+          : parseOptionsOf(endpoint.headers.ast),
+      params:
+        endpoint.params === undefined
+          ? null
+          : parseOptionsOf(endpoint.params.ast),
+      query:
+        endpoint.query === undefined
+          ? null
+          : parseOptionsOf(endpoint.query.ast),
+      payload: Object.fromEntries(
+        [...endpoint.payload].map(([contentType, { schemas }]) => [
+          contentType,
+          schemas.map((schema) => parseOptionsOf(schema.ast)),
+        ])
+      ),
+    },
+    // OpenAPI shows path and query parameters as their wire strings; the
+    // decoded side keeps the checks a string encoding drops.
+    decodedParameters: {
+      headers: decodedSchemaOf(endpoint.headers),
+      params: decodedSchemaOf(endpoint.params),
+      query: decodedSchemaOf(endpoint.query),
+    },
+    middleware: [...middleware].map((service) => service.key),
+    annotations: Object.fromEntries(
+      [...mergedAnnotations.mapUnsafe]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => [key, toJson(value, `${reference} ${key}`)])
+    ),
+    effectiveAnnotations: {
+      minimumDhwVersion: toJson(
+        Context.get(mergedAnnotations, MinimumDhwVersion),
+        `${reference} MinimumDhwVersion`
+      ),
+      outdatedDhwRefusal: Context.get(mergedAnnotations, OutdatedDhwRefusal),
+    },
+    operation,
+  };
+};
+
 /**
  * The wire contract of every endpoint of `api`: its OpenAPI
  * operation (method, path and query parameters, body, success and error
@@ -132,7 +226,10 @@ const wireContractOf = <
   api: HttpApi.HttpApi<Id, Groups>
 ) => {
   const spec = OpenApi.fromApi(api);
-  const groups: Record<string, Record<string, unknown>> = {};
+  const groups: Record<
+    string,
+    Record<string, ReturnType<typeof endpointContractOf>>
+  > = {};
   const operations: Array<OpenApi.OpenAPISpecOperation> = [];
   HttpApi.reflect(api, {
     onGroup: ({ group }) => {
@@ -141,62 +238,24 @@ const wireContractOf = <
     onEndpoint: ({ group, endpoint, mergedAnnotations, middleware }) => {
       const reference = `${group.identifier}.${endpoint.identifier}`;
       const openApiPath = endpoint.path.replace(/:(\w+)\??/g, "{$1}");
+      const method = openApiMethods[endpoint.method];
       const operation =
-        spec.paths[openApiPath]?.[
-          endpoint.method.toLowerCase() as OpenApi.OpenAPISpecMethodName
-        ];
+        method === undefined ? undefined : spec.paths[openApiPath]?.[method];
       if (operation === undefined) {
         throw new Error(`${reference} is missing from the OpenAPI document.`);
       }
+      const groupContract = groups[group.identifier];
+      if (groupContract === undefined) {
+        throw new Error(`${reference} was reflected before its group.`);
+      }
       operations.push(operation);
-      groups[group.identifier]![endpoint.identifier] = {
-        method: endpoint.method,
-        path: endpoint.path,
-        parseOptions: {
-          headers:
-            endpoint.headers === undefined
-              ? null
-              : parseOptionsOf(endpoint.headers.ast),
-          params:
-            endpoint.params === undefined
-              ? null
-              : parseOptionsOf(endpoint.params.ast),
-          query:
-            endpoint.query === undefined
-              ? null
-              : parseOptionsOf(endpoint.query.ast),
-          payload: Object.fromEntries(
-            [...endpoint.payload].map(([contentType, { schemas }]) => [
-              contentType,
-              schemas.map((schema) => parseOptionsOf(schema.ast)),
-            ])
-          ),
-        },
-        // OpenAPI shows path and query parameters as their wire strings; the
-        // decoded side keeps the checks a string encoding drops.
-        decodedParameters: {
-          headers: decodedSchemaOf(endpoint.headers),
-          params: decodedSchemaOf(endpoint.params),
-          query: decodedSchemaOf(endpoint.query),
-        },
-        middleware: [...middleware].map((service) => service.key),
-        annotations: Object.fromEntries(
-          [...mergedAnnotations.mapUnsafe]
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([key, value]) => [key, toJson(value, `${reference} ${key}`)])
-        ),
-        effectiveAnnotations: {
-          minimumDhwVersion: toJson(
-            Context.get(mergedAnnotations, MinimumDhwVersion),
-            `${reference} MinimumDhwVersion`
-          ),
-          outdatedDhwRefusal: Context.get(
-            mergedAnnotations,
-            OutdatedDhwRefusal
-          ),
-        },
+      groupContract[endpoint.identifier] = endpointContractOf({
+        reference,
+        endpoint,
+        mergedAnnotations,
+        middleware,
         operation,
-      };
+      });
     },
   });
   return {
@@ -220,7 +279,7 @@ const wireContractOf = <
 type JsonObject = { readonly [key: string]: Json };
 
 const isJsonObject = (value: Json | undefined): value is JsonObject =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+  Predicate.isObject(value);
 
 type RecordedEndpoint = JsonObject & {
   readonly decodedParameters: Readonly<Record<string, JsonObject | null>>;
@@ -322,7 +381,7 @@ const inlineReferences = (
   }
   if (!isJsonObject(node)) return node;
   const ref = node.$ref;
-  if (typeof ref !== "string") {
+  if (!Predicate.isString(ref)) {
     return Object.fromEntries(
       mapFields(
         node,
@@ -349,7 +408,7 @@ const sortedByJson = (values: ReadonlyArray<Json>) =>
     .map(([, value]) => value);
 
 const jsonTypesOf = (schema: JsonObject) => {
-  const types = typeof schema.type === "string" ? [schema.type] : schema.type;
+  const types = Predicate.isString(schema.type) ? [schema.type] : schema.type;
   return Array.isArray(types)
     ? types.map((type) => (type === "integer" ? "number" : type))
     : undefined;
@@ -388,7 +447,7 @@ const excludeEachOther = (
     isJsonObject(schema.properties) ? schema.properties[key] : undefined;
   return required(a).some(
     (key) =>
-      typeof key === "string" &&
+      Predicate.isString(key) &&
       required(b).includes(key) &&
       excludeEachOther(property(a, key), property(b, key))
   );

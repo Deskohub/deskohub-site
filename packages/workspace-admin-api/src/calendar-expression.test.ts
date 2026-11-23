@@ -22,7 +22,7 @@ describe("calendar expression contract", () => {
     },
     { minutes: Array.from({ length: 60 }, (_, minute) => minute) },
   ])("accepts %j", (input) => {
-    expect(Result.getOrThrow(decode(input))).toEqual(input as never);
+    expect<unknown>(Result.getOrThrow(decode(input))).toEqual(input);
   });
 
   test.each([

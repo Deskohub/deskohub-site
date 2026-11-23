@@ -7,6 +7,7 @@ import {
 } from "./audience-attribute-kinds";
 import {
   type AudienceCondition,
+  type AudienceConditionEncoded,
   AudienceFilter,
   type AudienceFilterOf,
   audienceAttributeCatalogue,
@@ -124,14 +125,16 @@ export type AutomationConditionFilter =
   AudienceFilterOf<AutomationConditionLeaf>;
 
 /** A condition step's filter: the audience builder's AND/OR groups plus "in saved audience" leaves. */
-export const AutomationConditionFilter: Schema.Codec<AutomationConditionFilter> =
-  makeAudienceFilterSchemas(audienceAttributeCatalogue, {
-    extraLeaves: [InSavedAudience],
-  }).filter.annotate({
-    identifier: "AutomationConditionFilter",
-    description:
-      "Nested AND/OR tree of audience attribute conditions and saved-audience membership.",
-  });
+export const AutomationConditionFilter: Schema.Codec<
+  AutomationConditionFilter,
+  AudienceFilterOf<AudienceConditionEncoded | typeof InSavedAudience.Encoded>
+> = makeAudienceFilterSchemas(audienceAttributeCatalogue, {
+  extraLeaves: [InSavedAudience],
+}).filter.annotate({
+  identifier: "AutomationConditionFilter",
+  description:
+    "Nested AND/OR tree of audience attribute conditions and saved-audience membership.",
+});
 
 export const automationDurationUnits = [
   "minute",

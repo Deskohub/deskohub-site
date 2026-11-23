@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, expectTypeOf, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema, Struct } from "effect";
 import {
   HttpClient,
   HttpClientRequest,
@@ -141,17 +141,17 @@ const inputs = {
 } satisfies {
   readonly [Name in keyof NoteOperations]: OperationInput<NoteOperations[Name]>;
 };
-const names = Object.keys(inputs) as Array<keyof NoteOperations>;
+const names = Struct.keys(inputs);
 
 const api = HttpApi.make("notesApi").add(Notes);
 
 const echoInput = <Name extends keyof NoteOperations>(
-  _name: Name,
+  name: Name,
   input: OperationInput<NoteOperations[Name]>
 ) =>
-  Effect.succeed(
-    JSON.stringify(input) as OperationOutput<NoteOperations[Name]>
-  );
+  Schema.decodeUnknownEffect(noteOperations[name].output)(
+    JSON.stringify(input)
+  ).pipe(Effect.orDie);
 
 const server = HttpRouter.toWebHandler(
   HttpApiBuilder.layer(api).pipe(
@@ -424,13 +424,18 @@ describe("operation endpoints", () => {
   });
 
   test("a mutation without a behavior is refused at run time too", () => {
+    // The compiler accepts the route only alongside the problem it names.
+    const archiveRoute = {
+      ...route.post("/notes/:noteId/archive"),
+      problem: "archiveNote is a mutation and declares its behavior",
+    } as const;
     expect(() =>
       operationGroup(
         "unchecked",
         defineOperations({
           archiveNote: mutation({ input: NoteRef, output: ReceivedInput }),
         }),
-        { archiveNote: route.post("/notes/:noteId/archive") as never },
+        { archiveNote: archiveRoute },
         { errors: [] }
       )
     ).toThrow("archiveNote is a mutation without a behavior.");

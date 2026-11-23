@@ -173,7 +173,7 @@ describe("Send delivery rules", () => {
 });
 
 describe("automation operation inputs", () => {
-  const decodeStrict = (schema: Schema.Decoder<unknown>, input: unknown) =>
+  const decodeStrict = (schema: Schema.Decoder<unknown>, input: Schema.Json) =>
     Schema.decodeUnknownResult(schema, administrationInputParseOptions)(input);
 
   test("reject unknown keys", () => {
@@ -492,7 +492,7 @@ describe("automation responses", () => {
       at: "2026-10-19T10:00:00.000Z",
     };
 
-    expect(
+    expect<unknown>(
       Result.getOrThrow(
         decodeEntry({
           ...entry,
@@ -504,15 +504,15 @@ describe("automation responses", () => {
       ...entry,
       kind: "waiting",
       detail: { dueAt: "2026-10-19T12:00:00.000Z" },
-    } as never);
-    expect(
+    });
+    expect<unknown>(
       Result.getOrThrow(
         decodeEntry({ ...entry, kind: "rescheduled", detail: { by: 1 } })
       )
-    ).toEqual({ ...entry, kind: "rescheduled", detail: { by: 1 } } as never);
-    expect(
+    ).toEqual({ ...entry, kind: "rescheduled", detail: { by: 1 } });
+    expect<unknown>(
       Result.getOrThrow(decodeEntry({ ...entry, kind: "waiting", detail: {} }))
-    ).toEqual({ ...entry, kind: "waiting", detail: {} } as never);
+    ).toEqual({ ...entry, kind: "waiting", detail: {} });
   });
 });
 

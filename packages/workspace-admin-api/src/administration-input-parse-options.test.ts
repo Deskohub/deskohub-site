@@ -12,7 +12,6 @@ import {
   HttpApi,
   HttpApiBuilder,
   HttpApiClient,
-  type HttpApiEndpoint,
   HttpApiGroup,
 } from "effect/http-api";
 import { AdminCliCampaignsApi } from "./campaign-operation-endpoints";
@@ -28,38 +27,16 @@ import {
   CurrentAdministrationCaller,
 } from "./workspace-admin-api";
 
-// Each group's `endpoints` record is typed loosely; these name the declared
-// endpoint types.
-type AdministrationEndpoint<Name extends string> =
-  HttpApiEndpoint.WithIdentifier<
-    HttpApiGroup.Endpoints<typeof AdminCliAdministrationApi>,
-    Name
-  >;
-type CampaignsEndpoint<Name extends string> = HttpApiEndpoint.WithIdentifier<
-  HttpApiGroup.Endpoints<typeof AdminCliCampaignsApi>,
-  Name
->;
-
 const SampleApi = HttpApi.make("strictInputs")
   .add(
     HttpApiGroup.make("administration")
-      .add(
-        AdminCliAdministrationApi.endpoints
-          .createStandaloneAccessCode as AdministrationEndpoint<"createStandaloneAccessCode">
-      )
-      .add(
-        AdminCliAdministrationApi.endpoints
-          .mutateDiscounts as AdministrationEndpoint<"mutateDiscounts">
-      )
-      .add(
-        AdminCliAdministrationApi.endpoints
-          .renameSession as AdministrationEndpoint<"renameSession">
-      )
+      .add(AdminCliAdministrationApi.endpoints.createStandaloneAccessCode)
+      .add(AdminCliAdministrationApi.endpoints.mutateDiscounts)
+      .add(AdminCliAdministrationApi.endpoints.renameSession)
   )
   .add(
     HttpApiGroup.make("campaigns").add(
-      AdminCliCampaignsApi.endpoints
-        .previewCampaignTemplate as CampaignsEndpoint<"previewCampaignTemplate">
+      AdminCliCampaignsApi.endpoints.previewCampaignTemplate
     )
   );
 
@@ -145,7 +122,7 @@ const server = HttpRouter.toWebHandler(
 );
 afterAll(() => server.dispose());
 
-const send = (method: string, path: string, body: unknown) => {
+const send = (method: string, path: string, body: Schema.Json) => {
   reached.length = 0;
   return server.handler(
     new Request(`https://workspace.deskohub.test/api/v1/cli${path}`, {

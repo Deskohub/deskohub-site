@@ -16,7 +16,7 @@ import {
   AdministrationCampaignUpdateInput,
 } from "./email-campaigns";
 
-const decodes = <A, I>(schema: Schema.Codec<A, I>, input: unknown) =>
+const decodes = <A, I>(schema: Schema.Codec<A, I>, input: Schema.Json) =>
   Result.isSuccess(
     Schema.decodeUnknownResult(schema, administrationInputParseOptions)(input)
   );
@@ -40,7 +40,7 @@ const reencode = (json: string) =>
     )
   );
 
-const issuePaths = (input: unknown) => {
+const issuePaths = (input: Schema.Json) => {
   const result = Schema.toStandardSchemaV1(AudienceFilter, {
     parseOptions: { errors: "all" },
   })["~standard"].validate(input);
@@ -286,7 +286,7 @@ describe("campaign admin API contract", () => {
 
   test("accepts only known locales and fields in campaign content", () => {
     const content = { subject: "News", preheader: "", bodyMarkdown: "Hi" };
-    const create = (overrides: object) => ({
+    const create = (overrides: Schema.JsonObject) => ({
       title: "News",
       purpose: "operational",
       templateKey: "workspace",
@@ -328,7 +328,7 @@ describe("campaign admin API contract", () => {
       },
     };
     const texts = { subject: "News", preheader: "" };
-    const create = (content: object) => ({
+    const create = (content: Schema.JsonObject) => ({
       title: "News",
       purpose: "operational",
       templateKey: "workspace",
@@ -469,9 +469,7 @@ describe("campaign admin API contract", () => {
       locale: "cs-CZ",
       statusUpdatedAt: "2026-10-14T10:00:00Z",
     };
-    const status = (
-      recipients: ReadonlyArray<Record<string, unknown>>
-    ): unknown => ({
+    const status = (recipients: ReadonlyArray<Schema.JsonObject>) => ({
       send: {
         sendId: "send-1",
         createdAt: "2026-10-14T10:00:00Z",

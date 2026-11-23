@@ -6,11 +6,11 @@ import { emailValueSnapshotForDefinition } from "./email-value-snapshot";
 import { EmailValueDefinition } from "./emails";
 
 const locale = "cs-CZ";
-const definitionOf = (input: object) =>
+const definitionOf = (input: Schema.JsonObject) =>
   Schema.decodeUnknownSync(EmailValueDefinition)({ name: "value", ...input });
-const accepts = (definition: EmailValueDefinition, snapshot: unknown) =>
+const accepts = (definition: EmailValueDefinition, snapshot: Schema.Json) =>
   Schema.is(emailValueSnapshotForDefinition(definition, locale))(snapshot);
-const resolved = (value: unknown) => ({ _tag: "Resolved", value });
+const resolved = (value: Schema.Json) => ({ _tag: "Resolved", value });
 
 const reservations = definitionOf({
   source: {
@@ -120,7 +120,7 @@ describe("emailValueSnapshotForDefinition", () => {
     expect(accepts(discount, resolved({ code: "WELCOME", expiresAt }))).toBe(
       true
     );
-    for (const value of [
+    const rejected: ReadonlyArray<Schema.Json> = [
       { code: "", expiresAt },
       { code: "WELCOME", expiresAt: "soon" },
       { code: "WELCOME", expiresAt: 1 },
@@ -129,7 +129,8 @@ describe("emailValueSnapshotForDefinition", () => {
       { code: "WELCOME", expiresAt, extra: true },
       ["WELCOME", expiresAt],
       "WELCOME",
-    ]) {
+    ];
+    for (const value of rejected) {
       expect(accepts(discount, resolved(value))).toBe(false);
     }
   });
