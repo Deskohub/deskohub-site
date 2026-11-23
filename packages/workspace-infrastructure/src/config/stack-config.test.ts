@@ -5,6 +5,7 @@ import * as Exit from "effect/Exit";
 import {
   decodeWorkspaceStackConfig,
   GcpRegion,
+  ImageDigest,
   serializeWorkspaceStackConfig,
   WorkspaceStackConfigInvalid,
 } from "./stack-config";
@@ -150,5 +151,41 @@ describe("workspace stack configuration", () => {
     expect(
       Effect.runSync(decodeWorkspaceStackConfig(JSON.parse(serialized)))
     ).toEqual(sandboxConfig);
+  });
+
+  test("takes an optional collector image pinned by digest only", () => {
+    const collectorDigest = `sha256:${"c".repeat(64)}`;
+    expect(sandboxConfig).not.toHaveProperty("telemetryCollectorImage");
+    expect(serializeWorkspaceStackConfig(sandboxConfig)).not.toContain(
+      "telemetryCollectorImage"
+    );
+    const withCollector = Effect.runSync(
+      decodeWorkspaceStackConfig({
+        ...sandboxConfigInput,
+        telemetryCollectorImage: collectorDigest,
+      })
+    );
+    expect(withCollector.telemetryCollectorImage).toBe(
+      ImageDigest.make(collectorDigest)
+    );
+    expect(
+      Effect.runSync(
+        decodeWorkspaceStackConfig(
+          JSON.parse(serializeWorkspaceStackConfig(withCollector))
+        )
+      )
+    ).toEqual(withCollector);
+    for (const rejected of [
+      "otelcol-google:0.165.1",
+      `europe-west1-docker.pkg.dev/p/workspace/collector@${collectorDigest}`,
+      "sha256:abc",
+    ]) {
+      expect(
+        decodeFailure({
+          ...sandboxConfigInput,
+          telemetryCollectorImage: rejected,
+        }).paths
+      ).toEqual(["telemetryCollectorImage"]);
+    }
   });
 });

@@ -176,6 +176,12 @@ const BaseStackConfig = Schema.Struct({
       Schema.isPattern(/^projects\/[a-z0-9-]+\/notificationChannels\/[0-9]+$/)
     )
   ),
+  /**
+   * The digest of the OpenTelemetry collector sidecar image in the stage's
+   * Workspace repository. When set, every Workspace service runs the
+   * collector beside the app; when absent, services run the app alone.
+   */
+  telemetryCollectorImage: Schema.optionalKey(ImageDigest),
 });
 
 export const SandboxStackConfig = Schema.Struct({
