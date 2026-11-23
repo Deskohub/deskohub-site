@@ -18,15 +18,18 @@ type HeldUnlimitedPass = Effect.Success<
   >
 >[number];
 
-class UnlimitedReadFailure extends Error {}
+class PassReadFailure extends Error {}
 
 let heldUnlimitedPasses: Effect.Effect<
   readonly HeldUnlimitedPass[],
-  UnlimitedReadFailure
+  PassReadFailure
 > = Effect.succeed([]);
 const listHeldUnlimitedPasses = mock(() => heldUnlimitedPasses);
-let heldEntryPacks: readonly HeldEntryPack[] = [];
-const listHeldEntryPacks = mock(() => Effect.succeed(heldEntryPacks));
+let heldEntryPacks: Effect.Effect<readonly HeldEntryPack[], PassReadFailure> =
+  Effect.succeed([]);
+const listHeldEntryPacks = mock(() => heldEntryPacks);
+let unlimitedCoverage: Effect.Effect<readonly never[], PassReadFailure> =
+  Effect.succeed([]);
 
 const heldUnlimitedPassReads = await import(
   "@/features/passes/backend/held-unlimited-passes"
@@ -47,7 +50,7 @@ const unlimitedPassWindows = await import(
 );
 mock.module("@/features/passes/backend/unlimited-pass-window", () => ({
   ...unlimitedPassWindows,
-  listUnlimitedPassCoverageWindows: () => Effect.succeed([]),
+  listUnlimitedPassCoverageWindows: () => unlimitedCoverage,
 }));
 const entryPackGifts = await import(
   "@/features/passes/backend/entry-pack-gift"
@@ -119,7 +122,8 @@ const originalNow = Temporal.Now.instant;
 beforeEach(() => {
   mock.clearAllMocks();
   heldUnlimitedPasses = Effect.succeed([]);
-  heldEntryPacks = [];
+  heldEntryPacks = Effect.succeed([]);
+  unlimitedCoverage = Effect.succeed([]);
   Temporal.Now.instant = () => Temporal.Instant.from("2099-07-30T10:00:00Z");
 });
 afterEach(() => {
@@ -145,7 +149,7 @@ describe("loadCoworkCustomerPasses", () => {
   });
 
   test("withholds every pass when the session can't be read", async () => {
-    heldEntryPacks = [heldEntryPack];
+    heldEntryPacks = Effect.succeed([heldEntryPack]);
     expect(
       await load(
         Effect.fail(customerAccountUnavailable("authentication.session"))
@@ -203,13 +207,38 @@ describe("loadCoworkCustomerPasses", () => {
     }
   );
 
-  test("keeps a usable Entry pack bookable when Unlimited passes can't be read", async () => {
-    heldEntryPacks = [heldEntryPack];
-    heldUnlimitedPasses = Effect.fail(new UnlimitedReadFailure());
-    const passes = await load();
-    expect(passes.passPurchaseOffered).toBe(false);
-    expect(passes.bookingPasses.packs).toEqual([
-      expect.objectContaining({ id: heldEntryPack.id, entriesLeft: 3 }),
-    ]);
+  test.each([
+    ["fails", Effect.fail(new PassReadFailure())],
+    ["dies", Effect.die(new PassReadFailure())],
+  ])(
+    "keeps a usable Entry pack bookable when the Unlimited pass read %s",
+    async (_, unlimitedRead) => {
+      heldEntryPacks = Effect.succeed([heldEntryPack]);
+      heldUnlimitedPasses = unlimitedRead;
+      const passes = await load();
+      expect(passes.passPurchaseOffered).toBe(false);
+      expect(passes.bookingPasses.packs).toEqual([
+        expect.objectContaining({ id: heldEntryPack.id, entriesLeft: 3 }),
+      ]);
+    }
+  );
+
+  test.each([
+    [
+      "Entry packs",
+      () => {
+        heldEntryPacks = Effect.fail(new PassReadFailure());
+      },
+    ],
+    [
+      "Unlimited coverage",
+      () => {
+        heldEntryPacks = Effect.succeed([heldEntryPack]);
+        unlimitedCoverage = Effect.fail(new PassReadFailure());
+      },
+    ],
+  ])("withholds every pass when %s can't be read", async (_, failRead) => {
+    failRead();
+    expect(await load()).toEqual(unreadCoworkCustomerPasses);
   });
 });

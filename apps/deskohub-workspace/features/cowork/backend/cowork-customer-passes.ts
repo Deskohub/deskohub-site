@@ -17,6 +17,7 @@ import { listHeldEntryPacks } from "@/features/passes/backend/held-entry-packs";
 import { listHeldUnlimitedPasses } from "@/features/passes/backend/held-unlimited-passes";
 import { listUnlimitedPassCoverageWindows } from "@/features/passes/backend/unlimited-pass-window";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
+import { catchRecoverableCause } from "@/shared/backend/workspace-effect";
 import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
 import {
   type CoworkEntryPacks,
@@ -147,13 +148,12 @@ const isPassPurchaseOffered = ({
     Effect.map(
       (passes) => !passes.some((pass) => isCurrentUnlimitedPass(pass, date))
     ),
-    Effect.tapError(() =>
+    catchRecoverableCause(() =>
       Effect.logWarning(
         "Held Unlimited passes could not be read; withholding pass offers.",
         { code: "cowork.unlimited-passes-unavailable" }
-      )
-    ),
-    Effect.orElseSucceed(() => false)
+      ).pipe(Effect.as(false))
+    )
   );
 
 /** A signed-in customer's passes, read beside each other. */
