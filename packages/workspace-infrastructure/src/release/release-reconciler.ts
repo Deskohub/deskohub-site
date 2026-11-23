@@ -1,9 +1,7 @@
-import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Ref from "effect/Ref";
 import type { ImageDigest } from "../config/stack-config";
 import { workspaceWebServiceId } from "../resources/workload-names";
 import {
@@ -64,12 +62,6 @@ export class ReleaseApplyNotObserved extends Data.TaggedError(
 )<{
   readonly intended: ReleaseId;
   readonly servingRevision: string | null;
-}> {}
-
-export class ReleaseRecordConflict extends Data.TaggedError(
-  "ReleaseRecordConflict"
-)<{
-  readonly expectedVersion: string;
 }> {}
 
 /** What the platform actually serves, read back after an apply. */
@@ -349,76 +341,3 @@ export const routableDeployments = (
     )
     .map(deploymentOf);
 };
-
-/**
- * The persisted record behind a compare-and-set. `version` is the store's
- * object generation; a write with a stale version fails.
- */
-export interface StoredReleaseRecord {
-  readonly record: ReleaseRecord;
-  readonly version: string;
-}
-
-export class ReleaseRecordStore extends Context.Service<
-  ReleaseRecordStore,
-  {
-    readonly read: Effect.Effect<StoredReleaseRecord>;
-    readonly write: (
-      record: ReleaseRecord,
-      ifVersion: string
-    ) => Effect.Effect<StoredReleaseRecord, ReleaseRecordConflict>;
-  }
->()("@deskohub/workspace-infrastructure/ReleaseRecordStore") {}
-
-/**
- * Run one release step as a serialized read, decide, compare-and-set.
- * Two runs that read the same version cannot both write.
- */
-export const runReleaseStep = <A, E>(
-  step: (
-    record: ReleaseRecord
-  ) => Effect.Effect<{ readonly record: ReleaseRecord; readonly result: A }, E>
-) =>
-  Effect.gen(function* () {
-    const store = yield* ReleaseRecordStore;
-    const current = yield* store.read;
-    const { record, result } = yield* step(current.record);
-    yield* store.write(record, current.version);
-    return result;
-  });
-
-/** An in-process store for tests and local dry runs. */
-export const makeInMemoryReleaseRecordStore = (initial: ReleaseRecord) =>
-  Effect.gen(function* () {
-    const state = yield* Ref.make<StoredReleaseRecord>({
-      record: initial,
-      version: "1",
-    });
-    return ReleaseRecordStore.of({
-      read: Ref.get(state),
-      write: (record, ifVersion) =>
-        Ref.modify(
-          state,
-          (
-            current
-          ): readonly [
-            Effect.Effect<StoredReleaseRecord, ReleaseRecordConflict>,
-            StoredReleaseRecord,
-          ] => {
-            if (current.version !== ifVersion) {
-              return [
-                Effect.fail(
-                  new ReleaseRecordConflict({ expectedVersion: ifVersion })
-                ),
-                current,
-              ];
-            }
-            const next: StoredReleaseRecord = {
-              record,
-              version: String(Number(current.version) + 1),
-            };
-            return [Effect.succeed(next), next];
-          }
-        ).pipe(Effect.flatten),
-    });
-  });

@@ -8,12 +8,9 @@ import { ImageDigest } from "../config/stack-config";
 import { sandboxConfig } from "../config/stack-config.test-utils";
 import { webServiceProps, webTraffic } from "../resources/service-declarations";
 import {
-  makeInMemoryReleaseRecordStore,
   promote,
-  ReleaseRecordStore,
   restore,
   routableDeployments,
-  runReleaseStep,
   settleApply,
   stage,
 } from "./release-reconciler";
@@ -23,6 +20,11 @@ import {
   type ReleaseId,
   ReleaseRecord,
 } from "./release-record";
+import {
+  makeInMemoryReleaseRecordStore,
+  ReleaseRecordStore,
+  runReleaseStep,
+} from "./release-record-store";
 
 const shaA = GitSha.make("a".repeat(40));
 const shaB = GitSha.make("b".repeat(40));
