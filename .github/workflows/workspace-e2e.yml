@@ -137,27 +137,10 @@ jobs:
             exit 1
           fi
 
-          pulls_raw_file="$(mktemp)"
-          pulls_lookup_ok=true
-          if ! gh api --paginate \
-            -H "Accept: application/vnd.github+json" \
-            "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/pulls?per_page=100" >"$pulls_raw_file"; then
-            pulls_lookup_ok=false
-          fi
-          pulls="$(jq -s '
-            if length == 0 then []
-            elif all(.[]; type == "array") then add
-            else empty
-            end
-          ' "$pulls_raw_file" 2>/dev/null)" || {
-            pulls_lookup_ok=false
-            pulls="[]"
-          }
-          rm -f "$pulls_raw_file"
-          if [[ -z "$pulls" ]]; then
-            pulls_lookup_ok=false
-            pulls="[]"
-          fi
+          pulls_result="$(node "$FLOWS_CLI" fetch-paginated-json \
+            "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/pulls")"
+          pulls_lookup_ok="$(jq -r '.ok' <<<"$pulls_result")"
+          pulls="$(jq -c '.items' <<<"$pulls_result")"
           filter_eligible_pulls() {
             jq \
               --arg repo "$GITHUB_REPOSITORY" \
@@ -240,30 +223,12 @@ jobs:
                 verified_head=true
               elif [[ "$TARGET_REF" != dependabot/* ]]; then
                 owner="${GITHUB_REPOSITORY%%/*}"
-                fallback_raw_file="$(mktemp)"
-                fallback_ok=true
-                if ! gh api --paginate --method GET \
-                  -H "Accept: application/vnd.github+json" \
+                fallback_result="$(node "$FLOWS_CLI" fetch-paginated-json \
                   "repos/$GITHUB_REPOSITORY/pulls" \
                   -f state=open \
-                  -f head="$owner:$TARGET_REF" \
-                  -f per_page=100 >"$fallback_raw_file" 2>/dev/null; then
-                  fallback_ok=false
-                fi
-                fallback_pulls="$(jq -s '
-                  if length == 0 then []
-                  elif all(.[]; type == "array") then add
-                  else empty
-                  end
-                ' "$fallback_raw_file" 2>/dev/null)" || {
-                  fallback_ok=false
-                  fallback_pulls="[]"
-                }
-                rm -f "$fallback_raw_file"
-                if [[ -z "$fallback_pulls" ]]; then
-                  fallback_ok=false
-                  fallback_pulls="[]"
-                fi
+                  -f head="$owner:$TARGET_REF")"
+                fallback_ok="$(jq -r '.ok' <<<"$fallback_result")"
+                fallback_pulls="$(jq -c '.items' <<<"$fallback_result")"
                 fallback_eligible_count="$(filter_eligible_pulls <<<"$fallback_pulls" 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
                 if [[ "$fallback_eligible_count" != "0" ]]; then
                   verified_head=true

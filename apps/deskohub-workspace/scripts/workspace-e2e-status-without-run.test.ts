@@ -1499,41 +1499,45 @@ exit 1
       "description=Protected preview E2E skipped [flows: none]"
     );
 
-    // Multi-page `commits/<sha>/pulls`: a second eligible PR on page 2 must
-    // keep ambiguity unresolved in BOTH initial target resolution and
-    // publish-status-without-run; a failed lookup must fail a verified eligible
-    // head (via page 1 or branch-specific PR lookup) while honoring a
-    // successful empty branch lookup so an unrelated branch sharing the same
-    // SHA never overwrites another PR's passing status.
+    // Multi-page `commits/<sha>/pulls` and branch-specific `pulls`: each page
+    // is fetched and parsed independently via `gh api -i` + `Link: rel="next"`.
+    // - A second eligible PR on page 2 keeps ambiguity unresolved in BOTH
+    //   target resolution and publish-status-without-run.
+    // - When page 1 matches the branch and SHA and page 2 returns HTTP 502
+    //   (even with a truncated/non-JSON error body AND when the other PR
+    //   lookup also fails), the resolver preserves page 1's verified match so
+    //   publish-status-without-run overwrites a prior green status with failure.
+    // - A successful empty branch lookup (`[]`) honors `eligible=false` so an
+    //   unrelated branch sharing the same SHA leaves the healthy PR untouched.
     const multiPageGh = (
       secondPageMode:
         | "ambiguous"
-        | "branch-fallback"
-        | "page1-then-error"
+        | "branch-fallback-page2-502"
+        | "page1-then-502"
         | "unrelated-branch"
     ) => `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
 if [[ "$*" == *"/commits/${targetSha}/pulls"* ]]; then
-  if [[ "$*" != *"--paginate"* ]]; then
-    echo "expected paginated commits/pulls lookup: $*" >&2
-    exit 1
-  fi
-  if [[ "${secondPageMode}" == "page1-then-error" ]]; then
-    echo '[${JSON.stringify(pullRequest)}]'
-    echo "HTTP 502 on page 2" >&2
-    exit 1
-  fi
-  if [[ "${secondPageMode}" == "branch-fallback" || "${secondPageMode}" == "unrelated-branch" ]]; then
-    echo "HTTP 502 on page 2" >&2
-    exit 1
-  fi
   if [[ "$*" == *"--slurp"* ]]; then
     echo '[[${JSON.stringify(pullRequest)}],[${JSON.stringify({ ...pullRequest, number: prNumber + 1 })}]]'
-  else
-    echo '[${JSON.stringify(pullRequest)}]'
-    echo '[${JSON.stringify({ ...pullRequest, number: prNumber + 1 })}]'
+    exit 0
   fi
+  if [[ "${secondPageMode}" == "branch-fallback-page2-502" || "${secondPageMode}" == "unrelated-branch" ]]; then
+    printf 'HTTP/2.0 502 Bad Gateway\\r\\n\\r\\n<html>502 Bad Gateway'
+    echo "gh: 502 Bad Gateway (HTTP 502)" >&2
+    exit 1
+  fi
+  if [[ "$*" == *"page=2"* ]]; then
+    if [[ "${secondPageMode}" == "page1-then-502" ]]; then
+      printf 'HTTP/2.0 502 Bad Gateway\\r\\n\\r\\n[{"truncated":'
+      echo "gh: 502 Bad Gateway (HTTP 502)" >&2
+      exit 1
+    fi
+    printf 'HTTP/2.0 200 OK\\r\\n\\r\\n[%s]' '${JSON.stringify({ ...pullRequest, number: prNumber + 1 })}'
+    exit 0
+  fi
+  printf 'HTTP/2.0 200 OK\\r\\nLink: <https://api.github.com/repos/${repository}/commits/${targetSha}/pulls?per_page=100&page=2>; rel="next"\\r\\n\\r\\n[%s]' '${JSON.stringify(pullRequest)}'
   exit 0
 fi
 if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
@@ -1541,11 +1545,21 @@ if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"repos/${repository}/pulls"* ]]; then
-  if [[ "${secondPageMode}" == "branch-fallback" && "$*" == *"head=owner:${pullRequest.head.ref}"* ]]; then
-    echo '[${JSON.stringify(pullRequest)}]'
-  else
-    echo '[]'
+  if [[ "${secondPageMode}" == "page1-then-502" ]]; then
+    printf 'HTTP/2.0 502 Bad Gateway\\r\\n\\r\\n<html>502'
+    echo "gh: 502 Bad Gateway (HTTP 502)" >&2
+    exit 1
   fi
+  if [[ "${secondPageMode}" == "branch-fallback-page2-502" && "$*" == *"head=owner:${pullRequest.head.ref}"* ]]; then
+    if [[ "$*" == *"page=2"* ]]; then
+      printf 'HTTP/2.0 502 Bad Gateway\\r\\n\\r\\n{"message":"Bad Gateway"'
+      echo "gh: 502 Bad Gateway (HTTP 502)" >&2
+      exit 1
+    fi
+    printf 'HTTP/2.0 200 OK\\r\\nLink: <https://api.github.com/repos/${repository}/pulls?state=open&head=owner:${pullRequest.head.ref}&per_page=100&page=2>; rel="next"\\r\\n\\r\\n[%s]' '${JSON.stringify(pullRequest)}'
+    exit 0
+  fi
+  printf 'HTTP/2.0 200 OK\\r\\n\\r\\n[]'
   exit 0
 fi
 if [[ "$*" == *"/commits/${targetSha}/statuses"* ]]; then
@@ -1589,11 +1603,15 @@ exit 1
     expect(page2Target.result.exitCode).not.toBe(0);
     expect(page2Target.outputs.resolution_error_kind).toBe("ambiguous-pr");
 
-    // Failed preview + unreadable second page on a verified eligible PR head:
-    // resolve-target must still mark the head eligible and route to
-    // publish-status-without-run so any prior green status is overwritten with
-    // failure (both when page 1 streamed and via branch-specific PR lookup).
-    for (const mode of ["page1-then-error", "branch-fallback"] as const) {
+    // Failed preview + HTTP 502 on page 2 (both on commit-to-PR lookup while
+    // branch fallback also fails, and on page 2 of branch fallback) starting
+    // from a prior green status: resolve-target must preserve page 1's verified
+    // branch-and-SHA match and publish-status-without-run must overwrite the
+    // prior green status with failure.
+    for (const mode of [
+      "page1-then-502",
+      "branch-fallback-page2-502",
+    ] as const) {
       const failedTarget = await runStep(
         targetStep,
         {},
@@ -1636,7 +1654,7 @@ exit 1
 
       const published = await runStep(
         publishStep,
-        { [`statuses/${targetSha}`]: {} },
+        {},
         {
           FLOWS_PUBLISH: flowsPublish,
           PR_NUMBER: failedTarget.outputs.pr_number ?? "",
@@ -1644,7 +1662,8 @@ exit 1
           STATUS_REASON: decided.outputs.reason ?? "",
           STATUS_STATE: decided.outputs.state ?? "failure",
           TARGET_SHA: failedTarget.outputs.sha ?? "",
-        }
+        },
+        { gh: multiPageGh(mode) }
       );
       expect(published.result.exitCode).toBe(0);
       const failurePosts = published.calls.filter((call) =>
