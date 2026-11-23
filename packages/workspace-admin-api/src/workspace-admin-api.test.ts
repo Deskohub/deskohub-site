@@ -729,7 +729,9 @@ describe("administration contract", () => {
     });
   });
   test("accepts cowork tier targets but not mixed or repeated cowork targets", () => {
-    const decodeProducts = (products: unknown) =>
+    const decodeProducts = (
+      products: ReadonlyArray<{ readonly kind: string; readonly tier?: string }>
+    ) =>
       Schema.decodeUnknownSync(
         AdministrationDiscountMutation,
         administrationInputParseOptions
@@ -1100,8 +1102,11 @@ describe("CLI session contract", () => {
         sessionFor(email)
       );
 
-      expect(released.approvedBy).not.toBeNull();
-      expect(released.approvedBy!.length).toBeLessThanOrEqual(80);
+      const approvedBy = released.approvedBy;
+      if (approvedBy === null) {
+        throw new Error("The released session lost its approver.");
+      }
+      expect(approvedBy.length).toBeLessThanOrEqual(80);
     }
   );
 
@@ -1337,12 +1342,16 @@ describe("discount code service dates contract", () => {
     validUntil: null,
     maxUses: null,
   };
-  const updateCode = (serviceDates: object) =>
+  type CodeServiceDates = {
+    readonly serviceDateFrom?: string | null;
+    readonly serviceDateUntil?: string | null;
+  };
+  const updateCode = (serviceDates: CodeServiceDates) =>
     decodeMutation({
       kind: "update-code",
       code: { id: codeId, discountId, ...codeConfiguration, ...serviceDates },
     });
-  const createCode = (serviceDates: object) =>
+  const createCode = (serviceDates: CodeServiceDates) =>
     decodeMutation({
       kind: "create-code",
       code: { ...codeConfiguration, ...serviceDates },

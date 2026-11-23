@@ -59,7 +59,21 @@ const recordingClient = (respond: (request: Request) => Response) => {
   return { client, requests };
 };
 
-const json = (body: unknown, status = 200) =>
+/**
+ * A recording client that answers the nth request with the nth response and
+ * fails a request beyond them.
+ */
+const sequencedClient = (responses: ReadonlyArray<() => Response>) => {
+  const recording = recordingClient(() => {
+    const respond = responses[recording.requests.length - 1];
+    if (respond === undefined)
+      throw new Error(`No response for request ${recording.requests.length}`);
+    return respond();
+  });
+  return recording;
+};
+
+const json = (body: Schema.Json, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
@@ -134,7 +148,7 @@ describe("makeWorkspaceCustomerApiClient", () => {
     const past = [
       { ...summary, settlement: "paid" },
       { ...summary, id: "later-value", settlement: "voucher" },
-      { ...summary, id: "provider-only", orderId: undefined },
+      { ...Struct.omit(summary, ["orderId"]), id: "provider-only" },
     ];
     const { client } = recordingClient(() =>
       json({ current: [], past, unavailable: [] })
@@ -357,9 +371,7 @@ describe("makeWorkspaceCustomerApiClient", () => {
         }),
       () => json({ _tag: "CustomerInvoiceNotFound" }, 404),
     ];
-    const { client, requests } = recordingClient(() =>
-      responses[requests.length - 1]!()
-    );
+    const { client, requests } = sequencedClient(responses);
     const download = Effect.flatMap(
       makeWorkspaceCustomerApiClient({ baseUrl }),
       (api) => api.invoices.getInvoicePdf({ params: { invoiceId } })
@@ -401,9 +413,7 @@ describe("makeWorkspaceCustomerApiClient", () => {
       () => json({ _tag: "CustomerServiceUnavailable" }, 503),
       () => json({ _tag: "CustomerRateLimited" }, 429),
     ];
-    const { client, requests } = recordingClient(() =>
-      responses[requests.length - 1]!()
-    );
+    const { client, requests } = sequencedClient(responses);
     const lookup = Effect.flatMap(
       makeWorkspaceCustomerApiClient({ baseUrl }),
       (api) =>

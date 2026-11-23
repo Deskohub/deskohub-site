@@ -17,7 +17,7 @@ import {
   requiredEmailLocale,
   requiredEmailValueNames,
 } from "./email-publication";
-import { EmailDocument, EmailDraft } from "./emails";
+import { EmailDocument, EmailDraft, type EmailInlinePart } from "./emails";
 
 const publish = Schema.decodeUnknownResult(EmailDocumentForPublication);
 const draft = Schema.decodeUnknownSync(EmailDraft);
@@ -25,21 +25,33 @@ const tags = (problems: readonly EmailDocumentProblem[]) =>
   problems.map((problem) => problem._tag);
 
 const discountId = "01900000-0000-7000-8000-000000000001";
-const texts = (word: string) => ({
-  heading: [{ _tag: "Text", text: `${word} heading` }],
-  intro: [
+const texts = (word: string) => {
+  const intro: Array<typeof EmailInlinePart.Encoded> = [
     { _tag: "Text", text: `${word} `, bold: true },
     { _tag: "Text", text: "book", italic: true, link: "book" },
     { _tag: "Text", text: ", " },
     { _tag: "Value", name: "first_name", bold: true },
-  ],
-  item_one: [{ _tag: "Text", text: `${word} one` }],
-  item_nested: [{ _tag: "Value", name: "offer", field: ["code"] }],
-  image_alt: [],
-  offer_label: [{ _tag: "Text", text: `${word} redeem` }],
-});
+  ];
+  return {
+    heading: [{ _tag: "Text", text: `${word} heading` }],
+    intro,
+    item_one: [{ _tag: "Text", text: `${word} one` }],
+    item_nested: [{ _tag: "Value", name: "offer", field: ["code"] }],
+    image_alt: [],
+    offer_label: [{ _tag: "Text", text: `${word} redeem` }],
+  };
+};
 
 /** One shared structure with every component kind and both languages. */
+const firstName = {
+  name: "first_name",
+  source: {
+    kind: "customer",
+    path: ["profile", "customer", "displayName"],
+  },
+  fallback: { "cs-CZ": "zákazníku", "en-US": "there" },
+};
+
 const richDocument = {
   purpose: "marketing",
   templateKey: "workspace",
@@ -105,21 +117,9 @@ const richDocument = {
       name: "offer",
       source: { kind: "discount", discountId, validDays: 30 },
     },
-    {
-      name: "first_name",
-      source: {
-        kind: "customer",
-        path: ["profile", "customer", "displayName"],
-      },
-      fallback: { "cs-CZ": "zákazníku", "en-US": "there" },
-    },
+    firstName,
   ],
 };
-
-const [, firstName] = richDocument.values as [
-  unknown,
-  { readonly name: string; readonly source: Record<string, unknown> },
-];
 
 describe("rich multilingual structure", () => {
   test("publishes shared formatting, lists, dividers, spacers, image layout and offers", () => {
@@ -137,7 +137,7 @@ describe("rich multilingual structure", () => {
       "Offer",
     ]);
     // Nested list texts reference values like any other text.
-    expect(requiredEmailValueNames(document) as readonly string[]).toEqual([
+    expect<ReadonlyArray<string>>(requiredEmailValueNames(document)).toEqual([
       "offer",
       "first_name",
     ]);
@@ -173,25 +173,23 @@ describe("rich multilingual structure", () => {
     };
     // Today's publication rules, such as https-only destinations, never
     // apply to stored versions.
-    expect(Schema.decodeUnknownSync(EmailDocument)(historical)).toEqual(
-      historical as never
-    );
+    expect<unknown>(
+      Schema.decodeUnknownSync(EmailDocument)(historical)
+    ).toEqual(historical);
     expect(Result.isFailure(publish(historical))).toBe(true);
   });
 
   test("plain texts refuse formatting, and links name the component's shared destinations", () => {
     const formatted = structuredClone(richDocument);
-    formatted.translations["en-US"].subject = [
-      { _tag: "Text", text: "Hello", bold: true } as never,
-    ];
-    formatted.translations["cs-CZ"].texts.offer_label = [
-      { _tag: "Text", text: "Uplatnit", link: "book" } as never,
-    ];
+    const boldSubject = { _tag: "Text", text: "Hello", bold: true };
+    const linkedLabel = { _tag: "Text", text: "Uplatnit", link: "book" };
+    formatted.translations["en-US"].subject = [boldSubject];
+    formatted.translations["cs-CZ"].texts.offer_label = [linkedLabel];
     formatted.translations["en-US"].texts.intro = [
-      { _tag: "Text", text: "elsewhere", link: "missing" } as never,
+      { _tag: "Text", text: "elsewhere", link: "missing" },
     ];
     const problems = emailDraftProblems(draft(formatted));
-    expect(problems).toEqual([
+    expect<unknown>(problems).toEqual([
       {
         _tag: "FormattingNotAllowed",
         at: {
@@ -215,15 +213,19 @@ describe("rich multilingual structure", () => {
           textKey: "intro",
         },
       },
-    ] as never);
+    ]);
     expect(Result.isFailure(publish(formatted))).toBe(true);
   });
 
   test("destinations must use https or mailto at publication", () => {
     const insecure = structuredClone(richDocument);
-    (insecure.structure[1] as { links: Record<string, string> }).links.book =
-      "http://workspace.deskohub.test/book";
-    (insecure.structure[6] as { href: string }).href = "ftp://deskohub.test/";
+    const intro = insecure.structure[1];
+    const offer = insecure.structure[6];
+    if (intro?.links === undefined || offer === undefined) {
+      throw new Error("The rich document lost its intro or offer.");
+    }
+    intro.links.book = "http://workspace.deskohub.test/book";
+    offer.href = "ftp://deskohub.test/";
     expect(tags(emailDraftProblems(draft(insecure)))).toEqual([
       "DestinationInvalid",
       "DestinationInvalid",
@@ -305,7 +307,7 @@ describe("drafts and publication", () => {
   };
 
   test("an incomplete draft saves with broken references, missing translations and an unused definition", () => {
-    expect(draft(broken)).toEqual(broken as never);
+    expect<unknown>(draft(broken)).toEqual(broken);
     const problems = emailDraftProblems(draft(broken));
     expect(problems).toEqual([
       {
@@ -342,7 +344,7 @@ describe("drafts and publication", () => {
         componentId: "cta",
         textKey: "cta",
       },
-    ] as never);
+    ]);
     expect(problems.map(englishEmailDocumentProblem)).toContain(
       "Missing text intro: en-US."
     );
@@ -371,7 +373,7 @@ describe("drafts and publication", () => {
           textKey: "intro",
         },
       },
-    ] as never);
+    ]);
     expect([...referencedEmailValueNames(draft(removed))].sort()).toEqual([
       "first_name",
       "removed",
@@ -401,11 +403,11 @@ describe("drafts and publication", () => {
     };
     expect(emailDraftProblems(draft(repaired))).toEqual([]);
     const document = Result.getOrThrow(publish(repaired));
-    expect(document.values.map((value) => value.name as string)).toEqual([
+    expect(document.values.map((value): string => value.name)).toEqual([
       "first_name",
       "spare",
     ]);
-    expect(requiredEmailValueNames(document) as readonly string[]).toEqual([
+    expect<ReadonlyArray<string>>(requiredEmailValueNames(document)).toEqual([
       "first_name",
     ]);
   });
@@ -421,7 +423,7 @@ describe("drafts and publication", () => {
     expect(emailDraftProblems(draft(referenced))).toEqual([
       { _tag: "ValueIncomplete", index: 0, name: "offer", field: "discountId" },
       { _tag: "ValueIncomplete", index: 0, name: "offer", field: "validDays" },
-    ] as never);
+    ]);
     expect(Result.isFailure(publish(referenced))).toBe(true);
   });
 
@@ -464,7 +466,7 @@ describe("drafts and publication", () => {
     };
     expect(emailDraftProblems(draft(repeated))).toEqual([]);
     const document = Result.getOrThrow(publish(repeated));
-    expect(document.values.map((value) => value.name as string)).toEqual([
+    expect(document.values.map((value): string => value.name)).toEqual([
       "offer",
       "first_name",
       "spare",
@@ -529,16 +531,17 @@ describe("drafts and publication", () => {
 describe("publication problems", () => {
   const text = [{ _tag: "Text", text: "Hello" }] as const;
   const translation = { subject: text, preheader: [], texts: { body: text } };
+  const body = { _tag: "Paragraph", id: "body", textKey: "body" };
   const document = {
     purpose: "marketing",
     templateKey: "workspace",
-    structure: [{ _tag: "Paragraph", id: "body", textKey: "body" }],
+    structure: [body],
     translations: { "cs-CZ": translation, "en-US": translation },
     values: [],
   };
-  const problems = (input: unknown) =>
+  const problems = (input: Schema.JsonObject) =>
     emailPublicationProblems(Schema.decodeUnknownSync(EmailDocument)(input));
-  const bothLanguages = (overrides: object) => ({
+  const bothLanguages = (overrides: Schema.JsonObject) => ({
     "cs-CZ": { ...translation, ...overrides },
     "en-US": { ...translation, ...overrides },
   });
@@ -621,7 +624,7 @@ describe("publication problems", () => {
     expect(
       problems({
         ...document,
-        structure: [document.structure[0], document.structure[0]],
+        structure: [body, body],
       })
     ).toEqual(["Duplicate component id: body."]);
   });
@@ -869,7 +872,7 @@ describe("publication problems", () => {
       value: "reservations",
       fields: [bodyField("id")],
     };
-    const listProblems = (overrides: object) =>
+    const listProblems = (overrides: Schema.JsonObject) =>
       problems({
         ...document,
         values: [reservations],
@@ -934,7 +937,9 @@ describe("publication problems", () => {
 
   test("record components need selected scalar fields", () => {
     const record = { _tag: "Record", id: "record", value: "customer" };
-    const recordProblems = (fields: readonly object[]) =>
+    const recordProblems = (
+      fields: ReadonlyArray<ReturnType<typeof bodyField>>
+    ) =>
       problems({
         ...document,
         values: [customer],
@@ -1016,7 +1021,7 @@ describe("trigger values, dynamic button links, and block conditions", () => {
       "unlimited-ending",
     ]);
     expect(emailDocumentUsesDiscounts(published)).toBe(false);
-    expect(requiredEmailValueNames(published) as readonly string[]).toEqual([
+    expect<ReadonlyArray<string>>(requiredEmailValueNames(published)).toEqual([
       "pass",
     ]);
     expect([...referencedEmailValueNames(published)]).toEqual(["pass"]);
@@ -1033,30 +1038,32 @@ describe("trigger values, dynamic button links, and block conditions", () => {
     expect(Result.isFailure(publish(inlineUrl))).toBe(true);
 
     const nonUrlButton = structuredClone(passReminderDocument);
-    (
-      nonUrlButton.structure[3] as {
-        hrefValue: { name: string; field: string[] };
-      }
-    ).hrefValue = { name: "pass", field: ["endsOn"] };
+    const nonUrlRenew = nonUrlButton.structure[3];
+    if (nonUrlRenew === undefined) throw new Error("The renew button is gone.");
+    nonUrlRenew.hrefValue = { name: "pass", field: ["endsOn"] };
     expect(tags(emailDraftProblems(draft(nonUrlButton)))).toContain(
       "ValueReferenceInvalid"
     );
     expect(Result.isFailure(publish(nonUrlButton))).toBe(true);
 
     const bothDestinations = structuredClone(passReminderDocument);
-    (bothDestinations.structure[3] as { href?: string }).href =
-      "https://workspace.deskohub.cz/";
+    const renew = bothDestinations.structure[3];
+    if (renew === undefined) throw new Error("The renew button is gone.");
+    const renewWithHref = { ...renew, href: "https://workspace.deskohub.cz/" };
+    bothDestinations.structure[3] = renewWithHref;
     expect(tags(emailDraftProblems(draft(bothDestinations)))).toContain(
       "ComponentIncomplete"
     );
     expect(Result.isFailure(publish(bothDestinations))).toBe(true);
 
     const badCondition = structuredClone(passReminderDocument);
-    (
-      badCondition.structure[0] as {
-        when: { name: string; field: string[]; present: boolean };
-      }
-    ).when = { name: "pass", field: ["remainingEntries"], present: true };
+    const greeting = badCondition.structure[0];
+    if (greeting === undefined) throw new Error("The greeting is gone.");
+    greeting.when = {
+      name: "pass",
+      field: ["remainingEntries"],
+      present: true,
+    };
     expect(tags(emailDraftProblems(draft(badCondition)))).toContain(
       "ValueReferenceInvalid"
     );
