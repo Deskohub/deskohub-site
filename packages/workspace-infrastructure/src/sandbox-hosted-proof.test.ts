@@ -38,6 +38,7 @@ interface Step {
   readonly run?: string;
   readonly env?: Record<string, string>;
   readonly with?: Record<string, string | boolean>;
+  readonly "timeout-minutes"?: number;
 }
 interface Workflow {
   readonly on: {
@@ -50,7 +51,10 @@ interface Workflow {
   };
   readonly concurrency: Record<string, unknown>;
   readonly env: Record<string, string>;
-  readonly jobs: Record<string, { readonly steps: ReadonlyArray<Step> }>;
+  readonly jobs: Record<
+    string,
+    { readonly steps: ReadonlyArray<Step>; readonly "timeout-minutes": string }
+  >;
 }
 
 const workflow = Bun.YAML.parse(
@@ -260,6 +264,26 @@ describe("sandbox workflow modes", () => {
     const upload = steps.at(-1);
     expect(upload?.uses).toMatch(/^actions\/upload-artifact@[0-9a-f]{40}$/);
     expect(upload?.if).toContain("always()");
+  });
+
+  test("gives each mutating mode a job limit above its step ceilings", () => {
+    const jobLimit = workflow.jobs.smoke?.["timeout-minutes"] ?? "";
+    for (const mode of ["hosted-proof", "cleanup-only"]) {
+      const limit = Number(
+        jobLimit.match(new RegExp(`inputs\\.mode == '${mode}' && (\\d+)`))?.[1]
+      );
+      const ceilings = phaseSteps
+        .filter(
+          ({ step }) =>
+            step.if === teardownCondition ||
+            (mode === "hosted-proof" &&
+              step.if === "inputs.mode == 'hosted-proof'")
+        )
+        .reduce((total, { step }) => total + (step["timeout-minutes"] ?? 0), 0);
+      expect(ceilings).toBeGreaterThan(0);
+      // Unbounded setup steps (checkout, auth, tool install) need headroom.
+      expect(limit - ceilings).toBeGreaterThanOrEqual(15);
+    }
   });
 });
 

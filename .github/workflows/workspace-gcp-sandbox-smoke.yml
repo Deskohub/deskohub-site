@@ -41,8 +41,10 @@ jobs:
     name: Sandbox ${{ inputs.mode }}
     runs-on: ubuntu-latest
     # The Alchemy access token lives one hour; the runner refreshes it from
-    # the federated gcloud credentials for later steps.
-    timeout-minutes: ${{ inputs.mode == 'hosted-proof' && 150 || inputs.mode == 'cleanup-only' && 45 || 10 }}
+    # the federated gcloud credentials for later steps. Each mode's limit
+    # covers the sum of its step ceilings plus setup, so a slow proof cannot
+    # cut teardown short.
+    timeout-minutes: ${{ inputs.mode == 'hosted-proof' && 240 || inputs.mode == 'cleanup-only' && 60 || 10 }}
     environment: workspace-gcp-sandbox
     permissions:
       contents: read
