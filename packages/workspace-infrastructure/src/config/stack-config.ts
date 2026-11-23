@@ -1,3 +1,4 @@
+import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -325,3 +326,16 @@ const serviceAccountProblems = (config: WorkspaceStackConfig) => {
  */
 export const serializeWorkspaceStackConfig = (config: WorkspaceStackConfig) =>
   JSON.stringify(Schema.encodeSync(WorkspaceStackConfig)(config));
+
+/**
+ * The stage config CI supplies as JSON in `WORKSPACE_STACK_CONFIG`; it
+ * alone selects project, stage and state for the stack and the release flow.
+ */
+export const configuredWorkspaceStack = Config.String(
+  "WORKSPACE_STACK_CONFIG"
+).pipe(
+  Effect.flatMap((raw) =>
+    Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(raw)
+  ),
+  Effect.flatMap(decodeWorkspaceStackConfig)
+);

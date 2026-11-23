@@ -1,0 +1,94 @@
+import { describe, expect, test } from "bun:test";
+import * as BunServices from "@effect/platform-bun/BunServices";
+import { Command } from "effect/cli";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import { sandboxConfig } from "../config/stack-config.test-utils";
+import { ReleaseStack, releaseCommand } from "./release-command";
+import {
+  ReleaseServiceApply,
+  ReleaseServiceReadback,
+} from "./release-platform";
+import { emptyReleaseRecord } from "./release-record";
+import {
+  makeInMemoryReleaseRecordStore,
+  ReleaseRecordStore,
+} from "./release-record-store";
+
+/** Runs one command against an in-memory record and a platform that must stay untouched. */
+const runRelease = (args: ReadonlyArray<string>) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const store = yield* makeInMemoryReleaseRecordStore(emptyReleaseRecord);
+      const platformCalls: Array<string> = [];
+      const untouched = (name: string) =>
+        Effect.sync(() => {
+          platformCalls.push(name);
+        }).pipe(Effect.andThen(Effect.die(`unexpected ${name}`)));
+      const exit = yield* Command.runWith(releaseCommand, {
+        version: "0.0.0",
+      })(args).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.succeed(ReleaseStack, sandboxConfig),
+            Layer.succeed(ReleaseRecordStore, store),
+            Layer.succeed(
+              ReleaseServiceApply,
+              ReleaseServiceApply.of({ apply: () => untouched("apply") })
+            ),
+            Layer.succeed(
+              ReleaseServiceReadback,
+              ReleaseServiceReadback.of({
+                service: () => untouched("service readback"),
+                revision: () => untouched("revision readback"),
+              })
+            ),
+            BunServices.layer
+          )
+        ),
+        Effect.exit
+      );
+      return { exit, stored: yield* store.read, platformCalls };
+    })
+  );
+
+describe("workspace release command", () => {
+  test("status reads the record without touching the platform", async () => {
+    const result = await runRelease(["status"]);
+    expect(Exit.isSuccess(result.exit)).toBe(true);
+    expect(result.platformCalls).toEqual([]);
+  });
+
+  test("deliver refuses a tag in place of a digest before any write", async () => {
+    const result = await runRelease([
+      "deliver",
+      "--sha",
+      "a".repeat(40),
+      "--image-digest",
+      "latest",
+    ]);
+    expect(Exit.isFailure(result.exit)).toBe(true);
+    expect(result.stored).toEqual({ record: emptyReleaseRecord, version: "1" });
+    expect(result.platformCalls).toEqual([]);
+  });
+
+  test("restore refuses a malformed release id before any write", async () => {
+    const result = await runRelease([
+      "restore",
+      "--release-id",
+      "previous",
+      "--expected-generation",
+      "0",
+    ]);
+    expect(Exit.isFailure(result.exit)).toBe(true);
+    expect(result.stored.version).toBe("1");
+    expect(result.platformCalls).toEqual([]);
+  });
+
+  test("recover with nothing pending applies nothing", async () => {
+    const result = await runRelease(["recover"]);
+    expect(Exit.isSuccess(result.exit)).toBe(true);
+    expect(result.platformCalls).toEqual([]);
+  });
+});
