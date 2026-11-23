@@ -12,6 +12,7 @@ import {
   AutomationPreviewId,
   type AutomationPreviewIdType,
   AutomationPreviewOutcome,
+  type AutomationPreviewOutcome as AutomationPreviewOutcomeType,
   type AutomationRunDetailType,
   AutomationRunId,
   AutomationRunOutcome,
@@ -26,6 +27,7 @@ import {
   type AutomationVersionDetailType,
   AutomationVersionNumber,
   type AutomationVersionSummaryType,
+  automationRunEventDetails,
   type CliAccessTokenType,
 } from "@deskohub/workspace-admin-api";
 import {
@@ -314,29 +316,37 @@ const sendDeferralCauses = {
   "one-off-campaign-gap": "a one-off campaign email was sent too recently",
 } satisfies Record<AutomationSendDeferralCauseType, string>;
 
+const isSkippedDetail = Schema.is(automationRunEventDetails.skipped);
+const isDeferredDetail = Schema.is(automationRunEventDetails.deferred);
+
 /**
- * A timeline entry's detail. Skipped and deferred entries name their known
- * reason or cause; any other detail, or a code this binary doesn't know,
- * prints as JSON.
+ * A timeline entry's detail. A skipped or deferred entry whose whole detail
+ * this binary reads names its reason or cause; any other detail, such as one
+ * with a code this binary doesn't know, prints as JSON.
  */
-const describeTimelineDetail = (
-  kind: string,
-  detail: Readonly<Record<string, unknown>>
-) => {
-  const reason =
-    kind === "skipped" && typeof detail.reason === "string"
-      ? knownCodeLabel(runSkipReasons, detail.reason)
-      : undefined;
-  if (reason !== undefined) return reason;
-  const cause =
-    kind === "deferred" && typeof detail.cause === "string"
-      ? knownCodeLabel(sendDeferralCauses, detail.cause)
-      : undefined;
-  if (cause !== undefined) {
-    return `${cause}; rechecks at ${String(detail.recheckAt)}`;
+const describeTimelineDetail = (kind: string, detail: unknown) => {
+  if (kind === "skipped" && isSkippedDetail(detail)) {
+    return runSkipReasons[detail.reason];
   }
-  return Object.keys(detail).length === 0 ? "" : JSON.stringify(detail);
+  if (kind === "deferred" && isDeferredDetail(detail)) {
+    return `${sendDeferralCauses[detail.cause]}; rechecks at ${detail.recheckAt}`;
+  }
+  return typeof detail === "object" &&
+    detail !== null &&
+    Object.keys(detail).length === 0
+    ? ""
+    : JSON.stringify(detail);
 };
+
+const previewOutcomes = {
+  "would-send": "would send",
+  "condition-failed": "condition failed",
+  "not-in-audience": "not in audience",
+  "already-active": "already active",
+  withdrawn: "withdrawn",
+  skipped: "skipped",
+  unavailable: "unavailable",
+} satisfies Record<AutomationPreviewOutcomeType, string>;
 
 const formatDryRun = (dryRun: AutomationDryRunType) => {
   // A matching pass draft supplies its forecast date without a schedule frequency.
@@ -373,7 +383,7 @@ const formatDryRun = (dryRun: AutomationDryRunType) => {
         ]
       : []),
     ...AutomationPreviewOutcome.literals.map(
-      (outcome) => `${outcome}\t${dryRun.counts[outcome]}`
+      (outcome) => `${previewOutcomes[outcome]}\t${dryRun.counts[outcome]}`
     ),
     ...(dryRun.profileFactsAreCurrent
       ? [
@@ -389,8 +399,8 @@ const formatDryRun = (dryRun: AutomationDryRunType) => {
         customer?.name ?? "",
         customer?.email ?? "",
         row.skipReason === null
-          ? row.outcome
-          : `${row.outcome} (${runSkipReasons[row.skipReason]})`,
+          ? previewOutcomes[row.outcome]
+          : `${previewOutcomes[row.outcome]} (${runSkipReasons[row.skipReason]})`,
         row.stepId ?? "",
         row.sendAt ?? "",
         [

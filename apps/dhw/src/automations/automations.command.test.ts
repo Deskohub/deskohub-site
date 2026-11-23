@@ -990,6 +990,10 @@ describe("dhw automations lifecycle and runs", () => {
       timeline: [
         deferred(1, "one-off-campaign-gap"),
         deferred(2, "cause-from-a-newer-server"),
+        {
+          ...deferred(3, "trigger-not-reached"),
+          detail: { cause: "trigger-not-reached" },
+        },
       ],
     });
     const fake = makeAutomationLayer({
@@ -1013,12 +1017,17 @@ describe("dhw automations lifecycle and runs", () => {
         recheckAt: timestamp,
       })
     );
+    expect(entry(3)).toBe(JSON.stringify({ cause: "trigger-not-reached" }));
     expect(
       JSON.parse(json ?? "").timeline.map(
         (timelineEntry: { detail: { cause: string } }) =>
           timelineEntry.detail.cause
       )
-    ).toEqual(["one-off-campaign-gap", "cause-from-a-newer-server"]);
+    ).toEqual([
+      "one-off-campaign-gap",
+      "cause-from-a-newer-server",
+      "trigger-not-reached",
+    ]);
   });
 
   test("run prints the timeline with each entry's detail", async () => {
