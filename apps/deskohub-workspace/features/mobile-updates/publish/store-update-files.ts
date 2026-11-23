@@ -1,4 +1,4 @@
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 import type { UpdateFile } from "./exported-update";
 import { UpdateAssetStorage } from "./update-asset-storage.service";
 
@@ -9,13 +9,14 @@ interface StoredUpdateFiles {
   readonly reused: number;
 }
 
-/** Blob rate-limits a store's writes, so a publish uploads a few at a time. */
+/** Stores rate-limit writes, so a publish uploads a few files at a time. */
 const uploadConcurrency = 4;
 
 /**
  * Stores the files of one or more updates. Pathnames are content addresses,
- * so a file already stored, by an earlier publish or another platform's
- * update, is reused as it is.
+ * so each distinct file is ensured once, and one already stored, by an
+ * earlier publish or another platform's update, is reused once the store
+ * confirms it holds exactly that file.
  */
 export const storeUpdateFiles = Effect.fn("storeUpdateFiles")(function* (
   files: readonly UpdateFile[]
@@ -28,13 +29,7 @@ export const storeUpdateFiles = Effect.fn("storeUpdateFiles")(function* (
   const stored = yield* Effect.forEach(
     unique,
     (file) =>
-      storage.find(file.pathname).pipe(
-        Effect.flatMap(
-          Option.match({
-            onSome: (url) => Effect.succeed({ url, reused: true }),
-            onNone: () => uploadMissing(file),
-          })
-        ),
+      storage.ensureAsset(file).pipe(
         Effect.map(({ url, reused }) => ({
           pathname: file.pathname,
           url,
@@ -50,25 +45,4 @@ export const storeUpdateFiles = Effect.fn("storeUpdateFiles")(function* (
     uploaded: stored.length - reused,
     reused,
   } satisfies StoredUpdateFiles;
-});
-
-/**
- * Uploads a file the store lacked. When the upload fails because another
- * publish stored the same content meanwhile, that copy is reused.
- */
-const uploadMissing = Effect.fnUntraced(function* (file: UpdateFile) {
-  const storage = yield* UpdateAssetStorage;
-  return yield* storage.upload(file).pipe(
-    Effect.map((url) => ({ url, reused: false })),
-    Effect.catchTag("UpdateAssetStorageUnavailable", (failure) =>
-      storage.find(file.pathname).pipe(
-        Effect.flatMap(
-          Option.match({
-            onSome: (url) => Effect.succeed({ url, reused: true }),
-            onNone: () => Effect.fail(failure),
-          })
-        )
-      )
-    )
-  );
 });

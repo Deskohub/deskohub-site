@@ -29,6 +29,12 @@ const workspaceRoot = resolve(import.meta.dir, "..");
 const blobToken = "vercel_blob_rw_fixturestore_syntheticblobtoken";
 const publishToken = "synthetic-mobile-updates-publish-token";
 const bypassSecret = "synthetic-protection-bypass-secret";
+const cloudStorageToken = "synthetic-cloud-storage-access-token";
+const cloudStorageBucket = "fixture-mobile-updates";
+const cloudStorage = {
+  MOBILE_UPDATES_GCS_BUCKET: cloudStorageBucket,
+  MOBILE_UPDATES_GCS_ACCESS_TOKEN: cloudStorageToken,
+};
 
 const appKeys = generateKeyPairSync("rsa", {
   modulusLength: 2048,
@@ -55,6 +61,8 @@ const stored = {
 };
 const blobUrl = (pathname: string) =>
   `https://fixture-store.public.blob.vercel-storage.com/${pathname}`;
+const cloudStorageUrl = (pathname: string) =>
+  `https://storage.googleapis.com/${cloudStorageBucket}/${pathname}`;
 
 /** A request or Expo CLI call the fixtures recorded, as JSON. */
 interface Recorded {
@@ -144,7 +152,12 @@ const publish = async ({
 };
 
 const expectNoSecrets = (output: string) => {
-  for (const secret of [blobToken, publishToken, bypassSecret]) {
+  for (const secret of [
+    blobToken,
+    publishToken,
+    bypassSecret,
+    cloudStorageToken,
+  ]) {
     expect(output).not.toContain(secret);
   }
 };
@@ -237,6 +250,13 @@ describe("publish-mobile-update", () => {
     expect(result.output).toContain(`id=${androidId}`);
     expect(result.output).toContain(`id=${iosId}`);
     expectNoSecrets(result.output);
+    // Without Cloud Storage settings files go to Blob, and the Expo CLI
+    // never sees a publish secret.
+    expect(result.recorded.some(({ kind }) => kind.startsWith("gcs-"))).toBe(
+      false
+    );
+    expect(result.of("expo").length).toBeGreaterThan(0);
+    for (const call of result.of("expo")) expect(call.secrets).toEqual([]);
   });
 
   test("exports only the requested platforms and leaves the export behind", async () => {
@@ -269,7 +289,156 @@ describe("publish-mobile-update", () => {
     expect(result.of("blob-put").map(({ pathname }) => pathname)).toEqual([
       stored.androidBundle,
     ]);
+    // A stored file is reused only once its downloaded bytes match.
+    expect(
+      result
+        .of("blob-download")
+        .map(({ pathname }) => pathname)
+        .sort()
+    ).toEqual([stored.iosBundle, stored.image].sort());
     expect(result.of("publish")).toHaveLength(2);
+  });
+
+  test("reuses a file another publish stored while this one uploaded it", async () => {
+    const result = await publish({
+      env: { PUBLISH_FIXTURE_STORED_DURING_UPLOAD: stored.image },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.of("blob-download")).toEqual([
+      expect.objectContaining({ pathname: stored.image }),
+    ]);
+    expect(result.of("publish")).toHaveLength(2);
+  });
+
+  test("publishes nothing when a file's pathname holds other bytes", async () => {
+    const result = await publish({
+      env: { PUBLISH_FIXTURE_STORED_DIFFERENT: stored.image },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain(stored.image);
+    expect(result.of("publish")).toHaveLength(0);
+    expectNoSecrets(result.output);
+  });
+
+  test("stores files in Cloud Storage when a bucket is set and publishes their URLs, signed and verified", async () => {
+    const result = await publish({
+      env: { ...cloudStorage, BLOB_READ_WRITE_TOKEN: "" },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.recorded.some(({ kind }) => kind.startsWith("blob-"))).toBe(
+      false
+    );
+    const creates = result.of("gcs-create");
+    expect(creates.map(({ pathname }) => pathname).sort()).toEqual(
+      [stored.androidBundle, stored.iosBundle, stored.image].sort()
+    );
+    for (const create of creates) {
+      expect(create).toMatchObject({
+        status: 200,
+        ifGenerationMatch: "0",
+        cacheControl: "public, max-age=31536000, immutable",
+        authorization: `Bearer ${cloudStorageToken}`,
+      });
+    }
+
+    const publications = result
+      .of("publish")
+      .map(({ publication }) => publication as Record<string, Schema.Json>);
+    expect(publications).toEqual([
+      expect.objectContaining({
+        platform: "android",
+        launchAsset: expect.objectContaining({
+          url: cloudStorageUrl(stored.androidBundle),
+        }),
+        assets: [
+          expect.objectContaining({ url: cloudStorageUrl(stored.image) }),
+        ],
+      }),
+      expect.objectContaining({
+        platform: "ios",
+        launchAsset: expect.objectContaining({
+          url: cloudStorageUrl(stored.iosBundle),
+        }),
+      }),
+    ]);
+    // The bytes stored at each URL are the ones the manifest's hash names.
+    const storedHashes = new Map(
+      creates.map(({ pathname, sha256 }) => [
+        pathname,
+        Buffer.from(String(sha256), "hex").toString("base64url"),
+      ])
+    );
+    for (const publication of publications) {
+      const files = [
+        publication.launchAsset,
+        ...(publication.assets as Schema.Json[]),
+      ] as { readonly url: string; readonly hash: string }[];
+      for (const { url, hash } of files) {
+        expect(
+          storedHashes.get(url.replace(`${cloudStorageUrl("")}`, ""))
+        ).toBe(hash);
+      }
+    }
+    // The deployment served each update, signed so the app's key verifies it.
+    expect(result.of("update-check")).toHaveLength(4);
+    for (const call of result.of("expo")) expect(call.secrets).toEqual([]);
+    expectNoSecrets(result.output);
+  });
+
+  test("publishes Cloud Storage files under a configured delivery origin", async () => {
+    const result = await publish({
+      env: {
+        ...cloudStorage,
+        MOBILE_UPDATES_ASSET_ORIGIN: "https://updates-cdn.test/ota/",
+      },
+      args: ["--platform", "android"],
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.of("publish")).toEqual([
+      expect.objectContaining({
+        publication: expect.objectContaining({
+          launchAsset: expect.objectContaining({
+            url: `https://updates-cdn.test/ota/${stored.androidBundle}`,
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  test("reuses a Cloud Storage file whose upload response was lost once its bytes match", async () => {
+    const result = await publish({
+      env: {
+        ...cloudStorage,
+        PUBLISH_FIXTURE_GCS_LOSE_RESPONSE: stored.image,
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.of("gcs-download").map(({ pathname }) => pathname)).toEqual([
+      stored.image,
+    ]);
+    expect(result.of("publish")).toHaveLength(2);
+  });
+
+  test.each([
+    [
+      "an http delivery origin",
+      { MOBILE_UPDATES_ASSET_ORIGIN: "http://updates-cdn.test" },
+    ],
+    ["a bucket without a token", { MOBILE_UPDATES_GCS_ACCESS_TOKEN: "" }],
+  ])("publishes nothing with %s", async (_, settings) => {
+    const result = await publish({ env: { ...cloudStorage, ...settings } });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.recorded.some(({ kind }) => kind.startsWith("gcs-"))).toBe(
+      false
+    );
+    expect(result.of("publish")).toHaveLength(0);
+    expectNoSecrets(result.output);
   });
 
   test("sends the protection bypass to a protected preview deployment", async () => {

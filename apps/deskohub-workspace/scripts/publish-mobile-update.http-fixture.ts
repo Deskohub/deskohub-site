@@ -4,7 +4,15 @@
  * Vercel Blob: `@vercel/blob` sends its requests through undici, which a
  * `fetch` stub doesn't see, so this serves the Blob API on a local port and
  * points `VERCEL_BLOB_API_URL` at it. `PUBLISH_FIXTURE_STORED` lists
- * pathnames (comma-separated) the store already holds.
+ * pathnames (comma-separated) the store already holds, with the fixture
+ * export's bytes; `PUBLISH_FIXTURE_STORED_DIFFERENT` ones hold other bytes,
+ * and `PUBLISH_FIXTURE_STORED_DURING_UPLOAD` ones get stored by "another
+ * publish" while this one uploads them, so the upload fails. The store's
+ * public URLs serve the stored bytes through the `fetch` stub.
+ *
+ * Cloud Storage (`fetch` stub on `https://storage.googleapis.com`): an
+ * in-memory bucket (`fakeCloudStorage`); `PUBLISH_FIXTURE_GCS_LOSE_RESPONSE`
+ * pathnames are created but their upload responses lost.
  *
  * Target deployment (`fetch` stub on `https://workspace.test`): the publish
  * route answers `PUBLISH_FIXTURE_PUBLISH_STATUS` (default 201) and records
@@ -20,10 +28,14 @@
  * other request fails.
  */
 import { createHash, createSign, randomUUID } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readdirSync, readFileSync } from "node:fs";
+import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Schema } from "effect";
 import { serializeDictionary } from "structured-headers";
 import { MobileUpdatePublication } from "@/features/mobile-updates/mobile-update-publication";
+import { fakeCloudStorage } from "@/features/mobile-updates/publish/cloud-storage.test-utils";
+import { cloudStorageApiOrigin } from "@/features/mobile-updates/publish/cloud-storage-update-asset-storage";
 import { encodeMultipartMixed } from "@/shared/utils/multipart-mixed";
 
 const targetOrigin = "https://workspace.test";
@@ -45,24 +57,85 @@ interface FixtureRecord {
     | number
     | boolean
     | null
+    | undefined
+    | Readonly<Record<string, string>>
     | MobileUpdatePublication;
 }
 
 const record = (entry: FixtureRecord) =>
   appendFileSync(recordFile, `${JSON.stringify(entry)}\n`);
 
-const storedBlobs = new Set(
-  (process.env.PUBLISH_FIXTURE_STORED ?? "").split(",").filter(Boolean)
+const listed = (name: string) =>
+  (process.env[name] ?? "").split(",").filter(Boolean);
+
+const sha256 = (bytes: Uint8Array) =>
+  createHash("sha256").update(bytes).digest("hex");
+
+interface StoredBlob {
+  readonly bytes: Uint8Array;
+  readonly contentType: string;
+}
+
+/** The fixture export's files, by their content-addressed pathname. */
+const exportedFiles = new Map<string, StoredBlob>(
+  readdirSync(
+    fileURLToPath(
+      new URL(
+        "../features/mobile-updates/publish/fixtures/export",
+        import.meta.url
+      )
+    ),
+    { recursive: true, withFileTypes: true }
+  )
+    .filter((entry) => entry.isFile() && entry.name !== "metadata.json")
+    .map((entry) => {
+      const bytes = new Uint8Array(
+        readFileSync(join(entry.parentPath, entry.name))
+      );
+      const bundle = extname(entry.name) === ".hbc";
+      return [
+        `mobile-updates/assets/${sha256(bytes)}${bundle ? ".hbc" : ".png"}`,
+        {
+          bytes,
+          contentType: bundle ? "application/javascript" : "image/png",
+        },
+      ] as const;
+    })
 );
+
+const exportedFile = (pathname: string) => {
+  const file = exportedFiles.get(pathname);
+  if (file === undefined) throw new Error(`No fixture file ${pathname}`);
+  return file;
+};
+
+const storedBlobs = new Map<string, StoredBlob>([
+  ...listed("PUBLISH_FIXTURE_STORED").map(
+    (pathname) => [pathname, exportedFile(pathname)] as const
+  ),
+  ...listed("PUBLISH_FIXTURE_STORED_DIFFERENT").map(
+    (pathname) =>
+      [
+        pathname,
+        {
+          ...exportedFile(pathname),
+          bytes: exportedFile(pathname).bytes.map((byte, index) =>
+            index === 0 ? byte ^ 1 : byte
+          ),
+        },
+      ] as const
+  ),
+]);
+const storedDuringUpload = listed("PUBLISH_FIXTURE_STORED_DURING_UPLOAD");
 const blobUrl = (pathname: string) => `${blobStoreOrigin}/${pathname}`;
-const blobResult = (pathname: string) => ({
+const blobResult = (pathname: string, { bytes, contentType }: StoredBlob) => ({
   url: blobUrl(pathname),
   downloadUrl: `${blobUrl(pathname)}?download=1`,
   pathname,
-  contentType: "application/octet-stream",
+  contentType,
   contentDisposition: "inline",
   cacheControl: "public, max-age=31536000",
-  size: 1,
+  size: bytes.byteLength,
   uploadedAt: new Date(0).toISOString(),
   etag: "fixture",
 });
@@ -76,8 +149,9 @@ const blobApi = Bun.serve({
     if (request.method === "GET" && headUrl !== null) {
       const pathname = headUrl.replace(`${blobStoreOrigin}/`, "");
       record({ kind: "blob-head", pathname });
-      return storedBlobs.has(pathname)
-        ? Response.json(blobResult(pathname))
+      const stored = storedBlobs.get(pathname);
+      return stored !== undefined
+        ? Response.json(blobResult(pathname, stored))
         : Response.json(
             { error: { code: "not_found", message: "Not found" } },
             { status: 404 }
@@ -93,8 +167,11 @@ const blobApi = Bun.serve({
         addRandomSuffix: request.headers.get("x-add-random-suffix"),
         allowOverwrite: request.headers.get("x-allow-overwrite"),
         cacheControlMaxAge: request.headers.get("x-cache-control-max-age"),
-        sha256: createHash("sha256").update(body).digest("hex"),
+        sha256: sha256(body),
       });
+      if (storedDuringUpload.includes(pathname)) {
+        storedBlobs.set(pathname, exportedFile(pathname));
+      }
       if (process.env.PUBLISH_FIXTURE_BLOB_UPLOADS === "unavailable") {
         return Response.json(
           { error: { code: "service_unavailable", message: "Unavailable" } },
@@ -109,14 +186,25 @@ const blobApi = Bun.serve({
           { status: 400 }
         );
       }
-      storedBlobs.add(pathname);
-      return Response.json(blobResult(pathname));
+      const stored = {
+        bytes: body,
+        contentType: request.headers.get("x-content-type") ?? "",
+      };
+      storedBlobs.set(pathname, stored);
+      return Response.json(blobResult(pathname, stored));
     }
     return new Response("Unexpected Blob API request", { status: 500 });
   },
 });
 blobApi.unref();
 process.env.VERCEL_BLOB_API_URL = blobApi.url.origin;
+
+const cloudStorage = fakeCloudStorage({
+  bucket: process.env.MOBILE_UPDATES_GCS_BUCKET ?? "fixture-mobile-updates",
+  loseCreateResponse: listed("PUBLISH_FIXTURE_GCS_LOSE_RESPONSE"),
+  onRequest: ({ kind, ...answer }) =>
+    record({ kind: `gcs-${kind}`, ...answer }),
+});
 
 const latest = new Map<string, MobileUpdatePublication>();
 let responseLost = false;
@@ -191,6 +279,19 @@ const fixtureFetch = async (
 ): Promise<Response> => {
   const request = new Request(input, init);
   const url = new URL(request.url);
+  if (url.origin === blobStoreOrigin && request.method === "GET") {
+    const pathname = url.pathname.slice(1);
+    record({ kind: "blob-download", pathname });
+    const stored = storedBlobs.get(pathname);
+    return stored === undefined
+      ? new Response("Not found", { status: 404 })
+      : new Response(new Uint8Array(stored.bytes), {
+          headers: { "content-type": stored.contentType },
+        });
+  }
+  if (url.origin === cloudStorageApiOrigin) {
+    return cloudStorage.handle(request);
+  }
   if (
     url.origin === targetOrigin &&
     process.env.PUBLISH_FIXTURE_TARGET === "unreachable"

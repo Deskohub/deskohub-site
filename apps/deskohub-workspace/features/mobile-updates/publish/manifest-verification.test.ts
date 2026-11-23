@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { createSign, generateKeyPairSync } from "node:crypto";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { serializeDictionary } from "structured-headers";
 import { encodeMultipartMixed } from "@/shared/utils/multipart-mixed";
+import { MobileUpdatePublication } from "../mobile-update-publication";
 import { verifyManifestReply } from "./manifest-verification";
 
 const appKeys = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -64,6 +65,46 @@ describe("verifying a published update's manifest", () => {
       type: "update",
       id: publishedId,
     });
+
+    expect(result._tag).toBe("Success");
+  });
+
+  test("accepts a manifest whose files sit on the legacy Blob store and on Cloud Storage", async () => {
+    const file = (url: string, hash: string) => ({
+      hash,
+      key: "d745e4d777b842fdec622dab9ebc8fdc",
+      contentType: "image/png",
+      fileExtension: ".png",
+      url,
+    });
+    // Apps installed before the move keep loading the original Blob URLs.
+    const publication = Schema.decodeUnknownSync(MobileUpdatePublication)({
+      type: "update",
+      id: publishedId,
+      platform: "android",
+      runtimeVersion: "rv",
+      launchAsset: file(
+        "https://fixture-store.public.blob.vercel-storage.com/mobile-updates/assets/9295f55b921438c98c566a78ab327261ff5e17328b855d8e8b8e13ce1027429f.hbc",
+        "kpX1W5IUOMmMVmp4qzJyYf9eFzKLhV2Oi44TzhAnQp8"
+      ),
+      assets: [
+        file(
+          "https://storage.googleapis.com/synthetic-mobile-updates/mobile-updates/assets/c06303dd848a80e9e774747ca5f185ba68129bb55e4842c72ed477340fc8100c.png",
+          "wGMD3YSKgOnndHR8pfGFumgSm7VeSELHLtR3NA_IEAw"
+        ),
+      ],
+      metadata: {},
+      extra: {},
+    });
+    const { type: _type, platform: _platform, ...body } = publication;
+
+    const result = await verify(
+      reply({
+        part: "manifest",
+        body: { ...body, createdAt: "2026-11-07T10:00:00.000Z" },
+      }),
+      { type: "update", id: publishedId }
+    );
 
     expect(result._tag).toBe("Success");
   });

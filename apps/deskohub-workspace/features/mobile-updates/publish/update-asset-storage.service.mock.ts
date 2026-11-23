@@ -1,21 +1,22 @@
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer } from "effect";
 import {
-  UpdateAssetStorage,
+  StoredUpdateAssetMismatch,
   UpdateAssetStorageUnavailable,
-} from "./update-asset-storage.service";
+} from "./stored-update-asset";
+import { UpdateAssetStorage } from "./update-asset-storage.service";
 
 /**
- * An in-memory update store. `stored` files exist from the start,
- * `storedDuringUpload` files appear when this publish tries to upload them
- * (as if another publish won the race), and `failedUploads` never upload.
+ * An in-memory update store. `stored` files exist from the start and are
+ * reused, `mismatched` pathnames hold another file, and `failedUploads`
+ * never upload.
  */
 export const memoryUpdateAssetStorage = ({
   stored = [],
-  storedDuringUpload = [],
+  mismatched = [],
   failedUploads = [],
 }: {
   readonly stored?: readonly string[];
-  readonly storedDuringUpload?: readonly string[];
+  readonly mismatched?: readonly string[];
   readonly failedUploads?: readonly string[];
 }) => {
   const urlOf = (pathname: string) => `https://blob.test/${pathname}`;
@@ -24,32 +25,33 @@ export const memoryUpdateAssetStorage = ({
   const uploadedContentTypes = new Map<string, string>();
 
   const layer = Layer.succeed(UpdateAssetStorage, {
-    find: (pathname) =>
-      Effect.sync(() =>
-        files.has(pathname) ? Option.some(urlOf(pathname)) : Option.none()
-      ),
-    upload: ({ pathname, asset }) => {
-      if (
-        storedDuringUpload.includes(pathname) ||
-        failedUploads.includes(pathname)
-      ) {
-        if (storedDuringUpload.includes(pathname)) files.add(pathname);
+    ensureAsset: ({ pathname, asset }) => {
+      if (mismatched.includes(pathname)) {
+        return Effect.fail(
+          new StoredUpdateAssetMismatch({
+            pathname,
+            mismatched: ["sha256"],
+            message: `${pathname} is already stored with a different sha256`,
+          })
+        );
+      }
+      if (failedUploads.includes(pathname)) {
         return Effect.fail(
           new UpdateAssetStorageUnavailable({
             operation: "upload",
             pathname,
-            message: `Blob upload of ${pathname} failed`,
+            message: `Upload of ${pathname} failed`,
           })
         );
       }
-      if (files.has(pathname)) {
-        return Effect.die(new Error(`Overwrote stored file ${pathname}`));
-      }
       return Effect.sync(() => {
-        files.add(pathname);
-        uploads.push(pathname);
-        uploadedContentTypes.set(pathname, asset.contentType);
-        return urlOf(pathname);
+        const reused = files.has(pathname);
+        if (!reused) {
+          files.add(pathname);
+          uploads.push(pathname);
+          uploadedContentTypes.set(pathname, asset.contentType);
+        }
+        return { url: urlOf(pathname), reused };
       });
     },
   });

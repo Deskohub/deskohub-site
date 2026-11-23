@@ -42,19 +42,20 @@ describe("storing update files", () => {
     });
   });
 
-  test("reuses a file another publish stored while this one uploaded it", async () => {
+  test("fails when a pathname already holds another file", async () => {
     const storage = memoryUpdateAssetStorage({
-      storedDuringUpload: [bundle.pathname],
+      mismatched: [image.pathname],
     });
 
-    const result = await Effect.runPromise(
-      storeUpdateFiles([bundle]).pipe(Effect.provide(storage.layer))
+    const failure = await Effect.runPromise(
+      Effect.flip(
+        storeUpdateFiles([bundle, image]).pipe(Effect.provide(storage.layer))
+      )
     );
 
-    expect(result).toEqual({
-      assetUrls: new Map([[bundle.pathname, storage.urlOf(bundle.pathname)]]),
-      uploaded: 0,
-      reused: 1,
+    expect(failure).toMatchObject({
+      _tag: "StoredUpdateAssetMismatch",
+      pathname: image.pathname,
     });
   });
 
