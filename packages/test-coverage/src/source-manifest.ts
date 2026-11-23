@@ -1,29 +1,39 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { Schema } from "effect";
+import { readJsonFile } from "./json-file";
 import { writeFileAtomically } from "./source-instrumentation";
 
 /**
  * Which tests a coverage report counts. A complete report ran every package's
  * tests; a partial one ran a subset, so its counts are a lower bound.
  */
-export type CoverageScope =
-  | { readonly kind: "complete" }
-  | { readonly kind: "partial"; readonly tests: ReadonlyArray<string> };
+const CoverageScope = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("complete") }),
+  Schema.Struct({
+    kind: Schema.Literal("partial"),
+    tests: Schema.Array(Schema.String),
+  }),
+]);
+
+export type CoverageScope = typeof CoverageScope.Type;
 
 /**
  * The source a coverage report measured: the SHA-256 of each source file,
  * keyed by repository-relative path. A file that changed while the tests ran
  * maps to null, because its counts may describe either version.
  */
-export type SourceManifest = {
-  readonly revision: string;
-  readonly generatedAt: string;
-  readonly scope: CoverageScope;
+const SourceManifest = Schema.Struct({
+  revision: Schema.String,
+  generatedAt: Schema.String,
+  scope: CoverageScope,
   /** Exit code of the test command; non-zero means some tests failed. */
-  readonly testExitCode: number;
-  readonly files: Readonly<Record<string, string | null>>;
-};
+  testExitCode: Schema.Int,
+  files: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
+});
+
+export type SourceManifest = typeof SourceManifest.Type;
 
 const sourceManifestFileName = "coverage-sources.json";
 
@@ -77,11 +87,7 @@ export function readSourceManifest(outputDirectory: string): SourceManifest {
       `${path} is missing; rerun \`bun run coverage\` to record which source the report measured`
     );
   }
-  const manifest: unknown = JSON.parse(readFileSync(path, "utf8"));
-  if (!isSourceManifest(manifest)) {
-    throw new Error(`Malformed source manifest ${path}`);
-  }
-  return manifest;
+  return readJsonFile(SourceManifest, path, "source manifest");
 }
 
 /**
@@ -95,38 +101,7 @@ export function measuresCurrentSource(
 ): boolean {
   const recorded = manifest.files[relativePath];
   return (
-    typeof recorded === "string" &&
+    recorded !== null &&
     recorded === hashSourceFile(join(repositoryRoot, relativePath))
-  );
-}
-
-function isSourceManifest(value: unknown): value is SourceManifest {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const manifest: Record<string, unknown> = { ...value };
-  return (
-    typeof manifest.revision === "string" &&
-    typeof manifest.generatedAt === "string" &&
-    isCoverageScope(manifest.scope) &&
-    typeof manifest.testExitCode === "number" &&
-    typeof manifest.files === "object" &&
-    manifest.files !== null &&
-    Object.values(manifest.files).every(
-      (hash) => hash === null || typeof hash === "string"
-    )
-  );
-}
-
-function isCoverageScope(value: unknown): value is CoverageScope {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const scope: Record<string, unknown> = { ...value };
-  return (
-    scope.kind === "complete" ||
-    (scope.kind === "partial" &&
-      Array.isArray(scope.tests) &&
-      scope.tests.every((test) => typeof test === "string"))
   );
 }

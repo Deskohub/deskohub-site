@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
+import { Schema } from "effect";
 import {
   type CoverageMapData,
   createCoverageMap,
   createFileCoverage,
 } from "istanbul-lib-coverage";
+import { readJsonFile } from "./json-file";
 import type { SourceInstrumentation } from "./source-instrumentation";
 
 export type CoverageReport = {
@@ -57,51 +59,64 @@ export function buildCoverageReport({
   };
 }
 
+const Location = Schema.Struct({ line: Schema.Int, column: Schema.Int });
+
+const Range = Schema.Struct({ start: Location, end: Location });
+
+/**
+ * A branch path's location. Istanbul's instrumenter clones a missing location
+ * into `{ start: {}, end: {} }`, as it does for an `if` without an `else`.
+ */
+const BranchPathLocation = Schema.Union([
+  Range,
+  Schema.Struct({
+    start: Schema.Struct({}),
+    end: Schema.Struct({}),
+  }),
+]);
+
+const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
+/**
+ * One file's Istanbul coverage. The rest record keeps the fields the merge
+ * passes through unread, such as `hash` and `inputSourceMap`.
+ */
+const FileCoverageData = Schema.StructWithRest(
+  Schema.Struct({
+    path: Schema.String,
+    statementMap: Schema.Record(Schema.String, Range),
+    fnMap: Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        name: Schema.String,
+        decl: Range,
+        loc: Range,
+        line: Schema.Int,
+      })
+    ),
+    branchMap: Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        loc: Range,
+        type: Schema.String,
+        locations: Schema.mutable(Schema.Array(BranchPathLocation)),
+        line: Schema.Int,
+      })
+    ),
+    s: Schema.Record(Schema.String, Count),
+    f: Schema.Record(Schema.String, Count),
+    b: Schema.Record(Schema.String, Schema.mutable(Schema.Array(Count))),
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)]
+);
+
+/** The coverage map a test process dumps, keyed by absolute source path. */
+const CoverageDump = Schema.Record(Schema.String, FileCoverageData);
+
 function readCoverageDump(dumpFile: string): CoverageMapData {
-  const dump: unknown = JSON.parse(readFileSync(dumpFile, "utf8"));
-  if (!isCoverageMapData(dump)) {
-    throw new Error(`Malformed coverage dump ${dumpFile}`);
-  }
-  return dump;
-}
-
-function isCoverageMapData(value: unknown): value is CoverageMapData {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.values(value).every(isFileCoverageData)
-  );
-}
-
-function isFileCoverageData(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const file: Record<string, unknown> = { ...value };
-  return (
-    typeof file.path === "string" &&
-    [file.statementMap, file.fnMap, file.branchMap].every(isPlainRecord) &&
-    isCounterRecord(file.s, isCount) &&
-    isCounterRecord(file.f, isCount) &&
-    isCounterRecord(
-      file.b,
-      (counts) => Array.isArray(counts) && counts.every(isCount)
-    )
-  );
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isCounterRecord(
-  value: unknown,
-  isCounter: (counter: unknown) => boolean
-): boolean {
-  return isPlainRecord(value) && Object.values(value).every(isCounter);
-}
-
-function isCount(value: unknown): boolean {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+  const dump = readJsonFile(CoverageDump, dumpFile, "coverage dump");
+  // `@types/istanbul-lib-coverage` declares every branch path location
+  // complete, though the instrumenter writes empty ones; Istanbul's merge
+  // reads only `locations[0]`, which is always complete.
+  return dump as CoverageMapData;
 }
