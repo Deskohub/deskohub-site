@@ -129,6 +129,11 @@ type CoworkReservationFormProps = {
    * booked as an overnight stay.
    */
   overnightStayOffered?: boolean;
+  /**
+   * Whether the customer may be offered passes to buy while the pass release
+   * is open; the page withholds them from a customer a pass may cover.
+   */
+  passPurchaseOffered?: boolean;
   checkoutSessionId?: CheckoutSessionId;
   checkoutCustomer: ReservationCheckoutCustomerForm;
   initialAvailability?: ReadonlyArray<PreloadedWorkspaceAvailability>;
@@ -186,6 +191,7 @@ export function CoworkReservationForm({
   initialValues,
   locale,
   overnightStayOffered = false,
+  passPurchaseOffered = true,
   checkoutSessionId,
   checkoutCustomer,
   initialAvailability,
@@ -287,6 +293,7 @@ export function CoworkReservationForm({
   // the day stays a pass covers, and only while choosing the reservation.
   const passPurchaseDraft =
     entryPackOffered &&
+    passPurchaseOffered &&
     !pack &&
     packSelection?.kind !== "unavailable" &&
     !isOvernightStay &&

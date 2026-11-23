@@ -30,7 +30,10 @@ import {
   packCoversDraft,
 } from "../../passes/entry-pack-booking";
 import { PassOfferCards } from "../../passes/pass-offer-cards";
-import { coworkPassOfferCatalog } from "../../passes/pass-offers";
+import {
+  coworkPassOfferCatalog,
+  holdsCurrentUnlimitedPass,
+} from "../../passes/pass-offers";
 import { cashBookingCoverage } from "../../passes/pass-read-state";
 import {
   heldPassesAtom,
@@ -268,11 +271,7 @@ function CoworkSelection({
     catalog: passCatalog,
     heldPasses: passList,
   });
-  const hasUnlimited = held.some(
-    (pass) =>
-      pass.kind === "unlimited" &&
-      (pass.status === "active" || pass.status === "upcoming")
-  );
+  const hasUnlimited = holdsCurrentUnlimitedPass(held);
   const refreshPassCatalog = useAtomRefresh(passCatalogAtom);
   const activePack = packs.find(({ passId }) => passId === entryPackId);
   const openingDraft = openingCoworkDraft({

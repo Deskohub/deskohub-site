@@ -55,11 +55,20 @@ export const unlimitedOfferExpiry = (
     validityDays
   );
 
+/** Whether the customer holds an Unlimited pass that is active or upcoming. */
+export const holdsCurrentUnlimitedPass = (held: CustomerPassList["held"]) =>
+  held.some(
+    (pass) =>
+      pass.kind === "unlimited" &&
+      (pass.status === "active" || pass.status === "upcoming")
+  );
+
 /**
  * The catalog the Cowork form offers passes from, or undefined while the
  * offers stay hidden: an Entry pack is applied, a held pack can pay for the
- * booking (its banner offers it), or either pass read hasn't succeeded. A
- * catalog read failing as unavailable is the passes rollout switched off.
+ * booking (its banner offers it), the customer holds an active or upcoming
+ * Unlimited pass, or either pass read hasn't succeeded. A catalog read
+ * failing as unavailable is the passes rollout switched off.
  */
 export const coworkPassOfferCatalog = ({
   appliedPackId,
@@ -78,6 +87,7 @@ export const coworkPassOfferCatalog = ({
   AsyncResult.isSuccess(heldPasses) &&
   !heldPasses.value.held.some(
     (pass) => pass.kind === "entry-pack" && pass.bookFrom !== undefined
-  )
+  ) &&
+  !holdsCurrentUnlimitedPass(heldPasses.value.held)
     ? catalog.value
     : undefined;

@@ -1,15 +1,28 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Deferred, Effect, Schema } from "effect";
-import { isValidElement, type ReactElement, type ReactNode } from "react";
+import {
+  type ComponentProps,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import type { PreloadedAdvertisedPrice } from "@/features/checkout/advertised-price";
 import { makeOfficePayRouteFixture } from "@/features/checkout/backend/checkout/office-pay-route.test-utils";
 import { checkoutSessionIdSchema } from "@/features/checkout/checkout-identifiers";
 import type { PublicPriceListOffering } from "@/features/checkout/public-offerings";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
+import type { CoworkCustomerPasses } from "@/features/cowork/backend/cowork-customer-passes";
+import type { CoworkReservationForm } from "@/features/cowork/components/cowork-reservation-form";
+import {
+  getCoworkBookingPasses,
+  noCoworkBookingPasses,
+} from "@/features/cowork/cowork-entry-packs";
 import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
 import type { Locale } from "@/features/i18n";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { orderIdSchema } from "@/features/order";
+import type { HeldEntryPack } from "@/features/passes/backend/held-entry-packs";
 import { recordReservationPagePreloads } from "@/features/reservation/backend/reservation-page-preloads.service.mock";
 import { getCoworkDateAdvertisedPriceRequests } from "@/features/reservation/cowork-advertised-price";
 import {
@@ -24,7 +37,10 @@ import type { PreloadedWorkspaceAvailability } from "@/features/reservation/work
 import { getOfficeAvailabilityQuery } from "@/features/reservation/workspace-availability";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { getSearchParam, type SearchParamsRecord } from "@/shared/utils";
-import { instantStringSchema } from "@/shared/utils/temporal";
+import {
+  instantStringSchema,
+  plainDateStringSchema,
+} from "@/shared/utils/temporal";
 import type {
   ReservationPageForm,
   ReservationPageRestoration,
@@ -108,6 +124,20 @@ mock.module(
       Promise.resolve(coworkPassesOpen),
   })
 );
+
+// The Cowork page serves what its pass loader reads, or its fallback.
+let coworkCustomerPasses: Effect.Effect<CoworkCustomerPasses, Error> =
+  Effect.succeed({
+    bookingPasses: noCoworkBookingPasses,
+    passPurchaseOffered: true,
+  });
+const coworkCustomerPassReads = await import(
+  "@/features/cowork/backend/cowork-customer-passes"
+);
+mock.module("@/features/cowork/backend/cowork-customer-passes", () => ({
+  ...coworkCustomerPassReads,
+  loadCoworkCustomerPasses: () => coworkCustomerPasses,
+}));
 
 const payStateBookedAt = instantStringSchema.make("2026-06-01T09:58:00.000Z");
 
@@ -324,6 +354,85 @@ test("returns to the selection with verified contact before continuing a linked 
   } finally {
     coworkPassesOpen = false;
   }
+});
+
+describe("the Cowork page's pass offers", () => {
+  const heldEntryPack = {
+    id: orderIdSchema.make("b53b3c15-9799-45d2-95b5-20f3ef69f3d2"),
+    tier: "open-space",
+    entryCount: 5,
+    entriesLeft: 3,
+    status: "active",
+    paidAt: Temporal.Instant.from("2099-07-09T12:00:00Z"),
+    validFrom: plainDateStringSchema.make("2099-07-09"),
+    validUntil: plainDateStringSchema.make("2099-09-09"),
+    claimedDates: [],
+    bookedDates: [],
+    reservedEntryDates: {},
+    giftIssuedAt: null,
+    giftClaimedAt: null,
+    giftPaymentIsUsable: true,
+  } satisfies HeldEntryPack;
+  const bookingPasses = getCoworkBookingPasses([heldEntryPack], "2099-07-30");
+
+  type CoworkFormProps = ComponentProps<typeof CoworkReservationForm>;
+
+  /** The props the page hands the Cowork form. */
+  const renderCoworkFormProps = async () => {
+    const { coworkReservationPage } = await import(
+      "@/features/cowork/components/cowork-reservation-page"
+    );
+    coworkPassesOpen = true;
+    try {
+      const page = await coworkReservationPage.Page({
+        searchParams: Promise.resolve({}),
+      });
+      const content = (await renderContent(page)) as ReactElement<{
+        readonly children: ReactNode;
+      }>;
+      const form = [content.props.children]
+        .flat()
+        .find((child) =>
+          isValidElement<CoworkFormProps>(child)
+            ? "passPurchaseOffered" in child.props
+            : false
+        );
+      if (!isValidElement<CoworkFormProps>(form)) {
+        throw new Error("Expected the Cowork form");
+      }
+      return form.props;
+    } finally {
+      coworkPassesOpen = false;
+    }
+  };
+
+  test.each([
+    [
+      "offers passes to buy beside the Entry packs the loader reads",
+      Effect.succeed({ bookingPasses, passPurchaseOffered: true }),
+      { bookingPasses, passPurchaseOffered: true },
+    ],
+    [
+      "withholds passes to buy from an Unlimited holder and keeps their Entry pack",
+      Effect.succeed({ bookingPasses, passPurchaseOffered: false }),
+      { bookingPasses, passPurchaseOffered: false },
+    ],
+    [
+      "withholds every pass when the loader fails",
+      Effect.fail(new Error("synthetic pass read failure")),
+      { bookingPasses: noCoworkBookingPasses, passPurchaseOffered: false },
+    ],
+  ])("%s", async (_, loaded, expected) => {
+    coworkCustomerPasses = loaded;
+    try {
+      expect(await renderCoworkFormProps()).toMatchObject(expected);
+    } finally {
+      coworkCustomerPasses = Effect.succeed({
+        bookingPasses: noCoworkBookingPasses,
+        passPurchaseOffered: true,
+      });
+    }
+  });
 });
 
 /** Fails a deadlocked load quickly instead of at the test timeout. */

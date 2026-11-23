@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type {
   CustomerHeldEntryPack,
+  CustomerHeldUnlimitedPass,
   CustomerPassCatalog,
   CustomerPassList,
 } from "@deskohub/workspace-customer-api";
@@ -157,4 +158,37 @@ test("the offers show only while both pass reads succeed and no pack is applied 
       heldPasses: held(heldPack("2026-11-21")),
     })
   ).toBe(undefined);
+});
+
+const heldUnlimited = (
+  status: CustomerHeldUnlimitedPass["status"]
+): CustomerHeldUnlimitedPass => ({
+  kind: "unlimited",
+  tier: "open-space",
+  status,
+  passId: "0b3f8c1e-6f43-4c62-9a43-7f1d2b9e8a10",
+  boughtOn: "2026-11-20",
+  validFrom: "2026-11-21",
+  lastUsableDate: "2026-12-20",
+});
+
+test("the offers hide while the customer holds an active or upcoming Unlimited pass", () => {
+  for (const status of ["active", "upcoming"] as const) {
+    expect(
+      coworkPassOfferCatalog({
+        appliedPackId: undefined,
+        catalog: offered,
+        heldPasses: held(heldUnlimited(status)),
+      })
+    ).toBe(undefined);
+  }
+  for (const status of ["expired", "ended"] as const) {
+    expect(
+      coworkPassOfferCatalog({
+        appliedPackId: undefined,
+        catalog: offered,
+        heldPasses: held(heldUnlimited(status), heldPack()),
+      })
+    ).toBe(catalog);
+  }
 });
