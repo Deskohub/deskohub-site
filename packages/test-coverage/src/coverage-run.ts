@@ -1,16 +1,20 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { Schema } from "effect";
+import { readJsonFile } from "./json-file";
 import { writeFileAtomically } from "./source-instrumentation";
 
 /** Names the run directory of the coverage run a test process belongs to. */
 export const coverageRunDirectoryVariable = "DESKOHUB_COVERAGE_RUN_DIR";
 
-export type CoverageRun = {
+const CoverageRun = Schema.Struct({
   /** Absolute paths of every source file the report must include. */
-  readonly sources: ReadonlyArray<string>;
+  sources: Schema.Array(Schema.String),
   /** Instrumented-code cache shared across runs. */
-  readonly cacheDirectory: string;
-};
+  cacheDirectory: Schema.String,
+});
+
+export type CoverageRun = typeof CoverageRun.Type;
 
 const runFile = (runDirectory: string) => join(runDirectory, "run.json");
 export const coverageDumpDirectory = (runDirectory: string) =>
@@ -21,19 +25,7 @@ export function writeCoverageRun(runDirectory: string, run: CoverageRun): void {
 }
 
 export function readCoverageRun(runDirectory: string): CoverageRun {
-  const run: unknown = JSON.parse(readFileSync(runFile(runDirectory), "utf8"));
-  if (
-    typeof run !== "object" ||
-    run === null ||
-    !("sources" in run) ||
-    !Array.isArray(run.sources) ||
-    !run.sources.every((source) => typeof source === "string") ||
-    !("cacheDirectory" in run) ||
-    typeof run.cacheDirectory !== "string"
-  ) {
-    throw new Error(`Malformed coverage run file in ${runDirectory}`);
-  }
-  return { sources: run.sources, cacheDirectory: run.cacheDirectory };
+  return readJsonFile(CoverageRun, runFile(runDirectory), "coverage run file");
 }
 
 /** Paths of the coverage dumps test processes wrote for the run. */
@@ -44,7 +36,7 @@ export function coverageDumpFiles(runDirectory: string): string[] {
       .filter((name) => name.endsWith(".json"))
       .map((name) => join(directory, name));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return [];
     }
     throw error;

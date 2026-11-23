@@ -8,7 +8,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CoverageMapData, FileCoverageData } from "istanbul-lib-coverage";
+import {
+  createCoverageMap,
+  type FileCoverageData,
+} from "istanbul-lib-coverage";
 import { buildCoverageReport } from "./coverage-report";
 import {
   coverageDumpFiles,
@@ -76,7 +79,10 @@ process.exitCode = scriptOnly() === 42 ? 0 : 1;
 `,
   "test-preload.ts": `
 import { environmentName } from "./src/environment";
-(globalThis as { fixtureEnvironment?: string }).fixtureEnvironment = environmentName();
+declare global {
+  var fixtureEnvironment: string | undefined;
+}
+globalThis.fixtureEnvironment = environmentName();
 `,
   "tests/math.test.ts": `
 import { expect, test } from "bun:test";
@@ -96,7 +102,7 @@ test("signs and greets", async () => {
   expect(mockedValue()).toBe("mock");
   expect(sign(-1)).toBe("negative");
   expect(greeting("bun")).toBe("hello bun");
-  expect((globalThis as { fixtureEnvironment?: string }).fixtureEnvironment).toBe("test");
+  expect(globalThis.fixtureEnvironment).toBe("test");
 });
 `,
   "tests/in-page.test.ts": `
@@ -147,14 +153,15 @@ afterEach(() => {
 });
 
 async function collectFixtureCoverage(testArguments: ReadonlyArray<string>) {
-  fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), "test-coverage-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "test-coverage-")));
+  fixtureRoot = root;
   for (const [path, contents] of Object.entries(fixtureFiles)) {
-    mkdirSync(join(fixtureRoot, path, ".."), { recursive: true });
-    writeFileSync(join(fixtureRoot, path), contents);
+    mkdirSync(join(root, path, ".."), { recursive: true });
+    writeFileSync(join(root, path), contents);
   }
-  const runDirectory = join(fixtureRoot, "coverage-run");
-  const cacheDirectory = join(fixtureRoot, "coverage-cache");
-  const sources = sourcePaths.map((path) => join(fixtureRoot as string, path));
+  const runDirectory = join(root, "coverage-run");
+  const cacheDirectory = join(root, "coverage-cache");
+  const sources = sourcePaths.map((path) => join(root, path));
   writeCoverageRun(runDirectory, { sources, cacheDirectory });
 
   const bunTest = Bun.spawn(
@@ -166,7 +173,7 @@ async function collectFixtureCoverage(testArguments: ReadonlyArray<string>) {
       "tests",
     ],
     {
-      cwd: fixtureRoot,
+      cwd: root,
       env: {
         ...process.env,
         BUN_OPTIONS: `--preload=${preload}`,
@@ -188,22 +195,12 @@ async function collectFixtureCoverage(testArguments: ReadonlyArray<string>) {
     sources,
     instrumentation: createSourceInstrumentation(cacheDirectory),
   });
+  const coverage = createCoverageMap(report.coverage);
   return {
     report,
-    file: (path: string) =>
-      fileCoverage(report.coverage, join(fixtureRoot as string, path)),
+    sources,
+    file: (path: string) => coverage.fileCoverageFor(join(root, path)).data,
   };
-}
-
-function fileCoverage(
-  coverage: CoverageMapData,
-  path: string
-): FileCoverageData {
-  const file = coverage[path];
-  if (file === undefined) {
-    throw new Error(`No coverage for ${path}`);
-  }
-  return file as FileCoverageData;
 }
 
 function functionCalls(
@@ -219,11 +216,10 @@ describe.each([
   ["a shared global", []],
 ])("coverage collection with %s", (_, testArguments) => {
   test("sums counters across test files and covers preloads, teardown, child scripts, query-suffixed imports, and unloaded sources", async () => {
-    const { report, file } = await collectFixtureCoverage(testArguments);
+    const { report, sources, file } =
+      await collectFixtureCoverage(testArguments);
 
-    expect(Object.keys(report.coverage).sort()).toEqual(
-      sourcePaths.map((path) => join(fixtureRoot as string, path)).sort()
-    );
+    expect(Object.keys(report.coverage).sort()).toEqual(sources.toSorted());
     expect(functionCalls(file("src/math.ts"), "add")).toBe(1);
     expect(functionCalls(file("src/math.ts"), "sign")).toBe(2);
     expect(file("src/math.ts").b).toEqual({ "0": [1, 1] });
