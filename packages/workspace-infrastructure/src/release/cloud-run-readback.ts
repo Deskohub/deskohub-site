@@ -61,6 +61,9 @@ const CloudRunService = Schema.Struct({
     )
   ),
   annotations: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  template: Schema.optional(
+    Schema.Struct({ revision: Schema.optional(Schema.String) })
+  ),
 });
 
 const CloudRunRevision = Schema.Struct({
@@ -297,6 +300,7 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
       traffic,
       revisionDigests,
       annotations: live.annotations ?? {},
+      templateRevision: live.template?.revision,
     } satisfies ObservedService;
   });
 

@@ -29,6 +29,8 @@ export interface ObservedService {
   readonly revisionDigests: Readonly<Record<string, ImageDigest>>;
   /** Service annotations as Cloud Run reports them. */
   readonly annotations: Readonly<Record<string, string>>;
+  /** The revision name the live service template declares, if any. */
+  readonly templateRevision?: string | undefined;
 }
 
 const observedTrafficGeneration = (observed: ObservedService) => {

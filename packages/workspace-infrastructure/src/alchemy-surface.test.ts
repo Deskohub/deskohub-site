@@ -18,6 +18,7 @@ import {
   sandboxConfig,
 } from "./config/stack-config.test-utils";
 import { ReleaseServiceReadback } from "./release/release-platform";
+import { workersServing } from "./release/release-readback.test-utils";
 import { promote, settleApply, stage } from "./release/release-reconciler";
 import { emptyReleaseRecord, GitSha } from "./release/release-record";
 import {
@@ -113,6 +114,7 @@ const servingRecord = () => {
         servingImageDigest: digest,
         trafficGeneration: 1,
       },
+      workers: workersServing(digest),
       now,
     })
   );

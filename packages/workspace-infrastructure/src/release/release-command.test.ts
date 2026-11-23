@@ -16,7 +16,10 @@ import {
   ReleaseRecordStore,
 } from "./release-record-store";
 
-/** Runs one command against an in-memory record and a platform that must stay untouched. */
+/**
+ * Runs one command against an in-memory record and a project with no
+ * services, whose apply and revision reads must stay untouched.
+ */
 const runRelease = (args: ReadonlyArray<string>) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -40,7 +43,11 @@ const runRelease = (args: ReadonlyArray<string>) =>
             Layer.succeed(
               ReleaseServiceReadback,
               ReleaseServiceReadback.of({
-                service: () => untouched("service readback"),
+                service: () =>
+                  Effect.sync(() => {
+                    platformCalls.push("service readback");
+                    return null;
+                  }),
                 revision: () => untouched("revision readback"),
               })
             ),
@@ -89,6 +96,7 @@ describe("workspace release command", () => {
   test("recover with nothing pending applies nothing", async () => {
     const result = await runRelease(["recover"]);
     expect(Exit.isSuccess(result.exit)).toBe(true);
-    expect(result.platformCalls).toEqual([]);
+    // It only reads the services, to rule out a lost record.
+    expect(result.platformCalls).not.toContain("apply");
   });
 });

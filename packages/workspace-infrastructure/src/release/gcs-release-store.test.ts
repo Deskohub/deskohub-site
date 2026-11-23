@@ -646,6 +646,7 @@ describe("Cloud Storage release record store", () => {
                 trafficGeneration:
                   record.pendingApply?.trafficGeneration ?? null,
               },
+              workers: [],
               now: t0,
             }).pipe(Effect.map((next) => ({ record: next, result: next })))
           ),

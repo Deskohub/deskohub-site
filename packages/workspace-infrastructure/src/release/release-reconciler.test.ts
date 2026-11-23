@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import { ImageDigest } from "../config/stack-config";
 import { sandboxConfig } from "../config/stack-config.test-utils";
 import { webServiceProps, webTraffic } from "../resources/service-declarations";
+import { workersServing } from "./release-readback.test-utils";
 import {
   promote,
   restore,
@@ -96,6 +97,7 @@ const release = (
           servingImageDigest: target?.imageDigest ?? null,
           trafficGeneration: pending.pendingApply?.trafficGeneration ?? null,
         },
+        workers: workersServing(target?.imageDigest ?? null),
         now,
       })
     ),
@@ -186,6 +188,7 @@ describe("release reconciler", () => {
         restore(settled, {
           expectedGeneration: 1,
           releaseId: "r1-aaaaaaa" as ReleaseId,
+          liveTemplateRevision: settled.materialized?.revision ?? null,
           now: t0,
         })
       )
@@ -221,6 +224,7 @@ describe("release reconciler", () => {
       restore(second.settled, {
         expectedGeneration: second.settled.generation,
         releaseId: first.releaseId,
+        liveTemplateRevision: second.settled.materialized?.revision ?? null,
         now: later(2),
       })
     );
@@ -245,6 +249,7 @@ describe("release reconciler", () => {
           servingImageDigest: digestA,
           trafficGeneration: pending.trafficGeneration,
         },
+        workers: workersServing(digestA),
         now: later(2),
       })
     );
@@ -264,6 +269,7 @@ describe("release reconciler", () => {
         restore(third.settled, {
           expectedGeneration: third.settled.generation,
           releaseId: first.releaseId,
+          liveTemplateRevision: third.settled.materialized?.revision ?? null,
           now: later(12.5),
         })
       ).pendingApply?.target.releaseId
@@ -273,6 +279,7 @@ describe("release reconciler", () => {
         restore(third.settled, {
           expectedGeneration: third.settled.generation,
           releaseId: first.releaseId,
+          liveTemplateRevision: third.settled.materialized?.revision ?? null,
           now: later(13),
         })
       )
@@ -343,6 +350,7 @@ describe("release reconciler", () => {
           settleApply(pending, {
             expectedGeneration: pending.generation,
             readback,
+            workers: workersServing(readback.servingImageDigest),
             now: later(1),
           })
         )
@@ -361,6 +369,7 @@ describe("release reconciler", () => {
             servingImageDigest: digestB,
             trafficGeneration: pending.trafficGeneration,
           },
+          workers: workersServing(digestB),
           now: later(1.5),
         })
       ).active?.releaseId
@@ -404,5 +413,25 @@ describe("release reconciler", () => {
     ]);
     expect(result.after.record.generation).toBe(1);
     expect(result.after.version).toBe("2");
+  });
+});
+
+describe("restore template", () => {
+  test("refuses a live template the record does not know", () => {
+    const first = release(emptyReleaseRecord, shaA, digestA, t0);
+    const second = release(first.settled, shaB, digestB, later(1));
+    expect(
+      failure(
+        restore(second.settled, {
+          expectedGeneration: second.settled.generation,
+          releaseId: first.releaseId,
+          now: later(2),
+          liveTemplateRevision: "workspace-web-r9-fffffff",
+        })
+      )
+    ).toMatchObject({
+      _tag: "ReleaseTemplateUnknown",
+      expectedRevisions: ["workspace-web-r4-bbbbbbb"],
+    });
   });
 });

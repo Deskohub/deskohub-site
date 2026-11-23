@@ -13,6 +13,7 @@ import {
   type ReleaseReadbackPolicy,
   readFencedReleaseRecord,
   recoverRelease,
+  requireRecordCoversLiveService,
   restoreRelease,
 } from "./release-delivery";
 import {
@@ -57,6 +58,16 @@ interface FakeCloudRunOptions {
   readonly tasksWorkerIngress?: string;
 }
 
+/** Platform misbehaviour a test can switch on between runs. */
+interface CloudRunFaults {
+  /** The digest Cloud Run reports for the next materialized revision. */
+  resolvedDigest?: ImageDigest;
+  /** Workers keep running the image they had before the apply. */
+  staleWorkers?: boolean;
+  /** Each apply sends 10% of traffic to the newest tagged revision. */
+  splitTraffic?: boolean;
+}
+
 /**
  * A Cloud Run project that applies the web service exactly as the release
  * record declares it, read under the apply's generation fence.
@@ -64,12 +75,13 @@ interface FakeCloudRunOptions {
 const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
   Effect.gen(function* () {
     const store = yield* ReleaseRecordStore;
+    const faults: CloudRunFaults = { resolvedDigest: options.resolvedDigest };
     const applies: Array<number> = [];
     const revisions = new Map<string, ImageDigest>();
     let web: ObservedService | null = null;
     let visible: ObservedService | null = null;
     let lagReads = 0;
-    let workersDeployed = false;
+    let workerDigest: ImageDigest | null = null;
 
     const apply = ReleaseServiceApply.of({
       apply: (generation) =>
@@ -104,11 +116,33 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
           if (revision !== undefined && typeof image === "string") {
             revisions.set(
               revision,
-              options.resolvedDigest ??
+              faults.resolvedDigest ??
                 ImageDigest.make(image.slice(image.indexOf("@") + 1))
             );
           }
-          workersDeployed = true;
+          // Workers run the serving release's image, like the stack declares.
+          if (!faults.staleWorkers) {
+            workerDigest =
+              (record.pendingApply?.target ?? record.active)?.imageDigest ??
+              null;
+          }
+          const declared = (props.traffic ?? []).map((entry) => ({
+            revision: entry.revision ?? "",
+            percent: entry.percent ?? 0,
+            tag: entry.tag,
+          }));
+          const splitPercent = (index: number, percent: number) => {
+            if (index === 0) {
+              return 90;
+            }
+            return index === declared.length - 1 ? 10 : percent;
+          };
+          const traffic = faults.splitTraffic
+            ? declared.map((entry, index) => ({
+                ...entry,
+                percent: splitPercent(index, entry.percent),
+              }))
+            : declared;
           web = {
             workload: "web",
             uri: undefined,
@@ -117,20 +151,18 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
             invokerIamDisabled: props.invokerIamDisabled === true,
             terminalConditionState: "CONDITION_SUCCEEDED",
             reconciling: false,
-            traffic: (props.traffic ?? []).map((entry) => ({
-              revision: entry.revision ?? "",
-              percent: entry.percent ?? 0,
-              tag: entry.tag,
-            })),
+            traffic,
             revisionDigests: Object.fromEntries(revisions),
             annotations: { ...props.annotations },
+            templateRevision: props.template?.revision,
           };
           lagReads = options.trafficLagReads ?? 0;
         }),
     });
 
     const worker = (
-      workload: Exclude<WorkspaceWorkload, "web">
+      workload: Exclude<WorkspaceWorkload, "web">,
+      imageDigest: ImageDigest
     ): ObservedService => ({
       workload,
       uri: workloadUrl(sandboxConfig, workload),
@@ -142,8 +174,8 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
       invokerIamDisabled: false,
       terminalConditionState: "CONDITION_SUCCEEDED",
       reconciling: false,
-      traffic: [],
-      revisionDigests: {},
+      traffic: [{ revision: `${workload}-00001`, percent: 100 }],
+      revisionDigests: { [`${workload}-00001`]: imageDigest },
       annotations: {},
     });
 
@@ -151,7 +183,9 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
       service: (workload) =>
         Effect.sync(() => {
           if (workload !== "web") {
-            return workersDeployed ? worker(workload) : null;
+            return workerDigest === null
+              ? null
+              : worker(workload, workerDigest);
           }
           if (lagReads > 0) {
             lagReads -= 1;
@@ -176,7 +210,7 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
         ),
     });
 
-    return { apply, readback, applies };
+    return { apply, readback, applies, faults };
   });
 
 const setup = (options?: FakeCloudRunOptions) =>
@@ -197,7 +231,12 @@ const setup = (options?: FakeCloudRunOptions) =>
         Effect.provideService(ReleaseServiceApply, cloudRun.apply),
         Effect.provideService(ReleaseServiceReadback, cloudRun.readback)
       );
-    return { store, applies: cloudRun.applies, provide };
+    return {
+      store,
+      applies: cloudRun.applies,
+      faults: cloudRun.faults,
+      provide,
+    };
   });
 
 const errorOf = <A, E>(exit: Exit.Exit<A, E>) => {
@@ -621,8 +660,173 @@ describe("fenced release delivery", () => {
     );
     expect(errorOf(result.exit)).toMatchObject({
       _tag: "ReleaseRecordLost",
-      liveRevisions: ["workspace-web-r1-aaaaaaa"],
+      liveWorkloads: ["web", "tasks-worker", "scheduler-worker"],
     });
     expect(result.record).toEqual(emptyReleaseRecord);
+  });
+});
+
+const deliver = (sha: GitSha, imageDigest: ImageDigest) =>
+  deliverRelease(sandboxConfig, { sha, imageDigest }, policy);
+
+describe("release readback gates", () => {
+  test("promotion waits for the active release to hold all traffic and the candidate none", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, provide } = yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        faults.splitTraffic = true;
+        const exit = yield* provide(deliver(shaB, digestB).pipe(Effect.exit));
+        return { exit, record: (yield* store.read).record };
+      })
+    );
+    expect(errorOf(result.exit)).toMatchObject({
+      _tag: "CandidateNotVerified",
+      releaseId: "r4-bbbbbbb",
+    });
+    expect(result.record.pendingApply).toBeNull();
+    expect(result.record.active?.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
+  });
+
+  test("settlement waits for both workers to run the target image", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, provide } = yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        faults.staleWorkers = true;
+        const exit = yield* provide(deliver(shaB, digestB).pipe(Effect.exit));
+        const pending = (yield* store.read).record;
+        faults.staleWorkers = false;
+        const recovered = yield* provide(recoverRelease(sandboxConfig, policy));
+        return { exit, pending, recovered };
+      })
+    );
+    expect(errorOf(result.exit)).toMatchObject({
+      _tag: "ReleaseApplyNotObserved",
+      intended: "r4-bbbbbbb",
+    });
+    expect(result.pending.pendingApply?.target.releaseId).toBe(
+      ReleaseId.make("r4-bbbbbbb")
+    );
+    expect(result.recovered?.releaseId).toBe(ReleaseId.make("r4-bbbbbbb"));
+  });
+});
+
+describe("restore after a failed candidate", () => {
+  /** Two settled releases, then a third whose candidate fails. */
+  const failCandidate = (fault: "digest" | "apply") =>
+    Effect.gen(function* () {
+      const { store, faults, provide } = yield* setup({
+        // Generation 7 stages the third release's candidate.
+        interruptApplyOf: fault === "apply" ? new Set([7]) : undefined,
+      });
+      yield* provide(deliver(shaA, digestA));
+      yield* provide(deliver(shaB, digestB));
+      if (fault === "digest") {
+        faults.resolvedDigest = digestA;
+      }
+      const failed = yield* provide(deliver(shaC, digestC).pipe(Effect.exit));
+      faults.resolvedDigest = undefined;
+      const before = yield* store.read;
+      const restored = yield* provide(
+        restoreRelease(
+          sandboxConfig,
+          {
+            releaseId: ReleaseId.make("r1-aaaaaaa"),
+            expectedGeneration: before.record.generation,
+          },
+          policy
+        )
+      );
+      const record = (yield* store.read).record;
+      return {
+        failed,
+        restored,
+        record,
+        web: webServiceProps(sandboxConfig, record, yield* DateTime.now),
+      };
+    });
+
+  test("keeps a landed candidate template and drops its traffic tag", async () => {
+    const result = await Effect.runPromise(failCandidate("digest"));
+    expect(errorOf(result.failed)).toMatchObject({
+      _tag: "CandidateNotVerified",
+    });
+    expect(result.restored.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
+    expect(result.record.candidate).toBeNull();
+    // Cloud Run already runs the candidate's template: it stays declared.
+    expect(result.record.materialized?.revision).toBe(
+      "workspace-web-r7-ccccccc"
+    );
+    expect(result.web?.template?.revision).toBe("workspace-web-r7-ccccccc");
+    expect(result.web?.traffic?.map((entry) => entry.revision)).not.toContain(
+      "workspace-web-r7-ccccccc"
+    );
+  });
+
+  test("keeps the materialized template when the candidate never landed", async () => {
+    const result = await Effect.runPromise(failCandidate("apply"));
+    expect(errorOf(result.failed)).toMatchObject({
+      _tag: "ReleaseServiceApplyFailed",
+    });
+    expect(result.record.candidate).toBeNull();
+    expect(result.record.materialized?.revision).toBe(
+      "workspace-web-r4-bbbbbbb"
+    );
+    expect(result.web?.template?.revision).toBe("workspace-web-r4-bbbbbbb");
+    expect(result.web?.traffic?.map((entry) => entry.revision)).not.toContain(
+      "workspace-web-r7-ccccccc"
+    );
+  });
+});
+
+describe("lost release record", () => {
+  test("recovery reports a lost record instead of nothing pending", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, provide } = yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        const live = yield* store.read;
+        yield* store.write(emptyReleaseRecord, live.version);
+        return yield* provide(
+          recoverRelease(sandboxConfig, policy).pipe(Effect.exit)
+        );
+      })
+    );
+    expect(errorOf(result)).toMatchObject({ _tag: "ReleaseRecordLost" });
+  });
+
+  test("a live worker alone proves the record was lost", async () => {
+    const exit = await Effect.runPromiseExit(
+      requireRecordCoversLiveService(emptyReleaseRecord).pipe(
+        Effect.provideService(
+          ReleaseServiceReadback,
+          ReleaseServiceReadback.of({
+            service: (workload) =>
+              Effect.succeed(
+                workload === "scheduler-worker"
+                  ? {
+                      workload,
+                      uri: undefined,
+                      urls: [],
+                      ingress: "INGRESS_TRAFFIC_INTERNAL_ONLY",
+                      invokerIamDisabled: false,
+                      terminalConditionState: "CONDITION_SUCCEEDED",
+                      reconciling: false,
+                      traffic: [],
+                      revisionDigests: {},
+                      annotations: {},
+                    }
+                  : null
+              ),
+            revision: () => Effect.succeed(null),
+          })
+        )
+      )
+    );
+    expect(errorOf(exit)).toMatchObject({
+      _tag: "ReleaseRecordLost",
+      liveWorkloads: ["scheduler-worker"],
+    });
   });
 });

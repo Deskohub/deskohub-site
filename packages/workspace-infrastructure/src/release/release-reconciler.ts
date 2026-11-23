@@ -51,7 +51,8 @@ export class ReleaseNotRestorable extends Data.TaggedError(
 }> {}
 
 /**
- * Readback does not show the intended target serving. The intent stays
+ * Readback does not show the intended target serving on the web service
+ * and its image on every worker. The intent stays
  * pending and blocks every other release step: the caller re-applies the
  * same declaration (apply is idempotent) and settles again. There is no
  * abandon step until Cloud Run operation evidence can prove an interrupted
@@ -208,12 +209,54 @@ export const promote = Effect.fn("WorkspaceRelease.promote")(function* (
 });
 
 /**
+ * The web service's live revision template is neither the revision the
+ * record materialized nor its candidate. Declaring the record's template
+ * would re-declare an older, immutable revision name with a different spec,
+ * so nothing is changed until an operator reconciles the service.
+ */
+export class ReleaseTemplateUnknown extends Data.TaggedError(
+  "ReleaseTemplateUnknown"
+)<{
+  readonly liveTemplateRevision: string | null;
+  readonly expectedRevisions: ReadonlyArray<string>;
+}> {}
+
+export interface RestoreInput extends TrafficChangeInput {
+  /** The revision the live web service template names, if it exists. */
+  readonly liveTemplateRevision: string | null;
+}
+
+/**
+ * The template the web service keeps once restore drops the candidate: the
+ * candidate itself if its template already landed, else the materialized
+ * one. Either way it must be the revision Cloud Run's template names now.
+ */
+const restoredTemplate = (record: ReleaseRecord, input: RestoreInput) => {
+  const landed = [record.candidate, record.materialized].find(
+    (deployment) =>
+      deployment !== null && deployment.revision === input.liveTemplateRevision
+  );
+  return landed === undefined || landed === null
+    ? Effect.fail(
+        new ReleaseTemplateUnknown({
+          liveTemplateRevision: input.liveTemplateRevision,
+          expectedRevisions: [record.candidate, record.materialized].flatMap(
+            (deployment) => (deployment === null ? [] : [deployment.revision])
+          ),
+        })
+      )
+    : Effect.succeed(deploymentOf(landed));
+};
+
+/**
  * Persist the intent to move traffic back to the previous verified release
- * or a deployment still inside its compatible window.
+ * or a deployment still inside its compatible window. An unverified
+ * candidate is dropped, so it loses its traffic tag; the service template
+ * stays the revision Cloud Run already runs.
  */
 export const restore = Effect.fn("WorkspaceRelease.restore")(function* (
   record: ReleaseRecord,
-  input: TrafficChangeInput
+  input: RestoreInput
 ) {
   yield* fence(record, input.expectedGeneration);
   yield* requireNoPendingApply(record);
@@ -227,8 +270,11 @@ export const restore = Effect.fn("WorkspaceRelease.restore")(function* (
   if (target === undefined || target.releaseId === record.active?.releaseId) {
     return yield* new ReleaseNotRestorable({ releaseId: input.releaseId });
   }
+  const materialized = yield* restoredTemplate(record, input);
   return {
     ...record,
+    materialized,
+    candidate: null,
     generation: record.generation + 1,
     trafficGeneration: record.trafficGeneration + 1,
     pendingApply: {
@@ -242,17 +288,23 @@ export const restore = Effect.fn("WorkspaceRelease.restore")(function* (
 
 export interface SettleInput {
   readonly expectedGeneration: number;
+  /** The web service's traffic. */
   readonly readback: TrafficReadback;
+  /** Each worker's traffic; workers run the serving release's image. */
+  readonly workers: ReadonlyArray<TrafficReadback>;
   readonly now: DateTime.Utc;
 }
 
 const servesPendingApply = (
-  readback: TrafficReadback,
+  input: SettleInput,
   pending: NonNullable<ReleaseRecord["pendingApply"]>
 ) =>
-  readback.servingRevision === pending.target.revision &&
-  readback.servingImageDigest === pending.target.imageDigest &&
-  readback.trafficGeneration === pending.trafficGeneration;
+  input.readback.servingRevision === pending.target.revision &&
+  input.readback.servingImageDigest === pending.target.imageDigest &&
+  input.readback.trafficGeneration === pending.trafficGeneration &&
+  input.workers.every(
+    (worker) => worker.servingImageDigest === pending.target.imageDigest
+  );
 
 /**
  * Settle the persisted traffic intent from readback. A normal apply and a
@@ -270,7 +322,7 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
     return yield* new NoPendingReleaseApply();
   }
   const generation = record.generation + 1;
-  if (servesPendingApply(input.readback, pending)) {
+  if (servesPendingApply(input, pending)) {
     const verified: VerifiedDeployment = {
       ...pending.target,
       verifiedAt: isoOf(input.now),

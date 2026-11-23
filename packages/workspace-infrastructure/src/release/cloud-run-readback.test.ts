@@ -667,3 +667,19 @@ describe("Cloud Run service readback", () => {
     expect(fake.requests.every(({ signal }) => signal.aborted)).toBe(true);
   });
 });
+
+describe("Cloud Run service template readback", () => {
+  test("reports the revision the live template declares", async () => {
+    const fake = fakeCloudRun({
+      ...steadyRoutes,
+      [webPath]: {
+        status: 200,
+        body: { ...steadyWeb, template: { revision: candidateRevision } },
+      },
+    });
+    const observed = await success(
+      readback(fake, (port) => port.service("web"))
+    );
+    expect(observed?.templateRevision).toBe(candidateRevision);
+  });
+});

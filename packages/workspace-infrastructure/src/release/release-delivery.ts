@@ -14,6 +14,7 @@ import {
   serviceReadbackDrift,
   trafficReadback,
 } from "../readback";
+import { releaseTrafficTag } from "../resources/service-declarations";
 import {
   ReleaseServiceApply,
   ReleaseServiceReadback,
@@ -33,6 +34,7 @@ import type {
   ReleaseDeployment,
   ReleaseId,
   ReleaseRecord,
+  VerifiedDeployment,
 } from "./release-record";
 import { ReleaseRecordStore, runReleaseStep } from "./release-record-store";
 
@@ -107,35 +109,55 @@ export const readFencedReleaseRecord = (expectedGeneration: number) =>
   });
 
 /**
- * The record names no serving release, yet the web service is live: the
- * record object was deleted or reset. Nothing proceeds from it, because a
+ * The record names no serving release, yet a release-owned service is
+ * live: the record object was deleted or reset. Nothing proceeds from it, because a
  * fresh history would skip candidate verification and drop the previous
  * release; an operator restores the object's last good version instead.
  */
 export class ReleaseRecordLost extends Data.TaggedError("ReleaseRecordLost")<{
+  readonly liveWorkloads: ReadonlyArray<WorkspaceWorkload>;
   readonly liveRevisions: ReadonlyArray<string>;
 }> {}
-
-/** Refuse a record without a serving release while the web service exists. */
-export const requireRecordCoversLiveService = (record: ReleaseRecord) =>
-  Effect.gen(function* () {
-    if (record.active !== null || record.pendingApply !== null) {
-      return;
-    }
-    const readback = yield* ReleaseServiceReadback;
-    const web = yield* readback.service("web");
-    if (web !== null) {
-      return yield* new ReleaseRecordLost({
-        liveRevisions: web.traffic.map((entry) => entry.revision),
-      });
-    }
-  });
 
 const releaseWorkloads: ReadonlyArray<WorkspaceWorkload> = [
   "web",
   "tasks-worker",
   "scheduler-worker",
 ];
+
+/** Every release-owned service as Cloud Run reports it now. */
+const observeReleaseServices = Effect.gen(function* () {
+  const readback = yield* ReleaseServiceReadback;
+  return yield* Effect.forEach(releaseWorkloads, (workload) =>
+    readback
+      .service(workload)
+      .pipe(Effect.map((service) => ({ workload, service })))
+  );
+});
+
+/**
+ * Refuse a record without a serving release while the web service or
+ * either worker exists. Callers run it on the record version they are about
+ * to write over, so no newer record slips in between check and write.
+ */
+export const requireRecordCoversLiveService = (record: ReleaseRecord) =>
+  Effect.gen(function* () {
+    if (record.active !== null || record.pendingApply !== null) {
+      return;
+    }
+    const live = (yield* observeReleaseServices).flatMap(
+      ({ workload, service }) =>
+        service === null ? [] : [{ workload, service }]
+    );
+    if (live.length > 0) {
+      return yield* new ReleaseRecordLost({
+        liveWorkloads: live.map(({ workload }) => workload),
+        liveRevisions: live.flatMap(({ service }) =>
+          service.traffic.map((entry) => entry.revision)
+        ),
+      });
+    }
+  });
 
 const unavailableTraffic: TrafficReadback = {
   servingRevision: null,
@@ -179,25 +201,24 @@ const settleFromReadback = (
   expectedGeneration: number
 ) =>
   Effect.gen(function* () {
-    const readback = yield* ReleaseServiceReadback;
-    const observed = yield* Effect.forEach(releaseWorkloads, (workload) =>
-      readback
-        .service(workload)
-        .pipe(Effect.map((service) => ({ workload, service })))
-    );
+    const observed = yield* observeReleaseServices;
     const drift = observed.flatMap(({ workload, service }) =>
       contractDrift(config, workload, service)
     );
     if (drift.length > 0) {
       return yield* new ReleaseServiceDrift({ drift });
     }
-    const web: ObservedService | null =
-      observed.find((entry) => entry.workload === "web")?.service ?? null;
+    const readbackOf = (service: ObservedService | null) =>
+      service === null ? unavailableTraffic : trafficReadback(service);
+    const web = observed.find((entry) => entry.workload === "web");
     const now = yield* DateTime.now;
     return yield* runReleaseStep((record) =>
       settleApply(record, {
         expectedGeneration,
-        readback: web === null ? unavailableTraffic : trafficReadback(web),
+        readback: readbackOf(web?.service ?? null),
+        workers: observed
+          .filter((entry) => entry.workload !== "web")
+          .map((entry) => readbackOf(entry.service)),
         now,
       }).pipe(Effect.map((next) => ({ record: next, result: next })))
     );
@@ -228,15 +249,50 @@ const applyAndSettle = (
     return serving;
   });
 
-/** Wait until the staged candidate revision is ready and read its digest. */
+/**
+ * The web service still sends all traffic to the active release, and the
+ * candidate is reachable only through its zero-percent tag.
+ */
+const holdsCandidateAtZero = (
+  web: ObservedService | null,
+  active: VerifiedDeployment,
+  candidate: ReleaseDeployment
+) => {
+  if (web === null) {
+    return false;
+  }
+  const serving = trafficReadback(web);
+  return (
+    serving.servingRevision === active.revision &&
+    serving.servingImageDigest === active.imageDigest &&
+    web.traffic.some(
+      (entry) =>
+        entry.revision === candidate.revision &&
+        entry.percent === 0 &&
+        entry.tag === releaseTrafficTag(candidate.releaseId)
+    )
+  );
+};
+
+/**
+ * Wait until the staged candidate revision is ready, read its digest, and
+ * confirm the active release still serves everything while the candidate
+ * holds no traffic.
+ */
 const observeCandidate = (
   candidate: ReleaseDeployment,
+  active: VerifiedDeployment,
   policy: ReleaseReadbackPolicy
 ) =>
   Effect.gen(function* () {
     const readback = yield* ReleaseServiceReadback;
     const observed = yield* readback.revision(candidate.revision);
-    if (observed === null || !observed.ready) {
+    const web = yield* readback.service("web");
+    if (
+      observed === null ||
+      !observed.ready ||
+      !holdsCandidateAtZero(web, active, candidate)
+    ) {
       return yield* new CandidateNotVerified({
         releaseId: candidate.releaseId,
       });
@@ -260,38 +316,41 @@ export const deliverRelease = Effect.fn("WorkspaceRelease.deliver")(function* (
   input: DeliverReleaseInput,
   policy: ReleaseReadbackPolicy = defaultReleaseReadbackPolicy
 ) {
-  const current = yield* (yield* ReleaseRecordStore).read;
-  yield* requireRecordCoversLiveService(current.record);
   const staged = yield* runReleaseStep((record) =>
-    stage(record, {
-      expectedGeneration: record.generation,
-      sha: input.sha,
-      imageDigest: input.imageDigest,
-      origin: "cloud-run",
-    } satisfies StageInput).pipe(
+    // The lost-record guard reads the very version this step replaces.
+    requireRecordCoversLiveService(record).pipe(
+      Effect.andThen(
+        stage(record, {
+          expectedGeneration: record.generation,
+          sha: input.sha,
+          imageDigest: input.imageDigest,
+          origin: "cloud-run",
+        } satisfies StageInput)
+      ),
       Effect.map(({ releaseId, record: next }) => ({
         record: next,
         result: {
           releaseId,
           generation: next.generation,
           candidate: next.candidate,
-          firstRelease: next.active === null,
+          active: next.active,
         },
       }))
     )
   );
-  const candidate = staged.candidate;
+  const { candidate, active } = staged;
   if (candidate === null) {
     return yield* Effect.die("A staged release record has no candidate");
   }
   // The very first release has no service yet: promotion creates it.
-  const candidateReadback = staged.firstRelease
-    ? null
-    : yield* Effect.gen(function* () {
-        const platform = yield* ReleaseServiceApply;
-        yield* platform.apply(staged.generation);
-        return yield* observeCandidate(candidate, policy);
-      });
+  const candidateReadback =
+    active === null
+      ? null
+      : yield* Effect.gen(function* () {
+          const platform = yield* ReleaseServiceApply;
+          yield* platform.apply(staged.generation);
+          return yield* observeCandidate(candidate, active, policy);
+        });
   const now = yield* DateTime.now;
   const promotedGeneration = yield* runReleaseStep((record) =>
     promote(record, {
@@ -320,10 +379,13 @@ export const restoreRelease = Effect.fn("WorkspaceRelease.restore")(function* (
   policy: ReleaseReadbackPolicy = defaultReleaseReadbackPolicy
 ) {
   const now = yield* DateTime.now;
+  const web = yield* (yield* ReleaseServiceReadback).service("web");
   const generation = yield* runReleaseStep((record) =>
-    restore(record, { ...input, now }).pipe(
-      Effect.map((next) => ({ record: next, result: next.generation }))
-    )
+    restore(record, {
+      ...input,
+      now,
+      liveTemplateRevision: web?.templateRevision ?? null,
+    }).pipe(Effect.map((next) => ({ record: next, result: next.generation })))
   );
   return yield* applyAndSettle(config, generation, policy);
 });
@@ -340,6 +402,8 @@ export const recoverRelease = Effect.fn("WorkspaceRelease.recover")(function* (
   const store = yield* ReleaseRecordStore;
   const { record } = yield* store.read;
   if (record.pendingApply === null) {
+    // "Nothing pending" from a lost record would hide the loss.
+    yield* requireRecordCoversLiveService(record);
     return null;
   }
   return yield* applyAndSettle(config, record.generation, policy);

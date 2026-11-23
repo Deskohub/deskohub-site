@@ -76,10 +76,14 @@ export class ReleaseRecordStore extends Context.Service<
  * Run one release step as a serialized read, decide, compare-and-set.
  * Two runs that read the same version cannot both write.
  */
-export const runReleaseStep = <A, E>(
+export const runReleaseStep = <A, E, R>(
   step: (
     record: ReleaseRecord
-  ) => Effect.Effect<{ readonly record: ReleaseRecord; readonly result: A }, E>
+  ) => Effect.Effect<
+    { readonly record: ReleaseRecord; readonly result: A },
+    E,
+    R
+  >
 ) =>
   Effect.gen(function* () {
     const store = yield* ReleaseRecordStore;

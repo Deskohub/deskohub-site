@@ -9,7 +9,7 @@ import type {
 import { workspaceQueueContracts } from "../contracts/queue-contracts";
 import { workspaceScheduleContracts } from "../contracts/schedule-contracts";
 import { routableDeployments } from "../release/release-reconciler";
-import type { ReleaseRecord } from "../release/release-record";
+import type { ReleaseId, ReleaseRecord } from "../release/release-record";
 import { toGcpDuration } from "./queue-declarations";
 import {
   secretResourceName,
@@ -69,6 +69,10 @@ const container = (
 export const trafficGenerationAnnotation =
   "deskohub.workspace/traffic-generation";
 
+/** The traffic tag that keeps a release's revision reachable by URL. */
+export const releaseTrafficTag = (releaseId: ReleaseId) =>
+  `release-${releaseId}`;
+
 /** The release taking untagged traffic: the one being applied, else active. */
 const servingDeployment = (record: ReleaseRecord) =>
   record.pendingApply?.target ?? record.active;
@@ -101,13 +105,13 @@ export const webTraffic = (
       type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
       revision: serving.revision,
       percent: 100,
-      tag: `release-${serving.releaseId}`,
+      tag: releaseTrafficTag(serving.releaseId),
     },
     ...tagged.map((deployment) => ({
       type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
       revision: deployment.revision,
       percent: 0,
-      tag: `release-${deployment.releaseId}`,
+      tag: releaseTrafficTag(deployment.releaseId),
     })),
   ];
 };
