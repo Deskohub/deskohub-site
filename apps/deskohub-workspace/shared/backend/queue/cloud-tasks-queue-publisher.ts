@@ -33,7 +33,7 @@ export type CloudTasksQueueSettings = {
 };
 
 /** Why Cloud Tasks did not accept a publication. Carries no payload or token. */
-export class CloudTasksPublishError extends Data.TaggedError(
+class CloudTasksPublishError extends Data.TaggedError(
   "CloudTasksPublishError"
 )<{
   readonly reason:
@@ -72,7 +72,7 @@ const googleRpcStatuses = [
 type GoogleRpcStatus = (typeof googleRpcStatuses)[number];
 
 /** Cloud Tasks rejects a schedule time further ahead than this. */
-export const cloudTasksScheduleHorizon = Duration.days(30);
+const cloudTasksScheduleHorizon = Duration.days(30);
 
 /** Bounds the request, response body included. */
 const requestTimeout = Duration.seconds(10);

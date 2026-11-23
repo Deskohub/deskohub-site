@@ -19,7 +19,7 @@ await mockWorkerHost({
   ...googleInvokerSettings,
 });
 
-const { defineWorkspaceCron } = await import("./service-route");
+const { defineWorkspaceCron } = await import("@/shared/backend/service-route");
 
 // Verification caches the first key set it fetches, so this file never lets
 // Google's certificates succeed.

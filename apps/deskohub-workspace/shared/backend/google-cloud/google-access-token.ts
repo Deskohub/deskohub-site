@@ -47,7 +47,7 @@ export class GoogleAccessToken extends Context.Service<
 >()("@deskohub-workspace/GoogleAccessToken") {}
 
 /** Where a Cloud Run service reads its service account's access token. */
-export const metadataServerTokenUrl =
+const metadataServerTokenUrl =
   "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
 
 /** Bounds each attempt, response body included. */
