@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import {
   context,
   createTraceState,
@@ -16,7 +17,7 @@ import { flushWorkspaceTraces } from "./workspace-telemetry";
 // Synthetic markers only; nothing leaves the test's loopback collector.
 const traceStateMarker = "statemarker";
 const tokenMarker = "tokSynthMarker7Q2xK9vB4nR8mW1zL6pD3";
-const addressMarker = "synthetic-marker-recipient@deskohub.invalid";
+const addressMarker = testEmailAddress("synthetic-marker-recipient");
 
 interface ExportedAttribute {
   readonly key: string;

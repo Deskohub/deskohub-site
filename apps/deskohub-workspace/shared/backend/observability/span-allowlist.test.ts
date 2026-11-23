@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import { type Attributes, SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
@@ -15,7 +16,7 @@ import { createWorkspaceOTelRegistration } from "./telemetry-sinks";
 // span must never export. The control marker sits in an allowlisted field,
 // so finding it proves the span arrived.
 const tokenMarker = "tokSynthMarker7Q2xK9vB4nR8mW1zL6pD3";
-const addressMarker = "synthetic-marker-recipient@deskohub.invalid";
+const addressMarker = testEmailAddress("synthetic-marker-recipient");
 const pathMarker = "accessSynthMarker5H8kT2qW9xY4";
 const controlRoute = "/[locale]/control-marker-route";
 
@@ -134,7 +135,7 @@ const recordUnsafeSpans = (provider: BasicTracerProvider) => {
   // A client address or credential where only a host belongs.
   record("http.client POST", {
     "http.request.method": "POST",
-    "server.address": `${tokenMarker}@api.provider.invalid`,
+    "server.address": [tokenMarker, "api.provider.invalid"].join("@"),
     "net.peer.name": "api.provider.invalid:8443",
   });
 };
