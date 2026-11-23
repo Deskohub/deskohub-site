@@ -147,6 +147,92 @@ describe("workspace edge Terraform", () => {
     expect(all).toContain('locale_prefix = "(/[a-z]{2,3}-[A-Z]{2})?"');
   });
 
+  test("serves HTTPS with a managed certificate and redirect by default", () => {
+    expect(all).toMatch(
+      /variable "enable_https" \{[^}]*type\s+= bool\s+default\s+= true/
+    );
+    for (const [type, name] of [
+      ["google_compute_managed_ssl_certificate", "workspace"],
+      ["google_compute_target_https_proxy", "workspace"],
+      ["google_compute_global_forwarding_rule", "https"],
+      ["google_compute_url_map", "https_redirect"],
+      ["google_compute_target_http_proxy", "https_redirect"],
+    ] as const) {
+      expect(resourceBlock(type, name)).toMatch(
+        /count\s+= var\.enable_https \? 1 : 0/
+      );
+      // Existing HTTPS state moves to index 0 instead of being replaced.
+      expect(all).toContain(
+        `moved {\n  from = ${type}.${name}\n  to   = ${type}.${name}[0]\n}`
+      );
+    }
+    expect(
+      resourceBlock("google_compute_target_https_proxy", "workspace")
+    ).toContain(
+      "ssl_certificates = [google_compute_managed_ssl_certificate.workspace[0].id]"
+    );
+    expect(
+      resourceBlock("google_compute_global_forwarding_rule", "http")
+    ).toContain("? google_compute_target_http_proxy.https_redirect[0].id");
+  });
+
+  test("serves the main URL map over plain HTTP when HTTPS is disabled", () => {
+    const proxy = resourceBlock(
+      "google_compute_target_http_proxy",
+      "workspace"
+    );
+    expect(proxy).toContain("count   = var.enable_https ? 0 : 1");
+    expect(proxy).toContain("url_map = google_compute_url_map.workspace.id");
+    const http = resourceBlock("google_compute_global_forwarding_rule", "http");
+    expect(http).not.toContain("count");
+    expect(http).toContain('port_range            = "80"');
+    expect(http).toContain(
+      ": google_compute_target_http_proxy.workspace[0].id"
+    );
+    // Without domains the URL map still routes static paths, for any host.
+    expect(resourceBlock("google_compute_url_map", "workspace")).toContain(
+      'hosts        = length(var.domains) > 0 ? var.domains : ["*"]'
+    );
+  });
+
+  test("allows plain HTTP only in the sandbox", () => {
+    expect(sources["variables.tf"]).toContain(
+      'condition     = var.enable_https || var.stage == "sandbox"'
+    );
+  });
+
+  test("requires domains while HTTPS is enabled", () => {
+    expect(sources["variables.tf"]).toContain(
+      "condition     = length(var.domains) > 0 || !var.enable_https"
+    );
+  });
+
+  test("reports the edge protocol beside the existing outputs", () => {
+    const outputs = sources["outputs.tf"] ?? "";
+    expect(outputs).toContain(
+      'value       = var.enable_https ? "https" : "http"'
+    );
+    for (const name of [
+      "edge_protocol",
+      "edge_ip_address",
+      "security_policy",
+      "backend_services",
+    ]) {
+      expect(outputs).toContain(`output "${name}" {`);
+    }
+    // Outputs never read a resource that may have count 0.
+    expect(outputs).not.toMatch(/\[0\]/);
+    for (const name of [
+      "google_compute_managed_ssl_certificate",
+      "google_compute_target_https_proxy",
+      "google_compute_url_map.https_redirect",
+      "google_compute_target_http_proxy",
+      "google_compute_global_forwarding_rule",
+    ]) {
+      expect(outputs).not.toContain(name);
+    }
+  });
+
   test("keeps request logging off on the dynamic backend", () => {
     expect(resourceBlock("google_compute_backend_service", "dynamic")).toMatch(
       /log_config \{\s*enable = false\s*\}/

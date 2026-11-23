@@ -15,3 +15,8 @@ output "backend_services" {
     static  = google_compute_backend_service.static.name
   }
 }
+
+output "edge_protocol" {
+  description = "Protocol clients use to reach the edge: https, or http when the sandbox disables HTTPS."
+  value       = var.enable_https ? "https" : "http"
+}

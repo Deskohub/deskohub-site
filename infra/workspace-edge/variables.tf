@@ -20,12 +20,23 @@ variable "region" {
 }
 
 variable "domains" {
-  description = "Hostnames the managed certificate covers."
+  description = "Hostnames the managed certificate covers and the URL map routes. May be empty only when enable_https is false, which then matches any host."
   type        = list(string)
 
   validation {
-    condition     = length(var.domains) > 0
-    error_message = "domains must name at least one hostname."
+    condition     = length(var.domains) > 0 || !var.enable_https
+    error_message = "domains must name at least one hostname while enable_https is true."
+  }
+}
+
+variable "enable_https" {
+  description = "Serve HTTPS with a managed certificate and redirect port 80 to it. Only the sandbox may set false, to serve plain HTTP on port 80 for a proof without DNS."
+  type        = bool
+  default     = true
+
+  validation {
+    condition     = var.enable_https || var.stage == "sandbox"
+    error_message = "enable_https may be false only when stage is sandbox."
   }
 }
 
