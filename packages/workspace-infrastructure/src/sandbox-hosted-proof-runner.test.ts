@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import * as Schema from "effect/Schema";
 import {
   type FakeRule,
   type FakeWorld,
@@ -253,19 +254,27 @@ describe("teardown deadline", () => {
 });
 
 describe("disposable queue IDs", () => {
+  /** The disposable queue suffix the stack config the runner wrote declares. */
+  const queueSuffixOf = (fakes: ProofFakes) =>
+    Schema.decodeSync(
+      Schema.fromJsonString(
+        Schema.Struct({
+          disposableQueueSuffix: Schema.optionalKey(Schema.String),
+        })
+      )
+    )(readFileSync(join(fakes.proofDir, "stack-config.json"), "utf8"))
+      .disposableQueueSuffix;
+
   const foundation = (runId: string) =>
     withProofFakes({}, (fakes) => {
       const { exitCode, output } = runPhase(fakes, "foundation", {
         GITHUB_RUN_ID: runId,
         GITHUB_RUN_ATTEMPT: "2",
       });
-      const config = JSON.parse(
-        readFileSync(join(fakes.proofDir, "stack-config.json"), "utf8")
-      ) as { disposableQueueSuffix?: string };
       return {
         exitCode,
         output,
-        suffix: config.disposableQueueSuffix,
+        suffix: queueSuffixOf(fakes),
         recorded: fakes.world().files?.["sandbox-proof/run.env"],
         calls: fakes.calls(),
       };
@@ -349,10 +358,7 @@ describe("disposable queue IDs", () => {
           SANDBOX_PROOF_MODE: "cleanup-only",
         });
         expect(exitCode).toBe(0);
-        const config = JSON.parse(
-          readFileSync(join(fakes.proofDir, "stack-config.json"), "utf8")
-        ) as { disposableQueueSuffix?: string };
-        expect(config.disposableQueueSuffix).toBe("r111-2");
+        expect(queueSuffixOf(fakes)).toBe("r111-2");
       }
     );
   });
@@ -515,13 +521,14 @@ describe("state snapshot and restore", () => {
   test("fails when a restored object does not read back as the snapshot", () => {
     withProofFakes(stateWorld(), (fakes) => {
       expect(runPhase(fakes, "state-snapshot-locked", locked).exitCode).toBe(0);
-      const snapshot = manifest(fakes, "state-live.json") as Array<{
-        crc32c: string;
-      }>;
-      snapshot[0] = { ...snapshot[0], crc32c: "crc-never-written" } as {
-        crc32c: string;
-      };
-      seed(fakes, { "state-snapshot.json": JSON.stringify(snapshot) });
+      const [first, ...rest] = Schema.decodeUnknownSync(
+        Schema.Array(Schema.Record(Schema.String, Schema.Unknown))
+      )(manifest(fakes, "state-live.json"));
+      if (first === undefined) {
+        throw new Error("expected the snapshot to list an object");
+      }
+      const altered = [{ ...first, crc32c: "crc-never-written" }, ...rest];
+      seed(fakes, { "state-snapshot.json": JSON.stringify(altered) });
       const { exitCode, output } = runPhase(
         fakes,
         "state-restore-locked",

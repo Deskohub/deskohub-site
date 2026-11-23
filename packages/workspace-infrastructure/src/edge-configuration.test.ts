@@ -3,6 +3,7 @@ import * as Storage from "@alchemy.run/gcp/Storage";
 import { isOutput } from "alchemy/Output";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Schema from "effect/Schema";
 import {
   decodeWorkspaceStackConfig,
   plainHttpEdgeProject,
@@ -39,9 +40,7 @@ const rejection = (input: unknown) => {
     throw new Error("expected the config to be rejected");
   }
   const reason = exit.cause.reasons.find((entry) => entry._tag === "Fail");
-  return reason?._tag === "Fail"
-    ? (reason.error as { reason: string; paths: ReadonlyArray<string> })
-    : undefined;
+  return reason?._tag === "Fail" ? reason.error : undefined;
 };
 
 /** The approved sandbox project, where plain HTTP is allowed. */
@@ -470,9 +469,15 @@ describe("workspace edge declaration", () => {
     }
 
     // Every locale prefix in the Workspace router matches the generic one.
-    const vercel = (await Bun.file(
-      new URL("../../../apps/deskohub-workspace/vercel.json", import.meta.url)
-    ).json()) as { routes: ReadonlyArray<{ src: string }> };
+    const vercel = Schema.decodeUnknownSync(
+      Schema.Struct({
+        routes: Schema.Array(Schema.Struct({ src: Schema.String })),
+      })
+    )(
+      await Bun.file(
+        new URL("../../../apps/deskohub-workspace/vercel.json", import.meta.url)
+      ).json()
+    );
     const locales =
       vercel.routes
         .map((route) => route.src.match(/^\^\/\(\?:([^)]*)\)/)?.[1])

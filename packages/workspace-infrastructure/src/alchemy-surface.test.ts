@@ -124,6 +124,12 @@ const servingRecord = () => {
   );
 };
 
+/** A readback for declarations that must not consult the live services. */
+const unconsultedReadback = ReleaseServiceReadback.of({
+  service: () => Effect.die(new Error("the declaration read a live service")),
+  revision: () => Effect.die(new Error("the declaration read a live revision")),
+});
+
 describe("Alchemy beta.87 surface", () => {
   test("pins exact versions and installs exactly them", async () => {
     expect(packageJson.dependencies).toEqual({
@@ -296,7 +302,10 @@ describe("Alchemy beta.87 surface", () => {
         return yield* declareRecordedWorkspaceServices(
           sandboxConfig,
           runAsHolder(expectedGeneration)
-        ).pipe(Effect.provideService(ReleaseRecordStore, store));
+        ).pipe(
+          Effect.provideService(ReleaseRecordStore, store),
+          Effect.provideService(ReleaseServiceReadback, unconsultedReadback)
+        );
       });
 
     const stale = await evaluate(fromStore(record.generation - 1));
@@ -325,7 +334,10 @@ describe("Alchemy beta.87 surface", () => {
           return yield* declareRecordedWorkspaceServices(
             sandboxConfig,
             runAsHolder(null)
-          ).pipe(Effect.provideService(ReleaseRecordStore, store));
+          ).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.provideService(ReleaseServiceReadback, unconsultedReadback)
+          );
         })
       );
     const serving = servingRecord();
@@ -478,7 +490,10 @@ describe("Alchemy beta.87 surface", () => {
           return yield* declareRecordedWorkspaceServices(previewConfig, {
             writer: Option.none(),
             generation: expectedGeneration,
-          }).pipe(Effect.provideService(ReleaseRecordStore, store));
+          }).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.provideService(ReleaseServiceReadback, unconsultedReadback)
+          );
         })
       );
     const plain = await preview(null);
@@ -541,7 +556,10 @@ describe("Alchemy beta.87 surface", () => {
           return yield* declareRecordedWorkspaceServices(
             sandboxConfig,
             runAsHolder(generation)
-          ).pipe(Effect.provideService(ReleaseRecordStore, store));
+          ).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.provideService(ReleaseServiceReadback, unconsultedReadback)
+          );
         })
       );
     // An inherited generation never turns a plain deploy into a fenced one.
@@ -624,14 +642,11 @@ describe("Alchemy beta.87 surface", () => {
     const queueTarget = queueProps(sandboxConfig, queueContract);
     const jobTarget = scheduleJobProps(sandboxConfig, scheduleContract);
     const environment = (workload: "tasks-worker" | "scheduler-worker") => {
-      const containers = (workerServiceProps(sandboxConfig, workload, digest)
-        .template?.containers ?? []) as Array<{
-        env: Array<{ name: string; value: string }>;
-      }>;
-      const [app] = containers;
-      return Object.fromEntries(
-        (app?.env ?? []).map(({ name, value }) => [name, value])
-      );
+      const [app] =
+        workerServiceProps(sandboxConfig, workload, digest).template
+          ?.containers ?? [];
+      const env = app !== undefined && "env" in app ? (app.env ?? []) : [];
+      return Object.fromEntries(env.map(({ name, value }) => [name, value]));
     };
     expect(environment("tasks-worker")).toMatchObject({
       WORKSPACE_TASKS_AUDIENCE: queueTarget.httpTarget?.oidcToken?.audience,
@@ -675,8 +690,7 @@ describe("Alchemy beta.87 surface", () => {
     }
 
     for (const props of declared(withCollector)) {
-      const [app, collector, ...rest] = (props?.template?.containers ??
-        []) as Array<Record<string, unknown>>;
+      const [app, collector, ...rest] = props?.template?.containers ?? [];
       expect(rest).toEqual([]);
       // The app stays first, so readback reads its image as the template's.
       expect(app).toMatchObject({
@@ -685,7 +699,9 @@ describe("Alchemy beta.87 surface", () => {
         ports: [{ containerPort: 8080 }],
         dependsOn: ["otel-collector"],
       });
-      expect(app?.env).toContainEqual({
+      expect(
+        app !== undefined && "env" in app ? app.env : undefined
+      ).toContainEqual({
         name: "WORKSPACE_OTLP_ENDPOINT",
         value: "http://127.0.0.1:4318",
       });

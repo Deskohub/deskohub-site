@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as Predicate from "effect/Predicate";
 
 /**
  * Stateful fakes of the CLIs the sandbox proof runner calls, for offline
@@ -123,8 +124,82 @@ const print = (line: string) => {
   process.stdout.write(`${line}\n`);
 };
 
-const readWorld = (path: string): FakeWorld =>
-  JSON.parse(readFileSync(path, "utf8")) as FakeWorld;
+/*
+ * The fake CLIs read the world on every call, so it is checked with plain
+ * predicates: loading Effect Schema would add about 60 ms to each call.
+ */
+const isOptional =
+  (is: (value: unknown) => boolean) =>
+  (value: unknown): boolean =>
+    value === undefined || is(value);
+const isArrayOf =
+  (is: (value: unknown) => boolean) =>
+  (value: unknown): boolean =>
+    Array.isArray(value) && value.every(is);
+const isRecordOf =
+  (is: (value: unknown) => boolean) =>
+  (value: unknown): boolean =>
+    Predicate.isReadonlyObject(value) && Object.values(value).every(is);
+const hasFields = (
+  value: unknown,
+  fields: Record<string, (field: unknown) => boolean>
+) =>
+  Predicate.isReadonlyObject(value) &&
+  Object.entries(fields).every(([key, is]) => is(value[key]));
+
+const optionalString = isOptional(Predicate.isString);
+const optionalNumber = isOptional(Predicate.isNumber);
+const optionalBoolean = isOptional(Predicate.isBoolean);
+
+const isFakeRule = (value: unknown) =>
+  hasFields(value, {
+    tool: Predicate.isString,
+    pattern: Predicate.isString,
+    stdout: optionalString,
+    exit: optionalNumber,
+    set: isOptional(Predicate.isReadonlyObject),
+    advance: optionalNumber,
+  });
+
+const isFakeObject = (value: unknown) =>
+  hasFields(value, {
+    live: Predicate.or(Predicate.isString, Predicate.isNull),
+    generations: isRecordOf(Predicate.isString),
+  });
+
+const interruptedDeliveries: ReadonlyArray<unknown> = [
+  "apply",
+  "exit",
+  "exit-after-failed-read",
+] satisfies ReadonlyArray<FakeWorld["interruptedDeliver"]>;
+
+const isFakeWorld = (value: unknown): value is FakeWorld =>
+  hasFields(value, {
+    rules: isOptional(isArrayOf(isFakeRule)),
+    objects: isOptional(isRecordOf(isFakeObject)),
+    listNoncurrent: optionalBoolean,
+    nextGeneration: optionalNumber,
+    files: isOptional(isRecordOf(Predicate.isString)),
+    serviceGenerations: isOptional(isRecordOf(Predicate.isNumber)),
+    interruptedDeliver: isOptional((field) =>
+      interruptedDeliveries.includes(field)
+    ),
+    serviceReadsFailAfterDeliver: optionalBoolean,
+    deliverStarted: optionalBoolean,
+    failedServiceReads: optionalNumber,
+    detachedChildPid: optionalNumber,
+    tokenLifetimes: isOptional(isRecordOf(Predicate.isNumber)),
+    tokeninfoDelay: optionalNumber,
+    now: optionalNumber,
+  });
+
+const readWorld = (path: string): FakeWorld => {
+  const world: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (!isFakeWorld(world)) {
+    throw new Error(`the fake world in ${path} is malformed`);
+  }
+  return world;
+};
 
 const writeWorld = (path: string, world: FakeWorld) => {
   writeFileSync(`${path}.next`, JSON.stringify(world));

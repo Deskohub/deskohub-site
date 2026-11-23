@@ -21,6 +21,7 @@ import {
   ownMarker as ownMarkerOf,
   project,
   runLifecycle,
+  withUndeclaredValue,
 } from "./edge-compute.test-utils";
 
 const logicalId = "EdgeDynamicBackend";
@@ -68,7 +69,7 @@ type Lifecycle = Provider.ProviderService<EdgeBackendService>;
 
 const run = <A, E>(
   fake: ReturnType<typeof fakeCompute>,
-  use: (provider: Lifecycle) => Effect.Effect<A, E, unknown>
+  use: (provider: Lifecycle) => Effect.Effect<A, E>
 ) => runLifecycle(EdgeBackendServiceProvider, lifecycle, fake, use);
 
 const reconcile = (
@@ -91,6 +92,23 @@ const readBackend = (
   provider.read === undefined
     ? Effect.die(new Error("the provider has no read"))
     : provider.read(input);
+
+/** The attributes a state file recorded for the dynamic backend. */
+const recorded = (id = ""): EdgeBackendServiceAttributes => ({
+  project,
+  name: "workspace-sandbox-dynamic",
+  id,
+  selfLink: "",
+  creationTimestamp: "",
+  loadBalancingScheme: "EXTERNAL_MANAGED",
+  protocol: "HTTPS",
+  backendGroups: [],
+  securityPolicy: undefined,
+  enableCDN: false,
+  cdnPolicy: undefined,
+  logConfig: { enable: false },
+  description: undefined,
+});
 
 /** A backend as Compute reports it after it converged on `props`. */
 const converged = (
@@ -164,7 +182,7 @@ describe("EdgeBackendService provider", () => {
       cdnPolicy,
     });
     if (Exit.isSuccess(exit)) {
-      const value = exit.value as EdgeBackendServiceAttributes;
+      const value = exit.value;
       expect(value.cdnPolicy).toEqual(cdnPolicy);
       expect(value.logConfig).toEqual({ enable: true, sampleRate: 1 });
     }
@@ -214,7 +232,7 @@ describe("EdgeBackendService provider", () => {
     expect(patch?.enableCDN).toBe(false);
     expect(patch && "cdnPolicy" in patch).toBe(false);
     if (Exit.isSuccess(exit)) {
-      const value = exit.value as EdgeBackendServiceAttributes;
+      const value = exit.value;
       expect(value.enableCDN).toBe(false);
       expect(value.cdnPolicy).toBeUndefined();
     }
@@ -281,11 +299,10 @@ describe("EdgeBackendService provider", () => {
           output: undefined,
         });
         expect(Unowned.is(adopted)).toBe(true);
-        return yield* reconcile(
-          provider,
-          dynamicProps,
-          adopted as EdgeBackendServiceAttributes
-        );
+        if (adopted === undefined) {
+          return yield* Effect.die(new Error("the backend was not read"));
+        }
+        return yield* reconcile(provider, dynamicProps, adopted);
       })
     );
     expect(Exit.isSuccess(exit)).toBe(true);
@@ -299,7 +316,7 @@ describe("EdgeBackendService provider", () => {
     const exit = await run(fake, (provider) =>
       reconcile(provider, dynamicProps)
     );
-    expect(failureTag(exit)).toBe("GCP.OperationFailed");
+    expect(failureTag(exit)).toBe("EdgeComputeOperationFailed");
   });
 
   test("reads owned, foreign and missing backends", async () => {
@@ -340,10 +357,7 @@ describe("EdgeBackendService provider", () => {
 
   test("deletes and waits, and treats a missing backend as gone", async () => {
     const fake = fakeCompute({ existing: [converged(dynamicProps)] });
-    const output = {
-      project,
-      name: "workspace-sandbox-dynamic",
-    } as EdgeBackendServiceAttributes;
+    const output = recorded();
     const exit = await run(fake, (provider) =>
       Effect.all([
         provider.delete({ ...lifecycleInput, olds: dynamicProps, output }),
@@ -375,14 +389,12 @@ describe("EdgeBackendService provider", () => {
         })
       );
     const renamed = await diff({ ...dynamicProps, name: "workspace-other" });
-    const rescheme = await diff({
-      ...dynamicProps,
-      loadBalancingScheme: "EXTERNAL" as never,
-    });
-    const reprotocol = await diff({
-      ...dynamicProps,
-      protocol: "HTTP" as never,
-    });
+    const rescheme = await diff(
+      withUndeclaredValue(dynamicProps, "loadBalancingScheme", "EXTERNAL")
+    );
+    const reprotocol = await diff(
+      withUndeclaredValue(dynamicProps, "protocol", "HTTP")
+    );
     expect(Exit.isSuccess(renamed) && renamed.value).toEqual({
       action: "replace",
       deleteFirst: false,
@@ -398,15 +410,12 @@ describe("EdgeBackendService provider", () => {
     const exit = await run(fake, (provider) =>
       reconcile(provider, dynamicProps)
     );
-    expect(failureTag(exit)).toBe("GCP.OperationFailed");
+    expect(failureTag(exit)).toBe("EdgeComputeOperationFailed");
     expect(mutations(fake.calls)).toEqual(["POST global/backendServices"]);
   });
 
   test("a delete fails on an operation error other than not found", async () => {
-    const output = {
-      project,
-      name: "workspace-sandbox-dynamic",
-    } as EdgeBackendServiceAttributes;
+    const output = recorded();
     const remove = (options: FakeComputeOptions) =>
       run(
         fakeCompute({ existing: [converged(dynamicProps)], ...options }),
@@ -414,7 +423,7 @@ describe("EdgeBackendService provider", () => {
           provider.delete({ ...lifecycleInput, olds: dynamicProps, output })
       );
     expect(failureTag(await remove({ failingAtOnce: ["delete"] }))).toBe(
-      "GCP.OperationFailed"
+      "EdgeComputeOperationFailed"
     );
     expect(
       Exit.isSuccess(
@@ -444,11 +453,7 @@ describe("EdgeBackendService provider", () => {
     });
   });
   test("never changes or deletes a same-name backend someone else recreated", async () => {
-    const admitted = {
-      project,
-      name: "workspace-sandbox-dynamic",
-      id: "1234",
-    } as EdgeBackendServiceAttributes;
+    const admitted = recorded("1234");
     const recreated = {
       ...converged(dynamicProps, ""),
       id: "9999",
@@ -483,11 +488,7 @@ describe("EdgeBackendService provider", () => {
       ],
     });
     const exit = await run(fake, (provider) =>
-      reconcile(provider, dynamicProps, {
-        project,
-        name: "workspace-sandbox-dynamic",
-        id: "1234",
-      } as EdgeBackendServiceAttributes)
+      reconcile(provider, dynamicProps, recorded("1234"))
     );
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(mutations(fake.calls)).toEqual([
@@ -508,11 +509,7 @@ describe("EdgeBackendService provider", () => {
       provider.delete({
         ...lifecycleInput,
         olds: dynamicProps,
-        output: {
-          project,
-          name: "workspace-sandbox-dynamic",
-          id: "1234",
-        } as EdgeBackendServiceAttributes,
+        output: recorded("1234"),
       })
     );
     expect(Exit.isSuccess(exit)).toBe(true);
@@ -547,5 +544,32 @@ describe("EdgeBackendService provider", () => {
     );
     expect(failureTag(exit)).toBe("EdgeComputeResourceUnowned");
     expect(mutations(fake.calls)).toEqual(["POST global/backendServices"]);
+  });
+
+  test("waits out an operation that is not yet visible to its first polls", async () => {
+    const fake = fakeCompute({
+      existing: [{ ...converged(staticProps), enableCDN: false }],
+      unknownOperationPolls: 2,
+    });
+    const exit = await run(fake, (provider) =>
+      reconcile(provider, staticProps)
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(mutations(fake.calls)).toEqual([
+      "PATCH backendServices/workspace-sandbox-static",
+    ]);
+    expect([...fake.operationPolls]).toEqual([["operation-1", 3]]);
+  });
+
+  test("polls a running operation again until it is done", async () => {
+    const fake = fakeCompute({
+      existing: [{ ...converged(staticProps), enableCDN: false }],
+      runningOperationPolls: 1,
+    });
+    const exit = await run(fake, (provider) =>
+      reconcile(provider, staticProps)
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect([...fake.operationPolls]).toEqual([["operation-1", 2]]);
   });
 });

@@ -11,10 +11,12 @@ import {
   foreignMarker,
   type Live,
   lifecycleInput as lifecycleInputOf,
+  liveRules,
   mutations,
   ownMarker as ownMarkerOf,
   project,
   runLifecycle,
+  withUndeclaredValue,
 } from "./edge-compute.test-utils";
 import {
   EdgeSecurityPolicy,
@@ -42,18 +44,20 @@ const wafRule = (preview: boolean): EdgeSecurityPolicyRule => ({
   },
 });
 
+const throttleLimits = {
+  conformAction: "allow",
+  exceedAction: "deny(429)",
+  enforceOnKey: "IP",
+  rateLimitThreshold: { count: 120, intervalSec: 60 },
+} satisfies EdgeSecurityPolicyRule["rateLimitOptions"];
+
 const throttleRule: EdgeSecurityPolicyRule = {
   action: "throttle",
   priority: 2000,
   preview: false,
   description: "Throttle auth endpoints per client IP",
   match: { expr: { expression: "request.path.startsWith('/api/auth/')" } },
-  rateLimitOptions: {
-    conformAction: "allow",
-    exceedAction: "deny(429)",
-    enforceOnKey: "IP",
-    rateLimitThreshold: { count: 120, intervalSec: 60 },
-  },
+  rateLimitOptions: throttleLimits,
 };
 
 const defaultRule: EdgeSecurityPolicyRule = {
@@ -73,6 +77,18 @@ const policyProps = (preview: boolean): EdgeSecurityPolicyProps => ({
 });
 
 /** A policy as Compute reports it: false booleans are left out. */
+/** The attributes a state file recorded for the edge policy. */
+const recorded = (id = ""): EdgeSecurityPolicyAttributes => ({
+  project,
+  name: "workspace-sandbox-edge",
+  id,
+  selfLink: "",
+  creationTimestamp: "",
+  type: "CLOUD_ARMOR",
+  description: undefined,
+  rules: [],
+});
+
 const liveRule = (rule: EdgeSecurityPolicyRule): Live => {
   const { preview, ...rest } = rule;
   return preview
@@ -104,7 +120,7 @@ type Lifecycle = Provider.ProviderService<EdgeSecurityPolicy>;
 
 const run = <A, E>(
   compute: ReturnType<typeof fake>,
-  use: (provider: Lifecycle) => Effect.Effect<A, E, unknown>
+  use: (provider: Lifecycle) => Effect.Effect<A, E>
 ) => runLifecycle(EdgeSecurityPolicyProvider, lifecycle, compute, use);
 
 const reconcile = (
@@ -175,9 +191,9 @@ describe("EdgeSecurityPolicy provider", () => {
             liveRule({
               ...throttleRule,
               rateLimitOptions: {
-                ...throttleRule.rateLimitOptions,
+                ...throttleLimits,
                 rateLimitThreshold: { count: 60, intervalSec: 60 },
-              } as EdgeSecurityPolicyRule["rateLimitOptions"],
+              },
             }),
             liveRule({ ...defaultRule, priority: 3000 }),
             liveRule(defaultRule),
@@ -204,11 +220,10 @@ describe("EdgeSecurityPolicy provider", () => {
       Effect.gen(function* () {
         const adopted = yield* readPolicy(provider, policyProps(true));
         expect(adopted !== undefined && Unowned.is(adopted)).toBe(true);
-        return yield* reconcile(
-          provider,
-          policyProps(true),
-          adopted as EdgeSecurityPolicyAttributes
-        );
+        if (adopted === undefined) {
+          return yield* Effect.die(new Error("the policy was not read"));
+        }
+        return yield* reconcile(provider, policyProps(true), adopted);
       })
     );
     expect(Exit.isSuccess(exit)).toBe(true);
@@ -248,15 +263,12 @@ describe("EdgeSecurityPolicy provider", () => {
     const exit = await run(compute, (provider) =>
       reconcile(provider, policyProps(false))
     );
-    expect(failureTag(exit)).toBe("GCP.OperationFailed");
+    expect(failureTag(exit)).toBe("EdgeComputeOperationFailed");
   });
 
   test("deletes and treats a missing policy as gone", async () => {
     const compute = fake({ existing: [converged(policyProps(true))] });
-    const output = {
-      project,
-      name: "workspace-sandbox-edge",
-    } as EdgeSecurityPolicyAttributes;
+    const output = recorded();
     const exit = await run(compute, (provider) =>
       Effect.all([
         provider.delete({ ...lifecycleInput, olds: policyProps(true), output }),
@@ -285,10 +297,9 @@ describe("EdgeSecurityPolicy provider", () => {
               .pipe(Effect.map((result) => result ?? undefined))
       );
     const renamed = await diff({ ...policyProps(true), name: "other" });
-    const retyped = await diff({
-      ...policyProps(true),
-      type: "CLOUD_ARMOR_EDGE" as never,
-    });
+    const retyped = await diff(
+      withUndeclaredValue(policyProps(true), "type", "CLOUD_ARMOR_EDGE")
+    );
     const rerules = await diff(policyProps(false));
     expect(Exit.isSuccess(renamed) && renamed.value).toEqual({
       action: "replace",
@@ -302,7 +313,7 @@ describe("EdgeSecurityPolicy provider", () => {
   });
   test("clears WAF exclusions the edge never declares", async () => {
     const live = converged(policyProps(true));
-    const rules = live.rules as ReadonlyArray<Live>;
+    const rules = liveRules(live);
     const compute = fake({
       existing: [
         {
@@ -346,11 +357,7 @@ describe("EdgeSecurityPolicy provider", () => {
   });
 
   test("never changes or deletes a same-name policy someone else recreated", async () => {
-    const admitted = {
-      project,
-      name: "workspace-sandbox-edge",
-      id: "5678",
-    } as EdgeSecurityPolicyAttributes;
+    const admitted = recorded("5678");
     const compute = fake({
       existing: [{ ...converged(policyProps(true), description), id: "9999" }],
     });
@@ -383,11 +390,7 @@ describe("EdgeSecurityPolicy provider", () => {
       },
     });
     const exit = await run(compute, (provider) =>
-      reconcile(provider, policyProps(false), {
-        project,
-        name: "workspace-sandbox-edge",
-        id: "5678",
-      } as EdgeSecurityPolicyAttributes)
+      reconcile(provider, policyProps(false), recorded("5678"))
     );
     expect(failureTag(exit)).toBe("EdgeComputeResourceUnowned");
     expect(mutations(compute.calls)).toEqual([
@@ -419,11 +422,7 @@ describe("EdgeSecurityPolicy provider", () => {
       replaceAfter: { kind: "patchRule", with: replacement },
     });
     const exit = await run(compute, (provider) =>
-      reconcile(provider, policyProps(false), {
-        project,
-        name: "workspace-sandbox-edge",
-        id: "5678",
-      } as EdgeSecurityPolicyAttributes)
+      reconcile(provider, policyProps(false), recorded("5678"))
     );
     expect(failureTag(exit)).toBe("EdgeComputeResourceUnowned");
     const patchRules = compute.calls.filter((call) =>
@@ -431,8 +430,7 @@ describe("EdgeSecurityPolicy provider", () => {
     );
     expect(patchRules).toHaveLength(1);
     expect(patchRules[0]?.requestId).toBeNull();
-    const rules = compute.objects.get("workspace-sandbox-edge")
-      ?.rules as ReadonlyArray<Live>;
+    const rules = liveRules(compute.objects.get("workspace-sandbox-edge"));
     expect(rules.find((rule) => rule.priority === 1000)?.preview).toBe(true);
   });
 

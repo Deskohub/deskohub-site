@@ -1,12 +1,14 @@
-import { waitGlobalOperation } from "@alchemy.run/gcp/Compute/operations";
 import {
   alchemyLabelKeys,
   createInternalLabels,
   hasAlchemyLabels,
 } from "@alchemy.run/gcp/Labels";
 import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { HttpClientRequest, type HttpClientResponse } from "effect/http";
+import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import {
   type GoogleApiNoAnswer,
@@ -104,26 +106,70 @@ export const ComputeOperation = Schema.Struct({
 });
 export type ComputeOperation = typeof ComputeOperation.Type;
 
-/** Wait for a global operation; it fails with `GCP.OperationFailed`. */
-export const settleGlobalOperation = (
-  project: string,
-  operation: ComputeOperation,
-  options?: { readonly ignore?: ReadonlyArray<string> }
-) =>
-  waitGlobalOperation(
-    project,
-    // The waiter reads only the operation's name, status and error.
-    operation as Parameters<typeof waitGlobalOperation>[1],
-    options
-  ).pipe(
-    Effect.map(
-      (settled): ComputeOperation => ({
-        name: settled.name,
-        status: settled.status,
-        targetId: settled.targetId ?? operation.targetId,
-      })
-    )
+/**
+ * Compute operations on edge objects settle in seconds; the budget is the
+ * one Alchemy's native Compute waiter allows, polled every two seconds.
+ */
+const operationBudget = Duration.minutes(15);
+const operationInterval = Duration.seconds(2);
+const operationPolls = Math.ceil(
+  Duration.toMillis(operationBudget) / Duration.toMillis(operationInterval)
+);
+
+/** The Compute error codes (`error.errors[].code`) an operation reports. */
+const operationErrorCodes = (operation: ComputeOperation) =>
+  (operation.error?.errors ?? []).flatMap((error) =>
+    error.code === undefined ? [] : [error.code]
   );
+
+/** A global operation finished with an error. */
+export class EdgeComputeOperationFailed extends Data.TaggedError(
+  "EdgeComputeOperationFailed"
+)<{
+  readonly resource: string;
+  readonly operation: string;
+  /** Numeric RPC code (google.rpc.Code), when reported. */
+  readonly code: number | undefined;
+  /** Compute error code (e.g. `RESOURCE_NOT_FOUND`), when reported. */
+  readonly reason: string | undefined;
+  readonly detail: string;
+}> {
+  override get message() {
+    return `${this.resource}: operation ${this.operation} failed (${this.reason ?? this.code ?? "error"}): ${this.detail}`;
+  }
+}
+
+/** A global operation did not finish within the waiting budget. */
+export class EdgeComputeOperationTimedOut extends Data.TaggedError(
+  "EdgeComputeOperationTimedOut"
+)<{ readonly resource: string; readonly operation: string }> {
+  override get message() {
+    return `${this.resource}: operation ${this.operation} did not finish within ${Duration.format(operationBudget)}`;
+  }
+}
+
+class EdgeComputeOperationPending extends Data.TaggedError(
+  "EdgeComputeOperationPending"
+) {}
+
+/** The failure a settled operation reports, if any. */
+const operationFailure = (resource: string, operation: ComputeOperation) => {
+  const error = operation.error;
+  const first = error?.errors?.[0];
+  if (
+    error === undefined ||
+    (error.code === undefined && first === undefined && !error.message)
+  ) {
+    return undefined;
+  }
+  return new EdgeComputeOperationFailed({
+    resource,
+    operation: operation.name ?? "",
+    code: error.code,
+    reason: first?.code,
+    detail: first?.message ?? error.message ?? "operation failed",
+  });
+};
 
 /**
  * Fail when a settled operation changed another object than the admitted
@@ -159,16 +205,20 @@ export const computeResourcePath = (link: string | undefined) => {
 };
 
 /** The message of a Google error body, never the request. */
-const errorReason = (body: string) => {
-  try {
-    const parsed = JSON.parse(body) as { error?: { message?: unknown } };
-    return typeof parsed.error?.message === "string"
-      ? parsed.error.message
-      : "request refused";
-  } catch {
-    return "request refused";
-  }
-};
+const decodeErrorBody = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      error: Schema.Struct({ message: Schema.String }),
+    })
+  )
+);
+const errorReason = (body: string) =>
+  decodeErrorBody(body).pipe(
+    Option.match({
+      onNone: () => "request refused",
+      onSome: ({ error }) => error.message,
+    })
+  );
 
 /**
  * Authorized Compute requests about one object. A handler returns
@@ -286,10 +336,69 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
       retries: 0,
     });
 
+  /**
+   * Wait for a global operation to finish. A freshly started operation can
+   * 404 for a moment; an operation finished with an error fails with
+   * `EdgeComputeOperationFailed` unless one of its error codes is in
+   * `ignore`, which means the desired state already holds.
+   */
+  const settle = Effect.fnUntraced(function* (
+    resource: string,
+    project: string,
+    operation: ComputeOperation,
+    options?: { readonly ignore?: ReadonlyArray<string> }
+  ) {
+    const name = operation.name ?? "";
+    const poll = send(
+      resource,
+      "wait",
+      HttpClientRequest.get(
+        `${computeRoot}/projects/${project}/global/operations/${name}`
+      ),
+      operationAnswer(resource, "wait")
+    ).pipe(
+      Effect.retry({
+        while: (error) => error.status === 404,
+        times: 5,
+        schedule: Schedule.exponential("250 millis"),
+      }),
+      Effect.filterOrFail(
+        (current) => current.status === "DONE",
+        () => new EdgeComputeOperationPending()
+      ),
+      Effect.retry({
+        while: (error) => error._tag === "EdgeComputeOperationPending",
+        times: operationPolls,
+        schedule: Schedule.spaced(operationInterval),
+      }),
+      Effect.catchTag("EdgeComputeOperationPending", () =>
+        Effect.fail(
+          new EdgeComputeOperationTimedOut({ resource, operation: name })
+        )
+      )
+    );
+    const settled =
+      operation.status === "DONE" || name === "" ? operation : yield* poll;
+    const failure = operationFailure(resource, settled);
+    const ignore = options?.ignore ?? [];
+    if (
+      failure !== undefined &&
+      !operationErrorCodes(settled).some((code) => ignore.includes(code))
+    ) {
+      return yield* failure;
+    }
+    return {
+      name: settled.name,
+      status: settled.status,
+      targetId: settled.targetId ?? operation.targetId,
+    } satisfies ComputeOperation;
+  });
+
   return {
     get,
     mutate,
     mutateOnce,
+    settle,
     /** An insert's operation, or `conflict` when the name is taken. */
     insert: (resource: string, url: string, body: object) =>
       send<"conflict" | ComputeOperation>(

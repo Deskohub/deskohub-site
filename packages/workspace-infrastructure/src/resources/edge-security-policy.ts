@@ -16,8 +16,8 @@ import {
   parseOwnedDescription,
   requireAdmittedTarget,
   requirePresent,
-  settleGlobalOperation,
 } from "./edge-compute-api";
+import { resolvedStringProp } from "./provider-inputs";
 
 /** One Cloud Armor rule, with only the fields the Workspace edge sets. */
 export interface EdgeSecurityPolicyRule {
@@ -148,7 +148,7 @@ const decodePolicy = Schema.decodeUnknownEffect(LiveSecurityPolicy);
  * field the edge sets matches.
  */
 export const comparedRule = (rule: LiveRule | EdgeSecurityPolicyRule) => {
-  const match = rule.match as LiveRule["match"];
+  const match = rule.match;
   const limit = rule.rateLimitOptions;
   const wafExclusions =
     "preconfiguredWafConfig" in rule
@@ -159,9 +159,18 @@ export const comparedRule = (rule: LiveRule | EdgeSecurityPolicyRule) => {
     action: rule.action ?? "",
     description: rule.description ?? "",
     preview: rule.preview === true,
-    expression: match?.expr?.expression ?? "",
-    versionedExpr: match?.versionedExpr ?? "",
-    srcIpRanges: [...(match?.config?.srcIpRanges ?? [])].sort(),
+    expression:
+      match !== undefined && "expr" in match
+        ? (match.expr?.expression ?? "")
+        : "",
+    versionedExpr:
+      match !== undefined && "versionedExpr" in match
+        ? (match.versionedExpr ?? "")
+        : "",
+    srcIpRanges:
+      match !== undefined && "config" in match
+        ? [...(match.config?.srcIpRanges ?? [])].sort()
+        : [],
     wafExclusions,
     rateLimit:
       limit === undefined
@@ -265,9 +274,11 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
     if (previous === undefined) {
       return undefined;
     }
-    const next = news as Partial<Record<string, unknown>>;
-    const changed = (key: "project" | "name" | "type") =>
-      typeof next[key] === "string" && next[key] !== previous[key];
+    // Identity fields are plain strings; an unresolved one cannot differ yet.
+    const changed = (key: "project" | "name" | "type") => {
+      const next = resolvedStringProp(news, key);
+      return next !== undefined && next !== previous[key];
+    };
     if (changed("project") || changed("name")) {
       return { action: "replace" as const, deleteFirst: false };
     }
@@ -320,7 +331,7 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
     ) =>
       read(operation).pipe(
         Effect.andThen(api.mutate(resource, operation, request)),
-        Effect.flatMap((pending) => settleGlobalOperation(project, pending)),
+        Effect.flatMap((pending) => api.settle(resource, project, pending)),
         Effect.flatMap((settled) =>
           requireAdmittedTarget(resource, admittedId, settled)
         )
@@ -339,7 +350,7 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
       const insertedId =
         inserted === "conflict"
           ? undefined
-          : (yield* settleGlobalOperation(project, inserted)).targetId;
+          : (yield* api.settle(resource, project, inserted)).targetId;
       live = yield* read("insert");
       if (!(yield* isAdmitted(id, insertedId, live))) {
         return yield* new EdgeComputeResourceUnowned({ resource });
@@ -378,7 +389,7 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
     ) =>
       read(operation).pipe(
         Effect.andThen(api.mutateOnce(resource, operation, request)),
-        Effect.flatMap((pending) => settleGlobalOperation(project, pending)),
+        Effect.flatMap((pending) => api.settle(resource, project, pending)),
         Effect.flatMap((settled) =>
           requireAdmittedTarget(resource, admittedId, settled)
         )
@@ -454,7 +465,7 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
     }
     const deleted = yield* api.delete(resource, url);
     if (deleted !== "gone") {
-      yield* settleGlobalOperation(output.project, deleted, {
+      yield* api.settle(resource, output.project, deleted, {
         ignore: ["RESOURCE_NOT_FOUND"],
       });
     }

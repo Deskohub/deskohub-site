@@ -16,8 +16,8 @@ import {
   parseOwnedDescription,
   requireAdmittedTarget,
   requirePresent,
-  settleGlobalOperation,
 } from "./edge-compute-api";
+import { resolvedStringProp } from "./provider-inputs";
 
 /**
  * Cloud CDN settings of a backend that caches. Only the fields the
@@ -31,6 +31,12 @@ export interface EdgeCdnPolicy {
     readonly includeProtocol: boolean;
     readonly includeQueryString: boolean;
   };
+}
+
+/** The CDN settings Compute reports for a backend that caches. */
+export interface EdgeLiveCdnPolicy extends Omit<EdgeCdnPolicy, "cacheMode"> {
+  /** Any Compute cache mode, so drift from the declared one shows. */
+  readonly cacheMode: string;
 }
 
 export interface EdgeLogConfig {
@@ -68,7 +74,7 @@ export interface EdgeBackendServiceAttributes {
   readonly backendGroups: ReadonlyArray<string>;
   readonly securityPolicy: string | undefined;
   readonly enableCDN: boolean;
-  readonly cdnPolicy: EdgeCdnPolicy | undefined;
+  readonly cdnPolicy: EdgeLiveCdnPolicy | undefined;
   readonly logConfig: EdgeLogConfig;
   /** The description with the Alchemy ownership marker stripped. */
   readonly description: string | undefined;
@@ -151,7 +157,7 @@ const toAttributes = (
     cdnPolicy:
       live.enableCDN === true && cdn !== undefined
         ? {
-            cacheMode: cdn.cacheMode as EdgeCdnPolicy["cacheMode"],
+            cacheMode: cdn.cacheMode ?? "",
             negativeCaching: cdn.negativeCaching === true,
             cacheKeyPolicy: {
               includeHost: cdn.cacheKeyPolicy?.includeHost === true,
@@ -250,8 +256,7 @@ const stalePatchRetries = 2;
 
 /**
  * The provider of `EdgeBackendService`. It uses the stack's GCP
- * credentials and HTTP client, the same ones the native providers use, and
- * the native Compute global operation waiter.
+ * credentials and HTTP client, the same ones the native providers use.
  */
 export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
   stables: ["project", "name", "id", "selfLink", "creationTimestamp"],
@@ -262,9 +267,10 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
       return undefined;
     }
     // Identity fields are plain strings; an unresolved one cannot differ yet.
-    const next = news as Partial<Record<string, unknown>>;
-    const changed = (key: "project" | "name" | "loadBalancingScheme") =>
-      typeof next[key] === "string" && next[key] !== previous[key];
+    const changed = (key: "project" | "name" | "loadBalancingScheme") => {
+      const next = resolvedStringProp(news, key);
+      return next !== undefined && next !== previous[key];
+    };
     if (changed("project") || changed("name")) {
       return { action: "replace" as const, deleteFirst: false };
     }
@@ -324,7 +330,7 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
       const insertedId =
         inserted === "conflict"
           ? undefined
-          : (yield* settleGlobalOperation(project, inserted)).targetId;
+          : (yield* api.settle(resource, project, inserted)).targetId;
       live = yield* read("insert");
       // A conflict is success only if the existing backend is ours, as
       // after a retried insert whose first attempt went through.
@@ -376,7 +382,7 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
         yield* requireAdmittedTarget(
           resource,
           admittedId,
-          yield* settleGlobalOperation(project, patched.operation)
+          yield* api.settle(resource, project, patched.operation)
         );
       }
       live = yield* read("patch");
@@ -398,7 +404,7 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
       yield* requireAdmittedTarget(
         resource,
         admittedId,
-        yield* settleGlobalOperation(project, attached)
+        yield* api.settle(resource, project, attached)
       );
       live = yield* read("setSecurityPolicy");
     }
@@ -427,7 +433,7 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
     }
     const deleted = yield* api.delete(resource, url);
     if (deleted !== "gone") {
-      yield* settleGlobalOperation(output.project, deleted, {
+      yield* api.settle(resource, output.project, deleted, {
         ignore: ["RESOURCE_NOT_FOUND"],
       });
     }

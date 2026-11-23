@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import {
   isLockedStackAction,
   lockedStackActions,
@@ -30,35 +31,51 @@ const runner = new URL("../scripts/sandbox-hosted-proof.sh", import.meta.url)
   .pathname;
 const packageRoot = new URL("..", import.meta.url).pathname;
 
-interface Step {
-  readonly id?: string;
-  readonly name?: string;
-  readonly if?: string;
-  readonly uses?: string;
-  readonly run?: string;
-  readonly env?: Record<string, string>;
-  readonly with?: Record<string, string | boolean>;
-  readonly "timeout-minutes"?: number;
-}
-interface Workflow {
-  readonly on: {
-    readonly workflow_dispatch: {
-      readonly inputs: Record<
-        string,
-        { type: string; default: string; options: ReadonlyArray<string> }
-      >;
-    };
-  };
-  readonly concurrency: Record<string, unknown>;
-  readonly env: Record<string, string>;
-  readonly jobs: Record<
-    string,
-    { readonly steps: ReadonlyArray<Step>; readonly "timeout-minutes": string }
-  >;
-}
+const StringRecord = Schema.Record(Schema.String, Schema.String);
+const Step = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
+  if: Schema.optionalKey(Schema.String),
+  uses: Schema.optionalKey(Schema.String),
+  run: Schema.optionalKey(Schema.String),
+  env: Schema.optionalKey(StringRecord),
+  with: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Union([Schema.String, Schema.Finite, Schema.Boolean])
+    )
+  ),
+  "timeout-minutes": Schema.optionalKey(Schema.Finite),
+});
+type Step = typeof Step.Type;
+const Workflow = Schema.Struct({
+  on: Schema.Struct({
+    workflow_dispatch: Schema.Struct({
+      inputs: Schema.Record(
+        Schema.String,
+        Schema.Struct({
+          type: Schema.String,
+          default: Schema.String,
+          options: Schema.Array(Schema.String),
+        })
+      ),
+    }),
+  }),
+  concurrency: Schema.Record(Schema.String, Schema.Unknown),
+  env: StringRecord,
+  jobs: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      steps: Schema.Array(Step),
+      "timeout-minutes": Schema.String,
+    })
+  ),
+});
 
 const workflowText = await Bun.file(workflowFile).text();
-const workflow = Bun.YAML.parse(workflowText) as Workflow;
+const workflow = Schema.decodeUnknownSync(Workflow)(
+  Bun.YAML.parse(workflowText)
+);
 const steps = workflow.jobs.smoke?.steps ?? [];
 const runnerScript = readFileSync(runner, "utf8");
 

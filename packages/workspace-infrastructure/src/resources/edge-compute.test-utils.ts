@@ -1,5 +1,6 @@
 import { Credentials } from "@alchemy.run/gcp";
 import type * as Provider from "alchemy/Provider";
+import { noopSession } from "alchemy/Report";
 import type { ResourceLike } from "alchemy/Resource";
 import { Stack } from "alchemy/Stack";
 import { Stage } from "alchemy/Stage";
@@ -8,6 +9,7 @@ import * as Exit from "effect/Exit";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 
 export const project = "deskohub-ws-sandbox";
 export const computeLinkRoot = `https://www.googleapis.com/compute/v1/projects/${project}`;
@@ -24,6 +26,30 @@ export const foreignMarker = (logicalId: string) =>
   `[alchemy alchemy-stack=other alchemy-stage=${stageName} alchemy-id=${logicalId.toLowerCase()}]`;
 
 export type Live = Record<string, unknown>;
+
+const LiveObject = Schema.Record(Schema.String, Schema.Unknown);
+const decodeLiveObjects = Schema.decodeUnknownSync(Schema.Array(LiveObject));
+const decodeLiveJson = Schema.decodeUnknownSync(
+  Schema.fromJsonString(LiveObject)
+);
+
+/** The rules of a live security policy; none when it has no rules. */
+export const liveRules = (live: Live | undefined): ReadonlyArray<Live> =>
+  decodeLiveObjects(live?.rules ?? []);
+
+/**
+ * A copy of `props` whose `key` holds a value its type rules out, for
+ * checking how a provider treats input it never declares.
+ */
+export const withUndeclaredValue = <P extends object>(
+  props: P,
+  key: keyof P & string,
+  value: unknown
+): P => {
+  const copy = { ...props };
+  Reflect.set(copy, key, value);
+  return copy;
+};
 export type Call = {
   readonly method: string;
   readonly path: string;
@@ -50,6 +76,10 @@ export interface FakeComputeOptions {
   readonly lostAnswers?: ReadonlyArray<string>;
   /** Right after an operation of `kind`, someone recreates the object. */
   readonly replaceAfter?: { readonly kind: string; readonly with: Live };
+  /** Polls of a fresh operation answered 404, as if not yet visible. */
+  readonly unknownOperationPolls?: number;
+  /** Polls of an operation answered RUNNING before it reports DONE. */
+  readonly runningOperationPolls?: number;
 }
 
 type Collection = "backendServices" | "securityPolicies";
@@ -67,6 +97,7 @@ export const fakeCompute = (
   const lostAnswers = new Set(options.lostAnswers ?? []);
   let replaceAfter = options.replaceAfter;
   const operations = new Map<string, string>();
+  const operationPolls = new Map<string, number>();
   let fingerprint = 0;
   let stalePatches = options.stalePatches ?? 0;
   const nextFingerprint = () => `fp-${++fingerprint}`;
@@ -77,7 +108,8 @@ export const fakeCompute = (
       ],
     },
   };
-  let lastOperation: { readonly kind: string; readonly body: Live } | undefined;
+  type Applied = { readonly kind: string; readonly body: Live };
+  const applied: Array<Applied> = [];
   const operation = (kind: string, targetId: unknown) => {
     const name = `operation-${operations.size + 1}`;
     operations.set(name, kind);
@@ -88,8 +120,25 @@ export const fakeCompute = (
         ? { status: "DONE", ...operationError }
         : { status: "RUNNING" }),
     };
-    lastOperation = { kind, body };
+    applied.push({ kind, body });
     return body;
+  };
+  const pollOperation = (name: string) => {
+    const polls = (operationPolls.get(name) ?? 0) + 1;
+    operationPolls.set(name, polls);
+    const unknownPolls = options.unknownOperationPolls ?? 0;
+    if (polls <= unknownPolls) {
+      return answer(404, { error: { message: "operation not found" } });
+    }
+    if (polls <= unknownPolls + (options.runningOperationPolls ?? 0)) {
+      return answer(200, { name, status: "RUNNING" });
+    }
+    const kind = operations.get(name) ?? "";
+    return answer(200, {
+      name,
+      status: "DONE",
+      ...(options.failing?.includes(kind) ? operationError : {}),
+    });
   };
   const answer = (status: number, body?: unknown) =>
     new Response(body === undefined ? null : JSON.stringify(body), {
@@ -106,12 +155,7 @@ export const fakeCompute = (
   ) => {
     const operationMatch = path.match(/\/global\/operations\/([^/]+)$/);
     if (operationMatch && method === "GET") {
-      const kind = operations.get(operationMatch[1] ?? "") ?? "";
-      return answer(200, {
-        name: operationMatch[1],
-        status: "DONE",
-        ...(options.failing?.includes(kind) ? operationError : {}),
-      });
+      return pollOperation(operationMatch[1] ?? "");
     }
     const match = path.match(
       new RegExp(`/global/${collection}(?:/([^/]+))?(?:/([A-Za-z]+))?$`)
@@ -169,7 +213,7 @@ export const fakeCompute = (
     if (method !== "POST" || action === undefined) {
       return answer(500);
     }
-    const rules = (live.rules ?? []) as ReadonlyArray<Live>;
+    const rules = liveRules(live);
     const priority = Number(params.get("priority"));
     switch (action) {
       case "setSecurityPolicy":
@@ -203,7 +247,7 @@ export const fakeCompute = (
     const body =
       bytes === undefined
         ? undefined
-        : (JSON.parse(new TextDecoder().decode(bytes)) as Live);
+        : decodeLiveJson(new TextDecoder().decode(bytes));
     const params = new URLSearchParams(
       request.urlParams.params.map(([key, value]) => [key, String(value)])
     );
@@ -225,72 +269,75 @@ export const fakeCompute = (
     if (original !== undefined) {
       return respond(answer(200, original));
     }
-    lastOperation = undefined;
+    const appliedBefore = applied.length;
     const response = route(request.method, url.pathname, params, body);
-    const applied = lastOperation as
-      | { readonly kind: string; readonly body: Live }
-      | undefined;
-    if (applied === undefined) {
+    const started = applied.at(appliedBefore);
+    if (started === undefined) {
       return respond(response);
     }
     if (requestId !== null) {
-      answered.set(requestId, applied.body);
+      answered.set(requestId, started.body);
     }
-    if (replaceAfter?.kind === applied.kind) {
+    if (replaceAfter?.kind === started.kind) {
       objects.set(String(replaceAfter.with.name), { ...replaceAfter.with });
       replaceAfter = undefined;
     }
-    if (lostAnswers.has(applied.kind)) {
-      lostAnswers.delete(applied.kind);
+    if (lostAnswers.has(started.kind)) {
+      lostAnswers.delete(started.kind);
       return respond(answer(503));
     }
     return respond(response);
   });
-  return { client, calls, objects };
+  return { client, calls, objects, operationPolls };
 };
 
 export type FakeCompute = ReturnType<typeof fakeCompute>;
+
+/** The services the edge providers read while they run. */
+type LifecycleServices = HttpClient.HttpClient | Credentials | Stack | Stage;
 
 /**
  * Run a provider's lifecycle against the fake with synthetic credentials
  * and the stack and stage its ownership marker names.
  */
 export const runLifecycle = <R extends ResourceLike, A, E>(
-  providerLayer: Layer.Layer<Provider.Provider<R>, never, unknown>,
+  providerLayer: Layer.Layer<Provider.Provider<R>, never, LifecycleServices>,
   tag: Provider.Provider<R>,
   fake: FakeCompute,
-  use: (provider: Provider.ProviderService<R>) => Effect.Effect<A, E, unknown>
-) =>
-  Effect.runPromiseExit(
-    Effect.gen(function* () {
-      return yield* use((yield* tag) as Provider.ProviderService<R>);
-    }).pipe(
-      Effect.provide(
-        providerLayer.pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(
-              Layer.succeed(HttpClient.HttpClient, fake.client),
-              Layer.succeed(
-                Credentials,
-                Effect.succeed({
-                  accessToken: Redacted.make("synthetic-access-token"),
-                }) as typeof Credentials.Service
-              ),
-              Layer.succeed(Stack, { name: stackName } as never),
-              Layer.succeed(Stage, stageName)
-            )
-          )
-        ) as Layer.Layer<Provider.Provider<R>>
-      )
-    ) as Effect.Effect<A, E>
+  use: (
+    provider: Provider.ProviderService<R>
+  ) => Effect.Effect<A, E, LifecycleServices>
+) => {
+  const services = Layer.mergeAll(
+    Layer.succeed(HttpClient.HttpClient, fake.client),
+    Layer.succeed(
+      Credentials,
+      Effect.succeed({
+        accessToken: Redacted.make("synthetic-access-token"),
+      })
+    ),
+    Layer.succeed(Stack, {
+      name: stackName,
+      stage: stageName,
+      resources: {},
+      bindings: {},
+      actions: {},
+    }),
+    Layer.succeed(Stage, stageName)
   );
+  return Effect.runPromiseExit(
+    Effect.gen(function* () {
+      return yield* use(yield* tag);
+    }).pipe(Effect.provide(providerLayer.pipe(Layer.provideMerge(services))))
+  );
+};
 
 /** The lifecycle fields no edge provider reads. */
 export const lifecycleInput = (logicalId: string) => ({
   id: logicalId,
   fqn: logicalId,
   instanceId: "instance",
-  session: {} as never,
+  session: noopSession,
   bindings: [],
 });
 
@@ -310,6 +357,8 @@ export const failureTag = (exit: Exit.Exit<unknown, unknown>) => {
   }
   const error = exit.cause.reasons
     .map((reason) => (reason._tag === "Fail" ? reason.error : undefined))
-    .find((value) => value !== undefined) as { _tag?: string } | undefined;
-  return error?._tag;
+    .find((value) => value !== undefined);
+  return typeof error === "object" && error !== null && "_tag" in error
+    ? error._tag
+    : undefined;
 };
