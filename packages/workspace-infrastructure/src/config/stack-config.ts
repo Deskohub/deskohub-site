@@ -176,12 +176,28 @@ const BaseStackConfig = Schema.Struct({
       Schema.isPattern(/^projects\/[a-z0-9-]+\/notificationChannels\/[0-9]+$/)
     )
   ),
+  /**
+   * The digest of the OpenTelemetry collector sidecar image in the stage's
+   * Workspace repository. When set, every Workspace service runs the
+   * collector beside the app; when absent, services run the app alone.
+   */
+  telemetryCollectorImage: Schema.optionalKey(ImageDigest),
 });
+
+/**
+ * A disposable run's suffix for Cloud Tasks queue IDs. Cloud Tasks keeps a
+ * deleted queue's ID unavailable for days, so a sandbox proof that tears
+ * down and reruns needs IDs of its own.
+ */
+export const DisposableQueueSuffix = Schema.String.check(
+  Schema.isPattern(/^[a-z0-9](?:[a-z0-9-]{0,22}[a-z0-9])?$/)
+);
 
 export const SandboxStackConfig = Schema.Struct({
   ...BaseStackConfig.fields,
   stage: Schema.Literal("sandbox"),
   budget: SandboxBudget,
+  disposableQueueSuffix: Schema.optionalKey(DisposableQueueSuffix),
 }).annotate({ identifier: "SandboxStackConfig" });
 
 export const PreviewStackConfig = Schema.Struct({

@@ -1,0 +1,424 @@
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+/**
+ * Stateful fakes of the CLIs the sandbox proof runner calls, for offline
+ * behavioural tests. Every tool on PATH is a shell shim; the stateful ones
+ * run this file with real Bun, and the shared state ("world") lives in a
+ * JSON file so a fake can observe what an earlier call, or a still-running
+ * one, changed. `date` and `sleep` are plain shell over a fake clock file:
+ * the runner calls them in polling loops, and a `sleep` advances the clock
+ * so a deadline loop ends without waiting.
+ */
+
+/** One canned answer: the first rule whose tool and pattern match wins. */
+export interface FakeRule {
+  readonly tool: string;
+  /** A regular expression over the space-joined arguments. */
+  readonly pattern: string;
+  readonly stdout?: string;
+  readonly exit?: number;
+  /** World keys this call sets before it answers. */
+  readonly set?: Record<string, unknown>;
+}
+
+/** One state object: its live generation, if any, and every generation. */
+export interface FakeObject {
+  readonly live: string | null;
+  /** CRC32C of each generation the bucket still holds. */
+  readonly generations: Record<string, string>;
+}
+
+export interface FakeWorld {
+  readonly rules?: ReadonlyArray<FakeRule>;
+  /** Versioned objects of the state bucket, by object name. */
+  readonly objects?: Record<string, FakeObject>;
+  /** Whether an object listing also returns noncurrent generations. */
+  readonly listNoncurrent?: boolean;
+  readonly nextGeneration?: number;
+  /** Plain files copied to or from the state bucket, by object name. */
+  readonly files?: Record<string, string>;
+  /** `bun release.run.ts status` prints this. */
+  readonly status?: unknown;
+  /** The persisted Cloud Run generation of each service. */
+  readonly serviceGenerations?: Record<string, number>;
+  /**
+   * How a deliver started with an interrupt token behaves: `apply` persists
+   * a Cloud Run change, leaves a detached child in its own session and
+   * hangs; `exit` changes nothing and exits.
+   */
+  readonly interruptedDeliver?: "apply" | "exit" | "exit-after-failed-read";
+  /** Cloud Run service reads fail once an interrupted deliver has started. */
+  readonly serviceReadsFailAfterDeliver?: boolean;
+  /** Set by any deliver started with an interrupt token. */
+  readonly deliverStarted?: boolean;
+  /** Cloud Run service reads that failed, counted by the fake. */
+  readonly failedServiceReads?: number;
+  /** Set by an `apply` deliver: the detached child's process ID. */
+  readonly detachedChildPid?: number;
+  /** The fake clock's start, in epoch seconds; defaults to the real clock. */
+  readonly now?: number;
+  readonly [key: string]: unknown;
+}
+
+/** The writer token an `apply` deliver hands its detached Alchemy child. */
+const fakeWriterToken = "fake-writer-token";
+/** The lock holder an `apply` deliver records: its token's fingerprint. */
+export const fakeWriterFingerprint = createHash("sha256")
+  .update(fakeWriterToken)
+  .digest("hex")
+  .slice(0, 12);
+
+const realBun = process.execPath;
+const realDate = Bun.which("date") ?? "/bin/date";
+const realSetsid = Bun.which("setsid") ?? "/usr/bin/setsid";
+const realSleep = Bun.which("sleep") ?? "/bin/sleep";
+const fakeTools = ["gcloud", "bun", "curl", "docker", "terraform"];
+
+/**
+ * `date +%s` and `date -u +%s` read the fake clock; any other form is the
+ * real `date`. A `sleep` advances the clock by its whole seconds, rounded
+ * up, and really waits only briefly, so loops waiting on real processes
+ * still yield to them.
+ */
+const clockShims = (clockFile: string): Record<string, string> => ({
+  date: `#!/bin/sh
+if [ "$*" = "+%s" ] || [ "$*" = "-u +%s" ]; then
+  exec cat "${clockFile}"
+fi
+exec "${realDate}" "$@"
+`,
+  sleep: `#!/bin/sh
+whole=\${1%%.*}
+case "$1" in *.*) whole=$((\${whole:-0} + 1)) ;; esac
+echo $(($(cat "${clockFile}") + \${whole:-0})) > "${clockFile}.next"
+mv "${clockFile}.next" "${clockFile}"
+exec "${realSleep}" 0.02
+`,
+});
+
+/** A line on the fake tool's stdout. */
+const print = (line: string) => {
+  process.stdout.write(`${line}\n`);
+};
+
+const readWorld = (path: string): FakeWorld =>
+  JSON.parse(readFileSync(path, "utf8")) as FakeWorld;
+
+const writeWorld = (path: string, world: FakeWorld) => {
+  writeFileSync(`${path}.next`, JSON.stringify(world));
+  renameSync(`${path}.next`, path);
+};
+
+export interface ProofFakes {
+  readonly env: Record<string, string>;
+  readonly proofDir: string;
+  readonly world: () => FakeWorld;
+  readonly calls: () => ReadonlyArray<string>;
+}
+
+/** Run with fake tools on PATH and a fresh proof directory. */
+export const withProofFakes = <A>(
+  world: FakeWorld,
+  run: (fakes: ProofFakes) => A
+): A => {
+  const dir = mkdtempSync(join(tmpdir(), "sandbox-proof-fakes-"));
+  const bin = join(dir, "bin");
+  const proofDir = join(dir, "proof");
+  const worldFile = join(dir, "world.json");
+  const callsLog = join(dir, "calls.log");
+  const clockFile = join(dir, "clock");
+  mkdirSync(bin);
+  mkdirSync(proofDir);
+  writeWorld(worldFile, world);
+  writeFileSync(clockFile, `${world.now ?? Math.floor(Date.now() / 1000)}\n`);
+  const shims: Record<string, string> = clockShims(clockFile);
+  for (const tool of fakeTools) {
+    shims[tool] =
+      `#!/bin/sh\nexec "${realBun}" "${import.meta.path}" ${tool} "$@"\n`;
+  }
+  for (const [tool, script] of Object.entries(shims)) {
+    const shim = join(bin, tool);
+    writeFileSync(shim, script);
+    chmodSync(shim, 0o755);
+  }
+  try {
+    return run({
+      env: {
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        SANDBOX_PROOF_DIR: proofDir,
+        FAKE_WORLD: worldFile,
+        FAKE_CALLS: callsLog,
+      },
+      proofDir,
+      world: () => readWorld(worldFile),
+      calls: () =>
+        existsSync(callsLog)
+          ? readFileSync(callsLog, "utf8").split("\n").filter(Boolean)
+          : [],
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+// ------------------------------------------------------------ the fake tool
+
+const flag = (args: ReadonlyArray<string>, name: string) =>
+  args.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
+
+const objectName = (url: string, bucketPrefix = /^gs:\/\/[^/]+\//) =>
+  url.replace(bucketPrefix, "");
+
+/** gcloud storage against the versioned state-object store. */
+const fakeStorage = (
+  args: ReadonlyArray<string>,
+  world: FakeWorld,
+  save: (next: FakeWorld) => void
+): number | undefined => {
+  const [group, verb] = args;
+  if (group !== "storage") {
+    return undefined;
+  }
+  const objects = { ...(world.objects ?? {}) };
+  const positional = args.filter((arg) => !arg.startsWith("--"));
+  if (verb === "objects" && positional[2] === "list") {
+    const prefix = objectName(positional[3] ?? "").replace(/\*+$/, "");
+    for (const [name, object] of Object.entries(objects)) {
+      if (!name.startsWith(prefix)) continue;
+      const liveCopies = object.live === null ? 0 : 1;
+      const copies = world.listNoncurrent
+        ? Object.keys(object.generations).length
+        : liveCopies;
+      for (let copy = 0; copy < copies; copy += 1) {
+        print(name);
+      }
+    }
+    return 0;
+  }
+  if (verb === "objects" && positional[2] === "describe") {
+    const name = objectName(positional[3] ?? "");
+    const object = objects[name];
+    if (object?.live == null) {
+      console.error(`ERROR: gs://bucket/${name} not found`);
+      return 1;
+    }
+    const format = flag(args, "--format") ?? "";
+    print(
+      format.includes("value(generation)")
+        ? object.live
+        : JSON.stringify({
+            name,
+            generation: Number(object.live),
+            crc32c_hash: object.generations[object.live],
+          })
+    );
+    return 0;
+  }
+  if (verb === "cp" || verb === "rm") {
+    const [source = "", target = ""] = positional.slice(2);
+    const remote = verb === "rm" ? source : target;
+    if (verb === "cp" && !source.startsWith("gs://")) {
+      // A local file uploaded as a plain object.
+      const files = { ...(world.files ?? {}) };
+      files[objectName(target)] = readFileSync(source, "utf8");
+      save({ ...world, files });
+      return 0;
+    }
+    if (verb === "cp" && !target.startsWith("gs://")) {
+      const content = world.files?.[objectName(source)];
+      if (content === undefined) {
+        console.error("ERROR: not found");
+        return 1;
+      }
+      writeFileSync(target, content);
+      return 0;
+    }
+    const name = objectName(remote);
+    const current = objects[name] ?? { live: null, generations: {} };
+    const precondition = flag(args, "--if-generation-match");
+    if (precondition !== undefined && precondition !== (current.live ?? "0")) {
+      console.error("ERROR: 412 Precondition Failed");
+      return 1;
+    }
+    if (verb === "rm") {
+      if (current.live === null) {
+        if (world.files?.[name] === undefined) return 1;
+        const files = { ...(world.files ?? {}) };
+        delete files[name];
+        save({ ...world, files });
+        return 0;
+      }
+      objects[name] = { ...current, live: null };
+      save({ ...world, objects });
+      return 0;
+    }
+    const [sourceObject = "", sourceGeneration = ""] =
+      objectName(source).split("#");
+    const crc = objects[sourceObject]?.generations[sourceGeneration];
+    if (crc === undefined) {
+      console.error("ERROR: source generation not found");
+      return 1;
+    }
+    const generation = String(world.nextGeneration ?? 1000);
+    objects[name] = {
+      live: generation,
+      generations: { ...current.generations, [generation]: crc },
+    };
+    save({ ...world, objects, nextGeneration: Number(generation) + 1 });
+    return 0;
+  }
+  return undefined;
+};
+
+/** A deliver run under an interrupt token: see `interruptedDeliver`. */
+const interruptedDeliver = async (
+  world: FakeWorld,
+  save: (next: FakeWorld) => void
+) => {
+  save({ ...world, deliverStarted: true });
+  if (world.interruptedDeliver === "exit-after-failed-read") {
+    // Keep running, changing nothing, until the runner has seen a read fail.
+    const worldFile = process.env.FAKE_WORLD ?? "";
+    while ((readWorld(worldFile).failedServiceReads ?? 0) < 1) {
+      await Bun.sleep(10);
+    }
+    return 0;
+  }
+  if (world.interruptedDeliver !== "apply") {
+    return 0;
+  }
+  const pidFile = `${process.env.FAKE_WORLD}.child`;
+  // A detached child in its own session, like Alchemy under Bun's spawner.
+  Bun.spawn(
+    [realSetsid, "sh", "-c", `echo $$ > "${pidFile}"; exec tail -f /dev/null`],
+    {
+      stdio: ["ignore", "ignore", "ignore"],
+      env: { ...process.env, WORKSPACE_RELEASE_WRITER: fakeWriterToken },
+    }
+  );
+  while (!existsSync(pidFile) || readFileSync(pidFile, "utf8").trim() === "") {
+    await Bun.sleep(10);
+  }
+  const generations = { ...(world.serviceGenerations ?? {}) };
+  generations["workspace-web"] = (generations["workspace-web"] ?? 1) + 1;
+  save({
+    ...world,
+    serviceGenerations: generations,
+    detachedChildPid: Number(readFileSync(pidFile, "utf8").trim()),
+    status: {
+      version: "1",
+      record: {
+        generation: 7,
+        writer: { holder: fakeWriterFingerprint },
+        pendingApply: null,
+      },
+    },
+  });
+  // Hang like an apply in flight until killed.
+  setInterval(() => undefined, 1000);
+  await new Promise(() => undefined);
+  return 0;
+};
+
+const runFake = async (tool: string, args: ReadonlyArray<string>) => {
+  const worldFile = process.env.FAKE_WORLD ?? "";
+  appendFileSync(process.env.FAKE_CALLS ?? "", `${tool} ${args.join(" ")}\n`);
+  let world = readWorld(worldFile);
+  const save = (next: FakeWorld) => {
+    world = next;
+    writeWorld(worldFile, next);
+  };
+  if (tool === "bun" && args[0] === "scripts/sandbox-stack-config.ts") {
+    return Bun.spawnSync([realBun, ...args], {
+      stdio: ["inherit", "inherit", "inherit"],
+    }).exitCode;
+  }
+  if (
+    tool === "bun" &&
+    args[0] === "release.run.ts" &&
+    args[1] === "deliver" &&
+    process.env.SANDBOX_PROOF_INTERRUPT_TOKEN !== undefined
+  ) {
+    return interruptedDeliver(world, save);
+  }
+  const joined = args.join(" ");
+  const rule = world.rules?.find(
+    (candidate) =>
+      candidate.tool === tool && new RegExp(candidate.pattern).test(joined)
+  );
+  if (rule !== undefined) {
+    if (rule.set !== undefined) {
+      save({ ...world, ...rule.set });
+    }
+    if (rule.stdout !== undefined) {
+      print(rule.stdout);
+    }
+    return rule.exit ?? 0;
+  }
+  if (tool === "bun" && args[0] === "release.run.ts") {
+    if (args[1] === "status") {
+      print(JSON.stringify(world.status ?? {}));
+      return 0;
+    }
+    return 0;
+  }
+  if (tool === "curl") {
+    const object = joined.match(
+      /storage\.googleapis\.com\/storage\/v1\/b\/([^/]+)\/o\/([^?\s]+)/
+    );
+    if (object !== null) {
+      // The JSON API object read, with the HTTP status `-w` appends.
+      const [, bucket = "", encoded = ""] = object;
+      const name = decodeURIComponent(encoded);
+      const stored = world.objects?.[name];
+      const live = stored?.live;
+      print(
+        live == null
+          ? `${JSON.stringify({ error: { code: 404, message: `No such object: ${bucket}/${name}` } })}\n404`
+          : `${JSON.stringify({ name, generation: live, crc32c: stored?.generations[live] })}\n200`
+      );
+      return 0;
+    }
+  }
+  if (tool === "gcloud") {
+    if (args[0] === "auth" && args[1] === "print-access-token") {
+      print("fake-access-token");
+      return 0;
+    }
+    if (args[0] === "run" && args[1] === "services" && args[2] === "describe") {
+      if (world.serviceReadsFailAfterDeliver && world.deliverStarted) {
+        save({
+          ...world,
+          failedServiceReads: (world.failedServiceReads ?? 0) + 1,
+        });
+        process.stderr.write("ERROR: 503 Service Unavailable\n");
+        return 1;
+      }
+      print(String(world.serviceGenerations?.[args[3] ?? ""] ?? 1));
+      return 0;
+    }
+    const storage = fakeStorage(args, world, save);
+    if (storage !== undefined) {
+      return storage;
+    }
+  }
+  return 0;
+};
+
+if (import.meta.main) {
+  const [tool = "", ...args] = process.argv.slice(2);
+  process.exitCode = await runFake(tool, args);
+}

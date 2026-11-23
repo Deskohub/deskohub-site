@@ -13,12 +13,19 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import packageJson from "../package.json";
-import { ImageDigest } from "./config/stack-config";
+import {
+  decodeWorkspaceStackConfig,
+  ImageDigest,
+  type WorkspaceStackConfig,
+} from "./config/stack-config";
 import {
   previewConfig,
   productionConfig,
   sandboxConfig,
+  sandboxConfigInput,
 } from "./config/stack-config.test-utils";
+import { workspaceQueueContracts } from "./contracts/queue-contracts";
+import { workspaceScheduleContracts } from "./contracts/schedule-contracts";
 import { ReleaseServiceReadback } from "./release/release-platform";
 import { workersServing } from "./release/release-readback.test-utils";
 import { promote, settleApply, stage } from "./release/release-reconciler";
@@ -45,6 +52,8 @@ import {
   secretAccessorGrants,
   workerInvokerGrants,
 } from "./resources/platform-declarations";
+import { queueProps } from "./resources/queue-declarations";
+import { scheduleJobProps } from "./resources/schedule-declarations";
 import {
   templateSpecAnnotation,
   webServiceProps,
@@ -190,14 +199,17 @@ describe("Alchemy beta.87 surface", () => {
     expect(countBy(types)).toEqual({
       "GCP.ArtifactRegistry.Repository": 1,
       "GCP.Storage.Bucket": 1,
-      "GCP.IAM.Member": 1,
+      "GCP.IAM.Member": 2,
       "GCP.CloudTasks.Queue": 6,
       "GCP.CloudScheduler.Job": 10,
       "GCP.Monitoring.AlertPolicy": 3,
     });
-    // The publisher grant names the declared bucket's output.
-    expect(isOutput(enabled.resources.MobileUpdatesPublisher?.Props.name)).toBe(
-      true
+    // Both publisher grants name the declared bucket's output.
+    for (const id of ["MobileUpdatesPublisher", "MobileUpdatesPublisherRead"]) {
+      expect(isOutput(enabled.resources[id]?.Props.name)).toBe(true);
+    }
+    expect(enabled.resources.MobileUpdatesPublisherRead?.Props.role).toBe(
+      "roles/storage.legacyObjectReader"
     );
   });
 
@@ -242,7 +254,7 @@ describe("Alchemy beta.87 surface", () => {
       countBy(Object.values(resources).map((entry) => entry.Type))
     ).toMatchObject({
       "GCP.Run.Service": 3,
-      "GCP.IAM.Member": 5,
+      "GCP.IAM.Member": 6,
     });
     for (const id of ["TasksWorkerInvoker", "SchedulerWorkerInvoker"]) {
       expect(isOutput(resources[id]?.Props.name)).toBe(true);
@@ -550,6 +562,14 @@ describe("Alchemy beta.87 surface", () => {
       env: [
         { name: "WORKSPACE_RUNTIME_ROLE", value: "tasks-worker" },
         {
+          name: "WORKSPACE_TASKS_AUDIENCE",
+          value: tasks.customAudiences?.[0],
+        },
+        {
+          name: "WORKSPACE_TASKS_INVOKER_EMAIL",
+          value: sandboxConfig.serviceAccounts.tasksInvoker,
+        },
+        {
           name: "DATABASE_URL",
           valueSource: {
             secretKeyRef: {
@@ -564,8 +584,112 @@ describe("Alchemy beta.87 surface", () => {
     expect(scheduler.customAudiences).not.toEqual(tasks.customAudiences);
     // The secret is not granted to the scheduler worker.
     expect(scheduler.template?.containers?.[0]).toMatchObject({
-      env: [{ name: "WORKSPACE_RUNTIME_ROLE", value: "scheduler-worker" }],
+      env: [
+        { name: "WORKSPACE_RUNTIME_ROLE", value: "scheduler-worker" },
+        {
+          name: "WORKSPACE_SCHEDULER_AUDIENCE",
+          value: scheduler.customAudiences?.[0],
+        },
+        {
+          name: "WORKSPACE_SCHEDULER_INVOKER_EMAIL",
+          value: sandboxConfig.serviceAccounts.schedulerInvoker,
+        },
+      ],
     });
+  });
+
+  test("workers accept the invokers their queues and schedules sign as", () => {
+    const record = servingRecord();
+    const [queueContract] = workspaceQueueContracts;
+    const [scheduleContract] = workspaceScheduleContracts;
+    if (queueContract === undefined || scheduleContract === undefined) {
+      throw new Error("expected a queue and a schedule contract");
+    }
+    const queueTarget = queueProps(sandboxConfig, queueContract);
+    const jobTarget = scheduleJobProps(sandboxConfig, scheduleContract);
+    const environment = (workload: "tasks-worker" | "scheduler-worker") => {
+      const containers = (workerServiceProps(sandboxConfig, workload, digest)
+        .template?.containers ?? []) as Array<{
+        env: Array<{ name: string; value: string }>;
+      }>;
+      const [app] = containers;
+      return Object.fromEntries(
+        (app?.env ?? []).map(({ name, value }) => [name, value])
+      );
+    };
+    expect(environment("tasks-worker")).toMatchObject({
+      WORKSPACE_TASKS_AUDIENCE: queueTarget.httpTarget?.oidcToken?.audience,
+      WORKSPACE_TASKS_INVOKER_EMAIL:
+        queueTarget.httpTarget?.oidcToken?.serviceAccountEmail,
+    });
+    expect(environment("scheduler-worker")).toMatchObject({
+      WORKSPACE_SCHEDULER_AUDIENCE: jobTarget.httpTarget?.oidcToken?.audience,
+      WORKSPACE_SCHEDULER_INVOKER_EMAIL:
+        jobTarget.httpTarget?.oidcToken?.serviceAccountEmail,
+    });
+    // The public web service accepts no Google invoker.
+    const web = webServiceProps(sandboxConfig, record, now);
+    expect(
+      JSON.stringify(web?.template?.containers?.[0]).includes("INVOKER")
+    ).toBe(false);
+  });
+
+  test("adds the collector sidecar only when the stage names its image", () => {
+    const record = servingRecord();
+    const collectorDigest = `sha256:${"c".repeat(64)}`;
+    const withCollector = Effect.runSync(
+      decodeWorkspaceStackConfig({
+        ...sandboxConfigInput,
+        telemetryCollectorImage: collectorDigest,
+      })
+    );
+    const declared = (config: WorkspaceStackConfig) => [
+      webServiceProps(config, record, now),
+      workerServiceProps(config, "tasks-worker", digest),
+      workerServiceProps(config, "scheduler-worker", digest),
+    ];
+
+    // Without the field every service runs the app alone, unnamed.
+    for (const props of declared(sandboxConfig)) {
+      const containers = props?.template?.containers ?? [];
+      expect(containers).toHaveLength(1);
+      expect(containers[0]).not.toHaveProperty("name");
+      expect(containers[0]).not.toHaveProperty("dependsOn");
+      expect(JSON.stringify(containers)).not.toContain("OTLP");
+    }
+
+    for (const props of declared(withCollector)) {
+      const [app, collector, ...rest] = (props?.template?.containers ??
+        []) as Array<Record<string, unknown>>;
+      expect(rest).toEqual([]);
+      // The app stays first, so readback reads its image as the template's.
+      expect(app).toMatchObject({
+        name: "workspace",
+        image: `europe-west1-docker.pkg.dev/deskohub-ws-sandbox/workspace/workspace@${digest}`,
+        ports: [{ containerPort: 8080 }],
+        dependsOn: ["otel-collector"],
+      });
+      expect(app?.env).toContainEqual({
+        name: "WORKSPACE_OTLP_ENDPOINT",
+        value: "http://127.0.0.1:4318",
+      });
+      // Only the app takes ingress; the collector serves its health port.
+      expect(collector).toEqual({
+        name: "otel-collector",
+        image: `europe-west1-docker.pkg.dev/deskohub-ws-sandbox/workspace/workspace-otel-collector@${collectorDigest}`,
+        startupProbe: expect.objectContaining({
+          httpGet: { path: "/", port: 13133 },
+        }),
+        livenessProbe: expect.objectContaining({
+          httpGet: { path: "/", port: 13133 },
+        }),
+      });
+    }
+
+    // The sidecar is part of the web spec, so it mints its own revision.
+    expect(webTemplateSpecFingerprint(withCollector, digest)).not.toBe(
+      webTemplateSpecFingerprint(sandboxConfig, digest)
+    );
   });
 
   test("plans the web service from the release record only", () => {

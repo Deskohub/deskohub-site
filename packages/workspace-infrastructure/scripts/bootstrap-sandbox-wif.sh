@@ -120,11 +120,85 @@ elif [[ -z "$project_number" ]]; then
 fi
 
 if [[ "$dry_run" == false ]]; then
-  billing_enabled="$(gcloud billing projects describe "$project_id" --format='value(billingEnabled)')"
+  # Billing reads charge quota to the sandbox, not the caller's default project.
+  billing_enabled="$(CLOUDSDK_BILLING_QUOTA_PROJECT="$project_id" \
+    gcloud billing projects describe "$project_id" --format='value(billingEnabled)')"
   [[ "$billing_enabled" == "True" ]] || fail "billing is not enabled on $project_id; link the approved billing account first"
 fi
 
 sa_email() { echo "$1@${project_id}.iam.gserviceaccount.com"; }
+
+# Like run, but retries Google's per-minute quota and rate refusals with
+# backoff (service accounts: 5 creations a minute) and treats an already
+# existing resource as success, so reruns and races converge.
+run_with_quota_retry() {
+  local attempt=1 max_attempts=6 delay=15 output
+  printf '+'
+  printf ' %q' "$@"
+  printf '\n'
+  [[ "$dry_run" == false ]] || return 0
+  while true; do
+    if output="$("$@" 2>&1)"; then
+      [[ -z "$output" ]] || printf '%s\n' "$output"
+      return 0
+    fi
+    if grep -qiE 'already exists|ALREADY_EXISTS' <<<"$output"; then
+      echo "already exists; continuing"
+      return 0
+    fi
+    if ((attempt < max_attempts)) &&
+      grep -qiE 'RESOURCE_EXHAUSTED|quota|rate limit|rateLimitExceeded|too many requests|\b429\b' <<<"$output"; then
+      echo "quota or rate limit (attempt ${attempt}/${max_attempts}); retrying in ${delay}s" >&2
+      sleep "$delay"
+      attempt=$((attempt + 1))
+      delay=$((delay * 2 > 60 ? 60 : delay * 2))
+      continue
+    fi
+    printf '%s\n' "$output" >&2
+    return 1
+  done
+}
+
+# Sets the approved spend and teardown labels through Cloud Resource
+# Manager v3, keeping every other label: `updateMask=labels` replaces the
+# whole map, so live runs merge with the labels read first. The access
+# token reaches curl on stdin, never argv or output.
+update_project_labels() {
+  local existing="" pair key body="" url response token
+  local -A labels=()
+  local -a pairs=()
+  url="https://cloudresourcemanager.googleapis.com/v3/projects/${project_id}?updateMask=labels"
+  if [[ "$dry_run" == false ]]; then
+    # Checked: a failed read must stop here, never drop existing labels.
+    existing="$(gcloud projects describe "$project_id" --format='value(labels)')" ||
+      fail "could not read the labels of $project_id"
+  fi
+  IFS=';' read -ra pairs <<<"$existing"
+  for pair in "${pairs[@]}"; do
+    [[ -n "$pair" ]] || continue
+    [[ "$pair" == *=* && "$pair" != *[\"\\]* ]] || fail "unexpected label on $project_id: $pair"
+    labels["${pair%%=*}"]="${pair#*=}"
+  done
+  labels[workspace-sandbox-max-spend]="$spend_label"
+  labels[workspace-sandbox-teardown]="$teardown_date"
+  while IFS= read -r key; do
+    body+="${body:+,}\"${key}\":\"${labels[$key]}\""
+  done < <(printf '%s\n' "${!labels[@]}" | LC_ALL=C sort)
+  body="{\"labels\":{${body}}}"
+  [[ "$dry_run" == false ]] || echo "# live runs merge these labels with the project's existing labels"
+  printf '+'
+  printf ' %q' curl -sS --fail-with-body -X PATCH "$url" \
+    -H "Authorization: Bearer <gcloud auth print-access-token>" \
+    -H "Content-Type: application/json" --data "$body"
+  printf '\n'
+  [[ "$dry_run" == false ]] || return 0
+  token="$(gcloud auth print-access-token)" || fail "could not get an access token"
+  response="$(curl -sS --fail-with-body -X PATCH "$url" -H @- \
+    -H "Content-Type: application/json" --data "$body" <<<"Authorization: Bearer ${token}")" || {
+    printf '%s\n' "$response" >&2
+    fail "could not update the labels of $project_id"
+  }
+}
 deployer="$(sa_email workspace-deployer)"
 runtime_accounts=(workspace-web workspace-tasks-worker workspace-scheduler-worker)
 invoker_accounts=(workspace-tasks-invoker workspace-scheduler-invoker)
@@ -139,20 +213,19 @@ echo "== APIs"
 run gcloud services enable --project "$project_id" \
   artifactregistry.googleapis.com cloudbilling.googleapis.com \
   cloudresourcemanager.googleapis.com cloudscheduler.googleapis.com \
-  cloudtasks.googleapis.com compute.googleapis.com iam.googleapis.com \
-  iamcredentials.googleapis.com logging.googleapis.com \
+  cloudtasks.googleapis.com cloudtrace.googleapis.com compute.googleapis.com \
+  iam.googleapis.com iamcredentials.googleapis.com logging.googleapis.com \
   monitoring.googleapis.com run.googleapis.com secretmanager.googleapis.com \
-  storage.googleapis.com sts.googleapis.com
+  storage.googleapis.com sts.googleapis.com telemetry.googleapis.com
 
 echo "== Approved spend and teardown"
 spend_label="$(echo "${max_spend}-${currency}" | tr '[:upper:]' '[:lower:]')"
-run gcloud projects update "$project_id" \
-  --update-labels "workspace-sandbox-max-spend=${spend_label},workspace-sandbox-teardown=${teardown_date}"
+update_project_labels
 
 echo "== Service accounts"
 for account in workspace-deployer "${runtime_accounts[@]}" "${invoker_accounts[@]}" "$publisher_account"; do
   exists gcloud iam service-accounts describe "$(sa_email "$account")" --project "$project_id" ||
-    run gcloud iam service-accounts create "$account" --project "$project_id" \
+    run_with_quota_retry gcloud iam service-accounts create "$account" --project "$project_id" \
     --display-name "Workspace ${account#workspace-}"
 done
 
@@ -163,6 +236,16 @@ for account in "${runtime_accounts[@]}"; do
   run gcloud iam service-accounts add-iam-policy-binding "$(sa_email workspace-tasks-invoker)" \
     --project "$project_id" --member "serviceAccount:$(sa_email "$account")" \
     --role roles/iam.serviceAccountUser --format=none
+done
+
+echo "== Runtime accounts may write traces"
+# The collector sidecar exports OTLP traces through the Telemetry API;
+# Cloud Trace's agent role covers the legacy Trace API.
+for account in "${runtime_accounts[@]}"; do
+  for role in roles/telemetry.tracesWriter roles/cloudtrace.agent; do
+    run gcloud projects add-iam-policy-binding "$project_id" --condition=None --quiet \
+      --member "serviceAccount:$(sa_email "$account")" --role "$role" --format=none
+  done
 done
 
 echo "== Google service agents may act as and mint OIDC tokens for their invokers"
@@ -254,7 +337,8 @@ if [[ "$grant_deploy_roles" == true ]]; then
   for role in roles/run.admin roles/cloudtasks.admin roles/cloudscheduler.admin \
     roles/artifactregistry.admin roles/storage.admin roles/monitoring.alertPolicyEditor \
     roles/compute.loadBalancerAdmin roles/compute.securityAdmin \
-    roles/logging.configWriter roles/serviceusage.serviceUsageConsumer; do
+    roles/logging.configWriter roles/logging.viewer roles/cloudtrace.user \
+    roles/serviceusage.serviceUsageConsumer; do
     run gcloud projects add-iam-policy-binding "$project_id" --condition=None --quiet \
       --member "serviceAccount:${deployer}" --role "$role" --format=none
   done

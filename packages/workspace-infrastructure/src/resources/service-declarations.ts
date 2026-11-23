@@ -21,6 +21,7 @@ import {
   workloadAudience,
   workloadRuntimeServiceAccount,
   workloadServiceIds,
+  workspaceArtifactRepositoryId,
   workspaceImageReference,
   workspaceLabels,
 } from "./workload-names";
@@ -57,18 +58,120 @@ const workerTimeout = (workload: "tasks-worker" | "scheduler-worker") =>
     )
   );
 
-const container = (
+/**
+ * The OIDC identity and audience a private worker accepts, the ones its
+ * queue or schedule signs tokens with; the web service accepts none.
+ */
+const invokerEnvironment = (
+  config: WorkspaceStackConfig,
+  workload: WorkspaceWorkload
+) => {
+  switch (workload) {
+    case "web":
+      return [];
+    case "tasks-worker":
+      return [
+        {
+          name: "WORKSPACE_TASKS_AUDIENCE",
+          value: workloadAudience(config, workload),
+        },
+        {
+          name: "WORKSPACE_TASKS_INVOKER_EMAIL",
+          value: config.serviceAccounts.tasksInvoker,
+        },
+      ];
+    case "scheduler-worker":
+      return [
+        {
+          name: "WORKSPACE_SCHEDULER_AUDIENCE",
+          value: workloadAudience(config, workload),
+        },
+        {
+          name: "WORKSPACE_SCHEDULER_INVOKER_EMAIL",
+          value: config.serviceAccounts.schedulerInvoker,
+        },
+      ];
+  }
+};
+
+/** The collector sidecar image in the stage's Workspace repository. */
+export const workspaceTelemetryCollectorImageName = "workspace-otel-collector";
+
+/** The name of the app container once the revision has a sidecar. */
+export const workspaceAppContainerName = "workspace";
+
+/** The name of the OpenTelemetry collector sidecar container. */
+export const telemetryCollectorContainerName = "otel-collector";
+
+/**
+ * The collector's loopback OTLP/HTTP receiver, as
+ * `apps/deskohub-workspace/otel-collector.cloudrun.yaml` binds it.
+ */
+export const telemetryCollectorOtlpEndpoint = "http://127.0.0.1:4318";
+
+/** The collector's `health_check` extension port, from the same config. */
+const telemetryCollectorHealthPort = 13133;
+
+const telemetryCollectorContainer = (
+  config: WorkspaceStackConfig,
+  imageDigest: ImageDigest
+) => ({
+  name: telemetryCollectorContainerName,
+  image: `${config.region}-docker.pkg.dev/${config.projectId}/${workspaceArtifactRepositoryId}/${workspaceTelemetryCollectorImageName}@${imageDigest}`,
+  // The app starts only once the collector reports healthy.
+  startupProbe: {
+    httpGet: { path: "/", port: telemetryCollectorHealthPort },
+    periodSeconds: 2,
+    timeoutSeconds: 1,
+    failureThreshold: 30,
+  },
+  livenessProbe: {
+    httpGet: { path: "/", port: telemetryCollectorHealthPort },
+    periodSeconds: 30,
+    timeoutSeconds: 5,
+    failureThreshold: 3,
+  },
+});
+
+/**
+ * The containers of a revision: the app alone, or, when the stage names a
+ * collector image, the named app container that alone takes ingress and
+ * starts after the collector sidecar it exports spans to.
+ */
+const containers = (
   config: WorkspaceStackConfig,
   workload: WorkspaceWorkload,
   imageDigest: ImageDigest
-) => ({
-  image: workspaceImageReference(config, imageDigest),
-  ports: [{ containerPort: 8080 }],
-  env: [
-    { name: "WORKSPACE_RUNTIME_ROLE", value: workload },
-    ...secretEnvironment(config, workload),
-  ],
-});
+) => {
+  const app = {
+    image: workspaceImageReference(config, imageDigest),
+    ports: [{ containerPort: 8080 }],
+    env: [
+      { name: "WORKSPACE_RUNTIME_ROLE", value: workload },
+      ...invokerEnvironment(config, workload),
+      ...secretEnvironment(config, workload),
+    ],
+  };
+  const collectorImage = config.telemetryCollectorImage;
+  if (collectorImage === undefined) {
+    return [app];
+  }
+  return [
+    {
+      name: workspaceAppContainerName,
+      ...app,
+      env: [
+        ...app.env,
+        {
+          name: "WORKSPACE_OTLP_ENDPOINT",
+          value: telemetryCollectorOtlpEndpoint,
+        },
+      ],
+      dependsOn: [telemetryCollectorContainerName],
+    },
+    telemetryCollectorContainer(config, collectorImage),
+  ];
+};
 
 /**
  * The template annotation carrying the fingerprint of the template spec,
@@ -87,7 +190,7 @@ const webTemplateSpec = (
     minInstanceCount: 0,
     maxInstanceCount: config.capacity.webMaxInstances,
   },
-  containers: [container(config, "web", imageDigest)],
+  containers: containers(config, "web", imageDigest),
 });
 
 /**
@@ -244,6 +347,6 @@ export const workerServiceProps = (
       minInstanceCount: 0,
       maxInstanceCount: config.capacity.workerMaxInstances,
     },
-    containers: [container(config, workload, imageDigest)],
+    containers: containers(config, workload, imageDigest),
   },
 });

@@ -30,6 +30,7 @@ import {
   artifactRepositoryProps,
   mobileUpdatesBucketProps,
   mobileUpdatesPublisherGrant,
+  mobileUpdatesPublisherReadGrant,
   secretAccessorGrants,
   workerInvokerGrants,
 } from "./resources/platform-declarations";
@@ -62,11 +63,14 @@ export const declareWorkspaceFoundation = (config: WorkspaceStackConfig) =>
       "MobileUpdates",
       mobileUpdatesBucketProps(config)
     );
-    const publisher = mobileUpdatesPublisherGrant(config);
-    yield* IAM.Member(publisher.id, {
-      ...publisher.props,
-      name: mobileUpdates.bucketName,
-    });
+    yield* Effect.forEach(
+      [
+        mobileUpdatesPublisherGrant(config),
+        mobileUpdatesPublisherReadGrant(config),
+      ],
+      (grant) =>
+        IAM.Member(grant.id, { ...grant.props, name: mobileUpdates.bucketName })
+    );
     const queues = yield* Effect.forEach(workspaceQueueContracts, (contract) =>
       CloudTasks.Queue(
         `Queue${pascal(contract.queueId)}`,

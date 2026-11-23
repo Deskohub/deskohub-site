@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import * as Duration from "effect/Duration";
-import { sandboxConfig } from "../config/stack-config.test-utils";
+import * as Effect from "effect/Effect";
+import {
+  decodeWorkspaceStackConfig,
+  type WorkspaceStackConfig,
+} from "../config/stack-config";
+import {
+  sandboxConfig,
+  sandboxConfigInput,
+} from "../config/stack-config.test-utils";
 import { queueProps } from "../resources/queue-declarations";
 import { scheduleJobProps } from "../resources/schedule-declarations";
 import { cloudTasksLimits, workspaceQueueContracts } from "./queue-contracts";
@@ -111,6 +119,27 @@ describe("queue contracts", () => {
       "workspace-email-automation-unit",
       "workspace-reservation-hold-cleanup",
     ]);
+  });
+
+  test("give each sandbox run's queues the run's disposable suffix", () => {
+    const queueIds = (config: WorkspaceStackConfig) =>
+      workspaceQueueContracts.map(
+        (contract) => queueProps(config, contract).queueId
+      );
+    const contractIds = workspaceQueueContracts.map(
+      (contract) => contract.queueId
+    );
+    expect(queueIds(sandboxConfig)).toEqual(contractIds);
+    expect(
+      queueIds(
+        Effect.runSync(
+          decodeWorkspaceStackConfig({
+            ...sandboxConfigInput,
+            disposableQueueSuffix: "r111-2",
+          })
+        )
+      )
+    ).toEqual(contractIds.map((queueId) => `${queueId}-r111-2`));
   });
 
   test("declare queues with the shared retry policy and a pinned private target", () => {

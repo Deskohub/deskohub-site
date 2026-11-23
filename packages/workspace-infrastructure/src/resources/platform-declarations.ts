@@ -61,6 +61,25 @@ export const mobileUpdatesPublisherGrant = (
   },
 });
 
+/**
+ * The mobile publisher may read an object it was refused to create: after
+ * `ifGenerationMatch=0` answers HTTP 412, publishing verifies the existing
+ * object instead of overwriting it. `legacyObjectReader` grants only
+ * `storage.objects.get`, so the publisher still cannot list, delete or
+ * replace objects.
+ */
+export const mobileUpdatesPublisherReadGrant = (
+  config: WorkspaceStackConfig
+): { readonly id: string; readonly props: MemberProps } => ({
+  id: "MobileUpdatesPublisherRead",
+  props: {
+    kind: "storage.bucket",
+    name: config.mobileUpdatesBucket,
+    role: "roles/storage.legacyObjectReader",
+    member: `serviceAccount:${config.serviceAccounts.mobileUpdatesPublisher}`,
+  },
+});
+
 const serviceResourceName = (
   config: WorkspaceStackConfig,
   workload: WorkspaceWorkload
