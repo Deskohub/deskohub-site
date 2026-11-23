@@ -20,6 +20,10 @@ import {
 import { promote, settleApply, stage } from "./release/release-reconciler";
 import { emptyReleaseRecord, GitSha } from "./release/release-record";
 import {
+  makeInMemoryReleaseRecordStore,
+  ReleaseRecordStore,
+} from "./release/release-record-store";
+import {
   alertPolicyDeclarations,
   artifactRepositoryProps,
   mobileUpdatesBucketProps,
@@ -33,6 +37,7 @@ import {
 } from "./resources/service-declarations";
 import { workspaceSurfaceClassification } from "./surface-classification";
 import {
+  declareRecordedWorkspaceServices,
   declareWorkspaceFoundation,
   declareWorkspaceServices,
 } from "./workspace-stack";
@@ -232,6 +237,52 @@ describe("Alchemy beta.87 surface", () => {
       expect(secretOf(id)?.version).toBe("3");
     }
     expect(secretOf("WorkspaceSchedulerWorker")).toBeUndefined();
+  });
+
+  test("declares services only from the record at the fenced generation", async () => {
+    const record = servingRecord();
+    const fromStore = (expectedGeneration: number | undefined) =>
+      Effect.gen(function* () {
+        const store = yield* makeInMemoryReleaseRecordStore(record);
+        return yield* declareRecordedWorkspaceServices(
+          sandboxConfig,
+          expectedGeneration
+        ).pipe(Effect.provideService(ReleaseRecordStore, store));
+      });
+
+    const stale = await evaluate(fromStore(record.generation - 1));
+    expect(stale.exit._tag).toBe("Failure");
+    expect(String(stale.exit)).toContain("StaleReleaseGeneration");
+    expect(stale.resources).toEqual({});
+
+    for (const fenced of [record.generation, undefined]) {
+      const applied = await evaluate(fromStore(fenced));
+      expect(applied.exit._tag).toBe("Success");
+      expect(
+        Object.values(applied.resources).filter(
+          (entry) => entry.Type === "GCP.Run.Service"
+        )
+      ).toHaveLength(3);
+    }
+  });
+
+  test("declares no preview services and refuses a fenced preview apply", async () => {
+    const preview = (expectedGeneration: number | undefined) =>
+      evaluate(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(servingRecord());
+          return yield* declareRecordedWorkspaceServices(
+            previewConfig,
+            expectedGeneration
+          ).pipe(Effect.provideService(ReleaseRecordStore, store));
+        })
+      );
+    const plain = await preview(undefined);
+    expect(plain.exit._tag).toBe("Success");
+    expect(plain.resources).toEqual({});
+    const fenced = await preview(2);
+    expect(fenced.exit._tag).toBe("Failure");
+    expect(fenced.resources).toEqual({});
   });
 
   test("plans private workers by digest with distinct audiences", () => {

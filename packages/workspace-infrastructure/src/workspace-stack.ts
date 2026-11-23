@@ -7,7 +7,7 @@ import type { ServiceProps } from "@alchemy.run/gcp/Run";
 import * as Run from "@alchemy.run/gcp/Run";
 import * as Storage from "@alchemy.run/gcp/Storage";
 import * as Data from "effect/Data";
-import type * as DateTime from "effect/DateTime";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type {
   WorkspaceStackConfig,
@@ -15,7 +15,9 @@ import type {
 } from "./config/stack-config";
 import { workspaceQueueContracts } from "./contracts/queue-contracts";
 import { workspaceScheduleContracts } from "./contracts/schedule-contracts";
+import { readFencedReleaseRecord } from "./release/release-delivery";
 import type { ReleaseRecord } from "./release/release-record";
+import { ReleaseRecordStore } from "./release/release-record-store";
 import {
   alertPolicyDeclarations,
   artifactRepositoryProps,
@@ -193,4 +195,28 @@ export const declareWorkspaceServices = (
       tasksWorkerUri: tasksWorker.uri,
       schedulerWorkerUri: schedulerWorker.uri,
     };
+  });
+
+/**
+ * The release-owned services as the authoritative release record declares
+ * them now. Every deploy of a stage that serves a release must declare them,
+ * or Alchemy would delete them; a fenced apply passes the generation it
+ * persisted and refuses a record any other run has since moved on. Preview
+ * declares none until #1455.
+ */
+export const declareRecordedWorkspaceServices = (
+  config: WorkspaceStackConfig,
+  expectedGeneration: number | undefined
+) =>
+  Effect.gen(function* () {
+    if (config.stage === "preview") {
+      return expectedGeneration === undefined
+        ? undefined
+        : yield* new PreviewServicesUnprotected();
+    }
+    const record =
+      expectedGeneration === undefined
+        ? (yield* (yield* ReleaseRecordStore).read).record
+        : yield* readFencedReleaseRecord(expectedGeneration);
+    return yield* declareWorkspaceServices(config, record, yield* DateTime.now);
   });
