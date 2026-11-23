@@ -37,7 +37,21 @@
         "mobile-web-app:build",
         "feature-flags:snapshot"
       ],
-      "passThroughEnv": ["BETTER_AUTH_SECRETS", "REVIEW_ACCOUNT_CREDENTIALS"]
+      "passThroughEnv": [
+        "BETTER_AUTH_SECRETS",
+        "REVIEW_ACCOUNT_CREDENTIALS",
+        "WORKSPACE_BUILD_TARGET",
+        "WORKSPACE_DEPLOYMENT_ID",
+        "WORKSPACE_DEPLOYMENT_STAGE",
+        "WORKSPACE_LOG_FORMAT",
+        "WORKSPACE_OTLP_ENDPOINT",
+        "WORKSPACE_PUBLIC_ORIGIN",
+        "WORKSPACE_REVISION_SHA",
+        "WORKSPACE_RUNTIME_HOST",
+        "WORKSPACE_SERVICE_ROLE",
+        "WORKSPACE_TRACE_PROJECT_ID",
+        "WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER"
+      ]
     },
     "build:source-maps": {
       "cache": false,
@@ -46,7 +60,21 @@
     "build:generate": {
       "cache": false,
       "dependsOn": ["build:source-maps"],
-      "passThroughEnv": ["BETTER_AUTH_SECRETS", "REVIEW_ACCOUNT_CREDENTIALS"]
+      "passThroughEnv": [
+        "BETTER_AUTH_SECRETS",
+        "REVIEW_ACCOUNT_CREDENTIALS",
+        "WORKSPACE_BUILD_TARGET",
+        "WORKSPACE_DEPLOYMENT_ID",
+        "WORKSPACE_DEPLOYMENT_STAGE",
+        "WORKSPACE_LOG_FORMAT",
+        "WORKSPACE_OTLP_ENDPOINT",
+        "WORKSPACE_PUBLIC_ORIGIN",
+        "WORKSPACE_REVISION_SHA",
+        "WORKSPACE_RUNTIME_HOST",
+        "WORKSPACE_SERVICE_ROLE",
+        "WORKSPACE_TRACE_PROJECT_ID",
+        "WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER"
+      ]
     },
     "build": {
       "cache": false,

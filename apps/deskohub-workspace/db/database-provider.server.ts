@@ -4,6 +4,7 @@ import { Duration, Effect, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 import { env } from "@/env";
 import { shareAcrossRequests } from "@/shared/backend/share-across-requests";
+import { onRuntimeShutdown } from "@/shared/deployment/runtime-lifecycle";
 import { WorkspaceDatabase } from "./database.service";
 import {
   databaseClient,
@@ -37,6 +38,13 @@ export const authDatabasePool = makeDatabasePool({
   idleTimeoutMillis: Duration.toMillis(databaseIdleTimeout),
 });
 authDatabasePool.on("release", reportRelease);
+// A container closes Better Auth's connections last when it shuts down; on
+// Vercel the hook never runs.
+onRuntimeShutdown({
+  name: "database.auth-pool",
+  stage: "close",
+  run: () => authDatabasePool.end(),
+});
 
 /** The Workspace's native pool, opened once per process. */
 const workspacePostgres = shareAcrossRequests(

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { channel } from "node:diagnostics_channel";
+import { EventEmitter } from "node:events";
 import { Effect } from "effect";
 
 // Stands in for Vercel's request context: records what reaches `waitUntil`.
@@ -16,6 +18,7 @@ const {
   keepRuntimeAliveUntil,
   onRuntimeShutdown,
   shutdownRuntime,
+  trackRuntimeWork,
 } = await import("./runtime-lifecycle");
 
 const lifecycleKey = Symbol.for("@deskohub-workspace/runtime-lifecycle");
@@ -78,6 +81,34 @@ describe("keepRuntimeAliveUntil", () => {
 
     expect(order).toEqual(["flush"]);
     work.resolve();
+  });
+});
+
+describe("trackRuntimeWork", () => {
+  test("leaves Vercel's waitUntil alone and tracks nothing before a container installs its shutdown", async () => {
+    const work = deferred();
+    trackRuntimeWork(work.promise);
+    const { exits, shutdown } = installForTest();
+
+    await shutdown();
+
+    expect(vercelWaits).toEqual([]);
+    expect(exits).toEqual([0]);
+  });
+
+  test("makes an installed container wait for the work before it exits", async () => {
+    const { exits, shutdown } = installForTest();
+    const work = deferred();
+    trackRuntimeWork(work.promise);
+
+    const stopped = shutdown();
+    await Bun.sleep(10);
+    expect(exits).toEqual([]);
+    work.resolve();
+    await stopped;
+
+    expect(vercelWaits).toEqual([]);
+    expect(exits).toEqual([0]);
   });
 });
 
@@ -188,5 +219,25 @@ describe("installRuntimeShutdown", () => {
     await Effect.runPromise(shutdownRuntime(shortBudget));
 
     expect(ran).toEqual(["second module instance"]);
+  });
+  test("lets an HTTP request in flight at the signal complete before it exits", async () => {
+    const { exits, shutdown } = installForTest();
+    // Node publishes each request its HTTP server starts on this channel;
+    // Bun's server does not, so the test publishes the request itself. The
+    // OCI image check exercises Node's own server.
+    const response = Object.assign(new EventEmitter(), { closed: false });
+    channel("http.server.request.start").publish({
+      request: new EventEmitter(),
+      response,
+    });
+
+    const stopped = shutdown();
+    await Bun.sleep(20);
+    expect(exits).toEqual([]);
+
+    response.closed = true;
+    response.emit("close");
+    await stopped;
+    expect(exits).toEqual([0]);
   });
 });

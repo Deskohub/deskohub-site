@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import http from "node:http";
 import https from "node:https";
+import { CloudinarySignatureRedactor } from "@deskohub/cloudinary/telemetry";
 import { testEmailAddress } from "@deskohub/test-email";
 import { context } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
@@ -12,6 +13,7 @@ import {
 } from "@opentelemetry/sdk-logs";
 import {
   BasicTracerProvider,
+  BatchSpanProcessor,
   InMemorySpanExporter,
   SimpleSpanProcessor,
   type SpanProcessor,
@@ -21,6 +23,7 @@ import { Effect, Logger } from "effect";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
 import { CENSORED_LOG_VALUE } from "@/shared/utils/log-classification";
 import { createCensoredOtelLogger } from "../logging/censorship";
+import { SpanAllowlistProcessor } from "./span-allowlist";
 import {
   createIdentifiedTracingLive,
   createPostHogLoggerProvider,
@@ -103,6 +106,55 @@ const expectSignatureRedacted = (exporter: InMemorySpanExporter) => {
   ).not.toContain(syntheticSignature);
 };
 
+describe("createWorkspaceOTelRegistration", () => {
+  test("keeps Vercel's registration without an OTLP endpoint: the identity, the redactor and the automatic exporters", () => {
+    const registration = createWorkspaceOTelRegistration({
+      serviceVersion: "synthetic-sha",
+      deploymentId: "synthetic-deployment",
+    });
+
+    expect(Object.keys(registration).sort()).toEqual([
+      "attributes",
+      "serviceName",
+      "spanProcessors",
+    ]);
+    expect(registration.serviceName).toBe("deskohub-workspace");
+    expect(registration.attributes).toEqual({
+      "service.namespace": "deskohub",
+    });
+    expect(registration.spanProcessors).toHaveLength(2);
+    expect(registration.spanProcessors[0]).toBeInstanceOf(
+      CloudinarySignatureRedactor
+    );
+    expect(registration.spanProcessors[1]).toBe("auto");
+  });
+
+  test("exports only through the allowlist and one bounded collector export with an OTLP endpoint", () => {
+    const registration = createWorkspaceOTelRegistration({
+      serviceVersion: "synthetic-sha",
+      deploymentId: "synthetic-deployment",
+      otlpEndpoint: "http://127.0.0.1:4318",
+    });
+
+    expect(Object.keys(registration).sort()).toEqual([
+      "attributes",
+      "serviceName",
+      "spanProcessors",
+    ]);
+    expect(registration.attributes).toEqual({
+      "service.namespace": "deskohub",
+      "service.version": "synthetic-sha",
+      "deployment.id": "synthetic-deployment",
+    });
+    const [redactor, allowlist, exporting, ...rest] =
+      registration.spanProcessors;
+    expect(redactor).toBeInstanceOf(CloudinarySignatureRedactor);
+    expect(allowlist).toBeInstanceOf(SpanAllowlistProcessor);
+    expect(exporting).toBeInstanceOf(BatchSpanProcessor);
+    expect(rest).toEqual([]);
+  });
+});
+
 describe("Workspace span redaction", () => {
   test("the registration's redactors scrub signed Cloudinary URLs before its exporters see a span", async () => {
     const exporter = new InMemorySpanExporter();
@@ -117,16 +169,10 @@ describe("Workspace span redaction", () => {
     try {
       await fetchSignedUrlTraced(provider, () => exporter.getFinishedSpans());
 
-      const [span] = exporter.getFinishedSpans();
-      expect(exporter.getFinishedSpans()).toHaveLength(1);
-      // The span allowlist keeps the method and provider host, not the URL.
-      expect(span?.name).not.toContain("://");
-      expect(span?.attributes["http.url"]).toBeUndefined();
-      expect(span?.attributes["url.full"]).toBeUndefined();
-      expect(JSON.stringify(span?.attributes)).not.toContain(
-        syntheticSignature
+      expectSignatureRedacted(exporter);
+      expect(exporter.getFinishedSpans()[0]?.attributes["http.url"]).toContain(
+        "s--REDACTED--"
       );
-      expect(span?.name).not.toContain(syntheticSignature);
     } finally {
       await provider.shutdown();
     }

@@ -1,3 +1,5 @@
+import { subscribe } from "node:diagnostics_channel";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { waitUntil } from "@vercel/functions";
 import { Data, type Duration, Effect } from "effect";
 
@@ -61,12 +63,47 @@ const ignoreSettlement = () => undefined;
  */
 export const keepRuntimeAliveUntil = (work: Promise<unknown>): void => {
   waitUntil(work);
+  trackRuntimeWork(work);
+};
+
+/**
+ * Makes a container process that installed its shutdown wait for `work`
+ * before it exits. Unlike `keepRuntimeAliveUntil` it leaves Vercel alone, for
+ * work Vercel already waits for, such as an `after()` callback or the
+ * response a route handler returns. Elsewhere a no-op.
+ */
+export const trackRuntimeWork = (work: Promise<unknown>): void => {
   const lifecycle = runtimeLifecycle();
   if (!lifecycle.tracksPending) return;
   const settled = work.then(ignoreSettlement, ignoreSettlement);
   lifecycle.pending.add(settled);
   void settled.then(() => lifecycle.pending.delete(settled));
 };
+
+interface HttpServerRequestStart {
+  readonly request: IncomingMessage;
+  readonly response: ServerResponse;
+}
+
+/** Node's channel for each request an `http.Server` starts serving. */
+const httpServerRequestStartChannel = "http.server.request.start";
+
+/**
+ * Tracks every HTTP request the process serves until its response closes,
+ * finished or aborted, so SIGTERM lets in-flight requests complete. Node
+ * publishes each request a server starts on a diagnostics channel, which
+ * reaches the Next.js standalone server without access to it.
+ */
+const trackHttpRequests = () =>
+  subscribe(httpServerRequestStartChannel, (message) => {
+    const { response } = message as HttpServerRequestStart;
+    trackRuntimeWork(
+      new Promise<void>((resolve) => {
+        if (response.closed) resolve();
+        else response.once("close", () => resolve());
+      })
+    );
+  });
 
 /** Runs `hook` when the process shuts down; a no-op on Vercel. */
 export const onRuntimeShutdown = (hook: RuntimeShutdownHook): void => {
@@ -97,12 +134,29 @@ class RuntimeShutdownHookError extends Data.TaggedError(
   readonly cause: unknown;
 }> {}
 
+/**
+ * One turn of the event loop. Work that follows a response, such as the
+ * `after()` callbacks Next.js starts when the response closes, is tracked
+ * only once it starts, so an empty set is final only after the turn.
+ */
+const nextEventLoopTurn = Effect.promise(
+  () => new Promise<void>((resolve) => setImmediate(resolve))
+);
+
 /** Waits for tracked work, including work started while it waits. */
 const drainPending = (lifecycle: RuntimeLifecycle): Effect.Effect<void> =>
   Effect.suspend(() => {
     const pending = [...lifecycle.pending];
     return pending.length === 0
-      ? Effect.void
+      ? nextEventLoopTurn.pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              lifecycle.pending.size === 0
+                ? Effect.void
+                : drainPending(lifecycle)
+            )
+          )
+        )
       : Effect.promise(() => Promise.all(pending)).pipe(
           Effect.andThen(drainPending(lifecycle))
         );
@@ -175,8 +229,8 @@ export interface RuntimeShutdownInstallation {
 }
 
 /**
- * Makes a container process track its pending work and, on the first
- * termination signal, shut down within the budget and exit. Only a container
+ * Makes a container process track its pending work, its in-flight HTTP
+ * requests among it, and, on the first termination signal, shut down within the budget and exit. Only a container
  * host installs this, and its server must leave the signals to it (Next.js
  * standalone with `NEXT_MANUAL_SIG_HANDLE=true`). Returns the shutdown the
  * signal starts, for tests.
@@ -188,6 +242,7 @@ export const installRuntimeShutdown = ({
   signals = ["SIGTERM", "SIGINT"],
 }: RuntimeShutdownInstallation): (() => Promise<void>) => {
   const lifecycle = runtimeLifecycle();
+  if (!lifecycle.tracksPending) trackHttpRequests();
   lifecycle.tracksPending = true;
   const shutdown = () => {
     lifecycle.shutdown ??= run(shutdownRuntime(budget)).then(

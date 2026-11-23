@@ -123,6 +123,7 @@ describe("register", () => {
     await register();
 
     expect(installRuntimeShutdown).not.toHaveBeenCalled();
+    expect(onRuntimeShutdown).not.toHaveBeenCalled();
   });
 
   test("installs the drain-and-flush shutdown on a container host", async () => {
@@ -137,6 +138,8 @@ describe("register", () => {
 
     expect(installRuntimeShutdown).toHaveBeenCalledTimes(1);
     expect(onRuntimeShutdown.mock.calls.map(([hook]) => hook.name)).toEqual([
+      "telemetry.logs",
+      "telemetry.analytics",
       "telemetry.traces",
     ]);
   });

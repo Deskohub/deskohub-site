@@ -4,11 +4,16 @@ import { logs } from "@opentelemetry/api-logs";
 import { registerOTel } from "@vercel/otel";
 import { env } from "./env";
 import {
+  flushWorkspaceLogs,
   flushWorkspaceTraces,
   workspaceLoggerProvider,
   workspaceOTelRegistration,
+  workspaceStandaloneObservabilityLive,
 } from "./shared/backend/observability/workspace-telemetry";
-import { runStandaloneWorkspaceEffect } from "./shared/backend/standalone-workspace-effect";
+import {
+  runStandaloneWorkspaceEffect,
+  setStandaloneWorkspaceObservability,
+} from "./shared/backend/standalone-workspace-effect";
 import {
   installRuntimeShutdown,
   onRuntimeShutdown,
@@ -24,6 +29,25 @@ export async function register() {
 
   // A container keeps serving until SIGTERM; Vercel ends invocations itself.
   if (env.WORKSPACE_RUNTIME_HOST !== "container") return;
+  const standaloneObservability = workspaceStandaloneObservabilityLive();
+  if (standaloneObservability) {
+    setStandaloneWorkspaceObservability(standaloneObservability);
+  }
+  // Loaded here, not at the top: only a container flushes analytics itself.
+  const { flushServerAnalytics } = await import(
+    "./shared/backend/analytics/analytics-event-delivery.service"
+  );
+  const runFlush = runStandaloneWorkspaceEffect("runtime.telemetry-flush");
+  onRuntimeShutdown({
+    name: "telemetry.logs",
+    stage: "flush",
+    run: () => runFlush(flushWorkspaceLogs),
+  });
+  onRuntimeShutdown({
+    name: "telemetry.analytics",
+    stage: "flush",
+    run: () => runFlush(flushServerAnalytics),
+  });
   onRuntimeShutdown({
     name: "telemetry.traces",
     stage: "flush",

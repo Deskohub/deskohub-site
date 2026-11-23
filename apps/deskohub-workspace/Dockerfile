@@ -33,9 +33,8 @@ COPY . .
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile
 
-# The image build is hermetic and shares no Turbo cache, so Turbo passes the
-# build environment through (`--env-mode=loose`) instead of its strict
-# allowlist, which lacks `WORKSPACE_BUILD_TARGET` and the secret's variables.
+# Turbo runs in its strict env mode: the Workspace build tasks pass the
+# secret's variables and the OCI build variables through by name.
 ARG WORKSPACE_REVISION_SHA
 RUN --mount=type=secret,id=workspace-build-env,required=false \
     set -eu; \
@@ -43,7 +42,7 @@ RUN --mount=type=secret,id=workspace-build-env,required=false \
       set -a; . /run/secrets/workspace-build-env; set +a; \
     fi; \
     WORKSPACE_BUILD_TARGET=oci WORKSPACE_REVISION_SHA="${WORKSPACE_REVISION_SHA:-}" \
-      bun turbo run build --filter=./apps/deskohub-workspace --env-mode=loose
+      bun turbo run build --filter=./apps/deskohub-workspace
 
 FROM ${NODE_IMAGE} AS runtime
 ARG WORKSPACE_REVISION_SHA

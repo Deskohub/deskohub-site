@@ -65,47 +65,71 @@ export interface WorkspaceOTelRegistrationOptions {
   readonly deploymentId?: string | undefined;
   /**
    * A loopback OTLP/HTTP collector, such as the Cloud Run sidecar at
-   * `http://127.0.0.1:4318`. Unset, `registerOTel` keeps its automatic
-   * exporters.
+   * `http://127.0.0.1:4318`. Unset, the registration is Vercel's.
    */
   readonly otlpEndpoint?: string | undefined;
 }
 
 /**
- * `registerOTel` options for the Workspace server: its identity, with the
- * span redactors and the span allowlist ahead of every exporting processor.
- * With an OTLP endpoint, its exporter also censors span data and replaces
- * the automatic OTLP exporter `registerOTel` would add off Vercel; on Vercel
- * its collector export stays as it is.
+ * `registerOTel` options for the Workspace server.
+ *
+ * Without an OTLP endpoint, as on Vercel, they are the Workspace identity
+ * and the span redactors ahead of `registerOTel`'s automatic exporting
+ * processors, as they have always been.
+ *
+ * With one, as in a container, the span redactors and the span allowlist
+ * run ahead of a single bounded, censoring batch export to that collector,
+ * and no automatic exporter runs; the identity adds the revision and the
+ * rollout.
  */
 export const createWorkspaceOTelRegistration = ({
   serviceVersion,
   deploymentId,
   otlpEndpoint,
-}: WorkspaceOTelRegistrationOptions = {}) => ({
-  serviceName: WORKSPACE_SERVICE_NAME,
-  attributes: {
-    "service.namespace": WORKSPACE_SERVICE_NAMESPACE,
-    ...(serviceVersion && { "service.version": serviceVersion }),
-    ...(deploymentId && { "deployment.id": deploymentId }),
-  },
-  spanProcessors: [
-    ...createWorkspaceSpanRedactors(),
-    new SpanAllowlistProcessor(),
-    "auto" as const,
-  ],
-  ...(otlpEndpoint && {
-    traceExporter: createCensoredOtelSpanExporter(
+}: WorkspaceOTelRegistrationOptions = {}) =>
+  otlpEndpoint
+    ? {
+        serviceName: WORKSPACE_SERVICE_NAME,
+        attributes: {
+          "service.namespace": WORKSPACE_SERVICE_NAMESPACE,
+          ...(serviceVersion && { "service.version": serviceVersion }),
+          ...(deploymentId && { "deployment.id": deploymentId }),
+        },
+        spanProcessors: [
+          ...createWorkspaceSpanRedactors(),
+          new SpanAllowlistProcessor(),
+          createCollectorSpanProcessor(otlpEndpoint),
+        ],
+      }
+    : {
+        serviceName: WORKSPACE_SERVICE_NAME,
+        attributes: { "service.namespace": WORKSPACE_SERVICE_NAMESPACE },
+        spanProcessors: [...createWorkspaceSpanRedactors(), "auto" as const],
+      };
+
+/** A loopback collector answers fast or is down; either way, don't wait. */
+const collectorExportTimeoutMs = 1_000;
+
+/**
+ * The batch export to a loopback collector. Its queue and batches are
+ * bounded, so a collector that is down drops spans instead of growing the
+ * process's memory.
+ */
+const createCollectorSpanProcessor = (otlpEndpoint: string): SpanProcessor =>
+  new BatchSpanProcessor(
+    createCensoredOtelSpanExporter(
       new OTLPTraceExporter({
-        timeoutMillis: loopbackExportTimeoutMs,
+        timeoutMillis: collectorExportTimeoutMs,
         url: new URL("/v1/traces", otlpEndpoint).toString(),
       })
     ),
-  }),
-});
-
-/** A loopback collector answers fast or is down; either way, don't wait. */
-const loopbackExportTimeoutMs = 1_000;
+    {
+      exportTimeoutMillis: collectorExportTimeoutMs,
+      maxExportBatchSize: 256,
+      maxQueueSize: 2_048,
+      scheduledDelayMillis: 1_000,
+    }
+  );
 
 /**
  * Span processors that scrub credentials, such as signed Cloudinary URL

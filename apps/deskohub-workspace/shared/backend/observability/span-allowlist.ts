@@ -13,73 +13,82 @@ import { Predicate } from "effect";
  * collector alike. Instrumentations name spans after full request URLs and
  * record URLs, query strings and headers as attributes, and those can carry
  * sign-in tokens and personal data. The policy keeps stable operation names,
- * route templates, status, timings and an allowlist of semantic attributes,
- * and rewrites everything else before any exporter sees the span.
+ * route templates, status, timings and an explicit attribute allowlist,
+ * drops every other attribute and rewrites the rest before any exporter sees
+ * the span.
  */
 
 /**
- * Semantic-convention attributes a span keeps. Any other attribute in a
- * semantic namespace (`semanticNamespaces`) is dropped: `url.full`,
- * `url.path`, `url.query`, `http.url`, `http.target`, request and response
- * headers, `user_agent.original`, `client.address` and their kin.
+ * The attributes a span keeps; every other key is dropped, whichever
+ * instrumentation or application code wrote it. The keys are the ones the
+ * Workspace's instrumentations emit with an operational meaning: Next.js
+ * spans (`next.*`, `http.route`, `http.method`, `http.status_code`),
+ * `@vercel/otel`'s fetch instrumentation (`http.method`, `http.status_code`,
+ * `net.peer.name`, `net.peer.port`, `operation.name`), Effect's HTTP client
+ * (`http.request.method`, `http.response.status_code`, `server.address`,
+ * `server.port`, `url.scheme`, `error.type`) and Effect SQL
+ * (`db.system.name`, `db.namespace`, `db.operation.name`). What they record
+ * besides, such as `url.full`, `url.path`, `url.query`, `http.url`,
+ * `http.target`, `http.host`, `resource.name`, request and response headers,
+ * `user_agent.original` and `client.address`, is dropped.
+ *
+ * Two application keys stay: `operation`, the Workspace operation name that
+ * administration operations record, and `action.locale`, the locale a
+ * Server Action ran in. Both hold names from a closed set, never values a
+ * customer typed.
  */
-const allowedSemanticAttributes = new Set([
+const allowedAttributes = new Set([
   "http.request.method",
   "http.method",
   "http.response.status_code",
   "http.status_code",
   "http.route",
+  "http.scheme",
   "url.scheme",
   "server.address",
   "server.port",
+  "net.peer.name",
+  "net.peer.port",
   "network.protocol.name",
   "network.protocol.version",
   "db.system",
   "db.system.name",
+  "db.namespace",
   "db.operation.name",
   "db.collection.name",
-  "db.query.text",
   "db.query.summary",
-  "db.statement",
   "rpc.system",
   "rpc.service",
   "rpc.method",
   "error.type",
   "exception.type",
+  "operation.name",
   "next.span_type",
+  "next.span_name",
+  "next.span_category",
   "next.route",
   "next.page",
   "next.rsc",
+  "next.segment",
+  "next.bubble",
   "code.function",
   "code.function.name",
   "code.namespace",
-  "code.filepath",
-  "code.file.path",
-  "code.lineno",
-  "code.line.number",
-  "code.stacktrace",
+  "operation",
+  "action.locale",
 ]);
 
-const semanticNamespaces = [
-  "http.",
-  "url.",
-  "net.",
-  "server.",
-  "client.",
-  "network.",
-  "user_agent.",
-  "db.",
-  "rpc.",
-  "messaging.",
-  "next.",
-  "code.",
-  "exception.",
-  "error.",
-  "enduser.",
-  "session.",
-  "peer.",
-  "faas.",
-];
+/**
+ * Keys that carry values even though instrumentations treat them as
+ * operational: query text with inlined literals and a stack with request
+ * data in its frames. They never leave the process, whatever the allowlist
+ * above lists.
+ */
+const deniedAttributes = new Set([
+  "code.stacktrace",
+  "db.query.text",
+  "db.statement",
+]);
 
 /** Attributes that hold a route template, never a concrete path. */
 const routeTemplateAttributes = new Set([
@@ -88,33 +97,63 @@ const routeTemplateAttributes = new Set([
   "next.page",
 ]);
 
-const isSemanticAttribute = (key: string) =>
-  semanticNamespaces.some((namespace) => key.startsWith(namespace));
+/** Attributes that name a host, kept only as a bare hostname. */
+const hostAttributes = new Set(["server.address", "net.peer.name"]);
+
+const isAllowedAttribute = (key: string) =>
+  allowedAttributes.has(key) && !deniedAttributes.has(key);
 
 const redactedText = "[redacted]";
 
 /** A word made of camel-cased dictionary-style parts, such as an operation. */
 const camelCasedName = /^[A-Za-z][a-z]+(?:[A-Z][a-z]+)*$/;
 
+const digitCount = (part: string) => part.replace(/\D/g, "").length;
+
+/**
+ * Whether the letters of `part` read as a name around its digits, as in
+ * `base64UrlDecode` or `utf8ToBase64`: every letter run is camel-cased.
+ */
+const hasNamedLetterRuns = (part: string) =>
+  part
+    .split(/\d+/)
+    .filter(Boolean)
+    .every((run) => camelCasedName.test(run));
+
 const isTokenLikePart = (part: string) =>
   /^\d{6,}$/.test(part) ||
-  (part.length >= 12 && /\d/.test(part) && /[a-z]/i.test(part)) ||
+  (part.length >= 12 &&
+    /\d/.test(part) &&
+    /[a-z]/i.test(part) &&
+    (digitCount(part) >= 4 || !hasNamedLetterRuns(part))) ||
   (part.length >= 24 && !camelCasedName.test(part));
 
 /**
  * A word that is probably an identifier or credential rather than a name:
- * a UUID, a long number, or a part that mixes letters and digits or runs
- * long without the shape of a camel-cased name.
+ * a UUID, a long number, a part that mixes letters with several digits or
+ * with letter runs that read as no name, or a long part without the shape of
+ * a camel-cased name.
  */
 const isTokenLike = (word: string) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(word) ||
   word.split(/[._:-]/).some(isTokenLikePart);
 
-/** Route template and static path segments; anything else could be a value. */
+/**
+ * An intercepting route segment, such as `(.)photo`, `(..)(..)[id]` or
+ * `(...)account`.
+ */
+const interceptingRouteSegment =
+  /^(?:\(\.{1,3}\))+(?:[\w-]+|\[{1,2}(?:\.\.\.)?[A-Za-z_][\w-]*\]{1,2})$/;
+
+/**
+ * Route template and static path segments, parallel route slots (`@modal`)
+ * among them; anything else could be a value.
+ */
 const isSafePathSegment = (segment: string) =>
   segment === "" ||
   /^\[{1,2}(\.\.\.)?[A-Za-z_][\w-]*\]{1,2}$/.test(segment) ||
   /^\([\w-]+\)$/.test(segment) ||
+  interceptingRouteSegment.test(segment) ||
   /^@[\w-]+$/.test(segment) ||
   /^:[A-Za-z_]\w*$/.test(segment) ||
   (/^[\w.-]{1,48}$/.test(segment) && !isTokenLike(segment));
@@ -135,7 +174,8 @@ const isSafeWord = (word: string) =>
 export const isAllowedSpanName = (name: string) =>
   name.length > 0 &&
   name.length <= 160 &&
-  !/[?#%=@&'"\\]|:\/\//.test(name) &&
+  // `@` only starts a parallel route slot segment, which `isSafeWord` checks.
+  !/[?#%=&'"\\]|:\/\//.test(name) &&
   name.split(" ").every(isSafeWord);
 
 const urlPattern = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]*/gi;
@@ -174,7 +214,7 @@ const sanitizeAttributeValue = (
   key: string,
   value: AttributeValue
 ): AttributeValue | undefined => {
-  if (key === "server.address") {
+  if (hostAttributes.has(key)) {
     return Predicate.isString(value) && hostPattern.test(value)
       ? value
       : undefined;
@@ -196,9 +236,7 @@ const sanitizeAttributeValue = (
 /** Applies the allowlist to `attributes` in place. */
 const sanitizeAttributesInPlace = (attributes: Attributes) => {
   for (const [key, value] of Object.entries(attributes)) {
-    const allowed =
-      value !== undefined &&
-      (!isSemanticAttribute(key) || allowedSemanticAttributes.has(key));
+    const allowed = value !== undefined && isAllowedAttribute(key);
     const sanitized = allowed ? sanitizeAttributeValue(key, value) : undefined;
     if (sanitized === undefined) delete attributes[key];
     else attributes[key] = sanitized;
@@ -226,7 +264,7 @@ const allowedSpanName = (name: string, attributes: Attributes) => {
     "http.method"
   );
   const route = stringAttribute(attributes, "http.route", "next.route");
-  const host = stringAttribute(attributes, "server.address");
+  const host = stringAttribute(attributes, "server.address", "net.peer.name");
   const candidates = [
     method && route && `${method} ${route}`,
     stringAttribute(attributes, "next.span_type"),

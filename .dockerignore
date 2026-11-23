@@ -6,7 +6,9 @@
 **/.vercel
 **/coverage
 **/*.tsbuildinfo
-**/.env*.local
+**/.env
+**/.env.*
+!**/.env.example
 **/*.local*
 **/.DS_Store
 .git

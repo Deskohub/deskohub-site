@@ -70,6 +70,26 @@ const originSchema = urlStringSchema.check(
   )
 );
 
+const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/**
+ * A collector the process reaches over plain HTTP on its own host, such as
+ * a Cloud Run sidecar. Spans leave unencrypted, so no other host qualifies.
+ */
+const loopbackHttpUrlSchema = urlStringSchema.check(
+  Schema.makeFilter(
+    (value) => {
+      if (!URL.canParse(value)) return false;
+      const url = new URL(value);
+      return url.protocol === "http:" && loopbackHosts.has(url.hostname);
+    },
+    {
+      expected:
+        "an http:// URL on 127.0.0.1, localhost or [::1], such as http://127.0.0.1:4318",
+    }
+  )
+);
+
 /**
  * Vercel supplies the deployment and production hosts. A container host has
  * neither, so it must name its public origin and the header its trusted
@@ -353,7 +373,7 @@ export const workspaceServerEnvSchema = Schema.Struct({
   WORKSPACE_LOG_FORMAT: toEnvSchema(Schema.optional(workspaceLogFormatSchema)),
   // A loopback OTLP/HTTP collector, such as the Cloud Run sidecar at
   // http://127.0.0.1:4318, that receives the server's allowlisted spans.
-  WORKSPACE_OTLP_ENDPOINT: optionalUrlEnvSchema,
+  WORKSPACE_OTLP_ENDPOINT: toEnvSchema(Schema.optional(loopbackHttpUrlSchema)),
   WORKSPACE_PAYMENT_PROVIDER: toEnvSchema(
     Schema.optional(Schema.Literals(["nexi", "mock", "fallback"]))
   ),

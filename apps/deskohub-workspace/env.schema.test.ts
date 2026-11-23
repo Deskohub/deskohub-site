@@ -546,6 +546,37 @@ describe("deployment host environment", () => {
     }
   });
 
+  test("accepts only a loopback http:// collector as the OTLP endpoint", () => {
+    for (const endpoint of [
+      "http://127.0.0.1:4318",
+      "http://localhost:4318",
+      "http://[::1]:4318",
+    ]) {
+      expect(
+        invalidVariables({
+          ...containerHost,
+          WORKSPACE_OTLP_ENDPOINT: endpoint,
+        })
+      ).toEqual([]);
+    }
+    for (const endpoint of [
+      "https://127.0.0.1:4318",
+      "http://collector.example:4318",
+      "http://10.0.0.7:4318",
+      "http://127.0.0.1.example:4318",
+      "not a url",
+    ]) {
+      expect(
+        new Set(
+          invalidVariables({
+            ...containerHost,
+            WORKSPACE_OTLP_ENDPOINT: endpoint,
+          })
+        )
+      ).toEqual(new Set(["WORKSPACE_OTLP_ENDPOINT"]));
+    }
+  });
+
   test("never trusts a client-appendable header as the client address", () => {
     expect(
       invalidVariables({

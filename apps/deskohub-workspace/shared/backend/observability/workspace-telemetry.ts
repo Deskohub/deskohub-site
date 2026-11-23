@@ -1,6 +1,6 @@
 import { ProxyTracerProvider, trace } from "@opentelemetry/api";
 import type { LoggerProvider } from "@opentelemetry/sdk-logs";
-import { Effect, Layer, Logger, Predicate, References } from "effect";
+import { Data, Effect, Layer, Logger, Predicate, References } from "effect";
 import { env } from "@/env";
 import { resolveDeploymentIdentity } from "@/shared/deployment/deployment-identity";
 import { defaultServiceRole } from "@/shared/deployment/runtime-host";
@@ -150,6 +150,26 @@ export const WorkspaceObservabilityLive: Layer.Layer<never> = Layer.unwrap(
 );
 
 /**
+ * Observability for standalone runs in a container that logs Cloud Logging
+ * JSON: the censoring structured console logger, without the PostHog
+ * export, and the tracer over the registered provider, so a record carries
+ * the trace and span it was written in. Undefined for any other log format,
+ * where standalone runs keep their logfmt logger.
+ */
+export const workspaceStandaloneObservabilityLive = ():
+  | Layer.Layer<never>
+  | undefined =>
+  env.WORKSPACE_LOG_FORMAT === "cloud-logging-json"
+    ? Layer.mergeAll(
+        WorkspaceClockLive,
+        Logger.layer([makeCloudLoggingLogger(workspaceCloudLoggingIdentity())]),
+        createIdentifiedTracingLive({
+          serviceVersion: workspaceDeploymentIdentity().revisionSha,
+        })
+      )
+    : undefined;
+
+/**
  * Exports what `loggerProvider` buffers when the drain starts. The SDK's
  * `forceFlush` returns at once while another is exporting, leaving records
  * logged since that one began in its buffer, behind a timer a frozen
@@ -207,3 +227,43 @@ export const flushWorkspaceTraces = (): Promise<void> => {
     ? Promise.resolve(provider.forceFlush()).then(() => undefined)
     : Promise.resolve();
 };
+
+/**
+ * Whether this process exports its own spans, to the loopback collector
+ * `WORKSPACE_OTLP_ENDPOINT` names. On Vercel `registerOTel`'s automatic
+ * exporters send them and the Workspace never flushes them.
+ */
+export const exportsWorkspaceTraces = () =>
+  env.WORKSPACE_OTLP_ENDPOINT !== undefined;
+
+class TraceFlushError extends Data.TaggedError("TraceFlushError")<{
+  readonly cause: unknown;
+}> {}
+
+/** The post-response deadline of the loopback trace flush. */
+const traceFlushTimeoutMs = 2_000;
+
+/**
+ * Exports the spans the process batches for its loopback collector within
+ * the post-response deadline, so a container that idles after the response
+ * still sends them. A no-op without the collector, as on Vercel. Never fails.
+ */
+export const flushWorkspaceTracesAfterResponse: Effect.Effect<void> =
+  Effect.suspend(() =>
+    exportsWorkspaceTraces()
+      ? Effect.tryPromise({
+          try: flushWorkspaceTraces,
+          catch: (cause) => new TraceFlushError({ cause }),
+        }).pipe(
+          Effect.timeout(traceFlushTimeoutMs),
+          Effect.catchTags({
+            TraceFlushError: ({ cause }) =>
+              Effect.logWarning("Workspace trace flush failed.", { cause }),
+            TimeoutError: () =>
+              Effect.logWarning(
+                "Workspace trace flush exceeded its post-response deadline."
+              ),
+          })
+        )
+      : Effect.void
+  );
