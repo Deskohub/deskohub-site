@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
   classifyE2EStatusDescription,
@@ -12,6 +11,7 @@ import {
   unionFlowIds,
   WORKSPACE_E2E_FLOW_IDS,
 } from "./flows.mjs";
+import { fetchPaginatedJson } from "./gh.mjs";
 
 const [command] = process.argv.slice(2);
 
@@ -28,128 +28,6 @@ const toCanonicalFlows = (flowIds) => {
   if (flowIds.length === 0) return "none";
   if (flowIds.length === WORKSPACE_E2E_FLOW_IDS.length) return "all";
   return flowIds.join(",");
-};
-
-const parseHttpHeaderAndBody = (raw) => {
-  const text = String(raw ?? "");
-  if (!/^HTTP\/\d(?:\.\d)?\s+\d{3}\b/.test(text)) {
-    return { hasHeaders: false, headersText: "", bodyText: text };
-  }
-  const match = /\r?\n\r?\n/.exec(text);
-  if (!match) {
-    return { hasHeaders: true, headersText: text, bodyText: "" };
-  }
-  return {
-    hasHeaders: true,
-    headersText: text.slice(0, match.index),
-    bodyText: text.slice(match.index + match[0].length),
-  };
-};
-
-const parseNextLink = (headersText) => {
-  for (const line of headersText.split(/\r?\n/)) {
-    const match = /^link:\s*(.+)$/i.exec(line.trim());
-    if (!match) continue;
-    for (const part of match[1].split(",")) {
-      const linkMatch = /^<([^>]+)>(.*)$/.exec(part.trim());
-      if (linkMatch && /;\s*rel="next"(?:;|$)/i.test(linkMatch[2])) {
-        return linkMatch[1];
-      }
-    }
-  }
-  return "";
-};
-
-/**
- * Fetches a paginated GitHub REST API JSON array one page at a time via
- * `gh api -i`. Each completed page is parsed and accumulated independently so
- * a failed or truncated later page (for example HTTP 502) never corrupts or
- * discards items already verified from earlier pages.
- */
-const fetchPaginatedJson = (endpoint, extraArgs) => {
-  const items = [];
-  const seenUrls = new Set();
-  let page = 1;
-  let nextUrl = "";
-
-  while (true) {
-    const args = nextUrl
-      ? [
-          "api",
-          "--method",
-          "GET",
-          "-i",
-          "-H",
-          "Accept: application/vnd.github+json",
-          nextUrl,
-        ]
-      : [
-          "api",
-          "--method",
-          "GET",
-          "-i",
-          "-H",
-          "Accept: application/vnd.github+json",
-          endpoint,
-          ...extraArgs,
-          "-f",
-          "per_page=100",
-          "-f",
-          `page=${page}`,
-        ];
-
-    let stdout = "";
-    try {
-      stdout = execFileSync("gh", args, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch {
-      return { ok: false, items };
-    }
-
-    const initial = parseHttpHeaderAndBody(stdout);
-    let effectiveHeaders = initial.headersText;
-    let effectiveBody = initial.bodyText;
-    while (
-      initial.hasHeaders &&
-      /^HTTP\/\d(?:\.\d)?\s+\d{3}\b/.test(effectiveBody)
-    ) {
-      const nested = parseHttpHeaderAndBody(effectiveBody);
-      effectiveHeaders = nested.headersText;
-      effectiveBody = nested.bodyText;
-    }
-
-    let parsed;
-    try {
-      parsed = JSON.parse(effectiveBody);
-    } catch {
-      return { ok: false, items };
-    }
-    if (!Array.isArray(parsed)) {
-      return { ok: false, items };
-    }
-    items.push(...parsed);
-
-    if (initial.hasHeaders) {
-      const linkNext = parseNextLink(effectiveHeaders);
-      if (!linkNext) {
-        return { ok: true, items };
-      }
-      if (seenUrls.has(linkNext)) {
-        return { ok: false, items };
-      }
-      seenUrls.add(linkNext);
-      nextUrl = linkNext;
-      page += 1;
-      continue;
-    }
-
-    if (parsed.length < 100) {
-      return { ok: true, items };
-    }
-    page += 1;
-  }
 };
 
 switch (command) {

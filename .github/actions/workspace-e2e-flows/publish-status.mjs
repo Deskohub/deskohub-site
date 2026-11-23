@@ -44,6 +44,7 @@ import {
   WORKSPACE_E2E_FLOW_IDS,
   WORKSPACE_E2E_SUPERSEDED_DESCRIPTION,
 } from "./flows.mjs";
+import { runGhCapture } from "./gh.mjs";
 
 const INVALID_FLOWS_DESCRIPTION =
   "Invalid or missing ## E2E flows in PR description; list valid flows, all, or none";
@@ -81,20 +82,7 @@ const appendSummary = (line) => {
   }
 };
 
-const ghExec = (args) => {
-  try {
-    const stdout = execFileSync("gh", args, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return { ok: true, stdout };
-  } catch (error) {
-    return {
-      ok: false,
-      stderr: error?.stderr ? String(error.stderr) : String(error),
-    };
-  }
-};
+const ghExec = (args) => runGhCapture(args);
 
 const ghApiJson = (args, { slurp = false } = {}) => {
   const fullArgs = [

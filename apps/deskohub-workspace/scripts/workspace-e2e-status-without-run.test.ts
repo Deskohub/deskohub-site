@@ -1701,6 +1701,72 @@ exit 1
       )
     ).toEqual([]);
 
+    // A single HTTP 200 PR-list page exceeding Node's default 1 MiB
+    // `execFileSync` buffer (24 PRs with 48,000-character bodies, one eligible
+    // PR requesting `admin`) must be read completely without truncation and
+    // resolve the eligible PR's requested flows.
+    const largeFillerBody = `${"x".repeat(48_000)}\n## E2E flows\n- none\n`;
+    const largePagePrs = [
+      ...Array.from({ length: 23 }, (_, index) => ({
+        ...pullRequest,
+        body: largeFillerBody,
+        number: prNumber + 100 + index,
+        state: "closed",
+      })),
+      {
+        ...pullRequest,
+        body: `${"y".repeat(48_000)}\n## E2E flows\n- admin\n`,
+      },
+    ];
+    const largePageJson = JSON.stringify(largePagePrs);
+    expect(Buffer.byteLength(largePageJson, "utf8")).toBeGreaterThan(
+      1024 * 1024
+    );
+    const largePageGh = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
+if [[ "$*" == *"/commits/${targetSha}/pulls"* ]]; then
+  printf 'HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n'
+  cat "$GH_FIXTURES/large_pulls.json"
+  exit 0
+fi
+if [[ "$*" == *"/deployments/11/statuses"* ]]; then
+  echo '[{"state":"success","description":"Deployment has completed","environment_url":"${previewUrl}/"}]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments"* ]]; then
+  echo '[{"id":11,"creator":{"login":"vercel[bot]"}}]'
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 1
+`;
+    const largePageTarget = await runStep(
+      targetStep,
+      { large_pulls: largePagePrs },
+      {
+        EVENT_NAME: "repository_dispatch",
+        FLOWS_CLI: flowsCli,
+        INCLUDE_NIGHTLY_CASES: "false",
+        INPUT_FLOWS: "",
+        TARGET_DEPLOYMENT: "success",
+        TARGET_REF: pullRequest.head.ref,
+        TARGET_SHA: targetSha,
+        TARGET_URL: previewUrl,
+      },
+      { gh: largePageGh }
+    );
+    expect(largePageTarget.result.exitCode).toBe(0);
+    expect(largePageTarget.outputs).toMatchObject({
+      eligible: "true",
+      flows: "admin",
+      install_webkit: "false",
+      pr_number: String(prNumber),
+      run_e2e: "true",
+      sha: targetSha,
+      url: previewUrl,
+    });
+
     const page2Publish = await runStep(
       publishStep,
       {},
