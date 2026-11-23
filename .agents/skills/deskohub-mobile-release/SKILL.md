@@ -56,11 +56,17 @@ list to the user when an agent can't:
 
 - A magic link or `/app/` link opens the app directly (verified App Link with
   the release certificate).
-- The OTA "update ready, restart" banner after a published update, and the
-  native-update prompt and Download link against a real `mobile-v` release.
-- An OTA rollback (`--rollback`) after a published update: the Restart banner
-  returns the app to its embedded update, and a dismissed one applies at the
-  next cold start.
+- A cold start after a published update, on a connection that downloads it
+  within 15 seconds, launches straight into it with no banner; the OTA
+  "update ready, restart" banner then appears only for an update published
+  while the app ran, on a return to the foreground at least 15 minutes after
+  launch. A slower startup download may surface as that banner instead
+  ([OTA updates](references/ota-updates.md#client)). Also the native-update prompt and Download link
+  against a real `mobile-v` release.
+- An OTA rollback (`--rollback`): a cold start after it launches the
+  embedded update with no banner; one published while the app ran shows the
+  Restart banner, which returns the app to its embedded update, and a
+  dismissed one applies at the next cold start.
 - The live Obtainium badge and import on `/android`, installing without the
   APK-origin warning, and no native-update prompt in an app Obtainium
   installed (one installed from the browser still shows it).

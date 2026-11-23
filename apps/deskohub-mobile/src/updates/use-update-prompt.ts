@@ -3,7 +3,7 @@ import { FetchHttpClient, type HttpClient } from "effect/http";
 import { nativeBuildVersion } from "expo-application";
 import * as Linking from "expo-linking";
 import * as Updates from "expo-updates";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { AppState, Platform } from "react-native";
 import { installingPackageName } from "../../modules/install-source";
 import { trackUpdateApplied } from "../analytics/events";
@@ -13,9 +13,9 @@ import { recordAppliedUpdate } from "./applied-update";
 import { type NativeUpdateOffer, nextNativeUpdate } from "./native-release";
 import type { ReadyUpdate } from "./ota-update";
 import {
-  isUpdateCheckDue,
   planUpdateCheck,
   runUpdateCheck,
+  scheduleUpdateChecks,
 } from "./update-check";
 import {
   dismissUpdatePrompt,
@@ -49,10 +49,10 @@ const openNativeDownload = (versionName: string) =>
 const restartIntoUpdate = Effect.tryPromise(() => Updates.reloadAsync());
 
 /**
- * Records an update this launch applied, then checks for a downloaded JS
- * update, a rollback and a newer APK on launch and on each return to the
- * foreground, and returns the one prompt to show, none while the analytics
- * consent prompt waits for an answer. Accepting restarts into
+ * Records an update this launch applied, checks for a newer APK on launch,
+ * and checks for a JS update, a rollback and a newer APK when the app
+ * returns to the foreground (`scheduleUpdateChecks`). Returns the one prompt
+ * to show, none while the analytics consent prompt waits for an answer. Accepting restarts into
  * the downloaded or embedded update, or downloads the offered APK;
  * dismissing hides that offer for the rest of the session.
  */
@@ -64,7 +64,6 @@ export function useUpdatePrompt(): {
   const [readyUpdate, setReadyUpdate] = useState<ReadyUpdate>();
   const [nativeUpdate, setNativeUpdate] = useState<NativeUpdateOffer>();
   const [dismissals, setDismissals] = useState(noUpdatePromptDismissals);
-  const lastCheckStartedAt = useRef<number>(undefined);
 
   useEffect(() => {
     // Debug and dev-client builds load JS from Metro: expo-updates is
@@ -84,38 +83,30 @@ export function useUpdatePrompt(): {
         )
       );
     }
-    const checkIfDue = () => {
-      const now = Date.now();
-      if (!isUpdateCheckDue(lastCheckStartedAt.current, now)) {
-        return;
-      }
-      lastCheckStartedAt.current = now;
-      runInBackground(
-        runUpdateCheck({
-          plan,
-          updates: Updates,
-          installedBuildVersion: nativeBuildVersion,
-          latestReleaseUrl: configuredWorkspaceUpdateUrls.latestReleaseUrl,
-          // A downloaded update or rollback stays ready until the restart,
-          // so a later empty or failed check keeps it, and a newer one
-          // replaces it: the next start launches only the newest.
-          onReadyUpdate: (update) => {
-            if (update !== undefined) {
-              setReadyUpdate(update);
-            }
-          },
-          onNativeRelease: (check) =>
-            setNativeUpdate((previous) => nextNativeUpdate(previous, check)),
-        })
-      );
-    };
-    checkIfDue();
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        checkIfDue();
-      }
+    return scheduleUpdateChecks({
+      plan,
+      appState: AppState,
+      now: Date.now,
+      check: (checks) =>
+        runInBackground(
+          runUpdateCheck({
+            plan: checks,
+            updates: Updates,
+            installedBuildVersion: nativeBuildVersion,
+            latestReleaseUrl: configuredWorkspaceUpdateUrls.latestReleaseUrl,
+            // A downloaded update or rollback stays ready until the restart,
+            // so a later empty or failed check keeps it, and a newer one
+            // replaces it: the next start launches only the newest.
+            onReadyUpdate: (update) => {
+              if (update !== undefined) {
+                setReadyUpdate(update);
+              }
+            },
+            onNativeRelease: (check) =>
+              setNativeUpdate((previous) => nextNativeUpdate(previous, check)),
+          })
+        ),
     });
-    return () => subscription.remove();
   }, []);
 
   const consent = useAnalyticsConsent();
