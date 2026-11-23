@@ -707,6 +707,12 @@ describe("interrupting a deliver mid-apply", () => {
 
 describe("Alchemy access token", () => {
   // Every step must start with the stack destroy's 30-minute budget left.
+  const lifetime = (seconds: number): FakeRule => ({
+    tool: "curl",
+    pattern: "oauth2\\.googleapis\\.com/tokeninfo",
+    stdout: JSON.stringify({ expires_in: String(seconds) }),
+  });
+
   test("mints a fresh token once the current one is 30 minutes old", () => {
     const now = 1_800_000_000;
     for (const [age, minted] of [
@@ -714,7 +720,7 @@ describe("Alchemy access token", () => {
       [30 * 60, true],
     ] as const) {
       // A minted token is masked before any use.
-      const { output } = withProofFakes({ now }, (fakes) =>
+      const { output } = withProofFakes({ now, rules: [lifetime(3599)] }, (fakes) =>
         runPhase(fakes, "baseline-inventory", {
           GOOGLE_ACCESS_TOKEN_MINTED_AT: String(now - age),
         })
@@ -722,6 +728,20 @@ describe("Alchemy access token", () => {
       expect({ age, minted: output.includes("::add-mask::") }).toEqual({
         age,
         minted,
+      });
+    }
+  });
+
+  test("refuses a token with less than 30 minutes left", () => {
+    for (const rules of [[lifetime(600)], []]) {
+      const { exitCode, output } = withProofFakes({ rules }, (fakes) =>
+        runPhase(fakes, "baseline-inventory", {
+          GOOGLE_ACCESS_TOKEN_MINTED_AT: "0",
+        })
+      );
+      expect({ exitCode, refused: output.includes("access token") }).toEqual({
+        exitCode: 1,
+        refused: true,
       });
     }
   });
@@ -743,12 +763,38 @@ describe("edge readback from the stack outputs", () => {
     tokenRouteExclusionFilter: filter,
   };
   const policyLink = `https://www.googleapis.com/compute/v1/projects/${projectId}/global/securityPolicies/${policy}`;
-  const policyRules = [
-    { priority: 1000, action: "deny(403)", preview: true },
-    { priority: 1010, action: "deny(403)", preview: true },
-    { priority: 2000, action: "throttle" },
+  const waf = (priority: number, set: string) => ({
+    priority,
+    action: "deny(403)",
+    preview: true,
+    match: {
+      expr: {
+        expression: `evaluatePreconfiguredWaf('${set}-v33-stable', {'sensitivity': 1})`,
+      },
+    },
+  });
+  const throttle = {
+    priority: 2000,
+    action: "throttle",
+    match: { expr: { expression: "request.path.startsWith('/api/auth/')" } },
+    rateLimitOptions: {
+      conformAction: "allow",
+      exceedAction: "deny(429)",
+      enforceOnKey: "IP",
+      rateLimitThreshold: { count: 120, intervalSec: 60 },
+    },
+  };
+  // As Compute returns the sandbox policy the stack declares.
+  const policyRules: ReadonlyArray<Record<string, unknown>> = [
+    waf(1000, "sqli"),
+    waf(1010, "xss"),
+    throttle,
     { priority: 2147483647, action: "allow" },
   ];
+  const withThrottle = (changes: Record<string, unknown>) =>
+    policyRules.map((rule) =>
+      rule.priority === 2000 ? { ...throttle, ...changes } : rule
+    );
   const liveEdge = (
     overrides: ReadonlyArray<FakeRule> = []
   ): ReadonlyArray<FakeRule> => [
@@ -823,7 +869,7 @@ describe("edge readback from the stack outputs", () => {
     });
     expect(edgeEnv).toBe("EDGE_IP=203.0.113.7\n");
     // Byte for byte what the privacy phase compares the live exclusion to.
-    expect(recorded).toBe(`${filter}\n`);
+    expect(recorded).toBe(filter);
     expect(JSON.parse(kept ?? "null")).toEqual(edgeOutputs);
     expect(calls).toContain(
       `gcloud storage cat gs://${stateBucket}/${outputObject}`
@@ -889,11 +935,27 @@ describe("edge readback from the stack outputs", () => {
           rule.priority === 1010 ? { ...rule, preview: false } : rule
         )
       ),
-      // The auth throttle only previewed, or missing.
+      // A WAF rule matching another rule set.
       rules(
         policyRules.map((rule) =>
-          rule.priority === 2000 ? { ...rule, preview: true } : rule
+          rule.priority === 1000 ? waf(1000, "lfi") : rule
         )
+      ),
+      // The auth throttle only previewed, on another route, at another
+      // limit, or missing.
+      rules(withThrottle({ preview: true })),
+      rules(
+        withThrottle({
+          match: { expr: { expression: "request.path.startsWith('/x/')" } },
+        })
+      ),
+      rules(
+        withThrottle({
+          rateLimitOptions: {
+            ...throttle.rateLimitOptions,
+            rateLimitThreshold: { count: 1000, intervalSec: 60 },
+          },
+        })
       ),
       rules(policyRules.filter((rule) => rule.priority !== 2000)),
     ]) {
@@ -1121,6 +1183,8 @@ describe("token-route privacy and telemetry", () => {
       // The stack's own filter misses Cloud Run request logs or a route.
       [[liveExclusion(withoutCloudRun)], withoutCloudRun],
       [[liveExclusion(withoutRoute)], withoutRoute],
+      // Not byte for byte the recorded filter.
+      [[liveExclusion(`${exclusionFilter}\n`)], exclusionFilter],
     ] satisfies ReadonlyArray<[ReadonlyArray<FakeRule>, string | null]>) {
       const { exitCode, markerSent } = privacy(overrides, recorded);
       expect({ recorded, exitCode, markerSent }).toEqual({

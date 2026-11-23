@@ -17,7 +17,6 @@ import {
 } from "../scripts/sandbox-locked-stack";
 import {
   sandboxProofBudget,
-  sandboxProofEdge,
   sandboxProofStackConfig,
   sandboxProofStackConfigInput,
 } from "../scripts/sandbox-stack-config";
@@ -428,7 +427,10 @@ describe("sandbox proof stack config", () => {
     expect(config.schedulesEnabled).toBe(false);
     // The plain-HTTP proof edge, allowed in the approved sandbox only.
     expect(config.edge).toEqual({
-      ...sandboxProofEdge,
+      domains: [],
+      enableHttps: false,
+      staticCdnEnabled: false,
+      wafPreview: true,
       authRateLimitPerMinute: 120,
     });
     expect(

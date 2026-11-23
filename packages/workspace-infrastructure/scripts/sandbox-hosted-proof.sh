@@ -94,6 +94,8 @@ mobile_updates_bucket="${project_id}-mobile-updates"
 edge_exclusion="workspace-${stage}-token-route-requests"
 edge_security_policy="workspace-${stage}-edge"
 edge_backend_services=("workspace-${stage}-dynamic" "workspace-${stage}-static")
+# The auth throttle's requests per minute: the stack config's default.
+edge_auth_rate_limit=120
 marker=synthetic-probe-marker
 # Token-bearing routes the privacy phase sends the marker to.
 token_routes=(/app/auth/callback /api/auth/magic-link/verify /marketing-preferences/access)
@@ -222,7 +224,10 @@ project_exclusion_names() {
 # token (google-github-actions/auth `token_format: access_token`). The token
 # lives at most one hour; a step past 30 minutes mints a fresh one from the
 # federated gcloud credentials, masked before use, so every step starts with
-# at least its 30-minute budget (the longest, the stack destroy) left.
+# at least its 30-minute budget (the longest, the stack destroy) left. An
+# empty gcloud config has no token cache, so gcloud cannot hand back a
+# cached token near its expiry, and the token's own remaining lifetime is
+# checked before any use.
 ensure_alchemy_token() {
   if $dry_run; then
     echo "+ (GOOGLE_ACCESS_TOKEN from token_format: access_token; refreshed past 30 minutes)" >&2
@@ -232,8 +237,18 @@ ensure_alchemy_token() {
   now="$(date +%s)"
   if [[ -z "${GOOGLE_ACCESS_TOKEN:-}" ]] ||
     ((now - ${GOOGLE_ACCESS_TOKEN_MINTED_AT:-0} >= 1800)); then
-    GOOGLE_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+    local config expires_in
+    config="$(mktemp -d)"
+    GOOGLE_ACCESS_TOKEN="$(CLOUDSDK_CONFIG="$config" gcloud auth print-access-token)"
+    rm -rf "${config:?}"
     echo "::add-mask::${GOOGLE_ACCESS_TOKEN}"
+    # The token goes in the request body, never on a command line.
+    expires_in="$(printf '%s' "$GOOGLE_ACCESS_TOKEN" |
+      curl -sS --fail-with-body --data-urlencode 'access_token@-' \
+        https://oauth2.googleapis.com/tokeninfo | jq -r '.expires_in // empty')" ||
+      fail "the minted access token's lifetime is unreadable"
+    [[ "$expires_in" =~ ^[0-9]+$ ]] && ((expires_in >= 1800)) ||
+      fail "the minted access token expires in ${expires_in:-an unknown time} s, under the 30-minute step budget"
     GOOGLE_ACCESS_TOKEN_MINTED_AT="$now"
   fi
   export GOOGLE_ACCESS_TOKEN GOOGLE_ACCESS_TOKEN_MINTED_AT
@@ -687,15 +702,29 @@ verify_edge_security() {
     --project="$project_id" --format='json(rules)')" ||
     fail "Cloud Armor policy ${edge_security_policy} is unreadable"
   if $dry_run; then
-    echo "  expect WAF rules 1000 and 1010 in preview and the 2000 auth throttle enforced" >&2
+    echo "  expect the declared SQLi and XSS rules in preview and the auth throttle enforced" >&2
     return 0
   fi
-  jq -e '[.rules[]? | select(.priority == 1000 or .priority == 1010)
-      | select(.action == "deny(403)" and .preview == true)] | length == 2' >/dev/null <<<"$rules" ||
-    fail "Cloud Armor policy ${edge_security_policy} lacks the WAF rules in preview"
-  jq -e '[.rules[]? | select(.priority == 2000 and .action == "throttle" and .preview != true)]
-      | length == 1' >/dev/null <<<"$rules" ||
-    fail "Cloud Armor policy ${edge_security_policy} does not enforce the auth throttle"
+  # Each rule as the stack declares it for the sandbox: matcher, action,
+  # preview and the auth throttle's limit.
+  jq -e --arg sqli "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})" \
+    --arg xss "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})" \
+    --arg auth "request.path.startsWith('/api/auth/')" \
+    --argjson limit "$edge_auth_rate_limit" '
+    def rule($priority): [.rules[]? | select(.priority == $priority)] | select(length == 1) | .[0];
+    def waf($priority; $expression):
+      rule($priority) | .action == "deny(403)" and .preview == true
+        and .match.expr.expression == $expression;
+    [waf(1000; $sqli), waf(1010; $xss),
+      (rule(2000) | .action == "throttle" and .preview != true
+        and .match.expr.expression == $auth
+        and .rateLimitOptions.conformAction == "allow"
+        and .rateLimitOptions.exceedAction == "deny(429)"
+        and .rateLimitOptions.enforceOnKey == "IP"
+        and .rateLimitOptions.rateLimitThreshold.count == $limit
+        and .rateLimitOptions.rateLimitThreshold.intervalSec == 60)]
+    | length == 3 and all' >/dev/null <<<"$rules" ||
+    fail "Cloud Armor policy ${edge_security_policy} does not hold the declared WAF preview rules and auth throttle"
   echo "both backends enforce ${edge_security_policy}: WAF rules in preview, auth throttle enforced"
 }
 
@@ -726,8 +755,9 @@ phase_edge_readback() {
   [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] ||
     fail "the stack outputs no edge IP address; deliver-v1 must declare the edge"
   record_value "$edge_file" EDGE_IP "$ip"
-  jq -r '.tokenRouteExclusionFilter // empty' "$edge_outputs_file" >"$exclusion_filter_file"
-  [[ -n "$(cat "$exclusion_filter_file")" ]] ||
+  # The filter's exact bytes, with no newline added.
+  jq -j '.tokenRouteExclusionFilter // empty' "$edge_outputs_file" >"$exclusion_filter_file"
+  [[ -s "$exclusion_filter_file" ]] ||
     fail "the edge reports no token-route exclusion filter"
   verify_edge_security
   expect_serving v1
@@ -1087,7 +1117,7 @@ verify_log_routing() {
   done < <(jq -r '.[] | [.id, .type] | @tsv' <<<"$ancestors")
   # The live project exclusion must be the filter the stack outputs, and
   # that filter must name both request sources and every token route.
-  local expected live source route
+  local expected source route
   expected="$(cat "$exclusion_filter_file" 2>/dev/null)" ||
     fail "the edge recorded no token-route exclusion filter; log routing unverified"
   [[ -n "$expected" ]] || fail "the edge recorded an empty token-route exclusion filter"
@@ -1097,10 +1127,11 @@ verify_log_routing() {
   for route in "${token_routes[@]}"; do
     [[ "$expected" == *"$route"* ]] || fail "the token-route exclusion filter omits ${route}"
   done
-  live="$(jq -r --arg name "$edge_exclusion" \
-    'map(select(.name == $name and .disabled != true)) | first | .filter // empty' \
-    "${dir}/project-exclusions.json")"
-  [[ "$live" == "$expected" ]] ||
+  # Compared as decoded strings: command substitution would strip a
+  # trailing newline from either side.
+  jq -e --arg name "$edge_exclusion" --rawfile expected "$exclusion_filter_file" \
+    'map(select(.name == $name and .disabled != true)) | first | .filter == $expected' \
+    "${dir}/project-exclusions.json" >/dev/null ||
     fail "the enabled project exclusion ${edge_exclusion} does not apply the stack's token-route filter"
   local uncovered
   uncovered="$(jq -r --arg name "$edge_exclusion" --slurpfile exclusions "${dir}/project-exclusions.json" '
