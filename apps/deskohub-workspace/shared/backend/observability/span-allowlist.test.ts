@@ -331,6 +331,7 @@ describe("isAllowedSpanName", () => {
       "render route (app) /[locale]/(...)reservation/[[...slug]]",
       "encoding.base64UrlDecode",
       "utf8ToBase64Url",
+      "GET /api/customers/:customerId",
     ]) {
       expect(isAllowedSpanName(name)).toBe(true);
     }
@@ -350,6 +351,11 @@ describe("isAllowedSpanName", () => {
       `render route (app) /[locale]/(.)${tokenMarker}`,
       `render route (app) /[locale]/(${tokenMarker})/page`,
       `render route (app) /[locale]/(..)(..)${pathMarker}`,
+      `render route (app) /[locale]/[${tokenMarker}]`,
+      `render route (app) /[locale]/[...${tokenMarker}]`,
+      `render route (app) /[locale]/[[...${tokenMarker}]]`,
+      `render route (app) /[locale]/(.)[${pathMarker}]`,
+      `GET /api/:${tokenMarker}`,
       "key deadbeef1234abcd",
       "",
     ]) {

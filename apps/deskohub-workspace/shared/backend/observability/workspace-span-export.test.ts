@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { trace } from "@opentelemetry/api";
+import { context, propagation, SpanKind, trace } from "@opentelemetry/api";
 import { registerOTel } from "@vercel/otel";
 import { createWorkspaceOTelRegistration } from "./telemetry-sinks";
 import { flushWorkspaceTraces } from "./workspace-telemetry";
@@ -43,13 +43,27 @@ describe("the container's span export through registerOTel", () => {
     });
 
     try {
-      registerOTel(
-        createWorkspaceOTelRegistration({
+      registerOTel({
+        ...createWorkspaceOTelRegistration({
           serviceVersion: "synthetic-sha",
           deploymentId: "synthetic-deployment",
           otlpEndpoint: `http://127.0.0.1:${collector.port}`,
+        }),
+        // The spans are recorded by hand; no instrumentation patches fetch.
+        instrumentations: [],
+      });
+      // A server span, which @vercel/otel names a resource for as it ends.
+      trace
+        .getTracer("workspace-span-export-test")
+        .startSpan(`GET /api/customers/${tokenMarker}`, {
+          kind: SpanKind.SERVER,
+          attributes: {
+            "http.method": "GET",
+            "http.route": "/api/customers/[customerId]",
+            "http.target": `/api/customers/${tokenMarker}`,
+          },
         })
-      );
+        .end();
       const span = trace
         .getTracer("workspace-span-export-test")
         .startSpan(
@@ -70,9 +84,21 @@ describe("the container's span export through registerOTel", () => {
       const exported = bodies.join("\n");
       expect(exported).not.toContain(tokenMarker);
       expect(exported).not.toContain(addressMarker);
-      const [resourceSpans] = (JSON.parse(bodies[0] ?? "{}") as ExportedTraces)
-        .resourceSpans;
-      const [exportedSpan] = resourceSpans?.scopeSpans[0]?.spans ?? [];
+      const allResourceSpans = bodies.flatMap(
+        (body) => (JSON.parse(body) as ExportedTraces).resourceSpans
+      );
+      const [resourceSpans] = allResourceSpans;
+      const spans = allResourceSpans.flatMap(({ scopeSpans }) =>
+        scopeSpans.flatMap(({ spans }) => spans)
+      );
+      const serverSpan = spans?.find(({ name }) => name.startsWith("GET /"));
+      expect(serverSpan?.name).toBe("GET /api/customers/[customerId]");
+      expect(
+        Object.keys(attributeMap(serverSpan?.attributes ?? []))
+      ).not.toContain("resource.name");
+      const exportedSpan = spans?.find(({ name }) =>
+        name.includes("api.provider.invalid")
+      );
       expect(exportedSpan?.name).toBe("GET api.provider.invalid");
       expect(attributeMap(exportedSpan?.attributes ?? [])).toEqual({
         "http.method": "GET",
@@ -87,6 +113,9 @@ describe("the container's span export through registerOTel", () => {
         "deployment.id": "synthetic-deployment",
       });
     } finally {
+      trace.disable();
+      context.disable();
+      propagation.disable();
       await collector.stop(true);
     }
   });

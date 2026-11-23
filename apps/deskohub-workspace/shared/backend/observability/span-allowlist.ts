@@ -144,12 +144,25 @@ const isTokenLike = (word: string) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(word) ||
   word.split(/[._:-]/).some(isTokenLikePart);
 
-/** A dynamic route segment, such as `[id]`, `[...all]` or `[[...slug]]`. */
-const dynamicRouteSegment = /^\[{1,2}(\.\.\.)?[A-Za-z_][\w-]*\]{1,2}$/;
-
 /** A static segment name: short, and not shaped like a value. */
 const isStaticSegmentName = (name: string) =>
   /^[\w.-]{1,48}$/.test(name) && !isTokenLike(name);
+
+/** A route parameter's name, such as `id` or `reservationId`. */
+const isParameterName = (name: string) =>
+  /^[A-Za-z_][\w-]{0,47}$/.test(name) && !isTokenLike(name);
+
+/**
+ * A dynamic route segment, such as `[id]`, `[...all]` or `[[...slug]]`, or
+ * a `:id` parameter, whose parameter name passes the name check.
+ */
+const isDynamicRouteSegment = (segment: string) => {
+  const parameter =
+    /^\[(?:\.\.\.)?([^\]]+)\]$/.exec(segment) ??
+    /^\[\[\.\.\.([^\]]+)\]\]$/.exec(segment) ??
+    /^:(.+)$/.exec(segment);
+  return parameter !== null && isParameterName(parameter[1] ?? "");
+};
 
 /**
  * A route group `(marketing)`, a parallel route slot `@modal`, or an
@@ -164,7 +177,7 @@ const isRouteConventionSegment = (segment: string) => {
   const intercepting = /^(?:\(\.{1,3}\)){1,4}(.+)$/.exec(segment);
   if (!intercepting) return false;
   const target = intercepting[1] ?? "";
-  return dynamicRouteSegment.test(target) || isStaticSegmentName(target);
+  return isDynamicRouteSegment(target) || isStaticSegmentName(target);
 };
 
 /**
@@ -173,9 +186,8 @@ const isRouteConventionSegment = (segment: string) => {
  */
 const isSafePathSegment = (segment: string) =>
   segment === "" ||
-  dynamicRouteSegment.test(segment) ||
+  isDynamicRouteSegment(segment) ||
   isRouteConventionSegment(segment) ||
-  /^:[A-Za-z_]\w*$/.test(segment) ||
   isStaticSegmentName(segment);
 
 const isSafeWord = (word: string) =>
