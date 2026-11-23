@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.41.0](https://github.com/totalolage/deskohub-site/compare/dhw-v1.40.1...dhw-v1.41.0) (2026-11-23)
+
+
+### Features
+
+* **dhw:** support linking and clearing published emails in campaigns update ([2d68f6a](https://github.com/totalolage/deskohub-site/commit/2d68f6a6229685fa42e9bc157e516aeace3766d8))
+* **email-campaigns:** editable, previewable automated campaign emails via Email Library ([f04710c](https://github.com/totalolage/deskohub-site/commit/f04710c8bcdae1e333f9528785be140680085a27))
+
 ## [1.40.1](https://github.com/totalolage/deskohub-site/compare/dhw-v1.40.0...dhw-v1.40.1) (2026-11-22)
 
 
