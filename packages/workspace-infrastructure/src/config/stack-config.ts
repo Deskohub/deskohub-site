@@ -157,6 +157,55 @@ export const GcpProjectNumber = Schema.String.check(
 );
 export type GcpProjectNumber = typeof GcpProjectNumber.Type;
 
+/** A lowercase DNS hostname the edge certificate covers and routes. */
+export const EdgeHostname = Schema.String.check(
+  Schema.isPattern(
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
+  )
+).annotate({
+  identifier: "EdgeHostname",
+  description: "A lowercase DNS hostname such as workspace.example.com.",
+});
+
+/**
+ * The only project whose sandbox edge may serve plain HTTP, for a hosted
+ * proof without DNS.
+ */
+export const plainHttpEdgeProject = "deskohub-workspace-sandbox";
+
+/**
+ * The stage's external load balancer, Cloud Armor and token-route log
+ * exclusion. The static asset paths are fixed by the declaration, never by
+ * configuration, so no other route can reach Cloud CDN.
+ */
+export const WorkspaceEdgeConfig = Schema.Struct({
+  /**
+   * Hostnames of the managed certificate and the URL map. Empty only
+   * while HTTPS is off, when any host matches.
+   */
+  domains: Schema.Array(EdgeHostname),
+  /**
+   * HTTPS with a managed certificate and a port 80 redirect. Only the
+   * sandbox stage in `plainHttpEdgeProject` may turn it off.
+   */
+  enableHttps: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(true))
+  ),
+  /** Cloud CDN on the immutable static asset paths only. */
+  staticCdnEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(false))
+  ),
+  /** Preconfigured WAF rules only log until their matches are reviewed. */
+  wafPreview: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(true))
+  ),
+  /** Requests per minute per client IP to `/api/auth/` before throttling. */
+  authRateLimitPerMinute: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: 10_000 })
+  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed(120))),
+}).annotate({ identifier: "WorkspaceEdgeConfig" });
+export type WorkspaceEdgeConfig = typeof WorkspaceEdgeConfig.Type;
+
 const BaseStackConfig = Schema.Struct({
   projectId: GcpProjectId,
   projectNumber: GcpProjectNumber,
@@ -182,6 +231,11 @@ const BaseStackConfig = Schema.Struct({
    * collector beside the app; when absent, services run the app alone.
    */
   telemetryCollectorImage: Schema.optionalKey(ImageDigest),
+  /**
+   * The stage's edge. Absent, the stack declares none; once a stack has
+   * declared it, removing the key destroys it.
+   */
+  edge: Schema.optionalKey(WorkspaceEdgeConfig),
 });
 
 /**
@@ -226,7 +280,7 @@ export class WorkspaceStackConfigInvalid extends Data.TaggedError(
   "WorkspaceStackConfigInvalid"
 )<{
   readonly paths: ReadonlyArray<string>;
-  readonly reason: "schema" | "secret-material" | "identity";
+  readonly reason: "schema" | "secret-material" | "identity" | "edge";
 }> {
   override get message() {
     return `Workspace stack configuration is invalid (${this.reason}) at: ${this.paths.join(", ")}`;
@@ -328,8 +382,33 @@ export const decodeWorkspaceStackConfig = (input: unknown) =>
         reason: "identity",
       });
     }
+    const edgePaths = edgeProblems(config);
+    if (edgePaths.length > 0) {
+      return yield* new WorkspaceStackConfigInvalid({
+        paths: edgePaths,
+        reason: "edge",
+      });
+    }
     return config;
   });
+
+/**
+ * Plain HTTP is a sandbox proof mode in its approved project only, and an
+ * HTTPS edge needs at least one hostname for its certificate.
+ */
+const edgeProblems = (config: WorkspaceStackConfig) => {
+  const edge = config.edge;
+  if (edge === undefined) {
+    return [];
+  }
+  if (!edge.enableHttps) {
+    return config.stage === "sandbox" &&
+      config.projectId === plainHttpEdgeProject
+      ? []
+      : ["edge.enableHttps"];
+  }
+  return edge.domains.length > 0 ? [] : ["edge.domains"];
+};
 
 /**
  * Each role has its own service account, and every account lives in the

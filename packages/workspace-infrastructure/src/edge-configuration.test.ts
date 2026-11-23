@@ -1,136 +1,408 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync } from "node:fs";
+import * as Storage from "@alchemy.run/gcp/Storage";
+import { isOutput } from "alchemy/Output";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import {
+  decodeWorkspaceStackConfig,
+  plainHttpEdgeProject,
+  type WorkspaceEdgeConfig,
+  type WorkspaceStackConfig,
+} from "./config/stack-config";
+import {
+  sandboxConfigInput,
+  sandboxConfigInputIn,
+} from "./config/stack-config.test-utils";
+import {
+  declareWorkspaceEdge,
+  edgeStaticAssetPaths,
+  tokenRouteExclusionFilter,
+} from "./resources/edge-declarations";
+import { evaluate } from "./stack-evaluation.test-utils";
 
-/**
- * Static checks of the Terraform edge. CI has no Terraform; these pin the
- * contract `terraform validate` cannot: CDN stays off dynamic routes, both
- * backends carry Cloud Armor, and token-bearing request logs are dropped.
- */
-const edgeDirectory = new URL(
-  "../../../infra/workspace-edge/",
-  import.meta.url
-);
-const files = readdirSync(edgeDirectory).filter((name) => name.endsWith(".tf"));
-const sources = Object.fromEntries(
-  await Promise.all(
-    files.map(
-      async (name) =>
-        [name, await Bun.file(new URL(name, edgeDirectory)).text()] as const
-    )
-  )
-);
-const all = Object.values(sources).join("\n");
+const domains = ["workspace.example.com"];
 
-/** The body of one `resource "<type>" "<name>"` block, by brace matching. */
-const resourceBlock = (type: string, name: string) => {
-  const start = all.indexOf(`resource "${type}" "${name}" {`);
-  if (start < 0) {
-    return undefined;
+const decode = (input: unknown) =>
+  Effect.runSyncExit(decodeWorkspaceStackConfig(input));
+
+const decoded = (input: unknown): WorkspaceStackConfig => {
+  const exit = decode(input);
+  if (Exit.isFailure(exit)) {
+    throw new Error("expected the config to decode");
   }
-  let depth = 0;
-  for (let index = all.indexOf("{", start); index < all.length; index++) {
-    if (all[index] === "{") {
-      depth += 1;
-    } else if (all[index] === "}") {
-      depth -= 1;
-    }
-    if (depth === 0) {
-      return all.slice(start, index + 1);
-    }
-  }
-  return undefined;
+  return exit.value;
 };
 
-describe("workspace edge Terraform", () => {
-  test("balances braces in every file", () => {
-    for (const [name, source] of Object.entries(sources)) {
-      const withoutStrings = source.replace(/"(?:[^"\\]|\\.)*"/g, '""');
-      expect({
-        name,
-        open: withoutStrings.split("{").length,
-      }).toEqual({ name, open: withoutStrings.split("}").length });
+const rejection = (input: unknown) => {
+  const exit = decode(input);
+  if (Exit.isSuccess(exit)) {
+    throw new Error("expected the config to be rejected");
+  }
+  const reason = exit.cause.reasons.find((entry) => entry._tag === "Fail");
+  return reason?._tag === "Fail"
+    ? (reason.error as { reason: string; paths: ReadonlyArray<string> })
+    : undefined;
+};
+
+/** The approved sandbox project, where plain HTTP is allowed. */
+const proofInput = sandboxConfigInputIn(plainHttpEdgeProject);
+const { budget: _budget, ...sharedInput } = sandboxConfigInput;
+
+const httpsConfig = decoded({ ...sandboxConfigInput, edge: { domains } });
+const plainHttpConfig = decoded({
+  ...proofInput,
+  edge: {
+    domains: [],
+    enableHttps: false,
+    staticCdnEnabled: false,
+    wafPreview: true,
+  },
+});
+
+const edgeOf = (config: WorkspaceStackConfig): WorkspaceEdgeConfig => {
+  if (config.edge === undefined) {
+    throw new Error("expected an edge");
+  }
+  return config.edge;
+};
+
+const declare = (
+  config: WorkspaceStackConfig,
+  overrides: Partial<WorkspaceEdgeConfig> = {},
+  webService?: Parameters<typeof declareWorkspaceEdge>[2]
+) =>
+  evaluate(
+    declareWorkspaceEdge(
+      config,
+      { ...edgeOf(config), ...overrides },
+      webService
+    )
+  );
+
+const typesOf = (resources: Record<string, { readonly Type: string }>) =>
+  Object.fromEntries(
+    Object.entries(resources).map(([id, entry]) => [id, entry.Type])
+  );
+
+describe("edge configuration", () => {
+  test("defaults HTTPS on, CDN off, WAF in preview and 120 auth requests a minute", () => {
+    expect(httpsConfig.edge).toEqual({
+      domains,
+      enableHttps: true,
+      staticCdnEnabled: false,
+      wafPreview: true,
+      authRateLimitPerMinute: 120,
+    });
+  });
+
+  test("allows plain HTTP only for the sandbox stage in the approved project", () => {
+    expect(plainHttpConfig.edge?.enableHttps).toBe(false);
+    const plainHttp = { domains: [], enableHttps: false };
+    for (const input of [
+      { ...sandboxConfigInput, edge: plainHttp },
+      { ...sharedInput, stage: "preview", edge: plainHttp },
+      { ...sharedInput, stage: "production", edge: plainHttp },
+    ]) {
+      const rejected = rejection(input);
+      expect(rejected?.reason).toBe("edge");
+      expect(rejected?.paths).toEqual(["edge.enableHttps"]);
     }
-  });
-
-  test("requires Terraform 1.9 and the google provider with a GCS backend", () => {
-    expect(all).toContain('required_version = ">= 1.9"');
-    expect(all).toMatch(/source\s+= "hashicorp\/google"/);
-    expect(all).toContain('backend "gcs" {}');
-    expect(all).toMatch(/variable "region" \{[^}]*default\s+= "europe-west1"/);
-  });
-
-  test("fronts the Cloud Run web service through a serverless NEG", () => {
-    const neg = resourceBlock(
-      "google_compute_region_network_endpoint_group",
-      "web"
-    );
-    expect(neg).toContain('network_endpoint_type = "SERVERLESS"');
-    expect(neg).toContain("service = var.web_service_name");
-    expect(all).toMatch(
-      /variable "web_service_name" \{[^}]*default\s+= "workspace-web"/
-    );
+    const { budget: _proofBudget, ...proofShared } = proofInput;
     expect(
-      resourceBlock("google_compute_global_forwarding_rule", "https")
-    ).toContain('port_range            = "443"');
-    expect(resourceBlock("google_compute_url_map", "https_redirect")).toContain(
-      "https_redirect         = true"
-    );
+      rejection({ ...proofShared, stage: "production", edge: plainHttp })?.paths
+    ).toEqual(["edge.enableHttps"]);
   });
 
-  test("keeps CDN off dynamic routes and opt-in for static assets", () => {
-    const dynamic = resourceBlock("google_compute_backend_service", "dynamic");
-    const staticAssets = resourceBlock(
-      "google_compute_backend_service",
-      "static"
+  test("requires a hostname while HTTPS is on", () => {
+    expect(
+      rejection({ ...sandboxConfigInput, edge: { domains: [] } })?.paths
+    ).toEqual(["edge.domains"]);
+    expect(
+      rejection({ ...sandboxConfigInput, edge: { domains: ["Not A Host"] } })
+        ?.reason
+    ).toBe("schema");
+  });
+
+  test("never takes static paths from configuration", () => {
+    expect(
+      rejection({
+        ...sandboxConfigInput,
+        edge: { domains, staticAssetPaths: ["/api/*"] },
+      })?.paths
+    ).toEqual(["edge.staticAssetPaths"]);
+  });
+
+  test("leaves the edge out of a config without one", () => {
+    expect(decoded(sandboxConfigInput).edge).toBeUndefined();
+  });
+});
+
+describe("workspace edge declaration", () => {
+  test("declares the HTTPS edge under the existing physical names", async () => {
+    const { exit, resources } = await declare(httpsConfig);
+    expect(exit._tag).toBe("Success");
+    expect(typesOf(resources)).toEqual({
+      EdgeAddress: "GCP.Compute.GlobalAddress",
+      EdgeWebEndpointGroup: "GCP.Compute.RegionNetworkEndpointGroup",
+      EdgeSecurityPolicy: "GCP.Compute.SecurityPolicy",
+      EdgeDynamicBackend: "DeskohubWorkspace.EdgeBackendService",
+      EdgeStaticBackend: "DeskohubWorkspace.EdgeBackendService",
+      EdgeUrlMap: "GCP.Compute.UrlMap",
+      EdgeCertificate: "GCP.Compute.SslCertificate",
+      EdgeHttpsProxy: "GCP.Compute.TargetHttpsProxy",
+      EdgeHttpsForwardingRule: "GCP.Compute.GlobalForwardingRule",
+      EdgeHttpsRedirectUrlMap: "GCP.Compute.UrlMap",
+      EdgeHttpsRedirectProxy: "GCP.Compute.TargetHttpProxy",
+      EdgeHttpForwardingRule: "GCP.Compute.GlobalForwardingRule",
+      EdgeTokenRouteExclusion: "GCP.Logging.Exclusion",
+    });
+    expect(resources.EdgeAddress?.Props).toEqual({
+      addressName: "workspace-sandbox-edge",
+    });
+    expect(resources.EdgeWebEndpointGroup?.Props).toEqual({
+      networkEndpointGroupName: "workspace-sandbox-web",
+      region: "europe-west1",
+      networkEndpointType: "SERVERLESS",
+      cloudRun: { service: "workspace-web" },
+    });
+    expect(resources.EdgeCertificate?.Props).toEqual({
+      sslCertificateName: "workspace-sandbox-edge",
+      type: "MANAGED",
+      managed: { domains },
+    });
+    expect(resources.EdgeHttpsProxy?.Props.targetHttpsProxyName).toBe(
+      "workspace-sandbox-edge"
     );
-    expect(dynamic).toContain("enable_cdn            = false");
-    expect(dynamic).not.toContain("cdn_policy");
-    expect(staticAssets).toContain(
-      "enable_cdn            = var.static_cdn_enabled"
+    expect(isOutput(resources.EdgeHttpsProxy?.Props.urlMap)).toBe(true);
+    expect(resources.EdgeHttpsRedirectUrlMap?.Props).toEqual({
+      urlMapName: "workspace-sandbox-https-redirect",
+      defaultUrlRedirect: {
+        httpsRedirect: true,
+        redirectResponseCode: "MOVED_PERMANENTLY_DEFAULT",
+        stripQuery: false,
+      },
+    });
+    expect(resources.EdgeHttpsRedirectProxy?.Props.targetHttpProxyName).toBe(
+      "workspace-sandbox-https-redirect"
     );
-    expect(all).toMatch(
-      /variable "static_cdn_enabled" \{[^}]*default\s+= false/
-    );
-    // Overrides may only name immutable build-asset paths.
-    expect(sources["variables.tf"]).toContain(
-      'contains(["/_next/static/*", "/app/_expo/static/*", "/polyfills/*"], path)'
-    );
-    for (const block of [dynamic, staticAssets]) {
-      expect(block).toContain(
-        "security_policy       = google_compute_security_policy.workspace.id"
-      );
+    for (const [id, name, port] of [
+      ["EdgeHttpsForwardingRule", "workspace-sandbox-https", "443"],
+      ["EdgeHttpForwardingRule", "workspace-sandbox-http", "80"],
+    ] as const) {
+      const props = resources[id]?.Props;
+      expect(props.forwardingRuleName).toBe(name);
+      expect(props.loadBalancingScheme).toBe("EXTERNAL_MANAGED");
+      expect(props.portRange).toBe(port);
+      expect(isOutput(props.ipAddress)).toBe(true);
+      expect(isOutput(props.target)).toBe(true);
     }
-    const urlMap = resourceBlock("google_compute_url_map", "workspace");
-    expect(urlMap).toContain(
-      "default_service = google_compute_backend_service.dynamic.id"
-    );
+    expect(resources.EdgeUrlMap?.Props.hostRules).toEqual([
+      { hosts: domains, pathMatcher: "workspace" },
+    ]);
   });
 
-  test("starts Cloud Armor with WAF, auth throttling and a default rule", () => {
-    const policy = resourceBlock("google_compute_security_policy", "workspace");
-    expect(policy).toContain("sqli-v33-stable");
-    expect(policy).toContain("xss-v33-stable");
-    expect(policy).toContain("request.path.startsWith('/api/auth/')");
-    expect(policy).toContain('exceed_action  = "deny(429)"');
-    expect(policy).toContain("priority    = 2147483647");
+  test("serves the main URL map over plain HTTP on port 80 without HTTPS", async () => {
+    const { exit, resources } = await declare(plainHttpConfig);
+    expect(exit._tag).toBe("Success");
+    for (const id of [
+      "EdgeCertificate",
+      "EdgeHttpsProxy",
+      "EdgeHttpsForwardingRule",
+      "EdgeHttpsRedirectUrlMap",
+      "EdgeHttpsRedirectProxy",
+    ]) {
+      expect(resources[id]).toBeUndefined();
+    }
+    expect(resources.EdgeHttpProxy?.Props.targetHttpProxyName).toBe(
+      "workspace-sandbox-edge-http"
+    );
+    expect(resources.EdgeHttpForwardingRule?.Props.portRange).toBe("80");
+    // Reached by IP address, so any host matches.
+    expect(resources.EdgeUrlMap?.Props.hostRules).toEqual([
+      { hosts: ["*"], pathMatcher: "workspace" },
+    ]);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.edgeProtocol).toBe("http");
+    }
+  });
+
+  test("routes only the immutable asset paths to the static backend", async () => {
+    const { resources } = await declare(httpsConfig);
+    const map = resources.EdgeUrlMap?.Props;
+    expect(map.urlMapName).toBe("workspace-sandbox-edge");
+    expect(map.pathMatchers).toHaveLength(1);
+    const [matcher] = map.pathMatchers;
+    expect(matcher.name).toBe("workspace");
+    expect(matcher.pathRules).toHaveLength(1);
+    expect(matcher.pathRules[0].paths).toEqual([
+      "/_next/static/*",
+      "/app/_expo/static/*",
+      "/polyfills/*",
+    ]);
+    expect(edgeStaticAssetPaths).toEqual(matcher.pathRules[0].paths);
+    // Default and matcher default go to dynamic, the path rule to static.
+    expect(isOutput(map.defaultService)).toBe(true);
+    expect(matcher.defaultService).toBe(map.defaultService);
+    expect(matcher.pathRules[0].service).not.toBe(map.defaultService);
+  });
+
+  test("keeps CDN off the dynamic backend and opt-in on the static one", async () => {
+    for (const staticCdnEnabled of [false, true]) {
+      const { resources } = await declare(httpsConfig, { staticCdnEnabled });
+      const dynamic = resources.EdgeDynamicBackend?.Props;
+      const statics = resources.EdgeStaticBackend?.Props;
+      expect(dynamic).toMatchObject({
+        project: httpsConfig.projectId,
+        name: "workspace-sandbox-dynamic",
+        loadBalancingScheme: "EXTERNAL_MANAGED",
+        protocol: "HTTPS",
+        logConfig: { enable: false },
+      });
+      expect("cdnPolicy" in dynamic).toBe(false);
+      expect(statics).toMatchObject({
+        name: "workspace-sandbox-static",
+        loadBalancingScheme: "EXTERNAL_MANAGED",
+        protocol: "HTTPS",
+        logConfig: { enable: true, sampleRate: 1 },
+      });
+      expect(statics.cdnPolicy).toEqual(
+        staticCdnEnabled
+          ? {
+              cacheMode: "USE_ORIGIN_HEADERS",
+              negativeCaching: false,
+              cacheKeyPolicy: {
+                includeHost: true,
+                includeProtocol: true,
+                includeQueryString: false,
+              },
+            }
+          : undefined
+      );
+      // Both backends front the one NEG behind the one Cloud Armor policy.
+      for (const props of [dynamic, statics]) {
+        expect(isOutput(props.backendGroup)).toBe(true);
+        expect(isOutput(props.securityPolicy)).toBe(true);
+      }
+    }
+  });
+
+  test("starts Cloud Armor with WAF in preview, auth throttling and a default allow", async () => {
+    const { resources } = await declare(httpsConfig);
+    expect(resources.EdgeSecurityPolicy?.Props).toEqual({
+      securityPolicyName: "workspace-sandbox-edge",
+      description: "Workspace sandbox edge policy",
+      type: "CLOUD_ARMOR",
+      rules: [
+        {
+          action: "deny(403)",
+          priority: 1000,
+          preview: true,
+          description: "Preconfigured SQL injection rules",
+          match: {
+            expr: {
+              expression:
+                "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})",
+            },
+          },
+        },
+        {
+          action: "deny(403)",
+          priority: 1010,
+          preview: true,
+          description: "Preconfigured cross-site scripting rules",
+          match: {
+            expr: {
+              expression:
+                "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})",
+            },
+          },
+        },
+        {
+          action: "throttle",
+          priority: 2000,
+          description: "Throttle auth endpoints per client IP",
+          match: {
+            expr: { expression: "request.path.startsWith('/api/auth/')" },
+          },
+          rateLimitOptions: {
+            conformAction: "allow",
+            exceedAction: "deny(429)",
+            enforceOnKey: "IP",
+            rateLimitThreshold: { count: 120, intervalSec: 60 },
+          },
+        },
+        {
+          action: "allow",
+          priority: 2147483647,
+          description: "Default allow",
+          match: {
+            versionedExpr: "SRC_IPS_V1",
+            config: { srcIpRanges: ["*"] },
+          },
+        },
+      ],
+    });
+    const enforced = await declare(httpsConfig, {
+      wafPreview: false,
+      authRateLimitPerMinute: 60,
+    });
+    const rules = enforced.resources.EdgeSecurityPolicy?.Props.rules;
+    expect(rules[0].preview).toBe(false);
+    expect(rules[1].preview).toBe(false);
+    expect(rules[2].rateLimitOptions.rateLimitThreshold.count).toBe(60);
+  });
+
+  test("points the endpoint group at the declared web service", async () => {
+    // Any declared resource's output stands in for the web service name.
+    const { exit, resources } = await evaluate(
+      Effect.gen(function* () {
+        const service = yield* Storage.Bucket("WebServiceStandIn", {});
+        return yield* declareWorkspaceEdge(
+          httpsConfig,
+          edgeOf(httpsConfig),
+          service.bucketName
+        );
+      })
+    );
+    expect(exit._tag).toBe("Success");
+    expect(
+      isOutput(resources.EdgeWebEndpointGroup?.Props.cloudRun.service)
+    ).toBe(true);
   });
 
   test("drops request logs for every token-bearing route", async () => {
-    const exclusion = resourceBlock(
-      "google_logging_project_exclusion",
-      "token_route_requests"
+    expect(tokenRouteExclusionFilter).toBe(
+      '(resource.type="http_load_balancer" OR (resource.type="cloud_run_revision" AND log_id("run.googleapis.com/requests"))) AND httpRequest.requestUrl=~"^https?://[^/]+(/app/auth/callback|/api/auth/magic-link/verify|/api/email-campaigns/unsubscribe|(/[a-z]{2,3}-[A-Z]{2})?/marketing-preferences/access)([/?#]|$)"'
     );
-    expect(exclusion).toBeDefined();
-    for (const route of [
-      '"/app/auth/callback"',
-      '"/api/auth/magic-link/verify"',
-      "/marketing-preferences/access",
-      'resource.type=\\"http_load_balancer\\"',
-      'log_id(\\"run.googleapis.com/requests\\")',
+    const { resources } = await declare(httpsConfig);
+    expect(resources.EdgeTokenRouteExclusion?.Props).toEqual({
+      exclusionId: "workspace-sandbox-token-route-requests",
+      description: "Raw request logs for token-bearing Workspace routes",
+      filter: tokenRouteExclusionFilter,
+    });
+
+    const pattern = new RegExp(
+      tokenRouteExclusionFilter.match(/requestUrl=~"(.*)"$/)?.[1] ?? "^$"
+    );
+    for (const url of [
+      "https://workspace.example.com/app/auth/callback?code=x",
+      "https://workspace.example.com/api/auth/magic-link/verify?token=x",
+      "http://203.0.113.10/api/email-campaigns/unsubscribe/x",
+      "https://workspace.example.com/marketing-preferences/access#t",
+      "https://workspace.example.com/cs-CZ/marketing-preferences/access?t=x",
+      "https://workspace.example.com/app/auth/callback",
     ]) {
-      expect(all).toContain(route);
+      expect(url).toMatch(pattern);
     }
-    expect(all).toContain('"/api/email-campaigns/unsubscribe"');
+    for (const url of [
+      "https://workspace.example.com/",
+      "https://workspace.example.com/api/auth/session",
+      "https://workspace.example.com/app/auth/callbacks",
+      "https://workspace.example.com/x/app/auth/callback",
+    ]) {
+      expect(url).not.toMatch(pattern);
+    }
+
     // Every locale prefix in the Workspace router matches the generic one.
     const vercel = (await Bun.file(
       new URL("../../../apps/deskohub-workspace/vercel.json", import.meta.url)
@@ -142,100 +414,28 @@ describe("workspace edge Terraform", () => {
         ?.split("|") ?? [];
     expect(locales.length).toBeGreaterThan(0);
     for (const locale of locales) {
-      expect(`/${locale}`).toMatch(/^\/[a-z]{2,3}-[A-Z]{2}$/);
-    }
-    expect(all).toContain('locale_prefix = "(/[a-z]{2,3}-[A-Z]{2})?"');
-  });
-
-  test("serves HTTPS with a managed certificate and redirect by default", () => {
-    expect(all).toMatch(
-      /variable "enable_https" \{[^}]*type\s+= bool\s+default\s+= true/
-    );
-    for (const [type, name] of [
-      ["google_compute_managed_ssl_certificate", "workspace"],
-      ["google_compute_target_https_proxy", "workspace"],
-      ["google_compute_global_forwarding_rule", "https"],
-      ["google_compute_url_map", "https_redirect"],
-      ["google_compute_target_http_proxy", "https_redirect"],
-    ] as const) {
-      expect(resourceBlock(type, name)).toMatch(
-        /count\s+= var\.enable_https \? 1 : 0/
-      );
-      // Existing HTTPS state moves to index 0 instead of being replaced.
-      expect(all).toContain(
-        `moved {\n  from = ${type}.${name}\n  to   = ${type}.${name}[0]\n}`
-      );
-    }
-    expect(
-      resourceBlock("google_compute_target_https_proxy", "workspace")
-    ).toContain(
-      "ssl_certificates = [google_compute_managed_ssl_certificate.workspace[0].id]"
-    );
-    expect(
-      resourceBlock("google_compute_global_forwarding_rule", "http")
-    ).toContain("? google_compute_target_http_proxy.https_redirect[0].id");
-  });
-
-  test("serves the main URL map over plain HTTP when HTTPS is disabled", () => {
-    const proxy = resourceBlock(
-      "google_compute_target_http_proxy",
-      "workspace"
-    );
-    expect(proxy).toContain("count   = var.enable_https ? 0 : 1");
-    expect(proxy).toContain("url_map = google_compute_url_map.workspace.id");
-    const http = resourceBlock("google_compute_global_forwarding_rule", "http");
-    expect(http).not.toContain("count");
-    expect(http).toContain('port_range            = "80"');
-    expect(http).toContain(
-      ": google_compute_target_http_proxy.workspace[0].id"
-    );
-    // Without domains the URL map still routes static paths, for any host.
-    expect(resourceBlock("google_compute_url_map", "workspace")).toContain(
-      'hosts        = length(var.domains) > 0 ? var.domains : ["*"]'
-    );
-  });
-
-  test("allows plain HTTP only in the sandbox", () => {
-    expect(sources["variables.tf"]).toContain(
-      'condition     = var.enable_https || (var.stage == "sandbox" && var.project_id == "deskohub-workspace-sandbox")'
-    );
-  });
-
-  test("requires domains while HTTPS is enabled", () => {
-    expect(sources["variables.tf"]).toContain(
-      "condition     = length(var.domains) > 0 || !var.enable_https"
-    );
-  });
-
-  test("reports the edge protocol beside the existing outputs", () => {
-    const outputs = sources["outputs.tf"] ?? "";
-    expect(outputs).toContain(
-      'value       = var.enable_https ? "https" : "http"'
-    );
-    for (const name of [
-      "edge_protocol",
-      "edge_ip_address",
-      "security_policy",
-      "backend_services",
-    ]) {
-      expect(outputs).toContain(`output "${name}" {`);
-    }
-    // Outputs never read a resource that may have count 0.
-    expect(outputs).not.toMatch(/\[0\]/);
-    for (const name of [
-      "google_compute_managed_ssl_certificate",
-      "google_compute_target_https_proxy",
-      "google_compute_url_map.https_redirect",
-      "google_compute_target_http_proxy",
-      "google_compute_global_forwarding_rule",
-    ]) {
-      expect(outputs).not.toContain(name);
+      expect(
+        `https://workspace.example.com/${locale}/marketing-preferences/access`
+      ).toMatch(pattern);
     }
   });
 
-  test("keeps request logging off on the dynamic backend", () => {
-    expect(resourceBlock("google_compute_backend_service", "dynamic")).toMatch(
-      /log_config \{\s*enable = false\s*\}/
-    );
+  test("returns the outputs the hosted proof reads back", async () => {
+    const { exit } = await declare(httpsConfig);
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(Object.keys(exit.value).sort()).toEqual([
+        "backendServices",
+        "edgeIpAddress",
+        "edgeProtocol",
+        "securityPolicy",
+        "tokenRouteExclusionFilter",
+      ]);
+      expect(exit.value.edgeProtocol).toBe("https");
+      expect(Object.keys(exit.value.backendServices).sort()).toEqual([
+        "dynamic",
+        "static",
+      ]);
+    }
   });
 });

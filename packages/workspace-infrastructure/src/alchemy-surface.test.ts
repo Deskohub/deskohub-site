@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 import * as ArtifactRegistry from "@alchemy.run/gcp/ArtifactRegistry";
 import * as CloudScheduler from "@alchemy.run/gcp/CloudScheduler";
 import * as CloudTasks from "@alchemy.run/gcp/CloudTasks";
+import * as Compute from "@alchemy.run/gcp/Compute";
 import * as IAM from "@alchemy.run/gcp/IAM";
+import * as Logging from "@alchemy.run/gcp/Logging";
 import * as Monitoring from "@alchemy.run/gcp/Monitoring";
 import * as Run from "@alchemy.run/gcp/Run";
 import * as Storage from "@alchemy.run/gcp/Storage";
 import { isOutput } from "alchemy/Output";
-import { Stack } from "alchemy/Stack";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -44,6 +45,7 @@ import {
   runAsHolder,
   testWriterToken,
 } from "./release/release-writer.test-utils";
+import { EdgeBackendService } from "./resources/edge-backend-service";
 import {
   alertPolicyDeclarations,
   artifactRepositoryProps,
@@ -60,38 +62,13 @@ import {
   webTemplateSpecFingerprint,
   workerServiceProps,
 } from "./resources/service-declarations";
+import { evaluate } from "./stack-evaluation.test-utils";
 import { workspaceSurfaceClassification } from "./surface-classification";
 import {
   declareRecordedWorkspaceServices,
   declareWorkspaceFoundation,
   declareWorkspaceServices,
 } from "./workspace-stack";
-
-type RegisteredResource = {
-  readonly Type: string;
-  // biome-ignore lint/suspicious/noExplicitAny: Alchemy registers raw input props.
-  readonly Props: any;
-};
-
-/**
- * Evaluate a declaration against an empty in-memory stack. Registration
- * runs the real beta.87 constructors (and their logical-ID checks) without
- * providers, state or credentials.
- */
-const evaluate = async <A, E, R>(declaration: Effect.Effect<A, E, R>) => {
-  const resources: Record<string, RegisteredResource> = {};
-  const registration = declaration.pipe(
-    Effect.provideService(Stack, {
-      name: "DeskohubWorkspaceTest",
-      stage: "sandbox",
-      resources,
-      bindings: {},
-      actions: {},
-    } as never)
-  ) as Effect.Effect<A, E>; // Providers are only used on deploy, never here.
-  const exit = await Effect.runPromiseExit(registration);
-  return { exit, resources };
-};
 
 const countBy = (values: ReadonlyArray<string>) => {
   const counts: Record<string, number> = {};
@@ -159,14 +136,25 @@ describe("Alchemy beta.87 surface", () => {
     expect(await installedVersion("effect")).toBe("4.1.4");
   });
 
-  test("names only resource types the installed provider defines", () => {
+  test("names only resource types the stack's providers define", () => {
     const constructors: Record<string, { readonly Type?: unknown }> = {
       "GCP.ArtifactRegistry.Repository": ArtifactRegistry.Repository,
       "GCP.CloudScheduler.Job": CloudScheduler.Job,
       "GCP.CloudTasks.Queue": CloudTasks.Queue,
+      "GCP.Compute.GlobalAddress": Compute.GlobalAddress,
+      "GCP.Compute.GlobalForwardingRule": Compute.GlobalForwardingRule,
+      "GCP.Compute.RegionNetworkEndpointGroup":
+        Compute.RegionNetworkEndpointGroup,
+      "GCP.Compute.SecurityPolicy": Compute.SecurityPolicy,
+      "GCP.Compute.SslCertificate": Compute.SslCertificate,
+      "GCP.Compute.TargetHttpProxy": Compute.TargetHttpProxy,
+      "GCP.Compute.TargetHttpsProxy": Compute.TargetHttpsProxy,
+      "GCP.Compute.UrlMap": Compute.UrlMap,
       "GCP.IAM.Member": IAM.Member,
+      "GCP.Logging.Exclusion": Logging.Exclusion,
       "GCP.Monitoring.AlertPolicy": Monitoring.AlertPolicy,
       "GCP.Storage.Bucket": Storage.Bucket,
+      "DeskohubWorkspace.EdgeBackendService": EdgeBackendService,
     };
     const alchemyOwned = workspaceSurfaceClassification.flatMap((item) =>
       item.owner.kind === "alchemy" ? [item.owner.resourceType] : []
@@ -178,16 +166,12 @@ describe("Alchemy beta.87 surface", () => {
       }
       expect(constructors[resourceType]?.Type).toBe(resourceType);
     }
+    // The edge has no Terraform owner left.
     expect(
-      workspaceSurfaceClassification
-        .filter((item) => item.owner.kind === "terraform")
-        .map((item) => item.capability)
-    ).toEqual([
-      "External HTTPS load balancer and serverless NEG",
-      "Cloud Armor security policy",
-      "Cloud CDN policy",
-      "Log Router exclusions for token-bearing routes",
-    ]);
+      new Set(workspaceSurfaceClassification.map((item) => item.owner.kind))
+    ).toEqual(
+      new Set(["alchemy", "owner-bootstrap", "release-flow", "deferred"])
+    );
   });
 
   test("registers every foundation resource under a distinct logical ID", async () => {

@@ -19,6 +19,8 @@ import {
   releaseRecordLocation,
 } from "./src/release/gcs-release-store";
 import { requireStackWriter } from "./src/release/release-writer";
+import { EdgeBackendServiceProvider } from "./src/resources/edge-backend-service";
+import { declareWorkspaceEdge } from "./src/resources/edge-declarations";
 import { verifyStackTarget } from "./src/stack-target";
 import {
   declareRecordedWorkspaceServices,
@@ -61,11 +63,20 @@ const releasePlatform = (config: WorkspaceStackConfig) =>
  * `WORKSPACE_RELEASE_WRITER` holds the token of the lock the record holds:
  * only the release command's own runs touch the stack. Preview declares no
  * release-owned services and stays lock-free (#1455).
+ *
+ * A config with `edge` also declares the stage's load balancer, Cloud Armor
+ * policy and token-route log exclusion, and outputs `edgeIpAddress`,
+ * `edgeProtocol`, `securityPolicy`, `backendServices` and
+ * `tokenRouteExclusionFilter`.
  */
 export default Alchemy.Stack(
   "DeskohubWorkspace",
   {
-    providers: GCP.providers(),
+    // The edge backends' provider reuses the GCP credentials and HTTP
+    // client the native providers resolve.
+    providers: EdgeBackendServiceProvider.pipe(
+      Layer.provideMerge(GCP.providers())
+    ),
     state: Layer.unwrap(
       stackConfig.pipe(
         Effect.map((config) =>
@@ -100,6 +111,16 @@ export default Alchemy.Stack(
       // preview stops the deploy before any service is planned.
       Effect.orDie
     );
-    return { ...foundation, services };
+    // The edge follows the services: its endpoint group names the declared
+    // web service, so it is created after it and destroyed before it.
+    const edge =
+      config.edge === undefined
+        ? {}
+        : yield* declareWorkspaceEdge(
+            config,
+            config.edge,
+            services?.webService
+          );
+    return { ...foundation, services, ...edge };
   })
 );
