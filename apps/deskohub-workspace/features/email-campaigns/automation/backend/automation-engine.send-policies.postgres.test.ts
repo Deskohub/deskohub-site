@@ -928,7 +928,7 @@ describe.skipIf(!database)(
         expect(await claimsOf(campaignId)).toEqual([]);
       });
 
-      test("a version that froze a library email delivers that email through the guard", async () => {
+      test("a version that froze a library email delivers that email through the guard, and still skips a pass holder", async () => {
         const subject = "Synthetic library email";
         const published = await seedPublishedEmail(database.db, {
           document: {
@@ -961,15 +961,34 @@ describe.skipIf(!database)(
           start
         );
         const customer = await signUp("guard-library-email", start);
+        const holder = await signUp("guard-library-holder", start);
+        await fixtures.holdPass({
+          customer: holder,
+          kind: "entry-pack",
+          validFrom: "2026-10-01",
+          validUntil: "2026-12-31",
+        });
         await scenario.tick(start.add({ minutes: 1 }));
 
-        expect(await runsOf(campaignId)).toMatchObject([
-          { status: "ended", outcome: "sent" },
+        const outcomes = Object.fromEntries(
+          (await runsOf(campaignId)).map((run) => [
+            run.customer,
+            [run.status, run.outcome, run.reason],
+          ])
+        );
+        expect(outcomes).toEqual({
+          [customer]: ["ended", "sent", null],
+          [holder]: ["ended", "skipped", "pass-holder"],
+        });
+        expect(requests().map((request) => request.to)).toEqual([
+          [emailOf(customer)],
         ]);
         expect(
           scenario.resend
             .subjects()
-            .filter(({ to }) => to === emailOf(customer))
+            .filter(
+              ({ to }) => to === emailOf(customer) || to === emailOf(holder)
+            )
         ).toEqual([{ to: emailOf(customer), subject }]);
       });
 

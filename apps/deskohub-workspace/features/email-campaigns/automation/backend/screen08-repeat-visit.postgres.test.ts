@@ -396,6 +396,71 @@ describe.skipIf(!database)(
       expect(mailed()).toEqual([emailOf(customer)]);
     });
 
+    test("qualifying and non-qualifying finishes one intake takes together start runs only for the qualifying visit", async () => {
+      const { campaignId } = await begin();
+      const paid = await fixtures.addCustomer("mixed-paid");
+      const packed = await fixtures.addCustomer("mixed-entry-pack");
+      const stayed = await fixtures.addCustomer("mixed-overnight");
+      const day = await visit({
+        label: "mixed-paid-day",
+        customer: paid,
+        day: 1,
+      });
+      const pack = await visit({
+        label: "mixed-pack-day",
+        customer: packed,
+        day: 1,
+        payment: "entry-pack",
+      });
+      const overnight = await visit({
+        label: "mixed-overnight",
+        customer: stayed,
+        day: 0,
+        overnight: true,
+      });
+
+      // The engine first runs once all three visits have finished.
+      await settle(day.endsAt.add({ minutes: 5 }));
+
+      const { rows: finishes } = await pool.query<{
+        id: string;
+        reservation: WorkspaceReservationId;
+        processed: boolean;
+      }>(
+        `select id, workspace_reservation_id as reservation, automation_processed_at is not null as processed
+          from customer_events where kind = 'reservation-finished' and workspace_reservation_id = any($1)`,
+        [[day.reservationId, pack.reservationId, overnight.reservationId]]
+      );
+      const finishOf = (reservationId: WorkspaceReservationId) =>
+        finishes.find((event) => event.reservation === reservationId)!.id;
+      const { rows: intakes } = await pool.query<{ eventIds: string[] }>(
+        `select subject->'eventIds' as "eventIds" from email_campaign_automation_work_units
+          where kind = 'intake' and subject->'eventIds' ?| $1`,
+        [finishes.map((event) => event.id)]
+      );
+      // Matching rules the Entry-pack visit out in SQL; one intake unit took
+      // the day visit and the overnight stay, whose visit it judges.
+      expect(finishes.map((event) => event.processed)).toEqual([
+        true,
+        true,
+        true,
+      ]);
+      expect(intakes).toHaveLength(1);
+      expect(intakes[0]!.eventIds.toSorted()).toEqual(
+        [
+          finishOf(day.reservationId),
+          finishOf(overnight.reservationId),
+        ].toSorted()
+      );
+      expect(await dispositions(campaignId)).toEqual({
+        [finishedKey(day.reservationId)]: "started",
+      });
+      expect(await outcomesOf(campaignId)).toEqual([
+        [day.reservationId, "condition-failed", null],
+      ]);
+      expect(requests()).toEqual([]);
+    });
+
     test("a one-off campaign email five days before the second visit defers the send 14 Prague days, sent on the first tick after", async () => {
       const { at, campaignId } = await begin();
       const customer = await fixtures.addCustomer("one-off-gap");
@@ -437,6 +502,56 @@ describe.skipIf(!database)(
         (await read.sends(campaignId)).map((send) => iso(send.created_at))
       ).toEqual([gapEnd.toString()]);
       expect(mailed()).toEqual([emailOf(customer)]);
+    });
+
+    test("a pass acquired while the one-off campaign gap defers the send skips the customer at the due tick, with no request", async () => {
+      const { at, campaignId } = await begin();
+      const customer = await fixtures.addCustomer("gap-pass");
+      await visit({ label: "gap-pass-first", customer, day: 0 });
+      const second = await visit({
+        label: "gap-pass-second",
+        customer,
+        day: 10,
+      });
+      const deliveredAt = pragueAt(today.add({ days: 5 }), "10:00");
+      await fixtures.deliverOneOffCampaign({ customer, at: deliveredAt });
+      const gapEnd = deliveredAt
+        .toZonedDateTimeISO(prague)
+        .add({ days: 14 })
+        .toInstant();
+
+      await settle(at, second.endsAt.add({ hours: 1 }));
+
+      expect((await runsOf(campaignId))[1]).toMatchObject({
+        reservation: second.reservationId,
+        status: "active",
+        dueAt: gapEnd.toString(),
+      });
+      await fixtures.holdPass({
+        customer,
+        kind: "entry-pack",
+        validFrom: today.add({ days: 12 }).toString(),
+        validUntil: today.add({ days: 60 }).toString(),
+      });
+
+      const progress = await scenario.runUntil({
+        from: second.endsAt.add({ hours: 1 }),
+        until: gapEnd.add({ hours: 24 }),
+        onTicks: true,
+        settled: async () =>
+          (await read.runs(campaignId)).every((run) => run.status === "ended"),
+      });
+      latest = progress.at;
+
+      expect(progress.settled).toBe(true);
+      expect(progress.at.toString()).toBe(gapEnd.toString());
+      expect((await outcomesOf(campaignId))[1]).toEqual([
+        second.reservationId,
+        "skipped",
+        "pass-holder",
+      ]);
+      expect(requests()).toEqual([]);
+      expect(await claimHolders(campaignId)).toEqual([]);
     });
 
     test("consent withdrawn before the email is submitted skips the customer", async () => {
