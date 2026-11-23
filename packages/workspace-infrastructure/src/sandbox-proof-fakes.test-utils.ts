@@ -383,11 +383,12 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
       // The JSON API object read, with the HTTP status `-w` appends.
       const [, bucket = "", encoded = ""] = object;
       const name = decodeURIComponent(encoded);
-      const live = world.objects?.[name]?.live;
+      const stored = world.objects?.[name];
+      const live = stored?.live;
       print(
         live == null
           ? `${JSON.stringify({ error: { code: 404, message: `No such object: ${bucket}/${name}` } })}\n404`
-          : `${JSON.stringify({ generation: live })}\n200`
+          : `${JSON.stringify({ name, generation: live, crc32c: stored?.generations[live] })}\n200`
       );
       return 0;
     }

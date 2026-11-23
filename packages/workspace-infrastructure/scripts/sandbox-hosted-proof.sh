@@ -421,18 +421,14 @@ terraform_edge() {
     -var enable_https=false
 }
 
-# An object's live generation from the Cloud Storage JSON API, or "absent"
-# only when the service answers 404 "No such object" for this object. An
-# authentication, transport or any other error fails, so an unreadable
-# object never reads as an unchanged one.
-object_generation() {
-  local url response code body generation token
-  url="https://storage.googleapis.com/storage/v1/b/${state_bucket}/o/$(jq -rn --arg name "$1" '$name | @uri')?fields=generation"
-  trace curl -sS "$url" "(bearer from gcloud, never printed)"
-  if $dry_run; then
-    echo 1
-    return 0
-  fi
+# One state-bucket object's live metadata from the Cloud Storage JSON API,
+# as JSON with the requested fields, or "absent" only when the service
+# answers 404 "No such object" for this very object. An authentication,
+# transport or any other error fails, so an unreadable object never reads
+# as a missing or unchanged one.
+storage_object() {
+  local name="$1" fields="$2" url response code body token
+  url="https://storage.googleapis.com/storage/v1/b/${state_bucket}/o/$(jq -rn --arg name "$name" '$name | @uri')?fields=${fields}"
   token="$(gcloud auth print-access-token)" || return 1
   [[ -n "$token" ]] || return 1
   response="$(printf 'Authorization: Bearer %s\n' "$token" |
@@ -441,18 +437,35 @@ object_generation() {
   body="${response%$'\n'*}"
   case "$code" in
     200)
-      generation="$(jq -r '.generation // empty' <<<"$body" 2>/dev/null)" || return 1
-      [[ "$generation" =~ ^[0-9]+$ ]] || return 1
-      echo "$generation"
+      jq -ce . <<<"$body" 2>/dev/null || return 1
       ;;
     404)
-      jq -e --arg object "${state_bucket}/$1" \
+      jq -e --arg object "${state_bucket}/${name}" \
         '.error.code == 404 and (.error.message == "No such object: \($object)")' \
         >/dev/null <<<"$body" 2>/dev/null || return 1
       echo absent
       ;;
     *) return 1 ;;
   esac
+}
+
+# An object's live generation, or "absent"; fails when unreadable.
+object_generation() {
+  local object generation
+  trace curl -sS "https://storage.googleapis.com/storage/v1/b/${state_bucket}/o/<$1>?fields=generation" \
+    "(bearer from gcloud, never printed)"
+  if $dry_run; then
+    echo 1
+    return 0
+  fi
+  object="$(storage_object "$1" generation)" || return 1
+  if [[ "$object" == absent ]]; then
+    echo absent
+    return 0
+  fi
+  generation="$(jq -r '.generation // empty' <<<"$object")"
+  [[ "$generation" =~ ^[0-9]+$ ]] || return 1
+  echo "$generation"
 }
 
 # No Alchemy lease holder: a live holder refreshes the 60 s lease well
@@ -893,20 +906,20 @@ live_state_manifest() {
   count=0
   while IFS= read -r name; do
     [[ -z "$name" || "$name" == "$lease_object" ]] && continue
-    # A listed name with no live generation is noncurrent history: skip it.
-    if ! described="$(gcloud storage objects describe "gs://${state_bucket}/${name}" --format=json 2>"${out}.err")"; then
-      grep -qiE 'not found|404' "${out}.err" && continue
-      cat "${out}.err" >&2
+    # Only a name the service confirms has no live object is skipped
+    # (noncurrent history); any other unreadable object fails the manifest
+    # before a snapshot is accepted or a restore writes anything.
+    described="$(storage_object "$name" name,generation,crc32c)" ||
       fail "state object ${name} is unreadable"
-    fi
+    [[ "$described" == absent ]] && continue
     jq -c --arg name "$name" \
-      'select(.name == $name and .generation != null and .crc32c_hash != null)
-        | {name, generation: (.generation | tostring), crc32c: .crc32c_hash}' \
+      'select(.name == $name and (.generation | tostring | test("^[0-9]+$")) and (.crc32c // "") != "")
+        | {name, generation: (.generation | tostring), crc32c}' \
       <<<"$described" >>"${out}.rows"
     count=$((count + 1))
   done < <(sort -u <<<"$names")
   jq -s 'sort_by(.name)' "${out}.rows" >"$out"
-  rm -f "${out}.rows" "${out}.err"
+  rm -f "${out}.rows"
   [[ "$(jq 'length' "$out")" == "$count" ]] ||
     fail "a state object described without its own name, generation or CRC32C"
 }

@@ -404,6 +404,41 @@ describe("state snapshot and restore", () => {
     });
   });
 
+  test("fails on an unreadable object instead of leaving it out", () => {
+    // A credential error worded like a missing object, on a live object.
+    const credentialError: FakeRule = {
+      tool: "curl",
+      pattern: "storage\\.googleapis\\.com/storage/v1/b/.*Queue\\.json",
+      stdout:
+        '{"error":{"code":401,"message":"credential file not found"}}\n401',
+    };
+    withProofFakes({ ...stateWorld(), rules: [credentialError] }, (fakes) => {
+      const snapshot = runPhase(fakes, "state-snapshot-locked", locked);
+      expect(snapshot.exitCode).toBe(1);
+      expect(snapshot.output).toContain("Queue.json is unreadable");
+
+      seed(fakes, {
+        "state-snapshot.json": JSON.stringify([
+          {
+            name: `${stackPrefix}Service.json`,
+            generation: "3",
+            crc32c: "crc-service-3",
+          },
+        ]),
+      });
+      const restore = runPhase(fakes, "state-restore-locked", locked);
+      expect(restore.exitCode).toBe(1);
+      expect(restore.output).toContain("Queue.json is unreadable");
+      const writes = fakes
+        .calls()
+        .filter((call) => /^gcloud storage (cp|rm) /.test(call));
+      expect(writes).toEqual([]);
+      expect(fakes.world().objects?.[`${stackPrefix}Queue.json`]?.live).toBe(
+        "7"
+      );
+    });
+  });
+
   test("refuses to snapshot or restore without the writer lock", () => {
     withProofFakes(stateWorld(), (fakes) => {
       for (const phase of ["state-snapshot-locked", "state-restore-locked"]) {
