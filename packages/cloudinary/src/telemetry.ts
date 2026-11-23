@@ -5,6 +5,7 @@ import type {
   TimeInput,
 } from "@opentelemetry/api";
 import type { Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { Predicate } from "effect";
 
 /**
  * A signed Cloudinary URL carries its signature as an `s--<signature>--` path
@@ -23,11 +24,11 @@ const isStringArray = (
   value: AttributeValue
 ): value is StringArrayAttributeValue =>
   Array.isArray(value) &&
-  value.every((item) => item == null || typeof item === "string");
+  value.every((item) => item == null || Predicate.isString(item));
 
 /** Returns `value` itself when it carries no signature. */
 const redactAttributeValue = (value: AttributeValue): AttributeValue => {
-  if (typeof value === "string") return redactCloudinarySignatures(value);
+  if (Predicate.isString(value)) return redactCloudinarySignatures(value);
   if (!isStringArray(value)) return value;
 
   const redacted = value.map((item) =>
@@ -48,10 +49,7 @@ const redactAttributes = (attributes: Attributes): Attributes =>
 
 const isAttributes = (
   value: Attributes | TimeInput | undefined
-): value is Attributes =>
-  typeof value === "object" &&
-  !Array.isArray(value) &&
-  !(value instanceof Date);
+): value is Attributes => Predicate.isObject(value) && !Predicate.isDate(value);
 
 const redactStatus = (status: SpanStatus): SpanStatus =>
   status.message === undefined

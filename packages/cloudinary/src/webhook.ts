@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash, timingSafeEqual } from "node:crypto";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import {
   type CloudinaryConfig,
   CloudinaryRuntimeConfig,
@@ -155,15 +155,20 @@ function isCloudinarySignature(input: {
   );
 }
 
+const decodeCloudinaryWebhookPayload = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Unknown)
+);
+
 function parseCloudinaryWebhookPayload(bodyText: string) {
-  return Effect.try({
-    try: () => JSON.parse(bodyText) as unknown,
-    catch: (error) =>
-      new CloudinaryWebhookValidationError({
-        message: "Invalid JSON payload",
-        cause: error,
-      }),
-  });
+  return decodeCloudinaryWebhookPayload(bodyText).pipe(
+    Effect.mapError(
+      (error) =>
+        new CloudinaryWebhookValidationError({
+          message: "Invalid JSON payload",
+          cause: error,
+        })
+    )
+  );
 }
 
 function verifyCloudinaryWebhookRequestWithConfig(

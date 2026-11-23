@@ -1,5 +1,8 @@
 import { beforeAll, describe, expect, expectTypeOf, test } from "bun:test";
-import type { CloudinaryAsset } from "@deskohub/cloudinary";
+import {
+  CloudinaryAssetSchema,
+  CloudinaryPublicIdSchema,
+} from "@deskohub/cloudinary";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CloudinaryImage } from "./cloudinary-image";
 
@@ -9,13 +12,17 @@ expectTypeOf<
 
 const publicId = "workspace/DSC03267_TOP_qopcnq";
 
-const asset = {
+const asset = CloudinaryAssetSchema.make({
   context: { custom: { alt: "Metadata alt" } },
+  created_at: "2026-01-01T00:00:00Z",
+  format: "jpg",
   height: 1200,
-  public_id: publicId,
+  public_id: CloudinaryPublicIdSchema.make(publicId),
+  resource_type: "image",
   secure_url: `https://res.cloudinary.com/demo/image/upload/${publicId}.jpg`,
+  url: `http://res.cloudinary.com/demo/image/upload/${publicId}.jpg`,
   width: 1600,
-} as CloudinaryAsset;
+});
 
 const renderedAlts = (markup: string) =>
   [...markup.matchAll(/\salt="([^"]*)"/g)].map(([, alt]) => alt);

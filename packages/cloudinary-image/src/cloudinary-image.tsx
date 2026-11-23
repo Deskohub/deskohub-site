@@ -1,6 +1,7 @@
 "use client";
 
 import type { CloudinaryAsset } from "@deskohub/cloudinary";
+import { imageSourcePublicId } from "@deskohub/cloudinary/delivery";
 import { CldImage, type CldImageProps } from "next-cloudinary";
 
 type ImageSize = number | "fill";
@@ -27,7 +28,7 @@ interface VariantConfig {
   className?: string;
 }
 
-const variantConfig: Record<CloudinaryImageVariant, VariantConfig> = {
+const variantConfig = {
   hero: {
     size: { width: "fill", height: "fill" },
     preload: true,
@@ -49,7 +50,7 @@ const variantConfig: Record<CloudinaryImageVariant, VariantConfig> = {
     size: { width: 1920, height: 1080 },
     crop: "limit",
   },
-};
+} satisfies Record<CloudinaryImageVariant, VariantConfig>;
 
 /** How each crop mode fits the image into its box. */
 const cropFit = {
@@ -72,7 +73,7 @@ const imageDimensions = (
   size: VariantConfig["size"],
   fill: boolean
 ): ImageDimensions =>
-  fill || typeof size.width !== "number" || typeof size.height !== "number"
+  fill || size.width === "fill" || size.height === "fill"
     ? { fill: true }
     : { width: size.width, height: size.height };
 
@@ -118,12 +119,12 @@ export function CloudinaryImage({
   style,
   ...props
 }: CloudinaryImageProps) {
-  const config = variantConfig[variant];
+  const config: VariantConfig = variantConfig[variant];
   const fit = cropFit[config.crop];
 
   return (
     <CldImage
-      src={typeof source === "string" ? source : source.public_id}
+      src={imageSourcePublicId(source)}
       alt={alt}
       blurDataURL={blurDataURL}
       placeholder={blurDataURL ? "blur" : "empty"}

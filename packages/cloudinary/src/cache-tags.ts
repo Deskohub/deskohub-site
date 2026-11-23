@@ -1,62 +1,62 @@
+import { Predicate } from "effect";
 import type { CloudinaryPublicId } from "./schema";
 
 const maxPrimitiveLength = 100;
+const maxEntries = 50;
+const maxDepth = 10;
+const maxSerializedLength = 1000;
 
 /** `String(value)`, which spells `null` and `undefined` out, cut to 100 characters. */
-const stringifyPrimitive = (value: unknown) => {
+const stringifyPrimitive = <Value>(value: Value) => {
   const stringValue = String(value);
   return stringValue.length > maxPrimitiveLength
     ? `${stringValue.substring(0, maxPrimitiveLength)}...`
     : stringValue;
 };
 
-export function createStableHash(value: unknown): string {
-  const seen = new WeakSet();
-  const maxDepth = 10;
-  const maxStringLength = 1000;
+/**
+ * A short hash that is equal for structurally equal values. Arrays and plain
+ * objects are walked, cycles included; anything else hashes by `String`.
+ */
+export function createStableHash<Value>(value: Value): string {
+  const seen = new WeakSet<object>();
 
-  const stringify = (nestedValue: unknown, depth = 0): string => {
+  const stringify = <Nested>(nestedValue: Nested, depth = 0): string => {
     if (depth > maxDepth) {
       return "[...]";
     }
 
-    if (nestedValue === null || typeof nestedValue !== "object") {
+    if (!Predicate.isObjectOrArray(nestedValue)) {
       return stringifyPrimitive(nestedValue);
     }
 
     if (seen.has(nestedValue)) {
       return "[circular]";
     }
-
     seen.add(nestedValue);
 
     if (Array.isArray(nestedValue)) {
       const items = nestedValue
-        .slice(0, 50)
+        .slice(0, maxEntries)
         .map((item) => stringify(item, depth + 1));
       seen.delete(nestedValue);
-      return `[${items.join(",")}${nestedValue.length > 50 ? ",..." : ""}]`;
+      return `[${items.join(",")}${nestedValue.length > maxEntries ? ",..." : ""}]`;
     }
 
-    const sortedKeys = Object.keys(nestedValue).sort().slice(0, 50);
-    const pairs = sortedKeys.map(
-      (key) =>
-        `${key}:${stringify((nestedValue as Record<string, unknown>)[key], depth + 1)}`
-    );
+    const pairs = Object.keys(nestedValue)
+      .sort()
+      .slice(0, maxEntries)
+      .map((key) => `${key}:${stringify(nestedValue[key], depth + 1)}`);
     seen.delete(nestedValue);
 
     return `{${pairs.join(",")}}`;
   };
 
-  const serialized = stringify(value);
-  const truncatedSerialized =
-    serialized.length > maxStringLength
-      ? serialized.substring(0, maxStringLength)
-      : serialized;
+  const serialized = stringify(value).substring(0, maxSerializedLength);
 
   let hash = 0;
-  for (let index = 0; index < truncatedSerialized.length; index++) {
-    hash = ((hash << 5) - hash + truncatedSerialized.charCodeAt(index)) | 0;
+  for (let index = 0; index < serialized.length; index++) {
+    hash = ((hash << 5) - hash + serialized.charCodeAt(index)) | 0;
   }
 
   return Math.abs(hash).toString(36);
@@ -70,7 +70,7 @@ export function createCloudinaryCacheTags({
   return {
     all: () => `${namespace}:all`,
     image: (publicId: CloudinaryPublicId) => `${namespace}:img:${publicId}`,
-    search: (tags?: unknown, maxResults?: number) => {
+    search: <Tags>(tags?: Tags, maxResults?: number) => {
       const parts = [`${namespace}:search`];
 
       if (tags) {
