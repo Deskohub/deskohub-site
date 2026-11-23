@@ -1,5 +1,5 @@
 import type { User as BetterAuthUser } from "better-auth";
-import { Context, Data, Effect, identity, Layer, Option, Schema } from "effect";
+import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { retryDatabaseRead } from "@/db/retry-database-read";
 import { type AgentScope, isAgentScope } from "../../agent-scopes";
 import {
@@ -129,13 +129,12 @@ const authorizeSession = (
     accessToken: string
   ) {
     const authority = yield* loadAuthority;
-    const claims = yield* Effect.tryPromise({
-      try: () => authority.validateAccessToken(accessToken),
-      catch: identity,
-    }).pipe(
+    const claims = yield* Effect.tryPromise(() =>
+      authority.validateAccessToken(accessToken)
+    ).pipe(
       retryDatabaseRead,
-      Effect.mapError((cause) =>
-        isProviderRejection(cause)
+      Effect.mapError((rejection) =>
+        isProviderRejection(rejection.cause)
           ? invalidToken()
           : unavailable("authentication.agent-token.verification")
       ),
@@ -159,10 +158,9 @@ const authorizeSession = (
       decodeClientId(claims.client_id)
     ).pipe(Effect.mapError(invalidToken));
 
-    const user = yield* Effect.tryPromise({
-      try: () => authority.findUser(accountId),
-      catch: identity,
-    }).pipe(
+    const user = yield* Effect.tryPromise(() =>
+      authority.findUser(accountId)
+    ).pipe(
       retryDatabaseRead,
       Effect.mapError(() =>
         unavailable("authentication.agent-token.account-lookup")

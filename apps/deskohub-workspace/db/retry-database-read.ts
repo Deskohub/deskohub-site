@@ -55,15 +55,19 @@ const hasTransientDriverCause = <E>(error: E, depth: number): boolean =>
   (isTransientDriverError(error.cause) ||
     hasTransientDriverCause(error.cause, depth + 1));
 
-const isRetryableDatabaseReadError = <E>(error: E) =>
+const isRetryableFailure = <E>(error: E) =>
   isRetryableEffectSqlFailure(error) ||
   (error instanceof DrizzleQueryError && hasTransientDriverCause(error, 0));
+
+// `Effect.tryPromise` wraps a rejected promise's reason in an UnknownError.
+const isRetryableDatabaseReadError = <E>(error: E) =>
+  isRetryableFailure(Cause.isUnknownError(error) ? error.cause : error);
 
 /**
  * Retries a read that failed on a transient database fault: a retryable
  * Effect SQL failure, or a node-postgres query (Better Auth's pool) that timed
- * out or lost its connection. Permanent database errors and other failures
- * fail at once.
+ * out or lost its connection, also as the rejection `Effect.tryPromise`
+ * wraps. Permanent database errors and other failures fail at once.
  */
 export const retryDatabaseRead = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(

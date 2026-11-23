@@ -218,3 +218,28 @@ test.each([
   expect(result).toBe(failure);
   expect(read.attempts()).toBe(1);
 });
+
+test("retries a timed-out node-postgres read that a promise rejected with", async () => {
+  let attempts = 0;
+  const result = await Effect.tryPromise(async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      throw nodePostgresFailure(new Error("Query read timeout"));
+    }
+    return "loaded";
+  }).pipe(retryDatabaseRead, withInstantSleeps, Effect.runPromise);
+
+  expect(result).toBe("loaded");
+  expect(attempts).toBe(2);
+});
+
+test("does not retry a Better Auth API error that a promise rejected with", async () => {
+  let attempts = 0;
+  const result = await Effect.tryPromise(async () => {
+    attempts += 1;
+    throw Object.assign(new Error("Invalid token"), { name: "APIError" });
+  }).pipe(retryDatabaseRead, Effect.flip, withInstantSleeps, Effect.runPromise);
+
+  expect(result.cause).toMatchObject({ name: "APIError" });
+  expect(attempts).toBe(1);
+});
