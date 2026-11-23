@@ -13,6 +13,8 @@ export interface SandboxProofIdentity {
   readonly stateBucket: string;
   /** The pushed collector image digest, once the images phase ran. */
   readonly telemetryCollectorImage?: string;
+  /** The proof run's disposable queue ID suffix, once foundation ran. */
+  readonly disposableQueueSuffix?: string;
 }
 
 /** The approved gross cap and teardown of the sandbox proof (#1452). */
@@ -76,6 +78,9 @@ export const sandboxProofStackConfigInput = (
   ...(identity.telemetryCollectorImage === undefined
     ? {}
     : { telemetryCollectorImage: identity.telemetryCollectorImage }),
+  ...(identity.disposableQueueSuffix === undefined
+    ? {}
+    : { disposableQueueSuffix: identity.disposableQueueSuffix }),
 });
 
 /** Build and decode the config with the package schema; returns its JSON. */
@@ -124,6 +129,7 @@ if (import.meta.main) {
       process.env.SANDBOX_TELEMETRY_COLLECTOR_DIGEST ?? "",
       process.env.SANDBOX_STACK_CONFIG_DRY_RUN === "true"
     ),
+    disposableQueueSuffix: process.env.SANDBOX_QUEUE_SUFFIX || undefined,
   };
   process.stdout.write(
     `${await Effect.runPromise(sandboxProofStackConfig(identity))}\n`

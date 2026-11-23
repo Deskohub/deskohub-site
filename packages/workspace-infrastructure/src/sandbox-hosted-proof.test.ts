@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect";
 import {
   isLockedStackAction,
   lockedStackActions,
-  lockedStackArgs,
+  lockedStackInvocation,
 } from "../scripts/sandbox-locked-stack";
 import {
   sandboxProofBudget,
@@ -332,6 +332,8 @@ describe("sandbox proof runner", () => {
     expect(phasesIn(output)).toEqual([...proofPhases, ...teardownPhases]);
     expectInOrder(output, [
       "gcloud run services list",
+      "gcloud storage cp",
+      "gs://deskohub-workspace-sandbox-workspace-state/sandbox-proof/run.env",
       "bun scripts/sandbox-stack-config.ts",
       "bun run release deploy",
       "docker buildx build",
@@ -352,22 +354,29 @@ describe("sandbox proof runner", () => {
       "bun scripts/sandbox-locked-stack.ts drift",
       "bun scripts/sandbox-locked-stack.ts repair",
       "bun run release deploy",
-      "setsid bun run release deliver",
-      "sleep 75",
+      "SANDBOX_PROOF_INTERRUPT_TOKEN=",
+      "bun run release deliver --sha",
+      "sleep 65",
       "bun run release unlock --holder",
       "sleep 65",
-      "gcloud storage objects list",
+      "bun scripts/sandbox-locked-stack.ts state-snapshot",
       "bun run release restore --release-id",
-      "gcloud storage cp",
+      "bun scripts/sandbox-locked-stack.ts state-snapshot",
+      "bun scripts/sandbox-locked-stack.ts state-restore",
       "bun run release deploy",
       "bun run release restore --release-id",
+      "https://logging.googleapis.com/v2/projects/deskohub-workspace-sandbox/exclusions",
+      "gcloud projects get-ancestors",
+      "gcloud logging sinks list --project=deskohub-workspace-sandbox",
+      "gcloud logging read",
+      "https://cloudtrace.googleapis.com/v1/projects/deskohub-workspace-sandbox/traces/",
       "token=synthetic-probe-marker",
       "gcloud logging read",
       "cloudtrace.googleapis.com",
-      "gcloud logging exclusions list",
       "destroy -input=false -auto-approve",
       "bun scripts/sandbox-locked-stack.ts destroy",
       "gcloud storage rm gs://deskohub-workspace-sandbox-workspace-state/workspace-release-record.sandbox.json",
+      "gcloud storage rm gs://deskohub-workspace-sandbox-workspace-state/sandbox-proof/run.env",
       "gcloud run services list",
       "CLOUDSDK_BILLING_QUOTA_PROJECT=deskohub-workspace-sandbox gcloud billing projects describe",
     ]);
@@ -419,15 +428,33 @@ describe("sandbox proof stack config", () => {
 });
 
 describe("writer-locked stack actions", () => {
+  test("snapshot and restore state through the runner as the lock holder", () => {
+    for (const [action, phase, mutates] of [
+      ["state-snapshot", "state-snapshot-locked", false],
+      ["state-restore", "state-restore-locked", true],
+    ] as const) {
+      const { command, args } = lockedStackInvocation(action, "sandbox");
+      expect(command).toBe("bash");
+      expect(args[0]).toEndWith("scripts/sandbox-hosted-proof.sh");
+      expect(args.slice(1)).toEqual([phase]);
+      expect(lockedStackActions[action].mutates).toBe(mutates);
+    }
+  });
+
   test("map to Alchemy commands for exactly the given stage", () => {
-    expect(lockedStackArgs("drift", "sandbox")).toEqual([
+    const alchemyArgs = (action: "drift" | "repair" | "destroy") => {
+      const { command, args } = lockedStackInvocation(action, "sandbox");
+      expect(command).toEndWith("node_modules/.bin/alchemy");
+      return args;
+    };
+    expect(alchemyArgs("drift")).toEqual([
       "drift",
       "alchemy.run.ts",
       "--stage",
       "sandbox",
       "--no-input",
     ]);
-    expect(lockedStackArgs("repair", "sandbox")).toEqual([
+    expect(alchemyArgs("repair")).toEqual([
       "drift",
       "alchemy.run.ts",
       "--stage",
@@ -436,7 +463,7 @@ describe("writer-locked stack actions", () => {
       "--yes",
       "--no-input",
     ]);
-    expect(lockedStackArgs("destroy", "sandbox")).toEqual([
+    expect(alchemyArgs("destroy")).toEqual([
       "destroy",
       "alchemy.run.ts",
       "--stage",
@@ -453,6 +480,7 @@ describe("writer-locked stack actions", () => {
       mutates: true,
     });
     expect(isLockedStackAction("destroy")).toBe(true);
+    expect(isLockedStackAction("state-restore")).toBe(true);
     expect(isLockedStackAction("deploy")).toBe(false);
   });
 });

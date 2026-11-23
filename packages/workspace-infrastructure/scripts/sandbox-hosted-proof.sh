@@ -171,6 +171,44 @@ billing() {
   $dry_run || CLOUDSDK_BILLING_QUOTA_PROJECT="$project_id" gcloud billing "$@"
 }
 
+# GET one Google API resource. The bearer token goes to curl on stdin, so it
+# is never traced or visible in the process list; any HTTP error fails. A dry
+# run prints the placeholder.
+google_get() {
+  local placeholder="$1" url="$2"
+  trace curl -fsS "$url" "(bearer from gcloud, never printed)"
+  if $dry_run; then
+    printf '%s\n' "$placeholder"
+    return 0
+  fi
+  local token
+  token="$(gcloud auth print-access-token)" || return 1
+  printf 'Authorization: Bearer %s\n' "$token" |
+    curl -fsS --max-time 30 -H @- "$url"
+}
+
+# The project's log exclusions as a JSON array, from the Logging API: the
+# pinned SDK has no `gcloud logging exclusions` group. A second page fails
+# rather than being ignored.
+project_exclusions_json() {
+  local body
+  body="$(google_get '{"exclusions":[]}' \
+    "https://logging.googleapis.com/v2/projects/${project_id}/exclusions?pageSize=100")" ||
+    return 1
+  if $dry_run; then
+    echo '[]'
+    return 0
+  fi
+  jq -e '.nextPageToken == null' >/dev/null <<<"$body" || return 1
+  jq -c '.exclusions // []' <<<"$body"
+}
+
+project_exclusion_names() {
+  local exclusions
+  exclusions="$(project_exclusions_json)" || return 1
+  $dry_run || jq -r '.[] | .name' <<<"$exclusions"
+}
+
 # Alchemy beta.87 rejects federated credential files, so it gets a bearer
 # token (google-github-actions/auth `token_format: access_token`). The token
 # lives at most one hour; a step past 45 minutes mints a fresh one from the
@@ -195,6 +233,14 @@ stack_config_file="${proof_dir}/stack-config.json"
 digests_file="${proof_dir}/digests.env"
 releases_file="${proof_dir}/releases.env"
 edge_file="${proof_dir}/edge.env"
+# The proof run's disposable queue ID suffix, kept in the state bucket
+# outside the stack prefix so a later cleanup-only run declares the same
+# queues. Removed with the stack.
+proof_run_file="${proof_dir}/proof-run.env"
+proof_run_object="sandbox-proof/run.env"
+# Hosted proof starts only this long before the teardown deadline, leaving
+# time for its own teardown and a cleanup-only rerun.
+hosted_proof_teardown_margin_seconds=86400
 
 load_env_file() {
   # shellcheck disable=SC1090
@@ -214,6 +260,7 @@ record_value() {
 # with the package's own schema before any use.
 write_stack_config() {
   local collector_digest="${1:-}"
+  load_env_file "$proof_run_file"
   trace bun scripts/sandbox-stack-config.ts
   (
     cd "$package_dir"
@@ -222,6 +269,7 @@ write_stack_config() {
       SANDBOX_REGION="$region" \
       SANDBOX_STATE_BUCKET="$state_bucket" \
       SANDBOX_TELEMETRY_COLLECTOR_DIGEST="$collector_digest" \
+      SANDBOX_QUEUE_SUFFIX="${QUEUE_SUFFIX:-}" \
       SANDBOX_STACK_CONFIG_DRY_RUN="$dry_run" \
       bun scripts/sandbox-stack-config.ts
   ) >"${stack_config_file}.next"
@@ -358,10 +406,6 @@ wait_for_quiet_lease() {
   expect_equal "Alchemy lease generation over 65 s" "$after" "$before"
 }
 
-stack_objects_json() {
-  capture '[]' gcloud storage objects list "gs://${state_bucket}/${stack_prefix}**" --format=json
-}
-
 # List one resource class into an inventory file. A denied or failed list
 # is recorded as unverified, never as empty.
 inventory_class() {
@@ -392,7 +436,7 @@ take_inventory() {
   inventory_class "$dir" network-endpoint-groups gcloud compute network-endpoint-groups list "${p[@]}" --regions="$region" --format='value(name)'
   inventory_class "$dir" security-policies gcloud compute security-policies list "${p[@]}" --format='value(name)'
   inventory_class "$dir" ssl-certificates gcloud compute ssl-certificates list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" logging-exclusions gcloud logging exclusions list "${p[@]}" --format='value(name)'
+  inventory_class "$dir" logging-exclusions project_exclusion_names
   inventory_class "$dir" logging-sinks gcloud logging sinks list "${p[@]}" --format='value(name,destination)'
   inventory_class "$dir" tasks-queues gcloud tasks queues list "${p[@]}" --location="$region" --format='value(name)'
   inventory_class "$dir" scheduler-jobs gcloud scheduler jobs list "${p[@]}" --location="$region" --format='value(name)'
@@ -413,7 +457,7 @@ proof_pattern() {
     tasks-queues) echo '/queues/workspace-' ;;
     scheduler-jobs) echo '/jobs/workspace-' ;;
     storage-buckets) echo "^(gs://)?${mobile_updates_bucket}/?\$" ;;
-    state-objects) echo "${stack_prefix}[^_]" ;;
+    state-objects) echo "${stack_prefix}[^_]|/${proof_run_object}\$" ;;
     *) echo '^$' ;;
   esac
 }
@@ -449,8 +493,31 @@ phase_preflight() {
   expect_equal "project number" "$number" "$SANDBOX_EXPECTED_PROJECT_NUMBER"
   location="$(capture "$region" gcloud storage buckets describe "gs://${state_bucket}" --format='value(location)')"
   expect_equal "state bucket location" "${location,,}" "$region"
+  if [[ ! -f "$proof_run_file" ]] &&
+    ! run gcloud storage cp "gs://${state_bucket}/${proof_run_object}" "$proof_run_file"; then
+    notice "no recorded proof run; queue IDs come from Alchemy state alone"
+  fi
   load_env_file "$digests_file"
   write_stack_config "${COLLECTOR_DIGEST:-}"
+  check_teardown_window
+}
+
+# The stack config's teardown deadline bounds the proof: hosted-proof must
+# start at least a day before it; cleanup-only runs at any time.
+check_teardown_window() {
+  local teardown_at deadline now latest_start
+  teardown_at="$(jq -r '.budget.teardownAt // empty' "$stack_config_file")"
+  [[ -n "$teardown_at" ]] || fail "the sandbox stack config records no teardown deadline"
+  deadline="$(date -u -d "$teardown_at" +%s)" || fail "unreadable teardown deadline ${teardown_at}"
+  now="$(date -u +%s)"
+  latest_start=$((deadline - hosted_proof_teardown_margin_seconds))
+  if [[ "${SANDBOX_PROOF_MODE:-}" == hosted-proof ]] && ((now > latest_start)); then
+    fail "hosted-proof must start by $(date -u -d "@${latest_start}" +%Y-%m-%dT%H:%M:%SZ), a day before the ${teardown_at} teardown deadline; only cleanup-only may run now"
+  fi
+  if ((now > deadline)); then
+    warning "the ${teardown_at} teardown deadline has passed; tear the sandbox down"
+  fi
+  echo "teardown deadline ${teardown_at}; ${SANDBOX_PROOF_MODE:-this mode} may run"
 }
 
 # Read-only: billing link, enabled APIs the proof needs, log routing.
@@ -475,8 +542,12 @@ phase_readonly_inventory() {
   fi
   run gcloud logging sinks list --project="$project_id" --format='table(name,destination,filter)' ||
     notice "log sinks unverified (denied); inherited folder/organization sinks are not listed"
-  run gcloud logging exclusions list --project="$project_id" --format='table(name,filter,disabled)' ||
+  local exclusions
+  if exclusions="$(project_exclusions_json)"; then
+    $dry_run || jq -r '.[] | [.name, (.disabled // false), .filter] | @tsv' <<<"$exclusions"
+  else
     notice "log exclusions unverified (denied)"
+  fi
 }
 
 phase_baseline_inventory() {
@@ -484,6 +555,11 @@ phase_baseline_inventory() {
 }
 
 phase_foundation() {
+  # Cloud Tasks keeps a deleted queue's ID unavailable for days, so every
+  # proof run declares queues of its own, recorded before Alchemy creates
+  # any for cleanup and recovery.
+  record_value "$proof_run_file" QUEUE_SUFFIX "r${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+  run gcloud storage cp "$proof_run_file" "gs://${state_bucket}/${proof_run_object}"
   write_stack_config
   # An empty record declares no release-owned service: foundation only.
   release deploy
@@ -582,38 +658,91 @@ phase_drift() {
   expect_no_op_plan
 }
 
-# Kill an in-flight `release deliver` once its Alchemy apply holds the
-# lease, then recover: the writer lock has no expiry, so the confirmed-dead
-# holder is cleared with `release unlock --holder`, any pending traffic
-# change is settled by `release recover`, and the deliver is rerun.
+# The persisted Cloud Run generation of every release service.
+release_service_generations() {
+  local service generation
+  for service in "${release_services[@]}"; do
+    generation="$(capture 1 gcloud run services describe "$service" --project="$project_id" \
+      --region="$region" --format='value(metadata.generation)' 2>/dev/null || true)"
+    printf '%s=%s\n' "$service" "$generation"
+  done
+}
+
+# Processes whose environment carries the interrupt token. Every descendant
+# of the interrupted deliver inherits it, including the Alchemy child Bun's
+# spawner moves into its own session and any process reparented after its
+# parent died. A reaped or zombie process has no environment and drops out.
+token_processes() {
+  local token="$1" environ pid
+  for environ in /proc/[0-9]*/environ; do
+    pid="${environ#/proc/}"
+    pid="${pid%/environ}"
+    if grep -qzx "SANDBOX_PROOF_INTERRUPT_TOKEN=${token}" "$environ" 2>/dev/null; then
+      printf '%s\n' "$pid"
+    fi
+  done
+  return 0
+}
+
+# Stop, then kill, every token process until none remain; stopping first
+# keeps one from forking a replacement. Fails if any survive.
+kill_token_processes() {
+  local token="$1" pids
+  for _ in $(seq 1 50); do
+    mapfile -t pids < <(token_processes "$token")
+    ((${#pids[@]} == 0)) && return 0
+    kill -STOP "${pids[@]}" 2>/dev/null || true
+    kill -KILL "${pids[@]}" 2>/dev/null || true
+    sleep 0.2
+  done
+  mapfile -t pids < <(token_processes "$token")
+  ((${#pids[@]} == 0))
+}
+
+# Kill an in-flight `release deliver` once its Alchemy apply has persisted a
+# Cloud Run change, with every process it started, then recover: once the
+# Alchemy lease is quiet the confirmed-dead holder is cleared with
+# `release unlock --holder` (the writer lock has no expiry), any pending
+# traffic change is settled by `release recover`, and the deliver is rerun.
 phase_interrupt_recover() {
   load_env_file "$digests_file"
   expect_settled "$(release_status before-interrupt)"
   local before log="${proof_dir}/interrupted-deliver.log"
-  before="$(object_generation "$lease_object")"
+  before="$(release_service_generations)"
   use_stack_config
-  trace setsid bun run release deliver --sha "$GITHUB_SHA" --image-digest "${PROBE_V3_DIGEST:-}" "&"
+  trace env "SANDBOX_PROOF_INTERRUPT_TOKEN=<random>" bun run release deliver \
+    --sha "$GITHUB_SHA" --image-digest "${PROBE_V3_DIGEST:-}" "&"
   if ! $dry_run; then
-    (cd "$package_dir" && exec setsid bun release.run.ts deliver \
-      --sha "$GITHUB_SHA" --image-digest "$PROBE_V3_DIGEST") >"$log" 2>&1 &
-    local pid=$! interrupted=false
-    for _ in $(seq 1 600); do
-      if ! kill -0 "$pid" 2>/dev/null; then
-        break
-      fi
-      if [[ "$(object_generation "$lease_object")" != "$before" ]]; then
-        kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "$pid"
-        interrupted=true
-        break
-      fi
-      sleep 0.5
+    local token pid changed=false running deadline=$((SECONDS + 900))
+    token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+    (cd "$package_dir" && exec env "SANDBOX_PROOF_INTERRUPT_TOKEN=${token}" bun release.run.ts \
+      deliver --sha "$GITHUB_SHA" --image-digest "$PROBE_V3_DIGEST") >"$log" 2>&1 &
+    pid=$!
+    # The token is in place once `env` has executed; a deliver that has
+    # already ended never shows it.
+    for _ in $(seq 1 100); do
+      [[ -n "$(token_processes "$token")" ]] && break
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
     done
+    # `kill -0` would still see an exited, unreaped deliver; the token does not.
+    while ((SECONDS < deadline)) && [[ -n "$(token_processes "$token")" ]]; do
+      if [[ "$(release_service_generations)" != "$before" ]]; then
+        changed=true
+        break
+      fi
+      sleep 1
+    done
+    running="$(token_processes "$token")"
+    kill_token_processes "$token" ||
+      fail "processes of the interrupted deliver survived SIGKILL: $(token_processes "$token" | tr '\n' ' ')"
     wait "$pid" 2>/dev/null || true
-    $interrupted || fail "the deliver ended before its apply took the lease; nothing was interrupted"
-    pgrep -s "$pid" >/dev/null && fail "processes of the interrupted deliver are still running"
+    $changed || fail "the deliver persisted no Cloud Run change before it ended; nothing was interrupted"
+    [[ -n "$running" ]] || fail "the deliver had exited when its change was seen; nothing was interrupted"
+    echo "killed the deliver after a persisted Cloud Run change; all its processes have exited"
   fi
-  echo "interrupted deliver during its Alchemy apply"
-  pause 75
+  # A live Alchemy holder refreshes its lease; a quiet one has expired.
+  wait_for_quiet_lease
   local status holder
   status="$(release_status interrupted)"
   holder="$(json_get '.record.writer.holder' "$status")"
@@ -642,15 +771,89 @@ phase_interrupt_recover() {
   expect_serving v3
 }
 
-# Snapshot exact generations of the stack's Alchemy state objects, make a
-# tracked change (restore traffic to v2), restore those generations, read
-# them back and reconcile. Never while a lock or lease is held.
+# One live generation and CRC32C per Alchemy state object of the stack,
+# lease excluded, sorted by name. A listing may also return noncurrent
+# generations, so it only supplies names; each object is then described,
+# which reads its live generation alone.
+live_state_manifest() {
+  local out="$1" names name described count
+  names="$(gcloud storage objects list "gs://${state_bucket}/${stack_prefix}**" --format='value(name)')" ||
+    fail "the stack's state objects are unreadable"
+  : >"${out}.rows"
+  count=0
+  while IFS= read -r name; do
+    [[ -z "$name" || "$name" == "$lease_object" ]] && continue
+    # A listed name with no live generation is noncurrent history: skip it.
+    if ! described="$(gcloud storage objects describe "gs://${state_bucket}/${name}" --format=json 2>"${out}.err")"; then
+      grep -qiE 'not found|404' "${out}.err" && continue
+      cat "${out}.err" >&2
+      fail "state object ${name} is unreadable"
+    fi
+    jq -c --arg name "$name" \
+      'select(.name == $name and .generation != null and .crc32c_hash != null)
+        | {name, generation: (.generation | tostring), crc32c: .crc32c_hash}' \
+      <<<"$described" >>"${out}.rows"
+    count=$((count + 1))
+  done < <(sort -u <<<"$names")
+  jq -s 'sort_by(.name)' "${out}.rows" >"$out"
+  rm -f "${out}.rows" "${out}.err"
+  [[ "$(jq 'length' "$out")" == "$count" ]] ||
+    fail "a state object described without its own name, generation or CRC32C"
+}
+
+# Internal phases the writer-lock holder runs (sandbox-locked-stack.ts
+# state-snapshot | state-restore); never called directly.
+require_writer_lock() {
+  [[ -n "${WORKSPACE_RELEASE_WRITER:-}" ]] || fail "$1 runs only under the writer lock"
+}
+
+phase_state_snapshot_locked() {
+  require_writer_lock state-snapshot-locked
+  live_state_manifest "${proof_dir}/state-live.json"
+}
+
+# Copy each snapshot generation back where the live one differs and remove
+# objects the snapshot lacks, each guarded by the live generation just read,
+# then require the live objects to match the snapshot's names and CRC32C.
+phase_state_restore_locked() {
+  require_writer_lock state-restore-locked
+  local snapshot="${proof_dir}/state-snapshot.json" current="${proof_dir}/state-before-restore.json"
+  [[ -s "$snapshot" ]] || fail "no state snapshot to restore"
+  live_state_manifest "$current"
+  local name wanted live
+  while IFS=$'\t' read -r name wanted; do
+    live="$(jq -r --arg name "$name" '.[] | select(.name == $name) | .generation' "$current")"
+    [[ "$live" == "$wanted" ]] && continue
+    run gcloud storage cp "gs://${state_bucket}/${name}#${wanted}" "gs://${state_bucket}/${name}" \
+      --if-generation-match="${live:-0}"
+  done < <(jq -r '.[] | [.name, .generation] | @tsv' "$snapshot")
+  while IFS=$'\t' read -r name live; do
+    run gcloud storage rm "gs://${state_bucket}/${name}" --if-generation-match="$live"
+  done < <(jq -r --slurpfile snapshot "$snapshot" \
+    '($snapshot[0] | map(.name)) as $kept | .[] | select(.name as $n | $kept | index($n) | not) | [.name, .generation] | @tsv' \
+    "$current")
+  live_state_manifest "${proof_dir}/state-restored.json"
+  jq -e --slurpfile snapshot "$snapshot" \
+    'map({name, crc32c}) == ($snapshot[0] | map({name, crc32c}))' \
+    "${proof_dir}/state-restored.json" >/dev/null ||
+    fail "the live state objects do not match the snapshot"
+  echo "live Alchemy state matches the snapshot object for object"
+}
+
+# The live state manifest, read under the writer lock, into a named file.
+locked_state_manifest() {
+  locked_stack state-snapshot
+  $dry_run || cp "${proof_dir}/state-live.json" "${proof_dir}/$1"
+}
+
+# Snapshot the stack's live Alchemy state, make a tracked change (restore
+# traffic to v2), restore the snapshot and reconcile. Snapshot and restore
+# each hold the writer lock, after the Alchemy lease has gone quiet.
 phase_state_snapshot_restore() {
   load_env_file "$releases_file"
   expect_settled "$(release_status before-snapshot)"
   wait_for_quiet_lease
-  local snapshot="${proof_dir}/state-snapshot.json" changed="${proof_dir}/state-changed.json"
-  stack_objects_json | jq_filter_lease >"$snapshot"
+  locked_state_manifest state-snapshot.json
 
   local status generation
   status="$(release_status before-tracked-change)"
@@ -660,51 +863,20 @@ phase_state_snapshot_restore() {
 
   expect_settled "$(release_status after-tracked-change)"
   wait_for_quiet_lease
-  stack_objects_json | jq_filter_lease >"$changed"
+  locked_state_manifest state-changed.json
   if ! $dry_run; then
-    jq -e --slurpfile before "$snapshot" \
-      '. != $before[0]' "$changed" >/dev/null ||
+    jq -e --slurpfile before "${proof_dir}/state-snapshot.json" '. != $before[0]' \
+      "${proof_dir}/state-changed.json" >/dev/null ||
       fail "the tracked change wrote no Alchemy state object"
   fi
 
-  local name generation_wanted
-  if ! $dry_run; then
-    while IFS=$'\t' read -r name generation_wanted; do
-      if [[ "$(jq -r --arg n "$name" '.[] | select(.name == $n) | .generation' "$changed")" != "$generation_wanted" ]]; then
-        run gcloud storage cp "gs://${state_bucket}/${name}#${generation_wanted}" "gs://${state_bucket}/${name}"
-      fi
-    done < <(jq -r '.[] | [.name, .generation] | @tsv' "$snapshot")
-    while read -r name; do
-      run gcloud storage rm "gs://${state_bucket}/${name}"
-    done < <(jq -r --slurpfile before "$snapshot" \
-      '($before[0] | map(.name)) as $kept | .[] | select(.name as $n | $kept | index($n) | not) | .name' "$changed")
-  else
-    trace gcloud storage cp "gs://${state_bucket}/<object>#<snapshot generation>" "gs://${state_bucket}/<object>"
-    trace gcloud storage rm "gs://${state_bucket}/<object created after the snapshot>"
-  fi
-
-  local restored="${proof_dir}/state-restored.json"
-  stack_objects_json | jq_filter_lease >"$restored"
-  if ! $dry_run; then
-    jq -e --slurpfile before "$snapshot" \
-      '(map({name, crc32c}) | sort) == ($before[0] | map({name, crc32c}) | sort)' \
-      "$restored" >/dev/null || fail "restored state objects do not match the snapshot"
-  fi
-  echo "Alchemy state restored to the snapshot generations"
+  locked_stack state-restore
+  echo "Alchemy state restored to the snapshot"
 
   release deploy
   expect_no_op_plan
   expect_settled "$(release_status after-state-restore)"
   expect_serving v2
-}
-
-jq_filter_lease() {
-  if $dry_run; then
-    cat
-  else
-    jq --arg lease "$lease_object" \
-      '[.[] | select(.name != $lease) | {name, generation: (.generation | tostring), crc32c: .crc32c_hash}] | sort_by(.name)'
-  fi
 }
 
 phase_restore_v1() {
@@ -718,57 +890,170 @@ phase_restore_v1() {
   expect_serving v1
 }
 
-# Token-route requests carry a synthetic marker; it must not reach any log
-# or trace this identity can read. Unreadable sources are reported, never
-# counted as clean.
-phase_edge_privacy() {
-  local ip path body
+# Every enabled sink that receives this project's logs must drop
+# token-route request logs before a marker is sent: the project's own sinks
+# and any folder or organization sink that includes or intercepts its
+# children. _Default is covered by the Terraform project exclusion, every
+# other sink by an enabled sink exclusion with the same filter. _Required
+# carries only audit logs and cannot be changed. An unreadable level, or a
+# sink whose filter could match without that exclusion, fails the proof.
+verify_log_routing() {
+  local dir="${proof_dir}/log-routing" exclusions ancestors sinks id type
+  mkdir -p "$dir"
+  exclusions="$(project_exclusions_json)" ||
+    fail "project log exclusions are unreadable; log routing unverified"
+  printf '%s\n' "$exclusions" >"${dir}/project-exclusions.json"
+  ancestors="$(capture "[{\"id\":\"${project_id}\",\"type\":\"project\"}]" \
+    gcloud projects get-ancestors "$project_id" --format=json)" ||
+    fail "the project's folders and organization are unreadable; inherited sinks unverified"
+  sinks="$(capture '[]' gcloud logging sinks list --project="$project_id" --format=json)" ||
+    fail "project log sinks are unreadable; log routing unverified"
+  if $dry_run; then
+    trace gcloud logging sinks list "--folder=<each ancestor folder>" --format=json
+    trace gcloud logging sinks list "--organization=<ancestor organization>" --format=json
+    echo "  expect every enabled project and inherited sink to exclude ${edge_exclusion}'s filter" >&2
+    return 0
+  fi
+  jq --arg parent "projects/${project_id}" '[.[] | . + {parent: $parent, level: "project"}]' \
+    <<<"$sinks" >"${dir}/sinks.json"
+  while IFS=$'\t' read -r id type; do
+    case "$type" in
+      project) continue ;;
+      folder | organization) ;;
+      *) fail "unknown ancestor type ${type}; inherited sinks unverified" ;;
+    esac
+    sinks="$(gcloud logging sinks list "--${type}=${id}" --format=json)" ||
+      fail "${type} ${id} log sinks are unreadable; inherited sinks unverified"
+    jq --arg parent "${type}s/${id}" --slurpfile known "${dir}/sinks.json" \
+      '$known[0] + [.[] | . + {parent: $parent, level: "ancestor"}]' <<<"$sinks" >"${dir}/sinks.next"
+    mv "${dir}/sinks.next" "${dir}/sinks.json"
+  done < <(jq -r '.[] | [.id, .type] | @tsv' <<<"$ancestors")
+  local uncovered
+  uncovered="$(jq -r --arg name "$edge_exclusion" --slurpfile exclusions "${dir}/project-exclusions.json" '
+    ($exclusions[0] | map(select(.name == $name and .disabled != true)) | first | .filter) as $filter
+    | if $filter == "" or $filter == null then "missing enabled project exclusion \($name)"
+      else .[]
+        | select(.disabled != true)
+        | select(.level == "project" or .includeChildren == true or .interceptChildren == true)
+        | select(.level != "project" or (.name != "_Required" and .name != "_Default"))
+        | select([.exclusions[]? | select(.disabled != true and .filter == $filter)] | length == 0)
+        | "\(.parent) sink \(.name) -> \(.destination)"
+      end' "${dir}/sinks.json")"
+  [[ -z "$uncovered" ]] ||
+    fail "token-route request logs could reach: $(tr '\n' ';' <<<"$uncovered")"
+  echo "every project and inherited log sink drops token-route request logs"
+}
+
+# The probe's current OTLP export: its trace ID must name a structured log
+# line from this service and a Cloud Trace trace holding the synthetic span.
+# A missing, empty or unreadable answer fails the proof.
+verify_probe_telemetry() {
+  local ip body trace_id="" status="" attempt
   ip="$(edge_ip)"
+  for attempt in $(seq 1 10); do
+    body="$(capture '{"otlp":{"traceId":"0123456789abcdef0123456789abcdef","status":200}}' \
+      curl -fsS --max-time 10 "http://${ip}/healthz" 2>/dev/null || true)"
+    trace_id="$(jq -r '.otlp.traceId // empty' <<<"$body" 2>/dev/null || true)"
+    status="$(jq -r '.otlp.status // empty' <<<"$body" 2>/dev/null || true)"
+    [[ "$trace_id" =~ ^[0-9a-f]{32}$ && "$status" =~ ^2[0-9][0-9]$ ]] && break
+    $dry_run && break
+    pause 10
+  done
+  [[ "$trace_id" =~ ^[0-9a-f]{32}$ && "$status" =~ ^2[0-9][0-9]$ ]] ||
+    fail "the probe reports no accepted OTLP export (trace '${trace_id}', status '${status}')"
+  echo "probe exported synthetic trace ${trace_id} (collector status ${status})"
+
+  local entries="" found=false
+  for attempt in $(seq 1 12); do
+    if entries="$(capture '[{}]' gcloud logging read \
+      "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${web_service}\" AND jsonPayload.otlp.traceId=\"${trace_id}\"" \
+      --project="$project_id" --freshness=1h --limit=1 --format='json(timestamp,jsonPayload.otlp)')"; then
+      [[ "$(jq 'length' <<<"$entries")" != 0 ]] && {
+        found=true
+        break
+      }
+    else
+      fail "Cloud Logging is unreadable; the probe's structured log is unverified"
+    fi
+    $dry_run && break
+    pause 15
+  done
+  $found || fail "no structured probe log for trace ${trace_id}"
+  echo "structured probe log present for trace ${trace_id}"
+
+  local trace_body="" spans=0
+  for attempt in $(seq 1 12); do
+    if trace_body="$(google_get '{"spans":[{"name":"sandbox-probe.synthetic"}]}' \
+      "https://cloudtrace.googleapis.com/v1/projects/${project_id}/traces/${trace_id}")"; then
+      spans="$(jq '[.spans[]? | select(.name == "sandbox-probe.synthetic")] | length' <<<"$trace_body")"
+      ((spans > 0)) && break
+    fi
+    $dry_run && break
+    pause 15
+  done
+  ((spans > 0)) ||
+    fail "Cloud Trace returned no sandbox-probe.synthetic span for trace ${trace_id} (denied, empty or not ingested)"
+  echo "Cloud Trace holds the probe's synthetic span for trace ${trace_id}"
+  record_value "${proof_dir}/telemetry.env" PROBE_TRACE_ID "$trace_id"
+}
+
+# Token-route requests carry a synthetic marker; it must reach no
+# searchable log or readable trace. Routing is verified first, request
+# logs for other routes must be readable (the control), and any unreadable
+# source fails the proof rather than counting as clean.
+phase_edge_privacy() {
+  verify_log_routing
+  verify_probe_telemetry
+  local ip path body start
+  ip="$(edge_ip)"
+  start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
   for path in /app/auth/callback /api/auth/magic-link/verify /marketing-preferences/access; do
     body="$(capture "{\"route\":\"${path}\"}" curl -fsS --max-time 10 "http://${ip}${path}?token=${marker}")"
     [[ "$body" != *"$marker"* ]] || fail "${path} echoed the marker"
   done
+  capture '{}' curl -fsS --max-time 10 "http://${ip}/healthz" >/dev/null
   pause 90
 
+  local requests="" attempt control=false
+  for attempt in $(seq 1 8); do
+    requests="$(capture '[{}]' gcloud logging read \
+      "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${web_service}\" AND log_id(\"run.googleapis.com/requests\") AND timestamp>=\"${start}\"" \
+      --project="$project_id" --freshness=1h --limit=1 --format='json(timestamp)')" ||
+      fail "Cloud Run request logs are unreadable; marker absence unverified"
+    [[ "$(jq 'length' <<<"$requests")" != 0 ]] && {
+      control=true
+      break
+    }
+    $dry_run && break
+    pause 15
+  done
+  $control || fail "no Cloud Run request log since ${start}; marker absence would prove nothing"
+
   local logs
-  if logs="$(capture '[]' gcloud logging read "\"${marker}\"" --project="$project_id" \
-    --freshness=1h --limit=20 --format='json(logName,timestamp)')"; then
-    [[ "$(jq 'length' <<<"$logs")" == 0 ]] ||
-      fail "the marker reached readable logs: $(jq -c '[.[] | .logName]' <<<"$logs")"
-    echo "marker absent from readable Cloud Logging entries"
-  else
-    notice "Cloud Logging is not readable by the deployer; marker absence in logs unverified"
-  fi
-  local requests
-  if requests="$(capture '[{}]' gcloud logging read \
-    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${web_service}\"" \
-    --project="$project_id" --freshness=1h --limit=1 --format='json(timestamp)')"; then
-    [[ "$(jq 'length' <<<"$requests")" != 0 ]] ||
-      notice "no readable Cloud Run log entries; marker absence proves little"
-  fi
+  logs="$(capture '[]' gcloud logging read "\"${marker}\"" --project="$project_id" \
+    --freshness=1h --limit=20 --format='json(logName,timestamp)')" ||
+    fail "Cloud Logging is unreadable; marker absence in logs unverified"
+  [[ "$(jq 'length' <<<"$logs")" == 0 ]] ||
+    fail "the marker reached readable logs: $(jq -c '[.[] | .logName]' <<<"$logs")"
+  echo "marker absent from searchable Cloud Logging entries"
 
-  if ! $dry_run; then
-    local start traces
-    start="$(date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)"
-    if traces="$(printf 'Authorization: Bearer %s\n' "$(gcloud auth print-access-token)" |
-      curl -fsS -H @- "https://cloudtrace.googleapis.com/v1/projects/${project_id}/traces?view=COMPLETE&pageSize=100&startTime=${start}")"; then
-      [[ "$traces" != *"$marker"* ]] || fail "the marker reached Cloud Trace"
-      echo "marker absent from readable Cloud Trace spans"
-    else
-      notice "Cloud Trace is not readable by the deployer; marker absence in traces unverified"
-    fi
-  else
-    trace curl https://cloudtrace.googleapis.com/v1/projects/"${project_id}"/traces "(bearer from gcloud, never printed)"
-  fi
-
-  local dir="${proof_dir}/log-routing"
-  mkdir -p "$dir"
-  inventory_class "$dir" logging-sinks gcloud logging sinks list --project="$project_id" --format='json(name,destination,filter,exclusions)'
-  inventory_class "$dir" logging-exclusions gcloud logging exclusions list --project="$project_id" --format='value(name)'
-  if ! $dry_run && [[ "$(cat "${dir}/logging-exclusions.txt")" != UNVERIFIED ]]; then
-    grep -qx "$edge_exclusion" "${dir}/logging-exclusions.txt" ||
-      fail "the token-route request-log exclusion is missing"
-  fi
+  # Every trace of the last hour, which must include the probe's own.
+  load_env_file "${proof_dir}/telemetry.env"
+  local window traces page="" listed=false
+  window="$(capture 2026-01-01T00:00:00Z date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)"
+  for _ in $(seq 1 20); do
+    traces="$(google_get '{"traces":[{"traceId":"0123456789abcdef0123456789abcdef"}]}' \
+      "https://cloudtrace.googleapis.com/v1/projects/${project_id}/traces?view=COMPLETE&pageSize=100&startTime=${window}${page:+&pageToken=${page}}")" ||
+      fail "Cloud Trace is unreadable; marker absence in traces unverified"
+    [[ "$traces" != *"$marker"* ]] || fail "the marker reached Cloud Trace"
+    jq -e --arg id "${PROBE_TRACE_ID:-}" 'any(.traces[]?; .traceId == $id)' >/dev/null <<<"$traces" &&
+      listed=true
+    page="$(jq -r '.nextPageToken // empty' <<<"$traces")"
+    [[ -z "$page" ]] && break
+  done
+  [[ -z "$page" ]] || fail "more than 20 pages of traces; marker absence unverified"
+  $dry_run || $listed || fail "the trace listing omits the probe's trace; marker absence unverified"
+  echo "marker absent from every Cloud Trace span of the last hour"
 }
 
 phase_edge_destroy() {
@@ -777,39 +1062,32 @@ phase_edge_destroy() {
 
 # Scoped destroy of exactly the sandbox stack, under the writer lock. The
 # state bucket, WIF, deployer and Terraform state stay; the release record's
-# live object is removed so the next proof starts from an empty record, and
-# its generations stay as noncurrent history in the versioned bucket.
+# live object and the proof run record are removed so the next proof starts
+# empty, and their generations stay as noncurrent history in the versioned
+# bucket. A refused lock or a failed destroy stops here: nothing is ever
+# deleted outside the lock, and the stack state is left for an operator.
 phase_stack_destroy() {
   local status holder
   status="$(release_status before-destroy)"
   holder="$(json_get '.record.writer.holder' "$status")"
   if ! $dry_run && [[ -n "$holder" && "$holder" != null ]]; then
-    # The concurrency group never runs two sandbox jobs, and every earlier
-    # step of this job has exited: the holder is confirmed dead.
+    # The concurrency group never runs two sandbox jobs, every earlier step
+    # of this job has exited and the interrupt phase killed its deliver's
+    # whole process tree; a quiet Alchemy lease confirms no apply runs.
     wait_for_quiet_lease
-    release unlock --holder "$holder"
+    release unlock --holder "$holder" ||
+      fail "the writer lock held by ${holder} was not released; nothing was destroyed"
     status="$(release_status destroy-unlocked)"
   fi
   if ! $dry_run && [[ "$(json_get '.record.pendingApply' "$status")" != null ]]; then
     release recover || warning "recover failed; destroy may refuse the pending apply"
   fi
-  if locked_stack destroy; then
-    run gcloud storage rm "gs://${state_bucket}/${record_object}" ||
-      warning "the release record's live object could not be removed"
-    return 0
-  fi
-  warning "Alchemy destroy failed; deleting billable proof resources directly"
-  local service queue
-  for service in "${release_services[@]}"; do
-    run gcloud run services delete "$service" --project="$project_id" --region="$region" --quiet || true
-  done
-  for queue in $(capture '' gcloud tasks queues list --project="$project_id" --location="$region" \
-    --filter='name~/queues/workspace-' --format='value(name.basename())'); do
-    run gcloud tasks queues delete "$queue" --project="$project_id" --location="$region" --quiet || true
-  done
-  run gcloud artifacts repositories delete "$artifact_repository" --project="$project_id" \
-    --location="$region" --quiet || true
-  fail "Alchemy destroy failed; the stack state under ${stack_prefix} needs an operator"
+  locked_stack destroy ||
+    fail "the locked Alchemy destroy failed or its lock was refused; nothing was deleted outside the lock, and the stack state under ${stack_prefix} needs an operator (rerun cleanup-only)"
+  run gcloud storage rm "gs://${state_bucket}/${record_object}" ||
+    warning "the release record's live object could not be removed"
+  run gcloud storage rm "gs://${state_bucket}/${proof_run_object}" ||
+    warning "the proof run record could not be removed"
 }
 
 phase_post_destroy_inventory() {
@@ -844,7 +1122,7 @@ run_phase() {
   local name="$1"
   phase "$name"
   case "$name" in
-    guard | readonly-inventory) ;;
+    guard | readonly-inventory | state-snapshot-locked | state-restore-locked) ;;
     # Refreshed in this shell, never inside a command substitution, so
     # the mask applies and every later command sees the token.
     *) ensure_alchemy_token ;;
@@ -862,6 +1140,8 @@ run_phase() {
     drift) phase_drift ;;
     interrupt-recover) phase_interrupt_recover ;;
     state-snapshot-restore) phase_state_snapshot_restore ;;
+    state-snapshot-locked) phase_state_snapshot_locked ;;
+    state-restore-locked) phase_state_restore_locked ;;
     restore-v1) phase_restore_v1 ;;
     edge-privacy) phase_edge_privacy ;;
     edge-destroy) phase_edge_destroy ;;

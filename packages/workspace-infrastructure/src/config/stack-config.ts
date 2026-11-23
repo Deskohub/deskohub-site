@@ -184,10 +184,20 @@ const BaseStackConfig = Schema.Struct({
   telemetryCollectorImage: Schema.optionalKey(ImageDigest),
 });
 
+/**
+ * A disposable run's suffix for Cloud Tasks queue IDs. Cloud Tasks keeps a
+ * deleted queue's ID unavailable for days, so a sandbox proof that tears
+ * down and reruns needs IDs of its own.
+ */
+export const DisposableQueueSuffix = Schema.String.check(
+  Schema.isPattern(/^[a-z0-9](?:[a-z0-9-]{0,22}[a-z0-9])?$/)
+);
+
 export const SandboxStackConfig = Schema.Struct({
   ...BaseStackConfig.fields,
   stage: Schema.Literal("sandbox"),
   budget: SandboxBudget,
+  disposableQueueSuffix: Schema.optionalKey(DisposableQueueSuffix),
 }).annotate({ identifier: "SandboxStackConfig" });
 
 export const PreviewStackConfig = Schema.Struct({

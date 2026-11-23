@@ -12,6 +12,18 @@ export const toGcpDuration = (duration: Duration.Duration) =>
   `${Math.round(Duration.toSeconds(duration))}s`;
 
 /**
+ * The Cloud Tasks queue ID of one contract: the contract's own ID, or in a
+ * sandbox run with a disposable suffix, that ID plus the suffix.
+ */
+export const queueIdOf = (
+  config: WorkspaceStackConfig,
+  contract: QueueContract
+) =>
+  config.stage === "sandbox" && config.disposableQueueSuffix !== undefined
+    ? `${contract.queueId}-${config.disposableQueueSuffix}`
+    : contract.queueId;
+
+/**
  * Queue properties for one contract. `maxAttempts: -1` leaves the attempt
  * count unbounded so the contract's lifetime alone ends retries; the
  * provider-default lifetime omits `maxRetryDuration` entirely.
@@ -24,7 +36,7 @@ export const queueProps = (
   config: WorkspaceStackConfig,
   contract: QueueContract
 ): QueueProps => ({
-  queueId: contract.queueId,
+  queueId: queueIdOf(config, contract),
   location: config.region,
   retryConfig: {
     maxAttempts: -1,

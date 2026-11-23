@@ -23,9 +23,11 @@ import {
 } from "../src/release/release-writer";
 
 /**
- * Alchemy commands the sandbox proof needs that the release command has no
+ * Stack commands the sandbox proof needs that the release command has no
  * verb for. Each runs under the stage's writer lock, like `release deploy`,
- * so the proof never becomes a second stack writer.
+ * so the proof never becomes a second stack writer: Alchemy drift, repair
+ * and destroy, and the runner's own snapshot and restore of the stack's
+ * Alchemy state objects.
  */
 export const lockedStackActions = {
   /** Detect drift: exit 2 when found, 0 when clean. Changes nothing. */
@@ -33,6 +35,7 @@ export const lockedStackActions = {
     operation: "plan",
     mutates: false,
     acceptedExitCodes: [0, 2],
+    program: "alchemy",
     args: (stage: string) => ["drift", "alchemy.run.ts", "--stage", stage],
   },
   /** Repair detected drift back to the declarations. */
@@ -40,6 +43,7 @@ export const lockedStackActions = {
     operation: "deploy",
     mutates: true,
     acceptedExitCodes: [0],
+    program: "alchemy",
     args: (stage: string) => [
       "drift",
       "alchemy.run.ts",
@@ -54,6 +58,7 @@ export const lockedStackActions = {
     operation: "deploy",
     mutates: true,
     acceptedExitCodes: [0],
+    program: "alchemy",
     args: (stage: string) => [
       "destroy",
       "alchemy.run.ts",
@@ -61,6 +66,22 @@ export const lockedStackActions = {
       stage,
       "--yes",
     ],
+  },
+  /** Record one live generation and checksum per state object. */
+  "state-snapshot": {
+    operation: "plan",
+    mutates: false,
+    acceptedExitCodes: [0],
+    program: "runner",
+    args: () => ["state-snapshot-locked"],
+  },
+  /** Restore the recorded state generations and verify them live. */
+  "state-restore": {
+    operation: "deploy",
+    mutates: true,
+    acceptedExitCodes: [0],
+    program: "runner",
+    args: () => ["state-restore-locked"],
   },
 } as const;
 
@@ -71,21 +92,28 @@ export const isLockedStackAction = (
 ): value is LockedStackAction =>
   value !== undefined && Object.hasOwn(lockedStackActions, value);
 
-/** The Alchemy arguments of one locked action. */
-export const lockedStackArgs = (action: LockedStackAction, stage: string) => [
-  ...lockedStackActions[action].args(stage),
-  "--no-input",
-];
-
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const alchemyCli = join(packageRoot, "node_modules", ".bin", "alchemy");
+const proofRunner = join(packageRoot, "scripts", "sandbox-hosted-proof.sh");
+
+/** The program and arguments one locked action runs. */
+export const lockedStackInvocation = (
+  action: LockedStackAction,
+  stage: string
+): { readonly command: string; readonly args: ReadonlyArray<string> } => {
+  const spec = lockedStackActions[action];
+  return spec.program === "alchemy"
+    ? { command: alchemyCli, args: [...spec.args(stage), "--no-input"] }
+    : { command: "bash", args: [proofRunner, ...spec.args()] };
+};
 
 const lockedStackCommand = (
   config: WorkspaceStackConfig,
   action: LockedStackAction,
   writer: Redacted.Redacted<string>
-) =>
-  ChildProcess.make(alchemyCli, lockedStackArgs(action, config.stage), {
+) => {
+  const { command, args } = lockedStackInvocation(action, config.stage);
+  return ChildProcess.make(command, args, {
     cwd: packageRoot,
     env: {
       [releaseWriterVariable]: writer,
@@ -96,6 +124,7 @@ const lockedStackCommand = (
     stdout: "inherit",
     stderr: "inherit",
   });
+};
 
 /**
  * Run one action as the lock holder. A mutating run whose exit is not an
