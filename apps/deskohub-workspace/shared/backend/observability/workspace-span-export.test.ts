@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { context, propagation, SpanKind, trace } from "@opentelemetry/api";
+import {
+  context,
+  ProxyTracerProvider,
+  propagation,
+  SpanKind,
+  trace,
+} from "@opentelemetry/api";
 import { registerOTel } from "@vercel/otel";
+import { Predicate } from "effect";
 import { createWorkspaceOTelRegistration } from "./telemetry-sinks";
 import { flushWorkspaceTraces } from "./workspace-telemetry";
 
@@ -113,6 +120,17 @@ describe("the container's span export through registerOTel", () => {
         "deployment.id": "synthetic-deployment",
       });
     } finally {
+      const registered = trace.getTracerProvider();
+      const provider =
+        registered instanceof ProxyTracerProvider
+          ? registered.getDelegate()
+          : registered;
+      if (
+        Predicate.hasProperty(provider, "shutdown") &&
+        Predicate.isFunction(provider.shutdown)
+      ) {
+        await provider.shutdown();
+      }
       trace.disable();
       context.disable();
       propagation.disable();
