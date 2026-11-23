@@ -10,6 +10,7 @@ import * as Result from "effect/Result";
 import { TestClock } from "effect/testing";
 import { ImageDigest } from "../config/stack-config";
 import { sandboxConfig } from "../config/stack-config.test-utils";
+import { refusedCredentials } from "../google-credentials.test-utils";
 import {
   type FakeCloudStorage,
   fakeAccessToken,
@@ -562,11 +563,10 @@ describe("Cloud Storage release record store", () => {
     let tokenRequests = 0;
     const refused = Layer.succeed(
       Credentials,
-      // The token error class is internal to the credentials package.
       Effect.suspend(() => {
         tokenRequests += 1;
-        return Effect.fail({ _tag: "GCPCredentialsError" });
-      }) as unknown as Credentials["Service"]
+        return refusedCredentials("token exchange refused");
+      })
     );
     const stalled = Layer.succeed(Credentials, Effect.never);
     for (const credentials of [refused, stalled]) {
@@ -589,10 +589,9 @@ describe("Cloud Storage release record store", () => {
   test("dies with a fixed message, without the record, when a record does not encode", async () => {
     const fake = makeFakeCloudStorage();
     const invalid = { ...emptyReleaseRecord, generation: -987_654 };
-    const exit = await withStore(
-      fake,
-      Effect.exit(write(invalid as ReleaseRecord, "0"))
-    ).then(success);
+    const exit = await withStore(fake, Effect.exit(write(invalid, "0"))).then(
+      success
+    );
     if (exit._tag !== "Failure") {
       throw new Error("expected the write to die");
     }

@@ -57,6 +57,3 @@ node_modules/
 
 # Turborepo
 .turbo
-
-# Terraform working data
-.terraform/

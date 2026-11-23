@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as Schema from "effect/Schema";
 import { sandboxServiceAccount } from "./config/stack-config.test-utils";
 
 const workflowFile = new URL(
@@ -13,29 +14,35 @@ const bootstrapScript = new URL(
   import.meta.url
 ).pathname;
 
-interface WorkflowStep {
-  readonly if?: string;
-  readonly uses?: string;
-  readonly with?: Record<string, string>;
-  readonly run?: string;
-}
-interface Workflow {
-  readonly on: Record<string, unknown>;
-  readonly permissions: Record<string, string>;
-  readonly jobs: Record<
-    string,
-    {
-      readonly environment: string;
-      readonly permissions: Record<string, string>;
-      readonly env: Record<string, string>;
-      readonly steps: ReadonlyArray<WorkflowStep>;
-    }
-  >;
-}
+const StringRecord = Schema.Record(Schema.String, Schema.String);
+const WorkflowStep = Schema.Struct({
+  if: Schema.optionalKey(Schema.String),
+  uses: Schema.optionalKey(Schema.String),
+  with: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Union([Schema.String, Schema.Finite, Schema.Boolean])
+    )
+  ),
+  run: Schema.optionalKey(Schema.String),
+});
+const Workflow = Schema.Struct({
+  on: Schema.Record(Schema.String, Schema.Unknown),
+  permissions: StringRecord,
+  jobs: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      environment: Schema.String,
+      permissions: StringRecord,
+      env: StringRecord,
+      steps: Schema.Array(WorkflowStep),
+    })
+  ),
+});
 
-const workflow = Bun.YAML.parse(
-  await Bun.file(workflowFile).text()
-) as Workflow;
+const workflow = Schema.decodeUnknownSync(Workflow)(
+  Bun.YAML.parse(await Bun.file(workflowFile).text())
+);
 
 const runBootstrap = (...args: ReadonlyArray<string>) =>
   Bun.spawnSync(["bash", bootstrapScript, ...args], {

@@ -12,6 +12,8 @@
       "**/*.jsx",
       "**/*.ts",
       "**/*.tsx",
+      "packages/workspace-infrastructure/**/*.mts",
+      "packages/workspace-infrastructure/**/*.cts",
       "**/*.json",
       "!**/.vercel",
       "!**/.turbo",
@@ -58,6 +60,7 @@
     "./lint/no-standalone-capability-layers.grit",
     "./lint/no-synchronous-subprocess.grit",
     "./lint/no-throw-in-workspace-effect-modules.grit",
+    "./lint/no-type-assertions-in-workspace-infrastructure.grit",
     "./lint/no-unknown-parameters.grit",
     "./lint/no-unknown-type-aliases.grit",
     "./lint/no-unsafe-dictionary-type.grit",
@@ -98,6 +101,16 @@
     }
   },
   "overrides": [
+    {
+      "includes": ["packages/workspace-infrastructure/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "error"
+          }
+        }
+      }
+    },
     {
       "includes": ["apps/deskohub-workspace/**"],
       "linter": {

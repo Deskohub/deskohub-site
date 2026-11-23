@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { AddressInfo } from "node:net";
 import {
   createProbeServer,
   maxTraceAttempts,
@@ -17,6 +16,13 @@ afterEach(() => {
   }
 });
 
+const fakeFetch = (
+  handler: (
+    ...args: Parameters<typeof globalThis.fetch>
+  ) => ReturnType<typeof globalThis.fetch>
+): typeof globalThis.fetch =>
+  Object.assign(handler, { preconnect: globalThis.fetch.preconnect });
+
 const startProbe = async (fetchImpl: typeof fetch) => {
   const logs: LogEntry[] = [];
   const probe = createProbeServer({
@@ -30,16 +36,20 @@ const startProbe = async (fetchImpl: typeof fetch) => {
     probe.server.listen(0, "127.0.0.1", resolve)
   );
   servers.push(probe.server);
-  const { port } = probe.server.address() as AddressInfo;
+  const address = probe.server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("expected the probe to listen on a TCP port");
+  }
+  const { port } = address;
   return { ...probe, logs, origin: `http://127.0.0.1:${port}` };
 };
 
 const collectorAnswering = (status: number) => {
   const calls: Array<{ url: string; body: unknown }> = [];
-  const fetchImpl = (async (url: string, init: RequestInit) => {
-    calls.push({ url, body: JSON.parse(String(init.body)) });
+  const fetchImpl = fakeFetch(async (url, init) => {
+    calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
     return new Response("{}", { status });
-  }) as unknown as typeof fetch;
+  });
   return { calls, fetchImpl };
 };
 
@@ -115,12 +125,12 @@ describe("sandbox probe", () => {
 
   test("logs an unreachable collector and retries on the next request", async () => {
     let attempts = 0;
-    const refused = (async () => {
+    const refused = fakeFetch(async () => {
       attempts += 1;
       throw new TypeError("fetch failed", {
         cause: Object.assign(new Error("connect"), { code: "ECONNREFUSED" }),
       });
-    }) as unknown as typeof fetch;
+    });
     const probe = await startProbe(refused);
     expect(await probe.attemptTrace()).toMatchObject({
       error: "ECONNREFUSED",
