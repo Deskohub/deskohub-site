@@ -1,4 +1,4 @@
-import { Effect, Layer, ManagedRuntime, Scope } from "effect";
+import { Effect, Exit, Layer, ManagedRuntime, Scope } from "effect";
 
 /**
  * Returns a function that provides `layer` to an Effect through a
@@ -44,7 +44,8 @@ export const makeSharedLayerProvider = <R, LE>(
  *   finalizer. The build's scope is never closed, since serverless processes
  *   end without a shutdown hook, and anything the build captured from the
  *   first request (headers, request context, an abort signal) would serve
- *   every later one.
+ *   every later one. A capability that holds connections a long-lived
+ *   process must release on shutdown uses `shareUntilShutdown`.
  * - Only a successful build is kept. A build that fails or is interrupted
  *   fails the runs waiting for it and is dropped, so the next run builds
  *   again. A runtime's own layer (`NextEffect.make`) instead keeps a failed
@@ -57,9 +58,36 @@ export const makeSharedLayerProvider = <R, LE>(
  */
 export const shareAcrossRequests = <A, E>(
   layer: Layer.Layer<A, E, never>
-): Layer.Layer<A, E> => {
+): Layer.Layer<A, E> => shareUntilShutdown(layer).layer;
+
+/** A layer shared across requests, and the shutdown that releases it. */
+export interface SharedUntilShutdown<A, E> {
+  /** Provides the process instance, as `shareAcrossRequests` does. */
+  readonly layer: Layer.Layer<A, E>;
+  /**
+   * Closes the build's scope, running its finalizers, such as a pool's
+   * `end()`, and settles once they have. A process that shuts itself down,
+   * such as a container on SIGTERM, calls it once its requests have drained.
+   * Runs after it get the closed instance, so nothing may use the layer
+   * afterwards. Closing again, or a layer no run built, does nothing.
+   */
+  readonly close: () => Promise<void>;
+}
+
+/**
+ * `shareAcrossRequests` for a capability with finalizers, such as a
+ * connection pool: the process closes it on shutdown. On a host that never
+ * shuts the process down itself, such as Vercel, `close` never runs and the
+ * layer behaves exactly like `shareAcrossRequests`.
+ */
+export const shareUntilShutdown = <A, E>(
+  layer: Layer.Layer<A, E, never>
+): SharedUntilShutdown<A, E> => {
   const memoMap = Layer.makeMemoMapUnsafe();
   const scope = Scope.makeUnsafe();
 
-  return Layer.fromBuild(() => Layer.buildWithMemoMap(layer, memoMap, scope));
+  return {
+    layer: Layer.fromBuild(() => Layer.buildWithMemoMap(layer, memoMap, scope)),
+    close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
+  };
 };

@@ -51,6 +51,10 @@ import { scheduleAgentPageRequest } from "./shared/backend/agent-traffic/agent-p
 import { resolveWorkspaceRuntimeCallbackOrigin } from "./shared/backend/config/workspace-url.config";
 import { withRequestPathname } from "./shared/backend/utils/request-pathname";
 import { addressedOrigin } from "./shared/deployment/addressed-origin";
+import {
+  containerPublicOrigin,
+  publicUrl,
+} from "./shared/deployment/public-origin";
 import { isOpenedFromApp } from "./shared/utils/opened-from-app";
 import { markPrivateResponse } from "./shared/utils/private-response";
 import { workspaceSiteOrigin } from "./shared/utils/site-constants";
@@ -280,7 +284,7 @@ const resolvedLocalePageResponse = (
 ) => {
   const sectionRedirect = findLegacyAccountSectionRedirect(
     locale,
-    new URL(request.url)
+    publicUrl(request.url)
   );
   if (sectionRedirect) {
     const response = markPrivateResponse(
@@ -364,10 +368,11 @@ const localeRedirectResponse = (
     locale,
     locales
   );
+  const localizedPublicUrl = publicUrl(localizedUrl.href);
   // A retired account section link goes straight to its section's path.
   const redirectUrl =
-    findLegacyAccountSectionRedirect(locale, new URL(localizedUrl.href)) ??
-    localizedUrl;
+    findLegacyAccountSectionRedirect(locale, localizedPublicUrl) ??
+    localizedPublicUrl;
 
   const response = NextResponse.redirect(redirectUrl);
   response.headers.set("Vary", "Accept-Language");
@@ -419,12 +424,12 @@ const requestLocale = (request: NextRequest) =>
 // Sends a signed-out page load to sign-in, coming back afterwards.
 const administrationSignInRedirect = (request: NextRequest) =>
   NextResponse.redirect(
-    new URL(
+    publicUrl(
       getAccountSignInPath(
         requestLocale(request),
         `${request.nextUrl.pathname}${request.nextUrl.search}`
       ),
-      request.nextUrl
+      request.url
     )
   );
 
@@ -489,9 +494,9 @@ const customerAgentSignInRedirect = (request: NextRequest) => {
   if (step.step !== "sign-in") return;
   return markPrivateResponse(
     NextResponse.redirect(
-      new URL(
+      publicUrl(
         getAccountSignInPath(locale, step.returnTo, "assistant"),
-        request.nextUrl
+        request.url
       )
     )
   );
@@ -505,11 +510,8 @@ const canonicalHostRedirect = (request: NextRequest) => {
   if (env.VERCEL_ENV !== "production" || !isPageLoad(request)) {
     return undefined;
   }
-  const canonicalOrigin = new URL(
-    (env.WORKSPACE_RUNTIME_HOST === "container" &&
-      env.WORKSPACE_PUBLIC_ORIGIN) ||
-      workspaceSiteOrigin
-  );
+  const canonicalOrigin =
+    containerPublicOrigin(env) ?? new URL(workspaceSiteOrigin);
   if (
     addressedOrigin(request, env.WORKSPACE_RUNTIME_HOST).host ===
     canonicalOrigin.host
@@ -581,7 +583,7 @@ const isMobileWebAppPath = (pathname: string) =>
 const mobileWebAppResponse = (request: NextRequest) => {
   if (request.nextUrl.pathname === "/app") {
     // `NextURL` drops a trailing slash when it serializes.
-    const appUrl = new URL(request.url);
+    const appUrl = publicUrl(request.url);
     appUrl.pathname = "/app/";
     return NextResponse.redirect(appUrl, 308);
   }

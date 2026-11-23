@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Context, Deferred, Effect, Exit, Layer, Logger } from "effect";
 import { NextEffect } from "..";
-import { shareAcrossRequests } from "./shared-layer";
+import { shareAcrossRequests, shareUntilShutdown } from "./shared-layer";
 
 class Provider extends Context.Service<Provider, { readonly build: number }>()(
   "@deskohub/next-effect/test/Provider"
@@ -277,5 +277,49 @@ describe("shareAcrossRequests", () => {
     await Effect.runPromise(Effect.provide(run, Logger.layer([logger])));
 
     expect(messages.flat()).toContain("building provider");
+  });
+});
+
+describe("shareUntilShutdown", () => {
+  const pooled = () => {
+    const events: string[] = [];
+    const layer = Layer.effect(
+      Connection,
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          events.push("open");
+          return { build: events.length };
+        }),
+        () =>
+          Effect.sync(() => {
+            events.push("close");
+          })
+      )
+    );
+    return { events, shared: shareUntilShutdown(layer) };
+  };
+
+  test("shares one instance until close runs its finalizers once", async () => {
+    const { events, shared } = pooled();
+    const run = provideTo(shared.layer);
+
+    const [first, second] = await Promise.all([
+      run(Connection),
+      run(Connection),
+    ]);
+    expect(second).toBe(first);
+    expect(events).toEqual(["open"]);
+
+    await shared.close();
+    expect(events).toEqual(["open", "close"]);
+
+    await shared.close();
+    expect(events).toEqual(["open", "close"]);
+  });
+
+  test("closes nothing when no run built it", async () => {
+    const { events, shared } = pooled();
+    await shared.close();
+    expect(events).toEqual([]);
   });
 });

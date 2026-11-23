@@ -8,6 +8,7 @@ import { CustomerAuthentication } from "@/features/account/backend/customer-auth
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import { RequestBudget } from "@/shared/backend/request-budget/request-budget.service";
+import { publicUrl } from "@/shared/deployment/public-origin";
 import { AgentToolAdmission } from "./agent-tool-admission.service";
 import { CustomerAgentToolsLive } from "./customer-agent-tools";
 
@@ -27,7 +28,7 @@ export const serveBrowserPassRequest = Effect.fnUntraced(
     serve: (accountId: CustomerAccountId) => Effect.Effect<Response, E, R>
   ) {
     if (
-      request.headers.get("origin") !== new URL(request.url).origin ||
+      request.headers.get("origin") !== publicUrl(request.url).origin ||
       request.headers.has("authorization")
     ) {
       return new Response(null, { status: 403 });

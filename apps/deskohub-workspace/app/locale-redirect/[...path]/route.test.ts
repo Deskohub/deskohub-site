@@ -1,13 +1,24 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
-import { GET } from "./route";
+import {
+  containerDeploymentHost,
+  mockDeploymentHost,
+} from "@/shared/testing/deployment-host.test-utils";
+
+const setDeploymentHost = await mockDeploymentHost();
+afterEach(() => {
+  setDeploymentHost({});
+});
+
+const { GET } = await import("./route");
 
 const redirectUnmatchedFile = (
   path: string,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  origin = "https://workspace.example"
 ) =>
   GET(
-    new NextRequest(`https://workspace.example/locale-redirect${path}`, {
+    new NextRequest(`${origin}/locale-redirect${path}`, {
       headers,
     }),
     {
@@ -57,5 +68,28 @@ test("moves a bare language prefix to the exact locale", async () => {
   expect(response.status).toBe(308);
   expect(response.headers.get("location")).toBe(
     "https://workspace.example/en-US/nope.html"
+  );
+});
+
+test("keeps a container's redirects on its public origin", async () => {
+  setDeploymentHost(containerDeploymentHost);
+  const listenOrigin = "http://0.0.0.0:3000";
+
+  const negotiated = await redirectUnmatchedFile(
+    "/nope.html",
+    { "accept-language": "en" },
+    listenOrigin
+  );
+  const exact = await redirectUnmatchedFile(
+    "/en-us/nope.html",
+    {},
+    listenOrigin
+  );
+
+  expect(negotiated.headers.get("location")).toBe(
+    "https://workspace-public.example/en-US/nope.html"
+  );
+  expect(exact.headers.get("location")).toBe(
+    "https://workspace-public.example/en-US/nope.html"
   );
 });

@@ -1,6 +1,6 @@
 import "@/shared/testing/workspace-test-env";
 
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   type CallToolResult,
   Client,
@@ -9,6 +9,10 @@ import {
 import { Effect, Layer, Schema } from "effect";
 import type { AgentTrafficEvent } from "@/shared/backend/agent-traffic/agent-traffic-events";
 import { CurrentAgentTraffic } from "@/shared/backend/workspace-request-context";
+import {
+  containerDeploymentHost,
+  mockDeploymentHost,
+} from "@/shared/testing/deployment-host.test-utils";
 
 const agentTrafficEvents = await import(
   "@/shared/backend/agent-traffic/agent-traffic-events"
@@ -22,6 +26,8 @@ mock.module("@/shared/backend/agent-traffic/agent-traffic-events", () => ({
       scheduledEvents.push(event);
     }),
 }));
+
+const setDeploymentHost = await mockDeploymentHost();
 
 const {
   AgentToolReply,
@@ -289,6 +295,46 @@ describe("answerAgentToolMcpRequest", () => {
       }
     });
   }
+
+  describe("on a container", () => {
+    // The container's server sees its listen address in the request URL.
+    const listenUrl = "http://0.0.0.0:3000/api/mcp";
+    const publicOrigin = containerDeploymentHost.WORKSPACE_PUBLIC_ORIGIN;
+
+    beforeEach(() => {
+      setDeploymentHost(containerDeploymentHost);
+    });
+    afterEach(() => {
+      setDeploymentHost({});
+    });
+
+    test("serves a browser on its public origin", async () => {
+      const response = await callLegacy(
+        { seats: 2 },
+        { url: listenUrl, origin: publicOrigin }
+      );
+
+      expect(response.status).toBe(200);
+      expect(await readEventStreamResult(response)).toMatchObject({
+        structuredContent: { seats: 2 },
+      });
+    });
+
+    test("rejects its listen origin and other origins", async () => {
+      for (const origin of [
+        "http://0.0.0.0:3000",
+        "https://attacker.example",
+        "null",
+      ]) {
+        const response = await callLegacy(
+          { seats: 1 },
+          { url: listenUrl, origin }
+        );
+
+        expect(response.status).toBe(403);
+      }
+    });
+  });
 
   test("rejects a browser on another of the deployment's hosts", async () => {
     const response = await callLegacy(

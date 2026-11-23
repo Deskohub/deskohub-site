@@ -21,6 +21,7 @@ import { scheduleAgentTrafficEvent } from "@/shared/backend/agent-traffic/agent-
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
 import type { RequestBudget } from "@/shared/backend/request-budget/request-budget.service";
 import { CurrentAgentTraffic } from "@/shared/backend/workspace-request-context";
+import { publicUrl } from "@/shared/deployment/public-origin";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { currentInstant } from "@/shared/utils/temporal";
 import {
@@ -125,7 +126,7 @@ export const answerAgentToolMcpRequest = <
   Effect.suspend(() =>
     Option.fromNullishOr(
       originValidationResponse(request.request, [
-        new URL(request.request.url).hostname,
+        publicUrl(request.request.url).hostname,
       ])
     ).pipe(
       Option.match({
