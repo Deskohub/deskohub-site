@@ -9,10 +9,12 @@ import {
   test,
 } from "bun:test";
 import { type DotyposCustomerId, DotyposUnavailable } from "@deskohub/dotypos";
+import { mapSupportedLocales } from "@deskohub/i18n/locale-registry";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect } from "effect";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { temporalInstantToIsoString } from "@/shared/utils/temporal";
+import { seedPublishedEmail } from "../../backend/email-campaigns.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
 import {
   databaseInstant,
@@ -924,6 +926,51 @@ describe.skipIf(!database)(
         ]);
         expect(requests()).toEqual([]);
         expect(await claimsOf(campaignId)).toEqual([]);
+      });
+
+      test("a version that froze a library email delivers that email through the guard", async () => {
+        const subject = "Synthetic library email";
+        const published = await seedPublishedEmail(database.db, {
+          document: {
+            purpose: "marketing",
+            templateKey: "workspace",
+            values: [],
+            structure: [{ _tag: "Paragraph", id: "body", textKey: "body" }],
+            translations: mapSupportedLocales(() => ({
+              subject: [{ _tag: "Text" as const, text: subject }],
+              preheader: [],
+              texts: { body: [{ _tag: "Text" as const, text: "Hello" }] },
+            })),
+          },
+        });
+        // Activation freezes the version the draft links.
+        const { campaignId } = await kit.seedDraft({
+          flow: policyFlow({ skipPassHolders: true }),
+        });
+        await pool.query(
+          "update email_campaigns set email_id = $2, content = '{}'::jsonb where id = $1",
+          [campaignId, published.emailId]
+        );
+        const previewId = await kit.seedPreview(campaignId, {
+          status: "completed",
+        });
+        await kit.run(
+          kit.lifecycle((lifecycle) =>
+            lifecycle.activate({ campaignId, previewId, activatedBy: null })
+          ),
+          start
+        );
+        const customer = await signUp("guard-library-email", start);
+        await scenario.tick(start.add({ minutes: 1 }));
+
+        expect(await runsOf(campaignId)).toMatchObject([
+          { status: "ended", outcome: "sent" },
+        ]);
+        expect(
+          scenario.resend
+            .subjects()
+            .filter(({ to }) => to === emailOf(customer))
+        ).toEqual([{ to: emailOf(customer), subject }]);
       });
 
       test("a pass holder and another customer on the same tick settle independently", async () => {
