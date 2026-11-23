@@ -234,6 +234,7 @@ describe("queue delivery", () => {
         schemaVersion: 1,
         orderId,
         reservationHoldExpiresAtIso: expiresAt.toString(),
+        cleanupDeadlineIso: "2026-10-20T13:10:00Z",
       },
     ]);
   });
