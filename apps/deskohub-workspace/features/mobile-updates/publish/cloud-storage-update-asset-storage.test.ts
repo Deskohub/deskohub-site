@@ -80,7 +80,10 @@ const run = <A, E>(
   );
 
 const ensure = (file: UpdateFile) =>
-  UpdateAssetStorage.use((storage) => storage.ensureAsset(file));
+  Effect.gen(function* () {
+    const storage = yield* UpdateAssetStorage;
+    return yield* storage.ensureAsset(file);
+  });
 const ensureFailure = (file: UpdateFile) => Effect.flip(ensure(file));
 
 const publicUrl = (file: UpdateFile) => `${publicBaseUrl}/${file.pathname}`;
