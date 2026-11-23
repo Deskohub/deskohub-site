@@ -165,7 +165,9 @@ export const webTraffic = (
 /**
  * The revision name and image the web template is declared with: the
  * candidate, else the materialized template under the name the record
- * declared it, else the serving release. Null before a release serves.
+ * declared it, else the serving release. `specFingerprint` is the spec a
+ * minted name was decided for, or null for a release's own name. Null
+ * before a release serves.
  */
 export const declaredWebTemplate = (record: ReleaseRecord) => {
   const serving = servingDeployment(record);
@@ -179,6 +181,10 @@ export const declaredWebTemplate = (record: ReleaseRecord) => {
         ? templateRevisionOf(record.materialized)
         : template.revision,
     imageDigest: template.imageDigest,
+    specFingerprint:
+      template === record.materialized
+        ? (record.materialized.template?.specFingerprint ?? null)
+        : null,
   };
 };
 

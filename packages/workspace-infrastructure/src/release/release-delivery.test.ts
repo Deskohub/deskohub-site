@@ -19,6 +19,7 @@ import type { ObservedService } from "../readback";
 import {
   templateSpecAnnotation,
   webServiceProps,
+  webTemplateSpecFingerprint,
 } from "../resources/service-declarations";
 import { workloadUrl } from "../resources/workload-names";
 import { requireRecordCoversLiveService } from "./live-release-services";
@@ -67,6 +68,8 @@ const policy: ReleaseReadbackPolicy = {
 };
 
 interface FakeCloudRunOptions {
+  /** Fail the apply of these generations before the process starts. */
+  readonly notStartedApplyOf?: ReadonlySet<number>;
   /** Fail the apply of these generations as if the run died mid-apply. */
   readonly interruptApplyOf?: ReadonlySet<number>;
   /** Readback keeps showing the old traffic for this many reads per apply. */
@@ -136,6 +139,16 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
       apply: (request) =>
         Effect.gen(function* () {
           const { generation } = request;
+          if (
+            generation !== null &&
+            options.notStartedApplyOf?.has(generation)
+          ) {
+            return yield* new ReleaseServiceApplyFailed({
+              generation,
+              outcome: "not-started",
+              reason: "the apply command did not start",
+            });
+          }
           applies.push(generation);
           const failed = (reason: string) =>
             new ReleaseServiceApplyFailed({
@@ -1503,6 +1516,81 @@ describe("declared web template", () => {
     for (const specs of specsByName.values()) {
       expect(specs.size).toBe(1);
     }
+  });
+
+  test("recovery refuses a minted name decided for an older spec that never landed", async () => {
+    const changed: WorkspaceStackConfig = {
+      ...sandboxConfig,
+      capacity: {
+        ...sandboxConfig.capacity,
+        webMaxInstances: sandboxConfig.capacity.webMaxInstances + 1,
+      },
+    };
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, applies, declaredTemplates, provide } =
+          yield* setup({ notStartedApplyOf: new Set([7]) });
+        yield* provide(deliver(shaA, digestA));
+        yield* provide(deliver(shaB, digestB));
+        faults.failedTemplate = true;
+        // The restore mints a name, but its apply never starts.
+        const notStarted = yield* provide(
+          restoreFirst((yield* store.read).record.generation).pipe(Effect.exit)
+        );
+        faults.failedTemplate = false;
+        const pending = (yield* store.read).record;
+        faults.config = changed;
+        const appliesBefore = applies.length;
+        const refused = yield* provide(
+          recoverRelease(changed, policy).pipe(Effect.exit)
+        );
+        const newApplies = applies.length - appliesBefore;
+        const stillPending = (yield* store.read).record;
+        const served = yield* provide(
+          restoreRelease(
+            changed,
+            {
+              releaseId: ReleaseId.make("r1-aaaaaaa"),
+              expectedGeneration: stillPending.generation,
+            },
+            policy
+          )
+        );
+        return {
+          notStarted,
+          pending,
+          refused,
+          newApplies,
+          stillPending,
+          served,
+          declaredTemplates,
+          record: (yield* store.read).record,
+        };
+      })
+    );
+    expect(errorOf(result.notStarted)).toMatchObject({
+      outcome: "not-started",
+    });
+    // The outcome was known, so the lock was released.
+    expect(result.pending.writer).toBeNull();
+    expect(result.pending.materialized?.template?.revision).toBe(
+      "workspace-web-r1-aaaaaaa-t7"
+    );
+    expect(errorOf(result.refused)).toMatchObject({
+      _tag: "ReleaseTemplateSpecChanged",
+      revision: "workspace-web-r1-aaaaaaa-t7",
+    });
+    expect(result.newApplies).toBe(0);
+    expect(result.stillPending.pendingApply).toEqual(
+      result.pending.pendingApply
+    );
+    expect(result.served.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
+    expect(
+      result.declaredTemplates.map(({ revision }) => revision)
+    ).not.toContain("workspace-web-r1-aaaaaaa-t7");
+    expect(result.record.materialized?.template?.specFingerprint).toBe(
+      webTemplateSpecFingerprint(changed, digestA)
+    );
   });
 });
 

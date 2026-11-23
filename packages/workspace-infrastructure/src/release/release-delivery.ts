@@ -243,27 +243,34 @@ export class ReleaseTemplateSpecChanged extends Data.TaggedError(
 }> {}
 
 /**
- * Refuse a fenced apply whose template re-declares the live revision name
- * from another spec. A name Cloud Run has not created yet is safe to
- * declare from the current spec.
+ * Refuse a fenced apply whose template would be declared from a spec other
+ * than the one its name stands for: a minted name decided for an older
+ * spec, landed or not, or the live revision's name from another spec. A
+ * release's own name Cloud Run has not created yet is safe to declare from
+ * the current spec. The intent stays pending for an explicit `restore`.
  */
 const requireDeclarableTemplate = Effect.fn(
   "WorkspaceRelease.requireDeclarableTemplate"
 )(function* (config: WorkspaceStackConfig) {
   const { record } = yield* (yield* ReleaseRecordStore).read;
   const declared = declaredWebTemplate(record);
-  const live = yield* readLiveTemplate;
-  if (declared === null || live?.revision !== declared.revision) {
+  if (declared === null) {
     return;
   }
   const declaredSpecFingerprint = webTemplateSpecFingerprint(
     config,
     declared.imageDigest
   );
-  if (live.specFingerprint !== declaredSpecFingerprint) {
+  const live = yield* readLiveTemplate;
+  const liveSpecFingerprint =
+    live?.revision === declared.revision ? live.specFingerprint : undefined;
+  // The spec the name stands for: the one it was minted for, else the one
+  // Cloud Run created it with. Undefined while an own name is unused.
+  const decidedFor = declared.specFingerprint ?? liveSpecFingerprint;
+  if (decidedFor !== undefined && decidedFor !== declaredSpecFingerprint) {
     return yield* new ReleaseTemplateSpecChanged({
       revision: declared.revision,
-      liveSpecFingerprint: live.specFingerprint,
+      liveSpecFingerprint: liveSpecFingerprint ?? null,
       declaredSpecFingerprint,
     });
   }
