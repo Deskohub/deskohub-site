@@ -8,7 +8,7 @@ import {
   EmailServiceTag,
 } from "@deskohub/email";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Exit } from "effect";
+import { Effect, Exit, type Schema } from "effect";
 import {
   accepted,
   connection,
@@ -475,7 +475,12 @@ describe("PostHog email failure classification", () => {
   });
 
   test("an accepted answer without a message id leaves the outcome unknown and is not retried", async () => {
-    for (const body of [{ replayed: false }, "not json", { message_id: "" }]) {
+    const bodies: readonly Schema.Json[] = [
+      { replayed: false },
+      "not json",
+      { message_id: "" },
+    ];
+    for (const body of bodies) {
       const { exit, requests } = await sendOnce(message, () => ({
         status: 202,
         body,

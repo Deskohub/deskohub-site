@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Fiber, Layer } from "effect";
+import { Effect, Fiber, Layer, Predicate } from "effect";
 import { TestClock } from "effect/testing";
 import {
   DnsLookupError,
@@ -25,9 +25,9 @@ const checkDomain = (
       lookups.push(`${type} ${domain}`);
       const answer = records[type] ?? { code: "ENODATA" };
       if (answer === "hang") return Effect.never;
-      return Array.isArray(answer)
-        ? Effect.succeed(answer)
-        : Effect.fail(new DnsLookupError(answer as { code?: string }));
+      return Predicate.isObject(answer)
+        ? Effect.fail(new DnsLookupError(answer))
+        : Effect.succeed(answer);
     },
   });
 
