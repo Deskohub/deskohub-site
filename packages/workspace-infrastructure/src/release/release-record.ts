@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { ImageDigest } from "../config/stack-config";
 
@@ -49,6 +50,33 @@ export const ReleaseDeployment = Schema.Struct({
 }).annotate({ identifier: "ReleaseDeployment" });
 export type ReleaseDeployment = typeof ReleaseDeployment.Type;
 
+/**
+ * A revision template the record declared under its own name instead of
+ * the release's revision: Cloud Run's template under the release's name
+ * failed or was declared from an older spec, and a revision name can never
+ * be re-declared with a different spec.
+ */
+export const DeclaredTemplate = Schema.Struct({
+  revision: ReleaseDeployment.fields.revision,
+  /** The fingerprint of the template spec the name was minted for. */
+  specFingerprint: Schema.String,
+}).annotate({ identifier: "DeclaredTemplate" });
+export type DeclaredTemplate = typeof DeclaredTemplate.Type;
+
+/**
+ * The deployment whose image the web template runs. Without `template`, the
+ * template is declared under the deployment's own revision name.
+ */
+export const MaterializedDeployment = Schema.Struct({
+  ...ReleaseDeployment.fields,
+  template: Schema.optionalKey(DeclaredTemplate),
+}).annotate({ identifier: "MaterializedDeployment" });
+export type MaterializedDeployment = typeof MaterializedDeployment.Type;
+
+/** The revision name the web template is declared under. */
+export const templateRevisionOf = (deployment: MaterializedDeployment) =>
+  deployment.template?.revision ?? deployment.revision;
+
 export const VerifiedDeployment = Schema.Struct({
   ...ReleaseDeployment.fields,
   /** When traffic readback confirmed the release served. */
@@ -76,10 +104,47 @@ export const PendingApply = Schema.Struct({
 }).annotate({ identifier: "PendingApply" });
 export type PendingApply = typeof PendingApply.Type;
 
+/** What a writer holds the release lock for. */
+export const ReleaseOperation = Schema.Literals([
+  "deliver",
+  "restore",
+  "recover",
+  "deploy",
+  "plan",
+]);
+export type ReleaseOperation = typeof ReleaseOperation.Type;
+
+/** The sha256 hex digest of a writer's secret token. */
+export const WriterDigest = Schema.String.check(
+  Schema.isPattern(/^[0-9a-f]{64}$/)
+).pipe(
+  Schema.brand("WriterDigest"),
+  Schema.annotate({
+    identifier: "WriterDigest",
+    description: "The sha256 digest of the token a release writer holds.",
+  })
+);
+export type WriterDigest = typeof WriterDigest.Type;
+
+/**
+ * The one writer allowed to change the stage's release record or its
+ * services. Only its token's digest is stored. `in-doubt` marks a holder
+ * whose apply ended without a known outcome; like a held lock it blocks
+ * every writer until an operator unlocks it.
+ */
+export const ReleaseWriterLock = Schema.Struct({
+  holderDigest: WriterDigest,
+  operation: ReleaseOperation,
+  acquiredAt: Instant,
+  state: Schema.Literals(["held", "in-doubt"]),
+}).annotate({ identifier: "ReleaseWriterLock" });
+export type ReleaseWriterLock = typeof ReleaseWriterLock.Type;
+
 /**
  * The authoritative Workspace release record. It lives outside the CI run
- * and every change advances `generation`, so a run holding an older
- * generation cannot overwrite a newer decision.
+ * and every release decision advances `generation`, so a run holding an
+ * older generation cannot overwrite a newer decision. Taking or releasing
+ * the writer lock changes the store version only.
  */
 export const ReleaseRecord = Schema.Struct({
   generation: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -93,7 +158,7 @@ export const ReleaseRecord = Schema.Struct({
    * The revision template Cloud Run last created. Promote and restore keep
    * it, so they change traffic only and never re-create a revision.
    */
-  materialized: Schema.NullOr(ReleaseDeployment),
+  materialized: Schema.NullOr(MaterializedDeployment),
   active: Schema.NullOr(VerifiedDeployment),
   previous: Schema.NullOr(VerifiedDeployment),
   /**
@@ -103,6 +168,10 @@ export const ReleaseRecord = Schema.Struct({
   candidate: Schema.NullOr(ReleaseDeployment),
   compatible: Schema.Array(CompatibleDeployment),
   pendingApply: Schema.NullOr(PendingApply),
+  /** Records written before the lock existed decode with no writer. */
+  writer: Schema.NullOr(ReleaseWriterLock).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null))
+  ),
 }).annotate({ identifier: "ReleaseRecord" });
 export type ReleaseRecord = typeof ReleaseRecord.Type;
 
@@ -115,4 +184,5 @@ export const emptyReleaseRecord: ReleaseRecord = {
   candidate: null,
   compatible: [],
   pendingApply: null,
+  writer: null,
 };

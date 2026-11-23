@@ -1,32 +1,66 @@
 import * as GCP from "@alchemy.run/gcp";
 import * as Alchemy from "alchemy";
-import { CredentialsStoreLive } from "alchemy/Auth/Credentials";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
-import { decodeWorkspaceStackConfig } from "./src/config/stack-config";
+import * as Option from "effect/Option";
+import {
+  configuredWorkspaceStack,
+  type WorkspaceStackConfig,
+} from "./src/config/stack-config";
+import { workspaceGoogleApiAccess } from "./src/gcp-access";
+import {
+  releaseApplyGenerationVariable,
+  releaseWriterVariable,
+} from "./src/release/alchemy-service-apply";
+import { cloudRunServiceReadbackLayer } from "./src/release/cloud-run-readback";
+import {
+  gcsReleaseRecordStoreLayer,
+  releaseRecordLocation,
+} from "./src/release/gcs-release-store";
+import { requireStackWriter } from "./src/release/release-writer";
 import { verifyStackTarget } from "./src/stack-target";
-import { declareWorkspaceFoundation } from "./src/workspace-stack";
+import {
+  declareRecordedWorkspaceServices,
+  declareWorkspaceFoundation,
+} from "./src/workspace-stack";
 
-/** The stage config CI supplies; it alone selects project, stage and state. */
-const stackConfig = Config.String("WORKSPACE_STACK_CONFIG").pipe(
-  Effect.flatMap((raw) =>
-    Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(raw)
-  ),
-  Effect.flatMap(decodeWorkspaceStackConfig),
-  Effect.orDie
-);
+const stackConfig = configuredWorkspaceStack.pipe(Effect.orDie);
+
+/** Set only by the fenced release apply (`alchemyServiceApply`). */
+const releaseGeneration = Config.option(
+  Config.Int(releaseApplyGenerationVariable)
+).pipe(Effect.map(Option.getOrNull), Effect.orDie);
+
+/** The writer lock's token, set by the release command for its own runs. */
+const releaseWriter = Config.option(
+  Config.Redacted(releaseWriterVariable)
+).pipe(Effect.orDie);
+
+/** The release record store and live readback of one stage. */
+const releasePlatform = (config: WorkspaceStackConfig) =>
+  Layer.mergeAll(
+    gcsReleaseRecordStoreLayer(releaseRecordLocation(config)),
+    cloudRunServiceReadbackLayer(config)
+  ).pipe(Layer.provide(workspaceGoogleApiAccess));
 
 /**
- * The Workspace foundation stack. State lives in the config's own state
- * bucket, reached only after `verifyStackTarget`, so credentials or state
- * of one stage never apply another.
+ * The Workspace stack. State lives in the config's own state bucket,
+ * reached only after `verifyStackTarget`, so credentials or state of one
+ * stage never apply another, and a config naming another region than the
+ * state bucket's never plans or declares anything.
  *
- * The release-owned Cloud Run services (`declareWorkspaceServices`) are not
- * declared here: they need the authoritative release record read under its
- * generation fence from the durable release store, which ships with the
- * hosted #1452 proof. A CI snapshot is never trusted in its place.
+ * The release-owned Cloud Run services come from the authoritative release
+ * record in that bucket, never from a CI snapshot. A fenced release apply
+ * sets `WORKSPACE_RELEASE_GENERATION` and the deploy refuses a record at any
+ * other generation; a plain deploy re-declares the current record so the
+ * services are kept.
+ *
+ * Every Alchemy command on a stage that serves releases (plan, deploy,
+ * drift, destroy) builds this state layer, which refuses unless
+ * `WORKSPACE_RELEASE_WRITER` holds the token of the lock the record holds:
+ * only the release command's own runs touch the stack. Preview declares no
+ * release-owned services and stays lock-free (#1455).
  */
 export default Alchemy.Stack(
   "DeskohubWorkspace",
@@ -37,17 +71,18 @@ export default Alchemy.Stack(
         Effect.map((config) =>
           Layer.mergeAll(
             GCP.state({ bucketName: config.stateBucket }),
-            Layer.effectDiscard(verifyStackTarget(config)).pipe(
-              // The same resolution the GCS state store uses.
-              Layer.provide(
-                GCP.fromCredentials().pipe(
-                  Layer.provideMerge(GCP.fromAuthProvider()),
-                  Layer.provideMerge(GCP.GcpAuth),
-                  Layer.provideMerge(CredentialsStoreLive)
+            Layer.effectDiscard(
+              verifyStackTarget(config).pipe(
+                // The same resolution the GCS state store uses.
+                Effect.provide(workspaceGoogleApiAccess),
+                Effect.andThen(releaseWriter),
+                Effect.flatMap((writer) =>
+                  requireStackWriter(config, writer).pipe(
+                    Effect.provide(releasePlatform(config))
+                  )
                 )
-              ),
-              Layer.orDie
-            )
+              )
+            ).pipe(Layer.orDie)
           )
         )
       )
@@ -55,6 +90,16 @@ export default Alchemy.Stack(
   },
   Effect.gen(function* () {
     const config = yield* stackConfig;
-    return yield* declareWorkspaceFoundation(config);
+    const foundation = yield* declareWorkspaceFoundation(config);
+    const services = yield* declareRecordedWorkspaceServices(config, {
+      writer: yield* releaseWriter,
+      generation: yield* releaseGeneration,
+    }).pipe(
+      Effect.provide(releasePlatform(config)),
+      // A missing lock, stale fence, lost or unreadable record or unprotected
+      // preview stops the deploy before any service is planned.
+      Effect.orDie
+    );
+    return { ...foundation, services };
   })
 );

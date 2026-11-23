@@ -3,7 +3,10 @@ import type {
   WorkspaceStackConfig,
   WorkspaceWorkload,
 } from "./config/stack-config";
-import type { TrafficReadback } from "./release/release-reconciler";
+import type {
+  LiveTemplate,
+  TrafficReadback,
+} from "./release/release-reconciler";
 import type { ReleaseRecord } from "./release/release-record";
 import { trafficGenerationAnnotation } from "./resources/service-declarations";
 import { workloadUrl } from "./resources/workload-names";
@@ -29,7 +32,28 @@ export interface ObservedService {
   readonly revisionDigests: Readonly<Record<string, ImageDigest>>;
   /** Service annotations as Cloud Run reports them. */
   readonly annotations: Readonly<Record<string, string>>;
+  /** The revision name the live service template declares, if any. */
+  readonly templateRevision?: string | undefined;
+  /** The digest the live template's container image pins, if any. */
+  readonly templateImageDigest?: ImageDigest | undefined;
+  /** The spec fingerprint annotation on the live template, if any. */
+  readonly templateSpecFingerprint?: string | undefined;
+  /** The live template's own revision is ready, routed or not. */
+  readonly templateReady?: boolean | undefined;
 }
+
+/** The live web template, or null while the service does not exist. */
+export const liveTemplateOf = (
+  observed: ObservedService | null
+): LiveTemplate | null =>
+  observed === null
+    ? null
+    : {
+        revision: observed.templateRevision ?? null,
+        imageDigest: observed.templateImageDigest ?? null,
+        specFingerprint: observed.templateSpecFingerprint ?? null,
+        ready: observed.templateReady === true,
+      };
 
 const observedTrafficGeneration = (observed: ObservedService) => {
   const value = observed.annotations[trafficGenerationAnnotation];

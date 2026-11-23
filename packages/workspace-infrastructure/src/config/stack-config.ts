@@ -1,3 +1,4 @@
+import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -266,6 +267,14 @@ const issuePaths = (issue: SchemaIssue.Issue): ReadonlyArray<string> => [
 ];
 
 /**
+ * The one state bucket of a project. The release record and its writer
+ * lock live in it, so a config naming any other bucket would give the same
+ * project and stage a second lock.
+ */
+export const workspaceStateBucket = (projectId: GcpProjectId) =>
+  `${projectId}-workspace-state`;
+
+/**
  * Decode untrusted stack configuration. Unknown keys fail, so a pasted
  * `value` or credential field never reaches a resource; known secret
  * shapes fail under any key.
@@ -291,7 +300,12 @@ export const decodeWorkspaceStackConfig = (input: unknown) =>
           })
       )
     );
-    const identityPaths = serviceAccountProblems(config);
+    const identityPaths = [
+      ...serviceAccountProblems(config),
+      ...(config.stateBucket === workspaceStateBucket(config.projectId)
+        ? []
+        : ["stateBucket"]),
+    ];
     if (identityPaths.length > 0) {
       return yield* new WorkspaceStackConfigInvalid({
         paths: identityPaths,
@@ -325,3 +339,16 @@ const serviceAccountProblems = (config: WorkspaceStackConfig) => {
  */
 export const serializeWorkspaceStackConfig = (config: WorkspaceStackConfig) =>
   JSON.stringify(Schema.encodeSync(WorkspaceStackConfig)(config));
+
+/**
+ * The stage config CI supplies as JSON in `WORKSPACE_STACK_CONFIG`; it
+ * alone selects project, stage and state for the stack and the release flow.
+ */
+export const configuredWorkspaceStack = Config.String(
+  "WORKSPACE_STACK_CONFIG"
+).pipe(
+  Effect.flatMap((raw) =>
+    Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(raw)
+  ),
+  Effect.flatMap(decodeWorkspaceStackConfig)
+);

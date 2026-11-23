@@ -6,16 +6,25 @@ import * as Monitoring from "@alchemy.run/gcp/Monitoring";
 import type { ServiceProps } from "@alchemy.run/gcp/Run";
 import * as Run from "@alchemy.run/gcp/Run";
 import * as Storage from "@alchemy.run/gcp/Storage";
-import * as Data from "effect/Data";
-import type * as DateTime from "effect/DateTime";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import type * as Option from "effect/Option";
+import type * as Redacted from "effect/Redacted";
 import type {
   WorkspaceStackConfig,
   WorkspaceWorkload,
 } from "./config/stack-config";
 import { workspaceQueueContracts } from "./contracts/queue-contracts";
 import { workspaceScheduleContracts } from "./contracts/schedule-contracts";
+import { requireRecordCoversLiveService } from "./release/live-release-services";
+import { stackRunRecord } from "./release/release-delivery";
+import { StaleReleaseGeneration } from "./release/release-reconciler";
 import type { ReleaseRecord } from "./release/release-record";
+import {
+  PreviewServicesUnprotected,
+  requireStackMode,
+  requireStackWriter,
+} from "./release/release-writer";
 import {
   alertPolicyDeclarations,
   artifactRepositoryProps,
@@ -30,14 +39,6 @@ import {
   webServiceProps,
   workerServiceProps,
 } from "./resources/service-declarations";
-
-/**
- * Preview services stay undeclared until IAP and per-SHA worker isolation
- * exist (#1455); a preview must never get an unprotected public service.
- */
-export class PreviewServicesUnprotected extends Data.TaggedError(
-  "PreviewServicesUnprotected"
-) {}
 
 const pascal = (id: string) =>
   id
@@ -193,4 +194,52 @@ export const declareWorkspaceServices = (
       tasksWorkerUri: tasksWorker.uri,
       schedulerWorkerUri: schedulerWorker.uri,
     };
+  });
+
+/** How the stack was started: the writer token and the generation fence. */
+export interface StackRun {
+  readonly writer: Option.Option<Redacted.Redacted<string>>;
+  /** Set only by a fenced release apply; null for a plain run. */
+  readonly generation: number | null;
+}
+
+/**
+ * The release-owned services as the authoritative release record declares
+ * them now. Every deploy of a stage that serves a release must declare them,
+ * or Alchemy would delete them. The run must hold the record's writer lock,
+ * and the lock decides its mode: a fenced apply passes the generation it
+ * persisted and refuses a record any other run has since moved on, while a
+ * plain run declares the current record, and a plan the template decision
+ * the following deploy would persist. A record without a serving release
+ * is refused while a release-owned service is live (`ReleaseRecordLost`).
+ * Preview declares none until #1455 and needs no lock.
+ */
+export const declareRecordedWorkspaceServices = (
+  config: WorkspaceStackConfig,
+  run: StackRun
+) =>
+  Effect.gen(function* () {
+    const held = yield* requireStackWriter(config, run.writer);
+    if (held === null) {
+      return run.generation === null
+        ? undefined
+        : yield* new PreviewServicesUnprotected();
+    }
+    yield* requireStackMode(held, run.generation);
+    const { record } = held;
+    if (run.generation !== null && record.generation !== run.generation) {
+      return yield* new StaleReleaseGeneration({
+        expectedGeneration: run.generation,
+        currentGeneration: record.generation,
+      });
+    }
+    // Declaring nothing from a lost record would delete the live services.
+    yield* requireRecordCoversLiveService(record);
+    // A plan previews the template decision its deploy would persist.
+    const declared = yield* stackRunRecord(config, record, held.lock.operation);
+    return yield* declareWorkspaceServices(
+      config,
+      declared,
+      yield* DateTime.now
+    );
   });

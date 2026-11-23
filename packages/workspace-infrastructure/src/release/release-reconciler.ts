@@ -1,19 +1,19 @@
-import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Ref from "effect/Ref";
-import type { ImageDigest } from "../config/stack-config";
+import type { ImageDigest, WorkspaceWorkload } from "../config/stack-config";
 import { workspaceWebServiceId } from "../resources/workload-names";
 import {
   type CompatibleDeployment,
   compatibleDeploymentWindowHours,
   type GitSha,
+  type MaterializedDeployment,
   type ReleaseDeployment,
   ReleaseId,
   type ReleaseOrigin,
   type ReleaseRecord,
+  templateRevisionOf,
   type VerifiedDeployment,
 } from "./release-record";
 
@@ -45,7 +45,10 @@ export class ReleaseNotStaged extends Data.TaggedError("ReleaseNotStaged")<{
   readonly releaseId: ReleaseId;
 }> {}
 
-/** Restore accepts only the previous release or an unexpired compatible one. */
+/**
+ * Restore accepts only the active release, the previous one, or an
+ * unexpired compatible one.
+ */
 export class ReleaseNotRestorable extends Data.TaggedError(
   "ReleaseNotRestorable"
 )<{
@@ -53,7 +56,8 @@ export class ReleaseNotRestorable extends Data.TaggedError(
 }> {}
 
 /**
- * Readback does not show the intended target serving. The intent stays
+ * Readback does not show the intended target serving on the web service
+ * and its image on every worker. The intent stays
  * pending and blocks every other release step: the caller re-applies the
  * same declaration (apply is idempotent) and settles again. There is no
  * abandon step until Cloud Run operation evidence can prove an interrupted
@@ -64,12 +68,8 @@ export class ReleaseApplyNotObserved extends Data.TaggedError(
 )<{
   readonly intended: ReleaseId;
   readonly servingRevision: string | null;
-}> {}
-
-export class ReleaseRecordConflict extends Data.TaggedError(
-  "ReleaseRecordConflict"
-)<{
-  readonly expectedVersion: string;
+  /** What each release-owned service showed; a missing one reads all null. */
+  readonly observed: Readonly<Record<WorkspaceWorkload, TrafficReadback>>;
 }> {}
 
 /** What the platform actually serves, read back after an apply. */
@@ -80,6 +80,81 @@ export interface TrafficReadback {
   /** The traffic generation stamped on the service, or null when absent. */
   readonly trafficGeneration: number | null;
 }
+
+/** The workers that run the serving release's image beside the web service. */
+export type ReleaseWorker = Exclude<WorkspaceWorkload, "web">;
+
+/**
+ * The revision the web service's live template declares and the image
+ * digest it pins, or null while the service does not exist.
+ */
+export interface LiveTemplate {
+  readonly revision: string | null;
+  readonly imageDigest: ImageDigest | null;
+  /** The spec fingerprint the template was declared with, if any. */
+  readonly specFingerprint: string | null;
+  /** The template's own revision is ready, routed or not. */
+  readonly ready: boolean;
+}
+
+/** What a step needs to decide which revision template to declare. */
+export interface TemplateInput {
+  /** The web service's live template, read just before the step. */
+  readonly liveTemplate: LiveTemplate | null;
+  /** The fingerprint of the template spec the stack declares now for an image. */
+  readonly specFingerprintOf: (imageDigest: ImageDigest) => string;
+}
+
+/**
+ * The live template is this deployment's, under the name the record
+ * declares it, ready, and declared from the spec the stack declares now,
+ * which is also the spec a minted name was decided for: re-declaring it
+ * changes nothing.
+ */
+const keepsTemplate = (
+  input: TemplateInput,
+  deployment: MaterializedDeployment | null
+): deployment is MaterializedDeployment =>
+  input.liveTemplate !== null &&
+  deployment !== null &&
+  input.liveTemplate.ready &&
+  input.liveTemplate.revision === templateRevisionOf(deployment) &&
+  input.liveTemplate.imageDigest === deployment.imageDigest &&
+  input.liveTemplate.specFingerprint ===
+    input.specFingerprintOf(deployment.imageDigest) &&
+  (deployment.template === undefined ||
+    deployment.template.specFingerprint ===
+      input.specFingerprintOf(deployment.imageDigest));
+
+/**
+ * A template for `target` under a name minted for this decision's
+ * generation, for when the live one cannot be kept. Every new decision
+ * mints its own name, even when an earlier one minted a name for the same
+ * release and spec: that name may have landed and been displaced since, and
+ * Cloud Run never re-creates a revision name with another spec. Only
+ * re-applying the persisted decision (recovery) declares a name again.
+ * Traffic keeps targeting the release's own revision.
+ */
+const freshTemplate = (
+  target: ReleaseDeployment,
+  generation: number,
+  input: TemplateInput
+): MaterializedDeployment => ({
+  ...deploymentOf(target),
+  template: {
+    revision: `${target.revision}-t${generation}`,
+    specFingerprint: input.specFingerprintOf(target.imageDigest),
+  },
+});
+
+const templateIs = (
+  live: LiveTemplate | null,
+  deployment: ReleaseDeployment | null
+): deployment is ReleaseDeployment =>
+  live !== null &&
+  deployment !== null &&
+  live.revision === deployment.revision &&
+  live.imageDigest === deployment.imageDigest;
 
 const fence = (record: ReleaseRecord, expectedGeneration: number) =>
   record.generation === expectedGeneration
@@ -134,19 +209,29 @@ export interface StageInput {
   readonly sha: GitSha;
   readonly imageDigest: ImageDigest;
   readonly origin: ReleaseOrigin;
+  /** The web service's live template, read just before the step. */
+  readonly liveTemplate: LiveTemplate | null;
+  readonly now: DateTime.Utc;
 }
 
 /**
  * Record a built image as the candidate, replacing any earlier one. Its
  * release ID and Cloud Run revision name derive from the new generation, so
- * reruns never collide.
+ * reruns never collide. A replaced candidate whose template already landed
+ * becomes the materialized template, so the record never forgets the
+ * revision Cloud Run runs.
+ *
+ * A first release whose promotion never settled is replaced instead: no
+ * release has served, so there is no traffic to protect and no candidate
+ * revision to verify. The new build is staged and promoted in one step
+ * (`promoted`), so the record never shows "no release, nothing pending"
+ * while services may exist. Any other pending change refuses the stage.
  */
 export const stage = Effect.fn("WorkspaceRelease.stage")(function* (
   record: ReleaseRecord,
   input: StageInput
 ) {
   yield* fence(record, input.expectedGeneration);
-  yield* requireNoPendingApply(record);
   const generation = record.generation + 1;
   const releaseId = ReleaseId.make(`r${generation}-${input.sha.slice(0, 7)}`);
   const deployment: ReleaseDeployment = {
@@ -156,11 +241,38 @@ export const stage = Effect.fn("WorkspaceRelease.stage")(function* (
     origin: input.origin,
     revision: `${workspaceWebServiceId}-${releaseId}`,
   };
+  if (record.active === null && record.pendingApply?.operation === "promote") {
+    return {
+      releaseId,
+      promoted: true,
+      record: {
+        ...record,
+        generation,
+        trafficGeneration: record.trafficGeneration + 1,
+        // The unsettled release's template may already run on Cloud Run.
+        materialized: templateIs(input.liveTemplate, record.candidate)
+          ? deploymentOf(record.candidate)
+          : record.materialized,
+        candidate: deployment,
+        pendingApply: {
+          operation: "promote",
+          target: deployment,
+          trafficGeneration: record.trafficGeneration + 1,
+          startedAt: isoOf(input.now),
+        },
+      } satisfies ReleaseRecord,
+    };
+  }
+  yield* requireNoPendingApply(record);
   return {
     releaseId,
+    promoted: false,
     record: {
       ...record,
       generation,
+      materialized: templateIs(input.liveTemplate, record.candidate)
+        ? deploymentOf(record.candidate)
+        : record.materialized,
       candidate: deployment,
     } satisfies ReleaseRecord,
   };
@@ -215,28 +327,63 @@ export const promote = Effect.fn("WorkspaceRelease.promote")(function* (
   } satisfies ReleaseRecord;
 });
 
+export interface RestoreInput extends TrafficChangeInput, TemplateInput {}
+
 /**
- * Persist the intent to move traffic back to the previous verified release
- * or a deployment still inside its compatible window.
+ * The template the web service keeps once restore or a plain deploy drops
+ * the candidate: the candidate or the materialized template, whichever
+ * Cloud Run runs ready from the current spec. Otherwise `target`'s image
+ * gets a template under a fresh name, since a failed or outdated revision
+ * name can never be re-declared with another spec.
+ */
+const templateWithoutCandidate = (
+  record: ReleaseRecord,
+  input: TemplateInput,
+  target: ReleaseDeployment,
+  generation: number
+): MaterializedDeployment => {
+  if (keepsTemplate(input, record.materialized)) {
+    return record.materialized;
+  }
+  return keepsTemplate(input, record.candidate)
+    ? deploymentOf(record.candidate)
+    : freshTemplate(target, generation, input);
+};
+
+/**
+ * Persist the intent to move traffic back to the previous verified release,
+ * a deployment still inside its compatible window, or the active release
+ * itself. It supersedes a pending traffic change: only the lock holder
+ * restores, so the earlier apply's outcome is known or an operator
+ * unlocked it. An unverified candidate is dropped, so it loses its traffic
+ * tag; the service template stays the revision Cloud Run already runs when
+ * that one is ready and current.
  */
 export const restore = Effect.fn("WorkspaceRelease.restore")(function* (
   record: ReleaseRecord,
-  input: TrafficChangeInput
+  input: RestoreInput
 ) {
   yield* fence(record, input.expectedGeneration);
-  yield* requireNoPendingApply(record);
   const candidates: ReadonlyArray<VerifiedDeployment> = [
+    ...(record.active === null ? [] : [record.active]),
     ...(record.previous === null ? [] : [record.previous]),
     ...unexpired(record.compatible, input.now),
   ];
   const target = candidates.find(
     (entry) => entry.releaseId === input.releaseId
   );
-  if (target === undefined || target.releaseId === record.active?.releaseId) {
+  if (target === undefined) {
     return yield* new ReleaseNotRestorable({ releaseId: input.releaseId });
   }
   return {
     ...record,
+    materialized: templateWithoutCandidate(
+      record,
+      input,
+      target,
+      record.generation + 1
+    ),
+    candidate: null,
     generation: record.generation + 1,
     trafficGeneration: record.trafficGeneration + 1,
     pendingApply: {
@@ -250,17 +397,23 @@ export const restore = Effect.fn("WorkspaceRelease.restore")(function* (
 
 export interface SettleInput {
   readonly expectedGeneration: number;
+  /** The web service's traffic. */
   readonly readback: TrafficReadback;
+  /** Each worker's traffic; workers run the serving release's image. */
+  readonly workers: Readonly<Record<ReleaseWorker, TrafficReadback>>;
   readonly now: DateTime.Utc;
 }
 
 const servesPendingApply = (
-  readback: TrafficReadback,
+  input: SettleInput,
   pending: NonNullable<ReleaseRecord["pendingApply"]>
 ) =>
-  readback.servingRevision === pending.target.revision &&
-  readback.servingImageDigest === pending.target.imageDigest &&
-  readback.trafficGeneration === pending.trafficGeneration;
+  input.readback.servingRevision === pending.target.revision &&
+  input.readback.servingImageDigest === pending.target.imageDigest &&
+  input.readback.trafficGeneration === pending.trafficGeneration &&
+  Object.values(input.workers).every(
+    (worker) => worker.servingImageDigest === pending.target.imageDigest
+  );
 
 /**
  * Settle the persisted traffic intent from readback. A normal apply and a
@@ -278,7 +431,18 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
     return yield* new NoPendingReleaseApply();
   }
   const generation = record.generation + 1;
-  if (servesPendingApply(input.readback, pending)) {
+  if (
+    servesPendingApply(input, pending) &&
+    pending.target.releaseId === record.active?.releaseId
+  ) {
+    // Restoring the active release only re-asserts its traffic.
+    return {
+      ...record,
+      generation,
+      pendingApply: null,
+    } satisfies ReleaseRecord;
+  }
+  if (servesPendingApply(input, pending)) {
     const verified: VerifiedDeployment = {
       ...pending.target,
       verifiedAt: isoOf(input.now),
@@ -323,13 +487,49 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
         ...demoted,
       ],
       pendingApply: null,
+      writer: record.writer,
     } satisfies ReleaseRecord;
   }
   return yield* new ReleaseApplyNotObserved({
     intended: pending.target.releaseId,
     servingRevision: input.readback.servingRevision,
+    observed: { web: input.readback, ...input.workers },
   });
 });
+
+export interface RefreshTemplateInput extends TemplateInput {
+  readonly expectedGeneration: number;
+}
+
+/**
+ * Decide the template a plain deploy declares, before it runs. It keeps
+ * the template Cloud Run runs when that is ready and current. A staged
+ * candidate is always dropped: only its own verification apply may declare
+ * its name, and a plain deploy only ever finds one a failed delivery left.
+ * The web service then keeps the candidate or materialized template Cloud
+ * Run runs ready from the current spec, else the active release's image
+ * gets a template under a fresh name.
+ */
+export const refreshTemplate = Effect.fn("WorkspaceRelease.refreshTemplate")(
+  function* (record: ReleaseRecord, input: RefreshTemplateInput) {
+    yield* fence(record, input.expectedGeneration);
+    yield* requireNoPendingApply(record);
+    const active = record.active;
+    if (
+      active === null ||
+      (record.candidate === null && keepsTemplate(input, record.materialized))
+    ) {
+      return record;
+    }
+    const generation = record.generation + 1;
+    return {
+      ...record,
+      generation,
+      materialized: templateWithoutCandidate(record, input, active, generation),
+      candidate: null,
+    } satisfies ReleaseRecord;
+  }
+);
 
 /** Revisions the edge may route to now: serving, pending and compatible. */
 export const routableDeployments = (
@@ -349,76 +549,3 @@ export const routableDeployments = (
     )
     .map(deploymentOf);
 };
-
-/**
- * The persisted record behind a compare-and-set. `version` is the store's
- * object generation; a write with a stale version fails.
- */
-export interface StoredReleaseRecord {
-  readonly record: ReleaseRecord;
-  readonly version: string;
-}
-
-export class ReleaseRecordStore extends Context.Service<
-  ReleaseRecordStore,
-  {
-    readonly read: Effect.Effect<StoredReleaseRecord>;
-    readonly write: (
-      record: ReleaseRecord,
-      ifVersion: string
-    ) => Effect.Effect<StoredReleaseRecord, ReleaseRecordConflict>;
-  }
->()("@deskohub/workspace-infrastructure/ReleaseRecordStore") {}
-
-/**
- * Run one release step as a serialized read, decide, compare-and-set.
- * Two runs that read the same version cannot both write.
- */
-export const runReleaseStep = <A, E>(
-  step: (
-    record: ReleaseRecord
-  ) => Effect.Effect<{ readonly record: ReleaseRecord; readonly result: A }, E>
-) =>
-  Effect.gen(function* () {
-    const store = yield* ReleaseRecordStore;
-    const current = yield* store.read;
-    const { record, result } = yield* step(current.record);
-    yield* store.write(record, current.version);
-    return result;
-  });
-
-/** An in-process store for tests and local dry runs. */
-export const makeInMemoryReleaseRecordStore = (initial: ReleaseRecord) =>
-  Effect.gen(function* () {
-    const state = yield* Ref.make<StoredReleaseRecord>({
-      record: initial,
-      version: "1",
-    });
-    return ReleaseRecordStore.of({
-      read: Ref.get(state),
-      write: (record, ifVersion) =>
-        Ref.modify(
-          state,
-          (
-            current
-          ): readonly [
-            Effect.Effect<StoredReleaseRecord, ReleaseRecordConflict>,
-            StoredReleaseRecord,
-          ] => {
-            if (current.version !== ifVersion) {
-              return [
-                Effect.fail(
-                  new ReleaseRecordConflict({ expectedVersion: ifVersion })
-                ),
-                current,
-              ];
-            }
-            const next: StoredReleaseRecord = {
-              record,
-              version: String(Number(current.version) + 1),
-            };
-            return [Effect.succeed(next), next];
-          }
-        ).pipe(Effect.flatten),
-    });
-  });

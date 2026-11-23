@@ -10,6 +10,8 @@ import { isOutput } from "alchemy/Output";
 import { Stack } from "alchemy/Stack";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import packageJson from "../package.json";
 import { ImageDigest } from "./config/stack-config";
 import {
@@ -17,8 +19,24 @@ import {
   productionConfig,
   sandboxConfig,
 } from "./config/stack-config.test-utils";
+import { ReleaseServiceReadback } from "./release/release-platform";
+import { workersServing } from "./release/release-readback.test-utils";
 import { promote, settleApply, stage } from "./release/release-reconciler";
-import { emptyReleaseRecord, GitSha } from "./release/release-record";
+import {
+  emptyReleaseRecord,
+  GitSha,
+  type ReleaseRecord,
+} from "./release/release-record";
+import {
+  makeInMemoryReleaseRecordStore,
+  ReleaseRecordStore,
+} from "./release/release-record-store";
+import { requireStackWriter } from "./release/release-writer";
+import {
+  heldBy,
+  runAsHolder,
+  testWriterToken,
+} from "./release/release-writer.test-utils";
 import {
   alertPolicyDeclarations,
   artifactRepositoryProps,
@@ -28,11 +46,14 @@ import {
   workerInvokerGrants,
 } from "./resources/platform-declarations";
 import {
+  templateSpecAnnotation,
   webServiceProps,
+  webTemplateSpecFingerprint,
   workerServiceProps,
 } from "./resources/service-declarations";
 import { workspaceSurfaceClassification } from "./surface-classification";
 import {
+  declareRecordedWorkspaceServices,
   declareWorkspaceFoundation,
   declareWorkspaceServices,
 } from "./workspace-stack";
@@ -89,6 +110,8 @@ const servingRecord = () => {
       sha: GitSha.make("a".repeat(40)),
       imageDigest: digest,
       origin: "cloud-run",
+      liveTemplate: null,
+      now,
     })
   );
   const pending = Effect.runSync(
@@ -107,6 +130,7 @@ const servingRecord = () => {
         servingImageDigest: digest,
         trafficGeneration: 1,
       },
+      workers: workersServing(digest),
       now,
     })
   );
@@ -234,6 +258,273 @@ describe("Alchemy beta.87 surface", () => {
     expect(secretOf("WorkspaceSchedulerWorker")).toBeUndefined();
   });
 
+  test("declares services only from the record at the fenced generation", async () => {
+    const record = servingRecord();
+    const fromStore = (expectedGeneration: number | null) =>
+      Effect.gen(function* () {
+        const store = yield* makeInMemoryReleaseRecordStore(
+          heldBy(record, expectedGeneration === null ? "deploy" : "deliver")
+        );
+        return yield* declareRecordedWorkspaceServices(
+          sandboxConfig,
+          runAsHolder(expectedGeneration)
+        ).pipe(Effect.provideService(ReleaseRecordStore, store));
+      });
+
+    const stale = await evaluate(fromStore(record.generation - 1));
+    expect(stale.exit._tag).toBe("Failure");
+    expect(String(stale.exit)).toContain("StaleReleaseGeneration");
+    expect(stale.resources).toEqual({});
+
+    for (const fenced of [record.generation, null]) {
+      const applied = await evaluate(fromStore(fenced));
+      expect(applied.exit._tag).toBe("Success");
+      expect(
+        Object.values(applied.resources).filter(
+          (entry) => entry.Type === "GCP.Run.Service"
+        )
+      ).toHaveLength(3);
+    }
+  });
+
+  test("a plain deploy refuses a pending traffic change but keeps a candidate", async () => {
+    const plain = (record: ReleaseRecord) =>
+      evaluate(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(
+            heldBy(record, "deploy")
+          );
+          return yield* declareRecordedWorkspaceServices(
+            sandboxConfig,
+            runAsHolder(null)
+          ).pipe(Effect.provideService(ReleaseRecordStore, store));
+        })
+      );
+    const serving = servingRecord();
+    const { record: candidate, releaseId } = Effect.runSync(
+      stage(serving, {
+        expectedGeneration: serving.generation,
+        sha: GitSha.make("b".repeat(40)),
+        imageDigest: digest,
+        origin: "cloud-run",
+        liveTemplate: null,
+        now,
+      })
+    );
+    const pending = Effect.runSync(
+      promote(candidate, {
+        expectedGeneration: candidate.generation,
+        releaseId,
+        now,
+        candidateReadback: candidate.candidate,
+      })
+    );
+
+    const staged = await plain(candidate);
+    expect(staged.exit._tag).toBe("Success");
+    const refused = await plain(pending);
+    expect(String(refused.exit)).toContain("ReleaseApplyPending");
+    expect(refused.resources).toEqual({});
+  });
+
+  test("a plan declares the web template its following deploy decides", async () => {
+    const record = servingRecord();
+    // Cloud Run runs the release's template from an older spec.
+    const olderSpec = ReleaseServiceReadback.of({
+      service: (workload) =>
+        Effect.succeed(
+          workload === "web"
+            ? {
+                workload,
+                uri: undefined,
+                urls: [],
+                ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
+                invokerIamDisabled: true,
+                terminalConditionState: "CONDITION_SUCCEEDED",
+                reconciling: false,
+                traffic: [
+                  { revision: "workspace-web-r1-aaaaaaa", percent: 100 },
+                ],
+                revisionDigests: { "workspace-web-r1-aaaaaaa": digest },
+                annotations: {},
+                templateRevision: "workspace-web-r1-aaaaaaa",
+                templateImageDigest: digest,
+                templateSpecFingerprint: "spec-older",
+                templateReady: true,
+              }
+            : null
+        ),
+      revision: () => Effect.succeed(null),
+    });
+    const declareAs = (operation: "plan" | "deploy") =>
+      evaluate(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(
+            heldBy(record, operation)
+          );
+          const services = yield* declareRecordedWorkspaceServices(
+            sandboxConfig,
+            runAsHolder(null)
+          ).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.provideService(ReleaseServiceReadback, olderSpec)
+          );
+          return { services, stored: (yield* store.read).record };
+        })
+      );
+
+    const planned = await declareAs("plan");
+    expect(planned.exit._tag).toBe("Success");
+    const template = planned.resources.WorkspaceWeb?.Props.template;
+    expect(template?.revision).toBe(
+      `workspace-web-r1-aaaaaaa-t${record.generation + 1}`
+    );
+    expect(template?.annotations?.[templateSpecAnnotation]).toBe(
+      webTemplateSpecFingerprint(sandboxConfig, digest)
+    );
+    // The plan persisted nothing; a deploy persists the decision first.
+    if (planned.exit._tag === "Success") {
+      expect(planned.exit.value.stored).toEqual(heldBy(record, "plan"));
+    }
+    const deployed = await declareAs("deploy");
+    expect(deployed.resources.WorkspaceWeb?.Props.template?.revision).toBe(
+      "workspace-web-r1-aaaaaaa"
+    );
+  });
+
+  test("refuses an empty record while the web service is live", async () => {
+    const liveWeb = (live: boolean) =>
+      ReleaseServiceReadback.of({
+        service: (workload) =>
+          Effect.succeed(
+            live && workload === "web"
+              ? {
+                  workload,
+                  uri: undefined,
+                  urls: [],
+                  ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
+                  invokerIamDisabled: true,
+                  terminalConditionState: "CONDITION_SUCCEEDED",
+                  reconciling: false,
+                  traffic: [
+                    { revision: "workspace-web-r3-aaaaaaa", percent: 100 },
+                  ],
+                  revisionDigests: {},
+                  annotations: {},
+                }
+              : null
+          ),
+        revision: () => Effect.succeed(null),
+      });
+    const declare = (live: boolean) =>
+      evaluate(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(
+            heldBy(emptyReleaseRecord, "deploy")
+          );
+          return yield* declareRecordedWorkspaceServices(
+            sandboxConfig,
+            runAsHolder(null)
+          ).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.provideService(ReleaseServiceReadback, liveWeb(live))
+          );
+        })
+      );
+
+    const lost = await declare(true);
+    expect(lost.exit._tag).toBe("Failure");
+    expect(String(lost.exit)).toContain("ReleaseRecordLost");
+    expect(lost.resources).toEqual({});
+
+    const fresh = await declare(false);
+    expect(fresh.exit._tag).toBe("Success");
+    expect(fresh.resources).toEqual({});
+  });
+
+  test("declares no preview services and refuses a fenced preview apply", async () => {
+    const preview = (expectedGeneration: number | null) =>
+      evaluate(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(servingRecord());
+          return yield* declareRecordedWorkspaceServices(previewConfig, {
+            writer: Option.none(),
+            generation: expectedGeneration,
+          }).pipe(Effect.provideService(ReleaseRecordStore, store));
+        })
+      );
+    const plain = await preview(null);
+    expect(plain.exit._tag).toBe("Success");
+    expect(plain.resources).toEqual({});
+    const fenced = await preview(2);
+    expect(fenced.exit._tag).toBe("Failure");
+    expect(fenced.resources).toEqual({});
+  });
+
+  test("the stack refuses a run without the held lock's token", async () => {
+    const record = heldBy(servingRecord(), "deploy");
+    const check = (
+      config: typeof sandboxConfig,
+      writer: Option.Option<Redacted.Redacted<string>>
+    ) =>
+      Effect.runPromiseExit(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(record);
+          return yield* requireStackWriter(config, writer).pipe(
+            Effect.provideService(ReleaseRecordStore, store)
+          );
+        })
+      );
+    expect(String(await check(sandboxConfig, Option.none()))).toContain(
+      "ReleaseWriterRequired"
+    );
+    expect(
+      String(await check(sandboxConfig, Option.some(Redacted.make("other"))))
+    ).toContain("ReleaseWriterLost");
+    expect(
+      (await check(sandboxConfig, Option.some(testWriterToken)))._tag
+    ).toBe("Success");
+    // Preview needs no lock and never reads the record.
+    const preview = await Effect.runPromiseExit(
+      requireStackWriter(previewConfig, Option.none()).pipe(
+        Effect.provideService(
+          ReleaseRecordStore,
+          ReleaseRecordStore.of({
+            read: Effect.die("preview read the record"),
+            write: () => Effect.die("preview wrote the record"),
+          })
+        )
+      )
+    );
+    expect(preview._tag).toBe("Success");
+  });
+
+  test("the lock's operation decides whether the stack run is fenced", async () => {
+    const record = servingRecord();
+    const declare = (
+      operation: "deploy" | "deliver",
+      generation: number | null
+    ) =>
+      evaluate(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(
+            heldBy(record, operation)
+          );
+          return yield* declareRecordedWorkspaceServices(
+            sandboxConfig,
+            runAsHolder(generation)
+          ).pipe(Effect.provideService(ReleaseRecordStore, store));
+        })
+      );
+    // An inherited generation never turns a plain deploy into a fenced one.
+    const inherited = await declare("deploy", record.generation);
+    expect(String(inherited.exit)).toContain("ReleaseWriterModeMismatch");
+    expect(inherited.resources).toEqual({});
+    const unfenced = await declare("deliver", null);
+    expect(String(unfenced.exit)).toContain("ReleaseWriterModeMismatch");
+    expect(unfenced.resources).toEqual({});
+  });
+
   test("plans private workers by digest with distinct audiences", () => {
     const tasks = workerServiceProps(sandboxConfig, "tasks-worker", digest);
     const scheduler = workerServiceProps(
@@ -287,6 +578,8 @@ describe("Alchemy beta.87 surface", () => {
         sha: GitSha.make("a".repeat(40)),
         imageDigest: digest,
         origin: "cloud-run",
+        liveTemplate: null,
+        now,
       })
     );
     const pending = Effect.runSync(

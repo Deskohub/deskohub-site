@@ -9,7 +9,12 @@ import type {
 import { workspaceQueueContracts } from "../contracts/queue-contracts";
 import { workspaceScheduleContracts } from "../contracts/schedule-contracts";
 import { routableDeployments } from "../release/release-reconciler";
-import type { ReleaseRecord } from "../release/release-record";
+import {
+  type ReleaseId,
+  type ReleaseRecord,
+  templateRevisionOf,
+} from "../release/release-record";
+import { sha256Hex } from "../sha256";
 import { toGcpDuration } from "./queue-declarations";
 import {
   secretResourceName,
@@ -65,9 +70,43 @@ const container = (
   ],
 });
 
+/**
+ * The template annotation carrying the fingerprint of the template spec,
+ * so readback can tell a template declared from an older config apart.
+ */
+export const templateSpecAnnotation = "deskohub.workspace/template-spec";
+
+/** The web revision template for one image, without its revision name. */
+const webTemplateSpec = (
+  config: WorkspaceStackConfig,
+  imageDigest: ImageDigest
+) => ({
+  serviceAccount: config.serviceAccounts.webRuntime,
+  timeout: "300s",
+  scaling: {
+    minInstanceCount: 0,
+    maxInstanceCount: config.capacity.webMaxInstances,
+  },
+  containers: [container(config, "web", imageDigest)],
+});
+
+/**
+ * A short sha256 fingerprint of the web template spec for one image. Two
+ * templates with the same fingerprint may share a revision name.
+ */
+export const webTemplateSpecFingerprint = (
+  config: WorkspaceStackConfig,
+  imageDigest: ImageDigest
+) =>
+  sha256Hex(JSON.stringify(webTemplateSpec(config, imageDigest))).slice(0, 16);
+
 /** The service annotation carrying the record's traffic generation. */
 export const trafficGenerationAnnotation =
   "deskohub.workspace/traffic-generation";
+
+/** The traffic tag that keeps a release's revision reachable by URL. */
+export const releaseTrafficTag = (releaseId: ReleaseId) =>
+  `release-${releaseId}`;
 
 /** The release taking untagged traffic: the one being applied, else active. */
 const servingDeployment = (record: ReleaseRecord) =>
@@ -101,13 +140,13 @@ export const webTraffic = (
       type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
       revision: serving.revision,
       percent: 100,
-      tag: `release-${serving.releaseId}`,
+      tag: releaseTrafficTag(serving.releaseId),
     },
     ...tagged.map((deployment) => ({
       type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
       revision: deployment.revision,
       percent: 0,
-      tag: `release-${deployment.releaseId}`,
+      tag: releaseTrafficTag(deployment.releaseId),
     })),
   ];
 };
@@ -123,16 +162,42 @@ export const webTraffic = (
  * one keeps serving, and promote and restore change traffic only. Nothing
  * is declared before a release serves.
  */
+/**
+ * The revision name and image the web template is declared with: the
+ * candidate, else the materialized template under the name the record
+ * declared it, else the serving release. `specFingerprint` is the spec a
+ * minted name was decided for, or null for a release's own name. Null
+ * before a release serves.
+ */
+export const declaredWebTemplate = (record: ReleaseRecord) => {
+  const serving = servingDeployment(record);
+  if (serving === null) {
+    return null;
+  }
+  const template = record.candidate ?? record.materialized ?? serving;
+  return {
+    revision:
+      template === record.materialized
+        ? templateRevisionOf(record.materialized)
+        : template.revision,
+    imageDigest: template.imageDigest,
+    specFingerprint:
+      template === record.materialized
+        ? (record.materialized.template?.specFingerprint ?? null)
+        : null,
+  };
+};
+
 export const webServiceProps = (
   config: WorkspaceStackConfig,
   record: ReleaseRecord,
   now: DateTime.Utc
 ): ServiceProps | undefined => {
-  const serving = servingDeployment(record);
-  if (serving === null) {
+  const template = declaredWebTemplate(record);
+  if (template === null) {
     return undefined;
   }
-  const template = record.candidate ?? record.materialized ?? serving;
+  const { revision } = template;
   return {
     serviceId: workloadServiceIds.web,
     location: config.region,
@@ -144,14 +209,14 @@ export const webServiceProps = (
       [trafficGenerationAnnotation]: String(record.trafficGeneration),
     },
     template: {
-      revision: template.revision,
-      serviceAccount: config.serviceAccounts.webRuntime,
-      timeout: "300s",
-      scaling: {
-        minInstanceCount: 0,
-        maxInstanceCount: config.capacity.webMaxInstances,
+      revision,
+      annotations: {
+        [templateSpecAnnotation]: webTemplateSpecFingerprint(
+          config,
+          template.imageDigest
+        ),
       },
-      containers: [container(config, "web", template.imageDigest)],
+      ...webTemplateSpec(config, template.imageDigest),
     },
     traffic: [...webTraffic(record, now)],
   };

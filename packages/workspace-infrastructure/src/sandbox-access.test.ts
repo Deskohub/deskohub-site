@@ -135,6 +135,8 @@ const runLiveBootstrap = (
     projectNumber: string;
     jwksJson?: string;
     jwksLookupFails?: boolean;
+    /** `location<TAB>location_type`, as gcloud prints the state bucket's. */
+    bucketLocation?: string;
   },
   ...args: ReadonlyArray<string>
 ) => {
@@ -151,6 +153,7 @@ case "$*" in
   *"providers list"*) echo "projects/$STUB_PROJECT_NUMBER/locations/global/workloadIdentityPools/workspace-sandbox-github/providers/deskohub-workspace" ;;
   *"value(oidc.issuerUri)"*) echo https://token.actions.githubusercontent.com ;;
   *"value(oidc.jwksJson)"*) [ -n "$STUB_JWKS_FAILS" ] && exit 1; echo "$STUB_JWKS" ;;
+  *"value(location,location_type)"*) printf '%s\n' "$STUB_BUCKET_LOCATION" ;;
   *describe*) exit 1 ;;
 esac
 `
@@ -162,6 +165,7 @@ esac
       STUB_PROJECT_NUMBER: answers.projectNumber,
       STUB_JWKS: answers.jwksJson ?? "",
       STUB_JWKS_FAILS: answers.jwksLookupFails ? "1" : "",
+      STUB_BUCKET_LOCATION: answers.bucketLocation ?? "EUROPE-WEST1\tregion",
     },
   });
   const calls = Bun.spawnSync(["cat", log]).stdout.toString();
@@ -219,6 +223,20 @@ describe("sandbox bootstrap script", () => {
     expect(calls.some((call) => call.includes("workloadIdentityUser"))).toBe(
       true
     );
+  });
+
+  test("refuses a state bucket outside the stage's region before changing it", () => {
+    for (const bucketLocation of ["EUROPE-WEST3\tregion", "EU\tmulti-region"]) {
+      const { result, calls } = runLiveBootstrap(
+        { projectNumber: "123456789012", bucketLocation },
+        ...liveArgs
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("single-region bucket");
+      expect(
+        calls.some((call) => call.startsWith("storage buckets update"))
+      ).toBe(false);
+    }
   });
 
   test("passes bash -n", () => {
