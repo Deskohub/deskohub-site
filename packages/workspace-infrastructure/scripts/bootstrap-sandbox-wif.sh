@@ -232,6 +232,14 @@ echo "== Versioned state bucket"
 exists gcloud storage buckets describe "gs://${state_bucket}" ||
   run gcloud storage buckets create "gs://${state_bucket}" --project "$project_id" \
   --location "$region" --uniform-bucket-level-access --public-access-prevention
+# The bucket's location fixes the stage's region (verifyStackTarget); an
+# existing bucket elsewhere would refuse every deploy.
+if [[ "$dry_run" == false ]]; then
+  bucket_location="$(gcloud storage buckets describe "gs://${state_bucket}" \
+    --format='value(location,location_type)' | tr '[:upper:]' '[:lower:]')"
+  [[ "$bucket_location" == "${region}"$'\t'"region" ]] ||
+    fail "state bucket ${state_bucket} must be a single-region bucket in ${region}"
+fi
 run gcloud storage buckets update "gs://${state_bucket}" --versioning \
   --uniform-bucket-level-access --public-access-prevention
 
