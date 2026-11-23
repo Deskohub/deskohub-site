@@ -14,7 +14,7 @@ import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/res
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
-import { defineVercelQueueRoute } from "@/shared/backend/queue/vercel-queue-consumer";
+import { defineQueueRoute } from "@/shared/backend/queue/queue-route";
 
 export const maxDuration = 300;
 
@@ -41,8 +41,9 @@ const ConsumerLive = LatePaymentRecoveryService.Default.pipe(
   Layer.provide(WorkspaceDotyposLayer)
 );
 
-export const POST = defineVercelQueueRoute(
+export const POST = defineQueueRoute(
   "latePaymentRecoveryQueue",
+  latePaymentRecoveryTopic.topic,
   latePaymentRecoveryTopic.consume((message) =>
     processLatePaymentRecoveryMessage(message).pipe(
       Effect.provide(ConsumerLive)

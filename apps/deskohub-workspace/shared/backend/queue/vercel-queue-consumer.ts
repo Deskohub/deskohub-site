@@ -13,6 +13,7 @@ import {
   type QueueDeliveryAction,
   type QueueDeliveryFailureReason,
   queueDeliveryFailureMessage,
+  queueDeliveryModeForStage,
 } from "./queue-consumer";
 
 // Vercel Queues accepts visibility changes of up to one hour.
@@ -68,7 +69,7 @@ export const defineVercelQueueRoute = (
           messageId: metadata.messageId,
           deliveryCount: metadata.deliveryCount,
         },
-        env.VERCEL_ENV === "preview" ? "preview" : "durable"
+        queueDeliveryModeForStage(env.VERCEL_ENV)
       ).pipe(
         Effect.flatMap(
           Match.valueTags({

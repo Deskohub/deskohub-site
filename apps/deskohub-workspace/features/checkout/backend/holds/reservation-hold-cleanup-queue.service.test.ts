@@ -68,6 +68,13 @@ const runProcessMessage = async (
     input.findById ?? mock(() => Effect.succeed(makeReservation()));
   const cancelOrderHold =
     input.cancelOrderHold ?? mock(() => Effect.succeed("cancelled" as const));
+  const logs: Array<{ level: string; message: unknown }> = [];
+  const captureLogs = Logger.layer([
+    Logger.make(({ logLevel, message }) => {
+      const [text] = Array.isArray(message) ? message : [message];
+      logs.push({ level: logLevel, message: text });
+    }),
+  ]);
 
   const result = await processReservationHoldCleanupScheduleMessage(
     message,
@@ -83,13 +90,14 @@ const runProcessMessage = async (
           sweepExpiredHolds: mock(() =>
             Effect.succeed({ cancelled: 0, skipped: 0, failed: 0 })
           ),
-        } satisfies ReservationHoldCleanupServiceType)
+        } satisfies ReservationHoldCleanupServiceType),
+        captureLogs
       )
     ),
     Effect.runPromise
   );
 
-  return { result, findById, cancelOrderHold };
+  return { result, findById, cancelOrderHold, logs };
 };
 
 /**
@@ -166,6 +174,12 @@ const duePayload = {
   orderId: "order-id",
   reservationHoldExpiresAtIso: expiresAt.toString(),
 };
+// Enqueued at `now`: the hold's ten minutes plus the hour of retries.
+const cleanupDeadline = Temporal.Instant.from("2026-06-01T11:10:00.000Z");
+const scheduledPayload = {
+  ...duePayload,
+  cleanupDeadlineIso: cleanupDeadline.toString(),
+};
 
 describe("ReservationHoldCleanupScheduleService", () => {
   test("builds bounded delayed queue messages with idempotency", async () => {
@@ -181,7 +195,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
     });
     expect(message).toEqual({
       topic: "workspace-reservation-hold-cleanup",
-      message: duePayload,
+      message: scheduledPayload,
       options: {
         delaySeconds: 600,
         retentionSeconds: 4200,
@@ -190,7 +204,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
       },
     });
     expect(JSON.stringify(message.message)).toBe(
-      '{"schemaVersion":1,"orderId":"order-id","reservationHoldExpiresAtIso":"2026-06-01T10:10:00Z"}'
+      '{"schemaVersion":1,"orderId":"order-id","reservationHoldExpiresAtIso":"2026-06-01T10:10:00Z","cleanupDeadlineIso":"2026-06-01T11:10:00Z"}'
     );
 
     const clamped = reservationHoldCleanupTopic.publication({
@@ -205,6 +219,25 @@ describe("ReservationHoldCleanupScheduleService", () => {
     );
     expect(clamped.options.retentionSeconds).toBe(
       reservationHoldCleanupScheduleMaxDelaySeconds
+    );
+    // At the cap the deadline is the end of retention, leaving no retries.
+    expect(clamped.message.cleanupDeadlineIso).toBe(
+      now
+        .add({ seconds: reservationHoldCleanupScheduleMaxDelaySeconds })
+        .toString()
+    );
+
+    const overdue = reservationHoldCleanupTopic.publication({
+      orderId: "order-id" as WorkspaceReservationId,
+      reservationHoldExpiresAt: now.subtract({ minutes: 5 }),
+      now,
+    });
+    expect(overdue.options).toMatchObject({
+      delaySeconds: 0,
+      retentionSeconds: 3600,
+    });
+    expect(overdue.message.cleanupDeadlineIso).toBe(
+      now.add({ hours: 1 }).toString()
     );
   });
 
@@ -255,7 +288,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
     expect(logs[0]?.fields).toEqual({
       message: {
         topic: "workspace-reservation-hold-cleanup",
-        payload: duePayload,
+        payload: queue.published()[0]?.message,
         options: queue.published()[0]?.options,
       },
     });
@@ -272,6 +305,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
       { ...duePayload, orderId: "" },
       { ...duePayload, reservationHoldExpiresAtIso: "tomorrow" },
       { schemaVersion: 1, orderId: "order-id" },
+      { ...duePayload, cleanupDeadlineIso: "tomorrow" },
     ]) {
       expect(
         decodeStandardSchema(reservationHoldCleanupTopic.message, message)
@@ -280,6 +314,233 @@ describe("ReservationHoldCleanupScheduleService", () => {
     expect(
       decodeStandardSchema(reservationHoldCleanupTopic.message, duePayload)
     ).toEqual(duePayload);
+    expect(
+      decodeStandardSchema(
+        reservationHoldCleanupTopic.message,
+        scheduledPayload
+      )
+    ).toEqual(scheduledPayload);
+    // Rollback safety: the deadline rides under version 1 because unknown keys
+    // decode instead of failing, as a later field does for this decoder.
+    expect(
+      decodeStandardSchema(reservationHoldCleanupTopic.message, {
+        ...scheduledPayload,
+        laterField: "ignored",
+      })
+    ).toEqual(scheduledPayload);
+  });
+
+  test("cleans up a scheduled hold on or before its cleanup deadline", async () => {
+    for (const deliveredAt of [dueNow, cleanupDeadline]) {
+      const delivery = await runProcessMessage(scheduledPayload, {
+        now: deliveredAt,
+      });
+
+      expect(delivery.result).toBe("cancelled");
+      expect(delivery.cancelOrderHold).toHaveBeenCalledWith({
+        orderId: "order-id",
+        holdExpiresAt: expiresAt,
+        checkedAt: deliveredAt,
+      });
+    }
+  });
+
+  test("acknowledges without cleanup after the cleanup deadline", async () => {
+    const delivery = await runProcessMessage(scheduledPayload, {
+      now: cleanupDeadline.add({ microseconds: 1 }),
+    });
+
+    expect(delivery.result).toBe("past_deadline");
+    expect(delivery.cancelOrderHold).not.toHaveBeenCalled();
+    expect(delivery.findById).not.toHaveBeenCalled();
+    expect(delivery.logs).toEqual([
+      {
+        level: "Warn",
+        message:
+          "Reservation hold cleanup queue message acknowledged: past its cleanup deadline",
+      },
+    ]);
+  });
+
+  test("acknowledges a late delivery before building its cleanup dependencies", async () => {
+    const { reservationHoldCleanupConsumer } = await import(
+      "./reservation-hold-cleanup-queue.service"
+    );
+    const { ReservationHoldCleanupService } = await import(
+      "./reservation-hold-cleanup.service"
+    );
+    const builds = mock(() => undefined);
+    const consume = reservationHoldCleanupConsumer(
+      Layer.effect(
+        ReservationHoldCleanupService,
+        Effect.sync(builds).pipe(
+          Effect.andThen(Effect.fail(new Error("database unavailable")))
+        )
+      )
+    );
+    const deliver = (payload: typeof scheduledPayload) =>
+      consume(
+        {
+          messageId: "message-id",
+          deliveryCount: 1,
+          topic: "workspace-reservation-hold-cleanup",
+          payload,
+        },
+        "durable"
+      ).pipe(Effect.runPromise);
+
+    // The deadline is long past on the real clock.
+    expect(await deliver(scheduledPayload)).toEqual({ _tag: "Handled" });
+    expect(builds).not.toHaveBeenCalled();
+
+    const onTime = await deliver({
+      ...scheduledPayload,
+      cleanupDeadlineIso: Temporal.Now.instant().add({ hours: 1 }).toString(),
+    });
+    expect(onTime._tag).not.toBe("Handled");
+    expect(builds).toHaveBeenCalledTimes(1);
+  });
+
+  test("checks a delivered hold once its cleanup dependencies are built", async () => {
+    const { reservationHoldCleanupConsumer } = await import(
+      "./reservation-hold-cleanup-queue.service"
+    );
+    const { ReservationHoldCleanupService } = await import(
+      "./reservation-hold-cleanup.service"
+    );
+    let builtAt: Temporal.Instant | undefined;
+    let checkedAt: Temporal.Instant | undefined;
+    const cancelOrderHold = mock(
+      (input: { readonly checkedAt: Temporal.Instant }) => {
+        checkedAt = input.checkedAt;
+        return Effect.succeed("cancelled" as const);
+      }
+    );
+    const consume = reservationHoldCleanupConsumer(
+      Layer.effect(
+        ReservationHoldCleanupService,
+        Effect.sleep("20 millis").pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              builtAt = Temporal.Now.instant();
+              return {
+                cancelOrderHold,
+                sweepExpiredHolds: mock(() =>
+                  Effect.succeed({ cancelled: 0, skipped: 0, failed: 0 })
+                ),
+              } satisfies ReservationHoldCleanupServiceType;
+            })
+          )
+        )
+      )
+    );
+
+    const outcome = await consume(
+      {
+        messageId: "message-id",
+        deliveryCount: 1,
+        topic: "workspace-reservation-hold-cleanup",
+        payload: duePayload,
+      },
+      "durable"
+    ).pipe(Effect.runPromise);
+
+    expect(outcome).toEqual({ _tag: "Handled" });
+    // A provider cutoff crossed while dependencies build counts as passed.
+    expect(
+      checkedAt && builtAt && Temporal.Instant.compare(checkedAt, builtAt)
+    ).toBeGreaterThanOrEqual(0);
+  });
+
+  test("cleans up a delivery received by its deadline even when dependencies build past it", async () => {
+    const { reservationHoldCleanupConsumer } = await import(
+      "./reservation-hold-cleanup-queue.service"
+    );
+    const { ReservationHoldCleanupService } = await import(
+      "./reservation-hold-cleanup.service"
+    );
+    const cancelOrderHold = mock(() => Effect.succeed("cancelled" as const));
+    const consume = reservationHoldCleanupConsumer(
+      Layer.effect(
+        ReservationHoldCleanupService,
+        Effect.sleep("150 millis").pipe(
+          Effect.as({
+            cancelOrderHold,
+            sweepExpiredHolds: mock(() =>
+              Effect.succeed({ cancelled: 0, skipped: 0, failed: 0 })
+            ),
+          } satisfies ReservationHoldCleanupServiceType)
+        )
+      )
+    );
+    const deadline = Temporal.Now.instant().add({ milliseconds: 50 });
+
+    const outcome = await consume(
+      {
+        messageId: "message-id",
+        deliveryCount: 1,
+        topic: "workspace-reservation-hold-cleanup",
+        payload: { ...duePayload, cleanupDeadlineIso: deadline.toString() },
+      },
+      "durable"
+    ).pipe(Effect.runPromise);
+
+    expect(outcome).toEqual({ _tag: "Handled" });
+    expect(cancelOrderHold).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps the enqueue clock's full precision in the cleanup deadline", async () => {
+    const { reservationHoldCleanupTopic } = await import(
+      "./reservation-hold-cleanup-topic"
+    );
+    const enqueuedAt = Temporal.Instant.from("2026-06-01T10:00:00.123456789Z");
+    const { message, options } = reservationHoldCleanupTopic.publication({
+      orderId: "order-id" as WorkspaceReservationId,
+      reservationHoldExpiresAt: expiresAt,
+      now: enqueuedAt,
+    });
+    const retentionEnd = enqueuedAt.add({ seconds: options.retentionSeconds });
+
+    const onTime = await runProcessMessage(message, { now: retentionEnd });
+    expect(onTime.result).toBe("cancelled");
+
+    const late = await runProcessMessage(message, {
+      now: retentionEnd.add({ nanoseconds: 1 }),
+    });
+    expect(late.result).toBe("past_deadline");
+  });
+
+  test("gives a hold scheduled at the delay cap no late retries", async () => {
+    const { reservationHoldCleanupTopic } = await import(
+      "./reservation-hold-cleanup-topic"
+    );
+    const capExpiresAt = now.add({ hours: 7 * 24 });
+    const { message } = reservationHoldCleanupTopic.publication({
+      orderId: "order-id" as WorkspaceReservationId,
+      reservationHoldExpiresAt: capExpiresAt,
+      now,
+    });
+    expect(message.cleanupDeadlineIso).toBe(
+      message.reservationHoldExpiresAtIso
+    );
+
+    const onTime = await runProcessMessage(message, { now: capExpiresAt });
+    expect(onTime.result).toBe("cancelled");
+
+    const retry = await runProcessMessage(message, {
+      now: capExpiresAt.add({ seconds: 1 }),
+    });
+    expect(retry.result).toBe("past_deadline");
+    expect(retry.cancelOrderHold).not.toHaveBeenCalled();
+  });
+
+  test("runs cleanup for a message without a deadline whenever it arrives", async () => {
+    const delivery = await runProcessMessage(duePayload, {
+      now: dueNow.add({ hours: 30 * 24 }),
+    });
+
+    expect(delivery.result).toBe("cancelled");
+    expect(delivery.cancelOrderHold).toHaveBeenCalledTimes(1);
   });
 
   test("acknowledges a cleanup its order is no longer due for", async () => {

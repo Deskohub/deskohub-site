@@ -1,13 +1,12 @@
-import { Effect, Layer } from "effect";
+import { Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
-  processReservationHoldCleanupScheduleMessage,
   ReservationHoldCleanupService,
-  reservationHoldCleanupRedelivery,
+  reservationHoldCleanupConsumer,
   reservationHoldCleanupTopic,
 } from "@/features/checkout/backend/holds";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { defineVercelQueueRoute } from "@/shared/backend/queue/vercel-queue-consumer";
+import { defineQueueRoute } from "@/shared/backend/queue/queue-route";
 
 const ReservationHoldCleanupScheduleConsumerLive = Layer.mergeAll(
   ReservationHoldCleanupService.Live,
@@ -16,13 +15,8 @@ const ReservationHoldCleanupScheduleConsumerLive = Layer.mergeAll(
   )
 );
 
-export const POST = defineVercelQueueRoute(
+export const POST = defineQueueRoute(
   "reservationHoldCleanupSchedule",
-  reservationHoldCleanupTopic.consume(
-    (message) =>
-      processReservationHoldCleanupScheduleMessage(message).pipe(
-        Effect.provide(ReservationHoldCleanupScheduleConsumerLive)
-      ),
-    reservationHoldCleanupRedelivery
-  )
+  reservationHoldCleanupTopic.topic,
+  reservationHoldCleanupConsumer(ReservationHoldCleanupScheduleConsumerLive)
 );

@@ -499,6 +499,24 @@ describe("deployment host environment", () => {
     expect(invalidVariables(containerHost)).toEqual([]);
   });
 
+  test("a production container host needs no cron secret", () => {
+    expect(
+      invalidVariables({
+        ...containerHost,
+        VERCEL_ENV: "production",
+        CRON_SECRET: undefined,
+      })
+    ).not.toContain("CRON_SECRET");
+    expect(
+      invalidVariables({
+        ...containerHost,
+        WORKSPACE_RUNTIME_HOST: "vercel",
+        VERCEL_ENV: "production",
+        CRON_SECRET: undefined,
+      })
+    ).toContain("CRON_SECRET");
+  });
+
   test("a container host requires its public origin and trusted client address header", () => {
     expect(
       invalidVariables({
