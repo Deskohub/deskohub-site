@@ -59,6 +59,4 @@ export class LatePaymentRecoveryQueueService extends Context.Service<
       };
     })
   );
-
-  static Live = this.Default.pipe(Layer.provide(QueuePublisher.Default));
 }

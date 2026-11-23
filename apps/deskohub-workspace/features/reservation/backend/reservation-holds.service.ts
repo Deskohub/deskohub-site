@@ -88,6 +88,7 @@ import type { ReservationPurpose } from "@/features/reservation/reservation-purp
 import type { SealedOfficePeople } from "@/features/reservation-invitees/backend/reservation-invitees.service";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { MissingDotyposId } from "@/shared/backend/missing-dotypos-id";
+import { VercelQueuePublisher } from "@/shared/backend/queue/vercel-queue-publisher";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 
 /** One checkout attempt's hold request, as a submission books it. */
@@ -229,7 +230,9 @@ export class ReservationHolds extends Context.Service<
           Layer.provide(WorkspaceDatabaseAdvisoryLock.Default),
           Layer.provide(WorkspaceDotyposLayer)
         ),
-        ReservationHoldCleanupScheduleService.Live,
+        ReservationHoldCleanupScheduleService.Default.pipe(
+          Layer.provide(VercelQueuePublisher)
+        ),
         CheckoutAnalytics.Live,
         WorkspaceDotyposLayer,
         SealedStateKeys.Default
