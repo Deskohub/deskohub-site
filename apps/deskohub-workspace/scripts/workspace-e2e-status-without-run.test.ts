@@ -1369,6 +1369,49 @@ exit 1
     expect(posts[0]).toContain(
       "No Vercel deployment record matches this preview yet"
     );
+
+    // A delayed `skipped-none` publisher for an older successful preview A must
+    // NOT overwrite an unresolved preview-record-mismatch posted for a newer
+    // preview B on the same SHA.
+    const delayedOlderPreview = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- none\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/statuses`]: [
+          {
+            context: "Workspace E2E",
+            creator: { login: "github-actions[bot]" },
+            description:
+              "No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: failed:deadbeef]",
+            state: "failure",
+          },
+        ],
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(delayedOlderPreview.result.exitCode).toBe(0);
+    const delayedPosts = delayedOlderPreview.calls.filter((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(delayedPosts).toEqual([]);
   });
 
   test("reconciles a delayed metadata failure that raced with a concurrent fix to none", async () => {

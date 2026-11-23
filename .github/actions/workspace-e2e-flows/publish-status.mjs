@@ -161,12 +161,15 @@ const deploymentStatusMatchesOutcome = (status, expectedOutcome) => {
 
 /**
  * Scans `Workspace E2E` commit statuses from newest to oldest for any
- * unresolved exact-preview or target-resolution failure that has not been
- * superseded by a genuine post-resolution success (`passed`, `skipped-none`,
- * or `carried-passed`). Preserves outstanding mismatch evidence across
- * intervening PR validation failures (`Invalid or missing ## E2E flows...`)
- * until a GitHub deployment record satisfies the resolver's exact URL-and-state
- * predicate.
+ * unresolved exact-preview or target-resolution failure.
+ *
+ * Tagged preview mismatches (`[preview: <outcome>:<tag>]`) are NEVER cleared
+ * by an unrelated `skipped-none`, `passed`, or `carried-passed` status (for
+ * example from a delayed publisher for an older preview on the same SHA); they
+ * clear ONLY when a GitHub deployment record on this SHA satisfies the
+ * resolver's exact URL-and-state predicate. Untagged target-resolution
+ * failures likewise stay unresolved across `skipped-none`, `carried-passed`,
+ * `restored`, and validation writes.
  */
 const findUnresolvedExactPreviewFailure = (statuses, deployment) => {
   const relevant = (Array.isArray(statuses) ? statuses : []).filter(
@@ -177,21 +180,11 @@ const findUnresolvedExactPreviewFailure = (statuses, deployment) => {
   );
 
   for (const status of relevant) {
-    const desc = String(status.description ?? "");
-    const classified = classifyE2EStatusDescription(desc);
-
-    if (
-      (classified.kind === "passed" && status.state === "success") ||
-      (classified.kind === "skipped-none" && status.state === "success") ||
-      (classified.kind === "carried-passed" && status.state === "success")
-    ) {
-      return null;
-    }
-
     if (status.state !== "failure" && status.state !== "error") {
       continue;
     }
 
+    const desc = String(status.description ?? "");
     const tagMatch = PREVIEW_MISMATCH_TAG_PATTERN.exec(desc);
     if (tagMatch) {
       const expectedOutcome = tagMatch[1];
@@ -491,6 +484,7 @@ const evaluateSameTreeCommit = (
 const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
   const tentativePosts = [];
   let pendingSnapshot = null;
+  let overrideDecision = null;
 
   for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
     const rawBefore = pendingSnapshot ?? readSnapshot();
@@ -501,7 +495,8 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
         ? stripTentativePosts(rawBefore.statuses, tentativePosts)
         : rawBefore.statuses,
     };
-    const decision = decide(before);
+    const decision = overrideDecision ?? decide(before);
+    overrideDecision = null;
     if (decision.skipPost) {
       if (tentativePosts.length === 0) {
         return decision;
@@ -631,7 +626,8 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
     // If verification returned skipPost after we already wrote a tentative
     // status, accept it ONLY when verification affirmatively proved the live
     // selection is already satisfied (`satisfiedSuccess: true`, e.g. a genuine
-    // concurrent pass landed). Otherwise undo the tentative status immediately.
+    // concurrent pass landed). When a tentative failure overwrote a concurrent
+    // success, reinstate that success and CAS-verify it on the next attempt.
     if (verifyDecision.skipPost) {
       if (
         decision.state === "success" &&
@@ -642,7 +638,25 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
       ) {
         return decision;
       }
+      if (
+        decision.state !== "success" &&
+        verifyDecision.satisfiedSuccess === true &&
+        verifyDecision.reinstateDecision &&
+        after.prOk &&
+        (after.deployment.state === "success" ||
+          after.deployment.state === "skipped")
+      ) {
+        pendingSnapshot = rawAfter;
+        overrideDecision = verifyDecision.reinstateDecision;
+        continue;
+      }
       if (verifyDecision.undoDecision) {
+        if (
+          verifyDecision.undoDecision.state === decision.state &&
+          verifyDecision.undoDecision.description === decision.description
+        ) {
+          return decision;
+        }
         postCommitStatus(sha, {
           context: "Workspace E2E",
           state: verifyDecision.undoDecision.state,
@@ -762,6 +776,18 @@ const runPublishFinalStatus = () => {
         const parsedPr = parsePrBodyE2EFlows(prBody);
         if (!parsedPr.ok) {
           return { state: "failure", description: INVALID_FLOWS_DESCRIPTION };
+        }
+
+        const unresolvedExactPreview = findUnresolvedExactPreviewFailure(
+          statuses,
+          deployment
+        );
+        if (unresolvedExactPreview) {
+          return {
+            state: "failure",
+            description: unresolvedExactPreview.description,
+            verifyAfterPost: true,
+          };
         }
 
         // Never overwrite a newer active run started by a DIFFERENT workflow run
@@ -1066,6 +1092,7 @@ const runPublishStatusWithoutRun = () => {
           return {
             state: "failure",
             description: unresolvedExactPreview.description,
+            verifyAfterPost: true,
           };
         }
         if (parsedPr.flows === "none") {
@@ -1198,6 +1225,40 @@ const runPublishStatusWithoutRun = () => {
         return { state: "failure", description: INVALID_FLOWS_DESCRIPTION };
       }
 
+      if (!statusesOk) {
+        return {
+          state: "failure",
+          description: STATUSES_UNAVAILABLE_DESCRIPTION,
+        };
+      }
+
+      const unresolvedExactPreview = findUnresolvedExactPreviewFailure(
+        statuses,
+        deployment
+      );
+      if (unresolvedExactPreview) {
+        const currentSummary = summarizeCommitStatuses(statuses, {
+          includeCarried: false,
+        });
+        if (
+          currentSummary.latestState === "failure" &&
+          currentSummary.latestDescription === unresolvedExactPreview.description
+        ) {
+          return {
+            skipPost: true,
+            undoDecision: {
+              state: "failure",
+              description: unresolvedExactPreview.description,
+            },
+          };
+        }
+        return {
+          state: "failure",
+          description: unresolvedExactPreview.description,
+          verifyAfterPost: true,
+        };
+      }
+
       if (classified.kind === "skipped-none") {
         if (parsedPr.flows !== "none") {
           return {
@@ -1210,12 +1271,6 @@ const runPublishStatusWithoutRun = () => {
       }
 
       if (classified.kind === "carried-passed") {
-        if (!statusesOk) {
-          return {
-            state: "failure",
-            description: STATUSES_UNAVAILABLE_DESCRIPTION,
-          };
-        }
         const summary = summarizeCommitStatuses(statuses, {
           includeCarried: false,
         });
@@ -1398,6 +1453,7 @@ const runSyncPrFlows = () => {
         return {
           state: "failure",
           description: unresolvedExactPreview.description,
+          verifyAfterPost: true,
         };
       }
       const requestedFlows = parsedPr.flows;
@@ -1411,13 +1467,18 @@ const runSyncPrFlows = () => {
 
       if (requestedFlows === "none") {
         if (deploymentResolved) {
+          const skippedNoneDecision = {
+            state: "success",
+            description: formatE2EStatusDescription({ kind: "skipped-none" }),
+          };
           if (summary.latestState !== "success") {
-            return {
-              state: "success",
-              description: formatE2EStatusDescription({ kind: "skipped-none" }),
-            };
+            return skippedNoneDecision;
           }
-          return { skipPost: true, satisfiedSuccess: true };
+          return {
+            skipPost: true,
+            satisfiedSuccess: true,
+            reinstateDecision: skippedNoneDecision,
+          };
         }
         if (
           summary.latestState === "failure" &&
@@ -1445,21 +1506,26 @@ const runSyncPrFlows = () => {
           }
           return { skipPost: true, undoDecision: pendingPreviewUndo };
         }
+        const restoredDecision = {
+          state: "success",
+          description: formatE2EStatusDescription({
+            kind: "restored",
+            flows: summary.realPassedFlowsCsv,
+          }),
+        };
         if (
           summary.latestState !== "success" ||
           summary.latestKind === "skipped-none"
         ) {
           // Use `restored` (not `passed`) so persisted tentative writes from
           // sync can never be mistaken by a later process for a real run pass.
-          return {
-            state: "success",
-            description: formatE2EStatusDescription({
-              kind: "restored",
-              flows: summary.realPassedFlowsCsv,
-            }),
-          };
+          return restoredDecision;
         }
-        return { skipPost: true, satisfiedSuccess: true };
+        return {
+          skipPost: true,
+          satisfiedSuccess: true,
+          reinstateDecision: restoredDecision,
+        };
       }
 
       const coveringCarried = findCoveringCarriedSource(
@@ -1484,16 +1550,21 @@ const runSyncPrFlows = () => {
           flows: coveringCarried.flowsCsv,
           sourceSha: coveringCarried.sourceSha,
         });
+        const carriedDecision = {
+          state: "success",
+          description: expectedDescription,
+        };
         if (
           summary.latestState !== "success" ||
           summary.latestDescription !== expectedDescription
         ) {
-          return {
-            state: "success",
-            description: expectedDescription,
-          };
+          return carriedDecision;
         }
-        return { skipPost: true, satisfiedSuccess: true };
+        return {
+          skipPost: true,
+          satisfiedSuccess: true,
+          reinstateDecision: carriedDecision,
+        };
       }
 
       const inFlightCovered = unionFlowIds(

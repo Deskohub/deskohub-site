@@ -220,8 +220,14 @@ const matchHtmlBlockStart = (line, inParagraph) => {
 /**
  * Strips inline HTML comments (`<!-- ... -->`) outside backtick code spans,
  * and reports whether an unclosed `<!--` remains open at end of line.
+ * When `allowUnclosed` is false (single-line blocks such as ATX headings),
+ * an unclosed `<!--` is preserved as literal text per GFM §4.2 / §6.6.
  */
-const stripInlineHtmlComments = (line, inCommentStart) => {
+const stripInlineHtmlComments = (
+  line,
+  inCommentStart,
+  { allowUnclosed = true } = {}
+) => {
   let inComment = inCommentStart;
   let out = "";
   let i = 0;
@@ -268,6 +274,15 @@ const stripInlineHtmlComments = (line, inCommentStart) => {
     }
 
     if (line.startsWith("<!--", i)) {
+      if (!allowUnclosed) {
+        const closeIndex = line.indexOf("-->", i + 4);
+        if (closeIndex === -1) {
+          out += line.slice(i);
+          break;
+        }
+        i = closeIndex + 3;
+        continue;
+      }
       inComment = true;
       i += 4;
       continue;
@@ -278,6 +293,29 @@ const stripInlineHtmlComments = (line, inCommentStart) => {
   }
 
   return { text: out, inComment };
+};
+
+const listItemStartPattern = /^ {0,3}(?:[-*+]|[0-9]{1,9}[.)])[ \t]/;
+
+const interruptsParagraph = (line, isBlank) => {
+  if (isBlank) return true;
+  if (anyHeadingPattern.test(line) || thematicBreakPattern.test(line)) {
+    return true;
+  }
+  const fenceMatch = fenceOpenPattern.exec(line);
+  if (
+    fenceMatch &&
+    (fenceMatch[1][0] !== "`" || !line.slice(fenceMatch[0].length).includes("`"))
+  ) {
+    return true;
+  }
+  if (matchHtmlBlockStart(line, true) !== null) {
+    return true;
+  }
+  if (listItemStartPattern.test(line)) {
+    return true;
+  }
+  return false;
 };
 
 const scanVisibleLines = (lines) => {
@@ -345,19 +383,28 @@ const scanVisibleLines = (lines) => {
     }
 
     if (inInlineComment) {
-      const stripped = stripInlineHtmlComments(line, true);
-      inInlineComment = stripped.inComment;
-      const blankAfter = /^[ \t]*$/.test(stripped.text);
-      previousBlank = blankAfter;
-      inParagraph = !blankAfter;
-      visible.push({
-        index,
-        line,
-        visibleLine: stripped.text,
-        hidden: blankAfter,
-        hiddenKind: blankAfter ? "html-comment" : "",
-      });
-      continue;
+      // Inline comments cannot cross a Markdown block boundary (GFM parses
+      // block structure before inlines). If this line ends or interrupts the
+      // open paragraph, abandon the unclosed inline comment and parse this
+      // line as its own block.
+      if (interruptsParagraph(line, isBlank)) {
+        inInlineComment = false;
+        inParagraph = false;
+      } else {
+        const stripped = stripInlineHtmlComments(line, true);
+        inInlineComment = stripped.inComment;
+        const blankAfter = /^[ \t]*$/.test(stripped.text);
+        previousBlank = blankAfter;
+        inParagraph = !blankAfter;
+        visible.push({
+          index,
+          line,
+          visibleLine: stripped.text,
+          hidden: blankAfter,
+          hiddenKind: blankAfter ? "html-comment" : "",
+        });
+        continue;
+      }
     }
 
     const fenceMatch = fenceOpenPattern.exec(line);
@@ -435,9 +482,6 @@ const scanVisibleLines = (lines) => {
       continue;
     }
 
-    const stripped = stripInlineHtmlComments(line, false);
-    inInlineComment = stripped.inComment;
-    previousBlank = false;
     // Setext heading underlines close the preceding paragraph (GFM §4.3), and
     // ATX headings / thematic breaks do not open a paragraph, so a standalone
     // GFM type-7 HTML tag on the immediately following line starts an HTML
@@ -445,10 +489,16 @@ const scanVisibleLines = (lines) => {
     // inline HTML comments (so `=== <!-- note -->` stays paragraph text).
     const closesSetextHeading =
       inParagraph && setextUnderlinePattern.test(line);
-    inParagraph =
+    const continuesParagraph =
       !closesSetextHeading &&
       !anyHeadingPattern.test(line) &&
       !thematicBreakPattern.test(line);
+    const stripped = stripInlineHtmlComments(line, false, {
+      allowUnclosed: continuesParagraph,
+    });
+    inInlineComment = continuesParagraph && stripped.inComment;
+    previousBlank = false;
+    inParagraph = continuesParagraph;
     visible.push({
       index,
       line,

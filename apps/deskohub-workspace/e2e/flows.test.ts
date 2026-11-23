@@ -127,6 +127,26 @@ describe("PR description ## E2E flows parser", () => {
       flows: "admin",
     });
 
+    // Per GFM §4.2 / §6.6, an unclosed inline `<!--` inside a heading or
+    // paragraph is bounded to its block and cannot hide a subsequent
+    // `## E2E flows` heading.
+    expect(
+      parsePrBodyE2EFlows(
+        "## Summary <!-- unclosed\n## E2E flows\n- none\n## End\n"
+      )
+    ).toMatchObject({
+      ok: true,
+      kind: "none",
+      flows: "none",
+    });
+    expect(
+      parsePrBodyE2EFlows("Some paragraph <!-- unclosed\n## E2E flows\n- none\n")
+    ).toMatchObject({
+      ok: true,
+      kind: "none",
+      flows: "none",
+    });
+
     // Listing every individual flow normalizes to `all`.
     const everyFlowBody = `## E2E flows\n${workspaceE2EFlowIds.map((id) => `- ${id}`).join("\n")}\n`;
     expect(parsePrBodyE2EFlows(everyFlowBody)).toMatchObject({
@@ -208,8 +228,8 @@ describe("PR description ## E2E flows parser", () => {
       "## Summary\n<!-- unclosed template comment\n## E2E flows\n- none\n## End\n",
     ],
     [
-      "heading inside inline unclosed HTML comment",
-      "## Summary <!-- unclosed\n## E2E flows\n- none\n## End\n",
+      "section heading with unclosed inline HTML comment as literal text",
+      "## E2E flows <!-- unclosed\n- none\n",
     ],
   ])("reports missing section for %s", (_label, body) => {
     const parsed = parsePrBodyE2EFlows(body);

@@ -1057,6 +1057,91 @@ exit 1
       "Protected preview E2E skipped [flows: none]"
     );
 
+    // An older preview's `skipped-none` sitting on top of a newer preview's
+    // unresolved mismatch must NOT clear that mismatch: sync restores failure.
+    const olderSuccessOverNewerMismatch = await runSync({
+      body: "## E2E flows\n- none\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E skipped [flows: none]",
+          state: "success",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description:
+            "No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: failed:deadbeef]",
+          state: "failure",
+        },
+      ],
+    });
+    expect(olderSuccessOverNewerMismatch.result.exitCode).toBe(0);
+    const olderSuccessPosts = statusPosts(olderSuccessOverNewerMismatch.calls);
+    expect(olderSuccessPosts).toHaveLength(1);
+    expect(olderSuccessPosts[0]).toContain("state=failure");
+    expect(olderSuccessPosts[0]).toContain("[preview: failed:deadbeef]");
+
+    // If sync reads an outstanding mismatch, and before its failure write lands
+    // the exact matching deployment appears and its publisher posts
+    // `skipped-none`, post-write CAS must reinstate `skipped-none` rather than
+    // leaving the stale failure on top.
+    const statefulMismatchRecoveryGh = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
+state_file="$GH_FIXTURES/state.txt"
+[[ -f "$state_file" ]] || echo "before" > "$state_file"
+if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
+  echo '{"number":${prNumber},"state":"open","draft":false,"user":{"login":"author"},"head":{"ref":"${headRef}","sha":"${headSha}","repo":{"full_name":"${repository}"}},"body":"## E2E flows\\n- none\\n"}'
+  exit 0
+fi
+if [[ "$*" == *"/deployments/11/statuses"* ]]; then
+  if [[ "$(cat "$state_file")" == "before" ]]; then
+    echo '[{"state":"success","description":"Deployment has completed","environment_url":"https://deskohub-workspace-site-other-team.vercel.app/"}]'
+  else
+    echo '[{"state":"success","description":"Deployment has completed","environment_url":"${previewUrl}/"}]'
+  fi
+  exit 0
+fi
+if [[ "$*" == *"/deployments"* ]]; then
+  echo '[{"id":11,"creator":{"login":"vercel[bot]"}}]'
+  exit 0
+fi
+if [[ "$*" == *"/commits/${headSha}/statuses"* ]]; then
+  if [[ "$(cat "$state_file")" == "before" ]]; then
+    echo '[[{"id":20,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"failure","description":"Invalid or missing ## E2E flows in PR description; list valid flows, all, or none"},{"id":19,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"failure","description":"No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: success:${previewUrlTag}]"}]]'
+  else
+    echo '[[{"id":22,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"failure","description":"No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: success:${previewUrlTag}]","target_url":"https://github.com/${repository}/actions/runs/99"},{"id":21,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E skipped [flows: none]","target_url":"https://github.com/${repository}/actions/runs/260"},{"id":20,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"failure","description":"Invalid or missing ## E2E flows in PR description; list valid flows, all, or none"},{"id":19,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"failure","description":"No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: success:${previewUrlTag}]"}]]'
+  fi
+  exit 0
+fi
+if [[ "$*" == *"/statuses/${headSha}"* ]]; then
+  if [[ "$(cat "$state_file")" == "before" ]]; then
+    echo "after" > "$state_file"
+    echo '{"id":22}'
+  else
+    echo '{"id":23}'
+  fi
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 1
+`;
+    const mismatchRecovered = await runSync({
+      body: "## E2E flows\n- none\n",
+      commands: { gh: statefulMismatchRecoveryGh },
+    });
+    expect(mismatchRecovered.result.exitCode).toBe(0);
+    const recoveredPosts = statusPosts(mismatchRecovered.calls);
+    expect(recoveredPosts).toHaveLength(2);
+    expect(recoveredPosts[0]).toContain("state=failure");
+    expect(recoveredPosts[0]).toContain(`[preview: success:${previewUrlTag}]`);
+    expect(recoveredPosts[1]).toContain("state=success");
+    expect(recoveredPosts[1]).toContain(
+      "description=Protected preview E2E skipped [flows: none]"
+    );
+
     // 3. Restoring carried coverage must cite only the commit that actually
     // passed the surviving flows and must never merge distinct carried sources
     // under a single source SHA.
