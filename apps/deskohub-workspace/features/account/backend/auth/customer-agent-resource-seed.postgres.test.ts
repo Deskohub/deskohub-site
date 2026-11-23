@@ -72,10 +72,10 @@ const registerClient = (auth: TestAuth, cookie: string) =>
       (error: Error) => error.name
     );
 
-// The OAuth provider seeds the MCP resource row when an instance starts.
-// Deployments start before migrations run (a preview is Ready before its
-// database is migrated), so a missing OAuth table must defer the seed, not
-// fail every auth request of the instance. The Drizzle adapter wraps the
+// The OAuth provider seeds the MCP resource row on an instance's first
+// resource lookup. Deployments start before migrations run (a preview is
+// Ready before its database is migrated), so a missing OAuth table must defer
+// the seed, not fail the auth requests of the instance. The Drizzle adapter wraps the
 // Postgres error, which the patched provider reads through `cause`.
 describe.skipIf(!testDatabase)(
   "customer agent resource seed before the OAuth migration",

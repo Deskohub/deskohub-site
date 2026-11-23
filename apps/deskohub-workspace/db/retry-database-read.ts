@@ -41,19 +41,24 @@ const isRetryableEffectSqlFailure = <E>(error: E) =>
             !Predicate.isString(reason.error.reason.cause.code))))
   );
 
-// A coded error is judged by its code alone, so a permanent SQLSTATE never
-// retries whatever its message says.
-const isTransientDriverError = <E>(error: E) =>
-  Predicate.hasProperty(error, "code") && Predicate.isString(error.code)
-    ? error.code.startsWith(transientConnectionClass) ||
-      transientCodes.has(error.code)
-    : error instanceof Error && transientDriverMessage.test(error.message);
+const isTransientCode = (code: string) =>
+  code.startsWith(transientConnectionClass) || transientCodes.has(code);
 
-const hasTransientDriverCause = <E>(error: E, depth: number): boolean =>
-  depth < maxCauseDepth &&
-  Predicate.hasProperty(error, "cause") &&
-  (isTransientDriverError(error.cause) ||
-    hasTransientDriverCause(error.cause, depth + 1));
+const isTransientMessage = <E>(error: E) =>
+  error instanceof Error && transientDriverMessage.test(error.message);
+
+// The first coded error in the chain decides, so a permanent SQLSTATE never
+// retries whatever it wraps or says. Uncoded links decide by their message.
+const hasTransientDriverCause = <E>(error: E, depth: number): boolean => {
+  if (depth >= maxCauseDepth || !Predicate.hasProperty(error, "cause")) {
+    return false;
+  }
+  const { cause } = error;
+  if (Predicate.hasProperty(cause, "code") && Predicate.isString(cause.code)) {
+    return isTransientCode(cause.code);
+  }
+  return isTransientMessage(cause) || hasTransientDriverCause(cause, depth + 1);
+};
 
 const isRetryableFailure = <E>(error: E) =>
   isRetryableEffectSqlFailure(error) ||

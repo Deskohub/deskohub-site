@@ -197,6 +197,22 @@ test.each([
     nodePostgresFailure(codedError("Connection terminated", "42P01")),
   ],
   [
+    "a failure whose causes form a cycle",
+    (() => {
+      const cyclic = new Error("unexpected driver state");
+      cyclic.cause = cyclic;
+      return nodePostgresFailure(cyclic);
+    })(),
+  ],
+  [
+    "a permanent error that wraps a dropped connection",
+    nodePostgresFailure(
+      Object.assign(codedError("no db", "3D000"), {
+        cause: codedError("read ECONNRESET", "ECONNRESET"),
+      })
+    ),
+  ],
+  [
     "a Better Auth API error",
     Object.assign(new Error("Invalid token"), {
       name: "APIError",

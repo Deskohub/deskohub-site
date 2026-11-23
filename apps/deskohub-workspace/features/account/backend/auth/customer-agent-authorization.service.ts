@@ -1,5 +1,5 @@
 import type { User as BetterAuthUser } from "better-auth";
-import { Context, Data, Effect, Layer, Option, Schema } from "effect";
+import { Context, Data, Effect, Layer, Option, Ref, Schema } from "effect";
 import { retryDatabaseRead } from "@/db/retry-database-read";
 import { type AgentScope, isAgentScope } from "../../agent-scopes";
 import {
@@ -118,6 +118,37 @@ const toScopes = (scope: string | undefined): ReadonlySet<AgentScope> =>
   new Set((scope ?? "").split(" ").filter(isAgentScope));
 
 /**
+ * Validates the token, retrying a check that failed on a transient database
+ * fault. A retried check can repeat its writes: a client metadata refetch and
+ * the client row it updates, the resource seed, and deleting a token bound to
+ * no consent, all idempotent. A refusal that follows such a fault reads as
+ * unavailable: the provider refuses a token whose client metadata it started
+ * refetching within the last second, and the token may be fine.
+ */
+const verifyToken = Effect.fn("CustomerAgentAuthorization.verifyToken")(
+  function* (authority: CustomerAgentAuthority, accessToken: string) {
+    const attempts = yield* Ref.make(0);
+    return yield* Ref.update(attempts, (count) => count + 1).pipe(
+      Effect.andThen(
+        Effect.tryPromise(() => authority.validateAccessToken(accessToken))
+      ),
+      retryDatabaseRead,
+      Effect.catch((rejection) =>
+        Ref.get(attempts).pipe(
+          Effect.flatMap((count) =>
+            Effect.fail(
+              count === 1 && isProviderRejection(rejection.cause)
+                ? invalidToken()
+                : unavailable("authentication.agent-token.verification")
+            )
+          )
+        )
+      )
+    );
+  }
+);
+
+/**
  * Verifies the token and re-reads the account it names, so every check sees
  * the current revocation and deletion state. Reads that fail on a transient
  * database fault are retried; a provider refusal never is.
@@ -129,15 +160,7 @@ const authorizeSession = (
     accessToken: string
   ) {
     const authority = yield* loadAuthority;
-    const claims = yield* Effect.tryPromise(() =>
-      authority.validateAccessToken(accessToken)
-    ).pipe(
-      retryDatabaseRead,
-      Effect.mapError((rejection) =>
-        isProviderRejection(rejection.cause)
-          ? invalidToken()
-          : unavailable("authentication.agent-token.verification")
-      ),
+    const claims = yield* verifyToken(authority, accessToken).pipe(
       Effect.map(decodeClaims),
       Effect.flatMap(
         Effect.fromOption(() =>
@@ -227,8 +250,8 @@ export class CustomerAgentAuthorization extends Context.Service<
     CustomerAgentAuthorization.fromAuthorityLoader(Effect.succeed(authority));
 
   /**
-   * Loads the authority on the first authorization instead of when the layer
-   * is built, so a request without a bearer token never loads Better Auth.
+   * Loads the authority whenever a token is authorized, not when the layer is
+   * built, so a request without a bearer token never loads Better Auth.
    */
   static fromAuthorityLoader = (
     loadAuthority: Effect.Effect<CustomerAgentAuthority>

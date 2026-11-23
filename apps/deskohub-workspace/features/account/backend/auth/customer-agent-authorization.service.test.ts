@@ -564,6 +564,23 @@ describe("CustomerAgentAuthorization database retries", () => {
     }
   );
 
+  test("reports a refusal after a database timeout as unavailable", async () => {
+    const check = failingThen(
+      [databaseTimeout(), providerError(429)],
+      activeClaims()
+    );
+
+    const outcome = await authorizeRetrying(
+      authorityWith({ validateAccessToken: check.read })
+    );
+
+    expect(outcome._tag === "Failure" && outcome.failure).toMatchObject({
+      reason: "unavailable",
+      failureCode: "authentication.agent-token.verification",
+    });
+    expect(check.attempts()).toBe(2);
+  });
+
   test("never retries a token the provider refuses", async () => {
     const check = failingThen([providerRejection()], activeClaims());
 
