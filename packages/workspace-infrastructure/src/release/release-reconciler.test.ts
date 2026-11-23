@@ -535,7 +535,6 @@ describe("declared web template", () => {
       refreshTemplate(settled, {
         expectedGeneration: settled.generation,
         liveTemplate: oldTemplate,
-        candidateCreated: false,
         specFingerprintOf: changed,
       })
     );
@@ -549,7 +548,6 @@ describe("declared web template", () => {
       refreshTemplate(first, {
         expectedGeneration: first.generation,
         liveTemplate: oldTemplate,
-        candidateCreated: false,
         specFingerprintOf: changed,
       })
     );
@@ -567,7 +565,6 @@ describe("declared web template", () => {
       refreshTemplate(settled, {
         expectedGeneration: settled.generation,
         liveTemplate: templateOf(settled.materialized),
-        candidateCreated: false,
         specFingerprintOf: () => "spec-a2",
       })
     );
@@ -601,7 +598,6 @@ describe("declared web template", () => {
     const unchanged = run(
       refreshTemplate(settled, {
         expectedGeneration: settled.generation,
-        candidateCreated: false,
         liveTemplate: templateOf(settled.materialized),
         specFingerprintOf,
       })
@@ -610,7 +606,6 @@ describe("declared web template", () => {
     const minted = run(
       refreshTemplate(settled, {
         expectedGeneration: settled.generation,
-        candidateCreated: false,
         liveTemplate: templateOf(settled.materialized),
         specFingerprintOf: changed,
       })
@@ -619,7 +614,6 @@ describe("declared web template", () => {
     const again = run(
       refreshTemplate(minted, {
         expectedGeneration: minted.generation,
-        candidateCreated: false,
         liveTemplate:
           landed === null ? null : { ...landed, specFingerprint: "spec-b" },
         specFingerprintOf: changed,
@@ -637,27 +631,34 @@ describe("declared web template", () => {
     const refreshed = run(
       refreshTemplate(staged, {
         expectedGeneration: staged.generation,
-        candidateCreated: true,
         liveTemplate: templateOf(staged.candidate),
         specFingerprintOf: () => "spec-b",
       })
     );
     expect(refreshed.candidate).toBeNull();
     expect(refreshed.materialized?.releaseId).toBe("r4-bbbbbbb" as ReleaseId);
-    // A candidate Cloud Run has no revision for is created from the current
-    // spec instead, whether or not the spec changed.
-    for (const fingerprint of [specFingerprintOf, () => "spec-b"]) {
-      expect(
-        run(
-          refreshTemplate(staged, {
-            expectedGeneration: staged.generation,
-            candidateCreated: false,
-            liveTemplate: templateOf(staged.materialized),
-            specFingerprintOf: fingerprint,
-          })
-        )
-      ).toEqual(staged);
-    }
+    // A candidate whose verification apply never ran is dropped too: only
+    // that apply may declare its name.
+    const kept = run(
+      refreshTemplate(staged, {
+        expectedGeneration: staged.generation,
+        liveTemplate: templateOf(staged.materialized),
+        specFingerprintOf,
+      })
+    );
+    expect(kept.candidate).toBeNull();
+    expect(kept.materialized).toEqual(staged.materialized);
+    const changed = run(
+      refreshTemplate(staged, {
+        expectedGeneration: staged.generation,
+        liveTemplate: templateOf(staged.materialized),
+        specFingerprintOf: () => "spec-b",
+      })
+    );
+    expect(changed.candidate).toBeNull();
+    expect(changed.materialized?.template?.revision).toBe(
+      `workspace-web-r4-bbbbbbb-t${changed.generation}`
+    );
   });
 
   test("a plain deploy never re-declares a created candidate a later rollout displaced", () => {
@@ -674,7 +675,6 @@ describe("declared web template", () => {
     const refreshed = run(
       refreshTemplate(staged, {
         expectedGeneration: staged.generation,
-        candidateCreated: true,
         liveTemplate: external,
         specFingerprintOf: () => "spec-b",
       })
@@ -693,7 +693,6 @@ describe("declared web template", () => {
     const refreshed = run(
       refreshTemplate(staged, {
         expectedGeneration: staged.generation,
-        candidateCreated: true,
         liveTemplate: templateOf(staged.materialized),
         specFingerprintOf,
       })

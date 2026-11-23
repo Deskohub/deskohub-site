@@ -1872,6 +1872,48 @@ describe("declared web template", () => {
     expect(result.applied).toBe(0);
   });
 
+  test("a plain run never declares a candidate whose verification apply never started", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, plannedTemplates, declaredTemplates, provide } =
+          yield* setup({
+            // Generation 4 stages the second release's candidate.
+            notStartedApplyOf: new Set([4]),
+          });
+        yield* provide(deliver(shaA, digestA));
+        const failed = yield* provide(deliver(shaB, digestB)).pipe(Effect.exit);
+        const staged = (yield* store.read).record;
+        yield* provide(runStack(sandboxConfig, "plan"));
+        const deployed = yield* provide(runStack(sandboxConfig, "deploy")).pipe(
+          Effect.exit
+        );
+        return {
+          failed,
+          staged,
+          deployed,
+          plannedTemplates,
+          declaredTemplates,
+          record: (yield* store.read).record,
+        };
+      })
+    );
+    expect(errorOf(result.failed)).toMatchObject({
+      _tag: "ReleaseServiceApplyFailed",
+      outcome: "not-started",
+    });
+    expect(result.staged.candidate?.revision).toBe("workspace-web-r4-bbbbbbb");
+    expect(result.staged.writer).toBeNull();
+    expect(result.deployed._tag).toBe("Success");
+    expect(result.record.candidate).toBeNull();
+    expect(result.plannedTemplates).toEqual(["workspace-web-r1-aaaaaaa"]);
+    expect(
+      result.declaredTemplates.map((entry) => entry.revision)
+    ).not.toContain("workspace-web-r4-bbbbbbb");
+    expect(result.declaredTemplates.at(-1)?.revision).toBe(
+      "workspace-web-r1-aaaaaaa"
+    );
+  });
+
   test("plan previews the template the following deploy declares", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {

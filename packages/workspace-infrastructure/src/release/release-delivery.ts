@@ -486,17 +486,10 @@ export const recoverRelease = Effect.fn("WorkspaceRelease.recover")(function* (
 const refreshedPlainRunRecord = Effect.fn(
   "WorkspaceRelease.refreshedPlainRunRecord"
 )(function* (config: WorkspaceStackConfig, record: ReleaseRecord) {
-  const readback = yield* ReleaseServiceReadback;
-  const liveTemplate = liveTemplateOf(yield* readback.service("web"));
-  const candidate = record.candidate;
-  const candidateCreated =
-    candidate !== null &&
-    (liveTemplate?.revision === candidate.revision ||
-      (yield* readback.revision(candidate.revision)) !== null);
+  const liveTemplate = yield* readLiveTemplate;
   return yield* refreshTemplate(record, {
     expectedGeneration: record.generation,
     liveTemplate,
-    candidateCreated,
     specFingerprintOf: (imageDigest) =>
       webTemplateSpecFingerprint(config, imageDigest),
   });
@@ -522,10 +515,11 @@ export const stackRunRecord = (
  * Run the whole stack outside a release, such as an infrastructure change,
  * as the stage's only writer: `deploy` applies it and `plan` previews it.
  * It declares the current record, so a pending traffic change must be
- * recovered or restored first; a staged candidate alone is fine. Before a
- * deploy runs, its own step decides the web template (`refreshTemplate`):
- * a failed or outdated template gets a fresh revision name, so a config
- * change never re-declares an existing revision name with another spec.
+ * recovered or restored first. Before a deploy runs, its own step decides
+ * the web template (`refreshTemplate`): it drops a candidate a failed
+ * delivery left staged, and a failed or outdated template gets a fresh
+ * revision name, so a config change never re-declares an existing revision
+ * name with another spec.
  */
 export const runStack = Effect.fn("WorkspaceRelease.runStack")(function* (
   config: WorkspaceStackConfig,
