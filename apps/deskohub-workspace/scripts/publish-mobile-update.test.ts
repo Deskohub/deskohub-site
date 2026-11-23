@@ -129,6 +129,10 @@ const publish = async ({
         MOBILE_UPDATES_PUBLISH_TOKEN: publishToken,
         VERCEL_AUTOMATION_BYPASS_SECRET: "",
         VERCEL_BLOB_RETRIES: "0",
+        // Empty counts as unset, so a developer's own settings don't leak in.
+        MOBILE_UPDATES_GCS_BUCKET: "",
+        MOBILE_UPDATES_GCS_ACCESS_TOKEN: "",
+        MOBILE_UPDATES_ASSET_ORIGIN: "",
         PUBLISH_FIXTURE_RECORD: recordFile,
         PUBLISH_FIXTURE_SIGNING_KEY: deployedKey,
         ...env,
@@ -311,6 +315,20 @@ describe("publish-mobile-update", () => {
     expect(result.of("publish")).toHaveLength(2);
   });
 
+  test("publishes nothing when another publish stored other bytes while this one uploaded", async () => {
+    const result = await publish({
+      env: { PUBLISH_FIXTURE_STORED_DIFFERENT_DURING_UPLOAD: stored.image },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.of("blob-download")).toEqual([
+      expect.objectContaining({ pathname: stored.image }),
+    ]);
+    expect(result.output).toContain(stored.image);
+    expect(result.of("publish")).toHaveLength(0);
+    expectNoSecrets(result.output);
+  });
+
   test("publishes nothing when a file's pathname holds other bytes", async () => {
     const result = await publish({
       env: { PUBLISH_FIXTURE_STORED_DIFFERENT: stored.image },
@@ -430,6 +448,8 @@ describe("publish-mobile-update", () => {
       { MOBILE_UPDATES_ASSET_ORIGIN: "http://updates-cdn.test" },
     ],
     ["a bucket without a token", { MOBILE_UPDATES_GCS_ACCESS_TOKEN: "" }],
+    ["an invalid bucket name", { MOBILE_UPDATES_GCS_BUCKET: "Not A Bucket" }],
+    ["a token without a bucket", { MOBILE_UPDATES_GCS_BUCKET: "" }],
   ])("publishes nothing with %s", async (_, settings) => {
     const result = await publish({ env: { ...cloudStorage, ...settings } });
 
@@ -519,6 +539,20 @@ describe("publish-mobile-update", () => {
       },
     ]);
     expect(result.of("update-check")).toHaveLength(4);
+  });
+
+  test("rolls back whatever the Cloud Storage settings", async () => {
+    const result = await publish({
+      args: ["--rollback"],
+      env: {
+        BLOB_READ_WRITE_TOKEN: "",
+        MOBILE_UPDATES_GCS_BUCKET: "fixture-mobile-updates",
+        MOBILE_UPDATES_ASSET_ORIGIN: "http://updates-cdn.test",
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.of("publish")).toHaveLength(2);
   });
 
   test("rolls back without a Blob token", async () => {

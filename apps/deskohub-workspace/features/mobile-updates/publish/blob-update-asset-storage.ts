@@ -10,6 +10,7 @@ import type { UpdateFile } from "./exported-update";
 import {
   MobileUpdatePublishConfig,
   MobileUpdatePublishConfigInvalid,
+  refuseCloudStorageWithoutBucket,
 } from "./mobile-update-publish-config";
 import {
   downloadedSha256,
@@ -40,7 +41,8 @@ const blobCacheControlMatches = (cacheControl: string) =>
  * once its size, content type, cache policy and downloaded bytes match.
  */
 export const makeBlobUpdateAssetStorage = Effect.gen(function* () {
-  const { blobToken } = yield* MobileUpdatePublishConfig;
+  const { blobToken, cloudStorage } = yield* MobileUpdatePublishConfig;
+  yield* refuseCloudStorageWithoutBucket(cloudStorage);
   if (Option.isNone(blobToken)) {
     return yield* new MobileUpdatePublishConfigInvalid({
       message: "Set BLOB_READ_WRITE_TOKEN to store update files",

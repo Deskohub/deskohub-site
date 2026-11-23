@@ -7,7 +7,8 @@
  * pathnames (comma-separated) the store already holds, with the fixture
  * export's bytes; `PUBLISH_FIXTURE_STORED_DIFFERENT` ones hold other bytes,
  * and `PUBLISH_FIXTURE_STORED_DURING_UPLOAD` ones get stored by "another
- * publish" while this one uploads them, so the upload fails. The store's
+ * publish" while this one uploads them, so the upload fails
+ * (`PUBLISH_FIXTURE_STORED_DIFFERENT_DURING_UPLOAD`: with other bytes). The store's
  * public URLs serve the stored bytes through the `fetch` stub.
  *
  * Cloud Storage (`fetch` stub on `https://storage.googleapis.com`): an
@@ -109,24 +110,26 @@ const exportedFile = (pathname: string) => {
   return file;
 };
 
+/** The fixture file at `pathname` with its first byte flipped. */
+const differentFile = (pathname: string): StoredBlob => ({
+  ...exportedFile(pathname),
+  bytes: exportedFile(pathname).bytes.map((byte, index) =>
+    index === 0 ? byte ^ 1 : byte
+  ),
+});
+
 const storedBlobs = new Map<string, StoredBlob>([
   ...listed("PUBLISH_FIXTURE_STORED").map(
     (pathname) => [pathname, exportedFile(pathname)] as const
   ),
   ...listed("PUBLISH_FIXTURE_STORED_DIFFERENT").map(
-    (pathname) =>
-      [
-        pathname,
-        {
-          ...exportedFile(pathname),
-          bytes: exportedFile(pathname).bytes.map((byte, index) =>
-            index === 0 ? byte ^ 1 : byte
-          ),
-        },
-      ] as const
+    (pathname) => [pathname, differentFile(pathname)] as const
   ),
 ]);
 const storedDuringUpload = listed("PUBLISH_FIXTURE_STORED_DURING_UPLOAD");
+const storedDifferentDuringUpload = listed(
+  "PUBLISH_FIXTURE_STORED_DIFFERENT_DURING_UPLOAD"
+);
 const blobUrl = (pathname: string) => `${blobStoreOrigin}/${pathname}`;
 const blobResult = (pathname: string, { bytes, contentType }: StoredBlob) => ({
   url: blobUrl(pathname),
@@ -171,6 +174,9 @@ const blobApi = Bun.serve({
       });
       if (storedDuringUpload.includes(pathname)) {
         storedBlobs.set(pathname, exportedFile(pathname));
+      }
+      if (storedDifferentDuringUpload.includes(pathname)) {
+        storedBlobs.set(pathname, differentFile(pathname));
       }
       if (process.env.PUBLISH_FIXTURE_BLOB_UPLOADS === "unavailable") {
         return Response.json(

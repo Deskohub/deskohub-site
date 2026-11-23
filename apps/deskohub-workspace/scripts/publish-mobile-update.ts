@@ -119,7 +119,7 @@ const rollBack = Effect.fn("MobileUpdates.rollBack")(function* (
 const selectedAssetStorage = Layer.unwrap(
   Effect.gen(function* () {
     const { cloudStorage } = yield* MobileUpdatePublishConfig;
-    return Option.isSome(cloudStorage)
+    return Option.isSome(cloudStorage.bucket)
       ? UpdateAssetStorage.CloudStorage
       : UpdateAssetStorage.Default;
   })

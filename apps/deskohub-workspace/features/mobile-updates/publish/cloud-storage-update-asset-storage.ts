@@ -8,7 +8,7 @@ import {
 import type { UpdateFile } from "./exported-update";
 import {
   MobileUpdatePublishConfig,
-  MobileUpdatePublishConfigInvalid,
+  readCloudStorageAssetStore,
 } from "./mobile-update-publish-config";
 import {
   downloadedSha256,
@@ -94,14 +94,10 @@ const readOutcome = (status: number) => {
  * and reused only if its metadata and downloaded bytes match exactly.
  */
 export const makeCloudStorageUpdateAssetStorage = Effect.gen(function* () {
-  const { cloudStorage } = yield* MobileUpdatePublishConfig;
-  if (Option.isNone(cloudStorage)) {
-    return yield* new MobileUpdatePublishConfigInvalid({
-      message:
-        "Set MOBILE_UPDATES_GCS_BUCKET to store update files in Cloud Storage",
-    });
-  }
-  const { bucket, accessToken, publicBaseUrl } = cloudStorage.value;
+  const { bucket, accessToken, publicBaseUrl } =
+    yield* readCloudStorageAssetStore(
+      (yield* MobileUpdatePublishConfig).cloudStorage
+    );
   const client = (yield* HttpClient.HttpClient).pipe(
     HttpClient.mapRequest(HttpClientRequest.bearerToken(accessToken))
   );

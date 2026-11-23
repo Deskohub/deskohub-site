@@ -59,11 +59,11 @@ const config = Layer.succeed(MobileUpdatePublishConfig, {
   blobToken: Option.none(),
   publishToken: Redacted.make("synthetic-publish-token"),
   protectionBypass: Option.none(),
-  cloudStorage: Option.some({
-    bucket,
-    accessToken: Redacted.make(accessToken),
-    publicBaseUrl,
-  }),
+  cloudStorage: {
+    bucket: Option.some(bucket),
+    accessToken: Option.some(Redacted.make(accessToken)),
+    assetOrigin: Option.none(),
+  },
 });
 
 const run = <A, E>(

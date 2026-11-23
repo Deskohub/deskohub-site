@@ -28,11 +28,7 @@ const PublishEnvironment = Schema.Struct({
    * Cloud Storage bucket for update files. Setting it stores files there
    * instead of in the Blob store.
    */
-  MOBILE_UPDATES_GCS_BUCKET: Schema.optionalKey(
-    Schema.String.check(
-      Schema.isPattern(/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/)
-    )
-  ),
+  MOBILE_UPDATES_GCS_BUCKET: Schema.optionalKey(Schema.NonEmptyString),
   /** OAuth access token allowed to create and read the bucket's objects. */
   MOBILE_UPDATES_GCS_ACCESS_TOKEN: Schema.optionalKey(Secret),
   /**
@@ -41,6 +37,16 @@ const PublishEnvironment = Schema.Struct({
    */
   MOBILE_UPDATES_ASSET_ORIGIN: Schema.optionalKey(Schema.NonEmptyString),
 });
+
+/**
+ * The Cloud Storage settings as set. Only storing files reads them, so a
+ * rollback never fails on them.
+ */
+export interface CloudStorageSettings {
+  readonly bucket: Option.Option<string>;
+  readonly accessToken: Option.Option<Redacted.Redacted<string>>;
+  readonly assetOrigin: Option.Option<string>;
+}
 
 /** Where a publish run stores update files in Cloud Storage. */
 export interface CloudStorageAssetStore {
@@ -60,8 +66,8 @@ interface IMobileUpdatePublishConfig {
   readonly blobToken: Option.Option<Redacted.Redacted<string>>;
   readonly publishToken: Redacted.Redacted<string>;
   readonly protectionBypass: Option.Option<Redacted.Redacted<string>>;
-  /** Set when update files go to Cloud Storage instead of the Blob store. */
-  readonly cloudStorage: Option.Option<CloudStorageAssetStore>;
+  /** A bucket set here sends update files to Cloud Storage, not Blob. */
+  readonly cloudStorage: CloudStorageSettings;
 }
 
 /** Where a publish run publishes to, and the secrets it publishes with. */
@@ -97,10 +103,17 @@ export class MobileUpdatePublishConfig extends Context.Service<
               })
           )
         );
-        const cloudStorage = yield* readCloudStorage(decoded);
         return {
           target,
-          cloudStorage,
+          cloudStorage: {
+            bucket: Option.fromUndefinedOr(decoded.MOBILE_UPDATES_GCS_BUCKET),
+            accessToken: Option.fromUndefinedOr(
+              decoded.MOBILE_UPDATES_GCS_ACCESS_TOKEN
+            ),
+            assetOrigin: Option.fromUndefinedOr(
+              decoded.MOBILE_UPDATES_ASSET_ORIGIN
+            ),
+          },
           blobToken: Option.fromUndefinedOr(decoded.BLOB_READ_WRITE_TOKEN),
           publishToken: decoded.MOBILE_UPDATES_PUBLISH_TOKEN,
           protectionBypass: Option.fromUndefinedOr(
@@ -111,31 +124,57 @@ export class MobileUpdatePublishConfig extends Context.Service<
     );
 }
 
-const readCloudStorage = Effect.fnUntraced(function* ({
-  MOBILE_UPDATES_GCS_BUCKET: bucket,
-  MOBILE_UPDATES_GCS_ACCESS_TOKEN: accessToken,
-  MOBILE_UPDATES_ASSET_ORIGIN: origin,
-}: typeof PublishEnvironment.Type) {
-  if (bucket === undefined) {
-    if (accessToken !== undefined || origin !== undefined) {
-      return yield* new MobileUpdatePublishConfigInvalid({
-        message:
-          "Set MOBILE_UPDATES_GCS_BUCKET to store update files in Cloud Storage",
-      });
-    }
-    return Option.none<CloudStorageAssetStore>();
+const bucketName = /^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/;
+
+/** The Cloud Storage bucket, token and delivery URL a publish stores files with. */
+export const readCloudStorageAssetStore = Effect.fnUntraced(function* ({
+  bucket,
+  accessToken,
+  assetOrigin,
+}: CloudStorageSettings) {
+  if (Option.isNone(bucket) || !bucketName.test(bucket.value)) {
+    return yield* new MobileUpdatePublishConfigInvalid({
+      message:
+        "Set MOBILE_UPDATES_GCS_BUCKET to a bucket name to store update files in Cloud Storage",
+    });
   }
-  if (accessToken === undefined) {
+  if (Option.isNone(accessToken)) {
     return yield* new MobileUpdatePublishConfigInvalid({
       message:
         "Set MOBILE_UPDATES_GCS_ACCESS_TOKEN to store update files in Cloud Storage",
     });
   }
   const publicBaseUrl = yield* readPublicBaseUrl(
-    origin ?? `https://storage.googleapis.com/${bucket}`
+    Option.getOrElse(
+      assetOrigin,
+      () => `https://storage.googleapis.com/${bucket.value}`
+    )
   );
-  return Option.some({ bucket, accessToken, publicBaseUrl });
+  return {
+    bucket: bucket.value,
+    accessToken: accessToken.value,
+    publicBaseUrl,
+  } satisfies CloudStorageAssetStore;
 });
+
+/**
+ * Cloud Storage settings without a bucket would silently publish to Blob,
+ * so storing files there refuses them.
+ */
+export const refuseCloudStorageWithoutBucket = ({
+  bucket,
+  accessToken,
+  assetOrigin,
+}: CloudStorageSettings) =>
+  Option.isNone(bucket) &&
+  (Option.isSome(accessToken) || Option.isSome(assetOrigin))
+    ? Effect.fail(
+        new MobileUpdatePublishConfigInvalid({
+          message:
+            "Set MOBILE_UPDATES_GCS_BUCKET to store update files in Cloud Storage",
+        })
+      )
+    : Effect.void;
 
 /**
  * Apps download files over HTTPS, and a file's URL is this base plus its
