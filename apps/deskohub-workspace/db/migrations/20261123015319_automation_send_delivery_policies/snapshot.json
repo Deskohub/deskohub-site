@@ -1,9 +1,9 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "2169a749-e645-459a-ac0d-f2f33a22fb08",
+  "id": "134b76fd-0055-40f0-8575-ed0bc0386291",
   "prevIds": [
-    "0e9eef19-a6da-4dfb-9bc3-7a56702c8c0e"
+    "b732b35a-47b1-4b4f-9ca6-13587d88af43"
   ],
   "ddl": [
     {
@@ -4421,6 +4421,19 @@
       "generated": null,
       "identity": null,
       "name": "email_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "email_campaign_automation_versions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "frozen_email_version_id",
       "entityType": "columns",
       "schema": "public",
       "table": "email_campaign_automation_versions"
@@ -19162,6 +19175,23 @@
     {
       "nameExplicit": false,
       "columns": [
+        "frozen_email_version_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "email_versions",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "email_campaign_automation_versions_DW1uiFSJliHx_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "email_campaign_automation_versions"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
         "campaign_id"
       ],
       "schemaTo": "public",
@@ -22550,6 +22580,13 @@
       "table": "email_campaign_automation_versions"
     },
     {
+      "value": "(\"email_id\" is null) = (\"frozen_email_version_id\" is null) and (\"email_id\" is null or (\"purpose\" = 'marketing' and \"content\" = '{}'::jsonb))",
+      "name": "email_campaign_automation_versions_published_email_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "email_campaign_automation_versions"
+    },
+    {
       "value": "\"status\" in ('planned', 'enqueued', 'claimed', 'done', 'dropped', 'failed')",
       "name": "email_campaign_automation_work_units_status_check",
       "entityType": "checks",
@@ -22669,7 +22706,7 @@
       "table": "email_campaigns"
     },
     {
-      "value": "\"delivery\" <> 'once' or \"email_id\" is null or (\"purpose\" = 'marketing' and \"content\" = '{}'::jsonb)",
+      "value": "\"email_id\" is null or (\"purpose\" = 'marketing' and \"content\" = '{}'::jsonb)",
       "name": "email_campaigns_published_email_check",
       "entityType": "checks",
       "schema": "public",
