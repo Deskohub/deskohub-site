@@ -131,7 +131,11 @@ describe("sandbox smoke workflow", () => {
  * tested without Google Cloud.
  */
 const runLiveBootstrap = (
-  answers: { projectNumber: string; jwksJson?: string },
+  answers: {
+    projectNumber: string;
+    jwksJson?: string;
+    jwksLookupFails?: boolean;
+  },
   ...args: ReadonlyArray<string>
 ) => {
   const directory = mkdtempSync(join(tmpdir(), "bootstrap-gcloud-"));
@@ -146,7 +150,7 @@ case "$*" in
   *"billing projects describe"*) echo True ;;
   *"providers list"*) echo "projects/$STUB_PROJECT_NUMBER/locations/global/workloadIdentityPools/workspace-sandbox-github/providers/deskohub-workspace" ;;
   *"value(oidc.issuerUri)"*) echo https://token.actions.githubusercontent.com ;;
-  *"value(oidc.jwksJson)"*) echo "$STUB_JWKS" ;;
+  *"value(oidc.jwksJson)"*) [ -n "$STUB_JWKS_FAILS" ] && exit 1; echo "$STUB_JWKS" ;;
   *describe*) exit 1 ;;
 esac
 `
@@ -157,6 +161,7 @@ esac
       PATH: `${directory}:${process.env.PATH ?? "/usr/bin:/bin"}`,
       STUB_PROJECT_NUMBER: answers.projectNumber,
       STUB_JWKS: answers.jwksJson ?? "",
+      STUB_JWKS_FAILS: answers.jwksLookupFails ? "1" : "",
     },
   });
   const calls = Bun.spawnSync(["cat", log]).stdout.toString();
@@ -186,6 +191,20 @@ describe("sandbox bootstrap script", () => {
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain("uploaded signing keys");
+    expect(calls.some((call) => call.includes("workloadIdentityUser"))).toBe(
+      false
+    );
+  });
+
+  test("refuses deploy access when the signing-key lookup fails", () => {
+    const { result, calls } = runLiveBootstrap(
+      { projectNumber: "123456789012", jwksLookupFails: true },
+      ...liveArgs
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain(
+      "could not read the signing keys"
+    );
     expect(calls.some((call) => call.includes("workloadIdentityUser"))).toBe(
       false
     );

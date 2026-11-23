@@ -214,9 +214,14 @@ if [[ "$dry_run" == false ]]; then
       --project "$project_id" --location global --workload-identity-pool "$pool_id" \
       --format="value($1)"
   }
-  [[ "$(provider_field oidc.issuerUri)" == "https://token.actions.githubusercontent.com" ]] ||
+  # Checked assignments: a failed read must stop here, never look empty.
+  issuer_uri="$(provider_field oidc.issuerUri)" ||
+    fail "could not read the issuer of provider $provider_id"
+  jwks_json="$(provider_field oidc.jwksJson)" ||
+    fail "could not read the signing keys of provider $provider_id"
+  [[ "$issuer_uri" == "https://token.actions.githubusercontent.com" ]] ||
     fail "provider $provider_id must use GitHub's issuer"
-  [[ -z "$(provider_field oidc.jwksJson)" ]] ||
+  [[ -z "$jwks_json" ]] ||
     fail "provider $provider_id has uploaded signing keys; remove them so GitHub's published keys are the trust root"
 fi
 run gcloud iam service-accounts add-iam-policy-binding "$deployer" --project "$project_id" \
