@@ -108,23 +108,11 @@ interface SealedAccountingRecord<A> {
   readonly schema: Schema.Decoder<A>;
 }
 
-type SealedAccountingJsonService<A, Plaintext> = Effect.Effect<
-  SealedAccountingJson<A, Plaintext>,
-  never,
-  WorkspaceDatabase | AccountingSnapshotKeyService
->;
-
 /**
  * Stores values of one kind as versionless JSON that PostgreSQL `pgcrypto`
  * encrypts. Keys and plaintext reach the database only as sensitive
  * parameters, and the encrypting and decrypting statements run untraced.
  */
-export function sealedAccountingJson<A>(
-  record: SealedAccountingRecord<A> & {
-    /** No columns are read beside the ciphertext: opened plaintext is empty. */
-    readonly plaintext: { readonly [column: string]: never };
-  }
-): SealedAccountingJsonService<A, SelectResultFields<Record<never, PgColumn>>>;
 export function sealedAccountingJson<
   A,
   const Plaintext extends Record<string, PgColumn>,
@@ -133,7 +121,9 @@ export function sealedAccountingJson<
     /** Columns read beside the ciphertext, in this order. */
     readonly plaintext: Plaintext;
   }
-): SealedAccountingJsonService<A, SelectResultFields<Plaintext>>;
+): ReturnType<
+  typeof makeSealedAccountingJson<A, Plaintext, SelectResultFields<Plaintext>>
+>;
 export function sealedAccountingJson<
   A,
   const Plaintext extends Record<string, PgColumn>,
@@ -164,7 +154,7 @@ const makeSealedAccountingJson = <
   readPlaintext: (
     selected: SelectResultFields<Plaintext> | undefined
   ) => Option.Option<P>
-): SealedAccountingJsonService<A, P> =>
+) =>
   Effect.gen(function* () {
     const { db } = yield* WorkspaceDatabase;
     const keys = yield* AccountingSnapshotKeyService;
