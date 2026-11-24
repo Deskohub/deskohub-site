@@ -19,7 +19,10 @@ export const NexiAmountFromWorkspaceMoney = NexiAmountSchema.pipe(
         Effect.mapError((error) => invalidValue(nexiAmount, error.message))
       )
     ),
-    encode: SchemaGetter.transformEffect((money, options) =>
+    encode: SchemaGetter.transformEffect<
+      typeof NexiAmountSchema.Type,
+      typeof positiveMoneyCodec.Encoded
+    >((money, options) =>
       Schema.decodeUnknownEffect(NexiAmountSchema)(
         {
           amount: (
@@ -30,10 +33,7 @@ export const NexiAmountFromWorkspaceMoney = NexiAmountSchema.pipe(
         },
         options
       ).pipe(Effect.mapError((error) => invalidValue(money, error.message)))
-    ) as SchemaGetter.Getter<
-      typeof NexiAmountSchema.Encoded,
-      typeof positiveMoneyCodec.Encoded
-    >,
+    ),
   })
 ).annotate({
   identifier: "NexiAmountFromWorkspaceMoney",

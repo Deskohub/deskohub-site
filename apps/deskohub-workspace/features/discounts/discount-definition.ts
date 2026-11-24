@@ -45,7 +45,7 @@ export const decodeDiscountDefinition = Effect.fn("DiscountDefinition.decode")(
     Effect.succeed(input).pipe(
       Effect.let("id", ({ row }) => row.id),
       Effect.bind("labels", decodeDefinitionLabels),
-      Effect.bind("adjustment", decodeDefinitionAdjustment),
+      Effect.bind("adjustment", decodeStoredDiscountAdjustment),
       Effect.bind("targets", decodeDefinitionTargets),
       Effect.let("products", ({ targets }) =>
         targets.map(({ productTarget }) => productTarget)
@@ -100,8 +100,21 @@ const decodeDefinitionLabels = (input: {
     onExcessProperty: "error",
   })(input.row.labels);
 
-const decodeDefinitionAdjustment = (input: {
-  readonly row: DiscountDefinitionRow;
+/** The columns that hold a stored discount's adjustment. */
+export type StoredDiscountAdjustment = Pick<
+  StoredDiscount,
+  | "fixedAmountCurrency"
+  | "fixedAmountExponent"
+  | "fixedAmountValue"
+  | "percentageBasisPoints"
+>;
+
+/**
+ * A stored discount's adjustment: its percentage when it has one, else its
+ * fixed amount.
+ */
+export const decodeStoredDiscountAdjustment = (input: {
+  readonly row: StoredDiscountAdjustment;
 }) =>
   Schema.decodeUnknownEffect(discountAdjustmentSchema, {
     errors: "all",

@@ -438,13 +438,14 @@ export function VoucherEditor({
       </p>
       <MutationForm
         buildMutation={(values) =>
-          Option.map(
+          Option.zipWith(
             toVoucherCreditInput(values),
-            (credit): DiscountAdminMutation => ({
+            toVoucherConfigurationInput(values),
+            (credit, configuration): DiscountAdminMutation => ({
               kind: "update-voucher",
               voucher: {
                 id: voucher.id,
-                ...toVoucherConfigurationInput(values),
+                ...configuration,
                 credit,
               },
             })
@@ -766,10 +767,11 @@ export function CreateVoucherForm({
   return (
     <MutationForm
       buildMutation={(values) =>
-        Option.map(
+        Option.zipWith(
           toVoucherCreditInput(values),
-          (credit): DiscountAdminMutation => {
-            const voucher = { ...toVoucherConfigurationInput(values), credit };
+          toVoucherConfigurationInput(values),
+          (credit, configuration): DiscountAdminMutation => {
+            const voucher = { ...configuration, credit };
             return customer
               ? {
                   kind: "create-customer-voucher",
@@ -913,13 +915,13 @@ function DiscountCodeEditor({
       </p>
       <MutationForm
         buildMutation={(values) =>
-          Option.some({
-            kind: "update-code",
-            code: {
-              id: code.id,
-              ...toDiscountCodeUpdateInput(values, code),
-            },
-          })
+          Option.map(
+            toDiscountCodeUpdateInput(values, code),
+            (update): DiscountAdminMutation => ({
+              kind: "update-code",
+              code: { id: code.id, ...update },
+            })
+          )
         }
         defaultValues={discountCodeFormDefaults(code)}
         resetOnSuccessTo="submitted"

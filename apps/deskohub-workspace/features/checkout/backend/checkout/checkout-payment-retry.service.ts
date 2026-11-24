@@ -52,9 +52,9 @@ import { CheckoutPricingService } from "./checkout-pricing.service";
 import {
   type BuildSignedPayStateInput,
   buildSignedPayState,
+  decodeSignedPayStatePricing,
   type FreshPayState,
   PayState,
-  type SignedPayStatePricing,
   toFreshPayState,
 } from "./pay-state";
 import {
@@ -410,6 +410,18 @@ const implementation = Effect.gen(function* () {
       const holdExpiresAt = hold.reservation.reservationHoldExpiresAt;
       if (!holdExpiresAt) return refused("needs_review");
 
+      // A rebuilt order today's rules refuse, such as a stored phone, is
+      // refused like one that doesn't decode as a Pay state.
+      const pricing = yield* decodeSignedPayStatePricing({
+        reservation: {
+          ...retry.recreated.reservation,
+          ...contact,
+          billing,
+        },
+        quote: retry.snapshot.quote,
+      }).pipe(Effect.option);
+      if (Option.isNone(pricing)) return refused("details_unavailable");
+
       const now = yield* currentInstant;
       const fresh: BuildSignedPayStateInput = {
         locale: input.locale,
@@ -418,16 +430,7 @@ const implementation = Effect.gen(function* () {
         holdExpiresAt: toPayStateHoldExpiresAt(holdExpiresAt),
         binding: "order",
         retriedAttemptId: attempt.id,
-        // Typed as the Pay state's order: building the state decodes it
-        // strictly, and a field today's rules refuse fails as invalid.
-        ...({
-          reservation: {
-            ...retry.recreated.reservation,
-            ...contact,
-            billing,
-          },
-          quote: retry.snapshot.quote,
-        } as SignedPayStatePricing),
+        ...pricing.value,
         ...(codes.referralCode !== undefined && {
           referralCode: codes.referralCode,
         }),

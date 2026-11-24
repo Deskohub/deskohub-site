@@ -58,7 +58,7 @@ export const discountProductTargetOptions = workspaceProductTargets
 
 export const discountProductTargetKeys = discountProductTargetOptions.map(
   ({ key }) => key
-) as [WorkspaceProductTargetKey, ...WorkspaceProductTargetKey[]];
+);
 
 /** Maps chosen option keys to targets in option order. */
 export const toDiscountProductTargets = (

@@ -21,18 +21,21 @@ type DiscountCodeCreationMutation = Extract<
 /**
  * The mutation a submitted code creation form asks for: a code restricted to
  * the customer when one is given, otherwise a general code. None when the
- * form's new discount has no valid adjustment.
+ * form's new discount has no valid adjustment, or its code or a redemption
+ * bound does not decode.
  */
 export const toDiscountCodeCreationMutation = (
   values: DiscountCodeCreationFormValues,
   customerId: DotyposCustomerId | undefined
 ): Option.Option<DiscountCodeCreationMutation> =>
-  Option.map(toCodeCreationDiscount(values), (discount) => {
-    const code = toDiscountCodeConfigurationInput(values);
-    return customerId
-      ? { kind: "create-customer-code", customerId, code, discount }
-      : { kind: "create-code", code, discount };
-  });
+  Option.zipWith(
+    toCodeCreationDiscount(values),
+    toDiscountCodeConfigurationInput(values),
+    (discount, code): DiscountCodeCreationMutation =>
+      customerId
+        ? { kind: "create-customer-code", customerId, code, discount }
+        : { kind: "create-code", code, discount }
+  );
 
 const toCodeCreationDiscount = (
   values: DiscountCodeCreationFormValues

@@ -709,7 +709,7 @@ export class DiscountAdministration extends Context.Service<
                 .where(eq(discountCodes.id, input.id))
                 .limit(1)
                 .for("update");
-              yield* requireUpdatedRow(rows, {
+              const code = yield* requireUpdatedRow(rows, {
                 kind: "discount code",
                 id: input.id,
               });
@@ -732,7 +732,7 @@ export class DiscountAdministration extends Context.Service<
                   ...toPromotionCodeValues(input),
                   updatedAt: Temporal.Now.instant(),
                 })
-                .where(eq(promotionCodes.id, rows[0]!.promotionCodeId));
+                .where(eq(promotionCodes.id, code.promotionCodeId));
             })
           );
         }
