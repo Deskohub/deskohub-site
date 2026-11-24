@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -102,6 +103,35 @@ const isAlive = (pid: number) => {
     return false;
   }
 };
+
+/** The project's log exclusions: none, read in one page. */
+const noExclusions: FakeRule = {
+  tool: "curl",
+  pattern: "logging\\.googleapis\\.com/v2/projects/.*/exclusions",
+  stdout: '{"exclusions":[]}',
+};
+
+const sinksPage = (
+  parent: string,
+  sinks: ReadonlyArray<Schema.JsonObject>,
+  page: { readonly token?: string; readonly next?: string } = {}
+): FakeRule => ({
+  tool: "curl",
+  pattern: `logging\\.googleapis\\.com/v2/${parent}/sinks\\?pageSize=100${
+    page.token === undefined ? "" : `&pageToken=${page.token}`
+  }$`,
+  stdout: JSON.stringify(
+    page.next === undefined ? { sinks } : { sinks, nextPageToken: page.next }
+  ),
+});
+
+/** Logging reads every inventory needs: no exclusions, no custom sinks. */
+const readableLogging: ReadonlyArray<FakeRule> = [
+  noExclusions,
+  sinksPage(`projects/${projectId}`, [
+    { name: "_Default", destination: "logging/_Default" },
+  ]),
+];
 
 describe("cleanup under the writer lock", () => {
   const directDeletes =
@@ -358,26 +388,6 @@ describe("drift detection", () => {
 
 // One page of a parent's sinks as the Logging API lists them; a later
 // page is the one asked for by the earlier page's token.
-/** The project's log exclusions: none, read in one page. */
-const noExclusions: FakeRule = {
-  tool: "curl",
-  pattern: "logging\\.googleapis\\.com/v2/projects/.*/exclusions",
-  stdout: '{"exclusions":[]}',
-};
-
-const sinksPage = (
-  parent: string,
-  sinks: ReadonlyArray<Schema.JsonObject>,
-  page: { readonly token?: string; readonly next?: string } = {}
-): FakeRule => ({
-  tool: "curl",
-  pattern: `logging\\.googleapis\\.com/v2/${parent}/sinks\\?pageSize=100${
-    page.token === undefined ? "" : `&pageToken=${page.token}`
-  }$`,
-  stdout: JSON.stringify(
-    page.next === undefined ? { sinks } : { sinks, nextPageToken: page.next }
-  ),
-});
 describe("read-only inventory", () => {
   test("reports the project's log sinks from every page", () => {
     const { exitCode, output } = withProofFakes(
@@ -399,6 +409,7 @@ describe("read-only inventory", () => {
             [{ name: "_Default", destination: "logging/_Default" }],
             { next: "page-2" }
           ),
+          noExclusions,
         ],
       },
       (fakes) => runPhase(fakes, "readonly-inventory")
@@ -431,7 +442,7 @@ describe("post-destroy inventory", () => {
     `${state}/${lease}`,
   ].join("\n");
   const inventory = (rules: ReadonlyArray<FakeRule>) =>
-    withProofFakes({ rules }, (fakes) =>
+    withProofFakes({ rules: [...rules, ...readableLogging] }, (fakes) =>
       runPhase(fakes, "post-destroy-inventory")
     );
   const listing = (pattern: string, stdout: string): FakeRule => ({
@@ -455,6 +466,7 @@ describe("post-destroy inventory", () => {
             [{ name: "_Default", destination: "logging/_Default" }],
             { next: "page-2" }
           ),
+          noExclusions,
         ],
       },
       (fakes) => {
@@ -486,6 +498,33 @@ describe("post-destroy inventory", () => {
     });
   });
 
+  test("fails when any class cannot be listed", () => {
+    const { exitCode, output } = inventory([
+      { tool: "gcloud", pattern: "^run revisions list", exit: 1 },
+      listing("^storage ls -r", emptiedState),
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain("teardown unverified: run-revisions");
+  });
+
+  test("lists every Compute class across all of the project's scopes", () => {
+    const calls = withProofFakes(
+      { rules: [listing("^storage ls -r", emptiedState), ...readableLogging] },
+      (fakes) => {
+        runPhase(fakes, "post-destroy-inventory");
+        return fakes
+          .calls()
+          .filter((call) => call.startsWith("gcloud compute"));
+      }
+    );
+    expect(calls).toHaveLength(9);
+    for (const call of calls) {
+      expect(call).toMatch(
+        /^gcloud compute [a-z-]+ list --project=deskohub-workspace-sandbox --format=value\(name\)$/
+      );
+    }
+  });
+
   test("finds leftover proof resources by their bare IDs", () => {
     for (const leftover of [
       listing(
@@ -512,6 +551,13 @@ describe("post-destroy inventory", () => {
       // any name, and no project-level invoker grant.
       listing("^compute forwarding-rules list", "legacy-http"),
       listing("^compute security-policies list", "legacy-armor"),
+      sinksPage(`projects/${projectId}`, [
+        {
+          name: "export",
+          destination: "bigquery.googleapis.com/x",
+          exclusions: [{ name: "drop-noise", filter: "severity<INFO" }],
+        },
+      ]),
       listing(
         "^projects get-iam-policy .*roles/run\\.invoker",
         "serviceAccount:stray"
@@ -551,6 +597,7 @@ describe("cleanup-only after run 45279064237", () => {
             pattern: "^storage ls -r",
             stdout: `gs://${stateBucket}/${stackPrefix}:\ngs://${stateBucket}/${lease}`,
           },
+          ...readableLogging,
         ],
       },
       (fakes) => {
@@ -1187,7 +1234,7 @@ describe("Alchemy access token", () => {
 
   test("takes the inventories even when no token can be verified", () => {
     for (const phase of ["baseline-inventory", "post-destroy-inventory"]) {
-      const { exitCode, mints, calls } = run(phase, 0, [noExclusions]);
+      const { exitCode, mints, calls } = run(phase, 0, [...readableLogging]);
       expect({
         phase,
         exitCode,
@@ -1219,24 +1266,25 @@ const seedServices = (fakes: ProofFakes) =>
     ].join("\n"),
   });
 
-/** A marker as the runner creates it, in its private directory. */
-const seedMarker = (fakes: ProofFakes) => {
+/**
+ * A marker as the primary RPC probe leaves it: in the private directory,
+ * with its digest recorded.
+ */
+const seedMarker = (fakes: ProofFakes, recorded?: string) => {
   const marker = `sandbox-marker-${"ab".repeat(16)}`;
+  const sha = createHash("sha256").update(marker).digest("hex");
   mkdirSync(fakes.privateDir, { recursive: true, mode: 0o700 });
   writeFileSync(join(fakes.privateDir, "marker"), marker);
-  return {
-    marker,
-    sha: createHash("sha256").update(marker).digest("hex"),
-  };
+  appendFileSync(
+    join(fakes.proofDir, "telemetry.env"),
+    `MARKER_SHA256=${recorded ?? sha}\n`
+  );
+  return { marker, sha };
 };
 
-/** Lines that show the marker, other than the job log's mask command. */
+/** Lines that show the marker: none, outside GitHub Actions. */
 const markerLeaks = (output: string, marker: string) =>
-  output
-    .split("\n")
-    .filter(
-      (line) => line.includes(marker) && line !== `::add-mask::${marker}`
-    );
+  output.split("\n").filter((line) => line.includes(marker));
 
 /** An unsigned JWT with the given claims, as the ID token's stand-in. */
 const idToken = (claims: Schema.JsonObject) =>
@@ -1304,6 +1352,31 @@ describe("first deliver", () => {
     );
   });
 
+  test("fails when one of two serving revisions runs another build", () => {
+    const { exitCode, output } = deliver([
+      {
+        tool: "gcloud",
+        pattern: "^run services describe workspace-api .*--format=json$",
+        stdout: JSON.stringify({
+          status: {
+            conditions: [{ type: "Ready", status: "True" }],
+            traffic: [
+              { revisionName: "workspace-api-live", percent: 90 },
+              { revisionName: "workspace-api-old", percent: 10 },
+            ],
+          },
+        }),
+      },
+      {
+        tool: "gcloud",
+        pattern: "^run revisions describe workspace-api-old ",
+        stdout: `europe-west1-docker.pkg.dev/x/workspace/workspace@sha256:${"2".repeat(64)}`,
+      },
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain("workspace-api did not send all its traffic");
+  });
+
   test("fails while a service is not Ready", () => {
     const { exitCode, output } = deliver([
       {
@@ -1334,8 +1407,8 @@ describe("private access", () => {
   });
   const baseRules: ReadonlyArray<FakeRule> = [
     status("Authorization: Bearer garbage", "401"),
-    status("workspace-api-[^ ]*/(healthz|rpc)$", "403"),
-    status("workspace-(tasks|scheduler)-worker-[^ ]*/(healthz|rpc)$", "404"),
+    status("workspace-api-[^ ]*/(health|rpc)$", "403"),
+    status("workspace-(tasks|scheduler)-worker-[^ ]*/(health|rpc)$", "404"),
     {
       tool: "gcloud",
       pattern: "^run services get-iam-policy workspace-api ",
@@ -1378,7 +1451,7 @@ describe("private access", () => {
     });
     for (const url of [apiUrl, tasksWorkerUrl, schedulerWorkerUrl]) {
       expect(calls).toContain(
-        `curl -sS -o /dev/null -w %{http_code} --max-time 20 -X GET ${url}/healthz`
+        `curl -sS -o /dev/null -w %{http_code} --max-time 20 -X GET ${url}/health`
       );
       expect(calls).toContain(
         `curl -sS -o /dev/null -w %{http_code} --max-time 20 -X POST --data-binary  ${url}/rpc`
@@ -1389,8 +1462,8 @@ describe("private access", () => {
   test("fails on any served request, or a refusal of the wrong kind", () => {
     for (const [rule, message] of [
       [
-        status("workspace-api-[^ ]*/healthz$", "200"),
-        "unauthenticated GET /healthz on workspace-api was served (HTTP 200)",
+        status("workspace-api-[^ ]*/health$", "200"),
+        "unauthenticated GET /health on workspace-api was served (HTTP 200)",
       ],
       [
         status("workspace-tasks-worker-[^ ]*/rpc$", "204"),
@@ -1405,7 +1478,7 @@ describe("private access", () => {
         "POST /rpc with a garbage bearer on workspace-api: HTTP 403, expected 401",
       ],
       [
-        { tool: "curl", pattern: "workspace-api-[^ ]*/healthz$", exit: 7 },
+        { tool: "curl", pattern: "workspace-api-[^ ]*/health$", exit: 7 },
         "HTTP 000",
       ],
     ] as const) {
@@ -1472,60 +1545,35 @@ describe("private access", () => {
 });
 
 describe("RPC probe", () => {
-  const verdict = (sha: string, overrides: Schema.JsonObject = {}) =>
-    JSON.stringify({
-      ok: true,
-      version: "v1",
-      status: 200,
-      contentType: "application/vnd.effect.rpc+schema-binary",
-      markerSha256: sha,
-      markerMatches: true,
-      failDecoded: "ProbeRejected",
-      countChunks: [0, 1, 2],
-      failures: [],
-      ...overrides,
-    });
+  const now = 1_800_000_000;
   const probe = (
-    respond: (sha: string, marker: string) => FakeRule,
-    claims: (now: number) => Schema.JsonObject = (now) => ({
-      aud: apiUrl,
-      exp: now + 3000,
-    }),
-    phase = "rpc-probe"
-  ) => {
-    const now = 1_800_000_000;
-    return withProofFakes({ now }, (fakes) => {
+    world: FakeWorld = { rpcVerdict: {} },
+    claims: Schema.JsonObject = { aud: apiUrl, exp: now + 3000 }
+  ) =>
+    withProofFakes({ now, ...world }, (fakes) => {
       seedServices(fakes);
-      const { marker, sha } = seedMarker(fakes);
-      writeFileSync(
-        fakes.env.FAKE_WORLD ?? "",
-        JSON.stringify({ now, rules: [respond(sha, marker)] })
-      );
-      const token = idToken(claims(now));
-      const result = runPhase(fakes, phase, { SANDBOX_API_ID_TOKEN: token });
-      const verdictFile = join(fakes.proofDir, "rpc-probe-primary.json");
+      const token = idToken(claims);
+      const result = runPhase(fakes, "rpc-probe", {
+        SANDBOX_API_ID_TOKEN: token,
+      });
+      const markerFile = join(fakes.privateDir, "marker");
       const telemetry = join(fakes.proofDir, "telemetry.env");
       return {
         ...result,
-        marker,
+        marker: existsSync(markerFile) ? readFileSync(markerFile, "utf8") : "",
         token,
         calls: fakes.calls(),
-        verdictKept: existsSync(verdictFile),
+        verdictKept: existsSync(join(fakes.proofDir, "rpc-probe-primary.json")),
         telemetry: existsSync(telemetry) ? readFileSync(telemetry, "utf8") : "",
         tokenFileLeft: existsSync(join(fakes.privateDir, "api-id-token")),
-        privateMode: statSync(fakes.privateDir).mode & 0o777,
+        privateMode: existsSync(fakes.privateDir)
+          ? statSync(fakes.privateDir).mode & 0o777
+          : null,
       };
     });
-  };
-  const answer = (stdout: string, exit = 0): FakeRule => ({
-    tool: "bun",
-    pattern: "^scripts/sandbox-rpc-probe\\.ts ",
-    stdout,
-    exit,
-  });
 
-  test("passes on a SchemaBinary verdict and records its trace", () => {
-    const result = probe((sha) => answer(verdict(sha)));
+  test("passes on a SchemaBinary verdict for a fresh marker and records its trace", () => {
+    const result = probe();
     expect({
       exitCode: result.exitCode,
       output: result.exitCode === 0 ? "" : result.output,
@@ -1539,7 +1587,11 @@ describe("RPC probe", () => {
       )
     );
     const traceparent = call?.match(/00-([0-9a-f]{32})-/)?.[1];
-    expect(result.telemetry).toBe(`PROBE_TRACE_ID=${traceparent}\n`);
+    expect(result.marker).toMatch(/^sandbox-marker-[0-9a-f]{32}$/);
+    const sha = createHash("sha256").update(result.marker).digest("hex");
+    expect(result.telemetry).toBe(
+      `MARKER_SHA256=${sha}\nPROBE_STARTED_AT=${now}\nPROBE_TRACE_ID=${traceparent}\n`
+    );
     expect(result.verdictKept).toBe(true);
     expect(result.tokenFileLeft).toBe(false);
     expect(result.privateMode).toBe(0o700);
@@ -1547,8 +1599,23 @@ describe("RPC probe", () => {
     expect(markerLeaks(result.output, result.marker)).toEqual([]);
   });
 
+  test("masks the marker only inside GitHub Actions", () => {
+    const masked = withProofFakes({ now, rpcVerdict: {} }, (fakes) => {
+      seedServices(fakes);
+      const { output } = runPhase(fakes, "rpc-probe", {
+        SANDBOX_API_ID_TOKEN: idToken({ aud: apiUrl, exp: now + 3000 }),
+        GITHUB_ACTIONS: "true",
+      });
+      return {
+        output,
+        marker: readFileSync(join(fakes.privateDir, "marker"), "utf8"),
+      };
+    });
+    expect(masked.output).toContain(`::add-mask::${masked.marker}`);
+  });
+
   test("fails on any verdict short of the full RPC contract", () => {
-    for (const [overrides, message] of [
+    for (const [rpcVerdict, message] of [
       [{ status: 403, ok: false }, "HTTP 403"],
       [{ contentType: "application/json" }, "content type application/json"],
       [{ markerSha256: "0".repeat(64) }, "markerSha256 does not match"],
@@ -1558,27 +1625,31 @@ describe("RPC probe", () => {
       [{ version: "v2" }, "version v2"],
       [{ failures: ["count stream ended early"] }, "count stream ended early"],
     ] as const) {
-      const { exitCode, output } = probe((sha) =>
-        answer(verdict(sha, overrides))
-      );
+      const { exitCode, output } = probe({ rpcVerdict });
       expect({ message, exitCode }).toEqual({ message, exitCode: 1 });
       expect(output).toContain(message);
     }
   });
 
   test("fails on a failing exit or an unreadable verdict", () => {
-    const failed = probe((sha) => answer(verdict(sha, { ok: false }), 1));
+    const failed = probe({ rpcVerdict: { ok: false }, rpcExit: 1 });
     expect(failed.exitCode).toBe(1);
     expect(failed.output).toContain("the RPC probe failed (exit 1)");
-    const garbled = probe(() => answer("not json"));
+    const garbled = probe({
+      rules: [
+        {
+          tool: "bun",
+          pattern: "^scripts/sandbox-rpc-probe\\.ts ",
+          stdout: "not json",
+        },
+      ],
+    });
     expect(garbled.exitCode).toBe(1);
     expect(garbled.output).toContain("printed no single JSON verdict");
   });
 
   test("keeps no verdict that shows the marker", () => {
-    const leaked = probe((sha, marker) =>
-      answer(verdict(sha, { failures: [marker] }))
-    );
+    const leaked = probe({ rpcVerdict: {}, rpcPrintsMarker: true });
     expect(leaked.exitCode).toBe(1);
     expect(leaked.output).toContain("the RPC probe printed the marker");
     expect(leaked.verdictKept).toBe(false);
@@ -1588,16 +1659,13 @@ describe("RPC probe", () => {
   test("refuses an ID token for another audience or near its expiry", () => {
     for (const [claims, message] of [
       [
-        (now: number) => ({ aud: tasksWorkerUrl, exp: now + 3000 }),
+        { aud: tasksWorkerUrl, exp: now + 3000 },
         "the ID token's audience is not the workspace-api URL",
       ],
-      [
-        (now: number) => ({ aud: apiUrl, exp: now + 300 }),
-        "expires in under 600 s",
-      ],
-      [() => ({ aud: apiUrl }), "expires in under 600 s"],
+      [{ aud: apiUrl, exp: now + 300 }, "expires in under 600 s"],
+      [{ aud: apiUrl }, "expires in under 600 s"],
     ] as const) {
-      const result = probe((sha) => answer(verdict(sha)), claims);
+      const result = probe({ rpcVerdict: {} }, claims);
       expect({ message, exitCode: result.exitCode }).toEqual({
         message,
         exitCode: 1,
@@ -1630,6 +1698,27 @@ describe("RPC probe", () => {
       expect(output).toContain("must lie outside the uploaded proof directory");
       expect(existsSync(join(fakes.proofDir, "private"))).toBe(false);
     });
+  });
+
+  test("never sends a replacement for a lost marker in a later probe", () => {
+    withProofFakes(
+      { now, rpcVerdict: {}, status: settled(v1Digest) },
+      (fakes) => {
+        seedServices(fakes);
+        seed(fakes, {
+          "stack-config.json": "{}",
+          "digests.env": `PROBE_V1_DIGEST=${v1Digest}\n`,
+          "releases.env": "V1_RELEASE_ID=release-1\n",
+        });
+        // The marker file is gone; restore-v1's probe must not mint one.
+        const { exitCode, output } = runPhase(fakes, "restore-v1", {
+          SANDBOX_API_ID_TOKEN: idToken({ aud: apiUrl, exp: now + 3000 }),
+        });
+        expect(exitCode).toBe(1);
+        expect(output).toContain("the run's marker is missing");
+        expect(existsSync(join(fakes.privateDir, "marker"))).toBe(false);
+      }
+    );
   });
 });
 
@@ -1689,6 +1778,18 @@ describe("worker probe", () => {
     );
     expect(result.bodyLeft).toBe(false);
     expect(markerLeaks(result.output, result.marker)).toEqual([]);
+  });
+
+  test("refuses a marker other than the one the RPC probe sent", () => {
+    withProofFakes({}, (fakes) => {
+      seedServices(fakes);
+      seed(fakes, { "proof-run.env": "QUEUE_SUFFIX=r111-1\n" });
+      seedMarker(fakes, "0".repeat(64));
+      const { exitCode, output } = runPhase(fakes, "worker-probe");
+      expect(exitCode).toBe(1);
+      expect(output).toContain("not the one the rpc-probe phase sent");
+      expect(fakes.calls().join("\n")).not.toContain("tasks create-http-task");
+    });
   });
 
   test("fails when a receipt carries the raw marker", () => {
@@ -1859,6 +1960,27 @@ describe("telemetry privacy", () => {
     );
   });
 
+  test("scans traces from the primary probe when it ran over an hour ago", () => {
+    const now = 1_800_000_000;
+    const calls = withProofFakes({ now, rules: baseRules }, (fakes) => {
+      seed(fakes, {
+        "telemetry.env": `PROBE_TRACE_ID=${traceId}\nPROBE_STARTED_AT=${now - 7200}\n`,
+      });
+      seedMarker(fakes);
+      expect(runPhase(fakes, "telemetry-privacy").exitCode).toBe(0);
+      return fakes.calls();
+    });
+    // The 90 s ingestion wait moved the fake clock; the window does not.
+    const start = new Date((now - 7200 - 300) * 1000)
+      .toISOString()
+      .replace(/\.\d{3}Z$/, "Z");
+    expect(calls).toContainEqual(
+      expect.stringContaining(
+        `/traces?view=COMPLETE&pageSize=100&startTime=${start}`
+      )
+    );
+  });
+
   test("reads every trace page with its page token URL-encoded", () => {
     const { exitCode, output } = privacy(() => [
       {
@@ -1886,7 +2008,7 @@ describe("telemetry privacy", () => {
 
 describe("baseline inventory", () => {
   const baseline = (rules: ReadonlyArray<FakeRule>) =>
-    withProofFakes({ rules: [...rules, noExclusions] }, (fakes) =>
+    withProofFakes({ rules: [...rules, ...readableLogging] }, (fakes) =>
       runPhase(fakes, "baseline-inventory")
     );
 
@@ -1915,6 +2037,16 @@ describe("baseline inventory", () => {
           stdout: JSON.stringify({ exclusions: [{ name: "drop-noise" }] }),
         },
         "the project already holds logging-exclusions: drop-noise",
+      ],
+      [
+        sinksPage(`projects/${projectId}`, [
+          {
+            name: "export",
+            destination: "bigquery.googleapis.com/x",
+            exclusions: [{ name: "drop-noise" }],
+          },
+        ]),
+        "the project already holds sink-exclusions: export\tdrop-noise",
       ],
       [
         { tool: "gcloud", pattern: "^compute ssl-certificates list", exit: 1 },

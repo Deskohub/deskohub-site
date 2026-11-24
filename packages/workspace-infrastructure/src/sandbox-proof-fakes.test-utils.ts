@@ -89,6 +89,15 @@ export interface FakeWorld {
   readonly repositoryDescription?: string;
   /** The fake clock's start, in epoch seconds; defaults to the real clock. */
   readonly now?: number;
+  /**
+   * When set, `bun scripts/sandbox-rpc-probe.ts` prints a passing verdict
+   * for the marker file it is given, with these fields laid over it.
+   */
+  readonly rpcVerdict?: Schema.JsonObject;
+  /** The fake RPC probe also prints the raw marker in its failures. */
+  readonly rpcPrintsMarker?: boolean;
+  /** The fake RPC probe's exit status. */
+  readonly rpcExit?: number;
 }
 
 /**
@@ -253,6 +262,9 @@ const isFakeWorld = (
     tokenLifetimes: isOptional(isRecordOf(Predicate.isNumber)),
     tokeninfoDelay: optionalNumber,
     now: optionalNumber,
+    rpcVerdict: isOptional(isJsonObject),
+    rpcPrintsMarker: optionalBoolean,
+    rpcExit: optionalNumber,
   });
 
 const readWorld = (path: string): FakeWorld => {
@@ -522,6 +534,27 @@ const isActiveRelease = Schema.is(ActiveRelease);
 const activeDigest = ({ status }: FakeWorld) =>
   isActiveRelease(status) ? status.record.active.imageDigest : undefined;
 
+/** The RPC probe CLI's verdict for the marker file it was handed. */
+const fakeRpcProbe = (args: ReadonlyArray<string>, world: FakeWorld) => {
+  const markerFile = args[args.indexOf("--marker-file") + 1] ?? "";
+  const marker = readFileSync(markerFile, "utf8");
+  print(
+    JSON.stringify({
+      ok: true,
+      version: args[args.indexOf("--expect-version") + 1] ?? null,
+      status: 200,
+      contentType: "application/vnd.effect.rpc+schema-binary",
+      markerSha256: createHash("sha256").update(marker).digest("hex"),
+      markerMatches: true,
+      failDecoded: "ProbeRejected",
+      countChunks: [0, 1, 2],
+      failures: world.rpcPrintsMarker === true ? [marker] : [],
+      ...world.rpcVerdict,
+    })
+  );
+  return world.rpcExit ?? 0;
+};
+
 const advanceClock = (seconds: number) => {
   if (seconds === 0) return;
   const clock = process.env.FAKE_CLOCK ?? "";
@@ -591,6 +624,13 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
       process.stderr.write(`${rule.stderr}\n`);
     }
     return rule.exit ?? 0;
+  }
+  if (
+    tool === "bun" &&
+    args[0] === "scripts/sandbox-rpc-probe.ts" &&
+    world.rpcVerdict !== undefined
+  ) {
+    return fakeRpcProbe(args, world);
   }
   if (tool === "bun" && args[0] === "release.run.ts") {
     if (args[1] === "status") {

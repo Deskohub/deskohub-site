@@ -418,7 +418,7 @@ describe("sandbox proof runner", () => {
       "bun run release plan",
       "gcloud run services describe workspace-api --project=deskohub-workspace-sandbox --region=europe-west1 --format=value\\(status.url\\)",
       "gcloud run services describe workspace-scheduler-worker --project=deskohub-workspace-sandbox --region=europe-west1 --format=json",
-      "/healthz",
+      "/health",
       "/rpc",
       "gcloud run services get-iam-policy workspace-api",
       "Authorization:\\ Bearer\\ garbage",
@@ -457,21 +457,10 @@ describe("sandbox proof runner", () => {
       "CLOUDSDK_BILLING_QUOTA_PROJECT=deskohub-workspace-sandbox gcloud billing projects describe",
     ]);
     expect(output).not.toContain("::error::");
-    // The marker is masked, and every traced command shows it redacted.
-    const marker = output.match(
-      /::add-mask::(sandbox-marker-[0-9a-f]{32})/
-    )?.[1];
-    expect(marker).toBeDefined();
-    expect(
-      output
-        .split("\n")
-        .filter(
-          (line) =>
-            marker !== undefined &&
-            line.includes(marker) &&
-            !line.startsWith("::add-mask::")
-        )
-    ).toEqual([]);
+    // Outside GitHub Actions nothing shows the marker, not even a mask
+    // command; every traced command shows it redacted.
+    expect(output).not.toMatch(/sandbox-marker-[0-9a-f]/);
+    expect(output).toContain("<marker>");
   });
 
   test("dry-runs cleanup-only as teardown and inventory alone", () => {

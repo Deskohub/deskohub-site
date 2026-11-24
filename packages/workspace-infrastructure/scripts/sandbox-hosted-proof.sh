@@ -119,7 +119,8 @@ marker=""
 # Resource classes the IAM-private topology never declares: none may exist
 # before the proof or after its teardown.
 edge_classes=(forwarding-rules addresses backend-services url-maps target-http-proxies
-  target-https-proxies network-endpoint-groups security-policies ssl-certificates logging-exclusions)
+  target-https-proxies network-endpoint-groups security-policies ssl-certificates logging-exclusions
+  sink-exclusions)
 declared_repository_description="Workspace container images, deployed by digest."
 plan_log="${proof_dir}/plan.log"
 # How long a delivered release may take to report every service Ready with
@@ -266,6 +267,14 @@ project_sink_rows() {
   local sinks
   sinks="$(log_sinks_json "projects/${project_id}")" || return 1
   $dry_run || jq -r '.[] | [.name, .destination] | @tsv' <<<"$sinks"
+}
+
+# Every exclusion on any of the project's sinks as `sink<TAB>exclusion`
+# rows: the project exclusions API covers only _Default.
+project_sink_exclusion_rows() {
+  local sinks
+  sinks="$(log_sinks_json "projects/${project_id}")" || return 1
+  $dry_run || jq -r '.[] | .name as $sink | (.exclusions // [])[] | [$sink, .name] | @tsv' <<<"$sinks"
 }
 
 project_exclusion_names() {
@@ -480,17 +489,27 @@ ensure_private_dir() {
   chmod 700 "$private_dir"
 }
 
-# The run's synthetic marker: random, created once per run, kept in the
-# private directory and masked in the job log. trace() redacts it, and no
-# check prints it.
+# The run's synthetic marker, kept in the private directory. Only the
+# primary RPC probe creates it (`load_marker create`), recording its digest;
+# every later phase must find that very marker, so a lost marker can never
+# be replaced by a fresh one that was never sent. Masked in a GitHub job
+# log; trace() redacts it and no check prints it.
 load_marker() {
   ensure_private_dir
-  if [[ ! -s "$marker_file" ]]; then
+  if [[ "${1:-}" == create ]]; then
     (umask 077 && printf 'sandbox-marker-%s' "$(random_hex 16)" >"$marker_file")
   fi
+  [[ -s "$marker_file" ]] || fail "the run's marker is missing; only the rpc-probe phase creates it"
   marker="$(cat "$marker_file")"
   [[ "$marker" =~ ^sandbox-marker-[0-9a-f]{32}$ ]] || fail "the private marker file is malformed"
-  echo "::add-mask::${marker}"
+  [[ "${GITHUB_ACTIONS:-}" != true ]] || echo "::add-mask::${marker}"
+  if [[ "${1:-}" == create ]]; then
+    record_value "$telemetry_file" MARKER_SHA256 "$(marker_sha256)"
+    return
+  fi
+  load_env_file "$telemetry_file"
+  [[ -n "${MARKER_SHA256:-}" && "$(marker_sha256)" == "$MARKER_SHA256" ]] ||
+    fail "the private marker is not the one the rpc-probe phase sent"
 }
 
 # Lowercase hex SHA-256 of the marker's UTF-8 bytes, as the probe logs it.
@@ -719,20 +738,23 @@ take_inventory() {
   local dir="${proof_dir}/inventory-$1"
   mkdir -p "$dir"
   local p=(--project="$project_id")
+  # Compute lists without a scope flag are aggregated: every region, zone
+  # and global scope of the project.
   inventory_class "$dir" run-services gcloud run services list "${p[@]}" --region="$region" --format='value(metadata.name)'
   inventory_class "$dir" run-revisions gcloud run revisions list "${p[@]}" --region="$region" --format='value(metadata.name)'
   inventory_class "$dir" artifact-repositories gcloud artifacts repositories list "${p[@]}" --location="$region" --format='value(name)'
-  inventory_class "$dir" forwarding-rules gcloud compute forwarding-rules list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" addresses gcloud compute addresses list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" backend-services gcloud compute backend-services list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" url-maps gcloud compute url-maps list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" target-http-proxies gcloud compute target-http-proxies list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" target-https-proxies gcloud compute target-https-proxies list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" network-endpoint-groups gcloud compute network-endpoint-groups list "${p[@]}" --regions="$region" --format='value(name)'
+  inventory_class "$dir" forwarding-rules gcloud compute forwarding-rules list "${p[@]}" --format='value(name)'
+  inventory_class "$dir" addresses gcloud compute addresses list "${p[@]}" --format='value(name)'
+  inventory_class "$dir" backend-services gcloud compute backend-services list "${p[@]}" --format='value(name)'
+  inventory_class "$dir" url-maps gcloud compute url-maps list "${p[@]}" --format='value(name)'
+  inventory_class "$dir" target-http-proxies gcloud compute target-http-proxies list "${p[@]}" --format='value(name)'
+  inventory_class "$dir" target-https-proxies gcloud compute target-https-proxies list "${p[@]}" --format='value(name)'
+  inventory_class "$dir" network-endpoint-groups gcloud compute network-endpoint-groups list "${p[@]}" --format='value(name)'
   inventory_class "$dir" security-policies gcloud compute security-policies list "${p[@]}" --format='value(name)'
-  inventory_class "$dir" ssl-certificates gcloud compute ssl-certificates list "${p[@]}" --global --format='value(name)'
+  inventory_class "$dir" ssl-certificates gcloud compute ssl-certificates list "${p[@]}" --format='value(name)'
   inventory_class "$dir" logging-exclusions project_exclusion_names
   inventory_class "$dir" logging-sinks project_sink_rows
+  inventory_class "$dir" sink-exclusions project_sink_exclusion_rows
   inventory_class "$dir" tasks-queues gcloud tasks queues list "${p[@]}" --location="$region" --format='value(name)'
   inventory_class "$dir" scheduler-jobs gcloud scheduler jobs list "${p[@]}" --location="$region" --format='value(name)'
   inventory_class "$dir" storage-buckets gcloud storage buckets list "${p[@]}" --format='value(name)'
@@ -753,7 +775,7 @@ proof_pattern() {
     artifact-repositories) echo "(^|/repositories/)${artifact_repository}\$" ;;
     # Load balancers, NEGs, Cloud Armor, certificates and log exclusions:
     # any at all, and any project-level invoker grant.
-    forwarding-rules | addresses | backend-services | url-maps | target-http-proxies | target-https-proxies | network-endpoint-groups | security-policies | ssl-certificates | logging-exclusions | project-run-invokers)
+    forwarding-rules | addresses | backend-services | url-maps | target-http-proxies | target-https-proxies | network-endpoint-groups | security-policies | ssl-certificates | logging-exclusions | sink-exclusions | project-run-invokers)
       echo '.' ;;
     # `value(name)` lists bare queue and job IDs.
     tasks-queues | scheduler-jobs) echo '(^|/)workspace-' ;;
@@ -995,15 +1017,17 @@ expect_iam_private() {
 }
 
 # Every service refuses callers without roles/run.invoker. The workers keep
-# internal ingress, so from the runner they may also answer 404.
+# internal ingress, so from the runner they may also answer 404. The probe
+# serves GET /health beside its startup /healthz: Cloud Run reserves some
+# paths ending in z on the run.app URL.
 phase_private_access() {
   local service url accepted
   for service in "${release_services[@]}"; do
     url="$(service_url "$service")"
     accepted='401|403'
     [[ "$service" == "$api_service" ]] || accepted='401|403|404'
-    expect_refused "unauthenticated GET /healthz on ${service}" \
-      "$(request_status GET "${url}/healthz")" "$accepted"
+    expect_refused "unauthenticated GET /health on ${service}" \
+      "$(request_status GET "${url}/health")" "$accepted"
     expect_refused "unauthenticated POST /rpc on ${service}" \
       "$(request_status POST "${url}/rpc" --data-binary '')" "$accepted"
     expect_iam_private "$service"
@@ -1020,7 +1044,12 @@ phase_private_access() {
 run_rpc_probe() {
   local version="$1" label="$2" url trace_id file="${proof_dir}/rpc-probe-${2}.json" code=0 problems
   url="$(service_url "$api_service")"
-  load_marker
+  if [[ "$label" == primary ]]; then
+    load_marker create
+    record_value "$telemetry_file" PROBE_STARTED_AT "$(date -u +%s)"
+  else
+    load_marker
+  fi
   load_id_token 600 "$url"
   trace_id="$(random_hex 16)"
   [[ "$trace_id" =~ ^[0-9a-f]{32}$ && "$trace_id" != "${trace_id//?/0}" ]] || fail "no usable trace ID"
@@ -1469,10 +1498,14 @@ phase_telemetry_privacy() {
   [[ "$trace_body" != *"$marker"* ]] || fail "the marker reached the probe's trace"
   echo "Cloud Trace holds the probe trace ${trace_id}"
 
-  # Every trace of the last hour, spans with names and labels, which must
-  # include the probe's own.
-  local window traces page="" listed=false
-  window="$(capture 2026-01-01T00:00:00Z date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)"
+  # Every trace since the earlier of the primary probe and an hour ago,
+  # spans with names and labels, which must include the probe's own.
+  local window traces page="" listed=false start_epoch
+  start_epoch=$(($(date -u +%s) - 3600))
+  if [[ "${PROBE_STARTED_AT:-}" =~ ^[0-9]+$ ]] && ((PROBE_STARTED_AT - 300 < start_epoch)); then
+    start_epoch=$((PROBE_STARTED_AT - 300))
+  fi
+  window="$(capture 2026-01-01T00:00:00Z date -u -d "@${start_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
   for _ in $(seq 1 20); do
     traces="$(google_get "{\"traces\":[{\"traceId\":\"${trace_id}\"}]}" \
       "https://cloudtrace.googleapis.com/v1/projects/${project_id}/traces?view=COMPLETE&pageSize=100&startTime=${window}${page:+&pageToken=${page}}")" ||
@@ -1547,12 +1580,15 @@ phase_post_destroy_inventory() {
       fi
     done
   fi
-  ((${#unverified[@]} == 0)) || notice "unverified after destroy: ${unverified[*]}"
   billing projects describe "$project_id" --format='value(billingEnabled,billingAccountName)' ||
     notice "billing link unverified (denied)"
   rm -f "$marker_file"
   ! $residual || fail "proof resources remain after teardown"
-  echo "no proof resources remain in any verified class"
+  # Every class is required: an unreadable one could hide residue. Each
+  # listing's error stays in its .err file.
+  ((${#unverified[@]} == 0)) ||
+    fail "teardown unverified: ${unverified[*]} could not be listed (see each class's .err file)"
+  echo "no proof resources remain in any class"
 }
 
 # ---------------------------------------------------------------- dispatch
