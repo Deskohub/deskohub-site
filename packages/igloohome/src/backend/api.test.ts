@@ -1,9 +1,16 @@
 import { describe, expect, mock, test } from "bun:test";
 import { Cause, Effect, Exit, Fiber, Layer, Option, Schema } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/http";
 import { TestClock } from "effect/testing";
 import { IgloohomeRuntimeConfig } from "../config";
 import { IgloohomeRequestError } from "../errors";
+import { IgloohomeClientError } from "../generated/effect.gen";
 import type { IssueHourlyAlgoPinInput } from "../types";
 import { IgloohomeDeviceIdSchema } from "../types";
 import { IgloohomeAccessToken, mapAlgoPinRequestError } from "./api";
@@ -12,34 +19,63 @@ import { IgloohomeService } from "./service";
 const getRequest = (input: RequestInfo | URL, init?: RequestInit) =>
   input instanceof Request ? input : new Request(input, init);
 
+const mockFetch = (
+  handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+): typeof globalThis.fetch =>
+  Object.assign(mock(handler), { preconnect: globalThis.fetch.preconnect });
+
 describe("mapAlgoPinRequestError", () => {
+  const algoPinRequest = HttpClientRequest.post(
+    "https://api.example.test/igloohome/devices/EK1X16f8898a/algopin/hourly"
+  );
+  const providerResponse = (status: number, body: string | null = null) =>
+    HttpClientResponse.fromWeb(algoPinRequest, new Response(body, { status }));
+  const undocumentedStatusFailure = (status: number) =>
+    new HttpClientError.HttpClientError({
+      reason: new HttpClientError.StatusCodeError({
+        request: algoPinRequest,
+        response: providerResponse(status),
+      }),
+    });
+
   test("only treats documented precondition responses as definitive rejection", () => {
-    for (const status of [400, 401, 403, 404, 415]) {
-      expect(mapAlgoPinRequestError({ response: { status } }).outcome).toBe(
-        "rejected"
-      );
+    const rejections = [
+      IgloohomeClientError("CreateHourlyAlgoPin400", {}, providerResponse(400)),
+      IgloohomeClientError("CreateHourlyAlgoPin401", {}, providerResponse(401)),
+      IgloohomeClientError("CreateHourlyAlgoPin403", {}, providerResponse(403)),
+      IgloohomeClientError("CreateHourlyAlgoPin404", {}, providerResponse(404)),
+      IgloohomeClientError("CreateHourlyAlgoPin415", {}, providerResponse(415)),
+    ];
+    for (const failure of rejections) {
+      expect(mapAlgoPinRequestError(failure).outcome).toBe("rejected");
     }
 
-    for (const status of [408, 425, 429, 499, 500, 503]) {
-      expect(mapAlgoPinRequestError({ response: { status } }).outcome).toBe(
-        "ambiguous"
-      );
+    const ambiguousFailures = [
+      IgloohomeClientError("CreateHourlyAlgoPin500", {}, providerResponse(500)),
+      ...[408, 425, 429, 499, 503].map(undocumentedStatusFailure),
+    ];
+    for (const failure of ambiguousFailures) {
+      expect(mapAlgoPinRequestError(failure).outcome).toBe("ambiguous");
     }
   });
 
   test("does not retain a provider response payload in the public error", () => {
-    const error = mapAlgoPinRequestError({
-      response: { status: 500 },
-      body: { pin: "987654321" },
-    });
+    const error = mapAlgoPinRequestError(
+      IgloohomeClientError(
+        "CreateHourlyAlgoPin500",
+        { error: "987654321" },
+        providerResponse(500, JSON.stringify({ pin: "987654321" }))
+      )
+    );
 
+    expect(error.statusCode).toBe(500);
     expect(JSON.stringify(error)).not.toContain("987654321");
   });
 });
 
 describe("IgloohomeService", () => {
   const recordRequests = (requests: Request[]) =>
-    mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    mockFetch(async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = getRequest(input, init);
       requests.push(request.clone());
 
@@ -56,7 +92,7 @@ describe("IgloohomeService", () => {
         return Response.json({ pin: "7654321", pinId: "pin-id" });
       }
       return new Response(null, { status: 404 });
-    }) as unknown as typeof globalThis.fetch;
+    });
 
   const buildServiceLayer = (
     httpClientLayer: Layer.Layer<HttpClient.HttpClient>,
@@ -113,7 +149,10 @@ describe("IgloohomeService", () => {
     expect(String(result.pinId)).toBe("pin-id");
     expect(requests).toHaveLength(2);
 
-    const authRequest = requests[0] as Request;
+    const [authRequest, issueRequest] = requests;
+    if (authRequest === undefined || issueRequest === undefined) {
+      throw new Error("Expected the authentication and AlgoPIN requests.");
+    }
     expect(authRequest.method).toBe("POST");
     expect(authRequest.headers.get("authorization")).toBe(
       `Basic ${Buffer.from("client-id:client-secret").toString("base64")}`
@@ -125,7 +164,6 @@ describe("IgloohomeService", () => {
       scope: "igloohomeapi/algopin-hourly",
     });
 
-    const issueRequest = requests[1] as Request;
     expect(issueRequest.method).toBe("POST");
     expect(issueRequest.headers.get("authorization")).toBe(
       "Bearer access-token"
@@ -140,7 +178,7 @@ describe("IgloohomeService", () => {
 
   test("re-authenticates after the provider rejects a cached access token", async () => {
     let issuedTokens = 0;
-    const fetchMock = mock(
+    const fetchMock = mockFetch(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = getRequest(input, init);
         if (request.url === "https://auth.example.test/oauth2/token") {
@@ -154,7 +192,7 @@ describe("IgloohomeService", () => {
           ? new Response(null, { status: 401 })
           : Response.json({ pin: "7654321", pinId: "pin-id" });
       }
-    ) as unknown as typeof globalThis.fetch;
+    );
     const input = {
       deviceId,
       variance: 1,
@@ -188,7 +226,7 @@ describe("IgloohomeService", () => {
     const requests: Request[] = [];
     const abortSignals: AbortSignal[] = [];
     let completeAuthentication: ((response: Response) => void) | undefined;
-    const fetchMock = mock(
+    const fetchMock = mockFetch(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = getRequest(input, init);
         requests.push(request.clone());
@@ -200,7 +238,7 @@ describe("IgloohomeService", () => {
         }
         return Response.json({ pin: "7654321", pinId: "pin-id" });
       }
-    ) as unknown as typeof globalThis.fetch;
+    );
 
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
@@ -235,7 +273,7 @@ describe("IgloohomeService", () => {
     const requests: Request[] = [];
     let completeBody: (() => void) | undefined;
     let bodyCancelled = false;
-    const fetchMock = mock(
+    const fetchMock = mockFetch(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = getRequest(input, init);
         requests.push(request.clone());
@@ -261,7 +299,7 @@ describe("IgloohomeService", () => {
         }
         return Response.json({ pin: "7654321", pinId: "pin-id" });
       }
-    ) as unknown as typeof globalThis.fetch;
+    );
 
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {

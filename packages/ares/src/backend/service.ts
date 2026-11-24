@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Match, Predicate, Schema } from "effect";
+import { Context, Data, Effect, Layer, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import {
   type AresClient,
@@ -50,9 +50,6 @@ const makeAresClient = (httpClient: HttpClient.HttpClient): AresClient =>
         )
       ),
   });
-
-const isNotFoundResponse = (error: unknown): boolean =>
-  Predicate.isTagged(error, "VratEkonomickySubjekt404");
 
 const reportUnavailable = Effect.logWarning("ARES company lookup failed").pipe(
   Effect.annotateLogs({ registry: "ares.gov.cz" }),
@@ -112,14 +109,10 @@ export class AresLookupService extends Context.Service<
           .vratEkonomickySubjekt(ico, undefined)
           .pipe(
             Effect.timeout(aresLookupTimeout),
-            Effect.catch(
-              (failure): Effect.Effect<never, AresLookupFailure> =>
-                Match.value(failure).pipe(
-                  Match.when(isNotFoundResponse, () =>
-                    Effect.fail(new AresLookupFailure({ reason: "NotFound" }))
-                  ),
-                  Match.orElse(() => reportUnavailable)
-                )
+            Effect.catchTag(
+              "VratEkonomickySubjekt404",
+              () => Effect.fail(new AresLookupFailure({ reason: "NotFound" })),
+              () => reportUnavailable
             )
           );
 

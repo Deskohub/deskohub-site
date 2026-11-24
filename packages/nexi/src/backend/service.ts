@@ -46,11 +46,11 @@ const CAPTURE_OPERATION_TYPE = "CAPTURE";
 const EXECUTED_OPERATION_RESULT = "EXECUTED";
 
 const decodeProviderIdentifier = <A>(
-  schema: Schema.Decoder<A>,
+  schema: Schema.Codec<A, string>,
   operation: string
 ) =>
-  Effect.fn(operation)((value: unknown) =>
-    Schema.decodeUnknownEffect(schema)(value).pipe(
+  Effect.fn(operation)((value: string) =>
+    Schema.decodeEffect(schema)(value).pipe(
       Effect.mapError(
         (cause) =>
           new ExternalAPIError({
