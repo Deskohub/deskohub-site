@@ -333,6 +333,7 @@ describe("post-destroy inventory", () => {
         "workspace-paid-fulfillment-r45279064237-1"
       ),
       listing("^scheduler jobs list", "workspace-reservation-hold-sweep"),
+      listing("^artifacts repositories list", "workspace"),
     ]) {
       const { exitCode, output } = inventory([
         leftover,
@@ -1152,7 +1153,7 @@ describe("edge readback from the live edge", () => {
       expect(calls).toContain(
         `gcloud compute addresses describe workspace-sandbox-edge --project=${projectId} --global --format=value(address)`
       );
-      // Alchemy persists no stack outputs object, so none is read; reading
+      // The live state holds no stack outputs object, so none is read; reading
       // back writes nothing: no deploy, destroy or upload.
       expect(
         calls.filter((call) =>
@@ -1193,6 +1194,7 @@ describe("edge readback from the live edge", () => {
       for (const override of [
         forwardingRule({ IPAddress: "198.51.100.99" }),
         forwardingRule({ portRange: "443-443" }),
+        forwardingRule({ portRange: "80-81" }),
         forwardingRule({ target: `${compute}/targetHttpProxies/other` }),
         { ...forwardingRule(), stdout: undefined, exit: 1 },
         {

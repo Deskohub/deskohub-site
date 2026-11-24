@@ -102,9 +102,11 @@ token_request_sources=('resource.type="http_load_balancer"' 'resource.type="clou
 dry_run_exclusion_filter='(resource.type="http_load_balancer" OR (resource.type="cloud_run_revision" AND log_id("run.googleapis.com/requests"))) AND httpRequest.requestUrl=~"^https?://[^/]+(/app/auth/callback|/api/auth/magic-link/verify|/marketing-preferences/access)([/?#]|$)"'
 declared_repository_description="Workspace container images, deployed by digest."
 plan_log="${proof_dir}/plan.log"
-# How long the edge may take to serve a version through the load balancer.
-: "${SANDBOX_SERVING_TIMEOUT_SECONDS:=1080}"
-serving_timeout_seconds="$SANDBOX_SERVING_TIMEOUT_SECONDS"
+# How long the edge may take to serve a version: a new global load
+# balancer's first propagation, then a revision change on a live one. Each
+# fits inside its workflow step's limit.
+: "${SANDBOX_FIRST_SERVING_TIMEOUT_SECONDS:=1080}"
+: "${SANDBOX_SERVING_TIMEOUT_SECONDS:=600}"
 
 # ---------------------------------------------------------------- helpers
 
@@ -428,10 +430,11 @@ edge_ip() {
 
 # Every one of several requests through the load balancer must report the
 # expected probe build: proof that it serves 100% of untagged traffic.
-# A new global load balancer can take well over ten minutes to serve, so
-# the wait is bounded by time, not by a count of attempts.
+# The wait is bounded by time, not by a count of attempts: the given
+# seconds, else the serving timeout.
 expect_serving() {
-  local version="$1" ip attempt=0 served=0 body deadline=$((SECONDS + serving_timeout_seconds))
+  local version="$1" timeout="${2:-$SANDBOX_SERVING_TIMEOUT_SECONDS}"
+  local ip attempt=0 served=0 body deadline=$((SECONDS + timeout))
   ip="$(edge_ip)"
   trace curl -fsS "http://${ip}/healthz" "(x10, until version=${version})"
   $dry_run && return 0
@@ -449,7 +452,7 @@ expect_serving() {
     }
     sleep 10
   done
-  fail "the edge did not serve ${version} on every request within ${serving_timeout_seconds} s (${served}/10)"
+  fail "the edge did not serve ${version} on every request within ${timeout} s (${served}/10)"
 }
 
 # One state-bucket object's live metadata from the Cloud Storage JSON API,
@@ -556,7 +559,8 @@ take_inventory() {
 proof_pattern() {
   case "$1" in
     run-services) echo '^workspace-' ;;
-    artifact-repositories) echo "/repositories/${artifact_repository}\$" ;;
+    # `value(name)` lists the bare repository ID.
+    artifact-repositories) echo "(^|/repositories/)${artifact_repository}\$" ;;
     forwarding-rules | addresses | backend-services | url-maps | target-http-proxies | target-https-proxies | network-endpoint-groups | security-policies | ssl-certificates)
       echo "^workspace-${stage}-" ;;
     logging-exclusions) echo "^${edge_exclusion}\$" ;;
@@ -783,7 +787,8 @@ declared_edge_name() {
 }
 
 # deliver-v1 declared the edge with the first release, in the same locked
-# apply. Alchemy persists no stack outputs, so the edge is read back live by
+# apply. The live state holds no stack outputs object (run 45279064237
+# found only per-resource state), so the edge is read back live by
 # the names the stack declares: the address's IP, the HTTP forwarding rule
 # on it, its proxy and URL map. Reading back writes nothing. The web service
 # only admits load-balancer traffic (ingress INTERNAL_LOAD_BALANCER), so
@@ -810,7 +815,11 @@ phase_edge_readback() {
     --format='json(IPAddress,portRange,target)')" ||
     fail "the edge forwarding rule $(declared_edge_name "$declared" httpForwardingRule) is unreadable"
   expect_equal "edge forwarding rule address" "$(jq -r '.IPAddress // empty' <<<"$rule")" "$ip"
-  expect_equal "edge forwarding rule port" "$(jq -r '.portRange // empty' <<<"$rule")" 80-80
+  # Compute reports a single port as `80-80`; `80` means the same.
+  local port
+  port="$(jq -r '.portRange // empty' <<<"$rule")"
+  [[ "$port" == 80 ]] && port=80-80
+  expect_equal "edge forwarding rule port" "$port" 80-80
   target="$(jq -r '.target // empty' <<<"$rule")"
   expect_equal "edge forwarding rule target" "${target##*/targetHttpProxies/}" "$(declared_edge_name "$declared" httpProxy)"
   url_map="$(capture "urlMaps/$(declared_edge_name "$declared" urlMap)" gcloud compute target-http-proxies describe \
@@ -829,7 +838,7 @@ phase_edge_readback() {
   [[ -s "$exclusion_filter_file" ]] ||
     fail "the edge declares no token-route exclusion filter"
   verify_edge_security
-  expect_serving v1
+  expect_serving v1 "$SANDBOX_FIRST_SERVING_TIMEOUT_SECONDS"
   local robots
   robots="$(capture 'text/plain' curl -fsS -o /dev/null -w '%{content_type}' "http://${ip}/robots.txt")"
   [[ "$robots" == text/plain* ]] || fail "/robots.txt is not text/plain"
@@ -1184,7 +1193,7 @@ verify_log_routing() {
       '$known[0] + [.[] | . + {parent: $parent, level: "ancestor"}]' <<<"$sinks" >"${dir}/sinks.next"
     mv "${dir}/sinks.next" "${dir}/sinks.json"
   done < <(jq -r '.[] | [.id, .type] | @tsv' <<<"$ancestors")
-  # The live project exclusion must be the filter the stack outputs, and
+  # The live project exclusion must be the filter the stack declares, and
   # that filter must name both request sources and every token route.
   local expected source route
   expected="$(cat "$exclusion_filter_file" 2>/dev/null)" ||

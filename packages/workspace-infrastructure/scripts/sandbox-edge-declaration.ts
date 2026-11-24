@@ -12,8 +12,8 @@ import {
 
 /**
  * What the configured stack declares for its edge: the protocol, every
- * physical object name and the token-route exclusion filter. Alchemy
- * persists no stack outputs in its state, so the hosted proof reads the
+ * physical object name and the token-route exclusion filter. The live
+ * state holds no stack outputs object, so the hosted proof reads the
  * live edge by these names and compares it with this declaration. `null`
  * when the stack declares no edge.
  */
