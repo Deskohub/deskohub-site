@@ -6,7 +6,6 @@ import {
   describe,
   expect,
   mock,
-  spyOn,
   test,
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
@@ -202,12 +201,15 @@ describe("scheduleTagManagerLoad", () => {
     // @ts-expect-error Safari does not implement requestIdleCallback.
     window.requestIdleCallback = undefined;
     const timers: { callback: TimerHandler; delay?: number }[] = [];
-    const setTimeoutSpy = spyOn(window, "setTimeout").mockImplementation(
-      (callback: TimerHandler, delay?: number) => {
+    const originalSetTimeout = window.setTimeout;
+    Object.defineProperty(window, "setTimeout", {
+      configurable: true,
+      writable: true,
+      value: (callback: TimerHandler, delay?: number) => {
         timers.push({ callback, delay });
         return timers.length;
-      }
-    );
+      },
+    });
 
     try {
       const cancel = scheduleTagManagerLoad(CONTAINER_ID);
@@ -225,7 +227,7 @@ describe("scheduleTagManagerLoad", () => {
       expect(tagManagerScripts()).toHaveLength(1);
       cancel();
     } finally {
-      setTimeoutSpy.mockRestore();
+      window.setTimeout = originalSetTimeout;
       window.requestIdleCallback = originalRequestIdleCallback;
     }
   });

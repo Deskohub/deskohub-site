@@ -93,7 +93,10 @@ describe("ContactForm", () => {
         HTMLTextAreaElement,
       ],
     ] as const) {
-      const field = elementOf(view.getByLabelText(label), fieldType);
+      const field = elementOf<HTMLInputElement | HTMLTextAreaElement>(
+        view.getByLabelText(label),
+        fieldType
+      );
       fireEvent.change(field, { target: { value } });
       expect(field.value).toBe(value);
     }
