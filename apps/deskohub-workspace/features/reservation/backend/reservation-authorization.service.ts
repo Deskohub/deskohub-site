@@ -87,11 +87,7 @@ export type ReservationViewer = "customer" | "invitee";
 const grants = (
   grant: keyof typeof reservationAccessPolicy,
   permission: ReservationPermission
-) => {
-  const granted: readonly ReservationPermission[] =
-    reservationAccessPolicy[grant];
-  return granted.includes(permission);
-};
+) => reservationAccessPolicy[grant].some((granted) => granted === permission);
 
 export type ReservationAuthorizationInput = {
   readonly accessCookie?: string;

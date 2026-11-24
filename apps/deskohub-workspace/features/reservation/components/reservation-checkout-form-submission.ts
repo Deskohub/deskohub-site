@@ -71,11 +71,23 @@ type AvailabilityState = {
   readonly unavailableMessage?: string;
 };
 
-/** One form field with a value for it. */
+/**
+ * One form field with a value for it. The value may be of any of the form's
+ * field types; a selection link pairs each of its fields with the value it
+ * read for that same field.
+ */
 export type ReservationFormFieldValue<Input extends FieldValues> = {
   readonly name: FieldPath<Input>;
   readonly value: FieldPathValue<Input, FieldPath<Input>>;
 };
+
+/** One form field with a value of that field's own type. */
+export type ReservationFormFieldEntry<Input extends FieldValues> = {
+  readonly [Name in FieldPath<Input>]: {
+    readonly name: Name;
+    readonly value: FieldPathValue<Input, Name>;
+  };
+}[FieldPath<Input>];
 
 /** The fields of a reservation form the checkout reads and writes by name. */
 export type ReservationCheckoutFormFields<Input extends FieldValues> = {
@@ -87,7 +99,7 @@ export type ReservationCheckoutFormFields<Input extends FieldValues> = {
   /** The repeated email of someone else's contact. */
   readonly emailConfirmation: FieldPath<Input>;
   /** The marketing-consent field with the value that gives consent. */
-  readonly marketingConsent: ReservationFormFieldValue<Input>;
+  readonly marketingConsent: ReservationFormFieldEntry<Input>;
 };
 
 /** What the checkout form's submission reads and drives in one render. */
