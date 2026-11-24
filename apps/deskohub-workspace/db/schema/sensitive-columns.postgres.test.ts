@@ -12,6 +12,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { EmailValueName } from "@deskohub/workspace-admin-api";
@@ -92,6 +93,9 @@ import {
 import { schemaColumns } from "./schema-columns.test-utils";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+
+/** A `count(*)::int as count` row. */
+const StoredCount = Schema.Struct({ count: Schema.Number });
 
 const sensitiveColumns = schemaColumns.filter(({ sensitive }) => sensitive);
 
@@ -749,11 +753,17 @@ const testIssuanceSensitiveColumn = async (index: number) => {
     await connection.query("begin");
     const storedCount = (value: string | Temporal.Instant) =>
       Effect.promise(() =>
-        connection.query<{ count: number }>(
+        connection.query(
           `select count(*)::int as count from email_discount_issuances where "${column.name}" = $1`,
-          [serializeSensitiveValue(value)]
+          [serializeSensitiveValue(value)],
+          StoredCount
         )
-      ).pipe(Effect.map(({ rows }) => rows[0]!.count));
+      ).pipe(
+        Effect.map(({ rows: [row] }) => {
+          assert(row, "the count query returned no row");
+          return row.count;
+        })
+      );
     const { logs, exit } = await Effect.runPromise(
       withHeldTransaction(connection, (db) =>
         Effect.gen(function* () {
@@ -907,8 +917,13 @@ describe.skipIf(!testDatabase)("sensitive columns on Postgres", () => {
         await connection.query("begin");
         const storedCount = (value: string) =>
           Effect.promise(() =>
-            connection.query<{ count: number }>(storedCountQuery, [value])
-          ).pipe(Effect.map(({ rows }) => rows[0]!.count));
+            connection.query(storedCountQuery, [value], StoredCount)
+          ).pipe(
+            Effect.map(({ rows: [row] }) => {
+              assert(row, "the count query returned no row");
+              return row.count;
+            })
+          );
 
         const { logs, exit } = await Effect.runPromise(
           withHeldTransaction(connection, (db) =>

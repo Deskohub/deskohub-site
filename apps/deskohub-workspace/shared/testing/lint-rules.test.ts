@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Schema } from "effect";
 import { commandOutput, runCommand } from "@/scripts/shared/command";
+import { decodeJson, readJsonFile } from "./json-file.test-utils";
 
 const repositoryRoot = fileURLToPath(new URL("../../../..", import.meta.url));
 const fixtureRoot = mkdtempSync(join(tmpdir(), "deskohub-lint-rules-"));
@@ -24,20 +25,6 @@ const LintMessageReport = Schema.Struct({
     })
   ),
 });
-
-const decodeJson = <
-  S extends Schema.Top & { readonly DecodingServices: never },
->(
-  schema: S,
-  text: string
-) => Schema.decodeUnknownSync(Schema.fromJsonString(schema))(text);
-
-const readJsonFile = <
-  S extends Schema.Top & { readonly DecodingServices: never },
->(
-  schema: S,
-  path: string
-) => decodeJson(schema, readFileSync(path, "utf8"));
 
 // The fixture configs copy the repository's, so its other keys stay.
 const OpenRecord = Schema.Record(Schema.String, Schema.Unknown);
@@ -55,7 +42,8 @@ const repositoryConfig = readJsonFile(
     }),
     [OpenRecord]
   ),
-  join(repositoryRoot, "biome.json")
+  join(repositoryRoot, "biome.json"),
+  "Biome config"
 );
 
 // Every case lives in its own `case-<n>/` directory beside its siblings, so the
@@ -1086,7 +1074,7 @@ beforeAll(async () => {
     ],
     { cwd: repositoryRoot }
   );
-  const report = decodeJson(LintMessageReport, result.stdout);
+  const report = decodeJson(LintMessageReport, result.stdout, "Biome report");
   for (const { message, location } of report.diagnostics) {
     const path = resolve(repositoryRoot, location.path);
     messagesByPath.set(path, [...(messagesByPath.get(path) ?? []), message]);
@@ -1159,7 +1147,7 @@ test("no-promise-matchers-in-browser-tests holds across Workspace browser tests"
     ],
     { cwd: repositoryRoot }
   );
-  const report = decodeJson(LintMessageReport, result.stdout);
+  const report = decodeJson(LintMessageReport, result.stdout, "Biome report");
   // Other diagnostics, such as suppressions aimed at rules this config leaves
   // off, belong to the regular lint run.
   expect(
@@ -1266,7 +1254,10 @@ const lintProduction = async (cwd: string, command: string) => {
       },
     }
   );
-  return diagnosticsByPath(decodeJson(LintReport, result.stdout), cwd);
+  return diagnosticsByPath(
+    decodeJson(LintReport, result.stdout, "Biome report"),
+    cwd
+  );
 };
 
 const expectAssertionDiagnostics = (
@@ -1323,12 +1314,14 @@ test("production Biome config rejects package and Workspace production assertion
   await runCommand(["git", "init", "--quiet"], { cwd: productionRoot });
   const packageManifest = readJsonFile(
     Schema.Struct({ scripts: Schema.Struct({ lint: Schema.String }) }),
-    join(repositoryRoot, "packages/standard-schema/package.json")
+    join(repositoryRoot, "packages/standard-schema/package.json"),
+    "package manifest"
   );
 
   const workspaceManifest = readJsonFile(
     Schema.Struct({ scripts: Schema.Struct({ "lint:biome": Schema.String }) }),
-    join(repositoryRoot, "apps/deskohub-workspace/package.json")
+    join(repositoryRoot, "apps/deskohub-workspace/package.json"),
+    "package manifest"
   );
 
   expectAssertionDiagnostics(
@@ -1377,7 +1370,8 @@ test("package lint scripts resolve the root Biome config by discovery", async ()
             Schema.Struct({ lint: Schema.optionalKey(Schema.String) })
           ),
         }),
-        join(repositoryRoot, path)
+        join(repositoryRoot, path),
+        "package manifest"
       );
       return { path, lint: manifest.scripts?.lint ?? "" };
     });
@@ -1396,7 +1390,8 @@ test("lint caches miss when the Biome config or a Grit plugin changes", () => {
         }),
       }),
     }),
-    join(repositoryRoot, "turbo.json")
+    join(repositoryRoot, "turbo.json"),
+    "Turbo config"
   );
   expect(turbo.tasks.lint.inputs).toEqual(
     expect.arrayContaining([
