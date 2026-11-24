@@ -1,6 +1,3 @@
-diff --git a/node_modules/@effect/openapi-generator/.bun-tag-afd600e8f48eb2f5 b/.bun-tag-afd600e8f48eb2f5
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/JsonSchemaGenerator.js b/dist/JsonSchemaGenerator.js
 index 7f46e476b5291c617011d88f2cc36c56ebe72ef0..8674939a7d5b996fb29fa6dfb9817626fb6de3e4 100644
 --- a/dist/JsonSchemaGenerator.js
