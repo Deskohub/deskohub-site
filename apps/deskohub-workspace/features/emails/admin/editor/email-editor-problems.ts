@@ -40,28 +40,32 @@ export const emailEditorLanguageName = (language: string): string =>
     ? getLocaleDefinition(language).nativeName
     : language;
 
-const componentSettingMessages = {
-  href: m.emailsEditorProblemComponentHref,
-  src: m.emailsEditorProblemComponentSrc,
-  value: m.emailsEditorProblemComponentValue,
-  fields: m.emailsEditorProblemComponentFields,
-  items: m.emailsEditorProblemComponentItems,
-  ordered: m.emailsEditorProblemComponentItems,
-  level: m.emailsEditorProblemComponentLevel,
-  sort: m.emailsEditorProblemComponentSort,
-  limit: m.emailsEditorProblemComponentLimit,
-  when: m.emailsEditorProblemComponentWhen,
-} as const;
+const componentSettingMessages = new Map(
+  Object.entries({
+    href: m.emailsEditorProblemComponentHref,
+    src: m.emailsEditorProblemComponentSrc,
+    value: m.emailsEditorProblemComponentValue,
+    fields: m.emailsEditorProblemComponentFields,
+    items: m.emailsEditorProblemComponentItems,
+    ordered: m.emailsEditorProblemComponentItems,
+    level: m.emailsEditorProblemComponentLevel,
+    sort: m.emailsEditorProblemComponentSort,
+    limit: m.emailsEditorProblemComponentLimit,
+    when: m.emailsEditorProblemComponentWhen,
+  })
+);
 
-const valueSettingMessages = {
-  path: m.emailsEditorProblemValuePath,
-  sort: m.emailsEditorProblemValueSort,
-  discountId: m.emailsEditorProblemValueDiscount,
-  validDays: m.emailsEditorProblemValueValidDays,
-  maxUses: m.emailsEditorProblemValueMaxUses,
-  maxUsesPerCustomer: m.emailsEditorProblemValueMaxUsesPerCustomer,
-  trigger: m.emailsEditorProblemValueTrigger,
-} as const;
+const valueSettingMessages = new Map(
+  Object.entries({
+    path: m.emailsEditorProblemValuePath,
+    sort: m.emailsEditorProblemValueSort,
+    discountId: m.emailsEditorProblemValueDiscount,
+    validDays: m.emailsEditorProblemValueValidDays,
+    maxUses: m.emailsEditorProblemValueMaxUses,
+    maxUsesPerCustomer: m.emailsEditorProblemValueMaxUsesPerCustomer,
+    trigger: m.emailsEditorProblemValueTrigger,
+  })
+);
 
 const selectionMessages = {
   "unknown-path": m.emailsEditorProblemSelectionUnknownPath,
@@ -125,7 +129,7 @@ export const emailEditorProblems = ({
   readonly publishedImageSources: ReadonlySet<string>;
 }): readonly EmailEditorProblem[] => {
   // The draft's encoded form is its decoded form: it has no transformations.
-  const decoded = draft as EmailDraft;
+  const decoded: EmailDraft = draft;
   const structure = draft.structure ?? [];
   const values = draft.values ?? [];
   const blockNumber = (componentId: string | undefined) =>
@@ -255,16 +259,15 @@ export const emailEditorProblems = ({
         message: m.emailsEditorProblemComponentIdDuplicate({}, { locale }),
       }),
       ComponentIncomplete: ({ index, componentId, field }) => {
-        const setting = Object.hasOwn(componentSettingMessages, field)
-          ? (field as keyof typeof componentSettingMessages)
-          : undefined;
+        const settingMessage = componentSettingMessages.get(field);
         return {
-          ...(componentId && setting
-            ? block(componentId, setting === "ordered" ? "items" : setting)
+          ...(componentId && settingMessage
+            ? block(componentId, field === "ordered" ? "items" : field)
             : blockAt(index, componentId)),
-          message: (setting
-            ? componentSettingMessages[setting]
-            : m.emailsEditorProblemComponentSettings)({}, { locale }),
+          message: (settingMessage ?? m.emailsEditorProblemComponentSettings)(
+            {},
+            { locale }
+          ),
         };
       },
       DestinationInvalid: ({ componentId, field }) => ({
@@ -299,10 +302,12 @@ export const emailEditorProblems = ({
         const setting = valueSettingField(field, values[index]?.source?.kind);
         return {
           ...value(index, setting),
-          message: (field !== "source" &&
-            Object.hasOwn(valueSettingMessages, setting)
-            ? valueSettingMessages[setting as keyof typeof valueSettingMessages]
-            : m.emailsEditorProblemValueSource)({}, { locale }),
+          message: (
+            (field === "source"
+              ? undefined
+              : valueSettingMessages.get(setting)) ??
+            m.emailsEditorProblemValueSource
+          )({}, { locale }),
         };
       },
       CustomerSelectionInvalid: ({ name, reason }) => ({

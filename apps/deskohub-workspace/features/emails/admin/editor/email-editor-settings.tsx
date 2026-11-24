@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  AdministrationCampaignPurpose,
+  AdministrationCampaignTemplateKey,
+} from "@deskohub/workspace-admin-api";
+import { Schema } from "effect";
 import { Controller } from "react-hook-form";
 import { m } from "@/features/administration/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
@@ -19,6 +24,9 @@ import {
 import { emailEditorFieldIds } from "./email-editor-field-ids";
 
 /** The email's purpose and template, shared by every language. */
+const isPurpose = Schema.is(AdministrationCampaignPurpose);
+const isTemplateKey = Schema.is(AdministrationCampaignTemplateKey);
+
 export function EmailEditorSettings() {
   const locale = useRouteLocale();
   const { control } = useEmailDraftForm();
@@ -45,9 +53,9 @@ export function EmailEditorSettings() {
                 {m.emailsEditorPurposeLabel({}, { locale })}
               </Label>
               <Select
-                onValueChange={(value) =>
-                  field.onChange(value as typeof field.value)
-                }
+                onValueChange={(value) => {
+                  if (isPurpose(value)) field.onChange(value);
+                }}
                 value={field.value ?? ""}
               >
                 <SelectTrigger
@@ -84,9 +92,9 @@ export function EmailEditorSettings() {
                 {m.emailsEditorTemplateLabel({}, { locale })}
               </Label>
               <Select
-                onValueChange={(value) =>
-                  field.onChange(value as typeof field.value)
-                }
+                onValueChange={(value) => {
+                  if (isTemplateKey(value)) field.onChange(value);
+                }}
                 value={field.value ?? ""}
               >
                 <SelectTrigger

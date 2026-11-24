@@ -34,28 +34,27 @@ const consentSignalsByCategory = {
   readonly (keyof GoogleConsentState)[]
 >;
 
-type GtmQueueWindow = Window & {
-  dataLayer: unknown[];
-  gtag: NonNullable<Window["gtag"]>;
-};
+type Gtag = NonNullable<Window["gtag"]>;
 
-function getGtmQueueWindow(): GtmQueueWindow | undefined {
+/** The page's gtag queue, installed on first use so calls queue before GTM loads. */
+function getGtag(): Gtag | undefined {
   if (globalThis.window === undefined) return undefined;
 
   window.dataLayer = window.dataLayer || [];
 
-  if (window.gtag) return window as GtmQueueWindow;
+  if (window.gtag) return window.gtag;
 
-  window.gtag = function gtag(...gtagArguments) {
+  const gtag: Gtag = function gtag(...gtagArguments) {
     window.dataLayer?.push(gtagArguments);
   };
+  window.gtag = gtag;
 
-  return window as GtmQueueWindow;
+  return gtag;
 }
 
 /** Queues Google consent mode's denied-by-default state before any tag runs. */
 export function setGoogleConsentDefaults(): void {
-  getGtmQueueWindow()?.gtag("consent", "default", DEFAULT_CONSENT_STATE);
+  getGtag()?.("consent", "default", DEFAULT_CONSENT_STATE);
 }
 
 export type GoogleConsentUpdateOptions = {
@@ -74,8 +73,8 @@ export function updateGoogleConsentMode(
   accepted: readonly ConsentCategory[],
   { announceToTagManager }: GoogleConsentUpdateOptions
 ): void {
-  const gtmQueueWindow = getGtmQueueWindow();
-  if (!gtmQueueWindow) return;
+  const gtag = getGtag();
+  if (!gtag) return;
 
   for (const category of consentCategories) {
     const signals = consentSignalsByCategory[category];
@@ -84,7 +83,7 @@ export function updateGoogleConsentMode(
     const status: ConsentStatus = accepted.includes(category)
       ? "granted"
       : "denied";
-    gtmQueueWindow.gtag(
+    gtag(
       "consent",
       "update",
       Object.fromEntries(signals.map((signal) => [signal, status]))

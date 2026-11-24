@@ -168,6 +168,8 @@ export const withEmailSetting = <T extends object, K extends keyof T>(
   key: K,
   value: T[K] | undefined
 ): T => {
-  const { [key]: _removed, ...rest } = object;
-  return (value === undefined ? rest : { ...rest, [key]: value }) as T;
+  const next = { ...object };
+  Reflect.deleteProperty(next, key);
+  if (value !== undefined) next[key] = value;
+  return next;
 };
