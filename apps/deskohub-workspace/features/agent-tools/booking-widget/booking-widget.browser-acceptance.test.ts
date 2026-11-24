@@ -135,10 +135,10 @@ const defaultAnswers: ToolAnswers = {
 const openBookingView = async ({
   mode,
   locale,
-  hostLocale = locale as string | null,
+  hostLocale = locale,
   hostTheme,
   hostStyles,
-  requestedLocale = locale as Locale | null,
+  requestedLocale = locale,
   resultLocale = locale,
   answers = {},
   opensLinks = true,

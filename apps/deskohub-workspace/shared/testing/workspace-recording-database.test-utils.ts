@@ -91,14 +91,26 @@ export const makeRecordingWorkspaceDatabase =
         }
         const rows = transactionControlPattern.test(text) ? [] : nextRows();
         statements.push({ sql: text, params: values });
-        return Effect.succeed([...rows] as never[]);
+        return Effect.succeed([...rows]);
       });
+
+    // Drizzle reads array-mode results through the value executors, so their
+    // canned rows must be value tuples.
+    const runValueStatement = (text: string, values: readonly unknown[]) =>
+      Effect.flatMap(runStatement(text, values), (rows) =>
+        rows.every(Array.isArray)
+          ? Effect.succeed(rows)
+          : Effect.die(
+              new Error(`Canned rows for ${text} are not value tuples`)
+            )
+      );
 
     const connection: SqlConnection.Connection = {
       execute: runStatement,
       executeUnprepared: runStatement,
-      executeValues: runStatement,
-      executeValuesUnprepared: runStatement,
+      executeValues: (text, values) => runValueStatement(text, values),
+      executeValuesUnprepared: (text, values) =>
+        runValueStatement(text, values),
       executeRaw: (text, values) =>
         Effect.map(runStatement(text, values), (rows) => ({
           command: "",

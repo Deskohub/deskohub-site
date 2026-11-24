@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Schema } from "effect";
 import { createElement, Fragment } from "react";
 import { getCanonicalLegalDocument } from "./canonical-document";
 
@@ -33,9 +34,13 @@ describe("getCanonicalLegalDocument", () => {
         },
       ],
     });
-    const parsed = JSON.parse(canonicalDocument) as {
-      sections: { body: string[] }[];
-    };
+    const parsed = Schema.decodeUnknownSync(
+      Schema.Struct({
+        sections: Schema.Array(
+          Schema.Struct({ body: Schema.Array(Schema.String) })
+        ),
+      })
+    )(JSON.parse(canonicalDocument));
     expect(parsed.sections[0]?.body).toEqual([
       "plain",
       "42",

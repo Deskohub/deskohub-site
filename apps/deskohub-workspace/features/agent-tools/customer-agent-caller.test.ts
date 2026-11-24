@@ -1,21 +1,22 @@
 import "@/shared/testing/workspace-test-env";
 
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   Client,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Predicate, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
   asBrowserRequest,
   fakeAccountServiceStores,
 } from "@/features/account/backend/customer-account-services.test-utils";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
 import { makeMemoryRequestBudget } from "@/shared/backend/request-budget/memory-request-budget.test-utils";
 import { CurrentAgentTraffic } from "@/shared/backend/workspace-request-context";
+import { connectUnreachableWorkspaceDatabase } from "@/shared/testing/unreachable-workspace-database.test-utils";
 
 // The route schedules a traffic event after each call, outside any Next
 // request here.
@@ -29,17 +30,16 @@ mock.module("@/shared/backend/agent-traffic/agent-traffic-events", () => ({
 
 // The services the MCP route builds open the database when built; every
 // read below reaches only the faked account stores.
+const unreachableDatabase = await connectUnreachableWorkspaceDatabase();
+afterAll(() => unreachableDatabase.pool.close());
 mock.module("@/db/database-provider.server", () => ({
-  workspaceDatabaseLayer: Layer.succeed(
-    WorkspaceDatabase,
-    WorkspaceDatabase.make({} as never)
-  ),
+  workspaceDatabaseLayer: unreachableDatabase.database,
   workspaceDatabasePool: { options: { max: 4 } },
 }));
 
-const agentAccountId = "agent-account" as CustomerAccountId;
+const agentAccountId = customerAccountIdSchema.make("agent-account");
 const agentCustomerId = dotyposCustomerIdSchema.make("60111");
-const browserAccountId = "browser-account" as CustomerAccountId;
+const browserAccountId = customerAccountIdSchema.make("browser-account");
 
 const stores = await fakeAccountServiceStores(
   new Map([
@@ -105,7 +105,11 @@ const actingAccount = <E>(effect: Effect.Effect<string | null, E>) =>
     Effect.map((result) =>
       result._tag === "Success"
         ? result.success
-        : { refused: (result.failure as { reason?: string }).reason }
+        : {
+            refused: Predicate.hasProperty(result.failure, "reason")
+              ? result.failure.reason
+              : undefined,
+          }
     )
   );
 

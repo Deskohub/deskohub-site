@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import {
   containerDeploymentHost,
   mockDeploymentHost,
@@ -8,6 +8,18 @@ import {
 const setDeploymentHost = await mockDeploymentHost();
 
 const { serveBrowserPassRequest } = await import("./browser-pass-request");
+const { CurrentCustomerAccount } = await import(
+  "@/features/account/backend/current-customer-account"
+);
+const { CoworkPassesReleaseGate } = await import(
+  "@/features/passes/backend/cowork-passes-release-gate"
+);
+
+// Neither check reaches a service, so each one dies if read.
+const unreadServices = Layer.mergeAll(
+  Layer.mock(CoworkPassesReleaseGate, {}),
+  Layer.mock(CurrentCustomerAccount, {})
+);
 
 /**
  * The status the origin check answers with. A request it lets through is a
@@ -22,8 +34,7 @@ const originCheckStatus = async (url: string, origin: string) => {
         headers: { origin, "content-type": "text/plain" },
       }),
       () => Effect.succeed(new Response(null, { status: 200 }))
-      // Neither check reaches a service, so none is provided.
-    ) as Effect.Effect<Response>
+    ).pipe(Effect.provide(unreadServices))
   );
   return response.status;
 };

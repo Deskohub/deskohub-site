@@ -420,9 +420,14 @@ const toWireJson = <Value>(value: Value) => parseJson(JSON.stringify(value));
  * the definition fields it knows, so the listing is wrapped. The SDK keeps
  * the stored handler protected; a route test pins both protocol eras.
  */
+/**
+ * The SDK's lookup of a stored request handler. It is protected, and
+ * TypeScript lets only element access reach a protected member.
+ */
+const storedRequestHandlerLookup = "_getRequestHandler";
+
 const listSecuritySchemes = (server: McpServer) => {
-  // biome-ignore lint/complexity/useLiteralKeys: the SDK declares _getRequestHandler protected; only bracket access reaches it.
-  const listTools = server.server["_getRequestHandler"]("tools/list");
+  const listTools = server.server[storedRequestHandlerLookup]("tools/list");
   if (listTools === undefined) return;
   server.server.setRequestHandler("tools/list", async (request, context) => {
     // The stored handler is typed for any method. Its listing is checked as

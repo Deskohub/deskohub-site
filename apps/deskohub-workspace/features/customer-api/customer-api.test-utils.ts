@@ -477,50 +477,59 @@ type CohortAnswers<A> = {
   readonly arrivals: Readonly<Record<string, number>>;
 };
 
+type CohortRequests = {
+  readonly serve: (featureFlags: Layer.Layer<WorkspaceFeatureFlagService>) => {
+    readonly handle: (request: Request) => Promise<Response>;
+  };
+  readonly send: (cohort: ReleaseCohort) => Request;
+};
+
 /**
  * Answers the request `send` makes for each release cohort twice: alone, on
  * its own server, and overlapping the other cohort's request on one server,
  * where each request evaluates every flag while the other evaluates it too.
  * `serve` makes a server whose release gates are decided over the feature
  * flags it's given, which decide by each request's own cohort. `answer`
- * reads what a test compares from a response, by default its status and
- * JSON body.
+ * reads what a test compares from a response.
  */
-export const answerInEachReleaseCohort = async <A = unknown>({
+export const readInEachReleaseCohort = async <A>({
   serve,
   send,
-  answer = statusAndBody as (response: Response) => Promise<A>,
-}: {
-  readonly serve: (featureFlags: Layer.Layer<WorkspaceFeatureFlagService>) => {
-    readonly handle: (request: Request) => Promise<Response>;
-  };
-  readonly send: (cohort: ReleaseCohort) => Request;
-  readonly answer?: (response: Response) => Promise<A>;
+  answer,
+}: CohortRequests & {
+  readonly answer: (response: Response) => Promise<A>;
 }): Promise<CohortAnswers<A>> => {
-  const alone: Partial<Record<ReleaseCohort, A>> = {};
-  for (const cohort of releaseCohorts) {
+  const answerAlone = async (cohort: ReleaseCohort) => {
     const server = serve(featureFlagsByRequestCohort(makeMeetingPoint(1)));
-    alone[cohort] = await answer(await server.handle(send(cohort)));
-  }
+    return answer(await server.handle(send(cohort)));
+  };
+  const alone = {
+    open: await answerAlone("open"),
+    closed: await answerAlone("closed"),
+  };
   const meetingPoint = makeMeetingPoint(releaseCohorts.length);
   const server = serve(featureFlagsByRequestCohort(meetingPoint));
-  const overlapping = Object.fromEntries(
-    await Promise.all(
-      releaseCohorts.map(async (cohort) => [
-        cohort,
-        await answer(await server.handle(send(cohort))),
-      ])
-    )
-  ) as Record<ReleaseCohort, A>;
+  const answerOverlapping = async (cohort: ReleaseCohort) =>
+    answer(await server.handle(send(cohort)));
+  const [open, closed] = await Promise.all([
+    answerOverlapping("open"),
+    answerOverlapping("closed"),
+  ]);
   return {
-    alone: alone as Record<ReleaseCohort, A>,
-    overlapping,
+    alone,
+    overlapping: { open, closed },
     arrivals: meetingPoint.arrivals(),
   };
 };
 
 /**
- * Checks what `answerInEachReleaseCohort` found: the cohorts answer
+ * `readInEachReleaseCohort`, comparing each response's status and JSON body.
+ */
+export const answerInEachReleaseCohort = (requests: CohortRequests) =>
+  readInEachReleaseCohort({ ...requests, answer: statusAndBody });
+
+/**
+ * Checks what `readInEachReleaseCohort` found: the cohorts answer
  * differently alone, each overlapping request answers as its cohort does
  * alone, and both requests evaluated every flag either evaluated.
  */

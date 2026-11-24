@@ -102,6 +102,9 @@ import { schemaColumns } from "./schema-columns.test-utils";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
+/** A `count(*)::int as count` row. */
+const StoredCount = Schema.Struct({ count: Schema.Number });
+
 const sensitiveColumns = schemaColumns.filter(({ sensitive }) => sensitive);
 
 /** Turns a unique seed into a value the column's constraints accept. */
@@ -779,9 +782,10 @@ const testIssuanceSensitiveColumn = async (index: number) => {
     await connection.query("begin");
     const storedCount = (value: string | Temporal.Instant) =>
       Effect.promise(() =>
-        connection.query<{ count: number }>(
+        connection.query(
           `select count(*)::int as count from email_discount_issuances where "${column.name}" = $1`,
-          [serializeSensitiveValue(value)]
+          [serializeSensitiveValue(value)],
+          StoredCount
         )
       ).pipe(
         Effect.map(({ rows: [row] }) => {
@@ -945,7 +949,7 @@ describe.skipIf(!testDatabase)("sensitive columns on Postgres", () => {
         await connection.query("begin");
         const storedCount = (value: string) =>
           Effect.promise(() =>
-            connection.query<{ count: number }>(storedCountQuery, [value])
+            connection.query(storedCountQuery, [value], StoredCount)
           ).pipe(
             Effect.map(({ rows: [row] }) => {
               assert(row, "the count query returned no row");

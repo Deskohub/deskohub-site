@@ -79,7 +79,8 @@ describe("mockWorkspaceActionRequest", () => {
     expect(request.after).toHaveBeenCalledTimes(1);
     expect(ran).toBe(false);
 
-    const [[callback]] = request.after.mock.calls as [[() => unknown]];
+    const callback = request.after.mock.calls[0]?.[0];
+    if (callback === undefined) throw new Error("`after` got no callback");
     await callback();
     expect(ran).toBe(true);
   });

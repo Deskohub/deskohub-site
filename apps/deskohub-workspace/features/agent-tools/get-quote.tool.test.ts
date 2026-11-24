@@ -1,17 +1,21 @@
 import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { supportedLocales } from "@deskohub/i18n/locale-registry";
-import { Effect, type Schema } from "effect";
+import { Effect, Schema } from "effect";
 import type { AdvertisedPriceRequest } from "@/features/checkout/advertised-price";
 import { m } from "@/features/i18n";
 import { coworkSelectionLink } from "@/features/reservation/cowork-selection-link";
 import { meetingRoomSelectionLink } from "@/features/reservation/meeting-room-selection-link";
 import { officeSelectionLink } from "@/features/reservation/office-selection-link";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
-import type { GetQuoteResult } from "./get-quote.schema";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
+import { getQuoteResultSchema } from "./get-quote.schema";
 
 const {
+  agentToolResultOf,
   makeAgentToolTestServices,
+  unreadCustomerAgentToolServices,
   workspaceDateFromToday,
   workspaceInstantToday,
 } = await import("./agent-tools.test-utils");
@@ -38,9 +42,11 @@ const quote = (
     .call(args)
     .pipe(
       Effect.provide(services.layer),
+      Effect.provide(unreadCustomerAgentToolServices),
       now === undefined ? (effect) => effect : atInstant(now),
       Effect.runPromise
-    ) as Promise<GetQuoteResult>;
+    )
+    .then(agentToolResultOf(getQuoteResultSchema));
 
 const quoteFailure = (
   args: Schema.Json,
@@ -48,7 +54,12 @@ const quoteFailure = (
 ) =>
   getQuoteTool
     .call(args)
-    .pipe(Effect.flip, Effect.provide(services.layer), Effect.runPromise);
+    .pipe(
+      Effect.flip,
+      Effect.provide(services.layer),
+      Effect.provide(unreadCustomerAgentToolServices),
+      Effect.runPromise
+    );
 
 /** The total the reservation page would advertise for the same request. */
 const advertisedTotal = (
@@ -173,7 +184,8 @@ describe("get_quote", () => {
       total: { amount: 980 },
       note: m.agentToolQuoteNote({}, { locale: "cs-CZ" }),
     });
-    expect(result.total.amount).toBe(await advertisedTotal(request!, services));
+    assert(request);
+    expect(result.total.amount).toBe(await advertisedTotal(request, services));
   });
 
   test("links meeting-room and office selections over the customer's remembered options", async () => {
@@ -250,7 +262,8 @@ describe("get_quote", () => {
       startDateTime: `${today}T00:00`,
     }).find(({ reservation }) => reservation.details.duration.unit === "day");
 
-    expect(result.total.amount).toBe(await advertisedTotal(request!, services));
+    assert(request);
+    expect(result.total.amount).toBe(await advertisedTotal(request, services));
     expect(result.reservation_url).toBe(
       `http://deskohub.test/reservation/meeting-room?startDateTime=${today}T00%3A00&duration=day%3A1`
     );
@@ -319,8 +332,8 @@ describe("get_quote", () => {
     expect(result.total.amount).toBe(
       await advertisedTotal(
         getOfficeAdvertisedPriceRequest({
-          startsOn: startsOn as never,
-          endsOn: endsOn as never,
+          startsOn: Schema.decodeUnknownSync(plainDateStringSchema)(startsOn),
+          endsOn: Schema.decodeUnknownSync(plainDateStringSchema)(endsOn),
           seats: 2,
           locale: "en-US",
         }),

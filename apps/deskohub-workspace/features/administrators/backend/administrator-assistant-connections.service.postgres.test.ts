@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { Effect, Layer } from "effect";
 import type { AdministratorAccountActor } from "@/features/administrators/account-role";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
@@ -106,7 +107,9 @@ describe.skipIf(!testDatabase)(
     test("writes the last use at most every five minutes", async () => {
       const administrator = await insertAdministrator();
       const { connectionId } = await connect(administrator);
-      const recordedUse = (await readConnection(connectionId))!.last_used_ms;
+      const recorded = await readConnection(connectionId);
+      assert(recorded, "Expected the stored assistant connection");
+      const recordedUse = recorded.last_used_ms;
 
       await connect(administrator, clientId, "Renamed assistant");
       expect(await readConnection(connectionId)).toMatchObject({
@@ -123,9 +126,10 @@ describe.skipIf(!testDatabase)(
       );
       await connect(administrator, clientId, "Renamed assistant");
       const refreshed = await readConnection(connectionId);
-      expect(refreshed?.client_name).toBe("Renamed assistant");
+      assert(refreshed, "Expected the stored assistant connection");
+      expect(refreshed.client_name).toBe("Renamed assistant");
       // Moved back six minutes, then forward to now.
-      expect(refreshed!.last_used_ms).toBeGreaterThan(recordedUse - 6 * 60_000);
+      expect(refreshed.last_used_ms).toBeGreaterThan(recordedUse - 6 * 60_000);
     });
 
     test("keeps the connection and its email snapshot when the account is deleted", async () => {
