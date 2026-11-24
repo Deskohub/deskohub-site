@@ -1384,8 +1384,14 @@ describe("token-route privacy and telemetry", () => {
     },
     {
       tool: "gcloud",
-      pattern: "^logging read .*jsonPayload\\.otlp\\.traceId",
-      stdout: '[{"timestamp":"2026-11-23T10:00:00Z"}]',
+      pattern:
+        "^logging read .*jsonPayload\\.otlp\\.traceId.* --format=json\\(timestamp,jsonPayload\\.otlp\\)$",
+      stdout: JSON.stringify([
+        {
+          timestamp: "2026-11-23T10:00:00Z",
+          jsonPayload: { otlp: { traceId, status: 200 } },
+        },
+      ]),
     },
     {
       tool: "curl",
@@ -1466,15 +1472,18 @@ describe("token-route privacy and telemetry", () => {
   });
 
   test("fails without the probe's current structured log", () => {
-    const { exitCode, output } = privacy([
-      {
-        tool: "gcloud",
-        pattern: "^logging read .*jsonPayload\\.otlp\\.traceId",
-        stdout: "[]",
-      },
-    ]);
-    expect(exitCode).toBe(1);
-    expect(output).toContain("no structured probe log");
+    // No matching entry, or a read that prints nothing at all.
+    for (const stdout of ["[]", ""]) {
+      const { exitCode, output } = privacy([
+        {
+          tool: "gcloud",
+          pattern: "^logging read .*jsonPayload\\.otlp\\.traceId",
+          stdout,
+        },
+      ]);
+      expect({ stdout, exitCode }).toEqual({ stdout, exitCode: 1 });
+      expect(output).toContain("no structured probe log");
+    }
   });
 
   test("fails on a denied log read instead of counting it clean", () => {
