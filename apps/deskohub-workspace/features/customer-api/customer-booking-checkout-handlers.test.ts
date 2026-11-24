@@ -60,22 +60,20 @@ import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/av
 import { OfficePeopleRejectedError } from "@/features/reservation/backend/office-people-submission";
 import { OvernightStayReleaseGate } from "@/features/reservation/backend/overnight-stay-release-gate";
 import { WorkspaceTableUnavailableError } from "@/features/reservation/backend/workspace-availability.service";
-import {
-  type WorkspaceReservation,
-  WorkspaceReservationRepository,
-} from "@/features/reservation/backend/workspace-reservation.repository";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { reservationOrderSchema } from "@/features/reservation/reservation-order";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { instantStringSchema } from "@/shared/utils/temporal";
 import {
-  answerInEachReleaseCohort,
   type CustomerApiCall,
   customerApiRequest,
   expectEachCohortAnsweredAlone,
   inReleaseCohort,
   makeCustomerApiTestServer,
+  readInEachReleaseCohort,
   testCustomerEndpointGuards,
 } from "./customer-api.test-utils";
 import type { CustomerBookingCheckoutLayerSet } from "./customer-booking-checkout-layers";
@@ -112,10 +110,12 @@ const storedHoldExpiresAt = "2099-07-01T10:09:00.000Z";
 /** The reservation a state signed without its hold deadline reads it from. */
 const storedReservations = Layer.mock(WorkspaceReservationRepository, {
   findById: (id) =>
-    Effect.succeed({
-      id,
-      reservationHoldExpiresAt: Temporal.Instant.from(storedHoldExpiresAt),
-    } as WorkspaceReservation),
+    Effect.succeed(
+      workspaceReservationFixture({
+        id,
+        reservationHoldExpiresAt: Temporal.Instant.from(storedHoldExpiresAt),
+      })
+    ),
 });
 
 const openTestPayState = (token: string) =>
@@ -300,7 +300,7 @@ describe("createCheckout", () => {
 
   test("creates funded checkouts only within the request's passes release cohort", async () => {
     const preparation = recordingPreparation(readyHold);
-    const answers = await answerInEachReleaseCohort({
+    const answers = await readInEachReleaseCohort({
       serve: (flags) =>
         makeCustomerApiTestServer({
           bookingCheckout: checkoutWith({

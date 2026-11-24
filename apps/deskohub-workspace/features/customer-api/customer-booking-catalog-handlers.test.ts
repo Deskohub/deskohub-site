@@ -15,7 +15,6 @@ import {
   type SignedPayState,
   sealPayState,
 } from "@/features/checkout/backend/checkout/pay-state";
-import type { PayableReservation } from "@/features/checkout/backend/checkout/payable-checkout.service";
 import { PayableCheckoutMock } from "@/features/checkout/backend/checkout/payable-checkout.service.mock";
 import { buildReservationQuote } from "@/features/checkout/reservation-quote";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
@@ -46,6 +45,7 @@ import {
   AvailabilityQueryInvalid,
   WorkspaceAvailabilityService,
 } from "@/features/reservation/backend/workspace-availability.service";
+import { payableReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { reservationOrderSchema } from "@/features/reservation/reservation-order";
@@ -185,13 +185,7 @@ const emptyInventory = Layer.succeed(AdvisoryAvailabilityInventory, {
 
 /** A replaced Pay state's hold that is still payable and unpaid. */
 const supersedableHold = (state: SignedPayState) =>
-  ({
-    id: state.orderId,
-    reservationState: "held",
-    paymentState: "not_started",
-    dotyposReservationId: "dotypos-reservation-1",
-    reservationHoldExpiresAt: Temporal.Instant.from("2099-06-01T10:10:00Z"),
-  }) as PayableReservation;
+  payableReservationFixture({ id: state.orderId });
 
 /** Payable checkouts that confirm every replaced hold with `confirm`. */
 const replacedHolds = (confirm: Parameters<typeof PayableCheckoutMock>[0]) =>
@@ -1698,7 +1692,7 @@ describe("overlapping requests in different release cohorts", () => {
       method: "GET",
       path: `/booking/quote?locale=en-US&family=cowork&tier=open-space&date=${workspaceDateFromToday(1)}&passId=${passId}`,
     };
-    const answers = await answerInEachReleaseCohort({
+    const answers = await readInEachReleaseCohort({
       serve: (flags) =>
         makeCustomerApiTestServer({
           bookingCatalog: {
