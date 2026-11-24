@@ -179,7 +179,7 @@ describe("Probe.count frame counting", () => {
             run: (_clientId, onMessage) =>
               Effect.forEach(
                 [
-                  { _tag: "Chunk", requestId: "7", values: [0] },
+                  { _tag: "Chunk", requestId: "9", values: [0] },
                   { _tag: "Chunk", requestId: 9, values: [0] },
                   { _tag: "Chunk", requestId: 9, values: [1] },
                   {
