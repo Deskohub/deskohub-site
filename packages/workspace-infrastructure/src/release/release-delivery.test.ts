@@ -14,6 +14,7 @@ import {
   type WorkspaceWorkload,
 } from "../config/stack-config";
 import {
+  plainHttpProofConfig,
   previewConfig,
   sandboxConfig,
 } from "../config/stack-config.test-utils";
@@ -1991,18 +1992,22 @@ interface StackRun {
  * record, with output references (resolved only at apply) as placeholders.
  */
 const declaredStackProps = async ({ declaring, now }: StackRun) => {
+  const { edge } = plainHttpProofConfig;
+  if (edge === undefined) {
+    throw new Error("the proof config declares no edge");
+  }
   const { exit, resources } = await evaluate(
     Effect.gen(function* () {
-      yield* declareWorkspaceFoundation(sandboxConfig);
+      yield* declareWorkspaceFoundation(plainHttpProofConfig);
       const services = yield* declareWorkspaceServices(
-        sandboxConfig,
+        plainHttpProofConfig,
         declaring,
         now
       );
-      if (sandboxConfig.edge !== undefined && services !== undefined) {
+      if (services !== undefined) {
         yield* declareWorkspaceEdge(
-          sandboxConfig,
-          sandboxConfig.edge,
+          plainHttpProofConfig,
+          edge,
           services.webServiceId
         );
       }
@@ -2026,9 +2031,11 @@ describe("release plan after a release command", () => {
     const checkpoints = await Effect.runPromise(
       Effect.gen(function* () {
         // The third delivery's staging apply (generation 7) is interrupted.
-        const { store, stackRuns, provide } = yield* setup({
+        const { store, stackRuns, faults, provide } = yield* setup({
           interruptApplyOf: new Set([7]),
         });
+        // The stack declares the hosted proof's config, edge included.
+        faults.config = plainHttpProofConfig;
         const checkpoints: Array<{
           readonly step: string;
           readonly deploy: StackRun;
@@ -2038,7 +2045,7 @@ describe("release plan after a release command", () => {
         const planAfter = (step: string) =>
           Effect.gen(function* () {
             const deploy = stackRuns.findLast((run) => run.action === "deploy");
-            yield* provide(runStack(sandboxConfig, "plan"));
+            yield* provide(runStack(plainHttpProofConfig, "plan"));
             const plan = stackRuns.at(-1);
             if (deploy === undefined || plan?.action !== "plan") {
               return yield* Effect.die(new Error(`no stack runs for ${step}`));
@@ -2046,7 +2053,9 @@ describe("release plan after a release command", () => {
             checkpoints.push({ step, deploy, plan });
           });
         const deliver = (sha: GitSha, imageDigest: ImageDigest) =>
-          provide(deliverRelease(sandboxConfig, { sha, imageDigest }, policy));
+          provide(
+            deliverRelease(plainHttpProofConfig, { sha, imageDigest }, policy)
+          );
 
         const first = yield* deliver(shaA, digestA);
         yield* planAfter("deliver v1");
@@ -2062,13 +2071,13 @@ describe("release plan after a release command", () => {
         const { writer } = (yield* store.read).record;
         yield* provide(
           unlockReleaseWriter(
-            sandboxConfig,
+            plainHttpProofConfig,
             writer === null ? "" : writerFingerprint(writer.holderDigest)
           )
         );
-        expect(yield* provide(recoverRelease(sandboxConfig, policy))).toBe(
-          null
-        );
+        expect(
+          yield* provide(recoverRelease(plainHttpProofConfig, policy))
+        ).toBe(null);
         yield* deliver(shaC, digestC);
         yield* planAfter("recovery deliver v3");
         // Two older releases are now tagged, in a different record order
@@ -2078,7 +2087,7 @@ describe("release plan after a release command", () => {
         const { record } = yield* store.read;
         yield* provide(
           restoreRelease(
-            sandboxConfig,
+            plainHttpProofConfig,
             {
               releaseId: first.releaseId,
               expectedGeneration: record.generation,
@@ -2089,7 +2098,7 @@ describe("release plan after a release command", () => {
         yield* planAfter("restore v1");
 
         // What `release deploy` runs after the state snapshot is restored.
-        yield* provide(runStack(sandboxConfig, "deploy"));
+        yield* provide(runStack(plainHttpProofConfig, "deploy"));
         yield* planAfter("plain deploy");
         return checkpoints;
       })
@@ -2104,11 +2113,15 @@ describe("release plan after a release command", () => {
     ]);
     for (const { step, deploy, plan } of checkpoints) {
       const applied = webServiceProps(
-        sandboxConfig,
+        plainHttpProofConfig,
         deploy.declaring,
         deploy.now
       );
-      const planned = webServiceProps(sandboxConfig, plan.declaring, plan.now);
+      const planned = webServiceProps(
+        plainHttpProofConfig,
+        plan.declaring,
+        plan.now
+      );
       expect({ step, planned }).toEqual({ step, planned: applied });
       if (applied === undefined || planned === undefined) {
         throw new Error(`${step} declared no web service`);
@@ -2118,9 +2131,21 @@ describe("release plan after a release command", () => {
         step,
         changed: false,
       });
+      const deployedStack = await declaredStackProps(deploy);
+      // The hosted proof's whole stack, its edge included.
+      expect(Object.keys(deployedStack)).toEqual(
+        expect.arrayContaining([
+          "WorkspaceWeb",
+          "WorkspaceTasksWorker",
+          "WorkspaceSchedulerWorker",
+          "EdgeWebEndpointGroup",
+          "EdgeUrlMap",
+          "EdgeHttpForwardingRule",
+        ])
+      );
       expect({ step, stack: await declaredStackProps(plan) }).toEqual({
         step,
-        stack: await declaredStackProps(deploy),
+        stack: deployedStack,
       });
     }
   });
