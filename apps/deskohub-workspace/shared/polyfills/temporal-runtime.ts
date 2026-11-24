@@ -166,6 +166,35 @@ type TemporalNamespaceApis = TemporalApis[string];
 type HostTemporalNamespace = Record<string, unknown> | undefined;
 
 /**
+ * Whether a host value is an object or a function, whose members code can
+ * read by name. `Object(value)` returns a primitive's wrapper instead.
+ */
+function isHostObject<Value>(
+  value: Value
+): value is Value & NonNullable<HostTemporalNamespace> {
+  return Object(value) === value;
+}
+
+/**
+ * Whether `temporal` has every API in `apis` in a form code can call, so
+ * code can use it as the Temporal global.
+ */
+function hasTemporalApis(
+  temporal: NonNullable<HostTemporalNamespace>,
+  apis: TemporalApis
+): temporal is NonNullable<HostTemporalNamespace> & typeof Temporal {
+  return Object.entries(apis).every(([name, members]) => {
+    const value = temporal[name];
+    const namespace = isHostObject(value) ? value : undefined;
+    return (
+      isConstructibleWhereClass(namespace, members) &&
+      hasStaticFunctions(namespace, members) &&
+      hasInstanceFunctions(namespace, members)
+    );
+  });
+}
+
+/**
  * Whether a namespace with instance members is a constructor, as a class
  * must be. `Reflect.construct` throws if it isn't, without calling it.
  */
@@ -250,17 +279,10 @@ export function isTemporalComplete(
   timeZone: string
 ): boolean {
   try {
-    const namespaces = temporal as Record<string, HostTemporalNamespace>;
     return (
-      Object.entries(apis).every(([name, members]) => {
-        const namespace = namespaces[name];
-        return (
-          isConstructibleWhereClass(namespace, members) &&
-          hasStaticFunctions(namespace, members) &&
-          hasInstanceFunctions(namespace, members)
-        );
-      }) &&
-      convertsAcrossDaylightSavingChange(temporal as typeof Temporal, timeZone)
+      isHostObject(temporal) &&
+      hasTemporalApis(temporal, apis) &&
+      convertsAcrossDaylightSavingChange(temporal, timeZone)
     );
   } catch {
     return false;

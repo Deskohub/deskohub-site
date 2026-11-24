@@ -298,11 +298,22 @@ type ButtonStyleOptions = ButtonAppearance & {
  * Class names for an element that must look like a Button but can't render
  * one, such as react-day-picker's navigation. Prefer `<Button asChild>`.
  */
-function buttonVariants({
+function buttonVariants(options: ButtonStyleOptions = {}) {
+  return buttonClassNames(options);
+}
+
+/**
+ * `Button` destructures its props, which separates `variant` from its
+ * `tone`; the caller's props already paired them through `ButtonAppearance`.
+ */
+function buttonClassNames({
   variant = "primary",
   tone,
   ...options
-}: ButtonStyleOptions = {}) {
+}: Omit<ButtonStyleOptions, keyof ButtonAppearance> & {
+  readonly variant?: ButtonVariant;
+  readonly tone?: ButtonTones[ButtonVariant];
+}) {
   return cn(
     buttonClasses({ variant, tone: tone ?? defaultTones[variant], ...options })
   );
@@ -366,14 +377,7 @@ function Button<AsChild extends boolean = false>({
     <Comp
       aria-busy={pending || undefined}
       className={cn(
-        buttonVariants({
-          caps,
-          fullWidth,
-          shape,
-          size,
-          wrap,
-          ...({ variant, tone } as ButtonAppearance),
-        }),
+        buttonClassNames({ caps, fullWidth, shape, size, tone, variant, wrap }),
         className
       )}
       disabled={disabled || pending}

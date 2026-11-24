@@ -9,11 +9,15 @@ import {
 } from "next-safe-action/hooks";
 import { useRef } from "react";
 
-type WorkspaceActionTransportErrorInput<
+// The input the action was called with, as next-safe-action types it.
+type WorkspaceActionInput<
+  ServerError,
   Schema extends StandardSchemaV1 | undefined,
-> = Schema extends StandardSchemaV1
-  ? StandardSchemaV1.InferInput<Schema>
-  : undefined;
+  ShapedErrors,
+  Data,
+> = Parameters<
+  UseActionHookReturn<ServerError, Schema, ShapedErrors, Data>["executeAsync"]
+>[0];
 
 type UseWorkspaceActionOptions<
   ServerError,
@@ -23,7 +27,12 @@ type UseWorkspaceActionOptions<
 > = HookBaseOptions<ServerError, Schema, ShapedErrors, Data> & {
   readonly onTransportError?: (args: {
     readonly error: unknown;
-    readonly input: WorkspaceActionTransportErrorInput<Schema>;
+    readonly input: WorkspaceActionInput<
+      ServerError,
+      Schema,
+      ShapedErrors,
+      Data
+    >;
   }) => void;
 };
 
@@ -56,7 +65,7 @@ export function useWorkspaceAction<
 
   const handleTransportError = (
     cause: unknown,
-    input: WorkspaceActionTransportErrorInput<Schema>
+    input: WorkspaceActionInput<ServerError, Schema, ShapedErrors, Data>
   ) => {
     try {
       onTransportError?.({ error: cause, input });
@@ -64,17 +73,14 @@ export function useWorkspaceAction<
   };
 
   const executeAsync = async (
-    input: Parameters<typeof action.executeAsync>[0]
+    input: WorkspaceActionInput<ServerError, Schema, ShapedErrors, Data>
   ) => {
     const call = ++latestCall.current;
     try {
       return await action.executeAsync(input);
     } catch (error) {
       if (call === latestCall.current) {
-        handleTransportError(
-          error,
-          input as WorkspaceActionTransportErrorInput<Schema>
-        );
+        handleTransportError(error, input);
       }
       throw error;
     }

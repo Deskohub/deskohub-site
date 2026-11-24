@@ -2,6 +2,7 @@ import { Option, Schema } from "effect";
 import { connection } from "next/server";
 import { PostOrderInvoicePage } from "@/features/accounting/components/post-order-invoice-page";
 import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { reservationAccessTokenSchema } from "@/features/reservation/reservation-access-token";
 import {
   getSearchParamsDecoder,
@@ -36,7 +37,9 @@ export default async function PostOrderInvoicePreviewPage({
       initialDeliveryFailed={params.deliveryFailed === "true"}
       initialState={params.state ?? "create"}
       locale={locale}
-      orderId={"synthetic-preview-reservation" as never}
+      orderId={workspaceReservationIdSchema.make(
+        "synthetic-preview-reservation"
+      )}
     />
   ));
 }

@@ -1,5 +1,6 @@
 import {
   type AuthenticationResponseJSON,
+  type AuthenticatorTransportFuture,
   base64URLStringToBuffer,
   bufferToBase64URLString,
   type PublicKeyCredentialRequestOptionsJSON,
@@ -10,6 +11,21 @@ export type PasskeyAssertion = Omit<
   AuthenticationResponseJSON,
   "clientExtensionResults"
 >;
+
+const browserTransports = [
+  "ble",
+  "hybrid",
+  "internal",
+  "nfc",
+  "usb",
+] as const satisfies readonly AuthenticatorTransport[];
+
+// The browser's types list fewer transports than the server records, such as
+// `smart-card`; a request passes on only the ones they list.
+const isBrowserTransport = (
+  transport: AuthenticatorTransportFuture
+): transport is AuthenticatorTransport =>
+  browserTransports.some((known) => known === transport);
 
 // Conditional requests need an empty allow list, and an empty one would
 // block a modal request.
@@ -22,7 +38,7 @@ const toAllowCredentials = (
   return allowCredentials.map((descriptor) => ({
     ...descriptor,
     id: base64URLStringToBuffer(descriptor.id),
-    transports: descriptor.transports as AuthenticatorTransport[] | undefined,
+    transports: descriptor.transports?.filter(isBrowserTransport),
   }));
 };
 
@@ -53,9 +69,18 @@ export const getPasskeyAssertion = async (
     signal,
   });
   if (credential === null) throw new Error("No passkey was picked.");
-  const { id, rawId, response, type, authenticatorAttachment } =
-    credential as PublicKeyCredential;
-  const assertion = response as AuthenticatorAssertionResponse;
+  if (!(credential instanceof PublicKeyCredential)) {
+    throw new Error("The browser returned a credential that isn't a passkey.");
+  }
+  const {
+    id,
+    rawId,
+    response: assertion,
+    authenticatorAttachment,
+  } = credential;
+  if (!(assertion instanceof AuthenticatorAssertionResponse)) {
+    throw new Error("The browser returned a passkey without an assertion.");
+  }
   return {
     id,
     rawId: bufferToBase64URLString(rawId),
@@ -67,7 +92,7 @@ export const getPasskeyAssertion = async (
         ? bufferToBase64URLString(assertion.userHandle)
         : undefined,
     },
-    type: type as PasskeyAssertion["type"],
+    type: "public-key",
     authenticatorAttachment:
       authenticatorAttachment === "platform" ||
       authenticatorAttachment === "cross-platform"
