@@ -108,7 +108,9 @@ const strictParseOptions = {
  * The input in its operation's encoded shape, which the port takes. Input
  * without that shape fails here as the port's strict decode would report it;
  * the port still re-checks the administrator grant and decodes every input
- * that has the shape, refinements included.
+ * that has the shape, refinements included. Input without the shape so fails
+ * before the grant re-check, outside the port's span: a caller whose grant
+ * was revoked learns only that the shape is wrong.
  */
 const encodedInput = ({
   operation,
