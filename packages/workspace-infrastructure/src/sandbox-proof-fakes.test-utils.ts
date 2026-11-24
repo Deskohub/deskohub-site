@@ -523,7 +523,7 @@ export const fakeHashUrl = (service: string) =>
  * hash-based URL as its primary URL and the deterministic one an alias.
  */
 const fakeReadyService = (service: string) => {
-  const ingress = service === "workspace-api" ? "all" : "internal";
+  const ingress = "all";
   return {
     metadata: {
       name: service,

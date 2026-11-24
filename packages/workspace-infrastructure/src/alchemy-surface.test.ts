@@ -214,7 +214,7 @@ describe("Alchemy beta.87 surface", () => {
     ).toEqual([]);
   });
 
-  test("declares the paused proof jobs only for a run-suffixed sandbox", async () => {
+  test("declares the paused proof tick job only for a run-suffixed sandbox", async () => {
     const proofRun = await evaluate(
       declareWorkspaceFoundation(
         Effect.runSync(
@@ -230,45 +230,18 @@ describe("Alchemy beta.87 surface", () => {
       (entry) => entry.Type === "GCP.CloudScheduler.Job"
     );
     const schedulerUrl = workloadUrl(sandboxConfig, "scheduler-worker");
-    const tasksUrl = workloadUrl(sandboxConfig, "tasks-worker");
-    const signedAs = (audience: string) => ({
-      serviceAccountEmail: sandboxConfig.serviceAccounts.schedulerInvoker,
-      audience,
-    });
-    expect(
-      jobs.map(({ Props }) => ({
-        jobId: Props.jobId,
-        paused: Props.paused,
-        uri: Props.httpTarget.uri,
-        oidcToken: Props.httpTarget.oidcToken,
-      }))
-    ).toEqual([
-      {
+    expect(jobs.map((job) => job.Props)).toEqual([
+      expect.objectContaining({
         jobId: "workspace-proof-tick-r42-1",
         paused: true,
-        uri: `${schedulerUrl}/api/cron/workspace/proof-tick`,
-        oidcToken: signedAs(schedulerUrl),
-      },
-      // IAM refusals observed from a source internal ingress admits.
-      {
-        jobId: "workspace-proof-deny-scheduler-anonymous-r42-1",
-        paused: true,
-        uri: `${schedulerUrl}/api/cron/workspace/proof-tick`,
-        oidcToken: undefined,
-      },
-      {
-        jobId: "workspace-proof-deny-tasks-anonymous-r42-1",
-        paused: true,
-        uri: `${tasksUrl}/api/queues/workspace/proof-deny`,
-        oidcToken: undefined,
-      },
-      {
-        jobId: "workspace-proof-deny-tasks-wrong-invoker-r42-1",
-        paused: true,
-        uri: `${tasksUrl}/api/queues/workspace/proof-deny`,
-        // The scheduler invoker holds no run.invoker on the tasks worker.
-        oidcToken: signedAs(tasksUrl),
-      },
+        httpTarget: expect.objectContaining({
+          uri: `${schedulerUrl}/api/cron/workspace/proof-tick`,
+          oidcToken: {
+            serviceAccountEmail: sandboxConfig.serviceAccounts.schedulerInvoker,
+            audience: schedulerUrl,
+          },
+        }),
+      }),
     ]);
     const production = await evaluate(
       declareWorkspaceFoundation(productionConfig)
@@ -413,6 +386,39 @@ describe("Alchemy beta.87 surface", () => {
         )
       ).toHaveLength(3);
     }
+  });
+
+  test("a teardown declares no services, even from a pre-rename record", async () => {
+    const serving = servingRecord();
+    const active = serving.active;
+    if (active === null) {
+      throw new Error("expected a serving record");
+    }
+    const preRename: ReleaseRecord = {
+      ...serving,
+      active: { ...active, revision: "workspace-web-r1-aaaaaaa" },
+    };
+    const run = (operation: "deploy" | "destroy") =>
+      evaluate(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(
+            heldBy(preRename, operation)
+          );
+          return yield* declareRecordedWorkspaceServices(
+            sandboxConfig,
+            runAsHolder(null)
+          ).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.provideService(ReleaseServiceReadback, unconsultedReadback)
+          );
+        })
+      );
+    const deploy = await run("deploy");
+    expect(String(deploy.exit)).toContain("ReleaseRecordNamesOtherService");
+    expect(deploy.resources).toEqual({});
+    const destroy = await run("destroy");
+    expect(destroy.exit._tag).toBe("Success");
+    expect(destroy.resources).toEqual({});
   });
 
   test("a plain deploy refuses a pending traffic change but keeps a candidate", async () => {
@@ -671,7 +677,7 @@ describe("Alchemy beta.87 surface", () => {
     );
     expect(tasks).toMatchObject({
       serviceId: "workspace-tasks-worker",
-      ingress: "INGRESS_TRAFFIC_INTERNAL_ONLY",
+      ingress: "INGRESS_TRAFFIC_ALL",
       invokerIamDisabled: false,
       customAudiences: [
         "https://workspace-tasks-worker-123456789012.europe-west1.run.app",

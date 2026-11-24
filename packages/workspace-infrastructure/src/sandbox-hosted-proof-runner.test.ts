@@ -1579,10 +1579,9 @@ describe("private access", () => {
   });
   const baseRules: ReadonlyArray<FakeRule> = [
     status("Authorization: Bearer garbage", "401"),
-    status("workspace-api-[^ ]*/(health|rpc)$", "403"),
     status(
-      "workspace-(tasks|scheduler)-worker-[^ ]*/(health|rpc|api/.*)$",
-      "404"
+      "workspace-(api|tasks-worker|scheduler-worker)-[^ ]*/(health|rpc|api/.*)$",
+      "403"
     ),
     {
       tool: "gcloud",
@@ -1616,62 +1615,16 @@ describe("private access", () => {
       }),
     },
   ];
-  const denyJob = (
-    name: string,
-    uri: string,
-    oidcToken?: Schema.JsonObject
-  ): FakeRule => ({
-    tool: "gcloud",
-    pattern: `^scheduler jobs describe workspace-proof-${name}-r111-1 `,
-    stdout: JSON.stringify({
-      state: "PAUSED",
-      // JSON drops an undefined token, as gcloud omits an unsigned one.
-      httpTarget: { uri, httpMethod: "GET", oidcToken },
-    }),
-  });
-  const refused = (name: string): FakeRule => ({
-    tool: "gcloud",
-    pattern: `^logging read resource\\.type="cloud_scheduler_job" AND resource\\.labels\\.job_id="workspace-proof-${name}-r111-1" AND .*AttemptFinished.*PERMISSION_DENIED`,
-    stdout: JSON.stringify([{ jsonPayload: { status: "PERMISSION_DENIED" } }]),
-  });
-  const denyRules: ReadonlyArray<FakeRule> = [
-    denyJob(
-      "deny-scheduler-anonymous",
-      `${schedulerWorkerUrl}/api/cron/workspace/proof-tick`
-    ),
-    denyJob(
-      "deny-tasks-anonymous",
-      `${tasksWorkerUrl}/api/queues/workspace/proof-deny`
-    ),
-    denyJob(
-      "deny-tasks-wrong-invoker",
-      `${tasksWorkerUrl}/api/queues/workspace/proof-deny`,
-      {
-        serviceAccountEmail: serviceAccount("workspace-scheduler-invoker"),
-        audience: tasksWorkerUrl,
-      }
-    ),
-    refused("deny-scheduler-anonymous"),
-    refused("deny-tasks-anonymous"),
-    refused("deny-tasks-wrong-invoker"),
-  ];
-  const access = (
-    overrides: ReadonlyArray<FakeRule> = [],
-    deny: ReadonlyArray<FakeRule> = denyRules
-  ) =>
-    withProofFakes(
-      { rules: [...overrides, ...baseRules, ...deny] },
-      (fakes) => {
-        seedServices(fakes);
-        seed(fakes, { "proof-run.env": "QUEUE_SUFFIX=r111-1\n" });
-        return {
-          ...runPhase(fakes, "private-access", {
-            GCP_SANDBOX_DEPLOY_SA: deployer,
-          }),
-          calls: fakes.calls(),
-        };
-      }
-    );
+  const access = (overrides: ReadonlyArray<FakeRule> = []) =>
+    withProofFakes({ rules: [...overrides, ...baseRules] }, (fakes) => {
+      seedServices(fakes);
+      return {
+        ...runPhase(fakes, "private-access", {
+          GCP_SANDBOX_DEPLOY_SA: deployer,
+        }),
+        calls: fakes.calls(),
+      };
+    });
 
   test("passes when every service refuses callers without the invoker role", () => {
     const { exitCode, output, calls } = access();
@@ -1686,53 +1639,13 @@ describe("private access", () => {
       expect(calls).toContain(
         `curl -sS -o /dev/null -w %{http_code} --max-time 20 -X POST --data-binary  ${url}/rpc`
       );
-    }
-  });
-
-  test("forces each paused deny job and requires IAM to refuse it", () => {
-    const { exitCode, output, calls } = access();
-    expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
-      exitCode: 0,
-      output: "",
-    });
-    for (const name of [
-      "deny-scheduler-anonymous",
-      "deny-tasks-anonymous",
-      "deny-tasks-wrong-invoker",
-    ]) {
-      expect(calls).toContain(
-        `gcloud scheduler jobs run workspace-proof-${name}-r111-1 --project=${projectId} --location=europe-west1`
+      // Each service, workers included, rejects a malformed bearer itself.
+      expect(calls).toContainEqual(
+        expect.stringMatching(
+          new RegExp(`Authorization: Bearer garbage .*${url}/rpc$`)
+        )
       );
     }
-  });
-
-  test("fails when a worker does not refuse a deny job's call", () => {
-    // The wrong-invoker run reaches the worker: no refusal is logged.
-    const { exitCode, output } = access(
-      [],
-      denyRules.filter((rule) => rule !== denyRules[denyRules.length - 1])
-    );
-    expect(exitCode).toBe(1);
-    expect(output).toContain(
-      "no IAM refusal of workspace-proof-deny-tasks-wrong-invoker-r111-1"
-    );
-  });
-
-  test("fails when a deny job would be signed by an allowed invoker", () => {
-    const { exitCode, output } = access([
-      denyJob(
-        "deny-tasks-wrong-invoker",
-        `${tasksWorkerUrl}/api/queues/workspace/proof-deny`,
-        {
-          serviceAccountEmail: serviceAccount("workspace-tasks-invoker"),
-          audience: tasksWorkerUrl,
-        }
-      ),
-    ]);
-    expect(exitCode).toBe(1);
-    expect(output).toContain(
-      "workspace-proof-deny-tasks-wrong-invoker-r111-1 is not the paused scheduler-invoker-signed GET"
-    );
   });
 
   test("fails on any served request, or a refusal of the wrong kind", () => {
@@ -1761,11 +1674,20 @@ describe("private access", () => {
       ],
       [
         status("workspace-api-[^ ]*/rpc$", "404"),
-        "unauthenticated POST /rpc on workspace-api: HTTP 404, expected 401|403",
+        "unauthenticated POST /rpc on workspace-api: HTTP 404, expected 403",
+      ],
+      [
+        // Ingress refusing a worker proves nothing about IAM.
+        status("workspace-scheduler-worker-[^ ]*/health$", "404"),
+        "unauthenticated GET /health on workspace-scheduler-worker: HTTP 404, expected 403",
       ],
       [
         status("Authorization: Bearer garbage", "403"),
         "POST /rpc with a garbage bearer on workspace-api: HTTP 403, expected 401",
+      ],
+      [
+        status("Bearer garbage.*workspace-tasks-worker-", "403"),
+        "POST /rpc with a garbage bearer on workspace-tasks-worker: HTTP 403, expected 401",
       ],
       [
         { tool: "curl", pattern: "workspace-api-[^ ]*/health$", exit: 7 },
@@ -1856,10 +1778,12 @@ describe("private access", () => {
           pattern:
             "^run services describe workspace-tasks-worker .*--format=json$",
           stdout: JSON.stringify({
-            metadata: { annotations: { "run.googleapis.com/ingress": "all" } },
+            metadata: {
+              annotations: { "run.googleapis.com/ingress": "internal" },
+            },
           }),
         },
-        "workspace-tasks-worker does not have ingress internal",
+        "workspace-tasks-worker does not have ingress all",
       ],
       [
         {
@@ -1869,13 +1793,13 @@ describe("private access", () => {
           stdout: JSON.stringify({
             metadata: {
               annotations: {
-                "run.googleapis.com/ingress": "internal",
-                "run.googleapis.com/ingress-status": "all",
+                "run.googleapis.com/ingress": "all",
+                "run.googleapis.com/ingress-status": "internal",
               },
             },
           }),
         },
-        "workspace-scheduler-worker does not have ingress internal, requested and active",
+        "workspace-scheduler-worker does not have ingress all, requested and active",
       ],
       [
         {

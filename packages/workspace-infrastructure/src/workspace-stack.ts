@@ -252,6 +252,10 @@ export const declareRecordedWorkspaceServices = Effect.fn(
       currentGeneration: record.generation,
     });
   }
+  // A teardown removes every service, even one a pre-rename record names.
+  if (held.lock.operation === "destroy") {
+    return undefined;
+  }
   // Declaring nothing from a lost record would delete the live services.
   yield* requireRecordCoversLiveService(record);
   // A record from before the API rename names revisions it cannot route to.

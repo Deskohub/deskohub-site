@@ -116,10 +116,6 @@ proof_queue=workspace-paid-fulfillment
 proof_queue_path=/api/queues/workspace/paid-fulfillment
 proof_schedule_job=workspace-proof-tick
 proof_schedule_path=/api/cron/workspace/proof-tick
-# Paused jobs the stack declares beside proof-tick; each run must be refused
-# by IAM, since the workers' internal ingress admits Cloud Scheduler.
-proof_deny_jobs=(deny-scheduler-anonymous deny-tasks-anonymous deny-tasks-wrong-invoker)
-proof_deny_queue_path=/api/queues/workspace/proof-deny
 rpc_content_type=application/vnd.effect.rpc+schema-binary
 # Set by load_marker; trace() redacts it.
 marker=""
@@ -1047,9 +1043,8 @@ service_invokers() {
     "$scheduler_worker_service") printf '%s\n' "serviceAccount:${scheduler_invoker}" ;;
   esac
 }
-service_ingress() {
-  if [[ "$1" == "$api_service" ]]; then echo all; else echo internal; fi
-}
+# Every service keeps the default run.app ingress; IAM alone keeps it private.
+service_ingress() { echo all; }
 
 # IAM readback: no public member, exactly the expected unconditional
 # invokers, the invoker IAM check on, and the expected ingress.
@@ -1096,80 +1091,34 @@ expect_project_iam_private() {
 }
 
 # Every service refuses callers without roles/run.invoker, on its own
-# routes too. The workers keep internal ingress, so from the runner they
-# may also answer 404. The probe serves GET /health beside its startup
-# /healthz: Cloud Run reserves some paths ending in z on the run.app URL.
-# The garbage bearer checks malformed-token rejection on the public API.
+# routes too: an unauthenticated request gets 403 and a malformed bearer
+# 401, from Cloud Run before the container sees it. All three keep the
+# default run.app ingress, so the runner reaches IAM on each. The probe
+# serves GET /health beside its startup /healthz: Cloud Run reserves some
+# paths ending in z on the run.app URL.
 phase_private_access() {
-  local service url accepted
+  local service url
   for service in "${release_services[@]}"; do
     url="$(service_url "$service")"
-    accepted='401|403'
-    [[ "$service" == "$api_service" ]] || accepted='401|403|404'
     expect_refused "unauthenticated GET /health on ${service}" \
-      "$(request_status GET "${url}/health")" "$accepted"
+      "$(request_status GET "${url}/health")" 403
     expect_refused "unauthenticated POST /rpc on ${service}" \
-      "$(request_status POST "${url}/rpc" --data-binary '')" "$accepted"
+      "$(request_status POST "${url}/rpc" --data-binary '')" 403
+    expect_refused "POST /rpc with a garbage bearer on ${service}" \
+      "$(request_status POST "${url}/rpc" -H 'Authorization: Bearer garbage' --data-binary '')" 401
     case "$service" in
       "$tasks_worker_service")
         expect_refused "unauthenticated POST ${proof_queue_path} on ${service}" \
-          "$(request_status POST "${url}${proof_queue_path}" --data-binary '{}')" "$accepted"
+          "$(request_status POST "${url}${proof_queue_path}" --data-binary '{}')" 403
         ;;
       "$scheduler_worker_service")
         expect_refused "unauthenticated GET ${proof_schedule_path} on ${service}" \
-          "$(request_status GET "${url}${proof_schedule_path}")" "$accepted"
+          "$(request_status GET "${url}${proof_schedule_path}")" 403
         ;;
     esac
     expect_iam_private "$service"
   done
   expect_project_iam_private
-  url="$(service_url "$api_service")"
-  expect_refused "POST /rpc with a garbage bearer on ${api_service}" \
-    "$(request_status POST "${url}/rpc" -H 'Authorization: Bearer garbage' --data-binary '')" 401
-  expect_worker_iam_refusals
-}
-
-# From outside, the workers' internal ingress answers before IAM does, so a
-# 404 there proves nothing about IAM. Cloud Scheduler is a source that
-# ingress admits: the run's paused deny jobs call each worker unsigned, and
-# the tasks worker as the scheduler invoker, which holds no invoker role on
-# it. Each forced run must finish refused (PERMISSION_DENIED or
-# UNAUTHENTICATED); any other outcome, or none, fails the proof.
-expect_worker_iam_refusals() {
-  load_proof_run_file
-  [[ -n "${QUEUE_SUFFIX:-}" ]] || $dry_run || fail "no recorded queue suffix; foundation records it"
-  local suffix="${QUEUE_SUFFIX:-r${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}" name job worker_url uri signer described start
-  for name in "${proof_deny_jobs[@]}"; do
-    job="workspace-proof-${name}-${suffix}"
-    case "$name" in
-      deny-scheduler-*)
-        worker_url="$(service_url "$scheduler_worker_service")"
-        uri="${worker_url}${proof_schedule_path}"
-        ;;
-      *)
-        worker_url="$(service_url "$tasks_worker_service")"
-        uri="${worker_url}${proof_deny_queue_path}"
-        ;;
-    esac
-    signer=""
-    [[ "$name" != *-wrong-invoker ]] || signer="$scheduler_invoker"
-    described="$(capture "{\"state\":\"PAUSED\",\"httpTarget\":{\"uri\":\"${uri}\",\"httpMethod\":\"GET\"}}" \
-      gcloud scheduler jobs describe "$job" --project="$project_id" --location="$region" --format=json)" ||
-      fail "the deny job ${job} is unreadable"
-    $dry_run ||
-      jq -e --arg uri "$uri" --arg signer "$signer" --arg audience "$worker_url" \
-        '.state == "PAUSED" and .httpTarget.uri == $uri and .httpTarget.httpMethod == "GET"
-          and (if $signer == "" then .httpTarget.oidcToken == null
-               else .httpTarget.oidcToken.serviceAccountEmail == $signer
-                 and .httpTarget.oidcToken.audience == $audience end)' \
-        >/dev/null 2>&1 <<<"$described" ||
-      fail "${job} is not the paused $([[ -n "$signer" ]] && echo scheduler-invoker-signed || echo unsigned) GET of ${uri}"
-    start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
-    run gcloud scheduler jobs run "$job" --project="$project_id" \
-      --location="$region" || fail "the paused deny job ${job} could not be forced"
-    wait_for_log "IAM refusal of ${job}" \
-      "resource.type=\"cloud_scheduler_job\" AND resource.labels.job_id=\"${job}\" AND jsonPayload.@type=\"type.googleapis.com/google.cloud.scheduler.logging.AttemptFinished\" AND (jsonPayload.status=\"PERMISSION_DENIED\" OR jsonPayload.status=\"UNAUTHENTICATED\") AND timestamp>=\"${start}\""
-  done
 }
 
 # The RPC probe against workspace-api as the deployer, with the run's

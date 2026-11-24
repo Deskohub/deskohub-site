@@ -148,7 +148,10 @@ const prepareReleaseWriter = Effect.fn("WorkspaceRelease.prepareReleaseWriter")(
     }
     yield* requireQuietReleaseServices;
     yield* requireRecordCoversLiveService(current.record);
-    yield* requireRecordNamesApiRevisions(current.record);
+    // A teardown may drain a stack whose record predates the API rename.
+    if (operation !== "destroy") {
+      yield* requireRecordNamesApiRevisions(current.record);
+    }
     const token = Redacted.make(randomBytes(32).toString("hex"));
     const writer: ReleaseWriter = {
       token,
@@ -374,8 +377,8 @@ export const requireStackWriter = Effect.fn(
 });
 
 /**
- * The mode the lock grants a stack run. `deploy` and `plan` declare the
- * current record and refuse a generation fence (an inherited one would
+ * The mode the lock grants a stack run. `deploy`, `plan` and `destroy` run
+ * unfenced; `deploy` and `plan` declare the current record and refuse a generation fence (an inherited one would
  * apply a stale intent) and a pending traffic change (`recover` owns it).
  * `deliver`, `restore` and `recover` declare only the record at their
  * fenced generation.
@@ -385,7 +388,10 @@ export const requireStackMode = Effect.fn("WorkspaceRelease.requireStackMode")(
     { record, lock }: { record: ReleaseRecord; lock: ReleaseWriterLock },
     generation: number | null
   ) {
-    const plain = lock.operation === "deploy" || lock.operation === "plan";
+    const plain =
+      lock.operation === "deploy" ||
+      lock.operation === "plan" ||
+      lock.operation === "destroy";
     if (plain === (generation !== null)) {
       return yield* new ReleaseWriterModeMismatch({
         operation: lock.operation,

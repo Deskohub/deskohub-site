@@ -296,8 +296,9 @@ export const apiServiceProps = (
 };
 
 /**
- * A private worker: internal ingress, IAM invoker required, and a custom
- * audience distinct from every other worker.
+ * A private worker: the default run.app ingress like the API, so IAM alone
+ * decides who calls it (only its own queue or schedule invoker), and a
+ * custom audience distinct from every other worker.
  */
 export const workerServiceProps = (
   config: WorkspaceStackConfig,
@@ -307,7 +308,7 @@ export const workerServiceProps = (
   serviceId: workloadServiceIds[workload],
   location: config.region,
   labels: workspaceLabels(config),
-  ingress: "INGRESS_TRAFFIC_INTERNAL_ONLY",
+  ingress: "INGRESS_TRAFFIC_ALL",
   invokerIamDisabled: false,
   customAudiences: [workloadAudience(config, workload)],
   template: {

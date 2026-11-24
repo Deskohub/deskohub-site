@@ -69,8 +69,8 @@ export interface ReadbackDrift {
 
 const expectedIngress = {
   api: "INGRESS_TRAFFIC_ALL",
-  "tasks-worker": "INGRESS_TRAFFIC_INTERNAL_ONLY",
-  "scheduler-worker": "INGRESS_TRAFFIC_INTERNAL_ONLY",
+  "tasks-worker": "INGRESS_TRAFFIC_ALL",
+  "scheduler-worker": "INGRESS_TRAFFIC_ALL",
 } satisfies Record<WorkspaceWorkload, string>;
 
 /**

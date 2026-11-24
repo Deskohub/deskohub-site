@@ -61,6 +61,7 @@ import {
 } from "./release-record-store";
 import {
   unlockReleaseWriter,
+  withReleaseWriter,
   writerDigestOf,
   writerFingerprint,
 } from "./release-writer";
@@ -312,8 +313,8 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
       urls: [workloadUrl(sandboxConfig, workload)],
       ingress:
         workload === "tasks-worker"
-          ? (options.tasksWorkerIngress ?? "INGRESS_TRAFFIC_INTERNAL_ONLY")
-          : "INGRESS_TRAFFIC_INTERNAL_ONLY",
+          ? (options.tasksWorkerIngress ?? "INGRESS_TRAFFIC_ALL")
+          : "INGRESS_TRAFFIC_ALL",
       invokerIamDisabled: false,
       terminalConditionState: "CONDITION_SUCCEEDED",
       reconciling: faults.reconciling === true,
@@ -830,7 +831,7 @@ describe("fenced release delivery", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const { store, provide } = yield* setup({
-          tasksWorkerIngress: "INGRESS_TRAFFIC_ALL",
+          tasksWorkerIngress: "INGRESS_TRAFFIC_INTERNAL_ONLY",
         });
         const exit = yield* provide(
           deliverRelease(
@@ -848,7 +849,7 @@ describe("fenced release delivery", () => {
         {
           workload: "tasks-worker",
           field: "ingress",
-          observed: "INGRESS_TRAFFIC_ALL",
+          observed: "INGRESS_TRAFFIC_INTERNAL_ONLY",
         },
       ],
     });
@@ -886,7 +887,7 @@ describe("fenced release delivery", () => {
     expect(result.record).toEqual(emptyReleaseRecord);
   });
 
-  test("a record from before the API rename is refused before any write", async () => {
+  test("a record from before the API rename is refused except by a teardown", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const { store, stackRuns, provide } = yield* setup();
@@ -912,14 +913,36 @@ describe("fenced release delivery", () => {
         yield* store.write(preRename, live.version);
         const runsBefore = stackRuns.length;
         const exit = yield* provide(deliver(shaB, digestB).pipe(Effect.exit));
+        const deploy = yield* provide(
+          withReleaseWriter(
+            sandboxConfig,
+            "deploy"
+          )(Effect.void).pipe(Effect.exit)
+        );
+        const record = (yield* store.read).record;
+        // Only the teardown may take the lock over it, so the stack drains.
+        const teardown = yield* provide(
+          withReleaseWriter(
+            sandboxConfig,
+            "destroy"
+          )(Effect.succeed("torn down")).pipe(Effect.exit)
+        );
         return {
           exit,
+          deploy,
+          teardown,
           preRename,
-          record: (yield* store.read).record,
+          record,
           newRuns: stackRuns.length - runsBefore,
+          lockAfterTeardown: (yield* store.read).record.writer,
         };
       })
     );
+    expect(errorOf(result.deploy)).toMatchObject({
+      _tag: "ReleaseRecordNamesOtherService",
+    });
+    expect(result.teardown).toEqual(Exit.succeed("torn down"));
+    expect(result.lockAfterTeardown).toBeNull();
     expect(errorOf(result.exit)).toMatchObject({
       _tag: "ReleaseRecordNamesOtherService",
       revisions: expect.arrayContaining([
@@ -1085,7 +1108,7 @@ describe("lost release record", () => {
                       workload,
                       uri: undefined,
                       urls: [],
-                      ingress: "INGRESS_TRAFFIC_INTERNAL_ONLY",
+                      ingress: "INGRESS_TRAFFIC_ALL",
                       invokerIamDisabled: false,
                       terminalConditionState: "CONDITION_SUCCEEDED",
                       reconciling: false,

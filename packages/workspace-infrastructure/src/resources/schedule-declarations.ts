@@ -36,86 +36,26 @@ export const scheduleJobProps = (
 });
 
 /**
- * The hosted proof's own scheduler jobs (sandbox only, once the run has a
- * disposable suffix). They stay paused, so they fire only when the proof
- * runs them by hand, and they call proof-only paths no Workspace schedule
- * serves.
- *
- * `proof-tick` signs as the scheduler invoker and must reach the scheduler
- * worker. The `proof-deny-*` jobs come from the same source the workers'
- * internal ingress admits, so their runs show IAM itself refusing: an
- * unsigned call to each worker, and the scheduler invoker calling the tasks
- * worker it may not invoke. The proof requires each to end in
- * PERMISSION_DENIED.
+ * The hosted proof's own scheduler job (sandbox only, once the run has a
+ * disposable suffix). It stays paused, so it fires only when the proof runs
+ * it by hand, and it calls a proof-only path no Workspace schedule serves.
  */
 export const sandboxProofScheduleJobs = (
   config: WorkspaceStackConfig
-): ReadonlyArray<{ readonly id: string; readonly props: JobProps }> => {
-  if (
-    config.stage !== "sandbox" ||
-    config.disposableQueueSuffix === undefined
-  ) {
-    return [];
-  }
-  const suffix = config.disposableQueueSuffix;
-  const job = (
-    id: string,
-    name: string,
-    workload: "tasks-worker" | "scheduler-worker",
-    path: string,
-    signed: boolean
-  ) => {
-    const unsigned = {
-      uri: `${workloadUrl(config, workload)}${path}`,
-      httpMethod: "GET",
-    } satisfies JobProps["httpTarget"];
-    const httpTarget: JobProps["httpTarget"] = signed
-      ? {
-          ...unsigned,
-          oidcToken: {
-            serviceAccountEmail: config.serviceAccounts.schedulerInvoker,
-            audience: workloadAudience(config, workload),
+): ReadonlyArray<{ readonly id: string; readonly props: JobProps }> =>
+  config.stage === "sandbox" && config.disposableQueueSuffix !== undefined
+    ? [
+        {
+          id: "ScheduleWorkspaceProofTick",
+          props: {
+            ...scheduleJobProps(config, {
+              jobId: `workspace-proof-tick-${config.disposableQueueSuffix}`,
+              handlerPath: "/api/cron/workspace/proof-tick",
+              schedule: "0 0 1 1 *",
+              attemptDeadline: Duration.seconds(60),
+            }),
+            paused: true,
           },
-        }
-      : unsigned;
-    return {
-      id,
-      props: {
-        jobId: `workspace-proof-${name}-${suffix}`,
-        location: config.region,
-        schedule: "0 0 1 1 *",
-        timeZone: workspaceScheduleTimeZone,
-        attemptDeadline: toGcpDuration(Duration.seconds(60)),
-        retryConfig: { retryCount: 0 },
-        httpTarget,
-        paused: true,
-      } satisfies JobProps,
-    };
-  };
-  const tick = "/api/cron/workspace/proof-tick";
-  const task = "/api/queues/workspace/proof-deny";
-  return [
-    job("ScheduleWorkspaceProofTick", "tick", "scheduler-worker", tick, true),
-    job(
-      "ScheduleWorkspaceProofDenySchedulerAnonymous",
-      "deny-scheduler-anonymous",
-      "scheduler-worker",
-      tick,
-      false
-    ),
-    job(
-      "ScheduleWorkspaceProofDenyTasksAnonymous",
-      "deny-tasks-anonymous",
-      "tasks-worker",
-      task,
-      false
-    ),
-    job(
-      "ScheduleWorkspaceProofDenyTasksWrongInvoker",
-      "deny-tasks-wrong-invoker",
-      "tasks-worker",
-      task,
-      true
-    ),
-  ];
-};
+        },
+      ]
+    : [];

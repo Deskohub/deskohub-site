@@ -111,6 +111,8 @@ export const ReleaseOperation = Schema.Literals([
   "recover",
   "deploy",
   "plan",
+  // Tears the whole stack down; it declares nothing from the record.
+  "destroy",
 ]);
 export type ReleaseOperation = typeof ReleaseOperation.Type;
 

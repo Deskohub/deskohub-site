@@ -22,7 +22,7 @@ const healthyWorker: ObservedService = {
     "https://workspace-tasks-worker-123456789012.europe-west1.run.app",
     "https://workspace-tasks-worker-abc123-ew.a.run.app",
   ],
-  ingress: "INGRESS_TRAFFIC_INTERNAL_ONLY",
+  ingress: "INGRESS_TRAFFIC_ALL",
   invokerIamDisabled: false,
   terminalConditionState: "CONDITION_SUCCEEDED",
   reconciling: false,
@@ -66,7 +66,7 @@ describe("stack readback", () => {
       serviceReadbackDrift(sandboxConfig, {
         ...healthyWorker,
         urls: [],
-        ingress: "INGRESS_TRAFFIC_ALL",
+        ingress: "INGRESS_TRAFFIC_INTERNAL_ONLY",
         invokerIamDisabled: true,
       }).map((drift) => drift.field)
     ).toEqual(["ingress", "invokerIamDisabled", "url"]);
