@@ -253,13 +253,15 @@ const reservationsAsOfReplay = ({
 
 /**
  * What a count param holds: a choice, a period, a campaign source, or the
- * product filter, which isn't a catalogued param.
+ * product filter, which isn't a catalogued param. An optional param may be
+ * absent.
  */
 type CountParamValue =
   | string
   | DatePeriod
   | CampaignEmailSourceType
-  | ReservationProductFilterType;
+  | ReservationProductFilterType
+  | undefined;
 
 const isDatePeriod = Schema.is(DatePeriodSchema);
 const isCampaignEmailSource = Schema.is(CampaignEmailSourceSchema);
