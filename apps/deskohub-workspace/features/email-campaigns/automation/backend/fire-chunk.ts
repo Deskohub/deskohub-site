@@ -158,7 +158,7 @@ export const makeFireChunkHandler = Effect.gen(function* () {
           campaignId,
           versionId: fire.value.versionId,
           rejected: customerIds.map((customerId) => ({
-            ...occurrenceOf(fireAt, customerId as DotyposCustomerId),
+            ...occurrenceOf(fireAt, customerId),
             disposition: "failed" as const,
           })),
           at,
@@ -177,7 +177,7 @@ export const makeFireChunkHandler = Effect.gen(function* () {
       ) {
         const campaignId = yield* campaignOf(unit);
         const { fireAt } = unit.subject;
-        const customers = unit.subject.customerIds as DotyposCustomerId[];
+        const customers = unit.subject.customerIds;
         const [fire] = yield* db
           .select({ versionId: fires.versionId })
           .from(fires)

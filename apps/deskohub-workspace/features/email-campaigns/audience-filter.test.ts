@@ -217,6 +217,20 @@ describe("evaluateAudienceFilter", () => {
     ).toBe("match");
   });
 
+  test("keeps choice params and the product filter as they are", () => {
+    const product = { family: "cowork", properties: [] } as const;
+    const { params } = countFactRequest(
+      audienceAttributeCatalogue.reservationCount,
+      {
+        ...reservationsVisitedInMarch,
+        params: { ...reservationsVisitedInMarch.params, product },
+      },
+      context
+    );
+    expect(params.dateBasis).toBe("visit");
+    expect(params.product).toEqual(product);
+  });
+
   test("a date in, not in, or without a value", () => {
     const request = dateFactRequest(lastVisitNotRecent, context);
     const visitedLongAgo = dateFacts(request, {

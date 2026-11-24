@@ -174,15 +174,24 @@ describe("campaignContentForRecipient", () => {
   const chosenLocale = (
     content: CampaignLocalizedContent,
     recipientLocale: Locale
-  ) => campaignContentForRecipient(content, recipientLocale).locale;
+  ) =>
+    Option.getOrUndefined(
+      Option.map(
+        campaignContentForRecipient(content, recipientLocale),
+        ({ locale }) => locale
+      )
+    );
 
   test("gives every recipient their own locale's content when it exists", () => {
     for (const locale of locales) {
-      expect(campaignContentForRecipient(everyLocale, locale)).toEqual({
-        locale,
-        content: everyLocale[locale]!,
-      });
+      expect(campaignContentForRecipient(everyLocale, locale)).toEqual(
+        Option.some({ locale, content: everyLocale[locale] })
+      );
     }
+  });
+
+  test("finds no content when the campaign has none", () => {
+    expect(Option.isNone(campaignContentForRecipient({}, "en-US"))).toBe(true);
   });
 
   test("German and Ukrainian recipients fall back to English, then Czech", () => {

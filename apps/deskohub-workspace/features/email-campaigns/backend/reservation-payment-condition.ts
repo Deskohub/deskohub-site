@@ -30,19 +30,20 @@ const keepsPaidAmount = sql`${paymentAttempts.amountValue} > greatest(
  * decides. A Dotypos reservation Workspace didn't book has no row and never
  * matches.
  */
-const individuallyPaidReservation: SQL = and(
-  isNull(workspaceReservations.passId),
-  eq(workspaceReservations.paymentState, "paid"),
-  sql`exists (select 1 from ${paymentAttempts} where ${and(
-    eq(paymentAttempts.id, workspaceReservations.activePaymentAttemptId),
-    eq(paymentAttempts.state, "paid"),
-    keepsPaidAmount
-  )})`,
-  sql`not exists (select 1 from ${passEntryClaims} where ${and(
-    eq(passEntryClaims.reservationId, workspaceReservations.id),
-    eq(passEntryClaims.status, "consumed")
-  )})`
-)!;
+const individuallyPaidReservation: SQL =
+  and(
+    isNull(workspaceReservations.passId),
+    eq(workspaceReservations.paymentState, "paid"),
+    sql`exists (select 1 from ${paymentAttempts} where ${and(
+      eq(paymentAttempts.id, workspaceReservations.activePaymentAttemptId),
+      eq(paymentAttempts.state, "paid"),
+      keepsPaidAmount
+    )})`,
+    sql`not exists (select 1 from ${passEntryClaims} where ${and(
+      eq(passEntryClaims.reservationId, workspaceReservations.id),
+      eq(passEntryClaims.status, "consumed")
+    )})`
+  ) ?? sql`false`;
 
 /** Selects `workspace_reservations` rows paid the way `payment` names. */
 export const reservationPaymentCondition = (payment: ReservationPayment): SQL =>

@@ -1,6 +1,5 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import {
-  type AudienceAttributeDefinition,
   type AudienceAttributeOfKind,
   type AudienceBooleanAttributeDefinition,
   type AudienceConditionOf,
@@ -19,7 +18,9 @@ import {
   type AudienceSetOperatorType,
   audienceAttributeCatalogue,
   AudienceFilter as audienceFilterContractSchema,
+  CampaignEmailSource as CampaignEmailSourceSchema,
   type CampaignEmailSourceType,
+  DatePeriod as DatePeriodSchema,
   type ReservationProductFilterType,
 } from "@deskohub/workspace-admin-api";
 import { Match, Option, Schema } from "effect";
@@ -72,15 +73,54 @@ export type AudienceConditionView =
       >;
     };
 
+const countConditionView = (
+  condition: AudienceConditionOf<AudienceAttributeOfKind<"count">>
+): AudienceConditionView => ({
+  kind: "count",
+  entry: audienceAttributeCatalogue[condition.attribute],
+  condition,
+});
+
+const dateConditionView = (
+  condition: AudienceConditionOf<AudienceAttributeOfKind<"date">>
+): AudienceConditionView => ({
+  kind: "date",
+  entry: audienceAttributeCatalogue[condition.attribute],
+  condition,
+});
+
+const setConditionView = (
+  condition: AudienceConditionOf<AudienceAttributeOfKind<"set">>
+): AudienceConditionView => ({
+  kind: "set",
+  entry: audienceAttributeCatalogue[condition.attribute],
+  condition,
+});
+
+const booleanConditionView = (
+  condition: AudienceConditionOf<AudienceAttributeOfKind<"boolean">>
+): AudienceConditionView => ({
+  kind: "boolean",
+  entry: audienceAttributeCatalogue[condition.attribute],
+  condition,
+});
+
 export const viewAudienceCondition = (
   condition: AudienceCondition
-): AudienceConditionView => {
-  const entry: AudienceAttributeDefinition =
-    audienceAttributeCatalogue[condition.attribute];
-  // The catalogue keys each entry by its attribute, so the entry's kind is
-  // the kind of the condition's attribute.
-  return { kind: entry.kind, entry, condition } as AudienceConditionView;
-};
+): AudienceConditionView =>
+  Match.value(condition).pipe(
+    Match.discriminatorsExhaustive("attribute")({
+      reservationCount: countConditionView,
+      campaignEmailCount: countConditionView,
+      firstVisit: dateConditionView,
+      lastVisit: dateConditionView,
+      accountCreated: dateConditionView,
+      hasAccount: booleanConditionView,
+      locale: setConditionView,
+      dotyposTags: setConditionView,
+      discountGroup: setConditionView,
+    })
+  );
 
 /**
  * Three-valued result: a Dotypos condition is `unknown` until the customer's
@@ -185,16 +225,6 @@ const concreteCampaignSource = (
   );
 
 /**
- * What a count param holds: a choice, a period, a campaign source, or the
- * product filter, which isn't a catalogued param.
- */
-type CountParamValue =
-  | string
-  | DatePeriod
-  | CampaignEmailSourceType
-  | ReservationProductFilterType;
-
-/**
  * When the things a count dates by their recorded moment happened, such as
  * an email's dispatch or a reservation's booking. A replayed moment counts
  * only what happened by then, whatever the period: the later ones hadn't
@@ -221,6 +251,19 @@ const reservationsAsOfReplay = ({
   replayed,
 }: AudienceEvaluationContext) => (replayed ? { reservationsAsOf: now } : {});
 
+/**
+ * What a count param holds: a choice, a period, a campaign source, or the
+ * product filter, which isn't a catalogued param.
+ */
+type CountParamValue =
+  | string
+  | DatePeriod
+  | CampaignEmailSourceType
+  | ReservationProductFilterType;
+
+const isDatePeriod = Schema.is(DatePeriodSchema);
+const isCampaignEmailSource = Schema.is(CampaignEmailSourceSchema);
+
 /** One param value fixed by the context, by its param's part. */
 const concreteParam = (
   param: AudienceParam | undefined,
@@ -236,9 +279,12 @@ const concreteParam = (
           choice: () => value,
           // The condition decoded with the param's schema, so the value is
           // of its part.
-          period: () => periodBounds(value as DatePeriod, context),
+          period: () =>
+            isDatePeriod(value) ? periodBounds(value, context) : value,
           campaign: () =>
-            concreteCampaignSource(value as CampaignEmailSourceType, context),
+            isCampaignEmailSource(value)
+              ? concreteCampaignSource(value, context)
+              : value,
         })
       );
 
@@ -266,14 +312,10 @@ export const countFactRequest = <Condition extends AudienceCountCondition>(
   return {
     attribute,
     params: Object.fromEntries(
-      // A decoded condition's params hold only its entry's param values and
-      // its product filter.
-      (Object.entries(params) as [string, CountParamValue][]).map(
-        ([key, value]) => [
-          key,
-          concreteParam(entry.params[key], value, context, periodBounds),
-        ]
-      )
+      Object.entries(params).map(([key, value]: [string, CountParamValue]) => [
+        key,
+        concreteParam(entry.params[key], value, context, periodBounds),
+      ])
     ),
     // Occurrence bounds already end by a replayed moment, but a reservation's
     // status may have changed since its booking.

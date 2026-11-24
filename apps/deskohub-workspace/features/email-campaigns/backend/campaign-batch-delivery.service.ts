@@ -582,9 +582,13 @@ export class CampaignBatchDelivery extends Context.Service<
               Match.exhaustive
             )
           ),
-          Effect.let(
+          Effect.bind(
             "localized",
-            ({ send, recipient, personalizedContent }) => {
+            Effect.fnUntraced(function* ({
+              send,
+              recipient,
+              personalizedContent,
+            }) {
               if (personalizedContent) {
                 return {
                   locale: recipient.locale,
@@ -598,14 +602,15 @@ export class CampaignBatchDelivery extends Context.Service<
               if (rendered) {
                 return { ...rendered, sensitive: true };
               }
-              return {
-                ...campaignContentForRecipient(
+              // Sends start only once the campaign has content.
+              const localized = yield* Effect.fromOption(
+                campaignContentForRecipient(
                   send.campaign.content,
                   recipient.locale
-                ),
-                sensitive: false,
-              };
-            }
+                )
+              ).pipe(Effect.orDie);
+              return { ...localized, sensitive: false };
+            })
           ),
           Effect.flatMap(
             ({
@@ -1372,6 +1377,7 @@ export class CampaignBatchDelivery extends Context.Service<
                     const ineligible = customerIds.flatMap(
                       (customerId, index): RecipientRequestDenial[] => {
                         const row = byId.get(customerId);
+                        const position = positions[index];
                         let reason:
                           | RecipientRequestDenial["reason"]
                           | undefined;
@@ -1381,7 +1387,9 @@ export class CampaignBatchDelivery extends Context.Service<
                           reason = "offer-unavailable";
                         else if (
                           identities.get(customerId) !==
-                          messages[positions[index]!]?.recipientIdentity
+                          (position === undefined
+                            ? undefined
+                            : messages[position]?.recipientIdentity)
                         )
                           reason = "recipient-payload-changed";
                         if (!reason) return [];

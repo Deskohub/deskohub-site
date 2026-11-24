@@ -34,9 +34,7 @@ const customerClaimReleasingOutcomes = [
 ] as const satisfies readonly AutomationRunOutcome[];
 
 export const releasesCustomerClaim = (outcome: AutomationRunOutcome) =>
-  (customerClaimReleasingOutcomes as readonly AutomationRunOutcome[]).includes(
-    outcome
-  );
+  customerClaimReleasingOutcomes.some((released) => released === outcome);
 
 /**
  * The customers among `customers` the campaign already sent its one

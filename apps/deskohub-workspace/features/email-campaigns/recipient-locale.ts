@@ -66,21 +66,28 @@ export const resolveRecipientLocale = (sources: {
 /**
  * The content a recipient reads: their locale's, else the first locale of
  * their locale's fallback chain with content, else the campaign's first
- * content locale (an audience restricted to it). The campaign must have
- * content.
+ * content locale (an audience restricted to it). None when the campaign
+ * has no content.
  */
 export const campaignContentForRecipient = (
   content: CampaignLocalizedContent,
   recipientLocale: Locale
-): { readonly locale: Locale; readonly content: CampaignLocaleContent } => {
-  const candidates = [
-    recipientLocale,
-    ...getLocaleDefinition(recipientLocale).fallbackChain,
-    ...campaignContentLocales(content),
-  ];
-  const chosen = candidates.find((candidate) => content[candidate]);
-  return { locale: chosen!, content: content[chosen!]! };
-};
+): Option.Option<{
+  readonly locale: Locale;
+  readonly content: CampaignLocaleContent;
+}> =>
+  Option.firstSomeOf(
+    [
+      recipientLocale,
+      ...getLocaleDefinition(recipientLocale).fallbackChain,
+      ...campaignContentLocales(content),
+    ].map((locale) =>
+      Option.map(Option.fromUndefinedOr(content[locale]), (localeContent) => ({
+        locale,
+        content: localeContent,
+      }))
+    )
+  );
 
 /**
  * Whether every recipient the audience can reach gets content meant for
