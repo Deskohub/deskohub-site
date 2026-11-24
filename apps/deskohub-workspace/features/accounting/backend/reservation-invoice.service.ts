@@ -1,6 +1,7 @@
 import {
   type DotyposConditionalWriteFailure,
   type DotyposCustomerId,
+  DotyposCustomerIdSchema,
   DotyposService,
 } from "@deskohub/dotypos";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
@@ -12,7 +13,10 @@ import {
 } from "@/features/accounting/billing-identity";
 import type { InvoiceBuyer } from "@/features/accounting/invoice";
 import type { InvoiceId } from "@/features/accounting/manual-invoice";
-import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
+import {
+  type PaymentAttemptId,
+  paymentAttemptIdSchema,
+} from "@/features/checkout/checkout-identifiers";
 import type { Locale } from "@/features/i18n";
 import { openReservationAccessToken } from "@/features/reservation/backend/reservation-access-token";
 import type { WorkspaceReservationDetailsMalformedError } from "@/features/reservation/backend/stored-reservation-details.server";
@@ -20,7 +24,10 @@ import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
 import type { ReservationAccessToken } from "@/features/reservation/reservation-access-token";
 import { getReservationInvoiceBuyer } from "@/features/reservation/reservation-billing";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
@@ -325,7 +332,7 @@ export class ReservationInvoiceService extends Context.Service<
           return { kind: "not_owed" };
         }
         const source = yield* accountingSnapshots
-          .find(cancelled.paymentAttemptId)
+          .find(paymentAttemptIdSchema.make(cancelled.paymentAttemptId))
           .pipe(Effect.catchTag("AccountingRecordUnavailable", unreadable));
         if (source === "unreadable") return { kind: "unreadable" };
         // The same buyer paid fulfillment issues to; without one, the
@@ -351,14 +358,18 @@ export class ReservationInvoiceService extends Context.Service<
       const reissuePostOrderInvoice = Effect.fnUntraced(function* (
         cancelled: ReservationInvoice
       ) {
-        const paymentAttemptId = cancelled.paymentAttemptId;
+        const paymentAttemptId = paymentAttemptIdSchema.make(
+          cancelled.paymentAttemptId
+        );
         yield* issueInvoice({
           request: {
             paymentAttemptId,
             buyer: cancelled.document.buyer,
             provenance: { source: "post-order-link" },
           },
-          dotyposCustomerId: cancelled.dotyposCustomerId,
+          dotyposCustomerId: DotyposCustomerIdSchema.make(
+            cancelled.dotyposCustomerId
+          ),
           origin: { kind: "submitted", acceptCommitted: requirePerson },
         });
         return yield* invoiceDeliveries
@@ -380,7 +391,9 @@ export class ReservationInvoiceService extends Context.Service<
           const delivered =
             plan.origin === "payment"
               ? yield* issueAfterFulfillment({
-                  reservationId: plan.cancelled.workspaceReservationId,
+                  reservationId: workspaceReservationIdSchema.make(
+                    plan.cancelled.workspaceReservationId
+                  ),
                 }).pipe(Effect.as(true))
               : yield* reissuePostOrderInvoice(plan.cancelled);
           const replacement = yield* invoices.findLiveByPaymentAttemptId(

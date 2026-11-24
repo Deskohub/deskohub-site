@@ -84,9 +84,9 @@ class ManualInvoiceConflictError extends Data.TaggedError(
 
 export interface Invoice {
   readonly id: InvoiceId;
-  readonly workspaceReservationId: WorkspaceReservationId | null;
-  readonly paymentAttemptId: PaymentAttemptId | null;
-  readonly dotyposCustomerId: DotyposCustomerId;
+  readonly workspaceReservationId: string | null;
+  readonly paymentAttemptId: string | null;
+  readonly dotyposCustomerId: string;
   readonly invoiceNumber: InvoiceNumber;
   readonly issuedAt: Temporal.Instant;
   readonly document: InvoiceDocument;
@@ -142,8 +142,8 @@ interface InvoiceIssuance {
 }
 
 export interface ReservationInvoice extends Invoice {
-  readonly workspaceReservationId: WorkspaceReservationId;
-  readonly paymentAttemptId: PaymentAttemptId;
+  readonly workspaceReservationId: string;
+  readonly paymentAttemptId: string;
   readonly document: ReservationInvoiceDocument;
 }
 

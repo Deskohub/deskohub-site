@@ -23,7 +23,7 @@ import { type Money, moneyEquals, sameMoneyUnit } from "@/shared/money/money";
 import {
   type AccountingRecordReference,
   AccountingRecordUnavailable,
-  sealedAccountingJson,
+  sealedAccountingJsonWithoutPlaintext,
 } from "./sealed-accounting-json";
 
 export type {
@@ -94,23 +94,22 @@ export interface IAccountingDocumentSnapshots {
  * Payment-time source snapshots, sealed one per payment attempt. Only the
  * accounting backend seals or opens them, through `AccountingDocumentSnapshots`.
  */
-export const sealedAccountingDocumentSnapshots = sealedAccountingJson({
-  label: "Accounting snapshot",
-  table: accountingDocumentSnapshots,
-  keyId: accountingDocumentSnapshots.keyId,
-  ciphertext: accountingDocumentSnapshots.encryptedSnapshot,
-  plaintext: { paymentAttemptId: accountingDocumentSnapshots.paymentAttemptId },
-  encode: (snapshot: AccountingDocumentSnapshot) =>
-    encodeStoredAccountingDocumentSnapshot(snapshot),
-  schema: accountingDocumentSnapshotSchema,
-});
+export const sealedAccountingDocumentSnapshots =
+  sealedAccountingJsonWithoutPlaintext({
+    label: "Accounting snapshot",
+    table: accountingDocumentSnapshots,
+    keyId: accountingDocumentSnapshots.keyId,
+    ciphertext: accountingDocumentSnapshots.encryptedSnapshot,
+    encode: (snapshot: AccountingDocumentSnapshot) =>
+      encodeStoredAccountingDocumentSnapshot(snapshot),
+    schema: accountingDocumentSnapshotSchema,
+  });
 
-const sealedEntryPackSnapshots = sealedAccountingJson({
+const sealedEntryPackSnapshots = sealedAccountingJsonWithoutPlaintext({
   label: "Entry pack accounting snapshot",
   table: accountingDocumentSnapshots,
   keyId: accountingDocumentSnapshots.keyId,
   ciphertext: accountingDocumentSnapshots.encryptedSnapshot,
-  plaintext: { paymentAttemptId: accountingDocumentSnapshots.paymentAttemptId },
   encode: Schema.encodeSync(passPurchaseAccountingSnapshotSchema),
   schema: passPurchaseAccountingSnapshotSchema,
 });

@@ -2,7 +2,7 @@ import type { SQL } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import type { SelectResultFields } from "drizzle-orm/query-builders/select.types";
-import { Data, Effect, Schema } from "effect";
+import { Data, Effect, Option, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import type { AccountingSnapshotKeyId } from "@/features/accounting/accounting-document-snapshot";
 import type { InvoicePreviewId } from "@/features/accounting/admin/invoice-preview-id";
@@ -91,15 +91,7 @@ interface SealedAccountingJson<A, Plaintext> {
   >;
 }
 
-/**
- * Stores values of one kind as versionless JSON that PostgreSQL `pgcrypto`
- * encrypts. Keys and plaintext reach the database only as sensitive
- * parameters, and the encrypting and decrypting statements run untraced.
- */
-export const sealedAccountingJson = <
-  A,
-  const Plaintext extends Record<string, PgColumn>,
->(record: {
+interface SealedAccountingRecord<A> {
   /** Names the record in error messages, such as "Invoice". */
   readonly label: string;
   readonly table: PgTable;
@@ -110,17 +102,55 @@ export const sealedAccountingJson = <
     };
   };
   readonly ciphertext: PgColumn;
-  /**
-   * Columns read beside the ciphertext, in this order. At least one: Drizzle
-   * leaves a nested selection without columns out of the row.
-   */
-  readonly plaintext: Plaintext &
-    (keyof Plaintext extends never ? never : unknown);
   /** The JSON form of a value; `JSON.stringify` writes it as stored. */
   readonly encode: (value: A) => unknown;
   /** Decodes stored JSON strictly: an unknown property is invalid. */
   readonly schema: Schema.Decoder<A>;
-}) =>
+}
+
+/**
+ * Stores values of one kind as versionless JSON that PostgreSQL `pgcrypto`
+ * encrypts, read beside plaintext columns of the same row. Keys and plaintext
+ * reach the database only as sensitive parameters, and the encrypting and
+ * decrypting statements run untraced.
+ */
+export const sealedAccountingJson = <
+  A,
+  const Plaintext extends Record<string, PgColumn>,
+>(
+  record: SealedAccountingRecord<A> & {
+    /**
+     * Columns read beside the ciphertext, in this order. At least one: a
+     * record without any opens through `sealedAccountingJsonWithoutPlaintext`.
+     */
+    readonly plaintext: Plaintext &
+      (keyof Plaintext extends never ? never : unknown);
+  }
+) => makeSealedAccountingJson(record, record.plaintext, Option.fromNullishOr);
+
+/**
+ * `sealedAccountingJson` for a record that reads no plaintext columns: its
+ * opened plaintext is empty.
+ */
+export const sealedAccountingJsonWithoutPlaintext = <A>(
+  record: SealedAccountingRecord<A>
+) => makeSealedAccountingJson(record, {}, () => Option.some({}));
+
+/**
+ * Drizzle leaves a nested selection without columns out of the row, so
+ * `readPlaintext` receives `undefined` for an empty `plaintext`.
+ */
+const makeSealedAccountingJson = <
+  A,
+  const Plaintext extends Record<string, PgColumn>,
+  P,
+>(
+  record: SealedAccountingRecord<A>,
+  plaintext: Plaintext,
+  readPlaintext: (
+    selected: SelectResultFields<Plaintext> | undefined
+  ) => Option.Option<P>
+) =>
   Effect.gen(function* () {
     const { db } = yield* WorkspaceDatabase;
     const keys = yield* AccountingSnapshotKeyService;
@@ -220,7 +250,7 @@ export const sealedAccountingJson = <
       // in order, then the decrypted JSON.
       const [row] = yield* db
         .select({
-          plaintext: record.plaintext,
+          plaintext,
           sealedJson: openSealedColumnText(record.ciphertext, key.secret),
         })
         .from(record.table)
@@ -260,14 +290,20 @@ export const sealedAccountingJson = <
         )
       );
 
+      const opened = readPlaintext(row.plaintext);
+      if (Option.isNone(opened)) {
+        return yield* unavailable(
+          input.reference,
+          "parse",
+          "plaintext columns are missing."
+        );
+      }
+
       return {
         value,
-        plaintext: row.plaintext,
-      } satisfies OpenedAccountingRecord<A, SelectResultFields<Plaintext>>;
+        plaintext: opened.value,
+      } satisfies OpenedAccountingRecord<A, P>;
     });
 
-    return { sealer, open } satisfies SealedAccountingJson<
-      A,
-      SelectResultFields<Plaintext>
-    >;
+    return { sealer, open } satisfies SealedAccountingJson<A, P>;
   });

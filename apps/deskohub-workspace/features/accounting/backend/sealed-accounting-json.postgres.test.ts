@@ -212,7 +212,7 @@ describe("sealed accounting JSON statements", () => {
         params: [paymentAttemptId, 1],
       },
       {
-        sql: 'select "payment_attempt_id", pgp_sym_decrypt("encrypted_snapshot", /* deskohub:sensitive */ $1) from "accounting_document_snapshots" where "accounting_document_snapshots"."payment_attempt_id" = $2 limit $3',
+        sql: 'select pgp_sym_decrypt("encrypted_snapshot", /* deskohub:sensitive */ $1) from "accounting_document_snapshots" where "accounting_document_snapshots"."payment_attempt_id" = $2 limit $3',
         params: [keySecret, paymentAttemptId, 1],
       },
     ]);
@@ -369,10 +369,7 @@ describe.skipIf(!testDatabase)("sealed accounting JSON in PostgreSQL", () => {
 
     const opened = await run(openSnapshot(attempt.paymentAttemptId));
 
-    expect(opened).toEqual({
-      value: attempt.snapshot,
-      plaintext: { paymentAttemptId: attempt.paymentAttemptId },
-    });
+    expect(opened).toEqual({ value: attempt.snapshot, plaintext: {} });
     expect(await readStoredSnapshotJson(attempt.paymentAttemptId)).toBe(
       JSON.stringify(encodeStoredAccountingDocumentSnapshot(attempt.snapshot))
     );
