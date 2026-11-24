@@ -3,7 +3,9 @@ language js(typescript, jsx)
 
 // ponytail: direct syntax only; use Biome JS plugins when they expose scope/type APIs.
 file($name, $body) where {
-  $name <: r".*apps/deskohub-workspace/(?:(?:app|db|emails|features|scripts|shared)/.*|[^/]+)\.(?:ts|tsx)$",
+  $name <: r".*(?:apps/deskohub-workspace/(?:(?:app|db|emails|features|scripts|shared)/.*|[^/]+)|packages/.*)\.(?:ts|tsx|mts|cts)$",
+  not $name <: r".*/generated/.*",
+  $body <: r"(?s).*(?:\bas\b|<|\b(?:const|let|var)\b|=>).*",
   $body <: contains bubble {
     or {
       `$known as $broad` as $widening,

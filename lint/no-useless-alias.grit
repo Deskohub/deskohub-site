@@ -17,7 +17,9 @@ language js(typescript, jsx)
 // rejects assignments to imports, functions, and classes, and the workspace exports no
 // mutable `let` bindings whose live updates an alias snapshot would hide.
 file($name, $body) where {
-  $name <: r".*apps/deskohub-workspace/(?:(?:app|db|emails|features|scripts|shared)/.*|[^/]+)\.(?:ts|tsx)$",
+  $name <: r".*(?:apps/deskohub-workspace/(?:(?:app|db|emails|features|scripts|shared)/.*|[^/]+)|packages/.*)\.(?:ts|tsx|mts|cts)$",
+  not $name <: r".*/generated/.*",
+  $body <: r"(?s).*\bconst\b.*",
   $body <: contains bubble {
     `const $alias = $source` as $alias_declaration where {
       $alias <: JsIdentifierBinding(),

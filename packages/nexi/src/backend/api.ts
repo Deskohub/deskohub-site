@@ -1,5 +1,9 @@
 import { Context, Effect, Layer, Option, Predicate, Schema } from "effect";
-import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
+import {
+  HttpClient,
+  type HttpClientError,
+  HttpClientRequest,
+} from "effect/http";
 import { NexiRuntimeConfig, type NexiRuntimeConfigObj } from "../config";
 import { ExternalAPIError, NetworkError } from "../errors";
 import {

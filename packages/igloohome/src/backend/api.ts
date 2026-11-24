@@ -1,7 +1,6 @@
 import { Context, Effect, Layer, Predicate, Ref, Schema, Stream } from "effect";
 import {
   HttpClient,
-  HttpClientError,
   HttpClientRequest,
   type HttpClientResponse,
 } from "effect/http";

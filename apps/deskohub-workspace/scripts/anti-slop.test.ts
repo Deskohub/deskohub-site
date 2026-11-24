@@ -16,15 +16,11 @@ const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
 const lint = async (
   source: string,
-  workspaceDirectory = "scripts",
+  repositoryDirectory = "apps/deskohub-workspace/scripts",
   filename = "probe.ts"
 ) => {
   const temporaryRoot = mkdtempSync(join(tmpdir(), "deskohub-anti-slop-"));
-  const directory = join(
-    temporaryRoot,
-    "apps/deskohub-workspace",
-    workspaceDirectory
-  );
+  const directory = join(temporaryRoot, repositoryDirectory);
   mkdirSync(directory, { recursive: true });
   const path = join(directory, filename);
   writeFileSync(path, source);
@@ -124,6 +120,56 @@ void reconstruct;
   }
 });
 
+test("anti-slop reports the generic rules in packages", async () => {
+  const result = await lint(
+    `
+declare const externalValue: unknown;
+const asserted = externalValue as string;
+const conditionalSpread = { ...(true ? { value: 1 } : {}) };
+const widened: unknown = { value: 1 };
+const objectParameter = (_value: object) => undefined;
+declare function operationOn(value: { id: string }): string;
+declare const repeatedConditionalOperands: readonly ({ id: string } | undefined)[];
+const repeatedConditional = repeatedConditionalOperands[0]
+  ? operationOn(repeatedConditionalOperands[0])
+  : null;
+const runtimeType = typeof externalValue;
+const payloadShape = 1;
+const unknownParameter = (_value: unknown) => undefined;
+type HiddenUnknown = unknown;
+type UnsafeDictionary = Record<string, unknown>;
+const renamed = asserted;
+void conditionalSpread;
+void widened;
+void objectParameter;
+void repeatedConditional;
+void runtimeType;
+void payloadShape;
+void unknownParameter;
+void renamed;
+`,
+    "packages/catalog/src"
+  );
+  const output = `${result.stdout}${result.stderr}`;
+
+  for (const rule of [
+    "no-type-assertions",
+    "no-conditional-empty-object-spread",
+    "no-known-value-widening",
+    "no-object-parameters",
+    "no-repeated-computed-conditional-operand",
+    "no-runtime-typeof",
+    "no-unknown-parameters",
+    "no-unknown-type-aliases",
+    "no-unsafe-dictionary-type",
+    "no-useless-alias",
+  ]) {
+    expect(output).toContain(`[anti-slop/${rule}]`);
+  }
+  // Workspace-only rules stay out of packages in this pass.
+  expect(output).not.toContain("[anti-slop/no-shape-in-symbol-names]");
+});
+
 test("repeated computed conditional operand rule allows independent branches", async () => {
   const result = await lint(`
 declare const condition: boolean;
@@ -155,7 +201,7 @@ void value;
 test("chained assertion rule retains Workspace e2e coverage", async () => {
   const result = await lint(
     "declare const value: unknown; value as unknown as string;",
-    "e2e"
+    "apps/deskohub-workspace/e2e"
   );
   const output = `${result.stdout}${result.stderr}`;
 
@@ -170,7 +216,7 @@ configure({ defaultValidationErrorsShape: "flattened" });
 const view = <Map tableShapeInlineStyle={() => ({})} />;
 void view;
 `,
-    "scripts",
+    "apps/deskohub-workspace/scripts",
     "probe.tsx"
   );
   const output = `${result.stdout}${result.stderr}`;
