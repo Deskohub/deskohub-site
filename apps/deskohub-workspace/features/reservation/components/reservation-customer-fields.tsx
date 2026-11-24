@@ -37,13 +37,17 @@ import {
 import { Input } from "@/shared/components/ui/input";
 import { ReservationFormLabel } from "./reservation-form-label";
 
-type ReservationCustomerFormValues = ReservationContactValues & {
+/** The form-only fields every reservation form holds beside its schema's. */
+export type ReservationEmailConfirmationValues = {
   /**
    * The repeated email of someone else's contact. It only guards against a
    * typo, so it stays outside the reservation schema and its submission.
    */
   readonly emailConfirmation?: string;
 };
+
+type ReservationCustomerFormValues = ReservationContactValues &
+  ReservationEmailConfirmationValues;
 
 type ReservationCustomerFieldsProps = {
   /** Asks for the email twice, for a contact who isn't the account. */
@@ -61,6 +65,7 @@ const reservationCustomerFieldNames = ["name", "email", "phone"] as const;
  */
 export const confirmReservationContactEmail = <Input extends FieldValues, Data>(
   form: UseFormReturn<Input, unknown, Data>,
+  emailConfirmationField: FieldPath<Input>,
   locale: Locale
 ) => {
   const values: Partial<ReservationCustomerFormValues> = form.getValues();
@@ -69,8 +74,7 @@ export const confirmReservationContactEmail = <Input extends FieldValues, Data>(
   if (normalize(values.emailConfirmation) === normalize(values.email)) {
     return true;
   }
-  // Every reservation form holds the contact fields.
-  form.setError("emailConfirmation" as FieldPath<Input>, {
+  form.setError(emailConfirmationField, {
     message: m.contactValidationEmailConfirmationMismatch({}, { locale }),
   });
   return false;

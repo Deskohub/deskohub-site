@@ -16,6 +16,7 @@ import { MeetingRoomEarlySetupField } from "@/features/meeting-room/components/m
 import { MeetingRoomStartTimeOptions } from "@/features/meeting-room/components/meeting-room-start-time-options";
 import { ReservationAdvertisedPrice } from "@/features/reservation/components/reservation-advertised-price";
 import { ReservationCheckoutForm } from "@/features/reservation/components/reservation-checkout-form";
+import type { ReservationEmailConfirmationValues } from "@/features/reservation/components/reservation-customer-fields";
 import { ReservationFormDateTimeInput } from "@/features/reservation/components/reservation-date-time-input";
 import {
   ReservationCustomerFieldsFallback,
@@ -113,7 +114,7 @@ export function MeetingRoomReservationForm({
       ? getMeetingRoomReservationDefaultValues(initialReservation)
       : { ...meetingRoomReservationDefaultValues });
   const form = useForm<
-    MeetingRoomReservationInput,
+    MeetingRoomReservationInput & ReservationEmailConfirmationValues,
     unknown,
     MeetingRoomReservationData
   >({
@@ -221,10 +222,23 @@ export function MeetingRoomReservationForm({
         },
         locale
       )}
+      fields={{
+        selection: meetingRoomSelectionLink.params,
+        emailConfirmation: "emailConfirmation",
+        marketingConsent: { name: "marketingConsent", value: true },
+      }}
       selection={{
         kind: meetingRoomSelectionLink.kind,
-        fromSearchParams: (searchParams) =>
-          meetingRoomSelectionLink.readSelection(searchParams, { locale }),
+        fromSearchParams: (searchParams, visit) => {
+          for (const {
+            name,
+            value,
+          } of meetingRoomSelectionLink.readFieldValues(searchParams, {
+            locale,
+          })) {
+            visit(name, value);
+          }
+        },
       }}
     >
       <FormField
@@ -280,6 +294,9 @@ export function MeetingRoomReservationForm({
                 onBlur={field.onBlur}
                 onChange={field.onChange}
                 value={field.value}
+                values={workspaceMeetingRoomCatalog.map((product) =>
+                  getMeetingRoomReservationDurationKey(product.duration)
+                )}
               >
                 {workspaceMeetingRoomCatalog.map((product) => {
                   const durationKey = getMeetingRoomReservationDurationKey(

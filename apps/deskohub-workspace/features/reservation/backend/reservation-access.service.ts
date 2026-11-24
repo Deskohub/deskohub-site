@@ -1,5 +1,4 @@
 import {
-  type DotyposCustomerId,
   type DotyposReservationId,
   DotyposService,
   getCustomerDisplayName,
@@ -246,7 +245,7 @@ const implementation = Effect.gen(function* () {
   const readBookerName = (
     customerId: WorkspaceReservation["dotyposCustomerId"]
   ) =>
-    dotypos.getCustomer(customerId as DotyposCustomerId).pipe(
+    dotypos.getCustomer(customerId).pipe(
       Effect.map((found) =>
         Option.getOrNull(
           Option.flatMapNullishOr(found, (customer) =>

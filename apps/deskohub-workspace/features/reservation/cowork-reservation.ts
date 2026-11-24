@@ -1,4 +1,11 @@
-import { Match, Schema, SchemaGetter } from "effect";
+import {
+  Effect,
+  Match,
+  Schema,
+  type SchemaAST,
+  SchemaGetter,
+  SchemaIssue,
+} from "effect";
 import {
   isWorkspaceCoworkCurrentProductTier,
   type WorkspaceProductMonitorOption,
@@ -651,6 +658,25 @@ const normalizedCurrentCoworkReservationOrderSchema = Schema.Union([
 export type NormalizedCurrentCoworkReservationOrder =
   typeof normalizedCurrentCoworkReservationOrderSchema.Type;
 
+const isNormalizedCurrentCoworkReservationOrder = Schema.is(
+  normalizedCurrentCoworkReservationOrderSchema
+);
+
+const isNormalizedCurrentCoworkReservationForm = Schema.is(
+  normalizedCurrentCoworkReservationFormSchema
+);
+
+/** Public issuance refuses a historical tier, which only stays decodable. */
+const currentOfferIssue = (
+  input: CoworkReservationOrderInput | CoworkReservationFormInput,
+  options: SchemaAST.ParseOptions
+) =>
+  new SchemaIssue.InvalidValue(
+    { message: "Only a current cowork offer can be issued." },
+    input,
+    options
+  );
+
 /**
  * A cowork order for a current offer a customer submits, phone read in
  * `defaultPhoneRegion`.
@@ -661,11 +687,13 @@ export const coworkCurrentReservationOrderSchema = (
   const inputSchema = coworkReservationOrderInputSchema(defaultPhoneRegion);
   return inputSchema.check(Schema.makeFilter(getCoworkReservationIssues)).pipe(
     Schema.decodeTo(normalizedCurrentCoworkReservationOrderSchema, {
-      decode: SchemaGetter.transform(
-        (data) =>
-          normalizeCoworkReservationOrder(
-            data
-          ) as NormalizedCurrentCoworkReservationOrder
+      decode: SchemaGetter.transformEffect(
+        (data: CoworkReservationOrderInput, options) => {
+          const order = normalizeCoworkReservationOrder(data);
+          return isNormalizedCurrentCoworkReservationOrder(order)
+            ? Effect.succeed(order)
+            : Effect.fail(currentOfferIssue(data, options));
+        }
       ),
       encode: SchemaGetter.transform(Schema.decodeUnknownSync(inputSchema)),
     })
@@ -673,13 +701,17 @@ export const coworkCurrentReservationOrderSchema = (
 };
 
 const normalizeCoworkReservationForm = (
-  data: CoworkReservationFormInput
-): NormalizedCurrentCoworkReservationForm =>
-  // Issuance input can only produce the current offers.
-  ({
+  data: CoworkReservationFormInput,
+  options: SchemaAST.ParseOptions
+): Effect.Effect<NormalizedCurrentCoworkReservationForm, SchemaIssue.Issue> => {
+  const form = {
     ...normalizeCoworkReservationOrder(data),
     marketingConsent: data.marketingConsent,
-  }) as NormalizedCurrentCoworkReservationForm;
+  };
+  return isNormalizedCurrentCoworkReservationForm(form)
+    ? Effect.succeed(form)
+    : Effect.fail(currentOfferIssue(data, options));
+};
 
 export const getCoworkReservationOrder = (
   form: NormalizedCoworkReservationForm | NormalizedCurrentCoworkReservationForm
@@ -717,7 +749,7 @@ export const coworkReservationSchema = (defaultPhoneRegion: string) =>
     .check(Schema.makeFilter(getCoworkReservationIssues))
     .pipe(
       Schema.decodeTo(normalizedCurrentCoworkReservationFormSchema, {
-        decode: SchemaGetter.transform(normalizeCoworkReservationForm),
+        decode: SchemaGetter.transformEffect(normalizeCoworkReservationForm),
         encode: SchemaGetter.transform(
           (reservation): CoworkReservationFormInput => ({
             ...reservation,

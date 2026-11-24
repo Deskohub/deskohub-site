@@ -4,7 +4,16 @@ import type {
   DotyposReservationInterval,
 } from "@deskohub/dotypos";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Context, Data, Effect, Layer, Match, Option, Result } from "effect";
+import {
+  Array as Arr,
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Match,
+  Option,
+  Result,
+} from "effect";
 import {
   WorkspaceDatabase,
   workspaceStatementConcurrency,
@@ -237,14 +246,14 @@ const implementation = Effect.gen(function* () {
       inventory: AvailabilityInventory,
       input: {
         /** The consecutive dates the inventory snapshot covers. */
-        readonly dates: readonly Temporal.PlainDate[];
+        readonly dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>;
         readonly occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion;
         readonly allowPassDayMove?: boolean;
       }
     ) {
       yield* Effect.logInfo("Workspace availability inventory load started");
-      const first = input.dates[0]!;
-      const last = input.dates.at(-1)!;
+      const first = Arr.headNonEmpty(input.dates);
+      const last = Arr.lastNonEmpty(input.dates);
       // The provider can list a hold as soon as it is attached. Read its
       // local intent first so it is visible on at least one side of the handover.
       const passDayIntents =
@@ -546,7 +555,7 @@ const implementation = Effect.gen(function* () {
    * against it, one shared view per request.
    */
   const loadMeetingRoomIntervalEvaluator = (input: {
-    readonly dates: readonly Temporal.PlainDate[];
+    readonly dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>;
     readonly occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion;
   }) =>
     loadInventory(advisoryInventory, { ...input, allowPassDayMove: true }).pipe(
@@ -647,7 +656,10 @@ const implementation = Effect.gen(function* () {
       const dates = yield* getCalendarDateRange(query);
       const now = yield* currentInstant;
       const evaluate = yield* loadMeetingRoomIntervalEvaluator({
-        dates: getMeetingRoomInventoryDates(dates[0]!, dates.at(-1)),
+        dates: getMeetingRoomInventoryDates(
+          Arr.headNonEmpty(dates),
+          Arr.lastNonEmpty(dates)
+        ),
         occupancyExclusion,
       });
       const durations = yield* Effect.fromResult(
@@ -673,8 +685,8 @@ const implementation = Effect.gen(function* () {
       yield* Effect.logInfo("Meeting-room unavailable dates computed");
 
       const calendar: MeetingRoomUnavailableDates = {
-        from: plainDateStringSchema.make(dates[0]!.toString()),
-        to: plainDateStringSchema.make(dates.at(-1)!.toString()),
+        from: plainDateStringSchema.make(Arr.headNonEmpty(dates).toString()),
+        to: plainDateStringSchema.make(Arr.lastNonEmpty(dates).toString()),
         unavailableDates,
         durations,
       };
@@ -891,7 +903,16 @@ const getDateRange = Effect.fn(function* (from: string, to: string) {
     });
   }
 
-  return getPlainDatesBetween(start, end);
+  const dates: ReadonlyArray<Temporal.PlainDate> = getPlainDatesBetween(
+    start,
+    end
+  );
+  if (!Arr.isReadonlyArrayNonEmpty(dates)) {
+    return yield* new AvailabilityQueryInvalid({
+      message: "Availability range must include at least one date",
+    });
+  }
+  return dates;
 });
 
 /** A calendar's dates, which span at most the six-month calendar range. */
@@ -921,14 +942,17 @@ const getCalendarDateRange = Effect.fn(function* ({
 const getMeetingRoomInventoryDates = (
   first: Temporal.PlainDate,
   last = first
-) =>
-  getPlainDatesBetween(
-    first.subtract({ days: 1 }),
-    Temporal.PlainDate.from(
-      getMeetingRoomDayLastServiceDate(
-        plainDateStringSchema.make(last.toString())
+): Arr.NonEmptyReadonlyArray<Temporal.PlainDate> =>
+  Arr.prepend(
+    getPlainDatesBetween(
+      first,
+      Temporal.PlainDate.from(
+        getMeetingRoomDayLastServiceDate(
+          plainDateStringSchema.make(last.toString())
+        )
       )
-    )
+    ),
+    first.subtract({ days: 1 })
   );
 
 /**
@@ -938,25 +962,27 @@ const getMeetingRoomInventoryDates = (
  */
 const getInventoryDates = (
   query: WorkspaceAvailabilityQuery,
-  dates: readonly Temporal.PlainDate[]
-): readonly Temporal.PlainDate[] => {
+  dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>
+): Arr.NonEmptyReadonlyArray<Temporal.PlainDate> => {
   if (query.kind === coworkReservationKind) {
     return isOvernightCoworkStay(query.entryTier, query.stay)
-      ? [...dates, dates.at(-1)!.add({ days: 1 })]
+      ? Arr.append(dates, Arr.lastNonEmpty(dates).add({ days: 1 }))
       : dates;
   }
   if (query.kind !== meetingRoomReservationKind) return dates;
 
-  const meetingRoomDates = getMeetingRoomInventoryDates(dates[0]!);
+  const meetingRoomDates = getMeetingRoomInventoryDates(
+    Arr.headNonEmpty(dates)
+  );
   return meetingRoomDates.length > dates.length ? meetingRoomDates : dates;
 };
 
 const getDateRangeReservationInterval = (
-  dates: readonly Temporal.PlainDate[]
+  dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>
 ): DotyposReservationInterval => {
   const timeZone = workspaceSiteConstants.location.timeZone;
-  const firstDate = dates[0]!;
-  const lastDate = dates.at(-1)!;
+  const firstDate = Arr.headNonEmpty(dates);
+  const lastDate = Arr.lastNonEmpty(dates);
   return {
     startDate: new Date(
       firstDate.toZonedDateTime(timeZone).toInstant().epochMilliseconds

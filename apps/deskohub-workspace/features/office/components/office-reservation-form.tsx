@@ -25,6 +25,7 @@ import {
 } from "@/features/office/office-people";
 import { ReservationAdvertisedPrice } from "@/features/reservation/components/reservation-advertised-price";
 import { ReservationCheckoutForm } from "@/features/reservation/components/reservation-checkout-form";
+import type { ReservationEmailConfirmationValues } from "@/features/reservation/components/reservation-customer-fields";
 import { ReservationFormDateInput } from "@/features/reservation/components/reservation-date-input";
 import {
   ReservationCustomerFieldsFallback,
@@ -91,10 +92,11 @@ type OfficeReservationFormProps = {
  * The people list stays in form state between the steps and goes to the
  * server with the submitted reservation, never into the selection link.
  */
-type OfficeReservationFormValues = OfficeReservationInput & {
-  /** A seat-only selection applied by WebMCP has no guest list. */
-  readonly people: OfficePeople | null;
-};
+type OfficeReservationFormValues = OfficeReservationInput &
+  ReservationEmailConfirmationValues & {
+    /** A seat-only selection applied by WebMCP has no guest list. */
+    readonly people: OfficePeople | null;
+  };
 
 type OfficeCheckoutFormData = OfficeReservationData & {
   readonly people?: OfficePeople;
@@ -360,6 +362,11 @@ export function OfficeReservationForm({
       heldOfficePrice={heldPrice}
       availability={availability}
       checkoutSessionId={checkoutSessionId}
+      fields={{
+        selection: [...officeSelectionLink.params, "people"],
+        emailConfirmation: "emailConfirmation",
+        marketingConsent: { name: "marketingConsent", value: true },
+      }}
       form={form}
       getOfficeSelection={({ people, seats }) =>
         people ? { kind: "people", people } : { kind: "seats", seats }
@@ -375,17 +382,16 @@ export function OfficeReservationForm({
         officeSelection: selection,
         // Only the site tool applies this selection. Ordinary links start
         // with You, while the tool books its quoted number of unnamed seats.
-        fromSearchParams: (
-          searchParams
-        ): Partial<OfficeReservationFormValues> => {
-          return {
-            ...officeSelectionLink.readSelection(searchParams, {
-              seatCapacity,
-              today,
-            }),
-            seats: Number(searchParams.get("seats")),
-            people: null,
-          };
+        fromSearchParams: (searchParams, visit) => {
+          for (const { name, value } of officeSelectionLink.readFieldValues(
+            searchParams,
+            { seatCapacity, today }
+          )) {
+            if (name === "seats")
+              visit(name, Number(searchParams.get("seats")));
+            else visit(name, value);
+          }
+          visit("people", null);
         },
       }}
     >
