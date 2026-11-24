@@ -407,6 +407,13 @@ const makeAgentToolMcpServer = <R>({
   return server;
 };
 
+const parseJson = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Unknown)
+);
+
+/** A value as JSON carries it: undefined members dropped, non-finite numbers null. */
+const toWireJson = <Value>(value: Value) => parseJson(JSON.stringify(value));
+
 /**
  * Lists each tool's `securitySchemes` beside its definition as well as in
  * its `_meta`, where ChatGPT reads it: the SDK's `tools/list` keeps only
@@ -418,11 +425,11 @@ const listSecuritySchemes = (server: McpServer) => {
   const listTools = server.server["_getRequestHandler"]("tools/list");
   if (listTools === undefined) return;
   server.server.setRequestHandler("tools/list", async (request, context) => {
-    const listed = await listTools(
-      { jsonrpc: "2.0", id: 0, ...request },
-      context
+    // The stored handler is typed for any method. Its listing is checked as
+    // the wire carries it, so a listing the wire would send still passes.
+    const listed = toWireJson(
+      await listTools({ jsonrpc: "2.0", id: 0, ...request }, context)
     );
-    // The stored handler is typed for any method; its listing is the SDK's.
     if (!isSpecType.ListToolsResult(listed)) {
       throw new ProtocolError(
         ProtocolErrorCode.InternalError,

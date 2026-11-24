@@ -55,18 +55,20 @@ type EndpointCall = (
   AdministrationAgentAccessToken
 >;
 
-/** The value an object holds under `name`, if it has one. */
-const propertyOf =
+/** The value an object holds as its own property `name`, if any. */
+const ownPropertyOf =
   (name: string) =>
   <Value>(value: Value) =>
-    Predicate.hasProperty(value, name)
+    Predicate.hasProperty(value, name) && Object.hasOwn(value, name)
       ? Option.fromNullishOr(value[name])
       : Option.none();
 
 /**
- * Whether a client member is an endpoint's method. The tools reach
- * operations by name and check each request part against the endpoint's
- * schemas themselves, so a method is called with the request they checked.
+ * Whether a client member is an endpoint's method. This is a trust boundary,
+ * not a proof: the runtime check is only that the member is callable. The
+ * client builds one method per endpoint, as its own property of its group,
+ * and the tools check each request part against the endpoint's schemas
+ * themselves, so a method is called with the request they checked.
  */
 const isEndpointCall = <Value>(value: Value): value is Value & EndpointCall =>
   Predicate.isFunction(value);
@@ -137,8 +139,8 @@ export class AdministrationApiClient extends Context.Service<
         return {
           call: (operation, request) =>
             Option.some(client).pipe(
-              Option.flatMap(propertyOf(operation.split(".")[0] ?? "")),
-              Option.flatMap(propertyOf(operation.split(".")[1] ?? "")),
+              Option.flatMap(ownPropertyOf(operation.split(".")[0] ?? "")),
+              Option.flatMap(ownPropertyOf(operation.split(".")[1] ?? "")),
               Option.filter(isEndpointCall),
               Option.match({
                 onNone: () =>

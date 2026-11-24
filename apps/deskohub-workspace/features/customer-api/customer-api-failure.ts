@@ -98,6 +98,10 @@ type WithheldFeatureAnswer<E> = PossibleFailureAnswer<
   CustomerFeatureUnavailable
 >;
 
+/**
+ * Whether the failure is a withheld feature. `E` must be the operation's own
+ * failure union: for a wider `E`, such as `unknown`, `Extract` is `never`.
+ */
 const isFeatureWithheld = <E>(
   failure: E
 ): failure is Extract<E, AccountFeatureWithheldError> =>

@@ -8,6 +8,7 @@ import {
   disclosedCredentials,
   WorkspaceAdminApi,
 } from "@deskohub/workspace-admin-api";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import {
   Context,
   Effect,
@@ -240,9 +241,7 @@ const successOf = (
 };
 
 const isBinary = (success: Schema.Top) =>
-  Schema.is(Schema.toType(administrationContractCodec(success)))(
-    new Uint8Array()
-  );
+  Schema.is(Schema.toType(success))(new Uint8Array());
 
 /**
  * Refuses an operation whose success or errors can carry a credential the
@@ -276,7 +275,8 @@ const guardCredentials = ({
 
 /** Whether the schema's JSON is always an object. */
 /** A schema whose JSON is an object, as tool results are. */
-type JsonObjectSchema = Schema.Codec<Schema.JsonObject, Schema.JsonObject>;
+type ToolResult = StandardSchemaV1.InferOutput<AgentTool<never>["output"]>;
+type JsonObjectSchema = Schema.Codec<ToolResult, ToolResult>;
 
 const encodesToObject = (ast: SchemaAST.AST): boolean => {
   const encoded = SchemaAST.toEncoded(ast);
@@ -312,10 +312,11 @@ const successResultSchema = ({
     });
   }
   const json = Schema.toCodecJson(administrationContractCodec(success));
-  // `encodesToObject` decided whether the JSON is an object; wrapped, it is.
-  return Schema.make<JsonObjectSchema>(
-    (wrapsResult ? Schema.Struct({ items: json }) : json).ast
-  );
+  // `encodesToObject` decided that an unwrapped success's JSON is an object,
+  // which only its AST shows, so the unwrapped schema states it.
+  return wrapsResult
+    ? Schema.Struct({ items: json })
+    : Schema.make<JsonObjectSchema>(json.ast);
 };
 
 const outputSchema = ({
