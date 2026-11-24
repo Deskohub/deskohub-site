@@ -47,24 +47,24 @@ export const observeReleaseServices = Effect.gen(function* () {
  * either worker exists. Callers run it on the record version they are about
  * to write over, so no newer record slips in between check and write.
  */
-export const requireRecordCoversLiveService = (record: ReleaseRecord) =>
-  Effect.gen(function* () {
-    if (record.active !== null || record.pendingApply !== null) {
-      return;
-    }
-    const live = (yield* observeReleaseServices).flatMap(
-      ({ workload, service }) =>
-        service === null ? [] : [{ workload, service }]
-    );
-    if (live.length > 0) {
-      return yield* new ReleaseRecordLost({
-        liveWorkloads: live.map(({ workload }) => workload),
-        liveRevisions: live.flatMap(({ service }) =>
-          service.traffic.map((entry) => entry.revision)
-        ),
-      });
-    }
-  });
+export const requireRecordCoversLiveService = Effect.fn(
+  "WorkspaceRelease.requireRecordCoversLiveService"
+)(function* (record: ReleaseRecord) {
+  if (record.active !== null || record.pendingApply !== null) {
+    return;
+  }
+  const live = (yield* observeReleaseServices).flatMap(
+    ({ workload, service }) => (service === null ? [] : [{ workload, service }])
+  );
+  if (live.length > 0) {
+    return yield* new ReleaseRecordLost({
+      liveWorkloads: live.map(({ workload }) => workload),
+      liveRevisions: live.flatMap(({ service }) =>
+        service.traffic.map((entry) => entry.revision)
+      ),
+    });
+  }
+});
 
 /** Refuse while any release-owned service reports a rollout in progress. */
 export const requireQuietReleaseServices = Effect.gen(function* () {

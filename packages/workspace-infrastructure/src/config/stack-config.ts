@@ -1,6 +1,7 @@
 import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 
@@ -333,11 +334,28 @@ const secretMaterialPatterns: ReadonlyArray<RegExp> = [
 const secretKeyPattern =
   /^(?:value|secretValue|password|token|apiKey|privateKey|credentials?|connectionString)$/i;
 
+/**
+ * Any value `JSON.parse` yields. Unlike `Schema.Json` it keeps non-finite
+ * numbers such as an overflowing `1e400`, so the domain decoder rejects
+ * them with the offending field path.
+ */
+const ParsedJson: Schema.Codec<Schema.Json> = Schema.Union([
+  Schema.Null,
+  Schema.Number,
+  Schema.Boolean,
+  Schema.String,
+  Schema.Array(Schema.suspend(() => ParsedJson)),
+  Schema.Record(
+    Schema.String,
+    Schema.suspend(() => ParsedJson)
+  ),
+]);
+
 const findSecretMaterial = (
-  input: unknown,
+  input: Schema.Json,
   path: ReadonlyArray<string> = []
 ): ReadonlyArray<string> => {
-  if (typeof input === "string") {
+  if (Predicate.isString(input)) {
     return secretMaterialPatterns.some((pattern) => pattern.test(input))
       ? [path.join(".") || "<root>"]
       : [];
@@ -347,14 +365,18 @@ const findSecretMaterial = (
       findSecretMaterial(item, [...path, String(index)])
     );
   }
-  if (typeof input === "object" && input !== null) {
-    return Object.entries(input).flatMap(([key, value]) =>
-      secretKeyPattern.test(key)
-        ? [[...path, key].join(".")]
-        : findSecretMaterial(value, [...path, key])
-    );
+  if (
+    input === null ||
+    Predicate.isNumber(input) ||
+    Predicate.isBoolean(input)
+  ) {
+    return [];
   }
-  return [];
+  return Object.entries(input).flatMap(([key, value]) =>
+    secretKeyPattern.test(key)
+      ? [[...path, key].join(".")]
+      : findSecretMaterial(value, [...path, key])
+  );
 };
 
 const issuePaths = (issue: SchemaIssue.Issue): ReadonlyArray<string> => [
@@ -378,48 +400,49 @@ export const workspaceStateBucket = (projectId: GcpProjectId) =>
  * `value` or credential field never reaches a resource; known secret
  * shapes fail under any key.
  */
-export const decodeWorkspaceStackConfig = (input: unknown) =>
-  Effect.gen(function* () {
-    const secretPaths = findSecretMaterial(input);
-    if (secretPaths.length > 0) {
-      return yield* new WorkspaceStackConfigInvalid({
-        paths: secretPaths,
-        reason: "secret-material",
-      });
-    }
-    const config = yield* Schema.decodeUnknownEffect(WorkspaceStackConfig)(
-      input,
-      { onExcessProperty: "error", errors: "all" }
-    ).pipe(
-      Effect.mapError(
-        (error) =>
-          new WorkspaceStackConfigInvalid({
-            paths: issuePaths(error.issue),
-            reason: "schema",
-          })
-      )
-    );
-    const identityPaths = [
-      ...serviceAccountProblems(config),
-      ...(config.stateBucket === workspaceStateBucket(config.projectId)
-        ? []
-        : ["stateBucket"]),
-    ];
-    if (identityPaths.length > 0) {
-      return yield* new WorkspaceStackConfigInvalid({
-        paths: identityPaths,
-        reason: "identity",
-      });
-    }
-    const edgePaths = edgeProblems(config);
-    if (edgePaths.length > 0) {
-      return yield* new WorkspaceStackConfigInvalid({
-        paths: edgePaths,
-        reason: "edge",
-      });
-    }
-    return config;
-  });
+export const decodeWorkspaceStackConfig = Effect.fn(
+  "WorkspaceStack.decodeWorkspaceStackConfig"
+)(function* (input: Schema.Json) {
+  const secretPaths = findSecretMaterial(input);
+  if (secretPaths.length > 0) {
+    return yield* new WorkspaceStackConfigInvalid({
+      paths: secretPaths,
+      reason: "secret-material",
+    });
+  }
+  const config = yield* Schema.decodeUnknownEffect(WorkspaceStackConfig)(
+    input,
+    { onExcessProperty: "error", errors: "all" }
+  ).pipe(
+    Effect.mapError(
+      (error) =>
+        new WorkspaceStackConfigInvalid({
+          paths: issuePaths(error.issue),
+          reason: "schema",
+        })
+    )
+  );
+  const identityPaths = [
+    ...serviceAccountProblems(config),
+    ...(config.stateBucket === workspaceStateBucket(config.projectId)
+      ? []
+      : ["stateBucket"]),
+  ];
+  if (identityPaths.length > 0) {
+    return yield* new WorkspaceStackConfigInvalid({
+      paths: identityPaths,
+      reason: "identity",
+    });
+  }
+  const edgePaths = edgeProblems(config);
+  if (edgePaths.length > 0) {
+    return yield* new WorkspaceStackConfigInvalid({
+      paths: edgePaths,
+      reason: "edge",
+    });
+  }
+  return config;
+});
 
 /**
  * Preview declares no web service for an edge to front (#1455). Plain HTTP
@@ -480,8 +503,6 @@ export const serializeWorkspaceStackConfig = (config: WorkspaceStackConfig) =>
 export const configuredWorkspaceStack = Config.String(
   "WORKSPACE_STACK_CONFIG"
 ).pipe(
-  Effect.flatMap((raw) =>
-    Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(raw)
-  ),
+  Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(ParsedJson))),
   Effect.flatMap(decodeWorkspaceStackConfig)
 );

@@ -3,6 +3,7 @@ import * as Provider from "alchemy/Provider";
 import { Resource } from "alchemy/Resource";
 import * as Effect from "effect/Effect";
 import { HttpClientRequest } from "effect/http";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   computeRoot,
@@ -140,8 +141,6 @@ const LiveSecurityPolicy = Schema.Struct({
   rules: Schema.optional(Schema.Array(LiveRule)),
 });
 type LiveSecurityPolicy = typeof LiveSecurityPolicy.Type;
-const decodePolicy = Schema.decodeUnknownEffect(LiveSecurityPolicy);
-
 /**
  * A rule in a form both sides share: absent booleans are false, absent
  * strings empty, so a live rule equals its declaration exactly when every
@@ -244,19 +243,22 @@ const policyDrift = (
  * The rule as written: `preview` is always sent, false included. A live
  * rule with WAF exclusions the edge never declares gets them cleared.
  */
-const ruleBody = (rule: EdgeSecurityPolicyRule, live?: LiveRule) => ({
-  priority: rule.priority,
-  action: rule.action,
-  description: rule.description,
-  preview: rule.preview,
-  match: rule.match,
-  ...(rule.rateLimitOptions === undefined
-    ? {}
-    : { rateLimitOptions: rule.rateLimitOptions }),
-  ...((live?.preconfiguredWafConfig?.exclusions?.length ?? 0) > 0
-    ? { preconfiguredWafConfig: { exclusions: [] } }
-    : {}),
-});
+const ruleBody = (rule: EdgeSecurityPolicyRule, live?: LiveRule) => {
+  const written = {
+    priority: rule.priority,
+    action: rule.action,
+    description: rule.description,
+    preview: rule.preview,
+    match: rule.match,
+  };
+  const limited =
+    rule.rateLimitOptions === undefined
+      ? written
+      : { ...written, rateLimitOptions: rule.rateLimitOptions };
+  return (live?.preconfiguredWafConfig?.exclusions?.length ?? 0) > 0
+    ? { ...limited, preconfiguredWafConfig: { exclusions: [] } }
+    : limited;
+};
 
 const policiesUrl = (project: string) =>
   `${computeRoot}/projects/${project}/global/securityPolicies`;
@@ -276,8 +278,10 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
     }
     // Identity fields are plain strings; an unresolved one cannot differ yet.
     const changed = (key: "project" | "name" | "type") => {
-      const next = resolvedStringProp(news, key);
-      return next !== undefined && next !== previous[key];
+      return Option.exists(
+        resolvedStringProp(key)(news),
+        (next) => next !== previous[key]
+      );
     };
     if (changed("project") || changed("name")) {
       return { action: "replace" as const, deleteFirst: false };
@@ -295,7 +299,7 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
     const live = yield* api.get(
       `Security policy ${name}`,
       `${policiesUrl(project)}/${name}`,
-      decodePolicy
+      LiveSecurityPolicy
     );
     if (live === undefined) {
       return undefined;
@@ -316,7 +320,7 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
     // Every readback must still be the object admitted below.
     let admittedId: string | undefined;
     const read = (operation: string) =>
-      api.get(resource, url, decodePolicy).pipe(
+      api.get(resource, url, LiveSecurityPolicy).pipe(
         Effect.flatMap((live) => requirePresent(resource, operation, live)),
         Effect.filterOrFail(
           (live) => admittedId === undefined || live.id === admittedId,
@@ -337,7 +341,7 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
         )
       );
 
-    let live = yield* api.get(resource, url, decodePolicy);
+    let live = yield* api.get(resource, url, LiveSecurityPolicy);
     if (live === undefined) {
       const inserted = yield* api.insert(resource, policiesUrl(project), {
         name,
@@ -459,7 +463,7 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
     const resource = `Security policy ${output.name}`;
     const url = `${policiesUrl(output.project)}/${output.name}`;
     // A same-name object someone else recreated is not ours to delete.
-    const live = yield* api.get(resource, url, decodePolicy);
+    const live = yield* api.get(resource, url, LiveSecurityPolicy);
     if (live === undefined || !(yield* isAdmitted(id, output.id, live))) {
       return;
     }

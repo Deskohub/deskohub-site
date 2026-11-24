@@ -130,31 +130,32 @@ const lockedStackCommand = (
  * Run one action as the lock holder. A mutating run whose exit is not an
  * accepted one leaves the lock in doubt, as an unknown apply outcome does.
  */
-const runLocked = (action: LockedStackAction) =>
-  Effect.gen(function* () {
-    const config = yield* ReleaseStack;
-    const spec = lockedStackActions[action];
-    return yield* withReleaseWriter(
-      config,
-      spec.operation
-    )(
-      Effect.gen(function* () {
-        const { writer, applyInFlight } = yield* HeldReleaseWriter;
-        const spawner = yield* ChildProcessSpawner;
-        yield* Ref.set(applyInFlight, spec.mutates);
-        const exitCode = yield* spawner
-          .spawn(lockedStackCommand(config, action, writer.token))
-          .pipe(
-            Effect.flatMap((handle) => handle.exitCode),
-            Effect.scoped
-          );
-        if (spec.acceptedExitCodes.some((code) => code === exitCode)) {
-          yield* Ref.set(applyInFlight, false);
-        }
-        return exitCode;
-      })
-    );
-  });
+const runLocked = Effect.fn("SandboxLockedStack.runLocked")(function* (
+  action: LockedStackAction
+) {
+  const config = yield* ReleaseStack;
+  const spec = lockedStackActions[action];
+  return yield* withReleaseWriter(
+    config,
+    spec.operation
+  )(
+    Effect.gen(function* () {
+      const { writer, applyInFlight } = yield* HeldReleaseWriter;
+      const spawner = yield* ChildProcessSpawner;
+      yield* Ref.set(applyInFlight, spec.mutates);
+      const exitCode = yield* spawner
+        .spawn(lockedStackCommand(config, action, writer.token))
+        .pipe(
+          Effect.flatMap((handle) => handle.exitCode),
+          Effect.scoped
+        );
+      if (spec.acceptedExitCodes.some((code) => code === exitCode)) {
+        yield* Ref.set(applyInFlight, false);
+      }
+      return exitCode;
+    })
+  );
+});
 
 if (import.meta.main) {
   const action = process.argv[2];

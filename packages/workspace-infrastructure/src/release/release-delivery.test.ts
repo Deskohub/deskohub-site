@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import {
   ImageDigest,
   type WorkspaceStackConfig,
@@ -223,7 +224,7 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
           if (revision !== undefined) {
             revisionSpecs.set(revision, specFingerprint);
           }
-          if (revision !== undefined && typeof image === "string") {
+          if (revision !== undefined && Schema.is(Schema.String)(image)) {
             revisions.set(
               revision,
               faults.resolvedDigest ??
@@ -265,10 +266,9 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
             revisionDigests: Object.fromEntries(revisions),
             annotations: { ...props.annotations },
             templateRevision: props.template?.revision,
-            templateImageDigest:
-              typeof image === "string"
-                ? ImageDigest.make(image.slice(image.indexOf("@") + 1))
-                : undefined,
+            templateImageDigest: Schema.is(Schema.String)(image)
+              ? ImageDigest.make(image.slice(image.indexOf("@") + 1))
+              : undefined,
             templateSpecFingerprint:
               props.template?.annotations?.[templateSpecAnnotation],
             templateReady: true,

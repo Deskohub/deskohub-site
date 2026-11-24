@@ -8,11 +8,11 @@ export const workspaceWebServiceId = "workspace-web";
 export const workspaceArtifactRepositoryId = "workspace";
 export const workspaceImageName = "workspace";
 
-export const workloadServiceIds: Record<WorkspaceWorkload, string> = {
+export const workloadServiceIds = {
   web: workspaceWebServiceId,
   "tasks-worker": "workspace-tasks-worker",
   "scheduler-worker": "workspace-scheduler-worker",
-};
+} satisfies Record<WorkspaceWorkload, string>;
 
 /**
  * The deterministic run.app URL of a service. Declarations use it so

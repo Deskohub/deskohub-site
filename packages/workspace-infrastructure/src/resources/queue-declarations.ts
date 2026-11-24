@@ -23,6 +23,14 @@ export const queueIdOf = (
     ? `${contract.queueId}-${config.disposableQueueSuffix}`
     : contract.queueId;
 
+/** The retry settings every queue shares, whatever its lifetime. */
+const queueRetryConfig = {
+  maxAttempts: -1,
+  minBackoff: toGcpDuration(workspaceQueueRetry.minBackoff),
+  maxBackoff: toGcpDuration(workspaceQueueRetry.maxBackoff),
+  maxDoublings: workspaceQueueRetry.maxDoublings,
+};
+
 /**
  * Queue properties for one contract. `maxAttempts: -1` leaves the attempt
  * count unbounded so the contract's lifetime alone ends retries; the
@@ -38,19 +46,15 @@ export const queueProps = (
 ): QueueProps => ({
   queueId: queueIdOf(config, contract),
   location: config.region,
-  retryConfig: {
-    maxAttempts: -1,
-    ...(contract.transportLifetime.kind === "bounded"
+  retryConfig:
+    contract.transportLifetime.kind === "bounded"
       ? {
+          ...queueRetryConfig,
           maxRetryDuration: toGcpDuration(
             contract.transportLifetime.maxRetryDuration
           ),
         }
-      : {}),
-    minBackoff: toGcpDuration(workspaceQueueRetry.minBackoff),
-    maxBackoff: toGcpDuration(workspaceQueueRetry.maxBackoff),
-    maxDoublings: workspaceQueueRetry.maxDoublings,
-  },
+      : queueRetryConfig,
   rateLimits: {
     maxConcurrentDispatches: config.capacity.queueMaxConcurrentDispatches,
     maxDispatchesPerSecond: config.capacity.queueMaxDispatchesPerSecond,

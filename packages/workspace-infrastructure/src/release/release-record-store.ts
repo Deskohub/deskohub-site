@@ -94,37 +94,38 @@ export const runReleaseStep = <A, E, R>(
   });
 
 /** An in-process store for tests and local dry runs. */
-export const makeInMemoryReleaseRecordStore = (initial: ReleaseRecord) =>
-  Effect.gen(function* () {
-    const state = yield* Ref.make<StoredReleaseRecord>({
-      record: initial,
-      version: "1",
-    });
-    return ReleaseRecordStore.of({
-      read: Ref.get(state),
-      write: (record, ifVersion) =>
-        Ref.modify(
-          state,
-          (
-            current
-          ): readonly [
-            Effect.Effect<StoredReleaseRecord, ReleaseRecordConflict>,
-            StoredReleaseRecord,
-          ] => {
-            if (current.version !== ifVersion) {
-              return [
-                Effect.fail(
-                  new ReleaseRecordConflict({ expectedVersion: ifVersion })
-                ),
-                current,
-              ];
-            }
-            const next: StoredReleaseRecord = {
-              record,
-              version: String(Number(current.version) + 1),
-            };
-            return [Effect.succeed(next), next];
-          }
-        ).pipe(Effect.flatten),
-    });
+export const makeInMemoryReleaseRecordStore = Effect.fn(
+  "WorkspaceRelease.makeInMemoryReleaseRecordStore"
+)(function* (initial: ReleaseRecord) {
+  const state = yield* Ref.make<StoredReleaseRecord>({
+    record: initial,
+    version: "1",
   });
+  return ReleaseRecordStore.of({
+    read: Ref.get(state),
+    write: (record, ifVersion) =>
+      Ref.modify(
+        state,
+        (
+          current
+        ): readonly [
+          Effect.Effect<StoredReleaseRecord, ReleaseRecordConflict>,
+          StoredReleaseRecord,
+        ] => {
+          if (current.version !== ifVersion) {
+            return [
+              Effect.fail(
+                new ReleaseRecordConflict({ expectedVersion: ifVersion })
+              ),
+              current,
+            ];
+          }
+          const next: StoredReleaseRecord = {
+            record,
+            version: String(Number(current.version) + 1),
+          };
+          return [Effect.succeed(next), next];
+        }
+      ).pipe(Effect.flatten),
+  });
+});
