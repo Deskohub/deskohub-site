@@ -112,6 +112,36 @@
       }
     },
     {
+      "includes": [
+        "apps/deskohub-workspace/app/**",
+        "apps/deskohub-workspace/db/**",
+        "apps/deskohub-workspace/emails/**",
+        "apps/deskohub-workspace/features/**",
+        "apps/deskohub-workspace/scripts/**",
+        "apps/deskohub-workspace/shared/**",
+        "apps/deskohub-workspace/*.ts",
+        "apps/deskohub-workspace/*.tsx",
+        "!**/e2e/**",
+        "!**/generated/**",
+        "!**/paraglide/**",
+        "!**/testing/**",
+        "!**/*.test.*",
+        "!**/*.spec.*",
+        "!**/*.pw.*",
+        "!**/*.test-utils.*",
+        "!**/*.browser-harness.*",
+        "!**/*-fixture.*",
+        "!**/*.fixture.*"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "error"
+          }
+        }
+      }
+    },
+    {
       "includes": ["apps/deskohub-workspace/**"],
       "linter": {
         "rules": {

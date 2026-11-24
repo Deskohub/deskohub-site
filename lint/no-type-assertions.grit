@@ -1,10 +1,20 @@
 engine biome(1.0)
 language js(typescript, jsx)
 
-// Packages decode or narrow values instead of asserting their types.
+// Packages and Workspace production code decode or narrow values instead of
+// asserting their types.
 file($name, $body) where {
-  $name <: r".*packages/.*\.(?:ts|tsx|mts|cts)$",
-  not $name <: r".*/generated/.*",
+  or {
+    and {
+      $name <: r".*packages/.*\.(?:ts|tsx|mts|cts)$",
+      not $name <: r".*/generated/.*"
+    },
+    and {
+      $name <: r".*apps/deskohub-workspace/(?:(?:app|db|emails|features|scripts|shared)/.*|[^/]+)\.(?:ts|tsx|mts|cts)$",
+      not $name <: r".*/(?:generated|paraglide|testing)/.*",
+      not $name <: r".*(?:\.(?:test|spec|pw|test-utils|browser-harness)|-fixture|\.fixture)\.(?:ts|tsx|mts|cts)$"
+    }
+  },
   // Every `as` assertion has the `as` keyword and every angle-bracket assertion a `<`.
   $body <: r"(?s).*(?:\bas\b|<).*",
   $body <: contains bubble {
