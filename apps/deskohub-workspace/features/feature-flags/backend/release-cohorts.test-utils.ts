@@ -9,8 +9,16 @@ import type {
 import type { ReleaseGateClass } from "./release-gate";
 import { releaseGateOverFlags } from "./release-gate.test-utils";
 import { releaseGateForRun } from "./release-gate-run";
-import type { WorkspaceFeatureFlagService } from "./workspace-feature-flag.service";
+import type {
+  IWorkspaceFeatureFlagService,
+  WorkspaceFeatureFlagService,
+} from "./workspace-feature-flag.service";
 import { WorkspaceFeatureFlagServiceMock } from "./workspace-feature-flag.service.mock";
+
+/** What one evaluation of the request's flags answers. */
+type FlagSnapshot = Effect.Success<
+  ReturnType<IWorkspaceFeatureFlagService["evaluateFlags"]>
+>;
 
 /** The test request header naming the release cohort the request is in. */
 export const testReleaseCohortHeader = "x-test-release-cohort";
@@ -35,12 +43,12 @@ export const featureFlagsByCohort = (
     isEnabled: (key) => decide([key]),
     evaluateFlags: (options) =>
       decide(options?.flagKeys ?? []).pipe(
-        Effect.map((open) => {
+        Effect.map((open): FlagSnapshot => {
           const values: PostHogFeatureFlagOverrides<PostHogFeatureFlagDefinitions> =
             Object.fromEntries(
               (options?.flagKeys ?? []).map((key) => [key, open])
             );
-          return { getFlag: (key: PostHogFeatureFlagKey) => values[key] };
+          return { getFlag: (key) => values[key] };
         })
       ),
   });
