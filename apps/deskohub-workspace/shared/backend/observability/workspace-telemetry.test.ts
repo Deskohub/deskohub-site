@@ -15,6 +15,7 @@ process.env.POSTHOG_LOGS_EXPORT = "always";
 process.env.NEXT_PUBLIC_POSTHOG_HOST ??= "https://posthog.example";
 // Spans stay with Vercel's automatic exporters: a development deployment
 // on Vercel, whatever trace opt-in the caller's environment sets.
+delete process.env.WORKSPACE_DEPLOYMENT_STAGE;
 process.env.VERCEL_ENV = "development";
 process.env.POSTHOG_TRACES_EXPORT = "production-only";
 delete process.env.WORKSPACE_RUNTIME_HOST;
