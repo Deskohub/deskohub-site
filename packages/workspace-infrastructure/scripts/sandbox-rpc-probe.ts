@@ -13,7 +13,10 @@ import * as FileSystem from "effect/FileSystem";
 import { FetchHttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { runSandboxRpcProbe } from "../sandbox-probe/probe-client";
+import {
+  runSandboxRpcProbe,
+  setupFailureVerdict,
+} from "../sandbox-probe/probe-client";
 
 class ProbeVerdictFailed extends Schema.TaggedError<ProbeVerdictFailed>()(
   "ProbeVerdictFailed",
@@ -37,7 +40,7 @@ const readValueFile = (path: string) =>
     Effect.map((text) => text.replace(/\r?\n$/, ""))
   );
 
-const probe = Effect.gen(function* () {
+const probeTarget = Effect.gen(function* () {
   const { values } = yield* Effect.try(() =>
     parseArgs({
       args: process.argv.slice(2),
@@ -52,18 +55,28 @@ const probe = Effect.gen(function* () {
     })
   );
   const options = yield* Schema.decodeUnknownEffect(ProbeArguments)(values);
-  const verdict = yield* runSandboxRpcProbe({
+  return {
     url: options.url,
     idToken: yield* readValueFile(options["id-token-file"]),
     marker: yield* readValueFile(options["marker-file"]),
     traceparent: options.traceparent,
     expectVersion: options["expect-version"],
-  });
-  yield* Console.log(JSON.stringify(verdict));
-  if (!verdict.ok) {
-    return yield* new ProbeVerdictFailed({ failures: verdict.failures });
-  }
+  };
 });
+
+const probe = probeTarget.pipe(
+  Effect.matchEffect({
+    onFailure: (error) =>
+      Effect.succeed(setupFailureVerdict(`setup: ${error._tag}`)),
+    onSuccess: runSandboxRpcProbe,
+  }),
+  Effect.tap((verdict) => Console.log(JSON.stringify(verdict))),
+  Effect.flatMap((verdict) =>
+    verdict.ok
+      ? Effect.void
+      : Effect.fail(new ProbeVerdictFailed({ failures: verdict.failures }))
+  )
+);
 
 // Failures go to stderr so stdout carries only the verdict line.
 BunRuntime.runMain(

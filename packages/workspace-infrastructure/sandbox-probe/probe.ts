@@ -17,7 +17,8 @@ import * as Match from "effect/Match";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { markerSha256, ProbeRejected, SandboxProbeRpcs } from "./probe-rpcs";
+import { sha256Hex } from "../src/sha256";
+import { ProbeRejected, SandboxProbeRpcs } from "./probe-rpcs";
 
 export const ServiceRole = Schema.Literals([
   "api",
@@ -31,7 +32,7 @@ export class ProbeIdentity extends Context.Service<
   ProbeIdentity,
   { readonly role: ServiceRole; readonly version: string }
 >()("sandbox-probe/ProbeIdentity") {
-  static readonly fromConfig = Layer.effect(ProbeIdentity)(
+  static readonly Default = Layer.effect(ProbeIdentity)(
     Effect.gen(function* () {
       const role = yield* Config.schema(ServiceRole, "WORKSPACE_SERVICE_ROLE");
       const version = yield* Config.String("PROBE_BUILD_VERSION").pipe(
@@ -76,7 +77,7 @@ export class ProbeLog extends Context.Service<
   ProbeLog,
   { readonly write: (line: ProbeLogLine) => Effect.Effect<void> }
 >()("sandbox-probe/ProbeLog") {
-  static readonly stdout = Layer.succeed(ProbeLog)({
+  static readonly Default = Layer.succeed(ProbeLog)({
     write: (line) => Console.log(JSON.stringify(line)),
   });
 }
@@ -88,7 +89,7 @@ export const probeHandlers = SandboxProbeRpcs.toLayer(
     const log = yield* ProbeLog;
     return SandboxProbeRpcs.of({
       "Probe.ingest": ({ marker }) => {
-        const digest = markerSha256(marker);
+        const digest = sha256Hex(marker);
         return log
           .write({
             severity: "INFO",
@@ -104,7 +105,8 @@ export const probeHandlers = SandboxProbeRpcs.toLayer(
         Effect.fail(
           new ProbeRejected({ reason: "the sandbox probe rejects Probe.fail" })
         ),
-      "Probe.count": ({ n }) => Stream.range(0, n - 1),
+      // One value per chunk, so each reaches the client as its own RPC frame.
+      "Probe.count": ({ n }) => Stream.range(0, n - 1, 1),
     });
   })
 );
@@ -141,7 +143,7 @@ const taskRoutes = Effect.gen(function* () {
         message: "workspace probe task received",
         event: "probe.task",
         queue,
-        markerSha256: markerSha256(marker),
+        markerSha256: sha256Hex(marker),
         probeVersion: identity.version,
         serviceRole: identity.role,
       });

@@ -1,7 +1,6 @@
 // The RPC contract the sandbox probe image serves on POST /rpc and the hosted
 // proof calls over SchemaBinary. PR 3 replaces the probe image with the real
 // API image, which merges these RPCs into its own group in the sandbox stage.
-import { createHash } from "node:crypto";
 import { Rpc, RpcGroup } from "effect/rpc";
 import * as Schema from "effect/Schema";
 
@@ -19,7 +18,7 @@ export class SandboxProbeRpcs extends RpcGroup.make(
     payload: { marker: Schema.String },
     success: Schema.Struct({ markerSha256: Schema.String }),
   }),
-  Rpc.make("Probe.fail", { error: ProbeRejected }),
+  Rpc.make("Probe.fail", { payload: {}, error: ProbeRejected }),
   Rpc.make("Probe.count", {
     payload: {
       n: Schema.Int.check(
@@ -30,7 +29,3 @@ export class SandboxProbeRpcs extends RpcGroup.make(
     stream: true,
   })
 ) {}
-
-/** Lowercase hex SHA-256 of the UTF-8 marker: the only form of it the probe logs or returns. */
-export const markerSha256 = (marker: string) =>
-  createHash("sha256").update(marker, "utf8").digest("hex");

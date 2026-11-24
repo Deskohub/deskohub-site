@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import { ProbeIdentity, ProbeLog, probeServer } from "./probe";
 
 // Cloud Run sets PORT; 0 (an ephemeral port) serves the bundle tests.
+// Schema.Port is experimental in effect 4.1.4, so the range is spelled out.
 const ListenPort = Schema.Int.check(
   Schema.isBetween({ minimum: 0, maximum: 65535 })
 );
@@ -20,7 +21,7 @@ NodeRuntime.runMain(
   Layer.launch(
     probeServer.pipe(
       Layer.provide(
-        Layer.mergeAll(httpServer, ProbeIdentity.fromConfig, ProbeLog.stdout)
+        Layer.mergeAll(httpServer, ProbeIdentity.Default, ProbeLog.Default)
       )
     )
   )

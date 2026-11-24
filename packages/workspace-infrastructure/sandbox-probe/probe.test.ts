@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import { HttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
 import { RpcClient, RpcSerialization, RpcTest } from "effect/rpc";
@@ -86,7 +87,7 @@ describe("sandbox probe RPCs in memory", () => {
 
   test("Probe.fail fails with the typed ProbeRejected error", async () => {
     const { value } = await runInMemory((client) =>
-      Effect.flip(client["Probe.fail"]())
+      Effect.flip(client["Probe.fail"]({}))
     );
     expect(value).toBeInstanceOf(ProbeRejected);
   });
@@ -96,9 +97,23 @@ describe("sandbox probe RPCs in memory", () => {
       Effect.all([
         Stream.runCollect(client["Probe.count"]({ n: 3 })),
         Stream.runCollect(client["Probe.count"]({ n: 0 })),
+        Stream.runCollect(client["Probe.count"]({ n: 100 })),
       ])
     );
-    expect(value).toEqual([[0, 1, 2], []]);
+    expect(value).toEqual([
+      [0, 1, 2],
+      [],
+      Array.from({ length: 100 }, (_, index) => index),
+    ]);
+  });
+
+  test.each([-1, 101, 1.5])("Probe.count rejects n = %p", async (n) => {
+    const { value } = await runInMemory((client) =>
+      Effect.exit(
+        Effect.suspend(() => Stream.runCollect(client["Probe.count"]({ n })))
+      )
+    );
+    expect(Exit.isFailure(value)).toBe(true);
   });
 });
 
@@ -128,7 +143,7 @@ describe("sandbox probe over HTTP", () => {
         const contentTypes: string[] = [];
         const client = yield* httpClient(origin, contentTypes);
         const ingested = yield* client["Probe.ingest"]({ marker });
-        const rejected = yield* Effect.flip(client["Probe.fail"]());
+        const rejected = yield* Effect.flip(client["Probe.fail"]({}));
         const chunks = yield* Stream.runCollect(
           client["Probe.count"]({ n: 3 })
         );
