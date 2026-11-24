@@ -67,7 +67,7 @@ describe.skipIf(!testDatabase)("ReviewSandbox on disposable Postgres", () => {
       email: testEmailAddress("app-review"),
       phone: "unused",
       billing: { purpose: "personal", invoice: "none" },
-    } as ReviewSandboxHoldRequest["reservation"],
+    },
     total: getWorkspaceMeetingRoomPriceForDuration(duration),
     bookedAt: Temporal.Now.instant(),
     ...overrides,

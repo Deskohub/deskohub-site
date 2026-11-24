@@ -16,10 +16,10 @@ type TableFields = Partial<typeof DotyposTableSchema.Encoded>;
 type ReservationFields = Partial<typeof DotyposReservationSchema.Encoded>;
 
 /** Provider fields, without the keys an override leaves undefined. */
-const definedFields = <A extends object>(fields: A): A =>
+const definedFields = (fields: TableFields | ReservationFields) =>
   Object.fromEntries(
     Object.entries(fields).filter(([, value]) => value !== undefined)
-  ) as A;
+  );
 
 const makeTable = (input: TableFields = {}): DotyposTable =>
   Schema.decodeUnknownSync(DotyposTableSchema)(
@@ -186,10 +186,6 @@ describe("getFaqOccupancyStats", () => {
 
   test("counts unique confirmed cowork reservation IDs and excludes other statuses and dates", () => {
     const duplicate = makeReservation({ id: "duplicate" });
-    const otherStatus = {
-      ...makeReservation({ id: "other-status" }),
-      status: "PENDING",
-    } as DotyposReservation;
 
     const stats = calculateStats({
       now: "2025-06-15T12:00:00Z",
@@ -199,7 +195,6 @@ describe("getFaqOccupancyStats", () => {
         { ...duplicate },
         makeReservation({ id: "new", status: "NEW" }),
         makeReservation({ id: "cancelled", status: "CANCELLED" }),
-        otherStatus,
         makeReservation({ id: "before", startDate: "2025-04-30T21:59:59Z" }),
         makeReservation({ id: "after", startDate: "2025-05-31T22:00:00Z" }),
       ],

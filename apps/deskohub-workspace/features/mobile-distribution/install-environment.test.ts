@@ -14,6 +14,8 @@ const linuxFirefox =
 const iPadSafari =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15";
 
+const visibleState: DocumentVisibilityState = "visible";
+
 const fakeBrowser = ({
   navigator,
   displayModeStandalone = false,
@@ -24,7 +26,7 @@ const fakeBrowser = ({
   Object.assign(new EventTarget(), {
     navigator,
     document: Object.assign(new EventTarget(), {
-      visibilityState: "visible" as DocumentVisibilityState,
+      visibilityState: visibleState,
     }),
     matchMedia: (query: string) => ({
       matches: query === "(display-mode: standalone)" && displayModeStandalone,

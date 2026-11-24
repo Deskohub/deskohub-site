@@ -1,5 +1,16 @@
 import { createHash } from "node:crypto";
+import { Schema } from "effect";
 import { cloudStorageApiOrigin } from "./cloud-storage-update-asset-storage";
+
+const decodeUploadMetadata = Schema.decodeUnknownSync(
+  Schema.Struct({
+    name: Schema.String,
+    contentType: Schema.optionalKey(Schema.String),
+    cacheControl: Schema.optionalKey(Schema.String),
+    md5Hash: Schema.optionalKey(Schema.String),
+    metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  })
+);
 
 /** One object of the fake bucket. */
 export interface FakeStoredObject {
@@ -65,13 +76,7 @@ const readMultipartUpload = (contentType: string, body: Buffer) => {
     throw new Error("A multipart upload needs a metadata and a media part");
   }
   return {
-    metadata: JSON.parse(metadataPart.toString("utf8")) as {
-      readonly name: string;
-      readonly contentType?: string;
-      readonly cacheControl?: string;
-      readonly md5Hash?: string;
-      readonly metadata?: Record<string, string>;
-    },
+    metadata: decodeUploadMetadata(JSON.parse(metadataPart.toString("utf8"))),
     media: new Uint8Array(mediaPart),
   };
 };

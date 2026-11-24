@@ -1,7 +1,11 @@
+import type { PostHogFeatureFlagOverrides } from "@deskohub/analytics-posthog/feature-flags";
 import { Effect, type Layer } from "effect";
 import { currentRequestHeaders } from "@/shared/backend/workspace-request-context";
 import type { MeetingPoint } from "@/shared/testing/overlapping-requests.test-utils";
-import type { PostHogFeatureFlagKey } from "../generated/contract";
+import type {
+  PostHogFeatureFlagDefinitions,
+  PostHogFeatureFlagKey,
+} from "../generated/contract";
 import type { ReleaseGateClass } from "./release-gate";
 import { releaseGateOverFlags } from "./release-gate.test-utils";
 import { releaseGateForRun } from "./release-gate-run";
@@ -31,10 +35,13 @@ export const featureFlagsByCohort = (
     isEnabled: (key) => decide([key]),
     evaluateFlags: (options) =>
       decide(options?.flagKeys ?? []).pipe(
-        Effect.map((open) => ({
-          getFlag: ((key: PostHogFeatureFlagKey) =>
-            options?.flagKeys?.includes(key) ? open : undefined) as never,
-        }))
+        Effect.map((open) => {
+          const values: PostHogFeatureFlagOverrides<PostHogFeatureFlagDefinitions> =
+            Object.fromEntries(
+              (options?.flagKeys ?? []).map((key) => [key, open])
+            );
+          return { getFlag: (key: PostHogFeatureFlagKey) => values[key] };
+        })
       ),
   });
 };

@@ -480,14 +480,15 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
         )
       ).then((found) => Option.getOrThrow(found).invitationSendCount);
 
+    const confirmedProviderStatus: WorkspaceReservationDetails["providerStatus"] =
+      "CONFIRMED";
     const delivery = {
       outage: false,
       loseProcessBeforeDispatch: false,
       loseProcessAfterAcceptance: false,
       bookerName: "Alex",
       simulateExpiredProviderKey: false,
-      providerStatus:
-        "CONFIRMED" as WorkspaceReservationDetails["providerStatus"],
+      providerStatus: confirmedProviderStatus,
     };
     const providerDelivery = new Map<string, string>();
     const attempts: Array<{ noticeId: string; kind: string; access?: string }> =

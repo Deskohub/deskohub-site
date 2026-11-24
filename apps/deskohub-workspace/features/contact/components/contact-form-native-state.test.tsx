@@ -14,6 +14,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ContactFormState } from "@/features/contact/actions/contact";
 import type { submitContactForm } from "@/features/contact/actions/submit-contact";
 import { m } from "@/features/i18n";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -144,10 +145,9 @@ describe("ContactForm native action state", () => {
       expect(form.getAttribute("data-rhf-ready")).toBe("true")
     );
     expect(
-      (
-        view.getByLabelText(
-          m.contactNameLabel({}, { locale })
-        ) as HTMLInputElement
+      elementOf(
+        view.getByLabelText(m.contactNameLabel({}, { locale })),
+        HTMLInputElement
       ).value
     ).toBe(state.values?.name);
   });
@@ -176,19 +176,17 @@ describe("ContactForm native action state", () => {
     );
     await waitFor(() =>
       expect(
-        (
-          view.getByLabelText(
-            m.contactNameLabel({}, { locale })
-          ) as HTMLInputElement
+        elementOf(
+          view.getByLabelText(m.contactNameLabel({}, { locale })),
+          HTMLInputElement
         ).value
       ).toBe(state.values?.name)
     );
 
     expect(
-      (
-        view.getByLabelText(
-          m.contactEmailLabel({}, { locale })
-        ) as HTMLInputElement
+      elementOf(
+        view.getByLabelText(m.contactEmailLabel({}, { locale })),
+        HTMLInputElement
       ).value
     ).toBe(state.values.email);
     expect(view.getByText(state.fieldErrors?.name ?? "")).toBeTruthy();
@@ -205,17 +203,25 @@ describe("ContactForm native action state", () => {
     await waitFor(() =>
       expect(form.getAttribute("data-rhf-ready")).toBe("true")
     );
-    expect((view.getByLabelText("Name") as HTMLInputElement).value).toBe("");
-    expect((view.getByLabelText("Email") as HTMLInputElement).value).toBe("");
-    expect((view.getByLabelText("Message") as HTMLTextAreaElement).value).toBe(
+    expect(elementOf(view.getByLabelText("Name"), HTMLInputElement).value).toBe(
       ""
     );
-    for (const [label, value] of [
-      ["Name", "Grace Hopper"],
-      ["Email", testEmailAddress("grace")],
-      ["Message", "Please contact me about a meeting room."],
-    ]) {
-      const field = view.getByLabelText(label) as HTMLInputElement;
+    expect(
+      elementOf(view.getByLabelText("Email"), HTMLInputElement).value
+    ).toBe("");
+    expect(
+      elementOf(view.getByLabelText("Message"), HTMLTextAreaElement).value
+    ).toBe("");
+    for (const [label, value, fieldType] of [
+      ["Name", "Grace Hopper", HTMLInputElement],
+      ["Email", testEmailAddress("grace"), HTMLInputElement],
+      [
+        "Message",
+        "Please contact me about a meeting room.",
+        HTMLTextAreaElement,
+      ],
+    ] as const) {
+      const field = elementOf(view.getByLabelText(label), fieldType);
       fireEvent.change(field, { target: { value } });
       expect(field.value).toBe(value);
     }
@@ -230,12 +236,16 @@ describe("ContactForm native action state", () => {
     view.rerender(<ContactFormClient {...props} />);
 
     await waitFor(() =>
-      expect((view.getByLabelText("Name") as HTMLInputElement).value).toBe("")
+      expect(
+        elementOf(view.getByLabelText("Name"), HTMLInputElement).value
+      ).toBe("")
     );
-    expect((view.getByLabelText("Email") as HTMLInputElement).value).toBe("");
-    expect((view.getByLabelText("Message") as HTMLTextAreaElement).value).toBe(
-      ""
-    );
+    expect(
+      elementOf(view.getByLabelText("Email"), HTMLInputElement).value
+    ).toBe("");
+    expect(
+      elementOf(view.getByLabelText("Message"), HTMLTextAreaElement).value
+    ).toBe("");
     expect(
       view.getByText(m.contactSuccessMessage({}, { locale }))
     ).toBeTruthy();
@@ -249,9 +259,9 @@ describe("ContactForm native action state", () => {
     );
     expect(view.queryByText(validationMessage)).toBeTruthy();
     await waitFor(() =>
-      expect((view.getByRole("button") as HTMLButtonElement).disabled).toBe(
-        false
-      )
+      expect(
+        elementOf(view.getByRole("button"), HTMLButtonElement).disabled
+      ).toBe(false)
     );
     expect(hydratedCalls).toHaveLength(0);
   });
@@ -277,7 +287,9 @@ describe("ContactForm native action state", () => {
     view.rerender(<ContactFormClient {...props} />);
 
     expect(contactSearchParamsReads.at(-1)).toBe("name=Query+Prefill");
-    expect((view.getByLabelText("Name") as HTMLInputElement).value).toBe("");
+    expect(elementOf(view.getByLabelText("Name"), HTMLInputElement).value).toBe(
+      ""
+    );
   });
 
   test("a late native validation result updates values used by RHF validation", async () => {
@@ -318,10 +330,9 @@ describe("ContactForm native action state", () => {
     view.rerender(<ContactFormClient {...props} />);
     await waitFor(() =>
       expect(
-        (
-          view.getByLabelText(
-            m.contactNameLabel({}, { locale })
-          ) as HTMLInputElement
+        elementOf(
+          view.getByLabelText(m.contactNameLabel({}, { locale })),
+          HTMLInputElement
         ).value
       ).toBe(state.values.name)
     );
@@ -337,9 +348,9 @@ describe("ContactForm native action state", () => {
     );
     expect(view.queryByText(validationMessage)).toBeTruthy();
     await waitFor(() =>
-      expect((view.getByRole("button") as HTMLButtonElement).disabled).toBe(
-        false
-      )
+      expect(
+        elementOf(view.getByRole("button"), HTMLButtonElement).disabled
+      ).toBe(false)
     );
     expect(hydratedCalls).toHaveLength(0);
   });
