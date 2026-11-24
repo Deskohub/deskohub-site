@@ -20,6 +20,11 @@ void (() => {
     searchParams,
     context
   );
+  const explicitAbsent: undefined = officeSelectionLink.restore<undefined>(
+    undefined,
+    searchParams,
+    context
+  );
   const inferred: OfficeReservationInput | undefined =
     officeSelectionLink.restore(optional, searchParams, context);
   const explicit: OfficeReservationInput | undefined =
@@ -28,5 +33,5 @@ void (() => {
       searchParams,
       context
     );
-  return [restored, absent, inferred, explicit];
+  return [restored, absent, explicitAbsent, inferred, explicit];
 });

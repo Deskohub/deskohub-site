@@ -67,8 +67,8 @@ export const defineSelectionLink = <
     searchParams: SupportedSearchParams,
     ...args: ReadArgs
   ): Omit<Restored, Param> & Pick<Values, Param>;
-  function restore(
-    restored: undefined,
+  function restore<Restored extends undefined>(
+    restored: Restored,
     searchParams: SupportedSearchParams,
     ...args: ReadArgs
   ): undefined;
