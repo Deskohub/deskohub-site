@@ -3,12 +3,16 @@ import {
   type AudienceConditionOf,
   audienceAttributeCatalogue,
   campaignSourceParam,
+  choiceParam,
   countAttribute,
   defineAudienceAttributeCatalogue,
   periodParam,
 } from "@deskohub/workspace-admin-api";
-import { Effect } from "effect";
-import type { AudienceCountRequest } from "./audience-filter";
+import { Effect, Schema } from "effect";
+import type {
+  AudienceCountRequest,
+  AudienceCountRequestOf,
+} from "./audience-filter";
 import {
   type AudienceAttributeResolvers,
   audienceAttributeResolvers,
@@ -76,18 +80,40 @@ type MismatchedRequest = Omit<AudienceCountRequest, "condition"> & {
 };
 export type CountRequestPairingChecks = [
   Expect<
+    Equal<
+      AudienceCountRequestOf<
+        AudienceConditionOf<"reservationCount">
+      > extends AudienceCountRequest
+        ? true
+        : false,
+      true
+    >
+  >,
+  Expect<
     Equal<MismatchedRequest extends AudienceCountRequest ? true : false, false>
   >,
 ];
 
 /**
  * A campaign source may take any name: its entry's part decides that the
- * request fixes it, and its resolver fixes it through `inContext`.
+ * request fixes it, and its resolver fixes it through `inContext`. A choice
+ * may take the name `campaign`; it stays a choice.
  */
 export const sourcedEmailCount = countAttribute("sourcedEmailCount", {
   label: "Emails received",
   section: "Reservations",
-  params: { period: periodParam, source: campaignSourceParam },
+  params: {
+    campaign: choiceParam(Schema.Literals(["welcome", "promotion"]), {
+      label: "Campaign kind",
+      control: "select",
+      options: {
+        welcome: { label: "welcome" },
+        promotion: { label: "promotion" },
+      },
+    }),
+    period: periodParam,
+    source: campaignSourceParam,
+  },
   editor: {
     lead: [{ text: "emails received" }],
     period: "Emails",
@@ -95,7 +121,7 @@ export const sourcedEmailCount = countAttribute("sourcedEmailCount", {
   },
   summary: { verb: "received", noun: { one: "email", other: "emails" } },
   defaults: {
-    params: { period: { _tag: "AnyTime" } },
+    params: { campaign: "welcome", period: { _tag: "AnyTime" } },
     operator: "gte",
     value: 1,
   },
@@ -111,13 +137,14 @@ export const sourcedResolvers: AudienceAttributeResolvers<
 > = {
   ...audienceAttributeResolvers,
   sourcedEmailCount: {
-    // Counts one email for the fixed campaign, so a test sees which it was.
-    count: ({ params: { source }, inContext }) =>
+    // Counts one email under the campaign kind and fixed campaign, so a
+    // test sees which they were.
+    count: ({ params: { campaign, source }, inContext }) =>
       Effect.succeed(
         new Map([
           [
             DotyposCustomerIdSchema.make(
-              String(source && inContext.campaign(source))
+              `${campaign}:${String(source && inContext.campaign(source))}`
             ),
             1,
           ],

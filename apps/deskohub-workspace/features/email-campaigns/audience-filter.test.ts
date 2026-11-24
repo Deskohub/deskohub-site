@@ -231,9 +231,7 @@ describe("evaluateAudienceFilter", () => {
 
   test("keeps choice params and the product filter as they are", () => {
     const product = { family: "cowork", properties: [] } as const;
-    const {
-      condition: { params },
-    } = countFactRequest(
+    const { fixedParams } = countFactRequest(
       audienceAttributeCatalogue.reservationCount,
       {
         ...reservationsVisitedInMarch,
@@ -241,8 +239,8 @@ describe("evaluateAudienceFilter", () => {
       },
       context
     );
-    expect(params.dateBasis).toBe("visit");
-    expect(params.product).toEqual(product);
+    expect(fixedParams.dateBasis).toBe("visit");
+    expect(fixedParams.product).toEqual(product);
   });
 
   test("a date in, not in, or without a value", () => {

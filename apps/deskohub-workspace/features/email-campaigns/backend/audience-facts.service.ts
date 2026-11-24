@@ -161,7 +161,11 @@ const visitInterval = (
 const dotyposStartsBefore = (bounds: DatePeriodBounds) =>
   bounds.startsAtOrBefore?.add({ milliseconds: 1 }) ?? bounds.startsBefore;
 
-/** A count request as its attribute's resolver dispatch reads it. */
+/**
+ * A count request as its attribute's resolver dispatch reads it. Dispatch
+ * also takes it as an {@link AudienceCountRequest}, whose condition pairs
+ * each attribute with its own params.
+ */
 type CountRequestFor<Attribute extends AudienceAttributeOfKind<"count">> = Omit<
   AudienceCountRequest,
   "condition"
@@ -173,25 +177,31 @@ type CountRequestFor<Attribute extends AudienceAttributeOfKind<"count">> = Omit<
 };
 
 /** Whether the request's attribute resolver reads Dotypos visits for it. */
-const readsVisits = <Attribute extends AudienceAttributeOfKind<"count">>({
-  condition: { attribute, params },
-  inContext,
-}: CountRequestFor<Attribute>) =>
-  countResolvers[attribute].readsVisits({ params, inContext });
+const readsVisits = <Attribute extends AudienceAttributeOfKind<"count">>(
+  request: AudienceCountRequest & CountRequestFor<Attribute>
+) => {
+  const {
+    condition: { attribute, params },
+    inContext,
+  }: CountRequestFor<Attribute> = request;
+  return countResolvers[attribute].readsVisits({ params, inContext });
+};
 
 /** Counts through the request's attribute resolver. */
 const resolveCount = <Attribute extends AudienceAttributeOfKind<"count">>(
-  {
+  request: AudienceCountRequest & CountRequestFor<Attribute>,
+  resolution: AudienceResolution
+) => {
+  const {
     condition: { attribute, params },
     inContext,
     reservationsAsOf,
-  }: CountRequestFor<Attribute>,
-  resolution: AudienceResolution
-) =>
-  countResolvers[attribute].count(
+  }: CountRequestFor<Attribute> = request;
+  return countResolvers[attribute].count(
     { params, inContext, reservationsAsOf },
     resolution
   );
+};
 
 /** Dates through the request's attribute resolver. */
 const resolveDates = (

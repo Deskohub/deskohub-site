@@ -120,7 +120,11 @@ describe("a count attribute added as one catalogue entry and its resolver", () =
     };
     const sourced = (source: CampaignEmailSourceType) => ({
       ...newConditionFrom(sourcedEmailCount),
-      params: { period: { _tag: "AnyTime" } as const, source },
+      params: {
+        campaign: "welcome" as const,
+        period: { _tag: "AnyTime" } as const,
+        source,
+      },
     });
     const fromThis = countFactRequest(
       sourcedEmailCount,
@@ -146,13 +150,28 @@ describe("a count attribute added as one catalogue entry and its resolver", () =
         })
       )
     );
+    // The choice named `campaign` stays part of the lookup.
+    expect(audienceFactKey(fromThis)).not.toBe(
+      audienceFactKey(
+        countFactRequest(
+          sourcedEmailCount,
+          {
+            ...fromThis.condition,
+            params: { ...fromThis.condition.params, campaign: "promotion" },
+          },
+          context
+        )
+      )
+    );
     const counts = await Effect.runPromise(
       sourcedResolvers.sourcedEmailCount.count(
         { params: fromThis.condition.params, inContext: fromThis.inContext },
         {} as AudienceResolution
       )
     );
-    expect([...counts.keys()].map(String)).toEqual([evaluatingCampaign]);
+    expect([...counts.keys()].map(String)).toEqual([
+      `welcome:${evaluatingCampaign}`,
+    ]);
   });
 
   test("edits with the shared count controls, worded by its wording", () => {

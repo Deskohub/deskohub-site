@@ -81,6 +81,9 @@ export type AudienceCountResolver<Params> = {
 /**
  * A count request as its attribute's resolver reads it: the condition's
  * params as decoded, fixed through `inContext` where the count needs them.
+ * Requests that share a lookup agree only on their fixed params, so a
+ * resolver fixes each period and campaign source of its own params through
+ * `inContext` and never reads them raw.
  */
 type AudienceCountResolverRequest<Params> = {
   readonly params: Params;
