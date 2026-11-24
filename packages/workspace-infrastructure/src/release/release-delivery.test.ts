@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { havePropsChanged } from "alchemy";
+import { isOutput } from "alchemy/Output";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -13,16 +15,23 @@ import {
   type WorkspaceWorkload,
 } from "../config/stack-config";
 import {
+  plainHttpProofConfig,
   previewConfig,
   sandboxConfig,
 } from "../config/stack-config.test-utils";
 import type { ObservedService } from "../readback";
+import { declareWorkspaceEdge } from "../resources/edge-declarations";
 import {
   templateSpecAnnotation,
   webServiceProps,
   webTemplateSpecFingerprint,
 } from "../resources/service-declarations";
 import { workloadUrl } from "../resources/workload-names";
+import { evaluate } from "../stack-evaluation.test-utils";
+import {
+  declareWorkspaceFoundation,
+  declareWorkspaceServices,
+} from "../workspace-stack";
 import { requireRecordCoversLiveService } from "./live-release-services";
 import {
   deliverRelease,
@@ -140,6 +149,12 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
     }> = [];
     /** The web template each plan previewed, in order. */
     const plannedTemplates: Array<string | undefined> = [];
+    /** Every stack run's declared record and clock, in order. */
+    const stackRuns: Array<{
+      readonly action: StackApplyRequest["action"];
+      readonly declaring: ReleaseRecord;
+      readonly now: DateTime.Utc;
+    }> = [];
 
     const apply = ReleaseServiceApply.of({
       apply: (request) =>
@@ -196,6 +211,11 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
             Effect.provideService(ReleaseServiceReadback, readback),
             Effect.mapError((error) => failed(error._tag))
           );
+          stackRuns.push({
+            action: request.action,
+            declaring,
+            now: yield* DateTime.now,
+          });
           if (request.action === "plan") {
             plannedTemplates.push(
               webServiceProps(config, declaring, yield* DateTime.now)?.template
@@ -376,6 +396,7 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
       faults,
       declaredTemplates,
       plannedTemplates,
+      stackRuns,
       rollOutExternally,
     };
   });
@@ -404,6 +425,7 @@ const setup = (options?: FakeCloudRunOptions) =>
       faults: cloudRun.faults,
       declaredTemplates: cloudRun.declaredTemplates,
       plannedTemplates: cloudRun.plannedTemplates,
+      stackRuns: cloudRun.stackRuns,
       rollOutExternally: cloudRun.rollOutExternally,
       provide,
     };
@@ -1956,5 +1978,175 @@ describe("worker readback during a rollout", () => {
     );
     expect(result.served.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
     expect(result.record.pendingApply).toBeNull();
+  });
+});
+
+interface StackRun {
+  readonly action: StackApplyRequest["action"];
+  readonly declaring: ReleaseRecord;
+  readonly now: DateTime.Utc;
+}
+
+/**
+ * Every resource's props as the stack entry declares them from a run's
+ * record, with output references (resolved only at apply) as placeholders.
+ */
+const declaredStackProps = async ({ declaring, now }: StackRun) => {
+  const { edge } = plainHttpProofConfig;
+  if (edge === undefined) {
+    throw new Error("the proof config declares no edge");
+  }
+  const { exit, resources } = await evaluate(
+    Effect.gen(function* () {
+      yield* declareWorkspaceFoundation(plainHttpProofConfig);
+      const services = yield* declareWorkspaceServices(
+        plainHttpProofConfig,
+        declaring,
+        now
+      );
+      if (services !== undefined) {
+        yield* declareWorkspaceEdge(
+          plainHttpProofConfig,
+          edge,
+          services.webServiceId
+        );
+      }
+    })
+  );
+  expect(exit._tag).toBe("Success");
+  return Object.fromEntries(
+    Object.entries(resources).map(([id, resource]) => [
+      id,
+      JSON.parse(
+        JSON.stringify(resource.Props, (_key, value) =>
+          isOutput(value) ? "<output>" : value
+        )
+      ),
+    ])
+  );
+};
+
+describe("release plan after a release command", () => {
+  test("plans no change after deliveries, an interrupted deliver, restore and a plain deploy", async () => {
+    const checkpoints = await Effect.runPromise(
+      Effect.gen(function* () {
+        // The third delivery's staging apply (generation 7) is interrupted.
+        const { store, stackRuns, faults, provide } = yield* setup({
+          interruptApplyOf: new Set([7]),
+        });
+        // The stack declares the hosted proof's config, edge included.
+        faults.config = plainHttpProofConfig;
+        const checkpoints: Array<{
+          readonly step: string;
+          readonly deploy: StackRun;
+          readonly plan: StackRun;
+        }> = [];
+        /** The last deploy run against the plan that follows it. */
+        const planAfter = (step: string) =>
+          Effect.gen(function* () {
+            const deploy = stackRuns.findLast((run) => run.action === "deploy");
+            yield* provide(runStack(plainHttpProofConfig, "plan"));
+            const plan = stackRuns.at(-1);
+            if (deploy === undefined || plan?.action !== "plan") {
+              return yield* Effect.die(new Error(`no stack runs for ${step}`));
+            }
+            checkpoints.push({ step, deploy, plan });
+          });
+        const deliver = (sha: GitSha, imageDigest: ImageDigest) =>
+          provide(
+            deliverRelease(plainHttpProofConfig, { sha, imageDigest }, policy)
+          );
+
+        const first = yield* deliver(shaA, digestA);
+        yield* planAfter("deliver v1");
+        yield* deliver(shaB, digestB);
+        yield* planAfter("deliver v2");
+
+        const interrupted = yield* deliver(shaC, digestC).pipe(Effect.exit);
+        expect(errorOf(interrupted)).toMatchObject({
+          _tag: "ReleaseServiceApplyFailed",
+          generation: 7,
+          outcome: "unknown",
+        });
+        const { writer } = (yield* store.read).record;
+        yield* provide(
+          unlockReleaseWriter(
+            plainHttpProofConfig,
+            writer === null ? "" : writerFingerprint(writer.holderDigest)
+          )
+        );
+        expect(
+          yield* provide(recoverRelease(plainHttpProofConfig, policy))
+        ).toBe(null);
+        yield* deliver(shaC, digestC);
+        yield* planAfter("recovery deliver v3");
+        // Two older releases are now tagged, in a different record order
+        // from the one the traffic apply declared.
+        expect((yield* store.read).record.compatible).toHaveLength(2);
+
+        const { record } = yield* store.read;
+        yield* provide(
+          restoreRelease(
+            plainHttpProofConfig,
+            {
+              releaseId: first.releaseId,
+              expectedGeneration: record.generation,
+            },
+            policy
+          )
+        );
+        yield* planAfter("restore v1");
+
+        // What `release deploy` runs after the state snapshot is restored.
+        yield* provide(runStack(plainHttpProofConfig, "deploy"));
+        yield* planAfter("plain deploy");
+        return checkpoints;
+      })
+    );
+
+    expect(checkpoints.map((checkpoint) => checkpoint.step)).toEqual([
+      "deliver v1",
+      "deliver v2",
+      "recovery deliver v3",
+      "restore v1",
+      "plain deploy",
+    ]);
+    for (const { step, deploy, plan } of checkpoints) {
+      const applied = webServiceProps(
+        plainHttpProofConfig,
+        deploy.declaring,
+        deploy.now
+      );
+      const planned = webServiceProps(
+        plainHttpProofConfig,
+        plan.declaring,
+        plan.now
+      );
+      expect({ step, planned }).toEqual({ step, planned: applied });
+      if (applied === undefined || planned === undefined) {
+        throw new Error(`${step} declared no web service`);
+      }
+      // Alchemy's own comparison for a provider diff that defers to props.
+      expect({ step, changed: havePropsChanged(applied, planned) }).toEqual({
+        step,
+        changed: false,
+      });
+      const deployedStack = await declaredStackProps(deploy);
+      // The hosted proof's whole stack, its edge included.
+      expect(Object.keys(deployedStack)).toEqual(
+        expect.arrayContaining([
+          "WorkspaceWeb",
+          "WorkspaceTasksWorker",
+          "WorkspaceSchedulerWorker",
+          "EdgeWebEndpointGroup",
+          "EdgeUrlMap",
+          "EdgeHttpForwardingRule",
+        ])
+      );
+      expect({ step, stack: await declaredStackProps(plan) }).toEqual({
+        step,
+        stack: deployedStack,
+      });
+    }
   });
 });

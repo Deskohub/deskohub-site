@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import {
   decodeWorkspaceStackConfig,
+  plainHttpEdgeProject,
   type WorkspaceStackConfig,
 } from "./stack-config";
 
@@ -82,3 +83,16 @@ export const sandboxConfigInputIn = (project: string) => ({
     )
   ),
 });
+
+/** The hosted proof's stack: the approved project with a plain-HTTP edge. */
+export const plainHttpProofConfig: WorkspaceStackConfig = Effect.runSync(
+  decodeWorkspaceStackConfig({
+    ...sandboxConfigInputIn(plainHttpEdgeProject),
+    edge: {
+      domains: [],
+      enableHttps: false,
+      staticCdnEnabled: false,
+      wafPreview: true,
+    },
+  })
+);

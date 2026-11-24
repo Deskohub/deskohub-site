@@ -11,6 +11,7 @@ import {
   type WorkspaceStackConfig,
 } from "./config/stack-config";
 import {
+  plainHttpProofConfig,
   sandboxConfigInput,
   sandboxConfigInputIn,
 } from "./config/stack-config.test-utils";
@@ -48,15 +49,6 @@ const proofInput = sandboxConfigInputIn(plainHttpEdgeProject);
 const { budget: _budget, ...sharedInput } = sandboxConfigInput;
 
 const httpsConfig = decoded({ ...sandboxConfigInput, edge: { domains } });
-const plainHttpConfig = decoded({
-  ...proofInput,
-  edge: {
-    domains: [],
-    enableHttps: false,
-    staticCdnEnabled: false,
-    wafPreview: true,
-  },
-});
 
 const edgeOf = (config: WorkspaceStackConfig): WorkspaceEdgeConfig => {
   if (config.edge === undefined) {
@@ -95,7 +87,7 @@ describe("edge configuration", () => {
   });
 
   test("allows plain HTTP only for the sandbox stage in the approved project", () => {
-    expect(plainHttpConfig.edge?.enableHttps).toBe(false);
+    expect(plainHttpProofConfig.edge?.enableHttps).toBe(false);
     const plainHttp = { domains: [], enableHttps: false };
     for (const input of [
       { ...sandboxConfigInput, edge: plainHttp },
@@ -264,7 +256,7 @@ describe("workspace edge declaration", () => {
   });
 
   test("serves the main URL map over plain HTTP on port 80 without HTTPS", async () => {
-    const { exit, resources } = await declare(plainHttpConfig);
+    const { exit, resources } = await declare(plainHttpProofConfig);
     expect(exit._tag).toBe("Success");
     for (const id of [
       "EdgeCertificate",

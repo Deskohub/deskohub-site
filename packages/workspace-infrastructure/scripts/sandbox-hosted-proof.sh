@@ -217,6 +217,38 @@ project_exclusions_json() {
   jq -c '.exclusions // []' <<<"$body"
 }
 
+# Every log sink of one parent (projects/ID, folders/ID or organizations/ID)
+# as a JSON array, from the Logging API page by page: `gcloud logging sinks
+# list` in the pinned SDK sends one request and drops nextPageToken
+# (surface/logging/sinks/list.py), so a sink on a later page would go
+# unseen. Each response must be exactly one JSON object (`{}` is an empty
+# page); anything else, or more than 20 pages (2,000 sinks), fails. Pages
+# reach jq on stdin, never as arguments, so no list outgrows ARG_MAX.
+log_sinks_json() {
+  local parent="$1" body url page_token="" count=0 pages=""
+  while true; do
+    url="https://logging.googleapis.com/v2/${parent}/sinks?pageSize=100"
+    [[ -z "$page_token" ]] || url+="&pageToken=${page_token}"
+    body="$(google_get '{"sinks":[]}' "$url")" || return 1
+    jq -se 'length == 1 and (.[0] | type == "object"
+      and ((.sinks // []) | type == "array")
+      and ((.nextPageToken // "") | type == "string"))' >/dev/null <<<"$body" || return 1
+    pages+="${body}"$'\n'
+    page_token="$(jq -r '.nextPageToken // empty | @uri' <<<"$body")" || return 1
+    [[ -n "$page_token" ]] || break
+    count=$((count + 1))
+    ((count < 20)) || return 1
+  done
+  jq -cs '[.[] | (.sinks // [])[]]' <<<"$pages"
+}
+
+# The project's own sinks as `name<TAB>destination` rows, every page.
+project_sink_rows() {
+  local sinks
+  sinks="$(log_sinks_json "projects/${project_id}")" || return 1
+  $dry_run || jq -r '.[] | [.name, .destination] | @tsv' <<<"$sinks"
+}
+
 project_exclusion_names() {
   local exclusions
   exclusions="$(project_exclusions_json)" || return 1
@@ -546,7 +578,7 @@ take_inventory() {
   inventory_class "$dir" security-policies gcloud compute security-policies list "${p[@]}" --format='value(name)'
   inventory_class "$dir" ssl-certificates gcloud compute ssl-certificates list "${p[@]}" --global --format='value(name)'
   inventory_class "$dir" logging-exclusions project_exclusion_names
-  inventory_class "$dir" logging-sinks gcloud logging sinks list "${p[@]}" --format='value(name,destination)'
+  inventory_class "$dir" logging-sinks project_sink_rows
   inventory_class "$dir" tasks-queues gcloud tasks queues list "${p[@]}" --location="$region" --format='value(name)'
   inventory_class "$dir" scheduler-jobs gcloud scheduler jobs list "${p[@]}" --location="$region" --format='value(name)'
   inventory_class "$dir" storage-buckets gcloud storage buckets list "${p[@]}" --format='value(name)'
@@ -654,8 +686,14 @@ phase_readonly_inventory() {
   else
     notice "enabled APIs unverified (denied)"
   fi
-  run gcloud logging sinks list --project="$project_id" --format='table(name,destination,filter)' ||
+  # Name, destination and the routing filter, `(empty filter)` as gcloud
+  # shows a sink that routes every log.
+  local sinks
+  if sinks="$(log_sinks_json "projects/${project_id}")"; then
+    $dry_run || jq -r '.[] | [.name, .destination, (.filter // "" | if . == "" then "(empty filter)" else . end)] | @tsv' <<<"$sinks"
+  else
     notice "log sinks unverified (denied); inherited folder/organization sinks are not listed"
+  fi
   local exclusions
   if exclusions="$(project_exclusions_json)"; then
     $dry_run || jq -r '.[] | [.name, (.disabled // false), .filter] | @tsv' <<<"$exclusions"
@@ -726,7 +764,7 @@ phase_deliver_v1() {
 # Both backends enforce the stack's Cloud Armor policy, with the sandbox's
 # WAF rules in preview and the auth throttle enforced.
 verify_edge_security() {
-  local backend attached rules
+  local backend attached
   for backend in "${edge_backend_services[@]}"; do
     attached="$(capture "projects/${project_id}/global/securityPolicies/${edge_security_policy}" \
       gcloud compute backend-services describe "$backend" --global --project="$project_id" \
@@ -734,18 +772,25 @@ verify_edge_security() {
       fail "backend service ${backend} is unreadable; its Cloud Armor policy is unverified"
     expect_equal "${backend} Cloud Armor policy" "${attached##*/}" "$edge_security_policy"
   done
-  # The whole policy: gcloud prints a lone projected field such as
-  # `json(rules)` as the bare value, not an object holding it.
-  rules="$(capture '{"rules":[]}' gcloud compute security-policies describe "$edge_security_policy" \
+  # The whole policy. Google Cloud SDK 594.0.1 returns the describe
+  # request's result list (security_policies/client.py Describe has no
+  # [0]), so `--format=json` prints `[policy]`; a bare object is accepted
+  # too. A lone projected field such as `json(rules)` prints bare.
+  local described policy mismatched
+  described="$(capture '[{"rules":[]}]' gcloud compute security-policies describe "$edge_security_policy" \
     --project="$project_id" --format=json)" ||
     fail "Cloud Armor policy ${edge_security_policy} is unreadable"
   if $dry_run; then
     echo "  expect the declared SQLi and XSS rules in preview, the auth throttle enforced and the default allow" >&2
     return 0
   fi
+  policy="$(jq -ce 'if type == "array" then select(length == 1) | .[0] else . end | select(type == "object")' \
+    <<<"$described")" ||
+    fail "Cloud Armor policy ${edge_security_policy} describe printed no single policy"
   # Each rule as the stack declares it for the sandbox: matcher, action,
   # preview, the auth throttle's limit and the enforced match-all default.
-  jq -e --arg sqli "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})" \
+  # A mismatch names the rule, never its contents.
+  mismatched="$(jq -r --arg sqli "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})" \
     --arg xss "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})" \
     --arg auth "request.path.startsWith('/api/auth/')" \
     --argjson limit "$edge_auth_rate_limit" '
@@ -753,19 +798,22 @@ verify_edge_security() {
     def waf($priority; $expression):
       rule($priority) | .action == "deny(403)" and .preview == true
         and .match.expr.expression == $expression;
-    [waf(1000; $sqli), waf(1010; $xss),
-      (rule(2000) | .action == "throttle" and .preview != true
+    [{rule: "1000 SQLi WAF in preview", ok: (waf(1000; $sqli) // false)},
+      {rule: "1010 XSS WAF in preview", ok: (waf(1010; $xss) // false)},
+      {rule: "2000 auth throttle enforced", ok: ((rule(2000) | .action == "throttle" and .preview != true
         and .match.expr.expression == $auth
         and .rateLimitOptions.conformAction == "allow"
         and .rateLimitOptions.exceedAction == "deny(429)"
         and .rateLimitOptions.enforceOnKey == "IP"
         and .rateLimitOptions.rateLimitThreshold.count == $limit
-        and .rateLimitOptions.rateLimitThreshold.intervalSec == 60),
-      (rule(2147483647) | .action == "allow" and .preview != true
+        and .rateLimitOptions.rateLimitThreshold.intervalSec == 60) // false)},
+      {rule: "2147483647 default allow enforced", ok: ((rule(2147483647) | .action == "allow" and .preview != true
         and .match.versionedExpr == "SRC_IPS_V1"
-        and .match.config.srcIpRanges == ["*"])]
-    | length == 4 and all' >/dev/null <<<"$rules" ||
-    fail "Cloud Armor policy ${edge_security_policy} does not hold the declared WAF preview rules and auth throttle"
+        and .match.config.srcIpRanges == ["*"]) // false)}]
+    | .[] | select(.ok | not) | .rule' <<<"$policy")" ||
+    fail "Cloud Armor policy ${edge_security_policy} rules are unreadable"
+  [[ -z "$mismatched" ]] ||
+    fail "Cloud Armor policy ${edge_security_policy} does not hold the declared rules: ${mismatched//$'\n'/, }"
   echo "both backends enforce ${edge_security_policy}: WAF rules in preview, auth throttle enforced"
 }
 
@@ -874,10 +922,16 @@ phase_drift() {
   run gcloud artifacts repositories update "$artifact_repository" \
     --project="$project_id" --location="$region" --description="$injected"
   expect_equal "drifted description" "$(repository_description)" "$injected"
+  # The Alchemy drift check exits 2 for unrepaired drift, 0 for a clean stage and
+  # 1 when the check itself failed (bad arguments, auth, a provider read).
   local code=0
   locked_stack drift || code=$?
   $dry_run && code=2
-  [[ "$code" == 2 ]] || fail "Alchemy reported no drift (exit ${code})"
+  case "$code" in
+    2) ;;
+    0) fail "Alchemy reported no drift after the injected description change" ;;
+    *) fail "the Alchemy drift check failed (exit ${code})" ;;
+  esac
   locked_stack repair
   expect_equal "repaired description" "$(repository_description)" "$declared_repository_description"
   release deploy
@@ -1178,11 +1232,11 @@ verify_log_routing() {
   ancestors="$(capture "[{\"id\":\"${project_id}\",\"type\":\"project\"}]" \
     gcloud projects get-ancestors "$project_id" --format=json)" ||
     fail "the project's folders and organization are unreadable; inherited sinks unverified"
-  sinks="$(capture '[]' gcloud logging sinks list --project="$project_id" --format=json)" ||
+  sinks="$(log_sinks_json "projects/${project_id}")" ||
     fail "project log sinks are unreadable; log routing unverified"
   if $dry_run; then
-    trace gcloud logging sinks list "--folder=<each ancestor folder>" --format=json
-    trace gcloud logging sinks list "--organization=<ancestor organization>" --format=json
+    trace curl -fsS "https://logging.googleapis.com/v2/<each ancestor folder and organization>/sinks?pageSize=100" \
+      "(every page; bearer from gcloud, never printed)"
     echo "  expect every enabled project and inherited sink to exclude ${edge_exclusion}'s filter" >&2
     return 0
   fi
@@ -1194,7 +1248,7 @@ verify_log_routing() {
       folder | organization) ;;
       *) fail "unknown ancestor type ${type}; inherited sinks unverified" ;;
     esac
-    sinks="$(gcloud logging sinks list "--${type}=${id}" --format=json)" ||
+    sinks="$(log_sinks_json "${type}s/${id}")" ||
       fail "${type} ${id} log sinks are unreadable; inherited sinks unverified"
     jq --arg parent "${type}s/${id}" --slurpfile known "${dir}/sinks.json" \
       '$known[0] + [.[] | . + {parent: $parent, level: "ancestor"}]' <<<"$sinks" >"${dir}/sinks.next"
@@ -1234,15 +1288,17 @@ verify_log_routing() {
   echo "every project and inherited log sink drops token-route request logs"
 }
 
-# The probe's current OTLP export: its trace ID must name a structured log
-# line from this service and a Cloud Trace trace holding the synthetic span.
+# A fresh OTLP export the probe sends on request (a warm instance's
+# startup export may be older than the readback windows): its trace ID
+# must name a structured log line from this service and a Cloud Trace
+# trace holding the synthetic span.
 # A missing, empty or unreadable answer fails the proof.
 verify_probe_telemetry() {
   local ip body trace_id="" status="" attempt
   ip="$(edge_ip)"
   for attempt in $(seq 1 10); do
     body="$(capture '{"otlp":{"traceId":"0123456789abcdef0123456789abcdef","status":200}}' \
-      curl -fsS --max-time 10 "http://${ip}/healthz" 2>/dev/null || true)"
+      curl -fsS --max-time 10 "http://${ip}/probe/trace" || true)"
     trace_id="$(jq -r '.otlp.traceId // empty' <<<"$body" 2>/dev/null || true)"
     status="$(jq -r '.otlp.status // empty' <<<"$body" 2>/dev/null || true)"
     [[ "$trace_id" =~ ^[0-9a-f]{32}$ && "$status" =~ ^2[0-9][0-9]$ ]] && break
@@ -1338,7 +1394,9 @@ phase_edge_privacy() {
     [[ "$traces" != *"$marker"* ]] || fail "the marker reached Cloud Trace"
     jq -e --arg id "${PROBE_TRACE_ID:-}" 'any(.traces[]?; .traceId == $id)' >/dev/null <<<"$traces" &&
       listed=true
-    page="$(jq -r '.nextPageToken // empty' <<<"$traces")"
+    # Encoded like the sink pages' tokens: a raw `+`, `/` or `=` in a page
+    # token would reach Cloud Trace altered.
+    page="$(jq -r '.nextPageToken // empty | @uri' <<<"$traces")"
     [[ -z "$page" ]] && break
   done
   [[ -z "$page" ]] || fail "more than 20 pages of traces; marker absence unverified"

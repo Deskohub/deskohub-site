@@ -146,6 +146,29 @@ describe("sandbox probe", () => {
     expect(collector.calls).toHaveLength(1);
   });
 
+  test("sends a fresh span on every trace-route request", async () => {
+    const collector = collectorAnswering(200);
+    const probe = await startProbe(collector.fetchImpl);
+    const startup = await probe.attemptTrace();
+    const answers = [];
+    for (const _ of [1, 2]) {
+      const response = await fetch(`${probe.origin}/probe/trace`);
+      expect(response.status).toBe(200);
+      answers.push(await response.json());
+    }
+    expect(collector.calls).toHaveLength(3);
+    const traceIds = answers.map((answer) => answer.otlp.traceId);
+    expect(new Set([startup.traceId, ...traceIds]).size).toBe(3);
+    expect(answers[1]).toEqual({
+      status: "ok",
+      version: "v2",
+      otlp: { traceId: traceIds[1], status: 200 },
+    });
+    // The health route then reports the latest export.
+    const health = await (await fetch(`${probe.origin}/healthz`)).json();
+    expect(health.otlp.traceId).toBe(traceIds[1]);
+  });
+
   test("logs an unreachable collector and retries on the next request", async () => {
     let attempts = 0;
     const refused = fakeFetch(async () => {

@@ -21,6 +21,12 @@ export const sensitiveRoutes = [
 
 const healthRoutes = ["/healthz", "/probe/health"];
 
+/**
+ * Sends one fresh synthetic span and answers with its outcome, so a proof
+ * can verify an export of its own however long the instance has been warm.
+ */
+export const traceRoute = "/probe/trace";
+
 /** Synthetic span attempts per process while none reaches the collector. */
 export const maxTraceAttempts = 5;
 
@@ -173,15 +179,30 @@ export const createProbeServer = ({
     return pending;
   };
 
-  const server = createServer((request, response) => {
+  const freshTrace = () =>
+    sendSyntheticTrace({
+      version,
+      otlpEndpoint,
+      timeoutMs: otlpTimeoutMs,
+      log,
+      fetchImpl,
+    }).then((result) => {
+      otlp = result;
+      return result;
+    });
+
+  const server = createServer(async (request, response) => {
     const startedAt = process.hrtime.bigint();
     const path = requestPath(request.url);
     const method = request.method ?? "GET";
-    if (otlp?.status === undefined) {
+    const readable = method === "GET" || method === "HEAD";
+    if (otlp?.status === undefined && !(readable && path === traceRoute)) {
       attemptTrace();
     }
-    if (method !== "GET" && method !== "HEAD") {
+    if (!readable) {
       sendJson(response, 405, { error: "method-not-allowed" });
+    } else if (path === traceRoute) {
+      sendJson(response, 200, { status: "ok", version, otlp: await freshTrace() });
     } else if (healthRoutes.includes(path)) {
       sendJson(response, 200, { status: "ok", version, otlp });
     } else if (path === "/robots.txt") {

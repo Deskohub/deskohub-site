@@ -1,6 +1,8 @@
 import type { ServiceProps, TrafficTarget } from "@alchemy.run/gcp/Run";
+import * as Arr from "effect/Array";
 import type * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
+import * as Order from "effect/Order";
 import type {
   ImageDigest,
   WorkspaceStackConfig,
@@ -215,11 +217,23 @@ export const releaseTrafficTag = (releaseId: ReleaseId) =>
 const servingDeployment = (record: ReleaseRecord) =>
   record.pendingApply?.target ?? record.active;
 
+const byReleaseId = Order.mapInput(
+  Order.String,
+  (deployment: { readonly releaseId: ReleaseId }) => deployment.releaseId
+);
+
 /**
  * Untagged traffic goes to the serving release. The candidate and every
  * release still in its compatible window keep a zero-percent tag, so the
  * candidate can be verified before promotion and pages an older release
  * served can still reach it.
+ *
+ * Tagged entries are ordered by release id, not by where the record lists
+ * them. Settling a traffic change moves the old active release to the end
+ * of the compatible window, so the record the apply declared and the
+ * settled record list the same releases in a different order. Alchemy
+ * compares the traffic array in order, so an order taken from the record
+ * would make the next plan report an update.
  */
 export const webTraffic = (
   record: ReleaseRecord,
@@ -229,14 +243,15 @@ export const webTraffic = (
   if (serving === null) {
     return [];
   }
-  const tagged = [
-    ...(record.candidate === null ? [] : [record.candidate]),
-    ...routableDeployments(record, now),
-  ].filter(
-    (deployment, index, all) =>
-      deployment.releaseId !== serving.releaseId &&
-      all.findIndex((other) => other.releaseId === deployment.releaseId) ===
-        index
+  const tagged = Arr.sort(
+    Arr.dedupeWith(
+      [
+        ...(record.candidate === null ? [] : [record.candidate]),
+        ...routableDeployments(record, now),
+      ].filter((deployment) => deployment.releaseId !== serving.releaseId),
+      (left, right) => left.releaseId === right.releaseId
+    ),
+    byReleaseId
   );
   return [
     {
