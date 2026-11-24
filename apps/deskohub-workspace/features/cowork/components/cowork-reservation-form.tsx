@@ -400,8 +400,14 @@ export function CoworkReservationForm({
       }}
       selection={{
         kind: coworkSelectionLink.kind,
-        fromSearchParams: (searchParams) =>
-          coworkSelectionLink.readFieldValues(searchParams, { locale }),
+        fromSearchParams: (searchParams, visit) => {
+          for (const { name, value } of coworkSelectionLink.readFieldValues(
+            searchParams,
+            { locale }
+          )) {
+            visit(name, value);
+          }
+        },
       }}
     >
       <div aria-live="polite" className="empty:absolute">

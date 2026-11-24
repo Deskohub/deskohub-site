@@ -1,5 +1,5 @@
 import { Match, Schema } from "effect";
-import { type OrderId, orderIdSchema } from "@/features/order";
+import type { OrderId } from "@/features/order";
 import type { NormalizedCoworkReservationOrder } from "@/features/reservation/cowork-reservation";
 import {
   getStoredCoworkReservationDetails,
@@ -61,10 +61,10 @@ export type WorkspaceReservationId = Schema.Schema.Type<
  */
 export const reservationOrderId = (
   reservationId: WorkspaceReservationId
-): OrderId =>
-  // The reservation ID doubles as its order's ID, so the UUID check is
-  // skipped on purpose: the database generates both as the same UUIDv7.
-  orderIdSchema.make(reservationId, { disableChecks: true });
+): OrderId => {
+  const id: string = reservationId;
+  return id as OrderId;
+};
 
 /** The reservation ID carried by an order already known to be a reservation. */
 export const reservationIdForOrder = (

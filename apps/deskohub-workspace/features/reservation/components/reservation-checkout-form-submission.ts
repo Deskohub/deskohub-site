@@ -71,15 +71,13 @@ type AvailabilityState = {
   readonly unavailableMessage?: string;
 };
 
-/**
- * One form field with a value for it. The value may be of any of the form's
- * field types; a selection link pairs each of its fields with the value it
- * read for that same field.
- */
-export type ReservationFormFieldValue<Input extends FieldValues> = {
-  readonly name: FieldPath<Input>;
-  readonly value: FieldPathValue<Input, FieldPath<Input>>;
-};
+/** Visits one form field with a value of that field's type. */
+export type ReservationFormFieldVisitor<Input extends FieldValues> = <
+  Name extends FieldPath<Input>,
+>(
+  name: Name,
+  value: FieldPathValue<Input, Name>
+) => void;
 
 /** One form field with a value of that field's own type. */
 export type ReservationFormFieldEntry<Input extends FieldValues> = {

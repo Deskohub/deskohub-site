@@ -52,6 +52,57 @@ export const defineSelectionLink = <
     ...args: ReadArgs
   ): Pick<Values, Param> => Struct.pick(read(searchParams, ...args), params);
 
+  /**
+   * Restored form values with the selection a URL names beside them.
+   *
+   * The Pay page links back to the reservation page with the signed
+   * restoration token alone, so selection parameters beside that token are
+   * the customer's edits after returning: any of them replaces the whole
+   * restored selection, while the restoration keeps the checkout, its hold
+   * replacement, the contact details, and the discount intent. Absent
+   * values restore nothing.
+   */
+  function restore<Restored extends Pick<Values, Param>>(
+    restored: Restored,
+    searchParams: SupportedSearchParams,
+    ...args: ReadArgs
+  ): Omit<Restored, Param> & Pick<Values, Param>;
+  function restore(
+    restored: undefined,
+    searchParams: SupportedSearchParams,
+    ...args: ReadArgs
+  ): undefined;
+  function restore<Restored extends Pick<Values, Param>>(
+    restored: Restored | undefined,
+    searchParams: SupportedSearchParams,
+    ...args: ReadArgs
+  ): (Omit<Restored, Param> & Pick<Values, Param>) | undefined {
+    if (restored === undefined) return undefined;
+    return hasReservationSelectionSearchParams(searchParams, namedParams)
+      ? {
+          ...Struct.omit(restored, params),
+          ...readSelection(searchParams, ...args),
+        }
+      : restored;
+  }
+
+  /** A selection as link parameters, in the declared order. */
+  const writeSelection = (
+    selection: Selection
+  ): ReservationSelectionSearchParams & {
+    readonly [Name in Param]: string | undefined;
+  } => {
+    const ordered = { ...Struct.pick(write(selection), params) };
+    // Re-inserting each parameter in declared order fixes the order a link
+    // names them in, whatever order the family's writer built them in.
+    for (const name of params) {
+      const value = ordered[name];
+      Reflect.deleteProperty(ordered, name);
+      ordered[name] = value;
+    }
+    return ordered;
+  };
+
   return {
     kind,
     params,
@@ -66,32 +117,8 @@ export const defineSelectionLink = <
       const values = read(searchParams, ...args);
       return params.map((name) => ({ name, value: values[name] }));
     },
-    /**
-     * Restored form values with the selection a URL names beside them.
-     *
-     * The Pay page links back to the reservation page with the signed
-     * restoration token alone, so selection parameters beside that token are
-     * the customer's edits after returning: any of them replaces the whole
-     * restored selection, while the restoration keeps the checkout, its hold
-     * replacement, the contact details, and the discount intent.
-     */
-    restore: <Restored extends Pick<Values, Param>>(
-      restored: Restored,
-      searchParams: SupportedSearchParams,
-      ...args: ReadArgs
-    ): Omit<Restored, Param> & Pick<Values, Param> =>
-      hasReservationSelectionSearchParams(searchParams, namedParams)
-        ? {
-            ...Struct.omit(restored, params),
-            ...readSelection(searchParams, ...args),
-          }
-        : restored,
-    /** A selection as link parameters, in the declared order. */
-    write: (
-      selection: Selection
-    ): ReservationSelectionSearchParams & {
-      readonly [Name in Param]: string | undefined;
-    } => Struct.pick(write(selection), params),
+    restore,
+    write: writeSelection,
     /** A stored reservation's selection, ready for a reservation page link. */
     fromStored: (
       stored: Stored

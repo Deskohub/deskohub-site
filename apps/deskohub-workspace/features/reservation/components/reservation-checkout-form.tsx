@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useEffect, useRef } from "react";
-import type { FieldValues, UseFormReturn } from "react-hook-form";
+import type { FieldPath, FieldValues, UseFormReturn } from "react-hook-form";
 import { usePrepareReservationSiteTool } from "@/features/agent-tools/webmcp/use-prepare-reservation-site-tool";
 import type { CheckoutSessionId } from "@/features/checkout/checkout-identifiers";
 import type { CheckoutStatusSummaryPresentation } from "@/features/checkout/checkout-status-summary-presentation";
@@ -27,7 +27,7 @@ import {
   isReservationSubmitDisabled,
   type ReservationCheckoutFormFields,
   type ReservationFormData,
-  type ReservationFormFieldValue,
+  type ReservationFormFieldVisitor,
   type ReservationFormSubmission,
   type ReservationSubmitOptions,
   submitReservationForm,
@@ -104,9 +104,11 @@ type ReservationCheckoutFormProps<
   readonly selection: {
     readonly kind: ReservationOrderData["kind"];
     readonly officeSelection?: OfficeReservationDetails;
+    /** Visits each selection field a link's parameters set, in link order. */
     readonly fromSearchParams: (
-      searchParams: URLSearchParams
-    ) => readonly ReservationFormFieldValue<Input>[];
+      searchParams: URLSearchParams,
+      visit: ReservationFormFieldVisitor<Input>
+    ) => void;
   };
 };
 
@@ -186,20 +188,24 @@ function useReservationFormSiteTool<Input extends FieldValues>({
       }),
     applySelection: (searchParams) => {
       let changed = false;
-      for (const { name, value } of selection.fromSearchParams(searchParams)) {
-        if (Object.is(form.getValues(name), value)) continue;
+      selection.fromSearchParams(searchParams, (name, value) => {
+        if (Object.is(form.getValues(name), value)) return;
         form.setValue(name, value, {
           shouldDirty: true,
           shouldValidate: true,
         });
         changed = true;
-      }
+      });
       return changed;
     },
     captureSelection: (searchParams) => {
-      const captured = selection
-        .fromSearchParams(searchParams)
-        .map(({ name: field }) => ({ field, value: form.getValues(field) }));
+      const captured: {
+        readonly field: FieldPath<Input>;
+        readonly value: unknown;
+      }[] = [];
+      selection.fromSearchParams(searchParams, (field) => {
+        captured.push({ field, value: form.getValues(field) });
+      });
       return () =>
         captured.every(({ field, value }) =>
           Object.is(form.getValues(field), value)

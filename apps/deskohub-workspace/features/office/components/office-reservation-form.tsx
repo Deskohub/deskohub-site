@@ -382,16 +382,17 @@ export function OfficeReservationForm({
         officeSelection: selection,
         // Only the site tool applies this selection. Ordinary links start
         // with You, while the tool books its quoted number of unnamed seats.
-        fromSearchParams: (searchParams) => [
-          ...officeSelectionLink
-            .readFieldValues(searchParams, { seatCapacity, today })
-            .map((field) =>
-              field.name === "seats"
-                ? { name: field.name, value: Number(searchParams.get("seats")) }
-                : field
-            ),
-          { name: "people", value: null },
-        ],
+        fromSearchParams: (searchParams, visit) => {
+          for (const { name, value } of officeSelectionLink.readFieldValues(
+            searchParams,
+            { seatCapacity, today }
+          )) {
+            if (name === "seats")
+              visit(name, Number(searchParams.get("seats")));
+            else visit(name, value);
+          }
+          visit("people", null);
+        },
       }}
     >
       <fieldset className="flex flex-col gap-y-2">

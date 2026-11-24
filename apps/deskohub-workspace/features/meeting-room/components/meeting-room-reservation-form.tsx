@@ -229,8 +229,16 @@ export function MeetingRoomReservationForm({
       }}
       selection={{
         kind: meetingRoomSelectionLink.kind,
-        fromSearchParams: (searchParams) =>
-          meetingRoomSelectionLink.readFieldValues(searchParams, { locale }),
+        fromSearchParams: (searchParams, visit) => {
+          for (const {
+            name,
+            value,
+          } of meetingRoomSelectionLink.readFieldValues(searchParams, {
+            locale,
+          })) {
+            visit(name, value);
+          }
+        },
       }}
     >
       <FormField
