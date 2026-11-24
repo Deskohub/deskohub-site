@@ -1223,6 +1223,66 @@ describe("an API that transforms a group after binding it", () => {
     expect(seen).toEqual([["getNote", Option.none(), Option.some("inner")]]);
   });
 
+  test("serves it at a prefix that names a path parameter", () => {
+    const tenanted = HttpApi.make("tenanted")
+      .addHttpApi(api)
+      .prefix("/tenants/:tenantId");
+    expect(
+      Layer.isLayer(
+        operationGroupHandlers(tenanted, Notes, Effect.succeed(echoInput))
+      )
+    ).toBe(true);
+  });
+
+  test("serves it beside a group whose type is generic", async () => {
+    /** `other` with `Notes` added, and the layer serving `Notes` in it. */
+    const withNotes = <
+      Id extends string,
+      Other extends HttpApiGroup.Constraint & { readonly identifier: "other" },
+    >(
+      other: HttpApi.HttpApi<Id, Other>
+    ) => {
+      const notesApi = other.add(Notes);
+      return {
+        notesApi,
+        notes: operationGroupHandlers(
+          notesApi,
+          Notes,
+          Effect.succeed(echoInput)
+        ),
+      };
+    };
+    const { notesApi, notes } = withNotes(
+      HttpApi.make("withOther").add(HttpApiGroup.make("other"))
+    );
+    const serve = () =>
+      HttpRouter.toWebHandler(
+        HttpApiBuilder.layer(notesApi).pipe(
+          Layer.provide(notes),
+          Layer.provide(
+            HttpApiBuilder.group(notesApi, "other", (handlers) => handlers)
+          ),
+          Layer.provide(administrationMiddleware),
+          Layer.provide(HttpServer.layerServices)
+        ),
+        { disableLogger: true }
+      );
+    expect(await respond(serve(), getNoteAt())).toEqual(await expected());
+  });
+
+  test("serves whichever of its groups a caller chooses", () => {
+    const both = HttpApi.make("both").add(Notes, Tallies);
+    /** The layer serving the group `useNotes` chooses. */
+    const serving = (useNotes: boolean) =>
+      operationGroupHandlers(
+        both,
+        useNotes ? Notes : Tallies,
+        Effect.succeed(() => Effect.die("unused"))
+      );
+    expect(Layer.isLayer(serving(true))).toBe(true);
+    expect(Layer.isLayer(serving(false))).toBe(true);
+  });
+
   test("serves it at the prefix a composed API adds", async () => {
     const prefixed = HttpApi.make("prefixed").addHttpApi(api).prefix("/v2");
     const path: "/v2/api/v1/cli/notes/:noteId" =

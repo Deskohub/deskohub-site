@@ -519,8 +519,8 @@ type EndpointNamed<Group, Identifier> = Extract<
 >;
 
 /** The prefix `Served`'s paths add to those of `Group`. */
-type PrefixOf<Served, Group> =
-  HttpApiGroup.Endpoints<Group> extends infer Declared
+type PrefixOf<Served, Group> = Served extends unknown
+  ? HttpApiGroup.Endpoints<Group> extends infer Declared
     ? Declared extends HttpApiEndpoint.Constraint
       ? EndpointNamed<Served, Declared["identifier"]> extends {
           readonly path: infer ServedPath extends string;
@@ -532,7 +532,8 @@ type PrefixOf<Served, Group> =
           : never
         : never
       : never
-    : never;
+    : never
+  : never;
 
 /** An API serving `Group` as `ServedGroup<Group, ...>` describes. */
 type ServingApi<
@@ -635,6 +636,14 @@ type OperationsOf<Group extends OperationBinding> =
 
 type BoundGroupOf<Group extends OperationBinding> =
   Group[typeof operationBinding]["group"];
+
+/**
+ * The server of each group of `Group`, so each group a caller chooses
+ * between keeps its own server.
+ */
+type ServerOf<Group extends OperationBinding> = Group extends OperationBinding
+  ? OperationServer<BoundGroupOf<Group>, OperationsOf<Group>>
+  : never;
 
 /** Operations each named after its key, as a group's endpoints are. */
 export type SelfNamedOperations<Ops> = {
@@ -930,9 +939,14 @@ export const operationGroupHandlers = <
   >,
 >(
   api: HttpApi.HttpApi<ApiId, Groups> &
-    ServingApi<BoundGroupOf<Group>, Prefix, Middleware, MiddlewareServices> &
+    ServingApi<
+      BoundGroupOf<Group>,
+      NoInfer<Prefix>,
+      Middleware,
+      MiddlewareServices
+    > &
     KeepsMiddleware<BoundGroupOf<Group>, Middleware>,
-  group: Group & OperationServer<BoundGroupOf<Group>, OperationsOf<Group>>,
+  group: Group & ServerOf<Group>,
   invoker: Effect.Effect<
     OperationInvoke<OperationsOf<Group>, Failure, Services>,
     E,
