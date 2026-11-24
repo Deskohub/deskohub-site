@@ -15,7 +15,7 @@ import {
   isLockedStackAction,
   lockedStackActions,
   lockedStackInvocation,
-} from "../scripts/sandbox-locked-stack";
+} from "../scripts/sandbox-locked-stack-actions";
 import {
   sandboxProofBudget,
   sandboxProofStackConfig,
@@ -398,6 +398,7 @@ describe("sandbox proof runner", () => {
       "https://logging.googleapis.com/v2/projects/deskohub-workspace-sandbox/exclusions",
       "gcloud projects get-ancestors",
       "https://logging.googleapis.com/v2/projects/deskohub-workspace-sandbox/sinks",
+      "http://198.51.100.10/probe/trace",
       "gcloud logging read",
       "https://cloudtrace.googleapis.com/v1/projects/deskohub-workspace-sandbox/traces/",
       "token=synthetic-probe-marker",

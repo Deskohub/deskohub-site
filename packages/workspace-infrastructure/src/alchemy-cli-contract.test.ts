@@ -7,7 +7,7 @@ import {
   isLockedStackAction,
   lockedStackActions,
   lockedStackInvocation,
-} from "../scripts/sandbox-locked-stack";
+} from "../scripts/sandbox-locked-stack-actions";
 import { sandboxConfig } from "./config/stack-config.test-utils";
 import { alchemyStackCommand } from "./release/alchemy-service-apply";
 

@@ -1288,15 +1288,17 @@ verify_log_routing() {
   echo "every project and inherited log sink drops token-route request logs"
 }
 
-# The probe's current OTLP export: its trace ID must name a structured log
-# line from this service and a Cloud Trace trace holding the synthetic span.
+# A fresh OTLP export the probe sends on request (a warm instance's
+# startup export may be older than the readback windows): its trace ID
+# must name a structured log line from this service and a Cloud Trace
+# trace holding the synthetic span.
 # A missing, empty or unreadable answer fails the proof.
 verify_probe_telemetry() {
   local ip body trace_id="" status="" attempt
   ip="$(edge_ip)"
   for attempt in $(seq 1 10); do
     body="$(capture '{"otlp":{"traceId":"0123456789abcdef0123456789abcdef","status":200}}' \
-      curl -fsS --max-time 10 "http://${ip}/healthz" 2>/dev/null || true)"
+      curl -fsS --max-time 10 "http://${ip}/probe/trace" || true)"
     trace_id="$(jq -r '.otlp.traceId // empty' <<<"$body" 2>/dev/null || true)"
     status="$(jq -r '.otlp.status // empty' <<<"$body" 2>/dev/null || true)"
     [[ "$trace_id" =~ ^[0-9a-f]{32}$ && "$status" =~ ^2[0-9][0-9]$ ]] && break

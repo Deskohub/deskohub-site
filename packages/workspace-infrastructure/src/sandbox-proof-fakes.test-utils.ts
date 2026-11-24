@@ -13,6 +13,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Predicate from "effect/Predicate";
+import {
+  isLockedStackAction,
+  lockedStackInvocation,
+} from "../scripts/sandbox-locked-stack-actions";
 
 /**
  * Stateful fakes of the CLIs the sandbox proof runner calls, for offline
@@ -86,6 +90,52 @@ export interface FakeWorld {
   readonly now?: number;
   readonly [key: string]: unknown;
 }
+
+/**
+ * The flags `alchemy drift` defines in alchemy 2.0.0-beta.87
+ * (lib/Cli/commands/drift.js), by whether each takes a value. Unlike
+ * deploy, destroy and plan it has no positional entrypoint.
+ */
+const driftFlags = new Map([
+  ["--config", true],
+  ["-c", true],
+  ["--stage", true],
+  ["--profile", true],
+  ["--env-file", true],
+  ["--repair", false],
+  ["--yes", false],
+  ["-y", false],
+  ["--no-input", false],
+]);
+
+/** Why Alchemy would reject a drift command line, if it would. */
+const driftArgumentError = (args: ReadonlyArray<string>) => {
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    const takesValue = driftFlags.get(arg);
+    if (takesValue === undefined) {
+      return arg.startsWith("-")
+        ? `Unknown flag: ${arg}`
+        : `Unexpected positional argument: "${arg}"`;
+    }
+    if (takesValue) {
+      index += 1;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * A locked action's real command line, checked as Alchemy would parse it
+ * before any canned outcome is returned.
+ */
+const lockedStackArgumentError = (action: string | undefined) => {
+  if (!isLockedStackAction(action)) {
+    return undefined;
+  }
+  const { args } = lockedStackInvocation(action, "sandbox");
+  return args[0] === "drift" ? driftArgumentError(args) : undefined;
+};
 
 /** The writer token an `apply` deliver hands its detached Alchemy child. */
 const fakeWriterToken = "fake-writer-token";
@@ -465,6 +515,13 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     process.env.SANDBOX_PROOF_INTERRUPT_TOKEN !== undefined
   ) {
     return interruptedDeliver(world, save);
+  }
+  if (tool === "bun" && args[0] === "scripts/sandbox-locked-stack.ts") {
+    const error = lockedStackArgumentError(args[1]);
+    if (error !== undefined) {
+      process.stderr.write(`ERROR: ${error}\n`);
+      return 1;
+    }
   }
   const joined = args.join(" ");
   if (

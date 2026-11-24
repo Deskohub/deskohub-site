@@ -1570,9 +1570,20 @@ describe("token-route privacy and telemetry", () => {
     sinksPage("folders/4242", [
       { name: "_Default", destination: "logging/folder" },
     ]),
+    // A warm instance: its startup export is older than every readback
+    // window, so only a fresh export from the trace route verifies.
     {
       tool: "curl",
       pattern: "/healthz$",
+      stdout: JSON.stringify({
+        status: "ok",
+        version: "v1",
+        otlp: { traceId: "e".repeat(32), status: 200 },
+      }),
+    },
+    {
+      tool: "curl",
+      pattern: "/probe/trace$",
       stdout: JSON.stringify({
         status: "ok",
         version: "v1",
