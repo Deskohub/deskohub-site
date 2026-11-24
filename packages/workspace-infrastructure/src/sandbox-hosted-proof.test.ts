@@ -559,8 +559,9 @@ describe("writer-locked stack actions", () => {
       operation: "plan",
       mutates: false,
     });
+    // Its own operation lets it drain a stack a pre-rename record names.
     expect(lockedStackActions.destroy).toMatchObject({
-      operation: "deploy",
+      operation: "destroy",
       mutates: true,
     });
     expect(isLockedStackAction("destroy")).toBe(true);
