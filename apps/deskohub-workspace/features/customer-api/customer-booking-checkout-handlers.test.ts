@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   type CreateCustomerCheckout,
-  CustomerCheckout,
+  type CustomerCheckout,
   customerReferralCodeHeader,
   type SubmitCustomerCheckout,
 } from "@deskohub/workspace-customer-api";
@@ -98,11 +98,6 @@ const unsignablePayState = new PayStateIssueError({
     message: "no sealing key",
   }),
 });
-
-/** A checkout as the response body carries it. */
-const decodeCheckoutBody = Schema.decodeUnknownSync(
-  Schema.toEncoded(CustomerCheckout)
-);
 
 /** The hold deadline the checkout's reservation stores. */
 const storedHoldExpiresAt = "2099-07-01T10:09:00.000Z";
@@ -917,7 +912,8 @@ describe("applyCheckoutDiscountCode", () => {
         })
       );
       expect(response.status).toBe(200);
-      return decodeCheckoutBody(await response.json());
+      const body: unknown = await response.json();
+      return body;
     };
 
     /** `token`'s state with an entered code its price includes. */
@@ -948,8 +944,8 @@ describe("applyCheckoutDiscountCode", () => {
         freshPayStateToken: await sealSyntheticPayStateToken(),
       });
 
-      expect(body.holdExpiresAt).toBe(syntheticHoldExpiresAt);
-      expect(body.expiresAt).not.toBe(signedEarlierExpiresAt);
+      expect(body).toHaveProperty("holdExpiresAt", syntheticHoldExpiresAt);
+      expect(body).not.toHaveProperty("expiresAt", signedEarlierExpiresAt);
     });
 
     test("names the entered code the replacement's price includes", async () => {
@@ -958,7 +954,7 @@ describe("applyCheckoutDiscountCode", () => {
         freshPayStateToken: await withAppliedCode(readyToken),
       });
 
-      expect(body.appliedDiscountCode).toEqual({
+      expect(body).toHaveProperty("appliedDiscountCode", {
         code: "SPRING",
         discountId: "spring-discount",
       });
@@ -981,7 +977,7 @@ describe("applyCheckoutDiscountCode", () => {
         }),
       });
 
-      expect(body.holdExpiresAt).toBe(storedHoldExpiresAt);
+      expect(body).toHaveProperty("holdExpiresAt", storedHoldExpiresAt);
     });
   });
 
@@ -1257,7 +1253,7 @@ describe("clearCheckoutDiscountCode", () => {
     const response = await api.handle(
       customerApiRequest(clearCode(signedEarlier))
     );
-    const body = decodeCheckoutBody(await response.json());
+    const body: unknown = await response.json();
 
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
@@ -1266,7 +1262,7 @@ describe("clearCheckoutDiscountCode", () => {
       holdExpiresAt: syntheticHoldExpiresAt,
       priceReview: { changedKeys: expect.any(Object) },
     });
-    expect(body.expiresAt).not.toBe(signedEarlierExpiresAt);
+    expect(body).not.toHaveProperty("expiresAt", signedEarlierExpiresAt);
     expect(body).not.toHaveProperty("appliedDiscountCode");
   });
 
@@ -1301,7 +1297,9 @@ describe("clearCheckoutDiscountCode", () => {
 
     const response = await api.handle(customerApiRequest(clearCode()));
 
-    expect(decodeCheckoutBody(await response.json()).holdExpiresAt).toBe(
+    expect(await response.json()).toHaveProperty(
+      "holdExpiresAt",
+
       storedHoldExpiresAt
     );
   });

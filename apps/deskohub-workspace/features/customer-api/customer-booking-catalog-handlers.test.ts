@@ -466,6 +466,31 @@ describe("listOfferings", () => {
     });
   });
 
+  test("answers unavailable while the sale source can't be read", async () => {
+    const api = makeCustomerApiTestServer({
+      bookingCatalog: pricedCatalog({
+        // The pricing service declares a provider failure; the sale lookup
+        // reports one as an incomplete sale instead.
+        pricing: Layer.mock(CheckoutPricingService, {
+          quoteAdvertisement: () =>
+            Effect.fail(
+              new DiscountProviderError({
+                reason: "provider_failure",
+                message: "Calendar down",
+              })
+            ),
+        }),
+      }),
+    });
+
+    const response = await api.handle(customerApiRequest(listOfferings));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      _tag: "CustomerServiceUnavailable",
+    });
+  });
+
   test("answers unavailable while the sale can't be calculated", async () => {
     const api = makeCustomerApiTestServer({
       bookingCatalog: pricedCatalog({

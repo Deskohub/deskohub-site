@@ -65,12 +65,16 @@ mock.module("@/shared/utils/use-workspace-action", () => ({
 // banner then announces the save through its change callback.
 let rememberedCategories: string[] = ["necessary"];
 
+// Keeps the fields the vendor adds beside the ones a test reads.
 const decodeSavedCookie = Schema.decodeUnknownSync(
-  Schema.Struct({
-    categories: Schema.Array(Schema.String),
-    lastConsentTimestamp: Schema.String,
-    revision: Schema.Number,
-  })
+  Schema.StructWithRest(
+    Schema.Struct({
+      categories: Schema.Array(Schema.String),
+      lastConsentTimestamp: Schema.String,
+      revision: Schema.Number,
+    }),
+    [Schema.Record(Schema.String, Schema.Unknown)]
+  )
 );
 
 const decodeConsentChange = Schema.decodeUnknownSync(
