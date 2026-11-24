@@ -29,7 +29,7 @@ import { ProfileFormFooter } from "@/features/account/components/profile-form-fo
 import {
   completionFormSchema,
   firstInvalidProfileFormSection,
-  type ProfileFormField,
+  isProfileFormField,
   type ProfileFormSection,
   type ProfileFormValues,
   profileFormDefaults,
@@ -203,7 +203,9 @@ export function ProfileForm({
       locale
     );
     for (const [field, message] of Object.entries(errors)) {
-      form.setError(field as ProfileFormField, { type: "server", message });
+      if (isProfileFormField(field)) {
+        form.setError(field, { type: "server", message });
+      }
     }
     if (!isComplete && firstSection !== undefined) {
       onSectionChange?.(firstSection);

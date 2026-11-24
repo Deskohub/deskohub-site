@@ -86,11 +86,10 @@ export const decodeCustomerAccountSession = (
       return yield* accessError("unverified-email");
     }
 
-    const withDeletionMarker = session.user as BetterAuthUser & {
-      deletionRequestedAt?: Date | null;
-    };
     const localePreference = Option.getOrUndefined(
-      decodeLocalePreference((session.user as { locale?: unknown }).locale)
+      decodeLocalePreference(
+        "locale" in session.user ? session.user.locale : undefined
+      )
     );
     const accountCreatedAt = yield* accountInstant(session.user.createdAt);
     const accountUpdatedAt = yield* accountInstant(session.user.updatedAt);
@@ -102,7 +101,9 @@ export const decodeCustomerAccountSession = (
     return {
       accountId,
       email,
-      deletionRequested: withDeletionMarker.deletionRequestedAt != null,
+      deletionRequested:
+        "deletionRequestedAt" in session.user &&
+        session.user.deletionRequestedAt != null,
       displayName: session.user.name.trim() === "" ? null : session.user.name,
       accountCreatedAt,
       accountUpdatedAt,
@@ -142,8 +143,8 @@ type NextRequestCode = "E251" | "E1378";
 
 const nextRequestCodeOf = (cause: unknown): NextRequestCode | undefined => {
   if (!(cause instanceof Error)) return undefined;
-  const code = (cause as { readonly __NEXT_ERROR_CODE?: unknown })
-    .__NEXT_ERROR_CODE;
+  const code =
+    "__NEXT_ERROR_CODE" in cause ? cause.__NEXT_ERROR_CODE : undefined;
   if (code === "E251" || code === "E1378") return code;
   return nextRequestScopePattern.test(cause.message) ? "E251" : undefined;
 };

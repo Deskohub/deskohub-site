@@ -145,11 +145,11 @@ const profileFormFields: {
   },
 };
 
-const isProfileFormField = (name: string): name is ProfileFormField =>
+export const isProfileFormField = (name: string): name is ProfileFormField =>
   Object.hasOwn(profileFormFields, name);
 
 const isProfileBillingField = (name: string): name is ProfileBillingField =>
-  (profileBillingFieldNames as readonly string[]).includes(name);
+  profileBillingFieldNames.some((field) => field === name);
 
 export const profileFormSectionOf = (
   field: ProfileFormField
@@ -174,8 +174,10 @@ export const profileFormInputName = (field: ProfileFormField): string =>
 export const profileFormFieldOfInputName = (
   inputName: string
 ): ProfileFormField | undefined =>
-  (Object.keys(profileFormFields) as ProfileFormField[]).find(
-    (field) => profileFormFields[field].inputName === inputName
+  Object.keys(profileFormFields).find(
+    (field): field is ProfileFormField =>
+      isProfileFormField(field) &&
+      profileFormFields[field].inputName === inputName
   );
 
 export const profileFormErrorMessage = (
