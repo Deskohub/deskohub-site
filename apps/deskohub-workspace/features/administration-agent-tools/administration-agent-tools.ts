@@ -281,9 +281,6 @@ const guardCredentials = ({
 type ToolResult = StandardSchemaV1.InferOutput<AgentTool<never>["output"]>;
 type JsonObjectSchema = Schema.Codec<ToolResult, ToolResult>;
 
-const isJsonObject = (value: Schema.Json): value is Schema.JsonObject =>
-  Predicate.isObject(value);
-
 const encodesToObject = (ast: SchemaAST.AST): boolean => {
   const encoded = SchemaAST.toEncoded(ast);
   return SchemaAST.isUnion(encoded)
@@ -319,12 +316,10 @@ const successResultSchema = ({
   }
   const json = Schema.toCodecJson(administrationContractCodec(success));
   if (wrapsResult) return Schema.Struct({ items: json });
-  // `encodesToObject` decided that this success's JSON is an object; the
-  // published schema describes that JSON, as the result carries it.
-  const encoded = Schema.toEncoded(json);
-  return Schema.toType(
-    encoded.pipe(Schema.refine<typeof encoded, Schema.JsonObject>(isJsonObject))
-  );
+  // A trust boundary: `encodesToObject` decided that this success's JSON is
+  // an object, which only its AST shows. MCP publishes the decoded side, so
+  // the schema stays the success's own JSON codec.
+  return Schema.make<JsonObjectSchema>(json.ast);
 };
 
 const outputSchema = ({
