@@ -2,7 +2,7 @@
 
 import { useWatch } from "react-hook-form";
 import { m } from "@/features/administration/i18n";
-import type { Locale } from "@/features/i18n";
+import { isLocale, type Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import {
   Tabs,
@@ -106,7 +106,9 @@ function EmailLanguageTabs() {
       <EmailRetiredTranslations />
       <EmailEnglishFallbackNote />
       <Tabs
-        onValueChange={(value) => setActiveLocale(value as Locale)}
+        onValueChange={(value) => {
+          if (isLocale(value)) setActiveLocale(value);
+        }}
         value={activeLocale}
       >
         <TabsList

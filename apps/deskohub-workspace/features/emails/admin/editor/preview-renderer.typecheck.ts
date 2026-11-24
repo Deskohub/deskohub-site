@@ -8,8 +8,6 @@ import type { previewEmailDraft } from "./preview-actions";
 type PreviewActionFitsEditor =
   typeof previewEmailDraft extends EmailPreviewRenderer ? true : false;
 
-const typecheck = false as boolean;
-
-if (typecheck) {
+void (() => {
   void (true satisfies PreviewActionFitsEditor);
-}
+});

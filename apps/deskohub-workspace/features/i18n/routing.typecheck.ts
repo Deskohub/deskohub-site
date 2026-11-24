@@ -1,8 +1,6 @@
 import { getLocalizedPagePath, getUnprefixedPagePath } from "./routing";
 
-const typecheck = false as boolean;
-
-if (typecheck) {
+void (() => {
   const administration: "/admin" = getUnprefixedPagePath("/[locale]/admin");
   const customer: `/admin/customers/${string}` = getUnprefixedPagePath(
     "/[locale]/admin/customers/[customerId]",
@@ -35,4 +33,4 @@ if (typecheck) {
 
   // @ts-expect-error A dynamic route needs its parameters.
   getLocalizedPagePath("cs-CZ", "/[locale]/account/[section]");
-}
+});

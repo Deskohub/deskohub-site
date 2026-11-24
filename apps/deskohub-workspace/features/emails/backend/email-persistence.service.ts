@@ -82,7 +82,10 @@ export class EmailPersistence extends Context.Service<
           readonly draft: EmailDraft;
         }) {
           const [row] = yield* db.insert(emails).values(input).returning();
-          return row!;
+          if (!row) {
+            return yield* Effect.die("Email insert returned no row.");
+          }
+          return row;
         }),
         saveDraft: Effect.fn("EmailPersistence.saveDraft")(function* ({
           emailId,
@@ -146,7 +149,12 @@ export class EmailPersistence extends Context.Service<
                 .insert(emailVersions)
                 .values(publication)
                 .returning();
-              return version!;
+              if (!version) {
+                return yield* Effect.die(
+                  "Email version insert returned no row."
+                );
+              }
+              return version;
             })
           );
         }),

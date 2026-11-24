@@ -9,7 +9,8 @@ const scramblingSchedule = Schedule.spaced(200).pipe(Schedule.jittered);
 const scrambleCharacter = (index: number) =>
   Random.nextIntBetween(0, scrambleCharacters.length - 1).pipe(
     Effect.map(
-      (characterIndex) => [index, scrambleCharacters[characterIndex]!] as const
+      (characterIndex) =>
+        [index, scrambleCharacters.charAt(characterIndex)] as const
     )
   );
 

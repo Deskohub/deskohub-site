@@ -5,6 +5,7 @@ import {
 } from "@deskohub/i18n/locale-registry";
 import { replaceLocaleInPathname } from "@deskohub/i18n/pathname";
 import type { AppRouteHandlerRoutes, AppRoutes } from "@/.next/types/routes";
+import { escapeRegExp } from "@/shared/utils/escape-regexp";
 import {
   baseLocale,
   cookieName,
@@ -83,6 +84,23 @@ export type LocalizedRouteParams<Route extends LocalizedRoute> = [
       >,
     ];
 
+const routeParamSegment = /\[([^\]]+)\]/g;
+
+/** Whether `path` is `route`'s unprefixed pathname with every `[param]` filled. */
+const fillsRoute = <Route extends LocalizedRoute>(
+  route: Route,
+  path: string
+): path is UnprefixedRoutePath<Route> =>
+  new RegExp(
+    `^${route
+      .slice(localeRouteSegment.length)
+      .split(routeParamSegment)
+      .filter((_, index) => index % 2 === 0)
+      .map(escapeRegExp)
+      .join(".*")}$`,
+    "s"
+  ).test(path);
+
 /**
  * Builds a path without a locale prefix to a page or route handler Next
  * generated from the app directory, filling each `[param]` segment with its
@@ -95,11 +113,15 @@ export const getUnprefixedPagePath = <Route extends LocalizedRoute>(
   ...[params]: LocalizedRouteParams<Route>
 ): UnprefixedRoutePath<Route> => {
   const values: Readonly<Record<string, string | number>> = params ?? {};
-  return route
+  const path = route
     .slice(localeRouteSegment.length)
-    .replace(/\[([^\]]+)\]/g, (_, name: string) =>
+    .replace(routeParamSegment, (_, name: string) =>
       encodeURIComponent(values[name] ?? "")
-    ) as UnprefixedRoutePath<Route>;
+    );
+  if (!fillsRoute(route, path)) {
+    throw new Error(`The filled path ${path} does not match ${route}.`);
+  }
+  return path;
 };
 
 /**
