@@ -1,16 +1,22 @@
+import { Record } from "effect";
 import { WebhookRefusal } from "@/shared/backend/service-route";
 import type { NexiWebhookProcessingError } from "./nexi-webhook.service";
 import { paymentWebhookDisposition } from "./payment-webhook-disposition";
 import type { WebhookFailure } from "./payment-webhook-processor";
 
-const nexiWebhookPrefix = "nexi_webhook_";
+const toNexiWebhookCode = <Failure extends WebhookFailure>(failure: Failure) =>
+  `nexi_webhook_${failure}` as const;
+
+/** Each Nexi webhook error code's disposition, keyed by the full code. */
+const nexiWebhookDispositions = Record.mapKeys(
+  paymentWebhookDisposition,
+  toNexiWebhookCode
+);
 
 export const nexiWebhookDisposition = (
   code: NexiWebhookProcessingError["errorCode"]
-) =>
-  paymentWebhookDisposition[
-    code.slice(nexiWebhookPrefix.length) as WebhookFailure
-  ];
+): (typeof paymentWebhookDisposition)[WebhookFailure] =>
+  nexiWebhookDispositions[code];
 
 export const nexiWebhookRefusal = (error: NexiWebhookProcessingError) =>
   new WebhookRefusal({

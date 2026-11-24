@@ -77,9 +77,8 @@ export const isWorkspaceCoworkHistoricalTableCandidate = (
   tableTags: ReadonlySet<string>,
   tier: WorkspaceCoworkProductTier
 ) =>
-  workspaceCoworkHistoricalTiers.includes(
-    tier as (typeof workspaceCoworkHistoricalTiers)[number]
-  ) && tableTags.has(`tier:${tier}`);
+  workspaceCoworkHistoricalTiers.some((historical) => historical === tier) &&
+  tableTags.has(`tier:${tier}`);
 
 const fallbackRoomKey = "__workspace-table-selection:fallback-room__";
 

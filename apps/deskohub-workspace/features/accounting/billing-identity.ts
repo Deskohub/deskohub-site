@@ -27,6 +27,10 @@ export const vatRegistrationIdSchema = billingTextSchema(255)
 export const invoiceCountryCodes = getCodes().sort();
 const invoiceCountryCodeSet = new Set(invoiceCountryCodes);
 const postalCodeLocaleSet = new Set<string>(validator.isPostalCodeLocales);
+const isPostalCodeLocale = (
+  country: string
+): country is Parameters<typeof validator.isPostalCode>[1] =>
+  postalCodeLocaleSet.has(country);
 
 const invoiceCountryCodeSchema = billingTextSchema(2).check(
   Schema.makeFilter((country) => invoiceCountryCodeSet.has(country), {
@@ -42,11 +46,7 @@ export const invoiceBuyerAddressSchema = Schema.Struct({
   country: invoiceCountryCodeSchema,
 }).check(
   Schema.makeFilter(({ country, postalCode }) =>
-    !postalCodeLocaleSet.has(country) ||
-    validator.isPostalCode(
-      postalCode,
-      country as Parameters<typeof validator.isPostalCode>[1]
-    )
+    !isPostalCodeLocale(country) || validator.isPostalCode(postalCode, country)
       ? true
       : {
           path: ["postalCode"],

@@ -145,8 +145,8 @@ export const makeInvoiceReads = Effect.gen(function* () {
     const opened = yield* sealedDocuments
       .open({
         reference: input.reference,
-        // `and` of defined conditions is never undefined.
-        where: and(eq(invoices.id, standing.id), input.where)!,
+        // `and` of defined conditions is never undefined; `false` fails closed.
+        where: and(eq(invoices.id, standing.id), input.where) ?? sql`false`,
       })
       .pipe(
         Effect.catchTag("AccountingRecordUnavailable", (cause) =>
@@ -213,7 +213,8 @@ export const makeInvoiceReads = Effect.gen(function* () {
   )((paymentAttemptId: string) => {
     const id = paymentAttemptIdSchema.make(paymentAttemptId);
     return loadInvoice({
-      where: and(eq(invoices.paymentAttemptId, id), isUncancelled)!,
+      where:
+        and(eq(invoices.paymentAttemptId, id), isUncancelled) ?? sql`false`,
       reference: { type: "paymentAttemptId", id },
     }).pipe(Effect.map(asReservationInvoice));
   });
@@ -227,7 +228,9 @@ export const makeInvoiceReads = Effect.gen(function* () {
   )((paymentAttemptId: string) => {
     const id = paymentAttemptIdSchema.make(paymentAttemptId);
     return loadInvoice({
-      where: and(eq(invoices.paymentAttemptId, id), isAttemptChainTail)!,
+      where:
+        and(eq(invoices.paymentAttemptId, id), isAttemptChainTail) ??
+        sql`false`,
       reference: { type: "paymentAttemptId", id },
     }).pipe(Effect.map(asReservationInvoice));
   });
@@ -237,10 +240,11 @@ export const makeInvoiceReads = Effect.gen(function* () {
     "InvoiceRepository.findLiveByReservationId"
   )((reservationId: WorkspaceReservationId) =>
     loadInvoice({
-      where: and(
-        eq(invoices.workspaceReservationId, reservationId),
-        isUncancelled
-      )!,
+      where:
+        and(
+          eq(invoices.workspaceReservationId, reservationId),
+          isUncancelled
+        ) ?? sql`false`,
       reference: { type: "workspaceReservationId", id: reservationId },
     }).pipe(Effect.map(asReservationInvoice))
   );
@@ -253,10 +257,9 @@ export const makeInvoiceReads = Effect.gen(function* () {
     "InvoiceRepository.findLatestByReservationId"
   )((reservationId: WorkspaceReservationId) =>
     loadInvoice({
-      where: and(
-        eq(invoices.workspaceReservationId, reservationId),
-        isChainTail
-      )!,
+      where:
+        and(eq(invoices.workspaceReservationId, reservationId), isChainTail) ??
+        sql`false`,
       reference: { type: "workspaceReservationId", id: reservationId },
     }).pipe(Effect.map(asReservationInvoice))
   );
@@ -398,12 +401,13 @@ export const makeInvoiceReads = Effect.gen(function* () {
     invoiceId: InvoiceId
   ) =>
     loadInvoice({
-      // `and` of defined conditions is never undefined.
-      where: and(
-        eq(invoices.id, invoiceId),
-        eq(invoices.dotyposCustomerId, dotyposCustomerId),
-        isVisibleToCustomer()
-      )!,
+      // `and` of defined conditions is never undefined; `false` fails closed.
+      where:
+        and(
+          eq(invoices.id, invoiceId),
+          eq(invoices.dotyposCustomerId, dotyposCustomerId),
+          isVisibleToCustomer()
+        ) ?? sql`false`,
       reference: { type: "invoiceId", id: invoiceId },
     });
 

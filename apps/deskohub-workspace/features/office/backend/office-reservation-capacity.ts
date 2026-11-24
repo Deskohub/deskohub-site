@@ -17,12 +17,13 @@ export const getOfficeReservationSeatCapacity = Effect.fn(function* (
   const candidates = getWorkspaceTableCandidates(tables, [
     workspaceOfficeReservationTableTag,
   ]);
-  if (candidates.length !== 1) {
+  const [candidate, ...otherCandidates] = candidates;
+  if (candidate === undefined || otherCandidates.length > 0) {
     return yield* new OfficeTableUnconfigured({
       message:
         "Office reservations require exactly one assignable office table.",
     });
   }
 
-  return yield* getWorkspaceTableSeatCapacity(candidates[0]!);
+  return yield* getWorkspaceTableSeatCapacity(candidate);
 });

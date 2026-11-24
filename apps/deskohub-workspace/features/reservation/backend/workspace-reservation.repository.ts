@@ -1761,13 +1761,17 @@ export class WorkspaceReservationRepository extends Context.Service<
               id: workspaceReservations.id,
               holdExpiresAt: workspaceReservations.reservationHoldExpiresAt,
             });
-          yield* ensureUpdated(
-            updated,
-            "workspaceReservations.markAttachFailedCancellationRequired",
-            input.id,
-            "Only creating_hold reservations can record attach-cancel recovery."
-          );
-          return updated[0]!.holdExpiresAt;
+          const [row] = updated;
+          if (row === undefined) {
+            return yield* new WorkspaceReservationStateError({
+              operation:
+                "workspaceReservations.markAttachFailedCancellationRequired",
+              reservationId: input.id,
+              message:
+                "Only creating_hold reservations can record attach-cancel recovery.",
+            });
+          }
+          return row.holdExpiresAt;
         }),
         claimCancellation: Effect.fn("workspaceReservations.claimCancellation")(
           function* (input) {

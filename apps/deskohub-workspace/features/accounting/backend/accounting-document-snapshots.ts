@@ -2,7 +2,7 @@ import type {
   DotyposCustomerId,
   DotyposReservationId,
 } from "@deskohub/dotypos";
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer, Schema } from "effect";
 import { WorkspaceTransaction } from "@/db/database.service";
@@ -131,10 +131,14 @@ export class AccountingDocumentSnapshots extends Context.Service<
       ) {
         const opened = yield* snapshots.open({
           reference: { type: "paymentAttemptId", id: paymentAttemptId },
-          where: and(
-            eq(accountingDocumentSnapshots.paymentAttemptId, paymentAttemptId),
-            isNotNull(accountingDocumentSnapshots.workspaceReservationId)
-          )!,
+          where:
+            and(
+              eq(
+                accountingDocumentSnapshots.paymentAttemptId,
+                paymentAttemptId
+              ),
+              isNotNull(accountingDocumentSnapshots.workspaceReservationId)
+            ) ?? sql`false`,
         });
         return opened?.value ?? null;
       });
@@ -144,10 +148,14 @@ export class AccountingDocumentSnapshots extends Context.Service<
       )(function* (paymentAttemptId: PaymentAttemptId) {
         const opened = yield* entryPacks.open({
           reference: { type: "paymentAttemptId", id: paymentAttemptId },
-          where: and(
-            eq(accountingDocumentSnapshots.paymentAttemptId, paymentAttemptId),
-            isNull(accountingDocumentSnapshots.workspaceReservationId)
-          )!,
+          where:
+            and(
+              eq(
+                accountingDocumentSnapshots.paymentAttemptId,
+                paymentAttemptId
+              ),
+              isNull(accountingDocumentSnapshots.workspaceReservationId)
+            ) ?? sql`false`,
         });
         return opened?.value ?? null;
       });
