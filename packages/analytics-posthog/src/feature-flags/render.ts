@@ -22,6 +22,7 @@ type PayloadType =
 interface PostHogFeatureFlagContractTemplateView {
   readonly featureFlags: readonly {
     readonly keyLiteral: string;
+    readonly keyProperty: string;
     readonly payloadSchema: string;
     readonly payloadType: string;
     readonly hasVariants: boolean;
@@ -53,6 +54,7 @@ export const renderPostHogFeatureFlagContract = Effect.fn(
   return Mustache.render(template, {
     featureFlags: sortedDefinitions.map((definition) => ({
       keyLiteral: JSON.stringify(definition.key),
+      keyProperty: renderObjectLiteralKey(definition.key),
       payloadSchema: renderPayloadSchemaForFlag(definition),
       payloadType: renderPayloadTypeForFlag(definition),
       hasVariants: definition.variants.length > 0,
@@ -253,9 +255,16 @@ const renderPayloadSchema = (type: PayloadType): string =>
       object: ({ properties }) =>
         properties.length === 0
           ? "Schema.Record(Schema.String, Schema.Never)"
-          : `Schema.Struct({ ${properties.map((property) => `${JSON.stringify(property.key)}: ${renderPayloadSchema(property.value)}`).join(", ")} })`,
+          : `Schema.Struct({ ${properties.map((property) => `${renderObjectLiteralKey(property.key)}: ${renderPayloadSchema(property.value)}`).join(", ")} })`,
       string: () => "Schema.String",
       undefined: () => "Schema.Undefined",
       unknown: () => "Schema.Unknown",
     })
   );
+
+/**
+ * An object literal key for `key`. A quoted `"__proto__"` key sets the
+ * object's prototype instead of an own property, so it renders computed.
+ */
+const renderObjectLiteralKey = (key: string) =>
+  key === "__proto__" ? `[${JSON.stringify(key)}]` : JSON.stringify(key);

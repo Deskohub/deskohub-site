@@ -6,7 +6,7 @@ export const postHogFeatureFlags = definePostHogFeatureFlags<
   PostHogFeatureFlagDefinitions
 >({
 {{#featureFlags}}
-  {{{keyLiteral}}}: {
+  {{{keyProperty}}}: {
     payload: {{{payloadSchema}}},
     value: {{{valueSchema}}},
   },

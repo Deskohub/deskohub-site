@@ -85,6 +85,8 @@ export const decodePostHogFeatureFlagValue = <
  * Decodes the SDK's payload for `key` into the contract's payload, or
  * `undefined` when PostHog returns none or one the contract does not declare,
  * so an edit in PostHog cannot hand callers a payload of another shape.
+ * Excess fields fail the decode, so a union of payload shapes matches the
+ * shape that declares every field instead of the first one that fits.
  */
 export const decodePostHogFeatureFlagPayload = <
   Definitions extends ValidPostHogFeatureFlagDefinitions<Definitions>,
@@ -94,7 +96,9 @@ export const decodePostHogFeatureFlagPayload = <
   key: Key
 ) =>
   flow(
-    Schema.decodeUnknownOption(contract.decoders[key].payload),
+    Schema.decodeUnknownOption(contract.decoders[key].payload, {
+      onExcessProperty: "error",
+    }),
     Option.getOrUndefined
   );
 

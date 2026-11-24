@@ -2,8 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
-import type { PostHogFeatureFlagSnapshot } from "./contract";
+import { Effect, type Schema } from "effect";
+import {
+  decodePostHogFeatureFlagPayload,
+  type PostHogFeatureFlagContract,
+  type PostHogFeatureFlagSnapshot,
+} from "./contract";
 import type { PostHogFeatureFlagDefinition } from "./definitions";
 import {
   renderPostHogFeatureFlagContract,
@@ -21,6 +25,20 @@ const definitions: readonly PostHogFeatureFlagDefinition[] = [
     variants: ["control", "treatment"],
   },
 ];
+
+interface RenderedFlags {
+  readonly __proto__: {
+    readonly payload: { readonly __proto__: number } | undefined;
+    readonly value: false | "control";
+  };
+  readonly overlapping: {
+    readonly payload:
+      | { readonly Z: number }
+      | { readonly a: number; readonly Z: number }
+      | undefined;
+    readonly value: false | "narrow" | "wide";
+  };
+}
 
 describe("renderPostHogFeatureFlagContract", () => {
   test("renders sorted keys, variants, and structural payload types", async () => {
@@ -91,6 +109,48 @@ describe("renderPostHogFeatureFlagContract", () => {
 
     expect(contract).toContain('readonly "apiKey": string;');
     expect(contract).not.toContain("do-not-commit-this-value");
+  });
+
+  test("renders decoders that keep own __proto__ keys and every declared field", async () => {
+    const directory = mkdtempSync(join(import.meta.dir, ".tmp-render-test-"));
+    try {
+      const contractFile = join(directory, "contract.ts");
+      await Bun.write(
+        contractFile,
+        await Effect.runPromise(
+          renderPostHogFeatureFlagContract([
+            {
+              key: "__proto__",
+              payloads: { control: '{"__proto__":1}' },
+              variants: ["control"],
+            },
+            {
+              key: "overlapping",
+              payloads: { narrow: '{"Z":1}', wide: '{"a":1,"Z":2}' },
+              variants: ["narrow", "wide"],
+            },
+          ])
+        )
+      );
+      const postHogFeatureFlags: PostHogFeatureFlagContract<RenderedFlags> = (
+        await import(contractFile)
+      ).postHogFeatureFlags;
+      const payloadOf = (
+        key: keyof RenderedFlags,
+        payload: Schema.Json
+      ): Schema.Json | undefined =>
+        decodePostHogFeatureFlagPayload(postHogFeatureFlags, key)(payload);
+
+      expect(postHogFeatureFlags.keys).toEqual(["__proto__", "overlapping"]);
+      expect(payloadOf("__proto__", JSON.parse('{"__proto__":1}'))).toEqual(
+        JSON.parse('{"__proto__":1}')
+      );
+      expect(payloadOf("__proto__", {})).toBeUndefined();
+      expect(payloadOf("overlapping", { a: 1, Z: 2 })).toEqual({ a: 1, Z: 2 });
+      expect(payloadOf("overlapping", { Z: 1 })).toEqual({ Z: 1 });
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 
   test("uses unknown for redacted payloads", async () => {

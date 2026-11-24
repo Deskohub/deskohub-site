@@ -2,7 +2,7 @@ import * as OpenApiGenerator from "@effect/openapi-generator/OpenApiGenerator";
 import * as OpenApiPatch from "@effect/openapi-generator/OpenApiPatch";
 import { Config, Data, Effect, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
-import type { OpenAPISpec } from "effect/http-api/OpenApi";
+import { OpenApiDocument } from "./openapi-document";
 
 const generatedClientPath = Bun.fileURLToPath(
   new URL("../src/generated/effect.gen.ts", import.meta.url)
@@ -94,22 +94,6 @@ const downloadSchema = (schemaUrl: URL) =>
         ),
     })
   );
-
-/**
- * The top-level OpenAPI fields the generator reads without a fallback. The
- * nested operation and schema objects stay JSON for the generator to parse.
- */
-const OpenApiDocumentShape = Schema.Struct({
-  openapi: Schema.String,
-  info: Schema.Struct({ title: Schema.String, version: Schema.String }),
-  paths: Schema.Record(Schema.String, Schema.Json),
-});
-
-const isOpenApiDocument = Schema.is(OpenApiDocumentShape);
-
-const OpenApiDocument = Schema.declare<OpenAPISpec>(
-  (document): document is OpenAPISpec => isOpenApiDocument(document)
-);
 
 const generatePostHogClient = Effect.gen(function* () {
   const schemaUrl = yield* Config.URL("POSTHOG_OPENAPI_SCHEMA_URL").pipe(
