@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer, Result } from "effect";
+import { Effect, Layer, Result, type Schema } from "effect";
 import {
   HttpClient,
   HttpClientRequest,
@@ -9,12 +9,7 @@ import {
   HttpServer,
   HttpServerRequest,
 } from "effect/http";
-import {
-  HttpApi,
-  HttpApiBuilder,
-  type HttpApiEndpoint,
-  HttpApiGroup,
-} from "effect/http-api";
+import { HttpApi, HttpApiBuilder, HttpApiGroup } from "effect/http-api";
 import { makeWorkspaceCustomerApiClient } from "./client";
 import { CustomerAccountApi } from "./customer-account-api";
 import type {
@@ -35,16 +30,8 @@ import {
  * order `WorkspaceCustomerApi` adds them (its test pins that order), to show
  * what that order and the payloads' parse options do at runtime.
  */
-// A group's `endpoints` record is typed loosely; this names each endpoint's
-// declared type.
-type AccountEndpoint<Name extends string> = HttpApiEndpoint.WithIdentifier<
-  HttpApiGroup.Endpoints<typeof CustomerAccountApi>,
-  Name
->;
-const updateProfileEndpoint = CustomerAccountApi.endpoints
-  .updateProfile as AccountEndpoint<"updateProfile">;
-const completeProfileEndpoint = CustomerAccountApi.endpoints
-  .completeProfile as AccountEndpoint<"completeProfile">;
+const updateProfileEndpoint = CustomerAccountApi.endpoints.updateProfile;
+const completeProfileEndpoint = CustomerAccountApi.endpoints.completeProfile;
 
 const api = HttpApi.make("customerRequestPipeline")
   .add(
@@ -112,7 +99,10 @@ const server = HttpRouter.toWebHandler(
 );
 afterAll(() => server.dispose());
 
-const updateProfile = (body: unknown, headers: Record<string, string> = {}) => {
+const updateProfile = (
+  body: Schema.Json,
+  headers: Record<string, string> = {}
+) => {
   ran.length = 0;
   received.length = 0;
   return server.handler(

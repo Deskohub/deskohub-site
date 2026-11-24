@@ -1,13 +1,11 @@
-import { SchemaAST } from "effect";
+import { Predicate, SchemaAST } from "effect";
 import type { EmailCustomerField } from "./email-customer-selection";
 
 type Presence = Pick<EmailCustomerField, "nullable" | "optional">;
 type RecordField = Extract<EmailCustomerField, { readonly kind: "record" }>;
 type ListField = Extract<EmailCustomerField, { readonly kind: "list" }>;
-type ScalarType = Extract<
-  EmailCustomerField,
-  { readonly kind: "scalar" }
->["type"];
+type ScalarField = Extract<EmailCustomerField, { readonly kind: "scalar" }>;
+type ScalarType = ScalarField["type"];
 
 const scalarTypeByTag: Partial<Record<SchemaAST.AST["_tag"], ScalarType>> = {
   String: "string",
@@ -48,11 +46,11 @@ function describeLiteral(
   literal: SchemaAST.Literal["literal"],
   presence: Presence
 ): EmailCustomerField {
-  if (typeof literal === "string")
+  if (Predicate.isString(literal))
     return { ...presence, kind: "scalar", type: "string", choices: [literal] };
-  if (typeof literal === "number")
+  if (Predicate.isNumber(literal))
     return { ...presence, kind: "scalar", type: "number", choices: [literal] };
-  if (typeof literal === "boolean")
+  if (Predicate.isBoolean(literal))
     return { ...presence, kind: "scalar", type: "boolean", choices: [literal] };
   return { ...presence, kind: "unsupported" };
 }
@@ -67,7 +65,7 @@ function describeObjects(
     kind: "record",
     fields: Object.fromEntries(
       ast.propertySignatures
-        .filter((property) => typeof property.name === "string")
+        .filter((property) => Predicate.isString(property.name))
         .map((property) => [
           property.name,
           describeEmailCustomerField(property.type),
@@ -182,14 +180,10 @@ function mergeScalars(
   const choices = fields.flatMap((field) =>
     field.kind === "scalar" ? (field.choices ?? []) : []
   );
-  return {
-    ...combined,
-    kind: "scalar",
-    type,
-    ...(fields.every((field) => field.kind === "scalar" && field.choices)
-      ? { choices: [...new Set(choices)] }
-      : {}),
-  };
+  const scalar: ScalarField = { ...combined, kind: "scalar", type };
+  if (!fields.every((field) => field.kind === "scalar" && field.choices))
+    return scalar;
+  return { ...scalar, choices: [...new Set(choices)] };
 }
 
 function mergeLists(

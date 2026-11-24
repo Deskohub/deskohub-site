@@ -29,8 +29,10 @@ describe("campaign operations", () => {
       { campaignId: "campaign-1", state: "active", limit: 100 },
     ],
   ] as const)("%s rejects an unknown key", (name, input) => {
+    const operationInput: Schema.Decoder<unknown> =
+      campaignOperations[name].input;
     const decode = Schema.decodeUnknownResult(
-      campaignOperations[name].input as Schema.Decoder<unknown>,
+      operationInput,
       administrationInputParseOptions
     );
 

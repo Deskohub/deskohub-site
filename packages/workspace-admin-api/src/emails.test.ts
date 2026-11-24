@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, JsonPointer, Schema } from "effect";
+import { Effect, JsonPointer, Predicate, Schema } from "effect";
 import {
   type EmailCustomerField,
   EmailCustomerSelection,
@@ -73,7 +73,7 @@ function customerContractPaths(schema: Schema.Top): Set<string> {
     for (const branch of [...(node.anyOf ?? []), ...(node.oneOf ?? [])])
       visit(branch, path);
     for (const branch of node.allOf ?? []) visit(branch, path, true);
-    for (const type of typeof node.type === "string"
+    for (const type of Predicate.isString(node.type)
       ? [node.type]
       : (node.type ?? [])) {
       switch (type) {
@@ -159,7 +159,7 @@ const document: EmailDocument = {
 };
 const publish = Schema.decodeUnknownSync(EmailDocumentForPublication);
 
-function selection(input: unknown) {
+function selection(input: Schema.JsonObject) {
   return Schema.decodeUnknownSync(EmailCustomerSelection)(input);
 }
 
