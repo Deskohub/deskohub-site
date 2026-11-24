@@ -21,7 +21,7 @@ import { getProviderValueLabel } from "@/features/administration/payment-present
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
-import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
+import "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -122,6 +122,10 @@ mock.module(
 mock.module("@/features/administration/fio-refund-action", () => ({
   recordFioManualRefund: mock(),
 }));
+// The detail's refund control reads an idle action.
+mock.module("@/shared/utils/use-workspace-action", () => ({
+  useWorkspaceAction: () => ({ execute: mock(), isExecuting: false }),
+}));
 const loadNexiOrder = mock(() => Promise.resolve(order));
 mock.module("@/features/administration/page-data.server", () => ({
   ...administrationPageData,
@@ -163,11 +167,6 @@ const unreported = new Set<string>([
 describe("OrderAdministrationDetail", () => {
   beforeAll(() => {
     registerWorkspaceComponentTestEnv();
-    workspaceUseAction.mockReturnValue({
-      execute: mock(),
-      isExecuting: false,
-      result: {},
-    });
   });
   afterEach(() => {
     order = fullOrder;
