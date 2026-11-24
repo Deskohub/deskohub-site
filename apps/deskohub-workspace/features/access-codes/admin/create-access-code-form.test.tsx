@@ -58,23 +58,39 @@ let actionOptions: Parameters<typeof useWorkspaceAction>[1] | undefined;
 
 const lastInput = () => execute.mock.lastCall?.[0];
 
+/** The callbacks the form registered, failing when it registered none. */
+const registeredOptions = () => {
+  assert(actionOptions, "Expected the form to register action callbacks");
+  return actionOptions;
+};
+
 /** Settles the latest call as the action's success with `data`. */
-const actionSucceeds = ({ data }: { readonly data: unknown }) =>
-  actionOptions?.onSuccess?.({ data, input: lastInput() });
+const actionSucceeds = ({ data }: { readonly data: unknown }) => {
+  const { onSuccess } = registeredOptions();
+  assert(onSuccess, "Expected the form to handle the action's success");
+  return onSuccess({ data, input: lastInput() });
+};
 
 /** Settles the latest call as the action's server error. */
 const actionFails = ({
   error,
 }: {
   readonly error: { readonly serverError: string };
-}) => actionOptions?.onError?.({ error, input: lastInput() });
+}) => {
+  const { onError } = registeredOptions();
+  assert(onError, "Expected the form to handle the action's error");
+  return onError({ error, input: lastInput() });
+};
 
 /** Settles the latest call as a request that never reached the server. */
-const actionTransportFails = () =>
-  actionOptions?.onTransportError?.({
+const actionTransportFails = () => {
+  const { onTransportError } = registeredOptions();
+  assert(onTransportError, "Expected the form to handle a transport failure");
+  return onTransportError({
     error: new Error("Synthetic transport failure"),
     input: lastInput(),
   });
+};
 
 mock.module("@/features/access-codes/admin/actions", () => ({
   createStandaloneAccessCode: mock(),
