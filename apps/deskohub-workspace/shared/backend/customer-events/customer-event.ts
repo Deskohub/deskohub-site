@@ -23,7 +23,7 @@ export const reservationCustomerEventKinds = [
   "reservation-finished",
 ] as const satisfies ReadonlyArray<CustomerEventKind>;
 
-const customerEventIdSchema = Schema.NonEmptyString.pipe(
+export const customerEventIdSchema = Schema.NonEmptyString.pipe(
   Schema.brand("CustomerEventId")
 ).annotate({
   identifier: "CustomerEventId",

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Predicate, Struct } from "effect";
 import { providePerRequest } from "./provide-per-request";
 
 /** A service whose every member is an operation that needs nothing more. */
@@ -27,7 +27,7 @@ export const servicePerOperation = <I, S extends Operations<S>, RIn = never>(
 ): Layer.Layer<I, never, RIn> =>
   Layer.effect(
     service,
-    Effect.map(Effect.context<RIn>(), (shared) => {
+    Effect.flatMap(Effect.context<RIn>(), (shared) => {
       const forward =
         (name: keyof S) =>
         (...input: ReadonlyArray<unknown>) =>
@@ -44,10 +44,20 @@ export const servicePerOperation = <I, S extends Operations<S>, RIn = never>(
               Context.merge(shared, operation)
             )
           );
-      const forwarded: Partial<Operations<S>> = {};
-      for (const name of Object.keys(operations) as Array<keyof S>) {
-        forwarded[name] = forward(name);
-      }
-      return forwarded as S;
+      const names = Struct.keys(operations);
+      const forwarded = Object.fromEntries(
+        names.map((name) => [name, forward(name)])
+      );
+      // Every operation `operations` names is forwarded, so `forwarded` is
+      // the service; the check is what lets the types say so.
+      const isService = (
+        value: typeof forwarded
+      ): value is typeof forwarded & S =>
+        names.every((name) => Predicate.isFunction(value[name]));
+      return isService(forwarded)
+        ? Effect.succeed(forwarded)
+        : Effect.die(
+            new Error("An operation of the service is not forwarded.")
+          );
     })
   );

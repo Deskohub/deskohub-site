@@ -10,9 +10,7 @@ class TestService extends Context.Service<
   static Default = Layer.succeed(this, { value: "typecheck" });
 }
 
-const typecheck = false as boolean;
-
-if (typecheck) {
+void (() => {
   const locationMapImage: Effect.Effect<Buffer, unknown> =
     generateWorkspaceLocationMapImage();
   void locationMapImage;
@@ -90,4 +88,4 @@ if (typecheck) {
         Effect.mapError(WorkspaceRouteFailure.internal("Failed"))
       )
   );
-}
+});

@@ -20,7 +20,7 @@ export type PostHogEmailFinalStatus = (typeof finalStatuses)[number];
 export const isPostHogEmailFinalStatus = (
   status: PostHogEmailStatus
 ): status is PostHogEmailFinalStatus =>
-  (finalStatuses as readonly PostHogEmailStatus[]).includes(status);
+  finalStatuses.some((finalStatus) => finalStatus === status);
 
 /**
  * The delivery report of PostHog's final status of one tracked email. Its

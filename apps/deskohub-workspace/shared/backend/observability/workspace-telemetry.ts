@@ -110,7 +110,7 @@ type GlobalWithTelemetry = typeof globalThis & {
  * or environment; the runtime then can't build its observability.
  */
 export const workspaceLoggerProvider = () => {
-  const processGlobals = globalThis as GlobalWithTelemetry;
+  const processGlobals: GlobalWithTelemetry = globalThis;
   processGlobals[workspaceTelemetryHandle] ??= {
     loggerProvider: createPostHogLoggerProvider({
       deploymentEnvironment: env.VERCEL_ENV,
@@ -204,7 +204,8 @@ const drainLogs = (
  */
 export const flushWorkspaceLogs: Effect.Effect<void> = Effect.suspend(() => {
   const loggerProvider = workspaceLoggerProvider();
-  const handle = (globalThis as GlobalWithTelemetry)[workspaceTelemetryHandle];
+  const processGlobals: GlobalWithTelemetry = globalThis;
+  const handle = processGlobals[workspaceTelemetryHandle];
   return flushLoggerProvider(
     loggerProvider &&
       handle && {

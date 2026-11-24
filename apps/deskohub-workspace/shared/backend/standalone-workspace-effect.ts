@@ -24,18 +24,18 @@ type GlobalWithStandaloneObservability = typeof globalThis & {
 export const setStandaloneWorkspaceObservability = (
   layer: Layer.Layer<never>
 ): void => {
-  (globalThis as GlobalWithStandaloneObservability)[
-    standaloneObservabilityKey
-  ] = layer;
+  const processGlobals: GlobalWithStandaloneObservability = globalThis;
+  processGlobals[standaloneObservabilityKey] = layer;
 };
 
 const StandaloneObservabilityLive: Layer.Layer<never> = Layer.unwrap(
-  Effect.sync(
-    () =>
-      (globalThis as GlobalWithStandaloneObservability)[
-        standaloneObservabilityKey
-      ] ?? Layer.merge(WorkspaceLoggerLive, WorkspaceClockLive)
-  )
+  Effect.sync(() => {
+    const processGlobals: GlobalWithStandaloneObservability = globalThis;
+    return (
+      processGlobals[standaloneObservabilityKey] ??
+      Layer.merge(WorkspaceLoggerLive, WorkspaceClockLive)
+    );
+  })
 );
 
 const runtime = NextEffect.make({ layer: StandaloneObservabilityLive });

@@ -1221,6 +1221,8 @@ describe("createCensoredOtelSpanExporter", () => {
             email: privateValue,
             "server.address": "private-provider-endpoint",
             sessionDuration: 123,
+            "app.labels": ["visible", "kept"],
+            "app.retryDelays": [1, 2],
           },
         }),
         Effect.exit,
@@ -1239,6 +1241,8 @@ describe("createCensoredOtelSpanExporter", () => {
       email: CENSORED_LOG_VALUE,
       "server.address": CENSORED_LOG_VALUE,
       sessionDuration: 123,
+      "app.labels": ["visible", "kept"],
+      "app.retryDelays": [1, 2],
     });
     expect(span?.events[0]?.name).toBe("exception");
     expect(span?.events[0]?.attributes?.["exception.stacktrace"]).toContain(
