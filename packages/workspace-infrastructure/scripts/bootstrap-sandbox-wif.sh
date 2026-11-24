@@ -16,6 +16,12 @@
 # a run outside the trusted workflow or environment is confirmed denied,
 # rerun with --grant-deploy-roles to grant deployment permissions.
 #
+# Once the hosted proof of the IAM-private stack passes, rerun with
+# --revoke-retired-edge-roles as well. It removes the load balancer, Cloud
+# Armor and log-exclusion roles earlier versions granted the deployer, then
+# reads the policy back and fails unless they are gone and the deployer
+# still reads logs and traces.
+#
 # Usage:
 #   bootstrap-sandbox-wif.sh \
 #     --project-id <id> --github-repository <owner>/<name> \
@@ -24,7 +30,8 @@
 #     --vercel-team-slug <slug> --vercel-project <name> \
 #     --vercel-owner-id <team_…> --vercel-project-id <prj_…> \
 #     [--region europe-west1] [--project-number <number>] \
-#     [--grant-deploy-roles] [--managed-secret <secret id>]... [--dry-run]
+#     [--grant-deploy-roles] [--revoke-retired-edge-roles] \
+#     [--managed-secret <secret id>]... [--dry-run]
 #
 # Numeric GitHub IDs: gh api repos/<owner>/<name> --jq '.owner.id, .id'
 # Vercel IDs: the project's settings or `vercel project inspect`; the
@@ -45,6 +52,7 @@ vercel_pool_id="workspace-vercel"
 vercel_provider_id="vercel"
 dry_run=false
 grant_deploy_roles=false
+revoke_retired_edge_roles=false
 managed_secrets=()
 project_id=""
 project_number=""
@@ -60,7 +68,7 @@ vercel_owner_id=""
 vercel_project_id=""
 
 usage() {
-  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -85,6 +93,7 @@ while [[ $# -gt 0 ]]; do
     --vercel-owner-id) vercel_owner_id="${2:-}"; shift 2 ;;
     --vercel-project-id) vercel_project_id="${2:-}"; shift 2 ;;
     --grant-deploy-roles) grant_deploy_roles=true; shift ;;
+    --revoke-retired-edge-roles) revoke_retired_edge_roles=true; shift ;;
     --managed-secret) managed_secrets+=("${2:-}"); shift 2 ;;
     --dry-run) dry_run=true; shift ;;
     -h | --help) usage ;;
@@ -93,6 +102,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 validate_inputs() {
+  # Revocation reads back a policy the deploy-roles phase converges first.
+  [[ "$revoke_retired_edge_roles" == false || "$grant_deploy_roles" == true ]] ||
+    fail "--revoke-retired-edge-roles needs --grant-deploy-roles"
   # Byte-wise: in a UTF-8 locale, ranges such as [a-z] admit accented
   # letters and ${#…} counts characters, not bytes.
   local LC_ALL=C
@@ -443,6 +455,32 @@ if [[ "$grant_deploy_roles" == true ]]; then
       --project "$project_id" --member "serviceAccount:${deployer}" \
       --role roles/iam.serviceAccountUser --format=none
   done
+
+  if [[ "$revoke_retired_edge_roles" == true ]]; then
+    echo "== Retired deployer edge roles"
+    # The stack declares no load balancer, Cloud Armor policy or log
+    # exclusion any more; earlier versions granted the roles to manage them.
+    retired_edge_roles=(roles/compute.loadBalancerAdmin roles/compute.securityAdmin roles/logging.configWriter)
+    for role in "${retired_edge_roles[@]}"; do
+      run_revoke gcloud projects remove-iam-policy-binding "$project_id" --condition=None --quiet \
+        --member "serviceAccount:${deployer}" --role "$role" --format=none
+    done
+    print_command gcloud projects get-iam-policy "$project_id" \
+      --flatten "bindings[].members" --filter "bindings.members:serviceAccount:${deployer}" \
+      --format "value(bindings.role)"
+    if [[ "$dry_run" == false ]]; then
+      deployer_roles="$(gcloud projects get-iam-policy "$project_id" \
+        --flatten "bindings[].members" --filter "bindings.members:serviceAccount:${deployer}" \
+        --format "value(bindings.role)")" || fail "could not read back the deployer's project roles"
+      for role in "${retired_edge_roles[@]}"; do
+        ! grep -qxF "$role" <<<"$deployer_roles" || fail "the deployer still holds ${role}"
+      done
+      for role in roles/logging.viewer roles/cloudtrace.user; do
+        grep -qxF "$role" <<<"$deployer_roles" || fail "the deployer lost ${role}"
+      done
+      echo "deployer holds no retired edge role and keeps log and trace read access"
+    fi
+  fi
 else
   echo "== Deploy roles not granted"
   echo "Run the smoke workflow, confirm an untrusted identity is denied, then rerun with --grant-deploy-roles."

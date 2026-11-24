@@ -179,6 +179,8 @@ const runLiveBootstrap = (
     vercelJwksJson?: string;
     /** gcloud's error for every retired-binding removal, if any. */
     removeBindingError?: string;
+    /** The deployer's project roles, one per line, as policy readback prints them. */
+    deployerRoles?: string;
   },
   ...args: ReadonlyArray<string>
 ) => {
@@ -216,6 +218,7 @@ case "$*" in
       echo "$STUB_REMOVE_ERROR" >&2
       exit 1
     fi ;;
+  *"projects get-iam-policy"*) printf '%s\n' "$STUB_DEPLOYER_ROLES" ;;
   *"providers list"*"workspace-vercel"*) printf '%s\n' "$STUB_VERCEL_PROVIDERS" ;;
   *"providers list"*) echo "projects/$STUB_PROJECT_NUMBER/locations/global/workloadIdentityPools/workspace-sandbox-github/providers/deskohub-workspace" ;;
   *"workspace-vercel"*"value(oidc.issuerUri)"*) echo https://oidc.vercel.com/example-team ;;
@@ -259,6 +262,7 @@ echo "$*" >> "${sleepLog}"
         answers.vercelProviders ?? `${vercelPool}/providers/vercel`,
       STUB_VERCEL_JWKS: answers.vercelJwksJson ?? "",
       STUB_REMOVE_ERROR: answers.removeBindingError ?? "",
+      STUB_DEPLOYER_ROLES: answers.deployerRoles ?? "",
     },
   });
   const lines = (path: string) =>
@@ -560,6 +564,91 @@ describe("sandbox bootstrap script", () => {
     expect(secondPhase).not.toMatch(
       /roles\/(?:compute\.loadBalancerAdmin|compute\.securityAdmin|logging\.configWriter)\b/
     );
+  });
+
+  describe("revoking the retired deployer edge roles", () => {
+    const retiredEdgeRoles = [
+      "roles/compute.loadBalancerAdmin",
+      "roles/compute.securityAdmin",
+      "roles/logging.configWriter",
+    ];
+    const keptRoles =
+      "roles/run.admin\nroles/logging.viewer\nroles/cloudtrace.user";
+    const revokeArgs = [
+      ...liveArgs,
+      "--grant-deploy-roles",
+      "--revoke-retired-edge-roles",
+    ];
+    const edgeRemovals = (calls: ReadonlyArray<string>) =>
+      calls.filter(
+        (call) =>
+          call.startsWith("projects remove-iam-policy-binding") &&
+          call.includes(sandboxServiceAccount("workspace-deployer"))
+      );
+
+    test("removes the bindings an earlier bootstrap granted and reads the policy back", () => {
+      const { result, calls } = runLiveBootstrap(
+        { projectNumber: "123456789012", deployerRoles: keptRoles },
+        ...revokeArgs
+      );
+      expect(result.exitCode).toBe(0);
+      expect(edgeRemovals(calls)).toEqual(
+        retiredEdgeRoles.map(
+          (role) =>
+            `projects remove-iam-policy-binding deskohub-ws-sandbox --condition=None --quiet --member serviceAccount:${sandboxServiceAccount("workspace-deployer")} --role ${role} --format=none`
+        )
+      );
+      expect(
+        calls.some((call) => call.startsWith("projects get-iam-policy"))
+      ).toBe(true);
+    });
+
+    test("converges when the bindings are already gone", () => {
+      const { result } = runLiveBootstrap(
+        {
+          projectNumber: "123456789012",
+          deployerRoles: keptRoles,
+          removeBindingError:
+            "ERROR: Policy binding with the specified principal, role, and condition not found!",
+        },
+        ...revokeArgs
+      );
+      expect(result.exitCode).toBe(0);
+    });
+
+    test("fails when readback still shows a retired role", () => {
+      const { result } = runLiveBootstrap(
+        {
+          projectNumber: "123456789012",
+          deployerRoles: `${keptRoles}\nroles/compute.securityAdmin`,
+        },
+        ...revokeArgs
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("roles/compute.securityAdmin");
+    });
+
+    test("fails when the deployer lost trace read access", () => {
+      const { result } = runLiveBootstrap(
+        {
+          projectNumber: "123456789012",
+          deployerRoles: "roles/logging.viewer",
+        },
+        ...revokeArgs
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("roles/cloudtrace.user");
+    });
+
+    test("never revokes without the deploy-roles phase", () => {
+      const { result, calls } = runLiveBootstrap(
+        { projectNumber: "123456789012", deployerRoles: keptRoles },
+        ...liveArgs,
+        "--revoke-retired-edge-roles"
+      );
+      expect(result.exitCode).toBe(1);
+      expect(edgeRemovals(calls)).toEqual([]);
+    });
   });
 
   test("gives the API runtime the retired web runtime's task and deploy access", () => {

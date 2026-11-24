@@ -16,7 +16,10 @@ import type {
 } from "./config/stack-config";
 import { workspaceQueueContracts } from "./contracts/queue-contracts";
 import { workspaceScheduleContracts } from "./contracts/schedule-contracts";
-import { requireRecordCoversLiveService } from "./release/live-release-services";
+import {
+  requireRecordCoversLiveService,
+  requireRecordNamesApiRevisions,
+} from "./release/live-release-services";
 import { stackRunRecord } from "./release/release-delivery";
 import { StaleReleaseGeneration } from "./release/release-reconciler";
 import type { ReleaseRecord } from "./release/release-record";
@@ -37,7 +40,7 @@ import {
 } from "./resources/platform-declarations";
 import { queueProps } from "./resources/queue-declarations";
 import {
-  sandboxProofScheduleJobProps,
+  sandboxProofScheduleJobs,
   scheduleJobProps,
 } from "./resources/schedule-declarations";
 import {
@@ -91,11 +94,10 @@ export const declareWorkspaceFoundation = Effect.fn(
         )
       )
     : [];
-  const proofJob = sandboxProofScheduleJobProps(config);
-  const proofJobs =
-    proofJob === undefined
-      ? []
-      : [yield* CloudScheduler.Job("ScheduleWorkspaceProofTick", proofJob)];
+  const proofJobs = yield* Effect.forEach(
+    sandboxProofScheduleJobs(config),
+    ({ id, props }) => CloudScheduler.Job(id, props)
+  );
   yield* Effect.forEach(alertPolicyDeclarations(config), ({ id, props }) =>
     Monitoring.AlertPolicy(id, props)
   );
@@ -252,6 +254,8 @@ export const declareRecordedWorkspaceServices = Effect.fn(
   }
   // Declaring nothing from a lost record would delete the live services.
   yield* requireRecordCoversLiveService(record);
+  // A record from before the API rename names revisions it cannot route to.
+  yield* requireRecordNamesApiRevisions(record);
   // A plan previews the template decision its deploy would persist.
   const declared = yield* stackRunRecord(config, record, held.lock.operation);
   return yield* declareWorkspaceServices(config, declared, yield* DateTime.now);

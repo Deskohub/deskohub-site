@@ -1616,16 +1616,65 @@ describe("private access", () => {
       }),
     },
   ];
-  const access = (overrides: ReadonlyArray<FakeRule> = []) =>
-    withProofFakes({ rules: [...overrides, ...baseRules] }, (fakes) => {
-      seedServices(fakes);
-      return {
-        ...runPhase(fakes, "private-access", {
-          GCP_SANDBOX_DEPLOY_SA: deployer,
-        }),
-        calls: fakes.calls(),
-      };
-    });
+  const denyJob = (
+    name: string,
+    uri: string,
+    oidcToken?: Schema.JsonObject
+  ): FakeRule => ({
+    tool: "gcloud",
+    pattern: `^scheduler jobs describe workspace-proof-${name}-r111-1 `,
+    stdout: JSON.stringify({
+      state: "PAUSED",
+      httpTarget: {
+        uri,
+        httpMethod: "GET",
+        ...(oidcToken === undefined ? {} : { oidcToken }),
+      },
+    }),
+  });
+  const refused = (name: string): FakeRule => ({
+    tool: "gcloud",
+    pattern: `^logging read resource\\.type="cloud_scheduler_job" AND resource\\.labels\\.job_id="workspace-proof-${name}-r111-1" AND .*AttemptFinished.*PERMISSION_DENIED`,
+    stdout: JSON.stringify([{ jsonPayload: { status: "PERMISSION_DENIED" } }]),
+  });
+  const denyRules: ReadonlyArray<FakeRule> = [
+    denyJob(
+      "deny-scheduler-anonymous",
+      `${schedulerWorkerUrl}/api/cron/workspace/proof-tick`
+    ),
+    denyJob(
+      "deny-tasks-anonymous",
+      `${tasksWorkerUrl}/api/queues/workspace/proof-deny`
+    ),
+    denyJob(
+      "deny-tasks-wrong-invoker",
+      `${tasksWorkerUrl}/api/queues/workspace/proof-deny`,
+      {
+        serviceAccountEmail: serviceAccount("workspace-scheduler-invoker"),
+        audience: tasksWorkerUrl,
+      }
+    ),
+    refused("deny-scheduler-anonymous"),
+    refused("deny-tasks-anonymous"),
+    refused("deny-tasks-wrong-invoker"),
+  ];
+  const access = (
+    overrides: ReadonlyArray<FakeRule> = [],
+    deny: ReadonlyArray<FakeRule> = denyRules
+  ) =>
+    withProofFakes(
+      { rules: [...overrides, ...baseRules, ...deny] },
+      (fakes) => {
+        seedServices(fakes);
+        seed(fakes, { "proof-run.env": "QUEUE_SUFFIX=r111-1\n" });
+        return {
+          ...runPhase(fakes, "private-access", {
+            GCP_SANDBOX_DEPLOY_SA: deployer,
+          }),
+          calls: fakes.calls(),
+        };
+      }
+    );
 
   test("passes when every service refuses callers without the invoker role", () => {
     const { exitCode, output, calls } = access();
@@ -1641,6 +1690,52 @@ describe("private access", () => {
         `curl -sS -o /dev/null -w %{http_code} --max-time 20 -X POST --data-binary  ${url}/rpc`
       );
     }
+  });
+
+  test("forces each paused deny job and requires IAM to refuse it", () => {
+    const { exitCode, output, calls } = access();
+    expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
+      exitCode: 0,
+      output: "",
+    });
+    for (const name of [
+      "deny-scheduler-anonymous",
+      "deny-tasks-anonymous",
+      "deny-tasks-wrong-invoker",
+    ]) {
+      expect(calls).toContain(
+        `gcloud scheduler jobs run workspace-proof-${name}-r111-1 --project=${projectId} --location=europe-west1`
+      );
+    }
+  });
+
+  test("fails when a worker does not refuse a deny job's call", () => {
+    // The wrong-invoker run reaches the worker: no refusal is logged.
+    const { exitCode, output } = access(
+      [],
+      denyRules.filter((rule) => rule !== denyRules[denyRules.length - 1])
+    );
+    expect(exitCode).toBe(1);
+    expect(output).toContain(
+      "no IAM refusal of workspace-proof-deny-tasks-wrong-invoker-r111-1"
+    );
+  });
+
+  test("fails when a deny job would be signed by an allowed invoker", () => {
+    const { exitCode, output } = access([
+      denyJob(
+        "deny-tasks-wrong-invoker",
+        `${tasksWorkerUrl}/api/queues/workspace/proof-deny`,
+        {
+          serviceAccountEmail: serviceAccount("workspace-tasks-invoker"),
+          audience: tasksWorkerUrl,
+        }
+      ),
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain(
+      "workspace-proof-deny-tasks-wrong-invoker-r111-1 is not the paused scheduler-invoker-signed GET"
+    );
   });
 
   test("fails on any served request, or a refusal of the wrong kind", () => {

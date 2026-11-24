@@ -12,6 +12,7 @@ import { sha256Hex } from "../sha256";
 import {
   requireQuietReleaseServices,
   requireRecordCoversLiveService,
+  requireRecordNamesApiRevisions,
 } from "./live-release-services";
 import {
   ReleaseServiceApply,
@@ -147,6 +148,7 @@ const prepareReleaseWriter = Effect.fn("WorkspaceRelease.prepareReleaseWriter")(
     }
     yield* requireQuietReleaseServices;
     yield* requireRecordCoversLiveService(current.record);
+    yield* requireRecordNamesApiRevisions(current.record);
     const token = Redacted.make(randomBytes(32).toString("hex"));
     const writer: ReleaseWriter = {
       token,

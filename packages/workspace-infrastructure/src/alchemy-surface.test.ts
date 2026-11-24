@@ -214,7 +214,7 @@ describe("Alchemy beta.87 surface", () => {
     ).toEqual([]);
   });
 
-  test("declares the paused proof tick job only for a run-suffixed sandbox", async () => {
+  test("declares the paused proof jobs only for a run-suffixed sandbox", async () => {
     const proofRun = await evaluate(
       declareWorkspaceFoundation(
         Effect.runSync(
@@ -229,26 +229,53 @@ describe("Alchemy beta.87 surface", () => {
     const jobs = Object.values(proofRun.resources).filter(
       (entry) => entry.Type === "GCP.CloudScheduler.Job"
     );
-    expect(jobs.map((job) => job.Props)).toEqual([
-      expect.objectContaining({
+    const schedulerUrl = workloadUrl(sandboxConfig, "scheduler-worker");
+    const tasksUrl = workloadUrl(sandboxConfig, "tasks-worker");
+    const signedAs = (audience: string) => ({
+      serviceAccountEmail: sandboxConfig.serviceAccounts.schedulerInvoker,
+      audience,
+    });
+    expect(
+      jobs.map(({ Props }) => ({
+        jobId: Props.jobId,
+        paused: Props.paused,
+        uri: Props.httpTarget.uri,
+        oidcToken: Props.httpTarget.oidcToken,
+      }))
+    ).toEqual([
+      {
         jobId: "workspace-proof-tick-r42-1",
         paused: true,
-        httpTarget: expect.objectContaining({
-          uri: `${workloadUrl(sandboxConfig, "scheduler-worker")}/api/cron/workspace/proof-tick`,
-          oidcToken: {
-            serviceAccountEmail: sandboxConfig.serviceAccounts.schedulerInvoker,
-            audience: workloadUrl(sandboxConfig, "scheduler-worker"),
-          },
-        }),
-      }),
+        uri: `${schedulerUrl}/api/cron/workspace/proof-tick`,
+        oidcToken: signedAs(schedulerUrl),
+      },
+      // IAM refusals observed from a source internal ingress admits.
+      {
+        jobId: "workspace-proof-deny-scheduler-anonymous-r42-1",
+        paused: true,
+        uri: `${schedulerUrl}/api/cron/workspace/proof-tick`,
+        oidcToken: undefined,
+      },
+      {
+        jobId: "workspace-proof-deny-tasks-anonymous-r42-1",
+        paused: true,
+        uri: `${tasksUrl}/api/queues/workspace/proof-deny`,
+        oidcToken: undefined,
+      },
+      {
+        jobId: "workspace-proof-deny-tasks-wrong-invoker-r42-1",
+        paused: true,
+        uri: `${tasksUrl}/api/queues/workspace/proof-deny`,
+        // The scheduler invoker holds no run.invoker on the tasks worker.
+        oidcToken: signedAs(tasksUrl),
+      },
     ]);
     const production = await evaluate(
       declareWorkspaceFoundation(productionConfig)
     );
     expect(
       Object.values(production.resources).some(
-        (entry) =>
-          entry.Props.jobId?.startsWith("workspace-proof-tick") === true
+        (entry) => entry.Props.jobId?.startsWith("workspace-proof-") === true
       )
     ).toBe(false);
   });

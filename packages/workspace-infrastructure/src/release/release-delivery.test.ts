@@ -885,6 +885,51 @@ describe("fenced release delivery", () => {
     });
     expect(result.record).toEqual(emptyReleaseRecord);
   });
+
+  test("a record from before the API rename is refused before any write", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, stackRuns, provide } = yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        // The record still names the old web service's revisions.
+        const live = yield* store.read;
+        const { active, materialized } = live.record;
+        if (active === null || materialized === null) {
+          return yield* Effect.die(
+            new Error("the first release did not serve")
+          );
+        }
+        const renamed = (revision: string) =>
+          revision.replace(/^workspace-api-/, "workspace-web-");
+        const preRename = {
+          ...live.record,
+          active: { ...active, revision: renamed(active.revision) },
+          materialized: {
+            ...materialized,
+            revision: renamed(materialized.revision),
+          },
+        };
+        yield* store.write(preRename, live.version);
+        const runsBefore = stackRuns.length;
+        const exit = yield* provide(deliver(shaB, digestB).pipe(Effect.exit));
+        return {
+          exit,
+          preRename,
+          record: (yield* store.read).record,
+          newRuns: stackRuns.length - runsBefore,
+        };
+      })
+    );
+    expect(errorOf(result.exit)).toMatchObject({
+      _tag: "ReleaseRecordNamesOtherService",
+      revisions: expect.arrayContaining([
+        expect.stringMatching(/^workspace-web-/),
+      ]),
+    });
+    // No candidate was staged and no stack run was attempted.
+    expect(result.record).toEqual(result.preRename);
+    expect(result.newRuns).toBe(0);
+  });
 });
 
 const deliver = (sha: GitSha, imageDigest: ImageDigest) =>
