@@ -34,13 +34,23 @@ import {
  * Alchemy state objects.
  */
 export const lockedStackActions = {
-  /** Detect drift: exit 2 when found, 0 when clean. Changes nothing. */
+  /**
+   * Detect drift: exit 2 when found and left unrepaired, 0 when clean, 1
+   * when the check itself failed. Changes nothing. `alchemy drift` takes
+   * its entrypoint only through `--config`, never positionally.
+   */
   drift: {
     operation: "plan",
     mutates: false,
     acceptedExitCodes: [0, 2],
     program: "alchemy",
-    args: (stage: string) => ["drift", "alchemy.run.ts", "--stage", stage],
+    args: (stage: string) => [
+      "drift",
+      "--config",
+      "alchemy.run.ts",
+      "--stage",
+      stage,
+    ],
   },
   /** Repair detected drift back to the declarations. */
   repair: {
@@ -50,6 +60,7 @@ export const lockedStackActions = {
     program: "alchemy",
     args: (stage: string) => [
       "drift",
+      "--config",
       "alchemy.run.ts",
       "--stage",
       stage,

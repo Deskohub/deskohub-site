@@ -80,6 +80,8 @@ export interface FakeWorld {
   readonly tokenLifetimes?: Record<string, number>;
   /** Seconds the fake clock moves while tokeninfo answers. */
   readonly tokeninfoDelay?: number;
+  /** The Artifact Registry repository's description, as gcloud reads it. */
+  readonly repositoryDescription?: string;
   /** The fake clock's start, in epoch seconds; defaults to the real clock. */
   readonly now?: number;
   readonly [key: string]: unknown;
@@ -538,6 +540,16 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
       }
       print(String(world.serviceGenerations?.[args[3] ?? ""] ?? 1));
       return 0;
+    }
+    if (args[0] === "artifacts" && args[1] === "repositories") {
+      if (args[2] === "update") {
+        save({ ...world, repositoryDescription: flag(args, "--description") });
+        return 0;
+      }
+      if (args[2] === "describe") {
+        print(world.repositoryDescription ?? "");
+        return 0;
+      }
     }
     const storage = fakeStorage(args, world, save);
     if (storage !== undefined) {

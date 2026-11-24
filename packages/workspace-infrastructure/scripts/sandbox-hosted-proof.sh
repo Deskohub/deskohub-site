@@ -922,10 +922,16 @@ phase_drift() {
   run gcloud artifacts repositories update "$artifact_repository" \
     --project="$project_id" --location="$region" --description="$injected"
   expect_equal "drifted description" "$(repository_description)" "$injected"
+  # The Alchemy drift check exits 2 for unrepaired drift, 0 for a clean stage and
+  # 1 when the check itself failed (bad arguments, auth, a provider read).
   local code=0
   locked_stack drift || code=$?
   $dry_run && code=2
-  [[ "$code" == 2 ]] || fail "Alchemy reported no drift (exit ${code})"
+  case "$code" in
+    2) ;;
+    0) fail "Alchemy reported no drift after the injected description change" ;;
+    *) fail "the Alchemy drift check failed (exit ${code})" ;;
+  esac
   locked_stack repair
   expect_equal "repaired description" "$(repository_description)" "$declared_repository_description"
   release deploy
@@ -1386,7 +1392,9 @@ phase_edge_privacy() {
     [[ "$traces" != *"$marker"* ]] || fail "the marker reached Cloud Trace"
     jq -e --arg id "${PROBE_TRACE_ID:-}" 'any(.traces[]?; .traceId == $id)' >/dev/null <<<"$traces" &&
       listed=true
-    page="$(jq -r '.nextPageToken // empty' <<<"$traces")"
+    # Encoded like the sink pages' tokens: a raw `+`, `/` or `=` in a page
+    # token would reach Cloud Trace altered.
+    page="$(jq -r '.nextPageToken // empty | @uri' <<<"$traces")"
     [[ -z "$page" ]] && break
   done
   [[ -z "$page" ]] || fail "more than 20 pages of traces; marker absence unverified"

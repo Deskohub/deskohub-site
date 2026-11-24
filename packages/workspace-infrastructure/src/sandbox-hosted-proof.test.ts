@@ -485,6 +485,7 @@ describe("writer-locked stack actions", () => {
     };
     expect(alchemyArgs("drift")).toEqual([
       "drift",
+      "--config",
       "alchemy.run.ts",
       "--stage",
       "sandbox",
@@ -492,6 +493,7 @@ describe("writer-locked stack actions", () => {
     ]);
     expect(alchemyArgs("repair")).toEqual([
       "drift",
+      "--config",
       "alchemy.run.ts",
       "--stage",
       "sandbox",
