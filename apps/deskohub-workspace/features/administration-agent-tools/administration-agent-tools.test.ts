@@ -16,7 +16,7 @@ import {
   WorkspaceAdminApi,
 } from "@deskohub/workspace-admin-api";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
-import { Schema } from "effect";
+import { Schema, SchemaTransformation } from "effect";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 import { customerAgentCatalog } from "@/features/agent-tools/customer-agent-catalog";
 import {
@@ -255,6 +255,34 @@ describe("administration agent tool derivation", () => {
     expect(
       deriveAdministrationOperationTools(api).map((tool) => tool.name)
     ).toEqual(["admin_create_standalone_access_code"]);
+  });
+
+  test("publishes an object result as the JSON it carries, even when it decodes to another type", async () => {
+    const Labelled = Schema.Struct({ value: Schema.String }).pipe(
+      Schema.decodeTo(
+        Schema.String,
+        SchemaTransformation.transform({
+          decode: ({ value }) => value,
+          encode: (value) => ({ value }),
+        })
+      )
+    );
+    const api = apiWith(
+      authenticated(
+        HttpApiGroup.make("administration").add(
+          HttpApiEndpoint.get("getLabel", "/label", {
+            success: Labelled,
+          }).annotate(AdministrationOperationBehavior, readOperation)
+        )
+      )
+    );
+    const [tool] = deriveAdministrationOperationTools(api);
+
+    const validated = await tool?.output["~standard"].validate({
+      value: "ok",
+    });
+
+    expect(validated).toEqual({ value: { value: "ok" } });
   });
 
   test("refuses an endpoint without an operation declaration", () => {

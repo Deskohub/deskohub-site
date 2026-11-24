@@ -26,7 +26,10 @@ import {
   type HttpApiGroup,
 } from "effect/http-api";
 import type { CustomerAccountId } from "@/features/account/customer-account";
-import { administrationContractCodec } from "@/features/admin-cli/administration-contract-codec";
+import {
+  administrationContractCodec,
+  type ServiceFreeContract,
+} from "@/features/admin-cli/administration-contract-codec";
 import { AdministratorAgentAuthorization } from "@/features/administrators/backend/administrator-agent-authorization.service";
 import {
   type AgentTool,
@@ -278,6 +281,9 @@ const guardCredentials = ({
 type ToolResult = StandardSchemaV1.InferOutput<AgentTool<never>["output"]>;
 type JsonObjectSchema = Schema.Codec<ToolResult, ToolResult>;
 
+const isJsonObject = (value: Schema.Json): value is Schema.JsonObject =>
+  Predicate.isObject(value);
+
 const encodesToObject = (ast: SchemaAST.AST): boolean => {
   const encoded = SchemaAST.toEncoded(ast);
   return SchemaAST.isUnion(encoded)
@@ -312,11 +318,13 @@ const successResultSchema = ({
     });
   }
   const json = Schema.toCodecJson(administrationContractCodec(success));
-  // `encodesToObject` decided that an unwrapped success's JSON is an object,
-  // which only its AST shows, so the unwrapped schema states it.
-  return wrapsResult
-    ? Schema.Struct({ items: json })
-    : Schema.make<JsonObjectSchema>(json.ast);
+  if (wrapsResult) return Schema.Struct({ items: json });
+  // `encodesToObject` decided that this success's JSON is an object; the
+  // published schema describes that JSON, as the result carries it.
+  const encoded = Schema.toEncoded(json);
+  return Schema.toType(
+    encoded.pipe(Schema.refine<typeof encoded, Schema.JsonObject>(isJsonObject))
+  );
 };
 
 const outputSchema = ({
@@ -688,7 +696,7 @@ export const deriveAdministrationOperationTools = <
   Id extends string,
   Groups extends HttpApiGroup.Constraint,
 >(
-  api: HttpApi.HttpApi<Id, Groups>
+  api: HttpApi.HttpApi<Id, Groups> & ServiceFreeContract<Groups>
 ): ReadonlyArray<AdministrationOperationTool> => {
   const tools: Array<AdministrationOperationTool> = [];
   HttpApi.reflect(api, {

@@ -100,7 +100,8 @@ type WithheldFeatureAnswer<E> = PossibleFailureAnswer<
 
 /**
  * Whether the failure is a withheld feature. `E` must be the operation's own
- * failure union: for a wider `E`, such as `unknown`, `Extract` is `never`.
+ * failure union, as every caller passes it: for a wider `E`, such as
+ * `unknown`, `Extract` is `never`.
  */
 const isFeatureWithheld = <E>(
   failure: E

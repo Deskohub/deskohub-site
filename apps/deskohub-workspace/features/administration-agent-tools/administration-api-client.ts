@@ -1,5 +1,13 @@
 import { WorkspaceAdminApi } from "@deskohub/workspace-admin-api";
-import { Context, Effect, Layer, Option, Predicate, Redacted } from "effect";
+import {
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Record,
+  Redacted,
+} from "effect";
 import {
   FetchHttpClient,
   HttpClient,
@@ -55,13 +63,11 @@ type EndpointCall = (
   AdministrationAgentAccessToken
 >;
 
-/** The value an object holds as its own property `name`, if any. */
-const ownPropertyOf =
+/** The member a client object holds as its own property `name`, if any. */
+const memberOf =
   (name: string) =>
   <Value>(value: Value) =>
-    Predicate.hasProperty(value, name) && Object.hasOwn(value, name)
-      ? Option.fromNullishOr(value[name])
-      : Option.none();
+    Predicate.isObject(value) ? Record.get(value, name) : Option.none();
 
 /**
  * Whether a client member is an endpoint's method. This is a trust boundary,
@@ -139,8 +145,8 @@ export class AdministrationApiClient extends Context.Service<
         return {
           call: (operation, request) =>
             Option.some(client).pipe(
-              Option.flatMap(ownPropertyOf(operation.split(".")[0] ?? "")),
-              Option.flatMap(ownPropertyOf(operation.split(".")[1] ?? "")),
+              Option.flatMap(memberOf(operation.split(".")[0] ?? "")),
+              Option.flatMap(memberOf(operation.split(".")[1] ?? "")),
               Option.filter(isEndpointCall),
               Option.match({
                 onNone: () =>
