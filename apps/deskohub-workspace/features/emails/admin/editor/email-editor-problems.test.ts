@@ -163,10 +163,10 @@ describe("emailEditorProblems", () => {
     const problems = problemsOf({
       ...fixtureDraft,
       values: fixtureDraft.values?.map((definition) =>
-        definition.name === "welcome_offer"
+        definition.name === "welcome_offer" && definition.source
           ? {
               ...definition,
-              source: { ...definition.source!, discountId: "not-a-uuid" },
+              source: { ...definition.source, discountId: "not-a-uuid" },
             }
           : definition
       ),
