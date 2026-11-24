@@ -1219,7 +1219,16 @@ const diagnosticsByPath = (report: LintReport, cwd: string) => {
 
 const lintProduction = async (cwd: string, command: string) => {
   const result = await runCommand(
-    ["bash", "-c", `${command} --reporter=json --max-diagnostics=none`],
+    [
+      "bash",
+      "-c",
+      // A script may end in `find -exec … {} +`, so the flags follow the
+      // Biome subcommand instead of the whole command.
+      command.replace(
+        /\bbiome (check|lint)\b/,
+        "$& --reporter=json --max-diagnostics=none"
+      ),
+    ],
     {
       cwd,
       env: {
