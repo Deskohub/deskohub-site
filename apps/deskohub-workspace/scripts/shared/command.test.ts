@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,7 +50,10 @@ describe("runCommand", () => {
   });
 
   test("forwards output as it arrives and still captures it", async () => {
-    const forwarded = { stdout: [] as string[], stderr: [] as string[] };
+    const forwarded = {
+      stdout: Array.of<string>(),
+      stderr: Array.of<string>(),
+    };
     const decoder = new TextDecoder();
     const result = await runCommand(
       ["bash", "-c", "echo one; echo two >&2; sleep 0.05; echo three"],
@@ -132,8 +136,9 @@ describe("commandOutput", () => {
     );
 
     expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toContain("exited with 4");
-    expect((failure as Error).message).toContain("broken");
+    assert(failure instanceof Error);
+    expect(failure.message).toContain("exited with 4");
+    expect(failure.message).toContain("broken");
   });
 
   test("rejects a timed-out command even when its direct child exited 0", async () => {
@@ -142,7 +147,8 @@ describe("commandOutput", () => {
     );
 
     expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toContain("timed out");
+    assert(failure instanceof Error);
+    expect(failure.message).toContain("timed out");
   });
 });
 

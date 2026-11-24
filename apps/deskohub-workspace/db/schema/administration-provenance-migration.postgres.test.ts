@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import { testEmailAddress } from "@deskohub/test-email";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -68,8 +69,8 @@ const previousDeployment = (pool: Pool, sessionId: string) => ({
     ).rowCount,
 });
 
-const insertSession = async (pool: Pool) =>
-  (
+const insertSession = async (pool: Pool) => {
+  const [row] = (
     await pool.query<{ id: string }>(
       `insert into cli_sessions (
          approved_by, token_hash, client_name, cli_version, build_target
@@ -78,7 +79,10 @@ const insertSession = async (pool: Pool) =>
          'Synthetic CLI', '1.0.0', 'development'
        ) returning id`
     )
-  ).rows[0]!.id;
+  ).rows;
+  assert(row, "insertSession returned no row");
+  return row.id;
+};
 
 const insertAssistantConnection = async (pool: Pool) => {
   const accountId = crypto.randomUUID();
@@ -90,7 +94,7 @@ const insertAssistantConnection = async (pool: Pool) => {
     `insert into auth."user" (id, name, email) values ($1, '', $2)`,
     [accountId, email]
   );
-  return (
+  const [row] = (
     await pool.query<{ id: string }>(
       `insert into administrator_assistant_connections (
          approved_by_account_id, approved_by_account_email, oauth_client_id,
@@ -99,17 +103,21 @@ const insertAssistantConnection = async (pool: Pool) => {
        returning id`,
       [accountId, email]
     )
-  ).rows[0]!.id;
+  ).rows;
+  assert(row, "the query returned no row");
+  return row.id;
 };
 
 describe.skipIf(!testDatabaseUrl)("administration provenance migration", () => {
+  if (!testDatabaseUrl) return;
+
   test(
     "keeps the previous deployment's ledger working and scopes request IDs per channel",
     async () => {
       const earlierMigrations = await linkMigrationsBefore(MIGRATION_DIR);
       try {
         await withScratchDatabase(
-          testDatabaseUrl!,
+          testDatabaseUrl,
           "administration_provenance",
           async (pool) => {
             await migrate(drizzle({ client: pool }), {

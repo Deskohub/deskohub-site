@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Effect } from "effect";
 import type { PoolClient } from "pg";
@@ -79,7 +80,8 @@ const reserveClaim = (
 const withClaimTargets = async (
   scenario: (client: PoolClient) => Promise<void>
 ) => {
-  const client = await holdDatabaseConnection(postgresDatabase!);
+  assert(postgresDatabase, "The Workspace test Postgres must be configured");
+  const client = await holdDatabaseConnection(postgresDatabase);
   try {
     await client.query("begin");
     await seedClaimTargets(client);

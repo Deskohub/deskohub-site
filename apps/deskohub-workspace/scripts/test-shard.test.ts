@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
+import { Schema } from "effect";
 import { commandOutput, runCommand } from "./shared/command";
+import { readJsonFile } from "./shared/json-file";
 import {
   parseShard,
   prepareShard,
@@ -20,44 +22,48 @@ import {
 const workspaceRoot = resolve(import.meta.dir, "..");
 const repositoryRoot = resolve(workspaceRoot, "../..");
 
-interface TurboTask {
-  readonly cache?: boolean;
-  readonly dependsOn?: readonly string[];
-  readonly env?: readonly string[];
-  readonly inputs?: readonly string[];
-  readonly outputs?: readonly string[];
-  readonly passThroughEnv?: readonly string[];
-}
+const StringList = Schema.Array(Schema.String);
+const DependencyVersions = Schema.Record(Schema.String, Schema.String);
 
-interface TurboConfig {
-  readonly globalPassThroughEnv?: readonly string[];
-  readonly tasks: Readonly<Record<string, TurboTask>>;
-}
+const TurboTask = Schema.Struct({
+  cache: Schema.optionalKey(Schema.Boolean),
+  dependsOn: Schema.optionalKey(StringList),
+  env: Schema.optionalKey(StringList),
+  inputs: Schema.optionalKey(StringList),
+  outputs: Schema.optionalKey(StringList),
+  passThroughEnv: Schema.optionalKey(StringList),
+});
+type TurboTask = typeof TurboTask.Type;
 
-const readJson = async <T>(path: string): Promise<T> =>
-  JSON.parse(await readFile(path, "utf8")) as T;
+const TurboConfig = Schema.Struct({
+  globalPassThroughEnv: Schema.optionalKey(StringList),
+  tasks: Schema.Record(Schema.String, TurboTask),
+});
 
-const workspaceTurbo = await readJson<TurboConfig>(
+const workspaceTurbo = readJsonFile(
+  TurboConfig,
   join(workspaceRoot, "turbo.json")
 );
-const rootTurbo = await readJson<TurboConfig>(
-  join(repositoryRoot, "turbo.json")
+const rootTurbo = readJsonFile(TurboConfig, join(repositoryRoot, "turbo.json"));
+const workspacePackage = readJsonFile(
+  Schema.Struct({
+    dependencies: Schema.optionalKey(DependencyVersions),
+    devDependencies: Schema.optionalKey(DependencyVersions),
+    scripts: DependencyVersions,
+  }),
+  join(workspaceRoot, "package.json")
 );
-const workspacePackage = await readJson<{
-  readonly dependencies?: Readonly<Record<string, string>>;
-  readonly devDependencies?: Readonly<Record<string, string>>;
-  readonly scripts: Readonly<Record<string, string>>;
-}>(join(workspaceRoot, "package.json"));
 const mobilePackage = "deskohub-mobile";
-const rootPackage = await readJson<{ readonly packageManager: string }>(
+const rootPackage = readJsonFile(
+  Schema.Struct({ packageManager: Schema.String }),
   join(repositoryRoot, "package.json")
 );
 
 const shards = Array.from({ length: testShardCount }, (_, index) => index + 1);
 const shardTask = (shard: number): TurboTask => {
   const task = workspaceTurbo.tasks[`test:shard-${shard}`];
-  expect(task).toBeDefined();
-  return task as TurboTask;
+  if (task === undefined) throw new Error(`turbo.json has no shard ${shard}`);
+  return task;
 };
 
 const synthetic = "postgresql://synthetic:synthetic@127.0.0.1:1/synthetic";

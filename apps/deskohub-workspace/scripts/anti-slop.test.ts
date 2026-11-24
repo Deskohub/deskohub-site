@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Schema } from "effect";
 import { runCommand } from "./shared/command";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -620,6 +621,13 @@ void [savedPierCount, savedDockCount, savedQuayCount];
   expect(output).not.toContain("[anti-slop/no-useless-alias]");
 });
 
+const WorkspaceLintManifest = Schema.Struct({
+  name: Schema.String,
+  scripts: Schema.optionalKey(
+    Schema.Struct({ lint: Schema.optionalKey(Schema.String) })
+  ),
+});
+
 test("every workspace shared package dependency defines a lint task", () => {
   const workspaceManifest = JSON.parse(
     readFileSync(
@@ -636,28 +644,26 @@ test("every workspace shared package dependency defines a lint task", () => {
 
   expect(dependencyNames.length).toBeGreaterThan(0);
 
-  const rootManifest = JSON.parse(
-    readFileSync(join(repositoryRoot, "package.json"), "utf8")
-  );
-  const workspaceDirectories = (rootManifest.workspaces as string[]).flatMap(
-    (pattern) =>
-      pattern.endsWith("/*")
-        ? readdirSync(join(repositoryRoot, pattern.slice(0, -2)), {
-            withFileTypes: true,
-          })
-            .filter((entry) => entry.isDirectory())
-            .map((entry) => join(pattern.slice(0, -2), entry.name))
-        : [pattern]
+  const rootManifest = Schema.decodeUnknownSync(
+    Schema.Struct({ workspaces: Schema.Array(Schema.String) })
+  )(JSON.parse(readFileSync(join(repositoryRoot, "package.json"), "utf8")));
+  const workspaceDirectories = rootManifest.workspaces.flatMap((pattern) =>
+    pattern.endsWith("/*")
+      ? readdirSync(join(repositoryRoot, pattern.slice(0, -2)), {
+          withFileTypes: true,
+        })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => join(pattern.slice(0, -2), entry.name))
+      : [pattern]
   );
   const lintTasks = new Map(
     workspaceDirectories.map((directory) => {
-      const manifest = JSON.parse(
-        readFileSync(join(repositoryRoot, directory, "package.json"), "utf8")
+      const manifest = Schema.decodeUnknownSync(WorkspaceLintManifest)(
+        JSON.parse(
+          readFileSync(join(repositoryRoot, directory, "package.json"), "utf8")
+        )
       );
-      return [
-        manifest.name as string,
-        manifest.scripts?.lint as string | undefined,
-      ];
+      return [manifest.name, manifest.scripts?.lint];
     })
   );
 

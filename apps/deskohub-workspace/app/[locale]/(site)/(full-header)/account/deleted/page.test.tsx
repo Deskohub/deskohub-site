@@ -4,9 +4,10 @@ import { Effect, Layer } from "effect";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CustomerAccountSession } from "@/features/account/backend/customer-authentication.service";
+import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
 import {
   type CustomerAccountAccessError,
-  type CustomerAccountId,
+  customerAccountIdSchema,
   customerAccountUnavailable,
 } from "@/features/account/customer-account";
 import { m } from "@/features/i18n";
@@ -96,10 +97,11 @@ describe("CustomerAccountDeletedPage", () => {
 
   test("sends a visitor with a live session to the account", async () => {
     currentUser = Effect.succeed({
-      accountId: "account-synthetic-1" as CustomerAccountId,
+      accountId: customerAccountIdSchema.make("account-synthetic-1"),
       email: testEmailAddress("synthetic.customer"),
       deletionRequested: false,
-    } as CustomerAccountSession);
+      ...testSessionProfile,
+    });
 
     const rendered = renderDeletedPage();
 

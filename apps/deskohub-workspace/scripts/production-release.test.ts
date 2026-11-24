@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -77,18 +78,16 @@ const nullSessionResponse = () =>
 const stagedDeploymentUrl =
   "https://deskohub-workspace-site-a1b2c3d4e-deskohub-bar.vercel.app";
 
-const restoreFetch = {
-  original: undefined as typeof globalThis.fetch | undefined,
-};
+let originalFetch: typeof globalThis.fetch | undefined;
 const mockGlobalFetch = (implementation: typeof globalThis.fetch) => {
-  restoreFetch.original ??= globalThis.fetch;
+  originalFetch ??= globalThis.fetch;
   globalThis.fetch = mock(implementation);
 };
 
 afterEach(() => {
-  if (restoreFetch.original) {
-    globalThis.fetch = restoreFetch.original;
-    restoreFetch.original = undefined;
+  if (originalFetch) {
+    globalThis.fetch = originalFetch;
+    originalFetch = undefined;
   }
 });
 
@@ -190,8 +189,9 @@ describe("workspace production release checks", () => {
     ).catch((error) => error);
 
     expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toContain("failed with 302");
-    expect((failure as Error).message).not.toContain(bypassSecret);
+    assert(failure instanceof Error);
+    expect(failure.message).toContain("failed with 302");
+    expect(failure.message).not.toContain(bypassSecret);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.init?.redirect).toBe("error");
     expect(requests[0]?.url.toString()).not.toBe(redirectTarget);
@@ -379,12 +379,15 @@ describe("workspace production release checks", () => {
       "github-output"
     );
     await appendFile(outputFile, "earlier_step_output=1\n");
-    const previousStdout = process.stdout.write;
     const stdout: string[] = [];
-    process.stdout.write = ((chunk: string) => {
-      stdout.push(chunk);
-      return true;
-    }) as typeof process.stdout.write;
+    const stdoutWrite = spyOn(process.stdout, "write").mockImplementation(
+      (chunk) => {
+        stdout.push(
+          chunk instanceof Uint8Array ? new TextDecoder().decode(chunk) : chunk
+        );
+        return true;
+      }
+    );
     const previousEnv = {
       VERCEL_TOKEN: process.env.VERCEL_TOKEN,
       VERCEL_PROJECT_ID: process.env.VERCEL_PROJECT_ID,
@@ -408,7 +411,7 @@ describe("workspace production release checks", () => {
     try {
       await emitRollbackTarget();
     } finally {
-      process.stdout.write = previousStdout;
+      stdoutWrite.mockRestore();
       if (previousEnv.VERCEL_TOKEN === undefined) {
         delete process.env.VERCEL_TOKEN;
       } else {
@@ -1343,7 +1346,7 @@ describe("workspace production release checks", () => {
       let clock = 0;
       let requestSignal: AbortSignal | undefined;
       mockGlobalFetch((_input, init) => {
-        requestSignal = init?.signal as AbortSignal | undefined;
+        requestSignal = init?.signal ?? undefined;
         if (stall === "request") {
           return new Promise<Response>(() => {});
         }

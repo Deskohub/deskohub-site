@@ -20,7 +20,9 @@ mock.module("@opentelemetry/api-logs", () => ({
 }));
 
 const syntheticRegistration = { serviceName: "synthetic-workspace" };
-const syntheticLoggerProvider = { synthetic: "workspace logger provider" };
+const syntheticLoggerProvider: LoggerProvider = {
+  getLogger: () => ({ emit: () => undefined, enabled: () => false }),
+};
 let loggerProviderEnabled = false;
 const workspaceOTelRegistration = mock(() => syntheticRegistration);
 const workspaceLoggerProvider = mock(() =>
@@ -114,7 +116,7 @@ describe("register", () => {
     await register();
 
     expect(registerOTel).toHaveBeenCalledTimes(1);
-    expect(registerOTel).toHaveBeenCalledWith(syntheticRegistration as never);
+    expect(registerOTel).toHaveBeenCalledWith(syntheticRegistration);
   });
 
   test("keeps the global logger provider without a Workspace logger provider", async () => {
@@ -134,7 +136,7 @@ describe("register", () => {
 
     expect(setGlobalLoggerProvider).toHaveBeenCalledTimes(1);
     expect(setGlobalLoggerProvider).toHaveBeenCalledWith(
-      syntheticLoggerProvider as never
+      syntheticLoggerProvider
     );
   });
 

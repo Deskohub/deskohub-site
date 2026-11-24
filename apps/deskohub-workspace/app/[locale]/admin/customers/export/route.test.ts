@@ -8,11 +8,13 @@ import {
   setSystemTime,
   test,
 } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
 import type {
   AdministrationCustomerExportInput,
   AdministrationCustomerSummary,
+  AdministrationService as AdministrationServiceContract,
 } from "@/features/administration/administration.service";
 import { inactiveCustomerDisplayNames } from "@/features/administration/customer-name";
 import { m } from "@/features/administration/i18n";
@@ -28,16 +30,15 @@ const { AdministrationListSourceUnavailableError } = await import(
 );
 
 const exportInputs: AdministrationCustomerExportInput[] = [];
-let exportResult: Effect.Effect<
-  readonly AdministrationCustomerSummary[],
-  unknown
+let exportResult: ReturnType<
+  AdministrationServiceContract["Service"]["exportCustomers"]
 > = Effect.succeed([]);
 AdministrationService.Live = Layer.mock(AdministrationService)({
   exportCustomers: (input) =>
     Effect.suspend(() => {
       exportInputs.push(input);
       return exportResult;
-    }) as never,
+    }),
 });
 
 const { GET } = await import("./route");
@@ -50,8 +51,7 @@ const requestExport = (query = "", locale = "en-US") =>
     { params: Promise.resolve({ locale }) }
   );
 
-const customerId = (id: string) =>
-  id as AdministrationCustomerSummary["customerId"];
+const customerId = (id: string) => DotyposCustomerIdSchema.make(id);
 
 const customers: readonly AdministrationCustomerSummary[] = [
   {
@@ -59,6 +59,7 @@ const customers: readonly AdministrationCustomerSummary[] = [
       id: customerId("dotypos-customer-1"),
       displayName: "Jana Nováková",
       hasName: true,
+      lifecycle: "active",
       email: testEmailAddress("export-jana"),
       phone: "+420 777 000 000",
     },
@@ -72,6 +73,7 @@ const customers: readonly AdministrationCustomerSummary[] = [
       id: customerId("dotypos-customer-2"),
       displayName: "Unnamed customer",
       hasName: false,
+      lifecycle: "active",
       email: null,
       phone: null,
     },

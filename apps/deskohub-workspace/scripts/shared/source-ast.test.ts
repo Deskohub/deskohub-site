@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   callsNamed,
   containsNode,
@@ -26,13 +27,13 @@ describe("source-ast structured checks", () => {
       ].join("\n")
     );
     const outerInitializer = topLevelConstInitializer(ast, "outer");
-    expect(outerInitializer).toBeDefined();
-    const insideOuter = callsNamed(outerInitializer!, "captureAccountReview");
+    assert(outerInitializer);
+    const insideOuter = callsNamed(outerInitializer, "captureAccountReview");
     expect(insideOuter).toHaveLength(2);
     const wholeFile = callsNamed(ast, "captureAccountReview");
     expect(wholeFile).toHaveLength(3);
     for (const call of insideOuter) {
-      expect(containsNode(outerInitializer!, call)).toBe(true);
+      expect(containsNode(outerInitializer, call)).toBe(true);
     }
   });
 

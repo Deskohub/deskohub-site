@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
@@ -12,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Schema } from "effect";
+import { Schema } from "effect";
 import { runCommand } from "./shared/command";
 
 const scriptPath = fileURLToPath(
@@ -69,6 +70,36 @@ interface Recorded {
   readonly kind: string;
   readonly [field: string]: Schema.Json;
 }
+
+/** The arguments a recorded Expo CLI call ran with. */
+const expoArgs = (call: Recorded): readonly string[] =>
+  Schema.decodeUnknownSync(
+    Schema.Struct({ args: Schema.Array(Schema.String) })
+  )(call).args;
+
+/** The update id a recorded publish request carried. */
+const publicationId = (request: Recorded): string =>
+  Schema.decodeUnknownSync(
+    Schema.Struct({ publication: Schema.Struct({ id: Schema.String }) })
+  )(request).publication.id;
+
+const PublishedFile = Schema.Struct({
+  url: Schema.String,
+  hash: Schema.String,
+});
+
+/** The launch asset and assets a published update manifest lists. */
+const publishedFiles = (
+  publication: Schema.Json | undefined
+): readonly (typeof PublishedFile.Type)[] => {
+  const { launchAsset, assets } = Schema.decodeUnknownSync(
+    Schema.Struct({
+      launchAsset: PublishedFile,
+      assets: Schema.Array(PublishedFile),
+    })
+  )(publication);
+  return [launchAsset, ...assets];
+};
 
 let workDirectory: string | undefined;
 afterEach(() => {
@@ -227,9 +258,7 @@ describe("publish-mobile-update", () => {
         }),
       }),
     ]);
-    const [androidId, iosId] = publications.map(
-      ({ publication }) => (publication as { readonly id: string }).id
-    );
+    const [androidId, iosId] = publications.map(publicationId);
     expect(androidId).not.toBe(iosId);
 
     // Each platform is checked once before anything changes, then once
@@ -269,8 +298,9 @@ describe("publish-mobile-update", () => {
     expect(result.exitCode).toBe(0);
     const [exportCall] = result
       .of("expo")
-      .filter(({ args }) => (args as string[])[0] === "export");
-    const exportArgs = exportCall?.args as string[];
+      .filter((call) => expoArgs(call)[0] === "export");
+    assert(exportCall);
+    const exportArgs = expoArgs(exportCall);
     expect(exportArgs).toEqual(
       expect.arrayContaining(["--platform", "ios", "--dump-assetmap"])
     );
@@ -364,7 +394,7 @@ describe("publish-mobile-update", () => {
 
     const publications = result
       .of("publish")
-      .map(({ publication }) => publication as Record<string, Schema.Json>);
+      .map(({ publication }) => publication);
     expect(publications).toEqual([
       expect.objectContaining({
         platform: "android",
@@ -390,11 +420,7 @@ describe("publish-mobile-update", () => {
       ])
     );
     for (const publication of publications) {
-      const files = [
-        publication.launchAsset,
-        ...(publication.assets as Schema.Json[]),
-      ] as { readonly url: string; readonly hash: string }[];
-      for (const { url, hash } of files) {
+      for (const { url, hash } of publishedFiles(publication)) {
         expect(
           storedHashes.get(url.replace(`${cloudStorageUrl("")}`, ""))
         ).toBe(hash);
@@ -522,7 +548,7 @@ describe("publish-mobile-update", () => {
     expect(result.exitCode).toBe(0);
     expect(result.of("blob-put")).toHaveLength(0);
     expect(
-      result.of("expo").filter(({ args }) => (args as string[])[0] === "export")
+      result.of("expo").filter((call) => expoArgs(call)[0] === "export")
     ).toHaveLength(0);
     expect(result.of("publish").map(({ publication }) => publication)).toEqual([
       {
@@ -578,9 +604,7 @@ describe("publish-mobile-update", () => {
     });
 
     expect(result.exitCode).toBe(0);
-    const ids = result
-      .of("publish")
-      .map(({ publication }) => (publication as { readonly id: string }).id);
+    const ids = result.of("publish").map(publicationId);
     expect(ids).toHaveLength(3);
     expect(ids[1]).toBe(ids[0]);
     expect(ids[2]).not.toBe(ids[0]);

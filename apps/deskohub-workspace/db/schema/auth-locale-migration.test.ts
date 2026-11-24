@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import "@/shared/testing/workspace-test-env";
 
@@ -60,24 +61,29 @@ const localesOf = async (pool: Pool, ids: readonly string[]) =>
     )
   ).rows.map((row) => row.locale);
 
-const tableExists = async (pool: Pool, table: string) =>
-  (
+const tableExists = async (pool: Pool, table: string) => {
+  const [row] = (
     await pool.query<{ present: boolean }>(
       `select to_regclass($1) is not null as present`,
       [table]
     )
-  ).rows[0]!.present;
+  ).rows;
+  assert(row, "tableExists returned no row");
+  return row.present;
+};
 
 describe.skipIf(!testDatabaseUrl)(
   "customer locale preference migration",
   () => {
+    if (!testDatabaseUrl) return;
+
     test(
       "leaves accounts that existed before the migration without a locale preference",
       async () => {
         const earlierMigrations = await linkMigrationsBefore(MIGRATION_DIR);
         try {
           await withScratchDatabase(
-            testDatabaseUrl!,
+            testDatabaseUrl,
             "locale_migration",
             async (pool) => {
               await migrate(drizzle({ client: pool }), {
@@ -109,13 +115,14 @@ describe.skipIf(!testDatabaseUrl)(
       "accepts only a supported locale as a locale preference",
       async () => {
         await withScratchDatabase(
-          testDatabaseUrl!,
+          testDatabaseUrl,
           "locale_migration",
           async (pool) => {
             await migrate(drizzle({ client: pool }), {
               migrationsFolder: workspaceMigrationsFolder,
             });
             const [account] = await insertLegacyAccounts(pool, true);
+            assert(account, "insertLegacyAccounts inserted no account");
 
             await pool.query(
               `update auth."user" set locale = 'cs-CZ' where id = $1`,
@@ -127,7 +134,7 @@ describe.skipIf(!testDatabaseUrl)(
                 [account]
               )
             ).rejects.toMatchObject({ code: "23514" });
-            expect(await localesOf(pool, [account!])).toEqual(["cs-CZ"]);
+            expect(await localesOf(pool, [account])).toEqual(["cs-CZ"]);
           }
         );
       },
@@ -153,7 +160,7 @@ describe.skipIf(!testDatabaseUrl)(
           );
 
           await withScratchDatabase(
-            testDatabaseUrl!,
+            testDatabaseUrl,
             "locale_migration",
             async (pool) => {
               await migrate(drizzle({ client: pool }), {

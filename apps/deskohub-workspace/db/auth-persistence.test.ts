@@ -1,10 +1,11 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import assert from "node:assert/strict";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { sql } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Predicate } from "effect";
 import type { Pool } from "pg";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
@@ -30,14 +31,19 @@ const pgErrorCode = async (promise: Promise<unknown>) => {
   for (
     let current: unknown = error;
     current;
-    current = (current as { cause?: unknown }).cause
+    current = Predicate.hasProperty(current, "cause")
+      ? current.cause
+      : undefined
   ) {
-    if ("code" in current) return String((current as { code: unknown }).code);
+    if (Predicate.hasProperty(current, "code")) return String(current.code);
   }
   return undefined;
 };
 
-const fixtures = () => workspaceFixtures(postgresDatabase!.db);
+const fixtures = () => {
+  assert(postgresDatabase, "the Postgres test database is configured");
+  return workspaceFixtures(postgresDatabase.db);
+};
 
 const insertAuthUser = (id: string) =>
   Effect.runPromise(
@@ -54,8 +60,10 @@ describe.skipIf(!postgresDatabase)(
     let db: AuthDatabase;
 
     beforeAll(() => {
+      const databaseUrl = process.env.WORKSPACE_TEST_DATABASE_URL;
+      assert(databaseUrl, "the Postgres test database is configured");
       pool = makeDatabasePool({
-        connectionString: process.env.WORKSPACE_TEST_DATABASE_URL!,
+        connectionString: databaseUrl,
       });
       db = makeAuthDatabase(pool);
     });
@@ -97,9 +105,12 @@ describe.skipIf(!postgresDatabase)(
         .where(sql`${authUser.email} = ${rawEmail}`);
 
       expect(rawRow).toBeDefined();
-      expect(rawRow!.createdAt).toBeInstanceOf(Date);
-      expect(rawRow!.createdAt.toISOString()).toBe(instant.toISOString());
-      expect(inserted[0]!.createdAt).toBeInstanceOf(Date);
+      assert(rawRow);
+      expect(rawRow.createdAt).toBeInstanceOf(Date);
+      expect(rawRow.createdAt.toISOString()).toBe(instant.toISOString());
+      const [facadeRow] = inserted;
+      assert(facadeRow, "the facade insert returns its row");
+      expect(facadeRow.createdAt).toBeInstanceOf(Date);
     });
 
     test("keeps one account per Dotypos customer and rejects blank customer IDs", async () => {
@@ -112,7 +123,13 @@ describe.skipIf(!postgresDatabase)(
       const linkTo = (id: string, customerId: string) =>
         db
           .update(customerAccounts)
-          .set({ dotyposCustomerId: customerId as DotyposCustomerId })
+          .set({
+            // Skips the brand's checks so the column's own constraint
+            // decides a blank ID.
+            dotyposCustomerId: DotyposCustomerIdSchema.make(customerId, {
+              disableChecks: true,
+            }),
+          })
           .where(sql`${customerAccounts.id} = ${id}`);
       await linkTo(firstUserId, dotyposCustomerId);
 
@@ -175,10 +192,11 @@ describe.skipIf(!postgresDatabase)(
       });
 
       expect(row).toBeDefined();
-      expect(Array.isArray(row!.sessions)).toBe(true);
-      expect(row!.sessions).toHaveLength(1);
-      expect(Array.isArray(row!.accounts)).toBe(true);
-      expect(row!.accounts).toHaveLength(1);
+      assert(row);
+      expect(Array.isArray(row.sessions)).toBe(true);
+      expect(row.sessions).toHaveLength(1);
+      expect(Array.isArray(row.accounts)).toBe(true);
+      expect(row.accounts).toHaveLength(1);
     });
   }
 );
