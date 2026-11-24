@@ -774,8 +774,8 @@ describe("Alchemy beta.87 surface", () => {
     );
     const api = apiServiceProps(sandboxConfig, pending, now);
     // The default run.app URL stays on; IAM, not ingress, keeps it private.
-    expect(api).not.toHaveProperty("defaultUriDisabled");
     expect(api).toMatchObject({
+      defaultUriDisabled: false,
       serviceId: "workspace-api",
       ingress: "INGRESS_TRAFFIC_ALL",
       invokerIamDisabled: false,

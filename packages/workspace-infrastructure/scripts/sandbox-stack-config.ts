@@ -2,7 +2,6 @@ import * as Effect from "effect/Effect";
 import { withLogsOnStderr } from "../src/command-line";
 import {
   decodeWorkspaceStackConfig,
-  SandboxStackConfig,
   serializeWorkspaceStackConfig,
 } from "../src/config/stack-config";
 

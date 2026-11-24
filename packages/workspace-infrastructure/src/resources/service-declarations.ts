@@ -275,6 +275,9 @@ export const apiServiceProps = (
     labels: workspaceLabels(config),
     ingress: "INGRESS_TRAFFIC_ALL",
     invokerIamDisabled: false,
+    // The frontend calls the deterministic run.app URL; declaring it keeps
+    // Alchemy repairing a URL someone turned off.
+    defaultUriDisabled: false,
     annotations: {
       [trafficGenerationAnnotation]: String(record.trafficGeneration),
     },
