@@ -8,7 +8,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { Schema } from "effect";
 import { runCommand } from "./shared/command";
+import { readJsonFile } from "./shared/json-file";
 import { parseCompositeAction } from "./shared/workflow-contract";
 
 const action = parseCompositeAction(
@@ -69,16 +71,12 @@ describe("restore-playwright-webkit action", () => {
     const result = await resolveVersion(repositoryRoot);
     expect(result.exitCode).toBe(0);
     // The restored WebKit build is the one the installed Playwright expects.
-    const installed = (
-      JSON.parse(
-        readFileSync(
-          resolve(
-            repositoryRoot,
-            "apps/deskohub-workspace/node_modules/@playwright/test/package.json"
-          ),
-          "utf8"
-        )
-      ) as { version: string }
+    const installed = readJsonFile(
+      Schema.Struct({ version: Schema.String }),
+      resolve(
+        repositoryRoot,
+        "apps/deskohub-workspace/node_modules/@playwright/test/package.json"
+      )
     ).version;
     expect(result.outputs).toBe(`version=${installed}\nimage-os=ubuntu24\n`);
   });

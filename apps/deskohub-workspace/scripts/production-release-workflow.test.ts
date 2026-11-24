@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { Schema } from "effect";
 import { isNumber, isString } from "effect/Predicate";
+import { readJsonFile } from "./shared/json-file";
 import {
   nodesOf,
   parseTrackedSource,
@@ -47,8 +50,8 @@ const scriptTexts = (): readonly string[] =>
 
 const stepByName = (name: string): WorkflowStep => {
   const step = findStepByName(doc, name);
-  expect(step).toBeDefined();
-  return step as WorkflowStep;
+  if (step === undefined) throw new Error(`workflow has no step "${name}"`);
+  return step;
 };
 
 const stepIndexOfName = (name: string): number => stepNames.indexOf(name);
@@ -67,9 +70,17 @@ describe("deploy-workspace-production workflow", () => {
   });
 
   test("typechecks the Workspace on the runner because the Vercel build only builds", () => {
-    const workspaceTurbo = JSON.parse(
-      readFileSync(resolve(import.meta.dir, "../turbo.json"), "utf8")
-    ) as { tasks: Record<string, { dependsOn?: readonly string[] }> };
+    const workspaceTurbo = readJsonFile(
+      Schema.Struct({
+        tasks: Schema.Record(
+          Schema.String,
+          Schema.Struct({
+            dependsOn: Schema.optionalKey(Schema.Array(Schema.String)),
+          })
+        ),
+      }),
+      resolve(import.meta.dir, "../turbo.json")
+    );
     const typecheckStep = stepByName("Typecheck Workspace");
 
     expect(workspaceTurbo.tasks["build:compile"]?.dependsOn).not.toContain(
@@ -100,8 +111,7 @@ describe("deploy-workspace-production workflow", () => {
   test("exposes the protection secret only to the staged probe", () => {
     // The job-level env must not carry the bypass secret; only the staged
     // probe step receives it.
-    const jobEnv = deployJob.env as Record<string, string> | undefined;
-    expect(Object.keys(jobEnv ?? {})).not.toContain(
+    expect(Object.keys(deployJob.env ?? {})).not.toContain(
       "VERCEL_AUTOMATION_BYPASS_SECRET"
     );
     const secretOutsideProbe = allSteps
@@ -194,8 +204,8 @@ describe("deploy-workspace-production workflow", () => {
       releaseScript.ast,
       "defaultPollDeadlineMilliseconds"
     );
-    expect(pollDeadlineInitializer).toBeDefined();
-    const pollBinary = nodesOf(pollDeadlineInitializer!).find(
+    assert(pollDeadlineInitializer);
+    const pollBinary = nodesOf(pollDeadlineInitializer).find(
       (node) => node.type === "BinaryExpression"
     );
     expect(pollBinary).toBeDefined();
@@ -249,8 +259,8 @@ describe("deploy-workspace-production workflow", () => {
   test("exposes the Neon API key only to the production migration", () => {
     // Dependency install and the Next build run third-party code, so the
     // database-admin credential stays scoped to the one step that uses it.
-    const jobEnv = deployJob.env as Record<string, string>;
-    expect(Object.keys(jobEnv)).not.toContain("NEON_API_KEY");
+    assert(deployJob?.env);
+    expect(Object.keys(deployJob.env)).not.toContain("NEON_API_KEY");
     const keyOutsideMigration = allSteps
       .filter((step) => step.name !== "Migrate production database")
       .some((step) => JSON.stringify(step.env ?? {}).includes("NEON_API_KEY"));
