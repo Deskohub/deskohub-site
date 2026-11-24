@@ -5,7 +5,7 @@ import { Schema } from "effect";
  * non-finite numbers that an out-of-range literal such as `1e400` parses to,
  * so a parsed request body passes as it arrived.
  */
-export const parsedJsonSchema: Schema.Codec<Schema.Json> = Schema.Union([
+const parsedJsonSchema: Schema.Codec<Schema.Json> = Schema.Union([
   Schema.Null,
   Schema.Boolean,
   Schema.Number,

@@ -108,8 +108,6 @@ export type CreateDiscountAdminInput =
   DiscountMutation<"create-discount">["discount"];
 export type UpdateDiscountAdminInput =
   DiscountMutation<"update-discount">["discount"];
-export type CreateDiscountCodeAdminInput =
-  typeof AdministrationExistingDiscountCodeCreateInput.Type;
 export type CreateManagedDiscountCodeAdminInput = Omit<
   DiscountMutation<"create-code">,
   "kind"

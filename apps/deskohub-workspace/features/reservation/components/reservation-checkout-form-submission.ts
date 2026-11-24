@@ -80,7 +80,7 @@ export type ReservationFormFieldVisitor<Input extends FieldValues> = <
 ) => void;
 
 /** One form field with a value of that field's own type. */
-export type ReservationFormFieldEntry<Input extends FieldValues> = {
+type ReservationFormFieldEntry<Input extends FieldValues> = {
   readonly [Name in FieldPath<Input>]: {
     readonly name: Name;
     readonly value: FieldPathValue<Input, Name>;
