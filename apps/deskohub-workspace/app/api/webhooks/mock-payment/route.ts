@@ -1,4 +1,4 @@
-import { Effect, type Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
   MockPaymentWebhookError,
   MockPaymentWebhookService,
@@ -13,15 +13,17 @@ import {
 const processMockWebhookRequest = Effect.fn("processMockPaymentWebhookRequest")(
   function* (request: Request) {
     const webhooks = yield* MockPaymentWebhookService;
-    const payload = yield* Effect.tryPromise({
-      try: () => request.json() as Promise<Schema.Json>,
-      catch: () =>
-        new MockPaymentWebhookError({
-          errorCode: "mock_webhook_parse_failed",
-          failure: "parse_failed",
-          message: "Mock payment webhook request body was not valid JSON.",
-        }),
-    });
+    const payload = yield* Effect.tryPromise(() => request.json()).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(Schema.Json)),
+      Effect.mapError(
+        () =>
+          new MockPaymentWebhookError({
+            errorCode: "mock_webhook_parse_failed",
+            failure: "parse_failed",
+            message: "Mock payment webhook request body was not valid JSON.",
+          })
+      )
+    );
     return yield* webhooks.processNotification(payload);
   }
 );

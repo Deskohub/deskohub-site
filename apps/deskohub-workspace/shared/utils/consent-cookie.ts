@@ -220,13 +220,7 @@ const readSavedConsentCookieValue = (
   const value = parsedValue.value;
   if (!Predicate.isObject(value)) return Result.fail("invalid_value_type");
 
-  const { categories, revision, lastConsentTimestamp, languageCode } =
-    value as {
-      categories?: unknown;
-      revision?: unknown;
-      lastConsentTimestamp?: unknown;
-      languageCode?: unknown;
-    };
+  const { categories, revision, lastConsentTimestamp, languageCode } = value;
   return Array.isArray(categories)
     ? Result.succeed({
         categories,

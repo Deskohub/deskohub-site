@@ -2,7 +2,6 @@ import {
   type ComponentPropsWithoutRef,
   cloneElement,
   isValidElement,
-  type ReactElement,
   type ReactNode,
 } from "react";
 import { cn } from "@/shared/utils";
@@ -48,10 +47,9 @@ export function PreferenceRow({
   // The control must stay a direct child of the row so callers can target it
   // structurally; inject the shrink guard on the element itself.
   let styledControl = control;
-  if (isValidElement(control)) {
-    const withClassName = control as ReactElement<{ className?: string }>;
-    styledControl = cloneElement(withClassName, {
-      className: cn("shrink-0", withClassName.props.className),
+  if (isValidElement<{ className?: string }>(control)) {
+    styledControl = cloneElement(control, {
+      className: cn("shrink-0", control.props.className),
     });
   }
   return (
