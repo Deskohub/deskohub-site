@@ -1,10 +1,14 @@
 import { readFileSync } from "node:fs";
+import { Schema } from "effect";
 
 /**
  * Parses a tracked GitHub Actions workflow into typed objects so tests can
- * assert on workflow semantics (steps, run commands, permissions, env)
+ * assert on workflow structure (jobs, steps, scripts, needs, permissions)
  * instead of pinned YAML substrings.
  */
+
+/** A step `env` or `with` value; YAML may write it unquoted (`fetch-depth: 0`). */
+export type WorkflowStepValue = string | number | boolean;
 
 export interface WorkflowStep {
   readonly name?: string;
@@ -15,8 +19,8 @@ export interface WorkflowStep {
   readonly "working-directory"?: string;
   readonly "continue-on-error"?: boolean;
   readonly "timeout-minutes"?: number;
-  readonly env?: Record<string, string>;
-  readonly with?: Record<string, string | boolean>;
+  readonly env?: Record<string, WorkflowStepValue>;
+  readonly with?: Record<string, WorkflowStepValue>;
   readonly outputs?: Record<string, string>;
 }
 
@@ -35,7 +39,8 @@ interface WorkflowJob {
   readonly "cache-mode"?: WorkflowCacheMode;
   readonly "runs-on"?: string;
   readonly steps?: readonly WorkflowStep[];
-  readonly "timeout-minutes"?: number;
+  /** Minutes, or an expression such as `${{ inputs.mode == ... }}`. */
+  readonly "timeout-minutes"?: number | string;
   readonly permissions?: Record<string, string>;
   readonly env?: Record<string, string>;
   readonly services?: Readonly<Record<string, WorkflowService>>;
@@ -68,9 +73,6 @@ export interface WorkflowDoc {
   readonly permissions?: Record<string, string>;
 }
 
-export const parseWorkflow = (path: string): WorkflowDoc =>
-  Bun.YAML.parse(readFileSync(path, "utf8")) as WorkflowDoc;
-
 /** A tracked composite action (`.github/actions/<name>/action.yml`). */
 export interface CompositeActionDoc {
   readonly inputs?: Readonly<
@@ -83,8 +85,144 @@ export interface CompositeActionDoc {
   };
 }
 
-export const parseCompositeAction = (path: string): CompositeActionDoc =>
-  Bun.YAML.parse(readFileSync(path, "utf8")) as CompositeActionDoc;
+/*
+ * Shape checks for the parsed YAML. They only validate: a document that
+ * passes is returned as parsed, keys these contracts leave undeclared
+ * included, so tests still read the whole document. Each schema shares its
+ * interface's name; the compiler checks that what a schema validates fits
+ * the interface the parser returns.
+ */
+
+const StringRecord = Schema.Record(Schema.String, Schema.String);
+
+const StepValueRecord = Schema.Record(
+  Schema.String,
+  Schema.Union([Schema.String, Schema.Number, Schema.Boolean])
+);
+
+const WorkflowStep = Schema.Struct({
+  name: Schema.optionalKey(Schema.String),
+  run: Schema.optionalKey(Schema.String),
+  uses: Schema.optionalKey(Schema.String),
+  id: Schema.optionalKey(Schema.String),
+  if: Schema.optionalKey(Schema.String),
+  "working-directory": Schema.optionalKey(Schema.String),
+  "continue-on-error": Schema.optionalKey(Schema.Boolean),
+  "timeout-minutes": Schema.optionalKey(Schema.Number),
+  env: Schema.optionalKey(StepValueRecord),
+  with: Schema.optionalKey(StepValueRecord),
+  outputs: Schema.optionalKey(StringRecord),
+});
+
+const WorkflowCacheMode = Schema.Literals([
+  "none",
+  "read",
+  "write",
+  "write-only",
+]);
+
+const WorkflowConcurrency = Schema.Struct({
+  group: Schema.String,
+  "cancel-in-progress": Schema.optionalKey(
+    Schema.Union([Schema.Boolean, Schema.String])
+  ),
+});
+
+const WorkflowJob = Schema.Struct({
+  name: Schema.optionalKey(Schema.String),
+  if: Schema.optionalKey(Schema.String),
+  needs: Schema.optionalKey(
+    Schema.Union([Schema.String, Schema.Array(Schema.String)])
+  ),
+  concurrency: Schema.optionalKey(WorkflowConcurrency),
+  outputs: Schema.optionalKey(StringRecord),
+  "cache-mode": Schema.optionalKey(WorkflowCacheMode),
+  "runs-on": Schema.optionalKey(Schema.String),
+  steps: Schema.optionalKey(Schema.Array(WorkflowStep)),
+  "timeout-minutes": Schema.optionalKey(
+    Schema.Union([Schema.Number, Schema.String])
+  ),
+  permissions: Schema.optionalKey(StringRecord),
+  env: Schema.optionalKey(StringRecord),
+  services: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        image: Schema.String,
+        env: Schema.optionalKey(StringRecord),
+        ports: Schema.optionalKey(Schema.Array(Schema.String)),
+        options: Schema.optionalKey(Schema.String),
+      })
+    )
+  ),
+});
+
+const WorkflowDoc = Schema.Struct({
+  "cache-mode": Schema.optionalKey(WorkflowCacheMode),
+  concurrency: Schema.optionalKey(WorkflowConcurrency),
+  jobs: Schema.Record(Schema.String, WorkflowJob),
+  on: Schema.optionalKey(
+    Schema.Struct({
+      schedule: Schema.optionalKey(
+        Schema.Array(Schema.Struct({ cron: Schema.String }))
+      ),
+      workflow_dispatch: Schema.optionalKey(
+        Schema.NullOr(
+          Schema.Struct({
+            inputs: Schema.optionalKey(
+              Schema.Record(
+                Schema.String,
+                Schema.Struct({
+                  default: Schema.optionalKey(
+                    Schema.Union([Schema.Boolean, Schema.String])
+                  ),
+                  description: Schema.optionalKey(Schema.String),
+                  required: Schema.optionalKey(Schema.Boolean),
+                  type: Schema.optionalKey(Schema.String),
+                })
+              )
+            ),
+          })
+        )
+      ),
+    })
+  ),
+  permissions: Schema.optionalKey(StringRecord),
+});
+
+const CompositeActionDoc = Schema.Struct({
+  inputs: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        required: Schema.optionalKey(Schema.Boolean),
+        default: Schema.optionalKey(Schema.String),
+      })
+    )
+  ),
+  outputs: Schema.optionalKey(
+    Schema.Record(Schema.String, Schema.Struct({ value: Schema.String }))
+  ),
+  runs: Schema.Struct({
+    using: Schema.String,
+    steps: Schema.Array(WorkflowStep),
+  }),
+});
+
+const readYaml = (path: string): unknown =>
+  Bun.YAML.parse(readFileSync(path, "utf8"));
+
+export const parseWorkflow = (path: string): WorkflowDoc => {
+  const document = readYaml(path);
+  Schema.asserts(WorkflowDoc, document);
+  return document;
+};
+
+export const parseCompositeAction = (path: string): CompositeActionDoc => {
+  const document = readYaml(path);
+  Schema.asserts(CompositeActionDoc, document);
+  return document;
+};
 
 export const workflowJobs = (doc: WorkflowDoc): readonly string[] =>
   Object.keys(doc.jobs);
@@ -162,8 +300,10 @@ const tokenizeExpression = (
       tokens.push({ kind: "operator", value: operator });
     } else if (text !== undefined) {
       tokens.push({ kind: "string", value: text.replaceAll("''", "'") });
+    } else if (path !== undefined) {
+      tokens.push({ kind: "path", value: path });
     } else {
-      tokens.push({ kind: "path", value: path as string });
+      throw new Error(`unsupported workflow expression syntax: ${source}`);
     }
   }
   return tokens;
@@ -276,7 +416,7 @@ export const evaluateWorkflowValue = (
   if (expression === null) {
     throw new Error(`expected a single workflow expression: ${value}`);
   }
-  const result = evaluateExpression(expression[1] as string, context);
+  const result = evaluateExpression(expression[1] ?? "", context);
   if (result.kind === "null") {
     return "";
   }
