@@ -8,6 +8,7 @@ import {
   expect,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { AlgoPinSchema, IgloohomeDeviceIdSchema } from "@deskohub/igloohome";
 import {
   AdministrationProviderCredentialId,
@@ -15,17 +16,14 @@ import {
   AdministrationStandaloneAccessCodeName,
   AdministrationWorkspaceSiteLocalWholeHourDateTime,
 } from "@deskohub/workspace-admin-api";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import { Pool } from "pg";
 import { standaloneAccessCodeAttemptEvents } from "@/db/schema";
 import type { AdministratorAccountActor } from "@/features/administrators/account-role";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
-import {
-  connectWorkspacePostgresTestDatabase,
-  type WorkspacePostgresTestDatabase,
-} from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type IStandaloneAccessCodeAttemptLogRepository,
   type StandaloneAccessCodeAttempt,
@@ -68,7 +66,11 @@ const window = {
   endsAt: Temporal.Instant.from("2026-09-10T10:00:00Z"),
 };
 
-const newAttemptId = () => attemptIds[nextAttemptIdIndex++]!;
+const newAttemptId = () => {
+  const attemptId = attemptIds[nextAttemptIdIndex++];
+  assert(attemptId, "Expected an unused attempt id fixture");
+  return attemptId;
+};
 
 const attemptFixture = (
   overrides?: Partial<StandaloneAccessCodeAttempt>
@@ -90,7 +92,7 @@ const postgresDatabase = await connectWorkspacePostgresTestDatabase();
 describe.skipIf(!postgresDatabase)(
   "StandaloneAccessCodeAttemptLogRepository on Postgres",
   () => {
-    const postgres = postgresDatabase as WorkspacePostgresTestDatabase;
+    if (!postgresDatabase) return;
     let attempts: IStandaloneAccessCodeAttemptLogRepository;
     const testAccounts: AdministratorAccountActor[] = [];
 
@@ -116,14 +118,14 @@ describe.skipIf(!postgresDatabase)(
 
     beforeAll(async () => {
       actor = await Effect.runPromise(
-        workspaceFixtures(postgres.db).account(
+        workspaceFixtures(postgresDatabase.db).account(
           "standalone-access-code-attempt",
           { roles: ["administrator"] }
         )
       );
       testAccounts.push(actor);
       otherAccountActor = await Effect.runPromise(
-        workspaceFixtures(postgres.db).account(
+        workspaceFixtures(postgresDatabase.db).account(
           "standalone-access-code-other-actor"
         )
       );
@@ -134,7 +136,7 @@ describe.skipIf(!postgresDatabase)(
         }).pipe(
           Effect.provide(
             StandaloneAccessCodeAttemptLogRepository.Default.pipe(
-              Layer.provide(postgres.layer)
+              Layer.provide(postgresDatabase.layer)
             )
           )
         )
@@ -143,7 +145,7 @@ describe.skipIf(!postgresDatabase)(
 
     afterEach(async () => {
       await Effect.runPromise(
-        postgres.db
+        postgresDatabase.db
           .delete(standaloneAccessCodeAttemptEvents)
           .where(
             inArray(standaloneAccessCodeAttemptEvents.attemptId, attemptIds)
@@ -154,7 +156,7 @@ describe.skipIf(!postgresDatabase)(
 
     const eventKindsOf = async (attemptId: (typeof attemptIds)[number]) => {
       const rows = await Effect.runPromise(
-        postgres.db
+        postgresDatabase.db
           .select({ eventKind: standaloneAccessCodeAttemptEvents.eventKind })
           .from(standaloneAccessCodeAttemptEvents)
           .where(eq(standaloneAccessCodeAttemptEvents.attemptId, attemptId))
@@ -164,7 +166,7 @@ describe.skipIf(!postgresDatabase)(
 
     const loadEvents = async (attemptId: (typeof attemptIds)[number]) =>
       Effect.runPromise(
-        postgres.db
+        postgresDatabase.db
           .select()
           .from(standaloneAccessCodeAttemptEvents)
           .where(eq(standaloneAccessCodeAttemptEvents.attemptId, attemptId))
@@ -176,7 +178,7 @@ describe.skipIf(!postgresDatabase)(
     afterAll(async () => {
       await barrierPool.end();
       await Effect.runPromise(
-        workspaceFixtures(postgres.db).deleteAccounts(testAccounts)
+        workspaceFixtures(postgresDatabase.db).deleteAccounts(testAccounts)
       );
     });
 
@@ -1130,13 +1132,13 @@ describe.skipIf(!postgresDatabase)(
       await Effect.runPromise(claim({ attempt }));
 
       const rejectedSource = Effect.runPromise(
-        postgres.db.insert(standaloneAccessCodeAttemptEvents).values({
+        postgresDatabase.db.insert(standaloneAccessCodeAttemptEvents).values({
           attemptId: newAttemptId(),
           eventKind: "started",
           actor: null,
           actorAccountId: actor.accountId,
           actorAccountEmail: actor.email,
-          source: "operator-console" as never,
+          source: sql`${"operator-console"}`,
           name: accessName,
           deviceId,
           startsAtLocal: window.startsAtLocal,
@@ -1150,19 +1152,29 @@ describe.skipIf(!postgresDatabase)(
       await expect(rejectedSource).rejects.toThrow();
 
       const rejectedFailureCode = Effect.runPromise(
-        attempts.appendTerminal({
-          attempt,
-          variance: 2,
+        postgresDatabase.db.insert(standaloneAccessCodeAttemptEvents).values({
+          attemptId: attempt.attemptId,
           eventKind: "rejected",
+          actor: null,
+          actorAccountId: actor.accountId,
+          actorAccountEmail: actor.email,
+          source,
+          name: accessName,
+          deviceId,
+          startsAtLocal: window.startsAtLocal,
+          endsAtLocal: window.endsAtLocal,
+          startsAt: window.startsAt,
+          endsAt: window.endsAt,
+          variance: 2,
+          failureCode: sql`${"provider_said_no"}`,
           occurredAt: Temporal.Now.instant(),
-          failureCode: "provider_said_no" as never,
         })
       );
       await expect(rejectedFailureCode).rejects.toThrow();
 
       const rejectedAttemptId = Effect.runPromise(
-        postgres.db.insert(standaloneAccessCodeAttemptEvents).values({
-          attemptId: "not-a-uuid" as never,
+        postgresDatabase.db.insert(standaloneAccessCodeAttemptEvents).values({
+          attemptId: sql`${"not-a-uuid"}`,
           eventKind: "started",
           actor: null,
           actorAccountId: actor.accountId,

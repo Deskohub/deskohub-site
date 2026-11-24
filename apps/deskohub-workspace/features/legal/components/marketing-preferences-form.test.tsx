@@ -7,6 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { type Locale, m } from "@/features/i18n";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -721,10 +722,11 @@ test("disables the explicit invalid-link clear action while it is busy", async (
     ).toBe("true");
   });
   expect(
-    (
+    elementOf(
       view.getByRole("button", {
         name: m.marketingPreferencesFormClearing({}, { locale: "en-US" }),
-      }) as HTMLButtonElement
+      }),
+      HTMLButtonElement
     ).disabled
   ).toBe(true);
 
@@ -768,7 +770,7 @@ test("announces clear loading, allows retry after an error, and keeps the dismis
         .getAttribute("aria-busy")
     ).toBe("true");
   });
-  expect((clearButton as HTMLButtonElement).disabled).toBe(true);
+  expect(elementOf(clearButton, HTMLButtonElement).disabled).toBe(true);
 
   resolveClear({ serverError: "Synthetic clear failure" });
   await waitFor(() => {

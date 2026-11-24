@@ -11,6 +11,7 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { m } from "@/features/administration/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -130,9 +131,12 @@ describe("AdministratorRoster", () => {
     const submitGrant = async (result: GrantResult) => {
       grantAdministrator.mockResolvedValue(result);
       const view = await renderRoster("en-US");
-      const input = view.getByPlaceholderText(
-        m.administratorsGrantEmailLabel({}, { locale: "en-US" })
-      ) as HTMLInputElement;
+      const input = elementOf(
+        view.getByPlaceholderText(
+          m.administratorsGrantEmailLabel({}, { locale: "en-US" })
+        ),
+        HTMLInputElement
+      );
       fireEvent.change(input, { target: { value: grantedEmail } });
       await act(async () => {
         fireEvent.click(

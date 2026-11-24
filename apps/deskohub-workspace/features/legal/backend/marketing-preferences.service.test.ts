@@ -46,11 +46,13 @@ const invalid = () =>
 
 function scenario() {
   const memory = makeMemoryMarketingCookies();
+  // Null once the session is signed out.
+  const linkedAccount = (): LinkedCustomerAccount | null => ({
+    accountId: accountA,
+    dotyposCustomerId: customerA,
+  });
   const state = {
-    account: {
-      accountId: accountA,
-      dotyposCustomerId: customerA,
-    } as LinkedCustomerAccount | null,
+    account: linkedAccount(),
     accountReads: 0,
     sessionUnavailable: false,
     revokeUnavailable: false,

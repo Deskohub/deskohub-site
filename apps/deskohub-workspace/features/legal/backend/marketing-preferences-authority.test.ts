@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Effect } from "effect";
-import { CustomerAccountAccessError } from "@/features/account/customer-account";
+import {
+  CustomerAccountAccessError,
+  customerAccountIdSchema,
+  type LinkedCustomerAccount,
+} from "@/features/account/customer-account";
 import { MarketingManagementError } from "./marketing-management.service";
 import {
   getAccountMarketingManagementContext,
@@ -11,11 +16,11 @@ import {
   resolveMarketingPreferencesAuthority,
 } from "./marketing-preferences-authority";
 
-const accountId = "account-a" as never;
+const accountId = customerAccountIdSchema.make("account-a");
 
-const account = (customerId: string) => ({
+const account = (customerId: string): LinkedCustomerAccount => ({
   accountId,
-  dotyposCustomerId: customerId,
+  dotyposCustomerId: DotyposCustomerIdSchema.make(customerId),
 });
 
 const resolve = (input: {
@@ -169,12 +174,21 @@ describe("marketing preference authority", () => {
         getLinkMarketingManagementContext("ab", "c"),
       ],
       [
-        getAccountMarketingManagementContext("a" as never, "bc"),
-        getAccountMarketingManagementContext("ab" as never, "c"),
+        getAccountMarketingManagementContext(
+          customerAccountIdSchema.make("a"),
+          "bc"
+        ),
+        getAccountMarketingManagementContext(
+          customerAccountIdSchema.make("ab"),
+          "c"
+        ),
       ],
       [
         getLinkMarketingManagementContext("session", "customer"),
-        getAccountMarketingManagementContext("session" as never, "customer"),
+        getAccountMarketingManagementContext(
+          customerAccountIdSchema.make("session"),
+          "customer"
+        ),
       ],
       [
         getMarketingManagementDismissalContext({

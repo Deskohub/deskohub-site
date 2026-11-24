@@ -8,7 +8,9 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { act, cleanup, render } from "@testing-library/react";
+import { Schema } from "effect";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import {
   flushWorkspaceComponentWork,
@@ -63,16 +65,30 @@ mock.module("@/shared/utils/use-workspace-action", () => ({
 // banner then announces the save through its change callback.
 let rememberedCategories: string[] = ["necessary"];
 
+// Keeps the fields the vendor adds beside the ones a test reads.
+const decodeSavedCookie = Schema.decodeUnknownSync(
+  Schema.StructWithRest(
+    Schema.Struct({
+      categories: Schema.Array(Schema.String),
+      lastConsentTimestamp: Schema.String,
+      revision: Schema.Number,
+    }),
+    [Schema.Record(Schema.String, Schema.Unknown)]
+  )
+);
+
+const decodeConsentChange = Schema.decodeUnknownSync(
+  Schema.Struct({ change: Schema.String })
+);
+
 const readSavedCookie = () => {
   const entry = document.cookie
     .split("; ")
     .find((cookie) => cookie.startsWith("cc_cookie="));
   return entry
-    ? (JSON.parse(decodeURIComponent(entry.slice("cc_cookie=".length))) as {
-        readonly categories: string[];
-        readonly lastConsentTimestamp: string;
-        readonly revision: number;
-      })
+    ? decodeSavedCookie(
+        JSON.parse(decodeURIComponent(entry.slice("cc_cookie=".length)))
+      )
     : undefined;
 };
 
@@ -181,8 +197,10 @@ const deferHydration = () => {
 /** Every change this tab announced while `run` ran. */
 const announcedChanges = async (run: () => Promise<void> | void) => {
   const changes: string[] = [];
-  const record = (event: Event) =>
-    changes.push((event as CustomEvent<{ change: string }>).detail.change);
+  const record = (event: Event) => {
+    assert(event instanceof CustomEvent, "Expected a consent change event");
+    changes.push(decodeConsentChange(event.detail).change);
+  };
   window.addEventListener(CONSENT_UPDATED_EVENT, record);
   try {
     await run();
@@ -413,7 +431,7 @@ describe("AccountAnalyticsConsentMirror", () => {
   );
 
   test.each([
-    { name: "signs out", next: { status: "anonymous" } as Identity },
+    { name: "signs out", next: { status: "anonymous" } satisfies Identity },
     { name: "switches to another account", next: signedIn("account-b") },
   ])(
     "ignores a withdrawal that arrives after the session $name",
