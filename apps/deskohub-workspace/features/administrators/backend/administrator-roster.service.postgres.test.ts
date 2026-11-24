@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
 import type { CustomerAccountId } from "@/features/account/customer-account";
@@ -12,6 +13,11 @@ import { AdministratorRoster } from "./administrator-roster.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
+const connectedTestDatabase = () => {
+  assert(testDatabase, "Expected the Postgres test database");
+  return testDatabase;
+};
+
 const runRoster = <A, E>(
   operation: (roster: AdministratorRoster["Service"]) => Effect.Effect<A, E>
 ) =>
@@ -21,7 +27,7 @@ const runRoster = <A, E>(
       Effect.provide(
         AdministratorRoster.Default.pipe(
           Layer.provideMerge(AccountRoleGrants.Default),
-          Layer.provide(testDatabase!.layer)
+          Layer.provide(connectedTestDatabase().layer)
         )
       )
     )
@@ -41,7 +47,7 @@ const insertAccount = ({
   readonly review?: boolean;
 } = {}): Promise<AdministratorAccountActor> =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("roster", {
+    workspaceFixtures(connectedTestDatabase().db).account("roster", {
       verified: emailVerified,
       deletionRequested,
       review,
@@ -53,9 +59,13 @@ const grantAdministrator = (
   grantedBy?: CustomerAccountId
 ) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).grantRole(accountId, "administrator", {
-      grantedBy,
-    })
+    workspaceFixtures(connectedTestDatabase().db).grantRole(
+      accountId,
+      "administrator",
+      {
+        grantedBy,
+      }
+    )
   );
 
 const cliSecret = () =>
@@ -65,14 +75,14 @@ const cliSecret = () =>
 const insertCliCredentials = async (approver: AdministratorAccountActor) => {
   const sessionId = crypto.randomUUID();
   const requestId = crypto.randomUUID();
-  await testDatabase!.pool.query(
+  await connectedTestDatabase().pool.query(
     `insert into cli_sessions
        (id, approved_by_account_id, approved_by_account_email, token_hash,
         client_name, cli_version, build_target, created_at, last_used_at)
      values ($1, $2, $3, $4, 'Roster test', '1.0.0', 'development', now(), now())`,
     [sessionId, approver.accountId, approver.email, cliSecret()]
   );
-  await testDatabase!.pool.query(
+  await connectedTestDatabase().pool.query(
     `insert into cli_authentication_requests
        (id, code_hash, challenge, client_name, cli_version, build_target,
         created_at, expires_at, approved_at, approved_by_account_id,
@@ -96,11 +106,15 @@ const cliCredentialsState = async (credentials: {
   readonly sessionId: string;
   readonly requestId: string;
 }) => {
-  const session = await testDatabase!.pool.query<{ revoked: boolean }>(
+  const session = await connectedTestDatabase().pool.query<{
+    revoked: boolean;
+  }>(
     `select revoked_at is not null as revoked from cli_sessions where id = $1`,
     [credentials.sessionId]
   );
-  const request = await testDatabase!.pool.query<{ exchangeable: boolean }>(
+  const request = await connectedTestDatabase().pool.query<{
+    exchangeable: boolean;
+  }>(
     `select grant_token is not null as exchangeable
      from cli_authentication_requests where id = $1`,
     [credentials.requestId]
@@ -122,7 +136,7 @@ const insertAdministrationAgent = async (
   const consentId = crypto.randomUUID();
   const refreshId = crypto.randomUUID();
   const scopes = ["openid", "administration"];
-  await testDatabase!.pool.query(
+  await connectedTestDatabase().pool.query(
     `insert into auth.oauth_client
        (id, client_id, scopes, redirect_uris, token_endpoint_auth_method,
         grant_types, response_types, created_at, updated_at)
@@ -130,20 +144,20 @@ const insertAdministrationAgent = async (
              '{code}', now(), now())`,
     [clientId, scopes, [`https://client.example/${clientId}`]]
   );
-  await testDatabase!.pool.query(
+  await connectedTestDatabase().pool.query(
     `insert into auth.oauth_consent
        (id, client_id, user_id, scopes, created_at, updated_at)
      values ($1, $2, $3, $4, now(), now())`,
     [consentId, clientId, account.accountId, scopes]
   );
-  await testDatabase!.pool.query(
+  await connectedTestDatabase().pool.query(
     `insert into auth.oauth_refresh_token
        (id, token, client_id, user_id, consent_id, scopes, created_at,
         expires_at)
      values ($1, $2, $3, $4, $5, $6, now(), now() + interval '30 days')`,
     [refreshId, cliSecret(), clientId, account.accountId, consentId, scopes]
   );
-  await testDatabase!.pool.query(
+  await connectedTestDatabase().pool.query(
     `insert into auth.oauth_access_token
        (id, token, client_id, user_id, consent_id, refresh_id, scopes,
         created_at, expires_at)
@@ -161,7 +175,7 @@ const insertAdministrationAgent = async (
 };
 
 const agentAccessState = async (accountId: string) => {
-  const { rows } = await testDatabase!.pool.query<{
+  const { rows } = await connectedTestDatabase().pool.query<{
     consents: number;
     refreshTokens: number;
     accessTokens: number;
@@ -177,7 +191,7 @@ const agentAccessState = async (accountId: string) => {
 
 const isAdministrator = async (accountId: string) =>
   (
-    await testDatabase!.pool.query(
+    await connectedTestDatabase().pool.query(
       `select 1 from account_role_grants where account_id = $1 and role = 'administrator'`,
       [accountId]
     )
@@ -194,9 +208,10 @@ describe.skipIf(!testDatabase)(
       await grantAdministrator(bootstrapped.accountId);
       await grantAdministrator(granted.accountId, bootstrapped.accountId);
       await grantAdministrator(orphaned.accountId, deletedGranter.accountId);
-      await testDatabase!.pool.query(`delete from auth."user" where id = $1`, [
-        deletedGranter.accountId,
-      ]);
+      await connectedTestDatabase().pool.query(
+        `delete from auth."user" where id = $1`,
+        [deletedGranter.accountId]
+      );
 
       const listed = await runRoster((roster) => roster.list);
       const byAccount = new Map(
@@ -227,7 +242,7 @@ describe.skipIf(!testDatabase)(
 
       expect(result).toEqual({ changed: true, email: target.email });
       expect(await isAdministrator(target.accountId)).toBe(true);
-      const stored = await testDatabase!.pool.query(
+      const stored = await connectedTestDatabase().pool.query(
         "select granted_by_account_id from account_role_grants where account_id = $1",
         [target.accountId]
       );
@@ -244,7 +259,7 @@ describe.skipIf(!testDatabase)(
       );
 
       expect(result).toEqual({ changed: false, email: target.email });
-      const stored = await testDatabase!.pool.query(
+      const stored = await connectedTestDatabase().pool.query(
         "select granted_by_account_id from account_role_grants where account_id = $1",
         [target.accountId]
       );
@@ -335,10 +350,10 @@ describe.skipIf(!testDatabase)(
       await insertAdministrationAgent(target);
       // Agents are disconnected last, after the grant and CLI cleanup.
       const fault = `fail_agent_disconnect_${crypto.randomUUID().replaceAll("-", "")}`;
-      await testDatabase!.pool.query(
+      await connectedTestDatabase().pool.query(
         `create function ${fault}() returns trigger language plpgsql as $$ begin raise exception 'simulated agent disconnect failure'; end $$`
       );
-      await testDatabase!.pool.query(
+      await connectedTestDatabase().pool.query(
         `create trigger ${fault} before delete on auth.oauth_consent for each row when (old.user_id = '${target.accountId}') execute function ${fault}()`
       );
       try {
@@ -346,10 +361,10 @@ describe.skipIf(!testDatabase)(
           roster.revoke({ accountId: target.accountId, actor })
         );
       } finally {
-        await testDatabase!.pool.query(
+        await connectedTestDatabase().pool.query(
           `drop trigger ${fault} on auth.oauth_consent`
         );
-        await testDatabase!.pool.query(`drop function ${fault}()`);
+        await connectedTestDatabase().pool.query(`drop function ${fault}()`);
       }
 
       expect(await isAdministrator(target.accountId)).toBe(true);

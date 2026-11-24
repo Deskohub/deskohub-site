@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { Effect } from "effect";
 import type { StaticMapImageOptions } from "osm";
 
@@ -22,12 +23,13 @@ beforeEach(() => {
 });
 
 const origin = "https://workspace.example";
-const get = (path: string) =>
-  GET(new Request(`${origin}${path}`), {
-    params: Promise.resolve({
-      image: new URL(path, origin).pathname.split("/").at(-1)!,
-    }),
+const get = (path: string) => {
+  const image = new URL(path, origin).pathname.split("/").at(-1);
+  assert(image !== undefined);
+  return GET(new Request(`${origin}${path}`), {
+    params: Promise.resolve({ image }),
   });
+};
 
 describe("GET /workspace-location-map/[image]", () => {
   test.each(["compact", "medium", "wide", "extra-wide"])(

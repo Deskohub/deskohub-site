@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { useState } from "react";
 import "@/shared/polyfills/temporal";
 import { m } from "@/features/i18n";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -49,8 +50,8 @@ const renderInForm = (props: Partial<TimeInputProps> = {}) => {
       <button type="button">Elsewhere</button>
     </form>
   );
-  const form = view.container.querySelector("form") as HTMLFormElement;
-  const editor = view.getByLabelText(timeLabel) as HTMLInputElement;
+  const form = elementOf(view.container.querySelector("form"), HTMLFormElement);
+  const editor = elementOf(view.getByLabelText(timeLabel), HTMLInputElement);
   const submitted = () => new FormData(form).getAll("time");
   const typeTime = (value: string) =>
     fireEvent.input(editor, { target: { value } });
@@ -287,7 +288,7 @@ describe("TimeInput", () => {
       );
     }
     const view = render(<Controlled />);
-    const editor = view.getByLabelText(timeLabel) as HTMLInputElement;
+    const editor = elementOf(view.getByLabelText(timeLabel), HTMLInputElement);
 
     await typeTimeAsBrowsers(editor, "10:00");
     fireEvent.blur(editor);
@@ -297,7 +298,9 @@ describe("TimeInput", () => {
     expect(editor.value).toBe("15:00");
     fireEvent.click(view.getByRole("button", { name: "Clear" }));
     expect(editor.getAttribute("aria-invalid")).toBe("false");
-    fireEvent.submit(view.container.querySelector("form") as HTMLFormElement);
+    fireEvent.submit(
+      elementOf(view.container.querySelector("form"), HTMLFormElement)
+    );
     expect(onSubmit.mock.calls[0]?.[0].getAll("time")).toEqual([""]);
   });
 
@@ -389,7 +392,7 @@ describe("TimeInput as a controlled field", () => {
       );
     }
     const view = render(<Controlled />);
-    const editor = view.getByLabelText(timeLabel) as HTMLInputElement;
+    const editor = elementOf(view.getByLabelText(timeLabel), HTMLInputElement);
 
     fireEvent.input(editor, { target: { value: "08:45" } });
 

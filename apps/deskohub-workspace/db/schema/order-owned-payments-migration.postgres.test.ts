@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
@@ -31,9 +32,13 @@ type ScratchDatabase = {
 const beforeMigration = async (
   run: (database: ScratchDatabase) => Promise<void>
 ) => {
+  assert(
+    testDatabaseUrl,
+    "WORKSPACE_TEST_DATABASE_URL must name the test Postgres"
+  );
   const earlierMigrations = await linkMigrationsBefore(MIGRATION_DIR);
   const scratch = await createScratchPostgresDatabase(
-    testDatabaseUrl!,
+    testDatabaseUrl,
     "order_owned_payments"
   );
   const pool = makeDatabasePool({ connectionString: scratch.url, max: 4 });
@@ -239,13 +244,15 @@ describe.skipIf(!testDatabaseUrl)(
         await migrateRemaining();
         const reservationId = await reservation();
 
-        const orderId = (
+        const [orderIdRow] = (
           await pool.query<{ id: string }>(
             `insert into orders (kind, dotypos_customer_id, payment_state, fulfillment_state)
            values ('pass-purchase', 'fixture-customer', 'not_started', 'not_started')
            returning id`
           )
-        ).rows[0]!.id;
+        ).rows;
+        assert(orderIdRow, "orderId returned no row");
+        const orderId = orderIdRow.id;
         const attemptId = await insertAttempt(pool, null, orderId);
 
         expect(await attemptOrder(pool, attemptId)).toBe(orderId);

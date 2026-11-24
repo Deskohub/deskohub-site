@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { relative, resolve } from "node:path";
 import { createContext, runInContext } from "node:vm";
 import { Temporal as PolyfillTemporal } from "@js-temporal/polyfill";
+import { Record } from "effect";
 import ts from "typescript";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { buildTemporalPolyfill } from "./build-temporal-polyfill";
@@ -33,10 +34,7 @@ const withNamespace = <Namespace extends TemporalNamespace>(
   replacement: Partial<(typeof PolyfillTemporal)[Namespace]>
 ): TemporalCandidate => ({
   ...Object.fromEntries(
-    Object.keys(requiredTemporalApis).map((key) => [
-      key,
-      PolyfillTemporal[key as TemporalNamespace],
-    ])
+    Record.keys(requiredTemporalApis).map((key) => [key, PolyfillTemporal[key]])
   ),
   [namespace]: replacement,
 });

@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { type EmailDeliveryId, EmailDeliveryIdSchema } from "@deskohub/email";
 import {
   type PostHogEmailStatus,
@@ -32,6 +33,7 @@ import {
   type DeliveryReport,
   DeliveryReportError,
   type DeliveryReportEvent,
+  deliveryReportEmailId,
   deliveryReportHandler,
   processedDeliveryReport,
 } from "./delivery-reports";
@@ -277,7 +279,8 @@ describe.skipIf(!database)("PostHog email delivery polling", () => {
       pollCount: fixture.pollCount ?? 0,
     }));
     for (const [index, fixture] of fixtures.entries()) {
-      if (fixture.reads) script.set(rows[index]!.messageId, [...fixture.reads]);
+      const row = rows[index];
+      if (fixture.reads && row) script.set(row.messageId, [...fixture.reads]);
     }
     for (let offset = 0; offset < rows.length; offset += 500) {
       await Effect.runPromise(
@@ -291,7 +294,8 @@ describe.skipIf(!database)("PostHog email delivery polling", () => {
 
   const insertDelivery = async (fixture: DeliveryFixture = {}) => {
     const [id] = await insertDeliveries([fixture]);
-    return id!;
+    assert(id !== undefined, "Expected inserted delivery ID");
+    return id;
   };
 
   const readDelivery = async (id: EmailDeliveryId) => {
@@ -363,12 +367,12 @@ describe.skipIf(!database)("PostHog email delivery polling", () => {
       });
       expect(reports).toEqual([
         {
-          emailId: id,
+          emailId: deliveryReportEmailId(id),
           event: "email.delivered",
           occurredAt: statusTime,
           metadata: Option.some({ noteId: "note-1" }),
         },
-      ] as never);
+      ]);
       expect(await readDelivery(id)).toMatchObject({
         status: "delivered",
         reason: null,
@@ -603,6 +607,7 @@ describe.skipIf(!database)("PostHog email delivery polling", () => {
           }))
         );
         const [stopping, ...rest] = ids;
+        assert(stopping !== undefined, "Expected stopping delivery ID");
         const unread = rest.slice(-2);
 
         expect(await pollAt("schedule", start)).toEqual({
@@ -616,7 +621,7 @@ describe.skipIf(!database)("PostHog email delivery polling", () => {
 
         expect(reads).not.toContain(unread[0]);
         expect(reads).not.toContain(unread[1]);
-        for (const row of await readDeliveries([stopping!, ...unread])) {
+        for (const row of await readDeliveries([stopping, ...unread])) {
           expect(row).toMatchObject({ status: "queued", pollCount: 0 });
           expect(row.nextPollAt.epochMilliseconds).toBeLessThan(
             start.epochMilliseconds
@@ -740,8 +745,9 @@ describe.skipIf(!database)("PostHog email delivery polling", () => {
       for (let poll = 0; poll < 5; poll += 1) {
         await pollAt("schedule", at);
         const row = await readDelivery(id);
-        gaps.push(at.until(row!.nextPollAt).total("minutes"));
-        at = row!.nextPollAt;
+        assert(row !== undefined, "Expected delivery row");
+        gaps.push(at.until(row.nextPollAt).total("minutes"));
+        at = row.nextPollAt;
       }
 
       expect(gaps).toEqual([1, 2, 5, 15, 15]);

@@ -1,21 +1,21 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
+import { parseStandardSchema } from "@deskohub/standard-schema";
 import { testEmailAddress } from "@deskohub/test-email";
-import type {
-  CallToolResult,
-  InitializeResult,
-  ListToolsResult,
-  Resource,
-} from "@modelcontextprotocol/client";
-import { Effect, Layer, Option, Schema } from "effect";
+import type { CallToolResult, Resource } from "@modelcontextprotocol/client";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { Data, Effect, Layer, Option, Schema } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
+import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import type { AgentToolClient } from "@/features/agent-tools/agent-tool-client";
 import { m } from "@/features/i18n";
 import type { AgentTrafficEvent } from "@/shared/backend/agent-traffic/agent-traffic-events";
 import { toWorkspaceWebHandler } from "@/shared/backend/workspace-effect";
+import { makeTestDatabaseClient } from "@/shared/testing/workspace-recording-database.test-utils";
 import { captureWorkspaceLogs } from "@/shared/testing/workspace-telemetry.test-utils";
 
 const workspaceLogs = captureWorkspaceLogs();
@@ -113,17 +113,13 @@ mock.module("@/features/account/server/auth.server", () => ({
 // The route provides the database on every request; these tests never
 // query it.
 mock.module("@/db/database-provider.server", () => ({
-  workspaceDatabaseLayer: Layer.succeed(
+  workspaceDatabaseLayer: Layer.effect(
     WorkspaceDatabase,
-    WorkspaceDatabase.make({} as never)
+    makeTestDatabaseClient(
+      Effect.die(new Error("The MCP route tests never query the database"))
+    ).pipe(Effect.map((db) => WorkspaceDatabase.make(db)))
   ),
-  workspaceDatabaseAdvisoryLockLayer: Layer.succeed(
-    WorkspaceDatabaseAdvisoryLock,
-    WorkspaceDatabaseAdvisoryLock.make({
-      client: {} as never,
-      maxConnections: 4,
-    })
-  ),
+  workspaceDatabaseAdvisoryLockLayer: makeRecordingAdvisoryLock().layer,
   authDatabasePool: {},
 }));
 
@@ -147,6 +143,10 @@ mock.module("@/shared/backend/request-budget/request-budget.service", () => ({
  * the administrator grant, without it, or can't tell.
  */
 let administratorGrant: "live" | "revoked" | "unavailable" = "live";
+/** Mirrors the service's own refusal, which the service does not export. */
+class AdministratorAgentAuthorizationError extends Data.TaggedError(
+  "AdministratorAgentAuthorizationError"
+)<{ readonly reason: "not-administrator" | "unavailable" }> {}
 let administratorAuthorizationCalls = 0;
 const administratorAuthorization = await import(
   "@/features/administrators/backend/administrator-agent-authorization.service"
@@ -159,16 +159,17 @@ class TestAdministratorAgentAuthorization extends administratorAuthorization.Adm
         administratorAuthorizationCalls += 1;
         return administratorGrant === "live"
           ? Effect.succeed({
-              accountId: agentAccountId,
+              accountId: customerAccountIdSchema.make(agentAccountId),
               email: testEmailAddress("mcp-administrator"),
-            } as never)
-          : Effect.fail({
-              _tag: "AdministratorAgentAuthorizationError",
-              reason:
-                administratorGrant === "revoked"
-                  ? "not-administrator"
-                  : "unavailable",
-            } as never);
+            })
+          : Effect.fail(
+              new AdministratorAgentAuthorizationError({
+                reason:
+                  administratorGrant === "revoked"
+                    ? "not-administrator"
+                    : "unavailable",
+              })
+            );
       },
     }
   );
@@ -451,10 +452,8 @@ const { AjvJsonSchemaValidator } = await import(
 const { StreamableHTTPClientTransport } = await import(
   "@modelcontextprotocol/client"
 );
-const route = (await import("./route")) as Record<
-  "DELETE" | "GET" | "POST",
-  (request: Request) => Promise<Response>
->;
+const { specTypeSchemas } = await import("@modelcontextprotocol/client");
+const route = await import("./route");
 const webRoute = await import("./web/route");
 const webPreparationQuoteRoute = await import("./web/prepare-quote/route");
 
@@ -488,14 +487,15 @@ const postRpc = (
   );
 
 /** One JSON-RPC exchange over the 2025-era stateless Streamable HTTP leg. */
-const rpc = async <Result>(method: string, params: Schema.JsonObject = {}) => {
+const rpc = async <Result>(
+  method: string,
+  params: Schema.JsonObject,
+  resultSchema: StandardSchemaV1<unknown, Result>
+) => {
   const response = await postRpc(method, params);
 
   expect(response.status).toBe(200);
-  return (await readJsonRpc(response)) as {
-    readonly result?: Result;
-    readonly error?: { readonly code: number; readonly message: string };
-  };
+  return readJsonRpcReply(response, resultSchema);
 };
 
 /** Reads a JSON body, or the last `data:` event of an SSE body. */
@@ -511,8 +511,92 @@ const readJsonRpc = async (response: Response) => {
   return JSON.parse(body);
 };
 
+const jsonRpcReplySchema = Schema.Struct({
+  result: Schema.optionalKey(Schema.Unknown),
+  error: Schema.optionalKey(
+    Schema.Struct({ code: Schema.Number, message: Schema.String })
+  ),
+});
+
+/** A JSON-RPC reply's error, or its result as sent. */
+const readJsonRpcEnvelope = async (response: Response) => {
+  const reply = Schema.decodeUnknownSync(jsonRpcReplySchema)(
+    await readJsonRpc(response)
+  );
+  assert(
+    reply.error === undefined || !("result" in reply),
+    "A JSON-RPC reply carries both an error and a result"
+  );
+  return reply;
+};
+
+/**
+ * A JSON-RPC reply: its error, or its result parsed with `resultSchema`.
+ * The SDK's schemas drop unknown keys and fill defaults, so the parsed
+ * result must equal the result as sent.
+ */
+const readJsonRpcReply = async <Result>(
+  response: Response,
+  resultSchema: StandardSchemaV1<unknown, Result>
+): Promise<{
+  readonly result?: Result;
+  readonly error?: { readonly code: number; readonly message: string };
+}> => {
+  const reply = await readJsonRpcEnvelope(response);
+  if (reply.error !== undefined) return { error: reply.error };
+  const result = parseStandardSchema(
+    resultSchema,
+    reply.result,
+    "Unexpected JSON-RPC result shape"
+  );
+  assert.deepStrictEqual(result, reply.result);
+  return { result };
+};
+
+/** The result of a successful JSON-RPC reply, parsed with `resultSchema`. */
+const readJsonRpcResult = async <Result>(
+  response: Response,
+  resultSchema: StandardSchemaV1<unknown, Result>
+) => {
+  const { result } = await readJsonRpcReply(response, resultSchema);
+  assert(result !== undefined, "expected a JSON-RPC result");
+  return result;
+};
+
+/**
+ * Each listed tool's OpenAI Apps `securitySchemes`, which the SDK's
+ * `ListToolsResult` schema drops.
+ */
+const decodeToolSecuritySchemes = Schema.decodeUnknownSync(
+  Schema.Struct({
+    tools: Schema.Array(
+      Schema.Struct({
+        securitySchemes: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+      })
+    ),
+  })
+);
+
+/** The `tools/list` result as sent, with each tool's `securitySchemes`. */
+const listTools = async (headers: Record<string, string> = {}) => {
+  const response = await postRpc("tools/list", {}, headers);
+  expect(response.status).toBe(200);
+  const reply = await readJsonRpcEnvelope(response);
+  const { tools } = parseStandardSchema(
+    specTypeSchemas.ListToolsResult,
+    reply.result,
+    "Unexpected tools/list result shape"
+  );
+  const { tools: extensions } = decodeToolSecuritySchemes(reply.result);
+  const listed = {
+    tools: tools.map((tool, index) => ({ ...tool, ...extensions[index] })),
+  };
+  assert.deepStrictEqual(listed, reply.result);
+  return listed;
+};
+
 const callTool = (name: string, args: Schema.JsonObject) =>
-  rpc<CallToolResult>("tools/call", { name, arguments: args });
+  rpc("tools/call", { name, arguments: args }, specTypeSchemas.CallToolResult);
 
 const webRpc = (
   method: string,
@@ -1055,13 +1139,14 @@ const validateStructuredContent = async (
   name: string,
   result: CallToolResult | undefined
 ) => {
-  const { result: list } = await rpc<ListToolsResult>("tools/list");
+  const list = await listTools();
   const outputSchema = list?.tools.find(
     (tool) => tool.name === name
   )?.outputSchema;
 
   expect(outputSchema).toBeDefined();
-  return jsonSchemaValidator.getValidator(outputSchema!)(
+  assert(outputSchema);
+  return jsonSchemaValidator.getValidator(outputSchema)(
     result?.structuredContent
   );
 };
@@ -1077,11 +1162,15 @@ describe("customer MCP route", () => {
   });
 
   test("initializes as the Deskohub Workspace server with the catalog's instructions for the client", async () => {
-    const { result } = await rpc<InitializeResult>("initialize", {
-      protocolVersion: legacyProtocolVersion,
-      capabilities: {},
-      clientInfo: { name: "route-test", version: "1.0.0" },
-    });
+    const { result } = await rpc(
+      "initialize",
+      {
+        protocolVersion: legacyProtocolVersion,
+        capabilities: {},
+        clientInfo: { name: "route-test", version: "1.0.0" },
+      },
+      specTypeSchemas.InitializeResult
+    );
 
     expect(result).toMatchObject({
       protocolVersion: legacyProtocolVersion,
@@ -1117,7 +1206,7 @@ describe("customer MCP route", () => {
   });
 
   test("lists the public and signed-in tools with schemas and annotations", async () => {
-    const { result } = await rpc<ListToolsResult>("tools/list");
+    const result = await listTools();
     const tools = result?.tools ?? [];
 
     expect(tools.map(({ name }) => name)).toEqual([
@@ -1565,9 +1654,10 @@ describe("customer MCP route for signed-in tools", () => {
     const response = await callToolAs("whoami", {}, bearer("valid"));
 
     expect(response.status).toBe(200);
-    const { result } = (await readJsonRpc(response)) as {
-      readonly result?: CallToolResult;
-    };
+    const { result } = await readJsonRpcReply(
+      response,
+      specTypeSchemas.CallToolResult
+    );
     expect(result?.isError).toBeFalsy();
     expect(result?.structuredContent).toEqual({
       account_id: agentAccountId,
@@ -1602,9 +1692,10 @@ describe("customer MCP route for signed-in tools", () => {
       { family: "cowork", date: workspaceDateFromToday(2), tier: "open-space" },
       bearer("valid")
     );
-    const { result } = (await readJsonRpc(response)) as {
-      readonly result?: CallToolResult;
-    };
+    const { result } = await readJsonRpcReply(
+      response,
+      specTypeSchemas.CallToolResult
+    );
 
     expect(result).toMatchObject({
       isError: true,
@@ -1624,9 +1715,10 @@ describe("customer MCP route for signed-in tools", () => {
     memoryBudget.exhaust((key) => key.startsWith("agent-tool:account:"));
 
     const response = await callToolAs("whoami", {}, bearer("valid"));
-    const { result } = (await readJsonRpc(response)) as {
-      readonly result?: CallToolResult;
-    };
+    const { result } = await readJsonRpcReply(
+      response,
+      specTypeSchemas.CallToolResult
+    );
 
     expect(result).toMatchObject({
       isError: true,
@@ -1638,9 +1730,10 @@ describe("customer MCP route for signed-in tools", () => {
     accessTokens.set("valid", "reservations:read");
 
     const response = await callToolAs("list_offerings", {}, bearer("valid"));
-    const { result } = (await readJsonRpc(response)) as {
-      readonly result?: CallToolResult;
-    };
+    const { result } = await readJsonRpcReply(
+      response,
+      specTypeSchemas.CallToolResult
+    );
 
     expect(result?.isError).toBeFalsy();
     expect(memoryBudget.spends()).toEqual([]);
@@ -1690,15 +1783,8 @@ describe("customer MCP route for administration tools", () => {
 
   const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 
-  const listToolNames = async (headers: Record<string, string>) => {
-    const response = await postRpc("tools/list", {}, headers);
-
-    expect(response.status).toBe(200);
-    const { result } = (await readJsonRpc(response)) as {
-      readonly result: ListToolsResult;
-    };
-    return result.tools.map(({ name }) => name);
-  };
+  const listToolNames = async (headers: Record<string, string>) =>
+    (await listTools(headers)).tools.map(({ name }) => name);
 
   const administrationToolNames = (names: ReadonlyArray<string>) =>
     names.filter((name) => name.startsWith("admin_"));
@@ -1714,10 +1800,7 @@ describe("customer MCP route for administration tools", () => {
       headers
     );
     expect(response.status).toBe(200);
-    return (await readJsonRpc(response)) as {
-      readonly result?: CallToolResult;
-      readonly error?: { readonly code: number; readonly message: string };
-    };
+    return readJsonRpcReply(response, specTypeSchemas.CallToolResult);
   };
 
   test("lists no administration tools to an agent without a token", async () => {
@@ -1762,10 +1845,7 @@ describe("customer MCP route for administration tools", () => {
   test("publishes the administration access and the contract's annotations", async () => {
     accessTokens.set("administrator", "administration");
 
-    const response = await postRpc("tools/list", {}, bearer("administrator"));
-    const { result } = (await readJsonRpc(response)) as {
-      readonly result: ListToolsResult;
-    };
+    const result = await listTools(bearer("administrator"));
     const revoke = result.tools.find(
       ({ name }) => name === "admin_revoke_session"
     );
@@ -1861,9 +1941,7 @@ describe("customer MCP route for administration tools", () => {
   const challengesOf = async (response: Response) => {
     const body = await response.clone().text();
     const messages =
-      body === ""
-        ? []
-        : [(await readJsonRpc(response.clone())) as Schema.Json].flat();
+      body === "" ? [] : [await readJsonRpc(response.clone())].flat();
     return [
       response.headers.get("www-authenticate") ?? "",
       ...messages.flatMap((message) =>
@@ -1952,9 +2030,10 @@ describe("customer MCP route for administration tools", () => {
       { name: "admin_list_sessions", arguments: {} },
       bearer("administrator")
     );
-    const { result } = (await readJsonRpc(response.clone())) as {
-      readonly result?: CallToolResult;
-    };
+    const { result } = await readJsonRpcReply(
+      response.clone(),
+      specTypeSchemas.CallToolResult
+    );
 
     expect(response.status).toBe(200);
     expect(response.headers.get("www-authenticate")).toBeNull();
@@ -2100,7 +2179,7 @@ describe("customer MCP route booking view", () => {
   });
 
   test("links only show_booking to the booking view", async () => {
-    const { result } = await rpc<ListToolsResult>("tools/list");
+    const result = await listTools();
 
     const linked = (result?.tools ?? []).filter(
       ({ _meta }) => _meta?.ui !== undefined
@@ -2184,9 +2263,11 @@ describe("customer MCP route booking view", () => {
   });
 
   test("reads the booking view without a token", async () => {
-    const { result } = await rpc<{
-      readonly contents: ReadonlyArray<{ readonly mimeType: string }>;
-    }>("resources/read", { uri: bookingViewUri });
+    const { result } = await rpc(
+      "resources/read",
+      { uri: bookingViewUri },
+      specTypeSchemas.ReadResourceResult
+    );
 
     expect(result?.contents[0]?.mimeType).toBe(viewMimeType);
   });
@@ -2198,9 +2279,10 @@ describe("customer MCP route booking view", () => {
       headers
     );
     expect(response.status).toBe(200);
-    const { result } = (await readJsonRpc(response)) as {
-      readonly result?: CallToolResult;
-    };
+    const { result } = await readJsonRpcReply(
+      response,
+      specTypeSchemas.CallToolResult
+    );
     expect(await validateStructuredContent("show_booking", result)).toEqual({
       valid: true,
       data: result?.structuredContent,
@@ -2265,14 +2347,8 @@ describe("customer MCP route per client", () => {
     accessTokens.clear();
   });
 
-  const listToolsAs = async (headers: Record<string, string>) => {
-    const response = await postRpc("tools/list", {}, headers);
-    expect(response.status).toBe(200);
-    const { result } = (await readJsonRpc(response)) as {
-      readonly result: ListToolsResult;
-    };
-    return result.tools;
-  };
+  const listToolsAs = async (headers: Record<string, string>) =>
+    (await listTools(headers)).tools;
 
   /**
    * What a directory reviewer reads: the instructions, the tools as listed,
@@ -2398,9 +2474,10 @@ describe("customer MCP route per client", () => {
         chatGpt
       );
       expect(response.status).toBe(200);
-      const { result } = (await readJsonRpc(response)) as {
-        readonly result: CallToolResult;
-      };
+      const result = await readJsonRpcResult(
+        response,
+        specTypeSchemas.CallToolResult
+      );
       expect(result.isError).toBeFalsy();
       return result.structuredContent;
     };
@@ -2562,11 +2639,15 @@ describe("customer MCP route per client", () => {
   });
 
   test("names the site and its icons", async () => {
-    const { result } = await rpc<InitializeResult>("initialize", {
-      protocolVersion: legacyProtocolVersion,
-      capabilities: {},
-      clientInfo: { name: "openai-mcp", version: "1.0.0" },
-    });
+    const { result } = await rpc(
+      "initialize",
+      {
+        protocolVersion: legacyProtocolVersion,
+        capabilities: {},
+        clientInfo: { name: "openai-mcp", version: "1.0.0" },
+      },
+      specTypeSchemas.InitializeResult
+    );
 
     expect(result?.serverInfo).toMatchObject({
       title: "Deskohub Workspace",

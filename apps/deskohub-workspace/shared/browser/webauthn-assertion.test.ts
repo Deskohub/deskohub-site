@@ -7,9 +7,16 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { getPasskeyAssertion } from "./webauthn-assertion";
 
 const bytes = (...values: number[]) => new Uint8Array(values).buffer;
+const toBytes = (source: BufferSource | undefined): Uint8Array => {
+  assert(source !== undefined, "Expected BufferSource");
+  return ArrayBuffer.isView(source)
+    ? new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    : new Uint8Array(source);
+};
 
 // Bun has no WebAuthn globals, so the tests install stand-ins for the
 // classes the browser returns.
@@ -113,13 +120,9 @@ describe("passkey assertions", () => {
     expect(mediation).toBeUndefined();
     expect(requestSignal).toBe(signal);
     expect(publicKey.rpId).toBe("workspace.invalid");
-    expect(new Uint8Array(publicKey.challenge as ArrayBuffer)).toEqual(
-      new Uint8Array([1, 2, 3])
-    );
+    expect(toBytes(publicKey.challenge)).toEqual(new Uint8Array([1, 2, 3]));
     const [allowed] = publicKey.allowCredentials ?? [];
-    expect(new Uint8Array(allowed?.id as ArrayBuffer)).toEqual(
-      new Uint8Array([4, 5])
-    );
+    expect(toBytes(allowed?.id)).toEqual(new Uint8Array([4, 5]));
     expect(allowed?.transports).toEqual(["internal"]);
   });
 

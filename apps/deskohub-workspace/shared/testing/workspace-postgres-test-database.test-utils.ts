@@ -11,6 +11,7 @@ import {
   Fiber,
   Layer,
   Option,
+  Schema,
 } from "effect";
 import { SqlClient, type SqlConnection } from "effect/sql";
 import type { Pool } from "pg";
@@ -118,6 +119,20 @@ export const connectWorkspacePostgresTestDatabase =
     (connection ??= connectConfiguredWorkspacePostgres());
 
 /**
+ * `database` from `connectWorkspacePostgresTestDatabase` or
+ * `createWorkspacePostgresSuiteDatabase`, for a suite that
+ * `describe.skipIf(!database)` skips when no test database is configured.
+ */
+export const requireTestDatabase = <Database>(
+  database: Database | null
+): Database => {
+  if (database === null) {
+    throw new Error("No test database: set WORKSPACE_TEST_DATABASE_URL");
+  }
+  return database;
+};
+
+/**
  * A test database no other suite uses. Helpers whose subject reads or writes
  * every row of a table, such as the automation engine planning every active
  * automation over every active consent, require one.
@@ -204,18 +219,38 @@ export interface HeldDatabaseConnection {
   readonly pool: DatabasePool;
   /** The held transaction's level, which `withHeldTransaction` joins. */
   readonly context: Context.Context<never>;
-  readonly query: <Row>(
-    sql: string,
-    params?: ReadonlyArray<unknown>
-  ) => Promise<{ readonly rows: Row[]; readonly rowCount: number | null }>;
+  readonly query: HeldQuery;
   /** Rolls the transaction back if the test has not ended it. */
   readonly release: () => Promise<void>;
 }
 
-type NativeResult = {
-  readonly rows: ReadonlyArray<unknown>;
+interface HeldQueryResult<Row> {
+  readonly rows: ReadonlyArray<Row>;
   readonly rowCount: number | null;
-};
+}
+
+/**
+ * Runs a statement inside the held transaction. Rows stay untyped unless the
+ * caller passes `row`, the schema each row decodes with.
+ */
+interface HeldQuery {
+  (
+    sql: string,
+    params?: ReadonlyArray<unknown>
+  ): Promise<HeldQueryResult<unknown>>;
+  <Row extends Schema.Decoder<unknown>>(
+    sql: string,
+    params: ReadonlyArray<unknown>,
+    row: Row
+  ): Promise<HeldQueryResult<Row["Type"]>>;
+}
+
+const decodeNativeResult = Schema.decodeUnknownSync(
+  Schema.Struct({
+    rows: Schema.Array(Schema.Unknown),
+    rowCount: Schema.NullOr(Schema.Number),
+  })
+);
 
 class HeldRollback extends Data.TaggedError("HeldRollback") {}
 
@@ -276,26 +311,48 @@ export const holdDatabaseConnection = async (database: {
       throw Cause.squash(exit.cause);
     }
   };
-  return {
-    pool,
-    context,
-    query: async <Row>(sql: string, params: ReadonlyArray<unknown> = []) => {
-      const statement = sql.trim().toLowerCase();
-      if (statement === "begin") return { rows: [], rowCount: null };
-      if (statement === "commit" || statement === "rollback") {
-        await end(statement);
-        return { rows: [], rowCount: null };
-      }
-      // Rejects with the driver's error, which carries the server's fields
-      // (`code`, `constraint`) as node-postgres errors do.
-      const { rows, rowCount } = (await Effect.runPromise(
+  async function query(
+    sql: string,
+    params?: ReadonlyArray<unknown>
+  ): Promise<HeldQueryResult<unknown>>;
+  async function query<Row extends Schema.Decoder<unknown>>(
+    sql: string,
+    params: ReadonlyArray<unknown>,
+    row: Row
+  ): Promise<HeldQueryResult<Row["Type"]>>;
+  async function query(
+    sql: string,
+    params: ReadonlyArray<unknown> = [],
+    row?: Schema.Decoder<unknown>
+  ): Promise<HeldQueryResult<unknown>> {
+    const statement = sql.trim().toLowerCase();
+    if (statement === "begin") return { rows: [], rowCount: null };
+    if (statement === "commit" || statement === "rollback") {
+      await end(statement);
+      return { rows: [], rowCount: null };
+    }
+    // Rejects with the driver's error, which carries the server's fields
+    // (`code`, `constraint`) as node-postgres errors do.
+    const { rows, rowCount } = decodeNativeResult(
+      await Effect.runPromise(
         Effect.mapError(
           connection.executeRaw(sql, params),
           (error) => error.reason.cause
         )
-      )) as NativeResult;
-      return { rows: [...rows] as Row[], rowCount };
-    },
+      )
+    );
+    return {
+      rows:
+        row === undefined
+          ? rows
+          : Schema.decodeUnknownSync(Schema.Array(row))(rows),
+      rowCount,
+    };
+  }
+  return {
+    pool,
+    context,
+    query,
     release: async () => {
       if (!Deferred.isDoneUnsafe(ending)) await end("rollback");
     },

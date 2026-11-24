@@ -9,18 +9,42 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Schema } from "effect";
 import { commandOutput, runCommand } from "@/scripts/shared/command";
+import { decodeJson, readJsonFile } from "./json-file.test-utils";
 
 const repositoryRoot = fileURLToPath(new URL("../../../..", import.meta.url));
 const fixtureRoot = mkdtempSync(join(tmpdir(), "deskohub-lint-rules-"));
 const config = join(fixtureRoot, "biome.json");
 
-const repositoryConfig = JSON.parse(
-  readFileSync(join(repositoryRoot, "biome.json"), "utf8")
-) as {
-  readonly plugins: readonly string[];
-  readonly overrides: readonly { readonly includes: readonly string[] }[];
-};
+const LintMessageReport = Schema.Struct({
+  diagnostics: Schema.Array(
+    Schema.Struct({
+      message: Schema.String,
+      location: Schema.Struct({ path: Schema.String }),
+    })
+  ),
+});
+
+// The fixture configs copy the repository's, so its other keys stay.
+const OpenRecord = Schema.Record(Schema.String, Schema.Unknown);
+
+const repositoryConfig = readJsonFile(
+  Schema.StructWithRest(
+    Schema.Struct({
+      plugins: Schema.Array(Schema.String),
+      overrides: Schema.Array(
+        Schema.StructWithRest(
+          Schema.Struct({ includes: Schema.Array(Schema.String) }),
+          [OpenRecord]
+        )
+      ),
+    }),
+    [OpenRecord]
+  ),
+  join(repositoryRoot, "biome.json"),
+  "Biome config"
+);
 
 // Every case lives in its own `case-<n>/` directory beside its siblings, so the
 // repository's path-scoped overrides gain one leading directory segment.
@@ -29,7 +53,7 @@ const caseScoped = (glob: string) =>
 
 // biome-ignore format: compact configuration literal.
 writeFileSync(config, JSON.stringify({
-  linter: { enabled: true },
+  linter: { enabled: true, rules: { style: { noNonNullAssertion: "off" } } },
   plugins: repositoryConfig.plugins.map((plugin) => join(repositoryRoot, plugin)),
   overrides: repositoryConfig.overrides.map((override) => ({ ...override, includes: override.includes.map(caseScoped) })),
 }));
@@ -955,14 +979,24 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects Workspace script assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/scripts/probe.ts"],
       ["rejects Workspace top-level module assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/probe.config.ts"],
       ["permits Workspace as const", "export const codes = [0, 2] as const;\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.ts"],
-      ["permits Workspace tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.postgres.test.ts"],
-      ["permits Workspace specs", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.spec.ts"],
-      ["permits Workspace Playwright tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.pw.ts"],
-      ["permits Workspace test utilities", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.test-utils.ts"],
-      ["permits Workspace browser harnesses", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.browser-harness.tsx"],
-      ["permits Workspace fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe-fixture.ts"],
-      ["permits Workspace dotted fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.fixture.ts"],
-      ["permits Workspace testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/shared/testing/probe.ts"],
+      ["permits Workspace large-feature tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.postgres.test.ts"],
+      ["permits Workspace large-feature specs", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.spec.ts"],
+      ["permits Workspace large-feature Playwright tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.pw.ts"],
+      ["permits Workspace large-feature test utilities", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.test-utils.ts"],
+      ["permits Workspace large-feature browser harnesses", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.browser-harness.tsx"],
+      ["permits Workspace large-feature fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe-fixture.ts"],
+      ["permits Workspace large-feature dotted fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.fixture.ts"],
+      ["permits Workspace large-feature testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/testing/probe.ts"],
+      ["permits Workspace large-feature nested testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/checkout/backend/testing/probe.ts"],
+      ["rejects Workspace shared testing modules", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/shared/testing/probe.ts"],
+      ["rejects Workspace shared tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/shared/utils/probe.test.ts"],
+      ["rejects Workspace app tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/app/probe.test.tsx"],
+      ["rejects Workspace db tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/db/probe.test.ts"],
+      ["rejects Workspace script tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/scripts/probe.test.ts"],
+      ["rejects Workspace unlisted-directory tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/types/probe.test.ts"],
+      ["rejects Workspace future-directory tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/lib/future.test.ts"],
+      ["rejects Workspace small-feature tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/emails/probe.test.ts"],
+      ["rejects Workspace large-feature production modules", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/checkout/product-catalog.ts"],
       ["permits Workspace E2E", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/e2e/probe.ts"],
       ["permits Workspace generated modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/generated/probe.ts"],
       ["permits Workspace Paraglide output", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/i18n/paraglide/probe.ts"],
@@ -977,6 +1011,12 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects Workspace feature non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/features/reservation/backend/probe.ts"],
       ["rejects Workspace route non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/app/api/workspace/probe/route.ts"],
       ["rejects Workspace top-level module non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/probe.config.ts"],
+      ["rejects Workspace shared test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/shared/utils/probe.test.ts"],
+      ["rejects Workspace unlisted-directory test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/types/probe.test.ts"],
+      ["rejects Workspace future-directory test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/lib/future.test.ts"],
+      ["rejects Workspace small-feature test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/features/emails/probe.test.ts"],
+      ["permits Workspace E2E non-null assertions", "export const first = values[0]!;\n", false, "apps/deskohub-workspace/e2e/probe.ts"],
+      ["permits Workspace large-feature test non-null assertions", "export const first = values[0]!;\n", false, "apps/deskohub-workspace/features/reservation/probe.test.ts"],
     ],
   },
   {
@@ -1023,9 +1063,10 @@ const writeCase = (directory: string, module: string, source: string) => {
   return path;
 };
 
-const casePaths = lintCases.map(({ module, source }, index) =>
-  writeCase(`case-${index}`, module, source)
-);
+const lintCaseRuns = lintCases.map((lintCase, index) => ({
+  ...lintCase,
+  path: writeCase(`case-${index}`, lintCase.module, lintCase.source),
+}));
 const singleDiagnosticPath = writeCase(
   "case-single-diagnostic",
   "apps/deskohub-workspace/features/reservation/load-reservation.ts",
@@ -1049,12 +1090,7 @@ beforeAll(async () => {
     ],
     { cwd: repositoryRoot }
   );
-  const report = JSON.parse(result.stdout) as {
-    readonly diagnostics: readonly {
-      readonly message: string;
-      readonly location: { readonly path: string };
-    }[];
-  };
+  const report = decodeJson(LintMessageReport, result.stdout, "Biome report");
   for (const { message, location } of report.diagnostics) {
     const path = resolve(repositoryRoot, location.path);
     messagesByPath.set(path, [...(messagesByPath.get(path) ?? []), message]);
@@ -1063,9 +1099,9 @@ beforeAll(async () => {
 
 const messagesOf = (path: string) => messagesByPath.get(path) ?? [];
 
-lintCases.forEach(({ title, diagnostic, flagged }, index) => {
+lintCaseRuns.forEach(({ title, diagnostic, flagged, path }) => {
   test(title, () => {
-    const reported = messagesOf(casePaths[index]!).some((message) =>
+    const reported = messagesOf(path).some((message) =>
       message.includes(diagnostic)
     );
     expect(reported).toBe(flagged);
@@ -1127,12 +1163,7 @@ test("no-promise-matchers-in-browser-tests holds across Workspace browser tests"
     ],
     { cwd: repositoryRoot }
   );
-  const report = JSON.parse(result.stdout) as {
-    readonly diagnostics: readonly {
-      readonly message: string;
-      readonly location: { readonly path: string };
-    }[];
-  };
+  const report = decodeJson(LintMessageReport, result.stdout, "Biome report");
   // Other diagnostics, such as suppressions aimed at rules this config leaves
   // off, belong to the regular lint run.
   expect(
@@ -1176,13 +1207,27 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/e2e/loader.mts",
   "apps/deskohub-workspace/shared/probe.test.config.cts",
   "apps/deskohub-workspace/probe with spaces.tsx",
+  "apps/deskohub-workspace/shared/testing/probe.ts",
+  "apps/deskohub-workspace/shared/utils/probe.test.ts",
+  "apps/deskohub-workspace/app/probe.test.tsx",
+  "apps/deskohub-workspace/db/probe.test.ts",
+  "apps/deskohub-workspace/scripts/probe.test.ts",
+  "apps/deskohub-workspace/types/probe.test.ts",
+  "apps/deskohub-workspace/lib/future.test.ts",
+  "apps/deskohub-workspace/docs/probe.test.ts",
+  "apps/deskohub-workspace/assets/probe.test.ts",
+  "apps/deskohub-workspace/public/probe.test.ts",
+  "apps/deskohub-workspace/.config/probe.test.ts",
+  "apps/deskohub-workspace/features/emails/probe.test.ts",
+  "apps/deskohub-workspace/features/checkout/product-catalog.ts",
 ];
 const generatedProbes = [
   "packages/standard-schema/generated/probe.mts",
   "packages/standard-schema/generated/probe.cts",
 ];
-// Workspace tests, fixtures, and E2E may still assert.
+// Remaining large-feature tests, fixtures, testing helpers, generated files, and E2E may still assert.
 const workspaceExemptProbes = [
+  "apps/deskohub-workspace/e2e/probe.ts",
   "apps/deskohub-workspace/features/reservation/probe.test.ts",
   "apps/deskohub-workspace/features/reservation/probe.postgres.test.ts",
   "apps/deskohub-workspace/features/reservation/probe.spec.ts",
@@ -1191,21 +1236,24 @@ const workspaceExemptProbes = [
   "apps/deskohub-workspace/features/reservation/probe.browser-harness.tsx",
   "apps/deskohub-workspace/features/reservation/probe-fixture.ts",
   "apps/deskohub-workspace/features/reservation/probe.fixture.ts",
+  "apps/deskohub-workspace/features/reservation/testing/probe.ts",
+  "apps/deskohub-workspace/features/checkout/backend/testing/probe.ts",
   "apps/deskohub-workspace/features/generated/probe.ts",
   "apps/deskohub-workspace/features/i18n/paraglide/probe.ts",
-  "apps/deskohub-workspace/shared/testing/probe.ts",
 ];
 
-type LintReport = {
-  readonly diagnostics: readonly {
-    readonly category?: string;
-    readonly message: string;
-    readonly severity: string;
-    readonly location: { readonly path: string };
-  }[];
-};
+const LintReport = Schema.Struct({
+  diagnostics: Schema.Array(
+    Schema.Struct({
+      category: Schema.optionalKey(Schema.String),
+      message: Schema.String,
+      severity: Schema.String,
+      location: Schema.Struct({ path: Schema.String }),
+    })
+  ),
+});
 
-const diagnosticsByPath = (report: LintReport, cwd: string) => {
+const diagnosticsByPath = (report: typeof LintReport.Type, cwd: string) => {
   const byPath = new Map<string, string[]>();
   for (const { category, message, severity, location } of report.diagnostics) {
     const path = resolve(cwd, location.path);
@@ -1237,7 +1285,10 @@ const lintProduction = async (cwd: string, command: string) => {
       },
     }
   );
-  return diagnosticsByPath(JSON.parse(result.stdout) as LintReport, cwd);
+  return diagnosticsByPath(
+    decodeJson(LintReport, result.stdout, "Biome report"),
+    cwd
+  );
 };
 
 const expectAssertionDiagnostics = (
@@ -1292,19 +1343,17 @@ test("production Biome config rejects package and Workspace production assertion
   }
   // The Workspace lint script resolves the root config through git.
   await runCommand(["git", "init", "--quiet"], { cwd: productionRoot });
-  const packageManifest = JSON.parse(
-    readFileSync(
-      join(repositoryRoot, "packages/standard-schema/package.json"),
-      "utf8"
-    )
-  ) as { readonly scripts: { readonly lint: string } };
+  const packageManifest = readJsonFile(
+    Schema.Struct({ scripts: Schema.Struct({ lint: Schema.String }) }),
+    join(repositoryRoot, "packages/standard-schema/package.json"),
+    "package manifest"
+  );
 
-  const workspaceManifest = JSON.parse(
-    readFileSync(
-      join(repositoryRoot, "apps/deskohub-workspace/package.json"),
-      "utf8"
-    )
-  ) as { readonly scripts: { readonly "lint:biome": string } };
+  const workspaceManifest = readJsonFile(
+    Schema.Struct({ scripts: Schema.Struct({ "lint:biome": Schema.String }) }),
+    join(repositoryRoot, "apps/deskohub-workspace/package.json"),
+    "package manifest"
+  );
 
   expectAssertionDiagnostics(
     await lintProduction(
@@ -1346,11 +1395,15 @@ test("package lint scripts resolve the root Biome config by discovery", async ()
     .split("\n")
     .filter((path) => path !== "")
     .map((path) => {
-      const manifest = JSON.parse(
-        readFileSync(join(repositoryRoot, path), "utf8")
-      ) as {
-        readonly scripts?: { readonly lint?: string };
-      };
+      const manifest = readJsonFile(
+        Schema.Struct({
+          scripts: Schema.optionalKey(
+            Schema.Struct({ lint: Schema.optionalKey(Schema.String) })
+          ),
+        }),
+        join(repositoryRoot, path),
+        "package manifest"
+      );
       return { path, lint: manifest.scripts?.lint ?? "" };
     });
   expect(scripts.length).toBeGreaterThan(0);
@@ -1360,11 +1413,17 @@ test("package lint scripts resolve the root Biome config by discovery", async ()
 });
 
 test("lint caches miss when the Biome config or a Grit plugin changes", () => {
-  const turbo = JSON.parse(
-    readFileSync(join(repositoryRoot, "turbo.json"), "utf8")
-  ) as {
-    readonly tasks: { readonly lint: { readonly inputs?: readonly string[] } };
-  };
+  const turbo = readJsonFile(
+    Schema.Struct({
+      tasks: Schema.Struct({
+        lint: Schema.Struct({
+          inputs: Schema.optionalKey(Schema.Array(Schema.String)),
+        }),
+      }),
+    }),
+    join(repositoryRoot, "turbo.json"),
+    "Turbo config"
+  );
   expect(turbo.tasks.lint.inputs).toEqual(
     expect.arrayContaining([
       "$TURBO_DEFAULT$",

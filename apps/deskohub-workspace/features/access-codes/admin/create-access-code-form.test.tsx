@@ -10,14 +10,18 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { ADMINISTRATION_STANDALONE_ACCESS_CODE_MAXIMUM_DURATION_HOURS } from "@deskohub/workspace-admin-api";
+import { Schema } from "effect";
 import type { Locale } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import type { useWorkspaceAction } from "@/shared/utils/use-workspace-action";
 import { shiftStandaloneAccessCodeLocalEnd } from "./create-access-code";
 
 // React DOM detects input events when it loads, so it is imported once
@@ -27,27 +31,66 @@ const { act, cleanup, fireEvent, render, waitFor } = await import(
 );
 
 const writeText = mock(() => Promise.resolve());
-const execute = mock();
+const execute = mock<ReturnType<typeof useWorkspaceAction>["execute"]>(
+  () => undefined
+);
 
-interface CreateStandaloneAccessCodeActionInput {
-  readonly attemptId: string;
-  readonly name: string;
-  readonly startsAt: string;
-  readonly endsAt: string;
-  readonly providerCredentialRemovedAttemptId?: string;
-}
+/** The input the form hands its action, as the action's schema reads it. */
+const decodeActionInput = Schema.decodeUnknownSync(
+  Schema.Struct({
+    attemptId: Schema.String,
+    name: Schema.String,
+    startsAt: Schema.String,
+    endsAt: Schema.String,
+    providerCredentialRemovedAttemptId: Schema.optionalKey(Schema.String),
+  }),
+  { onExcessProperty: "error" }
+);
 
-type ActionOptions = {
-  readonly execute: (input: CreateStandaloneAccessCodeActionInput) => void;
-  readonly isExecuting: boolean;
-  readonly onSuccess: (args: { readonly data?: unknown }) => void;
-  readonly onError: (args: {
-    readonly error: { readonly serverError?: string };
-  }) => void;
-  readonly onTransportError: () => void;
+/** The input the form passed to its action on the given call. */
+const executedInput = (call: number) => {
+  assert(execute.mock.calls[call], `Expected action call ${call}`);
+  return decodeActionInput(execute.mock.calls[call][0]);
 };
 
-let actionOptions: ActionOptions | undefined;
+/** The callbacks the form gave its action hook. */
+let actionOptions: Parameters<typeof useWorkspaceAction>[1] | undefined;
+
+const lastInput = () => execute.mock.lastCall?.[0];
+
+/** The callbacks the form registered, failing when it registered none. */
+const registeredOptions = () => {
+  assert(actionOptions, "Expected the form to register action callbacks");
+  return actionOptions;
+};
+
+/** Settles the latest call as the action's success with `data`. */
+const actionSucceeds = ({ data }: { readonly data: unknown }) => {
+  const { onSuccess } = registeredOptions();
+  assert(onSuccess, "Expected the form to handle the action's success");
+  return onSuccess({ data, input: lastInput() });
+};
+
+/** Settles the latest call as the action's server error. */
+const actionFails = ({
+  error,
+}: {
+  readonly error: { readonly serverError: string };
+}) => {
+  const { onError } = registeredOptions();
+  assert(onError, "Expected the form to handle the action's error");
+  return onError({ error, input: lastInput() });
+};
+
+/** Settles the latest call as a request that never reached the server. */
+const actionTransportFails = () => {
+  const { onTransportError } = registeredOptions();
+  assert(onTransportError, "Expected the form to handle a transport failure");
+  return onTransportError({
+    error: new Error("Synthetic transport failure"),
+    input: lastInput(),
+  });
+};
 
 mock.module("@/features/access-codes/admin/actions", () => ({
   createStandaloneAccessCode: mock(),
@@ -75,7 +118,7 @@ beforeEach(() => {
 
 const withActionOptions = () => {
   workspaceUseAction.mockImplementation((_action, options) => {
-    actionOptions = options as ActionOptions | undefined;
+    actionOptions = options;
     return { execute, isExecuting: false, result: {} };
   });
 };
@@ -152,12 +195,16 @@ const windowFieldLabels = async (locale: Locale = "en-US") => {
 const windowDateField = (
   view: ReturnType<typeof render>,
   labels: WindowFieldLabels
-) => view.getByRole("combobox", { name: labels.date }) as HTMLInputElement;
+) =>
+  elementOf(
+    view.getByRole("combobox", { name: labels.date }),
+    HTMLInputElement
+  );
 
 const windowTimeField = (
   view: ReturnType<typeof render>,
   labels: WindowFieldLabels
-) => view.getByLabelText(labels.time) as HTMLInputElement;
+) => elementOf(view.getByLabelText(labels.time), HTMLInputElement);
 
 // A date field takes typed text when focus leaves it.
 const typeWindowDate = (
@@ -192,9 +239,10 @@ const enterWindowBound = (
 /** The window as the form would submit it. */
 const submittedWindow = (view: ReturnType<typeof render>) => {
   const data = new FormData(
-    view.getByRole("form", {
-      name: "Create an access code",
-    }) as HTMLFormElement
+    elementOf(
+      view.getByRole("form", { name: "Create an access code" }),
+      HTMLFormElement
+    )
   );
   return { startsAt: data.get("startsAt"), endsAt: data.get("endsAt") };
 };
@@ -310,7 +358,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       );
       await submitForm(view);
       expect(execute).toHaveBeenCalledTimes(1);
-      expect(execute.mock.calls[0]![0]).toMatchObject({
+      expect(executedInput(0)).toMatchObject({
         name: "Booth A",
         startsAt: "2026-09-10T10:00",
         endsAt: "2026-09-10T12:00",
@@ -352,12 +400,10 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
 
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
 
     await submitForm(view);
-    const retryInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const retryInput = executedInput(1);
 
     expect(firstInput.attemptId).toBe(retryInput.attemptId);
     expect(firstInput).toMatchObject({
@@ -373,15 +419,13 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
 
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
 
     fireEvent.input(view.getByLabelText("Name"), {
       target: { value: "Booth B" },
     });
     await submitForm(view);
-    const secondInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const secondInput = executedInput(1);
 
     expect(secondInput.attemptId).not.toBe(firstInput.attemptId);
     expect(secondInput.name).toBe("Booth B");
@@ -393,17 +437,15 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
 
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "failed", outcome: { outcome: "rejected" } },
       });
     });
     await submitForm(view);
-    const resubmittedInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const resubmittedInput = executedInput(1);
 
     expect(resubmittedInput.attemptId).not.toBe(firstInput.attemptId);
     expect(resubmittedInput).toMatchObject({
@@ -419,17 +461,15 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
 
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "failed", outcome: { outcome: "unavailable" } },
       });
     });
     await submitForm(view);
-    const retriedInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const retriedInput = executedInput(1);
 
     expect(retriedInput.attemptId).toBe(firstInput.attemptId);
   });
@@ -440,7 +480,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
     await submitForm(view);
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "succeeded", outcome: createdOutcome },
       });
     });
@@ -465,7 +505,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     enterWindowTime(view, labels.startsAt, "08:00");
     await submitForm(view);
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(execute.mock.calls[0]![0]).toMatchObject({
+    expect(executedInput(0)).toMatchObject({
       startsAt: "2026-09-10T08:00",
       endsAt: "2026-09-10T12:00",
     });
@@ -478,7 +518,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "succeeded", outcome: createdOutcome },
       });
     });
@@ -486,11 +526,11 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const region = view.container.querySelector(
       '[data-standalone-access-code-creation="created"]'
     );
-    expect(region).not.toBeNull();
-    const digits = region!.querySelector("[data-ph-mask]");
-    expect(digits).not.toBeNull();
-    expect(digits!.getAttribute("data-ph-no-capture")).toBe("");
-    expect(digits!.getAttribute("aria-label")).toBe("7 6 5 4 3 2 1");
+    assert(region, "Expected the created access-code region");
+    const digits = region.querySelector("[data-ph-mask]");
+    assert(digits, "Expected the masked access-code digits");
+    expect(digits.getAttribute("data-ph-no-capture")).toBe("");
+    expect(digits.getAttribute("aria-label")).toBe("7 6 5 4 3 2 1");
     expect(view.queryByRole("form")).toBeNull();
     expect(
       view.getByText(/shown only once and cannot be retrieved later/)
@@ -508,11 +548,9 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const view = await renderForm();
     await fillForm(view);
     await submitForm(view);
-    const firstAttemptId = (
-      execute.mock.calls[0][0] as CreateStandaloneAccessCodeActionInput
-    ).attemptId;
+    const firstAttemptId = executedInput(0).attemptId;
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "succeeded", outcome: createdOutcome },
       });
     });
@@ -523,15 +561,15 @@ describe("CreateStandaloneAccessCodeForm", () => {
 
     const form = view.getByRole("form", { name: "Create an access code" });
     expect(
-      (form.querySelector("input[name='name']") as HTMLInputElement).value
+      elementOf(form.querySelector("input[name='name']"), HTMLInputElement)
+        .value
     ).toBe("");
     expect(document.activeElement).toBe(
       form.querySelector("input[name='name']")
     );
     await fillForm(view);
     await submitForm(view);
-    const nextInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const nextInput = executedInput(1);
     expect(nextInput.attemptId).not.toBe(firstAttemptId);
   });
 
@@ -542,7 +580,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: {
           status: "succeeded",
           outcome: { ...createdOutcome, outcome: "already-created" },
@@ -567,7 +605,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "failed", outcome: { outcome: "rejected" } },
       });
     });
@@ -580,7 +618,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
         "The provider rejected this access code. Adjust the details and try again."
       )
     ).toBeDefined();
-    expect((view.getByLabelText("Name") as HTMLInputElement).value).toBe(
+    expect(elementOf(view.getByLabelText("Name"), HTMLInputElement).value).toBe(
       "Booth A"
     );
   });
@@ -592,7 +630,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({ attemptId: priorAttemptId, name: "Booth A" }),
       });
     });
@@ -640,7 +678,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       fireEvent.submit(form);
     });
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "failed", outcome: { outcome: "rejected" } },
       });
     });
@@ -654,7 +692,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       fireEvent.submit(form);
     });
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({ attemptId: priorAttemptId, name: "Booth A" }),
       });
     });
@@ -685,7 +723,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const view = await renderForm("cs-CZ");
 
     act(() => {
-      actionOptions?.onError({
+      actionFails({
         error: { serverError: "Server neodpověděl včas. Zkuste to znovu." },
       });
     });
@@ -700,7 +738,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const view = await renderForm("cs-CZ");
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "succeeded", outcome: createdOutcome },
       });
     });
@@ -718,7 +756,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({
           attemptId: priorAttemptId,
           name: "Booth A",
@@ -744,11 +782,10 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const view = await renderForm();
     await fillForm(view);
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({ attemptId: priorAttemptId, name: "Booth A" }),
       });
     });
@@ -781,8 +818,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
     await submitForm(view);
 
-    const confirmedInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const confirmedInput = executedInput(1);
     expect(confirmedInput.providerCredentialRemovedAttemptId).toBe(
       priorAttemptId
     );
@@ -792,8 +828,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     expect(confirmedInput.attemptId).not.toBe(firstInput.attemptId);
 
     await submitForm(view);
-    const followUpInput = execute.mock
-      .calls[2][0] as CreateStandaloneAccessCodeActionInput;
+    const followUpInput = executedInput(2);
     expect("providerCredentialRemovedAttemptId" in followUpInput).toBe(false);
   });
 
@@ -804,7 +839,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({ attemptId: priorAttemptId, name: "Booth A" }),
       });
     });
@@ -820,7 +855,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       ).toBeDefined()
     );
 
-    expect((view.getByLabelText("Name") as HTMLInputElement).value).toBe(
+    expect(elementOf(view.getByLabelText("Name"), HTMLInputElement).value).toBe(
       "Booth A"
     );
     expect(submittedWindow(view)).toEqual({
@@ -836,7 +871,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({ data: cleanupRequiredFailure(staleTarget) });
+      actionSucceeds({ data: cleanupRequiredFailure(staleTarget) });
     });
 
     expect(
@@ -861,7 +896,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({
           attemptId: priorAttemptId,
           name: "Stale Booth",
@@ -884,7 +919,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
 
     const nextAttemptId = "01980000-0000-7000-8000-0000000000bb";
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: cleanupRequiredFailure({
           attemptId: nextAttemptId,
           name: "Fresh Booth",
@@ -916,8 +951,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
     await submitForm(view);
 
-    const reconfirmedInput = execute.mock
-      .calls[2][0] as CreateStandaloneAccessCodeActionInput;
+    const reconfirmedInput = executedInput(2);
     expect(reconfirmedInput.providerCredentialRemovedAttemptId).toBe(
       nextAttemptId
     );
@@ -933,7 +967,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({ attemptId: priorAttemptId, name: "Booth A" }),
       });
     });
@@ -954,8 +988,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       target: { value: "Booth B" },
     });
     await submitForm(view);
-    const changedInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const changedInput = executedInput(1);
 
     expect(changedInput.name).toBe("Booth B");
     expect("providerCredentialRemovedAttemptId" in changedInput).toBe(false);
@@ -968,7 +1001,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onTransportError();
+      actionTransportFails();
     });
 
     expect(
@@ -978,10 +1011,8 @@ describe("CreateStandaloneAccessCodeForm", () => {
     ).toBeDefined();
 
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
-    const retryInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
+    const retryInput = executedInput(1);
     expect(retryInput.attemptId).toBe(firstInput.attemptId);
   });
 });

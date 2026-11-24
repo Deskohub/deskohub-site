@@ -14,8 +14,12 @@ import { FetchHttpClient } from "effect/http";
 type SendImplementation = (payload?: {
   readonly subject?: string;
 }) => Promise<{ readonly data: { id: string } }>;
+type BatchSendPayloadItem = {
+  readonly subject?: string;
+  readonly to?: readonly string[];
+};
 type BatchSendImplementation = (
-  payload?: readonly unknown[],
+  payload?: readonly BatchSendPayloadItem[],
   options?: { readonly idempotencyKey?: string }
 ) => Promise<{ readonly data: { readonly data: readonly { id: string }[] } }>;
 
@@ -36,7 +40,7 @@ mock.module("resend", () => ({
     };
     batch = {
       send: (
-        payload?: readonly unknown[],
+        payload?: readonly BatchSendPayloadItem[],
         options?: { idempotencyKey?: string }
       ) => resendBatchSend(payload, options),
     };
@@ -168,12 +172,7 @@ describe("WorkspaceEmailLayer", () => {
     expect(resendBatchSend).toHaveBeenCalledTimes(1);
     const [payload, options] = resendBatchSend.mock.calls[0] ?? [];
     expect(
-      (
-        payload as readonly {
-          readonly subject?: string;
-          readonly to: readonly string[];
-        }[]
-      ).map((sent) => ({ subject: sent.subject, to: sent.to }))
+      (payload ?? []).map((sent) => ({ subject: sent.subject, to: sent.to }))
     ).toEqual([
       { subject: "Resend one", to: [realRecipient.email] },
       { subject: "Resend two", to: [realRecipient.email] },
@@ -269,18 +268,21 @@ describe("WorkspaceEmailLayer", () => {
     }
     const postHogAnswering = (status: number, answer: PostHogAnswer) => {
       const requests: PostHogRequest[] = [];
-      const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const sent: {
-          readonly distinct_id?: string;
-          readonly template_key?: string;
-        } = JSON.parse(await new Response(init?.body).text());
-        requests.push({
-          url: input instanceof Request ? input.url : String(input),
-          distinctId: sent.distinct_id,
-          templateKey: sent.template_key,
-        });
-        return Response.json(answer, { status });
-      }) as typeof globalThis.fetch;
+      const fetch: typeof globalThis.fetch = Object.assign(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const sent: {
+            readonly distinct_id?: string;
+            readonly template_key?: string;
+          } = JSON.parse(await new Response(init?.body).text());
+          requests.push({
+            url: input instanceof Request ? input.url : String(input),
+            distinctId: sent.distinct_id,
+            templateKey: sent.template_key,
+          });
+          return Response.json(answer, { status });
+        },
+        { preconnect: globalThis.fetch.preconnect }
+      );
       return { fetch, requests };
     };
     const campaignMessage = {

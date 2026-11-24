@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -266,62 +267,80 @@ const group = <Filter extends StoredFilter>(
   filters: readonly Filter[]
 ) => ({ _tag: "Group" as const, operator, filters });
 
+const [firstConditionCase, secondConditionCase] = conditionCases;
+assert(
+  firstConditionCase && secondConditionCase,
+  "two condition cases are required"
+);
+
+/** One filter nesting groups and conditions under both connectives. */
+const nestedCase = {
+  legacy: group("or", [
+    group(
+      "and",
+      conditionCases.map(({ legacy }) => legacy)
+    ),
+    group("or", []),
+    secondConditionCase.legacy,
+  ]),
+  migrated: group("or", [
+    group(
+      "and",
+      conditionCases.map(({ migrated }) => migrated)
+    ),
+    group("or", []),
+    secondConditionCase.migrated,
+  ]),
+};
+
 const filterCases = [
   ...conditionCases.map(({ legacy, migrated }) => ({
     legacy: group("and", [legacy]),
     migrated: group("and", [migrated]),
   })),
   { legacy: group("and", []), migrated: group("and", []) },
-  {
-    legacy: group("or", [
-      group(
-        "and",
-        conditionCases.map(({ legacy }) => legacy)
-      ),
-      group("or", []),
-      conditionCases[1]!.legacy,
-    ]),
-    migrated: group("or", [
-      group(
-        "and",
-        conditionCases.map(({ migrated }) => migrated)
-      ),
-      group("or", []),
-      conditionCases[1]!.migrated,
-    ]),
-  },
+  nestedCase,
 ];
 
-const nestedCase = filterCases.at(-1)!;
-
-const insertAudience = async (pool: Pool, filter: StoredFilter) =>
-  (
+const insertAudience = async (pool: Pool, filter: StoredFilter) => {
+  const [row] = (
     await pool.query<{ id: string }>(
       `insert into email_campaign_audiences (title, filter) values ('Audience', $1) returning id`,
       [JSON.stringify(filter)]
     )
-  ).rows[0]!.id;
-
-const insertSend = async (pool: Pool, filter: StoredFilter) => {
-  const campaign = await pool.query<{ id: string }>(
-    `insert into email_campaigns (title, purpose, template_key) values ('Campaign', 'marketing', 'announcement') returning id`
-  );
-  return (
-    await pool.query<{ id: string }>(
-      `insert into email_campaign_sends (campaign_id, audience_filter, content_hash) values ($1, $2, 'hash') returning id`,
-      [campaign.rows[0]!.id, JSON.stringify(filter)]
-    )
-  ).rows[0]!.id;
+  ).rows;
+  assert(row, "insertAudience returned no row");
+  return row.id;
 };
 
-const insertCliSession = async (pool: Pool) =>
-  (
+const insertSend = async (pool: Pool, filter: StoredFilter) => {
+  const {
+    rows: [campaign],
+  } = await pool.query<{ id: string }>(
+    `insert into email_campaigns (title, purpose, template_key) values ('Campaign', 'marketing', 'announcement') returning id`
+  );
+  assert(campaign, "the campaign insert returned no row");
+  const [row] = (
+    await pool.query<{ id: string }>(
+      `insert into email_campaign_sends (campaign_id, audience_filter, content_hash) values ($1, $2, 'hash') returning id`,
+      [campaign.id, JSON.stringify(filter)]
+    )
+  ).rows;
+  assert(row, "the query returned no row");
+  return row.id;
+};
+
+const insertCliSession = async (pool: Pool) => {
+  const [row] = (
     await pool.query<{ id: string }>(
       `insert into cli_sessions (token_hash, client_name, cli_version, build_target, approved_by)
        values ($1, 'dhw', '1.0.0', 'development', 'admin') returning id`,
       ["a".repeat(43)]
     )
-  ).rows[0]!.id;
+  ).rows;
+  assert(row, "insertCliSession returned no row");
+  return row.id;
+};
 
 const insertCliMutation = async (
   pool: Pool,
@@ -350,24 +369,34 @@ const audienceFilters = async (pool: Pool, ids: readonly string[]) => {
       [ids]
     )
   ).rows;
-  return ids.map((id) => rows.find((row) => row.id === id)!.filter);
+  return ids.map((id) => {
+    const row = rows.find((candidate) => candidate.id === id);
+    assert(row, `audience ${id} was not stored`);
+    return row.filter;
+  });
 };
 
-const sendFilter = async (pool: Pool, id: string) =>
-  (
+const sendFilter = async (pool: Pool, id: string) => {
+  const [row] = (
     await pool.query<{ audience_filter: unknown }>(
       `select audience_filter from email_campaign_sends where id = $1`,
       [id]
     )
-  ).rows[0]!.audience_filter;
+  ).rows;
+  assert(row, "sendFilter returned no row");
+  return row.audience_filter;
+};
 
-const cliMutation = async (pool: Pool, requestId: string) =>
-  (
+const cliMutation = async (pool: Pool, requestId: string) => {
+  const [row] = (
     await pool.query<{ mutation: unknown; result: unknown }>(
       `select mutation, result from cli_mutation_requests where request_id = $1`,
       [requestId]
     )
-  ).rows[0]!;
+  ).rows;
+  assert(row, "cliMutation returned no row");
+  return row;
+};
 
 const audienceResult = (filter: StoredFilter): StoredAudience => ({
   id: crypto.randomUUID(),
@@ -381,13 +410,15 @@ const audienceResult = (filter: StoredFilter): StoredAudience => ({
 describe.skipIf(!testDatabaseUrl)(
   "audience attribute conditions migration",
   () => {
+    if (!testDatabaseUrl) return;
+
     test(
       "rewrites stored legacy audience filters to attribute conditions once",
       async () => {
         const earlierMigrations = await linkMigrationsBefore(MIGRATION_DIR);
         try {
           await withScratchDatabase(
-            testDatabaseUrl!,
+            testDatabaseUrl,
             "audience_filter_migration",
             async (pool) => {
               await migrate(drizzle({ client: pool }), {
@@ -416,7 +447,7 @@ describe.skipIf(!testDatabaseUrl)(
                   kind: "campaign-audience-create",
                   audience: {
                     title: "Pending",
-                    filter: conditionCases[0]!.legacy,
+                    filter: firstConditionCase.legacy,
                   },
                 },
                 null
@@ -470,7 +501,7 @@ describe.skipIf(!testDatabaseUrl)(
                   kind: "campaign-audience-create",
                   audience: {
                     title: "Pending",
-                    filter: conditionCases[0]!.migrated,
+                    filter: firstConditionCase.migrated,
                   },
                 },
                 result: null,
@@ -495,7 +526,7 @@ describe.skipIf(!testDatabaseUrl)(
       "aborts on a filter node it does not know",
       async () => {
         await withScratchDatabase(
-          testDatabaseUrl!,
+          testDatabaseUrl,
           "audience_filter_migration",
           async (pool) => {
             await migrate(drizzle({ client: pool }), {

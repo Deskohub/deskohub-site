@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { unsafeReturnTargets } from "@/shared/testing/unsafe-return-targets.test-utils";
 import {
   maxSameOriginPathLength,
@@ -35,8 +36,8 @@ describe("parseSameOriginPath", () => {
   ])("keeps encoded separators in %p on the site", (value) => {
     const path = parseSameOriginPath(value);
 
-    expect(path).toBeDefined();
-    expect(new URL(path!, siteOrigin).origin).toBe(siteOrigin);
+    assert(path !== undefined);
+    expect(new URL(path, siteOrigin).origin).toBe(siteOrigin);
   });
 
   test.each([

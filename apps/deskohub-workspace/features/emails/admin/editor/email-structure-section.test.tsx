@@ -16,6 +16,7 @@ import {
 import { Effect, Option } from "effect";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -48,9 +49,13 @@ mock.module("@/shared/browser/image-size", () => ({
     Effect.sync(() => Option.some({ width: 800, height: 600 })),
 }));
 
+// Bun types `fetch` with a `preconnect` helper; the fakes keep the real one.
+const { preconnect } = globalThis.fetch;
 const fetchSpy = spyOn(globalThis, "fetch");
 const answer = (body: typeof storedImage) =>
-  fetchSpy.mockImplementation(async () => Response.json(body));
+  fetchSpy.mockImplementation(
+    Object.assign(async () => Response.json(body), { preconnect })
+  );
 
 const { RouteLocaleProvider } = await import("@/features/i18n/route-locale");
 const { EmailEditorProvider } = await import("./email-editor-context");
@@ -702,7 +707,7 @@ describe("images", () => {
     const input =
       view.container.querySelector<HTMLInputElement>('input[type="file"]');
     await act(async () => {
-      fireEvent.change(input as HTMLInputElement, {
+      fireEvent.change(elementOf(input, HTMLInputElement), {
         target: {
           files: [
             new File([new Uint8Array(3)], "hero.png", { type: "image/png" }),
@@ -763,10 +768,15 @@ describe("images", () => {
 
   test("an upload that ends after the block moved and changed sets only its source", async () => {
     const { promise: stored, resolve: store } = Promise.withResolvers<void>();
-    fetchSpy.mockImplementation(async () => {
-      await stored;
-      return Response.json(storedImage);
-    });
+    fetchSpy.mockImplementation(
+      Object.assign(
+        async () => {
+          await stored;
+          return Response.json(storedImage);
+        },
+        { preconnect }
+      )
+    );
     const { view, values } = renderSection({
       structure: [
         { _tag: "Image", id: "hero", altKey: "hero-alt" },
@@ -815,10 +825,15 @@ describe("images", () => {
 
   test("an upload that ends after its block was removed changes nothing", async () => {
     const { promise: stored, resolve: store } = Promise.withResolvers<void>();
-    fetchSpy.mockImplementation(async () => {
-      await stored;
-      return Response.json(storedImage);
-    });
+    fetchSpy.mockImplementation(
+      Object.assign(
+        async () => {
+          await stored;
+          return Response.json(storedImage);
+        },
+        { preconnect }
+      )
+    );
     const { view, values } = renderSection(imageDraft);
 
     await chooseImage(view);
@@ -1202,9 +1217,10 @@ test("a button can switch to a dynamic trigger link value and blocks can configu
   });
 
   // Configure a display condition on the paragraph block.
-  const conditionSelect = view.getAllByRole("combobox", {
+  const [conditionSelect] = view.getAllByRole("combobox", {
     name: m.emailsEditorBlockVisibilityLabel({}, { locale }),
-  })[0]!;
+  });
+  if (!conditionSelect) throw new Error("The block has no display condition.");
   await choose(
     view,
     conditionSelect,

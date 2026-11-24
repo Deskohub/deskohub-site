@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import type { ReactElement, ReactNode } from "react";
+import { isValidElement, type ReactNode, Suspense } from "react";
 import type { GlobalRelease } from "@/features/feature-flags/backend/global-release";
 
 const events: string[] = [];
@@ -35,23 +35,25 @@ const renderShell = (fallback?: ReactNode) =>
     fallback,
   });
 
-type RequestGateProps = {
-  readonly isEnabled: () => Promise<boolean>;
-  readonly children: ReactNode;
-  readonly fallback?: ReactNode;
+/** The Suspense boundary the shell renders around the per-request gate. */
+const renderGateBoundary = async (fallback?: ReactNode) => {
+  const boundary = await renderShell(fallback);
+  if (
+    !isValidElement<{ children?: unknown; fallback?: unknown }>(boundary) ||
+    boundary.type !== Suspense
+  ) {
+    throw new Error("Expected the gate's Suspense boundary");
+  }
+  return boundary;
 };
 
-type RequestGateBoundary = ReactElement<{
-  children: ReactElement<RequestGateProps>;
-  fallback: ReactNode;
-}>;
-
 /** Renders the per-request gate inside the Suspense boundary. */
-const renderRequestGate = async (fallback?: ReactNode) => {
-  const boundary = (await renderShell(fallback)) as RequestGateBoundary;
-  const gate = boundary.props.children;
-  const render = gate.type as (props: RequestGateProps) => Promise<ReactNode>;
-  return render(gate.props);
+const renderRequestGate = async (fallback?: ReactNode): Promise<unknown> => {
+  const gate = (await renderGateBoundary(fallback)).props.children;
+  if (!isValidElement(gate) || !(gate.type instanceof Function)) {
+    throw new Error("Expected the per-request gate component");
+  }
+  return Reflect.apply(gate.type, undefined, [gate.props]);
 };
 
 describe("GlobalReleaseGate", () => {
@@ -96,7 +98,7 @@ describe("GlobalReleaseGate", () => {
   });
 
   test("shows the fallback in the static shell while an undecided gate is pending", async () => {
-    const boundary = (await renderShell(closed)) as RequestGateBoundary;
+    const boundary = await renderGateBoundary(closed);
 
     expect(boundary.props.fallback).toBe(closed);
     expect(events).toEqual(["release:referrals"]);

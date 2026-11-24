@@ -17,6 +17,8 @@ import {
 import {
   type DeliveryReport,
   type DeliveryReportEvent,
+  deliveryReportEmailId,
+  deliveryReportEventId,
   deliveryReportHandler,
   dispatchDeliveryReport,
   ingestDeliveryReport,
@@ -62,13 +64,13 @@ describe("postHogDeliveryReport", () => {
         deploymentEnvironment,
       })
     ).toEqual({
-      eventId: "posthog:posthog-message-id:bounced",
+      eventId: deliveryReportEventId("posthog:posthog-message-id:bounced"),
       event: "email.bounced",
-      emailId: "posthog-message-id",
+      emailId: deliveryReportEmailId(messageId),
       occurredAt: statusAt,
       tags: new Map(Object.entries(campaignTags)),
       deploymentEnvironment,
-    } as never);
+    });
   });
 
   test("dates a status PostHog gave no time by the poll that read it", () => {
@@ -290,11 +292,11 @@ describe("PostHog delivery reports", () => {
 
     expect(calls.noteReports).toEqual([
       {
-        emailId: "posthog-message-id",
+        emailId: deliveryReportEmailId(messageId),
         event: "email.failed",
         occurredAt: statusAt,
         metadata: Option.some({ noteId: "note-1" }),
-      } as never,
+      },
     ]);
   });
 });

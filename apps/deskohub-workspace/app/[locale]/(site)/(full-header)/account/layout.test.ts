@@ -9,6 +9,10 @@ import {
   type ReactNode,
 } from "react";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
+import {
+  renderComponentElement,
+  requireElement,
+} from "@/shared/testing/route-element.test-utils";
 
 const adaEmail = testEmailAddress("ada");
 
@@ -131,24 +135,21 @@ describe("account route layout", () => {
       const { default: AccountLayout } = await import("./layout");
       const page = createElement("page");
       const modal = createElement("modal");
-      const route = AccountLayout({ children: page, modal }) as ReactElement<{
+      const route = requireElement<{
         readonly children: ReactElement<{
           readonly locale: "en-US";
           readonly children: ReactNode;
           readonly modal: ReactNode;
         }>;
         readonly fallback: ReactElement;
-      }>;
+      }>(AccountLayout({ children: page, modal }));
 
       expect(connection).not.toHaveBeenCalled();
 
       const content = route.props.children;
-      const Content = content.type as (props: {
-        readonly locale: "en-US";
-        readonly children: ReactNode;
-        readonly modal: ReactNode;
-      }) => Promise<ReactElement<{ readonly children: ReactNode }>>;
-      const output = await Content(content.props);
+      const output = requireElement<{ readonly children: ReactNode }>(
+        await renderComponentElement(content)
+      );
       const rendered = Children.toArray(output.props.children).filter(
         isValidElement
       );

@@ -388,8 +388,10 @@ describe.skipIf(!postgresDatabase)(
             })
           )
         );
-        const { rows } = await writer.query<{ readonly pid: number }>(
-          "select pg_backend_pid()::int as pid"
+        const { rows } = await writer.query(
+          "select pg_backend_pid()::int as pid",
+          [],
+          Schema.Struct({ pid: Schema.Number })
         );
         const writerPid = rows[0]?.pid;
 

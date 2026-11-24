@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
+import { Schema } from "effect";
 import { findStepByName, parseWorkflow } from "./shared/workflow-contract";
 import {
   createWorkflowStepRunner,
@@ -249,9 +250,9 @@ describe("Workspace E2E status without a run", () => {
   });
 
   test("recognizes exactly the descriptions a real run publishes", () => {
-    const descriptions = JSON.parse(
-      String(statusStep?.env?.E2E_RUN_DESCRIPTIONS)
-    ) as string[];
+    const descriptions = Schema.decodeUnknownSync(
+      Schema.fromJsonString(Schema.Array(Schema.String))
+    )(String(statusStep?.env?.E2E_RUN_DESCRIPTIONS));
     const publishers = [
       findStepByName(workflow, "Publish pending commit status"),
       findStepByName(workflow, "Publish final commit status"),

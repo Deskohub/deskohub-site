@@ -74,7 +74,8 @@ for (const locale of otherScriptLocales) {
 
 /** The system fonts a text takes letters from when set in the given face. */
 async function fallbackFontsFor(text: string, fontFile: Buffer) {
-  const page = await (browser as Browser).newPage();
+  if (!browser) throw new Error("Chromium did not launch");
+  const page = await browser.newPage();
   try {
     await page.setContent(
       `<!doctype html><html><head><meta charset="utf-8"><style>

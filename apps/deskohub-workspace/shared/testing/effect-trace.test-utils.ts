@@ -26,14 +26,7 @@ export interface EffectTrace {
 }
 
 /** Anything an Effect log entry or a mocked call can carry. */
-type TraceValue =
-  | string
-  | number
-  | boolean
-  | bigint
-  | null
-  | undefined
-  | object;
+type TraceValue = NonNullable<unknown> | null | undefined;
 
 /** Primitives render as themselves; anything else as its constructor name. */
 const describeValue = (value: TraceValue): string =>
@@ -65,23 +58,20 @@ export const startEffectTrace = (): EffectTrace => {
   return {
     entries,
     recordCalls: (service, methods) =>
-      Object.fromEntries(
-        Object.entries(
-          methods as Record<
-            string,
-            (...args: ReadonlyArray<TraceValue>) => Effect.Effect<TraceValue>
-          >
-        ).map(([name, method]) => [
-          name,
-          (...args: ReadonlyArray<TraceValue>) =>
-            Effect.suspend(() => {
-              entries.push(
-                `call ${service}.${name}(${args.map(describeFields).join("; ")})`
-              );
-              return method(...args);
-            }),
-        ])
-      ) as never,
+      new Proxy(methods, {
+        get: (target, name, receiver) => {
+          const method = Reflect.get(target, name, receiver);
+          return Predicate.isFunction(method)
+            ? (...args: ReadonlyArray<TraceValue>) =>
+                Effect.suspend(() => {
+                  entries.push(
+                    `call ${service}.${String(name)}(${args.map(describeFields).join("; ")})`
+                  );
+                  return Reflect.apply(method, undefined, args);
+                })
+            : method;
+        },
+      }),
   };
 };
 
@@ -110,9 +100,9 @@ export const recordEffectTrace = <A, E, R>(
       .sort()
       .join(",");
     // Effect hands a logger every argument of the log call as one array.
-    const parts = (
-      Array.isArray(message) ? message : [message]
-    ) as ReadonlyArray<TraceValue>;
+    const parts: ReadonlyArray<TraceValue> = Array.isArray(message)
+      ? message
+      : [message];
     trace.entries.push(
       `${logLevel} ${describeLogMessage(parts)} {${annotations}} in ${describeSpan(fiber.cache.span)}`
     );

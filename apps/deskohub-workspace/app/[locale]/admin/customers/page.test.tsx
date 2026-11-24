@@ -7,6 +7,8 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { within } from "@testing-library/react";
 import { prerender } from "react-dom/static";
 import type {
@@ -104,8 +106,7 @@ describe("CustomersAdministrationPage", () => {
         items: [
           {
             customer: null,
-            customerId:
-              "customer-one" as AdministrationCustomerSummary["customerId"],
+            customerId: DotyposCustomerIdSchema.make("customer-one"),
             lastActivityAt: "2026-10-10T08:00:00Z",
             marketingConsent: "active",
             reservationCount: 2,
@@ -118,9 +119,8 @@ describe("CustomersAdministrationPage", () => {
     };
     const view = await prerenderCustomersPage();
 
-    const form = view
-      .getByLabelText("Marketing consent")
-      .closest("form") as HTMLFormElement;
+    const form = view.getByLabelText("Marketing consent").closest("form");
+    assert(form);
     expect(form.getAttribute("action")).toBe("/en-US/admin/customers");
     expect(new FormData(form).get("from")).toBe("2026-10-01");
     expect(view.getByLabelText("49 customers")).toBeDefined();

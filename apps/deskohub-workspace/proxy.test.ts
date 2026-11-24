@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { Effect } from "effect";
 import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { NextRequest } from "next/server";
@@ -520,9 +521,9 @@ describe("administration route boundary", () => {
       );
 
       expect(response.status).toBe(307);
-      expect(new URL(response.headers.get("location")!).pathname).toMatch(
-        localizedSignInPathname
-      );
+      const location = response.headers.get("location");
+      assert(location);
+      expect(new URL(location).pathname).toMatch(localizedSignInPathname);
       expectPrivateAdministrationResponse(response);
     }
     expect(administrationRequestHeaders).toHaveLength(0);
@@ -541,9 +542,9 @@ describe("administration route boundary", () => {
       );
 
       expect(response.status).toBe(307);
-      expect(new URL(response.headers.get("location")!).pathname).toMatch(
-        localizedSignInPathname
-      );
+      const location = response.headers.get("location");
+      assert(location);
+      expect(new URL(location).pathname).toMatch(localizedSignInPathname);
       expectPrivateAdministrationResponse(response);
     }
   });
@@ -1168,8 +1169,9 @@ test("exchanges a pass holder's link only on its own access page", async () => {
     path: "/",
     maxAge: 86400,
   });
+  assert(cookie);
   expect(
-    Effect.runSync(openUnlimitedAccessCookie(orderId, cookie!.value))(
+    Effect.runSync(openUnlimitedAccessCookie(orderId, cookie.value))(
       holderAccountId
     )
   ).toBe(true);
@@ -1184,8 +1186,10 @@ test("exchanges a pass holder's link only on its own access page", async () => {
       locale,
     })
   );
-  const passToken = original.searchParams.get(unlimitedAccessTokenQueryParam)!;
-  const wrongLocale = locales.find((candidate) => candidate !== locale)!;
+  const passToken = original.searchParams.get(unlimitedAccessTokenQueryParam);
+  assert(passToken);
+  const wrongLocale = locales.find((candidate) => candidate !== locale);
+  assert(wrongLocale);
   const rejected = [
     [
       original.pathname.replace("/access/", "/status/"),
@@ -1498,13 +1502,14 @@ describe("AI assistant sign-in step", () => {
     );
 
     expect(response.status).toBe(307);
-    const location = new URL(response.headers.get("location")!);
+    const locationHeader = response.headers.get("location");
+    assert(locationHeader);
+    const location = new URL(locationHeader);
     expect(location.pathname).toBe("/en-US/auth/sign-in");
     expect(location.searchParams.get("for")).toBe("assistant");
-    const returnTo = new URL(
-      location.searchParams.get("returnTo")!,
-      "https://workspace.example"
-    );
+    const returnToParam = location.searchParams.get("returnTo");
+    assert(returnToParam);
+    const returnTo = new URL(returnToParam, "https://workspace.example");
     expect(returnTo.pathname).toBe("/en-US/auth/connect");
     expect(returnTo.searchParams.get("client_id")).toBe(
       "https://assistant.invalid/client.json"

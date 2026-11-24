@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import { testEmailAddress } from "@deskohub/test-email";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -19,8 +20,8 @@ const insertAuthenticationRequest = async (
   pool: Pool,
   codeHash: string,
   approval?: { readonly approvedBy: string | null }
-) =>
-  (
+) => {
+  const [row] = (
     await pool.query<{ id: string }>(
       `insert into cli_authentication_requests (
          code_hash, challenge, client_name, cli_version, build_target,
@@ -39,10 +40,13 @@ const insertAuthenticationRequest = async (
         approval?.approvedBy ?? null,
       ]
     )
-  ).rows[0]!.id;
+  ).rows;
+  assert(row, "insertAuthenticationRequest returned no row");
+  return row.id;
+};
 
-const insertAccessCodeEvent = async (pool: Pool, actor: string | null) =>
-  (
+const insertAccessCodeEvent = async (pool: Pool, actor: string | null) => {
+  const [row] = (
     await pool.query<{ id: string }>(
       `insert into standalone_access_code_attempt_events (
          attempt_id, event_kind, actor, actor_account_id, actor_account_email,
@@ -56,18 +60,23 @@ const insertAccessCodeEvent = async (pool: Pool, actor: string | null) =>
        ) returning id`,
       [crypto.randomUUID(), actor]
     )
-  ).rows[0]!.id;
+  ).rows;
+  assert(row, "insertAccessCodeEvent returned no row");
+  return row.id;
+};
 
 describe.skipIf(!testDatabaseUrl)(
   "administrator account actors migration",
   () => {
+    if (!testDatabaseUrl) return;
+
     test(
       "preserves legacy actors and applies the new actor constraints",
       async () => {
         const earlierMigrations = await linkMigrationsBefore(MIGRATION_DIR);
         try {
           await withScratchDatabase(
-            testDatabaseUrl!,
+            testDatabaseUrl,
             "administrator_account_actors",
             async (pool) => {
               await migrate(drizzle({ client: pool }), {
@@ -86,14 +95,16 @@ describe.skipIf(!testDatabaseUrl)(
                 await insertAuthenticationRequest(pool, "c", {
                   approvedBy: "legacy.admin",
                 });
-              const sessionId = (
+              const [sessionIdRow] = (
                 await pool.query<{ id: string }>(
                   `insert into cli_sessions (
                      approved_by, token_hash, client_name, cli_version, build_target
                    ) values ('legacy.admin', repeat('d', 43), 'Synthetic CLI', '1.0.0', 'development')
                    returning id`
                 )
-              ).rows[0]!.id;
+              ).rows;
+              assert(sessionIdRow, "sessionId returned no row");
+              const sessionId = sessionIdRow.id;
               const eventId = await insertAccessCodeEvent(pool, "legacy.admin");
 
               await migrate(drizzle({ client: pool }), {

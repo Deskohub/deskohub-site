@@ -1,9 +1,11 @@
 import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
 import { Effect, type Schema } from "effect";
-import type { ShowBookingResult } from "./show-booking.schema";
+import { showBookingResultSchema } from "./show-booking.schema";
 
-const { makeAgentToolTestServices } = await import("./agent-tools.test-utils");
+const { agentToolResultOf, makeAgentToolTestServices } = await import(
+  "./agent-tools.test-utils"
+);
 const { CallableAgentTools } = await import("./agent-tool");
 const { listOfferingsTool } = await import("./list-offerings.tool");
 const { makeShowBookingTool } = await import("./show-booking.tool");
@@ -19,7 +21,8 @@ const showBooking = (
       Effect.provideService(CallableAgentTools, new Set(callable)),
       Effect.provide(makeAgentToolTestServices().layer),
       Effect.runPromise
-    ) as Promise<ShowBookingResult>;
+    )
+    .then(agentToolResultOf(showBookingResultSchema));
 
 describe("show_booking", () => {
   test("lets the view start a booking when the caller may call start_reservation", async () => {

@@ -11,7 +11,10 @@ import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/o
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
-import { plainDateStringSchema } from "@/shared/utils/temporal";
+import {
+  instantStringSchema,
+  plainDateStringSchema,
+} from "@/shared/utils/temporal";
 import { getReviewPaymentDisabledPath } from "../routes";
 import {
   ReviewSandbox,
@@ -60,14 +63,14 @@ describe.skipIf(!testDatabase)("ReviewSandbox on disposable Postgres", () => {
     reservation: {
       kind: "meeting-room",
       duration,
-      reservationDate,
-      startsAt: `${reservationDate}T08:00:00Z`,
-      endsAt: `${reservationDate}T09:00:00Z`,
+      reservationDate: plainDateStringSchema.make(reservationDate),
+      startsAt: instantStringSchema.make(`${reservationDate}T08:00:00Z`),
+      endsAt: instantStringSchema.make(`${reservationDate}T09:00:00Z`),
       name: "App Review",
       email: testEmailAddress("app-review"),
       phone: "unused",
       billing: { purpose: "personal", invoice: "none" },
-    } as ReviewSandboxHoldRequest["reservation"],
+    },
     total: getWorkspaceMeetingRoomPriceForDuration(duration),
     bookedAt: Temporal.Now.instant(),
     ...overrides,

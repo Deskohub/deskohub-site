@@ -16,6 +16,8 @@ const activateLabel = "Activate map";
 
 const chromiumAvailable = await playwrightChromiumAvailable();
 let buildDirectory = "";
+type RequestedUrls = { scripts: string[]; tiles: string[] };
+
 let browser: Browser | undefined;
 const assets = new Map<string, Blob>();
 // The chunks that carry Leaflet, which only the interactive map imports.
@@ -97,9 +99,13 @@ const withLocationMap = async (
   ) => Promise<void>
 ) => {
   const server = serveSite();
-  const context = await browser!.newContext();
+  if (!browser) throw new Error("Chromium did not launch");
+  const context = await browser.newContext();
   try {
-    const requests = { scripts: [] as string[], tiles: [] as string[] };
+    const requests: RequestedUrls = {
+      scripts: [],
+      tiles: [],
+    };
     context.on("request", (request) => {
       const url = new URL(request.url());
       if (url.origin === server.url.origin && url.pathname.endsWith(".js")) {

@@ -13,7 +13,6 @@ import {
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
 import { registerSiteTools } from "./register-site-tools";
-import type { ModelContext } from "./webmcp";
 import {
   agentToolEventStream,
   installFakeModelContext,
@@ -30,8 +29,7 @@ let endpoint: ReturnType<typeof mockAgentToolEndpoint>;
 const register = (signal = new AbortController().signal) =>
   registerSiteTools({
     locale: "cs-CZ",
-    modelContext: (document as Document & { modelContext: ModelContext })
-      .modelContext,
+    modelContext: modelContext.context,
     signal,
   });
 

@@ -11,15 +11,24 @@ class SyntheticDefinitionsError extends Data.TaggedError(
   "SyntheticDefinitionsError"
 )<{ readonly message: string; readonly cause?: unknown }> {}
 
-const env = {
-  POSTHOG_API_HOST: undefined as string | undefined,
-  POSTHOG_API_KEY: undefined as string | undefined,
-  POSTHOG_PROJECT_ID: undefined as string | undefined,
+type PostHogEnv = {
+  POSTHOG_API_HOST: string | undefined;
+  POSTHOG_API_KEY: string | undefined;
+  POSTHOG_PROJECT_ID: string | undefined;
 };
-const postHogRuntimeConfig = {
-  featureFlagOverrides: undefined as
+type PostHogRuntimeConfig = {
+  featureFlagOverrides:
     | PostHogFeatureFlagOverrides<PostHogFeatureFlagDefinitions>
-    | undefined,
+    | undefined;
+};
+
+const env: PostHogEnv = {
+  POSTHOG_API_HOST: undefined,
+  POSTHOG_API_KEY: undefined,
+  POSTHOG_PROJECT_ID: undefined,
+};
+const postHogRuntimeConfig: PostHogRuntimeConfig = {
+  featureFlagOverrides: undefined,
 };
 let definitions: readonly PostHogFeatureFlagDefinition[] = [];
 let definitionsUnavailable = false;

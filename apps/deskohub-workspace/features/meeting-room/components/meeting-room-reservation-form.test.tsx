@@ -48,6 +48,8 @@ import {
   getMeetingRoomStartTimesQuery,
   workspaceAvailabilityKeys,
 } from "@/features/reservation/workspace-availability";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
+import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
 import {
   workspaceUseAction,
   workspaceUseSearchParams,
@@ -227,19 +229,22 @@ const startTimesResponse = {
 const isStartTimesRequest = (request: RequestInfo | URL) =>
   String(request).includes("mode=start-times");
 
-/** Answers start-times requests with the given list and others with `body`. */
-const availabilityFetch = <T,>(
+/**
+ * Answers start-times requests with the given list and others with `body`,
+ * returning the fetch spy with only this stub's calls.
+ */
+const stubAvailabilityFetch = <T,>(
   body: T,
   startTimes: typeof startTimesResponse = startTimesResponse
 ) =>
-  mock((request: RequestInfo | URL, _init?: RequestInit) =>
+  stubFetch((request: RequestInfo | URL) =>
     Promise.resolve(
       jsonResponse(isStartTimesRequest(request) ? startTimes : body)
     )
   );
 
 const getIntervalAvailabilityCalls = (
-  fetchMock: ReturnType<typeof availabilityFetch>
+  fetchMock: ReturnType<typeof stubAvailabilityFetch>
 ) => fetchMock.mock.calls.filter(([request]) => !isStartTimesRequest(request));
 
 const renderForm = (
@@ -339,8 +344,7 @@ describe("MeetingRoomReservationForm", () => {
   });
 
   test("renders page-loaded availability on the first paint without an availability request", () => {
-    const fetchCalls = availabilityFetch(availabilityResponse);
-    globalThis.fetch = fetchCalls as typeof fetch;
+    const fetchCalls = stubAvailabilityFetch(availabilityResponse);
     const query = getMeetingRoomSelectionAvailabilityQuery({
       duration: "hour:1",
       startDateTime: "2099-07-30T10:00",
@@ -374,26 +378,26 @@ describe("MeetingRoomReservationForm", () => {
       readonly url: string;
       readonly signal?: AbortSignal | null;
     } | null = null;
-    globalThis.fetch = mock(
-      (request: RequestInfo | URL, init?: RequestInit) => {
-        if (isStartTimesRequest(request)) {
-          return Promise.resolve(jsonResponse(startTimesResponse));
-        }
-        availabilityRequest = {
-          url: String(request),
-          signal: init?.signal,
-        };
-        return Promise.resolve(jsonResponse(availabilityResponse));
+    stubFetch((request: RequestInfo | URL, init?: RequestInit) => {
+      if (isStartTimesRequest(request)) {
+        return Promise.resolve(jsonResponse(startTimesResponse));
       }
-    ) as typeof fetch;
+      availabilityRequest = {
+        url: String(request),
+        signal: init?.signal,
+      };
+      return Promise.resolve(jsonResponse(availabilityResponse));
+    });
 
     const view = renderForm();
     const continueButton = view.getByRole("button", { name: "Continue" });
-    const durationInputs = ["hour:1", "hour:4", "day:1"].map(
-      (durationKey) =>
+    const durationInputs = ["hour:1", "hour:4", "day:1"].map((durationKey) =>
+      elementOf(
         view.container.querySelector(
           `[id="meeting-room-duration-${durationKey}"]`
-        ) as HTMLInputElement
+        ),
+        HTMLInputElement
+      )
     );
 
     await waitFor(
@@ -430,9 +434,10 @@ describe("MeetingRoomReservationForm", () => {
 
     // Every duration is quoted up front, so switching it needs no new quote.
     fireEvent.click(
-      view.container.querySelector(
-        'input[type="radio"][value="hour:4"]'
-      ) as HTMLInputElement
+      elementOf(
+        view.container.querySelector('input[type="radio"][value="hour:4"]'),
+        HTMLInputElement
+      )
     );
     await waitFor(
       () => {
@@ -453,13 +458,13 @@ describe("MeetingRoomReservationForm", () => {
       throw new Error("Expected a valid whole-day meeting-room interval");
     }
     let availabilityUrl = "";
-    globalThis.fetch = mock((request: RequestInfo | URL) => {
+    stubFetch((request: RequestInfo | URL) => {
       if (isStartTimesRequest(request)) {
         return Promise.resolve(jsonResponse(startTimesResponse));
       }
       availabilityUrl = String(request);
       return Promise.resolve(jsonResponse(availabilityResponse));
-    }) as typeof fetch;
+    });
     getAdvertisedPrices.mockImplementation(() => new Promise(() => undefined));
     const advertisedPrice = getDiscountedAdvertisedPriceResponse({
       unit: "day",
@@ -506,7 +511,10 @@ describe("MeetingRoomReservationForm", () => {
     });
 
     await continueAndSubmitReservation(
-      view.getByRole("button", { name: "Continue" }) as HTMLButtonElement
+      elementOf(
+        view.getByRole("button", { name: "Continue" }),
+        HTMLButtonElement
+      )
     );
 
     await waitFor(() => expect(executeAsync).toHaveBeenCalledTimes(1));
@@ -525,9 +533,7 @@ describe("MeetingRoomReservationForm", () => {
   test("preserves the selected date and time across whole-day toggles", async () => {
     const originalNow = Temporal.Now.instant;
     Temporal.Now.instant = () => Temporal.Instant.from("2099-07-30T12:37:00Z");
-    globalThis.fetch = mock(() =>
-      Promise.resolve(jsonResponse(availabilityResponse))
-    ) as typeof fetch;
+    stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
 
     try {
       const view = renderForm({
@@ -542,14 +548,17 @@ describe("MeetingRoomReservationForm", () => {
       });
 
       expect(
-        (view.getByLabelText(/^Meeting room start time/) as HTMLInputElement)
-          .value
+        elementOf(
+          view.getByLabelText(/^Meeting room start time/),
+          HTMLInputElement
+        ).value
       ).toBe("16:00");
 
       fireEvent.click(
-        view.container.querySelector(
-          'input[type="radio"][value="day:1"]'
-        ) as HTMLInputElement
+        elementOf(
+          view.container.querySelector('input[type="radio"][value="day:1"]'),
+          HTMLInputElement
+        )
       );
       await waitFor(() => {
         expect(view.queryByLabelText(/^Meeting room start time/)).toBeNull();
@@ -571,14 +580,17 @@ describe("MeetingRoomReservationForm", () => {
         );
       });
       fireEvent.click(
-        view.container.querySelector(
-          'input[type="radio"][value="hour:1"]'
-        ) as HTMLInputElement
+        elementOf(
+          view.container.querySelector('input[type="radio"][value="hour:1"]'),
+          HTMLInputElement
+        )
       );
       await waitFor(() => {
         expect(
-          (view.getByLabelText(/^Meeting room start time/) as HTMLInputElement)
-            .value
+          elementOf(
+            view.getByLabelText(/^Meeting room start time/),
+            HTMLInputElement
+          ).value
         ).toBe("16:00");
         expect(
           view.getByRole<HTMLInputElement>("combobox", {
@@ -591,7 +603,9 @@ describe("MeetingRoomReservationForm", () => {
       await waitFor(() => {
         expect(continueButton.hasAttribute("disabled")).toBe(false);
       });
-      await continueAndSubmitReservation(continueButton as HTMLButtonElement);
+      await continueAndSubmitReservation(
+        elementOf(continueButton, HTMLButtonElement)
+      );
 
       await waitFor(() => expect(executeAsync).toHaveBeenCalledTimes(1));
       expect(executeAsync.mock.calls[0]?.[0].reservation).toMatchObject({
@@ -609,7 +623,7 @@ describe("MeetingRoomReservationForm", () => {
   test("stays on the space with a typed start time before the earliest start", async () => {
     const originalNow = Temporal.Now.instant;
     Temporal.Now.instant = () => Temporal.Instant.from("2099-07-30T12:37:00Z");
-    globalThis.fetch = availabilityFetch(availabilityResponse) as typeof fetch;
+    stubAvailabilityFetch(availabilityResponse);
 
     try {
       const view = renderForm({
@@ -623,11 +637,12 @@ describe("MeetingRoomReservationForm", () => {
         },
       });
       const continueButton = view.getByRole("button", { name: "Continue" });
-      const timeField = view.getByLabelText(
-        /^Meeting room start time/
-      ) as HTMLInputElement;
+      const timeField = elementOf(
+        view.getByLabelText(/^Meeting room start time/),
+        HTMLInputElement
+      );
       const submittedStart = () =>
-        new FormData(continueButton.form as HTMLFormElement).getAll(
+        new FormData(elementOf(continueButton.form, HTMLFormElement)).getAll(
           "startDateTime"
         );
       await waitFor(
@@ -671,9 +686,7 @@ describe("MeetingRoomReservationForm", () => {
     const originalNow = Temporal.Now.instant;
     let now = Temporal.Instant.from("2099-07-30T12:37:00Z");
     Temporal.Now.instant = () => now;
-    globalThis.fetch = mock(() =>
-      Promise.resolve(jsonResponse(availabilityResponse))
-    ) as typeof fetch;
+    stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
     const restoredWholeDayReservation =
       normalizedMeetingRoomReservationOrderSchema.make({
         ...initialReservation,
@@ -711,9 +724,7 @@ describe("MeetingRoomReservationForm", () => {
   test("keeps the selected quote on a restored hourly slot that has started", async () => {
     const originalNow = Temporal.Now.instant;
     Temporal.Now.instant = () => Temporal.Instant.from("2099-07-30T13:01:00Z");
-    globalThis.fetch = mock(() =>
-      Promise.resolve(jsonResponse(availabilityResponse))
-    ) as typeof fetch;
+    stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
     const restoredHourlyReservation =
       normalizedMeetingRoomReservationOrderSchema.make({
         ...initialReservation,
@@ -762,8 +773,7 @@ describe("MeetingRoomReservationForm", () => {
   });
 
   test("collapses rapid interval edits into one availability request", async () => {
-    const fetchCalls = availabilityFetch(availabilityResponse);
-    globalThis.fetch = fetchCalls as typeof fetch;
+    const fetchCalls = stubAvailabilityFetch(availabilityResponse);
 
     const view = renderForm();
 
@@ -772,15 +782,19 @@ describe("MeetingRoomReservationForm", () => {
     );
 
     fireEvent.input(
-      view.container.querySelector(
-        'input[aria-label^="Meeting room start time"]'
-      ) as HTMLInputElement,
+      elementOf(
+        view.container.querySelector(
+          'input[aria-label^="Meeting room start time"]'
+        ),
+        HTMLInputElement
+      ),
       { target: { value: "11:00" } }
     );
     fireEvent.click(
-      view.container.querySelector(
-        'input[type="radio"][value="hour:4"]'
-      ) as HTMLInputElement
+      elementOf(
+        view.container.querySelector('input[type="radio"][value="hour:4"]'),
+        HTMLInputElement
+      )
     );
 
     await waitFor(
@@ -826,9 +840,7 @@ describe("MeetingRoomReservationForm", () => {
         }))
       )
     );
-    globalThis.fetch = mock(() =>
-      Promise.resolve(jsonResponse(availabilityResponse))
-    ) as typeof fetch;
+    stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
 
     const view = renderForm();
 
@@ -848,14 +860,14 @@ describe("MeetingRoomReservationForm", () => {
   });
 
   test("disables checkout when Dotypos reports the interval unavailable", async () => {
-    globalThis.fetch = mock(() =>
+    stubFetch(() =>
       Promise.resolve(
         jsonResponse({
           ...availabilityResponse,
           meetingRoomUnavailable: true,
         })
       )
-    ) as typeof fetch;
+    );
 
     const view = renderForm();
 
@@ -869,14 +881,15 @@ describe("MeetingRoomReservationForm", () => {
 
   describe("free start times", () => {
     test("lists the day's free starts as a labelled group that sets the start time", async () => {
-      const fetchCalls = availabilityFetch(availabilityResponse);
-      globalThis.fetch = fetchCalls as typeof fetch;
+      const fetchCalls = stubAvailabilityFetch(availabilityResponse);
 
       const view = renderForm();
       const group = await view.findByRole("radiogroup", {
         name: "Free start times",
       });
-      const options = within(group).getAllByRole("radio") as HTMLInputElement[];
+      const options = within(group)
+        .getAllByRole("radio")
+        .map((element) => elementOf(element, HTMLInputElement));
 
       expect(options.map(({ value }) => value)).toEqual([
         "2099-07-30T10:00",
@@ -896,13 +909,16 @@ describe("MeetingRoomReservationForm", () => {
         )
       ).toBe(true);
 
-      fireEvent.click(options[1] as HTMLInputElement);
+      fireEvent.click(elementOf(options[1], HTMLInputElement));
 
-      const timeInput = view.container.querySelector(
-        'input[aria-label^="Meeting room start time"]'
-      ) as HTMLInputElement;
+      const timeInput = elementOf(
+        view.container.querySelector(
+          'input[aria-label^="Meeting room start time"]'
+        ),
+        HTMLInputElement
+      );
       await waitFor(() => expect(timeInput.value).toBe("14:00"));
-      expect((options[1] as HTMLInputElement).checked).toBe(true);
+      expect(elementOf(options[1], HTMLInputElement).checked).toBe(true);
       await waitFor(() =>
         expect(
           getIntervalAvailabilityCalls(fetchCalls).some(([request]) =>
@@ -915,10 +931,10 @@ describe("MeetingRoomReservationForm", () => {
     });
 
     test("says when the day has no free start", async () => {
-      globalThis.fetch = availabilityFetch(availabilityResponse, {
+      stubAvailabilityFetch(availabilityResponse, {
         ...startTimesResponse,
         startTimes: [],
-      }) as typeof fetch;
+      });
 
       const view = renderForm();
 
@@ -933,17 +949,16 @@ describe("MeetingRoomReservationForm", () => {
     });
 
     test("lists no start times for a whole-day booking", async () => {
-      globalThis.fetch = availabilityFetch(
-        availabilityResponse
-      ) as typeof fetch;
+      stubAvailabilityFetch(availabilityResponse);
 
       const view = renderForm();
       await view.findByRole("radiogroup", { name: "Free start times" });
 
       fireEvent.click(
-        view.container.querySelector(
-          'input[type="radio"][value="day:1"]'
-        ) as HTMLInputElement
+        elementOf(
+          view.container.querySelector('input[type="radio"][value="day:1"]'),
+          HTMLInputElement
+        )
       );
 
       await waitFor(() =>
@@ -967,15 +982,16 @@ describe("MeetingRoomReservationForm", () => {
     };
     const selectStart = (view: ReturnType<typeof renderForm>, time: string) =>
       fireEvent.click(
-        view
-          .getByRole("radiogroup", { name: "Free start times" })
-          .querySelector(`input[value="2099-07-30T${time}"]`) as HTMLElement
+        elementOf(
+          view
+            .getByRole("radiogroup", { name: "Free start times" })
+            .querySelector(`input[value="2099-07-30T${time}"]`),
+          HTMLElement
+        )
       );
 
     test("starts unchecked, enables for a free setup time, and submits it", async () => {
-      globalThis.fetch = availabilityFetch(
-        availabilityResponse
-      ) as typeof fetch;
+      stubAvailabilityFetch(availabilityResponse);
 
       const view = renderForm();
       const checkbox = getEarlySetupCheckbox(view);
@@ -999,9 +1015,7 @@ describe("MeetingRoomReservationForm", () => {
     });
 
     test("turns off and explains itself when the room is booked just before the new start", async () => {
-      globalThis.fetch = availabilityFetch(
-        availabilityResponse
-      ) as typeof fetch;
+      stubAvailabilityFetch(availabilityResponse);
 
       const view = renderForm();
       const checkbox = getEarlySetupCheckbox(view);
@@ -1041,7 +1055,7 @@ describe("MeetingRoomReservationForm", () => {
         ],
         unavailableStartTimes: [],
       };
-      const fetchCalls = mock((request: RequestInfo | URL) => {
+      const fetchCalls = stubFetch((request: RequestInfo | URL) => {
         if (!isStartTimesRequest(request)) {
           return Promise.resolve(jsonResponse(availabilityResponse));
         }
@@ -1053,7 +1067,6 @@ describe("MeetingRoomReservationForm", () => {
           )
         );
       });
-      globalThis.fetch = fetchCalls as typeof fetch;
 
       const view = renderForm();
       const checkbox = getEarlySetupCheckbox(view);
@@ -1062,9 +1075,10 @@ describe("MeetingRoomReservationForm", () => {
       await waitFor(() => expect(isChecked(checkbox)).toBe(true));
 
       fireEvent.click(
-        view.container.querySelector(
-          'input[type="radio"][value="day:1"]'
-        ) as HTMLInputElement
+        elementOf(
+          view.container.querySelector('input[type="radio"][value="day:1"]'),
+          HTMLInputElement
+        )
       );
 
       await waitFor(() => {
@@ -1082,11 +1096,11 @@ describe("MeetingRoomReservationForm", () => {
     });
 
     test("keeps a restored choice while the free starts load", async () => {
-      globalThis.fetch = mock((request: RequestInfo | URL) =>
+      stubFetch((request: RequestInfo | URL) =>
         isStartTimesRequest(request)
           ? new Promise<Response>(() => undefined)
           : Promise.resolve(jsonResponse(availabilityResponse))
-      ) as typeof fetch;
+      );
 
       const view = renderForm({
         initialReservation: { ...initialReservation, earlySetup: true },
@@ -1132,11 +1146,11 @@ describe("MeetingRoomReservationForm", () => {
         { updatedAt: 0 }
       );
       const recheck = Promise.withResolvers<Response>();
-      globalThis.fetch = mock((request: RequestInfo | URL) =>
+      stubFetch((request: RequestInfo | URL) =>
         isStartTimesRequest(request)
           ? recheck.promise
           : Promise.resolve(jsonResponse(availabilityResponse))
-      ) as typeof fetch;
+      );
 
       const view = renderForm(
         { initialReservation: { ...initialReservation, earlySetup: true } },
@@ -1155,13 +1169,13 @@ describe("MeetingRoomReservationForm", () => {
     });
 
     test("explains a whole day's setup time it couldn't check", async () => {
-      globalThis.fetch = mock((request: RequestInfo | URL) =>
+      stubFetch((request: RequestInfo | URL) =>
         Promise.resolve(
           isStartTimesRequest(request)
             ? new Response(null, { status: 503 })
             : jsonResponse(availabilityResponse)
         )
-      ) as typeof fetch;
+      );
 
       const view = renderForm({
         initialReservation: {

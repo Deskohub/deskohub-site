@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import type { Table } from "@deskohub/dotypos/generated";
 import {
   registerWorkspaceComponentTestEnv,
@@ -120,8 +121,9 @@ describe("DotyposTablesPreview", () => {
   test("shows no facts when Dotypos returns no tables", () => {
     const view = render(<DotyposTablesPreview tables={[]} />);
     const aside = view.container.querySelector("aside");
+    assert(aside instanceof HTMLElement);
 
-    expect(aside?.querySelector("dl")).toBeNull();
-    expect(within(aside as HTMLElement).getByRole("paragraph")).toBeDefined();
+    expect(aside.querySelector("dl")).toBeNull();
+    expect(within(aside).getByRole("paragraph")).toBeDefined();
   });
 });

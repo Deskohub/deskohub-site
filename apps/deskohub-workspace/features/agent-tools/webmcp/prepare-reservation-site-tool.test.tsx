@@ -18,7 +18,7 @@ import {
   render,
   waitFor,
 } from "@testing-library/react";
-import { Effect, type Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { StrictMode, useEffect, useState } from "react";
 import {
   type Resolver,
@@ -31,7 +31,10 @@ import { buildOfficeReservationQuote } from "@/features/checkout/reservation-quo
 import { getReservationQuoteDiscount } from "@/features/checkout/reservation-quote-schema";
 import { m } from "@/features/i18n";
 import { type OrderId, orderIdSchema } from "@/features/order";
-import type { PreparePayStateInput } from "@/features/reservation/actions/prepare-pay-state.schema";
+import {
+  type PreparePayStateInput,
+  preparePayStateInputSchema,
+} from "@/features/reservation/actions/prepare-pay-state.schema";
 import type { CheckoutSubmission } from "@/features/reservation/components/use-reservation-checkout";
 import { getOfficeAdvertisedPriceRequest } from "@/features/reservation/office-advertised-price";
 import { officeReservationDefaultValues } from "@/features/reservation/office-reservation";
@@ -40,6 +43,7 @@ import type {
   ReservationCheckoutCustomerForm,
   ReservationExistingCustomerForm,
 } from "@/features/reservation/reservation-existing-customer";
+import { reservationOrderIssuanceSchema } from "@/features/reservation/reservation-order";
 import { getOfficeAvailabilityQuery } from "@/features/reservation/workspace-availability";
 import { moneyWithValue } from "@/shared/money/money";
 import {
@@ -167,6 +171,11 @@ function useHarnessAvailability(
 
 type HarnessKind = "cowork" | "meeting-room";
 
+/** The order the harness form issues for its selection. */
+const decodeHarnessOrder = Schema.decodeUnknownSync(
+  reservationOrderIssuanceSchema("CZ")
+);
+
 // The mounted harness form, for a test acting as the customer.
 let harnessForm: UseFormReturn<HarnessValues> | undefined;
 
@@ -265,8 +274,31 @@ function Harness({
         marketingConsent: { name: "marketingConsent", value: true },
       }}
       form={form}
-      getReservation={({ date: reservationDate, email, name, phone }) =>
-        ({ kind, reservationDate, email, name, phone }) as never
+      getReservation={({ billing, date, email, name, phone }) =>
+        decodeHarnessOrder(
+          kind === "cowork"
+            ? {
+                kind,
+                entryTier: "open-space",
+                coffee: false,
+                date,
+                billing,
+                email,
+                name,
+                phone,
+              }
+            : {
+                kind,
+                duration: { unit: "hour", amount: 1 },
+                reservationDate: date,
+                startsAt: `${date}T08:00:00Z`,
+                endsAt: `${date}T09:00:00Z`,
+                billing,
+                email,
+                name,
+                phone,
+              }
+        )
       }
       locale="en-US"
       selectionSummary={{
@@ -292,10 +324,13 @@ function Harness({
 function ReservationPages(props: Parameters<typeof Harness>[0]) {
   const [kind, setKind] = useState<HarnessKind>("cowork");
   useEffect(() => {
-    workspaceRouterPush.mockImplementation(((path: string) => {
+    workspaceRouterPush.mockImplementation((path: string) => {
       const opened = path.match(/\/reservation\/(cowork|meeting-room)\b/)?.[1];
-      if (opened) setTimeout(() => act(() => setKind(opened as HarnessKind)));
-    }) as never);
+      if (opened === "cowork" || opened === "meeting-room") {
+        setTimeout(() => act(() => setKind(opened)));
+      }
+      return undefined;
+    });
   }, []);
   return <Harness key={kind} {...props} kind={kind} />;
 }
@@ -339,7 +374,7 @@ const quoteFor = (family: string, date: string) => ({
 let modelContext: ReturnType<typeof installFakeModelContext>;
 let endpoint: ReturnType<typeof mockAgentToolEndpoint>;
 type PrepareActionResult = {
-  readonly data?:
+  readonly data:
     | {
         readonly status: "ready";
         readonly redirectUrl: string;
@@ -406,24 +441,19 @@ describe("prepare_reservation site tool", () => {
       })
     );
     // Like next-safe-action, a settled call runs the hook's callbacks first.
-    workspaceUseAction.mockImplementation(((
-      action: typeof preparePayState,
-      options: {
-        readonly onSuccess?: (
-          result: PrepareActionResult & { readonly input: PreparePayStateInput }
-        ) => void;
-      }
-    ) => ({
-      executeAsync: async (input: PreparePayStateInput) => {
+    workspaceUseAction.mockImplementation((action, options) => ({
+      executeAsync: async (input) => {
+        // The hook mock types its input as unknown; the form sends this.
+        Schema.asserts(preparePayStateInputSchema, input);
         const result = await executeAsync(input);
-        if (action === preparePayState && result.data) {
-          act(() => options.onSuccess?.({ ...result, input }));
+        if (action === preparePayState) {
+          act(() => options?.onSuccess?.({ ...result, input }));
         }
         return result;
       },
       isExecuting: false,
       result: {},
-    })) as never);
+    }));
   });
 
   afterEach(() => {
@@ -487,7 +517,7 @@ describe("prepare_reservation site tool", () => {
     expect(lastPrepareInput()).toMatchObject({
       advertisedPriceToken: "signed-price-2099-07-31",
       customer: "account",
-      reservation: { reservationDate: "2099-07-31" },
+      reservation: { kind: "cowork", date: "2099-07-31" },
     });
     expect(result).toEqual({
       status: "ready",
@@ -586,8 +616,11 @@ describe("prepare_reservation site tool", () => {
   });
 
   test("never reuses a cached checkout for a site tool's new selection", async () => {
-    workspaceUseAction.mockImplementation((() => ({
-      executeAsync,
+    workspaceUseAction.mockImplementation(() => ({
+      executeAsync: (input) => {
+        Schema.asserts(preparePayStateInputSchema, input);
+        return executeAsync(input);
+      },
       isExecuting: false,
       hasSucceeded: true,
       input: { reservation: { kind: "cowork", date: "2099-07-30" } },
@@ -598,7 +631,7 @@ describe("prepare_reservation site tool", () => {
           expiresAt: payExpiresAt,
         },
       },
-    })) as never);
+    }));
     await renderForm({ existingCustomer: accountCustomer() });
     const result = await runTool({ family: "cowork", date: "2099-07-31" });
     expect(result).toMatchObject({ error: { code: "checkout_failed" } });

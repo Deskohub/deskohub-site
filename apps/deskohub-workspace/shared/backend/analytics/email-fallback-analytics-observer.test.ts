@@ -20,7 +20,7 @@ const observeFallbacks = async (
   events: readonly Partial<EmailFallbackEvent>[]
 ) => {
   const recorder = recordServerAnalytics();
-  const warnings: unknown[][] = [];
+  const warnings: unknown[] = [];
   await Effect.runPromise(
     makeEmailFallbackAnalyticsObserver.pipe(
       Effect.flatMap((observer) =>
@@ -32,7 +32,7 @@ const observeFallbacks = async (
       Effect.provide(
         Logger.layer([
           Logger.make(({ logLevel, message }) => {
-            if (logLevel === "Warn") warnings.push(message as unknown[]);
+            if (logLevel === "Warn") warnings.push(message);
           }),
         ])
       )

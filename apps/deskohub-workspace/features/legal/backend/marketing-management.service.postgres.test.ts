@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import {
   type DotyposCustomerId,
@@ -14,6 +15,11 @@ import {
 } from "./marketing-management.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+
+const connectedTestDatabase = () => {
+  assert(testDatabase, "Expected the Postgres test database");
+  return testDatabase;
+};
 
 type StoredTokenRow = {
   readonly token_hash: string;
@@ -32,7 +38,9 @@ const hashToken = (token: string): string =>
   createHash("sha256").update(token, "utf8").digest("hex");
 
 const makeServiceLayer = () =>
-  MarketingManagementService.Default.pipe(Layer.provide(testDatabase!.layer));
+  MarketingManagementService.Default.pipe(
+    Layer.provide(connectedTestDatabase().layer)
+  );
 
 const runService = <A>(
   body: (
@@ -59,7 +67,7 @@ const runServiceResult = <A>(
   );
 
 const readRows = async (customerId: DotyposCustomerId) => {
-  const result = await testDatabase!.pool.query<StoredTokenRow>(
+  const result = await connectedTestDatabase().pool.query<StoredTokenRow>(
     `select token_hash, dotypos_customer_id, purpose, expires_at, revoked_at
        from customer_marketing_management_tokens
       where dotypos_customer_id = $1
@@ -75,7 +83,7 @@ const insertToken = async (input: {
   readonly purpose: "link" | "session";
   readonly expiresAt: Temporal.Instant;
 }) => {
-  await testDatabase!.pool.query(
+  await connectedTestDatabase().pool.query(
     `insert into customer_marketing_management_tokens
        (token_hash, dotypos_customer_id, purpose, expires_at)
      values ($1, $2, $3, $4)`,
@@ -89,7 +97,7 @@ const insertToken = async (input: {
 };
 
 const cleanupCustomer = async (customerId: DotyposCustomerId) => {
-  await testDatabase!.pool.query(
+  await connectedTestDatabase().pool.query(
     `delete from customer_marketing_management_tokens where dotypos_customer_id = $1`,
     [customerId]
   );
@@ -374,7 +382,7 @@ describe.skipIf(!testDatabase)(
         let createdFunction = false;
         let createdTrigger = false;
         try {
-          await testDatabase!.pool.query(
+          await connectedTestDatabase().pool.query(
             `create function ${functionName}() returns trigger
              language plpgsql as $$
              begin
@@ -383,7 +391,7 @@ describe.skipIf(!testDatabase)(
              $$`
           );
           createdFunction = true;
-          await testDatabase!.pool.query(
+          await connectedTestDatabase().pool.query(
             `create trigger ${triggerName}
              before insert on customer_marketing_management_tokens
              for each row execute function ${functionName}()`
@@ -406,12 +414,14 @@ describe.skipIf(!testDatabase)(
           expect(rows[0]?.revoked_at).toBeNull();
         } finally {
           if (createdTrigger) {
-            await testDatabase!.pool.query(
+            await connectedTestDatabase().pool.query(
               `drop trigger ${triggerName} on customer_marketing_management_tokens`
             );
           }
           if (createdFunction) {
-            await testDatabase!.pool.query(`drop function ${functionName}()`);
+            await connectedTestDatabase().pool.query(
+              `drop function ${functionName}()`
+            );
           }
         }
       });

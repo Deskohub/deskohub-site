@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import * as Net from "node:net";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { sql } from "drizzle-orm";
@@ -109,7 +110,9 @@ describe.skipIf(!suiteDatabase)(
             "select pg_try_advisory_xact_lock(hashtext($1), hashtext($2)) as free",
             [...lockKey(name)]
           );
-          return rows[0]!.free;
+          const [probe] = rows;
+          assert(probe, "pg_try_advisory_xact_lock returns one row");
+          return probe.free;
         } finally {
           other.release();
         }
@@ -393,18 +396,18 @@ describe.skipIf(!suiteDatabase)(
       // ROLLBACK, or when the test opens it.
       const gate = Latch.makeUnsafe(false);
       const sent: Array<unknown> = [];
-      const server = new URL(pool.options.connectionString!);
+      const { connectionString } = pool.options;
+      assert(connectionString, "the test pool has a connection string");
+      const server = new URL(connectionString);
       // The driver writes each statement as one frame to its socket.
       const gatedSocket = () => {
         const socket = Net.connect({
           host: server.hostname,
           port: Number(server.port),
         });
-        const write = socket.write.bind(socket) as (
-          ...args: Array<unknown>
-        ) => boolean;
+        const write = socket.write.bind(socket);
         Object.assign(socket, {
-          write: (...args: Array<unknown>) => {
+          write: (...args: Parameters<typeof write>) => {
             const [chunk] = args;
             const text =
               chunk instanceof Uint8Array
@@ -482,10 +485,10 @@ describe.skipIf(!suiteDatabase)(
           "Two statements overlapped"
         );
         expect(lateFibers).toHaveLength(1);
+        const [lateFiber] = lateFibers;
+        assert(lateFiber);
         expect(
-          Exit.isSuccess(
-            await Effect.runPromiseExit(Fiber.join(lateFibers[0]!))
-          )
+          Exit.isSuccess(await Effect.runPromiseExit(Fiber.join(lateFiber)))
         ).toBe(true);
         expect(await labels(prefix)).toEqual([]);
 
@@ -566,8 +569,10 @@ describe.skipIf(!suiteDatabase)(
     test("dies when another client's transaction opens inside, and that client never joins", async () => {
       const prefix = `foreign-${crypto.randomUUID()}`;
       // A client of its own pool: Effect SQL joins statements of one client.
+      const { connectionString } = pool.options;
+      assert(connectionString, "the test pool has a connection string");
       const otherPool = await openDatabasePool({
-        connectionString: pool.options.connectionString!,
+        connectionString,
         maxConnections: 2,
       });
       const otherDb = await Effect.runPromise(makeDatabaseClient(otherPool));
