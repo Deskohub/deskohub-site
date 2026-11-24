@@ -175,7 +175,8 @@ const captureLogs = (logs: CapturedLog[]) =>
     });
   });
 
-const logText = <Value>(value: Value) => JSON.stringify(value);
+const logText = (logged: LogAnnotations | readonly CapturedLog[]) =>
+  JSON.stringify(logged);
 
 const messageParts = (
   message: CapturedLog["message"]
