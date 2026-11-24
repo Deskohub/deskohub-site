@@ -75,6 +75,9 @@ type SavedIdentity = {
   readonly lastName: string | null;
 };
 
+/** The profile save contract a submission uses. */
+type ProfileSaveAction = "completion" | "update";
+
 export function ProfileForm({
   avatarPresentation,
   email,
@@ -167,9 +170,14 @@ export function ProfileForm({
     }
   };
 
-  // Each save contract keeps its own typed action, and the form reports the
-  // one it submitted last: a completion's result stays shown after later
-  // saves switch to the update contract.
+  // Each save contract keeps its own typed action. The latest save drives the
+  // pending state, and while it runs the previous save's feedback stays shown,
+  // even when later saves switch from the completion to the update contract.
+  const initialAction: ProfileSaveAction = isInitialCompletion
+    ? "completion"
+    : "update";
+  const [submittedAction, setSubmittedAction] = useState(initialAction);
+  const [previousAction, setPreviousAction] = useState(initialAction);
   const completion = useWorkspaceAction(completeCustomerProfile, {
     onSuccess: ({ data }) => {
       if (data?.status === "referral-code-unavailable") {
@@ -182,11 +190,12 @@ export function ProfileForm({
   const update = useWorkspaceAction(updateCustomerProfile, {
     onSuccess: handleSaved,
   });
-  const [submittedAction, setSubmittedAction] = useState<
-    "completion" | "update"
-  >("completion");
-  const { hasErrored, isExecuting, result } =
-    submittedAction === "completion" ? completion : update;
+  const saveOf = (action: ProfileSaveAction) =>
+    action === "completion" ? completion : update;
+  const latestSave = saveOf(submittedAction);
+  const { isExecuting } = latestSave;
+  const { result } = isExecuting ? saveOf(previousAction) : latestSave;
+  const hasErrored = !isExecuting && latestSave.hasErrored;
 
   useUnsavedChanges({
     enabled: !isRefreshPending,
@@ -224,6 +233,7 @@ export function ProfileForm({
     if (isExecuting || submittingRef.current) return;
     submittedValuesRef.current = form.getValues();
     submittingRef.current = true;
+    setPreviousAction(submittedAction);
     if (isInitialCompletion) {
       setSubmittedAction("completion");
       completion.execute(input);

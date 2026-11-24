@@ -703,12 +703,27 @@ describe("ProfileForm", () => {
         "You have unsaved profile changes. Leave this page?"
       );
 
+      let resolveUpdate!: (result: ActionResult) => void;
+      const pendingUpdate = new Promise<ActionResult>((resolve) => {
+        resolveUpdate = resolve;
+      });
+      updateCustomerProfile.mockImplementationOnce(() => pendingUpdate);
       await act(async () => {
         fireEvent.submit(form);
       });
 
       expect(completeCustomerProfile).toHaveBeenCalledTimes(1);
       expect(updateCustomerProfile).toHaveBeenCalledTimes(1);
+      // The completion stays reported until the update settles.
+      expect(
+        view.container.querySelector("#account-profile-feedback p")
+      ).not.toBeNull();
+
+      await act(async () => {
+        resolveUpdate({ data: { status: "updated" } });
+        await pendingUpdate;
+      });
+
       expect(workspaceRouterRefresh).toHaveBeenCalledTimes(1);
     } finally {
       window.confirm = originalConfirm;
