@@ -3,31 +3,104 @@ import { Schema } from "effect";
 
 /**
  * Parses a tracked GitHub Actions workflow into typed objects so tests can
- * assert on workflow semantics (steps, run commands, permissions, env)
+ * assert on workflow structure (jobs, steps, scripts, needs, permissions)
  * instead of pinned YAML substrings.
+ */
+
+/** A step `env` or `with` value; YAML may write it unquoted (`fetch-depth: 0`). */
+export type WorkflowStepValue = string | number | boolean;
+
+export interface WorkflowStep {
+  readonly name?: string;
+  readonly run?: string;
+  readonly uses?: string;
+  readonly id?: string;
+  readonly if?: string;
+  readonly "working-directory"?: string;
+  readonly "continue-on-error"?: boolean;
+  readonly "timeout-minutes"?: number;
+  readonly env?: Readonly<Record<string, WorkflowStepValue>>;
+  readonly with?: Readonly<Record<string, WorkflowStepValue>>;
+  readonly outputs?: Record<string, string>;
+}
+
+/** Cache access a job's token gets (`cache-mode`). */
+type WorkflowCacheMode = "none" | "read" | "write" | "write-only";
+
+interface WorkflowJob {
+  readonly name?: string;
+  readonly if?: string;
+  readonly needs?: string | readonly string[];
+  readonly concurrency?: {
+    readonly group: string;
+    readonly "cancel-in-progress"?: boolean | string;
+  };
+  readonly outputs?: Record<string, string>;
+  readonly "cache-mode"?: WorkflowCacheMode;
+  readonly "runs-on"?: string;
+  readonly steps?: readonly WorkflowStep[];
+  /** Minutes, or an expression such as `${{ inputs.mode == ... }}`. */
+  readonly "timeout-minutes"?: number | string;
+  readonly permissions?: Record<string, string>;
+  readonly env?: Record<string, string>;
+  readonly services?: Readonly<Record<string, WorkflowService>>;
+}
+
+interface WorkflowService {
+  readonly image: string;
+  readonly env?: Record<string, string>;
+  readonly ports?: readonly string[];
+  readonly options?: string;
+}
+
+interface WorkflowDispatchInput {
+  readonly default?: boolean | string;
+  readonly description?: string;
+  readonly required?: boolean;
+  readonly type?: string;
+}
+
+export interface WorkflowDoc {
+  readonly "cache-mode"?: WorkflowCacheMode;
+  readonly concurrency?: WorkflowJob["concurrency"];
+  readonly jobs: Readonly<Record<string, WorkflowJob>>;
+  readonly on?: Readonly<{
+    readonly schedule?: readonly { readonly cron: string }[];
+    readonly workflow_dispatch?: null | {
+      readonly inputs?: Readonly<Record<string, WorkflowDispatchInput>>;
+    };
+  }>;
+  readonly permissions?: Record<string, string>;
+}
+
+/** A tracked composite action (`.github/actions/<name>/action.yml`). */
+export interface CompositeActionDoc {
+  readonly inputs?: Readonly<
+    Record<string, { readonly required?: boolean; readonly default?: string }>
+  >;
+  readonly outputs?: Readonly<Record<string, { readonly value: string }>>;
+  readonly runs: {
+    readonly using: string;
+    readonly steps: readonly WorkflowStep[];
+  };
+}
+
+/*
+ * Shape checks for the parsed YAML. They only validate: a document that
+ * passes is returned as parsed, keys these contracts leave undeclared
+ * included, so tests still read the whole document. Each schema shares its
+ * interface's name; the compiler checks that what a schema validates fits
+ * the interface the parser returns.
  */
 
 const StringRecord = Schema.Record(Schema.String, Schema.String);
 
-/** Step `env` and `with` values YAML may write unquoted (`fetch-depth: 0`). */
 const StepValueRecord = Schema.Record(
   Schema.String,
   Schema.Union([Schema.String, Schema.Number, Schema.Boolean])
 );
 
-/**
- * A YAML mapping with the keys these contracts read declared and every other
- * key kept as is, so tests still see the whole document (`strategy`, other
- * triggers) instead of a decode that silently drops it.
- */
-const OpenMapping = <const Fields extends Schema.Struct.Fields>(
-  fields: Fields
-) =>
-  Schema.StructWithRest(Schema.Struct(fields), [
-    Schema.Record(Schema.String, Schema.Unknown),
-  ]);
-
-const WorkflowStep = OpenMapping({
+const WorkflowStep = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   run: Schema.optionalKey(Schema.String),
   uses: Schema.optionalKey(Schema.String),
@@ -40,9 +113,7 @@ const WorkflowStep = OpenMapping({
   with: Schema.optionalKey(StepValueRecord),
   outputs: Schema.optionalKey(StringRecord),
 });
-export type WorkflowStep = typeof WorkflowStep.Type;
 
-/** Cache access a job's token gets (`cache-mode`). */
 const WorkflowCacheMode = Schema.Literals([
   "none",
   "read",
@@ -57,14 +128,7 @@ const WorkflowConcurrency = Schema.Struct({
   ),
 });
 
-const WorkflowService = Schema.Struct({
-  image: Schema.String,
-  env: Schema.optionalKey(StringRecord),
-  ports: Schema.optionalKey(Schema.Array(Schema.String)),
-  options: Schema.optionalKey(Schema.String),
-});
-
-const WorkflowJob = OpenMapping({
+const WorkflowJob = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   if: Schema.optionalKey(Schema.String),
   needs: Schema.optionalKey(
@@ -75,28 +139,30 @@ const WorkflowJob = OpenMapping({
   "cache-mode": Schema.optionalKey(WorkflowCacheMode),
   "runs-on": Schema.optionalKey(Schema.String),
   steps: Schema.optionalKey(Schema.Array(WorkflowStep)),
-  /** Minutes, or an expression such as `${{ inputs.mode == ... }}`. */
   "timeout-minutes": Schema.optionalKey(
     Schema.Union([Schema.Number, Schema.String])
   ),
   permissions: Schema.optionalKey(StringRecord),
   env: Schema.optionalKey(StringRecord),
-  services: Schema.optionalKey(Schema.Record(Schema.String, WorkflowService)),
+  services: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        image: Schema.String,
+        env: Schema.optionalKey(StringRecord),
+        ports: Schema.optionalKey(Schema.Array(Schema.String)),
+        options: Schema.optionalKey(Schema.String),
+      })
+    )
+  ),
 });
 
-const WorkflowDispatchInput = Schema.Struct({
-  default: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.String])),
-  description: Schema.optionalKey(Schema.String),
-  required: Schema.optionalKey(Schema.Boolean),
-  type: Schema.optionalKey(Schema.String),
-});
-
-const WorkflowDoc = OpenMapping({
+const WorkflowDoc = Schema.Struct({
   "cache-mode": Schema.optionalKey(WorkflowCacheMode),
   concurrency: Schema.optionalKey(WorkflowConcurrency),
   jobs: Schema.Record(Schema.String, WorkflowJob),
   on: Schema.optionalKey(
-    OpenMapping({
+    Schema.Struct({
       schedule: Schema.optionalKey(
         Schema.Array(Schema.Struct({ cron: Schema.String }))
       ),
@@ -104,7 +170,17 @@ const WorkflowDoc = OpenMapping({
         Schema.NullOr(
           Schema.Struct({
             inputs: Schema.optionalKey(
-              Schema.Record(Schema.String, WorkflowDispatchInput)
+              Schema.Record(
+                Schema.String,
+                Schema.Struct({
+                  default: Schema.optionalKey(
+                    Schema.Union([Schema.Boolean, Schema.String])
+                  ),
+                  description: Schema.optionalKey(Schema.String),
+                  required: Schema.optionalKey(Schema.Boolean),
+                  type: Schema.optionalKey(Schema.String),
+                })
+              )
             ),
           })
         )
@@ -113,15 +189,8 @@ const WorkflowDoc = OpenMapping({
   ),
   permissions: Schema.optionalKey(StringRecord),
 });
-export type WorkflowDoc = typeof WorkflowDoc.Type;
 
-const decodeWorkflow = Schema.decodeUnknownSync(WorkflowDoc);
-
-export const parseWorkflow = (path: string): WorkflowDoc =>
-  decodeWorkflow(Bun.YAML.parse(readFileSync(path, "utf8")));
-
-/** A tracked composite action (`.github/actions/<name>/action.yml`). */
-const CompositeActionDoc = OpenMapping({
+const CompositeActionDoc = Schema.Struct({
   inputs: Schema.optionalKey(
     Schema.Record(
       Schema.String,
@@ -134,17 +203,26 @@ const CompositeActionDoc = OpenMapping({
   outputs: Schema.optionalKey(
     Schema.Record(Schema.String, Schema.Struct({ value: Schema.String }))
   ),
-  runs: OpenMapping({
+  runs: Schema.Struct({
     using: Schema.String,
     steps: Schema.Array(WorkflowStep),
   }),
 });
-export type CompositeActionDoc = typeof CompositeActionDoc.Type;
 
-const decodeCompositeAction = Schema.decodeUnknownSync(CompositeActionDoc);
+const readYaml = (path: string): unknown =>
+  Bun.YAML.parse(readFileSync(path, "utf8"));
 
-export const parseCompositeAction = (path: string): CompositeActionDoc =>
-  decodeCompositeAction(Bun.YAML.parse(readFileSync(path, "utf8")));
+export const parseWorkflow = (path: string): WorkflowDoc => {
+  const document = readYaml(path);
+  Schema.asserts(WorkflowDoc, document);
+  return document;
+};
+
+export const parseCompositeAction = (path: string): CompositeActionDoc => {
+  const document = readYaml(path);
+  Schema.asserts(CompositeActionDoc, document);
+  return document;
+};
 
 export const workflowJobs = (doc: WorkflowDoc): readonly string[] =>
   Object.keys(doc.jobs);
