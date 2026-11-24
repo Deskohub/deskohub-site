@@ -393,6 +393,18 @@ export type OutputAdapters<Ops extends Operations, Services> = {
   ) => Effect.Effect<OperationOutput<Ops[Name]>, never, Services>;
 };
 
+/** No operation's output adapted. */
+type NoOutputs = Record<never, never>;
+
+/** The services `Outputs`' adapters require. */
+type OutputServices<Outputs> = {
+  readonly [Name in keyof Outputs]: Outputs[Name] extends (
+    output: never
+  ) => Effect.Effect<infer _Output, infer _Error, infer Services>
+    ? Services
+    : never;
+}[keyof Outputs];
+
 /**
  * What serving `Endpoint` with a handler requiring `R1` requires, as
  * `HttpApiBuilder`'s `handleAll` adds it: its middleware and their
@@ -460,17 +472,34 @@ const operationBinding = Symbol.for(
   "@deskohub/workspace-admin-api/OperationBinding"
 );
 
-/** The group serving `Ops`, its operations, and its server. */
+const operationServer = Symbol.for(
+  "@deskohub/workspace-admin-api/OperationServer"
+);
+
+/** The operations a group serves, and the group serving them. */
 export interface OperationBinding<
-  Group extends HttpApiGroup.Constraint,
-  Ops extends Operations,
+  Ops extends Operations = Operations,
+  Group extends HttpApiGroup.Constraint = HttpApiGroup.Constraint,
 > {
   readonly [operationBinding]: {
     readonly group: Group;
     readonly operations: Ops;
-    readonly serve: OperationGroupServer<Group, Ops>;
   };
 }
+
+/** The server of a group bound to its operations. */
+export interface OperationServer<
+  Group extends HttpApiGroup.Constraint,
+  Ops extends Operations,
+> {
+  readonly [operationServer]: OperationGroupServer<Group, Ops>;
+}
+
+type OperationsOf<Group extends OperationBinding> =
+  Group[typeof operationBinding]["operations"];
+
+type BoundGroupOf<Group extends OperationBinding> =
+  Group[typeof operationBinding]["group"];
 
 /**
  * `group`, whose endpoints each serve the operation of their name in
@@ -491,7 +520,7 @@ export const operationGroup = <
   group: Group,
   operations: Ops,
   serve: OperationGroupServer<Group, Ops>
-): Group & OperationBinding<Group, Ops> => {
+): Group & OperationBinding<Ops, Group> & OperationServer<Group, Ops> => {
   const { endpoints } = httpApiGroupOf(group);
   for (const [name, operation] of Object.entries(operations)) {
     if (operation.name !== name) {
@@ -506,16 +535,44 @@ export const operationGroup = <
       throw new Error(`${group.identifier}.${name} serves no operation.`);
     }
   }
-  const binding: OperationBinding<Group, Ops> = {
-    [operationBinding]: { group, operations, serve },
+  const binding: OperationBinding<Ops, Group> & OperationServer<Group, Ops> = {
+    [operationBinding]: { group, operations },
+    [operationServer]: serve,
   };
   return Object.assign(group, binding);
 };
 
 /**
+ * Whether `served` is `group` as an API serves it: under its identifier,
+ * with its endpoints, each by its method and path. An API composed with
+ * `addHttpApi` serves a copy of the group carrying the added API's
+ * annotations.
+ */
+const servesAs =
+  <Group extends HttpApiGroup.Constraint>(group: Group) =>
+  (served: HttpApiGroup.Constraint): served is Group => {
+    if (served.identifier !== group.identifier) {
+      return false;
+    }
+    const declared = Object.entries(httpApiGroupOf(group).endpoints);
+    const { endpoints } = httpApiGroupOf(served);
+    return (
+      declared.length === Object.keys(endpoints).length &&
+      declared.every(([name, endpoint]) => {
+        const servedEndpoint: HttpApiEndpoint.Top | undefined = endpoints[name];
+        return (
+          servedEndpoint?.method === endpoint.method &&
+          servedEndpoint.path === endpoint.path
+        );
+      })
+    );
+  };
+
+/**
  * The API serving `group` alone, as `api` declares it, for building the
- * group's handlers where its endpoints are known. Throws unless `api`
- * serves `group` itself.
+ * group's handlers where its endpoints are known: the group `api` serves
+ * under its identifier, with that group's annotations. Throws unless `api`
+ * serves `group`.
  */
 export const operationGroupApi = <
   ApiId extends string,
@@ -525,10 +582,16 @@ export const operationGroupApi = <
   api: HttpApi.HttpApi<ApiId, Groups>,
   group: Group
 ) => {
-  if (!Object.values(api.groups).some((served) => Object.is(served, group))) {
+  const groups: ReadonlyArray<HttpApiGroup.Constraint> = Object.values(
+    api.groups
+  ).filter(HttpApiGroup.isHttpApiGroup);
+  const served = groups.find(servesAs(group));
+  if (served === undefined) {
     throw new Error(`${api.identifier} doesn't serve ${group.identifier}.`);
   }
-  return HttpApi.make(api.identifier).add(group).annotateMerge(api.annotations);
+  return HttpApi.make(api.identifier)
+    .add(served)
+    .annotateMerge(api.annotations);
 };
 
 /** An operation's input fields by name, before its schema decodes them. */
@@ -620,11 +683,10 @@ const requestOf = (
  * sends.
  */
 export const operationRequest = <
-  Group extends HttpApiGroup.Constraint,
   Ops extends Operations,
   Name extends keyof Ops & string,
 >(
-  group: OperationBinding<Group, Ops>,
+  group: OperationBinding<Ops>,
   name: Name,
   input: OperationInput<Ops[Name]>
 ): OperationRequest => {
@@ -707,16 +769,31 @@ export const operationHandler =
 export const operationGroupHandlers = <
   ApiId extends string,
   Groups extends HttpApiGroup.Constraint,
-  Group extends HttpApiGroup.Constraint,
-  Ops extends Operations,
-  Failure extends HttpApiEndpoint.Errors<HttpApiGroup.Endpoints<Group>>,
+  Group extends Groups & OperationBinding,
+  Failure extends HttpApiEndpoint.Errors<
+    HttpApiGroup.Endpoints<BoundGroupOf<Group>>
+  >,
   E,
   R,
   Services,
-  AdapterServices = never,
+  Outputs extends OutputAdapters<
+    OperationsOf<Group>,
+    AdapterServices
+  > = NoOutputs,
+  AdapterServices = OutputServices<Outputs>,
 >(
   api: HttpApi.HttpApi<ApiId, Groups>,
-  group: OperationBinding<Group, Ops>,
-  invoker: Effect.Effect<OperationInvoke<Ops, Failure, Services>, E, R>,
-  outputs?: OutputAdapters<Ops, AdapterServices>
-) => group[operationBinding].serve(api, invoker, outputs);
+  group: Group & OperationServer<BoundGroupOf<Group>, OperationsOf<Group>>,
+  invoker: Effect.Effect<
+    OperationInvoke<OperationsOf<Group>, Failure, Services>,
+    E,
+    R
+  >,
+  outputs?: Outputs
+) => {
+  const server: OperationServer<
+    BoundGroupOf<Group>,
+    OperationsOf<Group>
+  > = group;
+  return server[operationServer](api, invoker, outputs);
+};

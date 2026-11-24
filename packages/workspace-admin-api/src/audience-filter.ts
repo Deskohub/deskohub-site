@@ -391,23 +391,24 @@ export const makeAudienceFilterSchemas = <
       .map(({ label }) => label.toLowerCase())
       .join(", ")}.`,
   });
-  // A condition's ids are branded strings, carried as is, so the trees'
-  // callers type them by their decoded shape on both sides.
-  return {
-    condition: Schema.toType(Schema.Union(members)),
-    filter: Schema.toType(filter),
-  };
+  return { condition: Schema.Union(members), filter };
 };
 
 const schemas = makeAudienceFilterSchemas(audienceAttributeCatalogue);
 
+// A catalogued condition's ids are branded strings, carried as is, so the
+// catalogue's trees are typed by their decoded shape on both sides.
+
 /** One condition on one catalogued customer attribute. */
-export const AudienceCondition: Schema.Codec<AudienceCondition> =
-  schemas.condition;
+export const AudienceCondition: Schema.Codec<AudienceCondition> = Schema.toType(
+  schemas.condition
+);
 
 /**
  * The filter tree a campaign audience selects its recipients with. Workspace
  * stores and evaluates this schema, and the administration API carries it, so
  * it has one definition.
  */
-export const AudienceFilter: Schema.Codec<AudienceFilter> = schemas.filter;
+export const AudienceFilter: Schema.Codec<AudienceFilter> = Schema.toType(
+  schemas.filter
+);

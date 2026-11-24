@@ -5,6 +5,7 @@ import {
   Effect,
   Layer,
   Option,
+  Predicate,
   Schema,
   SchemaGetter,
   Struct,
@@ -270,6 +271,25 @@ const echoInput = <Name extends keyof NoteOperations>(
     JSON.stringify(input)
   ).pipe(Effect.orDie);
 
+/** The administration middleware a notes server runs its requests through. */
+const administrationMiddleware = Layer.mergeAll(
+  Layer.succeed(AdministrationAuthentication, {
+    bearer: (httpEffect) =>
+      Effect.provideService(httpEffect, CurrentAdministrationCaller, {
+        actor: {
+          accountId: AdministrationAccountId.make("account-1"),
+          email: testEmailAddress("notes-administrator"),
+        },
+        channel: {
+          _tag: "CliSession",
+          sessionId: CliSessionId.make("01980000-0000-7000-8000-000000000000"),
+        },
+      }),
+  }),
+  Layer.succeed(AdministrationActionRecord, (httpEffect) => httpEffect),
+  Layer.succeed(CliClientCompatibility, (httpEffect) => httpEffect)
+);
+
 const server = HttpRouter.toWebHandler(
   HttpApiBuilder.layer(api).pipe(
     Layer.provide(
@@ -277,49 +297,28 @@ const server = HttpRouter.toWebHandler(
         listNotes: (received: string) => Effect.succeed(`adapted ${received}`),
       })
     ),
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.succeed(AdministrationAuthentication, {
-          bearer: (httpEffect) =>
-            Effect.provideService(httpEffect, CurrentAdministrationCaller, {
-              actor: {
-                accountId: AdministrationAccountId.make("account-1"),
-                email: testEmailAddress("notes-administrator"),
-              },
-              channel: {
-                _tag: "CliSession",
-                sessionId: CliSessionId.make(
-                  "01980000-0000-7000-8000-000000000000"
-                ),
-              },
-            }),
-        }),
-        Layer.succeed(AdministrationActionRecord, (httpEffect) => httpEffect),
-        Layer.succeed(CliClientCompatibility, (httpEffect) => httpEffect)
-      )
-    ),
+    Layer.provide(administrationMiddleware),
     Layer.provide(HttpServer.layerServices)
   ),
   { disableLogger: true }
 );
 afterAll(() => server.dispose());
 
-const notesClient = HttpApiClient.make(api, {
-  baseUrl: "https://workspace.deskohub.test",
-}).pipe(
-  Effect.map(({ notes }) => notes),
-  Effect.provideService(
-    HttpClient.HttpClient,
-    HttpClient.make((request) =>
-      HttpClientRequest.toWeb(request).pipe(
-        Effect.flatMap((webRequest) =>
-          Effect.promise(() => server.handler(webRequest))
-        ),
-        Effect.map((response) => HttpClientResponse.fromWeb(request, response)),
-        Effect.orDie
-      )
+/** An HTTP client sending each request to `handler`. */
+const httpClientOf = (handler: (request: Request) => Promise<Response>) =>
+  HttpClient.make((request) =>
+    HttpClientRequest.toWeb(request).pipe(
+      Effect.flatMap((webRequest) => Effect.promise(() => handler(webRequest))),
+      Effect.map((response) => HttpClientResponse.fromWeb(request, response)),
+      Effect.orDie
     )
-  )
+  );
+
+const baseUrl = "https://workspace.deskohub.test";
+
+const notesClient = HttpApiClient.make(api, { baseUrl }).pipe(
+  Effect.map(({ notes }) => notes),
+  Effect.provideService(HttpClient.HttpClient, httpClientOf(server.handler))
 );
 
 /** A client method, sent the request parts `operationRequest` builds. */
@@ -700,8 +699,101 @@ describe("operation endpoints", () => {
     expect(() =>
       operationGroup(getNoteOnly, noteOperations, getNoteServer)
     ).toThrow("getNoteOnly serves no endpoint for listNotes.");
+    // A caller the types don't check can still alias an operation.
+    expect(() =>
+      Reflect.apply(operationGroup, undefined, [
+        getNoteOnly,
+        { getNote: noteOperations.listNotes },
+        getNoteServer,
+      ])
+    ).toThrow("getNoteOnly.getNote names listNotes.");
+  });
+
+  test("a mutation's endpoint declares its behavior", () => {
+    // A caller the types don't check can still leave the behavior out.
+    const servesWithoutBehavior: unknown = Reflect.apply(
+      servesOperation,
+      undefined,
+      [noteOperations.editNote]
+    );
+    if (!Predicate.isFunction(servesWithoutBehavior)) {
+      throw new Error("servesOperation returns no function.");
+    }
+    const endpoint = HttpApiEndpoint.patch(
+      ...paramsBodyRequest(
+        noteOperations.editNote,
+        "/notes/:noteId",
+        ["noteId"],
+        noteErrors
+      )
+    );
+    expect(() =>
+      Reflect.apply(servesWithoutBehavior, undefined, [endpoint])
+    ).toThrow("editNote is a mutation without a behavior.");
+  });
+
+  test("a composed API serves a group under its identifier", async () => {
+    const combined = HttpApi.make("combined").addHttpApi(api);
+    const composed = HttpRouter.toWebHandler(
+      HttpApiBuilder.layer(combined).pipe(
+        Layer.provide(
+          operationGroupHandlers(combined, Notes, Effect.succeed(echoInput))
+        ),
+        Layer.provide(administrationMiddleware),
+        Layer.provide(HttpServer.layerServices)
+      ),
+      { disableLogger: true }
+    );
+    try {
+      const received = await HttpApiClient.make(combined, { baseUrl }).pipe(
+        Effect.flatMap(({ notes }) =>
+          sendersOf(notes).getNote.send(
+            operationRequest(Notes, "getNote", inputs.getNote)
+          )
+        ),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          httpClientOf(composed.handler)
+        ),
+        Effect.runPromise
+      );
+      expect(received).toBe(await call("getNote"));
+    } finally {
+      await composed.dispose();
+    }
+    expect(() => operationGroupApi(HttpApi.make("empty"), Notes)).toThrow(
+      `empty doesn't serve ${Notes.identifier}.`
+    );
+  });
+
+  test("the helpers take their base type arguments explicitly", () => {
+    expectTypeOf(
+      operationRequest<NoteOperations, "getNote">(
+        Notes,
+        "getNote",
+        inputs.getNote
+      )
+    ).toEqualTypeOf<OperationRequest>();
+    expectTypeOf(
+      operationGroupHandlers<
+        "notesApi",
+        typeof Notes,
+        typeof Notes,
+        never,
+        never,
+        never,
+        never
+      >(api, Notes, Effect.succeed(echoInput))
+    ).toEqualTypeOf(
+      operationGroupHandlers(api, Notes, Effect.succeed(echoInput))
+    );
   });
 });
+
+/** Stamps an adapted output, as an output adapter's service may. */
+class OutputStamp extends Context.Service<OutputStamp, string>()(
+  "@deskohub/workspace-admin-api/test/OutputStamp"
+) {}
 
 /** Encodes a count with a service, as an input schema may. */
 class CountEncoder extends Context.Service<CountEncoder, number>()(
@@ -779,6 +871,37 @@ describe("an operation whose input encodes with a service", () => {
     const required: HttpRouter.Request<
       "Requires",
       CountEncoder
+    > extends Requirements
+      ? true
+      : false = true;
+    expect(required).toBe(true);
+  });
+
+  test("requires the services its output adapters use", () => {
+    const adapted = operationGroupHandlers(
+      tallyApi,
+      Tallies,
+      Effect.succeed((_name: "tally", input: { readonly count: string }) =>
+        Effect.succeed(JSON.stringify(input))
+      ),
+      {
+        tally: (output: string) =>
+          Effect.gen(function* () {
+            return `${yield* OutputStamp} ${output}`;
+          }),
+      }
+    );
+    type Requirements =
+      typeof adapted extends Layer.Layer<
+        infer _Provided,
+        infer _Error,
+        infer Required
+      >
+        ? Required
+        : never;
+    const required: HttpRouter.Request<
+      "Requires",
+      OutputStamp
     > extends Requirements
       ? true
       : false = true;
