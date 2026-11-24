@@ -51,6 +51,18 @@ runCommandLine(
     expect(stderr).toContain("about to print");
   });
 
+  test("reports a failed command on stderr, never stdout, and exits nonzero", () => {
+    const { exitCode, stdout, stderr } = runProgram(`
+runCommandLine(Effect.fail(new Error("WorkspaceStackConfigInvalid: no stage")));`);
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("WorkspaceStackConfigInvalid: no stage");
+    // Reported once, not again by the runtime.
+    expect(stderr.split("WorkspaceStackConfigInvalid: no stage").length).toBe(
+      2
+    );
+  });
+
   test("forwards a child's stdout to stderr and returns its exit code", () => {
     const { exitCode, stdout, stderr } = runProgram(`
 runCommandLine(

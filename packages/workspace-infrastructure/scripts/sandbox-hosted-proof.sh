@@ -569,7 +569,9 @@ proof_pattern() {
     storage-buckets) echo "^(gs://)?${mobile_updates_bucket}/?\$" ;;
     # Objects only: `storage ls -r` also prints each folder as a
     # `gs://…/prefix/:` heading, which is no residue.
-    state-objects) echo "${stack_prefix}[^_:][^:]*\$|/${proof_run_object}\$" ;;
+    # The release record's live object too; its noncurrent generations are
+    # history, which `ls -r` does not list.
+    state-objects) echo "${stack_prefix}[^_:][^:]*\$|/${proof_run_object}\$|/${record_object}\$" ;;
     *) echo '^$' ;;
   esac
 }

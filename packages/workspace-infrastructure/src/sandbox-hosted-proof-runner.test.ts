@@ -328,6 +328,11 @@ describe("post-destroy inventory", () => {
         "^storage ls -r",
         `${emptiedState}\n${state}/sandbox-proof/run.env`
       ),
+      // The live release record a failed removal left.
+      listing(
+        "^storage ls -r",
+        `${emptiedState}\n${state}/workspace-release-record.sandbox.json`
+      ),
       listing(
         "^tasks queues list",
         "workspace-paid-fulfillment-r45279064237-1"

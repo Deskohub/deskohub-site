@@ -1,8 +1,10 @@
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Logger from "effect/Logger";
 import type { ChildProcessHandle } from "effect/process/ChildProcessSpawner";
+import * as Runtime from "effect/Runtime";
 import type * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
 
@@ -15,15 +17,25 @@ export const withLogsOnStderr = <A, E, R>(self: Effect.Effect<A, E, R>) =>
 
 /**
  * Run a command-line program on Bun with its logs on stderr, the layers
- * it builds included.
+ * it builds included. A failure is reported here, as `runMain` would
+ * report it, but inside that scope: `runMain`'s own report runs outside
+ * it and would reach stdout. The process still exits nonzero.
  */
 export const runCommandLine = <A, E>(
   program: Effect.Effect<A, E, BunServices.BunServices>
 ) =>
-  program.pipe(
-    Effect.provide(BunServices.layer),
-    withLogsOnStderr,
-    BunRuntime.runMain
+  BunRuntime.runMain(
+    program.pipe(
+      Effect.provide(BunServices.layer),
+      Effect.tapCause((cause) =>
+        Cause.hasInterruptsOnly(cause) ||
+        !Runtime.getErrorReported(Cause.squash(cause))
+          ? Effect.void
+          : Effect.logError(cause)
+      ),
+      withLogsOnStderr
+    ),
+    { disableErrorReporting: true }
   );
 
 /**
