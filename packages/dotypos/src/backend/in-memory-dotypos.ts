@@ -555,27 +555,23 @@ export const makeInMemoryDotypos = (
           )
         )
       ),
-    updateReservation: ({ reservationId, note }) => {
+    updateReservation: Effect.fnUntraced(function* ({ reservationId, note }) {
       const trimmed = note.trim();
-      return trimmed
-        ? readReservationRecord(
-            reservationId,
-            "updateReservation",
-            "reservation.version"
-          ).pipe(
-            Effect.flatMap((reservation) =>
-              writeReservation(reservation, { note: trimmed })
-            )
-          )
-        : Effect.fail(
-            dotyposInvalidRequest(
-              "updateReservation",
-              "Reservation note is required"
-            )
-          );
-    },
-    setCustomerDiscountGroup: (customerId, discountGroupId) =>
-      Effect.gen(function* () {
+      if (!trimmed) {
+        return yield* dotyposInvalidRequest(
+          "updateReservation",
+          "Reservation note is required"
+        );
+      }
+      const reservation = yield* readReservationRecord(
+        reservationId,
+        "updateReservation",
+        "reservation.version"
+      );
+      return yield* writeReservation(reservation, { note: trimmed });
+    }),
+    setCustomerDiscountGroup: Effect.fnUntraced(
+      function* (customerId, discountGroupId) {
         const normalized = discountGroupId
           ? yield* normalizeId(
               DotyposDiscountGroupIdSchema,
@@ -596,7 +592,8 @@ export const makeInMemoryDotypos = (
           );
         }
         return written.value;
-      }),
+      }
+    ),
     expireCustomer: (customerId) =>
       Clock.currentTimeMillis.pipe(
         Effect.flatMap((now) =>

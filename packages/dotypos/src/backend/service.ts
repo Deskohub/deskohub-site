@@ -4,6 +4,7 @@ import {
   Context,
   Data,
   Effect,
+  flow,
   identity,
   Layer,
   Match,
@@ -902,9 +903,7 @@ const decodeResponseIdentifier = <A, Request extends DotyposRequest>(
     )
   );
 
-const getCustomerLookupLogAnnotations = (
-  options?: FindCustomerOptions
-): Record<string, unknown> => ({
+const getCustomerLookupLogAnnotations = (options?: FindCustomerOptions) => ({
   lookupFields: options?.lookupFields ?? defaultCustomerLookupFields,
 });
 
@@ -1002,8 +1001,9 @@ const customerLookupResult = (
   const activeMatchingCustomers = matchingCustomers.filter(
     (customer) => !customer.deleted
   );
+  const [customer] = activeMatchingCustomers;
 
-  if (activeMatchingCustomers.length === 0) {
+  if (customer === undefined) {
     return matchingCustomers.length > 0
       ? {
           _tag: "Deleted" as const,
@@ -1027,7 +1027,7 @@ const customerLookupResult = (
 
   return {
     _tag: "Matched" as const,
-    customer: activeMatchingCustomers[0]!,
+    customer,
     matches: activeMatchingCustomers,
     normalizedCustomerData,
   };
@@ -1040,6 +1040,10 @@ const fillableCustomerFields = [
   "lastName",
 ] as const;
 
+type CustomerFillPatch = {
+  -readonly [Field in (typeof fillableCustomerFields)[number]]?: string;
+};
+
 /**
  * The looked-up details an existing customer lacks. `needsUpdate` keeps the
  * value of `email-missing || phone-missing || firstName-missing ||
@@ -1049,9 +1053,7 @@ const customerFill = (
   customerData: DotyposCustomerLookupData,
   existingCustomer: DotyposCustomer
 ) => {
-  const patch: {
-    -readonly [Field in (typeof fillableCustomerFields)[number]]?: string;
-  } = {};
+  const patch: CustomerFillPatch = {};
   for (const field of fillableCustomerFields) {
     const value = customerData[field];
     if (value && !existingCustomer[field]) patch[field] = value;
@@ -1324,12 +1326,13 @@ const makeDotyposService: Effect.Effect<
         );
   };
 
+  /** Decodes one provider record, failing as an invalid response. */
   const decodeProviderEntity = <A, Request extends DotyposRequest>(
     schema: Schema.Decoder<A>,
-    value: unknown,
     call: DotyposCall<Request>
   ) =>
-    Schema.decodeUnknownEffect(schema)(value).pipe(
+    flow(
+      Schema.decodeUnknownEffect(schema),
       Effect.mapError((cause) =>
         dotyposInvalidResponse(call, {
           message: "Dotypos returned malformed entity identifiers.",
@@ -1344,7 +1347,7 @@ const makeDotyposService: Effect.Effect<
     call: DotyposCall<Request>
   ) =>
     Effect.forEach(values, (value) =>
-      decodeProviderEntity(schema, value, call)
+      decodeProviderEntity(schema, call)(value)
     );
 
   const decodeProviderPage = <A, Request extends DotyposRequest>(
@@ -1381,9 +1384,8 @@ const makeDotyposService: Effect.Effect<
 
       return yield* decodeProviderEntity(
         DotyposReservationSchema,
-        reservationResult,
         call
-      );
+      )(reservationResult);
     },
     (effect, reservationId) =>
       effect.pipe(
@@ -1561,9 +1563,8 @@ const makeDotyposService: Effect.Effect<
         Effect.flatMap((id) =>
           decodeProviderEntity(
             DotyposReservationSchema,
-            { ...reservationResult, id },
             call
-          )
+          )({ ...reservationResult, id })
         ),
         Effect.mapError((error) =>
           input.singleAttempt ? incompleteCreation() : error
@@ -1637,9 +1638,10 @@ const makeDotyposService: Effect.Effect<
         const etag = response.headers.etag ?? response.headers.ETag;
         return decodeProviderEntity(
           DotyposReservationSchema,
-          reservation,
           call
-        ).pipe(Effect.map((decoded) => ({ etag, reservation: decoded })));
+        )(reservation).pipe(
+          Effect.map((decoded) => ({ etag, reservation: decoded }))
+        );
       })
     );
   });
@@ -1693,9 +1695,8 @@ const makeDotyposService: Effect.Effect<
         Effect.flatMap(([reservation, response]) =>
           decodeProviderEntity(
             DotyposReservationSchema,
-            { ...reservation, id: reservation.id ?? input.reservationId },
             call
-          ).pipe(
+          )({ ...reservation, id: reservation.id ?? input.reservationId }).pipe(
             Effect.map((decoded) => ({
               etag: response.headers.etag ?? response.headers.ETag,
               reservation: decoded,
@@ -2002,18 +2003,20 @@ const makeDotyposService: Effect.Effect<
   }: ReassignDotyposReservationCustomerInput & {
     readonly current: ReservationWithEtag;
   }): Effect.Effect<DotyposReservation, DotyposConditionalWriteFailure> => {
-    const operation = reassignReservationCustomerOperation;
     const originalEtag = current.etag;
     if (!isStrongEtag(originalEtag)) {
       return Effect.fail(
         dotyposInvalidResponse(
-          { operation, request: "reservation.version" },
+          {
+            operation: reassignReservationCustomerOperation,
+            request: "reservation.version",
+          },
           { message: "Reservation ETag header was missing or unusable." }
         )
       );
     }
     const unverified = new DotyposUncertain({
-      operation,
+      operation: reassignReservationCustomerOperation,
       request: "reservation.reassignCustomer",
       reason: "invalid-response",
       message: "Dotypos did not verify the reservation customer reassignment.",
@@ -2025,14 +2028,17 @@ const makeDotyposService: Effect.Effect<
       reservationId,
       etag: originalEtag,
       payload: { _customerId: customerId },
-      operation,
+      operation: reassignReservationCustomerOperation,
     }).pipe(
       Effect.filterOrFail(
         ({ reservation }) => reservation.id === reservationId,
         () => unverified
       ),
       Effect.flatMap(({ etag: patchedEtag }) =>
-        readReservationWithEtag(reservationId, operation).pipe(
+        readReservationWithEtag(
+          reservationId,
+          reassignReservationCustomerOperation
+        ).pipe(
           Effect.mapError(() => unverified),
           Effect.filterOrFail(
             ({ etag, reservation }) =>
@@ -2109,7 +2115,7 @@ const makeDotyposService: Effect.Effect<
         client.getCustomer(config.cloudId, id, undefined),
         call
       ).pipe(retryDotyposRequest(call.request));
-      return yield* decodeProviderEntity(DotyposCustomerSchema, customer, call);
+      return yield* decodeProviderEntity(DotyposCustomerSchema, call)(customer);
     },
     (effect, customerId) =>
       effect.pipe(
@@ -2297,30 +2303,32 @@ const makeDotyposService: Effect.Effect<
       const normalizedCustomerData = normalizeCustomerLookupData(customerData);
       const call = { operation, request: "customers.lookup" } as const;
 
-      const searchByField = (fieldName: "email" | "phone", value: string) =>
-        Effect.gen(function* () {
-          const valueSanitized = value.replace("|", encodeURIComponent("|"));
-          const filter = [
-            `${fieldName}|like|${valueSanitized}`,
-            "deleted|in|0,1",
-          ].join(";");
+      const searchByField = Effect.fnUntraced(function* (
+        fieldName: "email" | "phone",
+        value: string
+      ) {
+        const valueSanitized = value.replace("|", encodeURIComponent("|"));
+        const filter = [
+          `${fieldName}|like|${valueSanitized}`,
+          "deleted|in|0,1",
+        ].join(";");
 
-          return yield* loadAllDotyposPages({
-            loadPage: (page) =>
-              runDotyposRequest(
-                client.getCustomers(config.cloudId, {
-                  params: { limit: 100, page, filter },
-                }),
-                call
-              ).pipe(
-                emptyFirstPageWhenNotFound(page),
-                Effect.flatMap((result) =>
-                  decodeProviderPage(DotyposCustomerSchema, result, call)
-                )
-              ),
-            call,
-          }).pipe(retryDotyposRequest(call.request));
-        });
+        return yield* loadAllDotyposPages({
+          loadPage: (page) =>
+            runDotyposRequest(
+              client.getCustomers(config.cloudId, {
+                params: { limit: 100, page, filter },
+              }),
+              call
+            ).pipe(
+              emptyFirstPageWhenNotFound(page),
+              Effect.flatMap((result) =>
+                decodeProviderPage(DotyposCustomerSchema, result, call)
+              )
+            ),
+          call,
+        }).pipe(retryDotyposRequest(call.request));
+      });
 
       const matchingCustomers: DotyposCustomer[] = [];
       const searches = customerLookupSearches(
@@ -2429,156 +2437,151 @@ const makeDotyposService: Effect.Effect<
 
       return yield* decodeProviderEntity(
         DotyposCustomerWriteRecordSchema,
-        result,
         call
-      );
+      )(result);
     },
     (effect) => effect.pipe(Effect.scoped)
   );
 
   /** Fills the details an existing customer lacks; a failed fill keeps the customer as it was. */
-  const fillExistingCustomer = (
+  const fillExistingCustomer = Effect.fnUntraced(function* (
     existingCustomer: DotyposCustomer,
     normalizedCustomerData: DotyposCustomerLookupData
-  ) =>
-    Effect.gen(function* () {
-      const { needsUpdate, patch: updateRequest } = customerFill(
-        normalizedCustomerData,
-        existingCustomer
+  ) {
+    const { needsUpdate, patch: updateRequest } = customerFill(
+      normalizedCustomerData,
+      existingCustomer
+    );
+
+    yield* Effect.logDebug("Dotypos customer update-needed decision", {
+      needsUpdate,
+      customerId: existingCustomer.id,
+    });
+
+    if (needsUpdate) {
+      const customerId = existingCustomer.id;
+      const fillCall = {
+        operation: "findOrCreateCustomer",
+        request: "customer.fill",
+      } as const;
+      const updatedCustomer = yield* runDotyposRequest(
+        client.updateCustomer(config.cloudId, customerId, {
+          payload: updateRequest,
+        }),
+        fillCall
+      ).pipe(
+        retryDotyposRequest(fillCall.request),
+        Effect.flatMap((customer) =>
+          decodeProviderEntity(
+            DotyposCustomerSchema,
+            fillCall
+          )({ ...customer, id: customer.id ?? customerId })
+        ),
+        Effect.tapError((error) =>
+          Effect.logWarning("Dotypos customer update failed", {
+            errorTag: error._tag,
+            operation: "updateCustomer",
+            customerId,
+            updatedFields: Object.keys(updateRequest),
+          })
+        ),
+        Effect.orElseSucceed(() => existingCustomer)
       );
-
-      yield* Effect.logDebug("Dotypos customer update-needed decision", {
-        needsUpdate,
-        customerId: existingCustomer.id,
-      });
-
-      if (needsUpdate) {
-        const customerId = existingCustomer.id;
-        const fillCall = {
-          operation: "findOrCreateCustomer",
-          request: "customer.fill",
-        } as const;
-        const updatedCustomer = yield* runDotyposRequest(
-          client.updateCustomer(config.cloudId, customerId, {
-            payload: updateRequest,
-          }),
-          fillCall
-        ).pipe(
-          retryDotyposRequest(fillCall.request),
-          Effect.flatMap((customer) =>
-            decodeProviderEntity(
-              DotyposCustomerSchema,
-              { ...customer, id: customer.id ?? customerId },
-              fillCall
-            )
-          ),
-          Effect.tapError((error) =>
-            Effect.logWarning("Dotypos customer update failed", {
-              errorTag: error._tag,
-              operation: "updateCustomer",
-              customerId,
-              updatedFields: Object.keys(updateRequest),
-            })
-          ),
-          Effect.orElseSucceed(() => existingCustomer)
-        );
-
-        yield* Effect.logDebug("Dotypos existing customer result", {
-          customerId: updatedCustomer.id,
-        });
-
-        return updatedCustomer;
-      }
 
       yield* Effect.logDebug("Dotypos existing customer result", {
-        customerId: existingCustomer.id,
+        customerId: updatedCustomer.id,
       });
 
-      return existingCustomer;
+      return updatedCustomer;
+    }
+
+    yield* Effect.logDebug("Dotypos existing customer result", {
+      customerId: existingCustomer.id,
     });
+
+    return existingCustomer;
+  });
 
   /** Creates the customer a lookup found no active match for. */
-  const createLookedUpCustomer = (
+  const createLookedUpCustomer = Effect.fnUntraced(function* (
     normalizedCustomerData: DotyposCustomerLookupData
-  ) =>
-    Effect.gen(function* () {
-      if (!normalizedCustomerData.email) {
-        return yield* dotyposInvalidRequest(
-          "findOrCreateCustomer",
-          "Customer email is required"
-        );
-      }
-
-      if (!normalizedCustomerData.phone) {
-        return yield* dotyposInvalidRequest(
-          "findOrCreateCustomer",
-          "Customer phone is required"
-        );
-      }
-
-      const createRequest: CreateCustomerRequest = {
-        _cloudId: config.cloudId,
-        addressLine1: "",
-        barcode: "",
-        companyId: "",
-        companyName: "",
-        deleted: false,
-        display: true,
-        firstName: normalizedCustomerData.firstName,
-        flags: "0",
-        headerPrint: "",
-        hexColor: "#000000",
-        internalNote: "",
-        lastName: normalizedCustomerData.lastName ?? "",
-        email: normalizedCustomerData.email,
-        phone: normalizedCustomerData.phone,
-        points: "0",
-        tags: [],
-        vatId: "",
-        zip: "",
-        expireDate: null,
-      };
-
-      const createCustomerRequestFields =
-        presentCreateCustomerRequestFields(createRequest);
-
-      yield* Effect.annotateLogsScoped({ createCustomerRequestFields });
-
-      const createCall = {
-        operation: "findOrCreateCustomer",
-        request: "customer.createAfterLookup",
-      } as const;
-      const customerResult = yield* runDotyposRequest(
-        client.createCustomers(config.cloudId, { payload: [createRequest] }),
-        createCall
-      ).pipe(
-        Effect.flatMap((customers) => firstCreated(customers, createCall)),
-        retryDotyposRequest(createCall.request),
-        Effect.tapError((error) =>
-          Effect.logError("Dotypos customer creation failed", {
-            errorTag: error._tag,
-            operation: "createCustomer",
-            // A failure Dotypos answered with a status keeps its parsed error body as the cause.
-            providerError:
-              error.httpStatus === undefined ? undefined : error.cause,
-            statusCode: error.httpStatus,
-            createCustomerRequestFields,
-          })
-        )
+  ) {
+    if (!normalizedCustomerData.email) {
+      return yield* dotyposInvalidRequest(
+        "findOrCreateCustomer",
+        "Customer email is required"
       );
+    }
 
-      const customer = yield* decodeProviderEntity(
-        DotyposCustomerWriteRecordSchema,
-        customerResult,
-        createCall
+    if (!normalizedCustomerData.phone) {
+      return yield* dotyposInvalidRequest(
+        "findOrCreateCustomer",
+        "Customer phone is required"
       );
+    }
 
-      yield* Effect.logInfo("Dotypos customer created", {
-        customerId: customer.id,
-      });
+    const createRequest: CreateCustomerRequest = {
+      _cloudId: config.cloudId,
+      addressLine1: "",
+      barcode: "",
+      companyId: "",
+      companyName: "",
+      deleted: false,
+      display: true,
+      firstName: normalizedCustomerData.firstName,
+      flags: "0",
+      headerPrint: "",
+      hexColor: "#000000",
+      internalNote: "",
+      lastName: normalizedCustomerData.lastName ?? "",
+      email: normalizedCustomerData.email,
+      phone: normalizedCustomerData.phone,
+      points: "0",
+      tags: [],
+      vatId: "",
+      zip: "",
+      expireDate: null,
+    };
 
-      return customer;
+    const createCustomerRequestFields =
+      presentCreateCustomerRequestFields(createRequest);
+
+    yield* Effect.annotateLogsScoped({ createCustomerRequestFields });
+
+    const createCall = {
+      operation: "findOrCreateCustomer",
+      request: "customer.createAfterLookup",
+    } as const;
+    const customerResult = yield* runDotyposRequest(
+      client.createCustomers(config.cloudId, { payload: [createRequest] }),
+      createCall
+    ).pipe(
+      Effect.flatMap((customers) => firstCreated(customers, createCall)),
+      retryDotyposRequest(createCall.request),
+      Effect.tapError((error) =>
+        Effect.logError("Dotypos customer creation failed", {
+          errorTag: error._tag,
+          operation: "createCustomer",
+          // A failure Dotypos answered with a status keeps its parsed error body as the cause.
+          providerError:
+            error.httpStatus === undefined ? undefined : error.cause,
+          statusCode: error.httpStatus,
+          createCustomerRequestFields,
+        })
+      )
+    );
+
+    const customer = yield* decodeProviderEntity(
+      DotyposCustomerWriteRecordSchema,
+      createCall
+    )(customerResult);
+
+    yield* Effect.logInfo("Dotypos customer created", {
+      customerId: customer.id,
     });
+
+    return customer;
+  });
 
   const findOrCreateCustomer = Effect.fn("findOrCreateCustomer")(
     function* (
@@ -2604,21 +2607,21 @@ const makeDotyposService: Effect.Effect<
       const normalizedCustomerData = lookup.normalizedCustomerData;
       const existingCustomer = yield* Match.value(lookup).pipe(
         Match.tag("Ambiguous", (ambiguousLookup) =>
-          Effect.gen(function* () {
-            yield* Effect.logError("Ambiguous Dotypos customer lookup", {
-              customerIds: ambiguousLookup.matches.map(
-                (customer) => customer.id
-              ),
-              matchCount: ambiguousLookup.matches.length,
-            });
-
-            return yield* new DotyposRejected({
-              operation: "findOrCreateCustomer",
-              request: "customers.lookup",
-              reason: "ambiguous-match",
-              message: "Dotypos customer lookup matched multiple customers",
-            });
-          })
+          Effect.logError("Ambiguous Dotypos customer lookup", {
+            customerIds: ambiguousLookup.matches.map((customer) => customer.id),
+            matchCount: ambiguousLookup.matches.length,
+          }).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new DotyposRejected({
+                  operation: "findOrCreateCustomer",
+                  request: "customers.lookup",
+                  reason: "ambiguous-match",
+                  message: "Dotypos customer lookup matched multiple customers",
+                })
+              )
+            )
+          )
         ),
         Match.tag("Matched", (matchedLookup) =>
           Effect.succeed(matchedLookup.matches[0])
@@ -2646,36 +2649,35 @@ const makeDotyposService: Effect.Effect<
       )
   );
 
-  const loadCustomerDiscountGroup = (
+  const loadCustomerDiscountGroup = Effect.fnUntraced(function* (
     customer: DotyposCustomer,
     operation: "getCustomerDiscountGroup"
-  ) =>
-    Effect.gen(function* () {
-      const rawDiscountGroupId = customer._discountGroupId?.toString().trim();
-      if (!rawDiscountGroupId) return undefined;
+  ) {
+    const rawDiscountGroupId = customer._discountGroupId?.toString().trim();
+    if (!rawDiscountGroupId) return undefined;
 
-      const call = { operation, request: "discountGroup.get" } as const;
-      const discountGroupId = yield* decodeResponseIdentifier(
-        DotyposDiscountGroupIdSchema,
-        rawDiscountGroupId,
-        "Discount group ID",
-        call
-      );
+    const call = { operation, request: "discountGroup.get" } as const;
+    const discountGroupId = yield* decodeResponseIdentifier(
+      DotyposDiscountGroupIdSchema,
+      rawDiscountGroupId,
+      "Discount group ID",
+      call
+    );
 
-      return yield* runDotyposRequest(
-        client.getDiscountGroup(config.cloudId, discountGroupId, undefined),
-        call
-      ).pipe(
-        retryDotyposRequest(call.request),
-        Effect.map(
-          (discountGroup) =>
-            ({
-              discountGroupId,
-              discountPercent: discountGroup.discountPercent,
-            }) satisfies DotyposCustomerDiscountGroup
-        )
-      );
-    });
+    return yield* runDotyposRequest(
+      client.getDiscountGroup(config.cloudId, discountGroupId, undefined),
+      call
+    ).pipe(
+      retryDotyposRequest(call.request),
+      Effect.map(
+        (discountGroup) =>
+          ({
+            discountGroupId,
+            discountPercent: discountGroup.discountPercent,
+          }) satisfies DotyposCustomerDiscountGroup
+      )
+    );
+  });
 
   const getCustomerDiscountGroup = Effect.fn(
     "DotyposService.getCustomerDiscountGroup"
@@ -2779,9 +2781,8 @@ const makeDotyposService: Effect.Effect<
       Effect.flatMap((customer) =>
         decodeProviderEntity(
           DotyposCustomerSchema,
-          { ...customer, id: customer.id ?? input.customerId },
           call
-        )
+        )({ ...customer, id: customer.id ?? input.customerId })
       )
     );
   };
@@ -2823,9 +2824,10 @@ const makeDotyposService: Effect.Effect<
         input.operation
       ).pipe(
         Effect.flatMap(({ etag, record }) =>
-          decodeProviderEntity(DotyposCustomerSchema, record, versionCall).pipe(
-            Effect.map((customer) => ({ etag, customer }))
-          )
+          decodeProviderEntity(
+            DotyposCustomerSchema,
+            versionCall
+          )(record).pipe(Effect.map((customer) => ({ etag, customer })))
         ),
         Effect.mapError(stayUncertain)
       );
