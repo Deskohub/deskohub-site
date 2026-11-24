@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { Schema } from "effect";
 import { commandOutput, runCommand } from "./shared/command";
+import { readJsonFile } from "./shared/json-file";
 import {
   parseShard,
   prepareShard,
@@ -39,23 +40,12 @@ const TurboConfig = Schema.Struct({
   tasks: Schema.Record(Schema.String, TurboTask),
 });
 
-const readJson = async <S extends Schema.Decoder<unknown>>(
-  schema: S,
-  path: string
-): Promise<S["Type"]> =>
-  Schema.decodeUnknownSync(Schema.fromJsonString(schema))(
-    await readFile(path, "utf8")
-  );
-
-const workspaceTurbo = await readJson(
+const workspaceTurbo = readJsonFile(
   TurboConfig,
   join(workspaceRoot, "turbo.json")
 );
-const rootTurbo = await readJson(
-  TurboConfig,
-  join(repositoryRoot, "turbo.json")
-);
-const workspacePackage = await readJson(
+const rootTurbo = readJsonFile(TurboConfig, join(repositoryRoot, "turbo.json"));
+const workspacePackage = readJsonFile(
   Schema.Struct({
     dependencies: Schema.optionalKey(DependencyVersions),
     devDependencies: Schema.optionalKey(DependencyVersions),
@@ -64,7 +54,7 @@ const workspacePackage = await readJson(
   join(workspaceRoot, "package.json")
 );
 const mobilePackage = "deskohub-mobile";
-const rootPackage = await readJson(
+const rootPackage = readJsonFile(
   Schema.Struct({ packageManager: Schema.String }),
   join(repositoryRoot, "package.json")
 );

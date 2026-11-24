@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Schema } from "effect";
 import { reviewScreenshotsEnabled } from "../e2e/e2e-env";
 import { makeTestE2EEnvironment } from "../e2e/e2e-env.test-fixture";
 import { workspaceE2ENonPaymentCaseIds } from "../e2e/playwright-checkout/case-catalog";
 import { runCommand } from "./shared/command";
+import { readJsonFile } from "./shared/json-file";
 import {
   evaluateWorkflowValue,
   findStepByName,
@@ -147,14 +147,6 @@ const stepsBetweenNames = (
   return allSteps.slice(from, to);
 };
 
-const readTrackedJson = <S extends Schema.Decoder<unknown>>(
-  schema: S,
-  path: string
-): S["Type"] =>
-  Schema.decodeUnknownSync(Schema.fromJsonString(schema))(
-    readFileSync(resolve(import.meta.dir, path), "utf8")
-  );
-
 const TurboConfig = Schema.Struct({
   globalEnv: Schema.optionalKey(StringList),
   globalPassThroughEnv: Schema.optionalKey(StringList),
@@ -208,8 +200,11 @@ const turboSecretExposures = (
 const trackedTurboExposures = (name: string) =>
   turboSecretExposures(
     {
-      app: readTrackedJson(TurboConfig, "../turbo.json"),
-      root: readTrackedJson(TurboConfig, "../../../turbo.json"),
+      app: readJsonFile(TurboConfig, resolve(import.meta.dir, "../turbo.json")),
+      root: readJsonFile(
+        TurboConfig,
+        resolve(import.meta.dir, "../../../turbo.json")
+      ),
     },
     name
   );
@@ -490,7 +485,10 @@ describe("workspace E2E workflow", () => {
   });
 
   test("passes allocated shard and provider coordination through Turborepo", () => {
-    const turbo = readTrackedJson(E2ETaskTurboConfig, "../../../turbo.json");
+    const turbo = readJsonFile(
+      E2ETaskTurboConfig,
+      resolve(import.meta.dir, "../../../turbo.json")
+    );
     const environment = turbo.tasks["test:e2e"].passThroughEnv;
 
     expect(environment).toContain("WORKSPACE_E2E_ALLOCATION_SHARD");
@@ -613,9 +611,9 @@ describe("workspace E2E workflow", () => {
         })
       )
     )(output.slice(jsonStart));
-    const rootTurbo = readTrackedJson(
+    const rootTurbo = readJsonFile(
       E2ETaskTurboConfig,
-      "../../../turbo.json"
+      resolve(import.meta.dir, "../../../turbo.json")
     );
     const e2eTask = graph.tasks.find(
       (task) => task.taskId === "deskohub-workspace#test:e2e"
@@ -686,7 +684,10 @@ describe("workspace E2E workflow", () => {
   });
 
   test("the Turborepo secret guard finds global and wildcard exposures", () => {
-    const root = readTrackedJson(TurboConfig, "../../../turbo.json");
+    const root = readJsonFile(
+      TurboConfig,
+      resolve(import.meta.dir, "../../../turbo.json")
+    );
     const secret = "WORKSPACE_E2E_BETTER_AUTH_SECRETS";
     const injected = (mutate: (turbo: TurboConfig) => TurboConfig) =>
       turboSecretExposures({ root: mutate(structuredClone(root)) }, secret);

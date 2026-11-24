@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Schema } from "effect";
+import { readJsonFile } from "./shared/json-file";
 import { parseWorkflow, workflowStepRuns } from "./shared/workflow-contract";
 import { assertValidMigrationCount } from "./validate-migration-count";
 
@@ -22,18 +22,17 @@ test("regenerates Workspace migrations in CI before accepting them", () => {
   const workflow = parseWorkflow(
     resolve(import.meta.dir, "../../../.github/workflows/workspace-tests.yml")
   );
-  const turbo = Schema.decodeUnknownSync(
-    Schema.fromJsonString(
-      Schema.Struct({
-        tasks: Schema.Struct({
-          "db:generate": Schema.Struct({
-            dependsOn: Schema.Array(Schema.String),
-            env: Schema.Array(Schema.String),
-          }),
+  const turbo = readJsonFile(
+    Schema.Struct({
+      tasks: Schema.Struct({
+        "db:generate": Schema.Struct({
+          dependsOn: Schema.Array(Schema.String),
+          env: Schema.Array(Schema.String),
         }),
-      })
-    )
-  )(readFileSync(resolve(import.meta.dir, "../turbo.json"), "utf8"));
+      }),
+    }),
+    resolve(import.meta.dir, "../turbo.json")
+  );
 
   expect(turbo.tasks["db:generate"].dependsOn).toContain("i18n:compile");
   expect(turbo.tasks["db:generate"].env).toEqual(

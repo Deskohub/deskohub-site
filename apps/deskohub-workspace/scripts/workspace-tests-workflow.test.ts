@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Schema } from "effect";
 import { shardTimingsArtifactPattern } from "./refresh-test-timings";
 import { commandOutput, runCommand } from "./shared/command";
+import { readJsonFile } from "./shared/json-file";
 import { identifierNames, parseTrackedSource } from "./shared/source-ast";
 import {
   findStepByName,
@@ -40,15 +41,6 @@ const shardStrategy = Schema.decodeUnknownSync(
 )(testJob).strategy;
 
 const affectedName = "WORKSPACE_SHARDS_AFFECTED";
-
-/** Reads a JSON file relative to this test and decodes it with `schema`. */
-const readJsonFile = <S extends Schema.Decoder<unknown>>(
-  schema: S,
-  path: string
-): S["Type"] =>
-  Schema.decodeUnknownSync(Schema.fromJsonString(schema))(
-    readFileSync(resolve(import.meta.dir, path), "utf8")
-  );
 
 const stepByName = (name: string): WorkflowStep => {
   const step = findStepByName(doc, name);
@@ -261,7 +253,7 @@ exit 1
 test("runs the shards with the Bun the repository pins", () => {
   const rootPackage = readJsonFile(
     Schema.Struct({ packageManager: Schema.String }),
-    "../../../package.json"
+    resolve(import.meta.dir, "../../../package.json")
   );
   const setupBun = workflowSteps(doc, "test-functional-shards").find((step) =>
     step.uses?.startsWith("oven-sh/setup-bun@")
@@ -281,7 +273,7 @@ test("splits the suite across every matrix shard and keeps test-functional as a 
   // Suites mutate process-wide state, so each shard runs one test process.
   const packageJson = readJsonFile(
     Schema.Struct({ scripts: Schema.Struct({ test: Schema.String }) }),
-    "../package.json"
+    resolve(import.meta.dir, "../package.json")
   );
   expect(packageJson.scripts.test).toContain("--parallel=1");
 
@@ -389,7 +381,7 @@ test("runs the shards only when the selection finds an affected shard task", () 
   // installs, and matches changes against task inputs.
   const installedTurbo = readJsonFile(
     Schema.Struct({ version: Schema.String }),
-    "../../../node_modules/turbo/package.json"
+    resolve(import.meta.dir, "../../../node_modules/turbo/package.json")
   );
   expect(select.run).toContain(`bunx turbo@${installedTurbo.version} run`);
   const shardTasks = Array.from(
@@ -405,7 +397,7 @@ test("runs the shards only when the selection finds an affected shard task", () 
         })
       ),
     }),
-    "../../../turbo.json"
+    resolve(import.meta.dir, "../../../turbo.json")
   );
   expect(rootTurbo.futureFlags?.affectedUsingTaskInputs).toBe(true);
 });
@@ -542,7 +534,7 @@ test("passes the disposable test database through Turborepo at the test task onl
         ),
       }),
     }),
-    "../turbo.json"
+    resolve(import.meta.dir, "../turbo.json")
   );
 
   expect(
