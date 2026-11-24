@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import {
   evaluateWorkflowValue,
+  parseCompositeAction,
+  parseWorkflow,
   workflowExpressionBoolean,
   workflowExpressionString,
 } from "./workflow-contract";
@@ -65,5 +69,33 @@ describe("workflow expression evaluation", () => {
     expect(() =>
       evaluateWorkflowValue(`prefix-\${{ inputs.enabled }}`, context)
     ).toThrow();
+  });
+});
+
+const githubDirectory = resolve(import.meta.dir, "../../../../.github");
+const parsedYaml = (path: string): unknown =>
+  Bun.YAML.parse(readFileSync(path, "utf8"));
+
+describe("tracked workflow parsing", () => {
+  test("returns every tracked workflow whole, undeclared keys included", () => {
+    const directory = join(githubDirectory, "workflows");
+    const paths = readdirSync(directory)
+      .filter((name) => /\.ya?ml$/.test(name))
+      .map((name) => join(directory, name));
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) {
+      expect(parseWorkflow(path)).toEqual(parsedYaml(path));
+    }
+  });
+
+  test("returns every tracked composite action whole", () => {
+    const directory = join(githubDirectory, "actions");
+    const paths = readdirSync(directory)
+      .map((name) => join(directory, name, "action.yml"))
+      .filter((path) => existsSync(path));
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) {
+      expect(parseCompositeAction(path)).toEqual(parsedYaml(path));
+    }
   });
 });

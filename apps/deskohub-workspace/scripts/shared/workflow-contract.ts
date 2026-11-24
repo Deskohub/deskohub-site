@@ -19,8 +19,8 @@ export interface WorkflowStep {
   readonly "working-directory"?: string;
   readonly "continue-on-error"?: boolean;
   readonly "timeout-minutes"?: number;
-  readonly env?: Readonly<Record<string, WorkflowStepValue>>;
-  readonly with?: Readonly<Record<string, WorkflowStepValue>>;
+  readonly env?: Record<string, WorkflowStepValue>;
+  readonly with?: Record<string, WorkflowStepValue>;
   readonly outputs?: Record<string, string>;
 }
 

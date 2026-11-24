@@ -19,12 +19,13 @@ interface NamedStep {
 }
 type _NamedStepIsAStep = Expect<Extends<NamedStep, WorkflowStep>>;
 
-// Step `env` and `with` values are what YAML yields unquoted, not only strings.
-type _StepEnvValue = Expect<
-  Equal<NonNullable<WorkflowStep["env"]>[string], WorkflowStepValue>
+// Step `env` and `with` values are what YAML yields unquoted, not only
+// strings, and callers may still fill the maps in place.
+type _StepEnv = Expect<
+  Equal<NonNullable<WorkflowStep["env"]>, Record<string, WorkflowStepValue>>
 >;
-type _StepWithValue = Expect<
-  Equal<NonNullable<WorkflowStep["with"]>[string], WorkflowStepValue>
+type _StepWith = Expect<
+  Equal<NonNullable<WorkflowStep["with"]>, Record<string, WorkflowStepValue>>
 >;
 
 // A job timeout may be a `${{ }}` expression.
