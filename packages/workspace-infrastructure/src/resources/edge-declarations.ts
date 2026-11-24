@@ -29,6 +29,22 @@ export const edgeResourceName = (
   suffix: string
 ) => `workspace-${config.stage}-${suffix}`;
 
+/**
+ * The physical names of the plain-HTTP edge's objects: what the stack
+ * declares and what a live readback, such as the hosted proof's, looks up.
+ */
+export const edgeObjectNames = (config: WorkspaceStackConfig) => ({
+  address: edgeResourceName(config, "edge"),
+  endpointGroup: edgeResourceName(config, "web"),
+  securityPolicy: edgeResourceName(config, "edge"),
+  dynamicBackend: edgeResourceName(config, "dynamic"),
+  staticBackend: edgeResourceName(config, "static"),
+  urlMap: edgeResourceName(config, "edge"),
+  httpProxy: edgeResourceName(config, "edge-http"),
+  httpForwardingRule: edgeResourceName(config, "http"),
+  tokenRouteExclusion: edgeResourceName(config, "token-route-requests"),
+});
+
 /** Any BCP 47 locale prefix the router may add before a route. */
 const localePrefix = "(/[a-z]{2,3}-[A-Z]{2})?";
 
@@ -59,7 +75,7 @@ export const edgeSecurityPolicyProps = (
   edge: WorkspaceEdgeConfig
 ): EdgeSecurityPolicyProps => ({
   project: config.projectId,
-  name: edgeResourceName(config, "edge"),
+  name: edgeObjectNames(config).securityPolicy,
   description: `Workspace ${config.stage} edge policy`,
   type: "CLOUD_ARMOR",
   rules: [
@@ -128,7 +144,7 @@ export const edgeDynamicBackendProps = (
   links: EdgeBackendLinks
 ) => ({
   project: config.projectId,
-  name: edgeResourceName(config, "dynamic"),
+  name: edgeObjectNames(config).dynamicBackend,
   loadBalancingScheme: "EXTERNAL_MANAGED" as const,
   protocol: "HTTPS" as const,
   ...links,
@@ -143,7 +159,7 @@ export const edgeStaticBackendProps = (
 ) => {
   const props = {
     project: config.projectId,
-    name: edgeResourceName(config, "static"),
+    name: edgeObjectNames(config).staticBackend,
     loadBalancingScheme: "EXTERNAL_MANAGED" as const,
     protocol: "HTTPS" as const,
     ...links,
@@ -175,7 +191,7 @@ export const edgeUrlMapProps = (
   edge: WorkspaceEdgeConfig,
   backends: { readonly dynamic: Input<string>; readonly static: Input<string> }
 ) => ({
-  urlMapName: edgeResourceName(config, "edge"),
+  urlMapName: edgeObjectNames(config).urlMap,
   defaultService: backends.dynamic,
   hostRules: [
     {
@@ -234,13 +250,13 @@ export const declareWorkspaceEdge = Effect.fn(
   webServiceId: Input<string>
 ) {
   const address = yield* Compute.GlobalAddress("EdgeAddress", {
-    addressName: edgeResourceName(config, "edge"),
+    addressName: edgeObjectNames(config).address,
   });
   const addressLink = address.selfLink.pipe(declaredLink("EdgeAddress"));
   const endpointGroup = yield* Compute.RegionNetworkEndpointGroup(
     "EdgeWebEndpointGroup",
     {
-      networkEndpointGroupName: edgeResourceName(config, "web"),
+      networkEndpointGroupName: edgeObjectNames(config).endpointGroup,
       region: config.region,
       networkEndpointType: "SERVERLESS",
       cloudRun: { service: webServiceId },
@@ -312,13 +328,13 @@ export const declareWorkspaceEdge = Effect.fn(
     );
   } else {
     const httpProxy = yield* Compute.TargetHttpProxy("EdgeHttpProxy", {
-      targetHttpProxyName: edgeResourceName(config, "edge-http"),
+      targetHttpProxyName: edgeObjectNames(config).httpProxy,
       urlMap: urlMapLink,
     });
     httpTarget = httpProxy.selfLink.pipe(declaredLink("EdgeHttpProxy"));
   }
   yield* Compute.GlobalForwardingRule("EdgeHttpForwardingRule", {
-    forwardingRuleName: edgeResourceName(config, "http"),
+    forwardingRuleName: edgeObjectNames(config).httpForwardingRule,
     loadBalancingScheme: "EXTERNAL_MANAGED" as const,
     ipAddress: addressLink,
     portRange: "80",
@@ -326,7 +342,7 @@ export const declareWorkspaceEdge = Effect.fn(
   });
 
   const exclusion = yield* Logging.Exclusion("EdgeTokenRouteExclusion", {
-    exclusionId: edgeResourceName(config, "token-route-requests"),
+    exclusionId: edgeObjectNames(config).tokenRouteExclusion,
     description: "Raw request logs for token-bearing Workspace routes",
     filter: tokenRouteExclusionFilter,
   });

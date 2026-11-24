@@ -83,8 +83,6 @@ stage=sandbox
 stack_prefix="DeskohubWorkspace/${stage}/"
 lease_object="${stack_prefix}__lease__.json"
 record_object="workspace-release-record.${stage}.json"
-# The outputs Alchemy persists after each full deploy of the stack.
-stack_output_object="${stack_prefix}__stack_output__.json"
 web_service=workspace-web
 release_services=(workspace-web workspace-tasks-worker workspace-scheduler-worker)
 artifact_repository=workspace
@@ -104,6 +102,11 @@ token_request_sources=('resource.type="http_load_balancer"' 'resource.type="clou
 dry_run_exclusion_filter='(resource.type="http_load_balancer" OR (resource.type="cloud_run_revision" AND log_id("run.googleapis.com/requests"))) AND httpRequest.requestUrl=~"^https?://[^/]+(/app/auth/callback|/api/auth/magic-link/verify|/marketing-preferences/access)([/?#]|$)"'
 declared_repository_description="Workspace container images, deployed by digest."
 plan_log="${proof_dir}/plan.log"
+# How long the edge may take to serve a version: a new global load
+# balancer's first propagation, then a revision change on a live one. Each
+# fits inside its workflow step's limit.
+: "${SANDBOX_FIRST_SERVING_TIMEOUT_SECONDS:=1080}"
+: "${SANDBOX_SERVING_TIMEOUT_SECONDS:=600}"
 
 # ---------------------------------------------------------------- helpers
 
@@ -363,7 +366,9 @@ release() {
 
 dry_status='{"version":"1","record":{"generation":1,"writer":null,"pendingApply":null}}'
 
-# `release status` into a named artifact file; prints the file path.
+# `release status` into a named artifact file; prints the file path. Its
+# stdout must be the one JSON record: logs go to stderr, and anything else
+# fails here rather than reading as an absent lock.
 release_status() {
   local file="${proof_dir}/status-$1.json"
   use_stack_config
@@ -371,7 +376,10 @@ release_status() {
   if $dry_run; then
     printf '%s\n' "$dry_status" >"$file"
   else
-    (cd "$package_dir" && bun release.run.ts status) >"$file"
+    (cd "$package_dir" && bun release.run.ts status) >"$file" ||
+      fail "release status failed; see $(basename "$file")"
+    jq -se 'length == 1 and (.[0].record | type == "object")' "$file" >/dev/null 2>&1 ||
+      fail "release status printed no single JSON record; see $(basename "$file")"
   fi
   printf '%s\n' "$file"
 }
@@ -393,9 +401,10 @@ expect_settled() {
   fi
 }
 
-# `release plan` must report no changes.
+# `release plan` must report no changes. Alchemy's plan goes to stderr, with
+# every log, so both streams are read.
 expect_no_op_plan() {
-  release plan | tee "$plan_log"
+  release plan 2>&1 | tee "$plan_log" >&2
   $dry_run && {
     echo "  expect plan summary: no changes" >&2
     return
@@ -421,12 +430,16 @@ edge_ip() {
 
 # Every one of several requests through the load balancer must report the
 # expected probe build: proof that it serves 100% of untagged traffic.
+# The wait is bounded by time, not by a count of attempts: the given
+# seconds, else the serving timeout.
 expect_serving() {
-  local version="$1" ip attempt served=0 body
+  local version="$1" timeout="${2:-$SANDBOX_SERVING_TIMEOUT_SECONDS}"
+  local ip attempt=0 served=0 body deadline=$((SECONDS + timeout))
   ip="$(edge_ip)"
   trace curl -fsS "http://${ip}/healthz" "(x10, until version=${version})"
   $dry_run && return 0
-  for attempt in $(seq 1 60); do
+  while ((SECONDS < deadline)); do
+    attempt=$((attempt + 1))
     served=0
     for _ in $(seq 1 10); do
       body="$(curl -fsS --max-time 10 "http://${ip}/healthz" 2>/dev/null || true)"
@@ -439,7 +452,7 @@ expect_serving() {
     }
     sleep 10
   done
-  fail "the edge did not serve ${version} on every request (${served}/10)"
+  fail "the edge did not serve ${version} on every request within ${timeout} s (${served}/10)"
 }
 
 # One state-bucket object's live metadata from the Cloud Storage JSON API,
@@ -546,14 +559,19 @@ take_inventory() {
 proof_pattern() {
   case "$1" in
     run-services) echo '^workspace-' ;;
-    artifact-repositories) echo "/repositories/${artifact_repository}\$" ;;
+    # `value(name)` lists the bare repository ID.
+    artifact-repositories) echo "(^|/repositories/)${artifact_repository}\$" ;;
     forwarding-rules | addresses | backend-services | url-maps | target-http-proxies | target-https-proxies | network-endpoint-groups | security-policies | ssl-certificates)
       echo "^workspace-${stage}-" ;;
     logging-exclusions) echo "^${edge_exclusion}\$" ;;
-    tasks-queues) echo '/queues/workspace-' ;;
-    scheduler-jobs) echo '/jobs/workspace-' ;;
+    # `value(name)` lists bare queue and job IDs.
+    tasks-queues | scheduler-jobs) echo '(^|/)workspace-' ;;
     storage-buckets) echo "^(gs://)?${mobile_updates_bucket}/?\$" ;;
-    state-objects) echo "${stack_prefix}[^_]|/${proof_run_object}\$" ;;
+    # Objects only: `storage ls -r` also prints each folder as a
+    # `gs://…/prefix/:` heading, which is no residue.
+    # The release record's live object too; its noncurrent generations are
+    # history, which `ls -r` does not list.
+    state-objects) echo "${stack_prefix}[^_:][^:]*\$|/${proof_run_object}\$|/${record_object}\$" ;;
     *) echo '^$' ;;
   esac
 }
@@ -716,15 +734,17 @@ verify_edge_security() {
       fail "backend service ${backend} is unreadable; its Cloud Armor policy is unverified"
     expect_equal "${backend} Cloud Armor policy" "${attached##*/}" "$edge_security_policy"
   done
+  # The whole policy: gcloud prints a lone projected field such as
+  # `json(rules)` as the bare value, not an object holding it.
   rules="$(capture '{"rules":[]}' gcloud compute security-policies describe "$edge_security_policy" \
-    --project="$project_id" --format='json(rules)')" ||
+    --project="$project_id" --format=json)" ||
     fail "Cloud Armor policy ${edge_security_policy} is unreadable"
   if $dry_run; then
-    echo "  expect the declared SQLi and XSS rules in preview and the auth throttle enforced" >&2
+    echo "  expect the declared SQLi and XSS rules in preview, the auth throttle enforced and the default allow" >&2
     return 0
   fi
   # Each rule as the stack declares it for the sandbox: matcher, action,
-  # preview and the auth throttle's limit.
+  # preview, the auth throttle's limit and the enforced match-all default.
   jq -e --arg sqli "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})" \
     --arg xss "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})" \
     --arg auth "request.path.startsWith('/api/auth/')" \
@@ -740,45 +760,92 @@ verify_edge_security() {
         and .rateLimitOptions.exceedAction == "deny(429)"
         and .rateLimitOptions.enforceOnKey == "IP"
         and .rateLimitOptions.rateLimitThreshold.count == $limit
-        and .rateLimitOptions.rateLimitThreshold.intervalSec == 60)]
-    | length == 3 and all' >/dev/null <<<"$rules" ||
+        and .rateLimitOptions.rateLimitThreshold.intervalSec == 60),
+      (rule(2147483647) | .action == "allow" and .preview != true
+        and .match.versionedExpr == "SRC_IPS_V1"
+        and .match.config.srcIpRanges == ["*"])]
+    | length == 4 and all' >/dev/null <<<"$rules" ||
     fail "Cloud Armor policy ${edge_security_policy} does not hold the declared WAF preview rules and auth throttle"
   echo "both backends enforce ${edge_security_policy}: WAF rules in preview, auth throttle enforced"
 }
 
+# The edge the stack config declares, from the package's own declarations:
+# protocol, physical object names and the token-route exclusion filter.
+declared_edge() {
+  use_stack_config
+  trace bun scripts/sandbox-edge-declaration.ts
+  if $dry_run; then
+    jq -cn --arg filter "$dry_run_exclusion_filter" --arg policy "$edge_security_policy" \
+      --arg dynamic "${edge_backend_services[0]}" --arg static "${edge_backend_services[1]}" \
+      --arg exclusion "$edge_exclusion" '{protocol: "http",
+        names: {address: "workspace-sandbox-edge", securityPolicy: $policy,
+          dynamicBackend: $dynamic, staticBackend: $static, urlMap: "workspace-sandbox-edge",
+          httpProxy: "workspace-sandbox-edge-http", httpForwardingRule: "workspace-sandbox-http",
+          tokenRouteExclusion: $exclusion},
+        tokenRouteExclusionFilter: $filter}'
+  else
+    (cd "$package_dir" && bun scripts/sandbox-edge-declaration.ts)
+  fi
+}
+
+# One declared edge object's physical name.
+declared_edge_name() {
+  jq -r --arg key "$2" '.names[$key] // empty' "$1"
+}
+
 # deliver-v1 declared the edge with the first release, in the same locked
-# apply; the outputs that apply persisted name it. Reading them back writes
-# nothing. The web service only admits load-balancer traffic (ingress
-# INTERNAL_LOAD_BALANCER), so every HTTP check goes through this edge.
+# apply. The live state holds no stack outputs object (run 45279064237
+# found only per-resource state), so the edge is read back live by
+# the names the stack declares: the address's IP, the HTTP forwarding rule
+# on it, its proxy and URL map. Reading back writes nothing. The web service
+# only admits load-balancer traffic (ingress INTERNAL_LOAD_BALANCER), so
+# every HTTP check goes through this edge.
 phase_edge_readback() {
-  local placeholder="" outputs ip
-  $dry_run && placeholder="$(jq -cn --arg filter "$dry_run_exclusion_filter" \
-    --arg policy "$edge_security_policy" --arg dynamic "${edge_backend_services[0]}" \
-    --arg static "${edge_backend_services[1]}" '{edgeIpAddress: "198.51.100.10",
-      edgeProtocol: "http", securityPolicy: $policy,
-      backendServices: {dynamic: $dynamic, static: $static},
-      tokenRouteExclusionFilter: $filter}')"
-  outputs="$(capture "$placeholder" gcloud storage cat "gs://${state_bucket}/${stack_output_object}")" ||
-    fail "the stack's persisted outputs are unreadable; the edge is unverified"
-  # Only the edge's outputs are kept: the rest of the stack's never reach
-  # the proof artifact.
-  jq '{edgeIpAddress, edgeProtocol, securityPolicy, backendServices, tokenRouteExclusionFilter}' \
-    <<<"$outputs" >"$edge_outputs_file" 2>/dev/null ||
-    fail "the stack's persisted outputs are not JSON"
-  expect_equal "edge protocol" "$(jq -r '.edgeProtocol' "$edge_outputs_file")" http
-  expect_equal "edge Cloud Armor policy" "$(jq -r '.securityPolicy' "$edge_outputs_file")" "$edge_security_policy"
-  expect_equal "edge dynamic backend" "$(jq -r '.backendServices.dynamic' "$edge_outputs_file")" "${edge_backend_services[0]}"
-  expect_equal "edge static backend" "$(jq -r '.backendServices.static' "$edge_outputs_file")" "${edge_backend_services[1]}"
-  ip="$(jq -r '.edgeIpAddress // empty' "$edge_outputs_file")"
+  local declared="${proof_dir}/edge-declaration.json"
+  declared_edge >"$declared" ||
+    fail "the stack config's edge declaration is unreadable"
+  jq -e 'type == "object"' "$declared" >/dev/null 2>&1 ||
+    fail "the stack config declares no edge; deliver-v1 must declare it"
+  expect_equal "edge protocol" "$(jq -r '.protocol' "$declared")" http
+  expect_equal "edge Cloud Armor policy" "$(declared_edge_name "$declared" securityPolicy)" "$edge_security_policy"
+  expect_equal "edge dynamic backend" "$(declared_edge_name "$declared" dynamicBackend)" "${edge_backend_services[0]}"
+  expect_equal "edge static backend" "$(declared_edge_name "$declared" staticBackend)" "${edge_backend_services[1]}"
+  expect_equal "edge token-route exclusion" "$(declared_edge_name "$declared" tokenRouteExclusion)" "$edge_exclusion"
+  local p=(--project="$project_id" --global) ip rule target url_map
+  ip="$(capture 198.51.100.10 gcloud compute addresses describe "$(declared_edge_name "$declared" address)" "${p[@]}" \
+    --format='value(address)')" ||
+    fail "the edge address $(declared_edge_name "$declared" address) is unreadable; deliver-v1 must declare the edge"
   [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] ||
-    fail "the stack outputs no edge IP address; deliver-v1 must declare the edge"
+    fail "the edge address $(declared_edge_name "$declared" address) holds no IPv4 address"
+  rule="$(capture "{\"IPAddress\":\"${ip}\",\"portRange\":\"80-80\",\"target\":\"targetHttpProxies/$(declared_edge_name "$declared" httpProxy)\"}" \
+    gcloud compute forwarding-rules describe "$(declared_edge_name "$declared" httpForwardingRule)" "${p[@]}" \
+    --format='json(IPAddress,portRange,target)')" ||
+    fail "the edge forwarding rule $(declared_edge_name "$declared" httpForwardingRule) is unreadable"
+  expect_equal "edge forwarding rule address" "$(jq -r '.IPAddress // empty' <<<"$rule")" "$ip"
+  # Compute reports a single port as `80-80`; `80` means the same.
+  local port
+  port="$(jq -r '.portRange // empty' <<<"$rule")"
+  [[ "$port" == 80 ]] && port=80-80
+  expect_equal "edge forwarding rule port" "$port" 80-80
+  target="$(jq -r '.target // empty' <<<"$rule")"
+  expect_equal "edge forwarding rule target" "${target##*/targetHttpProxies/}" "$(declared_edge_name "$declared" httpProxy)"
+  url_map="$(capture "urlMaps/$(declared_edge_name "$declared" urlMap)" gcloud compute target-http-proxies describe \
+    "$(declared_edge_name "$declared" httpProxy)" "${p[@]}" --format='value(urlMap)')" ||
+    fail "the edge proxy $(declared_edge_name "$declared" httpProxy) is unreadable"
+  expect_equal "edge proxy URL map" "${url_map##*/urlMaps/}" "$(declared_edge_name "$declared" urlMap)"
+  # The edge as read back, for the proof artifact; no other stack value.
+  jq --arg ip "$ip" '{edgeIpAddress: $ip, edgeProtocol: .protocol,
+    securityPolicy: .names.securityPolicy,
+    backendServices: {dynamic: .names.dynamicBackend, static: .names.staticBackend},
+    tokenRouteExclusionFilter}' "$declared" >"$edge_outputs_file"
   record_value "$edge_file" EDGE_IP "$ip"
-  # The filter's exact bytes, with no newline added.
-  jq -j '.tokenRouteExclusionFilter // empty' "$edge_outputs_file" >"$exclusion_filter_file"
+  # The declared filter's exact bytes, with no newline added: what the
+  # privacy phase requires the live exclusion to apply.
+  jq -j '.tokenRouteExclusionFilter // empty' "$declared" >"$exclusion_filter_file"
   [[ -s "$exclusion_filter_file" ]] ||
-    fail "the edge reports no token-route exclusion filter"
+    fail "the edge declares no token-route exclusion filter"
   verify_edge_security
-  expect_serving v1
+  expect_serving v1 "$SANDBOX_FIRST_SERVING_TIMEOUT_SECONDS"
   local robots
   robots="$(capture 'text/plain' curl -fsS -o /dev/null -w '%{content_type}' "http://${ip}/robots.txt")"
   [[ "$robots" == text/plain* ]] || fail "/robots.txt is not text/plain"
@@ -1133,7 +1200,7 @@ verify_log_routing() {
       '$known[0] + [.[] | . + {parent: $parent, level: "ancestor"}]' <<<"$sinks" >"${dir}/sinks.next"
     mv "${dir}/sinks.next" "${dir}/sinks.json"
   done < <(jq -r '.[] | [.id, .type] | @tsv' <<<"$ancestors")
-  # The live project exclusion must be the filter the stack outputs, and
+  # The live project exclusion must be the filter the stack declares, and
   # that filter must name both request sources and every token route.
   local expected source route
   expected="$(cat "$exclusion_filter_file" 2>/dev/null)" ||
@@ -1191,7 +1258,7 @@ verify_probe_telemetry() {
     if entries="$(capture '[{}]' gcloud logging read \
       "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${web_service}\" AND jsonPayload.otlp.traceId=\"${trace_id}\"" \
       --project="$project_id" --freshness=1h --limit=1 --format='json(timestamp,jsonPayload.otlp)')"; then
-      [[ "$(jq 'length' <<<"$entries")" != 0 ]] && {
+      jq -e 'length > 0' >/dev/null <<<"$entries" 2>&1 && {
         found=true
         break
       }
@@ -1241,9 +1308,9 @@ phase_edge_privacy() {
   for attempt in $(seq 1 8); do
     requests="$(capture '[{}]' gcloud logging read \
       "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${web_service}\" AND log_id(\"run.googleapis.com/requests\") AND timestamp>=\"${start}\"" \
-      --project="$project_id" --freshness=1h --limit=1 --format='json(timestamp)')" ||
+      --project="$project_id" --freshness=1h --limit=1 --format='json(logName,timestamp)')" ||
       fail "Cloud Run request logs are unreadable; marker absence unverified"
-    [[ "$(jq 'length' <<<"$requests")" != 0 ]] && {
+    jq -e 'length > 0' >/dev/null <<<"$requests" 2>&1 && {
       control=true
       break
     }
@@ -1287,9 +1354,16 @@ phase_edge_privacy() {
 # bucket. A refused lock or a failed destroy stops here: nothing is ever
 # deleted outside the lock, and the stack state is left for an operator.
 phase_stack_destroy() {
-  local status holder
-  status="$(release_status before-destroy)"
-  holder="$(json_get '.record.writer.holder' "$status")"
+  local status="" holder=""
+  # The locked destroy takes the writer lock itself and refuses a held one,
+  # so an unreadable status only skips clearing a proven-dead holder; it
+  # never stops the teardown.
+  if status="$(release_status before-destroy)"; then
+    holder="$(json_get '.record.writer.holder' "$status")"
+  else
+    warning "the release status is unreadable; the locked destroy decides on the writer lock"
+    status=""
+  fi
   if ! $dry_run && [[ -n "$holder" && "$holder" != null ]]; then
     # Only the holder whose whole process tree the interrupt phase proved
     # dead may be cleared, and only once the Alchemy lease is quiet; any
@@ -1301,7 +1375,7 @@ phase_stack_destroy() {
       fail "the writer lock held by ${holder} was not released; nothing was destroyed"
     status="$(release_status destroy-unlocked)"
   fi
-  if ! $dry_run && [[ "$(json_get '.record.pendingApply' "$status")" != null ]]; then
+  if ! $dry_run && [[ -n "$status" && "$(json_get '.record.pendingApply' "$status")" != null ]]; then
     release recover || warning "recover failed; destroy may refuse the pending apply"
   fi
   locked_stack destroy ||

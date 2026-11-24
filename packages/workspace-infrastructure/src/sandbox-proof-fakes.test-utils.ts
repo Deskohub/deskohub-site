@@ -31,6 +31,8 @@ export interface FakeRule {
   /** A regular expression over the space-joined arguments. */
   readonly pattern: string;
   readonly stdout?: string;
+  /** Written to stderr, as logs and Alchemy's plan are. */
+  readonly stderr?: string;
   readonly exit?: number;
   /** World keys this call sets before it answers. */
   readonly set?: Partial<FakeWorld>;
@@ -452,7 +454,12 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     world = next;
     writeWorld(worldFile, next);
   };
-  if (tool === "bun" && args[0] === "scripts/sandbox-stack-config.ts") {
+  // The package's own config and edge declarations run for real.
+  if (
+    tool === "bun" &&
+    (args[0] === "scripts/sandbox-stack-config.ts" ||
+      args[0] === "scripts/sandbox-edge-declaration.ts")
+  ) {
     return Bun.spawnSync([realBun, ...args], {
       stdio: ["inherit", "inherit", "inherit"],
     }).exitCode;
@@ -492,6 +499,9 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     advanceClock(rule.advance ?? 0);
     if (rule.stdout !== undefined) {
       print(rule.stdout);
+    }
+    if (rule.stderr !== undefined) {
+      process.stderr.write(`${rule.stderr}\n`);
     }
     return rule.exit ?? 0;
   }
