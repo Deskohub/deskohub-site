@@ -6,7 +6,6 @@ import {
   describe,
   expect,
   mock,
-  spyOn,
   test,
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
@@ -50,6 +49,7 @@ import {
   workspaceAvailabilityKeys,
 } from "@/features/reservation/workspace-availability";
 import { elementOf } from "@/shared/testing/dom-element.test-utils";
+import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
 import {
   workspaceUseAction,
   workspaceUseSearchParams,
@@ -236,15 +236,12 @@ const isStartTimesRequest = (request: RequestInfo | URL) =>
 const stubAvailabilityFetch = <T,>(
   body: T,
   startTimes: typeof startTimesResponse = startTimesResponse
-) => {
-  const fetchCalls = spyOn(globalThis, "fetch");
-  fetchCalls.mockClear();
-  return fetchCalls.mockImplementation((request: RequestInfo | URL) =>
+) =>
+  stubFetch((request: RequestInfo | URL) =>
     Promise.resolve(
       jsonResponse(isStartTimesRequest(request) ? startTimes : body)
     )
   );
-};
 
 const getIntervalAvailabilityCalls = (
   fetchMock: ReturnType<typeof stubAvailabilityFetch>
@@ -381,18 +378,16 @@ describe("MeetingRoomReservationForm", () => {
       readonly url: string;
       readonly signal?: AbortSignal | null;
     } | null = null;
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL, init?: RequestInit) => {
-        if (isStartTimesRequest(request)) {
-          return Promise.resolve(jsonResponse(startTimesResponse));
-        }
-        availabilityRequest = {
-          url: String(request),
-          signal: init?.signal,
-        };
-        return Promise.resolve(jsonResponse(availabilityResponse));
+    stubFetch((request: RequestInfo | URL, init?: RequestInit) => {
+      if (isStartTimesRequest(request)) {
+        return Promise.resolve(jsonResponse(startTimesResponse));
       }
-    );
+      availabilityRequest = {
+        url: String(request),
+        signal: init?.signal,
+      };
+      return Promise.resolve(jsonResponse(availabilityResponse));
+    });
 
     const view = renderForm();
     const continueButton = view.getByRole("button", { name: "Continue" });
@@ -463,15 +458,13 @@ describe("MeetingRoomReservationForm", () => {
       throw new Error("Expected a valid whole-day meeting-room interval");
     }
     let availabilityUrl = "";
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        if (isStartTimesRequest(request)) {
-          return Promise.resolve(jsonResponse(startTimesResponse));
-        }
-        availabilityUrl = String(request);
-        return Promise.resolve(jsonResponse(availabilityResponse));
+    stubFetch((request: RequestInfo | URL) => {
+      if (isStartTimesRequest(request)) {
+        return Promise.resolve(jsonResponse(startTimesResponse));
       }
-    );
+      availabilityUrl = String(request);
+      return Promise.resolve(jsonResponse(availabilityResponse));
+    });
     getAdvertisedPrices.mockImplementation(() => new Promise(() => undefined));
     const advertisedPrice = getDiscountedAdvertisedPriceResponse({
       unit: "day",
@@ -540,9 +533,7 @@ describe("MeetingRoomReservationForm", () => {
   test("preserves the selected date and time across whole-day toggles", async () => {
     const originalNow = Temporal.Now.instant;
     Temporal.Now.instant = () => Temporal.Instant.from("2099-07-30T12:37:00Z");
-    spyOn(globalThis, "fetch").mockImplementation(() =>
-      Promise.resolve(jsonResponse(availabilityResponse))
-    );
+    stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
 
     try {
       const view = renderForm({
@@ -695,9 +686,7 @@ describe("MeetingRoomReservationForm", () => {
     const originalNow = Temporal.Now.instant;
     let now = Temporal.Instant.from("2099-07-30T12:37:00Z");
     Temporal.Now.instant = () => now;
-    spyOn(globalThis, "fetch").mockImplementation(() =>
-      Promise.resolve(jsonResponse(availabilityResponse))
-    );
+    stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
     const restoredWholeDayReservation =
       normalizedMeetingRoomReservationOrderSchema.make({
         ...initialReservation,
@@ -735,9 +724,7 @@ describe("MeetingRoomReservationForm", () => {
   test("keeps the selected quote on a restored hourly slot that has started", async () => {
     const originalNow = Temporal.Now.instant;
     Temporal.Now.instant = () => Temporal.Instant.from("2099-07-30T13:01:00Z");
-    spyOn(globalThis, "fetch").mockImplementation(() =>
-      Promise.resolve(jsonResponse(availabilityResponse))
-    );
+    stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
     const restoredHourlyReservation =
       normalizedMeetingRoomReservationOrderSchema.make({
         ...initialReservation,
@@ -853,9 +840,7 @@ describe("MeetingRoomReservationForm", () => {
         }))
       )
     );
-    spyOn(globalThis, "fetch").mockImplementation(() =>
-      Promise.resolve(jsonResponse(availabilityResponse))
-    );
+    stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
 
     const view = renderForm();
 
@@ -875,7 +860,7 @@ describe("MeetingRoomReservationForm", () => {
   });
 
   test("disables checkout when Dotypos reports the interval unavailable", async () => {
-    spyOn(globalThis, "fetch").mockImplementation(() =>
+    stubFetch(() =>
       Promise.resolve(
         jsonResponse({
           ...availabilityResponse,
@@ -1070,9 +1055,7 @@ describe("MeetingRoomReservationForm", () => {
         ],
         unavailableStartTimes: [],
       };
-      const fetchCalls = spyOn(globalThis, "fetch");
-      fetchCalls.mockClear();
-      fetchCalls.mockImplementation((request: RequestInfo | URL) => {
+      const fetchCalls = stubFetch((request: RequestInfo | URL) => {
         if (!isStartTimesRequest(request)) {
           return Promise.resolve(jsonResponse(availabilityResponse));
         }
@@ -1113,11 +1096,10 @@ describe("MeetingRoomReservationForm", () => {
     });
 
     test("keeps a restored choice while the free starts load", async () => {
-      spyOn(globalThis, "fetch").mockImplementation(
-        (request: RequestInfo | URL) =>
-          isStartTimesRequest(request)
-            ? new Promise<Response>(() => undefined)
-            : Promise.resolve(jsonResponse(availabilityResponse))
+      stubFetch((request: RequestInfo | URL) =>
+        isStartTimesRequest(request)
+          ? new Promise<Response>(() => undefined)
+          : Promise.resolve(jsonResponse(availabilityResponse))
       );
 
       const view = renderForm({
@@ -1164,11 +1146,10 @@ describe("MeetingRoomReservationForm", () => {
         { updatedAt: 0 }
       );
       const recheck = Promise.withResolvers<Response>();
-      spyOn(globalThis, "fetch").mockImplementation(
-        (request: RequestInfo | URL) =>
-          isStartTimesRequest(request)
-            ? recheck.promise
-            : Promise.resolve(jsonResponse(availabilityResponse))
+      stubFetch((request: RequestInfo | URL) =>
+        isStartTimesRequest(request)
+          ? recheck.promise
+          : Promise.resolve(jsonResponse(availabilityResponse))
       );
 
       const view = renderForm(
@@ -1188,13 +1169,12 @@ describe("MeetingRoomReservationForm", () => {
     });
 
     test("explains a whole day's setup time it couldn't check", async () => {
-      spyOn(globalThis, "fetch").mockImplementation(
-        (request: RequestInfo | URL) =>
-          Promise.resolve(
-            isStartTimesRequest(request)
-              ? new Response(null, { status: 503 })
-              : jsonResponse(availabilityResponse)
-          )
+      stubFetch((request: RequestInfo | URL) =>
+        Promise.resolve(
+          isStartTimesRequest(request)
+            ? new Response(null, { status: 503 })
+            : jsonResponse(availabilityResponse)
+        )
       );
 
       const view = renderForm({

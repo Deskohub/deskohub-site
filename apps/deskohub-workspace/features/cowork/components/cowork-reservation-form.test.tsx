@@ -6,7 +6,6 @@ import {
   expect,
   mock,
   setSystemTime,
-  spyOn,
   test,
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
@@ -52,7 +51,6 @@ import {
 import { discountIdSchema } from "@/features/discounts/contracts";
 import { type Locale, m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
-import type { PreparePayStateInput } from "@/features/reservation/actions/prepare-pay-state.schema";
 import {
   continueAndSubmitReservation,
   mockReservationCheckoutStep,
@@ -70,6 +68,7 @@ import {
 import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney } from "@/shared/money/money";
 import { elementOf } from "@/shared/testing/dom-element.test-utils";
+import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
 import {
   workspaceRouterPush as push,
   workspaceRouterRefresh,
@@ -81,6 +80,7 @@ import {
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
+import type { useWorkspaceAction } from "@/shared/utils/use-workspace-action";
 import { formatCoworkOvernightStay } from "./cowork-stay-display";
 
 const testEmailAddressForAda = testEmailAddress("ada");
@@ -112,19 +112,24 @@ mock.module("next/image", () => ({
   getImageProps,
 }));
 
-/** The submitted checkout fields these tests read back. */
-type CheckoutSubmission = {
-  readonly advertisedPriceToken?: string;
-  readonly reservation?: {
-    readonly date?: string;
-    readonly entryTier?: string;
-    readonly monitorOption?: string;
-    readonly stay?: string;
-  };
-};
-const executeAsync = mock((_submission: CheckoutSubmission) =>
-  Promise.resolve({})
-);
+const executeAsync = mock<
+  ReturnType<typeof useWorkspaceAction>["executeAsync"]
+>(() => Promise.resolve({}));
+/** Reads the checkout fields these tests check from the first submission. */
+const firstCheckoutSubmission = () =>
+  Schema.decodeUnknownSync(
+    Schema.Struct({
+      advertisedPriceToken: Schema.optional(Schema.String),
+      reservation: Schema.optional(
+        Schema.Struct({
+          date: Schema.optional(Schema.String),
+          entryTier: Schema.optional(Schema.String),
+          monitorOption: Schema.optional(Schema.String),
+          stay: Schema.optional(Schema.String),
+        })
+      ),
+    })
+  )(executeAsync.mock.calls[0]?.[0]);
 const getAdvertisedPrices = mock(
   (requests: ReadonlyArray<AdvertisedPriceRequest>) =>
     Promise.resolve(advertisedPricesResult(requests))
@@ -670,9 +675,7 @@ describe("CoworkReservationForm advertised pricing", () => {
     };
 
     test("keeps the purchase cards away while a held pack is offered or used", async () => {
-      spyOn(globalThis, "fetch").mockImplementation(() =>
-        Promise.resolve(jsonResponse(availabilityResponse))
-      );
+      stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
       const view = renderForm({
         bookingPasses,
         entryPackOffered: true,
@@ -685,9 +688,7 @@ describe("CoworkReservationForm advertised pricing", () => {
     });
 
     test("applies the offered pack and keeps the ordinary tier enabled", async () => {
-      spyOn(globalThis, "fetch").mockImplementation(() =>
-        Promise.resolve(jsonResponse(availabilityResponse))
-      );
+      stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
       const view = renderForm({ bookingPasses, initialValues });
       fireEvent.click(await view.findByRole("button", { name: "Use pass" }));
 
@@ -735,9 +736,7 @@ describe("CoworkReservationForm advertised pricing", () => {
     });
 
     test("offers a pack only on eligible dates and keeps other tiers bookable", async () => {
-      spyOn(globalThis, "fetch").mockImplementation(() =>
-        Promise.resolve(jsonResponse(availabilityResponse))
-      );
+      stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
       const date = dateOffsetFromToday(1);
       const coveredDate = plainDateStringSchema.make(dateOffsetFromToday(2));
       const openSpace = {
@@ -784,9 +783,7 @@ describe("CoworkReservationForm advertised pricing", () => {
     });
 
     test("a restored pack blocks an ineligible date until the holder picks another day", async () => {
-      spyOn(globalThis, "fetch").mockImplementation(() =>
-        Promise.resolve(jsonResponse(availabilityResponse))
-      );
+      stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
       const coveredDate = plainDateStringSchema.make(dateOffsetFromToday(1));
       const nextDate = dateOffsetFromToday(2);
       const pack = {
@@ -827,26 +824,20 @@ describe("CoworkReservationForm advertised pricing", () => {
       const { preparePayState } = await import(
         "@/features/reservation/actions/prepare-pay-state"
       );
-      const runCallback = workspaceUseAction.mock.calls.findLast(
+      const onSuccess = workspaceUseAction.mock.calls.findLast(
         ([action]) => action === preparePayState
-      )?.[1] as {
-        readonly onSuccess: (result: {
-          readonly data: {
-            readonly status: "error";
-            readonly reason: "entry_pack_unavailable";
-            readonly message: string;
-          };
-        }) => void;
-      };
-      act(() =>
-        runCallback.onSuccess({
+      )?.[1].onSuccess;
+      if (!onSuccess) throw new Error("Expected the Pay preparation callback");
+      act(() => {
+        onSuccess({
           data: {
             status: "error",
             reason: "entry_pack_unavailable",
             message: "fixture",
           },
-        })
-      );
+          input: undefined,
+        });
+      });
     };
 
     test("keeps the pack after a conflicting date is rejected and another day is selected", async () => {
@@ -866,9 +857,7 @@ describe("CoworkReservationForm advertised pricing", () => {
     });
 
     test("offers another eligible pack on the same date after a pack is rejected", async () => {
-      spyOn(globalThis, "fetch").mockImplementation(() =>
-        Promise.resolve(jsonResponse(availabilityResponse))
-      );
+      stubFetch(() => Promise.resolve(jsonResponse(availabilityResponse)));
       const laterPack = {
         ...openSpacePack,
         id: orderIdSchema.make("6fd5c251-6506-4697-8006-ca57bb324303"),
@@ -892,23 +881,21 @@ describe("CoworkReservationForm advertised pricing", () => {
     test("keeps the selected workstation from a covered pack when changing dates", async () => {
       const date = dateOffsetFromToday(1);
       const nextDate = dateOffsetFromToday(2);
-      spyOn(globalThis, "fetch").mockImplementation(
-        (request: RequestInfo | URL) => {
-          const url = new URL(String(request), "http://localhost");
-          if (!url.pathname.startsWith("/api/workspace/availability")) {
-            return Promise.reject(new Error("Unexpected availability request"));
-          }
-          const monitor = url.searchParams.get("monitorOption");
-          const response =
-            url.searchParams.get("date") === date
-              ? requiredWorkstationAvailability(date, monitor)
-              : {
-                  ...availabilityResponse,
-                  reservedDeskWorkstationRequiredDates: [date],
-                };
-          return Promise.resolve(jsonResponse(response));
+      stubFetch((request: RequestInfo | URL) => {
+        const url = new URL(String(request), "http://localhost");
+        if (!url.pathname.startsWith("/api/workspace/availability")) {
+          return Promise.reject(new Error("Unexpected availability request"));
         }
-      );
+        const monitor = url.searchParams.get("monitorOption");
+        const response =
+          url.searchParams.get("date") === date
+            ? requiredWorkstationAvailability(date, monitor)
+            : {
+                ...availabilityResponse,
+                reservedDeskWorkstationRequiredDates: [date],
+              };
+        return Promise.resolve(jsonResponse(response));
+      });
       const pack = {
         ...openSpacePack,
         tier: "reserved-desk-workstation" as const,
@@ -951,9 +938,8 @@ describe("CoworkReservationForm advertised pricing", () => {
 
   test("offers the tier prices the form first shows in the page's structured data", async () => {
     workspaceUseSearchParams.mockReturnValue(new URLSearchParams());
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) =>
-        Promise.reject(new Error(`Unexpected client fetch: ${String(request)}`))
+    stubFetch((request: RequestInfo | URL) =>
+      Promise.reject(new Error(`Unexpected client fetch: ${String(request)}`))
     );
     const initialValues = {
       ...coworkReservationDefaultValues,
@@ -1011,9 +997,7 @@ describe("CoworkReservationForm advertised pricing", () => {
 
   test("renders every page-loaded price and availability without a client request", async () => {
     workspaceUseSearchParams.mockReturnValue(new URLSearchParams());
-    const fetchCalls = spyOn(globalThis, "fetch");
-    fetchCalls.mockClear();
-    fetchCalls.mockImplementation((request: RequestInfo | URL) =>
+    const fetchCalls = stubFetch((request: RequestInfo | URL) =>
       Promise.reject(new Error(`Unexpected client fetch: ${String(request)}`))
     );
     const initialValues = {
@@ -1069,15 +1053,13 @@ describe("CoworkReservationForm advertised pricing", () => {
     workspaceUseSearchParams.mockReturnValue(
       new URLSearchParams("entryTier=open-space&date=2099-07-30&coffee=true")
     );
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (url.startsWith("/api/workspace/availability")) {
-          return Promise.resolve(jsonResponse(availabilityResponse));
-        }
-        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (url.startsWith("/api/workspace/availability")) {
+        return Promise.resolve(jsonResponse(availabilityResponse));
       }
-    );
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
 
     const view = renderForm({ checkoutCustomer: { status: "signed-out" } });
     const continueButton = elementOf(
@@ -1105,15 +1087,13 @@ describe("CoworkReservationForm advertised pricing", () => {
     workspaceUseSearchParams.mockReturnValue(
       new URLSearchParams("entryTier=open-space&date=2099-07-30&coffee=true")
     );
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (url.startsWith("/api/workspace/availability")) {
-          return Promise.resolve(jsonResponse(availabilityResponse));
-        }
-        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (url.startsWith("/api/workspace/availability")) {
+        return Promise.resolve(jsonResponse(availabilityResponse));
       }
-    );
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
 
     const view = renderForm();
     const continueButton = view.getByRole("button", { name: "Continue" });
@@ -1196,15 +1176,13 @@ describe("CoworkReservationForm advertised pricing", () => {
         )
       );
     });
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (url.startsWith("/api/workspace/availability")) {
-          return Promise.resolve(jsonResponse(availabilityResponse));
-        }
-        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (url.startsWith("/api/workspace/availability")) {
+        return Promise.resolve(jsonResponse(availabilityResponse));
       }
-    );
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
 
     const view = renderForm();
 
@@ -1283,15 +1261,13 @@ describe("CoworkReservationForm advertised pricing", () => {
           : advertisedPricesResult(requests)
       )
     );
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (url.startsWith("/api/workspace/availability")) {
-          return Promise.resolve(jsonResponse(availabilityResponse));
-        }
-        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (url.startsWith("/api/workspace/availability")) {
+        return Promise.resolve(jsonResponse(availabilityResponse));
       }
-    );
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
 
     const view = renderForm();
     expect(
@@ -1322,16 +1298,14 @@ describe("CoworkReservationForm advertised pricing", () => {
         advertisedPricesResult(requests, getCoworkAdvertisedPriceResponse)
       );
     });
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (url.startsWith("/api/workspace/availability")) {
-          availabilityRequests.push(url);
-          return Promise.resolve(jsonResponse(availabilityResponse));
-        }
-        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (url.startsWith("/api/workspace/availability")) {
+        availabilityRequests.push(url);
+        return Promise.resolve(jsonResponse(availabilityResponse));
       }
-    );
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
 
     const view = renderForm();
     await view.findByText(openSpaceOriginalPriceText(), {}, { timeout: 3000 });
@@ -1432,11 +1406,11 @@ describe("CoworkReservationForm advertised pricing", () => {
     await waitFor(() => {
       expect(executeAsync).toHaveBeenCalledTimes(1);
     });
-    const workstationSubmission = executeAsync.mock.calls[0]?.[0];
-    expect(workstationSubmission?.advertisedPriceToken).toBe(
+    const workstationSubmission = firstCheckoutSubmission();
+    expect(workstationSubmission.advertisedPriceToken).toBe(
       "sealed-reserved-desk-workstation-advertised-price"
     );
-    expect(workstationSubmission?.reservation?.monitorOption).toBe("2x32-4k");
+    expect(workstationSubmission.reservation?.monitorOption).toBe("2x32-4k");
 
     // Toggling the workstation off submits the bare variant: no monitor
     // option and the no-workstation advertised token.
@@ -1461,11 +1435,11 @@ describe("CoworkReservationForm advertised pricing", () => {
     await waitFor(() => {
       expect(executeAsync).toHaveBeenCalledTimes(1);
     });
-    const bareSubmission = executeAsync.mock.calls[0]?.[0];
-    expect(bareSubmission?.advertisedPriceToken).toBe(
+    const bareSubmission = firstCheckoutSubmission();
+    expect(bareSubmission.advertisedPriceToken).toBe(
       "sealed-reserved-desk-advertised-price"
     );
-    expect(bareSubmission?.reservation?.monitorOption).toBeUndefined();
+    expect(bareSubmission.reservation?.monitorOption).toBeUndefined();
   });
 
   test("hides a previously shown workstation amount when the same query refresh fails", async () => {
@@ -1479,15 +1453,13 @@ describe("CoworkReservationForm advertised pricing", () => {
         advertisedPricesResult(requests, getCoworkAdvertisedPriceResponse)
       )
     );
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (url.startsWith("/api/workspace/availability")) {
-          return Promise.resolve(jsonResponse(availabilityResponse));
-        }
-        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (url.startsWith("/api/workspace/availability")) {
+        return Promise.resolve(jsonResponse(availabilityResponse));
       }
-    );
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
 
     const view = renderForm({}, queryClient);
     await view.findByText(openSpaceOriginalPriceText(), {}, { timeout: 3000 });
@@ -1548,15 +1520,13 @@ describe("CoworkReservationForm advertised pricing", () => {
     workspaceUseSearchParams.mockReturnValue(
       new URLSearchParams("entryTier=open-space&date=2099-07-30")
     );
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (url.startsWith("/api/workspace/availability")) {
-          return Promise.resolve(jsonResponse(availabilityResponse));
-        }
-        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (url.startsWith("/api/workspace/availability")) {
+        return Promise.resolve(jsonResponse(availabilityResponse));
       }
-    );
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    });
 
     const view = renderForm();
 
@@ -1619,24 +1589,22 @@ describe("CoworkReservationForm advertised pricing", () => {
         advertisedPricesResult(requests, getCoworkAdvertisedPriceResponse)
       )
     );
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (!url.startsWith("/api/workspace/availability")) {
-          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-        }
-
-        availabilityRequests.push(url);
-        const monitorOption = new URL(url, "http://localhost").searchParams.get(
-          "monitorOption"
-        );
-        return Promise.resolve(
-          jsonResponse(
-            requiredWorkstationAvailability("2099-07-30", monitorOption)
-          )
-        );
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (!url.startsWith("/api/workspace/availability")) {
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
       }
-    );
+
+      availabilityRequests.push(url);
+      const monitorOption = new URL(url, "http://localhost").searchParams.get(
+        "monitorOption"
+      );
+      return Promise.resolve(
+        jsonResponse(
+          requiredWorkstationAvailability("2099-07-30", monitorOption)
+        )
+      );
+    });
 
     const view = renderForm({
       initialValues: reservedDeskFormValues(),
@@ -1678,11 +1646,11 @@ describe("CoworkReservationForm advertised pricing", () => {
     await waitFor(() => {
       expect(executeAsync).toHaveBeenCalledTimes(1);
     });
-    const submission = executeAsync.mock.calls[0]?.[0];
-    expect(submission?.advertisedPriceToken).toBe(
+    const submission = firstCheckoutSubmission();
+    expect(submission.advertisedPriceToken).toBe(
       "sealed-reserved-desk-workstation-advertised-price"
     );
-    expect(submission?.reservation).toMatchObject({
+    expect(submission.reservation).toMatchObject({
       date: "2099-07-30",
       entryTier: "reserved-desk",
       monitorOption: "2x32-qhd",
@@ -1821,36 +1789,34 @@ describe("CoworkReservationForm advertised pricing", () => {
         unavailableDates: [],
       }
     );
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (!url.startsWith("/api/workspace/availability")) {
-          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-        }
-
-        const params = new URL(url, "http://localhost").searchParams;
-        const date = params.get("date");
-        return Promise.resolve(
-          jsonResponse(
-            date
-              ? {
-                  ...availabilityResponse,
-                  date,
-                  unavailableDates: [selectedDate],
-                  unavailableCoworkTiers: [],
-                  unavailableMonitorOptions: [],
-                }
-              : {
-                  ...availabilityResponse,
-                  date: undefined,
-                  from: params.get("from"),
-                  to: params.get("to"),
-                  unavailableDates: [],
-                }
-          )
-        );
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (!url.startsWith("/api/workspace/availability")) {
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
       }
-    );
+
+      const params = new URL(url, "http://localhost").searchParams;
+      const date = params.get("date");
+      return Promise.resolve(
+        jsonResponse(
+          date
+            ? {
+                ...availabilityResponse,
+                date,
+                unavailableDates: [selectedDate],
+                unavailableCoworkTiers: [],
+                unavailableMonitorOptions: [],
+              }
+            : {
+                ...availabilityResponse,
+                date: undefined,
+                from: params.get("from"),
+                to: params.get("to"),
+                unavailableDates: [],
+              }
+        )
+      );
+    });
 
     const view = renderForm(
       {
@@ -1917,30 +1883,28 @@ describe("CoworkReservationForm advertised pricing", () => {
       defaultOptions: { queries: { retryDelay: 0 } },
     });
     let selectedDateRequestCount = 0;
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (!url.startsWith("/api/workspace/availability")) {
-          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-        }
-
-        const params = new URL(url, "http://localhost").searchParams;
-        if (params.has("date")) {
-          selectedDateRequestCount += 1;
-          return Promise.reject(new Error("Selected-date availability failed"));
-        }
-
-        return Promise.resolve(
-          jsonResponse({
-            ...availabilityResponse,
-            date: undefined,
-            from: params.get("from"),
-            to: params.get("to"),
-            unavailableDates: [],
-          })
-        );
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (!url.startsWith("/api/workspace/availability")) {
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
       }
-    );
+
+      const params = new URL(url, "http://localhost").searchParams;
+      if (params.has("date")) {
+        selectedDateRequestCount += 1;
+        return Promise.reject(new Error("Selected-date availability failed"));
+      }
+
+      return Promise.resolve(
+        jsonResponse({
+          ...availabilityResponse,
+          date: undefined,
+          from: params.get("from"),
+          to: params.get("to"),
+          unavailableDates: [],
+        })
+      );
+    });
     getAdvertisedPrices.mockImplementation((requests) =>
       Promise.resolve(advertisedPricesResult(requests))
     );
@@ -1998,43 +1962,32 @@ describe("CoworkReservationForm advertised pricing", () => {
     });
     let bareQueryRequestCount = 0;
     let resolveBareQueryRefresh: ((response: Response) => void) | undefined;
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (!url.startsWith("/api/workspace/availability")) {
-          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-        }
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (!url.startsWith("/api/workspace/availability")) {
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+      }
 
-        const params = new URL(url, "http://localhost").searchParams;
-        const date = params.get("date");
-        const monitorOption = params.get("monitorOption");
-        if (!date) {
-          return Promise.resolve(
-            jsonResponse({
-              ...availabilityResponse,
-              date: undefined,
-              from: params.get("from"),
-              to: params.get("to"),
-              unavailableDates: [],
-            })
-          );
-        }
-        if (date === selectedDate && monitorOption === null) {
-          bareQueryRequestCount += 1;
-          if (bareQueryRequestCount > 1) {
-            return new Promise<Response>((resolve) => {
-              resolveBareQueryRefresh = resolve;
-            });
-          }
-          return Promise.resolve(
-            jsonResponse({
-              ...availabilityResponse,
-              date,
-              unavailableDates: [],
-              reservedDeskWorkstationRequiredDates: [],
-              unavailableMonitorOptions: ["2x27-qhd"],
-            })
-          );
+      const params = new URL(url, "http://localhost").searchParams;
+      const date = params.get("date");
+      const monitorOption = params.get("monitorOption");
+      if (!date) {
+        return Promise.resolve(
+          jsonResponse({
+            ...availabilityResponse,
+            date: undefined,
+            from: params.get("from"),
+            to: params.get("to"),
+            unavailableDates: [],
+          })
+        );
+      }
+      if (date === selectedDate && monitorOption === null) {
+        bareQueryRequestCount += 1;
+        if (bareQueryRequestCount > 1) {
+          return new Promise<Response>((resolve) => {
+            resolveBareQueryRefresh = resolve;
+          });
         }
         return Promise.resolve(
           jsonResponse({
@@ -2042,11 +1995,20 @@ describe("CoworkReservationForm advertised pricing", () => {
             date,
             unavailableDates: [],
             reservedDeskWorkstationRequiredDates: [],
-            unavailableMonitorOptions: [],
+            unavailableMonitorOptions: ["2x27-qhd"],
           })
         );
       }
-    );
+      return Promise.resolve(
+        jsonResponse({
+          ...availabilityResponse,
+          date,
+          unavailableDates: [],
+          reservedDeskWorkstationRequiredDates: [],
+          unavailableMonitorOptions: [],
+        })
+      );
+    });
 
     const view = renderForm(
       {
@@ -2141,45 +2103,31 @@ describe("CoworkReservationForm advertised pricing", () => {
     });
     let failBareQuery = false;
     let bareQueryRequestCount = 0;
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (!url.startsWith("/api/workspace/availability")) {
-          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-        }
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (!url.startsWith("/api/workspace/availability")) {
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+      }
 
-        const params = new URL(url, "http://localhost").searchParams;
-        const date = params.get("date");
-        const monitorOption = params.get("monitorOption");
-        if (!date) {
-          return Promise.resolve(
-            jsonResponse({
-              ...availabilityResponse,
-              date: undefined,
-              from: params.get("from"),
-              to: params.get("to"),
-              unavailableDates: [],
-            })
-          );
-        }
-        if (!monitorOption) {
-          if (failBareQuery) {
-            bareQueryRequestCount += 1;
-            return Promise.reject(
-              new Error("Workstation availability refresh failed")
-            );
-          }
-
-          return Promise.resolve(
-            jsonResponse({
-              ...availabilityResponse,
-              date,
-              from: params.get("from"),
-              to: params.get("to"),
-              unavailableDates: [],
-              reservedDeskWorkstationRequiredDates: [],
-              unavailableMonitorOptions: [],
-            })
+      const params = new URL(url, "http://localhost").searchParams;
+      const date = params.get("date");
+      const monitorOption = params.get("monitorOption");
+      if (!date) {
+        return Promise.resolve(
+          jsonResponse({
+            ...availabilityResponse,
+            date: undefined,
+            from: params.get("from"),
+            to: params.get("to"),
+            unavailableDates: [],
+          })
+        );
+      }
+      if (!monitorOption) {
+        if (failBareQuery) {
+          bareQueryRequestCount += 1;
+          return Promise.reject(
+            new Error("Workstation availability refresh failed")
           );
         }
 
@@ -2195,7 +2143,19 @@ describe("CoworkReservationForm advertised pricing", () => {
           })
         );
       }
-    );
+
+      return Promise.resolve(
+        jsonResponse({
+          ...availabilityResponse,
+          date,
+          from: params.get("from"),
+          to: params.get("to"),
+          unavailableDates: [],
+          reservedDeskWorkstationRequiredDates: [],
+          unavailableMonitorOptions: [],
+        })
+      );
+    });
     getAdvertisedPrices.mockImplementation((requests) =>
       Promise.resolve(
         advertisedPricesResult(requests, getCoworkAdvertisedPriceResponse)
@@ -2254,31 +2214,29 @@ describe("CoworkReservationForm advertised pricing", () => {
     expect(fullDate.day).toBe(fullDate.daysInMonth);
     expect(requiredDate.day).toBe(1);
     let requestedAvailabilityRange: { from: string; to: string } | undefined;
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (!url.startsWith("/api/workspace/availability")) {
-          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-        }
-
-        const searchParams = new URL(url, "http://localhost").searchParams;
-        const from = searchParams.get("from");
-        const to = searchParams.get("to");
-        if (from !== null && to !== null) {
-          requestedAvailabilityRange = { from, to };
-        }
-        return Promise.resolve(
-          jsonResponse({
-            ...availabilityResponse,
-            date: undefined,
-            from,
-            to,
-            unavailableDates: [fullDate.toString(), requiredDate.toString()],
-            reservedDeskWorkstationRequiredDates: [requiredDate.toString()],
-          })
-        );
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (!url.startsWith("/api/workspace/availability")) {
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
       }
-    );
+
+      const searchParams = new URL(url, "http://localhost").searchParams;
+      const from = searchParams.get("from");
+      const to = searchParams.get("to");
+      if (from !== null && to !== null) {
+        requestedAvailabilityRange = { from, to };
+      }
+      return Promise.resolve(
+        jsonResponse({
+          ...availabilityResponse,
+          date: undefined,
+          from,
+          to,
+          unavailableDates: [fullDate.toString(), requiredDate.toString()],
+          reservedDeskWorkstationRequiredDates: [requiredDate.toString()],
+        })
+      );
+    });
 
     const view = renderForm({
       initialValues: reservedDeskFormValues(""),
@@ -2324,41 +2282,39 @@ describe("CoworkReservationForm advertised pricing", () => {
     const unavailableDate = dateOffsetFromToday(4);
     const availabilityRequests: string[] = [];
     let resolveNewDateAvailability: ((response: Response) => void) | undefined;
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (!url.startsWith("/api/workspace/availability")) {
-          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-        }
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (!url.startsWith("/api/workspace/availability")) {
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+      }
 
-        availabilityRequests.push(url);
-        const searchParams = new URL(url, "http://localhost").searchParams;
-        const date = searchParams.get("date");
-        if (!date) {
-          return Promise.resolve(
-            jsonResponse({
-              ...availabilityResponse,
-              date: undefined,
-              from: searchParams.get("from"),
-              to: searchParams.get("to"),
-              unavailableDates: [unavailableDate],
-            })
-          );
-        }
-        if (date === newDate) {
-          return new Promise<Response>((resolve) => {
-            resolveNewDateAvailability = resolve;
-          });
-        }
+      availabilityRequests.push(url);
+      const searchParams = new URL(url, "http://localhost").searchParams;
+      const date = searchParams.get("date");
+      if (!date) {
         return Promise.resolve(
           jsonResponse({
             ...availabilityResponse,
-            date,
-            unavailableDates: [],
+            date: undefined,
+            from: searchParams.get("from"),
+            to: searchParams.get("to"),
+            unavailableDates: [unavailableDate],
           })
         );
       }
-    );
+      if (date === newDate) {
+        return new Promise<Response>((resolve) => {
+          resolveNewDateAvailability = resolve;
+        });
+      }
+      return Promise.resolve(
+        jsonResponse({
+          ...availabilityResponse,
+          date,
+          unavailableDates: [],
+        })
+      );
+    });
 
     const view = renderForm({
       initialValues: {
@@ -2443,43 +2399,41 @@ describe("CoworkReservationForm advertised pricing", () => {
     });
     let selectedDateRequestCount = 0;
     let resolveSelectedDateRefresh: ((response: Response) => void) | undefined;
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (!url.startsWith("/api/workspace/availability")) {
-          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-        }
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (!url.startsWith("/api/workspace/availability")) {
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+      }
 
-        const params = new URL(url, "http://localhost").searchParams;
-        const date = params.get("date");
-        if (!date) {
-          return Promise.resolve(
-            jsonResponse({
-              ...availabilityResponse,
-              date: undefined,
-              from: params.get("from"),
-              to: params.get("to"),
-              unavailableDates: [],
-            })
-          );
-        }
-        selectedDateRequestCount += 1;
-        if (selectedDateRequestCount > 1) {
-          return new Promise<Response>((resolve) => {
-            resolveSelectedDateRefresh = resolve;
-          });
-        }
+      const params = new URL(url, "http://localhost").searchParams;
+      const date = params.get("date");
+      if (!date) {
         return Promise.resolve(
           jsonResponse({
             ...availabilityResponse,
-            date,
+            date: undefined,
             from: params.get("from"),
             to: params.get("to"),
             unavailableDates: [],
           })
         );
       }
-    );
+      selectedDateRequestCount += 1;
+      if (selectedDateRequestCount > 1) {
+        return new Promise<Response>((resolve) => {
+          resolveSelectedDateRefresh = resolve;
+        });
+      }
+      return Promise.resolve(
+        jsonResponse({
+          ...availabilityResponse,
+          date,
+          from: params.get("from"),
+          to: params.get("to"),
+          unavailableDates: [],
+        })
+      );
+    });
     getAdvertisedPrices.mockImplementation((requests) =>
       Promise.resolve(advertisedPricesResult(requests))
     );
@@ -2569,15 +2523,13 @@ describe("CoworkReservationForm advertised pricing", () => {
     ];
 
     for (const testCase of cases) {
-      spyOn(globalThis, "fetch").mockImplementation(
-        (request: RequestInfo | URL) => {
-          const url = String(request);
-          if (!url.startsWith("/api/workspace/availability")) {
-            return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-          }
-          return Promise.resolve(jsonResponse(testCase.availability));
+      stubFetch((request: RequestInfo | URL) => {
+        const url = String(request);
+        if (!url.startsWith("/api/workspace/availability")) {
+          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
         }
-      );
+        return Promise.resolve(jsonResponse(testCase.availability));
+      });
 
       const view = renderForm({
         initialValues: reservedDeskFormValues(),
@@ -2609,42 +2561,40 @@ describe("CoworkReservationForm advertised pricing", () => {
     const newDate = dateOffsetFromToday(2);
     let resolveNewDateAvailability: ((response: Response) => void) | undefined;
     const availabilityRequests: string[] = [];
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (!url.startsWith("/api/workspace/availability")) {
-          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-        }
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (!url.startsWith("/api/workspace/availability")) {
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+      }
 
-        availabilityRequests.push(url);
-        const searchParams = new URL(url, "http://localhost").searchParams;
-        const date = searchParams.get("date") ?? initialDate;
-        const monitorOption = searchParams.get("monitorOption");
-        if (date === initialDate) {
-          return Promise.resolve(
-            jsonResponse({
-              ...requiredWorkstationAvailability(date, monitorOption),
-              reservedDeskWorkstationRequiredDates: [initialDate, newDate],
-            })
-          );
-        }
-        if (date === newDate && monitorOption) {
-          return new Promise<Response>((resolve) => {
-            resolveNewDateAvailability = resolve;
-          });
-        }
-
+      availabilityRequests.push(url);
+      const searchParams = new URL(url, "http://localhost").searchParams;
+      const date = searchParams.get("date") ?? initialDate;
+      const monitorOption = searchParams.get("monitorOption");
+      if (date === initialDate) {
         return Promise.resolve(
           jsonResponse({
-            ...availabilityResponse,
-            date,
-            unavailableDates: [],
-            reservedDeskWorkstationRequiredDates: [],
-            unavailableMonitorOptions: [],
+            ...requiredWorkstationAvailability(date, monitorOption),
+            reservedDeskWorkstationRequiredDates: [initialDate, newDate],
           })
         );
       }
-    );
+      if (date === newDate && monitorOption) {
+        return new Promise<Response>((resolve) => {
+          resolveNewDateAvailability = resolve;
+        });
+      }
+
+      return Promise.resolve(
+        jsonResponse({
+          ...availabilityResponse,
+          date,
+          unavailableDates: [],
+          reservedDeskWorkstationRequiredDates: [],
+          unavailableMonitorOptions: [],
+        })
+      );
+    });
 
     const view = renderForm({
       initialValues: reservedDeskFormValues(initialDate),
@@ -2740,31 +2690,29 @@ describe("CoworkReservationForm advertised pricing", () => {
     ];
 
     for (const { props } of cases) {
-      spyOn(globalThis, "fetch").mockImplementation(
-        (request: RequestInfo | URL) => {
-          const url = String(request);
-          if (!url.startsWith("/api/workspace/availability")) {
-            return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-          }
+      stubFetch((request: RequestInfo | URL) => {
+        const url = String(request);
+        if (!url.startsWith("/api/workspace/availability")) {
+          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+        }
 
-          const searchParams = new URL(url, "http://localhost").searchParams;
-          const date = searchParams.get("date") ?? requiredDate;
-          if (date === requiredDate) {
-            return Promise.resolve(
-              jsonResponse(requiredWorkstationAvailability(date, "2x32-qhd"))
-            );
-          }
+        const searchParams = new URL(url, "http://localhost").searchParams;
+        const date = searchParams.get("date") ?? requiredDate;
+        if (date === requiredDate) {
           return Promise.resolve(
-            jsonResponse({
-              ...availabilityResponse,
-              date,
-              unavailableDates: [],
-              reservedDeskWorkstationRequiredDates: [],
-              unavailableMonitorOptions: [],
-            })
+            jsonResponse(requiredWorkstationAvailability(date, "2x32-qhd"))
           );
         }
-      );
+        return Promise.resolve(
+          jsonResponse({
+            ...availabilityResponse,
+            date,
+            unavailableDates: [],
+            reservedDeskWorkstationRequiredDates: [],
+            unavailableMonitorOptions: [],
+          })
+        );
+      });
 
       const view = renderForm(props);
       await waitFor(() => {
@@ -2802,36 +2750,34 @@ describe("CoworkReservationForm advertised pricing", () => {
   test("keeps a monitor choice made while the workstation is forced", async () => {
     const requiredDate = dateOffsetFromToday(1);
     const availableDate = dateOffsetFromToday(2);
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = String(request);
-        if (!url.startsWith("/api/workspace/availability")) {
-          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-        }
+    stubFetch((request: RequestInfo | URL) => {
+      const url = String(request);
+      if (!url.startsWith("/api/workspace/availability")) {
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+      }
 
-        const searchParams = new URL(url, "http://localhost").searchParams;
-        const date = searchParams.get("date") ?? requiredDate;
-        if (date === requiredDate) {
-          return Promise.resolve(
-            jsonResponse(
-              requiredWorkstationAvailability(
-                date,
-                searchParams.get("monitorOption")
-              )
-            )
-          );
-        }
+      const searchParams = new URL(url, "http://localhost").searchParams;
+      const date = searchParams.get("date") ?? requiredDate;
+      if (date === requiredDate) {
         return Promise.resolve(
-          jsonResponse({
-            ...availabilityResponse,
-            date,
-            unavailableDates: [],
-            reservedDeskWorkstationRequiredDates: [],
-            unavailableMonitorOptions: [],
-          })
+          jsonResponse(
+            requiredWorkstationAvailability(
+              date,
+              searchParams.get("monitorOption")
+            )
+          )
         );
       }
-    );
+      return Promise.resolve(
+        jsonResponse({
+          ...availabilityResponse,
+          date,
+          unavailableDates: [],
+          reservedDeskWorkstationRequiredDates: [],
+          unavailableMonitorOptions: [],
+        })
+      );
+    });
 
     const view = renderForm({
       initialValues: reservedDeskFormValues(requiredDate),
@@ -2890,23 +2836,21 @@ describe("CoworkReservationForm advertised pricing", () => {
     setSystemTime(new Date("2026-10-09T22:30:00.000Z"));
     try {
       workspaceUseSearchParams.mockReturnValue(new URLSearchParams());
-      spyOn(globalThis, "fetch").mockImplementation(
-        (request: RequestInfo | URL) => {
-          const url = String(request);
-          if (!url.startsWith("/api/workspace/availability")) {
-            return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-          }
-          const searchParams = new URL(url, "http://localhost").searchParams;
-          return Promise.resolve(
-            jsonResponse({
-              ...availabilityResponse,
-              date: undefined,
-              from: searchParams.get("from"),
-              to: searchParams.get("to"),
-            })
-          );
+      stubFetch((request: RequestInfo | URL) => {
+        const url = String(request);
+        if (!url.startsWith("/api/workspace/availability")) {
+          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
         }
-      );
+        const searchParams = new URL(url, "http://localhost").searchParams;
+        return Promise.resolve(
+          jsonResponse({
+            ...availabilityResponse,
+            date: undefined,
+            from: searchParams.get("from"),
+            to: searchParams.get("to"),
+          })
+        );
+      });
 
       const view = renderForm({
         initialValues: { ...coworkReservationDefaultValues, date: "" },
@@ -2983,8 +2927,8 @@ describe("CoworkReservationForm advertised pricing", () => {
       await waitFor(() => {
         expect(executeAsync).toHaveBeenCalledTimes(1);
       });
-      const submission = executeAsync.mock.calls[0]?.[0];
-      return submission?.reservation;
+      const submission = firstCheckoutSubmission();
+      return submission.reservation;
     };
 
     let originalHref = "";
@@ -2999,24 +2943,22 @@ describe("CoworkReservationForm advertised pricing", () => {
           advertisedPricesResult(requests, getCoworkAdvertisedPriceResponse)
         )
       );
-      spyOn(globalThis, "fetch").mockImplementation(
-        (request: RequestInfo | URL) => {
-          const url = String(request);
-          if (!url.startsWith("/api/workspace/availability")) {
-            return Promise.reject(new Error(`Unexpected fetch: ${url}`));
-          }
-          const searchParams = new URL(url, "http://localhost").searchParams;
-          availabilityRequests.push(searchParams);
-          return Promise.resolve(
-            jsonResponse({
-              ...availabilityResponse,
-              date: searchParams.get("date") ?? undefined,
-              from: searchParams.get("from"),
-              to: searchParams.get("to"),
-            })
-          );
+      stubFetch((request: RequestInfo | URL) => {
+        const url = String(request);
+        if (!url.startsWith("/api/workspace/availability")) {
+          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
         }
-      );
+        const searchParams = new URL(url, "http://localhost").searchParams;
+        availabilityRequests.push(searchParams);
+        return Promise.resolve(
+          jsonResponse({
+            ...availabilityResponse,
+            date: searchParams.get("date") ?? undefined,
+            from: searchParams.get("from"),
+            to: searchParams.get("to"),
+          })
+        );
+      });
     });
 
     afterEach(() => {
@@ -3123,26 +3065,21 @@ describe("CoworkReservationForm advertised pricing", () => {
           expiresAt: "2099-07-29T08:10:00.000Z",
         },
       } as const;
-      const prepared: PreparePayStateInput[] = [];
+      const prepared: unknown[] = [];
       // Like next-safe-action, a settled call runs the hook's callbacks first.
-      workspaceUseAction.mockImplementation(((
-        action: typeof preparePayState,
-        options: {
-          readonly onSuccess?: (
-            result: typeof ready & { readonly input: PreparePayStateInput }
-          ) => void;
-        }
-      ) => ({
-        executeAsync: async (input: PreparePayStateInput) => {
+      workspaceUseAction.mockImplementation((action, options) => ({
+        executeAsync: async (input) => {
           prepared.push(input);
           if (action === preparePayState) {
-            act(() => options.onSuccess?.({ ...ready, input }));
+            act(() => {
+              options.onSuccess?.({ ...ready, input });
+            });
           }
           return ready;
         },
         isExecuting: false,
         result: {},
-      })) as never);
+      }));
       const availabilityFetch = globalThis.fetch;
       const endpoint = mockAgentToolEndpoint(({ params }) =>
         agentToolEventStream({
@@ -3267,15 +3204,13 @@ describe("CoworkReservationForm advertised pricing", () => {
   describe("CoworkReservationForm phone region", () => {
     beforeEach(() => {
       workspaceUseSearchParams.mockReturnValue(new URLSearchParams());
-      spyOn(globalThis, "fetch").mockImplementation(
-        (request: RequestInfo | URL) => {
-          const url = String(request);
-          if (url.startsWith("/api/workspace/availability")) {
-            return Promise.resolve(jsonResponse(availabilityResponse));
-          }
-          return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+      stubFetch((request: RequestInfo | URL) => {
+        const url = String(request);
+        if (url.startsWith("/api/workspace/availability")) {
+          return Promise.resolve(jsonResponse(availabilityResponse));
         }
-      );
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+      });
     });
 
     const submitWithPhone = async (locale: Locale, phone: string) => {

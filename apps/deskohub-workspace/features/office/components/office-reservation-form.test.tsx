@@ -6,7 +6,6 @@ import {
   describe,
   expect,
   mock,
-  spyOn,
   test,
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
@@ -33,6 +32,7 @@ import type { ReservationCheckoutAccount } from "@/features/reservation/reservat
 import { getOfficeAvailabilityQuery } from "@/features/reservation/workspace-availability";
 import { formatMoney, moneyWithValue } from "@/shared/money/money";
 import { elementOf } from "@/shared/testing/dom-element.test-utils";
+import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import {
   workspaceUseAction,
@@ -207,29 +207,27 @@ describe("OfficeReservationForm", () => {
   test("loads the month calendar without seat or interval filters and bounds the stay before an unavailable date", async () => {
     const today = decodePlainDate("2026-08-10");
     const requests: URL[] = [];
-    spyOn(globalThis, "fetch").mockImplementation(
-      (request: RequestInfo | URL) => {
-        const url = new URL(String(request), "https://workspace.example.test");
-        requests.push(url);
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              date: undefined,
-              from: "2026-08-10",
-              to: "2026-09-10",
-              unavailableDates: ["2026-08-12"],
-              reservedDeskWorkstationRequiredDates: [],
-              unavailableCoworkTiers: [],
-              meetingRoomUnavailable: false,
-              officeUnavailable: false,
-              unavailableMonitorOptions: [],
-              notices: [],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          )
-        );
-      }
-    );
+    stubFetch((request: RequestInfo | URL) => {
+      const url = new URL(String(request), "https://workspace.example.test");
+      requests.push(url);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            date: undefined,
+            from: "2026-08-10",
+            to: "2026-09-10",
+            unavailableDates: ["2026-08-12"],
+            reservedDeskWorkstationRequiredDates: [],
+            unavailableCoworkTiers: [],
+            meetingRoomUnavailable: false,
+            officeUnavailable: false,
+            unavailableMonitorOptions: [],
+            notices: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -268,9 +266,7 @@ describe("OfficeReservationForm", () => {
 
   test("bounds the stay from page-loaded availability without a client request", () => {
     const today = decodePlainDate("2026-08-10");
-    const fetchCalls = spyOn(globalThis, "fetch");
-    fetchCalls.mockClear();
-    fetchCalls.mockImplementation((_request: RequestInfo | URL) =>
+    const fetchCalls = stubFetch((_request: RequestInfo | URL) =>
       Promise.resolve(
         officeAvailabilityResponse({ from: today, to: "2026-09-10" })
       )
@@ -1160,7 +1156,7 @@ describe("OfficeReservationForm", () => {
 
   test("validates an empty start date when its calendar closes", async () => {
     const today = decodePlainDate("2026-08-10");
-    spyOn(globalThis, "fetch").mockImplementation(() =>
+    stubFetch(() =>
       Promise.resolve(
         officeAvailabilityResponse({ from: "2026-08-10", to: "2026-09-10" })
       )
@@ -1187,7 +1183,7 @@ describe("OfficeReservationForm", () => {
 
   test("keeps a typed unavailable start date out of the form", async () => {
     const today = decodePlainDate("2026-08-10");
-    spyOn(globalThis, "fetch").mockImplementation(() =>
+    stubFetch(() =>
       Promise.resolve(
         officeAvailabilityResponse({
           from: "2026-08-10",
