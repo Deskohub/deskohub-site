@@ -35,8 +35,8 @@ void (() => {
   const needsService = HttpApiEndpoint.get("needsService", "/needs", {
     success: Counted.pipe(
       Schema.decodeTo(Counted, {
-        decode: SchemaGetter.transformEffect(() =>
-          Effect.gen(function* () {
+        decode: SchemaGetter.transformEffect(
+          Effect.fn("RequiredService.decode")(function* () {
             const { n } = yield* RequiredService;
             return { n };
           })
