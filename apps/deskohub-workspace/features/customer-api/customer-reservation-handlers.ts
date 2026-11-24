@@ -80,9 +80,11 @@ import {
 } from "@/shared/utils/workspace-location-map";
 import {
   answerCustomerApiFailure,
+  answerOccurredFailure,
   answerSessionApiFailure,
   answerUnavailable,
   type CustomerApiFailure,
+  type PossibleFailureAnswer,
 } from "./customer-api-failure";
 import { toCustomerCheckout } from "./customer-checkout-view";
 import { answerFileDownload } from "./customer-file-download";
@@ -414,12 +416,29 @@ const customerWithdrawalRefundChanged = (
 type WithdrawalFailureAnswer<E> =
   | CustomerReservationNotFound
   | CustomerWithdrawalRefused
-  | ([Extract<E, WithdrawalNameRequiredError>] extends [never]
-      ? never
-      : CustomerWithdrawalNameRequired)
+  | PossibleFailureAnswer<
+      Extract<E, WithdrawalNameRequiredError>,
+      CustomerWithdrawalNameRequired
+    >
   | CustomerApiFailure<
       Exclude<E, WithdrawalRefusedError | WithdrawalNameRequiredError>
     >;
+
+const isWithdrawalNameRequired = <E>(
+  failure: E
+): failure is Extract<E, WithdrawalNameRequiredError> =>
+  failure instanceof WithdrawalNameRequiredError;
+
+const isOtherWithdrawalFailure = <E>(
+  failure: E
+): failure is Exclude<
+  E,
+  WithdrawalRefusedError | WithdrawalNameRequiredError
+> =>
+  !(
+    failure instanceof WithdrawalRefusedError ||
+    failure instanceof WithdrawalNameRequiredError
+  );
 
 /**
  * Answers a refused withdrawal with its public reason, an order the account
@@ -434,25 +453,23 @@ const answerWithdrawalFailure =
     effect.pipe(
       Effect.catch(
         (failure): Effect.Effect<never, WithdrawalFailureAnswer<E>> => {
-          if (failure instanceof WithdrawalNameRequiredError) {
+          if (isWithdrawalNameRequired(failure)) {
             return Effect.fail(
-              new CustomerWithdrawalNameRequired() as WithdrawalFailureAnswer<E>
-            );
-          }
-          if (!(failure instanceof WithdrawalRefusedError)) {
-            return answerCustomerApiFailure(operation)(
-              Effect.fail(
-                failure as Exclude<
-                  E,
-                  WithdrawalRefusedError | WithdrawalNameRequiredError
-                >
+              answerOccurredFailure(
+                failure,
+                new CustomerWithdrawalNameRequired()
               )
             );
           }
-          const { reason } = failure;
-          return reason === "not_found"
-            ? Effect.fail(new CustomerReservationNotFound())
-            : Effect.fail(new CustomerWithdrawalRefused({ reason }));
+          if (isOtherWithdrawalFailure(failure)) {
+            return answerCustomerApiFailure(operation)(Effect.fail(failure));
+          }
+          return failure instanceof WithdrawalRefusedError &&
+            failure.reason !== "not_found"
+            ? Effect.fail(
+                new CustomerWithdrawalRefused({ reason: failure.reason })
+              )
+            : Effect.fail(new CustomerReservationNotFound());
         }
       )
     );
