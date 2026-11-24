@@ -6,6 +6,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as Layer from "effect/Layer";
+import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
@@ -110,14 +111,65 @@ const authorizedClient = (target: ProbeTarget) =>
     )
   );
 
-/** What the client saw on the wire: each /rpc response and the stream chunk frame count. */
+/** Chunk frames delivered to the in-flight Probe.count call. */
+export interface CountFrames {
+  /** The in-flight call's exact request id; Effect matches ids by value and type. */
+  readonly activeId: string | number | undefined;
+  readonly frames: number;
+}
+
+/** What the client saw on the wire: each /rpc response and Probe.count's frames. */
 interface RpcObservations {
   readonly responses: Ref.Ref<ReadonlyArray<RpcResponseMeta>>;
-  /** Request ids of the Probe.count calls sent. */
-  readonly countRequests: Ref.Ref<ReadonlyArray<string>>;
-  /** Request id of every decoded `Chunk` frame. */
-  readonly chunkFrames: Ref.Ref<ReadonlyArray<string>>;
+  readonly countFrames: Ref.Ref<CountFrames>;
 }
+
+type ProtocolService = RpcClient.Protocol["Service"];
+type ProtocolExchange = Pick<ProtocolService, "send" | "run">;
+
+const nextCountFrames = (
+  state: CountFrames,
+  message: Parameters<Parameters<ProtocolService["run"]>[1]>[0]
+): CountFrames =>
+  Match.value(message).pipe(
+    Match.tag("Chunk", ({ requestId }) =>
+      requestId === state.activeId
+        ? { ...state, frames: state.frames + 1 }
+        : state
+    ),
+    Match.tag("Exit", ({ requestId }) =>
+      requestId === state.activeId ? { ...state, activeId: undefined } : state
+    ),
+    Match.orElse(() => state)
+  );
+
+/**
+ * Counts `Chunk` frames as they arrive for the in-flight Probe.count call,
+ * from its request until its `Exit`, the same frames Effect's client accepts.
+ */
+export const observeCountFrames = (
+  protocol: ProtocolExchange,
+  countFrames: Ref.Ref<CountFrames>
+): ProtocolExchange => ({
+  send: (
+    clientId: number,
+    request: Parameters<ProtocolService["send"]>[1],
+    transferables?: Parameters<ProtocolService["send"]>[2]
+  ) =>
+    Effect.andThen(
+      Predicate.isTagged(request, "Request") && request.tag === "Probe.count"
+        ? Ref.set(countFrames, { activeId: request.id, frames: 0 })
+        : Effect.void,
+      protocol.send(clientId, request, transferables)
+    ),
+  run: (clientId: number, onMessage: Parameters<ProtocolService["run"]>[1]) =>
+    protocol.run(clientId, (message) =>
+      Effect.andThen(
+        Ref.update(countFrames, (state) => nextCountFrames(state, message)),
+        onMessage(message)
+      )
+    ),
+});
 
 const observeResponses =
   (observations: RpcObservations) => (http: HttpClient.HttpClient) =>
@@ -137,7 +189,7 @@ const observeResponses =
     );
 
 /**
- * The HTTP protocol, counting every decoded `Chunk` message: stream values
+ * The HTTP protocol with Probe.count's chunk frames counted: stream values
  * the client batches into one pull still arrive here frame by frame.
  */
 const observedProtocol = (
@@ -153,36 +205,7 @@ const observedProtocol = (
     ).pipe(
       Effect.map((protocol) => ({
         ...protocol,
-        send: (
-          clientId: number,
-          request: Parameters<typeof protocol.send>[1],
-          transferables?: Parameters<typeof protocol.send>[2]
-        ) =>
-          Effect.andThen(
-            Predicate.isTagged(request, "Request") &&
-              request.tag === "Probe.count"
-              ? Ref.update(observations.countRequests, (ids) => [
-                  ...ids,
-                  String(request.id),
-                ])
-              : Effect.void,
-            protocol.send(clientId, request, transferables)
-          ),
-        run: (
-          clientId: number,
-          onMessage: Parameters<typeof protocol.run>[1]
-        ) =>
-          protocol.run(clientId, (message) =>
-            Effect.andThen(
-              Predicate.isTagged(message, "Chunk")
-                ? Ref.update(observations.chunkFrames, (frames) => [
-                    ...frames,
-                    String(message.requestId),
-                  ])
-                : Effect.void,
-              onMessage(message)
-            )
-          ),
+        ...observeCountFrames(protocol, observations.countFrames),
       }))
     )
   );
@@ -351,8 +374,7 @@ export const runSandboxRpcProbe = (target: ProbeTarget) => {
     Effect.bind("observations", () =>
       Effect.all({
         responses: Ref.make<ReadonlyArray<RpcResponseMeta>>([]),
-        countRequests: Ref.make<ReadonlyArray<string>>([]),
-        chunkFrames: Ref.make<ReadonlyArray<string>>([]),
+        countFrames: Ref.make<CountFrames>({ activeId: undefined, frames: 0 }),
       })
     ),
     Effect.bind("http", () => authorizedClient(target)),
@@ -366,16 +388,8 @@ export const runSandboxRpcProbe = (target: ProbeTarget) => {
     Effect.bind("responses", ({ observations }) =>
       Ref.get(observations.responses)
     ),
-    Effect.bind("countRequests", ({ observations }) =>
-      Ref.get(observations.countRequests)
-    ),
-    Effect.bind("chunkFrames", ({ observations, countRequests }) =>
-      Ref.get(observations.chunkFrames).pipe(
-        // Only frames answering Probe.count count toward its framing.
-        Effect.map(
-          (frames) => frames.filter((id) => countRequests.includes(id)).length
-        )
-      )
+    Effect.bind("chunkFrames", ({ observations }) =>
+      Ref.get(observations.countFrames).pipe(Effect.map(({ frames }) => frames))
     ),
     Effect.map((steps) => probeVerdict(target, steps)),
     Effect.scoped,

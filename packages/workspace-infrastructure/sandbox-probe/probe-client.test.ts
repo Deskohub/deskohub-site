@@ -12,9 +12,12 @@ import {
   HttpServerResponse,
 } from "effect/http";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import * as Stream from "effect/Stream";
 import {
+  type CountFrames,
+  observeCountFrames,
   type ProbeTarget,
   runSandboxRpcProbe,
   schemaBinaryContentType,
@@ -161,6 +164,53 @@ const echoingProbe = Layer.mergeAll(
     )
   )
 );
+
+describe("Probe.count frame counting", () => {
+  test("counts only frames for the in-flight call, until its exit", async () => {
+    const frames = await Effect.runPromise(
+      Effect.gen(function* () {
+        const countFrames = yield* Ref.make<CountFrames>({
+          activeId: undefined,
+          frames: 0,
+        });
+        const protocol = observeCountFrames(
+          {
+            send: () => Effect.void,
+            run: (_clientId, onMessage) =>
+              Effect.forEach(
+                [
+                  { _tag: "Chunk", requestId: "7", values: [0] },
+                  { _tag: "Chunk", requestId: 9, values: [0] },
+                  { _tag: "Chunk", requestId: 9, values: [1] },
+                  {
+                    _tag: "Exit",
+                    requestId: 9,
+                    exit: { _tag: "Success", value: null },
+                  },
+                  { _tag: "Chunk", requestId: 9, values: [2] },
+                ] as const,
+                onMessage,
+                { discard: true }
+              ).pipe(Effect.andThen(Effect.never)),
+          },
+          countFrames
+        );
+        yield* protocol.send(0, {
+          _tag: "Request",
+          id: 9,
+          tag: "Probe.count",
+          payload: { n: 3 },
+          headers: [],
+        });
+        yield* protocol
+          .run(0, () => Effect.void)
+          .pipe(Effect.timeoutOption("50 millis"));
+        return yield* Ref.get(countFrames);
+      })
+    );
+    expect(frames).toEqual({ activeId: undefined, frames: 2 });
+  });
+});
 
 describe("sandbox RPC probe verdict against an impostor", () => {
   test("redacts echoed secrets and rejects a single-frame count", async () => {
