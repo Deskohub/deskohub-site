@@ -1,6 +1,9 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { makeAudienceFilterSchemas } from "@deskohub/workspace-admin-api";
-import { Effect, Result, Schema } from "effect";
+import {
+  type CampaignEmailSourceType,
+  makeAudienceFilterSchemas,
+} from "@deskohub/workspace-admin-api";
+import { Effect, Option, Result, Schema } from "effect";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -12,10 +15,14 @@ import {
   extendedCatalogue,
   extendedResolvers,
   giftCardCount,
+  sourcedEmailCount,
+  sourcedResolvers,
 } from "./audience-attribute-extension.typecheck";
 import { audienceFactKey, countFactRequest } from "./audience-filter";
 import type { AudienceResolution } from "./backend/audience-attribute-resolvers";
 import { audienceEvaluationAt } from "./backend/audience-evaluation-context";
+import { campaignIdSchema } from "./campaign-identifiers";
+import { datePeriodBounds } from "./date-period";
 
 registerWorkspaceComponentTestEnv();
 // @testing-library/react must load after the happy-dom registration.
@@ -90,16 +97,81 @@ describe("a count attribute added as one catalogue entry and its resolver", () =
   });
 
   test("resolves its counts through its resolver", async () => {
-    const request = countFactRequest(
-      giftCardCount,
-      condition,
-      audienceEvaluationAt(Temporal.Now.instant())
-    );
+    const context = audienceEvaluationAt(Temporal.Now.instant());
+    const request = countFactRequest(giftCardCount, condition, context);
     expect(audienceFactKey(request)).toContain('"giftCardCount"');
+    expect(request.fixedParams.period).toEqual(
+      datePeriodBounds(condition.params.period, context)
+    );
     const counts = await Effect.runPromise(
-      extendedResolvers.giftCardCount.count(request, {} as AudienceResolution)
+      extendedResolvers.giftCardCount.count(
+        { params: request.condition.params, inContext: request.inContext },
+        {} as AudienceResolution
+      )
     );
     expect([...counts.values()]).toEqual([3]);
+  });
+
+  test("fixes a campaign source of any name by its part", async () => {
+    const evaluatingCampaign = campaignIdSchema.make("campaign-1");
+    const context = {
+      ...audienceEvaluationAt(Temporal.Now.instant()),
+      campaignId: Option.some(evaluatingCampaign),
+    };
+    const sourced = (source: CampaignEmailSourceType) => ({
+      ...newConditionFrom(sourcedEmailCount),
+      params: {
+        campaign: "welcome" as const,
+        period: { _tag: "AnyTime" } as const,
+        source,
+      },
+    });
+    const fromThis = countFactRequest(
+      sourcedEmailCount,
+      sourced({ _tag: "This" }),
+      context
+    );
+    expect(fromThis.fixedParams.source).toBe(evaluatingCampaign);
+    // The same campaign by name shares the lookup; another doesn't.
+    expect(audienceFactKey(fromThis)).toBe(
+      audienceFactKey(
+        countFactRequest(
+          sourcedEmailCount,
+          sourced({ _tag: "Specific", campaignId: evaluatingCampaign }),
+          context
+        )
+      )
+    );
+    expect(audienceFactKey(fromThis)).not.toBe(
+      audienceFactKey(
+        countFactRequest(sourcedEmailCount, sourced({ _tag: "This" }), {
+          ...context,
+          campaignId: Option.none(),
+        })
+      )
+    );
+    // The choice named `campaign` stays part of the lookup.
+    expect(audienceFactKey(fromThis)).not.toBe(
+      audienceFactKey(
+        countFactRequest(
+          sourcedEmailCount,
+          {
+            ...fromThis.condition,
+            params: { ...fromThis.condition.params, campaign: "promotion" },
+          },
+          context
+        )
+      )
+    );
+    const counts = await Effect.runPromise(
+      sourcedResolvers.sourcedEmailCount.count({
+        params: fromThis.condition.params,
+        inContext: fromThis.inContext,
+      })
+    );
+    expect([...counts.keys()].map(String)).toEqual([
+      `welcome:${evaluatingCampaign}`,
+    ]);
   });
 
   test("edits with the shared count controls, worded by its wording", () => {
