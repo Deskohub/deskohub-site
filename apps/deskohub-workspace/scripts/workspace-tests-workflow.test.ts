@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { testEmailAddress } from "@deskohub/test-email";
+import { Schema } from "effect";
 import { shardTimingsArtifactPattern } from "./refresh-test-timings";
 import { commandOutput, runCommand } from "./shared/command";
 import { identifierNames, parseTrackedSource } from "./shared/source-ast";
@@ -22,20 +24,36 @@ const workflowPath = resolve(
 
 const doc = parseWorkflow(workflowPath);
 const testJob = doc.jobs["test-functional-shards"];
-const shardContract = testJob as typeof testJob & {
-  readonly env?: Record<string, string>;
-  readonly strategy?: {
-    readonly "fail-fast"?: boolean;
-    readonly matrix?: { readonly shard?: readonly number[] };
-  };
-};
+const shardStrategy = Schema.decodeUnknownSync(
+  Schema.Struct({
+    strategy: Schema.optionalKey(
+      Schema.Struct({
+        "fail-fast": Schema.optionalKey(Schema.Boolean),
+        matrix: Schema.optionalKey(
+          Schema.Struct({
+            shard: Schema.optionalKey(Schema.Array(Schema.Number)),
+          })
+        ),
+      })
+    ),
+  })
+)(testJob).strategy;
 
 const affectedName = "WORKSPACE_SHARDS_AFFECTED";
 
+/** Reads a JSON file relative to this test and decodes it with `schema`. */
+const readJsonFile = <S extends Schema.Decoder<unknown>>(
+  schema: S,
+  path: string
+): S["Type"] =>
+  Schema.decodeUnknownSync(Schema.fromJsonString(schema))(
+    readFileSync(resolve(import.meta.dir, path), "utf8")
+  );
+
 const stepByName = (name: string): WorkflowStep => {
   const step = findStepByName(doc, name);
-  expect(step).toBeDefined();
-  return step as WorkflowStep;
+  if (step === undefined) throw new Error(`workflow has no step "${name}"`);
+  return step;
 };
 
 // Workflow scripts run in an isolated shell: earlier suites in the same Bun
@@ -63,7 +81,7 @@ test("fails each shard before its tests when the disposable database is missing"
 
   // Both steps read the job-level value, so the guard checks what the tests
   // receive.
-  expect(shardContract.env?.WORKSPACE_TEST_DATABASE_URL).toBeDefined();
+  expect(testJob?.env?.WORKSPACE_TEST_DATABASE_URL).toBeDefined();
   expect(guard.env?.WORKSPACE_TEST_DATABASE_URL).toBeUndefined();
   expect(testStep.env?.WORKSPACE_TEST_DATABASE_URL).toBeUndefined();
 
@@ -241,9 +259,10 @@ exit 1
 });
 
 test("runs the shards with the Bun the repository pins", () => {
-  const rootPackage = JSON.parse(
-    readFileSync(resolve(import.meta.dir, "../../../package.json"), "utf8")
-  ) as { readonly packageManager: string };
+  const rootPackage = readJsonFile(
+    Schema.Struct({ packageManager: Schema.String }),
+    "../../../package.json"
+  );
   const setupBun = workflowSteps(doc, "test-functional-shards").find((step) =>
     step.uses?.startsWith("oven-sh/setup-bun@")
   );
@@ -254,19 +273,22 @@ test("runs the shards with the Bun the repository pins", () => {
 
 test("splits the suite across every matrix shard and keeps test-functional as a fail-closed gate", async () => {
   // A shard count that disagrees with the matrix skips or repeats test files.
-  expect(shardContract.strategy?.["fail-fast"]).toBe(false);
-  const shards = shardContract.strategy?.matrix?.shard ?? [];
+  expect(shardStrategy?.["fail-fast"]).toBe(false);
+  const shards = shardStrategy?.matrix?.shard ?? [];
   expect(shards).toHaveLength(testShardCount);
   expect(shards).toEqual(shards.map((_, index) => index + 1));
 
   // Suites mutate process-wide state, so each shard runs one test process.
-  const packageJson = JSON.parse(
-    readFileSync(resolve(import.meta.dir, "../package.json"), "utf8")
-  ) as { readonly scripts: { readonly test: string } };
+  const packageJson = readJsonFile(
+    Schema.Struct({ scripts: Schema.Struct({ test: Schema.String }) }),
+    "../package.json"
+  );
   expect(packageJson.scripts.test).toContain("--parallel=1");
 
   const gate = doc.jobs["test-functional"];
-  const gateNeeds = gate.needs as readonly string[];
+  const gateNeeds = Schema.decodeUnknownSync(Schema.Array(Schema.String))(
+    gate.needs
+  );
   expect(gateNeeds).toEqual([
     "validate-workspace",
     "validate-workspace-migrations",
@@ -292,7 +314,8 @@ test("splits the suite across every matrix shard and keeps test-functional as a 
   expect(Object.values(resultJobs).sort()).toEqual([...gateNeeds].sort());
   const shardsResultName = Object.keys(resultJobs).find(
     (name) => resultJobs[name] === "test-functional-shards"
-  ) as string;
+  );
+  assert(shardsResultName);
 
   const successfulResults = Object.fromEntries(
     Object.keys(resultEnv).map((resultName) => [resultName, "success"])
@@ -364,23 +387,26 @@ test("runs the shards only when the selection finds an affected shard task", () 
 
   // The selection asks about every shard task, with the Turbo the lockfile
   // installs, and matches changes against task inputs.
-  const installedTurbo = JSON.parse(
-    readFileSync(
-      resolve(import.meta.dir, "../../../node_modules/turbo/package.json"),
-      "utf8"
-    )
-  ) as { readonly version: string };
+  const installedTurbo = readJsonFile(
+    Schema.Struct({ version: Schema.String }),
+    "../../../node_modules/turbo/package.json"
+  );
   expect(select.run).toContain(`bunx turbo@${installedTurbo.version} run`);
   const shardTasks = Array.from(
     { length: testShardCount },
     (_, index) => `test:shard-${index + 1}`
   );
   expect(select.run).toContain(` ${shardTasks.join(" ")} `);
-  const rootTurbo = JSON.parse(
-    readFileSync(resolve(import.meta.dir, "../../../turbo.json"), "utf8")
-  ) as {
-    readonly futureFlags?: { readonly affectedUsingTaskInputs?: boolean };
-  };
+  const rootTurbo = readJsonFile(
+    Schema.Struct({
+      futureFlags: Schema.optionalKey(
+        Schema.Struct({
+          affectedUsingTaskInputs: Schema.optionalKey(Schema.Boolean),
+        })
+      ),
+    }),
+    "../../../turbo.json"
+  );
   expect(rootTurbo.futureFlags?.affectedUsingTaskInputs).toBe(true);
 });
 
@@ -505,16 +531,19 @@ exit ${exitCode}
 });
 
 test("passes the disposable test database through Turborepo at the test task only", () => {
-  const turbo = JSON.parse(
-    readFileSync(resolve(import.meta.dir, "../turbo.json"), "utf8")
-  ) as {
-    readonly tasks: {
-      readonly test?: {
-        readonly cache?: boolean;
-        readonly passThroughEnv?: readonly string[];
-      };
-    };
-  };
+  const turbo = readJsonFile(
+    Schema.Struct({
+      tasks: Schema.Struct({
+        test: Schema.optionalKey(
+          Schema.Struct({
+            cache: Schema.optionalKey(Schema.Boolean),
+            passThroughEnv: Schema.optionalKey(Schema.Array(Schema.String)),
+          })
+        ),
+      }),
+    }),
+    "../turbo.json"
+  );
 
   expect(
     (turbo.tasks.test?.passThroughEnv ?? []).includes(

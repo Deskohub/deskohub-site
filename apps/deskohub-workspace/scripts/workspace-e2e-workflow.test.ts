@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { Schema } from "effect";
 import { reviewScreenshotsEnabled } from "../e2e/e2e-env";
 import { makeTestE2EEnvironment } from "../e2e/e2e-env.test-fixture";
 import { workspaceE2ENonPaymentCaseIds } from "../e2e/playwright-checkout/case-catalog";
@@ -17,19 +18,38 @@ import {
   workflowStepNames,
 } from "./shared/workflow-contract";
 
-type PlaywrightCheckoutConfig =
-  typeof import("../playwright.e2e.config")["default"];
+const StringList = Schema.Array(Schema.String);
 
-type PlaywrightInstantNavigationConfig =
-  typeof import("../playwright.instant-navigation.config")["default"];
+/** The parts of the serialized checkout Playwright config these cases assert on. */
+const PlaywrightCheckoutConfig = Schema.Struct({
+  outputDir: Schema.optionalKey(Schema.String),
+  projects: Schema.Array(
+    Schema.Struct({
+      name: Schema.optionalKey(Schema.String),
+      dependencies: Schema.optionalKey(StringList),
+      teardown: Schema.optionalKey(Schema.String),
+      testDir: Schema.optionalKey(Schema.String),
+      workers: Schema.optionalKey(Schema.Unknown),
+    })
+  ),
+  workers: Schema.Number,
+});
+type PlaywrightCheckoutConfig = typeof PlaywrightCheckoutConfig.Type;
+
+/** The parts of the serialized instant-navigation Playwright config these cases assert on. */
+const PlaywrightInstantNavigationConfig = Schema.Struct({
+  outputDir: Schema.optionalKey(Schema.String),
+  testDir: Schema.optionalKey(Schema.String),
+});
 
 // The real Playwright configs are executed (not text-scanned) and their
 // resolved structure is asserted on. They run in a child process because the
 // configs resolve their browser executable with a top-level await, which
 // bun's test runner does not settle reliably across multiple entry files.
-const loadPlaywrightConfigStructure = async <Config>(
-  configModule: string
-): Promise<Config> => {
+const loadPlaywrightConfigStructure = async <S extends Schema.Decoder<unknown>>(
+  configModule: string,
+  structure: S
+): Promise<S["Type"]> => {
   const result = await runCommand(
     [
       process.execPath,
@@ -49,17 +69,20 @@ const loadPlaywrightConfigStructure = async <Config>(
       `actual Playwright config loader exited with status ${result.exitCode}`
     );
   }
+  let serialized: unknown;
   try {
-    return JSON.parse(result.stdout) as Config;
+    serialized = JSON.parse(result.stdout);
   } catch {
     throw new Error("actual Playwright config loader emitted invalid JSON");
   }
+  return Schema.decodeUnknownSync(structure)(serialized);
 };
 
 let cachedConfigStructure: Promise<PlaywrightCheckoutConfig> | undefined;
 const playwrightConfigStructure = (): Promise<PlaywrightCheckoutConfig> => {
   cachedConfigStructure ??= loadPlaywrightConfigStructure(
-    "./playwright.e2e.config"
+    "./playwright.e2e.config",
+    PlaywrightCheckoutConfig
   );
   return cachedConfigStructure;
 };
@@ -107,8 +130,8 @@ const cacheMode = (job: string) =>
 
 const stepByName = (name: string): WorkflowStep => {
   const step = findStepByName(doc, name);
-  expect(step).toBeDefined();
-  return step as WorkflowStep;
+  if (step === undefined) throw new Error(`workflow has no step "${name}"`);
+  return step;
 };
 
 const stepsBetweenNames = (
@@ -124,22 +147,34 @@ const stepsBetweenNames = (
   return allSteps.slice(from, to);
 };
 
-const readTrackedJson = <T>(path: string): T =>
-  JSON.parse(readFileSync(resolve(import.meta.dir, path), "utf8")) as T;
+const readTrackedJson = <S extends Schema.Decoder<unknown>>(
+  schema: S,
+  path: string
+): S["Type"] =>
+  Schema.decodeUnknownSync(Schema.fromJsonString(schema))(
+    readFileSync(resolve(import.meta.dir, path), "utf8")
+  );
 
-type TurboConfig = {
-  readonly globalEnv?: readonly string[];
-  readonly globalPassThroughEnv?: readonly string[];
-  readonly tasks?: Readonly<
-    Record<
-      string,
-      {
-        readonly env?: readonly string[];
-        readonly passThroughEnv?: readonly string[];
-      }
-    >
-  >;
-};
+const TurboConfig = Schema.Struct({
+  globalEnv: Schema.optionalKey(StringList),
+  globalPassThroughEnv: Schema.optionalKey(StringList),
+  tasks: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        env: Schema.optionalKey(StringList),
+        passThroughEnv: Schema.optionalKey(StringList),
+      })
+    )
+  ),
+});
+type TurboConfig = typeof TurboConfig.Type;
+
+const E2ETaskTurboConfig = Schema.Struct({
+  tasks: Schema.Struct({
+    "test:e2e": Schema.Struct({ passThroughEnv: StringList }),
+  }),
+});
 
 const turboEnvEntryMatches = (entry: string, name: string) =>
   entry.endsWith("*") ? name.startsWith(entry.slice(0, -1)) : entry === name;
@@ -173,8 +208,8 @@ const turboSecretExposures = (
 const trackedTurboExposures = (name: string) =>
   turboSecretExposures(
     {
-      app: readTrackedJson<TurboConfig>("../turbo.json"),
-      root: readTrackedJson<TurboConfig>("../../../turbo.json"),
+      app: readTrackedJson(TurboConfig, "../turbo.json"),
+      root: readTrackedJson(TurboConfig, "../../../turbo.json"),
     },
     name
   );
@@ -455,11 +490,7 @@ describe("workspace E2E workflow", () => {
   });
 
   test("passes allocated shard and provider coordination through Turborepo", () => {
-    const turbo = readTrackedJson("../../../turbo.json") as {
-      readonly tasks: {
-        readonly "test:e2e": { readonly passThroughEnv: string[] };
-      };
-    };
+    const turbo = readTrackedJson(E2ETaskTurboConfig, "../../../turbo.json");
     const environment = turbo.tasks["test:e2e"].passThroughEnv;
 
     expect(environment).toContain("WORKSPACE_E2E_ALLOCATION_SHARD");
@@ -531,8 +562,10 @@ describe("workspace E2E workflow", () => {
             "WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS",
           ].map((name) => {
             const value = stepEnvironment[name];
-            expect(value).toBeDefined();
-            return [name, evaluateWorkflowValue(value as string, context)];
+            if (value === undefined) {
+              throw new Error(`Run checkout E2E sets no ${name} expression`);
+            }
+            return [name, evaluateWorkflowValue(String(value), context)];
           })
         )
       );
@@ -564,21 +597,26 @@ describe("workspace E2E workflow", () => {
     const output = result.stdout;
     const jsonStart = output.indexOf("{");
     expect(jsonStart).toBeGreaterThanOrEqual(0);
-    const graph = JSON.parse(output.slice(jsonStart)) as {
-      readonly tasks: readonly {
-        readonly dependencies: readonly string[];
-        readonly resolvedTaskDefinition: {
-          readonly dependsOn: readonly string[];
-          readonly passThroughEnv: readonly string[];
-        };
-        readonly taskId: string;
-      }[];
-    };
-    const rootTurbo = readTrackedJson("../../../turbo.json") as {
-      readonly tasks: {
-        readonly "test:e2e": { readonly passThroughEnv: readonly string[] };
-      };
-    };
+    const graph = Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({
+          tasks: Schema.Array(
+            Schema.Struct({
+              dependencies: StringList,
+              resolvedTaskDefinition: Schema.Struct({
+                dependsOn: Schema.NullOr(StringList),
+                passThroughEnv: Schema.NullOr(StringList),
+              }),
+              taskId: Schema.String,
+            })
+          ),
+        })
+      )
+    )(output.slice(jsonStart));
+    const rootTurbo = readTrackedJson(
+      E2ETaskTurboConfig,
+      "../../../turbo.json"
+    );
     const e2eTask = graph.tasks.find(
       (task) => task.taskId === "deskohub-workspace#test:e2e"
     );
@@ -648,7 +686,7 @@ describe("workspace E2E workflow", () => {
   });
 
   test("the Turborepo secret guard finds global and wildcard exposures", () => {
-    const root = readTrackedJson<TurboConfig>("../../../turbo.json");
+    const root = readTrackedJson(TurboConfig, "../../../turbo.json");
     const secret = "WORKSPACE_E2E_BETTER_AUTH_SECRETS";
     const injected = (mutate: (turbo: TurboConfig) => TurboConfig) =>
       turboSecretExposures({ root: mutate(structuredClone(root)) }, secret);
@@ -714,7 +752,7 @@ describe("workspace E2E workflow", () => {
         project.name?.startsWith("checkout-payment")
       )
     ).toEqual([]);
-    expect(casePool?.workers).toBe((playwrightConfig.workers as number) - 1);
+    expect(casePool?.workers).toBe(playwrightConfig.workers - 1);
     expect(
       projectByName(playwrightConfig, "account-auth")?.dependencies
     ).toEqual(casePool?.dependencies);
@@ -735,10 +773,10 @@ describe("workspace E2E workflow", () => {
 
   test("runs read-only navigation beside the checkout graph without gating it", async () => {
     const playwrightConfig = await playwrightConfigStructure();
-    const instantNavigationConfig =
-      await loadPlaywrightConfigStructure<PlaywrightInstantNavigationConfig>(
-        "./playwright.instant-navigation.config"
-      );
+    const instantNavigationConfig = await loadPlaywrightConfigStructure(
+      "./playwright.instant-navigation.config",
+      PlaywrightInstantNavigationConfig
+    );
     expect(doc.jobs["publish-final-status"].needs).toEqual([
       "resolve-target",
       "fill-bun-package-cache",

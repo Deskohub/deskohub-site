@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { LogLevel, Predicate } from "effect";
+import { LogLevel, Predicate, Record } from "effect";
 import { workspaceClientEnvSchema } from "./client-env.schema";
 import { createWorkspaceEnv } from "./env";
 import {
@@ -9,6 +9,7 @@ import {
 } from "./env.schema";
 
 type WorkspaceRuntimeEnv = Parameters<typeof createWorkspaceEnv>[0];
+type WorkspaceEnvOverrides = Partial<WorkspaceRuntimeEnv>;
 
 const environmentFields = {
   ...workspaceServerEnvSchema.fields,
@@ -20,11 +21,9 @@ const environmentFields = {
 // without, is a valid baseline; each case overrides only the variables it is
 // about.
 const workspaceRuntimeEnv = (
-  overrides: Partial<Record<keyof WorkspaceRuntimeEnv, string | undefined>>
+  overrides: WorkspaceEnvOverrides
 ): WorkspaceRuntimeEnv => ({
-  ...(Object.fromEntries(
-    Object.keys(environmentFields).map((key) => [key, process.env[key]])
-  ) as WorkspaceRuntimeEnv),
+  ...Record.map(environmentFields, (_field, key) => process.env[key]),
   EMAIL_API_KEY: "re_test",
   ...overrides,
 });
@@ -34,9 +33,7 @@ const serverEnvironmentSchema = createEnvironmentSchema(
   true
 );
 
-const invalidVariables = (
-  overrides: Partial<Record<keyof WorkspaceRuntimeEnv, string | undefined>>
-) => {
+const invalidVariables = (overrides: WorkspaceEnvOverrides) => {
   const result = serverEnvironmentSchema["~standard"].validate(
     workspaceRuntimeEnv(overrides)
   );
@@ -52,9 +49,7 @@ const invalidVariables = (
   );
 };
 
-const environmentError = (
-  overrides: Partial<Record<keyof WorkspaceRuntimeEnv, string | undefined>>
-) => {
+const environmentError = (overrides: WorkspaceEnvOverrides) => {
   try {
     createWorkspaceEnv(workspaceRuntimeEnv(overrides));
   } catch (error) {
@@ -402,9 +397,7 @@ describe("workspace environment schemas", () => {
 
   test("reports invalid secrets without echoing configured values", () => {
     const cases: readonly {
-      readonly overrides: Partial<
-        Record<keyof WorkspaceRuntimeEnv, string | undefined>
-      >;
+      readonly overrides: WorkspaceEnvOverrides;
       readonly expected: string;
       readonly neverEcho?: readonly string[];
     }[] = [

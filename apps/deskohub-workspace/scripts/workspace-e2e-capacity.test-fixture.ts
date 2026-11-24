@@ -41,7 +41,7 @@ const page = (data: unknown[]) => ({
 });
 
 // This preload owns every HTTP request in the child; unexpected requests fail locally.
-globalThis.fetch = (async (input) => {
+const fixtureFetch = async (input: RequestInfo | URL): Promise<Response> => {
   const url = new URL(String(input));
   if (url.origin !== "https://api.dotykacka.cz")
     throw new Error("Unexpected fixture origin");
@@ -73,4 +73,7 @@ globalThis.fetch = (async (input) => {
   if (url.pathname === "/v2/clouds/123/reservations")
     return Response.json(page([]));
   throw new Error("Unexpected fixture request");
-}) as typeof fetch;
+};
+globalThis.fetch = Object.assign(fixtureFetch, {
+  preconnect: globalThis.fetch.preconnect,
+});

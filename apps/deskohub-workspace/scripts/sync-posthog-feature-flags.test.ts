@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PostHogFeatureFlagError } from "@deskohub/analytics-posthog/feature-flags/codegen";
 import { PostHogProjectId } from "@deskohub/analytics-posthog/identifiers";
-import { Cause, Effect, Exit, Option } from "effect";
+import { Cause, Effect, Exit, Option, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import type {
   PostHogCliInput,
@@ -409,12 +409,25 @@ describe("Workspace PostHog feature flag snapshot refresh during the build", () 
   });
 
   test("runs before the Vercel build compiles the Workspace", () => {
-    const workspaceTurbo = JSON.parse(
-      readFileSync(resolve(import.meta.dir, "../turbo.json"), "utf8")
-    ) as { tasks: Record<string, { dependsOn?: readonly string[] }> };
-    const workspacePackage = JSON.parse(
-      readFileSync(resolve(import.meta.dir, "../package.json"), "utf8")
-    ) as { scripts: Record<string, string> };
+    const workspaceTurbo = Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({
+          tasks: Schema.Record(
+            Schema.String,
+            Schema.Struct({
+              dependsOn: Schema.optionalKey(Schema.Array(Schema.String)),
+            })
+          ),
+        })
+      )
+    )(readFileSync(resolve(import.meta.dir, "../turbo.json"), "utf8"));
+    const workspacePackage = Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({
+          scripts: Schema.Record(Schema.String, Schema.String),
+        })
+      )
+    )(readFileSync(resolve(import.meta.dir, "../package.json"), "utf8"));
 
     expect(workspaceTurbo.tasks["build:compile"]?.dependsOn).toContain(
       "feature-flags:snapshot"
