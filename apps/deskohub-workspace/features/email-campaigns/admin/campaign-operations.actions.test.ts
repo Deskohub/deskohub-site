@@ -265,6 +265,38 @@ describe("runCampaignOperation", () => {
     expect(deleteCampaign).not.toHaveBeenCalled();
   });
 
+  test("refuses input without its operation's shape before the handler runs", async () => {
+    const result = await runCampaignOperation({
+      operation: "deleteCampaign",
+      input: { campaignId: 42 } as never,
+    });
+
+    expect(result?.data).toMatchObject({
+      _tag: "Failure",
+      category: "OperationInputInvalid",
+      code: "input-invalid",
+    });
+    expect(deleteCampaign).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  test("reports an output its operation's schema rejects as unavailable", async () => {
+    archiveAudience.mockImplementationOnce(() =>
+      Effect.succeed({ ...archivedAudience, title: 42 } as never)
+    );
+
+    const result = await runCampaignOperation({
+      operation: "archiveCampaignAudience",
+      input: { audienceId },
+    });
+
+    expect(result?.data).toMatchObject({
+      _tag: "Failure",
+      category: "OperationUnavailable",
+      code: "output-invalid",
+    });
+  });
+
   test("rejects an operation the registry doesn't know", async () => {
     const result = await runCampaignOperation({
       operation: "dropAllCampaigns" as never,

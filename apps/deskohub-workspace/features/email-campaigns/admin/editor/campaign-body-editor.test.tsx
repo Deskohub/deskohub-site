@@ -153,6 +153,31 @@ const nonPlainParts = (node: CampaignBodyNode, path = "doc"): string[] => [
   ),
 ];
 
+test("undoes an edit the body format can't hold, so editor and form agree", async () => {
+  const { editor, changes } = await renderEditor();
+
+  act(() => {
+    editor
+      .chain()
+      .setNodeSelection(8)
+      .updateAttributes("image", { align: "left" })
+      .run();
+  });
+  const held = changes.at(-1);
+  const changeCount = changes.length;
+
+  act(() => {
+    editor
+      .chain()
+      .setNodeSelection(8)
+      .updateAttributes("image", { align: { side: "left" } })
+      .run();
+  });
+
+  expect(changes).toHaveLength(changeCount);
+  expect(editor.getJSON()).toEqual(structuredClone(held));
+});
+
 test("hands the form plain objects a Server Action can receive", async () => {
   const { editor, changes } = await renderEditor();
 

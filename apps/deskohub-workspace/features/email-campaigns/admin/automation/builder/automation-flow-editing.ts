@@ -2,6 +2,7 @@ import type {
   AutomationTriggerKindType as AutomationTriggerKind,
   CalendarExpressionType as CalendarExpression,
 } from "@deskohub/workspace-admin-api";
+import { Match, Struct } from "effect";
 import { isPassReminderTrigger } from "../../../automation/automation-triggers";
 import type {
   FlowStepValue as AutomationStep,
@@ -34,9 +35,8 @@ export const eventTriggerTags = {
 export type EventTriggerKind = keyof typeof eventTriggerTags;
 export type EventTrigger = Exclude<AutomationTrigger, { _tag: "Schedule" }>;
 
-export const eventTriggerKinds = Object.keys(
-  eventTriggerTags
-) as readonly EventTriggerKind[];
+export const eventTriggerKinds: readonly EventTriggerKind[] =
+  Struct.keys(eventTriggerTags);
 
 export const eventTriggerKindOf = (trigger: EventTrigger): EventTriggerKind =>
   eventTriggerKinds.find((kind) => eventTriggerTags[kind] === trigger._tag) ??
@@ -61,12 +61,31 @@ export const withReservationQualifier = <
   trigger: ReservationTrigger,
   key: Key,
   value: ReservationTriggerQualifiers[Key] | undefined
-): ReservationTrigger => {
-  const { [key]: _, ...rest } = trigger;
-  return (
-    value === undefined ? rest : { ...rest, [key]: value }
-  ) as ReservationTrigger;
-};
+): ReservationTrigger =>
+  value === undefined
+    ? withoutReservationQualifier(trigger, key)
+    : { ...trigger, [key]: value };
+
+/** The trigger without one qualifier. */
+const withoutReservationQualifier = (
+  trigger: ReservationTrigger,
+  key: keyof ReservationTriggerQualifiers
+): ReservationTrigger =>
+  Match.value(key).pipe(
+    Match.when("product", () => {
+      const { product: _, ...rest } = trigger;
+      return rest;
+    }),
+    Match.when("stay", () => {
+      const { stay: _, ...rest } = trigger;
+      return rest;
+    }),
+    Match.when("payment", () => {
+      const { payment: _, ...rest } = trigger;
+      return rest;
+    }),
+    Match.exhaustive
+  );
 
 /**
  * The trigger after switching to `kind`. Reservation triggers keep the

@@ -1,4 +1,4 @@
-import type { JSONContent, MarkdownToken } from "@tiptap/core";
+import type { JSONContent } from "@tiptap/core";
 import Image from "@tiptap/extension-image";
 import { Predicate } from "effect";
 import type {
@@ -157,7 +157,7 @@ export const CampaignImage = Image.extend({
       if (!layout || token?.type !== "image" || rest.length > 0) {
         return undefined;
       }
-      return { ...token, type: "image", raw, ...layout } as MarkdownToken;
+      return { ...token, type: "image", raw, ...layout };
     },
   },
 

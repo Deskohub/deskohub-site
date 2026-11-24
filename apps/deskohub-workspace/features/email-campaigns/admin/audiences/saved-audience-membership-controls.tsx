@@ -1,9 +1,6 @@
 "use client";
 
-import {
-  AdministrationCampaignAudienceId,
-  type InSavedAudienceType as InSavedAudience,
-} from "@deskohub/workspace-admin-api";
+import { AdministrationCampaignAudienceId } from "@deskohub/workspace-admin-api";
 import { ChevronDown } from "lucide-react";
 import { useId } from "react";
 import { m } from "@/features/administration/i18n";
@@ -29,7 +26,10 @@ import {
   FieldError,
   fieldErrorAttributes,
 } from "./audience-control-primitives";
-import { unchosenSavedAudience } from "./audience-filter-editing";
+import {
+  type SavedAudienceMembershipDraft,
+  unchosenSavedAudience,
+} from "./audience-filter-editing";
 
 const membershipOperators = ["in", "notIn"] as const;
 
@@ -44,7 +44,7 @@ export function SavedAudienceMembershipControls({
   onChange,
   errorAt,
   savedAudiences,
-}: ControlProps<InSavedAudience> & {
+}: ControlProps<SavedAudienceMembershipDraft> & {
   readonly savedAudiences: readonly AudienceValueOption[];
 }) {
   const locale = useRouteLocale();
@@ -113,8 +113,8 @@ function SavedAudiencePicker({
   missing,
   missingErrorId,
 }: {
-  readonly condition: InSavedAudience;
-  readonly onChange: (condition: InSavedAudience) => void;
+  readonly condition: SavedAudienceMembershipDraft;
+  readonly onChange: (condition: SavedAudienceMembershipDraft) => void;
   readonly savedAudiences: readonly AudienceValueOption[];
   readonly missing: boolean;
   /** The id of the `FieldError` that says an audience is required. */
