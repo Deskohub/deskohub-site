@@ -1,25 +1,25 @@
 import { Array as Arr, Option, pipe, Record } from "effect";
-import {
-  type WebhookDisposition,
-  WebhookRefusal,
-} from "@/shared/backend/service-route";
+import { WebhookRefusal } from "@/shared/backend/service-route";
 import type { NexiWebhookProcessingError } from "./nexi-webhook.service";
 import { paymentWebhookDisposition } from "./payment-webhook-disposition";
+import type { WebhookFailure } from "./payment-webhook-processor";
 
 const nexiWebhookPrefix = "nexi_webhook_";
 
+type PaymentWebhookDisposition =
+  (typeof paymentWebhookDisposition)[WebhookFailure];
+
 /**
- * Retried and reported as fatal: the answer for a code outside the known
- * failures, which the error code's type already rules out.
+ * The answer for a code outside the known failures, which the error code's
+ * type already rules out: retried and reported as fatal, as a failed
+ * transition is.
  */
-const unknownFailureDisposition: WebhookDisposition = {
-  kind: "retry",
-  severity: "fatal",
-};
+const unknownFailureDisposition: PaymentWebhookDisposition =
+  paymentWebhookDisposition.transition_failed;
 
 export const nexiWebhookDisposition = (
   code: NexiWebhookProcessingError["errorCode"]
-): WebhookDisposition =>
+): PaymentWebhookDisposition =>
   pipe(
     Record.keys(paymentWebhookDisposition),
     Arr.findFirst((failure) => code === `${nexiWebhookPrefix}${failure}`),

@@ -1,12 +1,21 @@
-import { expect, test } from "bun:test";
-import { Effect, Layer } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { Effect } from "effect";
+import {
+  connectUnreachableWorkspaceDatabase,
+  type UnreachableWorkspaceDatabase,
+} from "@/shared/testing/unreachable-workspace-database.test-utils";
 import { findOrderKind } from "./order-kind";
 
+let unreachable: UnreachableWorkspaceDatabase;
+beforeAll(async () => {
+  unreachable = await connectUnreachableWorkspaceDatabase();
+});
+afterAll(() => unreachable.pool.close());
+
 test("reads a route value that is not an order ID as no order, without querying", async () => {
-  // The mocked database dies on any query, so a lookup would fail the test.
+  // Every statement on this database fails, so a lookup would fail the test.
   const kind = await findOrderKind("not-an-order-id").pipe(
-    Effect.provide(Layer.mock(WorkspaceDatabase, {})),
+    Effect.provide(unreachable.database),
     Effect.runPromise
   );
 

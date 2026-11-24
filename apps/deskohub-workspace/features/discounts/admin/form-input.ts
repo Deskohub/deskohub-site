@@ -1,8 +1,4 @@
-import {
-  AdministrationDiscountCodeConfigurationInput,
-  AdministrationExistingDiscountCodeCreateInput,
-} from "@deskohub/workspace-admin-api";
-import { Option, Schema } from "effect";
+import { Option } from "effect";
 import { unitOf } from "@/shared/money/currencies";
 import { type Money, moneyWithValue } from "@/shared/money/money";
 import {
@@ -11,10 +7,11 @@ import {
 } from "@/shared/utils";
 import type { DiscountCodeTableItem } from "./admin-tables";
 import type {
-  CreateCustomerDiscountCodeAdminInput,
   CreateDiscountAdminInput,
-  CreateDiscountCodeAdminInput,
+  CreateDiscountCodeAdminRequest,
   CreateVoucherAdminInput,
+  CreateVoucherAdminRequest,
+  DiscountCodeConfigurationAdminRequest,
 } from "./contracts";
 import type {
   DiscountCodeConfigurationFormValues,
@@ -54,42 +51,27 @@ const toDiscountAdjustment = (
         basisPoints: Math.round(Number(values.percentage) * 100),
       });
 
-const decodeDiscountId = Schema.decodeUnknownOption(
-  AdministrationExistingDiscountCodeCreateInput.fields.discountId
-);
-const decodePromotionCode = Schema.decodeUnknownOption(
-  AdministrationDiscountCodeConfigurationInput.fields.code
-);
-const decodeOptionalInstant = Schema.decodeUnknownOption(
-  AdministrationDiscountCodeConfigurationInput.fields.validFrom
-);
-
-/** None when the discount, the code, or a redemption bound does not decode. */
 export const toCreateDiscountCodeInput = (
   values: DiscountCodeFormValues
-): Option.Option<CreateDiscountCodeAdminInput> =>
-  Option.zipWith(
-    decodeDiscountId(values.discountId),
-    toDiscountCodeConfigurationInput(values),
-    (discountId, configuration) => ({ discountId, ...configuration })
-  );
+): CreateDiscountCodeAdminRequest => ({
+  discountId: values.discountId,
+  ...toDiscountCodeConfigurationInput(values),
+});
 
 /**
  * A submitted code form as the code's full configuration. Its reservation
  * dates are always sent as a pair: both empty fields clear them, so an edit
- * that empties both removes the code's dates. None when the code or a
- * redemption bound does not decode.
+ * that empties both removes the code's dates.
  */
 export const toDiscountCodeConfigurationInput = (
   values: DiscountCodeConfigurationFormValues
-): Option.Option<CreateCustomerDiscountCodeAdminInput["code"]> =>
-  Option.map(toPromotionConfigurationInput(values), (promotion) => ({
-    ...promotion,
-    maxUses: toOptionalCount(values.maxUses),
-    maxUsesPerCustomer: toOptionalCount(values.maxUsesPerCustomer),
-    serviceDateFrom: toOptionalValue(values.serviceDateFrom),
-    serviceDateUntil: toOptionalValue(values.serviceDateUntil),
-  }));
+): DiscountCodeConfigurationAdminRequest => ({
+  ...toPromotionConfigurationInput(values),
+  maxUses: toOptionalCount(values.maxUses),
+  maxUsesPerCustomer: toOptionalCount(values.maxUsesPerCustomer),
+  serviceDateFrom: toOptionalValue(values.serviceDateFrom),
+  serviceDateUntil: toOptionalValue(values.serviceDateUntil),
+});
 
 /**
  * An edited code's configuration. Reservation dates the editor still shows as
@@ -99,7 +81,7 @@ export const toDiscountCodeConfigurationInput = (
 export const toDiscountCodeUpdateInput = (
   values: DiscountCodeFormValues,
   loaded: Pick<DiscountCodeTableItem, "serviceDateFrom" | "serviceDateUntil">
-): Option.Option<CreateDiscountCodeAdminInput> => {
+): CreateDiscountCodeAdminRequest => {
   const input = toCreateDiscountCodeInput(values);
   if (
     values.serviceDateFrom !== (loaded.serviceDateFrom ?? "") ||
@@ -107,40 +89,26 @@ export const toDiscountCodeUpdateInput = (
   ) {
     return input;
   }
-  return Option.map(
-    input,
-    ({
-      serviceDateFrom: _serviceDateFrom,
-      serviceDateUntil: _serviceDateUntil,
-      ...unchangedDates
-    }) => unchangedDates
-  );
+  const {
+    serviceDateFrom: _serviceDateFrom,
+    serviceDateUntil: _serviceDateUntil,
+    ...unchangedDates
+  } = input;
+  return unchangedDates;
 };
 
-/**
- * The code value, its switch, and its redemption window. None when the code
- * or a redemption bound does not decode.
- */
+/** The code value, its switch, and its redemption window. */
 const toPromotionConfigurationInput = (
   values: Pick<
     DiscountCodeConfigurationFormValues,
     "code" | "enabled" | "validFrom" | "validUntil"
   >
-): Option.Option<Omit<CreateVoucherAdminInput, "credit">> =>
-  Option.all({
-    code: decodePromotionCode(values.code.trim().toUpperCase()),
-    validFrom: decodeOptionalInstant(
-      toOptionalLocalDateTimeInstant(values.validFrom)
-    ),
-    validUntil: decodeOptionalInstant(
-      toOptionalLocalDateTimeInstant(values.validUntil)
-    ),
-  }).pipe(
-    Option.map((configuration) => ({
-      ...configuration,
-      enabled: values.enabled,
-    }))
-  );
+): Omit<CreateVoucherAdminRequest, "credit"> => ({
+  code: values.code.trim().toUpperCase(),
+  enabled: values.enabled,
+  validFrom: toOptionalLocalDateTimeInstant(values.validFrom),
+  validUntil: toOptionalLocalDateTimeInstant(values.validUntil),
+});
 
 /** None when the voucher currency is outside the catalog. */
 export const toVoucherCreditInput = (
@@ -148,10 +116,9 @@ export const toVoucherCreditInput = (
 ): Option.Option<CreateVoucherAdminInput["credit"]> =>
   toCatalogMoney(values.voucherValue, values.voucherCurrency);
 
-/** None when the code or a redemption bound does not decode. */
 export const toVoucherConfigurationInput = (
   values: VoucherFormValues
-): Option.Option<Omit<CreateVoucherAdminInput, "credit">> =>
+): Omit<CreateVoucherAdminRequest, "credit"> =>
   toPromotionConfigurationInput(values);
 
 const toOptionalLocalDateTimeInstant = (value: string) =>

@@ -1,3 +1,4 @@
+import { Array as Arr, pipe } from "effect";
 import { m } from "@/features/administration/i18n";
 import { getWorkspaceProductTierTitle } from "@/features/checkout/product-catalog.i18n";
 import {
@@ -40,23 +41,27 @@ export const getDiscountProductTargetLabel = (
 };
 
 /** Every target an operator can choose, with each cowork tier after cowork. */
-export const discountProductTargetOptions = workspaceProductTargets
-  .flatMap((target): readonly WorkspaceProductTarget[] =>
-    target.kind === "cowork"
-      ? [target, ...workspaceCoworkTierProductTargets]
-      : [
-          target,
-          ...workspacePassOfferTargets.filter(
-            ({ kind }) => kind === target.kind
-          ),
-        ]
-  )
-  .map((target) => ({
+export const discountProductTargetOptions = pipe(
+  workspaceProductTargets,
+  Arr.flatMap(
+    (target): Arr.NonEmptyReadonlyArray<WorkspaceProductTarget> =>
+      target.kind === "cowork"
+        ? [target, ...workspaceCoworkTierProductTargets]
+        : [
+            target,
+            ...workspacePassOfferTargets.filter(
+              ({ kind }) => kind === target.kind
+            ),
+          ]
+  ),
+  Arr.map((target) => ({
     key: getWorkspaceProductTargetKey(target),
     target,
-  }));
+  }))
+);
 
-export const discountProductTargetKeys = discountProductTargetOptions.map(
+export const discountProductTargetKeys = Arr.map(
+  discountProductTargetOptions,
   ({ key }) => key
 );
 

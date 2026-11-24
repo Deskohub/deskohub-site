@@ -46,18 +46,27 @@ import { getPriceVerdictChangedKeys, type PriceVerdict } from "./price-verdict";
 export { reservationHoldTtlMilliseconds as payStateDefaultTtlMilliseconds } from "@/features/reservation/reservation-hold-deadline";
 export { payStateTokenQueryParam };
 
+/** Each reservation family's order with its quote, as a Pay state signs them. */
+const coworkPayStatePricingSchema = Schema.Struct({
+  reservation: normalizedCoworkReservationOrderSchema,
+  quote: coworkReservationQuoteSchema,
+});
+const meetingRoomPayStatePricingSchema = Schema.Struct({
+  reservation: normalizedMeetingRoomReservationOrderSchema,
+  quote: meetingRoomReservationQuoteSchema,
+});
+const officePayStatePricingSchema = Schema.Struct({
+  reservation: normalizedOfficeReservationOrderSchema,
+  quote: officeReservationQuoteSchema,
+});
+
 /** A reservation family's Pay state: the signed envelope with its order. */
-const familyPayStateSchema = <
-  Reservation extends Schema.Top,
-  Quote extends Schema.Top,
->(
-  reservation: Reservation,
-  quote: Quote
+const familyPayStateSchema = <Fields extends Schema.Struct.Fields>(
+  pricing: Schema.Struct<Fields>
 ) =>
   Schema.Struct({
     ...signedPayStateEnvelopeSchema.fields,
-    reservation,
-    quote,
+    ...pricing.fields,
   });
 
 /**
@@ -76,18 +85,9 @@ const carriesSubmittedCodeWithItsDiscount = <
   (state.submittedCodeDiscountId === undefined);
 
 export const signedPayStateSchema = Schema.Union([
-  familyPayStateSchema(
-    normalizedCoworkReservationOrderSchema,
-    coworkReservationQuoteSchema
-  ),
-  familyPayStateSchema(
-    normalizedMeetingRoomReservationOrderSchema,
-    meetingRoomReservationQuoteSchema
-  ),
-  familyPayStateSchema(
-    normalizedOfficeReservationOrderSchema,
-    officeReservationQuoteSchema
-  ),
+  familyPayStateSchema(coworkPayStatePricingSchema),
+  familyPayStateSchema(meetingRoomPayStatePricingSchema),
+  familyPayStateSchema(officePayStatePricingSchema),
 ])
   .check(
     Schema.makeFilter(
@@ -137,14 +137,20 @@ export const signedPayStateSchema = Schema.Union([
         }
     )
   )
-  // Repeats the first check as a refinement so the decoded type carries it.
-  .pipe(Schema.refine(carriesSubmittedCodeWithItsDiscount))
   .annotate({
     identifier: "SignedPayState",
     description: "Workspace checkout Pay state payload.",
   });
 
-export type SignedPayState = typeof signedPayStateSchema.Type;
+/**
+ * The Pay state as built and opened: it repeats the submitted-code check as a
+ * refinement so the decoded type carries it.
+ */
+const signedPayStateCodec = signedPayStateSchema.pipe(
+  Schema.refine(carriesSubmittedCodeWithItsDiscount)
+);
+
+export type SignedPayState = typeof signedPayStateCodec.Type;
 
 /**
  * A Pay state whose reservation hold deadline is known. Every Pay state built
@@ -161,7 +167,7 @@ export type PayStateWithHoldExpiry = SignedPayState & {
  * sealed state format that predates purposes.
  */
 const payStateCodec = makeLegacySealedState({
-  schema: signedPayStateSchema,
+  schema: signedPayStateCodec,
   ttlMilliseconds: reservationHoldTtlMilliseconds,
 });
 
@@ -178,18 +184,9 @@ export type SignedPayStatePricing = SignedPayState extends infer State
  */
 export const decodeSignedPayStatePricing = Schema.decodeUnknownEffect(
   Schema.Union([
-    Schema.Struct({
-      reservation: normalizedCoworkReservationOrderSchema,
-      quote: coworkReservationQuoteSchema,
-    }),
-    Schema.Struct({
-      reservation: normalizedMeetingRoomReservationOrderSchema,
-      quote: meetingRoomReservationQuoteSchema,
-    }),
-    Schema.Struct({
-      reservation: normalizedOfficeReservationOrderSchema,
-      quote: officeReservationQuoteSchema,
-    }),
+    coworkPayStatePricingSchema,
+    meetingRoomPayStatePricingSchema,
+    officePayStatePricingSchema,
   ]),
   { onExcessProperty: "error" }
 );
@@ -365,7 +362,7 @@ export const buildSignedPayState = Effect.fn("payState.build")(function* (
     quote: input.quote,
   };
 
-  return yield* Schema.decodeUnknownEffect(signedPayStateSchema, {
+  return yield* Schema.decodeUnknownEffect(signedPayStateCodec, {
     onExcessProperty: "error",
   })(state).pipe(
     Effect.map(

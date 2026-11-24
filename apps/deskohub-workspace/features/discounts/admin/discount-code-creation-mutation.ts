@@ -3,7 +3,7 @@ import { storedDiscountIdSchema } from "@/features/discounts/persistence-contrac
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import type {
   CreateCustomerDiscountCodeAdminInput,
-  DiscountAdminMutation,
+  DiscountAdminMutationRequest,
 } from "./contracts";
 import {
   toCreateDiscountInput,
@@ -14,28 +14,25 @@ import type { DiscountCodeCreationFormValues } from "./form-schemas";
 const decodeStoredDiscountId = Schema.decodeUnknownSync(storedDiscountIdSchema);
 
 type DiscountCodeCreationMutation = Extract<
-  DiscountAdminMutation,
+  DiscountAdminMutationRequest,
   { readonly kind: "create-code" | "create-customer-code" }
 >;
 
 /**
  * The mutation a submitted code creation form asks for: a code restricted to
  * the customer when one is given, otherwise a general code. None when the
- * form's new discount has no valid adjustment, or its code or a redemption
- * bound does not decode.
+ * form's new discount has no valid adjustment.
  */
 export const toDiscountCodeCreationMutation = (
   values: DiscountCodeCreationFormValues,
   customerId: DotyposCustomerId | undefined
 ): Option.Option<DiscountCodeCreationMutation> =>
-  Option.zipWith(
-    toCodeCreationDiscount(values),
-    toDiscountCodeConfigurationInput(values),
-    (discount, code): DiscountCodeCreationMutation =>
-      customerId
-        ? { kind: "create-customer-code", customerId, code, discount }
-        : { kind: "create-code", code, discount }
-  );
+  Option.map(toCodeCreationDiscount(values), (discount) => {
+    const code = toDiscountCodeConfigurationInput(values);
+    return customerId
+      ? { kind: "create-customer-code", customerId, code, discount }
+      : { kind: "create-code", code, discount };
+  });
 
 const toCodeCreationDiscount = (
   values: DiscountCodeCreationFormValues

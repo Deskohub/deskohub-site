@@ -67,7 +67,10 @@ import {
   getCalendarSaleDiscountLabel,
   getCalendarStatusLabel,
 } from "./calendar-sale-display";
-import type { DiscountAdminMutation } from "./contracts";
+import type {
+  DiscountAdminMutation,
+  DiscountAdminMutationRequest,
+} from "./contracts";
 import type { AdminCalendarSale } from "./discount-administration.service";
 import {
   discountCodeFormDefaults,
@@ -438,14 +441,13 @@ export function VoucherEditor({
       </p>
       <MutationForm
         buildMutation={(values) =>
-          Option.zipWith(
+          Option.map(
             toVoucherCreditInput(values),
-            toVoucherConfigurationInput(values),
-            (credit, configuration): DiscountAdminMutation => ({
+            (credit): DiscountAdminMutationRequest => ({
               kind: "update-voucher",
               voucher: {
                 id: voucher.id,
-                ...configuration,
+                ...toVoucherConfigurationInput(values),
                 credit,
               },
             })
@@ -767,11 +769,10 @@ export function CreateVoucherForm({
   return (
     <MutationForm
       buildMutation={(values) =>
-        Option.zipWith(
+        Option.map(
           toVoucherCreditInput(values),
-          toVoucherConfigurationInput(values),
-          (credit, configuration): DiscountAdminMutation => {
-            const voucher = { ...configuration, credit };
+          (credit): DiscountAdminMutationRequest => {
+            const voucher = { ...toVoucherConfigurationInput(values), credit };
             return customer
               ? {
                   kind: "create-customer-voucher",
@@ -915,13 +916,13 @@ function DiscountCodeEditor({
       </p>
       <MutationForm
         buildMutation={(values) =>
-          Option.map(
-            toDiscountCodeUpdateInput(values, code),
-            (update): DiscountAdminMutation => ({
-              kind: "update-code",
-              code: { id: code.id, ...update },
-            })
-          )
+          Option.some({
+            kind: "update-code",
+            code: {
+              id: code.id,
+              ...toDiscountCodeUpdateInput(values, code),
+            },
+          })
         }
         defaultValues={discountCodeFormDefaults(code)}
         resetOnSuccessTo="submitted"
@@ -951,7 +952,7 @@ function MutationForm<Input extends FieldValues, Values = Input>({
   /** None when the values cannot form a mutation the action would accept. */
   readonly buildMutation: (
     values: Values
-  ) => Option.Option<DiscountAdminMutation>;
+  ) => Option.Option<DiscountAdminMutationRequest>;
   readonly children: ReactNode;
   readonly defaultValues: DefaultValues<Input>;
   readonly deleteControl?: ReactNode;

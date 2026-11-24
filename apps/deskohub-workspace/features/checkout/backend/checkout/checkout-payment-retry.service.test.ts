@@ -426,6 +426,16 @@ describe("CheckoutPaymentRetryService.prepare", () => {
       { state: "not_retryable", reason: "details_unavailable" },
     ],
     [
+      "an order whose stored quote no longer decodes as a Pay state's",
+      {
+        snapshot: {
+          ...snapshotFor({}),
+          quote: { ...snapshotFor({}).quote, retiredField: true },
+        },
+      },
+      { state: "not_retryable", reason: "details_unavailable" },
+    ],
+    [
       "a reservation that has ended",
       { snapshot: snapshotFor({ date: "2020-01-01" }) },
       { state: "not_retryable", reason: "reservation_ended" },

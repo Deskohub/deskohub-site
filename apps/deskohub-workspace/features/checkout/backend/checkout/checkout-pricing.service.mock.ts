@@ -1,7 +1,9 @@
-import { Effect, Layer, Match } from "effect";
+import { Effect, Layer, Match, Schema } from "effect";
 import type { CheckoutSummary } from "@/features/checkout/checkout-summary";
+import { coworkReservationQuoteSchema } from "@/features/checkout/reservation-quote-cowork";
+import { meetingRoomReservationQuoteSchema } from "@/features/checkout/reservation-quote-meeting-room";
+import { officeReservationQuoteSchema } from "@/features/checkout/reservation-quote-office";
 import {
-  type AdvertisementAffirmation,
   CheckoutPricingService,
   type CustomerQuoteInput,
   type ICheckoutPricingService,
@@ -11,7 +13,6 @@ import {
   reviewDisplayedOfficePrice,
 } from "./checkout-pricing.service";
 import { PayState } from "./pay-state";
-import type { PriceVerdict } from "./price-verdict";
 import {
   getCustomerQuotePriceVerdict,
   getPaymentPriceVerdict,
@@ -26,20 +27,44 @@ type PricingError = Effect.Error<
 >;
 
 /** The re-priced quote and commitment a caller's test stub returns. */
-export type RepricedPayment<
-  Input extends PaymentRepricingInput = PaymentRepricingInput,
-> = {
-  readonly quote: Input["quote"];
-  readonly commitment: PaymentPriceAffirmation["commitment"];
-};
+export type RepricedPayment = Pick<
+  PaymentPriceAffirmation,
+  "quote" | "commitment"
+>;
+
+type ReservationQuote = PaymentRepricingInput["quote"];
+
+const isCoworkQuote = Schema.is(coworkReservationQuoteSchema);
+const isMeetingRoomQuote = Schema.is(meetingRoomReservationQuoteSchema);
+const isOfficeQuote = Schema.is(officeReservationQuoteSchema);
+
+/**
+ * The quote a stub returned, when it is a quote of the family the input
+ * names. A stub that answers with another family's quote is a broken test.
+ */
+const requireFamilyQuote = <Quote extends ReservationQuote>(
+  isFamilyQuote: (quote: ReservationQuote) => quote is Quote,
+  quote: ReservationQuote
+) =>
+  isFamilyQuote(quote)
+    ? Effect.succeed(quote)
+    : Effect.die(
+        new Error("The pricing stub returned another family's quote.")
+      );
 
 /** One family's re-priced payment with the summary its quote shows. */
 const pricedPayment = <
   Reservation extends PaymentRepricingInput["reservation"],
-  Quote extends PaymentRepricingInput["quote"],
+  Quote extends ReservationQuote,
 >(
   reservation: Reservation,
-  { quote, commitment }: { readonly quote: Quote } & RepricedPayment,
+  {
+    quote,
+    commitment,
+  }: {
+    readonly quote: Quote;
+    readonly commitment: RepricedPayment["commitment"];
+  },
   summary: CheckoutSummary
 ): ReservationPaymentPriceAffirmation<Reservation, Quote> => ({
   kind: reservation.kind,
@@ -54,53 +79,63 @@ const pricedPayment = <
  * affirmation and returns the re-priced quote and commitment, and the
  * payment verdict comes from the real payment rule.
  */
-export const paymentPricingFrom = (
-  reprice: <Input extends PaymentRepricingInput>(
-    input: Input
-  ) => Effect.Effect<RepricedPayment<Input>, PricingError>
+export const paymentPricingFrom = <E extends PricingError>(
+  reprice: (input: PaymentRepricingInput) => Effect.Effect<RepricedPayment, E>
 ): Pick<ICheckoutPricingService, "repriceForPayment" | "affirmForPayment"> => {
   const repriceForPayment = (
     input: PaymentRepricingInput
-  ): Effect.Effect<PaymentPriceAffirmation, PricingError> =>
+  ): Effect.Effect<PaymentPriceAffirmation, E> =>
     Match.value(input).pipe(
       Match.when({ reservation: { kind: "cowork" } }, (cowork) =>
         reprice(cowork).pipe(
-          Effect.map((repriced) =>
-            pricedPayment(
-              cowork.reservation,
-              repriced,
-              PayState.summary({
-                reservation: cowork.reservation,
-                quote: repriced.quote,
-              })
+          Effect.flatMap(({ quote, commitment }) =>
+            requireFamilyQuote(isCoworkQuote, quote).pipe(
+              Effect.map((familyQuote) =>
+                pricedPayment(
+                  cowork.reservation,
+                  { quote: familyQuote, commitment },
+                  PayState.summary({
+                    reservation: cowork.reservation,
+                    quote: familyQuote,
+                  })
+                )
+              )
             )
           )
         )
       ),
       Match.when({ reservation: { kind: "meeting-room" } }, (meetingRoom) =>
         reprice(meetingRoom).pipe(
-          Effect.map((repriced) =>
-            pricedPayment(
-              meetingRoom.reservation,
-              repriced,
-              PayState.summary({
-                reservation: meetingRoom.reservation,
-                quote: repriced.quote,
-              })
+          Effect.flatMap(({ quote, commitment }) =>
+            requireFamilyQuote(isMeetingRoomQuote, quote).pipe(
+              Effect.map((familyQuote) =>
+                pricedPayment(
+                  meetingRoom.reservation,
+                  { quote: familyQuote, commitment },
+                  PayState.summary({
+                    reservation: meetingRoom.reservation,
+                    quote: familyQuote,
+                  })
+                )
+              )
             )
           )
         )
       ),
       Match.when({ reservation: { kind: "office" } }, (office) =>
         reprice(office).pipe(
-          Effect.map((repriced) =>
-            pricedPayment(
-              office.reservation,
-              repriced,
-              PayState.summary({
-                reservation: office.reservation,
-                quote: repriced.quote,
-              })
+          Effect.flatMap(({ quote, commitment }) =>
+            requireFamilyQuote(isOfficeQuote, quote).pipe(
+              Effect.map((familyQuote) =>
+                pricedPayment(
+                  office.reservation,
+                  { quote: familyQuote, commitment },
+                  PayState.summary({
+                    reservation: office.reservation,
+                    quote: familyQuote,
+                  })
+                )
+              )
             )
           )
         )
@@ -124,11 +159,6 @@ export const paymentPricingFrom = (
       ),
   };
 };
-
-/** A customer quote input whose advertisement is one family's. */
-export type FamilyCustomerQuoteInput<
-  Priced extends AdvertisementAffirmation = AdvertisementAffirmation,
-> = CustomerQuoteInput & { readonly advertisement: PriceVerdict<Priced> };
 
 /**
  * The verdict on one family's customer quote: full validation keeps the
@@ -160,19 +190,19 @@ const customerQuoteVerdict = (input: {
  * discounts and returns the customer quote, full validation keeps the
  * advertised query code, and the verdict comes from the real submission rule.
  */
-export const customerQuotePricingFrom = (
-  quote: <Priced extends AdvertisementAffirmation>(
-    input: FamilyCustomerQuoteInput<Priced>
-  ) => Effect.Effect<Priced["advertisedQuote"], PricingError>
+export const customerQuotePricingFrom = <E extends PricingError>(
+  quote: (
+    input: CustomerQuoteInput
+  ) => Effect.Effect<PreparedCustomerQuote["quote"], E>
 ): Pick<ICheckoutPricingService, "quoteForCustomer"> => ({
   quoteForCustomer: (input) =>
     Match.value(input.advertisement.priced).pipe(
       Match.discriminatorsExhaustive("kind")({
         cowork: (priced) =>
-          quote({
-            ...input,
-            advertisement: { ...input.advertisement, priced },
-          }).pipe(
+          quote(input).pipe(
+            Effect.flatMap((customerQuote) =>
+              requireFamilyQuote(isCoworkQuote, customerQuote)
+            ),
             Effect.map((customerQuote) =>
               customerQuoteVerdict({
                 quoted: input,
@@ -193,10 +223,10 @@ export const customerQuotePricingFrom = (
             )
           ),
         "meeting-room": (priced) =>
-          quote({
-            ...input,
-            advertisement: { ...input.advertisement, priced },
-          }).pipe(
+          quote(input).pipe(
+            Effect.flatMap((customerQuote) =>
+              requireFamilyQuote(isMeetingRoomQuote, customerQuote)
+            ),
             Effect.map((customerQuote) =>
               customerQuoteVerdict({
                 quoted: input,
@@ -217,10 +247,10 @@ export const customerQuotePricingFrom = (
             )
           ),
         office: (priced) =>
-          quote({
-            ...input,
-            advertisement: { ...input.advertisement, priced },
-          }).pipe(
+          quote(input).pipe(
+            Effect.flatMap((customerQuote) =>
+              requireFamilyQuote(isOfficeQuote, customerQuote)
+            ),
             Effect.map((customerQuote) =>
               customerQuoteVerdict({
                 quoted: input,

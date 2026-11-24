@@ -180,44 +180,17 @@ describe("discount administration form input", () => {
       serviceDateUntil: "",
     };
 
-    expect(toCreateDiscountCodeInput(values)).toEqual(
-      Option.some({
-        discountId: "019c91dd-c560-7e55-b9d8-c95065efd51d",
-        code: "SUMMER10",
-        enabled: true,
-        validFrom: "2026-08-01T08:00:00Z",
-        validUntil: "2026-09-01T08:00:00Z",
-        maxUses: 100,
-        maxUsesPerCustomer: 2,
-        serviceDateFrom: null,
-        serviceDateUntil: null,
-      })
-    );
-  });
-
-  test("refuses a code the API would not accept", () => {
-    const values: DiscountCodeFormValues = {
+    expect(toCreateDiscountCodeInput(values)).toEqual({
       discountId: "019c91dd-c560-7e55-b9d8-c95065efd51d",
-      code: "summer 10",
+      code: "SUMMER10",
       enabled: true,
-      validFrom: "",
-      validUntil: "",
-      maxUses: "",
-      maxUsesPerCustomer: "",
-      serviceDateFrom: "",
-      serviceDateUntil: "",
-    };
-
-    expect(Option.isNone(toCreateDiscountCodeInput(values))).toBe(true);
-    expect(
-      Option.isNone(
-        toCreateDiscountCodeInput({
-          ...values,
-          code: "SUMMER10",
-          discountId: "",
-        })
-      )
-    ).toBe(true);
+      validFrom: "2026-08-01T08:00:00Z",
+      validUntil: "2026-09-01T08:00:00Z",
+      maxUses: 100,
+      maxUsesPerCustomer: 2,
+      serviceDateFrom: null,
+      serviceDateUntil: null,
+    });
   });
 
   test("sends a code's reservation dates as a pair", () => {
@@ -233,19 +206,17 @@ describe("discount administration form input", () => {
       serviceDateUntil: "2026-07-15",
     };
 
-    expect(Option.getOrThrow(toCreateDiscountCodeInput(values))).toMatchObject({
+    expect(toCreateDiscountCodeInput(values)).toMatchObject({
       serviceDateFrom: "2026-07-15",
       serviceDateUntil: "2026-07-15",
     });
     // Emptied fields send explicit nulls, which clear an edited code's dates.
     expect(
-      Option.getOrThrow(
-        toCreateDiscountCodeInput({
-          ...values,
-          serviceDateFrom: "",
-          serviceDateUntil: "",
-        })
-      )
+      toCreateDiscountCodeInput({
+        ...values,
+        serviceDateFrom: "",
+        serviceDateUntil: "",
+      })
     ).toMatchObject({ serviceDateFrom: null, serviceDateUntil: null });
   });
 
@@ -266,36 +237,30 @@ describe("discount administration form input", () => {
       serviceDateUntil: "2026-07-31",
     };
 
-    const kept = Option.getOrThrow(toDiscountCodeUpdateInput(values, loaded));
+    const kept = toDiscountCodeUpdateInput(values, loaded);
     expect(Object.keys(kept)).not.toContain("serviceDateFrom");
     expect(Object.keys(kept)).not.toContain("serviceDateUntil");
     expect(
-      Option.getOrThrow(
-        toDiscountCodeUpdateInput(
-          { ...values, serviceDateUntil: "2026-08-15" },
-          loaded
-        )
+      toDiscountCodeUpdateInput(
+        { ...values, serviceDateUntil: "2026-08-15" },
+        loaded
       )
     ).toMatchObject({
       serviceDateFrom: "2026-07-01",
       serviceDateUntil: "2026-08-15",
     });
     expect(
-      Option.getOrThrow(
-        toDiscountCodeUpdateInput(
-          { ...values, serviceDateFrom: "", serviceDateUntil: "" },
-          loaded
-        )
+      toDiscountCodeUpdateInput(
+        { ...values, serviceDateFrom: "", serviceDateUntil: "" },
+        loaded
       )
     ).toMatchObject({ serviceDateFrom: null, serviceDateUntil: null });
     // A code without dates that stays without them sends nothing either.
     expect(
       Object.keys(
-        Option.getOrThrow(
-          toDiscountCodeUpdateInput(
-            { ...values, serviceDateFrom: "", serviceDateUntil: "" },
-            { serviceDateFrom: null, serviceDateUntil: null }
-          )
+        toDiscountCodeUpdateInput(
+          { ...values, serviceDateFrom: "", serviceDateUntil: "" },
+          { serviceDateFrom: null, serviceDateUntil: null }
         )
       )
     ).not.toContain("serviceDateFrom");
@@ -304,16 +269,14 @@ describe("discount administration form input", () => {
   test("gives vouchers no usage limits or reservation dates", () => {
     expect(
       Object.keys(
-        Option.getOrThrow(
-          toVoucherConfigurationInput({
-            voucherValue: "10000",
-            voucherCurrency: "CZK",
-            code: "gift100",
-            enabled: true,
-            validFrom: "",
-            validUntil: "",
-          })
-        )
+        toVoucherConfigurationInput({
+          voucherValue: "10000",
+          voucherCurrency: "CZK",
+          code: "gift100",
+          enabled: true,
+          validFrom: "",
+          validUntil: "",
+        })
       ).sort()
     ).toEqual(["code", "enabled", "validFrom", "validUntil"]);
   });
