@@ -398,10 +398,10 @@ type NoOutputs = Record<never, never>;
 
 /** The services `Outputs`' adapters require. */
 type OutputServices<Outputs> = {
-  readonly [Name in keyof Outputs]: Outputs[Name] extends (
+  readonly [Name in keyof Outputs]-?: NonNullable<Outputs[Name]> extends (
     output: never
-  ) => Effect.Effect<infer _Output, infer _Error, infer Services>
-    ? Services
+  ) => infer Adapted
+    ? Effect.Services<Adapted>
     : never;
 }[keyof Outputs];
 
@@ -543,54 +543,41 @@ export const operationGroup = <
 };
 
 /**
- * Whether `served` is `group` as an API serves it: under its identifier,
- * with its endpoints, each by its method and path. An API composed with
- * `addHttpApi` serves a copy of the group carrying the added API's
- * annotations.
+ * Whether `served` is `group` as an API serves it: `group` itself, or the
+ * copy `addHttpApi` makes, which shares `group`'s endpoints and adds the
+ * composed API's annotations. A group that only shares `group`'s identifier
+ * and routes isn't it: its endpoints may decode and encode differently.
  */
-const servesAs =
-  <Group extends HttpApiGroup.Constraint>(group: Group) =>
-  (served: HttpApiGroup.Constraint): served is Group => {
-    if (served.identifier !== group.identifier) {
-      return false;
-    }
-    const declared = Object.entries(httpApiGroupOf(group).endpoints);
-    const { endpoints } = httpApiGroupOf(served);
-    return (
-      declared.length === Object.keys(endpoints).length &&
-      declared.every(([name, endpoint]) => {
-        const servedEndpoint: HttpApiEndpoint.Top | undefined = endpoints[name];
-        return (
-          servedEndpoint?.method === endpoint.method &&
-          servedEndpoint.path === endpoint.path
-        );
-      })
-    );
-  };
+const servesGroup =
+  (group: HttpApiGroup.Top) =>
+  (served: HttpApiGroup.Top): boolean =>
+    served.identifier === group.identifier &&
+    served.topLevel === group.topLevel &&
+    served.endpoints === group.endpoints;
 
 /**
  * The API serving `group` alone, as `api` declares it, for building the
- * group's handlers where its endpoints are known: the group `api` serves
- * under its identifier, with that group's annotations. Throws unless `api`
- * serves `group`.
+ * group's handlers where its endpoints are known: `group` with the
+ * annotations `api` serves it with. Throws unless `api` serves `group`.
  */
 export const operationGroupApi = <
   ApiId extends string,
   Groups extends HttpApiGroup.Constraint,
-  const Group extends HttpApiGroup.Constraint,
+  Id extends string,
+  Endpoints extends HttpApiEndpoint.Constraint,
+  TopLevel extends boolean,
 >(
   api: HttpApi.HttpApi<ApiId, Groups>,
-  group: Group
+  group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>
 ) => {
-  const groups: ReadonlyArray<HttpApiGroup.Constraint> = Object.values(
-    api.groups
-  ).filter(HttpApiGroup.isHttpApiGroup);
-  const served = groups.find(servesAs(group));
+  const served = Object.values(api.groups)
+    .filter(HttpApiGroup.isHttpApiGroup)
+    .find(servesGroup(httpApiGroupOf(group)));
   if (served === undefined) {
     throw new Error(`${api.identifier} doesn't serve ${group.identifier}.`);
   }
   return HttpApi.make(api.identifier)
-    .add(served)
+    .add(group.annotateMerge(served.annotations))
     .annotateMerge(api.annotations);
 };
 

@@ -908,6 +908,52 @@ describe("an operation whose input encodes with a service", () => {
     expect(required).toBe(true);
   });
 
+  test("requires the services of an optional adapter its explicit outputs type declares", () => {
+    type Adapters = {
+      readonly tally?: (
+        output: string
+      ) => Effect.Effect<string, never, OutputStamp>;
+    };
+    const adapters: Adapters = {
+      tally: (output) =>
+        Effect.gen(function* () {
+          return `${yield* OutputStamp} ${output}`;
+        }),
+    };
+    const adapted = operationGroupHandlers<
+      "talliesApi",
+      typeof Tallies,
+      typeof Tallies,
+      never,
+      never,
+      never,
+      never,
+      Adapters
+    >(
+      tallyApi,
+      Tallies,
+      Effect.succeed((_name: "tally", input: { readonly count: string }) =>
+        Effect.succeed(JSON.stringify(input))
+      ),
+      adapters
+    );
+    type Requirements =
+      typeof adapted extends Layer.Layer<
+        infer _Provided,
+        infer _Error,
+        infer Required
+      >
+        ? Required
+        : never;
+    const required: HttpRouter.Request<
+      "Requires",
+      OutputStamp
+    > extends Requirements
+      ? true
+      : false = true;
+    expect(required).toBe(true);
+  });
+
   test("re-encodes the input with that service", async () => {
     const tallyServer = HttpRouter.toWebHandler(
       HttpApiBuilder.layer(tallyApi).pipe(
@@ -955,5 +1001,41 @@ describe("an operation whose input encodes with a service", () => {
     } finally {
       await tallyServer.dispose();
     }
+  });
+});
+
+/** Notes an API composed into another, as an annotation `addHttpApi` carries. */
+class ComposedNote extends Context.Service<ComposedNote, string>()(
+  "@deskohub/workspace-admin-api/test/ComposedNote"
+) {}
+
+describe("the API serving one group", () => {
+  const pairGroup = <Success extends Schema.Top>(success: Success) =>
+    HttpApiGroup.make("pairs").add(
+      HttpApiEndpoint.get("getPair", "/pair", { success })
+    );
+  const StringPairs = pairGroup(Schema.String);
+  const NumberPairs = pairGroup(Schema.Number);
+
+  test("isn't another group with the same identifier and routes", () => {
+    const api = HttpApi.make("pairsApi").add(StringPairs).add(NumberPairs);
+    expect(() => operationGroupApi(api, StringPairs)).toThrow(
+      "pairsApi doesn't serve pairs."
+    );
+    expect(operationGroupApi(api, NumberPairs).groups.pairs.endpoints).toBe(
+      NumberPairs.endpoints
+    );
+  });
+
+  test("serves the group an API composed with addHttpApi serves, with its annotations", () => {
+    const inner = HttpApi.make("innerApi")
+      .add(StringPairs)
+      .annotate(ComposedNote, "inner");
+    const composed = HttpApi.make("outerApi").addHttpApi(inner);
+    const served = operationGroupApi(composed, StringPairs).groups.pairs;
+    expect(served.endpoints).toBe(StringPairs.endpoints);
+    expect(Context.getOption(served.annotations, ComposedNote)).toEqual(
+      Option.some("inner")
+    );
   });
 });
