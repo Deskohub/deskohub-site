@@ -173,6 +173,29 @@ const postHogEndpoint = (posthogHost: string, path: string) =>
 const postHogExportTimeoutMs = 2_000;
 
 /**
+ * A batch span processor whose flush also waits for the exports already in
+ * flight. The SDK's flush exports the queued spans only, so it can resolve
+ * while a batch its timer started is still sending, and a container that
+ * idles or a function that freezes after the flush would lose that batch.
+ */
+class DrainingBatchSpanProcessor extends BatchSpanProcessor {
+  readonly #exporter: SpanExporter;
+
+  constructor(
+    exporter: SpanExporter,
+    config: ConstructorParameters<typeof BatchSpanProcessor>[1]
+  ) {
+    super(exporter, config);
+    this.#exporter = exporter;
+  }
+
+  override async forceFlush(): Promise<void> {
+    await super.forceFlush();
+    await this.#exporter.forceFlush?.();
+  }
+}
+
+/**
  * The batch export of the Workspace server's spans to PostHog's
  * `/i/v1/traces`, never its AI-only OTLP endpoint, which drops other spans.
  * Its exporter applies the span allowlist again, after every processor ran.
@@ -198,7 +221,7 @@ const createPostHogSpanProcessor = ({
       "The deployment stage (WORKSPACE_DEPLOYMENT_STAGE or VERCEL_ENV) is required when PostHog tracing is enabled"
     );
   }
-  return new BatchSpanProcessor(
+  return new DrainingBatchSpanProcessor(
     createAllowlistedSpanExporter(
       new OTLPTraceExporter({
         headers: { Authorization: `Bearer ${posthogProjectToken}` },
