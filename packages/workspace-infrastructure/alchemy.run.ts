@@ -19,6 +19,7 @@ import {
   releaseRecordLocation,
 } from "./src/release/gcs-release-store";
 import { requireStackWriter } from "./src/release/release-writer";
+import { retiredEdgeProviders } from "./src/resources/retired-edge-providers";
 import { verifyStackTarget } from "./src/stack-target";
 import {
   declareRecordedWorkspaceServices,
@@ -68,7 +69,9 @@ const releasePlatform = (config: WorkspaceStackConfig) =>
 export default Alchemy.Stack(
   "DeskohubWorkspace",
   {
-    providers: GCP.providers(),
+    // Deletion-only providers for pre-rename edge rows so locked cleanup-only
+    // destroys can drain a stack deployed before the edge removal.
+    providers: retiredEdgeProviders.pipe(Layer.provideMerge(GCP.providers())),
     state: Layer.unwrap(
       stackConfig.pipe(
         Effect.map((config) =>
