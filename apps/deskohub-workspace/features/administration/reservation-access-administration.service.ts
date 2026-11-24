@@ -178,7 +178,11 @@ export class ReservationAccessAdministration extends Context.Service<
   ) =>
     servicePerOperation(
       this,
-      { mutate: true, resumeInterruptedMutation: true },
+      (run) => ({
+        mutate: (mutation) => run((instance) => instance.mutate(mutation)),
+        resumeInterruptedMutation: (reservationId) =>
+          run((instance) => instance.resumeInterruptedMutation(reservationId)),
+      }),
       implementation
     );
 

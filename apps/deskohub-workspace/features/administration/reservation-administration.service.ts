@@ -716,7 +716,11 @@ export class ReservationAdministrationService extends Context.Service<
   ) =>
     servicePerOperation(
       this,
-      { cancel: true, restore: true, readAudit: true },
+      (run) => ({
+        cancel: (input) => run((instance) => instance.cancel(input)),
+        restore: (input) => run((instance) => instance.restore(input)),
+        readAudit: (input) => run((instance) => instance.readAudit(input)),
+      }),
       this.Default.pipe(
         Layer.provide(ReservationRestorationService.Default),
         Layer.provide(WorkspaceReservationService.Default),
