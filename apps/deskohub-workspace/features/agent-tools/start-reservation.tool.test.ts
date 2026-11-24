@@ -10,8 +10,8 @@ import {
   customerAgentClientIdSchema,
 } from "@/features/account/backend/auth/customer-agent-authorization.service";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
-import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import type { prepareAgentPayState as PrepareAgentPayState } from "@/features/reservation/backend/agent-booking";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 
 type Prepared =
@@ -67,9 +67,7 @@ const { startReservationTool } = await import("./start-reservation.tool");
 
 const callerServices = inMemoryCustomerAgentCallServices(({ accountId }) => ({
   contact: {
-    current: Effect.sync(() =>
-      contact ? { accountId, ...contact } : null
-    ),
+    current: Effect.sync(() => (contact ? { accountId, ...contact } : null)),
   },
 }));
 

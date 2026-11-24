@@ -36,9 +36,8 @@ const {
   defineAgentTool,
   defineSignedInAgentTool,
 } = await import("./agent-tool");
-const { CustomerAgentAuthorization, customerAgentClientIdSchema } = await import(
-  "@/features/account"
-);
+const { CustomerAgentAuthorization, customerAgentClientIdSchema } =
+  await import("@/features/account");
 const { AgentToolAdmission } = await import("./agent-tool-admission.service");
 const { answerAgentToolMcpRequest } = await import("./agent-tool-mcp-handler");
 const { readMcpRequest } = await import("./agent-tool-mcp-messages");

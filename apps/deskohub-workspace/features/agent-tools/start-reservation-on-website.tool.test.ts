@@ -20,9 +20,8 @@ mock.module(
   })
 );
 
-const { agentToolResultOf, makeAgentToolTestServices, workspaceDateFromToday } = await import(
-  "./agent-tools.test-utils"
-);
+const { agentToolResultOf, makeAgentToolTestServices, workspaceDateFromToday } =
+  await import("./agent-tools.test-utils");
 const { getQuoteTool } = await import("./get-quote.tool");
 const { startReservationOnWebsiteTool } = await import(
   "./start-reservation-on-website.tool"

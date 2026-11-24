@@ -936,7 +936,7 @@ describe("invoice cancellation tools through the assistant API", () => {
       readonly input: unknown;
     }> = [];
     const invoices = Layer.mock(InvoiceAdministrationService, {
-      get: () => Effect.succeed(detail as never),
+      get: () => Effect.succeed(detail),
       cancel: (input) =>
         Effect.sync(() => {
           changes.push({ operation: "cancel", input });
@@ -945,7 +945,7 @@ describe("invoice cancellation tools through the assistant API", () => {
             outcome: "cancelled",
             cancellation,
             reservation: null,
-          } as never;
+          };
         }),
       archive: (input) =>
         Effect.sync(() => {
@@ -954,7 +954,7 @@ describe("invoice cancellation tools through the assistant API", () => {
             invoiceId,
             archivedAt: "2026-11-15T11:00:00Z",
             changed: true,
-          } as never;
+          };
         }),
       getCorrectiveDocumentPdf: (_id, scope) =>
         Effect.sync(() => {
@@ -970,17 +970,19 @@ describe("invoice cancellation tools through the assistant API", () => {
   const call = (handler: Handler, name: string, args: Schema.Json) => {
     const tool = tools.find((candidate) => candidate.name === name);
     if (tool === undefined) throw new Error(`No tool ${name}.`);
-    return tool.call(args, Option.some(caller)).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          makeAssistantServices().layer,
-          AdministrationApiClient.Default.pipe(
-            Layer.provide(Layer.succeed(AdministrationApiTransport, handler))
+    return tool
+      .call(args, Option.some(caller))
+      .pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            makeAssistantServices().layer,
+            AdministrationApiClient.Default.pipe(
+              Layer.provide(Layer.succeed(AdministrationApiTransport, handler))
+            )
           )
-        )
-      ),
-      Effect.runPromise
-    );
+        ),
+        Effect.runPromise
+      );
   };
 
   test("previews a cancellation and an archive with the invoice's plan, changing nothing", async () => {

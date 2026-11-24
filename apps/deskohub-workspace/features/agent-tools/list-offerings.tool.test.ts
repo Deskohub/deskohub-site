@@ -4,9 +4,12 @@ import { Effect, type Schema } from "effect";
 import { m } from "@/features/i18n";
 import { listOfferingsResultSchema } from "./list-offerings.schema";
 
-const { agentToolResultOf, agentToolTestOfficeSeats, makeAgentToolTestServices, workspaceDateFromToday } = await import(
-  "./agent-tools.test-utils"
-);
+const {
+  agentToolResultOf,
+  agentToolTestOfficeSeats,
+  makeAgentToolTestServices,
+  workspaceDateFromToday,
+} = await import("./agent-tools.test-utils");
 const { listOfferingsTool } = await import("./list-offerings.tool");
 
 const listOfferings = (
@@ -15,10 +18,7 @@ const listOfferings = (
 ) =>
   listOfferingsTool
     .call(args)
-    .pipe(
-      Effect.provide(services.layer),
-      Effect.runPromise
-    )
+    .pipe(Effect.provide(services.layer), Effect.runPromise)
     .then(agentToolResultOf(listOfferingsResultSchema));
 
 const czk = (amount: number) => ({ amount, currency: "CZK" });

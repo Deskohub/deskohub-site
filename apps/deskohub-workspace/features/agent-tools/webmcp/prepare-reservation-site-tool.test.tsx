@@ -265,9 +265,13 @@ function Harness({
         marketingConsent: { name: "marketingConsent", value: true },
       }}
       form={form}
-      getReservation={({ date: reservationDate, email, name, phone }) =>
-        ({ kind, reservationDate, email, name, phone }) as never
-      }
+      getReservation={({ date: reservationDate, email, name, phone }) => ({
+        kind,
+        reservationDate,
+        email,
+        name,
+        phone,
+      })}
       locale="en-US"
       selectionSummary={{
         reservationTitle: "Open Space",

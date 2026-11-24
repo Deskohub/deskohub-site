@@ -1,11 +1,13 @@
 import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
-import type { ShowBookingResult } from "./show-booking.schema";
+import { showBookingResultSchema } from "./show-booking.schema";
 
 const { customerAgentCatalog } = await import("./customer-agent-catalog");
 const { CallableAgentTools } = await import("./agent-tool");
-const { makeAgentToolTestServices } = await import("./agent-tools.test-utils");
+const { agentToolResultOf, makeAgentToolTestServices } = await import(
+  "./agent-tools.test-utils"
+);
 
 const clients = ["chatgpt", "claude", "other"] as const;
 
@@ -159,15 +161,17 @@ describe("customerAgentCatalog", () => {
         .forClient(client)
         .tools.find(({ name }) => name === "show_booking");
       if (showBooking === undefined) throw new Error("No show_booking");
-      const result = (await showBooking.call({}).pipe(
-        Effect.provideService(
-          CallableAgentTools,
-          new Set(["show_booking", "start_reservation"])
-        ),
-        Effect.provide(makeAgentToolTestServices().layer),
-        // show_booking reads only the public services the test layer has.
-        (effect) => Effect.runPromise(effect as Effect.Effect<unknown>)
-      )) as ShowBookingResult;
+      const result = await showBooking
+        .call({})
+        .pipe(
+          Effect.provideService(
+            CallableAgentTools,
+            new Set(["show_booking", "start_reservation"])
+          ),
+          Effect.provide(makeAgentToolTestServices().layer),
+          Effect.runPromise
+        )
+        .then(agentToolResultOf(showBookingResultSchema));
 
       expect(result.booking_mode).toBe(mode);
     }

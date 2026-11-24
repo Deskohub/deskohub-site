@@ -12,9 +12,12 @@ import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { getQuoteResultSchema } from "./get-quote.schema";
 
-const { agentToolResultOf, makeAgentToolTestServices, workspaceDateFromToday, workspaceInstantToday } = await import(
-  "./agent-tools.test-utils"
-);
+const {
+  agentToolResultOf,
+  makeAgentToolTestServices,
+  workspaceDateFromToday,
+  workspaceInstantToday,
+} = await import("./agent-tools.test-utils");
 const { getQuoteTool } = await import("./get-quote.tool");
 const { buildAdvertisedPrice } = await import(
   "@/features/checkout/backend/checkout/advertised-price.server"

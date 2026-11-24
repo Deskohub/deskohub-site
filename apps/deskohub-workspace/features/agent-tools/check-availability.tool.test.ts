@@ -6,9 +6,14 @@ import { meetingRoomSelectionLink } from "@/features/reservation/meeting-room-se
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { checkAvailabilityResultSchema } from "./check-availability.schema";
 
-const { agentToolResultOf, agentToolTestOfficeSeats, makeAgentToolTestServices, makeTestOccupancy, workspaceDateFromToday, workspaceInstantToday } = await import(
-  "./agent-tools.test-utils"
-);
+const {
+  agentToolResultOf,
+  agentToolTestOfficeSeats,
+  makeAgentToolTestServices,
+  makeTestOccupancy,
+  workspaceDateFromToday,
+  workspaceInstantToday,
+} = await import("./agent-tools.test-utils");
 const { checkAvailabilityTool } = await import("./check-availability.tool");
 
 const checkAvailability = (

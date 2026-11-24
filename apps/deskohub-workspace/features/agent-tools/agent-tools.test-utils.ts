@@ -198,16 +198,15 @@ export const makeAgentToolTestServices = ({
   // recorded.
   const unreachableDotypos = Layer.effect(
     DotyposService,
-    Effect.map(
-      DotyposService.asEffect(),
-      (unimplemented) =>
-        new Proxy(unimplemented, {
-          get: (target, operation, receiver) => {
-            dotyposRequests.push(String(operation));
-            return Reflect.get(target, operation, receiver);
-          },
-        })
-    )
+    Effect.gen(function* () {
+      const unimplemented = yield* DotyposService;
+      return new Proxy(unimplemented, {
+        get: (target, operation, receiver) => {
+          dotyposRequests.push(String(operation));
+          return Reflect.get(target, operation, receiver);
+        },
+      });
+    })
   ).pipe(Layer.provide(Layer.mock(DotyposService, {})));
   const advisoryInventory = Layer.succeed(AdvisoryAvailabilityInventory, {
     tables: Effect.sync(() => {

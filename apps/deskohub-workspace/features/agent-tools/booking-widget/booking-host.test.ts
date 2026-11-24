@@ -53,6 +53,14 @@ const listOfferingsResult = (): ListOfferingsResult => ({
  * An MCP Apps host the view connects to, recording the calls the view makes
  * through it.
  */
+/** The handlers the booking host sets on its app. */
+class FakeAppHandlers {
+  ontoolinput: ((input: ToolInput) => void) | undefined = undefined;
+  ontoolresult: ((result: ToolResult) => void) | undefined = undefined;
+  onhostcontextchanged: ((context: McpUiHostContext) => void) | undefined =
+    undefined;
+}
+
 const fakeHost = ({
   context,
   capabilities,
@@ -66,22 +74,12 @@ const fakeHost = ({
   readonly tools?: Readonly<Record<string, ToolResult>>;
   readonly link?: "opened" | "refused" | "unreachable";
 } = {}) => {
-  const calls: {
-    readonly tools: Array<ToolCall>;
-    readonly links: Array<string>;
-    closed: number;
-  } = { tools: [], links: [], closed: 0 };
-  // The handlers the booking host sets.
-  const handlers: {
-    ontoolinput: ((input: ToolInput) => void) | undefined;
-    ontoolresult: ((result: ToolResult) => void) | undefined;
-    onhostcontextchanged: ((context: McpUiHostContext) => void) | undefined;
-  } = {
-    ontoolinput: undefined,
-    ontoolresult: undefined,
-    onhostcontextchanged: undefined,
+  const calls = {
+    tools: [] as ToolCall[],
+    links: [] as string[],
+    closed: 0,
   };
-  const app = Object.assign(handlers, {
+  const app = Object.assign(new FakeAppHandlers(), {
     connect,
     close: () => {
       calls.closed += 1;

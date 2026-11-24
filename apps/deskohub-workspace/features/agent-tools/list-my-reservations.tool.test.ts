@@ -26,7 +26,9 @@ const load = mock(() => Effect.sync(() => history));
 
 const grant: CustomerAgentGrant = {
   accountId,
-  clientId: customerAgentClientIdSchema.make("https://assistant.example/client.json"),
+  clientId: customerAgentClientIdSchema.make(
+    "https://assistant.example/client.json"
+  ),
   scopes: new Set<CustomerAgentScope>(["reservations:read"]),
 };
 
@@ -84,7 +86,8 @@ describe("list_my_reservations", () => {
         current: [
           {
             id: "order-1",
-            workspaceReservationId: workspaceReservationIdSchema.make("order-1"),
+            workspaceReservationId:
+              workspaceReservationIdSchema.make("order-1"),
             product: { kind: "cowork", tier: "open-space" },
             startsAt: "2099-07-01T06:00:00Z",
             endsAt: "2099-07-01T22:00:00Z",
@@ -169,7 +172,8 @@ describe("list_my_reservations", () => {
         current: [
           {
             id: "order-1",
-            workspaceReservationId: workspaceReservationIdSchema.make("order-1"),
+            workspaceReservationId:
+              workspaceReservationIdSchema.make("order-1"),
             product: { kind: "cowork", tier: "reserved-desk" },
             startsAt: "2099-07-01T10:00:00Z",
             endsAt: "2099-07-02T10:00:00Z",

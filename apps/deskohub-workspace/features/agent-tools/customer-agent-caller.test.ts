@@ -6,7 +6,8 @@ import {
   Client,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
-import { Effect, Predicate, Schema } from "effect";
+import { Effect, Layer, Predicate, Schema } from "effect";
+import { WorkspaceDatabase } from "@/db/database.service";
 import {
   asBrowserRequest,
   fakeAccountServiceStores,
