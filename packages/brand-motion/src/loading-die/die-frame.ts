@@ -77,10 +77,12 @@ const segments = (face: LottieShape) =>
     const end = face.v[endIndex] ?? start;
     const out = face.o[index] ?? [0, 0];
     const into = face.i[endIndex] ?? [0, 0];
+    const control1: Point = [start[0] + out[0], start[1] + out[1]];
+    const control2: Point = [end[0] + into[0], end[1] + into[1]];
     return {
       start,
-      control1: [start[0] + out[0], start[1] + out[1]] as Point,
-      control2: [end[0] + into[0], end[1] + into[1]] as Point,
+      control1,
+      control2,
       end,
       straight: out[0] === 0 && out[1] === 0 && into[0] === 0 && into[1] === 0,
     };

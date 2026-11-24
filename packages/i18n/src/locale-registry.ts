@@ -140,14 +140,13 @@ export type SupportedLocale = (typeof localeEntries)[number]["tag"];
 /** Everything the registry records about one {@link SupportedLocale}. */
 export type LocaleDefinition = LocaleEntry<SupportedLocale>;
 
+const [firstLocaleEntry, ...otherLocaleEntries] = localeEntries;
+
 /** Every supported locale, base locale first. */
 export const supportedLocales: readonly [
   SupportedLocale,
   ...SupportedLocale[],
-] = localeEntries.map((entry) => entry.tag) as [
-  SupportedLocale,
-  ...SupportedLocale[],
-];
+] = [firstLocaleEntry.tag, ...otherLocaleEntries.map((entry) => entry.tag)];
 
 /**
  * The locale message catalogs are written in first and that a message
@@ -164,9 +163,29 @@ export const unstatedLanguageLocale = "cs-CZ" satisfies SupportedLocale;
 /** The locale a visitor who states only languages Deskohub doesn't serve gets. */
 export const unservedLanguageLocale = "en-US" satisfies SupportedLocale;
 
-const definitionByLocale = Object.fromEntries(
-  localeEntries.map((entry) => [entry.tag, entry])
-) as Readonly<Record<SupportedLocale, LocaleDefinition>>;
+/**
+ * Builds a record keyed by every supported locale from locale-value pairs, so
+ * callers index it without an `undefined` case.
+ */
+const toSupportedLocaleRecord = <Value>(
+  entries: Iterable<readonly [SupportedLocale, Value]>
+): Readonly<Record<SupportedLocale, Value>> => {
+  const record: Partial<Record<SupportedLocale, Value>> =
+    Object.fromEntries(entries);
+  if (!hasEverySupportedLocale(record)) {
+    throw new Error("A supported locale is missing from a per-locale record.");
+  }
+  return record;
+};
+
+const hasEverySupportedLocale = <Value>(
+  record: Partial<Record<SupportedLocale, Value>>
+): record is Record<SupportedLocale, Value> =>
+  supportedLocales.every((locale) => Object.hasOwn(record, locale));
+
+const definitionByLocale = toSupportedLocaleRecord(
+  localeEntries.map((entry) => [entry.tag, entry] as const)
+);
 
 export const isSupportedLocale = (value: string): value is SupportedLocale =>
   Object.hasOwn(definitionByLocale, value);
@@ -204,6 +223,6 @@ export const matchSupportedLocale = (
 export const mapSupportedLocales = <Value>(
   valueFor: (locale: SupportedLocale) => Value
 ): Readonly<Record<SupportedLocale, Value>> =>
-  Object.fromEntries(
-    supportedLocales.map((locale) => [locale, valueFor(locale)])
-  ) as Record<SupportedLocale, Value>;
+  toSupportedLocaleRecord(
+    supportedLocales.map((locale) => [locale, valueFor(locale)] as const)
+  );

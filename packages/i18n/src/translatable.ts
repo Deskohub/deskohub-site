@@ -1,3 +1,5 @@
+import { Predicate } from "effect";
+
 export type TranslatedRecord<Locale extends string> = Partial<
   Record<Locale | string, string>
 >;
@@ -15,7 +17,7 @@ export function getTranslatedValue<
   defaultValue?: D
 ): string | D | undefined {
   if (!value) return defaultValue;
-  if (typeof value === "string") return value;
+  if (Predicate.isString(value)) return value;
 
   const localeTranslation = value[locale];
   if (localeTranslation) return localeTranslation;

@@ -9,7 +9,10 @@ export type ParaglideStore<Locale extends string = string> = {
 
 export type ParaglideAsyncLocalStorage<Locale extends string = string> = {
   getStore(): ParaglideStore<Locale> | undefined;
-  run: (store: ParaglideStore<Locale>, callback: unknown) => unknown;
+  run: <Result>(
+    store: ParaglideStore<Locale>,
+    callback: () => Result
+  ) => Result;
 };
 
 type CreateRequestLocaleScopeOptions<Locale extends string> = {
@@ -32,9 +35,7 @@ export function createRequestLocaleScope<Locale extends string>({
 }: CreateRequestLocaleScopeOptions<Locale>) {
   const storage = new AsyncLocalStorage<ParaglideStore<Locale>>();
 
-  overwriteServerAsyncLocalStorage(
-    storage as unknown as ParaglideAsyncLocalStorage<Locale>
-  );
+  overwriteServerAsyncLocalStorage(storage);
 
   return {
     getLocale: (): Locale | undefined => storage.getStore()?.locale,

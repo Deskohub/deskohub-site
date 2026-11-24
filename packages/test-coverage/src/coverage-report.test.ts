@@ -49,6 +49,37 @@ test("rejects a dump that is not Istanbul coverage", () => {
   ).toThrow("Malformed coverage dump");
 });
 
+test("keeps the file metadata Istanbul passes through", () => {
+  const { directory, source, instrumentation } = fixture();
+  const inputSourceMap = { version: 3, sources: ["source.ts"], mappings: "" };
+  const dump = join(directory, "dump.json");
+  writeFileSync(
+    dump,
+    JSON.stringify({
+      [source]: {
+        ...instrumentation.unexecutedCoverage(
+          source,
+          "export const one = () => 1;\n"
+        ),
+        hash: "fixture-hash",
+        inputSourceMap,
+      },
+    })
+  );
+
+  const { coverage } = buildCoverageReport({
+    dumpFiles: [dump],
+    sources: [source],
+    instrumentation,
+  });
+
+  // The report is written as JSON, so check what serialization emits.
+  expect(JSON.parse(JSON.stringify(coverage))[source]).toMatchObject({
+    hash: "fixture-hash",
+    inputSourceMap,
+  });
+});
+
 test("rejects a dump covering a file outside the run's sources", () => {
   const { directory, source, instrumentation } = fixture();
   const stray = join(directory, "stray.ts");

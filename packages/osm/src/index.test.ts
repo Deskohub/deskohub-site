@@ -205,21 +205,26 @@ describe("generateStaticMapImage", () => {
 
   test("lands the coordinate on the focus pixel", async () => {
     // At zoom 1, latitude 0 and longitude 0 is the corner the four tiles share.
-    const tileColors: Record<string, string> = {
-      "0/0": "#ff0000",
-      "1/0": "#00ff00",
-      "0/1": "#0000ff",
-      "1/1": "#ffffff",
-    };
+    const tileColors = new Map([
+      ["0/0", "#ff0000"],
+      ["1/0", "#00ff00"],
+      ["0/1", "#0000ff"],
+      ["1/1", "#ffffff"],
+    ]);
     const fetch = makeFetch(async (input) => {
       const url = input instanceof Request ? input.url : String(input);
-      const [, x, y] = new URL(url).pathname.match(/\/1\/(\d)\/(\d)\.png$/)!;
+      const [, x, y] =
+        new URL(url).pathname.match(/\/1\/(\d)\/(\d)\.png$/) ?? [];
+      const background = tileColors.get(`${x}/${y}`);
+      if (!background) {
+        throw new Error(`Unexpected tile request: ${url}`);
+      }
       const tile = await sharp({
         create: {
           width: 256,
           height: 256,
           channels: 3,
-          background: tileColors[`${x}/${y}`]!,
+          background,
         },
       })
         .png()

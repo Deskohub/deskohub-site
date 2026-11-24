@@ -8,10 +8,10 @@ type DailyWorkingHours = {
   close: ClockTime;
 };
 
-export type WeeklyWorkingHours = Record<
-  0 | 1 | 2 | 3 | 4 | 5 | 6,
-  DailyWorkingHours
->;
+/** A day of the week, Sunday first, as `Date.prototype.getDay` numbers it. */
+type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+export type WeeklyWorkingHours = Record<Weekday, DailyWorkingHours>;
 
 type ReservationValidationSettings = {
   minDurationHours: number;
@@ -25,21 +25,21 @@ export type ReservationScheduleConfig = {
   validation: ReservationValidationSettings;
 };
 
-const weekdayMap: Record<string, number> = {
-  Sun: 0,
-  Mon: 1,
-  Tue: 2,
-  Wed: 3,
-  Thu: 4,
-  Fri: 5,
-  Sat: 6,
-};
+const weekdayByShortName = new Map<string, Weekday>([
+  ["Sun", 0],
+  ["Mon", 1],
+  ["Tue", 2],
+  ["Wed", 3],
+  ["Thu", 4],
+  ["Fri", 5],
+  ["Sat", 6],
+]);
 
 export function getLocalTimeInTimezone(
   date: Date,
   timezone: string
 ): {
-  dayOfWeek: number;
+  dayOfWeek: Weekday;
   hours: number;
   minutes: number;
   timeString: string;
@@ -61,7 +61,7 @@ export function getLocalTimeInTimezone(
     throw new Error("Failed to parse reservation datetime components");
   }
 
-  const dayOfWeek = weekdayMap[weekdayPart.value] ?? 0;
+  const dayOfWeek = weekdayByShortName.get(weekdayPart.value) ?? 0;
   const hours = Number.parseInt(hourPart.value, 10);
   const minutes = Number.parseInt(minutePart.value, 10);
   const timeString = `${hourPart.value}:${minutePart.value}`;
@@ -88,8 +88,7 @@ export function isReservationWithinWorkingHours(
   );
   const endTime = getLocalTimeInTimezone(endDateTime, config.timezone);
 
-  const dayHours =
-    config.workingHours[startTime.dayOfWeek as keyof WeeklyWorkingHours];
+  const dayHours = config.workingHours[startTime.dayOfWeek];
   const openTimeInMinutes = minutesFromClockTime(dayHours.open);
   const closeTimeInMinutes = minutesFromClockTime(dayHours.close);
   const startTimeInMinutes = startTime.hours * 60 + startTime.minutes;
@@ -132,7 +131,7 @@ export function getAvailableDurations(
     datetime,
     config.timezone
   );
-  const dayHours = config.workingHours[dayOfWeek as keyof WeeklyWorkingHours];
+  const dayHours = config.workingHours[dayOfWeek];
   const currentMinutes = hours * 60 + minutes;
   const openingMinutes = minutesFromClockTime(dayHours.open);
   const closingMinutes = minutesFromClockTime(dayHours.close);

@@ -11,6 +11,9 @@
     "test": "bun test",
     "typecheck": "tsc --project tsconfig.json"
   },
+  "dependencies": {
+    "effect": "4.1.4"
+  },
   "devDependencies": {
     "typescript": "npm:@typescript/typescript6@6.0.2"
   }
