@@ -286,6 +286,66 @@ describe("release command output", () => {
   });
 });
 
+describe("drift detection", () => {
+  const injected = "sandbox proof drift 111";
+  const declared = "Workspace container images, deployed by digest.";
+  // The fake repository keeps the injected description until a repair.
+  const driftWith = (driftExit: number) =>
+    withProofFakes(
+      {
+        rules: [
+          {
+            tool: "bun",
+            pattern: "^scripts/sandbox-locked-stack\\.ts drift",
+            exit: driftExit,
+          },
+          {
+            tool: "bun",
+            pattern: "^scripts/sandbox-locked-stack\\.ts repair",
+            set: { repositoryDescription: declared },
+          },
+          {
+            tool: "bun",
+            pattern: "^release\\.run\\.ts plan",
+            stderr: "Plan: no changes",
+          },
+        ],
+      },
+      (fakes) => {
+        seed(fakes, { "stack-config.json": "{}" });
+        const { exitCode, output } = runPhase(fakes, "drift");
+        return { exitCode, output, calls: fakes.calls() };
+      }
+    );
+
+  test("repairs once Alchemy reports the injected drift", () => {
+    const { exitCode, output, calls } = driftWith(2);
+    expect(calls).toContain(
+      `gcloud artifacts repositories update workspace --project=deskohub-workspace-sandbox --location=europe-west1 --description=${injected}`
+    );
+    expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
+      exitCode: 0,
+      output: "",
+    });
+    expect(calls).toContain("bun scripts/sandbox-locked-stack.ts repair");
+  });
+
+  test("fails as a failed check, not as no drift, when Alchemy errors", () => {
+    const { exitCode, output, calls } = driftWith(1);
+    expect(exitCode).toBe(1);
+    expect(output).toContain("drift check failed (exit 1)");
+    expect(output).not.toContain("reported no drift");
+    expect(calls).not.toContain("bun scripts/sandbox-locked-stack.ts repair");
+  });
+
+  test("fails when Alchemy finds a clean stage after the injection", () => {
+    const { exitCode, output, calls } = driftWith(0);
+    expect(exitCode).toBe(1);
+    expect(output).toContain("reported no drift");
+    expect(calls).not.toContain("bun scripts/sandbox-locked-stack.ts repair");
+  });
+});
+
 // One page of a parent's sinks as the Logging API lists them; a later
 // page is the one asked for by the earlier page's token.
 const sinksPage = (
@@ -1510,9 +1570,20 @@ describe("token-route privacy and telemetry", () => {
     sinksPage("folders/4242", [
       { name: "_Default", destination: "logging/folder" },
     ]),
+    // A warm instance: its startup export is older than every readback
+    // window, so only a fresh export from the trace route verifies.
     {
       tool: "curl",
       pattern: "/healthz$",
+      stdout: JSON.stringify({
+        status: "ok",
+        version: "v1",
+        otlp: { traceId: "e".repeat(32), status: 200 },
+      }),
+    },
+    {
+      tool: "curl",
+      pattern: "/probe/trace$",
       stdout: JSON.stringify({
         status: "ok",
         version: "v1",
@@ -1589,6 +1660,30 @@ describe("token-route privacy and telemetry", () => {
       output: "",
     });
     expect(markerSent).toBe(true);
+  });
+
+  test("reads every trace page with its page token URL-encoded", () => {
+    const { exitCode, output } = privacy([
+      {
+        tool: "curl",
+        pattern:
+          "/traces\\?view=COMPLETE&pageSize=100&startTime=[^&]+&pageToken=a%2Bb%2Fc%3D$",
+        stdout: JSON.stringify({ traces: [{ traceId }] }),
+      },
+      { tool: "curl", pattern: "/traces\\?.*&pageToken=", exit: 22 },
+      {
+        tool: "curl",
+        pattern: "/traces\\?view=COMPLETE&pageSize=100&startTime=[^&]+$",
+        stdout: JSON.stringify({
+          traces: [{ traceId: "f".repeat(32) }],
+          nextPageToken: "a+b/c=",
+        }),
+      },
+    ]);
+    expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
+      exitCode: 0,
+      output: "",
+    });
   });
 
   test("fails on an empty or denied trace read", () => {

@@ -15,7 +15,7 @@ import {
   isLockedStackAction,
   lockedStackActions,
   lockedStackInvocation,
-} from "../scripts/sandbox-locked-stack";
+} from "../scripts/sandbox-locked-stack-actions";
 import {
   sandboxProofBudget,
   sandboxProofStackConfig,
@@ -398,6 +398,7 @@ describe("sandbox proof runner", () => {
       "https://logging.googleapis.com/v2/projects/deskohub-workspace-sandbox/exclusions",
       "gcloud projects get-ancestors",
       "https://logging.googleapis.com/v2/projects/deskohub-workspace-sandbox/sinks",
+      "http://198.51.100.10/probe/trace",
       "gcloud logging read",
       "https://cloudtrace.googleapis.com/v1/projects/deskohub-workspace-sandbox/traces/",
       "token=synthetic-probe-marker",
@@ -485,6 +486,7 @@ describe("writer-locked stack actions", () => {
     };
     expect(alchemyArgs("drift")).toEqual([
       "drift",
+      "--config",
       "alchemy.run.ts",
       "--stage",
       "sandbox",
@@ -492,6 +494,7 @@ describe("writer-locked stack actions", () => {
     ]);
     expect(alchemyArgs("repair")).toEqual([
       "drift",
+      "--config",
       "alchemy.run.ts",
       "--stage",
       "sandbox",
