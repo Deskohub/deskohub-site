@@ -498,6 +498,20 @@ describe("post-destroy inventory", () => {
     });
   });
 
+  test("fails on a partial Compute listing that exited 0", () => {
+    const { exitCode, output } = inventory([
+      {
+        tool: "gcloud",
+        pattern: "^compute forwarding-rules list",
+        stderr:
+          "WARNING: Some requests did not succeed:\n - region unreachable",
+      },
+      listing("^storage ls -r", emptiedState),
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain("teardown unverified: forwarding-rules");
+  });
+
   test("fails when any class cannot be listed", () => {
     const { exitCode, output } = inventory([
       { tool: "gcloud", pattern: "^run revisions list", exit: 1 },
@@ -1132,6 +1146,7 @@ describe("Alchemy access token", () => {
     withProofFakes({ now, rules }, (fakes) => {
       const result = runPhase(fakes, phases, {
         GOOGLE_ACCESS_TOKEN_EXPIRES_AT: String(now + expiresIn),
+        GITHUB_ACTIONS: "true",
       });
       return {
         ...result,
@@ -1174,6 +1189,7 @@ describe("Alchemy access token", () => {
           runPhase(fakes, "foundation", {
             GOOGLE_ACCESS_TOKEN: "workflow-token",
             GOOGLE_ACCESS_TOKEN_EXPIRES_AT: "",
+            GITHUB_ACTIONS: "true",
           })
       );
       expect({
@@ -1194,6 +1210,7 @@ describe("Alchemy access token", () => {
           const result = runPhase(fakes, "foundation", {
             GOOGLE_ACCESS_TOKEN: "workflow-token",
             GOOGLE_ACCESS_TOKEN_EXPIRES_AT: "",
+            GITHUB_ACTIONS: "true",
           });
           return {
             exitCode: result.exitCode,
@@ -1352,6 +1369,32 @@ describe("first deliver", () => {
     );
   });
 
+  test("fails when a service does not report its deterministic URL", () => {
+    const { exitCode, output } = deliver([
+      {
+        tool: "gcloud",
+        pattern:
+          "^run services describe workspace-tasks-worker .*--format=json$",
+        stdout: JSON.stringify({
+          metadata: {
+            annotations: {
+              "run.googleapis.com/urls": JSON.stringify([
+                "https://workspace-tasks-worker-a1b2c3d4e5-ew.a.run.app",
+              ]),
+            },
+          },
+          status: {
+            url: "https://workspace-tasks-worker-a1b2c3d4e5-ew.a.run.app",
+          },
+        }),
+      },
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain(
+      `workspace-tasks-worker does not report its deterministic URL ${tasksWorkerUrl}`
+    );
+  });
+
   test("fails when one of two serving revisions runs another build", () => {
     const { exitCode, output } = deliver([
       {
@@ -1360,6 +1403,7 @@ describe("first deliver", () => {
         stdout: JSON.stringify({
           metadata: { generation: 2 },
           status: {
+            url: apiUrl,
             observedGeneration: 2,
             conditions: [{ type: "Ready", status: "True" }],
             traffic: [
@@ -1388,6 +1432,7 @@ describe("first deliver", () => {
         stdout: JSON.stringify({
           metadata: { generation: 3 },
           status: {
+            url: schedulerWorkerUrl,
             observedGeneration: 2,
             conditions: [{ type: "Ready", status: "True" }],
             traffic: [
@@ -1423,7 +1468,10 @@ describe("first deliver", () => {
         tool: "gcloud",
         pattern: "^run services describe workspace-api .*--format=json$",
         stdout: JSON.stringify({
+          metadata: { generation: 2 },
           status: {
+            url: apiUrl,
+            observedGeneration: 2,
             conditions: [{ type: "Ready", status: "False" }],
             traffic: [{ revisionName: "workspace-api-live", percent: 100 }],
           },
@@ -1640,6 +1688,22 @@ describe("private access", () => {
       [
         {
           tool: "gcloud",
+          pattern:
+            "^run services describe workspace-scheduler-worker .*--format=json$",
+          stdout: JSON.stringify({
+            metadata: {
+              annotations: {
+                "run.googleapis.com/ingress": "internal",
+                "run.googleapis.com/ingress-status": "all",
+              },
+            },
+          }),
+        },
+        "workspace-scheduler-worker does not have ingress internal, requested and active",
+      ],
+      [
+        {
+          tool: "gcloud",
           pattern: "^projects get-iam-policy ",
           stdout: JSON.stringify({
             bindings: [
@@ -1714,7 +1778,7 @@ describe("RPC probe", () => {
     expect(result.marker).toMatch(/^sandbox-marker-[0-9a-f]{32}$/);
     const sha = createHash("sha256").update(result.marker).digest("hex");
     expect(result.telemetry).toBe(
-      `MARKER_SHA256=${sha}\nPROBE_STARTED_AT=${now}\nPROBE_TRACE_ID=${traceparent}\n`
+      `PROBE_STARTED_AT=${now}\nPROBE_TRACE_ID=${traceparent}\nMARKER_SHA256=${sha}\n`
     );
     expect(result.verdictKept).toBe(true);
     expect(result.tokenFileLeft).toBe(false);
@@ -1824,6 +1888,26 @@ describe("RPC probe", () => {
     });
   });
 
+  test("leaves no usable marker record after a failed retry", () => {
+    withProofFakes({ now, rpcVerdict: {} }, (fakes) => {
+      seedServices(fakes);
+      const env = {
+        SANDBOX_API_ID_TOKEN: idToken({ aud: apiUrl, exp: now + 3000 }),
+      };
+      expect(runPhase(fakes, "rpc-probe", env).exitCode).toBe(0);
+      writeFileSync(
+        fakes.env.FAKE_WORLD ?? "",
+        JSON.stringify({ now, rpcVerdict: { ok: false }, rpcExit: 1 })
+      );
+      expect(runPhase(fakes, "rpc-probe", env).exitCode).toBe(1);
+      expect(existsSync(join(fakes.proofDir, "telemetry.env"))).toBe(false);
+      seed(fakes, { "proof-run.env": "QUEUE_SUFFIX=r111-1\n" });
+      const later = runPhase(fakes, "worker-probe");
+      expect(later.exitCode).toBe(1);
+      expect(later.output).toContain("not the one the rpc-probe phase sent");
+    });
+  });
+
   test("never sends a replacement for a lost marker in a later probe", () => {
     withProofFakes(
       { now, rpcVerdict: {}, status: settled(v1Digest) },
@@ -1857,16 +1941,38 @@ describe("worker probe", () => {
         httpMethod: "GET",
         oidcToken: {
           serviceAccountEmail: serviceAccount("workspace-scheduler-invoker"),
+          audience: schedulerWorkerUrl,
         },
       },
       ...overrides,
     }),
   });
+  const proofQueue = (path: string): FakeRule => ({
+    tool: "gcloud",
+    pattern: "^tasks queues describe workspace-paid-fulfillment-r111-1 ",
+    stdout: JSON.stringify({
+      state: "RUNNING",
+      httpTarget: {
+        httpMethod: "POST",
+        uriOverride: {
+          scheme: "HTTPS",
+          host: tasksWorkerUrl.replace("https://", ""),
+          pathOverride: { path },
+          uriOverrideEnforceMode: "ALWAYS",
+        },
+        oidcToken: {
+          serviceAccountEmail: serviceAccount("workspace-tasks-invoker"),
+          audience: tasksWorkerUrl,
+        },
+      },
+    }),
+  });
   const receipts = (sha: string): ReadonlyArray<FakeRule> => [
+    proofQueue("/api/queues/workspace/paid-fulfillment"),
     pausedJob(),
     {
       tool: "gcloud",
-      pattern: `^logging read .*service_name="workspace-tasks-worker" AND jsonPayload\\.event="probe\\.task" AND jsonPayload\\.markerSha256="${sha}"`,
+      pattern: `^logging read .*service_name="workspace-tasks-worker" AND jsonPayload\\.event="probe\\.task" AND jsonPayload\\.queue="paid-fulfillment" AND jsonPayload\\.markerSha256="${sha}"`,
       stdout: JSON.stringify([
         { jsonPayload: { event: "probe.task", markerSha256: sha } },
       ]),
@@ -1906,7 +2012,7 @@ describe("worker probe", () => {
     expect(result.calls).toContainEqual(
       expect.stringMatching(
         new RegExp(
-          `^gcloud tasks create-http-task --queue=workspace-paid-fulfillment-r111-1 --project=${projectId} --location=europe-west1 --url=${tasksWorkerUrl}/api/queues/workspace/paid-fulfillment --method=POST --header=Content-Type:application/json --body-file=\\S+ --oidc-service-account-email=${serviceAccount("workspace-tasks-invoker")} --oidc-token-audience=${tasksWorkerUrl} `
+          `^gcloud tasks create-http-task --queue=workspace-paid-fulfillment-r111-1 --project=${projectId} --location=europe-west1 --url=${tasksWorkerUrl}/api/queues/workspace/paid-fulfillment --method=POST --header=Content-Type:application/json --body-file=\\S+ --format=value\\(name\\)$`
         )
       )
     );
@@ -1930,6 +2036,18 @@ describe("worker probe", () => {
       expect(output).toContain("not the one the rpc-probe phase sent");
       expect(fakes.calls().join("\n")).not.toContain("tasks create-http-task");
     });
+  });
+
+  test("enqueues only through a queue bound to the paid-fulfillment route", () => {
+    const { exitCode, output, calls } = workers((sha) => [
+      proofQueue("/api/queues/workspace/reservation-expiry"),
+      ...receipts(sha),
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain(
+      "does not send every task to /api/queues/workspace/paid-fulfillment on the tasks worker"
+    );
+    expect(calls.join("\n")).not.toContain("tasks create-http-task");
   });
 
   test("forces only the run's paused job aimed at the scheduler worker", () => {
@@ -1983,6 +2101,7 @@ describe("worker probe", () => {
     expect(missing.exitCode).toBe(1);
     expect(missing.output).toContain("no scheduler worker receipt");
     const denied = workers(() => [
+      proofQueue("/api/queues/workspace/paid-fulfillment"),
       { tool: "gcloud", pattern: "^logging read ", exit: 1 },
     ]);
     expect(denied.exitCode).toBe(1);
@@ -2176,7 +2295,14 @@ describe("baseline inventory", () => {
     );
 
   test("passes when no edge or log exclusion resource exists", () => {
-    const { exitCode, output } = baseline([]);
+    // gcloud reports an empty list on stderr; that is no partial listing.
+    const { exitCode, output } = baseline([
+      {
+        tool: "gcloud",
+        pattern: "^compute url-maps list",
+        stderr: "Listed 0 items.",
+      },
+    ]);
     expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
       exitCode: 0,
       output: "",
@@ -2214,6 +2340,15 @@ describe("baseline inventory", () => {
       [
         { tool: "gcloud", pattern: "^compute ssl-certificates list", exit: 1 },
         "ssl-certificates is unreadable",
+      ],
+      [
+        {
+          tool: "gcloud",
+          pattern: "^compute network-endpoint-groups list",
+          stderr:
+            "WARNING: Some requests did not succeed:\n - The resource 'projects/x/zones/europe-west1-b' is not ready",
+        },
+        "network-endpoint-groups is unreadable",
       ],
     ] as const) {
       const { exitCode, output } = baseline([rule]);

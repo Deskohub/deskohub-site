@@ -514,23 +514,37 @@ const fakeImage =
 export const fakeServiceUrl = (service: string) =>
   `https://${service}-759037106024.europe-west1.run.app`;
 
-/** A Ready service sending all its traffic to one live revision. */
-const fakeReadyService = (service: string) => ({
-  metadata: {
-    name: service,
-    generation: 2,
-    annotations: {
-      "run.googleapis.com/ingress":
-        service === "workspace-api" ? "all" : "internal",
+/** The hash-based run.app URL Cloud Run may report as a service's primary URL. */
+export const fakeHashUrl = (service: string) =>
+  `https://${service}-a1b2c3d4e5-ew.a.run.app`;
+
+/**
+ * A Ready service sending all its traffic to one live revision, with the
+ * hash-based URL as its primary URL and the deterministic one an alias.
+ */
+const fakeReadyService = (service: string) => {
+  const ingress = service === "workspace-api" ? "all" : "internal";
+  return {
+    metadata: {
+      name: service,
+      generation: 2,
+      annotations: {
+        "run.googleapis.com/ingress": ingress,
+        "run.googleapis.com/ingress-status": ingress,
+        "run.googleapis.com/urls": JSON.stringify([
+          fakeHashUrl(service),
+          fakeServiceUrl(service),
+        ]),
+      },
     },
-  },
-  status: {
-    observedGeneration: 2,
-    url: fakeServiceUrl(service),
-    conditions: [{ type: "Ready", status: "True" }],
-    traffic: [{ revisionName: `${service}-live`, percent: 100 }],
-  },
-});
+    status: {
+      observedGeneration: 2,
+      url: fakeHashUrl(service),
+      conditions: [{ type: "Ready", status: "True" }],
+      traffic: [{ revisionName: `${service}-live`, percent: 100 }],
+    },
+  };
+};
 
 const ActiveRelease = Schema.Struct({
   record: Schema.Struct({
@@ -681,10 +695,6 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     }
     if (args[0] === "run" && args[1] === "services" && args[2] === "describe") {
       const service = args[3] ?? "";
-      if (flag(args, "--format") === "value(status.url)") {
-        print(fakeServiceUrl(service));
-        return 0;
-      }
       if (flag(args, "--format") === "json") {
         print(JSON.stringify(fakeReadyService(service)));
         return 0;

@@ -327,7 +327,7 @@ ensure_alchemy_token() {
     config="$(mktemp -d)"
     GOOGLE_ACCESS_TOKEN="$(CLOUDSDK_CONFIG="$config" gcloud auth print-access-token)"
     rm -rf "${config:?}"
-    echo "::add-mask::${GOOGLE_ACCESS_TOKEN}"
+    [[ "${GITHUB_ACTIONS:-}" != true ]] || echo "::add-mask::${GOOGLE_ACCESS_TOKEN}"
     expires_at="$(token_expiry "$GOOGLE_ACCESS_TOKEN")" ||
       fail "the minted access token's lifetime is unreadable"
     now="$(date +%s)"
@@ -493,23 +493,24 @@ ensure_private_dir() {
 }
 
 # The run's synthetic marker, kept in the private directory. Only the
-# primary RPC probe creates it (`load_marker create`), recording its digest;
-# every later phase must find that very marker, so a lost marker can never
-# be replaced by a fresh one that was never sent. Masked in a GitHub job
-# log; trace() redacts it and no check prints it.
+# primary RPC probe creates it (`load_marker create`), first discarding any
+# earlier attempt's record; its digest is recorded with the probe's trace
+# and start only once the probe passed. Every later phase must find that
+# very marker, so a lost marker, or one from a failed attempt, can never
+# stand in for the one the RPC received. Masked in a GitHub job log;
+# trace() redacts it and no check prints it.
 load_marker() {
   ensure_private_dir
   if [[ "${1:-}" == create ]]; then
+    rm -f "$telemetry_file"
+    unset MARKER_SHA256 PROBE_STARTED_AT PROBE_TRACE_ID
     (umask 077 && printf 'sandbox-marker-%s' "$(random_hex 16)" >"$marker_file")
   fi
   [[ -s "$marker_file" ]] || fail "the run's marker is missing; only the rpc-probe phase creates it"
   marker="$(cat "$marker_file")"
   [[ "$marker" =~ ^sandbox-marker-[0-9a-f]{32}$ ]] || fail "the private marker file is malformed"
   [[ "${GITHUB_ACTIONS:-}" != true ]] || echo "::add-mask::${marker}"
-  if [[ "${1:-}" == create ]]; then
-    record_value "$telemetry_file" MARKER_SHA256 "$(marker_sha256)"
-    return
-  fi
+  [[ "${1:-}" != create ]] || return 0
   load_env_file "$telemetry_file"
   [[ -n "${MARKER_SHA256:-}" && "$(marker_sha256)" == "$MARKER_SHA256" ]] ||
     fail "the private marker is not the one the rpc-probe phase sent"
@@ -569,13 +570,19 @@ service_url_key() {
 # Each release service's run.app URL, read back after the first deliver.
 # The workspace-api URL is the step's `api_url` output: the audience every
 # later ID token is minted for.
+# The stack aims queues, jobs and ID-token audiences at each service's
+# deterministic URL (https://<service>-<project number>.<region>.run.app);
+# the service must report it among its URLs.
 record_service_urls() {
-  local service url
+  local service url described
   for service in "${release_services[@]}"; do
-    url="$(capture "https://${service}-759037106024.${region}.run.app" gcloud run services describe "$service" \
-      --project="$project_id" --region="$region" --format='value(status.url)')" ||
-      fail "the URL of ${service} is unreadable"
-    [[ "$url" =~ ^https://[a-z0-9.-]+\.run\.app$ ]] || fail "${service} has no run.app URL"
+    url="https://${service}-${SANDBOX_EXPECTED_PROJECT_NUMBER}.${region}.run.app"
+    described="$(capture "{\"status\":{\"url\":\"${url}\"}}" gcloud run services describe "$service" \
+      --project="$project_id" --region="$region" --format=json)" ||
+      fail "the URLs of ${service} are unreadable"
+    jq -e --arg url "$url" '.status.url == $url
+      or ((.metadata.annotations["run.googleapis.com/urls"] // "[]") | fromjson | index($url)) != null' \
+      >/dev/null 2>&1 <<<"$described" || fail "${service} does not report its deterministic URL ${url}"
     record_value "$services_file" "$(service_url_key "$service")" "$url"
   done
   load_env_file "$services_file"
@@ -731,11 +738,14 @@ inventory_class() {
   shift 2
   trace "$@"
   $dry_run && return 0
-  if "$@" >"${dir}/${class}.txt" 2>"${dir}/${class}.err"; then
+  # Aggregated gcloud lists report an unreachable scope as a warning on
+  # stderr and still exit 0: a partial listing is no listing.
+  if "$@" >"${dir}/${class}.txt" 2>"${dir}/${class}.err" &&
+    ! grep -Eqi '(^|[[:space:]])(WARNING|ERROR):|did not succeed|could not fetch|unreachable' "${dir}/${class}.err"; then
     rm -f "${dir}/${class}.err"
   else
     echo "UNVERIFIED" >"${dir}/${class}.txt"
-    notice "${class}: listing failed (permission or API); unverified, not empty"
+    notice "${class}: listing failed or was partial (permission, API or scope); unverified, not empty"
   fi
 }
 
@@ -1028,8 +1038,9 @@ expect_iam_private() {
     fail "${service} does not grant roles/run.invoker unconditionally to exactly ${invokers}"
   jq -e '(.metadata.annotations["run.googleapis.com/invoker-iam-disabled"] // "false") != "true"' \
     >/dev/null 2>&1 <<<"$described" || fail "${service} has the invoker IAM check disabled"
-  jq -e --arg ingress "$ingress" '.metadata.annotations["run.googleapis.com/ingress"] == $ingress' \
-    >/dev/null 2>&1 <<<"$described" || fail "${service} does not have ingress ${ingress}"
+  jq -e --arg ingress "$ingress" '.metadata.annotations["run.googleapis.com/ingress"] == $ingress
+      and .metadata.annotations["run.googleapis.com/ingress-status"] == $ingress' \
+    >/dev/null 2>&1 <<<"$described" || fail "${service} does not have ingress ${ingress}, requested and active"
   echo "${service}: IAM-private"
 }
 
@@ -1087,9 +1098,10 @@ phase_private_access() {
 run_rpc_probe() {
   local version="$1" label="$2" url trace_id file="${proof_dir}/rpc-probe-${2}.json" code=0 problems
   url="$(service_url "$api_service")"
+  local started
+  started="$(date -u +%s)"
   if [[ "$label" == primary ]]; then
     load_marker create
-    record_value "$telemetry_file" PROBE_STARTED_AT "$(date -u +%s)"
   else
     load_marker
   fi
@@ -1125,7 +1137,10 @@ run_rpc_probe() {
     echo "  expect HTTP 200, ${rpc_content_type}, matching markerSha256, ProbeRejected, 3 chunks, version ${version}" >&2
   fi
   if [[ "$label" == primary ]]; then
+    # Published together, after the verdict passed.
+    record_value "$telemetry_file" PROBE_STARTED_AT "$started"
     record_value "$telemetry_file" PROBE_TRACE_ID "$trace_id"
+    record_value "$telemetry_file" MARKER_SHA256 "$(marker_sha256)"
   fi
   echo "RPC probe ${label}: workspace-api serves ${version} over SchemaBinary (trace ${trace_id})"
 }
@@ -1146,24 +1161,40 @@ phase_worker_probe() {
   load_marker
   body_file="$task_body_file"
   (umask 077 && jq -cn --arg marker "$marker" '{marker: $marker}' >"$body_file")
+  # The queue itself must send every task to the paid-fulfillment route
+  # as the tasks invoker: the task carries no identity of its own, so the
+  # receipt proves the queue's configuration.
+  local queue="${proof_queue}-${suffix}" queue_config
+  queue_config="$(capture "{\"state\":\"RUNNING\",\"httpTarget\":{\"uriOverride\":{\"host\":\"${url#https://}\",\"pathOverride\":{\"path\":\"${proof_queue_path}\"},\"uriOverrideEnforceMode\":\"ALWAYS\"},\"oidcToken\":{\"serviceAccountEmail\":\"${tasks_invoker}\",\"audience\":\"${url}\"}}}" \
+    gcloud tasks queues describe "$queue" --project="$project_id" --location="$region" --format=json)" ||
+    fail "the proof queue ${queue} is unreadable"
+  jq -e --arg host "${url#https://}" --arg path "$proof_queue_path" --arg invoker "$tasks_invoker" --arg audience "$url" \
+    '.state == "RUNNING"
+      and .httpTarget.uriOverride.host == $host
+      and .httpTarget.uriOverride.pathOverride.path == $path
+      and .httpTarget.uriOverride.uriOverrideEnforceMode == "ALWAYS"
+      and .httpTarget.oidcToken.serviceAccountEmail == $invoker
+      and .httpTarget.oidcToken.audience == $audience' >/dev/null 2>&1 <<<"$queue_config" ||
+    fail "${queue} does not send every task to ${proof_queue_path} on the tasks worker as the tasks invoker"
   start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
-  run gcloud tasks create-http-task --queue="${proof_queue}-${suffix}" --project="$project_id" \
+  run gcloud tasks create-http-task --queue="$queue" --project="$project_id" \
     --location="$region" --url="${url}${proof_queue_path}" --method=POST \
     --header=Content-Type:application/json --body-file="$body_file" \
-    --oidc-service-account-email="$tasks_invoker" --oidc-token-audience="$url" \
     --format='value(name)' || fail "the proof task could not be enqueued"
   rm -f "$body_file"
   wait_for_log "tasks worker receipt" \
-    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${tasks_worker_service}\" AND jsonPayload.event=\"probe.task\" AND jsonPayload.markerSha256=\"$(marker_sha256)\" AND timestamp>=\"${start}\""
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${tasks_worker_service}\" AND jsonPayload.event=\"probe.task\" AND jsonPayload.queue=\"${proof_queue_path##*/}\" AND jsonPayload.markerSha256=\"$(marker_sha256)\" AND timestamp>=\"${start}\""
 
   # The run's own paused job, aimed at the scheduler worker as its invoker.
   local job="${proof_schedule_job}-${suffix}" described
-  described="$(capture "{\"state\":\"PAUSED\",\"httpTarget\":{\"uri\":\"$(service_url "$scheduler_worker_service")${proof_schedule_path}\",\"httpMethod\":\"GET\",\"oidcToken\":{\"serviceAccountEmail\":\"${scheduler_invoker}\"}}}" \
+  described="$(capture "{\"state\":\"PAUSED\",\"httpTarget\":{\"uri\":\"$(service_url "$scheduler_worker_service")${proof_schedule_path}\",\"httpMethod\":\"GET\",\"oidcToken\":{\"serviceAccountEmail\":\"${scheduler_invoker}\",\"audience\":\"$(service_url "$scheduler_worker_service")\"}}}" \
     gcloud scheduler jobs describe "$job" --project="$project_id" --location="$region" --format=json)" ||
     fail "the proof-tick job ${job} is unreadable"
   jq -e --arg uri "$(service_url "$scheduler_worker_service")${proof_schedule_path}" \
-    --arg invoker "$scheduler_invoker" '.state == "PAUSED" and .httpTarget.uri == $uri
-      and .httpTarget.httpMethod == "GET" and .httpTarget.oidcToken.serviceAccountEmail == $invoker' \
+    --arg invoker "$scheduler_invoker" --arg audience "$(service_url "$scheduler_worker_service")" \
+    '.state == "PAUSED" and .httpTarget.uri == $uri
+      and .httpTarget.httpMethod == "GET" and .httpTarget.oidcToken.serviceAccountEmail == $invoker
+      and .httpTarget.oidcToken.audience == $audience' \
     >/dev/null 2>&1 <<<"$described" ||
     fail "${job} is not a paused GET of ${proof_schedule_path} signed as the scheduler invoker"
   start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
