@@ -201,11 +201,6 @@ export type AdministratorGrantReadFailure = Effect.Error<
 >;
 
 /**
- * Builds an operation group's port from its registry and handlers. The
- * group's `toOperationError` maps each domain failure to its port category
- * with a stable code, and passes port errors through unchanged.
- */
-/**
  * What the port needs of each operation: an input schema that decodes without
  * services, and a literal ledger flag, so `LedgerOperationName` names exactly
  * the operations whose flag is `true`.
@@ -217,6 +212,11 @@ type PortableOperations<Ops extends Operations> = {
   };
 };
 
+/**
+ * Builds an operation group's port from its registry and handlers. The
+ * group's `toOperationError` maps each domain failure to its port category
+ * with a stable code, and passes port errors through unchanged.
+ */
 export const makeAdministrationOperationPort = <
   Ops extends Operations,
   Cause,

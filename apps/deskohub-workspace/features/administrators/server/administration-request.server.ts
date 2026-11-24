@@ -271,18 +271,19 @@ export const defineAdministrationAction = <
           Effect.provide(callingFromAdminUi(capabilities, administrator))
         )
       ),
-      Effect.catchIf(
+      Effect.catchFilter(
         (failure) =>
-          Predicate.isTagged(failure, "AdministratorUnauthorizedError"),
-        (failure) =>
-          unauthorizedResult === undefined
-            ? Effect.fail(failure)
-            : Effect.succeed<SettledAdministrationAction<A>>({
-                result: unauthorizedResult,
-                locale: context.locale,
-                revalidates: [],
-                refresh: () => undefined,
-              })
+          unauthorizedResult !== undefined &&
+          Predicate.isTagged(failure, "AdministratorUnauthorizedError")
+            ? Result.succeed(unauthorizedResult)
+            : Result.fail(failure),
+        (result) =>
+          Effect.succeed<SettledAdministrationAction<A>>({
+            result,
+            locale: context.locale,
+            revalidates: [],
+            refresh: () => undefined,
+          })
       ),
       Effect.mapError(toPublicFailure(context.locale))
     )
