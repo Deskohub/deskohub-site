@@ -176,7 +176,7 @@ export const normalizeNexiWebhookNotification = (
   },
 });
 
-export const decodeNexiWebhookNotification = (payload: unknown) =>
+export const decodeNexiWebhookNotification = (payload: Schema.Json) =>
   decodeUnknownNexiWebhookNotification(payload).pipe(
     Effect.map(normalizeNexiWebhookNotification)
   );

@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Predicate from "effect/Predicate";
+import type * as Schema from "effect/Schema";
 import {
   isLockedStackAction,
   lockedStackInvocation,
@@ -38,7 +39,7 @@ export interface FakeRule {
   readonly stderr?: string;
   readonly exit?: number;
   /** World keys this call sets before it answers. */
-  readonly set?: Record<string, unknown>;
+  readonly set?: Partial<FakeWorld>;
   /** Seconds this call advances the fake clock by. */
   readonly advance?: number;
 }
@@ -88,7 +89,6 @@ export interface FakeWorld {
   readonly repositoryDescription?: string;
   /** The fake clock's start, in epoch seconds; defaults to the real clock. */
   readonly now?: number;
-  readonly [key: string]: unknown;
 }
 
 /**
@@ -182,30 +182,36 @@ const print = (line: string) => {
  * The fake CLIs read the world on every call, so it is checked with plain
  * predicates: loading Effect Schema would add about 60 ms to each call.
  */
+/** A JSON value from the world file; a missing field reads as undefined. */
+type WorldValue = Schema.Json | undefined;
+type WorldCheck = (value: WorldValue) => boolean;
+
+const isJsonObject = (value: WorldValue): value is Schema.JsonObject =>
+  Predicate.isReadonlyObject(value) && !Array.isArray(value);
 const isOptional =
-  (is: (value: unknown) => boolean) =>
-  (value: unknown): boolean =>
+  (is: WorldCheck) =>
+  (value: WorldValue): boolean =>
     value === undefined || is(value);
 const isArrayOf =
-  (is: (value: unknown) => boolean) =>
-  (value: unknown): boolean =>
+  (is: WorldCheck) =>
+  (value: WorldValue): boolean =>
     Array.isArray(value) && value.every(is);
 const isRecordOf =
-  (is: (value: unknown) => boolean) =>
-  (value: unknown): boolean =>
-    Predicate.isReadonlyObject(value) && Object.values(value).every(is);
+  (is: WorldCheck) =>
+  (value: WorldValue): boolean =>
+    isJsonObject(value) && Object.values(value).every(is);
 const hasFields = (
-  value: unknown,
-  fields: Record<string, (field: unknown) => boolean>
+  value: WorldValue,
+  fields: Readonly<Record<string, WorldCheck>>
 ) =>
-  Predicate.isReadonlyObject(value) &&
+  isJsonObject(value) &&
   Object.entries(fields).every(([key, is]) => is(value[key]));
 
 const optionalString = isOptional(Predicate.isString);
 const optionalNumber = isOptional(Predicate.isNumber);
 const optionalBoolean = isOptional(Predicate.isBoolean);
 
-const isFakeRule = (value: unknown) =>
+const isFakeRule = (value: WorldValue) =>
   hasFields(value, {
     tool: Predicate.isString,
     pattern: Predicate.isString,
@@ -215,7 +221,7 @@ const isFakeRule = (value: unknown) =>
     advance: optionalNumber,
   });
 
-const isFakeObject = (value: unknown) =>
+const isFakeObject = (value: WorldValue) =>
   hasFields(value, {
     live: Predicate.or(Predicate.isString, Predicate.isNull),
     generations: isRecordOf(Predicate.isString),
@@ -227,7 +233,9 @@ const interruptedDeliveries: ReadonlyArray<unknown> = [
   "exit-after-failed-read",
 ] satisfies ReadonlyArray<FakeWorld["interruptedDeliver"]>;
 
-const isFakeWorld = (value: unknown): value is FakeWorld =>
+const isFakeWorld = (
+  value: WorldValue
+): value is FakeWorld & Schema.JsonObject =>
   hasFields(value, {
     rules: isOptional(isArrayOf(isFakeRule)),
     objects: isOptional(isRecordOf(isFakeObject)),
@@ -248,7 +256,7 @@ const isFakeWorld = (value: unknown): value is FakeWorld =>
   });
 
 const readWorld = (path: string): FakeWorld => {
-  const world: unknown = JSON.parse(readFileSync(path, "utf8"));
+  const world: Schema.Json = JSON.parse(readFileSync(path, "utf8"));
   if (!isFakeWorld(world)) {
     throw new Error(`the fake world in ${path} is malformed`);
   }

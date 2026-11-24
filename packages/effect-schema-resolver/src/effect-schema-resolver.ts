@@ -29,18 +29,18 @@ import { toNestErrors, validateFieldsNatively } from "@hookform/resolvers";
 import {
   Context,
   Effect,
+  Predicate,
   type Schema,
   type SchemaAST,
   SchemaIssue,
   SchemaParser,
 } from "effect";
-import {
-  appendErrors,
-  type FieldError,
-  type FieldValues,
-  type Resolver,
-  type ResolverOptions,
-  type ResolverResult,
+import type {
+  FieldError,
+  FieldValues,
+  Resolver,
+  ResolverOptions,
+  ResolverResult,
 } from "react-hook-form";
 
 type ResolverMode = {
@@ -51,36 +51,15 @@ type ResolverMode = {
   readonly mode?: "async" | "sync" | undefined;
 };
 
-/**
- * A schema whose decoding requires Effect services must receive them
- * explicitly; React Hook Form's resolver context is not an Effect environment.
- */
-type ResolverServices<Services> = [Services] extends [never]
-  ? { readonly services?: Context.Context<never> | undefined }
-  : { readonly services: Context.Context<Services> };
+type DecodedResolverOptions = ResolverMode & {
+  readonly raw?: false | undefined;
+};
 
-type ResolverArguments<Services, Raw extends boolean> = [Services] extends [
-  never,
-]
-  ? Raw extends true
-    ? [
-        parseOptions: SchemaAST.ParseOptions | undefined,
-        resolverOptions: ResolverMode &
-          ResolverServices<never> & { readonly raw: true },
-      ]
-    : [
-        parseOptions?: SchemaAST.ParseOptions,
-        resolverOptions?: ResolverMode &
-          ResolverServices<never> & { readonly raw?: false | undefined },
-      ]
-  : [
-      parseOptions: SchemaAST.ParseOptions | undefined,
-      resolverOptions: ResolverMode &
-        ResolverServices<Services> &
-        (Raw extends true
-          ? { readonly raw: true }
-          : { readonly raw?: false | undefined }),
-    ];
+type RawResolverOptions = ResolverMode & { readonly raw: true };
+
+type ResolverSettings = ResolverMode & {
+  readonly raw?: boolean | undefined;
+};
 
 type FieldIssue = {
   readonly path: ReadonlyArray<PropertyKey>;
@@ -115,7 +94,7 @@ const toFieldIssues = (
     path: [
       ...path,
       ...(formatted.path ?? []).map((segment) =>
-        typeof segment === "object" ? segment.key : segment
+        Predicate.isPropertyKey(segment) ? segment : segment.key
       ),
     ],
     message: formatted.message,
@@ -136,76 +115,37 @@ const toFieldErrors = (
     errors[name] ??= { message, type };
 
     if (validateAllFieldCriteria) {
-      const previous = errors[name].types?.[type];
-      errors[name] = appendErrors(
-        name,
-        validateAllFieldCriteria,
-        errors,
-        type,
-        previous === undefined
-          ? message
-          : [
-              ...(Array.isArray(previous) ? previous : [String(previous)]),
-              message,
-            ]
-      ) as FieldError;
+      const current = errors[name];
+      const previous = current.types?.[type];
+      errors[name] = {
+        ...current,
+        types: {
+          ...current.types,
+          [type]:
+            previous === undefined
+              ? message || true
+              : [
+                  ...(Array.isArray(previous) ? previous : [String(previous)]),
+                  message,
+                ],
+        },
+      };
     }
   }
 
   return errors;
 };
 
-export function effectSchemaResolver<
-  Input extends FieldValues,
-  TContext,
-  Output,
-  Services = never,
->(
+const makeResolver = <Input extends FieldValues, TContext, Output, Services>(
   schema: Schema.Codec<Output, Input, Services, unknown>,
-  ...options: ResolverArguments<Services, false>
-): Resolver<Input, TContext, Output>;
-
-export function effectSchemaResolver<
-  Input extends FieldValues,
-  TContext,
-  Output,
-  Services = never,
->(
-  schema: Schema.Codec<Output, Input, Services, unknown>,
-  ...options: ResolverArguments<Services, true>
-): Resolver<Input, TContext, Input>;
-
-/**
- * Creates a React Hook Form resolver that decodes form values with an Effect
- * schema. Form values use the schema's encoded type and submitted values use
- * its decoded type unless `raw` is set.
- *
- * @example
- * const schema = Schema.Struct({ name: Schema.NonEmptyString });
- *
- * useForm({ resolver: effectSchemaResolver(schema) });
- */
-export function effectSchemaResolver<
-  Input extends FieldValues,
-  TContext,
-  Output,
-  Services,
->(
-  schema: Schema.Codec<Output, Input, Services, unknown>,
-  parseOptions?: SchemaAST.ParseOptions,
-  resolverOptions: ResolverMode & {
-    readonly raw?: boolean | undefined;
-    readonly services?: Context.Context<Services> | undefined;
-  } = {}
-): Resolver<Input, TContext, Output | Input> {
+  services: Context.Context<Services>,
+  parseOptions: SchemaAST.ParseOptions | undefined,
+  resolverOptions: ResolverSettings
+): Resolver<Input, TContext, Output | Input> => {
   const decode = SchemaParser.decodeUnknownEffect(schema, {
     errors: "all",
     ...parseOptions,
   });
-  // The overloads require `services` whenever decoding needs any.
-  const services =
-    resolverOptions.services ?? (Context.empty() as Context.Context<Services>);
-
   const resolve = (
     values: Input,
     options: ResolverOptions<Input>
@@ -243,4 +183,91 @@ export function effectSchemaResolver<
         Effect.runSyncWith(services)(resolve(values, options))
     : (values, _context, options) =>
         Effect.runPromiseWith(services)(resolve(values, options));
+};
+
+export function effectSchemaResolver<
+  Input extends FieldValues,
+  TContext,
+  Output,
+>(
+  schema: Schema.Codec<Output, Input, never, unknown>,
+  parseOptions?: SchemaAST.ParseOptions,
+  resolverOptions?: DecodedResolverOptions
+): Resolver<Input, TContext, Output>;
+
+export function effectSchemaResolver<
+  Input extends FieldValues,
+  TContext,
+  Output,
+>(
+  schema: Schema.Codec<Output, Input, never, unknown>,
+  parseOptions: SchemaAST.ParseOptions | undefined,
+  resolverOptions: RawResolverOptions
+): Resolver<Input, TContext, Input>;
+
+/**
+ * Creates a React Hook Form resolver that decodes form values with an Effect
+ * schema. Form values use the schema's encoded type and submitted values use
+ * its decoded type unless `raw` is set. Use
+ * `effectSchemaResolverWithServices` for a schema whose decoding requires
+ * Effect services.
+ *
+ * @example
+ * const schema = Schema.Struct({ name: Schema.NonEmptyString });
+ *
+ * useForm({ resolver: effectSchemaResolver(schema) });
+ */
+export function effectSchemaResolver<
+  Input extends FieldValues,
+  TContext,
+  Output,
+>(
+  schema: Schema.Codec<Output, Input, never, unknown>,
+  parseOptions?: SchemaAST.ParseOptions,
+  resolverOptions: ResolverSettings = {}
+): Resolver<Input, TContext, Output | Input> {
+  return makeResolver(schema, Context.empty(), parseOptions, resolverOptions);
+}
+
+export function effectSchemaResolverWithServices<
+  Input extends FieldValues,
+  TContext,
+  Output,
+  Services,
+>(
+  schema: Schema.Codec<Output, Input, Services, unknown>,
+  services: Context.Context<Services>,
+  parseOptions?: SchemaAST.ParseOptions,
+  resolverOptions?: DecodedResolverOptions
+): Resolver<Input, TContext, Output>;
+
+export function effectSchemaResolverWithServices<
+  Input extends FieldValues,
+  TContext,
+  Output,
+  Services,
+>(
+  schema: Schema.Codec<Output, Input, Services, unknown>,
+  services: Context.Context<Services>,
+  parseOptions: SchemaAST.ParseOptions | undefined,
+  resolverOptions: RawResolverOptions
+): Resolver<Input, TContext, Input>;
+
+/**
+ * Creates a React Hook Form resolver like `effectSchemaResolver` for a schema
+ * whose decoding requires Effect services. React Hook Form's resolver context
+ * is not an Effect environment, so the services are supplied explicitly.
+ */
+export function effectSchemaResolverWithServices<
+  Input extends FieldValues,
+  TContext,
+  Output,
+  Services,
+>(
+  schema: Schema.Codec<Output, Input, Services, unknown>,
+  services: Context.Context<Services>,
+  parseOptions?: SchemaAST.ParseOptions,
+  resolverOptions: ResolverSettings = {}
+): Resolver<Input, TContext, Output | Input> {
+  return makeResolver(schema, services, parseOptions, resolverOptions);
 }

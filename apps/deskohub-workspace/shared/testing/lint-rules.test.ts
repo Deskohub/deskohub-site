@@ -215,6 +215,9 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["permits namespace imports", 'import * as reservations from "./reservations";\n', false, booking],
       ["permits test modules", 'export * from "./reservation-fixtures";\n', false, `${reservations}/index.test.ts`],
       ["permits generated modules", 'export * from "./dotypos-types";\n', false, generated],
+      ["rejects package wildcards", 'export * from "./catalog";\n', true, "packages/catalog/src/index.ts"],
+      ["permits package test modules", 'export * from "./catalog-fixtures";\n', false, "packages/catalog/src/index.test.ts"],
+      ["permits generated package modules", 'export * from "./dotypos-types";\n', false, "packages/dotypos/src/generated/index.ts"],
       ["permits modules outside Workspace", 'export * from "./catalog";\n', false, "apps/dhw/src/barrel.ts"],
     ],
   },
@@ -234,6 +237,9 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
     module: "apps/deskohub-workspace/features/reservation/load-reservation.ts",
     cases: [
       ["rejects a traced direct generator", traced(gen), true],
+      ["rejects an untraced package generator", untracedGen, true, "packages/catalog/src/load-catalog.ts"],
+      ["rejects a package ES module generator", untracedGen, true, "packages/catalog/src/load-catalog.mts"],
+      ["permits a generated package generator", untracedGen, false, "packages/dotypos/src/generated/effect.gen.ts"],
       ["rejects a traced piped generator", traced(piped), true],
       ["rejects generators piped to multiple operators", traced(multiPiped), true],
       ["rejects piped generators with a trailing transform", traced(piped, transform), true],
@@ -298,6 +304,8 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["permits an unrelated factory", 'export const loadValue = Effect.fn("Workspace.loadValue")(() => database.query("headers"));\n', false],
       ["permits an Effect.all composition factory", 'export const loadValue = Effect.fn("Workspace.loadValue")(() => Effect.all([Effect.sync(() => headers()), Effect.sync(() => headers())]));\n', false],
       ["permits test modules", tracedLazyValue("sync(() => headers())"), false, "apps/deskohub-workspace/features/reservation/load-value.test.ts"],
+      ["rejects package modules", tracedLazyValue("sync(() => headers())"), true, "packages/catalog/src/load-value.ts"],
+      ["permits generated package modules", tracedLazyValue("sync(() => headers())"), false, "packages/dotypos/src/generated/load-value.ts"],
       ["permits generated modules", tracedLazyValue("sync(() => headers())"), false, generated],
       ["permits modules outside Workspace", tracedLazyValue("sync(() => headers())"), false, "apps/dhw/src/load-value.ts"],
     ],
@@ -918,7 +926,7 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
     ],
   },
   {
-    name: "no-type-assertions-in-workspace-infrastructure", diagnostic: "only `as const` is allowed",
+    name: "no-type-assertions", diagnostic: "[anti-slop/no-type-assertions]",
     module: "packages/workspace-infrastructure/src/resources/edge-compute-api.ts",
     cases: [
       ["rejects asserting an operation to a library parameter type", "export const settle = waitGlobalOperation(project, operation as Parameters<typeof waitGlobalOperation>[1]);\n", true],
@@ -934,7 +942,43 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects assertions in a CommonJS module file", "export const value = input as string;\n", true, "packages/workspace-infrastructure/src/review-probe.cts"],
       ["permits as const", 'export const conflict = { status: "conflict" as const, codes: [0, 2] as const };\n', false],
       ["permits satisfies", "export const settled = { name } satisfies ComputeOperation;\n", false],
-      ["permits assertions outside workspace infrastructure", "export const value = input as Settled;\n", false, "packages/workspace-admin-api/src/probe.ts"],
+      ["rejects assertions in another package", "export const value = input as Settled;\n", true, "packages/workspace-admin-api/src/probe.ts"],
+      ["rejects angle-bracket assertions in another package", "export const value = <Settled>input;\n", true, "packages/standard-schema/src/index.ts"],
+      ["permits generated package modules", "export const value = input as Settled;\n", false, "packages/dotypos/src/generated/effect.gen.ts"],
+      ["permits assertions outside packages", "export const value = input as Settled;\n", false, "apps/dhw/src/probe.ts"],
+    ],
+  },
+  {
+    name: "style/noNonNullAssertion", diagnostic: "non-null assertion",
+    module: "packages/catalog/src/probe.ts",
+    cases: [
+      ["rejects package non-null assertions", "export const first = values[0]!;\n", true],
+      ["rejects non-null assertions in workspace infrastructure", "export const first = values[0]!;\n", true, "packages/workspace-infrastructure/src/probe.ts"],
+    ],
+  },
+  {
+    name: "no-unknown-parameters", diagnostic: "[anti-slop/no-unknown-parameters]",
+    module: "packages/catalog/src/parse.ts",
+    cases: [
+      ["rejects package parameters", "export const parse = (value: unknown) => String(value);\n", true],
+      ["rejects package CommonJS module parameters", "export const parse = (value: unknown) => String(value);\n", true, "packages/catalog/src/parse.cts"],
+      ["rejects modules beside a Standard Schema boundary", "export const parse = (value: unknown) => String(value);\n", true, "packages/standard-schema/src/parse.ts"],
+      ["permits the Standard Schema boundary", "export const validate = (value: unknown) => value;\n", false, "packages/standard-schema/src/index.ts"],
+      ["permits the next-safe-action Effect boundary", "export const validate = (value: unknown) => value;\n", false, "packages/next-effect/src/effect-action.ts"],
+      ["permits the next-safe-action i18n boundary", "export const validate = (value: unknown) => value;\n", false, "packages/i18n/src/action.ts"],
+      ["permits generated package modules", "export const parse = (value: unknown) => String(value);\n", false, "packages/dotypos/src/generated/index.ts"],
+    ],
+  },
+  {
+    name: "no-runtime-typeof", diagnostic: "[anti-slop/no-runtime-typeof]",
+    module: "packages/catalog/src/narrow.ts",
+    cases: [
+      ["rejects package narrowing", 'export const isText = (value: string | number) => typeof value === "string";\n', true],
+      ["rejects narrowing beside the Standard Schema boundary", 'export const isText = (value: string | number) => typeof value === "string";\n', true, "packages/standard-schema/src/result.ts"],
+      ["permits the Standard Schema thenable check", 'export const isAsync = (result: Result) => typeof result.then === "function";\n', false, "packages/standard-schema/src/index.ts"],
+      ["rejects narrowing in a next-safe-action boundary", 'export const isText = (value: string | number) => typeof value === "string";\n', true, "packages/next-effect/src/effect-action.ts"],
+      ["permits generated package modules", 'export const isText = (value: string | number) => typeof value === "string";\n', false, "packages/dotypos/src/generated/index.ts"],
+      ["permits type queries", "export type Catalog = typeof catalog;\n", false],
     ],
   },
 ];
@@ -1074,5 +1118,163 @@ test("no-promise-matchers-in-browser-tests holds across Workspace browser tests"
         message.includes("Await the promise before asserting")
       )
       .map(({ location }) => location.path)
+  ).toEqual([]);
+});
+
+// The corpus above lints with Biome's default file set, so these cases lint a
+// copy of the repository layout with the production `files.includes` and run
+// a package's own `lint` script from its directory, the way Turbo runs it.
+const productionRoot = join(fixtureRoot, "production");
+const assertionProbe =
+  "export const probe = (input?: string) => input! as string;\n";
+const productionProbes = [
+  "packages/standard-schema/src/probe.ts",
+  "packages/standard-schema/probe.ts",
+  "packages/standard-schema/probe.mts",
+  "packages/standard-schema/probe.cts",
+  "packages/standard-schema/src/probe.mts",
+  "packages/standard-schema/src/probe.cts",
+];
+const generatedProbes = [
+  "packages/standard-schema/generated/probe.mts",
+  "packages/standard-schema/generated/probe.cts",
+];
+
+type LintReport = {
+  readonly diagnostics: readonly {
+    readonly category?: string;
+    readonly message: string;
+    readonly severity: string;
+    readonly location: { readonly path: string };
+  }[];
+};
+
+const diagnosticsByPath = (report: LintReport, cwd: string) => {
+  const byPath = new Map<string, string[]>();
+  for (const { category, message, severity, location } of report.diagnostics) {
+    const path = resolve(cwd, location.path);
+    byPath.set(path, [
+      ...(byPath.get(path) ?? []),
+      `${severity} ${category ?? ""} ${message}`,
+    ]);
+  }
+  return byPath;
+};
+
+const lintProduction = async (cwd: string, command: string) => {
+  const result = await runCommand(
+    ["bash", "-c", `${command} --reporter=json --max-diagnostics=none`],
+    {
+      cwd,
+      env: {
+        ...process.env,
+        PATH: `${join(repositoryRoot, "node_modules/.bin")}:${process.env.PATH ?? ""}`,
+      },
+    }
+  );
+  return diagnosticsByPath(JSON.parse(result.stdout) as LintReport, cwd);
+};
+
+const expectAssertionDiagnostics = (byPath: Map<string, string[]>) => {
+  for (const probe of productionProbes) {
+    const messages = byPath.get(join(productionRoot, probe)) ?? [];
+    expect({
+      probe,
+      assertion: messages.some(
+        (m) =>
+          m.startsWith("error ") && m.includes("[anti-slop/no-type-assertions]")
+      ),
+    }).toEqual({ probe, assertion: true });
+    expect({
+      probe,
+      nonNull: messages.some(
+        (m) =>
+          m.startsWith("error ") && m.includes("lint/style/noNonNullAssertion")
+      ),
+    }).toEqual({ probe, nonNull: true });
+  }
+  for (const probe of generatedProbes) {
+    expect(byPath.get(join(productionRoot, probe)) ?? []).toEqual([]);
+  }
+};
+
+test("production Biome config rejects package assertions in every module kind from the root and from the package", async () => {
+  writeCase(
+    "production",
+    "biome.json",
+    JSON.stringify({
+      ...repositoryConfig,
+      vcs: { enabled: false },
+      plugins: repositoryConfig.plugins.map((plugin) =>
+        join(repositoryRoot, plugin)
+      ),
+    })
+  );
+  for (const probe of [...productionProbes, ...generatedProbes]) {
+    writeCase("production", probe, assertionProbe);
+  }
+  const packageManifest = JSON.parse(
+    readFileSync(
+      join(repositoryRoot, "packages/standard-schema/package.json"),
+      "utf8"
+    )
+  ) as { readonly scripts: { readonly lint: string } };
+
+  expectAssertionDiagnostics(
+    await lintProduction(productionRoot, "biome lint packages")
+  );
+  expectAssertionDiagnostics(
+    await lintProduction(
+      join(productionRoot, "packages/standard-schema"),
+      packageManifest.scripts.lint
+    )
+  );
+});
+
+test("package lint scripts resolve the root Biome config by discovery", async () => {
+  // A relative --config-path makes Biome 2.5 match override globs against
+  // paths relative to the working directory, so `packages/**` overrides stop
+  // applying when a package lints itself.
+  const manifests = await commandOutput(
+    ["git", "ls-files", "--", "packages/*/package.json"],
+    {
+      cwd: repositoryRoot,
+    }
+  );
+  const scripts = manifests
+    .split("\n")
+    .filter((path) => path !== "")
+    .map((path) => {
+      const manifest = JSON.parse(
+        readFileSync(join(repositoryRoot, path), "utf8")
+      ) as {
+        readonly scripts?: { readonly lint?: string };
+      };
+      return { path, lint: manifest.scripts?.lint ?? "" };
+    });
+  expect(scripts.length).toBeGreaterThan(0);
+  expect(scripts.filter(({ lint }) => lint.includes("--config-path"))).toEqual(
+    []
+  );
+});
+
+test("lint caches miss when the Biome config or a Grit plugin changes", () => {
+  const turbo = JSON.parse(
+    readFileSync(join(repositoryRoot, "turbo.json"), "utf8")
+  ) as {
+    readonly tasks: { readonly lint: { readonly inputs?: readonly string[] } };
+  };
+  expect(turbo.tasks.lint.inputs).toEqual(
+    expect.arrayContaining([
+      "$TURBO_DEFAULT$",
+      "$TURBO_ROOT$/biome.json",
+      "$TURBO_ROOT$/lint/*.grit",
+    ])
+  );
+  // `lint/*.grit` covers a plugin only when it sits directly in `lint/`.
+  expect(
+    repositoryConfig.plugins.filter(
+      (plugin) => !/^\.\/lint\/[^/]+\.grit$/.test(plugin)
+    )
   ).toEqual([]);
 });

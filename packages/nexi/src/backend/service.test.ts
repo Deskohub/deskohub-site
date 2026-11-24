@@ -49,14 +49,19 @@ const runWithService = <A, E>(
   return Effect.runPromise(effect.pipe(Effect.provide(serviceLayer)));
 };
 
-const mockNexiFetch = (response: Response) => {
-  const fetchMock = mock(
-    async (_input: RequestInfo | URL, _init?: RequestInit) => response.clone()
-  );
-  return fetchMock as unknown as typeof globalThis.fetch & typeof fetchMock;
+type FetchCall = [RequestInfo | URL, RequestInit?];
+
+const mockFetch = (handler: (...call: FetchCall) => Promise<Response>) =>
+  Object.assign(mock(handler), { preconnect: globalThis.fetch.preconnect });
+
+const firstFetchCall = (fetchMock: ReturnType<typeof mockFetch>) => {
+  const [call] = fetchMock.mock.calls;
+  if (call === undefined) throw new Error("Expected a Nexi request.");
+  return call;
 };
 
-type FetchCall = [RequestInfo | URL, RequestInit?];
+const mockNexiFetch = (response: Response) =>
+  mockFetch(async () => response.clone());
 
 const getUrl = ([input]: FetchCall) =>
   input instanceof Request ? input.url : String(input);
@@ -110,7 +115,7 @@ describe("NexiService hosted payment pages", () => {
       fetchMock
     );
 
-    const call = fetchMock.mock.calls[0] as FetchCall;
+    const call = firstFetchCall(fetchMock);
     expect(getUrl(call)).toBe(
       "https://nexi.example.test/api/phoenix-0.0/psp/api/v1/orders/hpp"
     );
@@ -186,9 +191,7 @@ describe("NexiService hosted payment pages", () => {
   ])(
     "does not resend hosted payment page creation after %s",
     async (_label, respond) => {
-      const fetchMock = mock(
-        async (_input: RequestInfo | URL, _init?: RequestInit) => respond()
-      ) as unknown as typeof globalThis.fetch & ReturnType<typeof mock>;
+      const fetchMock = mockFetch(async () => respond());
 
       const result = await runWithService(
         Effect.gen(function* () {
@@ -218,11 +221,11 @@ describe("NexiService hosted payment pages", () => {
 describe("NexiService verifyPaymentOutcome", () => {
   test("retries an order lookup after a provider 5xx", async () => {
     let calls = 0;
-    const fetchMock = mock(async () =>
+    const fetchMock = mockFetch(async () =>
       calls++ === 0
         ? Response.json({}, { status: 503 })
         : Response.json({ orderId: "order-id", operations: [] })
-    ) as unknown as typeof globalThis.fetch & ReturnType<typeof mock>;
+    );
 
     await runWithService(
       Effect.gen(function* () {
@@ -464,7 +467,7 @@ describe("NexiService verifyPaymentOutcome", () => {
   });
 
   test("stops retrying an unanswered order lookup at its deadline", async () => {
-    const fetchMock = mock(
+    const fetchMock = mockFetch(
       (_input: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () =>
@@ -497,7 +500,7 @@ describe("NexiService verifyPaymentOutcome", () => {
           result: finished ? yield* Fiber.join(lookup) : undefined,
         };
       }).pipe(Effect.provide(TestClock.layer())),
-      fetchMock as unknown as typeof globalThis.fetch
+      fetchMock
     );
 
     expect(finished).toBe(true);
@@ -515,7 +518,7 @@ describe("NexiService verifyPaymentOutcome", () => {
 
 describe("NexiService verifyPaymentOutcome evidence", () => {
   const verify = (
-    order: unknown,
+    order: Schema.Json,
     input: { readonly currency?: "CZK" | "EUR" } = { currency: "CZK" }
   ) =>
     runWithService(
@@ -697,7 +700,7 @@ describe("NexiService verifyPaymentOutcome evidence", () => {
 
 describe("NexiService request retries", () => {
   test("gives up on an unanswered order lookup within its worst-case duration", async () => {
-    const fetchMock = mock(
+    const fetchMock = mockFetch(
       (_input: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () =>
@@ -723,7 +726,7 @@ describe("NexiService request retries", () => {
         }
         return { elapsedMilliseconds, result: yield* Fiber.join(lookup) };
       }).pipe(Effect.provide(TestClock.layer())),
-      fetchMock as unknown as typeof globalThis.fetch
+      fetchMock
     );
 
     expect(result).toMatchObject({ failure: { _tag: "NetworkError" } });
@@ -835,7 +838,7 @@ describe("NexiService administration reads", () => {
     expect(JSON.stringify(result)).not.toContain("securityToken");
     expect(JSON.stringify(result)).not.toContain("customerInfo");
     expect(JSON.stringify(result)).not.toContain("paymentInstrumentInfo");
-    expect(getUrl(fetchMock.mock.calls[0] as FetchCall)).toBe(
+    expect(getUrl(firstFetchCall(fetchMock))).toBe(
       "https://nexi.example.test/api/phoenix-0.0/psp/api/v1/orders/order%23id"
     );
   });
@@ -962,11 +965,11 @@ describe("NexiService administration reads", () => {
         currency: "CZK",
       },
     ]);
-    const url = new URL(getUrl(fetchMock.mock.calls[0] as FetchCall));
+    const url = new URL(getUrl(firstFetchCall(fetchMock)));
     expect(url.pathname).toBe("/api/phoenix-0.0/psp/api/v1/operations");
-    expect(
-      getHeader(fetchMock.mock.calls[0] as FetchCall, "Correlation-Id")
-    ).toBe("correlation-id");
+    expect(getHeader(firstFetchCall(fetchMock), "Correlation-Id")).toBe(
+      "correlation-id"
+    );
   });
 
   test("gets one sanitized operation by encoded ID", async () => {
@@ -1003,7 +1006,7 @@ describe("NexiService administration reads", () => {
       amount: "5000",
       currency: "CZK",
     });
-    expect(getUrl(fetchMock.mock.calls[0] as FetchCall)).toBe(
+    expect(getUrl(firstFetchCall(fetchMock))).toBe(
       "https://nexi.example.test/api/phoenix-0.0/psp/api/v1/operations/operation%23id"
     );
   });

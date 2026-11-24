@@ -35,8 +35,8 @@ const boundsSamplesPerFrame = 4;
  * 95% along its axis, which leans 6 degrees from vertical. Logo units.
  */
 const brandGradient = {
-  from: { at: [155.1, 59.4] as Point, color: "#eeb726" },
-  to: { at: [133, 266.1] as Point, color: "#da4013" },
+  from: { at: [155.1, 59.4], color: "#eeb726" },
+  to: { at: [133, 266.1], color: "#da4013" },
 } as const;
 
 const round = (value: number, decimals: number) => {
@@ -134,20 +134,24 @@ const compressKeys = <Value>(
   equivalent: (a: Value, b: Value) => boolean
 ): readonly Key<Value>[] => {
   const keys: Key<Value>[] = [];
-  let runStart = 0;
+  let runStart:
+    | { readonly index: number; readonly frame: number; readonly value: Value }
+    | undefined;
   values.forEach((value, index) => {
+    const frame = frames[index];
+    if (frame === undefined) {
+      throw new Error(`Sampled value ${index} has no frame.`);
+    }
+    runStart ??= { index, frame, value };
     const next = values[index + 1];
     if (next !== undefined && equivalent(value, next)) {
       return;
     }
-    const startValue = values[runStart] as Value;
-    const startFrame = frames[runStart] as number;
-    const frame = frames[index] as number;
-    if (runStart < index) {
-      keys.push({ frame: startFrame, value: startValue, hold: true });
+    if (runStart.index < index) {
+      keys.push({ frame: runStart.frame, value: runStart.value, hold: true });
     }
     keys.push({ frame, value, hold: false });
-    runStart = index + 1;
+    runStart = undefined;
   });
   return keys;
 };

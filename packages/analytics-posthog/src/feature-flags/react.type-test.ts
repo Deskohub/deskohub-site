@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import { definePostHogFeatureFlags } from "./contract";
 import { createPostHogReactFeatureFlags } from "./react";
 
@@ -6,14 +7,24 @@ const workspaceContract = definePostHogFeatureFlags<{
     readonly payload: undefined;
     readonly value: boolean;
   };
-}>(["meeting_room_page"]);
+}>({
+  meeting_room_page: { payload: Schema.Undefined, value: Schema.Boolean },
+});
 
 const barContract = definePostHogFeatureFlags<{
   readonly seasonal_menu: {
     readonly payload: { readonly menuId: number } | undefined;
     readonly value: false | "control" | "summer";
   };
-}>(["seasonal_menu"]);
+}>({
+  seasonal_menu: {
+    payload: Schema.Union([
+      Schema.Undefined,
+      Schema.Struct({ menuId: Schema.Number }),
+    ]),
+    value: Schema.Literals([false, "control", "summer"]),
+  },
+});
 
 const workspaceFlags = createPostHogReactFeatureFlags(workspaceContract);
 const barFlags = createPostHogReactFeatureFlags(barContract);

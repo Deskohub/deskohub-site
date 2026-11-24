@@ -65,7 +65,10 @@ interface IDotyposAccessToken {
 }
 
 interface IDotyposGeneratedClient {
-  readonly client: DotyposClient;
+  /** Fails with the access token's failure when the token can't be acquired. */
+  readonly client: DotyposClient<
+    HttpClientError.HttpClientError | DotyposWireFailure
+  >;
 }
 
 /** Tracks token acquisition for a write that must distinguish a timeout from a sent request. */
@@ -79,8 +82,6 @@ type GeneratedClientError = {
   readonly response: HttpClientResponse.HttpClientResponse;
   readonly cause: unknown;
 };
-
-type ProviderErrorInput = DotyposErrorResponse | string | undefined;
 
 /** A strong entity tag uses the opaque-tag grammar from RFC 9110 §8.8.3. */
 export const isStrongEtag = (etag: string | undefined): etag is string =>
@@ -173,7 +174,7 @@ export class DotyposGeneratedClient extends Context.Service<
             Effect.succeed(response.status === 401)
           )
         )
-      ) as HttpClient.HttpClient;
+      );
 
       return {
         client: make(authenticatedHttpClient),
@@ -187,32 +188,32 @@ export class DotyposGeneratedClient extends Context.Service<
  * through the addressed request keeps its access-token origin.
  */
 export const toDotyposWireFailure = (
-  error: unknown,
+  cause: unknown,
   { fromAccessToken }: { readonly fromAccessToken: boolean }
 ): DotyposWireFailure => {
-  if (error instanceof DotyposWireFailure) return error;
+  if (cause instanceof DotyposWireFailure) return cause;
 
-  if (HttpClientError.isHttpClientError(error)) {
-    return httpClientWireFailure(error, fromAccessToken);
+  if (HttpClientError.isHttpClientError(cause)) {
+    return httpClientWireFailure(cause, fromAccessToken);
   }
 
-  if (isGeneratedClientError(error)) {
+  if (isGeneratedClientError(cause)) {
     return statusFailure({
-      providerError: parseProviderError(asProviderErrorInput(error.cause)),
-      status: error.response.status,
+      providerError: providerErrorFrom(cause.cause),
+      status: cause.response.status,
       fromAccessToken,
     });
   }
 
-  if (isTransportException(error)) {
+  if (isTransportException(cause)) {
     return new DotyposWireFailure({
       outcome: { kind: "transport" },
       fromAccessToken,
-      cause: error,
+      cause,
     });
   }
 
-  const providerError = parseProviderError(asProviderErrorInput(error));
+  const providerError = providerErrorFrom(cause);
   if (providerError) {
     return statusFailure({
       providerError,
@@ -224,7 +225,7 @@ export const toDotyposWireFailure = (
   return new DotyposWireFailure({
     outcome: { kind: "unreadable" },
     fromAccessToken,
-    cause: error,
+    cause,
   });
 };
 
@@ -245,12 +246,10 @@ const httpClientWireFailure = (
   }
 
   return statusFailure({
-    providerError: parseProviderError(
-      asProviderErrorInput(
-        Predicate.hasProperty(reason, "description")
-          ? reason.description
-          : undefined
-      )
+    providerError: providerErrorFrom(
+      Predicate.hasProperty(reason, "description")
+        ? reason.description
+        : undefined
     ),
     status: error.response?.status,
     fromAccessToken,
@@ -258,32 +257,23 @@ const httpClientWireFailure = (
 };
 
 /** A thrown error that means the request never got an answer. */
-const isTransportException = (error: unknown) =>
-  Predicate.isError(error) &&
-  (error.name === "AbortError" ||
-    error.message.includes("fetch") ||
-    error.message.includes("ECONNREFUSED"));
+const isTransportException = (cause: unknown) =>
+  Predicate.isError(cause) &&
+  (cause.name === "AbortError" ||
+    cause.message.includes("fetch") ||
+    cause.message.includes("ECONNREFUSED"));
 
-/** Keeps a value only if it can carry a Dotypos error body. */
-const asProviderErrorInput = (value: unknown): ProviderErrorInput =>
-  Predicate.isString(value) || Schema.is(ErrorResponse)(value)
-    ? value
-    : undefined;
+/** A Dotypos error body, decoded or still as its JSON text. */
+const decodeProviderErrorBody = Schema.decodeUnknownOption(
+  Schema.Union([ErrorResponse, Schema.fromJsonString(ErrorResponse)])
+);
 
-const parseProviderError = (error: ProviderErrorInput) => {
-  if (!error) return undefined;
-  if (!Predicate.isString(error)) return toProviderError(error);
-
-  try {
-    const parsed = JSON.parse(error);
-    const parsedDecoded = Schema.decodeUnknownOption(ErrorResponse)(parsed);
-    return Option.isSome(parsedDecoded)
-      ? toProviderError(parsedDecoded.value)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-};
+/** The provider error a failure carries, if it carries a Dotypos error body. */
+const providerErrorFrom = (cause: unknown) =>
+  Option.match(decodeProviderErrorBody(cause), {
+    onNone: () => undefined,
+    onSome: toProviderError,
+  });
 
 const toProviderError = (
   error: DotyposErrorResponse
@@ -302,10 +292,10 @@ const toProviderError = (
 };
 
 const isGeneratedClientError = (
-  error: unknown
-): error is GeneratedClientError =>
-  Predicate.hasProperty(error, "response") &&
-  Predicate.hasProperty(error, "cause");
+  cause: unknown
+): cause is GeneratedClientError =>
+  Predicate.hasProperty(cause, "response") &&
+  Predicate.hasProperty(cause, "cause");
 
 /**
  * A failure Dotypos answered with a status. It keeps only the parsed provider

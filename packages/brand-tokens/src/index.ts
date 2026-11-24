@@ -58,17 +58,18 @@ export const brandFonts = {
   weights: { heading: 400, subheading: 400, body: 400, emphasis: 600 },
 } as const;
 
+/** The `brand-theme.css` custom property of each brand colour. */
 const brandColorVariables = {
-  navyBlue: "--brand-navy-blue",
-  silver: "--brand-silver",
-  sunsetYellow: "--brand-sunset-yellow",
-  sunsetYellowInk: "--brand-sunset-yellow-ink",
-  chileanFire: "--brand-chilean-fire",
-  burnedOrange: "--brand-burned-orange",
-  burnedOrangeInk: "--brand-burned-orange-ink",
-  aquamarineGreen: "--brand-aquamarine-green",
-  aquamarineInk: "--brand-aquamarine-ink",
-} as const satisfies Record<BrandColor, `--brand-${string}`>;
+  "--brand-navy-blue": "navyBlue",
+  "--brand-silver": "silver",
+  "--brand-sunset-yellow": "sunsetYellow",
+  "--brand-sunset-yellow-ink": "sunsetYellowInk",
+  "--brand-chilean-fire": "chileanFire",
+  "--brand-burned-orange": "burnedOrange",
+  "--brand-burned-orange-ink": "burnedOrangeInk",
+  "--brand-aquamarine-green": "aquamarineGreen",
+  "--brand-aquamarine-ink": "aquamarineInk",
+} as const satisfies Record<`--brand-${string}`, BrandColor>;
 
 /** A CSS `font-family` list, quoting the names that hold a space. */
 const cssFontFamilyList = (families: readonly string[]): string =>
@@ -104,9 +105,9 @@ export const brandThemeVariables: Readonly<
   Partial<Record<`--${string}`, string>>
 > = {
   ...Object.fromEntries(
-    Object.entries(brandColorVariables).map(([color, variable]) => [
+    Object.entries(brandColorVariables).map(([variable, color]) => [
       variable,
-      brandColors[color as BrandColor],
+      brandColors[color],
     ])
   ),
   "--font-heading": webFontStack,

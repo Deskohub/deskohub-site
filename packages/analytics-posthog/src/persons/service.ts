@@ -1,4 +1,11 @@
-import { Context, type Duration, Effect, Layer, type Redacted } from "effect";
+import {
+  Context,
+  type Duration,
+  Effect,
+  Layer,
+  Predicate,
+  type Redacted,
+} from "effect";
 import { FetchHttpClient, HttpClient, HttpClientError } from "effect/http";
 import type { SchemaError } from "effect/Schema";
 import type { PersonBulkDeleteResponse } from "../generated/effect.gen";
@@ -147,9 +154,7 @@ const toDeletion = (
 > => {
   if (response.persons_found === 0) return Effect.succeed("absent");
   const steps = (response.deletion_errors ?? []).map((entry) => entry.step);
-  const namedSteps = steps.filter(
-    (step): step is string => typeof step === "string"
-  );
+  const namedSteps = steps.filter(Predicate.isString);
   if (namedSteps.length < steps.length) {
     return Effect.fail(
       new PostHogPersonsUncertain({

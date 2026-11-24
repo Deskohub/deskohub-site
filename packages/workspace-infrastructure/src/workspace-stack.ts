@@ -53,48 +53,49 @@ const pascal = (id: string) =>
  * unauthorized stage declares no Scheduler job at all, so no interrupted
  * create can leave one running.
  */
-export const declareWorkspaceFoundation = (config: WorkspaceStackConfig) =>
-  Effect.gen(function* () {
-    const repository = yield* ArtifactRegistry.Repository(
-      "WorkspaceImages",
-      artifactRepositoryProps(config)
-    );
-    const mobileUpdates = yield* Storage.Bucket(
-      "MobileUpdates",
-      mobileUpdatesBucketProps(config)
-    );
-    yield* Effect.forEach(
-      [
-        mobileUpdatesPublisherGrant(config),
-        mobileUpdatesPublisherReadGrant(config),
-      ],
-      (grant) =>
-        IAM.Member(grant.id, { ...grant.props, name: mobileUpdates.bucketName })
-    );
-    const queues = yield* Effect.forEach(workspaceQueueContracts, (contract) =>
-      CloudTasks.Queue(
-        `Queue${pascal(contract.queueId)}`,
-        queueProps(config, contract)
-      )
-    );
-    const jobs = config.schedulesEnabled
-      ? yield* Effect.forEach(workspaceScheduleContracts, (contract) =>
-          CloudScheduler.Job(
-            `Schedule${pascal(contract.jobId)}`,
-            scheduleJobProps(config, contract)
-          )
+export const declareWorkspaceFoundation = Effect.fn(
+  "WorkspaceStack.declareWorkspaceFoundation"
+)(function* (config: WorkspaceStackConfig) {
+  const repository = yield* ArtifactRegistry.Repository(
+    "WorkspaceImages",
+    artifactRepositoryProps(config)
+  );
+  const mobileUpdates = yield* Storage.Bucket(
+    "MobileUpdates",
+    mobileUpdatesBucketProps(config)
+  );
+  yield* Effect.forEach(
+    [
+      mobileUpdatesPublisherGrant(config),
+      mobileUpdatesPublisherReadGrant(config),
+    ],
+    (grant) =>
+      IAM.Member(grant.id, { ...grant.props, name: mobileUpdates.bucketName })
+  );
+  const queues = yield* Effect.forEach(workspaceQueueContracts, (contract) =>
+    CloudTasks.Queue(
+      `Queue${pascal(contract.queueId)}`,
+      queueProps(config, contract)
+    )
+  );
+  const jobs = config.schedulesEnabled
+    ? yield* Effect.forEach(workspaceScheduleContracts, (contract) =>
+        CloudScheduler.Job(
+          `Schedule${pascal(contract.jobId)}`,
+          scheduleJobProps(config, contract)
         )
-      : [];
-    yield* Effect.forEach(alertPolicyDeclarations(config), ({ id, props }) =>
-      Monitoring.AlertPolicy(id, props)
-    );
-    return {
-      repository: repository.name,
-      mobileUpdatesBucket: mobileUpdates.bucketName,
-      queues: queues.map((queue) => queue.name),
-      jobs: jobs.map((job) => job.name),
-    };
-  });
+      )
+    : [];
+  yield* Effect.forEach(alertPolicyDeclarations(config), ({ id, props }) =>
+    Monitoring.AlertPolicy(id, props)
+  );
+  return {
+    repository: repository.name,
+    mobileUpdatesBucket: mobileUpdates.bucketName,
+    queues: queues.map((queue) => queue.name),
+    jobs: jobs.map((job) => job.name),
+  };
+});
 
 /**
  * Point each secret reference of a service at its accessor grant's output,
@@ -139,68 +140,69 @@ const withSecretGrants = (
  * may declare them; nothing is declared before a release serves. The web
  * service carries the record's traffic generation for drift readback.
  */
-export const declareWorkspaceServices = (
+export const declareWorkspaceServices = Effect.fn(
+  "WorkspaceStack.declareWorkspaceServices"
+)(function* (
   config: WorkspaceStackConfig,
   record: ReleaseRecord,
   now: DateTime.Utc
-) =>
-  Effect.gen(function* () {
-    if (config.stage === "preview") {
-      return yield* new PreviewServicesUnprotected();
-    }
-    const web = webServiceProps(config, record, now);
-    const serving = record.pendingApply?.target ?? record.active;
-    if (web === undefined || serving === null) {
-      return undefined;
-    }
-    const grantDeclarations = secretAccessorGrants(config);
-    const grants = new Map<string, IAM.Member>();
-    for (const grant of grantDeclarations) {
-      const member = yield* IAM.Member(grant.id, grant.props);
-      grants.set(`${grant.props.name}|${grant.workload}`, member);
-    }
+) {
+  if (config.stage === "preview") {
+    return yield* new PreviewServicesUnprotected();
+  }
+  const web = webServiceProps(config, record, now);
+  const serving = record.pendingApply?.target ?? record.active;
+  if (web === undefined || serving === null) {
+    return undefined;
+  }
+  const grantDeclarations = secretAccessorGrants(config);
+  const grants = new Map<string, IAM.Member>();
+  for (const grant of grantDeclarations) {
+    const member = yield* IAM.Member(grant.id, grant.props);
+    grants.set(`${grant.props.name}|${grant.workload}`, member);
+  }
 
-    const webService = yield* Run.Service(
-      "WorkspaceWeb",
-      withSecretGrants(web, "web", grants)
-    );
-    const tasksWorker = yield* Run.Service(
-      "WorkspaceTasksWorker",
-      withSecretGrants(
-        workerServiceProps(config, "tasks-worker", serving.imageDigest),
-        "tasks-worker",
-        grants
-      )
-    );
-    const schedulerWorker = yield* Run.Service(
-      "WorkspaceSchedulerWorker",
-      withSecretGrants(
-        workerServiceProps(config, "scheduler-worker", serving.imageDigest),
-        "scheduler-worker",
-        grants
-      )
-    );
+  const webService = yield* Run.Service(
+    "WorkspaceWeb",
+    withSecretGrants(web, "web", grants)
+  );
+  const tasksWorker = yield* Run.Service(
+    "WorkspaceTasksWorker",
+    withSecretGrants(
+      workerServiceProps(config, "tasks-worker", serving.imageDigest),
+      "tasks-worker",
+      grants
+    )
+  );
+  const schedulerWorker = yield* Run.Service(
+    "WorkspaceSchedulerWorker",
+    withSecretGrants(
+      workerServiceProps(config, "scheduler-worker", serving.imageDigest),
+      "scheduler-worker",
+      grants
+    )
+  );
 
-    // Invoker grants name the declared services, so they follow them.
-    const [tasksInvoker, schedulerInvoker] = workerInvokerGrants(config);
-    for (const [grant, service] of [
-      [tasksInvoker, tasksWorker],
-      [schedulerInvoker, schedulerWorker],
-    ] as const) {
-      if (grant !== undefined) {
-        yield* IAM.Member(grant.id, { ...grant.props, name: service.name });
-      }
+  // Invoker grants name the declared services, so they follow them.
+  const [tasksInvoker, schedulerInvoker] = workerInvokerGrants(config);
+  for (const [grant, service] of [
+    [tasksInvoker, tasksWorker],
+    [schedulerInvoker, schedulerWorker],
+  ] as const) {
+    if (grant !== undefined) {
+      yield* IAM.Member(grant.id, { ...grant.props, name: service.name });
     }
+  }
 
-    return {
-      webService: webService.name,
-      /** The short service ID the edge's serverless NEG names. */
-      webServiceId: webService.serviceId,
-      webLatestReadyRevision: webService.latestReadyRevision,
-      tasksWorkerUri: tasksWorker.uri,
-      schedulerWorkerUri: schedulerWorker.uri,
-    };
-  });
+  return {
+    webService: webService.name,
+    /** The short service ID the edge's serverless NEG names. */
+    webServiceId: webService.serviceId,
+    webLatestReadyRevision: webService.latestReadyRevision,
+    tasksWorkerUri: tasksWorker.uri,
+    schedulerWorkerUri: schedulerWorker.uri,
+  };
+});
 
 /** How the stack was started: the writer token and the generation fence. */
 export interface StackRun {
@@ -220,32 +222,26 @@ export interface StackRun {
  * is refused while a release-owned service is live (`ReleaseRecordLost`).
  * Preview declares none until #1455 and needs no lock.
  */
-export const declareRecordedWorkspaceServices = (
-  config: WorkspaceStackConfig,
-  run: StackRun
-) =>
-  Effect.gen(function* () {
-    const held = yield* requireStackWriter(config, run.writer);
-    if (held === null) {
-      return run.generation === null
-        ? undefined
-        : yield* new PreviewServicesUnprotected();
-    }
-    yield* requireStackMode(held, run.generation);
-    const { record } = held;
-    if (run.generation !== null && record.generation !== run.generation) {
-      return yield* new StaleReleaseGeneration({
-        expectedGeneration: run.generation,
-        currentGeneration: record.generation,
-      });
-    }
-    // Declaring nothing from a lost record would delete the live services.
-    yield* requireRecordCoversLiveService(record);
-    // A plan previews the template decision its deploy would persist.
-    const declared = yield* stackRunRecord(config, record, held.lock.operation);
-    return yield* declareWorkspaceServices(
-      config,
-      declared,
-      yield* DateTime.now
-    );
-  });
+export const declareRecordedWorkspaceServices = Effect.fn(
+  "WorkspaceStack.declareRecordedWorkspaceServices"
+)(function* (config: WorkspaceStackConfig, run: StackRun) {
+  const held = yield* requireStackWriter(config, run.writer);
+  if (held === null) {
+    return run.generation === null
+      ? undefined
+      : yield* new PreviewServicesUnprotected();
+  }
+  yield* requireStackMode(held, run.generation);
+  const { record } = held;
+  if (run.generation !== null && record.generation !== run.generation) {
+    return yield* new StaleReleaseGeneration({
+      expectedGeneration: run.generation,
+      currentGeneration: record.generation,
+    });
+  }
+  // Declaring nothing from a lost record would delete the live services.
+  yield* requireRecordCoversLiveService(record);
+  // A plan previews the template decision its deploy would persist.
+  const declared = yield* stackRunRecord(config, record, held.lock.operation);
+  return yield* declareWorkspaceServices(config, declared, yield* DateTime.now);
+});

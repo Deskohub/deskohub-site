@@ -143,7 +143,7 @@ describe("Workspace PostHog feature flag CLI synchronization", () => {
         const contract = await Bun.file(outputFile).text();
 
         expect(result).toEqual({ flagCount: 1, status: "updated" });
-        expect(contract).toContain('  "accounts",');
+        expect(contract).toContain('  "accounts": {');
         expect(await Bun.file(snapshotFileFor(outputFile)).text()).toContain(
           '"accounts": null'
         );
@@ -193,8 +193,8 @@ describe("Workspace PostHog feature flag CLI synchronization", () => {
       );
 
       const contract = await Bun.file(outputFile).text();
-      expect(contract).toContain('  "accounts",');
-      expect(contract).toContain('  "calendar_sales",');
+      expect(contract).toContain('  "accounts": {');
+      expect(contract).toContain('  "calendar_sales": {');
       expect(reader.calls).toEqual([
         { operation: "project-get", input: { id: projectId } },
         {
@@ -244,7 +244,7 @@ describe("Workspace PostHog feature flag CLI synchronization", () => {
       );
 
       const contract = await Bun.file(outputFile).text();
-      expect(contract).toContain('  "calendar_sales",');
+      expect(contract).toContain('  "calendar_sales": {');
       expect(contract).not.toContain('"accounts"');
     });
   });

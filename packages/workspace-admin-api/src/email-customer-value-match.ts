@@ -1,4 +1,4 @@
-import { Array as Arr, type Schema } from "effect";
+import { Array as Arr, Predicate, type Schema } from "effect";
 import type { EmailCustomerField } from "./email-customer-selection";
 
 type JsonValue = NonNullable<Schema.Json>;
@@ -33,16 +33,27 @@ const matchesScalar = (
   value: JsonValue,
   field: Extract<EmailCustomerField, { readonly kind: "scalar" }>
 ) =>
-  typeof value === field.type &&
+  scalarTypeMatchers[field.type](value) &&
   (field.choices === undefined ||
     field.choices.some((choice) => choice === value));
+
+const scalarTypeMatchers: Readonly<
+  Record<
+    Extract<EmailCustomerField, { readonly kind: "scalar" }>["type"],
+    (value: JsonValue) => boolean
+  >
+> = {
+  string: Predicate.isString,
+  number: Predicate.isNumber,
+  boolean: Predicate.isBoolean,
+};
 
 /** A record holds only declared fields, each matching its descriptor when present. */
 const matchesRecord = (
   value: JsonValue,
   field: Extract<EmailCustomerField, { readonly kind: "record" }>
 ) =>
-  typeof value === "object" &&
+  Predicate.isObjectKeyword(value) &&
   !Arr.isArray<Schema.Json>(value) &&
   Object.keys(value).every((key) => Object.hasOwn(field.fields, key)) &&
   Object.entries(field.fields).every(([key, descriptor]) =>

@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Result, Schema } from "effect";
 import { administrationInputParseOptions } from "./administration-input-parse-options";
+import { CampaignEmailSource } from "./audience-attribute-kinds";
+import { AudienceCondition, AudienceFilter } from "./audience-filter";
 import {
+  AutomationConditionFilter,
   AutomationDetail,
   AutomationDryRun,
   AutomationDryRunRow,
@@ -18,6 +21,7 @@ import {
   automationRunEventDetails,
   automationRunSkipReasons,
   automationSendDeferralCauses,
+  InSavedAudience,
   scheduleMinutesOffTick,
 } from "./email-automations";
 
@@ -173,7 +177,7 @@ describe("Send delivery rules", () => {
 });
 
 describe("automation operation inputs", () => {
-  const decodeStrict = (schema: Schema.Decoder<unknown>, input: unknown) =>
+  const decodeStrict = (schema: Schema.Decoder<unknown>, input: Schema.Json) =>
     Schema.decodeUnknownResult(schema, administrationInputParseOptions)(input);
 
   test("reject unknown keys", () => {
@@ -492,7 +496,7 @@ describe("automation responses", () => {
       at: "2026-10-19T10:00:00.000Z",
     };
 
-    expect(
+    expect<unknown>(
       Result.getOrThrow(
         decodeEntry({
           ...entry,
@@ -504,15 +508,15 @@ describe("automation responses", () => {
       ...entry,
       kind: "waiting",
       detail: { dueAt: "2026-10-19T12:00:00.000Z" },
-    } as never);
-    expect(
+    });
+    expect<unknown>(
       Result.getOrThrow(
         decodeEntry({ ...entry, kind: "rescheduled", detail: { by: 1 } })
       )
-    ).toEqual({ ...entry, kind: "rescheduled", detail: { by: 1 } } as never);
-    expect(
+    ).toEqual({ ...entry, kind: "rescheduled", detail: { by: 1 } });
+    expect<unknown>(
       Result.getOrThrow(decodeEntry({ ...entry, kind: "waiting", detail: {} }))
-    ).toEqual({ ...entry, kind: "waiting", detail: {} } as never);
+    ).toEqual({ ...entry, kind: "waiting", detail: {} });
   });
 });
 
@@ -585,5 +589,34 @@ describe("scheduleMinutesOffTick", () => {
     [{ minutes: [45, 7, 0, 1] }, [1, 7]],
   ] as const)("%j fires off the engine's ticks at %j", (calendar, minutes) => {
     expect(scheduleMinutesOffTick(calendar)).toEqual(minutes);
+  });
+});
+
+describe("audience codecs", () => {
+  test("keep their decoded shape on the wire side", () => {
+    // Callers type these codecs by their decoded shape alone.
+    const condition: Schema.Codec<AudienceCondition> = AudienceCondition;
+    const filter: Schema.Codec<AudienceFilter> = AudienceFilter;
+    const automationFilter: Schema.Codec<AutomationConditionFilter> =
+      AutomationConditionFilter;
+    expect([condition, filter, automationFilter].every(Schema.isSchema)).toBe(
+      true
+    );
+  });
+});
+
+describe("audience leaves", () => {
+  test("take plain-string ids on their encoded side", () => {
+    const specific: typeof CampaignEmailSource.Encoded = {
+      _tag: "Specific",
+      campaignId: "campaign-1",
+    };
+    const inAudience: typeof InSavedAudience.Encoded = {
+      _tag: "InAudience",
+      operator: "in",
+      audienceId: "audience-1",
+    };
+    expect(Schema.is(CampaignEmailSource)(specific)).toBe(true);
+    expect(Schema.is(InSavedAudience)(inAudience)).toBe(true);
   });
 });

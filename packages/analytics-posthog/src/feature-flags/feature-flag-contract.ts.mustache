@@ -1,13 +1,17 @@
 import { definePostHogFeatureFlags } from "@deskohub/analytics-posthog/feature-flags";
+import { Schema } from "effect";
 
 /** Generated from PostHog feature flag definitions. Do not edit manually. */
 export const postHogFeatureFlags = definePostHogFeatureFlags<
   PostHogFeatureFlagDefinitions
->([
+>({
 {{#featureFlags}}
-  {{{keyLiteral}}},
+  {{{keyProperty}}}: {
+    payload: {{{payloadSchema}}},
+    value: {{{valueSchema}}},
+  },
 {{/featureFlags}}
-] as const);
+});
 
 export type PostHogFeatureFlagKey =
   (typeof postHogFeatureFlags.keys)[number];

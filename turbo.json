@@ -154,6 +154,11 @@
     },
     "lint": {
       "dependsOn": ["^lint"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/biome.json",
+        "$TURBO_ROOT$/lint/*.grit"
+      ],
       "outputs": []
     },
     "test": {

@@ -99,13 +99,39 @@ type DotyposRequestProfiles = typeof dotyposRequestProfiles;
 
 /** The failures one request can surface: reads are never uncertain, and only conditional writes conflict. */
 export type DotyposRequestFailure<Request extends DotyposRequest> =
-  DotyposRequestProfiles[Request] extends { readonly effect: "read" }
+  DotyposRequestFailures[Request];
+
+/** Keyed per request so a union of requests unions their failures. */
+type DotyposRequestFailures = {
+  readonly [Request in DotyposRequest]: DotyposRequestProfiles[Request] extends {
+    readonly effect: "read";
+  }
     ? DotyposReadFailure
     : DotyposRequestProfiles[Request] extends {
           readonly repeat: "conditional";
         }
       ? DotyposConditionalWriteFailure
       : DotyposWriteFailure;
+};
+
+/** Only a replayed write can turn a later failure uncertain. */
+export type DotyposReplayUncertainty<Request extends DotyposRequest> =
+  DotyposReplayUncertainties[Request];
+
+/** Keyed per request so a union of requests unions their replay uncertainty. */
+type DotyposReplayUncertainties = {
+  readonly [Request in DotyposRequest]: DotyposRequestProfiles[Request] extends {
+    readonly retry: "replay";
+  }
+    ? DotyposUncertain
+    : never;
+};
+
+const surfacesReplayUncertainty = <Request extends DotyposRequest>(
+  request: Request,
+  failure: DotyposUncertain
+): failure is DotyposUncertain & DotyposReplayUncertainty<Request> =>
+  dotyposRequestProfiles[request].retry === "replay";
 
 /** One attempt's outcome, before stickiness and `Option` conversion. */
 export type DotyposAttemptFailure = DotyposConditionalWriteFailure;
@@ -177,10 +203,10 @@ export const getDotyposRequestWorstCase = (apiTimeout: Duration.Input) => {
  * uses each attempt's own outcome, so stickiness never adds a retry.
  */
 export const retryDotyposRequest =
-  (request: DotyposRequest) =>
+  <Request extends DotyposRequest>(request: Request) =>
   <A, E extends DotyposAttemptFailure, R>(
     effect: Effect.Effect<A, E, R>
-  ): Effect.Effect<A, E, R> => {
+  ): Effect.Effect<A, E | DotyposReplayUncertainty<Request>, R> => {
     const ceiling = dotyposRequestProfiles[request].retry;
     if (ceiling === "none") return effect;
     const retry = dotyposRetryPolicy.retryWhile(retryCeilings[ceiling]);
@@ -195,10 +221,15 @@ export const retryDotyposRequest =
           retry,
           Effect.catch((outcome) =>
             Ref.get(firstUncertain).pipe(
-              Effect.flatMap((uncertain) =>
-                // Replay rows are writes, whose failure union includes DotyposUncertain.
-                Effect.fail(keepUncertainty(outcome, uncertain) as E)
-              )
+              Effect.flatMap((uncertain) => {
+                const kept = keepUncertainty(outcome, uncertain);
+                return Effect.fail(
+                  kept._tag === "DotyposUncertain" &&
+                    surfacesReplayUncertainty(request, kept)
+                    ? kept
+                    : outcome
+                );
+              })
             )
           )
         )

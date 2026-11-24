@@ -6,10 +6,26 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { Effect, Fiber, Layer, Logger, References } from "effect";
+import type {
+  AdminAndResourceOptions,
+  SignApiOptions,
+  UploadApiOptions,
+  UrlOptions,
+} from "cloudinary";
+import {
+  type Context,
+  Effect,
+  Fiber,
+  Layer,
+  Logger,
+  Predicate,
+  References,
+} from "effect";
 import { FetchHttpClient } from "effect/http";
 import * as Schema from "effect/Schema";
 import { TestClock } from "effect/testing";
+import type { ProviderRejection } from "./provider-rejection";
+import type { CloudinaryAsset } from "./schema";
 
 mock.module("server-only", () => ({}));
 
@@ -23,30 +39,39 @@ type SearchCall = {
 
 type ResourceCall = {
   publicId: string;
-  options: Record<string, unknown>;
+  options: AdminAndResourceOptions;
 };
+
+type DestroyOptions = { readonly invalidate?: boolean };
+type RenameOptions = { readonly overwrite?: boolean };
+type LogAnnotations = Context.Service.Shape<
+  typeof References.CurrentLogAnnotations
+>;
+
+/** A queued upload reply: the asset to resolve, or a provider rejection. */
+type UploadReply = CloudinaryAsset | { readonly throw: ProviderRejection };
 
 const searchCalls: SearchCall[] = [];
 const resourceCalls: ResourceCall[] = [];
 const prefixDeleteCalls: {
   prefix: string;
-  options: Record<string, unknown>;
+  options: AdminAndResourceOptions;
 }[] = [];
 const uploadCalls: {
-  options: Record<string, unknown>;
+  options: UploadApiOptions;
   byteLength: number;
 }[] = [];
 const destroyCalls: string[] = [];
-const destroyOptions: Record<string, unknown>[] = [];
+const destroyOptions: DestroyOptions[] = [];
 const renameCalls: {
   fromPublicId: string;
   toPublicId: string;
-  options: Record<string, unknown>;
+  options: RenameOptions;
 }[] = [];
 let queuedResults: unknown[] = [];
 let queuedResourceResults: unknown[] = [];
 let queuedPrefixDeleteResults: unknown[] = [];
-let queuedUploadResults: unknown[] = [];
+let queuedUploadResults: UploadReply[] = [];
 let queuedDestroyResults: unknown[] = [];
 let queuedRenameResults: unknown[] = [];
 let executeAttempts = 0;
@@ -57,7 +82,7 @@ let renameAttempts = 0;
 
 /** Stand-in for the SDK signature segment; never a real signature. */
 const fakeListSignature = "s--fake-signature--";
-const urlCalls: { source: string; options: Record<string, unknown> }[] = [];
+const urlCalls: { source: string; options: UrlOptions }[] = [];
 
 type TagListReply = Response | "hang";
 const tagListRequests: string[] = [];
@@ -66,29 +91,32 @@ let tagListReplies: Record<string, TagListReply[]> = {};
 const tagFromListUrl = (url: string) =>
   decodeURIComponent(url.slice(url.lastIndexOf("/") + 1, -".json".length));
 
-const fakeFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-  const url = input instanceof Request ? input.url : String(input);
-  const tag = tagFromListUrl(url);
-  tagListRequests.push(tag);
-  const reply = tagListReplies[tag]?.shift();
+const fakeFetch: typeof globalThis.fetch = Object.assign(
+  (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const tag = tagFromListUrl(url);
+    tagListRequests.push(tag);
+    const reply = tagListReplies[tag]?.shift();
 
-  if (reply === "hang") {
-    return new Promise<Response>((_, reject) => {
-      init?.signal?.addEventListener("abort", () =>
-        reject(init.signal?.reason)
-      );
-    });
-  }
+    if (reply === "hang") {
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(init.signal?.reason)
+        );
+      });
+    }
 
-  return Promise.resolve(reply ?? new Response("Not Found", { status: 404 }));
-}) as unknown as typeof globalThis.fetch;
+    return Promise.resolve(reply ?? new Response("Not Found", { status: 404 }));
+  },
+  { preconnect: globalThis.fetch.preconnect }
+);
 
 const fakeHttpClientLayer = FetchHttpClient.layer.pipe(
   Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fakeFetch))
 );
 
 const signCalls: {
-  params: Record<string, unknown>;
+  params: SignApiOptions;
   apiSecret: string;
 }[] = [];
 
@@ -96,17 +124,15 @@ const cloudinary = {
   config: mock(() => undefined),
   utils: {
     api_url: mock(
-      (action: string, options: Record<string, unknown>) =>
+      (action: string, options: UrlOptions) =>
         `https://api.cloudinary.test/v1_1/${String(options.cloud_name)}/${String(options.resource_type)}/${action}`
     ),
-    api_sign_request: mock(
-      (params: Record<string, unknown>, apiSecret: string) => {
-        signCalls.push({ params: { ...params }, apiSecret });
-        return "fake-upload-signature";
-      }
-    ),
+    api_sign_request: mock((params: SignApiOptions, apiSecret: string) => {
+      signCalls.push({ params: { ...params }, apiSecret });
+      return "fake-upload-signature";
+    }),
   },
-  url: mock((source: string, options: Record<string, unknown>) => {
+  url: mock((source: string, options: UrlOptions) => {
     urlCalls.push({ source, options: { ...options } });
 
     if (options.type === "list") {
@@ -121,23 +147,23 @@ const cloudinary = {
   }),
   api: {
     resource: mock(
-      async (publicId: string, options: Record<string, unknown>) => {
+      async (publicId: string, options: AdminAndResourceOptions) => {
         resourceCalls.push({ publicId, options });
         resourceAttempts += 1;
         const next = queuedResourceResults.shift();
         if (next instanceof Error) throw next;
-        if (next && typeof next === "object" && "throw" in next) {
+        if (Predicate.hasProperty(next, "throw")) {
           throw next.throw;
         }
         return next;
       }
     ),
     delete_resources_by_prefix: mock(
-      async (prefix: string, options: Record<string, unknown>) => {
+      async (prefix: string, options: AdminAndResourceOptions) => {
         prefixDeleteCalls.push({ prefix, options });
         const next = queuedPrefixDeleteResults.shift();
         if (next instanceof Error) throw next;
-        if (next && typeof next === "object" && "throw" in next) {
+        if (Predicate.hasProperty(next, "throw")) {
           throw next.throw;
         }
         return next;
@@ -147,47 +173,44 @@ const cloudinary = {
   uploader: {
     upload_stream: mock(
       (
-        options: Record<string, unknown>,
-        callback: (error: unknown, result: unknown) => void
+        options: UploadApiOptions,
+        callback: (
+          error: ProviderRejection | undefined,
+          result: CloudinaryAsset | undefined
+        ) => void
       ) => ({
         end: (bytes: Uint8Array) => {
           uploadCalls.push({ options, byteLength: bytes.byteLength });
           uploadAttempts += 1;
           const next = queuedUploadResults.shift();
-          const thrown =
-            next && typeof next === "object" && "throw" in next
-              ? (next as { throw: unknown }).throw
-              : undefined;
-          const result =
-            next != null && !(typeof next === "object" && "throw" in next)
-              ? next
-              : undefined;
-          callback(thrown, result);
+          if (next !== undefined && "throw" in next) {
+            callback(next.throw, undefined);
+            return;
+          }
+          callback(undefined, next);
         },
       })
     ),
-    destroy: mock(
-      async (publicId: string, options: Record<string, unknown>) => {
-        destroyCalls.push(publicId);
-        destroyOptions.push(options);
-        destroyAttempts += 1;
-        const next = queuedDestroyResults.shift();
-        if (next && typeof next === "object" && "throw" in next) {
-          throw next.throw;
-        }
-        return next;
+    destroy: mock(async (publicId: string, options: DestroyOptions) => {
+      destroyCalls.push(publicId);
+      destroyOptions.push(options);
+      destroyAttempts += 1;
+      const next = queuedDestroyResults.shift();
+      if (Predicate.hasProperty(next, "throw")) {
+        throw next.throw;
       }
-    ),
+      return next;
+    }),
     rename: mock(
       async (
         fromPublicId: string,
         toPublicId: string,
-        options: Record<string, unknown>
+        options: RenameOptions
       ) => {
         renameCalls.push({ fromPublicId, toPublicId, options });
         renameAttempts += 1;
         const next = queuedRenameResults.shift();
-        if (next && typeof next === "object" && "throw" in next) {
+        if (Predicate.hasProperty(next, "throw")) {
           throw next.throw;
         }
         return next;
@@ -220,7 +243,7 @@ const cloudinary = {
           executeAttempts += 1;
           const next = queuedResults.shift();
           if (next instanceof Error) throw next;
-          if (next && typeof next === "object" && "throw" in next) {
+          if (Predicate.hasProperty(next, "throw")) {
             throw next.throw;
           }
           return next;
@@ -440,7 +463,7 @@ describe("CloudinaryService", () => {
       service.searchAll({ maxResults: 8 })
     );
 
-    expect(result).toEqual([...firstPage, secondPage[0]!]);
+    expect(result).toEqual([...firstPage, ...secondPage.slice(0, 1)]);
     expect(
       searchCalls.map(({ maxResults, nextCursor }) => ({
         maxResults,
@@ -471,7 +494,7 @@ describe("CloudinaryService", () => {
   test("fails invalid options as CloudinarySearchError", async () => {
     const service = await makeService();
     const result = await Effect.runPromise(
-      service.searchAll({ maxResults: 0 } as never).pipe(Effect.result)
+      service.searchAll({ maxResults: 0 }).pipe(Effect.result)
     );
 
     expect(result._tag).toBe("Failure");
@@ -803,7 +826,7 @@ describe("CloudinaryService destroys", () => {
 
 describe("CloudinaryService prefix delete page decoding", () => {
   const accountPrefix = () => cloudinaryPublicId("avatars/staging/account/");
-  const deleteByPrefix = async (page: unknown) => {
+  const deleteByPrefix = async (page: Schema.Json) => {
     queuedPrefixDeleteResults = [page];
     const service = await makeService();
     return Effect.runPromise(
@@ -862,7 +885,7 @@ describe("CloudinaryService prefix delete page decoding", () => {
 });
 
 describe("CloudinaryService rename failure classification", () => {
-  const renameRejectedWith = async (rejection: unknown) => {
+  const renameRejectedWith = async (rejection: Schema.Json) => {
     queuedRenameResults = [{ throw: rejection }];
     const service = await makeService();
     return Effect.runPromise(
@@ -1012,7 +1035,7 @@ describe("CloudinaryService avatar-path logging", () => {
   ) => {
     const captured: {
       message: unknown;
-      annotations: Record<string, unknown>;
+      annotations: LogAnnotations;
     }[] = [];
     const captureLogger = Logger.make((options) => {
       captured.push({
@@ -1176,9 +1199,7 @@ describe("CloudinaryService avatar-path logging", () => {
       )
     );
     const failureFields = Array.isArray(failure?.message)
-      ? failure.message.find(
-          (part) => typeof part === "object" && part !== null
-        )
+      ? failure.message.find((part) => Predicate.isObject(part))
       : undefined;
 
     expect(failureFields).toMatchObject({ outcome: "failed", httpCode: 403 });
@@ -1202,14 +1223,11 @@ describe("CloudinaryService avatar-path logging", () => {
         ).includes("Cloudinary asset prefix delete failed")
       );
       const malformedFields = Array.isArray(malformedFailure?.message)
-        ? malformedFailure.message.find(
-            (part) => typeof part === "object" && part !== null
-          )
+        ? malformedFailure.message.find((part) => Predicate.isObject(part))
         : undefined;
 
       expect(
-        typeof malformedFields === "object" &&
-          malformedFields !== null &&
+        Predicate.isObject(malformedFields) &&
           Object.hasOwn(malformedFields, "httpCode")
       ).toBe(false);
     }
@@ -1224,7 +1242,7 @@ describe("CloudinaryService avatar-path logging", () => {
       })
     );
 
-    expect(searchCalls[0]!.expression).toBe(
+    expect(searchCalls[0]?.expression).toBe(
       "folder=avatars/test-staging/acct-abc-1 AND resource_type:image"
     );
     const serialized = JSON.stringify(captured);
@@ -1293,7 +1311,7 @@ describe("CloudinaryService avatar-path logging", () => {
       const stringified = `${String(failure)} ${JSON.stringify(
         failure,
         (key, value) =>
-          key === "toJSON" && typeof value === "function" ? undefined : value
+          key === "toJSON" && Predicate.isFunction(value) ? undefined : value
       )}`;
       expect(stringified).not.toContain("cloudinary-account-id-sentinel");
       expect(stringified).not.toContain("synthetic-cloudinary-secret-sentinel");
@@ -1389,7 +1407,7 @@ describe("CloudinaryService tag lists", () => {
   const listEntry = (
     publicId: string,
     createdAt: string,
-    extra: Record<string, unknown> = {}
+    extra: Schema.JsonObject = {}
   ) => ({
     public_id: publicId,
     version: 1710000000,
@@ -1400,7 +1418,7 @@ describe("CloudinaryService tag lists", () => {
     created_at: createdAt,
     ...extra,
   });
-  const tagList = (...resources: readonly Record<string, unknown>[]) =>
+  const tagList = (...resources: readonly Schema.JsonObject[]) =>
     Response.json({ resources, updated_at: "2026-09-01T00:00:00Z" });
   const listedIds = (assets: readonly { public_id: string }[]) =>
     assets.map(({ public_id }) => public_id);

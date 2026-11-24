@@ -2,16 +2,21 @@ import { describe, expect, mock, test } from "bun:test";
 import { parsePhoneNumber } from "@deskohub/phone-number";
 import { EMAIL_TEST_DOMAIN, testEmailAddress } from "@deskohub/test-email";
 import {
+  Array as Arr,
   Duration,
   Effect,
+  Exit,
   Fiber,
+  flow,
   Layer,
   Logger,
   Option,
   Predicate,
   Random,
   References,
+  Result,
   Schema,
+  Struct,
 } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
@@ -20,12 +25,11 @@ import {
   DotyposRuntimeConfigSchema,
   makeDotyposRuntimeConfigLayer,
 } from "../config";
-import type { DotyposConditionalWriteFailure } from "../errors";
+import type { DotyposConditionalWriteFailure, DotyposFailure } from "../errors";
 import {
   type Category,
   Customer,
   CustomerWriteRecord,
-  type DotyposClient,
   ReplaceCustomersRequestJson,
   ReplaceReservationsRequestJson,
   Reservation,
@@ -100,7 +104,7 @@ const dotyposReservationId = Schema.decodeUnknownSync(
 );
 const dotyposTableId = Schema.decodeUnknownSync(DotyposTableIdSchema);
 
-const omitUndefinedProperties = (value: Record<string, unknown>) =>
+const omitUndefinedProperties = <Value extends object>(value: Value) =>
   Object.fromEntries(
     Object.entries(value).filter(([, property]) => property !== undefined)
   );
@@ -154,30 +158,51 @@ const category = (overrides: Partial<Category> = {}) =>
 
 type FetchCall = [RequestInfo | URL, RequestInit?];
 
+type LogAnnotations = ReturnType<
+  typeof References.CurrentLogAnnotations.defaultValue
+>;
+
 type CapturedLog = {
   readonly message: unknown;
-  readonly annotations: Readonly<Record<string, unknown>>;
+  readonly annotations: LogAnnotations;
 };
 
 const captureLogs = (logs: CapturedLog[]) =>
   Logger.make((options) => {
     logs.push({
       message: options.message,
-      annotations: options.fiber.getRef(
-        References.CurrentLogAnnotations
-      ) as Readonly<Record<string, unknown>>,
+      annotations: options.fiber.getRef(References.CurrentLogAnnotations),
     });
   });
 
-const logText = (value: unknown) => JSON.stringify(value);
+const logText = (logged: LogAnnotations | readonly CapturedLog[]) =>
+  JSON.stringify(logged);
 
-const messageParts = (message: unknown): readonly unknown[] =>
+const messageParts = (
+  message: CapturedLog["message"]
+): readonly CapturedLog["message"][] =>
   Array.isArray(message) ? message : [message];
 
 const getRequest = ([input, init]: FetchCall) =>
   input instanceof Request ? input : new Request(input, init);
 
 const getUrl = (call: FetchCall) => getRequest(call).url;
+
+/** The read for this attempt; the last read repeats once the list runs out. */
+const readAt = <Read>(reads: readonly Read[], attempt: number): Read => {
+  const read = reads[Math.min(attempt, reads.length - 1)];
+  if (read === undefined) throw new Error("A settlement row needs a read");
+  return read;
+};
+
+const findCall = (
+  calls: readonly FetchCall[],
+  matches: (call: FetchCall) => boolean
+): FetchCall => {
+  const call = calls.find(matches);
+  if (call === undefined) throw new Error("No matching Dotypos request");
+  return call;
+};
 
 const getMethod = (call: FetchCall) => getRequest(call).method;
 
@@ -193,7 +218,7 @@ const mockDotyposFetch = (
   const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) =>
     handler(getRequest([input, init]))
   );
-  return fetchMock as unknown as typeof globalThis.fetch & typeof fetchMock;
+  return Object.assign(fetchMock, { preconnect: globalThis.fetch.preconnect });
 };
 
 const tokenResponse = () => Response.json({ accessToken: "access-token" });
@@ -246,38 +271,25 @@ const runWithServiceRetryingInstantly = <A, E>(
     }).pipe(Effect.provide(TestClock.layer()))
   );
 
-const runWithServiceClient = <A, E>(
-  effect: Effect.Effect<A, E, DotyposService>,
-  client: DotyposClient
-) => {
-  const serviceLayer = DotyposService.Default.pipe(
-    Layer.provide(
-      Layer.merge(
-        Layer.succeed(DotyposGeneratedClient, { client }),
-        makeDotyposRuntimeConfigLayer(config)
-      )
-    )
-  );
-
-  return Effect.runPromise(effect.pipe(Effect.provide(serviceLayer)));
-};
-
-const makePaginatedClient = (
+/** Answers list pages over the wire so provider values pass generated decoding first. */
+const mockPaginatedFetch = (
   loadPage: (
     operation: "getTables" | "listReservations",
     page: number
   ) => unknown
-): DotyposClient =>
-  // Bypass generated decoding to exercise this runtime boundary with invalid provider values.
-  ({
-    getTables: (_cloudId: string, options?: { params?: { page?: number } }) =>
-      Effect.succeed(loadPage("getTables", options?.params?.page ?? 1)),
-    listReservations: (
-      _cloudId: string,
-      options?: { params?: { page?: number } }
-    ) =>
-      Effect.succeed(loadPage("listReservations", options?.params?.page ?? 1)),
-  }) as unknown as DotyposClient;
+) =>
+  mockDotyposFetch((request) => {
+    const url = new URL(request.url);
+    if (url.pathname === "/signin/token") return tokenResponse();
+    return Response.json(
+      loadPage(
+        url.pathname === "/clouds/cloud-id/tables"
+          ? "getTables"
+          : "listReservations",
+        Number(url.searchParams.get("page") ?? "1")
+      )
+    );
+  });
 
 describe("DotyposService customer lookup", () => {
   test("retries rate-limited customer reads", async () => {
@@ -403,7 +415,7 @@ describe("DotyposService customer lookup", () => {
     expect(result).toEqual([ada, company]);
     expect(
       fetchMock.mock.calls
-        .map((call) => new URL(getUrl(call as FetchCall)))
+        .map((call) => new URL(getUrl(call)))
         .filter(({ pathname }) => pathname.endsWith("/customers"))
         .map((url) => url.searchParams.get("filter"))
         .toSorted()
@@ -443,7 +455,7 @@ describe("DotyposService customer lookup", () => {
     expect(result).toEqual([firstPageCustomer, secondPageCustomer]);
     expect(
       fetchMock.mock.calls
-        .map((call) => new URL(getUrl(call as FetchCall)))
+        .map((call) => new URL(getUrl(call)))
         .filter(
           (url) =>
             url.pathname.endsWith("/customers") &&
@@ -496,13 +508,13 @@ describe("DotyposService customer lookup", () => {
 
     expect(
       fetchMock.mock.calls.filter((call) =>
-        getUrl(call as FetchCall).endsWith("/signin/token")
+        getUrl(call).endsWith("/signin/token")
       )
     ).toHaveLength(1);
 
-    const searchCall = fetchMock.mock.calls.find((call) =>
-      getUrl(call as FetchCall).includes("/customers")
-    ) as FetchCall;
+    const searchCall = findCall(fetchMock.mock.calls, (call) =>
+      getUrl(call).includes("/customers")
+    );
     expect(new URL(getUrl(searchCall)).searchParams.get("filter")).toBe(
       `email|like|${adaAddress};deleted|in|0,1`
     );
@@ -577,7 +589,7 @@ describe("DotyposService customer lookup", () => {
 
     expect([...result.values()]).toEqual([first, second]);
     const customerCalls = fetchMock.mock.calls
-      .map((call) => new URL(getUrl(call as FetchCall)))
+      .map((call) => new URL(getUrl(call)))
       .filter(({ pathname }) => pathname === "/clouds/cloud-id/customers");
     expect(customerCalls).toHaveLength(1);
     expect(customerCalls[0]?.searchParams.get("filter")).toBe(
@@ -1079,8 +1091,8 @@ describe("DotyposService customer lookup", () => {
       fetchMock
     );
 
-    expect(Predicate.isTagged(result, "Failure")).toBe(true);
-    if (!Predicate.isTagged(result, "Failure")) return;
+    expect(Result.isFailure(result)).toBe(true);
+    if (!Result.isFailure(result)) return;
     expect(Predicate.isTagged(result.failure, "DotyposRejected")).toBe(true);
     if (!Predicate.isTagged(result.failure, "DotyposRejected")) return;
 
@@ -1099,8 +1111,7 @@ describe("DotyposService customer lookup", () => {
     if (!failureLog) return;
 
     const payload = messageParts(failureLog.message).find(
-      (part): part is Record<string, unknown> =>
-        typeof part === "object" && part !== null
+      Predicate.isObjectKeyword
     );
     expect(payload).toMatchObject({
       errorTag: "DotyposRejected",
@@ -1177,11 +1188,11 @@ describe("DotyposService customer lookup", () => {
 
     expect(result).toEqual(created);
 
-    const createCall = fetchMock.mock.calls.find(
+    const createCall = findCall(
+      fetchMock.mock.calls,
       (call) =>
-        getMethod(call as FetchCall) === "POST" &&
-        getUrl(call as FetchCall).includes("/customers")
-    ) as FetchCall;
+        getMethod(call) === "POST" && getUrl(call).includes("/customers")
+    );
     expect(await readJsonBody(createCall)).toEqual([
       {
         _cloudId: config.cloudId,
@@ -1270,20 +1281,21 @@ describe("DotyposService customer lookup", () => {
     );
 
     expect(result).toEqual({ newCustomer: created, savedCustomer: updated });
-    const createCall = fetchMock.mock.calls.find(
+    const createCall = findCall(
+      fetchMock.mock.calls,
       (call) =>
-        getMethod(call as FetchCall) === "POST" &&
-        getUrl(call as FetchCall).endsWith("/customers")
-    ) as FetchCall;
+        getMethod(call) === "POST" && getUrl(call).endsWith("/customers")
+    );
     expect((await readJsonBody(createCall))[0]).toMatchObject({
       email: billingAddress,
       phone: "",
       addressLine1: "42 Engine Street",
       companyName: "Analytical Engines",
     });
-    const updateCall = fetchMock.mock.calls.find(
-      (call) => getMethod(call as FetchCall) === "PATCH"
-    ) as FetchCall;
+    const updateCall = findCall(
+      fetchMock.mock.calls,
+      (call) => getMethod(call) === "PATCH"
+    );
     const updateBody = await readJsonBody(updateCall);
     expect(updateBody).toMatchObject({
       email: billingAddress,
@@ -1346,9 +1358,10 @@ describe("DotyposService customer lookup", () => {
         fetchMock
       );
 
-      const updateCall = fetchMock.mock.calls.find(
-        (call) => getMethod(call as FetchCall) === "PATCH"
-      ) as FetchCall;
+      const updateCall = findCall(
+        fetchMock.mock.calls,
+        (call) => getMethod(call) === "PATCH"
+      );
       const updateBody = await readJsonBody(updateCall);
       if (expectedPhone === undefined) {
         expect(updateBody).not.toHaveProperty("phone");
@@ -1602,9 +1615,9 @@ describe("DotyposService customer lookup", () => {
         customer: matched,
         matches: [matched],
       });
-      const searchCall = fetchMock.mock.calls.find((call) =>
-        getUrl(call as FetchCall).includes("/customers")
-      ) as FetchCall;
+      const searchCall = findCall(fetchMock.mock.calls, (call) =>
+        getUrl(call).includes("/customers")
+      );
       expect(new URL(getUrl(searchCall)).searchParams.get("filter")).toBe(
         `email|like|${input.trim()};deleted|in|0,1`
       );
@@ -1676,8 +1689,7 @@ describe("DotyposService customer lookup", () => {
     expect(
       fetchMock.mock.calls.some(
         (call) =>
-          getMethod(call as FetchCall) !== "GET" &&
-          getUrl(call as FetchCall).includes("/customers")
+          getMethod(call) !== "GET" && getUrl(call).includes("/customers")
       )
     ).toBe(false);
   });
@@ -1687,9 +1699,11 @@ describe("DotyposService customer changes", () => {
   const changedSince = DotyposTimestampSchema.make(BigInt("1759320000123456"));
   const createdFrom = DotyposTimestampSchema.make(BigInt("1759310000000001"));
 
-  const customerListRequests = (fetchMock: { mock: { calls: unknown[][] } }) =>
+  const customerListRequests = (fetchMock: {
+    mock: { calls: readonly FetchCall[] };
+  }) =>
     fetchMock.mock.calls
-      .map((call) => new URL(getUrl(call as FetchCall)))
+      .map((call) => new URL(getUrl(call)))
       .filter((url) => url.pathname === "/clouds/cloud-id/customers");
 
   test.each([
@@ -1900,9 +1914,11 @@ describe("DotyposService customer changes", () => {
 });
 
 describe("DotyposService customer page", () => {
-  const customerListRequests = (fetchMock: { mock: { calls: unknown[][] } }) =>
+  const customerListRequests = (fetchMock: {
+    mock: { calls: readonly FetchCall[] };
+  }) =>
     fetchMock.mock.calls
-      .map((call) => new URL(getUrl(call as FetchCall)))
+      .map((call) => new URL(getUrl(call)))
       .filter((url) => url.pathname === "/clouds/cloud-id/customers");
 
   test("reads an access-token 404 as an empty page", async () => {
@@ -2140,10 +2156,10 @@ describe("DotyposService customer page", () => {
 
 describe("DotyposService reservation page", () => {
   const reservationListRequests = (fetchMock: {
-    mock: { calls: unknown[][] };
+    mock: { calls: readonly FetchCall[] };
   }) =>
     fetchMock.mock.calls
-      .map((call) => new URL(getUrl(call as FetchCall)))
+      .map((call) => new URL(getUrl(call)))
       .filter((url) => url.pathname === "/clouds/cloud-id/reservations");
 
   test.each([
@@ -2383,10 +2399,10 @@ describe("DotyposService active reservation page", () => {
     endDate: new Date("2026-08-04T14:00:00Z"),
   };
   const reservationListRequests = (fetchMock: {
-    mock: { calls: unknown[][] };
+    mock: { calls: readonly FetchCall[] };
   }) =>
     fetchMock.mock.calls
-      .map((call) => new URL(getUrl(call as FetchCall)))
+      .map((call) => new URL(getUrl(call)))
       .filter((url) => url.pathname === "/clouds/cloud-id/reservations");
 
   test.each([
@@ -2714,11 +2730,11 @@ describe("DotyposService reservations", () => {
     expect(result.id).toBe(dotyposReservationId("reservation-id"));
     expect(reservationAttempts).toBe(2);
 
-    const createCall = fetchMock.mock.calls.find(
+    const createCall = findCall(
+      fetchMock.mock.calls,
       (call) =>
-        getMethod(call as FetchCall) === "POST" &&
-        getUrl(call as FetchCall).includes("/reservations")
-    ) as FetchCall;
+        getMethod(call) === "POST" && getUrl(call).includes("/reservations")
+    );
     expect(await readJsonBody(createCall)).toEqual([
       {
         _branchId: config.branchId,
@@ -2806,9 +2822,10 @@ describe("DotyposService reservations", () => {
       fetchMock
     );
 
-    const patchCall = fetchMock.mock.calls.find(
-      (call) => getMethod(call as FetchCall) === "PATCH"
-    ) as FetchCall;
+    const patchCall = findCall(
+      fetchMock.mock.calls,
+      (call) => getMethod(call) === "PATCH"
+    );
     expect(getHeader(patchCall, "If-Match")).toBe('"reservation-etag"');
     expect(getHeader(patchCall, "Authorization")).toBe("Bearer access-token");
     expect(await readJsonBody(patchCall)).toEqual({ status: "CONFIRMED" });
@@ -2847,9 +2864,7 @@ describe("DotyposService reservations", () => {
 
     expect(error._tag).toBe("DotyposReservationCancelledError");
     expect(
-      fetchMock.mock.calls.some(
-        (call) => getMethod(call as FetchCall) === "PATCH"
-      )
+      fetchMock.mock.calls.some((call) => getMethod(call) === "PATCH")
     ).toBe(false);
   });
 
@@ -2880,9 +2895,7 @@ describe("DotyposService reservations", () => {
 
     expect(result.status).toBe("CONFIRMED");
     expect(
-      fetchMock.mock.calls.some(
-        (call) => getMethod(call as FetchCall) === "PATCH"
-      )
+      fetchMock.mock.calls.some((call) => getMethod(call) === "PATCH")
     ).toBe(false);
   });
 
@@ -2919,9 +2932,10 @@ describe("DotyposService reservations", () => {
     );
 
     expect(result.note).toBe("accepted quote");
-    const patchCall = fetchMock.mock.calls.find(
-      (call) => getMethod(call as FetchCall) === "PATCH"
-    ) as FetchCall;
+    const patchCall = findCall(
+      fetchMock.mock.calls,
+      (call) => getMethod(call) === "PATCH"
+    );
     expect(getHeader(patchCall, "If-Match")).toBe('"reservation-etag"');
     expect(await readJsonBody(patchCall)).toEqual({ note: "accepted quote" });
   });
@@ -2985,9 +2999,7 @@ describe("DotyposService reservations", () => {
       request: "reservation.version",
     });
     expect(
-      fetchMock.mock.calls.some(
-        (call) => getMethod(call as FetchCall) === "PATCH"
-      )
+      fetchMock.mock.calls.some((call) => getMethod(call) === "PATCH")
     ).toBe(false);
   });
 });
@@ -3611,8 +3623,8 @@ describe("DotyposService reservation restore", () => {
   ) => {
     const seen = {
       reads: 0,
-      ifMatch: [] as Array<string | null>,
-      bodies: [] as unknown[],
+      ifMatch: Arr.empty<string | null>(),
+      bodies: Arr.empty<unknown>(),
     };
     const fetchMock = mockDotyposFetch(async (request) => {
       const url = new URL(request.url);
@@ -3823,7 +3835,7 @@ describe("DotyposService reservation restore", () => {
     readonly reads: readonly RestoreRead[];
     readonly readEtags?: readonly string[];
     readonly patches: readonly RestorePatch[];
-    readonly expected: Record<string, unknown>;
+    readonly expected: object;
     readonly expectedReads: number;
     readonly expectedIfMatch: readonly string[];
   };
@@ -4409,7 +4421,7 @@ describe("DotyposService reservation listing", () => {
 
     expect(result).toHaveLength(1);
     const request = fetchMock.mock.calls
-      .map((call) => new URL(getUrl(call as FetchCall)))
+      .map((call) => new URL(getUrl(call)))
       .find((url) => url.pathname === "/clouds/cloud-id/reservations");
     expect(request?.searchParams.get("filter")).toBe(
       [
@@ -4439,7 +4451,7 @@ describe("DotyposService reservation listing", () => {
     );
 
     const request = fetchMock.mock.calls
-      .map((call) => new URL(getUrl(call as FetchCall)))
+      .map((call) => new URL(getUrl(call)))
       .find((url) => url.pathname === "/clouds/cloud-id/reservations");
     expect(request?.searchParams.has("filter")).toBe(false);
   });
@@ -4700,8 +4712,8 @@ describe("DotyposService reservation listing", () => {
       fetchMock
     );
 
-    expect(Predicate.isTagged(result, "Failure")).toBe(true);
-    if (Predicate.isTagged(result, "Failure")) {
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
       expect(result.failure).toMatchObject({
         _tag: "DotyposRejected",
         reason: "not-found",
@@ -4734,8 +4746,8 @@ describe("DotyposService reservation listing", () => {
       fetchMock
     );
 
-    expect(Predicate.isTagged(result, "Failure")).toBe(true);
-    if (Predicate.isTagged(result, "Failure")) {
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
       expect(result.failure).toMatchObject({
         _tag: "DotyposRejected",
         reason: "unauthorized",
@@ -4818,16 +4830,16 @@ describe("DotyposService paginated list responses", () => {
     for (const { name, response } of malformedPages) {
       test(`${operation} rejects ${name} without logging provider payloads`, async () => {
         const logs: CapturedLog[] = [];
-        const client = makePaginatedClient(() => response);
+        const client = mockPaginatedFetch(() => response);
         const result = await (operation === "getTables"
-          ? runWithServiceClient(
+          ? runWithService(
               Effect.gen(function* () {
                 const dotypos = yield* DotyposService;
                 return yield* dotypos.getTables().pipe(Effect.result);
               }).pipe(Effect.provide(Logger.layer([captureLogs(logs)]))),
               client
             )
-          : runWithServiceClient(
+          : runWithService(
               Effect.gen(function* () {
                 const dotypos = yield* DotyposService;
                 return yield* dotypos.listReservations().pipe(Effect.result);
@@ -4858,7 +4870,7 @@ describe("DotyposService paginated list responses", () => {
       { data: [], nextPage: null },
     ];
 
-    await runWithServiceClient(
+    await runWithService(
       Effect.gen(function* () {
         const dotypos = yield* DotyposService;
         yield* dotypos.getTables();
@@ -4867,7 +4879,7 @@ describe("DotyposService paginated list responses", () => {
           endDate: new Date("2026-06-20T12:00:00Z"),
         });
       }).pipe(Effect.provide(Logger.layer([captureLogs(logs)]))),
-      makePaginatedClient((operation, page) =>
+      mockPaginatedFetch((operation, page) =>
         operation === "getTables"
           ? {
               data: [
@@ -4905,12 +4917,12 @@ describe("DotyposService paginated list responses", () => {
   test("fails the whole reservation listing when a later page is malformed", async () => {
     const firstReservation = reservation({ id: "reservation-1" });
     const requestedPages: number[] = [];
-    const result = await runWithServiceClient(
+    const result = await runWithService(
       Effect.gen(function* () {
         const dotypos = yield* DotyposService;
         return yield* dotypos.listReservations().pipe(Effect.result);
       }),
-      makePaginatedClient((_operation, page) => {
+      mockPaginatedFetch((_operation, page) => {
         requestedPages.push(page);
         return page === 1 ? { data: [firstReservation], nextPage: "2" } : {};
       })
@@ -5003,9 +5015,7 @@ type FailureOutcomeInput =
       readonly operations: readonly FailureOutcomeOperation[];
     };
 
-const allFailureOutcomeOperations = Object.keys(
-  failureOutcomeOperations
-) as FailureOutcomeOperation[];
+const allFailureOutcomeOperations = Struct.keys(failureOutcomeOperations);
 const responseOperations = allFailureOutcomeOperations.filter(
   (operation) => operation !== "cancelReservation"
 );
@@ -5096,7 +5106,7 @@ const failureOutcomeCustomerDetails = {
 const invokeFailureOutcomeOperation = (
   dotypos: IDotyposService,
   operation: FailureOutcomeOperation
-): Effect.Effect<unknown, unknown, never> => {
+): Effect.Effect<unknown, DotyposFailure> => {
   switch (operation) {
     case "getCustomer":
       return dotypos.getCustomer(dotyposCustomerId("customer-id"));
@@ -5357,24 +5367,26 @@ describe("DotyposService failure classification table", () => {
     const expected = failureOutcomeExpectation(row.operation, row);
     if ("success" in expected) {
       expect(result).toMatchObject({ _tag: "Success" });
-      if (!Predicate.isTagged(result, "Success")) return;
+      if (!Result.isSuccess(result)) return;
       if (expected.success === "none") {
-        expect((result as { success: unknown }).success).toEqual(Option.none());
+        expect(result.success).toEqual(Option.none());
       } else if (expected.success === "some") {
         expect(
-          Option.isSome((result as { success: Option.Option<unknown> }).success)
+          Option.isOption(result.success) && Option.isSome(result.success)
         ).toBe(true);
       } else if (expected.success === "empty") {
-        expect((result as { success: unknown }).success).toEqual(new Map());
+        expect(result.success).toEqual(new Map());
       }
     } else {
       expect(result).toMatchObject({
         _tag: "Failure",
         failure: expected.failure,
       });
-      if (!Predicate.isTagged(result, "Failure")) return;
-      const failure = result.failure as { readonly httpStatus?: number };
-      expect(failure.httpStatus).toBe(expected.failure.httpStatus);
+      if (!Result.isFailure(result)) return;
+      const failure = result.failure;
+      expect("httpStatus" in failure ? failure.httpStatus : undefined).toBe(
+        expected.failure.httpStatus
+      );
       expect(Object.hasOwn(failure, "httpStatus")).toBe(
         expected.failure.httpStatus !== undefined
       );
@@ -5605,7 +5617,7 @@ type CreationOutcomeOperation =
 const runCreationOutcomeOperation = (
   dotypos: IDotyposService,
   operation: CreationOutcomeOperation
-): Effect.Effect<unknown, unknown, never> => {
+): Effect.Effect<unknown, DotyposFailure> => {
   switch (operation) {
     case "createReservation":
       return dotypos.createReservation(failureOutcomeReservationInput);
@@ -5710,7 +5722,7 @@ describe("DotyposService creation retry guard", () => {
       request = "customer.createAfterLookup";
     } else request = "customer.create";
     const postCount = fetchMock.mock.calls.filter((call) => {
-      const request = getRequest(call as FetchCall);
+      const request = getRequest(call);
       return (
         request.method === "POST" && new URL(request.url).pathname === postPath
       );
@@ -5752,7 +5764,7 @@ describe("DotyposService creation retry guard", () => {
         fetchMock
       );
       const postCount = fetchMock.mock.calls.filter((call) => {
-        const request = getRequest(call as FetchCall);
+        const request = getRequest(call);
         return (
           request.method === "POST" &&
           new URL(request.url).pathname === postPath
@@ -5762,8 +5774,8 @@ describe("DotyposService creation retry guard", () => {
 
       if (!scenario.expectedTag) {
         expect(result).toMatchObject({ _tag: "Failure" });
-        if (!Predicate.isTagged(result, "Failure")) return;
-        expect((result as { failure: unknown }).failure).toMatchObject({
+        if (!Result.isFailure(result)) return;
+        expect(result.failure).toMatchObject({
           _tag: "DotyposUnavailable",
           reason: "rate-limited",
           operation: "createCustomer",
@@ -5781,8 +5793,8 @@ describe("DotyposService creation retry guard", () => {
           request: "customer.create",
         },
       });
-      if (!Predicate.isTagged(result, "Failure")) return;
-      const failure = result.failure as { readonly httpStatus?: number };
+      if (!Result.isFailure(result)) return;
+      const failure = result.failure;
       expect(failure.httpStatus).toBe(scenario.expectedHttpStatus);
       expect(Object.hasOwn(failure, "httpStatus")).toBe(
         scenario.expectedHttpStatus !== undefined
@@ -6048,7 +6060,7 @@ describe("DotyposService conditional-write replay", () => {
 
     if (row.expected === "some") {
       expect(result).toMatchObject({ _tag: "Success" });
-      if (Predicate.isTagged(result, "Success")) {
+      if (Result.isSuccess(result)) {
         expect(Option.isSome(result.success)).toBe(true);
       }
     } else if (row.expected === "none") {
@@ -6066,8 +6078,8 @@ describe("DotyposService conditional-write replay", () => {
           }),
         },
       });
-      if (Predicate.isTagged(result, "Failure")) {
-        const failure = result.failure as { readonly httpStatus?: number };
+      if (Result.isFailure(result)) {
+        const failure = result.failure;
         expect(failure.httpStatus).toBe(row.expected.httpStatus);
         expect(Object.hasOwn(failure, "httpStatus")).toBe(
           row.expected.httpStatus !== undefined
@@ -6701,9 +6713,7 @@ describe("DotyposService conditional-write replay", () => {
           return new Response("Not found", { status: 404 });
         }
         if (request.method === "GET") {
-          const read = row.reads[
-            Math.min(versionReads, row.reads.length - 1)
-          ] as DiscountGroupSettlementRead;
+          const read = readAt(row.reads, versionReads);
           versionReads += 1;
           if (read === 503) return new Response("Unavailable", { status: 503 });
           // Both hold the requested group, so only the failed read decides.
@@ -6763,7 +6773,7 @@ describe("DotyposService conditional-write replay", () => {
           _tag: "Success",
           success: { id: "customer-id" },
         });
-        if (Predicate.isTagged(result, "Success")) {
+        if (Result.isSuccess(result)) {
           expect(result.success._discountGroupId ?? null).toBe(
             row.requested === null
               ? null
@@ -6865,9 +6875,7 @@ describe("DotyposService conditional-write replay", () => {
         return new Response("Not found", { status: 404 });
       }
       if (request.method === "GET") {
-        const read = row.reads[
-          Math.min(versionReads, row.reads.length - 1)
-        ] as CustomerFieldsSettlementRead;
+        const read = readAt(row.reads, versionReads);
         versionReads += 1;
         if (read === 503) return new Response("Unavailable", { status: 503 });
         return Response.json(customer(read.fields), {
@@ -6880,7 +6888,7 @@ describe("DotyposService conditional-write replay", () => {
         patchBodies.push(await request.json());
         if (patch === "transport") throw new TypeError("fetch failed");
         if (patch === "success") return Response.json(customer(input.written));
-        if (typeof patch === "object") {
+        if (Predicate.hasProperty(patch, "fields")) {
           return Response.json(customer(patch.fields));
         }
         return new Response(null, { status: patch ?? 500 });
@@ -7749,11 +7757,7 @@ describe("DotyposService conditional-write replay", () => {
       dotypos.reactivateCustomer(dotyposCustomerId("customer-id")),
   } as const;
 
-  test.each(
-    Object.keys(accountCustomerWrites) as Array<
-      keyof typeof accountCustomerWrites
-    >
-  )(
+  test.each(Struct.keys(accountCustomerWrites))(
     "%s answers none without a PATCH when the customer is missing",
     async (operation) => {
       const methods: string[] = [];
@@ -7801,7 +7805,7 @@ const singleReadPageSpecs = {
 const invokeSingleReadPage = (
   dotypos: IDotyposService,
   operation: SingleReadPageOperation
-): Effect.Effect<unknown, unknown, never> => {
+): Effect.Effect<unknown, DotyposFailure> => {
   switch (operation) {
     case "getCustomersByIds":
       return dotypos.getCustomersByIds([dotyposCustomerId("customer-id")]);
@@ -7817,7 +7821,7 @@ const invokeSingleReadPage = (
 };
 
 describe("DotyposService read retry boundary", () => {
-  test.each(Object.keys(singleReadPageSpecs) as SingleReadPageOperation[])(
+  test.each(Struct.keys(singleReadPageSpecs))(
     "$operation does not retry a page 503",
     async (operation) => {
       const spec = singleReadPageSpecs[operation];
@@ -7836,7 +7840,7 @@ describe("DotyposService read retry boundary", () => {
         fetchMock
       );
       const pageRequests = fetchMock.mock.calls.filter((call) => {
-        const request = getRequest(call as FetchCall);
+        const request = getRequest(call);
         return (
           request.method === "GET" &&
           new URL(request.url).pathname === spec.path
@@ -7858,8 +7862,9 @@ describe("DotyposService read retry boundary", () => {
   );
 
   test("ends a retried read whose every attempt times out at its retried worst case", async () => {
-    const apiTimeout = dotyposApiTimeoutDefaultMilliseconds;
-    const worstCase = getDotyposRequestWorstCase(apiTimeout);
+    const worstCase = getDotyposRequestWorstCase(
+      dotyposApiTimeoutDefaultMilliseconds
+    );
     let customerRequests = 0;
     let markRequestStarted!: () => void;
     const requestStarted = new Promise<void>((resolve) => {
@@ -7886,7 +7891,10 @@ describe("DotyposService read retry boundary", () => {
             .pipe(Effect.result);
         }).pipe(
           Effect.provide(
-            makeServiceLayer(fetchMock, { ...config, apiTimeout })
+            makeServiceLayer(fetchMock, {
+              ...config,
+              apiTimeout: dotyposApiTimeoutDefaultMilliseconds,
+            })
           ),
           // Pin every jittered backoff at its maximum.
           Effect.provideService(Random.Random, {
@@ -7927,8 +7935,9 @@ describe("DotyposService read retry boundary", () => {
   });
 
   test("resumes a retried paged list load at the failed page and ends within its paged-load worst case", async () => {
-    const apiTimeout = dotyposApiTimeoutDefaultMilliseconds;
-    const worstCase = getDotyposRequestWorstCase(apiTimeout);
+    const worstCase = getDotyposRequestWorstCase(
+      dotyposApiTimeoutDefaultMilliseconds
+    );
     const requestedPages: string[] = [];
     let answerFirstPage!: () => void;
     const firstPageStarted = Promise.withResolvers<void>();
@@ -7960,7 +7969,10 @@ describe("DotyposService read retry boundary", () => {
           return yield* dotypos.listReservations().pipe(Effect.result);
         }).pipe(
           Effect.provide(
-            makeServiceLayer(fetchMock, { ...config, apiTimeout })
+            makeServiceLayer(fetchMock, {
+              ...config,
+              apiTimeout: dotyposApiTimeoutDefaultMilliseconds,
+            })
           ),
           // Pin every jittered backoff at its maximum.
           Effect.provideService(Random.Random, {
@@ -7974,7 +7986,10 @@ describe("DotyposService read retry boundary", () => {
         // its bound.
         yield* Effect.promise(() => firstPageStarted.promise);
         yield* TestClock.adjust(
-          Duration.subtract(Duration.millis(apiTimeout), Duration.millis(1))
+          Duration.subtract(
+            Duration.millis(dotyposApiTimeoutDefaultMilliseconds),
+            Duration.millis(1)
+          )
         );
         answerFirstPage();
         yield* Effect.promise(() => secondPageStarted.promise);
@@ -7985,7 +8000,10 @@ describe("DotyposService read retry boundary", () => {
         // The clock stands at 1 ms before one attempt timeout; move it to
         // 1 ms before the slowest load.
         yield* TestClock.adjust(
-          Duration.subtract(slowest, Duration.millis(apiTimeout))
+          Duration.subtract(
+            slowest,
+            Duration.millis(dotyposApiTimeoutDefaultMilliseconds)
+          )
         );
         const finishedEarly = fiber.pollUnsafe() !== undefined;
         yield* TestClock.adjust("1 millis");
@@ -8046,7 +8064,7 @@ describe("DotyposService read retry boundary", () => {
         request: "products.list",
       },
     });
-    if (Predicate.isTagged(result, "Failure")) {
+    if (Result.isFailure(result)) {
       expect(result.failure.httpStatus).toBeUndefined();
       expect(Object.hasOwn(result.failure, "httpStatus")).toBe(false);
     }
@@ -8233,7 +8251,7 @@ describe("DotyposService package input validation", () => {
       expect(result.failure.httpStatus).toBeUndefined();
     }
     const customerPosts = fetchMock.mock.calls.filter((call) => {
-      const request = getRequest(call as FetchCall);
+      const request = getRequest(call);
       return (
         request.method === "POST" &&
         new URL(request.url).pathname === "/clouds/cloud-id/customers"
@@ -8332,11 +8350,11 @@ describe("DotyposService ID reads", () => {
         const fetchMock = mockDotyposFetch((request) => {
           const url = new URL(request.url);
           if (url.pathname === "/signin/token") return tokenResponse();
-          const selected = url.searchParams
-            .get("filter")!
-            .split(";")[0]!
-            .slice(6)
-            .split(",");
+          const selected =
+            (url.searchParams.get("filter") ?? "")
+              .split(";")[0]
+              ?.slice(6)
+              .split(",") ?? [];
           calls.push(selected);
           expect(url.searchParams.get("limit")).toBe("100");
           expect(url.searchParams.get("page")).toBe("1");
@@ -8361,7 +8379,7 @@ describe("DotyposService ID reads", () => {
         expect(calls).toHaveLength(dotyposIdReadRequests(new Set(ids).size));
         expect(calls.flat()).toEqual(ids);
         expect(result.size).toBe(Math.max(0, count - 1));
-        expect(result.has("id-0" as never)).toBe(false);
+        expect([...result.keys()]).not.toContain("id-0");
       }
     }
   );
@@ -8376,11 +8394,11 @@ describe("DotyposService ID reads", () => {
         const url = new URL(request.url);
         if (url.pathname === "/signin/token") return tokenResponse();
         attempts++;
-        const selected = url.searchParams
-          .get("filter")!
-          .split(";")[0]!
-          .slice(6)
-          .split(",");
+        const selected =
+          (url.searchParams.get("filter") ?? "")
+            .split(";")[0]
+            ?.slice(6)
+            .split(",") ?? [];
         if (selected[0] === "id-100")
           return new Response("Unavailable", { status: 503 });
         return Response.json({
@@ -8510,22 +8528,22 @@ describe("DotyposService write responses without an id", () => {
   }: A) => record;
 
   test("generated write schemas accept records without an id; read schemas reject them", () => {
-    const decodes = (schema: Schema.Decoder<unknown>, value: unknown) =>
-      Schema.decodeUnknownExit(schema)(value)._tag === "Success";
+    const decodes = (schema: Schema.Decoder<unknown>) =>
+      flow(Schema.decodeUnknownExit(schema), Exit.isSuccess);
 
-    expect(decodes(ReplaceCustomersRequestJson, [withoutId(customer())])).toBe(
+    expect(decodes(ReplaceCustomersRequestJson)([withoutId(customer())])).toBe(
       true
     );
     expect(
-      decodes(ReplaceReservationsRequestJson, [withoutId(reservation())])
+      decodes(ReplaceReservationsRequestJson)([withoutId(reservation())])
     ).toBe(true);
-    expect(decodes(CustomerWriteRecord, withoutId(customer()))).toBe(true);
-    expect(decodes(ReservationWriteRecord, withoutId(reservation()))).toBe(
+    expect(decodes(CustomerWriteRecord)(withoutId(customer()))).toBe(true);
+    expect(decodes(ReservationWriteRecord)(withoutId(reservation()))).toBe(
       true
     );
-    expect(decodes(Customer, withoutId(customer()))).toBe(false);
-    expect(decodes(Reservation, withoutId(reservation()))).toBe(false);
-    expect(decodes(Table, withoutId(table()))).toBe(false);
+    expect(decodes(Customer)(withoutId(customer()))).toBe(false);
+    expect(decodes(Reservation)(withoutId(reservation()))).toBe(false);
+    expect(decodes(Table)(withoutId(table()))).toBe(false);
   });
 
   test("createCustomer returns a created customer without an id for the caller's fallback", async () => {

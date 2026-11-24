@@ -10,7 +10,7 @@
   },
   "scripts": {
     "generate": "bun ../../scripts/generate-effect-openapi-client.ts --spec ./openapi/igloohome-api.yaml --name IgloohomeClient --output ./src/generated/effect.gen.ts",
-    "lint": "cd ../.. && biome check packages/igloohome/src --config-path biome.json --vcs-root .",
+    "lint": "biome check .",
     "test": "bun test",
     "typecheck": "tsc --project tsconfig.json"
   },

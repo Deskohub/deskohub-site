@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { Schema } from "effect";
+import { decodeJson, readJsonFile } from "./json-file";
 import { writeFileAtomically } from "./source-instrumentation";
 import { measuresCurrentSource, type SourceManifest } from "./source-manifest";
 
@@ -63,28 +64,44 @@ export type FunctionCrap = {
   readonly evidence: CoverageEvidence;
 };
 
-type FallowFinding = {
-  readonly path: string;
-  readonly name: string;
-  readonly line: number;
-  readonly cyclomatic: number;
-  readonly cognitive: number;
-  readonly crap?: number | null;
-  readonly coverage_pct?: number | null;
-  readonly coverage_source?: string | null;
-};
+const FallowFinding = Schema.Struct({
+  path: Schema.String,
+  name: Schema.String,
+  line: Schema.Int,
+  cyclomatic: Schema.Int,
+  cognitive: Schema.Int,
+  crap: Schema.optional(Schema.NullOr(Schema.Finite)),
+  coverage_pct: Schema.optional(Schema.NullOr(Schema.Finite)),
+  coverage_source: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+type FallowFinding = typeof FallowFinding.Type;
+
+/** The part of `fallow health --format json` output the scores read. */
+const FallowHealthReport = Schema.Struct({
+  findings: Schema.Array(FallowFinding),
+});
+
+/** The `bin` field of a package manifest: one path, or paths by command. */
+const PackageBinaries = Schema.Struct({
+  bin: Schema.Union([
+    Schema.String,
+    Schema.Record(Schema.String, Schema.String),
+  ]),
+});
 
 const fallowBinary = (() => {
   const packageFile = Bun.resolveSync("fallow/package.json", import.meta.dir);
-  const manifest = JSON.parse(readFileSync(packageFile, "utf8")) as {
-    readonly bin: string | Readonly<Record<string, string>>;
-  };
-  const bin =
-    typeof manifest.bin === "string" ? manifest.bin : manifest.bin.fallow;
-  if (bin === undefined) {
+  const { bin } = readJsonFile(
+    PackageBinaries,
+    packageFile,
+    "package manifest"
+  );
+  const fallow = Schema.is(Schema.String)(bin) ? bin : bin.fallow;
+  if (fallow === undefined) {
     throw new Error("The fallow package declares no fallow binary");
   }
-  return join(dirname(packageFile), bin);
+  return join(dirname(packageFile), fallow);
 })();
 
 /**
@@ -141,9 +158,7 @@ export async function scoreFunctions({
   if (exitCode !== 0) {
     throw new Error(`fallow health exited with ${exitCode}:\n${errors}`);
   }
-  const report = JSON.parse(output) as {
-    readonly findings: ReadonlyArray<FallowFinding>;
-  };
+  const report = decodeJson(FallowHealthReport, output, "fallow health report");
   const freshness = new Map<string, boolean>();
   const isFresh = (path: string) => {
     let fresh = freshness.get(path);
@@ -162,7 +177,7 @@ export function toFunctionCrap(
   finding: FallowFinding,
   sourceIsFresh: boolean
 ): FunctionCrap {
-  if (typeof finding.crap !== "number") {
+  if (finding.crap === undefined || finding.crap === null) {
     throw new Error(
       `fallow reported no CRAP score for ${finding.path}:${finding.line} ${finding.name}`
     );

@@ -1,9 +1,10 @@
-import { Context, Effect, Layer } from "effect";
+import { Array as Arr, Context, Effect, Layer, Predicate } from "effect";
 import type {
   EmailBatchResult,
   EmailMessage,
   EmailSendResult,
 } from "../types/email.types";
+import { entriesAtBatchPositions } from "./batch-positions";
 import {
   type EmailBatchOptions,
   EmailConfigTag,
@@ -97,150 +98,151 @@ const routeOrder: readonly EmailRoute[] = [
 
 const consoleChain: ReadonlyArray<EmailProvider> = [ConsoleEmailProvider];
 
-const makeEmailService = (options: {
+const makeEmailService = Effect.fn("email.makeService")(function* (options: {
   readonly testRecipientsToConsole: boolean;
-}) =>
-  Effect.gen(function* () {
-    const providers = yield* EmailProviders;
-    const config = yield* EmailConfigTag;
-    const observer = yield* EmailDeliveryObserver;
+}) {
+  const providers = yield* EmailProviders;
+  const config = yield* EmailConfigTag;
+  const observer = yield* EmailDeliveryObserver;
 
-    const streamOf = (message: EmailMessage) =>
-      emailStreamOf(message, providers.marketingCategories);
-    const context: EmailChainContext = { streamOf, observer };
+  const streamOf = (message: EmailMessage) =>
+    emailStreamOf(message, providers.marketingCategories);
+  const context: EmailChainContext = { streamOf, observer };
 
-    const routeOf = (message: EmailMessage): EmailRoute => {
-      if (
-        options.testRecipientsToConsole &&
-        addressesOnlyTestRecipients(message)
-      ) {
-        return "console";
-      }
-      const stream = streamOf(message);
-      return providers[stream].length > 0 ? stream : "console";
-    };
-    const chainOf = (route: EmailRoute) =>
-      route === "console" ? consoleChain : providers[route];
-    const providerNames = (route: EmailRoute) =>
-      chainOf(route).map((provider) => provider.name);
+  const routeOf = (message: EmailMessage): EmailRoute => {
+    if (
+      options.testRecipientsToConsole &&
+      addressesOnlyTestRecipients(message)
+    ) {
+      return "console";
+    }
+    const stream = streamOf(message);
+    return providers[stream].length > 0 ? stream : "console";
+  };
+  const chainOf = (route: EmailRoute) =>
+    route === "console" ? consoleChain : providers[route];
+  const providerNames = (route: EmailRoute) =>
+    chainOf(route).map((provider) => provider.name);
 
-    const withDefaultSender = (message: EmailMessage): EmailMessage => ({
-      ...message,
-      from: message.from || config.defaultFrom,
-    });
+  const withDefaultSender = (message: EmailMessage): EmailMessage => ({
+    ...message,
+    from: message.from || config.defaultFrom,
+  });
 
-    const service: EmailService = {
-      send: Effect.fn("email.send")(
-        function* (message: EmailMessage) {
-          const finalMessage = yield* withDeliveryIdempotencyKey(
-            withDefaultSender(message)
-          );
-          const route = routeOf(finalMessage);
-          yield* Effect.logInfo("Email send started", {
-            providers: providerNames(route),
-          });
+  const service: EmailService = {
+    send: Effect.fn("email.send")(
+      function* (message: EmailMessage) {
+        const finalMessage = yield* withDeliveryIdempotencyKey(
+          withDefaultSender(message)
+        );
+        const route = routeOf(finalMessage);
+        yield* Effect.logInfo("Email send started", {
+          providers: providerNames(route),
+        });
 
-          return yield* sendThroughChain(
-            chainOf(route),
-            finalMessage,
-            context
-          ).pipe(
-            Effect.tap((sendResult) =>
-              Effect.logInfo("Email sent successfully", {
-                id: sendResult.id,
-                provider: sendResult.provider,
-              })
-            ),
-            Effect.tapError((error) =>
-              Effect.logError("Email send failed", {
-                ...emailFailureLogFacts(error),
-                provider:
-                  error._tag === "EmailServiceError"
-                    ? error.provider
-                    : undefined,
-              })
-            )
-          );
-        },
-        (effect, message) =>
-          effect.pipe(Effect.annotateLogs(emailSendLogFacts(message)))
-      ),
-
-      sendBatch: Effect.fn("email.sendBatch")(
-        function* (
-          messages: readonly EmailMessage[],
-          batchOptions: EmailBatchOptions
-        ) {
-          const finalMessages = messages.map(withDefaultSender);
-          const routes = finalMessages.map(routeOf);
-          const groups = routeOrder
-            .map((route) => ({
-              route,
-              indices: routes.flatMap((routed, index) =>
-                routed === route ? [index] : []
-              ),
-            }))
-            .filter(({ indices }) => indices.length > 0);
-          // Two chains in one batch must not share one provider key.
-          const chainGroups = groups.filter(({ route }) => route !== "console");
-          const keyOf = (route: EmailRoute) =>
-            chainGroups.length > 1
-              ? `${batchOptions.idempotencyKey}:${route}`
-              : batchOptions.idempotencyKey;
-
-          yield* Effect.logInfo("Email batch send started", {
-            size: messages.length,
-            providers: groups.map(({ route }) => providerNames(route)),
-          });
-
-          const results: EmailBatchResult[] = [];
-          const { beforeRequest } = batchOptions;
-          for (const { route, indices } of groups) {
-            const groupResults = yield* sendBatchThroughChain(
-              chainOf(route),
-              indices.map((index) => finalMessages[index]!),
-              {
-                ...batchOptions,
-                idempotencyKey: keyOf(route),
-                ...(beforeRequest && {
-                  beforeRequest: (fingerprint, positions) =>
-                    beforeRequest(
-                      fingerprint,
-                      positions.map((position) => indices[position]!)
-                    ),
-                }),
-              },
-              context
-            );
-            for (const [position, index] of indices.entries()) {
-              results[index] = groupResults[position]!;
-            }
-          }
-
-          yield* Effect.logInfo("Email batch sent", {
-            size: results.length,
-            failed: results.filter((result) => result.status === "failed")
-              .length,
-          });
-          return results;
-        },
-        (effect, messages) =>
-          effect.pipe(
-            Effect.tapError((error) =>
-              Effect.logError(
-                "Email batch send failed",
-                emailFailureLogFacts(error)
-              )
-            ),
-            Effect.annotateLogs({
-              category: emailCategoryOf(messages[0] ?? {}),
+        return yield* sendThroughChain(
+          chainOf(route),
+          finalMessage,
+          context
+        ).pipe(
+          Effect.tap((sendResult) =>
+            Effect.logInfo("Email sent successfully", {
+              id: sendResult.id,
+              provider: sendResult.provider,
+            })
+          ),
+          Effect.tapError((error) =>
+            Effect.logError("Email send failed", {
+              ...emailFailureLogFacts(error),
+              provider:
+                error._tag === "EmailServiceError" ? error.provider : undefined,
             })
           )
-      ),
-    };
+        );
+      },
+      (effect, message) =>
+        effect.pipe(Effect.annotateLogs(emailSendLogFacts(message)))
+    ),
 
-    return service;
-  });
+    sendBatch: Effect.fn("email.sendBatch")(
+      function* (
+        messages: readonly EmailMessage[],
+        batchOptions: EmailBatchOptions
+      ) {
+        const routed = messages.map((message, index) => {
+          const finalMessage = withDefaultSender(message);
+          return { index, message: finalMessage, route: routeOf(finalMessage) };
+        });
+        const groups = routeOrder
+          .map((route) => {
+            const members = routed.filter((entry) => entry.route === route);
+            return {
+              route,
+              indices: members.map(({ index }) => index),
+              messages: members.map(({ message }) => message),
+            };
+          })
+          .filter(({ indices }) => indices.length > 0);
+        // Two chains in one batch must not share one provider key.
+        const chainGroups = groups.filter(({ route }) => route !== "console");
+        const keyOf = (route: EmailRoute) =>
+          chainGroups.length > 1
+            ? `${batchOptions.idempotencyKey}:${route}`
+            : batchOptions.idempotencyKey;
+
+        yield* Effect.logInfo("Email batch send started", {
+          size: messages.length,
+          providers: groups.map(({ route }) => providerNames(route)),
+        });
+
+        const results: EmailBatchResult[] = [];
+        const { beforeRequest } = batchOptions;
+        for (const { route, indices, messages: grouped } of groups) {
+          const groupResults = yield* sendBatchThroughChain(
+            chainOf(route),
+            grouped,
+            {
+              ...batchOptions,
+              idempotencyKey: keyOf(route),
+              ...(beforeRequest && {
+                beforeRequest: (fingerprint, positions) =>
+                  entriesAtBatchPositions(indices, positions).pipe(
+                    Effect.flatMap((batchIndices) =>
+                      beforeRequest(fingerprint, batchIndices)
+                    )
+                  ),
+              }),
+            },
+            context
+          );
+          for (const [index, result] of Arr.zip(indices, groupResults)) {
+            results[index] = result;
+          }
+        }
+
+        yield* Effect.logInfo("Email batch sent", {
+          size: results.length,
+          failed: results.filter((result) => result.status === "failed").length,
+        });
+        return results;
+      },
+      (effect, messages) =>
+        effect.pipe(
+          Effect.tapError((error) =>
+            Effect.logError(
+              "Email batch send failed",
+              emailFailureLogFacts(error)
+            )
+          ),
+          Effect.annotateLogs({
+            category: emailCategoryOf(messages[0] ?? {}),
+          })
+        )
+    ),
+  };
+
+  return service;
+});
 
 /**
  * One logical delivery keeps one idempotency key across a provider's
@@ -263,10 +265,7 @@ const reservationDeliveryIdempotencyKey = (message: EmailMessage) => {
   const workspaceReservationId = message.metadata?.workspaceReservationId;
   const category = emailCategoryOf(message);
 
-  if (
-    typeof workspaceReservationId !== "string" ||
-    typeof category !== "string"
-  ) {
+  if (!Predicate.isString(workspaceReservationId) || category === undefined) {
     return undefined;
   }
 

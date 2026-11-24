@@ -125,9 +125,11 @@ export type AutomationConditionFilter =
 
 /** A condition step's filter: the audience builder's AND/OR groups plus "in saved audience" leaves. */
 export const AutomationConditionFilter: Schema.Codec<AutomationConditionFilter> =
-  makeAudienceFilterSchemas(audienceAttributeCatalogue, {
-    extraLeaves: [InSavedAudience],
-  }).filter.annotate({
+  Schema.toType(
+    makeAudienceFilterSchemas(audienceAttributeCatalogue, {
+      extraLeaves: [InSavedAudience],
+    }).filter
+  ).annotate({
     identifier: "AutomationConditionFilter",
     description:
       "Nested AND/OR tree of audience attribute conditions and saved-audience membership.",

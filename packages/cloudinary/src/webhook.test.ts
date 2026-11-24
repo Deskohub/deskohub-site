@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { Effect, Layer, Logger, References } from "effect";
+import { type Context, Effect, Layer, Logger, References } from "effect";
 
 mock.module("server-only", () => ({}));
 
@@ -57,7 +57,10 @@ const verifyRequest = (request: Request) =>
   );
 
 const captureLogs = async <A>(effect: Effect.Effect<A, never, never>) => {
-  const logs: { message: unknown; annotations: Record<string, unknown> }[] = [];
+  const logs: {
+    message: unknown;
+    annotations: Context.Service.Shape<typeof References.CurrentLogAnnotations>;
+  }[] = [];
   const logger = Logger.make((options) => {
     logs.push({
       message: options.message,

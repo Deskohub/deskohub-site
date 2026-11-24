@@ -130,6 +130,15 @@ test("runs Mobile's tests and the repository-wide tests in Workspace validation,
   expect(doc.jobs["test-functional"]?.needs).toContain("validate-workspace");
 });
 
+test("lints every package from the repository root", () => {
+  const step = workflowSteps(doc, "validate-workspace").find(
+    (candidate) => candidate.name === "Lint packages"
+  );
+  expect(step?.run).toBe("bun biome check packages");
+  expect(step?.if).toBeUndefined();
+  expect(step?.["continue-on-error"]).toBeUndefined();
+});
+
 test("lints and tests the Workspace infrastructure", () => {
   // No app depends on it, so the test shards never cover it.
   const steps = workflowSteps(doc, "validate-workspace");

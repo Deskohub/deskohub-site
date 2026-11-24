@@ -1,3 +1,5 @@
+import { Predicate } from "effect";
+
 export type UnnormalizedLogicalExpression<T> =
   | T
   | readonly UnnormalizedLogicalExpression<T>[];
@@ -7,7 +9,7 @@ export type CnfExpression<T extends string> = readonly (readonly T[])[];
 function flattenExpression<T extends string>(
   expression: UnnormalizedLogicalExpression<T>
 ): T[] {
-  if (typeof expression === "string") {
+  if (Predicate.isString(expression)) {
     return [expression];
   }
 
@@ -17,7 +19,7 @@ function flattenExpression<T extends string>(
 export function normalizeExpression<T extends string>(
   expression: UnnormalizedLogicalExpression<T>
 ): CnfExpression<T> {
-  if (typeof expression === "string") {
+  if (Predicate.isString(expression)) {
     return [[expression]];
   }
 

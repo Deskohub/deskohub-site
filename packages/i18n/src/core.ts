@@ -50,7 +50,7 @@ export function isLocale<Locale extends string>(
   locales: LocaleList<Locale>,
   value: string
 ): value is Locale {
-  return locales.includes(value as Locale);
+  return locales.some((locale) => locale === value);
 }
 
 type ParsedAcceptLanguageEntry = {
@@ -61,8 +61,10 @@ type ParsedAcceptLanguageEntry = {
   order: number;
 };
 
-export function parseAcceptLanguage(headerValue: string | null | undefined) {
-  if (!headerValue) return [] as ParsedAcceptLanguageEntry[];
+export function parseAcceptLanguage(
+  headerValue: string | null | undefined
+): ParsedAcceptLanguageEntry[] {
+  if (!headerValue) return [];
 
   const parsedEntries = headerValue
     .split(",")

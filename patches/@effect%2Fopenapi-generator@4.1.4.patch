@@ -226,6 +226,86 @@ index 7f46e476b5291c617011d88f2cc36c56ebe72ef0..8674939a7d5b996fb29fa6dfb9817626
  }
  //# sourceMappingURL=JsonSchemaGenerator.js.map
 \ No newline at end of file
+diff --git a/dist/OpenApiGenerator.d.ts b/dist/OpenApiGenerator.d.ts
+index 48b063a3f976b146afd8479d8a9777ab755a661b..581cc8596227aed1ce4ebd936f54e1b56f64c526 100644
+--- a/dist/OpenApiGenerator.d.ts
++++ b/dist/OpenApiGenerator.d.ts
+@@ -16,8 +16,65 @@ import type { OpenAPISpec } from "effect/http-api/OpenApi";
+ import type { HttpMethod } from "effect/http/HttpMethod";
+ import type * as JsonSchema from "effect/JsonSchema";
+ import * as Layer from "effect/Layer";
++import type * as Schema from "effect/Schema";
++/**
++ * An OpenAPI operation as `generate` reads it. Parameters, request bodies
++ * and responses may be `$ref`s, which generation resolves.
++ */
++export interface OpenApiDocumentOperation {
++    readonly deprecated?: boolean;
++    readonly description?: string;
++    readonly externalDocs?: OpenApiDocumentExternalDocs;
++    readonly operationId?: string;
++    readonly parameters?: ReadonlyArray<{ readonly [key: string]: Schema.Json }>;
++    readonly requestBody?: { readonly [key: string]: Schema.Json };
++    readonly responses?: { readonly [status: string]: { readonly [key: string]: Schema.Json } };
++    readonly security?: ReadonlyArray<{ readonly [scheme: string]: ReadonlyArray<string> }>;
++    readonly summary?: string;
++    readonly tags?: ReadonlyArray<string>;
++}
++export interface OpenApiDocumentExternalDocs {
++    readonly description?: string;
++    readonly url: string;
++}
++export interface OpenApiDocumentPathItem {
++    readonly delete?: OpenApiDocumentOperation;
++    readonly get?: OpenApiDocumentOperation;
++    readonly head?: OpenApiDocumentOperation;
++    readonly options?: OpenApiDocumentOperation;
++    readonly parameters?: ReadonlyArray<{ readonly [key: string]: Schema.Json }>;
++    readonly patch?: OpenApiDocumentOperation;
++    readonly post?: OpenApiDocumentOperation;
++    readonly put?: OpenApiDocumentOperation;
++    readonly query?: OpenApiDocumentOperation;
++    readonly trace?: OpenApiDocumentOperation;
++    readonly "x-oai-additionalOperations"?: { readonly [method: string]: OpenApiDocumentOperation };
++}
++/**
++ * An OpenAPI 3.x document as `generate` reads it: the fields generation
++ * defaults may be omitted, and component schemas stay JSON Schema.
++ * `OpenAPISpec`, the type of documents `OpenApi.fromApi` emits, is one.
++ */
++export interface OpenApiDocument {
++    readonly components?: {
++        readonly schemas?: { readonly [name: string]: Schema.Json };
++        readonly securitySchemes?: { readonly [name: string]: Schema.Json };
++    };
++    readonly info: {
++        readonly description?: string;
++        readonly license?: { readonly name: string; readonly url?: string };
++        readonly summary?: string;
++        readonly title: string;
++        readonly version: string;
++    };
++    readonly openapi: string;
++    readonly paths: { readonly [path: string]: OpenApiDocumentPathItem };
++    readonly security?: ReadonlyArray<{ readonly [scheme: string]: ReadonlyArray<string> }>;
++    readonly servers?: ReadonlyArray<{ readonly description?: string; readonly url: string }>;
++    readonly tags?: ReadonlyArray<{ readonly description?: string; readonly externalDocs?: OpenApiDocumentExternalDocs; readonly name: string }>;
++}
+ declare const OpenApiGenerator_base: Context.ServiceClass<OpenApiGenerator, "OpenApiGenerator", {
+-    readonly generate: (spec: OpenAPISpec, options: OpenApiGenerateOptions) => Effect.Effect<string>;
++    readonly generate: (spec: OpenAPISpec | OpenApiDocument, options: OpenApiGenerateOptions) => Effect.Effect<string>;
+ }>;
+ /**
+  * Service for turning OpenAPI or Swagger specifications into generated Effect
+@@ -139,7 +196,7 @@ export interface OpenApiGenerateOptions {
+  * @since 4.0.0
+  */
+ export declare const make: Effect.Effect<{
+-    readonly generate: (_: OpenAPISpec, options: OpenApiGenerateOptions) => Effect.Effect<string, never, never>;
++    readonly generate: (_: OpenAPISpec | OpenApiDocument, options: OpenApiGenerateOptions) => Effect.Effect<string, never, never>;
+ }, never, never>;
+ /**
+  * Layer providing an OpenAPI generator for Schema-backed HTTP client and HttpApi output.
 diff --git a/src/JsonSchemaGenerator.ts b/src/JsonSchemaGenerator.ts
 index 2f2bbf05819f19347d9c7127678cbc7e261f15d6..bc68470a43cd0e50b4b2eba1b7e5a6d2dc6d0333 100644
 --- a/src/JsonSchemaGenerator.ts

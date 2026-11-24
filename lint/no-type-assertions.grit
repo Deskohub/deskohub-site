@@ -1,0 +1,24 @@
+engine biome(1.0)
+language js(typescript, jsx)
+
+// Packages decode or narrow values instead of asserting their types.
+file($name, $body) where {
+  $name <: r".*packages/.*\.(?:ts|tsx|mts|cts)$",
+  not $name <: r".*/generated/.*",
+  // Every `as` assertion has the `as` keyword and every angle-bracket assertion a `<`.
+  $body <: r"(?s).*(?:\bas\b|<).*",
+  $body <: contains bubble {
+    or {
+      TsAsExpression() as $assertion where {
+        not $assertion <: `$value as const`
+      },
+      TsTypeAssertionExpression() as $assertion
+    } where {
+      register_diagnostic(
+        span = $assertion,
+        message = "[anti-slop/no-type-assertions] Decode with Schema or narrow the value instead of asserting its type; only `as const` is allowed.",
+        severity = "error"
+      )
+    }
+  }
+}

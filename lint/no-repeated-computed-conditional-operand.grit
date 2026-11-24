@@ -2,7 +2,8 @@ engine biome(1.0)
 language js(typescript, jsx)
 
 file($name, $body) where {
-  $name <: r".*apps/deskohub-workspace/(?:(?:app|db|emails|features|scripts|shared)/.*|[^/]+)\.(?:ts|tsx)$",
+  $name <: r".*(?:apps/deskohub-workspace/(?:(?:app|db|emails|features|scripts|shared)/.*|[^/]+)|packages/.*)\.(?:ts|tsx|mts|cts)$",
+  not $name <: r".*/generated/.*",
   $body <: r"(?s).*\bnull\b.*",
   $body <: contains bubble {
     `$value ? $consequent : null` as $conditional where {

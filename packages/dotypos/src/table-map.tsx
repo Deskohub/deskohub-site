@@ -52,7 +52,7 @@ export interface TableMapRoomDoor {
   readonly entranceArrowClassName?: string;
 }
 
-const tableShapes: Record<TableType, TableShape> = {
+const tableShapes = {
   SQUARE: { kind: "rect", width: 56, height: 56, radius: 6 },
   SQUARE6: { kind: "rect", width: 84, height: 56, radius: 6 },
   CIRCLE2: { kind: "circle", size: 48 },
@@ -64,7 +64,7 @@ const tableShapes: Record<TableType, TableShape> = {
   GENERIC: { kind: "rect", width: 56, height: 40, radius: 6 },
   CAR1: { kind: "rect", width: 80, height: 40, radius: 10 },
   CAR2: { kind: "rect", width: 80, height: 40, radius: 10 },
-};
+} satisfies Record<TableType, TableShape>;
 
 const padding = 20;
 const quarterCircleControl = 0.552_284_749_8;

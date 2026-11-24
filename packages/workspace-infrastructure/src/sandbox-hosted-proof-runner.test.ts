@@ -73,17 +73,19 @@ const seed = (fakes: ProofFakes, files: Record<string, string>) => {
   }
 };
 
-const settled = (digest?: string) => ({
-  version: "1",
-  record: {
-    generation: 3,
-    writer: null,
-    pendingApply: null,
-    ...(digest === undefined
-      ? {}
-      : { active: { imageDigest: digest, releaseId: "release-3" } }),
-  },
-});
+const settled = (digest?: string) => {
+  const record = { generation: 3, writer: null, pendingApply: null };
+  return {
+    version: "1",
+    record:
+      digest === undefined
+        ? record
+        : {
+            ...record,
+            active: { imageDigest: digest, releaseId: "release-3" },
+          },
+  };
+};
 
 const isAlive = (pid: number) => {
   try {
@@ -140,12 +142,10 @@ describe("cleanup under the writer lock", () => {
   test("leaves a lock whose holder this run did not prove dead", () => {
     for (const deadHolder of [null, "another-holder"]) {
       withProofFakes(heldBy("live-holder"), (fakes) => {
-        seed(fakes, {
-          "stack-config.json": "{}",
-          ...(deadHolder === null
-            ? {}
-            : { "interrupted-dead-holder": `${deadHolder}\n` }),
-        });
+        seed(fakes, { "stack-config.json": "{}" });
+        if (deadHolder !== null) {
+          seed(fakes, { "interrupted-dead-holder": `${deadHolder}\n` });
+        }
         const { exitCode, output } = runPhase(fakes, "stack-destroy");
         expect(exitCode).toBe(1);
         expect(output).toContain("whose death this run did not establish");
@@ -227,7 +227,10 @@ describe("release command output", () => {
   // What Alchemy's GCP auth logged before the JSON in run 45279064237.
   const alchemyLog =
     "[22:30:23.620] INFO (#12): GCP: using environment variables (GOOGLE_ACCESS_TOKEN, GOOGLE_PROJECT_ID).";
-  const status = (record: unknown, logs: "stdout" | "stderr"): FakeRule => ({
+  const status = (
+    record: Schema.JsonObject,
+    logs: "stdout" | "stderr"
+  ): FakeRule => ({
     tool: "bun",
     pattern: "^release\\.run\\.ts status",
     ...(logs === "stdout"
@@ -350,7 +353,7 @@ describe("drift detection", () => {
 // page is the one asked for by the earlier page's token.
 const sinksPage = (
   parent: string,
-  sinks: ReadonlyArray<Record<string, unknown>>,
+  sinks: ReadonlyArray<Schema.JsonObject>,
   page: { readonly token?: string; readonly next?: string } = {}
 ): FakeRule => ({
   tool: "curl",
@@ -1098,10 +1101,10 @@ describe("Alchemy access token", () => {
       const { exitCode, output } = withProofFakes(
         {
           now,
-          tokenLifetimes: {
-            "fake-access-token": 3599,
-            ...(left === undefined ? {} : { "workflow-token": left }),
-          },
+          tokenLifetimes:
+            left === undefined
+              ? { "fake-access-token": 3599 }
+              : { "fake-access-token": 3599, "workflow-token": left },
         },
         (fakes) =>
           runPhase(fakes, "foundation", {
@@ -1223,12 +1226,12 @@ describe("edge readback from the live edge", () => {
     action: "allow",
     match: { versionedExpr: "SRC_IPS_V1", config: { srcIpRanges: ["*"] } },
   };
-  const withDefault = (changes: Record<string, unknown>) =>
+  const withDefault = (changes: Schema.JsonObject) =>
     policyRules.map((rule) =>
       rule.priority === 2147483647 ? { ...defaultRule, ...changes } : rule
     );
   // As Compute returns the sandbox policy the stack declares.
-  const policyRules: ReadonlyArray<Record<string, unknown>> = [
+  const policyRules = [
     waf(1000, "sqli"),
     waf(1010, "xss"),
     throttle,
@@ -1236,7 +1239,7 @@ describe("edge readback from the live edge", () => {
   ];
   // The policy as Compute returns it, `preview: false` omitted as Compute
   // omits it.
-  const policyResource = (rules: ReadonlyArray<Record<string, unknown>>) => ({
+  const policyResource = (rules: ReadonlyArray<Schema.JsonObject>) => ({
     kind: "compute#securityPolicy",
     id: "4815162342",
     name: policy,
@@ -1251,13 +1254,13 @@ describe("edge readback from the live edge", () => {
   // `security-policies describe --format=json` as Google Cloud SDK 594.0.1
   // prints it: the describe request's one-element result list, as run
   // 45305300114 read it.
-  const policyDescription = (rules: ReadonlyArray<Record<string, unknown>>) =>
+  const policyDescription = (rules: ReadonlyArray<Schema.JsonObject>) =>
     JSON.stringify([policyResource(rules)]);
-  const withThrottle = (changes: Record<string, unknown>) =>
+  const withThrottle = (changes: Schema.JsonObject) =>
     policyRules.map((rule) =>
       rule.priority === 2000 ? { ...throttle, ...changes } : rule
     );
-  const forwardingRule = (changes: Record<string, unknown> = {}): FakeRule => ({
+  const forwardingRule = (changes: Schema.JsonObject = {}): FakeRule => ({
     tool: "gcloud",
     pattern: "^compute forwarding-rules describe workspace-sandbox-http ",
     stdout: JSON.stringify({
@@ -1469,9 +1472,7 @@ describe("edge readback from the live edge", () => {
         pattern: "^compute backend-services describe workspace-sandbox-dynamic",
         exit: 1,
       };
-      const rules = (
-        next: ReadonlyArray<Record<string, unknown>>
-      ): FakeRule => ({
+      const rules = (next: ReadonlyArray<Schema.JsonObject>): FakeRule => ({
         tool: "gcloud",
         pattern: "^compute security-policies describe .*--format=json$",
         stdout: policyDescription(next),
@@ -1638,12 +1639,10 @@ describe("token-route privacy and telemetry", () => {
     recordedFilter: string | null = exclusionFilter
   ) =>
     withProofFakes({ rules: rules(overrides) }, (fakes) => {
-      seed(fakes, {
-        "edge.env": "EDGE_IP=198.51.100.10\n",
-        ...(recordedFilter === null
-          ? {}
-          : { "edge-exclusion-filter.txt": recordedFilter }),
-      });
+      seed(fakes, { "edge.env": "EDGE_IP=198.51.100.10\n" });
+      if (recordedFilter !== null) {
+        seed(fakes, { "edge-exclusion-filter.txt": recordedFilter });
+      }
       const result = runPhase(fakes, "edge-privacy");
       return {
         ...result,

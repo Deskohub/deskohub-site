@@ -35,7 +35,8 @@ export interface EffectActionArgs<
 }
 
 interface EffectActionBaseOptions {
-  readonly mapError?: (error: unknown) => unknown;
+  /** Maps the failure of any run, whatever its error type. */
+  readonly mapError?: <E>(error: E) => unknown;
 }
 
 interface EffectActionRunnableOptions extends EffectActionBaseOptions {

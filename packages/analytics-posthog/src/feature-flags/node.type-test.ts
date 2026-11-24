@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import { PostHogDistinctId } from "../identifiers";
 import type { PostHogFeatureFlagOverrides } from "./contract";
 import { definePostHogFeatureFlags } from "./contract";
@@ -17,10 +18,13 @@ interface FeatureFlagDefinitions {
   };
 }
 
-const contract = definePostHogFeatureFlags<FeatureFlagDefinitions>([
-  "meeting_room_page",
-  "room_experience",
-]);
+const contract = definePostHogFeatureFlags<FeatureFlagDefinitions>({
+  meeting_room_page: { payload: Schema.Undefined, value: Schema.Boolean },
+  room_experience: {
+    payload: Schema.Undefined,
+    value: Schema.Literals([false, "control", "treatment"]),
+  },
+});
 
 const overrides = {
   meeting_room_page: false,

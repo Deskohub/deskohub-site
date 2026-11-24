@@ -1,6 +1,7 @@
 import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import { Temporal } from "@js-temporal/polyfill";
 import { Context, Effect, Option, Schema } from "effect";
+import type { HttpMethod } from "effect/http";
 import {
   HttpApi,
   HttpApiEndpoint,
@@ -490,44 +491,42 @@ export class AdministrationActionRecord extends HttpApiMiddleware.Service<
  */
 export const requiresDhw =
   (minimum: DhwVersion, refusal?: (typeof OutdatedDhwRefusal)["Service"]) =>
-  <Endpoint extends HttpApiEndpoint.Constraint>(
-    endpoint: Endpoint
-  ): HttpApiEndpoint.AddMiddleware<Endpoint, CliClientCompatibility> => {
-    const required = (endpoint as unknown as HttpApiEndpoint.Top)
+  <
+    Identifier extends string,
+    Method extends HttpMethod.HttpMethod,
+    Path extends string,
+    Params extends Schema.Top,
+    Query extends Schema.Top,
+    Payload extends Schema.Top,
+    Headers extends Schema.Top,
+    Success extends Schema.Top,
+    Failure extends Schema.Top,
+    Middleware,
+    MiddlewareServices,
+  >(
+    endpoint: HttpApiEndpoint.HttpApiEndpoint<
+      Identifier,
+      Method,
+      Path,
+      Params,
+      Query,
+      Payload,
+      Headers,
+      Success,
+      Failure,
+      Middleware,
+      MiddlewareServices
+    >
+  ) => {
+    const required = endpoint
       .annotate(MinimumDhwVersion, Option.some(minimum))
       .middleware(CliClientCompatibility);
-    return (
-      refusal === undefined
-        ? required
-        : required.annotate(OutdatedDhwRefusal, refusal)
-    ) as never;
+    return refusal === undefined
+      ? required
+      : required.annotate(OutdatedDhwRefusal, refusal);
   };
 
-interface AdministrationOperationGroupOptions {
-  /**
-   * Refuses a `dhw` older than an endpoint's `MinimumDhwVersion` on every
-   * endpoint before reading its session, in place of `requiresDhw`.
-   */
-  readonly checkDhwVersionBeforeAuthentication?: true;
-}
-
-type AuthenticatedGroup<Group> = HttpApiGroup.AddMiddleware<
-  HttpApiGroup.AddMiddleware<Group, AdministrationActionRecord>,
-  AdministrationAuthentication
->;
-
-export type AdministrationOperationGroup<
-  Group,
-  Options extends AdministrationOperationGroupOptions,
-> = HttpApiGroup.AddPrefix<
-  Options["checkDhwVersionBeforeAuthentication"] extends true
-    ? HttpApiGroup.AddMiddleware<
-        AuthenticatedGroup<Group>,
-        CliClientCompatibility
-      >
-    : AuthenticatedGroup<Group>,
-  "/api/v1/cli"
->;
+const administrationOperationPrefix = "/api/v1/cli";
 
 /**
  * Throws when an endpoint can't be an administration operation in its group:
@@ -535,14 +534,13 @@ export type AdministrationOperationGroup<
  * minimum `dhw`.
  */
 const assertAdministrationOperationEndpoint = (
-  declared: HttpApiGroup.Top,
+  declared: Pick<HttpApiGroup.Top, "identifier" | "annotations">,
   endpoint: HttpApiEndpoint.Top,
   checksFirst: boolean
 ) => {
   const reference = `${declared.identifier}.${endpoint.identifier}`;
-  const checksOwn = (endpoint.middlewares as ReadonlySet<unknown>).has(
-    CliClientCompatibility
-  );
+  const middlewares: ReadonlySet<unknown> = endpoint.middlewares;
+  const checksOwn = middlewares.has(CliClientCompatibility);
   const annotations = Context.merge(declared.annotations, endpoint.annotations);
   const minimum = Context.get(annotations, MinimumDhwVersion);
   if (Option.isSome(Context.getOption(annotations, CliOnly))) {
@@ -563,6 +561,31 @@ const assertAdministrationOperationEndpoint = (
 };
 
 /**
+ * Checks each endpoint of `group` can be an administration operation, then
+ * records each change and runs it as the authenticated administrator's.
+ */
+const authenticatedOperationGroup = <
+  Id extends string,
+  Endpoints extends HttpApiEndpoint.Constraint,
+  TopLevel extends boolean,
+>(
+  group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>,
+  checksFirst: boolean
+) => {
+  const declared: unknown = group;
+  if (!HttpApiGroup.isHttpApiGroup(declared)) {
+    throw new Error(`${group.identifier} isn't an HttpApiGroup.`);
+  }
+  for (const endpoint of Object.values(declared.endpoints)) {
+    assertAdministrationOperationEndpoint(group, endpoint, checksFirst);
+  }
+  // Each middleware added later runs outside the earlier ones.
+  return group
+    .middleware(AdministrationActionRecord)
+    .middleware(AdministrationAuthentication);
+};
+
+/**
  * `group` served as administration operations under `/api/v1/cli`: each runs
  * as the authenticated administrator's, and each change is recorded. Add
  * every endpoint before declaring the group, since later ones get neither.
@@ -571,36 +594,31 @@ const assertAdministrationOperationEndpoint = (
  * own in a group that checks every endpoint's first.
  */
 export const administrationOperationGroup = <
-  Group extends HttpApiGroup.Constraint,
-  const Options extends AdministrationOperationGroupOptions = Record<
-    never,
-    never
-  >,
+  Id extends string,
+  Endpoints extends HttpApiEndpoint.Constraint,
+  TopLevel extends boolean,
 >(
-  group: Group,
-  options?: Options
-): AdministrationOperationGroup<Group, Options> => {
-  const declared = group as unknown as HttpApiGroup.Top;
-  const checksFirst = options?.checkDhwVersionBeforeAuthentication ?? false;
-  for (const endpoint of Object.values(declared.endpoints)) {
-    assertAdministrationOperationEndpoint(declared, endpoint, checksFirst);
-  }
-  // Each middleware added later runs outside the earlier ones.
-  const middleware: ReadonlyArray<
-    Context.Key<HttpApiMiddleware.AnyId, unknown>
-  > = [
-    AdministrationActionRecord,
-    AdministrationAuthentication,
-    ...(checksFirst ? [CliClientCompatibility] : []),
-  ];
-  return middleware
-    .reduce(
-      (served, service) =>
-        served.middleware(service) as unknown as HttpApiGroup.Top,
-      declared
-    )
-    .prefix("/api/v1/cli") as never;
-};
+  group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>
+) =>
+  authenticatedOperationGroup(group, false).prefix(
+    administrationOperationPrefix
+  );
+
+/**
+ * `administrationOperationGroup` refusing a `dhw` older than an endpoint's
+ * `MinimumDhwVersion` on every endpoint before reading its session, in
+ * place of `requiresDhw`.
+ */
+export const administrationOperationGroupCheckingDhwFirst = <
+  Id extends string,
+  Endpoints extends HttpApiEndpoint.Constraint,
+  TopLevel extends boolean,
+>(
+  group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>
+) =>
+  authenticatedOperationGroup(group, true)
+    .middleware(CliClientCompatibility)
+    .prefix(administrationOperationPrefix);
 
 export const AdministrationOverviewMetric = Schema.Struct({
   completed: Schema.Number,

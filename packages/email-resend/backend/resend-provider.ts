@@ -11,7 +11,16 @@ import {
   NetworkError,
 } from "@deskohub/email";
 import type { ProviderRequestPolicy } from "@deskohub/provider-request";
-import { Config, Duration, Effect, Option, Redacted, Schema } from "effect";
+import {
+  Config,
+  Duration,
+  Effect,
+  Option,
+  Predicate,
+  Redacted,
+  Schema,
+} from "effect";
+import { flow } from "effect/Function";
 import { Resend } from "resend";
 import { resendRetryPolicy } from "./request-policy";
 
@@ -53,7 +62,7 @@ const toResendCategoryTags = (categories: EmailMessage["tags"]) =>
 const toResendMetadataTags = (metadata: EmailMessage["metadata"]) => {
   const tags: ResendTag[] = [];
   for (const [name, value] of Object.entries(metadata ?? {})) {
-    if (typeof value !== "string") continue;
+    if (!Predicate.isString(value)) continue;
     if (!resendTagPattern.test(name) || !resendTagPattern.test(value)) continue;
     tags.push({ name, value });
   }
@@ -69,28 +78,51 @@ const toResendTags = (message: EmailMessage) => {
   return tags.length > 0 ? tags : undefined;
 };
 
-const getResendErrorMessage = (error: unknown) => {
-  if (!error || typeof error !== "object") return "Unknown Resend error";
-
-  const message = "message" in error ? error.message : undefined;
-  if (typeof message === "string") return message;
-
-  const code = "error" in error ? error.error : undefined;
-  return typeof code === "string" ? code : "Unknown Resend error";
-};
-
-const getResendErrorStatusCode = (error: unknown) => {
-  if (!error || typeof error !== "object" || !("statusCode" in error)) {
-    return undefined;
-  }
-
-  return typeof error.statusCode === "number" ? error.statusCode : undefined;
-};
-
 type ResendResponse<A> = {
   readonly data: A | null;
   readonly error: unknown;
 };
+
+/**
+ * The fields of a Resend refusal the classifier reads. Resend's SDK and its
+ * HTTP API disagree on the refusal's shape, so each field is decoded on its
+ * own and a field of another type is absent.
+ */
+type ResendRefusal = {
+  readonly statusCode: Option.Option<number>;
+  readonly message: Option.Option<string>;
+  readonly code: Option.Option<string>;
+  readonly name: Option.Option<string>;
+};
+
+const decodeRefusalStatusCode = Schema.decodeUnknownOption(
+  Schema.Struct({ statusCode: Schema.Finite })
+);
+const decodeRefusalMessage = Schema.decodeUnknownOption(
+  Schema.Struct({ message: Schema.String })
+);
+const decodeRefusalCode = Schema.decodeUnknownOption(
+  Schema.Struct({ error: Schema.String })
+);
+const decodeRefusalName = Schema.decodeUnknownOption(
+  Schema.Struct({ name: Schema.String })
+);
+
+const readResendRefusal = <A>({ error }: ResendResponse<A>): ResendRefusal => ({
+  statusCode: Option.map(
+    decodeRefusalStatusCode(error),
+    ({ statusCode }) => statusCode
+  ),
+  message: Option.map(decodeRefusalMessage(error), ({ message }) => message),
+  code: Option.map(decodeRefusalCode(error), (refusal) => refusal.error),
+  name: Option.map(decodeRefusalName(error), ({ name }) => name),
+});
+
+const getResendErrorMessage = (refusal: ResendRefusal) =>
+  refusal.message.pipe(
+    Option.orElse(() => refusal.code),
+    Option.getOrElse(() => "Unknown Resend error")
+  );
 
 const resendProviderRefusal = (code: string, definitivelyUnsent?: true) =>
   new EmailServiceError("Resend cannot send now", undefined, "resend", {
@@ -129,10 +161,9 @@ const resendMessageRefusal = (code: string, definitivelyUnsent?: true) =>
  * Codes are `http-<status>` or `resend-<kind>`; the raw provider message is
  * discarded so spans and logs never carry it.
  */
-const classifyResendError = (error: unknown): EmailSendError => {
-  const statusCode = getResendErrorStatusCode(error);
-  if (statusCode === undefined) {
-    const message = getResendErrorMessage(error).toLowerCase();
+const classifyResendError = (refusal: ResendRefusal): EmailSendError => {
+  if (Option.isNone(refusal.statusCode)) {
+    const message = getResendErrorMessage(refusal).toLowerCase();
     if (
       ["unauthorized", "forbidden", "api key", "not verified"].some((word) =>
         message.includes(word)
@@ -148,6 +179,7 @@ const classifyResendError = (error: unknown): EmailSendError => {
       code: "resend-server",
     });
   }
+  const statusCode = refusal.statusCode.value;
   const code = `http-${statusCode}`;
   if (statusCode === 409) {
     return new NetworkError({
@@ -191,7 +223,7 @@ const requestResend = <A>(
     Effect.flatMap(
       (response): Effect.Effect<A | null, EmailSendError> =>
         response.error
-          ? Effect.fail(classify(response.error))
+          ? Effect.fail(classify(readResendRefusal(response)))
           : Effect.succeed(response.data)
     ),
     Effect.tapError((error) =>
@@ -246,10 +278,9 @@ const postResend = async (
     data: null,
     error: {
       statusCode: response.status,
-      name:
-        typeof answer === "object" && answer !== null && "name" in answer
-          ? answer.name
-          : undefined,
+      name: Option.getOrUndefined(
+        Option.map(decodeRefusalName(answer), ({ name }) => name)
+      ),
     },
   };
 };
@@ -258,17 +289,18 @@ const postResend = async (
  * Resend accepted the request but its response is unreadable, so whether it
  * delivered is unknown.
  */
-const decodeDeliveryId = (id: unknown) =>
-  Schema.decodeUnknownEffect(EmailDeliveryIdSchema)(id).pipe(
-    Effect.mapError(
-      () =>
-        new NetworkError({
-          message: "Resend response did not contain a valid email delivery ID",
-          code: "invalid-response",
-          failureKind: "unknown-outcome",
-        })
-    )
-  );
+const decodeResendAcceptance = flow(
+  Schema.decodeUnknownEffect(Schema.Struct({ id: EmailDeliveryIdSchema })),
+  Effect.map(({ id }) => id),
+  Effect.mapError(
+    () =>
+      new NetworkError({
+        message: "Resend response did not contain a valid email delivery ID",
+        code: "invalid-response",
+        failureKind: "unknown-outcome",
+      })
+  )
+);
 
 export interface ResendEmailProviderConfig {
   readonly apiKey: string;
@@ -278,14 +310,13 @@ export interface ResendEmailProviderConfig {
 export const resendIdempotencyMismatchCode =
   "resend-idempotency-payload-mismatch";
 
-const classifyResendDurableRefusal = (error: unknown): EmailSendError => {
-  const status = getResendErrorStatusCode(error);
+const classifyResendDurableRefusal = (
+  refusal: ResendRefusal
+): EmailSendError => {
+  const status = Option.getOrUndefined(refusal.statusCode);
   if (
     status === 409 &&
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    error.name === "invalid_idempotent_request"
+    Option.contains(refusal.name, "invalid_idempotent_request")
   ) {
     return new NetworkError({
       message: "Resend reports a different request for the idempotency key",
@@ -295,7 +326,7 @@ const classifyResendDurableRefusal = (error: unknown): EmailSendError => {
   }
   return status !== undefined &&
     [400, 401, 403, 404, 405, 422, 429].includes(status)
-    ? classifyResendError(error)
+    ? classifyResendError(refusal)
     : new NetworkError({
         message: "Resend acceptance is unknown",
         code: status === undefined ? "resend-unclassified" : `http-${status}`,
@@ -344,15 +375,7 @@ export const makeResendEmailAttempt = ({
         policy,
         classifyResendDurableRefusal
       ).pipe(
-        Effect.flatMap((response) =>
-          decodeDeliveryId(
-            typeof response === "object" &&
-              response !== null &&
-              "id" in response
-              ? response.id
-              : undefined
-          )
-        ),
+        Effect.flatMap(decodeResendAcceptance),
         Effect.mapError((error) =>
           error._tag === "NetworkError" &&
           error.failureKind !== "unknown-outcome"
@@ -481,7 +504,7 @@ export const makeResendEmailProvider = ({
               id: response?.id,
             })
           ),
-          Effect.flatMap((response) => decodeDeliveryId(response?.id)),
+          Effect.flatMap(decodeResendAcceptance),
           Effect.tapError((error) =>
             Effect.sync(() => {
               uncertain ||= isUnknownOutcome(error);
@@ -564,8 +587,8 @@ export const makeResendEmailProvider = ({
         }
 
         const timestamp = new Date();
-        return yield* Effect.forEach(ids, ({ id }) =>
-          decodeDeliveryId(id).pipe(
+        return yield* Effect.forEach(ids, (acceptance) =>
+          decodeResendAcceptance(acceptance).pipe(
             Effect.map(
               (deliveryId): EmailSendResult => ({
                 id: deliveryId,

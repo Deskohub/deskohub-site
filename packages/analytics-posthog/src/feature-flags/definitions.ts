@@ -127,62 +127,62 @@ export const loadPostHogFeatureFlagDefinitions = Effect.fn(
     effect.pipe(Effect.provide(PostHogFeatureFlagService.Live(input)))
 );
 
-export const listPostHogFeatureFlagDefinitions = (
+export const listPostHogFeatureFlagDefinitions = Effect.fn(
+  "listPostHogFeatureFlagDefinitions"
+)(function* (
   projectId: PostHogProjectId,
   listPage: PostHogFeatureFlagPageSource
-) =>
-  Effect.gen(function* () {
-    const definitions = new Map<string, PostHogFeatureFlagDefinition>();
+) {
+  const definitions = new Map<string, PostHogFeatureFlagDefinition>();
 
-    for (let offset = 0; ; offset += pageSize) {
-      const page = yield* listPage({
-        limit: pageSize,
-        offset,
-        projectId,
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
+  for (let offset = 0; ; offset += pageSize) {
+    const page = yield* listPage({
+      limit: pageSize,
+      offset,
+      projectId,
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new PostHogFeatureFlagError({
+            message: "Could not list PostHog feature flags.",
+            cause,
+            ...describeListFailure(cause),
+          })
+      ),
+      Effect.timeoutOrElse({
+        duration: pageRequestTimeout,
+        orElse: () =>
+          Effect.fail(
             new PostHogFeatureFlagError({
-              message: "Could not list PostHog feature flags.",
-              cause,
-              ...describeListFailure(cause),
+              message: "PostHog feature flag request timed out.",
+              failureCode: "Timeout",
             })
-        ),
-        Effect.timeoutOrElse({
-          duration: pageRequestTimeout,
-          orElse: () =>
-            Effect.fail(
-              new PostHogFeatureFlagError({
-                message: "PostHog feature flag request timed out.",
-                failureCode: "Timeout",
-              })
-            ),
-        })
-      );
+          ),
+      })
+    );
 
-      for (const featureFlag of page.results) {
-        if (featureFlag.archived || featureFlag.deleted) continue;
+    for (const featureFlag of page.results) {
+      if (featureFlag.archived || featureFlag.deleted) continue;
 
-        const definition = yield* toPostHogFeatureFlagDefinition(featureFlag);
-        if (definitions.has(definition.key)) {
-          return yield* new PostHogFeatureFlagError({
-            message:
-              "PostHog returned the same feature flag key more than once.",
-          });
-        }
-        definitions.set(definition.key, definition);
+      const definition = yield* toPostHogFeatureFlagDefinition(featureFlag);
+      if (definitions.has(definition.key)) {
+        return yield* new PostHogFeatureFlagError({
+          message: "PostHog returned the same feature flag key more than once.",
+        });
       }
-
-      if (
-        page.results.length < pageSize ||
-        offset + page.results.length >= page.count
-      ) {
-        return [...definitions.values()].toSorted((left, right) =>
-          left.key.localeCompare(right.key)
-        );
-      }
+      definitions.set(definition.key, definition);
     }
-  });
+
+    if (
+      page.results.length < pageSize ||
+      offset + page.results.length >= page.count
+    ) {
+      return [...definitions.values()].toSorted((left, right) =>
+        left.key.localeCompare(right.key)
+      );
+    }
+  }
+});
 
 /**
  * The status and failed step of a page request, which logs keep while they
@@ -197,46 +197,47 @@ const describeListFailure = (
       : {};
   }
 
+  const failureCode = cause.reason._tag;
   const httpStatus = cause.response?.status;
-  return {
-    failureCode: cause.reason._tag,
-    ...(httpStatus === undefined ? {} : { httpStatus }),
-  };
+  return httpStatus === undefined
+    ? { failureCode }
+    : { failureCode, httpStatus };
 };
 
-const toPostHogFeatureFlagDefinition = (featureFlag: FeatureFlagSummary) =>
-  Effect.gen(function* () {
-    const key = featureFlag.key.trim();
-    if (!key) {
-      return yield* new PostHogFeatureFlagError({
-        message: "PostHog returned a feature flag with a blank key.",
-      });
-    }
+const toPostHogFeatureFlagDefinition = Effect.fn(
+  "toPostHogFeatureFlagDefinition"
+)(function* (featureFlag: FeatureFlagSummary) {
+  const key = featureFlag.key.trim();
+  if (!key) {
+    return yield* new PostHogFeatureFlagError({
+      message: "PostHog returned a feature flag with a blank key.",
+    });
+  }
 
-    const filters = yield* Schema.decodeUnknownEffect(FeatureFlagFilters)(
-      featureFlag.filters ?? {}
-    ).pipe(
-      Effect.mapError(
-        () =>
-          new PostHogFeatureFlagError({
-            message: `PostHog returned invalid filters for feature flag ${JSON.stringify(key)}.`,
-          })
-      )
-    );
+  const filters = yield* Schema.decodeUnknownEffect(FeatureFlagFilters)(
+    featureFlag.filters ?? {}
+  ).pipe(
+    Effect.mapError(
+      () =>
+        new PostHogFeatureFlagError({
+          message: `PostHog returned invalid filters for feature flag ${JSON.stringify(key)}.`,
+        })
+    )
+  );
 
-    return {
-      constantEnabledValue: getConstantEnabledValue(featureFlag, filters),
-      key,
-      payloads: filters.payloads ?? {},
-      variants: [
-        ...new Set(
-          (filters.multivariate?.variants ?? [])
-            .map((variant) => variant.key.trim())
-            .filter(Boolean)
-        ),
-      ].toSorted((left, right) => left.localeCompare(right)),
-    } satisfies PostHogFeatureFlagDefinition;
-  });
+  return {
+    constantEnabledValue: getConstantEnabledValue(featureFlag, filters),
+    key,
+    payloads: filters.payloads ?? {},
+    variants: [
+      ...new Set(
+        (filters.multivariate?.variants ?? [])
+          .map((variant) => variant.key.trim())
+          .filter(Boolean)
+      ),
+    ].toSorted((left, right) => left.localeCompare(right)),
+  } satisfies PostHogFeatureFlagDefinition;
+});
 
 const getConstantEnabledValue = (
   featureFlag: FeatureFlagSummary,

@@ -74,6 +74,11 @@ jobs:
       - name: Lint Workspace
         run: bun turbo lint --filter=deskohub-workspace
 
+      # Workspace lint reaches only the packages the Workspace depends on, so
+      # every package directory is checked here, uncached, from the root.
+      - name: Lint packages
+        run: bun biome check packages
+
       # A cached shard replays its pass while its inputs are unchanged, so
       # the checks that its inputs cover every file the tests read run here,
       # outside Turbo, on every pull request.

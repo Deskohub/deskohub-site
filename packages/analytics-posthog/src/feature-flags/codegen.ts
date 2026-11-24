@@ -67,11 +67,15 @@ export const generatePostHogFeatureFlagContractFromDefinitions = Effect.fn(
   (
     options: GeneratePostHogFeatureFlagContractFromDefinitionsOptions
   ): Effect.Effect<PostHogFeatureFlagSyncResult, PostHogFeatureFlagError> =>
-    runPostHogFeatureFlagContractGeneration({
-      definitions: Effect.succeed(options.definitions),
-      outputFile: options.outputFile,
-      snapshotFile: options.snapshotFile,
-    })
+    runPostHogFeatureFlagSync.pipe(
+      Effect.provide(
+        featureFlagContractGenerationLayer({
+          definitions: Effect.succeed(options.definitions),
+          outputFile: options.outputFile,
+          snapshotFile: options.snapshotFile,
+        })
+      )
+    )
 );
 
 /**
@@ -81,22 +85,21 @@ export const generatePostHogFeatureFlagContractFromDefinitions = Effect.fn(
 export const generatePostHogFeatureFlagSnapshot = Effect.fn(
   "generatePostHogFeatureFlagSnapshot"
 )(
-  (
-    options: GeneratePostHogFeatureFlagSnapshotOptions
-  ): Effect.Effect<{ readonly flagCount: number }, PostHogFeatureFlagError> =>
-    Effect.gen(function* () {
-      const snapshotFile = yield* PostHogFeatureFlagSnapshotFile;
-      return yield* refreshPostHogFeatureFlagSnapshot({
-        definitions: loadPostHogFeatureFlagDefinitions(options),
-        keys: options.keys,
-        snapshotFile,
-      });
-    }).pipe(
+  function* (options: GeneratePostHogFeatureFlagSnapshotOptions) {
+    const snapshotFile = yield* PostHogFeatureFlagSnapshotFile;
+    return yield* refreshPostHogFeatureFlagSnapshot({
+      definitions: loadPostHogFeatureFlagDefinitions(options),
+      keys: options.keys,
+      snapshotFile,
+    });
+  },
+  (effect, options) =>
+    effect.pipe(
       Effect.provide(PostHogFeatureFlagSnapshotFile.from(options.snapshotFile))
     )
 );
 
-const runPostHogFeatureFlagContractGeneration = ({
+const featureFlagContractGenerationLayer = ({
   definitions,
   outputFile,
   snapshotFile,
@@ -105,8 +108,8 @@ const runPostHogFeatureFlagContractGeneration = ({
     readonly PostHogFeatureFlagDefinition[],
     PostHogFeatureFlagError
   >;
-}) => {
-  const featureFlagSyncLive = PostHogFeatureFlagSync.Default.pipe(
+}) =>
+  PostHogFeatureFlagSync.Default.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(PostHogFeatureFlagService, {
@@ -117,9 +120,6 @@ const runPostHogFeatureFlagContractGeneration = ({
       )
     )
   );
-
-  return runPostHogFeatureFlagSync.pipe(Effect.provide(featureFlagSyncLive));
-};
 
 export type { PostHogFeatureFlagDefinition } from "./definitions";
 export { PostHogFeatureFlagError } from "./errors";

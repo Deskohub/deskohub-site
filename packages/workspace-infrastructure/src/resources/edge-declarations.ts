@@ -156,15 +156,18 @@ export const edgeStaticBackendProps = (
   config: WorkspaceStackConfig,
   edge: WorkspaceEdgeConfig,
   links: EdgeBackendLinks
-) => ({
-  project: config.projectId,
-  name: edgeObjectNames(config).staticBackend,
-  loadBalancingScheme: "EXTERNAL_MANAGED" as const,
-  protocol: "HTTPS" as const,
-  ...links,
-  logConfig: { enable: true, sampleRate: 1 },
-  ...(edge.staticCdnEnabled
+) => {
+  const props = {
+    project: config.projectId,
+    name: edgeObjectNames(config).staticBackend,
+    loadBalancingScheme: "EXTERNAL_MANAGED" as const,
+    protocol: "HTTPS" as const,
+    ...links,
+    logConfig: { enable: true, sampleRate: 1 },
+  };
+  return edge.staticCdnEnabled
     ? {
+        ...props,
         cdnPolicy: {
           cacheMode: "USE_ORIGIN_HEADERS" as const,
           negativeCaching: false,
@@ -175,8 +178,8 @@ export const edgeStaticBackendProps = (
           },
         },
       }
-    : {}),
-});
+    : props;
+};
 
 /**
  * The main URL map: everything to the dynamic backend except the static
@@ -238,119 +241,120 @@ const declaredLink = (resource: string) =>
  * only redirects. A sandbox proof without DNS turns HTTPS off: port 80 then
  * serves the main URL map over plain HTTP and no certificate exists.
  */
-export const declareWorkspaceEdge = (
+export const declareWorkspaceEdge = Effect.fn(
+  "WorkspaceStack.declareWorkspaceEdge"
+)(function* (
   config: WorkspaceStackConfig,
   edge: WorkspaceEdgeConfig,
   /** The declared web service's ID (not its full resource name). */
   webServiceId: Input<string>
-) =>
-  Effect.gen(function* () {
-    const address = yield* Compute.GlobalAddress("EdgeAddress", {
-      addressName: edgeObjectNames(config).address,
-    });
-    const addressLink = address.selfLink.pipe(declaredLink("EdgeAddress"));
-    const endpointGroup = yield* Compute.RegionNetworkEndpointGroup(
-      "EdgeWebEndpointGroup",
-      {
-        networkEndpointGroupName: edgeObjectNames(config).endpointGroup,
-        region: config.region,
-        networkEndpointType: "SERVERLESS",
-        cloudRun: { service: webServiceId },
-      }
-    );
-    const policy = yield* EdgeSecurityPolicy(
-      "EdgeSecurityPolicy",
-      edgeSecurityPolicyProps(config, edge)
-    );
-    const links = {
-      backendGroup: endpointGroup.selfLink.pipe(
-        declaredLink("EdgeWebEndpointGroup")
-      ),
-      securityPolicy: policy.selfLink,
-    };
-    const dynamicBackend = yield* EdgeBackendService(
-      "EdgeDynamicBackend",
-      edgeDynamicBackendProps(config, links)
-    );
-    const staticBackend = yield* EdgeBackendService(
-      "EdgeStaticBackend",
-      edgeStaticBackendProps(config, edge, links)
-    );
-    const urlMap = yield* Compute.UrlMap(
-      "EdgeUrlMap",
-      edgeUrlMapProps(config, edge, {
-        dynamic: dynamicBackend.selfLink,
-        static: staticBackend.selfLink,
-      })
-    );
-    const urlMapLink = urlMap.selfLink.pipe(declaredLink("EdgeUrlMap"));
-
-    let httpTarget: Input<string>;
-    if (edge.enableHttps) {
-      const certificate = yield* Compute.SslCertificate("EdgeCertificate", {
-        sslCertificateName: edgeResourceName(config, "edge"),
-        type: "MANAGED",
-        managed: { domains: [...edge.domains] },
-      });
-      const httpsProxy = yield* Compute.TargetHttpsProxy("EdgeHttpsProxy", {
-        targetHttpsProxyName: edgeResourceName(config, "edge"),
-        urlMap: urlMapLink,
-        sslCertificates: [
-          certificate.selfLink.pipe(declaredLink("EdgeCertificate")),
-        ],
-      });
-      yield* Compute.GlobalForwardingRule("EdgeHttpsForwardingRule", {
-        forwardingRuleName: edgeResourceName(config, "https"),
-        loadBalancingScheme: "EXTERNAL_MANAGED" as const,
-        ipAddress: addressLink,
-        portRange: "443",
-        target: httpsProxy.selfLink.pipe(declaredLink("EdgeHttpsProxy")),
-      });
-      const redirectMap = yield* Compute.UrlMap(
-        "EdgeHttpsRedirectUrlMap",
-        edgeHttpsRedirectUrlMapProps(config)
-      );
-      const redirectProxy = yield* Compute.TargetHttpProxy(
-        "EdgeHttpsRedirectProxy",
-        {
-          targetHttpProxyName: edgeResourceName(config, "https-redirect"),
-          urlMap: redirectMap.selfLink.pipe(
-            declaredLink("EdgeHttpsRedirectUrlMap")
-          ),
-        }
-      );
-      httpTarget = redirectProxy.selfLink.pipe(
-        declaredLink("EdgeHttpsRedirectProxy")
-      );
-    } else {
-      const httpProxy = yield* Compute.TargetHttpProxy("EdgeHttpProxy", {
-        targetHttpProxyName: edgeObjectNames(config).httpProxy,
-        urlMap: urlMapLink,
-      });
-      httpTarget = httpProxy.selfLink.pipe(declaredLink("EdgeHttpProxy"));
+) {
+  const address = yield* Compute.GlobalAddress("EdgeAddress", {
+    addressName: edgeObjectNames(config).address,
+  });
+  const addressLink = address.selfLink.pipe(declaredLink("EdgeAddress"));
+  const endpointGroup = yield* Compute.RegionNetworkEndpointGroup(
+    "EdgeWebEndpointGroup",
+    {
+      networkEndpointGroupName: edgeObjectNames(config).endpointGroup,
+      region: config.region,
+      networkEndpointType: "SERVERLESS",
+      cloudRun: { service: webServiceId },
     }
-    yield* Compute.GlobalForwardingRule("EdgeHttpForwardingRule", {
-      forwardingRuleName: edgeObjectNames(config).httpForwardingRule,
+  );
+  const policy = yield* EdgeSecurityPolicy(
+    "EdgeSecurityPolicy",
+    edgeSecurityPolicyProps(config, edge)
+  );
+  const links = {
+    backendGroup: endpointGroup.selfLink.pipe(
+      declaredLink("EdgeWebEndpointGroup")
+    ),
+    securityPolicy: policy.selfLink,
+  };
+  const dynamicBackend = yield* EdgeBackendService(
+    "EdgeDynamicBackend",
+    edgeDynamicBackendProps(config, links)
+  );
+  const staticBackend = yield* EdgeBackendService(
+    "EdgeStaticBackend",
+    edgeStaticBackendProps(config, edge, links)
+  );
+  const urlMap = yield* Compute.UrlMap(
+    "EdgeUrlMap",
+    edgeUrlMapProps(config, edge, {
+      dynamic: dynamicBackend.selfLink,
+      static: staticBackend.selfLink,
+    })
+  );
+  const urlMapLink = urlMap.selfLink.pipe(declaredLink("EdgeUrlMap"));
+
+  let httpTarget: Input<string>;
+  if (edge.enableHttps) {
+    const certificate = yield* Compute.SslCertificate("EdgeCertificate", {
+      sslCertificateName: edgeResourceName(config, "edge"),
+      type: "MANAGED",
+      managed: { domains: [...edge.domains] },
+    });
+    const httpsProxy = yield* Compute.TargetHttpsProxy("EdgeHttpsProxy", {
+      targetHttpsProxyName: edgeResourceName(config, "edge"),
+      urlMap: urlMapLink,
+      sslCertificates: [
+        certificate.selfLink.pipe(declaredLink("EdgeCertificate")),
+      ],
+    });
+    yield* Compute.GlobalForwardingRule("EdgeHttpsForwardingRule", {
+      forwardingRuleName: edgeResourceName(config, "https"),
       loadBalancingScheme: "EXTERNAL_MANAGED" as const,
       ipAddress: addressLink,
-      portRange: "80",
-      target: httpTarget,
+      portRange: "443",
+      target: httpsProxy.selfLink.pipe(declaredLink("EdgeHttpsProxy")),
     });
-
-    const exclusion = yield* Logging.Exclusion("EdgeTokenRouteExclusion", {
-      exclusionId: edgeObjectNames(config).tokenRouteExclusion,
-      description: "Raw request logs for token-bearing Workspace routes",
-      filter: tokenRouteExclusionFilter,
+    const redirectMap = yield* Compute.UrlMap(
+      "EdgeHttpsRedirectUrlMap",
+      edgeHttpsRedirectUrlMapProps(config)
+    );
+    const redirectProxy = yield* Compute.TargetHttpProxy(
+      "EdgeHttpsRedirectProxy",
+      {
+        targetHttpProxyName: edgeResourceName(config, "https-redirect"),
+        urlMap: redirectMap.selfLink.pipe(
+          declaredLink("EdgeHttpsRedirectUrlMap")
+        ),
+      }
+    );
+    httpTarget = redirectProxy.selfLink.pipe(
+      declaredLink("EdgeHttpsRedirectProxy")
+    );
+  } else {
+    const httpProxy = yield* Compute.TargetHttpProxy("EdgeHttpProxy", {
+      targetHttpProxyName: edgeObjectNames(config).httpProxy,
+      urlMap: urlMapLink,
     });
-
-    return {
-      edgeIpAddress: address.address,
-      edgeProtocol: edge.enableHttps ? ("https" as const) : ("http" as const),
-      securityPolicy: policy.name,
-      backendServices: {
-        dynamic: dynamicBackend.name,
-        static: staticBackend.name,
-      },
-      tokenRouteExclusionFilter: exclusion.filter,
-    };
+    httpTarget = httpProxy.selfLink.pipe(declaredLink("EdgeHttpProxy"));
+  }
+  yield* Compute.GlobalForwardingRule("EdgeHttpForwardingRule", {
+    forwardingRuleName: edgeObjectNames(config).httpForwardingRule,
+    loadBalancingScheme: "EXTERNAL_MANAGED" as const,
+    ipAddress: addressLink,
+    portRange: "80",
+    target: httpTarget,
   });
+
+  const exclusion = yield* Logging.Exclusion("EdgeTokenRouteExclusion", {
+    exclusionId: edgeObjectNames(config).tokenRouteExclusion,
+    description: "Raw request logs for token-bearing Workspace routes",
+    filter: tokenRouteExclusionFilter,
+  });
+
+  return {
+    edgeIpAddress: address.address,
+    edgeProtocol: edge.enableHttps ? ("https" as const) : ("http" as const),
+    securityPolicy: policy.name,
+    backendServices: {
+      dynamic: dynamicBackend.name,
+      static: staticBackend.name,
+    },
+    tokenRouteExclusionFilter: exclusion.filter,
+  };
+});

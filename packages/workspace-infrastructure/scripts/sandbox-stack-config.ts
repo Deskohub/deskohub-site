@@ -51,52 +51,61 @@ const serviceAccount = (projectId: string, name: string) =>
  */
 export const sandboxProofStackConfigInput = (
   identity: SandboxProofIdentity
-) => ({
-  stage: "sandbox",
-  projectId: identity.projectId,
-  projectNumber: identity.projectNumber,
-  region: identity.region,
-  stateBucket: identity.stateBucket,
-  mobileUpdatesBucket: `${identity.projectId}-mobile-updates`,
-  serviceAccounts: {
-    deployer: serviceAccount(identity.projectId, "workspace-deployer"),
-    webRuntime: serviceAccount(identity.projectId, "workspace-web"),
-    tasksWorkerRuntime: serviceAccount(
-      identity.projectId,
-      "workspace-tasks-worker"
-    ),
-    schedulerWorkerRuntime: serviceAccount(
-      identity.projectId,
-      "workspace-scheduler-worker"
-    ),
-    tasksInvoker: serviceAccount(identity.projectId, "workspace-tasks-invoker"),
-    schedulerInvoker: serviceAccount(
-      identity.projectId,
-      "workspace-scheduler-invoker"
-    ),
-    mobileUpdatesPublisher: serviceAccount(
-      identity.projectId,
-      "workspace-mobile-publisher"
-    ),
-  },
-  secrets: [],
-  capacity: {
-    webMaxInstances: 1,
-    workerMaxInstances: 1,
-    queueMaxConcurrentDispatches: 1,
-    queueMaxDispatchesPerSecond: 1,
-  },
-  schedulesEnabled: false,
-  alertNotificationChannels: [],
-  budget: sandboxProofBudget,
-  edge: sandboxProofEdge,
-  ...(identity.telemetryCollectorImage === undefined
-    ? {}
-    : { telemetryCollectorImage: identity.telemetryCollectorImage }),
-  ...(identity.disposableQueueSuffix === undefined
-    ? {}
-    : { disposableQueueSuffix: identity.disposableQueueSuffix }),
-});
+) => {
+  const input = {
+    stage: "sandbox",
+    projectId: identity.projectId,
+    projectNumber: identity.projectNumber,
+    region: identity.region,
+    stateBucket: identity.stateBucket,
+    mobileUpdatesBucket: `${identity.projectId}-mobile-updates`,
+    serviceAccounts: {
+      deployer: serviceAccount(identity.projectId, "workspace-deployer"),
+      webRuntime: serviceAccount(identity.projectId, "workspace-web"),
+      tasksWorkerRuntime: serviceAccount(
+        identity.projectId,
+        "workspace-tasks-worker"
+      ),
+      schedulerWorkerRuntime: serviceAccount(
+        identity.projectId,
+        "workspace-scheduler-worker"
+      ),
+      tasksInvoker: serviceAccount(
+        identity.projectId,
+        "workspace-tasks-invoker"
+      ),
+      schedulerInvoker: serviceAccount(
+        identity.projectId,
+        "workspace-scheduler-invoker"
+      ),
+      mobileUpdatesPublisher: serviceAccount(
+        identity.projectId,
+        "workspace-mobile-publisher"
+      ),
+    },
+    secrets: [],
+    capacity: {
+      webMaxInstances: 1,
+      workerMaxInstances: 1,
+      queueMaxConcurrentDispatches: 1,
+      queueMaxDispatchesPerSecond: 1,
+    },
+    schedulesEnabled: false,
+    alertNotificationChannels: [],
+    budget: sandboxProofBudget,
+    edge: sandboxProofEdge,
+  };
+  const withCollector =
+    identity.telemetryCollectorImage === undefined
+      ? input
+      : { ...input, telemetryCollectorImage: identity.telemetryCollectorImage };
+  return identity.disposableQueueSuffix === undefined
+    ? withCollector
+    : {
+        ...withCollector,
+        disposableQueueSuffix: identity.disposableQueueSuffix,
+      };
+};
 
 /** Build and decode the config with the package schema; returns its JSON. */
 export const sandboxProofStackConfig = (identity: SandboxProofIdentity) =>

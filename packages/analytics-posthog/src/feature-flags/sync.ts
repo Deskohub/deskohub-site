@@ -44,7 +44,7 @@ const makeGeneratedFile = (
   outputFile: string | URL
 ): IPostHogFeatureFlagGeneratedFile => {
   const path =
-    typeof outputFile === "string" ? outputFile : Bun.fileURLToPath(outputFile);
+    outputFile instanceof URL ? Bun.fileURLToPath(outputFile) : outputFile;
 
   return {
     path,
@@ -88,7 +88,9 @@ export const runPostHogFeatureFlagSync = Effect.gen(function* () {
 });
 
 /** Writes the contract when it changed and the snapshot every time. */
-export const syncPostHogFeatureFlagContract = ({
+export const syncPostHogFeatureFlagContract = Effect.fn(
+  "syncPostHogFeatureFlagContract"
+)(function* ({
   contractFile,
   definitions,
   snapshotFile,
@@ -99,31 +101,30 @@ export const syncPostHogFeatureFlagContract = ({
     PostHogFeatureFlagError
   >;
   readonly snapshotFile: IPostHogFeatureFlagGeneratedFile;
-}) =>
-  Effect.gen(function* () {
-    const featureFlags = yield* definitions;
-    const content = yield* renderPostHogFeatureFlagContract(featureFlags);
-    const snapshot = yield* renderSnapshot(
-      featureFlags,
-      featureFlags.map(({ key }) => key)
-    );
-    const existingContent = yield* contractFile.read;
-    const status =
-      existingContent === content
-        ? ("unchanged" as const)
-        : ("updated" as const);
+}) {
+  const featureFlags = yield* definitions;
+  const content = yield* renderPostHogFeatureFlagContract(featureFlags);
+  const snapshot = yield* renderSnapshot(
+    featureFlags,
+    featureFlags.map(({ key }) => key)
+  );
+  const existingContent = yield* contractFile.read;
+  const status =
+    existingContent === content ? ("unchanged" as const) : ("updated" as const);
 
-    if (status === "updated") yield* contractFile.write(content);
-    yield* snapshotFile.write(snapshot);
+  if (status === "updated") yield* contractFile.write(content);
+  yield* snapshotFile.write(snapshot);
 
-    return { flagCount: featureFlags.length, status };
-  });
+  return { flagCount: featureFlags.length, status };
+});
 
 /**
  * Rewrites only the snapshot, for the keys of a contract that stays as it
  * is, such as the committed one during a build.
  */
-export const refreshPostHogFeatureFlagSnapshot = ({
+export const refreshPostHogFeatureFlagSnapshot = Effect.fn(
+  "refreshPostHogFeatureFlagSnapshot"
+)(function* ({
   definitions,
   keys,
   snapshotFile,
@@ -134,12 +135,11 @@ export const refreshPostHogFeatureFlagSnapshot = ({
   >;
   readonly keys: readonly string[];
   readonly snapshotFile: IPostHogFeatureFlagGeneratedFile;
-}) =>
-  Effect.gen(function* () {
-    const snapshot = yield* renderSnapshot(yield* definitions, keys);
-    yield* snapshotFile.write(snapshot);
-    return { flagCount: keys.length };
-  });
+}) {
+  const snapshot = yield* renderSnapshot(yield* definitions, keys);
+  yield* snapshotFile.write(snapshot);
+  return { flagCount: keys.length };
+});
 
 const renderSnapshot = (
   definitions: readonly PostHogFeatureFlagDefinition[],

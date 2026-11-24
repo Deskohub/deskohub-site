@@ -24,10 +24,10 @@ import { evaluate } from "./stack-evaluation.test-utils";
 
 const domains = ["workspace.example.com"];
 
-const decode = (input: unknown) =>
+const decode = (input: Schema.Json) =>
   Effect.runSyncExit(decodeWorkspaceStackConfig(input));
 
-const decoded = (input: unknown): WorkspaceStackConfig => {
+const decoded = (input: Schema.Json): WorkspaceStackConfig => {
   const exit = decode(input);
   if (Exit.isFailure(exit)) {
     throw new Error("expected the config to decode");
@@ -35,7 +35,7 @@ const decoded = (input: unknown): WorkspaceStackConfig => {
   return exit.value;
 };
 
-const rejection = (input: unknown) => {
+const rejection = (input: Schema.Json) => {
   const exit = decode(input);
   if (Exit.isSuccess(exit)) {
     throw new Error("expected the config to be rejected");

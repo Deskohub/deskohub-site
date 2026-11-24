@@ -1,7 +1,6 @@
 import { Context, Effect, Layer, Predicate, Ref, Schema, Stream } from "effect";
 import {
   HttpClient,
-  HttpClientError,
   HttpClientRequest,
   type HttpClientResponse,
 } from "effect/http";
@@ -182,8 +181,13 @@ export const makeIgloohomeClient = ({
     }
   );
 
+/** A failure the generated client can raise while issuing an hourly AlgoPIN. */
+type AlgoPinProviderFailure = Effect.Error<
+  ReturnType<IgloohomeClient["createHourlyAlgoPin"]>
+>;
+
 export const mapAlgoPinRequestError = (
-  error: unknown
+  error: IgloohomeRequestError | AlgoPinProviderFailure
 ): IgloohomeRequestError => {
   if (error instanceof IgloohomeRequestError) return error;
 
@@ -204,15 +208,10 @@ export const mapAlgoPinRequestError = (
   });
 };
 
-const getResponseStatus = (error: unknown): number | undefined => {
-  if (HttpClientError.isHttpClientError(error)) return error.response?.status;
-  if (
-    Predicate.hasProperty(error, "response") &&
-    Predicate.isObject(error.response) &&
-    Predicate.hasProperty(error.response, "status") &&
-    Predicate.isNumber(error.response.status)
-  ) {
-    return error.response.status;
-  }
-  return undefined;
+const getResponseStatus = (
+  failure: AlgoPinProviderFailure
+): number | undefined => {
+  if (failure._tag === "HttpClientError") return failure.response?.status;
+  if (failure._tag === "SchemaError") return undefined;
+  return failure.response.status;
 };

@@ -12,7 +12,7 @@
     "./sign-in-email": "./src/sign-in-email.ts"
   },
   "scripts": {
-    "lint": "cd ../.. && biome check packages/workspace-customer-api/src --config-path biome.json --vcs-root .",
+    "lint": "biome check .",
     "test": "bun test",
     "typecheck": "tsc --project tsconfig.json"
   },

@@ -1,4 +1,4 @@
-import { Array as Arr, Schema } from "effect";
+import { Array as Arr, Predicate, Schema } from "effect";
 import {
   EmailCustomerField,
   selectedEmailCustomerShape,
@@ -75,12 +75,12 @@ const matchesSourceValue = (
 
 /** A discount is exactly a non-empty code and a parseable expiry. */
 const isDiscountValue = (value: JsonValue) =>
-  typeof value === "object" &&
+  Predicate.isObjectKeyword(value) &&
   !Arr.isArray<Schema.Json>(value) &&
   Object.keys(value).length === 2 &&
-  typeof value.code === "string" &&
+  Predicate.isString(value.code) &&
   value.code.length > 0 &&
-  typeof value.expiresAt === "string" &&
+  Predicate.isString(value.expiresAt) &&
   Number.isFinite(Date.parse(value.expiresAt));
 
 const exceedsSelectionLimit = (

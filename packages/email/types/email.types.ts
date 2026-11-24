@@ -51,7 +51,7 @@ export interface EmailMessage {
   headers?: Record<string, string>;
   idempotencyKey?: string;
   tags?: string[];
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, EmailMetadataValue>;
   /** Providers suppress recipient and content when this message may carry secrets. */
   sensitiveContent?: boolean;
   /**
@@ -83,6 +83,12 @@ export interface EmailSendFailure {
 
 /** One message's outcome in a batch, in the batch's message order. */
 export type EmailBatchResult = EmailSendResult | EmailSendFailure;
+
+/**
+ * A metadata value a message carries for its providers and delivery
+ * reports, such as a source name, a record id, or an attempt count.
+ */
+export type EmailMetadataValue = string | number | boolean | null | undefined;
 
 /**
  * Email delivery configuration. The email service reads only `defaultFrom`;

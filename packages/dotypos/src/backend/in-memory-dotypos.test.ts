@@ -7,7 +7,7 @@ import {
   DotyposReservationNotRestorable,
   DotyposUnavailable,
 } from "../errors";
-import type { Reservation } from "../generated/effect.gen";
+import type { Customer, Reservation } from "../generated/effect.gen";
 import { dotyposIdReadBatchSize } from "../id-reads";
 import {
   DotyposCustomerIdSchema,
@@ -30,7 +30,16 @@ const customerId = Schema.decodeUnknownSync(DotyposCustomerIdSchema);
 const reservationId = Schema.decodeUnknownSync(DotyposReservationIdSchema);
 const discountGroupId = Schema.decodeUnknownSync(DotyposDiscountGroupIdSchema);
 
-const customer = (id: string, overrides: Record<string, unknown> = {}) =>
+/** A written record's version; every in-memory write sets one. */
+const versionOf = <Version extends string | number | bigint>(record: {
+  readonly versionDate?: Version | null;
+}) => {
+  const { versionDate } = record;
+  if (versionDate == null) throw new Error("Expected a versioned record");
+  return versionDate;
+};
+
+const customer = (id: string, overrides: Partial<Customer> = {}) =>
   Schema.decodeUnknownSync(DotyposCustomerSchema)({
     _cloudId: "cloud-id",
     id,
@@ -355,7 +364,7 @@ describe("makeInMemoryDotypos reservation transitions", () => {
     const again = await run(service.confirmReservation(created.id));
 
     expect(confirmed.status).toBe("CONFIRMED");
-    expect(confirmed.versionDate! > created.versionDate!).toBe(true);
+    expect(versionOf(confirmed) > versionOf(created)).toBe(true);
     expect(again).toEqual(confirmed);
     expect(await run(service.getReservationStatus(created.id))).toBe(
       "CONFIRMED"
@@ -403,9 +412,7 @@ describe("makeInMemoryDotypos reservation transitions", () => {
 
     expect(restored._tag).toBe("Restored");
     expect(restored.reservation.status).toBe("CONFIRMED");
-    expect(restored.reservation.versionDate! > cancelled.versionDate!).toBe(
-      true
-    );
+    expect(versionOf(restored.reservation) > versionOf(cancelled)).toBe(true);
     expect(again).toMatchObject({
       _tag: "AlreadyConfirmed",
       reservation: restored.reservation,
@@ -552,13 +559,12 @@ describe("makeInMemoryDotypos reservation transitions", () => {
 });
 
 describe("makeInMemoryDotypos customer writes", () => {
-  const discountGroups = [
-    Schema.decodeUnknownSync(DotyposDiscountGroupSchema)({
-      id: "group-10",
-      name: "Ten",
-      discountPercent: "10",
-    }),
-  ];
+  const groupTen = Schema.decodeUnknownSync(DotyposDiscountGroupSchema)({
+    id: "group-10",
+    name: "Ten",
+    discountPercent: "10",
+  });
+  const discountGroups = [groupTen];
 
   test("sets and clears a discount group, each under a new version", async () => {
     const { service } = makeInMemoryDotypos({
@@ -577,10 +583,10 @@ describe("makeInMemoryDotypos customer writes", () => {
 
     expect(group).toEqual({
       discountGroupId: discountGroupId("group-10"),
-      discountPercent: discountGroups[0]!.discountPercent,
+      discountPercent: groupTen.discountPercent,
     });
     expect(cleared._discountGroupId).toBeNull();
-    expect(cleared.versionDate! > set.versionDate!).toBe(true);
+    expect(versionOf(cleared) > versionOf(set)).toBe(true);
     expect(
       await run(service.getCustomerDiscountGroup({ customerId: id }))
     ).toBeUndefined();

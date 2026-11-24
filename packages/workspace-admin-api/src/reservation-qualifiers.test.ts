@@ -6,7 +6,7 @@ import { AutomationTrigger } from "./email-automations";
 const cowork = { family: "cowork", properties: [] };
 const meetingRoom = { family: "meeting-room", properties: [] };
 
-const reservationCount = (params: Record<string, unknown>) => ({
+const reservationCount = (params: Schema.JsonObject) => ({
   attribute: "reservationCount",
   _tag: "Condition",
   params: { period: { _tag: "Last", count: 60, unit: "day" }, ...params },

@@ -31,9 +31,7 @@ export const readByIds = <Id extends string, A extends { readonly id: Id }>(
         read(batch).pipe(
           Effect.catch((failure) =>
             options.onBatchFailure
-              ? options
-                  .onBatchFailure(failure)
-                  .pipe(Effect.as([] as readonly A[]))
+              ? options.onBatchFailure(failure).pipe(Effect.as(Arr.empty<A>()))
               : Effect.fail(failure)
           )
         ),

@@ -90,7 +90,7 @@ export const parseLocalizedValues = (
       }
       values.set(locale, entry.slice(separator + 1));
     }
-    return values as LocalizedValues;
+    return values;
   });
 
 const parseCampaignLocale = (flag: string, value: string) =>
@@ -125,7 +125,7 @@ const requireLocalizedText = (flag: string, values: LocalizedValues) =>
     for (const [locale, value] of values) {
       trimmed.set(locale, yield* requireText(`${flag} ${locale}`, value));
     }
-    return trimmed as LocalizedValues;
+    return trimmed;
   });
 
 /** Fails when a repeated locale flag names the same locale twice. */
@@ -161,7 +161,7 @@ export const readBodies = (paths: LocalizedValues) =>
       );
       bodies.set(locale, body);
     }
-    return bodies as LocalizedValues;
+    return bodies;
   });
 
 export interface LocalizedContentFlags {

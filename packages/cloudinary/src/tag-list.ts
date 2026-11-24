@@ -1,7 +1,7 @@
 import "server-only";
 
-import { v2 as cloudinary } from "cloudinary";
-import { Duration, Effect, Order, pipe } from "effect";
+import { v2 as cloudinary, type UrlOptions } from "cloudinary";
+import { Duration, Effect, Order, pipe, type Types } from "effect";
 import {
   HttpClient,
   type HttpClientError,
@@ -142,20 +142,23 @@ export function makeTaggedAssetLister(
     );
 
   const toAsset = (entry: TagListEntry): CloudinaryAsset => {
-    const deliveryOptions = (secure: boolean) => ({
-      resource_type: "image",
-      type: entry.type ?? "upload",
-      format: entry.format,
-      secure,
-      sign_url: false,
-      cloud_name: config.cloudName,
-      urlAnalytics: false,
-      ...(entry.version === undefined
-        ? {}
-        : { version: String(entry.version) }),
-    });
+    const deliveryOptions = (secure: boolean) => {
+      const options: UrlOptions = {
+        resource_type: "image",
+        type: entry.type ?? "upload",
+        format: entry.format,
+        secure,
+        sign_url: false,
+        cloud_name: config.cloudName,
+        urlAnalytics: false,
+      };
+      if (entry.version !== undefined) {
+        options.version = String(entry.version);
+      }
+      return options;
+    };
 
-    return {
+    const asset: Types.Mutable<CloudinaryAsset> = {
       public_id: entry.public_id,
       secure_url: cloudinary.url(entry.public_id, deliveryOptions(true)),
       url: cloudinary.url(entry.public_id, deliveryOptions(false)),
@@ -164,9 +167,14 @@ export function makeTaggedAssetLister(
       format: entry.format,
       resource_type: "image",
       created_at: entry.created_at,
-      ...(entry.version === undefined ? {} : { version: entry.version }),
-      ...(entry.context === undefined ? {} : { context: entry.context }),
     };
+    if (entry.version !== undefined) {
+      asset.version = entry.version;
+    }
+    if (entry.context !== undefined) {
+      asset.context = entry.context;
+    }
+    return asset;
   };
 
   return Effect.fn("CloudinaryService.listTaggedAssets")(function* <

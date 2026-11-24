@@ -8,11 +8,23 @@ import {
   runAgainst,
   successOf,
 } from "./posthog-email.test-utils";
-import { fetchPostHogEmailStatus } from "./posthog-email-status";
+import {
+  fetchPostHogEmailStatus,
+  type PostHogEmailStatusError,
+} from "./posthog-email-status";
+
+/** Status answer fields a test overrides, valid or not. */
+type StatusAnswerFields = {
+  readonly id?: string | undefined;
+  readonly status?: string;
+  readonly created_at?: string;
+  readonly status_at?: string | null;
+  readonly reason?: string | null;
+};
 
 const messageId = "0197a5e1-1b52-7c4e-9f5a-2d3b4c5d6e7f";
 
-const statusAnswer = (fields: Record<string, unknown>) => ({
+const statusAnswer = (fields: StatusAnswerFields) => ({
   status: 200,
   body: {
     id: messageId,
@@ -120,7 +132,11 @@ describe("fetchPostHogEmailStatus", () => {
     );
   });
 
-  const failures: readonly [string, FakeAnswer, Record<string, unknown>][] = [
+  const failures: readonly [
+    string,
+    FakeAnswer,
+    Pick<PostHogEmailStatusError, "reason" | "retryAfterSeconds">,
+  ][] = [
     [
       "a throttled read is rate-limited with its Retry-After",
       refused(429, "throttled", { "Retry-After": "12" }),

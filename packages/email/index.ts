@@ -35,6 +35,7 @@ export type {
   EmailConfig,
   EmailDeliveryId,
   EmailMessage,
+  EmailMetadataValue,
   EmailProviderConfig,
   EmailRecipient,
   EmailSendFailure,

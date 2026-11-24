@@ -122,18 +122,19 @@ const servingReleaseOf = (record: ReleaseRecord): ServingRelease | null =>
  * non-cancelling concurrency group per stage, so a run is never cancelled
  * mid-apply and no second run starts beside it.
  */
-export const readFencedReleaseRecord = (expectedGeneration: number) =>
-  Effect.gen(function* () {
-    const store = yield* ReleaseRecordStore;
-    const { record } = yield* store.read;
-    if (record.generation !== expectedGeneration) {
-      return yield* new StaleReleaseGeneration({
-        expectedGeneration,
-        currentGeneration: record.generation,
-      });
-    }
-    return record;
-  });
+export const readFencedReleaseRecord = Effect.fn(
+  "WorkspaceRelease.readFencedReleaseRecord"
+)(function* (expectedGeneration: number) {
+  const store = yield* ReleaseRecordStore;
+  const { record } = yield* store.read;
+  if (record.generation !== expectedGeneration) {
+    return yield* new StaleReleaseGeneration({
+      expectedGeneration,
+      currentGeneration: record.generation,
+    });
+  }
+  return record;
+});
 
 const unavailableTraffic: TrafficReadback = {
   servingRevision: null,
@@ -168,11 +169,8 @@ const contractDrift = (
  * change from what the web service actually serves. Contract drift fails
  * before the record changes.
  */
-const settleFromReadback = (
-  config: WorkspaceStackConfig,
-  expectedGeneration: number
-) =>
-  Effect.gen(function* () {
+const settleFromReadback = Effect.fn("WorkspaceRelease.settleFromReadback")(
+  function* (config: WorkspaceStackConfig, expectedGeneration: number) {
     const observed = yield* observeReleaseServices;
     const drift = observed.flatMap(({ service }) =>
       contractDrift(config, service)
@@ -185,10 +183,10 @@ const settleFromReadback = (
         observed.find((entry) => entry.workload === workload)?.service ?? null;
       return service === null ? unavailableTraffic : trafficReadback(service);
     };
-    const workers: Record<ReleaseWorker, TrafficReadback> = {
+    const workers = {
       "tasks-worker": readbackOf("tasks-worker"),
       "scheduler-worker": readbackOf("scheduler-worker"),
-    };
+    } satisfies Record<ReleaseWorker, TrafficReadback>;
     const now = yield* DateTime.now;
     return yield* runLockedReleaseStep((record) =>
       settleApply(record, {
@@ -198,32 +196,30 @@ const settleFromReadback = (
         now,
       }).pipe(Effect.map((next) => ({ record: next, result: next })))
     );
-  });
+  }
+);
 
 /**
  * Apply the record persisted at `generation`, then settle its pending
  * traffic change once readback shows the target serving. Readback that
  * never converges leaves the intent pending for `recoverRelease`.
  */
-const applyAndSettle = (
+const applyAndSettle = Effect.fn("WorkspaceRelease.applyAndSettle")(function* (
   config: WorkspaceStackConfig,
   generation: number,
   policy: ReleaseReadbackPolicy
-) =>
-  Effect.gen(function* () {
-    yield* requireDeclarableTemplate(config);
-    yield* applyAsWriter({ action: "deploy", generation });
-    const settled = yield* settleFromReadback(config, generation).pipe(
-      Effect.retry(retryWhile(policy, "ReleaseApplyNotObserved"))
-    );
-    const serving = servingReleaseOf(settled);
-    if (serving === null) {
-      return yield* Effect.die(
-        "A settled release record has no active release"
-      );
-    }
-    return serving;
-  });
+) {
+  yield* requireDeclarableTemplate(config);
+  yield* applyAsWriter({ action: "deploy", generation });
+  const settled = yield* settleFromReadback(config, generation).pipe(
+    Effect.retry(retryWhile(policy, "ReleaseApplyNotObserved"))
+  );
+  const serving = servingReleaseOf(settled);
+  if (serving === null) {
+    return yield* Effect.die("A settled release record has no active release");
+  }
+  return serving;
+});
 
 /** The web service's live template as Cloud Run reports it now. */
 const readLiveTemplate = Effect.gen(function* () {
@@ -323,12 +319,12 @@ const holdsCandidateAtZero = (
  * confirm the active release still serves everything while the candidate
  * holds no traffic.
  */
-const observeCandidate = (
-  candidate: ReleaseDeployment,
-  active: VerifiedDeployment,
-  policy: ReleaseReadbackPolicy
-) =>
-  Effect.gen(function* () {
+const observeCandidate = Effect.fn("WorkspaceRelease.observeCandidate")(
+  function* (
+    candidate: ReleaseDeployment,
+    active: VerifiedDeployment,
+    _policy: ReleaseReadbackPolicy
+  ) {
     const readback = yield* ReleaseServiceReadback;
     const observed = yield* readback.revision(candidate.revision);
     const web = yield* readback.service("web");
@@ -342,7 +338,10 @@ const observeCandidate = (
       });
     }
     return { revision: observed.revision, imageDigest: observed.imageDigest };
-  }).pipe(Effect.retry(retryWhile(policy, "CandidateNotVerified")));
+  },
+  (effect, _candidate, _active, policy) =>
+    effect.pipe(Effect.retry(retryWhile(policy, "CandidateNotVerified")))
+);
 
 export interface DeliverReleaseInput {
   readonly sha: GitSha;
@@ -356,65 +355,64 @@ export interface DeliverReleaseInput {
  * before it wrote. A first release whose promotion never settled is
  * replaced by this build, staged and promoted in one step.
  */
-const deliver = (
+const deliver = Effect.fn("WorkspaceRelease.deliver")(function* (
   config: WorkspaceStackConfig,
   input: DeliverReleaseInput,
   policy: ReleaseReadbackPolicy
-) =>
-  Effect.gen(function* () {
-    const liveTemplate = yield* readLiveTemplate;
-    const now = yield* DateTime.now;
-    const staged = yield* runLockedReleaseStep((record) =>
-      // The lost-record guard reads the very version this step replaces.
-      requireRecordCoversLiveService(record).pipe(
-        Effect.andThen(
-          stage(record, {
-            expectedGeneration: record.generation,
-            sha: input.sha,
-            imageDigest: input.imageDigest,
-            origin: "cloud-run",
-            liveTemplate,
-            now,
-          } satisfies StageInput)
-        ),
-        Effect.map(({ releaseId, promoted, record: next }) => ({
-          record: next,
-          result: {
-            releaseId,
-            promoted,
-            generation: next.generation,
-            candidate: next.candidate,
-            active: next.active,
-          },
-        }))
-      )
-    );
-    if (staged.promoted) {
-      return yield* applyAndSettle(config, staged.generation, policy);
-    }
-    const { candidate, active } = staged;
-    if (candidate === null) {
-      return yield* Effect.die("A staged release record has no candidate");
-    }
-    // The very first release has no service yet: promotion creates it.
-    const candidateReadback =
-      active === null
-        ? null
-        : yield* applyAsWriter({
-            action: "deploy",
-            generation: staged.generation,
-          }).pipe(Effect.andThen(observeCandidate(candidate, active, policy)));
-    const promotedAt = yield* DateTime.now;
-    const promotedGeneration = yield* runLockedReleaseStep((record) =>
-      promote(record, {
-        expectedGeneration: staged.generation,
-        releaseId: staged.releaseId,
-        now: promotedAt,
-        candidateReadback,
-      }).pipe(Effect.map((next) => ({ record: next, result: next.generation })))
-    );
-    return yield* applyAndSettle(config, promotedGeneration, policy);
-  });
+) {
+  const liveTemplate = yield* readLiveTemplate;
+  const now = yield* DateTime.now;
+  const staged = yield* runLockedReleaseStep((record) =>
+    // The lost-record guard reads the very version this step replaces.
+    requireRecordCoversLiveService(record).pipe(
+      Effect.andThen(
+        stage(record, {
+          expectedGeneration: record.generation,
+          sha: input.sha,
+          imageDigest: input.imageDigest,
+          origin: "cloud-run",
+          liveTemplate,
+          now,
+        } satisfies StageInput)
+      ),
+      Effect.map(({ releaseId, promoted, record: next }) => ({
+        record: next,
+        result: {
+          releaseId,
+          promoted,
+          generation: next.generation,
+          candidate: next.candidate,
+          active: next.active,
+        },
+      }))
+    )
+  );
+  if (staged.promoted) {
+    return yield* applyAndSettle(config, staged.generation, policy);
+  }
+  const { candidate, active } = staged;
+  if (candidate === null) {
+    return yield* Effect.die("A staged release record has no candidate");
+  }
+  // The very first release has no service yet: promotion creates it.
+  const candidateReadback =
+    active === null
+      ? null
+      : yield* applyAsWriter({
+          action: "deploy",
+          generation: staged.generation,
+        }).pipe(Effect.andThen(observeCandidate(candidate, active, policy)));
+  const promotedAt = yield* DateTime.now;
+  const promotedGeneration = yield* runLockedReleaseStep((record) =>
+    promote(record, {
+      expectedGeneration: staged.generation,
+      releaseId: staged.releaseId,
+      now: promotedAt,
+      candidateReadback,
+    }).pipe(Effect.map((next) => ({ record: next, result: next.generation })))
+  );
+  return yield* applyAndSettle(config, promotedGeneration, policy);
+});
 
 /** Deliver one build as the stage's only writer. */
 export const deliverRelease = Effect.fn("WorkspaceRelease.deliver")(function* (
