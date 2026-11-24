@@ -2,6 +2,7 @@
 // each SandboxProbeRpcs RPC over POST /rpc with SchemaBinary and reports one
 // verdict. Failures name the step and error tag only, and every remote string
 // in the verdict is redacted, so it never carries the token or the marker.
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as Layer from "effect/Layer";
@@ -55,6 +56,11 @@ export const setupFailureVerdict = (failure: string): ProbeVerdict => ({
   failures: [failure],
 });
 
+const printable = (contentType: string) =>
+  contentType === "" || printableContentType.test(contentType)
+    ? contentType
+    : "[unprintable]";
+
 interface RpcResponseMeta {
   readonly status: number;
   readonly contentType: string;
@@ -62,8 +68,31 @@ interface RpcResponseMeta {
 
 const HealthBody = Schema.Struct({
   status: Schema.Literal("ok"),
-  version: Schema.String,
+  version: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._-]{1,64}$/)),
 });
+
+/** A content type the verdict may print; anything else shows as a placeholder. */
+const printableContentType = /^[\w.+/-]{1,64}(?:;\s*[\w.+/=-]{1,64})*$/;
+
+/** Generous: the hosted proof's cold starts can take tens of seconds. */
+const stepTimeout = Duration.seconds(60);
+
+/**
+ * Bounds a step and turns its defects and timeout into safe failures, so the
+ * probe always reaches a verdict. Interruption still propagates.
+ */
+const settleStep =
+  (name: string) =>
+  <A>(
+    step: Effect.Effect<Result.Result<A, string>>
+  ): Effect.Effect<Result.Result<A, string>> =>
+    step.pipe(
+      Effect.catchDefect(() => Effect.succeed(Result.fail(`${name}: defect`))),
+      Effect.timeoutOrElse({
+        duration: stepTimeout,
+        orElse: () => Effect.succeed(Result.fail(`${name}: timeout`)),
+      })
+    );
 
 const expectedCount = 3;
 
@@ -93,7 +122,7 @@ const observeResponses =
           ...seen,
           {
             status: response.status,
-            contentType: response.headers["content-type"] ?? "",
+            contentType: printable(response.headers["content-type"] ?? ""),
           },
         ])
       )
@@ -149,7 +178,9 @@ const probeRpcClient = (
 type ProbeRpcClient = Effect.Success<ReturnType<typeof probeRpcClient>>;
 
 const checkHealth = (http: HttpClient.HttpClient, origin: string) =>
-  http.get(`${origin}/healthz`).pipe(
+  // Cloud Run reserves some paths ending in "z" on its public URL, so the
+  // caller uses /health; the startup probe keeps /healthz.
+  http.get(`${origin}/health`).pipe(
     Effect.mapError((error) => `healthz: ${error._tag}`),
     Effect.flatMap((response) =>
       response.status === 200
@@ -159,14 +190,16 @@ const checkHealth = (http: HttpClient.HttpClient, origin: string) =>
           )
         : Effect.fail(`healthz: status ${response.status}`)
     ),
-    Effect.result
+    Effect.result,
+    settleStep("healthz")
   );
 
 const ingestMarker = (rpc: ProbeRpcClient, marker: string) =>
   rpc["Probe.ingest"]({ marker }).pipe(
     Effect.map(({ markerSha256 }) => markerSha256),
     Effect.mapError((error) => `Probe.ingest: ${error._tag}`),
-    Effect.result
+    Effect.result,
+    settleStep("Probe.ingest")
   );
 
 const decodeRejection = (
@@ -179,13 +212,15 @@ const decodeRejection = (
         Effect.succeed(Result.succeed("ProbeRejected" as const)),
       RpcClientError: (error) =>
         Effect.succeed(Result.fail(`Probe.fail: ${error._tag}`)),
-    })
+    }),
+    settleStep("Probe.fail")
   );
 
 const collectCount = (rpc: ProbeRpcClient) =>
   Stream.runCollect(rpc["Probe.count"]({ n: expectedCount })).pipe(
     Effect.mapError((error) => `Probe.count: ${error._tag}`),
-    Effect.result
+    Effect.result,
+    settleStep("Probe.count")
   );
 
 interface ProbeSteps {

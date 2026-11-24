@@ -195,14 +195,19 @@ describe("sandbox RPC probe verdict against an impostor", () => {
 });
 
 describe("sandbox-rpc-probe CLI", () => {
-  const runCli = (origin: string, expectVersion: string, writeToken = true) =>
+  const runCli = (
+    origin: string,
+    expectVersion: string,
+    writeToken = true,
+    markerContent = `${marker}\n`
+  ) =>
     Effect.promise(async () => {
       const dir = await mkdtemp(join(tmpdir(), "sandbox-rpc-probe-"));
       scratchDirs.push(dir);
       if (writeToken) {
         await Bun.write(join(dir, "token"), `${idToken}\n`);
       }
-      await Bun.write(join(dir, "marker"), `${marker}\n`);
+      await Bun.write(join(dir, "marker"), markerContent);
       const child = Bun.spawn(
         [
           process.execPath,
@@ -264,6 +269,17 @@ describe("sandbox-rpc-probe CLI", () => {
       ok: false,
       version: null,
       countChunks: [],
+    });
+  });
+
+  test("refuses an empty marker file with a failing verdict", async () => {
+    const { stdout, exitCode } = await runWithProbe("api", ({ origin }) =>
+      runCli(origin, probeVersion, true, "\n")
+    );
+    expect(exitCode).not.toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({
+      ok: false,
+      failures: ["setup: --marker-file is empty"],
     });
   });
 });

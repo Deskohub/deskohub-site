@@ -119,21 +119,24 @@ describe("sandbox probe RPCs in memory", () => {
 
 describe("sandbox probe over HTTP", () => {
   test.each(roles)(
-    "%s reports its version and role on /healthz",
+    "%s reports its version and role on /healthz and /health",
     async (role) => {
       const health = await runWithProbe(role, ({ origin }) =>
-        send(`${origin}/healthz`).pipe(
-          Effect.flatMap((response) =>
-            Effect.promise(() => response.json()).pipe(
-              Effect.map((body) => ({ status: response.status, body }))
+        Effect.forEach(["/healthz", "/health"], (path) =>
+          send(`${origin}${path}`).pipe(
+            Effect.flatMap((response) =>
+              Effect.promise(() => response.json()).pipe(
+                Effect.map((body) => ({ status: response.status, body }))
+              )
             )
           )
         )
       );
-      expect(health).toEqual({
+      const reported = {
         status: 200,
         body: { status: "ok", version: probeVersion, role },
-      });
+      };
+      expect(health).toEqual([reported, reported]);
     }
   );
 
