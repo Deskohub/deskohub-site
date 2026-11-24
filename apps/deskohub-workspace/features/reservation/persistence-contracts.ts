@@ -1,5 +1,5 @@
-import { Match, Schema } from "effect";
-import type { OrderId } from "@/features/order";
+import { Match, type Option, Schema } from "effect";
+import { type OrderId, orderIdSchema } from "@/features/order";
 import type { NormalizedCoworkReservationOrder } from "@/features/reservation/cowork-reservation";
 import {
   getStoredCoworkReservationDetails,
@@ -56,15 +56,16 @@ export type WorkspaceReservationId = Schema.Schema.Type<
 >;
 
 /**
- * The ID of a reservation's order. The database mirrors every reservation
- * into a `reservation` order with the same ID.
+ * The ID of the order a standalone reservation is mirrored into, read from the
+ * reservation ID's shape: the database mirrors each standalone reservation into
+ * a `reservation` order with the same UUID. Unlimited-pass days and
+ * review-sandbox samples have no order and no UUID, so they find none. A UUID
+ * alone doesn't prove the order exists (a review-account hold has none), so
+ * lookups by the found ID can still find nothing.
  */
-export const reservationOrderId = (
+export const findReservationOrderId: (
   reservationId: WorkspaceReservationId
-): OrderId => {
-  const id: string = reservationId;
-  return id as OrderId;
-};
+) => Option.Option<OrderId> = Schema.decodeOption(orderIdSchema);
 
 /** The reservation ID carried by an order already known to be a reservation. */
 export const reservationIdForOrder = (

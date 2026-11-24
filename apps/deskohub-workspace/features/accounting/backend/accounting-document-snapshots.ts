@@ -4,7 +4,7 @@ import type {
 } from "@deskohub/dotypos";
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 import { WorkspaceTransaction } from "@/db/database.service";
 import { accountingDocumentSnapshots } from "@/db/schema";
 import {
@@ -18,7 +18,7 @@ import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers"
 import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
 import { withPassPurchaseAddons } from "@/features/passes/pass-purchase-quote";
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import { findReservationOrderId } from "@/features/reservation/persistence-contracts";
 import { type Money, moneyEquals, sameMoneyUnit } from "@/shared/money/money";
 import {
   type AccountingRecordReference,
@@ -302,7 +302,10 @@ const acceptForAttempt = Effect.fnUntraced(function* (input: {
   );
 
   if (
-    reservationOrderId(snapshot.workspaceReservationId) !== input.orderId ||
+    !Option.contains(
+      findReservationOrderId(snapshot.workspaceReservationId),
+      input.orderId
+    ) ||
     snapshot.locale !== input.locale ||
     !moneyEquals(snapshot.quote.payment.expectedPrice, input.amount) ||
     !moneyReconciles(snapshot)

@@ -35,14 +35,14 @@ const providerOrderCreatedAt = instant("2026-06-01T10:00:00Z");
 const providerRedirectUrl = "https://sandbox.example/hpp/order-page";
 
 const input = {
-  orderId: "reservation-reopen",
+  orderId: "0198c1a2-c6ac-7bc9-83a6-7a5f8af36183",
   locale: "cs-CZ",
   accessCookie: "access-cookie",
 } as PaymentPageReopeningInput;
 
 const makeReservation = (overrides: Partial<WorkspaceReservation> = {}) =>
   ({
-    id: "reservation-reopen",
+    id: "0198c1a2-c6ac-7bc9-83a6-7a5f8af36183",
     reservationState: "held",
     // The ten-minute hold from 09:52 expired; the pending provider order
     // keeps it held.
@@ -55,7 +55,7 @@ const makeReservation = (overrides: Partial<WorkspaceReservation> = {}) =>
 const makeAttempt = (overrides: Partial<PaymentAttempt> = {}) =>
   ({
     id: "attempt-reopen",
-    workspaceReservationId: "reservation-reopen",
+    workspaceReservationId: "0198c1a2-c6ac-7bc9-83a6-7a5f8af36183",
     provider: "nexi",
     providerOrderId: "provider-order-id",
     state: "pending",
@@ -208,8 +208,18 @@ describe("CheckoutPaymentPageService.reopen", () => {
     await harness.reopen();
 
     expect(harness.recordPaymentReturnTarget.mock.calls).toEqual([
-      [{ id: "reservation-reopen", paymentReturnTarget: "native-app" }],
-      [{ id: "reservation-reopen", paymentReturnTarget: undefined }],
+      [
+        {
+          id: "0198c1a2-c6ac-7bc9-83a6-7a5f8af36183",
+          paymentReturnTarget: "native-app",
+        },
+      ],
+      [
+        {
+          id: "0198c1a2-c6ac-7bc9-83a6-7a5f8af36183",
+          paymentReturnTarget: undefined,
+        },
+      ],
     ]);
   });
 
@@ -413,7 +423,10 @@ describe("CheckoutPaymentPageService.reopen", () => {
   test.each([
     ["no stored page", { providerRedirectUrl: null }],
     ["no security token", { securityToken: null }],
-    ["another order", { workspaceReservationId: "reservation-other" }],
+    [
+      "another order",
+      { workspaceReservationId: "0198c1a2-c9f4-79ad-8951-ec189deca046" },
+    ],
   ] as const)("closes the page of an attempt with %s", async (_, overrides) => {
     const harness = createHarness({
       attempt: makeAttempt(overrides as Partial<PaymentAttempt>),

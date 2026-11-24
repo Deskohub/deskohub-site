@@ -37,8 +37,8 @@ import { getCoworkReservationIntervalInput } from "@/features/reservation/cowork
 import type { CoworkStay } from "@/features/reservation/cowork-stay";
 import { hasOfficeReservationEnded } from "@/features/reservation/office-reservation";
 import {
+  findReservationOrderId,
   getStoredWorkspaceReservationDetails,
-  reservationOrderId,
   type WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
 import { hasReservationIntervalEnded } from "@/features/reservation/reservation-interval";
@@ -308,6 +308,17 @@ const reissuePriceReviewPayState: (
   )
 );
 
+/** The order a reservation checkout pays: the one it is mirrored into. */
+const requireReservationOrderId = (reservationId: WorkspaceReservationId) =>
+  Effect.fromOption(
+    findReservationOrderId(reservationId),
+    () =>
+      new CheckoutError({
+        code: "checkout_failed",
+        message: "The reservation has no order to pay.",
+      })
+  );
+
 const mapCheckoutFailure = <E>(cause: E | CheckoutError): CheckoutError =>
   cause instanceof CheckoutError
     ? cause
@@ -433,9 +444,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
             latestReservation.paymentState !== "pending"
           )
             return paymentInProgress;
-          const currentCard = yield* qrPayments.findCardAttempt(
-            reservationOrderId(reservation.id)
-          );
+          const currentCard = yield* qrPayments.findCardAttempt(reservation.id);
           if (!currentCard || currentCard.id !== attempt.id)
             return paymentInProgress;
 
@@ -493,7 +502,9 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
             input.checkout
           );
 
-          const orderId = reservationOrderId(input.workspaceReservationId);
+          const orderId = yield* requireReservationOrderId(
+            input.workspaceReservationId
+          );
           const fio = input.fio;
           const session = yield* startPaymentSession({
             kind: input.checkout.kind,
@@ -540,7 +551,9 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           const { attachedAttempt, hostedPaymentPage } = session;
           if ("reused" in session) {
             if (!fio || !qrPayments) return paymentInProgress;
-            const window = yield* qrPayments.findPaymentWindow(orderId);
+            const window = yield* qrPayments.findPaymentWindow(
+              input.workspaceReservationId
+            );
             if (window?.accountKey !== fio.accountKey) return paymentInProgress;
             return yield* reopenPublicCard({
               attempt: attachedAttempt,
@@ -588,7 +601,9 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
             message: "The order kind does not support payment.",
           });
         }
-        const orderId = reservationOrderId(input.workspaceReservationId);
+        const orderId = yield* requireReservationOrderId(
+          input.workspaceReservationId
+        );
         const transition = yield* handler.admitInternal({
           orderId,
           amount: input.total,
@@ -644,7 +659,8 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
             message: "The order kind does not support payment.",
           });
         }
-        yield* handler.fulfill(reservationOrderId(input.orderId)).pipe(
+        yield* requireReservationOrderId(input.orderId).pipe(
+          Effect.flatMap((orderId) => handler.fulfill(orderId)),
           Effect.catch((cause) =>
             Effect.logError("Paid checkout fulfillment retry failed", {
               orderId: input.orderId,
@@ -723,9 +739,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
         // path, including when a stale Pay form omits the payment method.
         if (
           qrPayments &&
-          (yield* qrPayments.findPaymentWindow(
-            reservationOrderId(input.reservation.id)
-          ))
+          (yield* qrPayments.findPaymentWindow(input.reservation.id))
         ) {
           return paymentInProgress;
         }
@@ -923,9 +937,11 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           locale: Locale
         ) {
           if (!qrPayments || !lifecycle || !input.fio) return undefined;
-          const orderId = reservationOrderId(input.reservationId);
-          const window = yield* qrPayments.findPaymentWindow(orderId);
+          const window = yield* qrPayments.findPaymentWindow(
+            input.reservationId
+          );
           if (!window) return undefined;
+          const orderId = window.orderId;
           if (yield* reservations.findEntryPackClaim(input.reservationId)) {
             return paymentInProgress;
           }
@@ -950,7 +966,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
             return paymentInProgress;
 
           if (input.method === "card") {
-            const card = yield* qrPayments.findCardAttempt(orderId);
+            const card = yield* qrPayments.findCardAttempt(input.reservationId);
             if (card) {
               return yield* reopenPublicCard({
                 attempt: card,
@@ -1083,7 +1099,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 !input.method && qrPayments
                   ? (reservationId) =>
                       qrPayments
-                        .findPaymentWindow(reservationOrderId(reservationId))
+                        .findPaymentWindow(reservationId)
                         .pipe(Effect.map((window) => window !== null))
                   : undefined,
             })
@@ -1315,7 +1331,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                   yield* reconfirmPayableCheckout(checkout);
                   yield* lifecycle
                     .createPendingQrAttempt({
-                      orderId: reservationOrderId(reservation.id),
+                      orderId: yield* requireReservationOrderId(reservation.id),
                       amount: expectedPrice,
                       commitment: prepared.commitment,
                       locale,

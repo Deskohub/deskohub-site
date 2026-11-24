@@ -125,7 +125,7 @@ const makePayStateToken = async (input?: {
         locale: input?.locale ?? "en-US",
         reservation: input?.funded?.reservation ?? reservation,
         quote: input?.funded?.quote ?? quote,
-        orderId: "reservation-id",
+        orderId: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
         bookedAt: payStateBookedAt,
         holdExpiresAt: payStateHoldExpiresAt,
         checkoutSessionId,
@@ -200,7 +200,7 @@ const prepareSubmission = async (input?: SubmissionInput) => {
           null)
         : (input?.activePaymentAttemptId ?? null);
     return {
-      id: "reservation-id",
+      id: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
       dotyposCustomerId: "customer-id",
       reservationHoldExpiresAt: storedHoldExpiresAt,
       activePaymentAttemptId,
@@ -618,7 +618,8 @@ describe("applyDiscountCodeToPayState", () => {
       throw new Error("Expected applied result");
     }
 
-    const orderId = "reservation-id" as WorkspaceReservationId;
+    const orderId =
+      "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5" as WorkspaceReservationId;
     const baseUrl = "https://deskohub.test";
     const currentUrl = new URL(scenario.result.freshPayUrl, baseUrl).href;
     const previousUrl = new URL(
@@ -675,7 +676,9 @@ describe("applyDiscountCodeToPayState", () => {
     expect(scenario.result.freshPayUrl).toBeTruthy();
     expect(scenario.reissues).toEqual([
       {
-        state: expect.objectContaining({ orderId: "reservation-id" }),
+        state: expect.objectContaining({
+          orderId: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
+        }),
         outcome: {
           kind: "code_rejected",
           code: canonicalPromotionCodeSchema.make("SAVE20"),

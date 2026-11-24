@@ -2,15 +2,15 @@ import "server-only";
 
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Array as Arr, Context, Data, Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { equalsAny } from "@/db/equals-any";
 import { type LegalEvidenceEvent, legalEvidenceEvents } from "@/db/schema";
 import { postgresUuidV7 } from "@/db/uuid-v7";
 import { legalEvidenceSchema } from "@/features/checkout/legal-evidence";
-import { orderIdSchema } from "@/features/order";
+import { type OrderId, orderIdSchema } from "@/features/order";
 import {
-  reservationOrderId,
+  findReservationOrderId,
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
@@ -89,13 +89,11 @@ export interface ILegalEvidenceEventRepository {
 }
 
 const getLegalEvidenceEventRecord = (
-  parsed: typeof legalEvidenceEventInputSchema.Type
+  parsed: typeof legalEvidenceEventInputSchema.Type,
+  orderId: OrderId | undefined
 ) => ({
   workspaceReservationId: parsed.workspaceReservationId,
-  orderId:
-    parsed.workspaceReservationId === undefined
-      ? parsed.orderId
-      : reservationOrderId(parsed.workspaceReservationId),
+  orderId,
   documentKey: parsed.evidence.documentKey,
   documentPath: parsed.evidence.document.path,
   documentHash: parsed.evidence.documentHash,
@@ -130,7 +128,19 @@ export class LegalEvidenceEventRepository extends Context.Service<
                 })
             )
           );
-          const event = getLegalEvidenceEventRecord(parsed);
+          // A reservation's evidence belongs to the order it is mirrored into.
+          const orderId =
+            parsed.workspaceReservationId === undefined
+              ? parsed.orderId
+              : yield* Effect.fromOption(
+                  findReservationOrderId(parsed.workspaceReservationId),
+                  () =>
+                    new LegalEvidenceEventInputError({
+                      message:
+                        "Legal evidence reservation has no order of its own.",
+                    })
+                );
+          const event = getLegalEvidenceEventRecord(parsed, orderId);
 
           const [inserted] = yield* db
             .insert(legalEvidenceEvents)
@@ -166,7 +176,10 @@ export class LegalEvidenceEventRepository extends Context.Service<
         listForReservations: Effect.fn(
           "legalEvidenceEvents.listForReservations"
         )(function* (input) {
-          if (input.workspaceReservationIds.length === 0) return [];
+          const orderIds = Arr.getSomes(
+            input.workspaceReservationIds.map(findReservationOrderId)
+          );
+          if (orderIds.length === 0) return [];
 
           const { acknowledgements } = legalEvidenceEvents;
           const rows = yield* db
@@ -189,10 +202,7 @@ export class LegalEvidenceEventRepository extends Context.Service<
             .from(legalEvidenceEvents)
             .where(
               and(
-                equalsAny(
-                  legalEvidenceEvents.orderId,
-                  input.workspaceReservationIds.map(reservationOrderId)
-                ),
+                equalsAny(legalEvidenceEvents.orderId, orderIds),
                 eq(
                   legalEvidenceEvents.workspaceReservationId,
                   legalEvidenceEvents.orderId

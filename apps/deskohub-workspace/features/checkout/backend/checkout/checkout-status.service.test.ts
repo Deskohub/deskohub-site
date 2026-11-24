@@ -49,7 +49,7 @@ const testInstant = (value = "2026-06-01T10:00:00Z") =>
   Temporal.Instant.from(value);
 
 const makeReservation = <Overrides extends object>(overrides?: Overrides) => ({
-  id: "reservation-provider-return",
+  id: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
   checkoutSessionKey: "session-key",
   checkoutAttemptKey: "attempt-key",
   correlationId: "correlation-id",
@@ -88,7 +88,7 @@ const makePaymentAttempt = <Overrides extends object>(
   overrides?: Overrides
 ) => ({
   id: "attempt-provider-return",
-  workspaceReservationId: "reservation-provider-return",
+  workspaceReservationId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
   provider: "nexi",
   providerOrderId: "provider-order-id",
   securityToken: null,
@@ -148,7 +148,7 @@ describe("CheckoutStatusService", () => {
       "@/features/reservation/backend/workspace-reservation.repository"
     );
 
-    const orderId = "reservation-provider-return";
+    const orderId = "0198c1a2-cc76-7c23-83b3-0a10457ef2cb";
     const finalizePendingProviderPayment = mock(() =>
       Effect.succeed("paid" as const)
     );
@@ -204,7 +204,7 @@ describe("CheckoutStatusService", () => {
     expect(status.status).toBe("fulfilled");
   });
 
-  test("reports a review account's sandbox order the ledger doesn't hold", async () => {
+  test("reports a review account's sandbox order the ledger doesn't hold, refreshed or not", async () => {
     const { CheckoutStatusService } = await import("./checkout-status.service");
     const { ProviderPaymentFinalizationService } = await import(
       "../payment/provider-payment-finalization.service"
@@ -229,10 +229,16 @@ describe("CheckoutStatusService", () => {
     const sandboxLookup = mock(() =>
       Effect.succeed(Option.some(sandboxStatus))
     );
+    // A sample has no order of its own, so no provider payment to finalize.
+    const finalizePendingProviderPayment = mock(() => Effect.die("not used"));
 
-    const status = await Effect.gen(function* () {
+    const statuses = await Effect.gen(function* () {
       const service = yield* CheckoutStatusService;
-      return yield* service.getStatus({ orderId, returnOutcome: "unknown" });
+      const lookup = { orderId, returnOutcome: "unknown" } as const;
+      return [
+        yield* service.getStatus(lookup),
+        yield* service.refreshStatus(lookup),
+      ];
     }).pipe(
       Effect.provide(
         CheckoutStatusService.Default.pipe(
@@ -241,7 +247,9 @@ describe("CheckoutStatusService", () => {
           Layer.provide(observePaymentPagesAs("unknown").layer),
           Layer.provide(
             Layer.mergeAll(
-              Layer.mock(ProviderPaymentFinalizationService, {}),
+              Layer.mock(ProviderPaymentFinalizationService, {
+                finalizePendingProviderPayment,
+              }),
               Layer.mock(WorkspaceReservationRepository, {
                 findById: mock(() => Effect.succeed(null)),
               }),
@@ -257,11 +265,12 @@ describe("CheckoutStatusService", () => {
       Effect.runPromise
     );
 
-    expect(status).toEqual(sandboxStatus);
+    expect(statuses).toEqual([sandboxStatus, sandboxStatus]);
     expect(sandboxLookup).toHaveBeenCalledWith({
       orderId,
       returnOutcome: "unknown",
     });
+    expect(finalizePendingProviderPayment).not.toHaveBeenCalled();
   });
 
   test("renders the stored status without late-payment recovery after refresh finds terminal payment", async () => {
@@ -276,7 +285,7 @@ describe("CheckoutStatusService", () => {
       "@/features/reservation/backend/workspace-reservation.repository"
     );
 
-    const orderId = "reservation-provider-return";
+    const orderId = "0198c1a2-cc76-7c23-83b3-0a10457ef2cb";
     const startRecoveryIfSettled = mock(() =>
       Effect.succeed("not_applicable" as const)
     );
@@ -434,7 +443,7 @@ describe("CheckoutStatusService", () => {
       Effect.gen(function* () {
         const service = yield* CheckoutStatusService;
         return yield* service.getStatus({
-          orderId: "reservation-provider-return",
+          orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
           returnOutcome: "success",
         });
       }).pipe(
@@ -491,7 +500,7 @@ describe("CheckoutStatusService", () => {
     expect(JSON.stringify(status)).not.toContain("phone");
     expect(JSON.stringify(status)).not.toContain("message");
     expect(paymentAttempts.findDisplayableForReservation).toHaveBeenCalledWith({
-      workspaceReservationId: "reservation-provider-return",
+      workspaceReservationId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
       activePaymentAttemptId: "attempt-provider-return",
       paymentState: "paid",
     });
@@ -649,7 +658,7 @@ describe("CheckoutStatusService", () => {
     const status = await Effect.gen(function* () {
       const service = yield* CheckoutStatusService;
       return yield* service.getStatus({
-        orderId: "reservation-provider-return",
+        orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
         returnOutcome: "success",
       });
     }).pipe(
@@ -761,7 +770,7 @@ describe("CheckoutStatusService", () => {
     return await Effect.gen(function* () {
       const service = yield* CheckoutStatusService;
       return yield* service.getStatus({
-        orderId: "reservation-provider-return",
+        orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
         returnOutcome: "success",
       });
     }).pipe(
@@ -900,7 +909,7 @@ describe("CheckoutStatusService", () => {
       const status = await Effect.gen(function* () {
         const service = yield* CheckoutStatusService;
         return yield* service.getStatus({
-          orderId: "reservation-provider-return",
+          orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
           returnOutcome: "success",
         });
       }).pipe(
@@ -1026,7 +1035,7 @@ describe("CheckoutStatusService", () => {
             },
             {
               orderId: workspaceReservationIdSchema.make(
-                "reservation-provider-return"
+                "0198c1a2-cc76-7c23-83b3-0a10457ef2cb"
               ),
               returnOutcome: "success",
               locale: "en-US",
@@ -1035,7 +1044,7 @@ describe("CheckoutStatusService", () => {
           );
         }
         const lookup = {
-          orderId: "reservation-provider-return",
+          orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
           returnOutcome: "success",
           ...(includeSupportContact !== undefined && { includeSupportContact }),
         } as const;
@@ -1150,7 +1159,9 @@ describe("CheckoutStatusService", () => {
             ),
         });
         const order = {
-          id: workspaceReservationIdSchema.make("reservation-provider-return"),
+          id: workspaceReservationIdSchema.make(
+            "0198c1a2-cc76-7c23-83b3-0a10457ef2cb"
+          ),
           reservationDetails: { kind: "office", seats: 2 },
           officeContactAttends: true,
           reservationState,
@@ -1494,7 +1505,7 @@ describe("CheckoutStatusService", () => {
     const status = await Effect.gen(function* () {
       const service = yield* CheckoutStatusService;
       return yield* service.getStatus({
-        orderId: "reservation-provider-return",
+        orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
         returnOutcome: "cancelled",
       });
     }).pipe(
@@ -1567,7 +1578,7 @@ describe("CheckoutStatusService", () => {
     const status = await Effect.gen(function* () {
       const service = yield* CheckoutStatusService;
       return yield* service.getStatus({
-        orderId: "reservation-provider-return",
+        orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
         returnOutcome: "success",
       });
     }).pipe(
@@ -1622,7 +1633,7 @@ describe("CheckoutStatusService summary reconstruction", () => {
     return Effect.gen(function* () {
       const service = yield* CheckoutStatusService;
       return yield* service.getStatus({
-        orderId: "reservation-provider-return",
+        orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
         returnOutcome: "success",
         includeSupportContact: false,
       });
@@ -1773,7 +1784,7 @@ describe("CheckoutStatusService retry selection", () => {
     const getStatus = Effect.gen(function* () {
       const service = yield* CheckoutStatusService;
       return yield* service.getStatus({
-        orderId: "reservation-provider-return",
+        orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
         returnOutcome: "cancelled",
       });
     });

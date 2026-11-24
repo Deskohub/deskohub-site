@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import type { AccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { AccountingDocumentSnapshots } from "./accounting-document-snapshots";
 
 /**
@@ -17,7 +17,9 @@ export const recordAccountingDocumentSnapshot = (input: {
     const snapshots = yield* AccountingDocumentSnapshots;
     const prepared = yield* snapshots.prepare({
       snapshot: input.snapshot,
-      orderId: reservationOrderId(input.snapshot.workspaceReservationId),
+      orderId: standaloneReservationOrderId(
+        input.snapshot.workspaceReservationId
+      ),
       amount: input.snapshot.quote.payment.expectedPrice,
       locale: input.snapshot.locale,
       reference: { type: "paymentAttemptId", id: input.paymentAttemptId },
