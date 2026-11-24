@@ -336,22 +336,18 @@ describe("collectAudienceFactRequests", () => {
     expect(requests.counts).toEqual([
       {
         attribute: "reservationCount",
-        params: {
-          dateBasis: "visit",
-          period: {
-            startsAtOrAfter: Temporal.Instant.from("2026-02-28T23:00:00Z"),
-            startsBefore: Temporal.Instant.from("2026-03-31T22:00:00Z"),
-          },
+        params: reservationsVisitedInMarch.params,
+        bounds: {
+          startsAtOrAfter: Temporal.Instant.from("2026-02-28T23:00:00Z"),
+          startsBefore: Temporal.Instant.from("2026-03-31T22:00:00Z"),
         },
       },
       {
         attribute: "campaignEmailCount",
-        params: {
-          purpose: "marketing",
-          period: {
-            startsAtOrAfter: Temporal.Instant.from("2026-10-05T10:00:00Z"),
-            startsAtOrBefore: now,
-          },
+        params: marketingEmailsLastTenDays.params,
+        bounds: {
+          startsAtOrAfter: Temporal.Instant.from("2026-10-05T10:00:00Z"),
+          startsAtOrBefore: now,
         },
       },
     ]);
