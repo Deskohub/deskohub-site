@@ -802,10 +802,8 @@ describe("AudienceFactsService fetched facts", () => {
       liveFacts.counts.get(
         audienceFactKey({
           attribute: "reservationCount",
-          params: {
-            dateBasis: "visit",
-            period: datePeriodBounds(recent, audienceEvaluationAt(now)),
-          },
+          params: { dateBasis: "visit", period: recent },
+          bounds: datePeriodBounds(recent, audienceEvaluationAt(now)),
         })
       )
     ).toEqual(new Map([[ids[0]!, 2]]));
@@ -813,13 +811,11 @@ describe("AudienceFactsService fetched facts", () => {
       liveFacts.counts.get(
         audienceFactKey({
           attribute: "reservationCount",
-          params: {
-            dateBasis: "booking",
-            period: datePeriodBounds(
-              { _tag: "AnyTime" },
-              audienceEvaluationAt(now)
-            ),
-          },
+          params: { dateBasis: "booking", period: { _tag: "AnyTime" } },
+          bounds: datePeriodBounds(
+            { _tag: "AnyTime" },
+            audienceEvaluationAt(now)
+          ),
         })
       )
     ).toEqual(

@@ -6,10 +6,7 @@ import {
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
 } from "@deskohub/dotypos";
-import {
-  type AudienceCountCondition,
-  audienceAttributeCatalogue,
-} from "@deskohub/workspace-admin-api";
+import type { AudienceCountCondition } from "@deskohub/workspace-admin-api";
 import { Effect, Option } from "effect";
 import { customerMarketingConsents } from "@/db/schema";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
@@ -424,7 +421,6 @@ describe.skipIf(!testDatabase)(
           [
             audienceFactKey(
               countFactRequest(
-                audienceAttributeCatalogue.reservationCount,
                 condition("gt") as AudienceCountCondition,
                 context
               )

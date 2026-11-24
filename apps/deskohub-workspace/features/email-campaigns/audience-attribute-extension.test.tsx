@@ -91,7 +91,6 @@ describe("a count attribute added as one catalogue entry and its resolver", () =
 
   test("resolves its counts through its resolver", async () => {
     const request = countFactRequest(
-      giftCardCount,
       condition,
       audienceEvaluationAt(Temporal.Now.instant())
     );

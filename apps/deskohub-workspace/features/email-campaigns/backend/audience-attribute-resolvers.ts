@@ -16,7 +16,8 @@ import type {
   AudienceCandidate,
   AudienceDateFacts,
   AudienceDateRequest,
-  ConcreteCountParams,
+  CountRequestContext,
+  CountRequestParams,
 } from "../audience-filter";
 import {
   type DatePeriodBounds,
@@ -70,16 +71,17 @@ type Resolved<Value> = Effect.Effect<Value, CampaignRecipientResolutionError>;
  */
 export type AudienceCountResolver<Params> = {
   readonly count: (
-    request: {
-      readonly attribute: string;
-      readonly params: ConcreteCountParams<Params>;
-      readonly reservationsAsOf?: Temporal.Instant;
-    },
+    request: AudienceCountResolverRequest<Params>,
     resolution: AudienceResolution
   ) => Resolved<ReadonlyMap<DotyposCustomerId, number>>;
-  readonly readsVisits: (request: {
-    readonly params: ConcreteCountParams<Params>;
-  }) => boolean;
+  readonly readsVisits: (
+    request: Pick<AudienceCountResolverRequest<Params>, "params" | "bounds">
+  ) => boolean;
+};
+
+/** A count request as its attribute's resolver reads it. */
+type AudienceCountResolverRequest<Params> = CountRequestContext & {
+  readonly params: CountRequestParams<Params>;
 };
 
 /**
@@ -181,14 +183,12 @@ const database = CampaignRecipientResolutionError.database;
  */
 const countReservations = (
   {
-    params: { dateBasis, period, status, stay, payment, product },
+    params: { dateBasis, status, stay, payment, product },
+    bounds,
     reservationsAsOf,
-  }: {
-    readonly params: ConcreteCountParams<
-      AudienceConditionOf<"reservationCount">["params"]
-    >;
-    readonly reservationsAsOf?: Temporal.Instant;
-  },
+  }: AudienceCountResolverRequest<
+    AudienceConditionOf<"reservationCount">["params"]
+  >,
   { candidates, scope, visitsIn, visitEndsIn }: AudienceResolution
 ) => {
   const selection = {
@@ -219,14 +219,14 @@ const countReservations = (
       )
     );
   return Match.value(dateBasis).pipe(
-    Match.when("booking", () => countSelected({ booked: period })),
+    Match.when("booking", () => countSelected({ booked: bounds })),
     Match.when("visitEnd", () =>
-      countVisits(visitEndsIn(period, status !== undefined))
+      countVisits(visitEndsIn(bounds, status !== undefined))
     ),
     Match.when("visit", () =>
-      isUnboundedPeriod(period) && stay === undefined
+      isUnboundedPeriod(bounds) && stay === undefined
         ? countSelected({})
-        : countVisits(visitsIn(period))
+        : countVisits(visitsIn(bounds))
     ),
     Match.exhaustive
   );
@@ -321,15 +321,15 @@ const visitDates =
 export const audienceAttributeResolvers: AudienceAttributeResolvers = {
   reservationCount: {
     count: countReservations,
-    readsVisits: ({ params: { dateBasis, period, stay } }) =>
+    readsVisits: ({ params: { dateBasis, stay }, bounds }) =>
       dateBasis === "visitEnd" ||
       (dateBasis === "visit" &&
-        (stay !== undefined || !isUnboundedPeriod(period))),
+        (stay !== undefined || !isUnboundedPeriod(bounds))),
   },
   campaignEmailCount: {
     // The evaluating campaign without one (`null`) has sent nobody anything.
     count: (
-      { params: { purpose, period, campaign } },
+      { params: { purpose }, bounds, campaign },
       { candidates, scope }
     ) =>
       campaign === null
@@ -338,7 +338,7 @@ export const audienceAttributeResolvers: AudienceAttributeResolvers = {
             .countReceivedCampaignEmails({
               ...(purpose !== "any" && { purpose }),
               ...(campaign && { campaignId: campaign }),
-              dispatched: period,
+              dispatched: bounds,
               customers: scopedCustomers(scope),
             })
             .pipe(Effect.mapError(database)),
