@@ -9,7 +9,7 @@ import { Schema } from "effect";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { FormProvider, useForm } from "react-hook-form";
-import type { Locale } from "@/features/i18n";
+import { isLocale, type Locale } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import { ReusableEmailForm } from "../library/email-library-forms";
 import {
@@ -29,7 +29,10 @@ import {
 
 const mountPoint = document.getElementById("editor-root");
 if (!mountPoint) throw new Error("The editor harness root is missing.");
-const locale = mountPoint.dataset.locale as Locale;
+const mountLocale = mountPoint.dataset.locale;
+if (!isLocale(mountLocale))
+  throw new Error("The editor harness locale is missing.");
+const locale: Locale = mountLocale;
 const initialDraft: EmailDraftFormValues = mountPoint.dataset.draft
   ? Schema.decodeUnknownSync(
       EmailDraft,
@@ -61,12 +64,15 @@ const plainText = (
     )
     .join("");
 
+const htmlEscapes: Readonly<Record<string, string>> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+};
+
 const escapeHtml = (text: string) =>
-  text.replace(
-    /[&<>"]/g,
-    (character) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]!
-  );
+  text.replace(/[&<>"]/g, (character) => htmlEscapes[character] ?? character);
 
 /**
  * A stand-in for the preview Server Action: shows the language's texts in

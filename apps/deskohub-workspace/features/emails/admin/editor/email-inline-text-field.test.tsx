@@ -105,7 +105,11 @@ const renderSubject = async ({
   const subject = () =>
     form?.getValues(`translations.${contentLocale}.subject`);
   const textbox = () => view.getByRole("textbox", { name: "Subject" });
-  return { view, editor, subject, textbox, form: () => form! };
+  const startedForm = () => {
+    if (!form) throw new Error("The form has not started");
+    return form;
+  };
+  return { view, editor, subject, textbox, form: startedForm };
 };
 
 /** Types at the caret, as ProseMirror does for keyboard input. */

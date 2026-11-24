@@ -11,11 +11,13 @@ import {
   selectedEmailCustomerShape as selectedEmailCustomerFields,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Layer, Schema } from "effect";
-import {
-  CustomerValueSource,
-  CustomerValueUnavailable,
-} from "./customer-value-source.service";
-import { CustomerValues } from "./customer-values.service";
+import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
+import { CustomerValueUnavailable } from "./customer-value-source.service";
+import { CustomerValues, makeCustomerValues } from "./customer-values.service";
+
+const customerId = Schema.decodeUnknownSync(dotyposCustomerIdSchema)(
+  "synthetic-customer"
+);
 
 const definition = (
   source: typeof EmailCustomerSelection.Type
@@ -56,27 +58,25 @@ const run = (input: {
 }) =>
   Effect.flatMap(CustomerValues, (values) =>
     values.resolve({
-      customerId: "synthetic-customer",
+      customerId,
       definition: input.definition,
       locale: "en-US",
     })
   ).pipe(
+    // The loaders hand back whatever data a test needs, contract or not.
     Effect.provide(
-      CustomerValues.Default.pipe(
-        Layer.provide(
-          Layer.mock(CustomerValueSource, {
-            profile: () => {
-              input.called?.();
-              return input.fail
-                ? Effect.fail(
-                    new CustomerValueUnavailable({ source: "profile" })
-                  )
-                : Effect.succeed(input.profile ?? profile);
-            },
-            activity: () =>
-              Effect.succeed(input.activity ?? { marketingConsent: null }),
-          } as never)
-        )
+      Layer.succeed(
+        CustomerValues,
+        makeCustomerValues({
+          profile: () => {
+            input.called?.();
+            return input.fail
+              ? Effect.fail(new CustomerValueUnavailable({ source: "profile" }))
+              : Effect.succeed(input.profile ?? profile);
+          },
+          activity: () =>
+            Effect.succeed(input.activity ?? { marketingConsent: null }),
+        })
       )
     ),
     Effect.result,
