@@ -285,6 +285,20 @@ describe("EdgeSecurityPolicy provider", () => {
     ]);
   });
 
+  test("rejects a settled rule operation whose error is null as unreadable", async () => {
+    const compute = fake({
+      existing: [converged(policyProps(true))],
+      nullErrorOperations: ["patchRule"],
+    });
+    const exit = await run(compute, (provider) =>
+      reconcile(provider, policyProps(false))
+    );
+    expect(failureTag(exit)).toBe("EdgeComputeRequestFailed");
+    expect(mutations(compute.calls)).toEqual([
+      "POST workspace-sandbox-edge/patchRule?priority=1000",
+    ]);
+  });
+
   test("rejects an unfinished rule operation without a name, unpolled", async () => {
     const compute = fake({
       existing: [converged(policyProps(true))],

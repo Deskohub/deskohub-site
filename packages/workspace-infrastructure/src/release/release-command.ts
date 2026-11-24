@@ -37,7 +37,15 @@ export class ReleaseStack extends Context.Service<
   WorkspaceStackConfig
 >()("@deskohub/workspace-infrastructure/ReleaseStack") {}
 
-const printJson = <Value>(value: Value) =>
+/** What a release command prints: its delivery, recovery or record readout. */
+type ReleaseCommandOutput =
+  | Effect.Success<ReturnType<typeof deliverRelease>>
+  | Effect.Success<ReturnType<typeof restoreRelease>>
+  | Effect.Success<ReturnType<typeof recoverRelease>>
+  | { readonly cleared: Effect.Success<ReturnType<typeof unlockReleaseWriter>> }
+  | ReturnType<typeof describeStoredRecord>;
+
+const printJson = (value: ReleaseCommandOutput) =>
   Console.log(JSON.stringify(value, null, 2));
 
 const deliverCommand = Command.make(

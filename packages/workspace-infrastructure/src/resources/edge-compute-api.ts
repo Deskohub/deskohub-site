@@ -6,7 +6,7 @@ import {
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import { HttpClientRequest, HttpClientResponse } from "effect/http";
+import { HttpClientRequest, type HttpClientResponse } from "effect/http";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -280,7 +280,8 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
   const decodeJson =
     <A>(body: Schema.Decoder<A>, resource: string, operation: string) =>
     (response: HttpClientResponse.HttpClientResponse) =>
-      HttpClientResponse.schemaBodyJson(body)(response).pipe(
+      response.json.pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(body)),
         Effect.mapError(
           () =>
             new EdgeComputeRequestFailed({

@@ -336,6 +336,23 @@ const secretKeyPattern =
 
 const isJsonObject = Schema.is(Schema.JsonObject);
 
+/**
+ * Any value `JSON.parse` yields. Unlike `Schema.Json` it keeps non-finite
+ * numbers such as an overflowing `1e400`, so the domain decoder rejects
+ * them with the offending field path.
+ */
+const ParsedJson: Schema.Codec<Schema.Json> = Schema.Union([
+  Schema.Null,
+  Schema.Number,
+  Schema.Boolean,
+  Schema.String,
+  Schema.Array(Schema.suspend(() => ParsedJson)),
+  Schema.Record(
+    Schema.String,
+    Schema.suspend(() => ParsedJson)
+  ),
+]);
+
 const findSecretMaterial = (
   input: Schema.Json,
   path: ReadonlyArray<string> = []
@@ -484,8 +501,6 @@ export const serializeWorkspaceStackConfig = (config: WorkspaceStackConfig) =>
 export const configuredWorkspaceStack = Config.String(
   "WORKSPACE_STACK_CONFIG"
 ).pipe(
-  Effect.flatMap((raw) =>
-    Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(raw)
-  ),
+  Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(ParsedJson))),
   Effect.flatMap(decodeWorkspaceStackConfig)
 );

@@ -93,6 +93,8 @@ export interface FakeComputeOptions {
   readonly unavailableOperationPolls?: number;
   /** Operation kinds answered RUNNING without an operation name. */
   readonly unnamedOperations?: ReadonlyArray<string>;
+  /** Operation kinds answered already DONE with an explicit `error: null`. */
+  readonly nullErrorOperations?: ReadonlyArray<string>;
 }
 
 type Collection = "backendServices" | "securityPolicies";
@@ -136,6 +138,10 @@ export const fakeCompute = (
     if (options.failingAtOnce?.includes(kind)) {
       body.status = "DONE";
       body.error = operationError.error;
+    }
+    if (options.nullErrorOperations?.includes(kind)) {
+      body.status = "DONE";
+      body.error = null;
     }
     applied.push({ kind, body });
     return body;

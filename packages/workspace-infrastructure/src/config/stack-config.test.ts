@@ -1,19 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type * as Schema from "effect/Schema";
 import {
+  configuredWorkspaceStack,
   decodeWorkspaceStackConfig,
   GcpRegion,
   ImageDigest,
   serializeWorkspaceStackConfig,
+  type WorkspaceStackConfig,
   WorkspaceStackConfigInvalid,
 } from "./stack-config";
 import { sandboxConfig, sandboxConfigInput } from "./stack-config.test-utils";
 
-const decodeFailure = (input: Schema.Json) => {
-  const exit = Effect.runSyncExit(decodeWorkspaceStackConfig(input));
+const rejection = <E>(decoding: Effect.Effect<WorkspaceStackConfig, E>) => {
+  const exit = Effect.runSyncExit(decoding);
   if (Exit.isSuccess(exit)) {
     throw new Error("expected the configuration to be rejected");
   }
@@ -25,6 +28,20 @@ const decodeFailure = (input: Schema.Json) => {
   }
   return error;
 };
+
+const decodeFailure = (input: Schema.Json) =>
+  rejection(decodeWorkspaceStackConfig(input));
+
+const configuredFailure = (raw: string) =>
+  rejection(
+    configuredWorkspaceStack.pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ WORKSPACE_STACK_CONFIG: raw })
+        )
+      )
+    )
+  );
 
 const fakePrivateKey =
   "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----";
@@ -38,6 +55,14 @@ describe("workspace stack configuration", () => {
   test("requires approved spend and teardown on a sandbox", () => {
     const { budget: _budget, ...withoutBudget } = sandboxConfigInput;
     expect(decodeFailure(withoutBudget).paths).toContain("budget");
+  });
+
+  test("names an overflowing budget in the stage config by its field path", () => {
+    const raw = JSON.stringify(sandboxConfigInput).replace(
+      /"maximumSpend":[^,}]+/,
+      '"maximumSpend":1e400'
+    );
+    expect(configuredFailure(raw).paths).toEqual(["budget.maximumSpend"]);
   });
 
   test("rejects a secret value placed beside a reference", () => {
