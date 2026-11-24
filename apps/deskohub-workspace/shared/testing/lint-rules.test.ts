@@ -1144,17 +1144,18 @@ type LintReport = {
   readonly diagnostics: readonly {
     readonly category?: string;
     readonly message: string;
+    readonly severity: string;
     readonly location: { readonly path: string };
   }[];
 };
 
 const diagnosticsByPath = (report: LintReport, cwd: string) => {
   const byPath = new Map<string, string[]>();
-  for (const { category, message, location } of report.diagnostics) {
+  for (const { category, message, severity, location } of report.diagnostics) {
     const path = resolve(cwd, location.path);
     byPath.set(path, [
       ...(byPath.get(path) ?? []),
-      `${category ?? ""} ${message}`,
+      `${severity} ${category ?? ""} ${message}`,
     ]);
   }
   return byPath;
@@ -1179,14 +1180,16 @@ const expectAssertionDiagnostics = (byPath: Map<string, string[]>) => {
     const messages = byPath.get(join(productionRoot, probe)) ?? [];
     expect({
       probe,
-      assertion: messages.some((m) =>
-        m.includes("[anti-slop/no-type-assertions]")
+      assertion: messages.some(
+        (m) =>
+          m.startsWith("error ") && m.includes("[anti-slop/no-type-assertions]")
       ),
     }).toEqual({ probe, assertion: true });
     expect({
       probe,
-      nonNull: messages.some((m) =>
-        m.includes("lint/style/noNonNullAssertion")
+      nonNull: messages.some(
+        (m) =>
+          m.startsWith("error ") && m.includes("lint/style/noNonNullAssertion")
       ),
     }).toEqual({ probe, nonNull: true });
   }
