@@ -85,8 +85,10 @@ mkdir -p "$proof_dir"
 private_dir="$SANDBOX_PROOF_PRIVATE_DIR"
 marker_file="${private_dir}/marker"
 id_token_file="${private_dir}/api-id-token"
-# The token file goes when the runner exits; the marker stays for later steps.
-trap 'rm -f "$id_token_file"' EXIT
+task_body_file="${private_dir}/task-body.json"
+# The token file and task body go when the runner exits; the marker stays
+# for later steps.
+trap 'rm -f "$id_token_file" "$task_body_file"' EXIT
 
 project_id="${GCP_SANDBOX_PROJECT_ID:-}"
 # Alchemy pairs GOOGLE_ACCESS_TOKEN with this project.
@@ -107,6 +109,7 @@ mobile_updates_bucket="${project_id}-mobile-updates"
 # The stack grants these roles/run.invoker on workspace-api.
 frontend_invoker="workspace-frontend-preview@${project_id}.iam.gserviceaccount.com"
 tasks_invoker="workspace-tasks-invoker@${project_id}.iam.gserviceaccount.com"
+scheduler_invoker="workspace-scheduler-invoker@${project_id}.iam.gserviceaccount.com"
 # The worker probe's queue contract and the sandbox-only paused job, each
 # suffixed with the run's queue suffix.
 proof_queue=workspace-paid-fulfillment
@@ -599,6 +602,8 @@ service_serves() {
   described="$(gcloud run services describe "$service" --project="$project_id" \
     --region="$region" --format=json 2>/dev/null)" || return 1
   jq -e 'any(.status.conditions[]?; .type == "Ready" and .status == "True")
+    and .status.observedGeneration != null
+    and .status.observedGeneration == .metadata.generation
     and ([.status.traffic[]? | .percent // 0] | add) == 100
     and all(.status.traffic[]? | select((.percent // 0) > 0); (.revisionName // "") != "")' \
     >/dev/null 2>&1 <<<"$described" || return 1
@@ -607,7 +612,7 @@ service_serves() {
   for revision in "${revisions[@]}"; do
     image="$(gcloud run revisions describe "$revision" --project="$project_id" \
       --region="$region" --format='value(status.imageDigest)' 2>/dev/null)" || return 1
-    [[ "$image" == *"@${digest}" ]] || return 1
+    [[ "$image" == "$digest" || "$image" == *"@${digest}" ]] || return 1
   done
 }
 
@@ -987,39 +992,66 @@ expect_refused() {
   [[ "$code" =~ ^(${accepted})$ ]] || fail "${label}: HTTP ${code}, expected ${accepted}"
 }
 
-# IAM readback: no public member, the invoker IAM check on, and for
-# workspace-api the frontend and deployer invokers.
+# The service's expected unconditional roles/run.invoker members and ingress.
+service_invokers() {
+  case "$1" in
+    "$api_service") printf '%s\n' "serviceAccount:${frontend_invoker}" "serviceAccount:${GCP_SANDBOX_DEPLOY_SA:-}" ;;
+    "$tasks_worker_service") printf '%s\n' "serviceAccount:${tasks_invoker}" ;;
+    "$scheduler_worker_service") printf '%s\n' "serviceAccount:${scheduler_invoker}" ;;
+  esac
+}
+service_ingress() {
+  if [[ "$1" == "$api_service" ]]; then echo all; else echo internal; fi
+}
+
+# IAM readback: no public member, exactly the expected unconditional
+# invokers, the invoker IAM check on, and the expected ingress.
 expect_iam_private() {
-  local service="$1" policy described
+  local service="$1" policy described invokers ingress
   policy="$(capture '{"bindings":[]}' gcloud run services get-iam-policy "$service" \
     --project="$project_id" --region="$region" --format=json)" ||
     fail "the IAM policy of ${service} is unreadable"
   described="$(capture '{"metadata":{"annotations":{}}}' gcloud run services describe "$service" \
     --project="$project_id" --region="$region" --format=json)" ||
     fail "${service} is unreadable"
+  ingress="$(service_ingress "$service")"
   if $dry_run; then
-    echo "  expect ${service}: no allUsers or allAuthenticatedUsers member; invoker IAM check on" >&2
+    echo "  expect ${service}: no public member; invokers exactly $(service_invokers "$service" | paste -sd ' '); invoker IAM check on; ingress ${ingress}" >&2
     return
   fi
+  invokers="$(service_invokers "$service" | jq -Rnc '[inputs] | sort')"
   jq -e '[.bindings[]?.members[]?] | any(. == "allUsers" or . == "allAuthenticatedUsers") | not' \
     >/dev/null 2>&1 <<<"$policy" || fail "${service} grants allUsers or allAuthenticatedUsers"
+  jq -e --argjson want "$invokers" '[.bindings[]? | select(.role == "roles/run.invoker")] as $grants
+    | ($grants | all(.condition == null))
+      and ([$grants[].members[]?] | unique) == ($want | unique)' >/dev/null 2>&1 <<<"$policy" ||
+    fail "${service} does not grant roles/run.invoker unconditionally to exactly ${invokers}"
   jq -e '(.metadata.annotations["run.googleapis.com/invoker-iam-disabled"] // "false") != "true"' \
     >/dev/null 2>&1 <<<"$described" || fail "${service} has the invoker IAM check disabled"
-  if [[ "$service" == "$api_service" ]]; then
-    jq -e --arg frontend "serviceAccount:${frontend_invoker}" \
-      --arg deployer "serviceAccount:${GCP_SANDBOX_DEPLOY_SA:-}" \
-      '[.bindings[]? | select(.role == "roles/run.invoker") | .members[]?] as $members
-        | ($members | index($frontend)) != null and ($members | index($deployer)) != null' \
-      >/dev/null 2>&1 <<<"$policy" ||
-      fail "${service} does not grant roles/run.invoker to the frontend and the deployer"
-  fi
+  jq -e --arg ingress "$ingress" '.metadata.annotations["run.googleapis.com/ingress"] == $ingress' \
+    >/dev/null 2>&1 <<<"$described" || fail "${service} does not have ingress ${ingress}"
   echo "${service}: IAM-private"
 }
 
-# Every service refuses callers without roles/run.invoker. The workers keep
-# internal ingress, so from the runner they may also answer 404. The probe
-# serves GET /health beside its startup /healthz: Cloud Run reserves some
-# paths ending in z on the run.app URL.
+# While the services are live, the project grants no public member and no
+# project-wide roles/run.invoker that would bypass the service policies.
+expect_project_iam_private() {
+  local policy
+  policy="$(capture '{"bindings":[]}' gcloud projects get-iam-policy "$project_id" --format=json)" ||
+    fail "the project IAM policy is unreadable"
+  $dry_run && return 0
+  jq -e '[.bindings[]? | select(.role == "roles/run.invoker"
+      or any(.members[]?; . == "allUsers" or . == "allAuthenticatedUsers"))] == []' \
+    >/dev/null 2>&1 <<<"$policy" ||
+    fail "the project grants roles/run.invoker or a public member at project level"
+  echo "the project grants no project-wide invoker or public member"
+}
+
+# Every service refuses callers without roles/run.invoker, on its own
+# routes too. The workers keep internal ingress, so from the runner they
+# may also answer 404. The probe serves GET /health beside its startup
+# /healthz: Cloud Run reserves some paths ending in z on the run.app URL.
+# The garbage bearer checks malformed-token rejection on the public API.
 phase_private_access() {
   local service url accepted
   for service in "${release_services[@]}"; do
@@ -1030,8 +1062,19 @@ phase_private_access() {
       "$(request_status GET "${url}/health")" "$accepted"
     expect_refused "unauthenticated POST /rpc on ${service}" \
       "$(request_status POST "${url}/rpc" --data-binary '')" "$accepted"
+    case "$service" in
+      "$tasks_worker_service")
+        expect_refused "unauthenticated POST ${proof_queue_path} on ${service}" \
+          "$(request_status POST "${url}${proof_queue_path}" --data-binary '{}')" "$accepted"
+        ;;
+      "$scheduler_worker_service")
+        expect_refused "unauthenticated GET ${proof_schedule_path} on ${service}" \
+          "$(request_status GET "${url}${proof_schedule_path}")" "$accepted"
+        ;;
+    esac
     expect_iam_private "$service"
   done
+  expect_project_iam_private
   url="$(service_url "$api_service")"
   expect_refused "POST /rpc with a garbage bearer on ${api_service}" \
     "$(request_status POST "${url}/rpc" -H 'Authorization: Bearer garbage' --data-binary '')" 401
@@ -1101,7 +1144,7 @@ phase_worker_probe() {
   local suffix="${QUEUE_SUFFIX:-r${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}" url body_file start
   url="$(service_url "$tasks_worker_service")"
   load_marker
-  body_file="${private_dir}/task-body.json"
+  body_file="$task_body_file"
   (umask 077 && jq -cn --arg marker "$marker" '{marker: $marker}' >"$body_file")
   start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
   run gcloud tasks create-http-task --queue="${proof_queue}-${suffix}" --project="$project_id" \
@@ -1113,8 +1156,18 @@ phase_worker_probe() {
   wait_for_log "tasks worker receipt" \
     "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${tasks_worker_service}\" AND jsonPayload.event=\"probe.task\" AND jsonPayload.markerSha256=\"$(marker_sha256)\" AND timestamp>=\"${start}\""
 
+  # The run's own paused job, aimed at the scheduler worker as its invoker.
+  local job="${proof_schedule_job}-${suffix}" described
+  described="$(capture "{\"state\":\"PAUSED\",\"httpTarget\":{\"uri\":\"$(service_url "$scheduler_worker_service")${proof_schedule_path}\",\"httpMethod\":\"GET\",\"oidcToken\":{\"serviceAccountEmail\":\"${scheduler_invoker}\"}}}" \
+    gcloud scheduler jobs describe "$job" --project="$project_id" --location="$region" --format=json)" ||
+    fail "the proof-tick job ${job} is unreadable"
+  jq -e --arg uri "$(service_url "$scheduler_worker_service")${proof_schedule_path}" \
+    --arg invoker "$scheduler_invoker" '.state == "PAUSED" and .httpTarget.uri == $uri
+      and .httpTarget.httpMethod == "GET" and .httpTarget.oidcToken.serviceAccountEmail == $invoker' \
+    >/dev/null 2>&1 <<<"$described" ||
+    fail "${job} is not a paused GET of ${proof_schedule_path} signed as the scheduler invoker"
   start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
-  run gcloud scheduler jobs run "${proof_schedule_job}-${suffix}" --project="$project_id" \
+  run gcloud scheduler jobs run "$job" --project="$project_id" \
     --location="$region" || fail "the paused proof-tick job could not be forced"
   wait_for_log "scheduler worker receipt" \
     "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${scheduler_worker_service}\" AND jsonPayload.event=\"probe.schedule\" AND jsonPayload.job=\"${proof_schedule_path##*/}\" AND timestamp>=\"${start}\""
@@ -1453,13 +1506,18 @@ phase_telemetry_privacy() {
   fi
   [[ "$trace_id" =~ ^[0-9a-f]{32}$ ]] || fail "no recorded probe trace ID; the rpc-probe phase records it"
   pause 90
+  # Log reads reach back past the primary probe, at least two hours.
+  local freshness=7200
+  if [[ "${PROBE_STARTED_AT:-}" =~ ^[0-9]+$ ]] && (($(date -u +%s) - PROBE_STARTED_AT + 900 > freshness)); then
+    freshness=$(($(date -u +%s) - PROBE_STARTED_AT + 900))
+  fi
 
   local requests="" control=false
   for _ in $(seq 1 8); do
     requests="$(capture "[{\"trace\":\"projects/${project_id}/traces/${trace_id}\",\"httpRequest\":{\"requestUrl\":\"https://${api_service}.run.app/rpc\"}}]" \
       gcloud logging read \
       "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${api_service}\" AND log_id(\"run.googleapis.com/requests\") AND httpRequest.requestMethod=\"POST\" AND trace=\"projects/${project_id}/traces/${trace_id}\"" \
-      --project="$project_id" --freshness=2h --limit=5 --format='json(trace,httpRequest.requestUrl)')" ||
+      --project="$project_id" --freshness="${freshness}s" --limit=5 --format='json(trace,httpRequest.requestUrl)')" ||
       fail "Cloud Run request logs are unreadable; marker absence unverified"
     if jq -e --arg id "$trace_id" 'type == "array" and any(.[];
         ((.trace // "") | endswith("/traces/" + $id))
@@ -1477,7 +1535,7 @@ phase_telemetry_privacy() {
   local logs
   logs="$(capture '[]' gcloud logging read \
     "\"${marker}\" OR textPayload:\"${marker}\" OR jsonPayload:\"${marker}\" OR httpRequest.requestUrl:\"${marker}\"" \
-    --project="$project_id" --freshness=2h --limit=20 --format='json(logName,timestamp)')" ||
+    --project="$project_id" --freshness="${freshness}s" --limit=20 --format='json(logName,timestamp)')" ||
     fail "Cloud Logging is unreadable; marker absence in logs unverified"
   jq -e 'type == "array" and length == 0' >/dev/null 2>&1 <<<"$logs" ||
     fail "the marker reached readable logs: $(jq -c '[.[]? | .logName]' <<<"$logs" 2>/dev/null)"

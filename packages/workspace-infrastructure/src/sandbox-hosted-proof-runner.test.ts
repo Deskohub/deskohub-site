@@ -1358,7 +1358,9 @@ describe("first deliver", () => {
         tool: "gcloud",
         pattern: "^run services describe workspace-api .*--format=json$",
         stdout: JSON.stringify({
+          metadata: { generation: 2 },
           status: {
+            observedGeneration: 2,
             conditions: [{ type: "Ready", status: "True" }],
             traffic: [
               { revisionName: "workspace-api-live", percent: 90 },
@@ -1375,6 +1377,44 @@ describe("first deliver", () => {
     ]);
     expect(exitCode).toBe(1);
     expect(output).toContain("workspace-api did not send all its traffic");
+  });
+
+  test("fails until the service has observed its latest generation", () => {
+    const { exitCode, output } = deliver([
+      {
+        tool: "gcloud",
+        pattern:
+          "^run services describe workspace-scheduler-worker .*--format=json$",
+        stdout: JSON.stringify({
+          metadata: { generation: 3 },
+          status: {
+            observedGeneration: 2,
+            conditions: [{ type: "Ready", status: "True" }],
+            traffic: [
+              { revisionName: "workspace-scheduler-worker-live", percent: 100 },
+            ],
+          },
+        }),
+      },
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain(
+      "workspace-scheduler-worker did not send all its traffic"
+    );
+  });
+
+  test("accepts a bare image digest", () => {
+    const { exitCode, output } = deliver([
+      {
+        tool: "gcloud",
+        pattern: "^run revisions describe workspace-api-live ",
+        stdout: v1Digest,
+      },
+    ]);
+    expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
+      exitCode: 0,
+      output: "",
+    });
   });
 
   test("fails while a service is not Ready", () => {
@@ -1408,7 +1448,10 @@ describe("private access", () => {
   const baseRules: ReadonlyArray<FakeRule> = [
     status("Authorization: Bearer garbage", "401"),
     status("workspace-api-[^ ]*/(health|rpc)$", "403"),
-    status("workspace-(tasks|scheduler)-worker-[^ ]*/(health|rpc)$", "404"),
+    status(
+      "workspace-(tasks|scheduler)-worker-[^ ]*/(health|rpc|api/.*)$",
+      "404"
+    ),
     {
       tool: "gcloud",
       pattern: "^run services get-iam-policy workspace-api ",
@@ -1430,6 +1473,15 @@ describe("private access", () => {
       stdout: policy([
         `serviceAccount:${serviceAccount("workspace-scheduler-invoker")}`,
       ]),
+    },
+    {
+      tool: "gcloud",
+      pattern: "^projects get-iam-policy ",
+      stdout: JSON.stringify({
+        bindings: [
+          { role: "roles/viewer", members: [`serviceAccount:${deployer}`] },
+        ],
+      }),
     },
   ];
   const access = (overrides: ReadonlyArray<FakeRule> = []) =>
@@ -1468,6 +1520,20 @@ describe("private access", () => {
       [
         status("workspace-tasks-worker-[^ ]*/rpc$", "204"),
         "unauthenticated POST /rpc on workspace-tasks-worker was served",
+      ],
+      [
+        status(
+          "workspace-tasks-worker-[^ ]*/api/queues/workspace/paid-fulfillment$",
+          "204"
+        ),
+        "unauthenticated POST /api/queues/workspace/paid-fulfillment on workspace-tasks-worker was served",
+      ],
+      [
+        status(
+          "workspace-scheduler-worker-[^ ]*/api/cron/workspace/proof-tick$",
+          "204"
+        ),
+        "unauthenticated GET /api/cron/workspace/proof-tick on workspace-scheduler-worker was served",
       ],
       [
         status("workspace-api-[^ ]*/rpc$", "404"),
@@ -1526,7 +1592,65 @@ describe("private access", () => {
           pattern: "^run services get-iam-policy workspace-api ",
           stdout: policy([`serviceAccount:${deployer}`]),
         },
-        "workspace-api does not grant roles/run.invoker to the frontend and the deployer",
+        "workspace-api does not grant roles/run.invoker unconditionally to exactly",
+      ],
+      [
+        {
+          tool: "gcloud",
+          pattern: "^run services get-iam-policy workspace-tasks-worker ",
+          stdout: policy([
+            `serviceAccount:${serviceAccount("workspace-tasks-invoker")}`,
+            `serviceAccount:${deployer}`,
+          ]),
+        },
+        "workspace-tasks-worker does not grant roles/run.invoker unconditionally to exactly",
+      ],
+      [
+        {
+          tool: "gcloud",
+          pattern: "^run services get-iam-policy workspace-scheduler-worker ",
+          stdout: JSON.stringify({
+            bindings: [
+              {
+                role: "roles/run.invoker",
+                members: [
+                  `serviceAccount:${serviceAccount("workspace-scheduler-invoker")}`,
+                ],
+                condition: {
+                  expression:
+                    "request.time < timestamp('2000-01-01T00:00:00Z')",
+                },
+              },
+            ],
+          }),
+        },
+        "workspace-scheduler-worker does not grant roles/run.invoker unconditionally",
+      ],
+      [
+        {
+          tool: "gcloud",
+          pattern:
+            "^run services describe workspace-tasks-worker .*--format=json$",
+          stdout: JSON.stringify({
+            metadata: { annotations: { "run.googleapis.com/ingress": "all" } },
+          }),
+        },
+        "workspace-tasks-worker does not have ingress internal",
+      ],
+      [
+        {
+          tool: "gcloud",
+          pattern: "^projects get-iam-policy ",
+          stdout: JSON.stringify({
+            bindings: [
+              {
+                role: "roles/run.invoker",
+                members: [`serviceAccount:${deployer}`],
+              },
+            ],
+          }),
+        },
+        "the project grants roles/run.invoker or a public member at project level",
       ],
       [
         {
@@ -1723,7 +1847,23 @@ describe("RPC probe", () => {
 });
 
 describe("worker probe", () => {
+  const pausedJob = (overrides: Schema.JsonObject = {}): FakeRule => ({
+    tool: "gcloud",
+    pattern: "^scheduler jobs describe workspace-proof-tick-r111-1 ",
+    stdout: JSON.stringify({
+      state: "PAUSED",
+      httpTarget: {
+        uri: `${schedulerWorkerUrl}/api/cron/workspace/proof-tick`,
+        httpMethod: "GET",
+        oidcToken: {
+          serviceAccountEmail: serviceAccount("workspace-scheduler-invoker"),
+        },
+      },
+      ...overrides,
+    }),
+  });
   const receipts = (sha: string): ReadonlyArray<FakeRule> => [
+    pausedJob(),
     {
       tool: "gcloud",
       pattern: `^logging read .*service_name="workspace-tasks-worker" AND jsonPayload\\.event="probe\\.task" AND jsonPayload\\.markerSha256="${sha}"`,
@@ -1790,6 +1930,29 @@ describe("worker probe", () => {
       expect(output).toContain("not the one the rpc-probe phase sent");
       expect(fakes.calls().join("\n")).not.toContain("tasks create-http-task");
     });
+  });
+
+  test("forces only the run's paused job aimed at the scheduler worker", () => {
+    const overridesList: ReadonlyArray<Schema.JsonObject> = [
+      { state: "ENABLED" },
+      {
+        httpTarget: {
+          uri: `${apiUrl}/api/cron/workspace/proof-tick`,
+          httpMethod: "GET",
+        },
+      },
+    ];
+    for (const overrides of overridesList) {
+      const { exitCode, output, calls } = workers((sha) => [
+        pausedJob(overrides),
+        ...receipts(sha),
+      ]);
+      expect({ overrides, exitCode }).toEqual({ overrides, exitCode: 1 });
+      expect(output).toContain(
+        "is not a paused GET of /api/cron/workspace/proof-tick"
+      );
+      expect(calls.join("\n")).not.toContain("scheduler jobs run");
+    }
   });
 
   test("fails when a receipt carries the raw marker", () => {
@@ -1878,7 +2041,7 @@ describe("telemetry privacy", () => {
       output: "",
     });
     expect(calls).toContain(
-      `gcloud logging read "${marker}" OR textPayload:"${marker}" OR jsonPayload:"${marker}" OR httpRequest.requestUrl:"${marker}" --project=${projectId} --freshness=2h --limit=20 --format=json(logName,timestamp)`
+      `gcloud logging read "${marker}" OR textPayload:"${marker}" OR jsonPayload:"${marker}" OR httpRequest.requestUrl:"${marker}" --project=${projectId} --freshness=7200s --limit=20 --format=json(logName,timestamp)`
     );
     expect(markerLeaks(output, marker)).toEqual([]);
   });

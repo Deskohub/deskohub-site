@@ -516,8 +516,16 @@ export const fakeServiceUrl = (service: string) =>
 
 /** A Ready service sending all its traffic to one live revision. */
 const fakeReadyService = (service: string) => ({
-  metadata: { name: service, annotations: {} },
+  metadata: {
+    name: service,
+    generation: 2,
+    annotations: {
+      "run.googleapis.com/ingress":
+        service === "workspace-api" ? "all" : "internal",
+    },
+  },
   status: {
+    observedGeneration: 2,
     url: fakeServiceUrl(service),
     conditions: [{ type: "Ready", status: "True" }],
     traffic: [{ revisionName: `${service}-live`, percent: 100 }],
