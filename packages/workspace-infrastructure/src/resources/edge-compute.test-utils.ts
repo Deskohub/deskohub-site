@@ -28,13 +28,19 @@ export const ownMarker = (logicalId: string) =>
 export const foreignMarker = (logicalId: string) =>
   `[alchemy alchemy-stack=other alchemy-stage=${stageName} alchemy-id=${logicalId.toLowerCase()}]`;
 
-export type Live = Record<string, unknown>;
+/** A Compute resource as its JSON wire form. */
+export type Live = Schema.JsonObject;
 
-const LiveObject = Schema.Record(Schema.String, Schema.Unknown);
-const decodeLiveObjects = Schema.decodeUnknownSync(Schema.Array(LiveObject));
-const decodeLiveJson = Schema.decodeUnknownSync(
-  Schema.fromJsonString(LiveObject)
+const decodeLiveObjects = Schema.decodeUnknownSync(
+  Schema.Array(Schema.JsonObject)
 );
+const decodeLiveJson = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.JsonObject)
+);
+
+/** `resource` in its JSON wire form, which leaves out undefined fields. */
+export const liveOf = <R extends object>(resource: R): Live =>
+  decodeLiveJson(JSON.stringify(resource));
 
 /** The rules of a live security policy; none when it has no rules. */
 export const liveRules = (live: Live | undefined): ReadonlyArray<Live> =>
@@ -47,7 +53,7 @@ export const liveRules = (live: Live | undefined): ReadonlyArray<Live> =>
 export const withUndeclaredValue = <P extends object>(
   props: P,
   key: keyof P & string,
-  value: unknown
+  value: string
 ): P => {
   const copy = { ...props };
   Reflect.set(copy, key, value);
@@ -117,16 +123,20 @@ export const fakeCompute = (
   };
   type Applied = { readonly kind: string; readonly body: Live };
   const applied: Array<Applied> = [];
-  const operation = (kind: string, targetId: unknown) => {
+  const operation = (kind: string, targetId: Schema.Json | undefined) => {
     const name = `operation-${operations.size + 1}`;
     operations.set(name, kind);
-    const body = {
-      ...(options.unnamedOperations?.includes(kind) ? {} : { name }),
+    const body: Schema.MutableJsonObject = {
       targetId: String(targetId),
-      ...(options.failingAtOnce?.includes(kind)
-        ? { status: "DONE", ...operationError }
-        : { status: "RUNNING" }),
+      status: "RUNNING",
     };
+    if (!options.unnamedOperations?.includes(kind)) {
+      body.name = name;
+    }
+    if (options.failingAtOnce?.includes(kind)) {
+      body.status = "DONE";
+      body.error = operationError.error;
+    }
     applied.push({ kind, body });
     return body;
   };
@@ -146,13 +156,14 @@ export const fakeCompute = (
       return answer(200, { name, status: "RUNNING" });
     }
     const kind = operations.get(name) ?? "";
-    return answer(200, {
-      name,
-      status: "DONE",
-      ...(options.failing?.includes(kind) ? operationError : {}),
-    });
+    return answer(
+      200,
+      options.failing?.includes(kind)
+        ? { name, status: "DONE", ...operationError }
+        : { name, status: "DONE" }
+    );
   };
-  const answer = (status: number, body?: unknown) =>
+  const answer = (status: number, body?: Schema.Json) =>
     new Response(body === undefined ? null : JSON.stringify(body), {
       status,
     });
@@ -228,11 +239,20 @@ export const fakeCompute = (
     const rules = liveRules(live);
     const priority = Number(params.get("priority"));
     switch (action) {
-      case "setSecurityPolicy":
-        touch(name, live, { securityPolicy: body?.securityPolicy });
+      case "setSecurityPolicy": {
+        const { securityPolicy: _previous, ...detached } = live;
+        const securityPolicy = body?.securityPolicy;
+        touch(
+          name,
+          detached,
+          securityPolicy === undefined ? {} : { securityPolicy }
+        );
         break;
+      }
       case "addRule":
-        touch(name, live, { rules: [...rules, body] });
+        touch(name, live, {
+          rules: body === undefined ? rules : [...rules, body],
+        });
         break;
       case "patchRule":
         touch(name, live, {
@@ -362,6 +382,8 @@ export const mutations = (calls: ReadonlyArray<Call>) =>
         `${call.method} ${call.path.split("/").slice(-2).join("/")}${call.query ? `?${call.query}` : ""}`
     );
 
+const TaggedFailure = Schema.Struct({ _tag: Schema.String });
+
 /** The tag of the failure an exit ended with. */
 export const failureTag = (exit: Exit.Exit<unknown, unknown>) => {
   if (Exit.isSuccess(exit)) {
@@ -370,9 +392,7 @@ export const failureTag = (exit: Exit.Exit<unknown, unknown>) => {
   const error = exit.cause.reasons
     .map((reason) => (reason._tag === "Fail" ? reason.error : undefined))
     .find((value) => value !== undefined);
-  return typeof error === "object" && error !== null && "_tag" in error
-    ? error._tag
-    : undefined;
+  return Schema.is(TaggedFailure)(error) ? error._tag : undefined;
 };
 
 /**

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import type * as Schema from "effect/Schema";
 import {
   decodeWorkspaceStackConfig,
   GcpRegion,
@@ -11,7 +12,7 @@ import {
 } from "./stack-config";
 import { sandboxConfig, sandboxConfigInput } from "./stack-config.test-utils";
 
-const decodeFailure = (input: unknown) => {
+const decodeFailure = (input: Schema.Json) => {
   const exit = Effect.runSyncExit(decodeWorkspaceStackConfig(input));
   if (Exit.isSuccess(exit)) {
     throw new Error("expected the configuration to be rejected");

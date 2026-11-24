@@ -145,34 +145,36 @@ describe("Alchemy beta.87 surface", () => {
   });
 
   test("names only resource types the stack's providers define", () => {
-    const constructors: Record<string, { readonly Type?: unknown }> = {
-      "GCP.ArtifactRegistry.Repository": ArtifactRegistry.Repository,
-      "GCP.CloudScheduler.Job": CloudScheduler.Job,
-      "GCP.CloudTasks.Queue": CloudTasks.Queue,
-      "GCP.Compute.GlobalAddress": Compute.GlobalAddress,
-      "GCP.Compute.GlobalForwardingRule": Compute.GlobalForwardingRule,
-      "GCP.Compute.RegionNetworkEndpointGroup":
-        Compute.RegionNetworkEndpointGroup,
-      "GCP.Compute.SslCertificate": Compute.SslCertificate,
-      "GCP.Compute.TargetHttpProxy": Compute.TargetHttpProxy,
-      "GCP.Compute.TargetHttpsProxy": Compute.TargetHttpsProxy,
-      "GCP.Compute.UrlMap": Compute.UrlMap,
-      "GCP.IAM.Member": IAM.Member,
-      "GCP.Logging.Exclusion": Logging.Exclusion,
-      "GCP.Monitoring.AlertPolicy": Monitoring.AlertPolicy,
-      "GCP.Storage.Bucket": Storage.Bucket,
-      "DeskohubWorkspace.EdgeBackendService": EdgeBackendService,
-      "DeskohubWorkspace.EdgeSecurityPolicy": EdgeSecurityPolicy,
-    };
+    const constructors = new Map<string, { readonly Type: string }>(
+      Object.entries({
+        "GCP.ArtifactRegistry.Repository": ArtifactRegistry.Repository,
+        "GCP.CloudScheduler.Job": CloudScheduler.Job,
+        "GCP.CloudTasks.Queue": CloudTasks.Queue,
+        "GCP.Compute.GlobalAddress": Compute.GlobalAddress,
+        "GCP.Compute.GlobalForwardingRule": Compute.GlobalForwardingRule,
+        "GCP.Compute.RegionNetworkEndpointGroup":
+          Compute.RegionNetworkEndpointGroup,
+        "GCP.Compute.SslCertificate": Compute.SslCertificate,
+        "GCP.Compute.TargetHttpProxy": Compute.TargetHttpProxy,
+        "GCP.Compute.TargetHttpsProxy": Compute.TargetHttpsProxy,
+        "GCP.Compute.UrlMap": Compute.UrlMap,
+        "GCP.IAM.Member": IAM.Member,
+        "GCP.Logging.Exclusion": Logging.Exclusion,
+        "GCP.Monitoring.AlertPolicy": Monitoring.AlertPolicy,
+        "GCP.Storage.Bucket": Storage.Bucket,
+        "DeskohubWorkspace.EdgeBackendService": EdgeBackendService,
+        "DeskohubWorkspace.EdgeSecurityPolicy": EdgeSecurityPolicy,
+      })
+    );
     const alchemyOwned = workspaceSurfaceClassification.flatMap((item) =>
       item.owner.kind === "alchemy" ? [item.owner.resourceType] : []
     );
     for (const resourceType of alchemyOwned) {
       if (resourceType === "GCP.Run.Service") {
-        expect(typeof Run.Service).toBe("function");
+        expect(Run.Service).toBeFunction();
         continue;
       }
-      expect(constructors[resourceType]?.Type).toBe(resourceType);
+      expect(constructors.get(resourceType)?.Type).toBe(resourceType);
     }
     // The edge has no Terraform owner left.
     expect(

@@ -1,11 +1,38 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import * as Schema from "effect/Schema";
 import {
   createProbeServer,
   maxTraceAttempts,
   sensitiveRoutes,
 } from "./probe.mjs";
 
-type LogEntry = Record<string, unknown>;
+/** A structured line the probe logs: an OTLP export attempt or a served request. */
+type LogEntry =
+  | {
+      readonly severity: string;
+      readonly message: string;
+      readonly otlp: {
+        readonly traceId: string;
+        readonly status?: number;
+        readonly error?: string;
+      };
+    }
+  | {
+      readonly severity: string;
+      readonly message: string;
+      readonly httpRequest: {
+        readonly requestMethod: string;
+        readonly requestUrl: string;
+        readonly status: number;
+        readonly latency: string;
+      };
+      readonly probeVersion: string;
+    };
+
+/** The TCP address a listening probe reports. */
+const decodeTcpAddress = Schema.decodeUnknownSync(
+  Schema.Struct({ port: Schema.Number })
+);
 
 const marker = "synthetic-probe-marker";
 const servers: Array<{ close: () => void }> = [];
@@ -36,11 +63,7 @@ const startProbe = async (fetchImpl: typeof fetch) => {
     probe.server.listen(0, "127.0.0.1", resolve)
   );
   servers.push(probe.server);
-  const address = probe.server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("expected the probe to listen on a TCP port");
-  }
-  const { port } = address;
+  const { port } = decodeTcpAddress(probe.server.address());
   return { ...probe, logs, origin: `http://127.0.0.1:${port}` };
 };
 

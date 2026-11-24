@@ -32,18 +32,19 @@ const lifecycleInput = lifecycleInputOf(logicalId);
 const description = "Workspace sandbox edge policy";
 const ownDescription = `${ownMarkerOf(logicalId)}\n${description}`;
 
-const wafRule = (preview: boolean): EdgeSecurityPolicyRule => ({
-  action: "deny(403)",
-  priority: 1000,
-  preview,
-  description: "Preconfigured SQL injection rules",
-  match: {
-    expr: {
-      expression:
-        "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})",
+const wafRule = (preview: boolean) =>
+  ({
+    action: "deny(403)",
+    priority: 1000,
+    preview,
+    description: "Preconfigured SQL injection rules",
+    match: {
+      expr: {
+        expression:
+          "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})",
+      },
     },
-  },
-});
+  }) satisfies EdgeSecurityPolicyRule;
 
 const throttleLimits = {
   conformAction: "allow",
@@ -52,22 +53,22 @@ const throttleLimits = {
   rateLimitThreshold: { count: 120, intervalSec: 60 },
 } satisfies EdgeSecurityPolicyRule["rateLimitOptions"];
 
-const throttleRule: EdgeSecurityPolicyRule = {
+const throttleRule = {
   action: "throttle",
   priority: 2000,
   preview: false,
   description: "Throttle auth endpoints per client IP",
   match: { expr: { expression: "request.path.startsWith('/api/auth/')" } },
   rateLimitOptions: throttleLimits,
-};
+} satisfies EdgeSecurityPolicyRule;
 
-const defaultRule: EdgeSecurityPolicyRule = {
+const defaultRule = {
   action: "allow",
   priority: 2147483647,
   preview: false,
   description: "Default allow",
   match: { versionedExpr: "SRC_IPS_V1", config: { srcIpRanges: ["*"] } },
-};
+} satisfies EdgeSecurityPolicyRule;
 
 const policyProps = (preview: boolean): EdgeSecurityPolicyProps => ({
   project,
