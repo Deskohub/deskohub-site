@@ -65,6 +65,16 @@ describe("workspace stack configuration", () => {
     expect(configuredFailure(raw).paths).toEqual(["budget.maximumSpend"]);
   });
 
+  test("reports secret material in the stage config even beside an overflowing budget", () => {
+    const raw = JSON.stringify({
+      ...sandboxConfigInput,
+      secrets: [{ ...sandboxConfigInput.secrets[0], value: "plain-text" }],
+    }).replace(/"maximumSpend":[^,}]+/, '"maximumSpend":1e400');
+    const failure = configuredFailure(raw);
+    expect(failure.reason).toBe("secret-material");
+    expect(failure.paths).toEqual(["secrets.0.value"]);
+  });
+
   test("rejects a secret value placed beside a reference", () => {
     const error = decodeFailure({
       ...sandboxConfigInput,

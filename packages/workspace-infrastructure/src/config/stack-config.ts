@@ -334,8 +334,6 @@ const secretMaterialPatterns: ReadonlyArray<RegExp> = [
 const secretKeyPattern =
   /^(?:value|secretValue|password|token|apiKey|privateKey|credentials?|connectionString)$/i;
 
-const isJsonObject = Schema.is(Schema.JsonObject);
-
 /**
  * Any value `JSON.parse` yields. Unlike `Schema.Json` it keeps non-finite
  * numbers such as an overflowing `1e400`, so the domain decoder rejects
@@ -367,14 +365,18 @@ const findSecretMaterial = (
       findSecretMaterial(item, [...path, String(index)])
     );
   }
-  if (isJsonObject(input)) {
-    return Object.entries(input).flatMap(([key, value]) =>
-      secretKeyPattern.test(key)
-        ? [[...path, key].join(".")]
-        : findSecretMaterial(value, [...path, key])
-    );
+  if (
+    input === null ||
+    Predicate.isNumber(input) ||
+    Predicate.isBoolean(input)
+  ) {
+    return [];
   }
-  return [];
+  return Object.entries(input).flatMap(([key, value]) =>
+    secretKeyPattern.test(key)
+      ? [[...path, key].join(".")]
+      : findSecretMaterial(value, [...path, key])
+  );
 };
 
 const issuePaths = (issue: SchemaIssue.Issue): ReadonlyArray<string> => [
