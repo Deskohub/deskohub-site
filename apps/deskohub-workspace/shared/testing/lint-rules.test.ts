@@ -1171,6 +1171,11 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/probe.tsx",
   "apps/deskohub-workspace/probe.mts",
   "apps/deskohub-workspace/probe.cts",
+  // Only the listed suffixes right before the extension, and only testing,
+  // generated, and Paraglide directories, are exempt.
+  "apps/deskohub-workspace/features/e2e/loader.mts",
+  "apps/deskohub-workspace/shared/probe.test.config.cts",
+  "apps/deskohub-workspace/probe with spaces.tsx",
 ];
 const generatedProbes = [
   "packages/standard-schema/generated/probe.mts",
