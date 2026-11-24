@@ -1,11 +1,13 @@
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import {
   audienceAttributeCatalogue,
+  campaignSourceParam,
+  choiceParam,
   countAttribute,
   defineAudienceAttributeCatalogue,
   periodParam,
 } from "@deskohub/workspace-admin-api";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import {
   type AudienceAttributeResolvers,
   audienceAttributeResolvers,
@@ -55,3 +57,86 @@ const withoutResolver: AudienceAttributeResolvers<typeof extendedCatalogue> =
   audienceAttributeResolvers;
 
 void withoutResolver;
+
+type Expect<T extends true> = T;
+type Equal<X, Y> =
+  (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2
+    ? true
+    : false;
+
+/**
+ * Its resolver reads the period as the request's bounds, and no campaign,
+ * since it names no campaign source.
+ */
+type GiftCardCountRequest = Parameters<
+  (typeof extendedResolvers)["giftCardCount"]["count"]
+>[0];
+export type GiftCardCountRequestChecks = [
+  Expect<Equal<keyof GiftCardCountRequest["params"], never>>,
+  Expect<
+    Equal<keyof GiftCardCountRequest, "bounds" | "reservationsAsOf" | "params">
+  >,
+];
+
+const countPresentation = {
+  label: "Emails received",
+  section: "Reservations",
+  editor: {
+    lead: [{ text: "emails received" }],
+    period: "Emails",
+    count: "Email count",
+  },
+  summary: { verb: "received", noun: { one: "email", other: "emails" } },
+} as const;
+
+/** A campaign source only its request's `campaign` param can fix. */
+const sourcedEmailCount = countAttribute("sourcedEmailCount", {
+  ...countPresentation,
+  params: { period: periodParam, source: campaignSourceParam },
+  defaults: {
+    params: { period: { _tag: "AnyTime" } },
+    operator: "gte",
+    value: 1,
+  },
+});
+
+/** A `campaign` param that isn't a campaign source. */
+const campaignChoiceCount = countAttribute("campaignChoiceCount", {
+  ...countPresentation,
+  params: {
+    period: periodParam,
+    campaign: choiceParam(Schema.Literals(["welcome", "promotion"]), {
+      label: "Campaign",
+      control: "select",
+      options: {
+        welcome: { label: "welcome" },
+        promotion: { label: "promotion" },
+      },
+    }),
+  },
+  defaults: {
+    params: { period: { _tag: "AnyTime" }, campaign: "welcome" },
+    operator: "gte",
+    value: 1,
+  },
+});
+
+/** Neither gets a resolver its request could feed. */
+export type MisplacedContextualParamChecks = [
+  Expect<
+    Equal<
+      AudienceAttributeResolvers<{
+        readonly sourcedEmailCount: typeof sourcedEmailCount;
+      }>["sourcedEmailCount"],
+      never
+    >
+  >,
+  Expect<
+    Equal<
+      AudienceAttributeResolvers<{
+        readonly campaignChoiceCount: typeof campaignChoiceCount;
+      }>["campaignChoiceCount"],
+      never
+    >
+  >,
+];

@@ -7,6 +7,8 @@ import {
 import {
   type AudienceCountOperatorType,
   audienceAttributeCatalogue,
+  type CampaignEmailSourceType,
+  type DatePeriodType,
 } from "@deskohub/workspace-admin-api";
 import { Option, Result, Schema } from "effect";
 import { newCondition } from "./admin/audiences/audience-filter-editing";
@@ -362,6 +364,50 @@ describe("collectAudienceFactRequests", () => {
       },
       { attribute: "lastVisit", bounds: {}, asOf: now },
     ]);
+  });
+
+  test("shares a request between conditions whose fixed params agree", () => {
+    const replayed = { ...context, replayed: true };
+    const emailsFrom = (period: DatePeriodType) =>
+      ({
+        ...marketingEmailsLastTenDays,
+        params: { purpose: "marketing", period },
+      }) as const satisfies AudienceCondition;
+    // A replay counts emails only up to its moment either way.
+    expect(
+      collectAudienceFactRequests(
+        group("or", [
+          emailsFrom({ _tag: "Since", date: "2026-03-01" }),
+          emailsFrom({ _tag: "Onward", date: "2026-03-01" }),
+        ]),
+        [replayed]
+      ).counts
+    ).toHaveLength(1);
+
+    const campaignId = campaignIdSchema.make("campaign-1");
+    const emailsOf = (campaign?: CampaignEmailSourceType) =>
+      ({
+        ...marketingEmailsLastTenDays,
+        params: {
+          ...marketingEmailsLastTenDays.params,
+          ...(campaign && { campaign }),
+        },
+      }) as const satisfies AudienceCondition;
+    const countsOf = (
+      sources: readonly (CampaignEmailSourceType | undefined)[],
+      evaluating: AudienceEvaluationContext
+    ) =>
+      collectAudienceFactRequests(group("or", sources.map(emailsOf)), [
+        evaluating,
+      ]).counts;
+    expect(
+      countsOf([{ _tag: "This" }, { _tag: "Specific", campaignId }], {
+        ...context,
+        campaignId: Option.some(campaignId),
+      })
+    ).toHaveLength(1);
+    // No campaign of its own (none) isn't any campaign.
+    expect(countsOf([{ _tag: "This" }, undefined], context)).toHaveLength(2);
   });
 
   test("shares a request between contexts only where their bounds agree", () => {

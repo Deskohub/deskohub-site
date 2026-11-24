@@ -16,6 +16,7 @@ import {
 import { audienceFactKey, countFactRequest } from "./audience-filter";
 import type { AudienceResolution } from "./backend/audience-attribute-resolvers";
 import { audienceEvaluationAt } from "./backend/audience-evaluation-context";
+import { datePeriodBounds } from "./date-period";
 
 registerWorkspaceComponentTestEnv();
 // @testing-library/react must load after the happy-dom registration.
@@ -90,11 +91,12 @@ describe("a count attribute added as one catalogue entry and its resolver", () =
   });
 
   test("resolves its counts through its resolver", async () => {
-    const request = countFactRequest(
-      condition,
-      audienceEvaluationAt(Temporal.Now.instant())
-    );
+    const context = audienceEvaluationAt(Temporal.Now.instant());
+    const request = countFactRequest(condition, context);
     expect(audienceFactKey(request)).toContain('"giftCardCount"');
+    expect(request.bounds).toEqual(
+      datePeriodBounds(condition.params.period, context)
+    );
     const counts = await Effect.runPromise(
       extendedResolvers.giftCardCount.count(request, {} as AudienceResolution)
     );

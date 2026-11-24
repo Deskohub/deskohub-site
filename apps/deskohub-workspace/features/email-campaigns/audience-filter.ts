@@ -137,9 +137,10 @@ export type AudienceCandidate = {
  * The count params the evaluation context fixes: a period becomes the
  * instants it covers, and a campaign source the campaign whose emails count.
  * Every count attribute counts in a `period`; one that counts campaign
- * emails names their source `campaign`.
+ * emails names their source `campaign`. The resolver catalogue rejects
+ * attributes that place them elsewhere.
  */
-type ContextualCountParam = "period" | "campaign";
+export type ContextualCountParam = "period" | "campaign";
 
 /** The params a count resolver reads as decoded; its request fixes the rest. */
 export type CountRequestParams<Params> = Omit<Params, ContextualCountParam>;
@@ -160,8 +161,9 @@ export type CountRequestContext = {
 /**
  * What one count condition counts in one evaluation context: the condition's
  * attribute and decoded params, with its period and campaign source fixed by
- * the context. Equal requests share one lookup, so subjects with different
- * contexts share it whenever their bounds and campaign agree.
+ * the context. Requests that agree on all but their raw period and campaign
+ * source share one lookup, so subjects with different contexts share it
+ * whenever their bounds and campaign agree.
  */
 export type AudienceCountRequestOf<Condition extends AudienceCountCondition> =
   CountRequestContext & {
@@ -169,7 +171,11 @@ export type AudienceCountRequestOf<Condition extends AudienceCountCondition> =
     readonly params: Condition["params"];
   };
 
-/** A count request of any catalogued count attribute. */
+/**
+ * A count request of any catalogued count attribute, as
+ * {@link countFactRequest} builds it. The type doesn't tie each attribute
+ * to its own params; resolvers read them through their attribute's resolver.
+ */
 export type AudienceCountRequest = AudienceCountRequestOf<
   AudienceConditionOf<AudienceAttributeOfKind<"count">>
 >;
@@ -205,14 +211,34 @@ export type AudienceFacts = {
 };
 
 /**
+ * A count request's lookup: its attribute, the params it reads as decoded,
+ * and what its context fixes, without the raw period and campaign source.
+ * An omitted campaign (any campaign) stays apart from `null` (none).
+ */
+const countFactLookup = ({
+  attribute,
+  params: { period: _period, campaign: _campaign, ...params },
+  bounds,
+  campaign,
+  reservationsAsOf,
+}: AudienceCountRequestOf<AudienceCountCondition>) => ({
+  attribute,
+  params,
+  bounds,
+  campaign,
+  reservationsAsOf,
+});
+
+/**
  * Requests are built from decoded schema values in the entry's param order,
  * so their key order is stable; instants serialize as ISO strings.
  */
 export const audienceFactKey = (
   request:
-    | { readonly attribute: string; readonly params: object }
+    | AudienceCountRequestOf<AudienceCountCondition>
     | AudienceDateRequest<string>
-): string => JSON.stringify(request);
+): string =>
+  JSON.stringify("params" in request ? countFactLookup(request) : request);
 
 const anyTime: DatePeriod = { _tag: "AnyTime" };
 

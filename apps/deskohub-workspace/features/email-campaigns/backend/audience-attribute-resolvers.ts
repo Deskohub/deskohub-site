@@ -8,6 +8,8 @@ import type {
   AudienceAttributeDefinition,
   AudienceConditionIn,
   AudienceConditionOf,
+  CampaignEmailSourceType,
+  DatePeriodType,
   ReservationStay,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Match } from "effect";
@@ -16,6 +18,7 @@ import type {
   AudienceCandidate,
   AudienceDateFacts,
   AudienceDateRequest,
+  ContextualCountParam,
   CountRequestContext,
   CountRequestParams,
 } from "../audience-filter";
@@ -79,9 +82,17 @@ export type AudienceCountResolver<Params> = {
   ) => boolean;
 };
 
-/** A count request as its attribute's resolver reads it. */
-type AudienceCountResolverRequest<Params> = CountRequestContext & {
+/**
+ * A count request as its attribute's resolver reads it: the campaign only
+ * when its params name a campaign source.
+ */
+type AudienceCountResolverRequest<Params> = Omit<
+  CountRequestContext,
+  "campaign"
+> & {
   readonly params: CountRequestParams<Params>;
+} & {
+  readonly [Param in keyof Params & "campaign"]?: CountRequestContext[Param];
 };
 
 /**
@@ -146,8 +157,42 @@ type ValueIn<
     : never;
 
 /**
+ * Params a request would leave unfixed: a period or campaign source under
+ * another name than its {@link ContextualCountParam}, or a `campaign` that
+ * isn't a campaign source.
+ */
+type MisplacedContextualParam<Params> = {
+  readonly [Param in keyof Params]-?: Param extends ContextualCountParam
+    ? Exclude<Params[Param], undefined> extends ContextualParamValue[Param]
+      ? never
+      : Param
+    : [
+          Extract<Params[Param], ContextualParamValue[ContextualCountParam]>,
+        ] extends [never]
+      ? never
+      : Param;
+}[keyof Params];
+
+/** What each contextual param holds before its request fixes it. */
+type ContextualParamValue = {
+  readonly period: DatePeriodType;
+  readonly campaign: CampaignEmailSourceType;
+};
+
+/**
+ * A count attribute's resolver, or `never` when its params put what the
+ * context fixes where its request can't fix it.
+ */
+type AudienceCountResolverOf<Params> = [
+  MisplacedContextualParam<Params>,
+] extends [never]
+  ? AudienceCountResolver<Params>
+  : never;
+
+/**
  * One resolver per catalogued attribute, of its kind's shape. An attribute
- * added to the catalogue without a resolver fails the typecheck here.
+ * added to the catalogue without a resolver fails the typecheck here, as
+ * does a count attribute with a misplaced period or campaign source.
  */
 export type AudienceAttributeResolvers<
   Catalogue extends CatalogueEntries = AudienceAttributeCatalogue,
@@ -155,7 +200,7 @@ export type AudienceAttributeResolvers<
   readonly [Attribute in AttributeOfKindIn<
     Catalogue,
     "count"
-  >]: AudienceCountResolver<AudienceCountParams<Attribute, Catalogue>>;
+  >]: AudienceCountResolverOf<AudienceCountParams<Attribute, Catalogue>>;
 } & {
   readonly [Attribute in AttributeOfKindIn<
     Catalogue,
