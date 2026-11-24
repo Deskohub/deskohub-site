@@ -12,6 +12,7 @@ import {
 } from "bun:test";
 import assert from "node:assert/strict";
 import { ADMINISTRATION_STANDALONE_ACCESS_CODE_MAXIMUM_DURATION_HOURS } from "@deskohub/workspace-admin-api";
+import { Schema } from "effect";
 import type { Locale } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import { elementOf } from "@/shared/testing/dom-element.test-utils";
@@ -20,6 +21,7 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import type { useWorkspaceAction } from "@/shared/utils/use-workspace-action";
 import { shiftStandaloneAccessCodeLocalEnd } from "./create-access-code";
 
 // React DOM detects input events when it loads, so it is imported once
@@ -29,36 +31,50 @@ const { act, cleanup, fireEvent, render, waitFor } = await import(
 );
 
 const writeText = mock(() => Promise.resolve());
-const execute = mock(
-  (_input: CreateStandaloneAccessCodeActionInput) => undefined
+const execute = mock<ReturnType<typeof useWorkspaceAction>["execute"]>(
+  () => undefined
 );
 
-interface CreateStandaloneAccessCodeActionInput {
-  readonly attemptId: string;
-  readonly name: string;
-  readonly startsAt: string;
-  readonly endsAt: string;
-  readonly providerCredentialRemovedAttemptId?: string;
-}
-
-type ActionOptions = {
-  readonly execute: (input: CreateStandaloneAccessCodeActionInput) => void;
-  readonly isExecuting: boolean;
-  readonly onSuccess: (args: { readonly data?: unknown }) => void;
-  readonly onError: (args: {
-    readonly error: { readonly serverError?: string };
-  }) => void;
-  readonly onTransportError: () => void;
-};
-
-let actionOptions: ActionOptions | undefined;
+/** The input the form hands its action, as the action's schema reads it. */
+const decodeActionInput = Schema.decodeUnknownSync(
+  Schema.Struct({
+    attemptId: Schema.String,
+    name: Schema.String,
+    startsAt: Schema.String,
+    endsAt: Schema.String,
+    providerCredentialRemovedAttemptId: Schema.optionalKey(Schema.String),
+  }),
+  { onExcessProperty: "error" }
+);
 
 /** The input the form passed to its action on the given call. */
-const executedInput = (call: number): CreateStandaloneAccessCodeActionInput => {
-  const input = execute.mock.calls[call]?.[0];
-  assert(input, `Expected action call ${call}`);
-  return input;
+const executedInput = (call: number) => {
+  assert(execute.mock.calls[call], `Expected action call ${call}`);
+  return decodeActionInput(execute.mock.calls[call][0]);
 };
+
+/** The callbacks the form gave its action hook. */
+let actionOptions: Parameters<typeof useWorkspaceAction>[1] | undefined;
+
+const lastInput = () => execute.mock.lastCall?.[0];
+
+/** Settles the latest call as the action's success with `data`. */
+const actionSucceeds = ({ data }: { readonly data: unknown }) =>
+  actionOptions?.onSuccess?.({ data, input: lastInput() });
+
+/** Settles the latest call as the action's server error. */
+const actionFails = ({
+  error,
+}: {
+  readonly error: { readonly serverError: string };
+}) => actionOptions?.onError?.({ error, input: lastInput() });
+
+/** Settles the latest call as a request that never reached the server. */
+const actionTransportFails = () =>
+  actionOptions?.onTransportError?.({
+    error: new Error("Synthetic transport failure"),
+    input: lastInput(),
+  });
 
 mock.module("@/features/access-codes/admin/actions", () => ({
   createStandaloneAccessCode: mock(),
@@ -86,7 +102,7 @@ beforeEach(() => {
 
 const withActionOptions = () => {
   workspaceUseAction.mockImplementation((_action, options) => {
-    actionOptions = options as ActionOptions | undefined;
+    actionOptions = options;
     return { execute, isExecuting: false, result: {} };
   });
 };
@@ -408,7 +424,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const firstInput = executedInput(0);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "failed", outcome: { outcome: "rejected" } },
       });
     });
@@ -432,7 +448,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const firstInput = executedInput(0);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "failed", outcome: { outcome: "unavailable" } },
       });
     });
@@ -448,7 +464,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
     await submitForm(view);
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "succeeded", outcome: createdOutcome },
       });
     });
@@ -486,7 +502,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "succeeded", outcome: createdOutcome },
       });
     });
@@ -518,7 +534,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
     const firstAttemptId = executedInput(0).attemptId;
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "succeeded", outcome: createdOutcome },
       });
     });
@@ -548,7 +564,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: {
           status: "succeeded",
           outcome: { ...createdOutcome, outcome: "already-created" },
@@ -573,7 +589,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "failed", outcome: { outcome: "rejected" } },
       });
     });
@@ -598,7 +614,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({ attemptId: priorAttemptId, name: "Booth A" }),
       });
     });
@@ -646,7 +662,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       fireEvent.submit(form);
     });
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "failed", outcome: { outcome: "rejected" } },
       });
     });
@@ -660,7 +676,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       fireEvent.submit(form);
     });
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({ attemptId: priorAttemptId, name: "Booth A" }),
       });
     });
@@ -691,7 +707,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const view = await renderForm("cs-CZ");
 
     act(() => {
-      actionOptions?.onError({
+      actionFails({
         error: { serverError: "Server neodpověděl včas. Zkuste to znovu." },
       });
     });
@@ -706,7 +722,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const view = await renderForm("cs-CZ");
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: { status: "succeeded", outcome: createdOutcome },
       });
     });
@@ -724,7 +740,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({
           attemptId: priorAttemptId,
           name: "Booth A",
@@ -753,7 +769,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const firstInput = executedInput(0);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({ attemptId: priorAttemptId, name: "Booth A" }),
       });
     });
@@ -807,7 +823,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({ attemptId: priorAttemptId, name: "Booth A" }),
       });
     });
@@ -839,7 +855,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({ data: cleanupRequiredFailure(staleTarget) });
+      actionSucceeds({ data: cleanupRequiredFailure(staleTarget) });
     });
 
     expect(
@@ -864,7 +880,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({
           attemptId: priorAttemptId,
           name: "Stale Booth",
@@ -887,7 +903,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
 
     const nextAttemptId = "01980000-0000-7000-8000-0000000000bb";
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: cleanupRequiredFailure({
           attemptId: nextAttemptId,
           name: "Fresh Booth",
@@ -935,7 +951,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onSuccess({
+      actionSucceeds({
         data: ambiguousFailure({ attemptId: priorAttemptId, name: "Booth A" }),
       });
     });
@@ -969,7 +985,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await submitForm(view);
 
     act(() => {
-      actionOptions?.onTransportError();
+      actionTransportFails();
     });
 
     expect(

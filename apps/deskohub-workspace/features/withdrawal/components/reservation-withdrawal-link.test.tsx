@@ -68,7 +68,7 @@ mock.module("@/features/account/withdrawal-actions", () => ({
 
 registerWorkspaceComponentTestEnv();
 // The library hook behind useWorkspaceAction drives the dialog's states.
-workspaceUseAction.mockImplementation(useAction as never);
+workspaceUseAction.mockImplementation(useAction);
 // @testing-library/react and the dialog load after the happy-dom registration.
 const { act, cleanup, fireEvent, render } = await import(
   "@testing-library/react"
