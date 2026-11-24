@@ -1394,6 +1394,21 @@ describe("token-route privacy and telemetry", () => {
     { name: "_Required", destination: "logging/_Required" },
     { name: "_Default", destination: "logging/_Default" },
   ];
+  // One page of a parent's sinks as the Logging API lists them; a later
+  // page is the one asked for by the earlier page's token.
+  const sinksPage = (
+    parent: string,
+    sinks: ReadonlyArray<Record<string, unknown>>,
+    page: { readonly token?: string; readonly next?: string } = {}
+  ): FakeRule => ({
+    tool: "curl",
+    pattern: `logging\\.googleapis\\.com/v2/${parent}/sinks\\?pageSize=100${
+      page.token === undefined ? "" : `&pageToken=${page.token}`
+    }$`,
+    stdout: JSON.stringify(
+      page.next === undefined ? { sinks } : { sinks, nextPageToken: page.next }
+    ),
+  });
   const traceBody = JSON.stringify({
     traceId,
     spans: [{ name: "sandbox-probe.synthetic" }],
@@ -1415,18 +1430,10 @@ describe("token-route privacy and telemetry", () => {
         { id: "4242", type: "folder" },
       ]),
     },
-    {
-      tool: "gcloud",
-      pattern: "^logging sinks list --project=",
-      stdout: JSON.stringify(projectSinks),
-    },
-    {
-      tool: "gcloud",
-      pattern: "^logging sinks list --folder=4242",
-      stdout: JSON.stringify([
-        { name: "_Default", destination: "logging/folder" },
-      ]),
-    },
+    sinksPage(`projects/${projectId}`, projectSinks),
+    sinksPage("folders/4242", [
+      { name: "_Default", destination: "logging/folder" },
+    ]),
     {
       tool: "curl",
       pattern: "/healthz$",
@@ -1554,45 +1561,72 @@ describe("token-route privacy and telemetry", () => {
 
   test("sends no marker while any sink could receive token-route logs", () => {
     for (const override of [
-      {
-        tool: "gcloud",
-        pattern: "^logging sinks list --project=",
-        stdout: JSON.stringify([
+      [
+        sinksPage(`projects/${projectId}`, [
           ...projectSinks,
           { name: "export", destination: "bigquery.googleapis.com/x" },
         ]),
-      },
-      {
-        tool: "gcloud",
-        pattern: "^logging sinks list --folder=4242",
-        stdout: JSON.stringify([
+      ],
+      [
+        sinksPage("folders/4242", [
           {
             name: "org-export",
             destination: "storage.googleapis.com/y",
             includeChildren: true,
           },
         ]),
-      },
-      { tool: "gcloud", pattern: "^logging sinks list --folder=4242", exit: 1 },
-      { tool: "gcloud", pattern: "^projects get-ancestors", exit: 1 },
-      {
-        tool: "curl",
-        pattern: "logging\\.googleapis\\.com/v2/projects/.*/exclusions",
-        stdout: JSON.stringify({
-          exclusions: [
-            { name: exclusionName, filter: exclusionFilter, disabled: true },
+      ],
+      [{ ...sinksPage("folders/4242", []), stdout: undefined, exit: 1 }],
+      // An uncovered export on a later page of the project's or the
+      // folder's sinks, which `gcloud logging sinks list` never reads.
+      [
+        sinksPage(
+          `projects/${projectId}`,
+          [{ name: "export", destination: "bigquery.googleapis.com/x" }],
+          { token: "page-2" }
+        ),
+        sinksPage(`projects/${projectId}`, projectSinks, { next: "page-2" }),
+      ],
+      [
+        sinksPage(
+          "folders/4242",
+          [
+            {
+              name: "org-export",
+              destination: "storage.googleapis.com/y",
+              includeChildren: true,
+            },
           ],
-        }),
-      },
-    ] satisfies ReadonlyArray<FakeRule>) {
-      const { exitCode, markerSent } = privacy([override]);
+          { token: "page%2B2" }
+        ),
+        sinksPage("folders/4242", [], { next: "page+2" }),
+      ],
+      // Pages without end.
+      [
+        sinksPage("folders/4242", [], { token: "again", next: "again" }),
+        sinksPage("folders/4242", [], { next: "again" }),
+      ],
+      [{ tool: "gcloud", pattern: "^projects get-ancestors", exit: 1 }],
+      [
+        {
+          tool: "curl",
+          pattern: "logging\\.googleapis\\.com/v2/projects/.*/exclusions",
+          stdout: JSON.stringify({
+            exclusions: [
+              { name: exclusionName, filter: exclusionFilter, disabled: true },
+            ],
+          }),
+        },
+      ],
+    ] satisfies ReadonlyArray<ReadonlyArray<FakeRule>>) {
+      const { exitCode, markerSent } = privacy(override);
       expect({ override, exitCode, markerSent }).toEqual({
         override,
         exitCode: 1,
         markerSent: false,
       });
     }
-  });
+  }, 60_000);
 
   test("sends no marker unless the live exclusion is the stack's full filter", () => {
     const liveExclusion = (filter: string): FakeRule => ({
@@ -1624,18 +1658,14 @@ describe("token-route privacy and telemetry", () => {
 
   test("accepts an inherited sink that excludes the same filter", () => {
     const { exitCode, output } = privacy([
-      {
-        tool: "gcloud",
-        pattern: "^logging sinks list --folder=4242",
-        stdout: JSON.stringify([
-          {
-            name: "org-export",
-            destination: "storage.googleapis.com/y",
-            includeChildren: true,
-            exclusions: [{ name: "tokens", filter: exclusionFilter }],
-          },
-        ]),
-      },
+      sinksPage("folders/4242", [
+        {
+          name: "org-export",
+          destination: "storage.googleapis.com/y",
+          includeChildren: true,
+          exclusions: [{ name: "tokens", filter: exclusionFilter }],
+        },
+      ]),
     ]);
     expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
       exitCode: 0,

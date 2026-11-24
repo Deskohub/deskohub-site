@@ -217,6 +217,27 @@ project_exclusions_json() {
   jq -c '.exclusions // []' <<<"$body"
 }
 
+# Every log sink of one parent (projects/ID, folders/ID or organizations/ID)
+# as a JSON array, from the Logging API page by page: `gcloud logging sinks
+# list` in the pinned SDK sends one request and drops nextPageToken
+# (surface/logging/sinks/list.py), so a sink on a later page would go
+# unchecked. More than 20 pages (2,000 sinks) fails rather than paging
+# without end.
+log_sinks_json() {
+  local parent="$1" body url page_token="" pages=0 sinks='[]'
+  while true; do
+    url="https://logging.googleapis.com/v2/${parent}/sinks?pageSize=100"
+    [[ -z "$page_token" ]] || url+="&pageToken=${page_token}"
+    body="$(google_get '{"sinks":[]}' "$url")" || return 1
+    sinks="$(jq -c --argjson sinks "$sinks" '$sinks + (.sinks // [])' <<<"$body")" || return 1
+    page_token="$(jq -r '.nextPageToken // empty | @uri' <<<"$body")" || return 1
+    [[ -n "$page_token" ]] || break
+    pages=$((pages + 1))
+    ((pages < 20)) || return 1
+  done
+  printf '%s\n' "$sinks"
+}
+
 project_exclusion_names() {
   local exclusions
   exclusions="$(project_exclusions_json)" || return 1
@@ -1188,11 +1209,11 @@ verify_log_routing() {
   ancestors="$(capture "[{\"id\":\"${project_id}\",\"type\":\"project\"}]" \
     gcloud projects get-ancestors "$project_id" --format=json)" ||
     fail "the project's folders and organization are unreadable; inherited sinks unverified"
-  sinks="$(capture '[]' gcloud logging sinks list --project="$project_id" --format=json)" ||
+  sinks="$(log_sinks_json "projects/${project_id}")" ||
     fail "project log sinks are unreadable; log routing unverified"
   if $dry_run; then
-    trace gcloud logging sinks list "--folder=<each ancestor folder>" --format=json
-    trace gcloud logging sinks list "--organization=<ancestor organization>" --format=json
+    trace curl -fsS "https://logging.googleapis.com/v2/<each ancestor folder and organization>/sinks?pageSize=100" \
+      "(every page; bearer from gcloud, never printed)"
     echo "  expect every enabled project and inherited sink to exclude ${edge_exclusion}'s filter" >&2
     return 0
   fi
@@ -1204,7 +1225,7 @@ verify_log_routing() {
       folder | organization) ;;
       *) fail "unknown ancestor type ${type}; inherited sinks unverified" ;;
     esac
-    sinks="$(gcloud logging sinks list "--${type}=${id}" --format=json)" ||
+    sinks="$(log_sinks_json "${type}s/${id}")" ||
       fail "${type} ${id} log sinks are unreadable; inherited sinks unverified"
     jq --arg parent "${type}s/${id}" --slurpfile known "${dir}/sinks.json" \
       '$known[0] + [.[] | . + {parent: $parent, level: "ancestor"}]' <<<"$sinks" >"${dir}/sinks.next"

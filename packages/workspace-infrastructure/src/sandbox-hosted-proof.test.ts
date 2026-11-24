@@ -397,7 +397,7 @@ describe("sandbox proof runner", () => {
       "bun run release restore --release-id",
       "https://logging.googleapis.com/v2/projects/deskohub-workspace-sandbox/exclusions",
       "gcloud projects get-ancestors",
-      "gcloud logging sinks list --project=deskohub-workspace-sandbox",
+      "https://logging.googleapis.com/v2/projects/deskohub-workspace-sandbox/sinks",
       "gcloud logging read",
       "https://cloudtrace.googleapis.com/v1/projects/deskohub-workspace-sandbox/traces/",
       "token=synthetic-probe-marker",
