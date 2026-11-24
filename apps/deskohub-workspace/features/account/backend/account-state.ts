@@ -146,25 +146,28 @@ type WithReservationHistory<State> = State extends {
  * always shows its own history; an account without a usable profile may show
  * what it authored for others, only when it has any or they can't be read.
  */
-type WithHistoryScope<State> = State extends {
-  readonly kind: "linked" | "review-account";
-}
-  ? {
-      readonly state: State;
+type WithHistoryScope<State> =
+  | {
+      readonly state: Extract<State, HistoryAlwaysShown>;
       readonly shown: "always";
       readonly history: ReservationHistoryAccount;
     }
-  : State extends { readonly kind: "completion-required" | "support-required" }
-    ? { readonly state: State } & (
-        | {
-            readonly shown: "when-any";
-            readonly history: ReservationHistoryAccount;
-          }
-        | NoHistory
-      )
-    : { readonly state: State } & NoHistory;
+  | {
+      readonly state: Extract<State, HistoryShownWhenAny>;
+      readonly shown: "when-any";
+      readonly history: ReservationHistoryAccount;
+    }
+  | {
+      readonly state: Exclude<State, HistoryAlwaysShown>;
+      readonly shown?: undefined;
+      readonly history?: undefined;
+    };
 
-type NoHistory = { readonly shown?: undefined; readonly history?: undefined };
+type HistoryAlwaysShown = { readonly kind: "linked" | "review-account" };
+
+type HistoryShownWhenAny = {
+  readonly kind: "completion-required" | "support-required";
+};
 
 type LoadedAccount = WithHistoryScope<CustomerAccountState>;
 
@@ -337,8 +340,17 @@ const isReviewAccount = (
 const withSessionSettings = (
   loaded: LoadedContent,
   settings: SessionSettings
-): LoadedAccount =>
-  ({ ...loaded, state: { ...loaded.state, ...settings } }) as LoadedAccount;
+): LoadedAccount => {
+  // Each scope is spread on its own so the state keeps the scope it loaded with.
+  switch (loaded.shown) {
+    case "always":
+      return { ...loaded, state: { ...loaded.state, ...settings } };
+    case "when-any":
+      return { ...loaded, state: { ...loaded.state, ...settings } };
+    case undefined:
+      return { ...loaded, state: { ...loaded.state, ...settings } };
+  }
+};
 
 /**
  * A review account can't be deleted, and an unreadable marker lands one in a

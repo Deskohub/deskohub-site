@@ -18,9 +18,7 @@ declare const heldStepWithService: Effect.Effect<
   HeldCustomerAccount | OtherService
 >;
 
-const typecheck = false as boolean;
-
-if (typecheck) {
+void (() => {
   const held: Effect.Effect<void, CustomerAccountAccessError, never> =
     sections.withActiveAccount(accountId, heldStep);
   const nested: Effect.Effect<void, CustomerAccountAccessError, never> =
@@ -64,4 +62,4 @@ if (typecheck) {
     optional,
     closedRecheck,
   ];
-}
+});

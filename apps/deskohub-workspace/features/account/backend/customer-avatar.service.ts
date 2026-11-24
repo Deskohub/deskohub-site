@@ -412,12 +412,12 @@ const recoverRetainedStaging = (
             cloudinary,
             accountStagingFolder(namespace, accountId)
           ).pipe(
-            Effect.flatMap((staged) =>
-              staged.length === 0
+            Effect.flatMap(([staged]) =>
+              staged === undefined
                 ? Effect.void
                 : promoteStaged(
                     cloudinary,
-                    staged[0]!,
+                    staged,
                     livePublicIdFor(namespace, accountId)
                   ).pipe(Effect.asVoid)
             )

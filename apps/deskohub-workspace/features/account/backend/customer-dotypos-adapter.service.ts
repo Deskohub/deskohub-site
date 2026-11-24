@@ -79,10 +79,6 @@ const billingAddressFields = [
 
 const businessBillingFields = ["companyName", "companyId", "vatId"] as const;
 
-type BillingTextField =
-  | (typeof billingAddressFields)[number]
-  | (typeof businessBillingFields)[number];
-
 type BillingInput = CustomerProfileSave["billing"];
 
 type StoredBilling = NonNullable<CustomerProfile["billing"]>;
@@ -92,15 +88,23 @@ const businessBillingOf = (billing: BillingInput) =>
 
 /**
  * Dotypos clears an optional text field only when it receives an empty
- * string, so every listed field carries an explicit value.
+ * string, so every billing text field carries an explicit value.
  */
-const toProviderText = <Field extends BillingTextField>(
-  fields: readonly Field[],
-  source: Partial<Record<Field, string>> | undefined
-): Record<Field, string> => {
-  const values: Partial<Record<Field, string>> = {};
-  for (const field of fields) values[field] = source?.[field] ?? "";
-  return values as Record<Field, string>;
+const toProviderAddress = (billing: BillingInput) => ({
+  addressLine1: billing?.addressLine1 ?? "",
+  addressLine2: billing?.addressLine2 ?? "",
+  city: billing?.city ?? "",
+  zip: billing?.zip ?? "",
+  country: billing?.country ?? "",
+});
+
+const toProviderBusiness = (billing: BillingInput) => {
+  const business = businessBillingOf(billing);
+  return {
+    companyName: business?.companyName ?? "",
+    companyId: business?.companyId ?? "",
+    vatId: business?.vatId ?? "",
+  };
 };
 
 const toCustomerBilling = (
@@ -148,8 +152,8 @@ const toProviderProfile = (
   firstName: input.firstName,
   lastName: input.lastName ?? "",
   phone: input.phone ?? "",
-  ...toProviderText(billingAddressFields, input.billing),
-  ...toProviderText(businessBillingFields, businessBillingOf(input.billing)),
+  ...toProviderAddress(input.billing),
+  ...toProviderBusiness(input.billing),
 });
 
 const toCustomerDetails = (input: {
@@ -160,11 +164,8 @@ const toCustomerDetails = (input: {
   lastName: input.profile.lastName ?? "",
   email: input.email,
   phone: input.profile.phone || undefined,
-  ...toProviderText(billingAddressFields, input.profile.billing),
-  ...toProviderText(
-    businessBillingFields,
-    businessBillingOf(input.profile.billing)
-  ),
+  ...toProviderAddress(input.profile.billing),
+  ...toProviderBusiness(input.profile.billing),
 });
 
 /**
