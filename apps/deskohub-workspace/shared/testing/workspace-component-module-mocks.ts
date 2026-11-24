@@ -1,4 +1,5 @@
 import { mock } from "bun:test";
+import type { useWorkspaceAction } from "@/shared/utils/use-workspace-action";
 
 export const workspaceRouterPush = mock((_href: string) => undefined);
 export const workspaceRouterRefresh = mock(() => undefined);
@@ -20,9 +21,16 @@ const workspaceUseFeatureFlagResult = mock(
 const workspaceUseFeatureFlagVariantKey = mock(
   (_flag: string): unknown => undefined
 );
-export const workspaceUseAction = mock(
-  <Action, Options>(_action: Action, _options: Options) => undefined
-);
+/**
+ * `useWorkspaceAction` as a test double sees it: any action and options, with
+ * an implementation that returns only the hook fields the component reads.
+ * Without an implementation it returns `undefined`, as the default does.
+ */
+type WorkspaceActionHook = (
+  ...args: Parameters<typeof useWorkspaceAction>
+) => Partial<ReturnType<typeof useWorkspaceAction>> | undefined;
+
+export const workspaceUseAction = mock<WorkspaceActionHook>();
 
 const navigation = await import("next/navigation");
 mock.module("next/navigation", () => ({
