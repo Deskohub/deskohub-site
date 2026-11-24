@@ -175,7 +175,45 @@ test("undoes an edit the body format can't hold, so editor and form agree", asyn
   });
 
   expect(changes).toHaveLength(changeCount);
-  expect(editor.getJSON()).toEqual(structuredClone(held));
+  const shown: unknown = editor.getJSON();
+  expect(shown).toEqual(structuredClone(held));
+});
+
+test("keeps a pasted ordered list whose start isn't a number, counting from 1", async () => {
+  const { editor, changes } = await renderEditor();
+
+  act(() => {
+    editor.commands.focus("end");
+    editor.view.pasteHTML(
+      '<p>Pasted intro</p><ol start="unknown"><li><p>Pasted item</p></li></ol>'
+    );
+  });
+
+  const doc = changes.at(-1);
+  const list = doc?.content?.find((node) => node.type === "orderedList");
+  expect(list?.attrs?.start).toBe(1);
+  expect(JSON.stringify(doc)).toContain("Pasted intro");
+  expect(JSON.stringify(list)).toContain("Pasted item");
+  const shown: unknown = editor.getJSON();
+  expect(shown).toEqual(structuredClone(doc));
+});
+
+test("keeps a pasted image whose width is too long to hold, without a width", async () => {
+  const { editor, changes } = await renderEditor();
+
+  act(() => {
+    editor.commands.focus("end");
+    editor.view.pasteHTML(
+      `<p>Pasted intro</p><img src="${cloudinaryImage}" width="${"9".repeat(400)}">`
+    );
+  });
+
+  const doc = changes.at(-1);
+  expect(JSON.stringify(doc)).toContain("Pasted intro");
+  expect(doc?.content?.at(-1)).toMatchObject({
+    type: "image",
+    attrs: { src: cloudinaryImage, width: null },
+  });
 });
 
 test("hands the form plain objects a Server Action can receive", async () => {

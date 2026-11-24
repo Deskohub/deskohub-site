@@ -15,6 +15,28 @@ import { CampaignPassOffer } from "./campaign-pass-offer";
 const campaignHeadingLevels = [1, 2, 3] as const;
 
 /**
+ * An ordered list. A pasted list whose `start` isn't a number counts from 1,
+ * as the browser shows it, so the paste fits the body format.
+ */
+const CampaignOrderedList = OrderedList.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      start: {
+        default: 1,
+        parseHTML: (element) => {
+          const start = Number.parseInt(
+            element.getAttribute("start") ?? "",
+            10
+          );
+          return Number.isFinite(start) ? start : 1;
+        },
+      },
+    };
+  },
+});
+
+/**
  * The campaign body content set. The editor, renderer, validator, and Markdown
  * parser all build on this list, so they agree on one document schema. It
  * must stay free of DOM and React dependencies; the editor adds its own
@@ -34,7 +56,7 @@ export const campaignBodyExtensions: Extensions = [
     openOnClick: false,
   }),
   BulletList,
-  OrderedList,
+  CampaignOrderedList,
   ListItem,
   CampaignImage.configure({ allowBase64: false, inline: false }),
   HorizontalRule,

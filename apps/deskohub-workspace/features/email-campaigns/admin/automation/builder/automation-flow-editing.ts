@@ -5,6 +5,7 @@ import type {
 import { Match, Struct } from "effect";
 import { isPassReminderTrigger } from "../../../automation/automation-triggers";
 import type {
+  AutomationFlowFormValues,
   FlowStepValue as AutomationStep,
   FlowTriggerValue as AutomationTrigger,
 } from "./automation-flow-form";
@@ -199,6 +200,6 @@ export const canMoveStep = (
 };
 
 /** The flow a builder starts from when the automation has none yet. */
-export const emptyFlowSteps: readonly AutomationStep[] = [
+export const emptyFlowSteps: AutomationFlowFormValues["steps"] = [
   { _tag: "Send", id: "send" },
 ];

@@ -57,7 +57,7 @@ export type FlowTriggerValue = NonNullable<AutomationFlowFormValues["trigger"]>;
 /** The form values of a saved flow, or of an empty one. */
 export const automationFlowFormValues = (
   flow: AutomationFlow | null
-): AutomationFlowDraftValues =>
+): AutomationFlowFormValues =>
   flow === null
     ? { trigger: null, steps: emptyFlowSteps }
     : { trigger: flow.trigger, steps: flow.steps };

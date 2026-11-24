@@ -266,9 +266,10 @@ describe("runCampaignOperation", () => {
   });
 
   test("refuses input without its operation's shape before the handler runs", async () => {
+    const input = { campaignId, retiredField: true };
     const result = await runCampaignOperation({
       operation: "deleteCampaign",
-      input: { campaignId: 42 } as never,
+      input,
     });
 
     expect(result?.data).toMatchObject({
@@ -280,9 +281,29 @@ describe("runCampaignOperation", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
+  test("refuses input without its operation's shape before checking a revoked grant", async () => {
+    holdsGrant = false;
+    const input = { campaignId, retiredField: true };
+
+    const result = await runCampaignOperation({
+      operation: "deleteCampaign",
+      input,
+    });
+
+    expect(result?.data).toMatchObject({
+      _tag: "Failure",
+      category: "OperationInputInvalid",
+      code: "input-invalid",
+    });
+    expect(deleteCampaign).not.toHaveBeenCalled();
+  });
+
   test("reports an output its operation's schema rejects as unavailable", async () => {
     archiveAudience.mockImplementationOnce(() =>
-      Effect.succeed({ ...archivedAudience, title: 42 } as never)
+      Effect.succeed({
+        ...archivedAudience,
+        filter: { ...archivedAudience.filter, operator: "xor" },
+      })
     );
 
     const result = await runCampaignOperation({
