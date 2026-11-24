@@ -9,7 +9,7 @@ import { Result, Schema } from "effect";
 export const readJsonFile = <S extends Schema.Decoder<unknown>>(
   schema: S,
   path: string,
-  description: string
+  description = "JSON file"
 ): S["Type"] =>
   decodeJson(schema, readFileSync(path, "utf8"), `${description} ${path}`);
 

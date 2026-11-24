@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Schema } from "effect";
 import { isNumber, isString } from "effect/Predicate";
-import { readJsonFile } from "./shared/json-file";
+import { readJsonFile } from "@/shared/testing/json-file.test-utils";
 import {
   nodesOf,
   parseTrackedSource,

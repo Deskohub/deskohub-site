@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Schema } from "effect";
+import { readJsonFile } from "@/shared/testing/json-file.test-utils";
 import { shardTimingsArtifactPattern } from "./refresh-test-timings";
 import { commandOutput, runCommand } from "./shared/command";
-import { readJsonFile } from "./shared/json-file";
 import { identifierNames, parseTrackedSource } from "./shared/source-ast";
 import {
   findStepByName,

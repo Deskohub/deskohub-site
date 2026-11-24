@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
@@ -91,7 +92,8 @@ describe.skipIf(!testDatabase)(
 
     const insertReservation = async (reservation: ReservationFixtureInput) => {
       const [id] = await insertReservations([reservation]);
-      return id!;
+      assert(id !== undefined, "Expected inserted reservation ID");
+      return id;
     };
 
     /** A paid booking confirmed at the instant. */
@@ -136,6 +138,10 @@ describe.skipIf(!testDatabase)(
         booked(confirmedAt),
         booked(confirmedAt),
       ]);
+      assert(
+        recordedFirst !== undefined && reconciledFirst !== undefined,
+        "Expected inserted reservation IDs"
+      );
       const recordOutbox = async (id: WorkspaceReservationId) => {
         const [reservation] = await Effect.runPromise(
           testDatabase.db
@@ -145,13 +151,14 @@ describe.skipIf(!testDatabase)(
             .from(workspaceReservations)
             .where(eq(workspaceReservations.id, id))
         );
+        assert(reservation !== undefined, "Expected reservation row");
         await Effect.runPromise(
           Effect.flatMap(WorkspaceDatabase, ({ transaction }) =>
             transaction(
               recordCustomerEvent({
                 kind: "reservation-booked",
                 occurredAt: confirmedAt,
-                dotyposCustomerId: reservation!.dotyposCustomerId,
+                dotyposCustomerId: reservation.dotyposCustomerId,
                 workspaceReservationId: id,
               })
             )
@@ -159,14 +166,14 @@ describe.skipIf(!testDatabase)(
         );
       };
 
-      await recordOutbox(recordedFirst!);
+      await recordOutbox(recordedFirst);
       expect(await reconcileAt(now)).toEqual({
         ...nothingReconciled,
         booked: 1,
       });
-      await recordOutbox(reconciledFirst!);
+      await recordOutbox(reconciledFirst);
 
-      for (const id of [recordedFirst!, reconciledFirst!]) {
+      for (const id of [recordedFirst, reconciledFirst]) {
         expect(await readEvents(id)).toEqual([
           { kind: "reservation-booked", occurredAt: confirmedAt },
         ]);
@@ -242,13 +249,17 @@ describe.skipIf(!testDatabase)(
         booked(now.subtract({ hours: 36 * 24 })),
         booked(now.subtract({ hours: 34 * 24 })),
       ]);
+      assert(
+        tooOld !== undefined && recent !== undefined,
+        "Expected inserted reservation IDs"
+      );
 
       expect(await reconcileAt(now)).toEqual({
         ...nothingReconciled,
         booked: 1,
       });
-      expect(await readEvents(tooOld!)).toEqual([]);
-      expect(await readEvents(recent!)).toHaveLength(1);
+      expect(await readEvents(tooOld)).toEqual([]);
+      expect(await readEvents(recent)).toHaveLength(1);
     });
 
     test("records at most a batch per kind, oldest first", async () => {
@@ -264,13 +275,18 @@ describe.skipIf(!testDatabase)(
             )
         )
       );
-      const newest = ids.at(-1)!;
+      const [oldest] = ids;
+      const newest = ids.at(-1);
+      assert(
+        oldest !== undefined && newest !== undefined,
+        "Expected batch reservation IDs"
+      );
 
       expect(await reconcileAt(now)).toEqual({
         ...nothingReconciled,
         booked: customerEventReconcileBatchSize,
       });
-      expect(await readEvents(ids[0]!)).toHaveLength(1);
+      expect(await readEvents(oldest)).toHaveLength(1);
       expect(await readEvents(newest)).toEqual([]);
       expect(await reconcileAt(now)).toEqual({
         ...nothingReconciled,

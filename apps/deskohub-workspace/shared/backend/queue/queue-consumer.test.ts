@@ -6,7 +6,7 @@ import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Cause, Data, Duration, Effect, Logger, Schema } from "effect";
 import { SqlError } from "effect/sql";
 import { reservationHoldCleanupTopic } from "@/features/checkout/backend/holds/reservation-hold-cleanup-topic";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { WorkspaceLoggerLive } from "@/shared/backend/logging/censorship";
 import { makeMemoryQueue } from "./memory-queue.test-utils";
 import {
@@ -197,7 +197,7 @@ describe("queue delivery", () => {
 
   test("publishes and delivers a hold-cleanup command in process", async () => {
     const queue = makeMemoryQueue();
-    const orderId = "order-id" as WorkspaceReservationId;
+    const orderId = workspaceReservationIdSchema.make("order-id");
     const expiresAt = now.add({ minutes: 10 });
     const deliveries: unknown[] = [];
     const consume = reservationHoldCleanupTopic.consume((message) =>

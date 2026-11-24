@@ -1,12 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import { Schema } from "effect";
 import { createElement, type ReactNode } from "react";
-import { requireElement } from "@/app/route-element.test-utils";
 import { getPublicCatalogOfferings } from "@/features/checkout/public-offerings";
 import { classifiedConstancy } from "@/features/feature-flags/backend/feature-flag-constancy.test-utils";
 import type { PostHogFeatureFlagKey } from "@/features/feature-flags/generated/contract";
 import { publicSiteShareImage } from "@/features/public-pages/page-metadata";
 import { nextFontLocal } from "@/shared/testing/next-font-local.test-utils";
+import { requireElement } from "@/shared/testing/route-element.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 
 mock.module("next/font/local", () => nextFontLocal);

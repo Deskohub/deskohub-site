@@ -8,11 +8,11 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import {
   renderComponentElement,
   requireElement,
-} from "@/app/route-element.test-utils";
-import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
+} from "@/shared/testing/route-element.test-utils";
 
 const adaEmail = testEmailAddress("ada");
 

@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import "@/shared/polyfills/temporal";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -146,9 +147,12 @@ describe("date and time form fields", () => {
 
   test("reports edits as field values and focuses the control on setFocus", async () => {
     const { form, view } = renderForm();
-    const dateField = view.getByRole("combobox", {
-      name: "Service date",
-    }) as HTMLInputElement;
+    const dateField = elementOf(
+      view.getByRole("combobox", {
+        name: "Service date",
+      }),
+      HTMLInputElement
+    );
 
     fireEvent.change(dateField, { target: { value: "6/12/2099" } });
     fireEvent.focusOut(dateField);

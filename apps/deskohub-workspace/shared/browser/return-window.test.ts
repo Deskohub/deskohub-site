@@ -3,8 +3,6 @@ import { afterEach, describe, expect, jest, mock, test } from "bun:test";
 const VALID_ATTEMPT_ID = "550e8400-e29b-41d4-a716-446655440000";
 const OTHER_ATTEMPT_ID = "550e8400-e29b-41d4-a716-446655440001";
 
-type MessageListener = (event: MessageEvent) => void;
-
 class TestBroadcastChannel {
   static readonly channels = new Map<string, Set<TestBroadcastChannel>>();
   static readonly postedMessages: Array<{
@@ -13,7 +11,7 @@ class TestBroadcastChannel {
   }> = [];
 
   readonly name: string;
-  private readonly listeners = new Set<MessageListener>();
+  private readonly listeners = new Set<EventListenerOrEventListenerObject>();
   private closed = false;
 
   constructor(name: string) {
@@ -27,7 +25,7 @@ class TestBroadcastChannel {
 
   addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
     if (type !== "message") return;
-    this.listeners.add(listener as MessageListener);
+    this.listeners.add(listener);
   }
 
   removeEventListener(
@@ -35,7 +33,7 @@ class TestBroadcastChannel {
     listener: EventListenerOrEventListenerObject
   ) {
     if (type !== "message") return;
-    this.listeners.delete(listener as MessageListener);
+    this.listeners.delete(listener);
   }
 
   postMessage(data: MessageEvent["data"]) {
@@ -45,7 +43,11 @@ class TestBroadcastChannel {
     for (const channel of TestBroadcastChannel.channels.get(this.name) ?? []) {
       if (channel === this || channel.closed) continue;
       for (const listener of channel.listeners) {
-        queueMicrotask(() => listener(new MessageEvent("message", { data })));
+        queueMicrotask(() => {
+          const event = new MessageEvent("message", { data });
+          if (listener instanceof Function) listener(event);
+          else listener.handleEvent(event);
+        });
       }
     }
   }
@@ -84,8 +86,8 @@ class TestLockManager {
         .then(() =>
           callback({
             name,
-            mode: "exclusive",
-          } as TestLock)
+            mode: "exclusive" as const,
+          })
         )
         .finally(() => this.held.delete(name));
     }

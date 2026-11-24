@@ -10,7 +10,7 @@ import {
   trace,
 } from "@opentelemetry/api";
 import { registerOTel } from "@vercel/otel";
-import { Predicate } from "effect";
+import { Predicate, Schema } from "effect";
 import { createWorkspaceOTelRegistration } from "./telemetry-sinks";
 import { flushWorkspaceTraces } from "./workspace-telemetry";
 
@@ -19,24 +19,37 @@ const traceStateMarker = "statemarker";
 const tokenMarker = "tokSynthMarker7Q2xK9vB4nR8mW1zL6pD3";
 const addressMarker = testEmailAddress("synthetic-marker-recipient");
 
-interface ExportedAttribute {
-  readonly key: string;
-  readonly value: Readonly<Record<string, string | number | boolean>>;
-}
+const ExportedAttributeSchema = Schema.Struct({
+  key: Schema.String,
+  value: Schema.Record(
+    Schema.String,
+    Schema.Union([Schema.String, Schema.Number, Schema.Boolean])
+  ),
+});
 
-interface ExportedSpan {
-  readonly name: string;
-  readonly attributes: readonly ExportedAttribute[];
-  readonly parentSpanId?: string;
-  readonly links?: readonly { readonly spanId: string }[];
-}
+type ExportedAttribute = typeof ExportedAttributeSchema.Type;
 
-interface ExportedTraces {
-  readonly resourceSpans: readonly {
-    readonly resource: { readonly attributes: readonly ExportedAttribute[] };
-    readonly scopeSpans: readonly { readonly spans: readonly ExportedSpan[] }[];
-  }[];
-}
+const ExportedSpanSchema = Schema.Struct({
+  name: Schema.String,
+  attributes: Schema.Array(ExportedAttributeSchema),
+  parentSpanId: Schema.optionalKey(Schema.String),
+  links: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ spanId: Schema.String }))
+  ),
+});
+
+const ExportedTracesSchema = Schema.Struct({
+  resourceSpans: Schema.Array(
+    Schema.Struct({
+      resource: Schema.Struct({
+        attributes: Schema.Array(ExportedAttributeSchema),
+      }),
+      scopeSpans: Schema.Array(
+        Schema.Struct({ spans: Schema.Array(ExportedSpanSchema) })
+      ),
+    })
+  ),
+});
 
 const attributeMap = (attributes: readonly ExportedAttribute[]) =>
   Object.fromEntries(
@@ -114,7 +127,10 @@ describe("the container's span export through registerOTel", () => {
       expect(exported).not.toContain(traceStateMarker);
       expect(exported).toContain("0af7651916cd43dd8448eb211c80319c");
       const allResourceSpans = bodies.flatMap(
-        (body) => (JSON.parse(body) as ExportedTraces).resourceSpans
+        (body) =>
+          Schema.decodeUnknownSync(Schema.fromJsonString(ExportedTracesSchema))(
+            body
+          ).resourceSpans
       );
       const [resourceSpans] = allResourceSpans;
       const spans = allResourceSpans.flatMap(({ scopeSpans }) =>

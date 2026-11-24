@@ -46,9 +46,9 @@ const lint = async (
   }
 };
 
-// Workspace production code forbids every assertion, so independent ones stay
-// allowed only in tests.
-test("anti-slop allows independent assertions in Workspace tests and parsed unknown values", async () => {
+// Workspace code forbids every assertion outside the remaining large-feature
+// test directories, so independent ones stay allowed only in those tests.
+test("anti-slop allows independent assertions in remaining large-feature Workspace tests and parsed unknown values", async () => {
   const result = await lint(
     `
 declare const input: unknown;
@@ -60,7 +60,7 @@ void result;
 void parenthesizedResult;
 void payload;
 `,
-    "apps/deskohub-workspace/scripts",
+    "apps/deskohub-workspace/features/reservation",
     "probe.test.ts"
   );
 

@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { type EmailDeliveryId, EmailDeliveryIdSchema } from "@deskohub/email";
 import { eq, inArray } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
@@ -85,7 +86,8 @@ describe.skipIf(!database)("PostHog email delivery repository", () => {
 
   const insertDelivery = async (fixture: DeliveryFixture = {}) => {
     const [id] = await insertDeliveries([fixture]);
-    return id!;
+    assert(id !== undefined, "Expected inserted delivery ID");
+    return id;
   };
 
   const readDeliveries = (ids: readonly EmailDeliveryId[]) =>

@@ -4,8 +4,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { Schema } from "effect";
+import { readJsonFile } from "@/shared/testing/json-file.test-utils";
 import { commandOutput, runCommand } from "./shared/command";
-import { readJsonFile } from "./shared/json-file";
 import {
   parseShard,
   prepareShard,

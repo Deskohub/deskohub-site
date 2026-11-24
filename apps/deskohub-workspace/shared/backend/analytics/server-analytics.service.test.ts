@@ -46,6 +46,12 @@ describe("ServerAnalytics", () => {
   test("sends only explicit scalar properties and approved metadata", async () => {
     const recorder = recordServerAnalytics();
 
+    const properties = {
+      reservation_id: "reservation-id",
+      unset: undefined,
+    };
+    Object.assign(properties, { providerPayload: { raw: "provider-data" } });
+
     await Effect.runPromise(
       Effect.flatMap(ServerAnalytics, (analytics) =>
         analytics.capture({
@@ -55,11 +61,7 @@ describe("ServerAnalytics", () => {
             recordId: "reservation-id",
             occurrenceId: "reservation-id",
           },
-          properties: {
-            providerPayload: { raw: "provider-data" },
-            reservation_id: "reservation-id",
-            unset: undefined,
-          } as never,
+          properties,
           timestamp,
         })
       ).pipe(

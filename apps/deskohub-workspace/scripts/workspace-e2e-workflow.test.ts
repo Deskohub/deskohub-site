@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { Schema } from "effect";
+import { readJsonFile } from "@/shared/testing/json-file.test-utils";
 import { reviewScreenshotsEnabled } from "../e2e/e2e-env";
 import { makeTestE2EEnvironment } from "../e2e/e2e-env.test-fixture";
 import { workspaceE2ENonPaymentCaseIds } from "../e2e/playwright-checkout/case-catalog";
 import { runCommand } from "./shared/command";
-import { readJsonFile } from "./shared/json-file";
 import {
   evaluateWorkflowValue,
   findStepByName,

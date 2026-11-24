@@ -18,12 +18,12 @@ const tracingHeaders = {
 };
 
 const read = (headers: Record<string, string>) => {
-  const warnings: unknown[][] = [];
+  const warnings: unknown[] = [];
   const identity = readVisitorIdentity(new Headers(headers)).pipe(
     Effect.provide(
       Logger.layer([
         Logger.make(({ logLevel, message }) => {
-          if (logLevel === "Warn") warnings.push(message as unknown[]);
+          if (logLevel === "Warn") warnings.push(message);
         }),
       ])
     ),

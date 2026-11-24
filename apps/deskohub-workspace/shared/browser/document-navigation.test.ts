@@ -5,12 +5,12 @@ const documentNavigations: string[] = [];
 
 beforeAll(() => {
   GlobalRegistrator.register();
-  window.location.assign = ((href: string) => {
-    documentNavigations.push(`assign:${href}`);
-  }) as typeof window.location.assign;
-  window.location.replace = ((href: string) => {
-    documentNavigations.push(`replace:${href}`);
-  }) as typeof window.location.replace;
+  window.location.assign = (href: string | URL) => {
+    documentNavigations.push(`assign:${String(href)}`);
+  };
+  window.location.replace = (href: string | URL) => {
+    documentNavigations.push(`replace:${String(href)}`);
+  };
 });
 
 afterAll(async () => {

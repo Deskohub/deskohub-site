@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import { requireElement } from "@/app/route-element.test-utils";
+import { requireElement } from "@/shared/testing/route-element.test-utils";
 
 const AccountSectionPathCheck = mock(() => null);
 const getAccountSectionMetadata = mock((locale: string, section: string) => ({

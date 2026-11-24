@@ -6,7 +6,7 @@ import { PostHogFeatureFlagError } from "@deskohub/analytics-posthog/feature-fla
 import { PostHogProjectId } from "@deskohub/analytics-posthog/identifiers";
 import { Cause, Effect, Exit, Option, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
-import { readJsonFile } from "./shared/json-file";
+import { readJsonFile } from "@/shared/testing/json-file.test-utils";
 import type {
   PostHogCliInput,
   PostHogCliOperation,

@@ -3,7 +3,7 @@ import { createElement, type ReactElement, Suspense } from "react";
 import {
   renderComponentElement,
   requireElement,
-} from "@/app/route-element.test-utils";
+} from "@/shared/testing/route-element.test-utils";
 
 type TestMarketingPreferences = {
   readonly context?: string;

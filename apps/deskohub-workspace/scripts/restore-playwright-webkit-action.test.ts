@@ -9,8 +9,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Schema } from "effect";
+import { readJsonFile } from "@/shared/testing/json-file.test-utils";
 import { runCommand } from "./shared/command";
-import { readJsonFile } from "./shared/json-file";
 import { parseCompositeAction } from "./shared/workflow-contract";
 
 const action = parseCompositeAction(

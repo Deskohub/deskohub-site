@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { Schema } from "effect";
-import { readJsonFile } from "./shared/json-file";
+import { readJsonFile } from "@/shared/testing/json-file.test-utils";
 import { parseWorkflow, workflowStepRuns } from "./shared/workflow-contract";
 import { assertValidMigrationCount } from "./validate-migration-count";
 

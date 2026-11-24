@@ -53,7 +53,7 @@ const caseScoped = (glob: string) =>
 
 // biome-ignore format: compact configuration literal.
 writeFileSync(config, JSON.stringify({
-  linter: { enabled: true },
+  linter: { enabled: true, rules: { style: { noNonNullAssertion: "off" } } },
   plugins: repositoryConfig.plugins.map((plugin) => join(repositoryRoot, plugin)),
   overrides: repositoryConfig.overrides.map((override) => ({ ...override, includes: override.includes.map(caseScoped) })),
 }));
@@ -979,14 +979,22 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects Workspace script assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/scripts/probe.ts"],
       ["rejects Workspace top-level module assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/probe.config.ts"],
       ["permits Workspace as const", "export const codes = [0, 2] as const;\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.ts"],
-      ["permits Workspace tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.postgres.test.ts"],
-      ["permits Workspace specs", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.spec.ts"],
-      ["permits Workspace Playwright tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.pw.ts"],
-      ["permits Workspace test utilities", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.test-utils.ts"],
-      ["permits Workspace browser harnesses", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.browser-harness.tsx"],
-      ["permits Workspace fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe-fixture.ts"],
-      ["permits Workspace dotted fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.fixture.ts"],
-      ["permits Workspace testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/shared/testing/probe.ts"],
+      ["permits Workspace large-feature tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.postgres.test.ts"],
+      ["permits Workspace large-feature specs", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.spec.ts"],
+      ["permits Workspace large-feature Playwright tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.pw.ts"],
+      ["permits Workspace large-feature test utilities", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.test-utils.ts"],
+      ["permits Workspace large-feature browser harnesses", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.browser-harness.tsx"],
+      ["permits Workspace large-feature fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe-fixture.ts"],
+      ["permits Workspace large-feature dotted fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.fixture.ts"],
+      ["permits Workspace large-feature testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/testing/probe.ts"],
+      ["permits Workspace large-feature nested testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/checkout/backend/testing/probe.ts"],
+      ["rejects Workspace shared testing modules", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/shared/testing/probe.ts"],
+      ["rejects Workspace shared tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/shared/utils/probe.test.ts"],
+      ["rejects Workspace app tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/app/probe.test.tsx"],
+      ["rejects Workspace db tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/db/probe.test.ts"],
+      ["rejects Workspace script tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/scripts/probe.test.ts"],
+      ["rejects Workspace small-feature tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/emails/probe.test.ts"],
+      ["rejects Workspace large-feature production modules", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/checkout/product-catalog.ts"],
       ["permits Workspace E2E", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/e2e/probe.ts"],
       ["permits Workspace generated modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/generated/probe.ts"],
       ["permits Workspace Paraglide output", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/i18n/paraglide/probe.ts"],
@@ -1001,6 +1009,9 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects Workspace feature non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/features/reservation/backend/probe.ts"],
       ["rejects Workspace route non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/app/api/workspace/probe/route.ts"],
       ["rejects Workspace top-level module non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/probe.config.ts"],
+      ["rejects Workspace shared test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/shared/utils/probe.test.ts"],
+      ["rejects Workspace small-feature test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/features/emails/probe.test.ts"],
+      ["permits Workspace large-feature test non-null assertions", "export const first = values[0]!;\n", false, "apps/deskohub-workspace/features/reservation/probe.test.ts"],
     ],
   },
   {
@@ -1191,12 +1202,19 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/e2e/loader.mts",
   "apps/deskohub-workspace/shared/probe.test.config.cts",
   "apps/deskohub-workspace/probe with spaces.tsx",
+  "apps/deskohub-workspace/shared/testing/probe.ts",
+  "apps/deskohub-workspace/shared/utils/probe.test.ts",
+  "apps/deskohub-workspace/app/probe.test.tsx",
+  "apps/deskohub-workspace/db/probe.test.ts",
+  "apps/deskohub-workspace/scripts/probe.test.ts",
+  "apps/deskohub-workspace/features/emails/probe.test.ts",
+  "apps/deskohub-workspace/features/checkout/product-catalog.ts",
 ];
 const generatedProbes = [
   "packages/standard-schema/generated/probe.mts",
   "packages/standard-schema/generated/probe.cts",
 ];
-// Workspace tests, fixtures, and E2E may still assert.
+// Remaining large-feature tests, fixtures, testing helpers, generated files, and E2E may still assert.
 const workspaceExemptProbes = [
   "apps/deskohub-workspace/features/reservation/probe.test.ts",
   "apps/deskohub-workspace/features/reservation/probe.postgres.test.ts",
@@ -1206,9 +1224,10 @@ const workspaceExemptProbes = [
   "apps/deskohub-workspace/features/reservation/probe.browser-harness.tsx",
   "apps/deskohub-workspace/features/reservation/probe-fixture.ts",
   "apps/deskohub-workspace/features/reservation/probe.fixture.ts",
+  "apps/deskohub-workspace/features/reservation/testing/probe.ts",
+  "apps/deskohub-workspace/features/checkout/backend/testing/probe.ts",
   "apps/deskohub-workspace/features/generated/probe.ts",
   "apps/deskohub-workspace/features/i18n/paraglide/probe.ts",
-  "apps/deskohub-workspace/shared/testing/probe.ts",
 ];
 
 const LintReport = Schema.Struct({

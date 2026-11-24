@@ -1,6 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import type { ReactElement } from "react";
-import { requireElement } from "@/app/route-element.test-utils";
+import { requireElement } from "@/shared/testing/route-element.test-utils";
 
 const AccountSections = mock(() => null);
 
