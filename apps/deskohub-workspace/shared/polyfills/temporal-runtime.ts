@@ -135,6 +135,7 @@ export const requiredTemporalApis = {
     ],
     getters: [
       "hour",
+      "hoursInDay",
       "microsecond",
       "millisecond",
       "minute",
