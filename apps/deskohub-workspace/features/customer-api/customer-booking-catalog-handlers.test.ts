@@ -24,10 +24,12 @@ import {
   discountAdvertisementQuoteCodec,
   discountIdSchema,
 } from "@/features/discounts/contracts";
+import type { DiscountService } from "@/features/discounts/discount.service";
 import { DiscountServiceMock } from "@/features/discounts/discount.service.mock";
 import { DiscountReleaseGateService } from "@/features/discounts/discount-release-gate.service";
 import {
   DiscountAffirmationUnavailableError,
+  DiscountCalculationError,
   DiscountProviderError,
 } from "@/features/discounts/errors";
 import { releaseGateForRunOverFlags } from "@/features/feature-flags/backend/release-cohorts.test-utils";
@@ -70,6 +72,7 @@ import {
   expectEachCohortAnsweredAlone,
   inReleaseCohort,
   makeCustomerApiTestServer,
+  readInEachReleaseCohort,
   testCustomerEndpointGuards,
 } from "./customer-api.test-utils";
 import type { CustomerBookingCatalogLayerSet } from "./customer-booking-catalog-layers";
@@ -168,19 +171,10 @@ const tenPercentSale = ({
 
 /** Anonymous pricing whose sale source answers with `discover`. */
 const pricingWith = (
-  discoverAdvertisedDiscounts: (
-    input: DiscountAdvertisementInput
-  ) =>
-    | Effect.Effect<never, unknown>
-    | ReturnType<typeof noSale>
-    | ReturnType<typeof tenPercentSale>
+  discoverAdvertisedDiscounts: DiscountService["Service"]["discoverAdvertisedDiscounts"]
 ) =>
   CheckoutPricingService.Default.pipe(
-    Layer.provide(
-      DiscountServiceMock({
-        discoverAdvertisedDiscounts: discoverAdvertisedDiscounts as never,
-      })
-    )
+    Layer.provide(DiscountServiceMock({ discoverAdvertisedDiscounts }))
   );
 
 const emptyInventory = Layer.succeed(AdvisoryAvailabilityInventory, {
@@ -478,14 +472,14 @@ describe("listOfferings", () => {
     });
   });
 
-  test("answers unavailable while the sale source can't be read", async () => {
+  test("answers unavailable while the sale can't be calculated", async () => {
     const api = makeCustomerApiTestServer({
       bookingCatalog: pricedCatalog({
         pricing: pricingWith(() =>
           Effect.fail(
-            new DiscountProviderError({
-              reason: "provider_failure",
-              message: "Calendar down",
+            new DiscountCalculationError({
+              reason: "currency_mismatch",
+              message: "Sale in another currency",
             })
           )
         ),
@@ -1627,16 +1621,14 @@ describe("overlapping requests in different release cohorts", () => {
         Layer.unwrap(
           Effect.map(DiscountReleaseGateService, (gates) =>
             DiscountServiceMock({
-              discoverAdvertisedDiscounts: ((
-                input: DiscountAdvertisementInput
-              ) =>
+              discoverAdvertisedDiscounts: (input) =>
                 gates
                   .evaluate({ operation: "discover_advertised_discounts" })
                   .pipe(
                     Effect.flatMap(({ calendarSales }) =>
                       calendarSales ? tenPercentSale(input) : noSale(input)
                     )
-                  )) as never,
+                  ),
             })
           )
         ).pipe(
@@ -1684,7 +1676,7 @@ describe("overlapping requests in different release cohorts", () => {
     };
 
     expectEachCohortAnsweredAlone(
-      await answerInEachReleaseCohort({
+      await readInEachReleaseCohort({
         serve,
         send: (cohort) => customerApiRequest(inReleaseCohort(getQuote, cohort)),
         // The quote's time and signed token differ between any two quotes.

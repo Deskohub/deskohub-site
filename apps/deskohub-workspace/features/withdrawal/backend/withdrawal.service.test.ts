@@ -1,3 +1,4 @@
+import { EmailServiceError } from "@deskohub/email/backend/service";
 import { testEmailAddress } from "@deskohub/test-email";
 import "@/shared/polyfills/temporal";
 
@@ -8,7 +9,10 @@ import {
   CustomerAccountSections,
   HeldCustomerAccount,
 } from "@/features/account";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import {
+  CustomerAccountAccessError,
+  customerAccountIdSchema,
+} from "@/features/account/customer-account";
 import { assessReservationWithdrawal } from "@/features/reservation/reservation-withdrawal";
 import type { Money } from "@/shared/money/money";
 import {
@@ -17,7 +21,10 @@ import {
   type WithdrawableContractFamily,
 } from "../withdrawable-contract";
 import type { WithdrawalAssessment } from "../withdrawal-assessment";
-import type { WithdrawalId } from "../withdrawal-identifiers";
+import {
+  type WithdrawalId,
+  withdrawalIdSchema,
+} from "../withdrawal-identifiers";
 import { WithdrawableContractFamilies } from "./withdrawable-contract-families";
 import {
   type ContractWithdrawal,
@@ -28,7 +35,7 @@ import { WithdrawalService } from "./withdrawal.service";
 import { WithdrawalEmails } from "./withdrawal-emails.service";
 import { getWithdrawalSettlementStatus } from "./withdrawal-settlement-status";
 
-const accountId = "account-1" as CustomerAccountId;
+const accountId = customerAccountIdSchema.make("account-1");
 const receiptEmail = testEmailAddress("customer");
 const paid: Money = { value: 100_000, exponent: 2, currency: "CZK" };
 const contract = { kind: "reservation", id: "reservation-1" } as const;
@@ -96,7 +103,7 @@ const makeHarness = (options: {
     record: (withdrawal) =>
       Effect.sync(() => {
         log.push("record");
-        const id = `withdrawal-${++sequence}` as WithdrawalId;
+        const id = withdrawalIdSchema.make(`withdrawal-${++sequence}`);
         const row: ContractWithdrawal = {
           ...withdrawal,
           id,
@@ -206,7 +213,7 @@ const makeHarness = (options: {
         if (receiptFailures > 0) {
           receiptFailures -= 1;
           log.push("receipt failed");
-          return Effect.fail(new Error("Resend unavailable") as never);
+          return Effect.fail(new EmailServiceError("Resend unavailable"));
         }
         log.push(`receipt to ${message.receiptEmail}`);
         emailNames.push(message.withdrawal.statementName);
@@ -217,7 +224,7 @@ const makeHarness = (options: {
         if (operatorNoticeFailures > 0) {
           operatorNoticeFailures -= 1;
           log.push("operator notice failed");
-          return Effect.fail(new Error("Resend unavailable") as never);
+          return Effect.fail(new EmailServiceError("Resend unavailable"));
         }
         log.push("operator notice");
         emailNames.push(message.withdrawal.statementName);
@@ -260,7 +267,9 @@ const makeHarness = (options: {
               email: receiptEmail,
             })
           )
-        : (Effect.fail(new Error("Account section unavailable")) as never),
+        : Effect.fail(
+            new CustomerAccountAccessError({ reason: "unavailable" })
+          ),
   });
 
   const contacts = Layer.mock(CustomerAccountContactService, {
@@ -888,7 +897,7 @@ describe("WithdrawalService.settleNow", () => {
     });
     await harness.submitQuoted();
     const own = onlyRow(harness);
-    const otherId = "withdrawal-other" as WithdrawalId;
+    const otherId = withdrawalIdSchema.make("withdrawal-other");
     const other: ContractWithdrawal = {
       ...own,
       id: otherId,

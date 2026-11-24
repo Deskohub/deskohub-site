@@ -1,7 +1,8 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
-import { asc, eq } from "drizzle-orm";
+import assert from "node:assert/strict";
+import { asc, eq, sql } from "drizzle-orm";
 import { Clock, Effect, Layer, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { accountAnalyticsConsentDecisions } from "@/db/schema";
@@ -21,10 +22,18 @@ import {
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
+const connectedTestDatabase = () => {
+  assert(testDatabase, "Expected the Postgres test database");
+  return testDatabase;
+};
+
 const ledgerLayer = () =>
   AnalyticsConsentLedger.Default.pipe(
     Layer.provide(
-      Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(testDatabase!.db))
+      Layer.succeed(
+        WorkspaceDatabase,
+        WorkspaceDatabase.make(connectedTestDatabase().db)
+      )
     )
   );
 
@@ -60,7 +69,7 @@ const runLedgerAt = <A>(
 
 const newAccount = () =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("analytics-consent")
+    workspaceFixtures(connectedTestDatabase().db).account("analytics-consent")
   ).then(({ accountId }) => accountId);
 
 const mirrorAt = (
@@ -96,8 +105,8 @@ const currentDecisionOf = async (accountId: CustomerAccountId) => {
 
 const storedDecisionsOf = (accountId: CustomerAccountId) =>
   Effect.runPromise(
-    testDatabase!.db
-      .select({
+    connectedTestDatabase()
+      .db.select({
         decision: accountAnalyticsConsentDecisions.decision,
         decidedAt: accountAnalyticsConsentDecisions.decidedAt,
         source: accountAnalyticsConsentDecisions.source,
@@ -191,14 +200,16 @@ describe.skipIf(!testDatabase)("AnalyticsConsentLedger", () => {
     const accountId = await newAccount();
     const store = (decision: "grant" | "withdraw", decidedAt: string) =>
       Effect.runPromise(
-        testDatabase!.db.insert(accountAnalyticsConsentDecisions).values({
-          accountId,
-          decision,
-          documentHash: privacyNoticeHash("cs-CZ"),
-          locale: "cs-CZ",
-          decidedAt: Temporal.Instant.from(decidedAt),
-          source: "backfill",
-        })
+        connectedTestDatabase()
+          .db.insert(accountAnalyticsConsentDecisions)
+          .values({
+            accountId,
+            decision,
+            documentHash: privacyNoticeHash("cs-CZ"),
+            locale: "cs-CZ",
+            decidedAt: Temporal.Instant.from(decidedAt),
+            source: "backfill",
+          })
       );
 
     await store("withdraw", "2026-11-05T10:00:00Z");
@@ -360,12 +371,14 @@ describe.skipIf(!testDatabase)("AnalyticsConsentLedger", () => {
 
     test("waits for a decision being recorded, so an undated choice never seeds past it", async () => {
       const accountId = await newAccount();
-      const holder = await testDatabase!.pool.connect();
+      const holder = await connectedTestDatabase().pool.connect();
       const waitingForLedgerLock = async () => {
-        const { rows } = await testDatabase!.pool.query(
+        const { rows } = await connectedTestDatabase().pool.query<{
+          waiting: number;
+        }>(
           "select count(*)::int as waiting from pg_locks where locktype = 'advisory' and not granted"
         );
-        return (rows[0]?.waiting as number) > 0;
+        return (rows[0]?.waiting ?? 0) > 0;
       };
       try {
         // Another request holds the ledger lock while recording a
@@ -495,7 +508,9 @@ describe.skipIf(!testDatabase)("AnalyticsConsentLedger", () => {
     }
 
     await Effect.runPromise(
-      testDatabase!.db.delete(authUser).where(eq(authUser.id, accountId))
+      connectedTestDatabase()
+        .db.delete(authUser)
+        .where(eq(authUser.id, accountId))
     );
 
     expect(await storedDecisionsOf(accountId)).toEqual([]);
@@ -504,17 +519,27 @@ describe.skipIf(!testDatabase)("AnalyticsConsentLedger", () => {
 
   test("stores only the known decisions and sources", async () => {
     const accountId = await newAccount();
-    const insert = (row: Record<string, string>) =>
+    // Raw values reach the database's own checks past the column types.
+    const insert = ({
+      decision = "grant",
+      source = "banner",
+      locale = "cs-CZ",
+    }: {
+      readonly decision?: string;
+      readonly source?: string;
+      readonly locale?: string;
+    }) =>
       Effect.runPromise(
-        testDatabase!.db.insert(accountAnalyticsConsentDecisions).values({
-          accountId,
-          decision: "grant",
-          documentHash: privacyNoticeHash("cs-CZ"),
-          locale: "cs-CZ",
-          decidedAt: Temporal.Instant.from("2026-11-05T10:00:00Z"),
-          source: "banner",
-          ...row,
-        } as typeof accountAnalyticsConsentDecisions.$inferInsert)
+        connectedTestDatabase()
+          .db.insert(accountAnalyticsConsentDecisions)
+          .values({
+            accountId,
+            decision: sql`${decision}`,
+            documentHash: privacyNoticeHash("cs-CZ"),
+            locale: sql`${locale}`,
+            decidedAt: Temporal.Instant.from("2026-11-05T10:00:00Z"),
+            source: sql`${source}`,
+          })
       );
 
     for (const source of [

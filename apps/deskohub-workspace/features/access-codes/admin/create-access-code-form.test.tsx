@@ -10,9 +10,11 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { ADMINISTRATION_STANDALONE_ACCESS_CODE_MAXIMUM_DURATION_HOURS } from "@deskohub/workspace-admin-api";
 import type { Locale } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
@@ -27,7 +29,9 @@ const { act, cleanup, fireEvent, render, waitFor } = await import(
 );
 
 const writeText = mock(() => Promise.resolve());
-const execute = mock();
+const execute = mock(
+  (_input: CreateStandaloneAccessCodeActionInput) => undefined
+);
 
 interface CreateStandaloneAccessCodeActionInput {
   readonly attemptId: string;
@@ -48,6 +52,13 @@ type ActionOptions = {
 };
 
 let actionOptions: ActionOptions | undefined;
+
+/** The input the form passed to its action on the given call. */
+const executedInput = (call: number): CreateStandaloneAccessCodeActionInput => {
+  const input = execute.mock.calls[call]?.[0];
+  assert(input, `Expected action call ${call}`);
+  return input;
+};
 
 mock.module("@/features/access-codes/admin/actions", () => ({
   createStandaloneAccessCode: mock(),
@@ -152,12 +163,16 @@ const windowFieldLabels = async (locale: Locale = "en-US") => {
 const windowDateField = (
   view: ReturnType<typeof render>,
   labels: WindowFieldLabels
-) => view.getByRole("combobox", { name: labels.date }) as HTMLInputElement;
+) =>
+  elementOf(
+    view.getByRole("combobox", { name: labels.date }),
+    HTMLInputElement
+  );
 
 const windowTimeField = (
   view: ReturnType<typeof render>,
   labels: WindowFieldLabels
-) => view.getByLabelText(labels.time) as HTMLInputElement;
+) => elementOf(view.getByLabelText(labels.time), HTMLInputElement);
 
 // A date field takes typed text when focus leaves it.
 const typeWindowDate = (
@@ -192,9 +207,10 @@ const enterWindowBound = (
 /** The window as the form would submit it. */
 const submittedWindow = (view: ReturnType<typeof render>) => {
   const data = new FormData(
-    view.getByRole("form", {
-      name: "Create an access code",
-    }) as HTMLFormElement
+    elementOf(
+      view.getByRole("form", { name: "Create an access code" }),
+      HTMLFormElement
+    )
   );
   return { startsAt: data.get("startsAt"), endsAt: data.get("endsAt") };
 };
@@ -310,7 +326,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       );
       await submitForm(view);
       expect(execute).toHaveBeenCalledTimes(1);
-      expect(execute.mock.calls[0]![0]).toMatchObject({
+      expect(executedInput(0)).toMatchObject({
         name: "Booth A",
         startsAt: "2026-09-10T10:00",
         endsAt: "2026-09-10T12:00",
@@ -352,12 +368,10 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
 
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
 
     await submitForm(view);
-    const retryInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const retryInput = executedInput(1);
 
     expect(firstInput.attemptId).toBe(retryInput.attemptId);
     expect(firstInput).toMatchObject({
@@ -373,15 +387,13 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
 
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
 
     fireEvent.input(view.getByLabelText("Name"), {
       target: { value: "Booth B" },
     });
     await submitForm(view);
-    const secondInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const secondInput = executedInput(1);
 
     expect(secondInput.attemptId).not.toBe(firstInput.attemptId);
     expect(secondInput.name).toBe("Booth B");
@@ -393,8 +405,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
 
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
 
     act(() => {
       actionOptions?.onSuccess({
@@ -402,8 +413,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       });
     });
     await submitForm(view);
-    const resubmittedInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const resubmittedInput = executedInput(1);
 
     expect(resubmittedInput.attemptId).not.toBe(firstInput.attemptId);
     expect(resubmittedInput).toMatchObject({
@@ -419,8 +429,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
 
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
 
     act(() => {
       actionOptions?.onSuccess({
@@ -428,8 +437,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       });
     });
     await submitForm(view);
-    const retriedInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const retriedInput = executedInput(1);
 
     expect(retriedInput.attemptId).toBe(firstInput.attemptId);
   });
@@ -465,7 +473,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     enterWindowTime(view, labels.startsAt, "08:00");
     await submitForm(view);
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(execute.mock.calls[0]![0]).toMatchObject({
+    expect(executedInput(0)).toMatchObject({
       startsAt: "2026-09-10T08:00",
       endsAt: "2026-09-10T12:00",
     });
@@ -486,11 +494,11 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const region = view.container.querySelector(
       '[data-standalone-access-code-creation="created"]'
     );
-    expect(region).not.toBeNull();
-    const digits = region!.querySelector("[data-ph-mask]");
-    expect(digits).not.toBeNull();
-    expect(digits!.getAttribute("data-ph-no-capture")).toBe("");
-    expect(digits!.getAttribute("aria-label")).toBe("7 6 5 4 3 2 1");
+    assert(region, "Expected the created access-code region");
+    const digits = region.querySelector("[data-ph-mask]");
+    assert(digits, "Expected the masked access-code digits");
+    expect(digits.getAttribute("data-ph-no-capture")).toBe("");
+    expect(digits.getAttribute("aria-label")).toBe("7 6 5 4 3 2 1");
     expect(view.queryByRole("form")).toBeNull();
     expect(
       view.getByText(/shown only once and cannot be retrieved later/)
@@ -508,9 +516,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const view = await renderForm();
     await fillForm(view);
     await submitForm(view);
-    const firstAttemptId = (
-      execute.mock.calls[0][0] as CreateStandaloneAccessCodeActionInput
-    ).attemptId;
+    const firstAttemptId = executedInput(0).attemptId;
     act(() => {
       actionOptions?.onSuccess({
         data: { status: "succeeded", outcome: createdOutcome },
@@ -523,15 +529,15 @@ describe("CreateStandaloneAccessCodeForm", () => {
 
     const form = view.getByRole("form", { name: "Create an access code" });
     expect(
-      (form.querySelector("input[name='name']") as HTMLInputElement).value
+      elementOf(form.querySelector("input[name='name']"), HTMLInputElement)
+        .value
     ).toBe("");
     expect(document.activeElement).toBe(
       form.querySelector("input[name='name']")
     );
     await fillForm(view);
     await submitForm(view);
-    const nextInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const nextInput = executedInput(1);
     expect(nextInput.attemptId).not.toBe(firstAttemptId);
   });
 
@@ -580,7 +586,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
         "The provider rejected this access code. Adjust the details and try again."
       )
     ).toBeDefined();
-    expect((view.getByLabelText("Name") as HTMLInputElement).value).toBe(
+    expect(elementOf(view.getByLabelText("Name"), HTMLInputElement).value).toBe(
       "Booth A"
     );
   });
@@ -744,8 +750,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     const view = await renderForm();
     await fillForm(view);
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
 
     act(() => {
       actionOptions?.onSuccess({
@@ -781,8 +786,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
     await submitForm(view);
 
-    const confirmedInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const confirmedInput = executedInput(1);
     expect(confirmedInput.providerCredentialRemovedAttemptId).toBe(
       priorAttemptId
     );
@@ -792,8 +796,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     expect(confirmedInput.attemptId).not.toBe(firstInput.attemptId);
 
     await submitForm(view);
-    const followUpInput = execute.mock
-      .calls[2][0] as CreateStandaloneAccessCodeActionInput;
+    const followUpInput = executedInput(2);
     expect("providerCredentialRemovedAttemptId" in followUpInput).toBe(false);
   });
 
@@ -820,7 +823,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       ).toBeDefined()
     );
 
-    expect((view.getByLabelText("Name") as HTMLInputElement).value).toBe(
+    expect(elementOf(view.getByLabelText("Name"), HTMLInputElement).value).toBe(
       "Booth A"
     );
     expect(submittedWindow(view)).toEqual({
@@ -916,8 +919,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
     await fillForm(view);
     await submitForm(view);
 
-    const reconfirmedInput = execute.mock
-      .calls[2][0] as CreateStandaloneAccessCodeActionInput;
+    const reconfirmedInput = executedInput(2);
     expect(reconfirmedInput.providerCredentialRemovedAttemptId).toBe(
       nextAttemptId
     );
@@ -954,8 +956,7 @@ describe("CreateStandaloneAccessCodeForm", () => {
       target: { value: "Booth B" },
     });
     await submitForm(view);
-    const changedInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const changedInput = executedInput(1);
 
     expect(changedInput.name).toBe("Booth B");
     expect("providerCredentialRemovedAttemptId" in changedInput).toBe(false);
@@ -978,10 +979,8 @@ describe("CreateStandaloneAccessCodeForm", () => {
     ).toBeDefined();
 
     await submitForm(view);
-    const firstInput = execute.mock
-      .calls[0][0] as CreateStandaloneAccessCodeActionInput;
-    const retryInput = execute.mock
-      .calls[1][0] as CreateStandaloneAccessCodeActionInput;
+    const firstInput = executedInput(0);
+    const retryInput = executedInput(1);
     expect(retryInput.attemptId).toBe(firstInput.attemptId);
   });
 });

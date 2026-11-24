@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import { asc, eq } from "drizzle-orm";
 import { Clock, Effect, Layer, Option } from "effect";
@@ -25,10 +26,18 @@ import {
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
+const connectedTestDatabase = () => {
+  assert(testDatabase, "Expected the Postgres test database");
+  return testDatabase;
+};
+
 const ledgerLayer = () =>
   AnalyticsConsentLedger.Default.pipe(
     Layer.provide(
-      Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(testDatabase!.db))
+      Layer.succeed(
+        WorkspaceDatabase,
+        WorkspaceDatabase.make(connectedTestDatabase().db)
+      )
     )
   );
 
@@ -43,7 +52,7 @@ const clockAt = (instant: Temporal.Instant): Clock.Clock => ({
 
 const newAccount = () =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("analytics-mirror")
+    workspaceFixtures(connectedTestDatabase().db).account("analytics-mirror")
   ).then(({ accountId }) => accountId);
 
 /** Records the account's decision from preferences at `at`, in `locale`. */
@@ -179,8 +188,8 @@ describe.skipIf(!testDatabase)(
 /** The account's stored decisions, oldest first. */
 const storedDecisionsOf = (accountId: CustomerAccountId) =>
   Effect.runPromise(
-    testDatabase!.db
-      .select({
+    connectedTestDatabase()
+      .db.select({
         decision: accountAnalyticsConsentDecisions.decision,
         decidedAt: accountAnalyticsConsentDecisions.decidedAt,
         source: accountAnalyticsConsentDecisions.source,
@@ -198,8 +207,8 @@ const storedDecisionsOf = (accountId: CustomerAccountId) =>
 /** The locale and privacy notice of the account's stored decisions, oldest first. */
 const storedNoticesOf = (accountId: CustomerAccountId) =>
   Effect.runPromise(
-    testDatabase!.db
-      .select({
+    connectedTestDatabase()
+      .db.select({
         locale: accountAnalyticsConsentDecisions.locale,
         documentHash: accountAnalyticsConsentDecisions.documentHash,
       })
@@ -314,20 +323,21 @@ describe.skipIf(!testDatabase)(
         decision: "withdraw",
         decidedAt: "2026-11-05T10:00:00.123Z",
       });
+      assert(taken);
 
       // The app stores the withdrawal at the answered instant: its next sync
       // appends nothing.
       expect(
         await syncApp(accountId, {
           analytics: false,
-          decidedAt: taken!.decidedAt,
+          decidedAt: taken.decidedAt,
         })
       ).toBeUndefined();
       // A grant at that instant still doesn't outrank the withdrawal.
       expect(
         await syncApp(accountId, {
           analytics: true,
-          decidedAt: taken!.decidedAt,
+          decidedAt: taken.decidedAt,
         })
       ).toEqual(taken);
       expect(await storedDecisionsOf(accountId)).toEqual(storedBefore);
@@ -360,11 +370,12 @@ describe.skipIf(!testDatabase)(
         decision: "grant",
         decidedAt: "2026-11-05T10:00:00.123Z",
       });
+      assert(taken);
 
       expect(
         await syncApp(accountId, {
           analytics: true,
-          decidedAt: taken!.decidedAt,
+          decidedAt: taken.decidedAt,
         })
       ).toBeUndefined();
       expect(await storedDecisionsOf(accountId)).toEqual(storedBefore);

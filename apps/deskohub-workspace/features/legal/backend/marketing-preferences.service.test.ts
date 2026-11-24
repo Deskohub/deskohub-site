@@ -46,11 +46,12 @@ const invalid = () =>
 
 function scenario() {
   const memory = makeMemoryMarketingCookies();
+  const account: LinkedCustomerAccount | null = {
+    accountId: accountA,
+    dotyposCustomerId: customerA,
+  };
   const state = {
-    account: {
-      accountId: accountA,
-      dotyposCustomerId: customerA,
-    } as LinkedCustomerAccount | null,
+    account,
     accountReads: 0,
     sessionUnavailable: false,
     revokeUnavailable: false,

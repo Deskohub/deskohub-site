@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   type CreateCustomerCheckout,
-  type CustomerCheckout,
+  CustomerCheckout,
   customerReferralCodeHeader,
   type SubmitCustomerCheckout,
 } from "@deskohub/workspace-customer-api";
@@ -100,6 +100,11 @@ const unsignablePayState = new PayStateIssueError({
     message: "no sealing key",
   }),
 });
+
+/** A checkout as the response body carries it. */
+const decodeCheckoutBody = Schema.decodeUnknownSync(
+  Schema.toEncoded(CustomerCheckout)
+);
 
 /** The hold deadline the checkout's reservation stores. */
 const storedHoldExpiresAt = "2099-07-01T10:09:00.000Z";
@@ -912,7 +917,7 @@ describe("applyCheckoutDiscountCode", () => {
         })
       );
       expect(response.status).toBe(200);
-      return (await response.json()) as typeof CustomerCheckout.Encoded;
+      return decodeCheckoutBody(await response.json());
     };
 
     /** `token`'s state with an entered code its price includes. */
@@ -1252,7 +1257,7 @@ describe("clearCheckoutDiscountCode", () => {
     const response = await api.handle(
       customerApiRequest(clearCode(signedEarlier))
     );
-    const body = (await response.json()) as typeof CustomerCheckout.Encoded;
+    const body = decodeCheckoutBody(await response.json());
 
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
@@ -1296,9 +1301,9 @@ describe("clearCheckoutDiscountCode", () => {
 
     const response = await api.handle(customerApiRequest(clearCode()));
 
-    expect(
-      ((await response.json()) as typeof CustomerCheckout.Encoded).holdExpiresAt
-    ).toBe(storedHoldExpiresAt);
+    expect(decodeCheckoutBody(await response.json()).holdExpiresAt).toBe(
+      storedHoldExpiresAt
+    );
   });
 
   test.each([
@@ -1600,12 +1605,10 @@ describe("submitCheckout", () => {
       CheckoutService["Service"]["createHostedPaymentCheckout"]
     >
   ) => {
-    const submissions = {
-      count: 0,
-      inputs: [] as Parameters<
-        CheckoutService["Service"]["createHostedPaymentCheckout"]
-      >[0][],
-    };
+    const inputs: Parameters<
+      CheckoutService["Service"]["createHostedPaymentCheckout"]
+    >[0][] = [];
+    const submissions = { count: 0, inputs };
     return {
       submissions,
       layer: Layer.mock(CheckoutService, {

@@ -13,6 +13,7 @@ import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { formatMoney } from "@/shared/money/money";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   workspaceRouterRefresh,
   workspaceUseAction,
@@ -147,9 +148,12 @@ describe("ReservationWithdrawalLink", () => {
 
     await act(async () => {
       fireEvent.click(
-        view.getAllByRole("button", {
-          name: m.withdrawalClose({}, { locale }),
-        })[0] as HTMLElement
+        elementOf(
+          view.getAllByRole("button", {
+            name: m.withdrawalClose({}, { locale }),
+          })[0],
+          HTMLElement
+        )
       );
     });
 
