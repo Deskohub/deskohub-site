@@ -993,6 +993,8 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects Workspace app tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/app/probe.test.tsx"],
       ["rejects Workspace db tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/db/probe.test.ts"],
       ["rejects Workspace script tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/scripts/probe.test.ts"],
+      ["rejects Workspace unlisted-directory tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/types/probe.test.ts"],
+      ["rejects Workspace future-directory tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/lib/future.test.ts"],
       ["rejects Workspace small-feature tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/emails/probe.test.ts"],
       ["rejects Workspace large-feature production modules", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/checkout/product-catalog.ts"],
       ["permits Workspace E2E", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/e2e/probe.ts"],
@@ -1010,7 +1012,10 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects Workspace route non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/app/api/workspace/probe/route.ts"],
       ["rejects Workspace top-level module non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/probe.config.ts"],
       ["rejects Workspace shared test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/shared/utils/probe.test.ts"],
+      ["rejects Workspace unlisted-directory test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/types/probe.test.ts"],
+      ["rejects Workspace future-directory test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/lib/future.test.ts"],
       ["rejects Workspace small-feature test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/features/emails/probe.test.ts"],
+      ["permits Workspace E2E non-null assertions", "export const first = values[0]!;\n", false, "apps/deskohub-workspace/e2e/probe.ts"],
       ["permits Workspace large-feature test non-null assertions", "export const first = values[0]!;\n", false, "apps/deskohub-workspace/features/reservation/probe.test.ts"],
     ],
   },
@@ -1207,6 +1212,8 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/app/probe.test.tsx",
   "apps/deskohub-workspace/db/probe.test.ts",
   "apps/deskohub-workspace/scripts/probe.test.ts",
+  "apps/deskohub-workspace/types/probe.test.ts",
+  "apps/deskohub-workspace/lib/future.test.ts",
   "apps/deskohub-workspace/features/emails/probe.test.ts",
   "apps/deskohub-workspace/features/checkout/product-catalog.ts",
 ];
@@ -1216,6 +1223,7 @@ const generatedProbes = [
 ];
 // Remaining large-feature tests, fixtures, testing helpers, generated files, and E2E may still assert.
 const workspaceExemptProbes = [
+  "apps/deskohub-workspace/e2e/probe.ts",
   "apps/deskohub-workspace/features/reservation/probe.test.ts",
   "apps/deskohub-workspace/features/reservation/probe.postgres.test.ts",
   "apps/deskohub-workspace/features/reservation/probe.spec.ts",

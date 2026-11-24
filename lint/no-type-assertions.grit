@@ -11,7 +11,8 @@ file($name, $body) where {
       not $name <: r".*/generated/.*"
     },
     and {
-      $name <: r".*apps/deskohub-workspace/(?:(?:app|db|emails|features|scripts|shared)/.*|[^/]+)\.(?:ts|tsx|mts|cts)$",
+      $name <: r".*apps/deskohub-workspace/.*\.(?:ts|tsx|mts|cts)$",
+      not $name <: r".*apps/deskohub-workspace/e2e/.*",
       not $name <: r".*/(?:generated|paraglide)/.*",
       not $name <: r".*apps/deskohub-workspace/features/(?:account|accounting|admin-cli|administration|checkout|discounts|email-campaigns|passes|referrals|reservation)/(?:.*/)?testing/.*",
       not $name <: r".*apps/deskohub-workspace/features/(?:account|accounting|admin-cli|administration|checkout|discounts|email-campaigns|passes|referrals|reservation)/.*(?:\.(?:test|spec|pw|test-utils|browser-harness)|-fixture|\.fixture)\.(?:ts|tsx|mts|cts)$"
