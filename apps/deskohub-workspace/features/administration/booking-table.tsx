@@ -3,7 +3,10 @@
 import { useMemo } from "react";
 import type { Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
-import { StatusBadge } from "@/shared/components/ui/status-badge";
+import {
+  StatusBadge,
+  type StatusTone,
+} from "@/shared/components/ui/status-badge";
 import { AdministrationLink as Link } from "./admin-link";
 import type { AdministrationBookingSummary } from "./administration.service";
 import { administrationHref } from "./administration-href";
@@ -26,6 +29,14 @@ import { formatAdministrationDateTime } from "./formatters";
 import { m } from "./i18n";
 import { getAdministrationReservationProductTitle } from "./reservation-product";
 
+const bookingStatusTones: Readonly<
+  Record<AdministrationBookingSummary["status"], StatusTone>
+> = {
+  CANCELLED: "neutral",
+  CONFIRMED: "positive",
+  NEW: "progress",
+};
+
 export function BookingStatusBadge({
   booking,
   locale,
@@ -34,15 +45,7 @@ export function BookingStatusBadge({
   readonly locale: Locale;
 }) {
   return (
-    <StatusBadge
-      tone={
-        {
-          CANCELLED: "neutral",
-          CONFIRMED: "positive",
-          NEW: "progress",
-        }[booking.status] as "neutral" | "positive" | "progress"
-      }
-    >
+    <StatusBadge tone={bookingStatusTones[booking.status]}>
       {getAdministrationBookingStatusLabel(booking.status, locale)}
     </StatusBadge>
   );
