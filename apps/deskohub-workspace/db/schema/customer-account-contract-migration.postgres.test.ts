@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import { testEmailAddress } from "@deskohub/test-email";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -24,10 +25,14 @@ const migrateAcross = async (
   seed: (pool: Pool) => Promise<void>,
   check: (pool: Pool, migrated: Promise<void>) => Promise<void>
 ) => {
+  assert(
+    testDatabaseUrl,
+    "WORKSPACE_TEST_DATABASE_URL must name the test Postgres"
+  );
   const earlierMigrations = await linkMigrationsBefore(MIGRATION_DIR);
   try {
     await withScratchDatabase(
-      testDatabaseUrl!,
+      testDatabaseUrl,
       "customer_account_contract",
       async (pool) => {
         await migrate(drizzle({ client: pool }), {
@@ -110,7 +115,7 @@ const migrationFailure = async (migrated: Promise<void>) => {
   try {
     await migrated;
   } catch (error) {
-    return (error as { readonly cause?: unknown }).cause;
+    return error instanceof Error ? error.cause : undefined;
   }
   throw new Error("The migration was expected to fail.");
 };

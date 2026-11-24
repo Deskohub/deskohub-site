@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
@@ -78,9 +79,13 @@ const migrateAcross = async ({
   readonly alongside?: { readonly sql: string; readonly values: unknown[] };
   readonly check: (database: MigratedDatabase) => Promise<void>;
 }) => {
+  assert(
+    testDatabaseUrl,
+    "WORKSPACE_TEST_DATABASE_URL must name the test Postgres"
+  );
   const earlierMigrations = await linkMigrationsBefore(MIGRATION_DIR);
   const scratch = await createScratchPostgresDatabase(
-    testDatabaseUrl!,
+    testDatabaseUrl,
     "account_creation_repair"
   );
   const pool = makeDatabasePool({ connectionString: scratch.url, max: 4 });

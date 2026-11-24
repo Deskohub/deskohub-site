@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { passkey } from "@better-auth/passkey";
 import { getAuthTables } from "better-auth/db";
 import { getTableConfig, PgDialect, type PgTable } from "drizzle-orm/pg-core";
@@ -19,18 +20,6 @@ import {
   authUser,
   authVerification,
 } from "./auth";
-
-interface BetterAuthField {
-  readonly fieldName: string;
-  readonly required?: boolean;
-  readonly unique?: boolean;
-  readonly index?: boolean;
-  readonly references?: {
-    readonly model: string;
-    readonly field: string;
-    readonly onDelete?: string;
-  };
-}
 
 // An acronym such as the passkey `credentialID` is one word.
 const snakeCase = (field: string) =>
@@ -93,9 +82,10 @@ describe("Better Auth schema", () => {
     );
 
     for (const [model, table] of Object.entries(drizzleAuthTables)) {
-      const authTable = authTables[model as keyof typeof authTables]!;
+      const authTable = authTables[model];
+      assert(authTable, `Better Auth derives no ${model} table`);
       const config = getTableConfig(table);
-      const fields = authTable.fields as Record<string, BetterAuthField>;
+      const fields = authTable.fields;
 
       expect(config.columns.map((column) => column.name).sort()).toEqual(
         [
@@ -110,7 +100,8 @@ describe("Better Auth schema", () => {
         const columnName = snakeCase(field.fieldName ?? key);
         const column = config.columns.find(
           (candidate) => candidate.name === columnName
-        )!;
+        );
+        assert(column, `${model} has no ${columnName} column`);
 
         expect(column.notNull).toBe(field.required ?? false);
 
@@ -126,18 +117,21 @@ describe("Better Auth schema", () => {
           const foreignKey = config.foreignKeys.find(
             (candidate) => candidate.reference().columns[0]?.name === columnName
           );
-          expect(foreignKey).toBeDefined();
-          expect(foreignKey!.onDelete).toBe(
+          assert(foreignKey, `${columnName} has no foreign key`);
+          expect(foreignKey.onDelete).toBe(
             field.references.model === "session" ? "set null" : "cascade"
           );
           const referenced = getTableConfig(
-            foreignKey!.reference().foreignTable
+            foreignKey.reference().foreignTable
+          );
+          const referencedTable = authTables[field.references.model];
+          assert(
+            referencedTable,
+            `Better Auth derives no ${field.references.model} table`
           );
           expect(referenced.schema).toBe("auth");
-          expect(referenced.name).toBe(
-            snakeCase(authTables[field.references.model]!.modelName)
-          );
-          expect(foreignKey!.reference().foreignColumns[0]?.name).toBe(
+          expect(referenced.name).toBe(snakeCase(referencedTable.modelName));
+          expect(foreignKey.reference().foreignColumns[0]?.name).toBe(
             snakeCase(field.references.field)
           );
         }
@@ -150,14 +144,17 @@ describe("Better Auth schema", () => {
     expect(
       foreignKey?.reference().columns.map((column) => column.name)
     ).toEqual(["id"]);
-    expect(getTableConfig(foreignKey!.reference().foreignTable).name).toBe(
+    assert(foreignKey, "auth.user has no foreign key");
+    expect(getTableConfig(foreignKey.reference().foreignTable).name).toBe(
       "customer_accounts"
     );
-    expect(foreignKey!.onDelete).toBe("restrict");
+    expect(foreignKey.onDelete).toBe("restrict");
   });
 
   test("carries deletionRequestedAt as nullable server-owned user state", () => {
-    const fields = authTables.user!.fields as Record<string, BetterAuthField>;
+    const user = authTables.user;
+    assert(user, "Better Auth derives no user table");
+    const fields = user.fields;
     expect(fields.deletionRequestedAt).toMatchObject({
       type: "date",
       required: false,
@@ -167,13 +164,16 @@ describe("Better Auth schema", () => {
     const config = getTableConfig(authUser);
     const column = config.columns.find(
       (candidate) => candidate.name === "deletion_requested_at"
-    )!;
+    );
+    assert(column, "auth.user has no deletion_requested_at column");
     expect(column.notNull).toBe(false);
     expect(column.getSQLType()).toBe("timestamp with time zone");
   });
 
   test("carries the locale preference as a nullable server-owned user field", () => {
-    const fields = authTables.user!.fields as Record<string, BetterAuthField>;
+    const user = authTables.user;
+    assert(user, "Better Auth derives no user table");
+    const fields = user.fields;
     expect(fields.locale).toMatchObject({
       type: "string",
       required: false,
@@ -183,14 +183,15 @@ describe("Better Auth schema", () => {
     const config = getTableConfig(authUser);
     const column = config.columns.find(
       (candidate) => candidate.name === "locale"
-    )!;
+    );
+    assert(column, "auth.user has no locale column");
     expect(column.notNull).toBe(false);
     expect(column.getSQLType()).toBe("text");
     const check = config.checks.find(
       (candidate) => candidate.name === "user_locale_check"
     );
-    expect(check).toBeDefined();
-    expect(new PgDialect().sqlToQuery(check!.value).sql).toBe(
+    assert(check, "auth.user has no user_locale_check");
+    expect(new PgDialect().sqlToQuery(check.value).sql).toBe(
       `"auth"."user"."locale" in ('en-US', 'cs-CZ', 'de-DE', 'uk-UA', 'sk-SK', 'vi-VN', 'hi-IN')`
     );
   });
