@@ -154,8 +154,7 @@ export class InvoiceCancellationService extends Context.Service<
           const statuses = yield* deliveryLedger
             .status([invoice.id])
             .pipe(Effect.mapError(persistenceFailed(invoice.id)));
-          const reservationId =
-            invoice.workspaceReservationId as WorkspaceReservationId | null;
+          const reservationId = invoice.workspaceReservationId;
           const reservationState = reservationId
             ? yield* readReservationState(invoice.id, reservationId)
             : null;

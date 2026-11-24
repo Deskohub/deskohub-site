@@ -9,7 +9,10 @@ import {
 } from "@/db/schema";
 import type { InvoiceNumber } from "@/features/accounting/invoice";
 import type { InvoiceCancellationCause } from "@/features/accounting/invoice-cancellation";
-import type { InvoiceId } from "@/features/accounting/manual-invoice";
+import {
+  type InvoiceId,
+  invoiceIdSchema,
+} from "@/features/accounting/manual-invoice";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { isChainTail } from "./invoice-reads";
 
@@ -99,7 +102,7 @@ export const readReservationInvoiceStanding = (
       Effect.map(([row]): ReservationInvoiceStanding | null =>
         row
           ? {
-              id: row.id as InvoiceId,
+              id: invoiceIdSchema.make(row.id),
               invoiceNumber: row.invoiceNumber,
               state: row.cancelled === true ? "cancelled" : "live",
               cancellationCause: getCancellationCause(row),

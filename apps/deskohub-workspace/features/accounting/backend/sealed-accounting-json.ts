@@ -110,8 +110,12 @@ export const sealedAccountingJson = <
     };
   };
   readonly ciphertext: PgColumn;
-  /** Columns read beside the ciphertext, in this order. */
-  readonly plaintext: Plaintext;
+  /**
+   * Columns read beside the ciphertext, in this order. At least one: Drizzle
+   * leaves a nested selection without columns out of the row.
+   */
+  readonly plaintext: Plaintext &
+    (keyof Plaintext extends never ? never : unknown);
   /** The JSON form of a value; `JSON.stringify` writes it as stored. */
   readonly encode: (value: A) => unknown;
   /** Decodes stored JSON strictly: an unknown property is invalid. */
@@ -120,6 +124,9 @@ export const sealedAccountingJson = <
   Effect.gen(function* () {
     const { db } = yield* WorkspaceDatabase;
     const keys = yield* AccountingSnapshotKeyService;
+    const decodeJson = Schema.decodeUnknownEffect(
+      Schema.fromJsonString(Schema.Unknown)
+    );
     const decode = Schema.decodeUnknownEffect(record.schema, {
       onExcessProperty: "error",
     });
@@ -242,10 +249,11 @@ export const sealedAccountingJson = <
         );
       }
 
-      const encoded = yield* Effect.try({
-        try: () => JSON.parse(row.sealedJson) as unknown,
-        catch: () => unavailable(input.reference, "parse", "JSON is invalid."),
-      });
+      const encoded = yield* decodeJson(row.sealedJson).pipe(
+        Effect.mapError(() =>
+          unavailable(input.reference, "parse", "JSON is invalid.")
+        )
+      );
       const value = yield* decode(encoded).pipe(
         Effect.mapError(() =>
           unavailable(input.reference, "parse", "schema is invalid.")
@@ -254,8 +262,7 @@ export const sealedAccountingJson = <
 
       return {
         value,
-        // Drizzle leaves a nested selection without columns out of the row.
-        plaintext: (row.plaintext ?? {}) as SelectResultFields<Plaintext>,
+        plaintext: row.plaintext,
       } satisfies OpenedAccountingRecord<A, SelectResultFields<Plaintext>>;
     });
 

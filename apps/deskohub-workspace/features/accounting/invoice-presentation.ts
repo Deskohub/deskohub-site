@@ -404,11 +404,10 @@ export const getInvoiceStatedLines = (
   }
 
   const copy = getInvoiceCopy(document.locale);
-  const items = document.quote.items;
   return [
-    ...getItemLines(document, copy).map(({ description }, index) => ({
-      description,
-      amount: moneyToDecimalString(items[index]!.amount),
+    ...document.quote.items.map((item) => ({
+      description: getItemLine(document, copy, item).description,
+      amount: moneyToDecimalString(item.amount),
     })),
     ...document.quote.payment.discounts.map(({ amount, discount }) => ({
       description: getDiscountDescription(copy, discount.label),
@@ -424,43 +423,47 @@ const getItemLines = (
   document: ReservationInvoiceDocument,
   copy: InvoiceCopy
 ): readonly InvoicePresentationLine[] =>
-  document.quote.items.map(
-    (item): InvoicePresentationLine =>
-      Match.value(item).pipe(
-        Match.discriminatorsExhaustive("type")({
-          cowork: ({ amount, tier }) => ({
-            kind: "item" as const,
-            description: copy.coworkProducts[tier],
-            amount: formatMoney(amount, document.locale),
-          }),
-          coffee: ({ amount }) => ({
-            kind: "item" as const,
-            description: copy.coffee,
-            amount: formatMoney(amount, document.locale),
-          }),
-          workstation: ({ amount }) => ({
-            kind: "item" as const,
-            description: copy.workstation,
-            amount: formatMoney(amount, document.locale),
-          }),
-          "meeting-room": ({ amount, duration }) => {
-            const durationLabel =
-              duration.unit === "day"
-                ? copy.day(duration.amount)
-                : copy.hour(duration.amount);
-            return {
-              kind: "item" as const,
-              description: `${copy.meetingRoom} · ${durationLabel}`,
-              amount: formatMoney(amount, document.locale),
-            };
-          },
-          office: ({ amount, dayCount, seats }) => ({
-            kind: "item" as const,
-            description: `${copy.office} · ${copy.day(dayCount)} · ${copy.seat(seats)}`,
-            amount: formatMoney(amount, document.locale),
-          }),
-        })
-      )
+  document.quote.items.map((item) => getItemLine(document, copy, item));
+
+const getItemLine = (
+  document: ReservationInvoiceDocument,
+  copy: InvoiceCopy,
+  item: ReservationInvoiceDocument["quote"]["items"][number]
+): InvoicePresentationLine =>
+  Match.value(item).pipe(
+    Match.discriminatorsExhaustive("type")({
+      cowork: ({ amount, tier }) => ({
+        kind: "item" as const,
+        description: copy.coworkProducts[tier],
+        amount: formatMoney(amount, document.locale),
+      }),
+      coffee: ({ amount }) => ({
+        kind: "item" as const,
+        description: copy.coffee,
+        amount: formatMoney(amount, document.locale),
+      }),
+      workstation: ({ amount }) => ({
+        kind: "item" as const,
+        description: copy.workstation,
+        amount: formatMoney(amount, document.locale),
+      }),
+      "meeting-room": ({ amount, duration }) => {
+        const durationLabel =
+          duration.unit === "day"
+            ? copy.day(duration.amount)
+            : copy.hour(duration.amount);
+        return {
+          kind: "item" as const,
+          description: `${copy.meetingRoom} · ${durationLabel}`,
+          amount: formatMoney(amount, document.locale),
+        };
+      },
+      office: ({ amount, dayCount, seats }) => ({
+        kind: "item" as const,
+        description: `${copy.office} · ${copy.day(dayCount)} · ${copy.seat(seats)}`,
+        amount: formatMoney(amount, document.locale),
+      }),
+    })
   );
 
 /** An issued instant as its Prague calendar date in the document locale. */

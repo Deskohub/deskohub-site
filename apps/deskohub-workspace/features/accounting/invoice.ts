@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { type Locale, m } from "@/features/i18n";
+import { m } from "@/features/i18n";
 import { unlimitedPassCoffeePrice } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import { withPassPurchaseAddons } from "@/features/passes/pass-purchase-quote";
@@ -8,7 +8,6 @@ import { moneyToDecimalString } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
   instantStringSchema,
-  type PlainDate,
   plainDateStringSchema,
   temporalInstantToIsoString,
   temporalInstantToPlainDate,
@@ -321,7 +320,7 @@ export const makeManualInvoiceDocument = (input: {
     documentKind: "manual",
     invoiceId: normalized.invoiceId,
     dotyposCustomerId: normalized.dotyposCustomerId,
-    locale: normalized.locale as Locale,
+    locale: normalized.locale,
     supplier: {
       ...workspaceAccountingSupplier,
       commercialRegister: workspaceSiteConstants.company.commercialRegister,
@@ -330,10 +329,10 @@ export const makeManualInvoiceDocument = (input: {
     delivery: { email: normalized.deliveryEmail },
     invoiceNumber: input.invoiceNumber,
     issuedAt: generatedAt,
-    serviceDate: normalized.serviceDate as PlainDate,
+    serviceDate: normalized.serviceDate,
     ...(normalized.payment.status === "paid"
       ? { payment: normalized.payment }
-      : { dueDate: normalized.payment.date as PlainDate }),
+      : { dueDate: normalized.payment.date }),
     currency: normalized.currency,
     variableSymbol:
       normalized.variableSymbol ??

@@ -369,7 +369,10 @@ describe.skipIf(!testDatabase)("sealed accounting JSON in PostgreSQL", () => {
 
     const opened = await run(openSnapshot(attempt.paymentAttemptId));
 
-    expect(opened).toEqual({ value: attempt.snapshot, plaintext: {} });
+    expect(opened).toEqual({
+      value: attempt.snapshot,
+      plaintext: { paymentAttemptId: attempt.paymentAttemptId },
+    });
     expect(await readStoredSnapshotJson(attempt.paymentAttemptId)).toBe(
       JSON.stringify(encodeStoredAccountingDocumentSnapshot(attempt.snapshot))
     );
