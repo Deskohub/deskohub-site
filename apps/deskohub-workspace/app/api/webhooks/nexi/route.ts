@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import { NextResponse } from "next/server";
 import {
   NexiWebhookProcessingError,
@@ -8,6 +8,7 @@ import {
 } from "@/features/checkout/backend/payment";
 import { configuredPaymentProvider } from "@/features/checkout/backend/payment/payment-provider-selection";
 import { defineWebhookRoute } from "@/shared/backend/service-route";
+import { isParsedJson } from "@/shared/utils/parsed-json";
 
 const processWebhookRequest = Effect.fn("processNexiWebhookRequest")(function* (
   request: Request
@@ -22,10 +23,9 @@ const processWebhookRequest = Effect.fn("processNexiWebhookRequest")(function* (
     try: () => request.json(),
     catch: parseFailed,
   }).pipe(
-    Effect.flatMap((body) =>
-      Schema.decodeUnknownEffect(Schema.Json)(body).pipe(
-        Effect.mapError(parseFailed)
-      )
+    // The body stays out of the error, as it stays out of the logs.
+    Effect.filterOrFail(isParsedJson, () =>
+      parseFailed(new Error("The parsed body isn't a JSON value."))
     )
   );
   yield* Effect.logInfo("Nexi webhook request body parsed");

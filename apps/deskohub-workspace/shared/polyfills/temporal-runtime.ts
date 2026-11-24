@@ -135,7 +135,6 @@ export const requiredTemporalApis = {
     ],
     getters: [
       "hour",
-      "hoursInDay",
       "microsecond",
       "millisecond",
       "minute",
@@ -175,14 +174,11 @@ function isHostObject<Value>(
   return Object(value) === value;
 }
 
-/**
- * Whether `temporal` has every API in `apis` in a form code can call, so
- * code can use it as the Temporal global.
- */
+/** Whether `temporal` has every API in `apis` in a form code can call. */
 function hasTemporalApis(
   temporal: NonNullable<HostTemporalNamespace>,
   apis: TemporalApis
-): temporal is NonNullable<HostTemporalNamespace> & typeof Temporal {
+): boolean {
   return Object.entries(apis).every(([name, members]) => {
     const value = temporal[name];
     const namespace = isHostObject(value) ? value : undefined;
@@ -243,26 +239,75 @@ function hasInstanceFunctions(
   );
 }
 
+/** A host value as an object, or a TypeError when the host gave another. */
+function hostObject<Value>(
+  value: Value
+): Value & NonNullable<HostTemporalNamespace> {
+  if (isHostObject(value)) return value;
+  throw new TypeError(
+    "The host Temporal returned a value that isn't an object."
+  );
+}
+
+/**
+ * Calls the host value's method `name`, or throws a TypeError when it has
+ * none. The answer stays unknown until a check reads it.
+ */
+function callHostMethod<Target>(
+  target: Target,
+  name: string,
+  ...args: readonly unknown[]
+): unknown {
+  const host = hostObject(target);
+  const method = host[name];
+  if (!isFunction(method)) {
+    throw new TypeError(`The host Temporal has no ${name} method.`);
+  }
+  return Reflect.apply(method, host, args);
+}
+
 /**
  * Whether the date arithmetic and time zone conversions Workspace code relies
  * on give the right answers in `timeZone` across a daylight saving change.
  * Central European clocks skip 02:00–03:00 on 2026-03-29.
  */
 function convertsAcrossDaylightSavingChange(
-  temporal: typeof Temporal,
+  temporal: NonNullable<HostTemporalNamespace>,
   timeZone: string
 ): boolean {
-  const { Instant, PlainDate, PlainDateTime } = temporal;
-  const afterChange = Instant.from("2026-03-29T01:30:00Z");
+  const afterChange = callHostMethod(
+    temporal.Instant,
+    "from",
+    "2026-03-29T01:30:00Z"
+  );
+  const dayAfter = callHostMethod(
+    callHostMethod(
+      callHostMethod(temporal.PlainDate, "from", "2026-03-28"),
+      "add",
+      { days: 1 }
+    ),
+    "toZonedDateTime",
+    timeZone
+  );
+  const wallClockInstant = callHostMethod(
+    callHostMethod(
+      callHostMethod(temporal.PlainDateTime, "from", "2026-03-29T03:30"),
+      "toZonedDateTime",
+      timeZone
+    ),
+    "toInstant"
+  );
+  const localTime = callHostMethod(
+    callHostMethod(
+      callHostMethod(afterChange, "toZonedDateTimeISO", timeZone),
+      "toPlainTime"
+    ),
+    "toString"
+  );
   return (
-    PlainDate.from("2026-03-28").add({ days: 1 }).toZonedDateTime(timeZone)
-      .hoursInDay === 23 &&
-    PlainDateTime.from("2026-03-29T03:30")
-      .toZonedDateTime(timeZone)
-      .toInstant()
-      .equals(afterChange) &&
-    afterChange.toZonedDateTimeISO(timeZone).toPlainTime().toString() ===
-      "03:30:00"
+    hostObject(dayAfter).hoursInDay === 23 &&
+    callHostMethod(wallClockInstant, "equals", afterChange) === true &&
+    localTime === "03:30:00"
   );
 }
 

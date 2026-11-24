@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import {
   MockPaymentWebhookError,
   MockPaymentWebhookService,
@@ -9,12 +9,13 @@ import {
   defineWebhookRoute,
   WebhookRefusal,
 } from "@/shared/backend/service-route";
+import { isParsedJson } from "@/shared/utils/parsed-json";
 
 const processMockWebhookRequest = Effect.fn("processMockPaymentWebhookRequest")(
   function* (request: Request) {
     const webhooks = yield* MockPaymentWebhookService;
     const payload = yield* Effect.tryPromise(() => request.json()).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Schema.Json)),
+      Effect.filterOrFail(isParsedJson),
       Effect.mapError(
         () =>
           new MockPaymentWebhookError({

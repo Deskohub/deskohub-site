@@ -1,10 +1,28 @@
 import {
   type AuthenticationResponseJSON,
-  type AuthenticatorTransportFuture,
   base64URLStringToBuffer,
   bufferToBase64URLString,
+  type PublicKeyCredentialDescriptorFuture,
   type PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
+
+declare global {
+  interface CredentialsContainer {
+    // WebAuthn types a descriptor's transports as DOMString values, so a
+    // browser skips the ones it doesn't know; TypeScript's DOM lib lists only
+    // five of the transports a passkey can record, without `smart-card`.
+    get(
+      options: Omit<CredentialRequestOptions, "publicKey"> & {
+        readonly publicKey: Omit<
+          PublicKeyCredentialRequestOptions,
+          "allowCredentials"
+        > & {
+          readonly allowCredentials?: PublicKeyCredentialDescriptorFuture[];
+        };
+      }
+    ): Promise<Credential | null>;
+  }
+}
 
 /** A passkey assertion as the server verifies it. */
 export type PasskeyAssertion = Omit<
@@ -12,33 +30,17 @@ export type PasskeyAssertion = Omit<
   "clientExtensionResults"
 >;
 
-const browserTransports = [
-  "ble",
-  "hybrid",
-  "internal",
-  "nfc",
-  "usb",
-] as const satisfies readonly AuthenticatorTransport[];
-
-// The browser's types list fewer transports than the server records, such as
-// `smart-card`; a request passes on only the ones they list.
-const isBrowserTransport = (
-  transport: AuthenticatorTransportFuture
-): transport is AuthenticatorTransport =>
-  browserTransports.some((known) => known === transport);
-
 // Conditional requests need an empty allow list, and an empty one would
 // block a modal request.
 const toAllowCredentials = (
   { allowCredentials }: PublicKeyCredentialRequestOptionsJSON,
   conditional: boolean
-): PublicKeyCredentialDescriptor[] | undefined => {
+): PublicKeyCredentialDescriptorFuture[] | undefined => {
   if (conditional) return [];
   if (!allowCredentials?.length) return undefined;
   return allowCredentials.map((descriptor) => ({
     ...descriptor,
     id: base64URLStringToBuffer(descriptor.id),
-    transports: descriptor.transports?.filter(isBrowserTransport),
   }));
 };
 

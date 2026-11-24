@@ -169,7 +169,7 @@ describe("passkey assertions", () => {
     await expect(request()).rejects.toThrow(Error);
   });
 
-  test("passes on only the transports the browser's request accepts", async () => {
+  test("passes on every transport the passkey recorded", async () => {
     await getPasskeyAssertion(
       {
         ...requestOptions,
@@ -185,6 +185,6 @@ describe("passkey assertions", () => {
     );
 
     const [allowed] = requested().publicKey.allowCredentials ?? [];
-    expect(allowed?.transports).toEqual(["usb", "hybrid"]);
+    expect(allowed?.transports).toEqual(["usb", "smart-card", "hybrid"]);
   });
 });
