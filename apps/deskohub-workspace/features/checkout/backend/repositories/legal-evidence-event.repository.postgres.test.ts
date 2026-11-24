@@ -8,6 +8,7 @@ import {
   type LegalEvidenceEventId,
   paymentSubmitLegalEvidenceSource,
 } from "@/features/checkout/legal-evidence";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { LegalEvidenceEventRepository } from "./legal-evidence-event.repository";
 
@@ -109,6 +110,21 @@ describe.skipIf(!testDatabase)(
               ...makeEvidence("termsAndConditions"),
               acknowledgements: { earlyPerformanceConsent: false } as never,
             },
+          })
+        )
+      );
+
+      expect(failure).toMatchObject({ _tag: "LegalEvidenceEventInputError" });
+    });
+
+    test("rejects evidence for a reservation without an order of its own", async () => {
+      const failure = await run((repository) =>
+        Effect.flip(
+          repository.record({
+            workspaceReservationId: workspaceReservationIdSchema.make(
+              "review-sample-0123456789abcdefghijkl"
+            ),
+            evidence: makeEvidence("termsAndConditions"),
           })
         )
       );

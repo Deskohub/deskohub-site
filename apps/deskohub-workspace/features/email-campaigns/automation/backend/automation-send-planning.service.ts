@@ -118,12 +118,13 @@ const atSendStep = (extra?: SQL) => sql`exists (
   )`;
 
 /** An unplanned `ready` run at its version's Send step. */
-const readyToSend: SQL = and(
-  eq(runs.status, "active"),
-  eq(runs.phase, "ready"),
-  isNull(runs.workUnitId),
-  atSendStep()
-)!;
+const readyToSend: SQL =
+  and(
+    eq(runs.status, "active"),
+    eq(runs.phase, "ready"),
+    isNull(runs.workUnitId),
+    atSendStep()
+  ) ?? sql`false`;
 
 export class AutomationSendPlanning extends Context.Service<
   AutomationSendPlanning,

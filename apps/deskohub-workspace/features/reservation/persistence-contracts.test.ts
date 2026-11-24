@@ -7,13 +7,16 @@ import {
   test,
 } from "bun:test";
 import "@/shared/polyfills/temporal";
+import { createHash } from "node:crypto";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import { workspaceMeetingRoomCatalog } from "@/features/checkout/product-catalog";
 import { getMeetingRoomReservationInterval } from "./meeting-room-reservation-time";
 import {
+  findReservationOrderId,
   getStoredWorkspaceReservationDetails,
   storedWorkspaceReservationDetailsSchema,
+  workspaceReservationIdSchema,
 } from "./persistence-contracts";
 import { reservationOrderSchema } from "./reservation-order";
 
@@ -112,6 +115,28 @@ describe("stored reservation snapshot identity", () => {
   test("still reads snapshots written before they recorded the identity", () => {
     for (const legacy of [{ kind: "meeting-room" }, { kind: "office" }]) {
       expect(decodeStoredDetails(legacy)).toEqual(legacy);
+    }
+  });
+});
+
+describe("reservation order identity", () => {
+  test("finds the mirrored order of a standalone reservation", () => {
+    const id = "0198c1a2-3b4c-7d5e-8f90-1a2b3c4d5e6f";
+
+    expect(
+      findReservationOrderId(workspaceReservationIdSchema.make(id))
+    ).toEqual(Option.some(id));
+  });
+
+  test("finds no order for unlimited-pass days or review samples", () => {
+    const passDayId = createHash("sha256")
+      .update("unlimited-pass-day:pass:2026-11-24")
+      .digest("hex");
+
+    for (const id of [passDayId, "review-sample-0123456789abcdefghijkl"]) {
+      expect(
+        findReservationOrderId(workspaceReservationIdSchema.make(id))
+      ).toEqual(Option.none());
     }
   });
 });

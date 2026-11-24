@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { Locale } from "@/features/i18n";
-import { cn } from "@/shared/utils";
+import { cn, type VariableStyle } from "@/shared/utils";
 import { formatWeekday } from "@/shared/utils/date-time-format";
 import type {
   AdministrationReservationActivity,
@@ -31,16 +31,14 @@ export const getReservationActivityCountAppearance = (
   count: number
 ): ReservationActivityDayAppearance => {
   const intensity = getReservationActivityIntensity(count);
-  return intensity === 0
-    ? { className: emptyDayClassName }
-    : {
-        className: "bg-aquamarine-green/(--reservation-activity-intensity)",
-        style: {
-          "--reservation-activity-intensity": `${
-            Math.round(intensity * 1000) / 10
-          }%`,
-        } as CSSProperties,
-      };
+  if (intensity === 0) return { className: emptyDayClassName };
+  const style: VariableStyle<"reservation-activity-intensity"> = {
+    "--reservation-activity-intensity": `${Math.round(intensity * 1000) / 10}%`,
+  };
+  return {
+    className: "bg-aquamarine-green/(--reservation-activity-intensity)",
+    style,
+  };
 };
 
 const emptyDayClassName = "bg-navy-blue/[0.035]";

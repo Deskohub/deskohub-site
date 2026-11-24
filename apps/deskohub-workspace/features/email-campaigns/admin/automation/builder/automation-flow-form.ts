@@ -1,3 +1,4 @@
+import type { AudienceFilterOf } from "@deskohub/workspace-admin-api";
 import {
   type AutomationFlowType as AutomationFlow,
   AutomationStep,
@@ -6,6 +7,7 @@ import {
 import { Schema } from "effect";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
+import type { AudienceFilterLeaf } from "../../audiences/audience-filter-editing";
 import { emptyFlowSteps } from "./automation-flow-editing";
 
 /**
@@ -31,8 +33,24 @@ type AutomationFlowFormSchema = ReturnType<
 export type AutomationFlowFormValues = AutomationFlowFormSchema["Encoded"];
 export type AutomationFlowFormOutput = AutomationFlowFormSchema["Type"];
 
-/** One step as the form holds it. */
-export type FlowStepValue = AutomationFlowFormValues["steps"][number];
+type StepEncoded = AutomationFlowFormValues["steps"][number];
+
+/**
+ * One step as the form holds it. A condition step's saved-audience
+ * membership may have no audience picked yet, which only submission rejects.
+ */
+export type FlowStepValue =
+  | Exclude<StepEncoded, { readonly _tag: "Condition" }>
+  | (Omit<Extract<StepEncoded, { readonly _tag: "Condition" }>, "filter"> & {
+      readonly filter: AudienceFilterOf<AudienceFilterLeaf>;
+    });
+
+/** The flow builder's values while the operator edits them. */
+export type AutomationFlowDraftValues = Omit<
+  AutomationFlowFormValues,
+  "steps"
+> & { readonly steps: readonly FlowStepValue[] };
+
 /** The trigger as the form holds it, once chosen. */
 export type FlowTriggerValue = NonNullable<AutomationFlowFormValues["trigger"]>;
 

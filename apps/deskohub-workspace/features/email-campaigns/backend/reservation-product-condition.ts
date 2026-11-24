@@ -66,4 +66,4 @@ export const reservationProductCondition = ({
           )
         : sql`false`
     )
-  )!;
+  ) ?? sql`false`;

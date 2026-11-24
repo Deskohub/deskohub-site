@@ -202,6 +202,7 @@ const createFakeFamily = (
 ) => ({
   fallback: mock((_locale: string): ReactNode => "loading reservation form"),
   kind: "cowork" as const,
+  loadPageData: async () => undefined,
   pathname: "/reservation/cowork" as const,
   prefillsContact: true,
   restore: mock(

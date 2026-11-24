@@ -16,7 +16,7 @@ import type {
   AudienceCandidate,
   AudienceDateFacts,
   AudienceDateRequest,
-  ConcreteCountParams,
+  CountParamsInContext,
 } from "../audience-filter";
 import {
   type DatePeriodBounds,
@@ -70,16 +70,25 @@ type Resolved<Value> = Effect.Effect<Value, CampaignRecipientResolutionError>;
  */
 export type AudienceCountResolver<Params> = {
   readonly count: (
-    request: {
-      readonly attribute: string;
-      readonly params: ConcreteCountParams<Params>;
-      readonly reservationsAsOf?: Temporal.Instant;
-    },
+    request: AudienceCountResolverRequest<Params>,
     resolution: AudienceResolution
   ) => Resolved<ReadonlyMap<DotyposCustomerId, number>>;
-  readonly readsVisits: (request: {
-    readonly params: ConcreteCountParams<Params>;
-  }) => boolean;
+  readonly readsVisits: (
+    request: Pick<AudienceCountResolverRequest<Params>, "params" | "inContext">
+  ) => boolean;
+};
+
+/**
+ * A count request as its attribute's resolver reads it: the condition's
+ * params as decoded, fixed through `inContext` where the count needs them.
+ * Requests that share a lookup agree only on their fixed params, so a
+ * resolver fixes each period and campaign source of its own params through
+ * `inContext` and never reads them raw.
+ */
+type AudienceCountResolverRequest<Params> = {
+  readonly params: Params;
+  readonly inContext: CountParamsInContext;
+  readonly reservationsAsOf?: Temporal.Instant;
 };
 
 /**
@@ -182,15 +191,14 @@ const database = CampaignRecipientResolutionError.database;
 const countReservations = (
   {
     params: { dateBasis, period, status, stay, payment, product },
+    inContext,
     reservationsAsOf,
-  }: {
-    readonly params: ConcreteCountParams<
-      AudienceConditionOf<"reservationCount">["params"]
-    >;
-    readonly reservationsAsOf?: Temporal.Instant;
-  },
+  }: AudienceCountResolverRequest<
+    AudienceConditionOf<"reservationCount">["params"]
+  >,
   { candidates, scope, visitsIn, visitEndsIn }: AudienceResolution
 ) => {
+  const bounds = inContext.bounds(period);
   const selection = {
     ...(status && { status }),
     ...(product && { product }),
@@ -219,14 +227,14 @@ const countReservations = (
       )
     );
   return Match.value(dateBasis).pipe(
-    Match.when("booking", () => countSelected({ booked: period })),
+    Match.when("booking", () => countSelected({ booked: bounds })),
     Match.when("visitEnd", () =>
-      countVisits(visitEndsIn(period, status !== undefined))
+      countVisits(visitEndsIn(bounds, status !== undefined))
     ),
     Match.when("visit", () =>
-      isUnboundedPeriod(period) && stay === undefined
+      isUnboundedPeriod(bounds) && stay === undefined
         ? countSelected({})
-        : countVisits(visitsIn(period))
+        : countVisits(visitsIn(bounds))
     ),
     Match.exhaustive
   );
@@ -321,27 +329,29 @@ const visitDates =
 export const audienceAttributeResolvers: AudienceAttributeResolvers = {
   reservationCount: {
     count: countReservations,
-    readsVisits: ({ params: { dateBasis, period, stay } }) =>
+    readsVisits: ({ params: { dateBasis, period, stay }, inContext }) =>
       dateBasis === "visitEnd" ||
       (dateBasis === "visit" &&
-        (stay !== undefined || !isUnboundedPeriod(period))),
+        (stay !== undefined || !isUnboundedPeriod(inContext.bounds(period)))),
   },
   campaignEmailCount: {
     // The evaluating campaign without one (`null`) has sent nobody anything.
     count: (
-      { params: { purpose, period, campaign } },
+      { params: { purpose, period, campaign: source }, inContext },
       { candidates, scope }
-    ) =>
-      campaign === null
+    ) => {
+      const campaign = source && inContext.campaign(source);
+      return campaign === null
         ? Effect.succeed(new Map<DotyposCustomerId, number>())
         : candidates
             .countReceivedCampaignEmails({
               ...(purpose !== "any" && { purpose }),
               ...(campaign && { campaignId: campaign }),
-              dispatched: period,
+              dispatched: inContext.bounds(period),
               customers: scopedCustomers(scope),
             })
-            .pipe(Effect.mapError(database)),
+            .pipe(Effect.mapError(database));
+    },
     readsVisits: () => false,
   },
   firstVisit: { dates: visitDates("earliest"), readsVisits: true },

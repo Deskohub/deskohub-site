@@ -4,6 +4,7 @@ import {
   containsNode,
   identifierNames,
   methodCallsNamed,
+  nodesOf,
   parseSource,
   stringLiterals,
   topLevelConstInitializer,
@@ -51,5 +52,18 @@ describe("source-ast structured checks", () => {
     );
     expect(identifierNames(ast).has("process")).toBe(true);
     expect(identifierNames(ast).has("stdout")).toBe(true);
+  });
+
+  test("walks syntax nodes only, not the parser's tokens", () => {
+    const types = nodesOf(parseSource("const sample = 1;")).map(
+      (node) => node.type
+    );
+    expect(types).toEqual([
+      "Program",
+      "VariableDeclaration",
+      "VariableDeclarator",
+      "Identifier",
+      "Literal",
+    ]);
   });
 });

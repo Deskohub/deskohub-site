@@ -1,10 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import {
-  type AresBusinessLookupResult,
-  lookupAresBusiness,
-} from "@/features/account/actions";
+import { lookupAresBusiness } from "@/features/account/actions";
 import type { AresBusinessBillingDraft } from "@/features/account/backend/ares-business-draft";
 import { type Locale, m } from "@/features/i18n";
 import { useWorkspaceAction } from "@/shared/utils/use-workspace-action";
@@ -34,8 +31,7 @@ export function useAresBusinessLookup(locale: Locale) {
   };
 
   const action = useWorkspaceAction(lookupAresBusiness, {
-    onSuccess: ({ data }) => {
-      const result = data as AresBusinessLookupResult | undefined;
+    onSuccess: ({ data: result }) => {
       if (!result) return;
       settle(
         result.status === "found"

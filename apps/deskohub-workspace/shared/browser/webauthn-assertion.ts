@@ -2,8 +2,26 @@ import {
   type AuthenticationResponseJSON,
   base64URLStringToBuffer,
   bufferToBase64URLString,
+  type PublicKeyCredentialDescriptorFuture,
   type PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
+
+// WebAuthn types a descriptor's transports as DOMString values, so a browser
+// skips the ones it doesn't know; TypeScript's DOM lib lists only five of the
+// transports a passkey can record, without `smart-card`. Seen through this
+// method signature, `navigator.credentials` accepts every transport.
+type PasskeyCredentials = {
+  get(
+    options?: Omit<CredentialRequestOptions, "publicKey"> & {
+      readonly publicKey?: Omit<
+        PublicKeyCredentialRequestOptions,
+        "allowCredentials"
+      > & {
+        readonly allowCredentials?: PublicKeyCredentialDescriptorFuture[];
+      };
+    }
+  ): Promise<Credential | null>;
+};
 
 /** A passkey assertion as the server verifies it. */
 export type PasskeyAssertion = Omit<
@@ -16,13 +34,12 @@ export type PasskeyAssertion = Omit<
 const toAllowCredentials = (
   { allowCredentials }: PublicKeyCredentialRequestOptionsJSON,
   conditional: boolean
-): PublicKeyCredentialDescriptor[] | undefined => {
+): PublicKeyCredentialDescriptorFuture[] | undefined => {
   if (conditional) return [];
   if (!allowCredentials?.length) return undefined;
   return allowCredentials.map((descriptor) => ({
     ...descriptor,
     id: base64URLStringToBuffer(descriptor.id),
-    transports: descriptor.transports as AuthenticatorTransport[] | undefined,
   }));
 };
 
@@ -43,7 +60,8 @@ export const getPasskeyAssertion = async (
     signal,
   }: { readonly conditional: boolean; readonly signal: AbortSignal }
 ): Promise<PasskeyAssertion> => {
-  const credential = await navigator.credentials.get({
+  const credentials: PasskeyCredentials = navigator.credentials;
+  const credential = await credentials.get({
     mediation: conditional ? "conditional" : undefined,
     publicKey: {
       ...options,
@@ -53,9 +71,18 @@ export const getPasskeyAssertion = async (
     signal,
   });
   if (credential === null) throw new Error("No passkey was picked.");
-  const { id, rawId, response, type, authenticatorAttachment } =
-    credential as PublicKeyCredential;
-  const assertion = response as AuthenticatorAssertionResponse;
+  if (!(credential instanceof PublicKeyCredential)) {
+    throw new Error("The browser returned a credential that isn't a passkey.");
+  }
+  const {
+    id,
+    rawId,
+    response: assertion,
+    authenticatorAttachment,
+  } = credential;
+  if (!(assertion instanceof AuthenticatorAssertionResponse)) {
+    throw new Error("The browser returned a passkey without an assertion.");
+  }
   return {
     id,
     rawId: bufferToBase64URLString(rawId),
@@ -67,7 +94,7 @@ export const getPasskeyAssertion = async (
         ? bufferToBase64URLString(assertion.userHandle)
         : undefined,
     },
-    type: type as PasskeyAssertion["type"],
+    type: "public-key",
     authenticatorAttachment:
       authenticatorAttachment === "platform" ||
       authenticatorAttachment === "cross-platform"

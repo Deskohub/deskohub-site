@@ -48,6 +48,7 @@ export function PassTierInput({
         name="tier"
         presentation="illustrated"
         value={tier}
+        values={passTiers}
         onChange={onChange}
       >
         {passTiers.map((option) => {

@@ -198,7 +198,8 @@ const readPostHogCliJson: ReadPostHogCliJson = (operation, input) =>
         throw new Error(`PostHog CLI exited with status ${exitCode}.`);
       }
 
-      return JSON.parse(stdout) as unknown;
+      const output: unknown = JSON.parse(stdout);
+      return output;
     },
     catch: () =>
       new PostHogFeatureFlagError({

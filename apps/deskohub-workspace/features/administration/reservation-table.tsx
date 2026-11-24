@@ -7,7 +7,10 @@ import { useRouteLocale } from "@/features/i18n/route-locale";
 import type { ReservationPassLink } from "@/features/passes/admin/pass-reads";
 import { ReservationPassBadge } from "@/features/passes/admin/reservation-pass-badge";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
-import { StatusBadge } from "@/shared/components/ui/status-badge";
+import {
+  StatusBadge,
+  type StatusTone,
+} from "@/shared/components/ui/status-badge";
 import { formatMoney } from "@/shared/money/money";
 import { AdministrationLink as Link } from "./admin-link";
 import type { AdministrationReservationSummary } from "./administration.service";
@@ -41,6 +44,15 @@ import {
 import { getAdministrationReservationProductTitle } from "./reservation-product";
 import type { AdministrationStatusGroup } from "./reservation-status";
 
+const statusGroupTones: Readonly<
+  Record<AdministrationStatusGroup, StatusTone>
+> = {
+  attention: "attention",
+  cancelled: "neutral",
+  complete: "positive",
+  in_progress: "progress",
+};
+
 function ReservationStatusBadge({
   group,
   label,
@@ -48,20 +60,7 @@ function ReservationStatusBadge({
   readonly group: AdministrationStatusGroup;
   readonly label: string;
 }) {
-  return (
-    <StatusBadge
-      tone={
-        {
-          attention: "attention",
-          cancelled: "neutral",
-          complete: "positive",
-          in_progress: "progress",
-        }[group] as "attention" | "neutral" | "positive" | "progress"
-      }
-    >
-      {label}
-    </StatusBadge>
-  );
+  return <StatusBadge tone={statusGroupTones[group]}>{label}</StatusBadge>;
 }
 
 export function ReservationTable({

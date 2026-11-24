@@ -117,6 +117,7 @@ type HarnessValues = {
   readonly billing: { readonly purpose: "personal"; readonly invoice: "none" };
   readonly date: string;
   readonly email: string;
+  readonly emailConfirmation?: string;
   readonly marketingConsent: boolean;
   readonly name: string;
   readonly phone: string;
@@ -258,6 +259,11 @@ function Harness({
         onPendingAvailability
       )}
       checkoutCustomer={checkoutCustomer}
+      fields={{
+        selection: ["date"],
+        emailConfirmation: "emailConfirmation",
+        marketingConsent: { name: "marketingConsent", value: true },
+      }}
       form={form}
       getReservation={({ date: reservationDate, email, name, phone }) =>
         ({ kind, reservationDate, email, name, phone }) as never
@@ -269,9 +275,8 @@ function Harness({
       }}
       selection={{
         kind,
-        fromSearchParams: (searchParams) => ({
-          date: searchParams.get("date") ?? "",
-        }),
+        fromSearchParams: (searchParams, visit) =>
+          visit("date", searchParams.get("date") ?? ""),
       }}
     >
       <output data-testid="date">{date}</output>

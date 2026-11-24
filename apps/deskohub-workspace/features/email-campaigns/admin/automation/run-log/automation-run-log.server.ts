@@ -51,11 +51,11 @@ export interface AutomationRunLog {
   readonly flow: AutomationFlow | null;
 }
 
-const optionalField = <K extends string, A>(key: K, value: Option.Option<A>) =>
-  Option.match(value, {
-    onNone: () => ({}),
-    onSome: (present) => ({ [key]: present }) as { readonly [P in K]: A },
-  });
+/** The field `field` builds from a present value, or no field. */
+const optionalField = <A, Field extends object>(
+  value: Option.Option<A>,
+  field: (present: A) => Field
+) => Option.match(value, { onNone: () => ({}), onSome: field });
 
 /** The flows of `versionNumbers`; a version that fails to load names no steps. */
 const loadFlows = (campaignId: CampaignId, versionNumbers: Iterable<number>) =>
@@ -84,7 +84,9 @@ const loadRunLog = Effect.fn("AutomationRunLog.load")(function* (
   filters: AutomationRunFilters
 ) {
   const campaignId = campaign.id;
-  const version = optionalField("versionNumber", filters.versionNumber);
+  const version = optionalField(filters.versionNumber, (versionNumber) => ({
+    versionNumber,
+  }));
   const [summary, runs, health, checkedAt] = yield* Effect.all(
     [
       Effect.result(
@@ -105,12 +107,16 @@ const loadRunLog = Effect.fn("AutomationRunLog.load")(function* (
         invokeCampaignOperation("listAutomationRuns", {
           campaignId,
           ...version,
-          ...optionalField("state", filters.state),
-          ...optionalField("outcome", filters.outcome),
-          ...optionalField("skipReason", filters.skipReason),
-          ...optionalField("stepId", filters.stepId),
-          ...optionalField("customerId", filters.customerId),
-          ...optionalField("cursor", filters.cursor),
+          ...optionalField(filters.state, (state) => ({ state })),
+          ...optionalField(filters.outcome, (outcome) => ({ outcome })),
+          ...optionalField(filters.skipReason, (skipReason) => ({
+            skipReason,
+          })),
+          ...optionalField(filters.stepId, (stepId) => ({ stepId })),
+          ...optionalField(filters.customerId, (customerId) => ({
+            customerId,
+          })),
+          ...optionalField(filters.cursor, (cursor) => ({ cursor })),
         })
       ),
       Effect.result(invokeCampaignOperation("getAutomationEngineHealth", {})),

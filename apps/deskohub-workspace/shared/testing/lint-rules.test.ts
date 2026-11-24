@@ -946,6 +946,26 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects angle-bracket assertions in another package", "export const value = <Settled>input;\n", true, "packages/standard-schema/src/index.ts"],
       ["permits generated package modules", "export const value = input as Settled;\n", false, "packages/dotypos/src/generated/effect.gen.ts"],
       ["permits assertions outside packages", "export const value = input as Settled;\n", false, "apps/dhw/src/probe.ts"],
+      ["rejects Workspace feature assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/features/reservation/backend/probe.ts"],
+      ["rejects Workspace route assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/app/api/workspace/probe/route.ts"],
+      ["rejects Workspace component assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/shared/components/probe.tsx"],
+      ["rejects Workspace angle-bracket assertions", "export const value = <Settled>input;\n", true, "apps/deskohub-workspace/features/reservation/probe.ts"],
+      ["rejects Workspace database assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/db/probe.ts"],
+      ["rejects Workspace email assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/emails/probe.tsx"],
+      ["rejects Workspace script assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/scripts/probe.ts"],
+      ["rejects Workspace top-level module assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/probe.config.ts"],
+      ["permits Workspace as const", "export const codes = [0, 2] as const;\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.ts"],
+      ["permits Workspace tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.postgres.test.ts"],
+      ["permits Workspace specs", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.spec.ts"],
+      ["permits Workspace Playwright tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.pw.ts"],
+      ["permits Workspace test utilities", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.test-utils.ts"],
+      ["permits Workspace browser harnesses", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.browser-harness.tsx"],
+      ["permits Workspace fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe-fixture.ts"],
+      ["permits Workspace dotted fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/reservation/probe.fixture.ts"],
+      ["permits Workspace testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/shared/testing/probe.ts"],
+      ["permits Workspace E2E", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/e2e/probe.ts"],
+      ["permits Workspace generated modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/generated/probe.ts"],
+      ["permits Workspace Paraglide output", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/i18n/paraglide/probe.ts"],
     ],
   },
   {
@@ -954,6 +974,9 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
     cases: [
       ["rejects package non-null assertions", "export const first = values[0]!;\n", true],
       ["rejects non-null assertions in workspace infrastructure", "export const first = values[0]!;\n", true, "packages/workspace-infrastructure/src/probe.ts"],
+      ["rejects Workspace feature non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/features/reservation/backend/probe.ts"],
+      ["rejects Workspace route non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/app/api/workspace/probe/route.ts"],
+      ["rejects Workspace top-level module non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/probe.config.ts"],
     ],
   },
   {
@@ -1135,9 +1158,42 @@ const productionProbes = [
   "packages/standard-schema/src/probe.mts",
   "packages/standard-schema/src/probe.cts",
 ];
+const workspaceProductionProbes = [
+  "apps/deskohub-workspace/app/api/probe/route.ts",
+  "apps/deskohub-workspace/db/probe.ts",
+  "apps/deskohub-workspace/emails/probe.tsx",
+  "apps/deskohub-workspace/features/reservation/probe.ts",
+  "apps/deskohub-workspace/scripts/probe.ts",
+  "apps/deskohub-workspace/shared/probe.ts",
+  "apps/deskohub-workspace/shared/probe.mts",
+  "apps/deskohub-workspace/features/reservation/probe.cts",
+  "apps/deskohub-workspace/probe.ts",
+  "apps/deskohub-workspace/probe.tsx",
+  "apps/deskohub-workspace/probe.mts",
+  "apps/deskohub-workspace/probe.cts",
+  // Only the listed suffixes right before the extension, and only testing,
+  // generated, and Paraglide directories, are exempt.
+  "apps/deskohub-workspace/features/e2e/loader.mts",
+  "apps/deskohub-workspace/shared/probe.test.config.cts",
+  "apps/deskohub-workspace/probe with spaces.tsx",
+];
 const generatedProbes = [
   "packages/standard-schema/generated/probe.mts",
   "packages/standard-schema/generated/probe.cts",
+];
+// Workspace tests, fixtures, and E2E may still assert.
+const workspaceExemptProbes = [
+  "apps/deskohub-workspace/features/reservation/probe.test.ts",
+  "apps/deskohub-workspace/features/reservation/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/reservation/probe.spec.ts",
+  "apps/deskohub-workspace/features/reservation/probe.pw.ts",
+  "apps/deskohub-workspace/features/reservation/probe.test-utils.ts",
+  "apps/deskohub-workspace/features/reservation/probe.browser-harness.tsx",
+  "apps/deskohub-workspace/features/reservation/probe-fixture.ts",
+  "apps/deskohub-workspace/features/reservation/probe.fixture.ts",
+  "apps/deskohub-workspace/features/generated/probe.ts",
+  "apps/deskohub-workspace/features/i18n/paraglide/probe.ts",
+  "apps/deskohub-workspace/shared/testing/probe.ts",
 ];
 
 type LintReport = {
@@ -1163,7 +1219,16 @@ const diagnosticsByPath = (report: LintReport, cwd: string) => {
 
 const lintProduction = async (cwd: string, command: string) => {
   const result = await runCommand(
-    ["bash", "-c", `${command} --reporter=json --max-diagnostics=none`],
+    [
+      "bash",
+      "-c",
+      // A script may end in `find -exec … {} +`, so the flags follow the
+      // Biome subcommand instead of the whole command.
+      command.replace(
+        /\bbiome (check|lint)\b/,
+        "$& --reporter=json --max-diagnostics=none"
+      ),
+    ],
     {
       cwd,
       env: {
@@ -1175,8 +1240,12 @@ const lintProduction = async (cwd: string, command: string) => {
   return diagnosticsByPath(JSON.parse(result.stdout) as LintReport, cwd);
 };
 
-const expectAssertionDiagnostics = (byPath: Map<string, string[]>) => {
-  for (const probe of productionProbes) {
+const expectAssertionDiagnostics = (
+  byPath: Map<string, string[]>,
+  rejected: readonly string[],
+  exempt: readonly string[]
+) => {
+  for (const probe of rejected) {
     const messages = byPath.get(join(productionRoot, probe)) ?? [];
     expect({
       probe,
@@ -1193,12 +1262,15 @@ const expectAssertionDiagnostics = (byPath: Map<string, string[]>) => {
       ),
     }).toEqual({ probe, nonNull: true });
   }
-  for (const probe of generatedProbes) {
-    expect(byPath.get(join(productionRoot, probe)) ?? []).toEqual([]);
+  for (const probe of exempt) {
+    expect({
+      probe,
+      messages: byPath.get(join(productionRoot, probe)) ?? [],
+    }).toEqual({ probe, messages: [] });
   }
 };
 
-test("production Biome config rejects package assertions in every module kind from the root and from the package", async () => {
+test("production Biome config rejects package and Workspace production assertions from the root and from each lint script", async () => {
   writeCase(
     "production",
     "biome.json",
@@ -1210,9 +1282,16 @@ test("production Biome config rejects package assertions in every module kind fr
       ),
     })
   );
-  for (const probe of [...productionProbes, ...generatedProbes]) {
+  for (const probe of [
+    ...productionProbes,
+    ...generatedProbes,
+    ...workspaceProductionProbes,
+    ...workspaceExemptProbes,
+  ]) {
     writeCase("production", probe, assertionProbe);
   }
+  // The Workspace lint script resolves the root config through git.
+  await runCommand(["git", "init", "--quiet"], { cwd: productionRoot });
   const packageManifest = JSON.parse(
     readFileSync(
       join(repositoryRoot, "packages/standard-schema/package.json"),
@@ -1220,14 +1299,36 @@ test("production Biome config rejects package assertions in every module kind fr
     )
   ) as { readonly scripts: { readonly lint: string } };
 
+  const workspaceManifest = JSON.parse(
+    readFileSync(
+      join(repositoryRoot, "apps/deskohub-workspace/package.json"),
+      "utf8"
+    )
+  ) as { readonly scripts: { readonly "lint:biome": string } };
+
   expectAssertionDiagnostics(
-    await lintProduction(productionRoot, "biome lint packages")
+    await lintProduction(
+      productionRoot,
+      "biome lint packages apps/deskohub-workspace"
+    ),
+    [...productionProbes, ...workspaceProductionProbes],
+    [...generatedProbes, ...workspaceExemptProbes]
   );
   expectAssertionDiagnostics(
     await lintProduction(
       join(productionRoot, "packages/standard-schema"),
       packageManifest.scripts.lint
-    )
+    ),
+    productionProbes,
+    generatedProbes
+  );
+  expectAssertionDiagnostics(
+    await lintProduction(
+      join(productionRoot, "apps/deskohub-workspace"),
+      workspaceManifest.scripts["lint:biome"]
+    ),
+    workspaceProductionProbes,
+    workspaceExemptProbes
   );
 });
 

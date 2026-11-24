@@ -126,14 +126,13 @@ export const abandonedContainers = (
   dockerPsOutput
     .split("\n")
     .map((line) => line.trim().split(/\s+/))
-    .filter(([container, owner]) => {
+    .flatMap(([container, owner]) => {
+      if (!container) return [];
       const pid = Number(owner);
-      return (
-        Boolean(container) &&
-        !(Number.isInteger(pid) && pid > 0 && isRunning(pid))
-      );
-    })
-    .map(([container]) => container as string);
+      return Number.isInteger(pid) && pid > 0 && isRunning(pid)
+        ? []
+        : [container];
+    });
 
 const isRunning = (pid: number): boolean => {
   try {

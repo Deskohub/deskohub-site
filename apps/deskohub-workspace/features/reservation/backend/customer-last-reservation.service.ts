@@ -20,9 +20,10 @@ import { getMeetingRoomReservationDurationKey } from "@/features/reservation/mee
 import { findMeetingRoomReservationDuration } from "@/features/reservation/meeting-room-reservation-time";
 import { getOfficeReservationSelection } from "@/features/reservation/office-reservation";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
-import type {
-  CustomerLastReservation,
-  CustomerLastReservationForKind,
+import {
+  type CustomerLastReservation,
+  type CustomerLastReservationForKind,
+  isCustomerLastReservationForKind,
 } from "@/features/reservation/reservation-existing-customer";
 import type { WorkspaceReservationKind } from "@/features/reservation/reservation-kind";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
@@ -85,90 +86,108 @@ export class CustomerLastReservationService extends Context.Service<
               )
           : Effect.succeed(Option.none());
 
-      const load = Effect.fn("CustomerLastReservationService.load")(function* (
-        dotyposCustomerId: DotyposCustomerId,
-        kind: WorkspaceReservationKind
-      ) {
-        const [row] = yield* db
-          .select({
-            dotyposReservationId: workspaceReservations.dotyposReservationId,
-            reservationDetails: workspaceReservations.reservationDetails,
-          })
-          .from(workspaceReservations)
-          .where(
-            and(
-              eq(workspaceReservations.dotyposCustomerId, dotyposCustomerId),
-              isNotNull(workspaceReservations.reservationConfirmedAt),
-              sql`${StoredReservationDetails.kind} = ${kind}`
+      const loadLatest = Effect.fn("CustomerLastReservationService.load")(
+        function* (
+          dotyposCustomerId: DotyposCustomerId,
+          kind: WorkspaceReservationKind
+        ) {
+          const [row] = yield* db
+            .select({
+              dotyposReservationId: workspaceReservations.dotyposReservationId,
+              reservationDetails: workspaceReservations.reservationDetails,
+            })
+            .from(workspaceReservations)
+            .where(
+              and(
+                eq(workspaceReservations.dotyposCustomerId, dotyposCustomerId),
+                isNotNull(workspaceReservations.reservationConfirmedAt),
+                sql`${StoredReservationDetails.kind} = ${kind}`
+              )
             )
-          )
-          .orderBy(desc(workspaceReservations.createdAt))
-          .limit(1);
-        if (!row) return null;
-        // A malformed document names no options to repeat.
-        const stored = StoredReservationDetails.project(row.reservationDetails);
-        if (Option.isNone(stored)) return null;
-        const reservationDetails = stored.value;
-        const booking = {
-          dotyposReservationId: row.dotyposReservationId,
-          reservationDetails,
-        };
+            .orderBy(desc(workspaceReservations.createdAt))
+            .limit(1);
+          if (!row) return null;
+          // A malformed document names no options to repeat.
+          const stored = StoredReservationDetails.project(
+            row.reservationDetails
+          );
+          if (Option.isNone(stored)) return null;
+          const reservationDetails = stored.value;
+          const booking = {
+            dotyposReservationId: row.dotyposReservationId,
+            reservationDetails,
+          };
 
-        return yield* Match.value(reservationDetails).pipe(
-          Match.discriminatorsExhaustive("kind")({
-            cowork: (details) =>
-              Effect.succeed<CustomerLastReservation | null>(
-                isWorkspaceCoworkCurrentProductTier(details.entryTier)
-                  ? {
-                      kind: "cowork",
-                      entryTier: details.entryTier,
-                      coffee: details.coffee,
-                      ...(details.monitorOption && {
-                        monitorOption: details.monitorOption,
-                      }),
-                    }
-                  : null
-              ),
-            "meeting-room": () =>
-              readBooked(booking).pipe(
-                Effect.map((booked): CustomerLastReservation | null =>
-                  booked.pipe(
-                    Option.flatMap(({ interval }) => interval),
-                    Option.flatMapNullishOr(findMeetingRoomReservationDuration),
-                    Option.map(
-                      (duration): CustomerLastReservation => ({
-                        kind: "meeting-room",
-                        duration:
-                          getMeetingRoomReservationDurationKey(duration),
-                      })
-                    ),
-                    Option.getOrNull
+          return yield* Match.value(reservationDetails).pipe(
+            Match.discriminatorsExhaustive("kind")({
+              cowork: (details) =>
+                Effect.succeed<CustomerLastReservation | null>(
+                  isWorkspaceCoworkCurrentProductTier(details.entryTier)
+                    ? {
+                        kind: "cowork",
+                        entryTier: details.entryTier,
+                        coffee: details.coffee,
+                        ...(details.monitorOption && {
+                          monitorOption: details.monitorOption,
+                        }),
+                      }
+                    : null
+                ),
+              "meeting-room": () =>
+                readBooked(booking).pipe(
+                  Effect.map((booked): CustomerLastReservation | null =>
+                    booked.pipe(
+                      Option.flatMap(({ interval }) => interval),
+                      Option.flatMapNullishOr(
+                        findMeetingRoomReservationDuration
+                      ),
+                      Option.map(
+                        (duration): CustomerLastReservation => ({
+                          kind: "meeting-room",
+                          duration:
+                            getMeetingRoomReservationDurationKey(duration),
+                        })
+                      ),
+                      Option.getOrNull
+                    )
                   )
-                )
-              ),
-            office: () =>
-              readBooked(booking).pipe(
-                Effect.map((booked): CustomerLastReservation | null =>
-                  booked.pipe(
-                    Option.flatMap(({ interval, seats }) =>
-                      Option.all({ interval, seats })
-                    ),
-                    Option.flatMapNullishOr(({ interval, seats }) =>
-                      getOfficeReservationSelection({ ...interval, seats })
-                    ),
-                    Option.map(
-                      (selection): CustomerLastReservation => ({
-                        kind: "office",
-                        ...selection,
-                      })
-                    ),
-                    Option.getOrNull
+                ),
+              office: () =>
+                readBooked(booking).pipe(
+                  Effect.map((booked): CustomerLastReservation | null =>
+                    booked.pipe(
+                      Option.flatMap(({ interval, seats }) =>
+                        Option.all({ interval, seats })
+                      ),
+                      Option.flatMapNullishOr(({ interval, seats }) =>
+                        getOfficeReservationSelection({ ...interval, seats })
+                      ),
+                      Option.map(
+                        (selection): CustomerLastReservation => ({
+                          kind: "office",
+                          ...selection,
+                        })
+                      ),
+                      Option.getOrNull
+                    )
                   )
-                )
-              ),
-          })
+                ),
+            })
+          );
+        }
+      );
+
+      const load = <Kind extends WorkspaceReservationKind>(
+        dotyposCustomerId: DotyposCustomerId,
+        kind: Kind
+      ) =>
+        loadLatest(dotyposCustomerId, kind).pipe(
+          Effect.map((last) =>
+            last !== null && isCustomerLastReservationForKind(last, kind)
+              ? last
+              : null
+          )
         );
-      }) as ICustomerLastReservationService["load"];
 
       return { load } satisfies ICustomerLastReservationService;
     })

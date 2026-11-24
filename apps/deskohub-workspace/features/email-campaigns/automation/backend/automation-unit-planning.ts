@@ -1,3 +1,4 @@
+import { AutomationRunId } from "@deskohub/workspace-admin-api";
 import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 import { WorkspaceTransaction } from "@/db/database.service";
@@ -6,6 +7,7 @@ import {
   emailCampaignAutomationRuns as runs,
   emailCampaignAutomationWorkUnits as units,
 } from "@/db/schema";
+import { customerEventIdSchema } from "@/shared/backend/customer-events/customer-event";
 import type { AutomationWorkUnitId } from "../automation-identifiers";
 import { automationWorkUnitPriorities } from "../automation-work-units";
 import type { PlannedAutomationUnit } from "./automation-unit-handler";
@@ -101,8 +103,8 @@ export const planAutomationUnits = Effect.fn("automationUnits.plan")(function* (
 
 /** The subjects a unit owns through `runs.work_unit_id` or `customer_events.automation_unit_id` (§1.2.13). */
 const ownedSubjectsSchema = Schema.Struct({
-  runIds: Schema.optional(Schema.Array(Schema.String)),
-  eventIds: Schema.optional(Schema.Array(Schema.String)),
+  runIds: Schema.optional(Schema.Array(AutomationRunId)),
+  eventIds: Schema.optional(Schema.Array(customerEventIdSchema)),
 });
 
 /**
@@ -144,7 +146,7 @@ export const releaseAutomationUnitSubjects = Effect.fn(
       .where(
         inArray(
           runs.id,
-          runOwners.map(({ runId }) => runId as typeof runs.$inferSelect.id)
+          runOwners.map(({ runId }) => runId)
         )
       )
       .orderBy(runs.id)
@@ -174,10 +176,7 @@ export const releaseAutomationUnitSubjects = Effect.fn(
         .set({ automationUnitId: null })
         .where(
           and(
-            inArray(
-              customerEvents.id,
-              eventIds as Array<typeof customerEvents.$inferSelect.id>
-            ),
+            inArray(customerEvents.id, eventIds),
             eq(customerEvents.automationUnitId, unitId)
           )
         ),

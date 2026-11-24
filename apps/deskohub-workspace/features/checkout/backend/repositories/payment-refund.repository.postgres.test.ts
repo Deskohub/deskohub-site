@@ -12,7 +12,7 @@ import {
   type PaymentAttemptId,
   paymentAttemptIdSchema,
 } from "@/features/checkout/checkout-identifiers";
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
@@ -60,7 +60,7 @@ describe.skipIf(!testDatabase)(
       await Effect.runPromise(
         testDatabase.db.insert(paymentAttempts).values({
           id: paymentAttemptId,
-          orderId: reservationOrderId(reservationId),
+          orderId: standaloneReservationOrderId(reservationId),
           workspaceReservationId: reservationId,
           provider: "nexi",
           providerOrderId: NexiOrderIdSchema.make(`order-${id}`),

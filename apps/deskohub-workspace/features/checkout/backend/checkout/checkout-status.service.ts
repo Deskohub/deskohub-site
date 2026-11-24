@@ -42,7 +42,7 @@ import type { StoredCoworkReservationDetails } from "@/features/reservation/cowo
 import type { StoredMeetingRoomReservationDetails } from "@/features/reservation/meeting-room-reservation";
 import type { StoredOfficeReservationDetails } from "@/features/reservation/office-reservation";
 import {
-  reservationOrderId,
+  findReservationOrderId,
   type WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
 import type { ReservationSelection } from "@/features/reservation/selection-path";
@@ -736,9 +736,7 @@ const implementation = Effect.gen(function* () {
     if ("closed" in getPaymentPageToReopen(attempt, now)) return false;
     // The shared continuation authorizes the author and enforces the original
     // deadline. The attempt's age alone applies only to legacy card orders.
-    if (
-      yield* qrPayments.findPaymentWindow(reservationOrderId(reservation.id))
-    ) {
+    if (yield* qrPayments.findPaymentWindow(reservation.id)) {
       return false;
     }
     const observation =
@@ -949,10 +947,16 @@ const implementation = Effect.gen(function* () {
     refreshStatus: Effect.fn("CheckoutStatusService.refreshStatus")(
       function* (input) {
         yield* Effect.logInfo("Checkout status refresh started");
-        const orderId = reservationOrderId(input.orderId);
+        // Pass days and review samples have no order of their own, so no
+        // provider payment to refresh.
+        const ownOrderId = findReservationOrderId(input.orderId);
+        if (Option.isNone(ownOrderId)) {
+          return yield* lookUpStatus(input, undefined);
+        }
+        const orderId = ownOrderId.value;
         // Shared orders settle through payment notifications and the Fio
         // worker. A browser refresh reads their stored outcome.
-        if (yield* qrPayments.findPaymentWindow(orderId)) {
+        if (yield* qrPayments.findPaymentWindow(input.orderId)) {
           return yield* lookUpStatus(input, undefined);
         }
         const verificationStartedAt = yield* Clock.currentTimeMillis;
@@ -995,7 +999,7 @@ const implementation = Effect.gen(function* () {
           } else {
             const latePayment =
               yield* latePaymentVerification.startRecoveryIfSettled({
-                orderId: reservationOrderId(input.orderId),
+                orderId,
                 verificationDeadline: remaining,
               });
             yield* Effect.annotateLogsScoped({ latePayment });

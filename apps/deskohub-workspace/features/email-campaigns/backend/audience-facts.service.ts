@@ -26,7 +26,6 @@ import {
   type AudienceFilter,
   audienceConditionsOf,
   audienceFactKey,
-  type ConcreteCountParams,
   collectAudienceFactRequests,
   viewAudienceCondition,
 } from "../audience-filter";
@@ -162,23 +161,47 @@ const visitInterval = (
 const dotyposStartsBefore = (bounds: DatePeriodBounds) =>
   bounds.startsAtOrBefore?.add({ milliseconds: 1 }) ?? bounds.startsBefore;
 
+/**
+ * A count request as its attribute's resolver dispatch reads it. Dispatch
+ * also takes it as an {@link AudienceCountRequest}, whose condition pairs
+ * each attribute with its own params.
+ */
+type CountRequestFor<Attribute extends AudienceAttributeOfKind<"count">> = Omit<
+  AudienceCountRequest,
+  "condition"
+> & {
+  readonly condition: {
+    readonly attribute: Attribute;
+    readonly params: AudienceCountParams<Attribute>;
+  };
+};
+
 /** Whether the request's attribute resolver reads Dotypos visits for it. */
-const readsVisits = <
-  Attribute extends AudienceAttributeOfKind<"count">,
->(request: {
-  readonly attribute: Attribute;
-  readonly params: ConcreteCountParams<AudienceCountParams<Attribute>>;
-}) => countResolvers[request.attribute].readsVisits(request);
+const readsVisits = <Attribute extends AudienceAttributeOfKind<"count">>(
+  request: AudienceCountRequest & CountRequestFor<Attribute>
+) => {
+  const {
+    condition: { attribute, params },
+    inContext,
+  }: CountRequestFor<Attribute> = request;
+  return countResolvers[attribute].readsVisits({ params, inContext });
+};
 
 /** Counts through the request's attribute resolver. */
 const resolveCount = <Attribute extends AudienceAttributeOfKind<"count">>(
-  request: {
-    readonly attribute: Attribute;
-    readonly params: ConcreteCountParams<AudienceCountParams<Attribute>>;
-    readonly reservationsAsOf?: Temporal.Instant;
-  },
+  request: AudienceCountRequest & CountRequestFor<Attribute>,
   resolution: AudienceResolution
-) => countResolvers[request.attribute].count(request, resolution);
+) => {
+  const {
+    condition: { attribute, params },
+    inContext,
+    reservationsAsOf,
+  }: CountRequestFor<Attribute> = request;
+  return countResolvers[attribute].count(
+    { params, inContext, reservationsAsOf },
+    resolution
+  );
+};
 
 /** Dates through the request's attribute resolver. */
 const resolveDates = (

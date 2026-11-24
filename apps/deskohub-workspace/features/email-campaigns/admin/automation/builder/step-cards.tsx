@@ -3,7 +3,6 @@
 import {
   type AdministrationCampaignDetail,
   type AudienceFilterGroupOf,
-  type AutomationConditionLeaf,
   type AutomationDurationUnitType as AutomationDurationUnit,
   automationDurationUnits,
 } from "@deskohub/workspace-admin-api";
@@ -39,7 +38,10 @@ import {
   numberInputValue,
 } from "../../audiences/audience-control-primitives";
 import { AudienceFilterBuilder } from "../../audiences/audience-filter-builder";
-import { asRootGroup } from "../../audiences/audience-filter-editing";
+import {
+  type AudienceFilterLeaf,
+  asRootGroup,
+} from "../../audiences/audience-filter-editing";
 import { campaignLocaleName } from "../../sending/campaign-locale-names";
 import { defaultWaitCalendar } from "./automation-flow-editing";
 import type { FlowStepValue } from "./automation-flow-form";
@@ -56,7 +58,7 @@ import { useCalendarPreview } from "./use-calendar-preview";
 
 type ConditionStep = Extract<FlowStepValue, { _tag: "Condition" }>;
 type WaitStep = Extract<FlowStepValue, { _tag: "Wait" }>;
-type ConditionGroup = AudienceFilterGroupOf<AutomationConditionLeaf>;
+type ConditionGroup = AudienceFilterGroupOf<AudienceFilterLeaf>;
 
 /** "Step 2 · Condition", the eyebrow and accessible name of a step. */
 export const stepLabel = (
@@ -106,9 +108,7 @@ export function ConditionStepCard({
       </p>
       <AudienceFilterBuilder
         holder="automation-condition"
-        // The form holds the encoded filter; the builder edits its decoded
-        // shape, which differs only in branded ids.
-        value={asRootGroup(step.filter as ConditionGroup)}
+        value={asRootGroup(step.filter)}
         onChange={(filter: ConditionGroup) => onChange({ ...step, filter })}
         path={`${path}.filter`}
         errorAt={errorAt}

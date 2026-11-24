@@ -102,6 +102,12 @@ export const normalizedProfiCoworkReservationProductSchema = Schema.Struct({
   monitorOption: Schema.Literals(workspaceProductMonitorOptions),
 });
 
+// A profi selection must name a monitor; decoding rejects one that does not,
+// as constructing the normalized product would.
+const decodeNormalizedProfiCoworkReservationProduct = Schema.decodeUnknownSync(
+  normalizedProfiCoworkReservationProductSchema
+);
+
 export const normalizedCoworkReservationProductSchema = Schema.Union([
   normalizedOpenSpaceCoworkReservationProductSchema,
   normalizedReservedDeskCoworkReservationProductSchema,
@@ -255,10 +261,10 @@ export const normalizeCoworkReservationProduct = (
       })
     ),
     Match.when("profi", () =>
-      normalizedProfiCoworkReservationProductSchema.make({
+      decodeNormalizedProfiCoworkReservationProduct({
         entryTier: "profi",
         coffee: true,
-        monitorOption: normalizeMonitorOption(data.monitorOption)!,
+        monitorOption: normalizeMonitorOption(data.monitorOption),
       })
     ),
     Match.exhaustive

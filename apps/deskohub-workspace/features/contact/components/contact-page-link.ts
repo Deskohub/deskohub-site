@@ -1,9 +1,16 @@
 import type { ContactFormValues } from "@/features/contact/schemas/contact";
 import type { Locale } from "@/features/i18n";
 
+const contactPrefillFields = [
+  "name",
+  "email",
+  "phone",
+  "message",
+] as const satisfies ReadonlyArray<keyof ContactFormValues>;
+
 /** Contact form fields another page can prefill through the contact page's query. */
 export type ContactPrefill = Partial<
-  Pick<ContactFormValues, "name" | "email" | "phone" | "message">
+  Pick<ContactFormValues, (typeof contactPrefillFields)[number]>
 >;
 
 /** The longest value the contact page takes from each query parameter. */
@@ -13,10 +20,6 @@ const contactPrefillMaxLengths = {
   phone: 20,
   message: 1000,
 } as const satisfies Record<keyof ContactPrefill, number>;
-
-const contactPrefillFields = Object.keys(
-  contactPrefillMaxLengths
-) as ReadonlyArray<keyof ContactPrefill>;
 
 /** The contact form values a contact page link prefills, if it names any. */
 export const readContactPrefill = (

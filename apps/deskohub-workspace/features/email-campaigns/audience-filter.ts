@@ -1,6 +1,6 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import {
-  type AudienceAttributeDefinition,
+  type AudienceAttributeKind,
   type AudienceAttributeOfKind,
   type AudienceBooleanAttributeDefinition,
   type AudienceConditionOf,
@@ -19,7 +19,9 @@ import {
   type AudienceSetOperatorType,
   audienceAttributeCatalogue,
   AudienceFilter as audienceFilterContractSchema,
+  CampaignEmailSource as CampaignEmailSourceSchema,
   type CampaignEmailSourceType,
+  DatePeriod as DatePeriodSchema,
   type ReservationProductFilterType,
 } from "@deskohub/workspace-admin-api";
 import { Match, Option, Schema } from "effect";
@@ -72,14 +74,51 @@ export type AudienceConditionView =
       >;
     };
 
+/**
+ * Whether the condition's attribute is of `kind`, by its catalogue entry.
+ * The catalogue keys each entry by its attribute, so the entry's kind is
+ * the kind of the condition's attribute.
+ */
+const isConditionOfKind =
+  <Kind extends AudienceAttributeKind>(kind: Kind) =>
+  (
+    condition: AudienceCondition
+  ): condition is AudienceConditionOf<AudienceAttributeOfKind<Kind>> =>
+    audienceAttributeCatalogue[condition.attribute].kind === kind;
+
+const isCountCondition = isConditionOfKind("count");
+const isDateCondition = isConditionOfKind("date");
+const isSetCondition = isConditionOfKind("set");
+
 export const viewAudienceCondition = (
   condition: AudienceCondition
 ): AudienceConditionView => {
-  const entry: AudienceAttributeDefinition =
-    audienceAttributeCatalogue[condition.attribute];
-  // The catalogue keys each entry by its attribute, so the entry's kind is
-  // the kind of the condition's attribute.
-  return { kind: entry.kind, entry, condition } as AudienceConditionView;
+  if (isCountCondition(condition)) {
+    return {
+      kind: "count",
+      entry: audienceAttributeCatalogue[condition.attribute],
+      condition,
+    };
+  }
+  if (isDateCondition(condition)) {
+    return {
+      kind: "date",
+      entry: audienceAttributeCatalogue[condition.attribute],
+      condition,
+    };
+  }
+  if (isSetCondition(condition)) {
+    return {
+      kind: "set",
+      entry: audienceAttributeCatalogue[condition.attribute],
+      condition,
+    };
+  }
+  return {
+    kind: "boolean",
+    entry: audienceAttributeCatalogue[condition.attribute],
+    condition,
+  };
 };
 
 /**
@@ -97,37 +136,34 @@ export type AudienceCandidate = {
 };
 
 /**
- * A param value fixed by the evaluation context: a period becomes the
- * instants it covers, and a campaign source the campaign whose emails count
- * (`null` when it names the evaluating campaign and there is none).
+ * Fixes a count condition's params in one evaluation context: a period
+ * becomes the instants it covers, and a campaign source the campaign whose
+ * emails count (`null` when it names the evaluating campaign and there is
+ * none).
  */
-type ConcreteParam<Value> = Value extends DatePeriod
-  ? DatePeriodBounds
-  : Value extends CampaignEmailSourceType
-    ? CampaignId | null
-    : Value;
-
-/** A count condition's params with its period and campaign source fixed. */
-export type ConcreteCountParams<Params> = {
-  readonly [Param in keyof Params]: ConcreteParam<Params[Param]>;
+export type CountParamsInContext = {
+  readonly bounds: (period: DatePeriod) => DatePeriodBounds;
+  readonly campaign: (source: CampaignEmailSourceType) => CampaignId | null;
 };
 
-type CountRequestOf<Condition extends AudienceCountCondition> =
-  Condition extends unknown
-    ? {
-        readonly attribute: Condition["attribute"];
-        readonly params: ConcreteCountParams<Condition["params"]>;
-        /** Reservations count as they stood then (reservation counts). */
-        readonly reservationsAsOf?: Temporal.Instant;
-      }
-    : never;
-
 /**
- * What one count condition counts in one evaluation context. Conditions
- * whose requests are equal share one lookup, so subjects with different
- * contexts share it whenever their bounds agree.
+ * What one count condition counts in one evaluation context. Its fixed
+ * params, each fixed by its part in the condition's catalogue entry, decide
+ * its lookup: requests whose attribute, fixed params, and reservation moment
+ * agree share one, so subjects with different contexts share it whenever
+ * their bounds and campaign agree. Resolvers fix the params they read
+ * through `inContext`, which gives the same values.
  */
-export type AudienceCountRequest = CountRequestOf<
+export type AudienceCountRequestOf<Condition extends AudienceCountCondition> = {
+  readonly condition: Condition;
+  readonly inContext: CountParamsInContext;
+  readonly fixedParams: { readonly [param: string]: FixedCountParamValue };
+  /** Reservations count as they stood then (reservation counts). */
+  readonly reservationsAsOf?: Temporal.Instant;
+};
+
+/** A count request of any catalogued count attribute. */
+export type AudienceCountRequest = AudienceCountRequestOf<
   AudienceConditionOf<AudienceAttributeOfKind<"count">>
 >;
 
@@ -163,13 +199,23 @@ export type AudienceFacts = {
 
 /**
  * Requests are built from decoded schema values in the entry's param order,
- * so their key order is stable; instants serialize as ISO strings.
+ * so their key order is stable; instants serialize as ISO strings. A count
+ * request keys on what decides its lookup.
  */
 export const audienceFactKey = (
   request:
-    | { readonly attribute: string; readonly params: object }
+    | AudienceCountRequestOf<AudienceCountCondition>
     | AudienceDateRequest<string>
-): string => JSON.stringify(request);
+): string =>
+  JSON.stringify(
+    "condition" in request
+      ? {
+          attribute: request.condition.attribute,
+          params: request.fixedParams,
+          reservationsAsOf: request.reservationsAsOf,
+        }
+      : request
+  );
 
 const anyTime: DatePeriod = { _tag: "AnyTime" };
 
@@ -183,16 +229,6 @@ const concreteCampaignSource = (
       This: () => Option.getOrNull(campaignId),
     })
   );
-
-/**
- * What a count param holds: a choice, a period, a campaign source, or the
- * product filter, which isn't a catalogued param.
- */
-type CountParamValue =
-  | string
-  | DatePeriod
-  | CampaignEmailSourceType
-  | ReservationProductFilterType;
 
 /**
  * When the things a count dates by their recorded moment happened, such as
@@ -221,12 +257,33 @@ const reservationsAsOfReplay = ({
   replayed,
 }: AudienceEvaluationContext) => (replayed ? { reservationsAsOf: now } : {});
 
+/**
+ * What a count param holds: a choice, a period, a campaign source, or the
+ * product filter, which isn't a catalogued param. An optional param may be
+ * absent.
+ */
+type CountParamValue =
+  | string
+  | DatePeriod
+  | CampaignEmailSourceType
+  | ReservationProductFilterType
+  | undefined;
+
+/** A count param value as its context fixes it. */
+type FixedCountParamValue =
+  | CountParamValue
+  | DatePeriodBounds
+  | CampaignId
+  | null;
+
+const isDatePeriod = Schema.is(DatePeriodSchema);
+const isCampaignEmailSource = Schema.is(CampaignEmailSourceSchema);
+
 /** One param value fixed by the context, by its param's part. */
-const concreteParam = (
+const fixedParam = (
   param: AudienceParam | undefined,
   value: CountParamValue,
-  context: AudienceEvaluationContext,
-  periodBounds: typeof datePeriodBounds
+  inContext: CountParamsInContext
 ) =>
   param === undefined
     ? // The product filter isn't a catalogued param; it needs no context.
@@ -236,9 +293,9 @@ const concreteParam = (
           choice: () => value,
           // The condition decoded with the param's schema, so the value is
           // of its part.
-          period: () => periodBounds(value as DatePeriod, context),
+          period: () => (isDatePeriod(value) ? inContext.bounds(value) : value),
           campaign: () =>
-            concreteCampaignSource(value as CampaignEmailSourceType, context),
+            isCampaignEmailSource(value) ? inContext.campaign(value) : value,
         })
       );
 
@@ -259,26 +316,30 @@ export const countFactRequest = <Condition extends AudienceCountCondition>(
   entry: Pick<AudienceCountAttributeDefinition, "params">,
   condition: Condition,
   context: AudienceEvaluationContext
-): CountRequestOf<Condition> => {
-  const { attribute, params } = condition;
-  const occurrences = datesOccurrences(condition);
-  const periodBounds = occurrences ? occurrenceBounds : datePeriodBounds;
+): AudienceCountRequestOf<Condition> => {
+  const periodBounds = datesOccurrences(condition)
+    ? occurrenceBounds
+    : datePeriodBounds;
+  const inContext: CountParamsInContext = {
+    bounds: (period) => periodBounds(period, context),
+    campaign: (source) => concreteCampaignSource(source, context),
+  };
   return {
-    attribute,
-    params: Object.fromEntries(
-      // A decoded condition's params hold only its entry's param values and
-      // its product filter.
-      (Object.entries(params) as [string, CountParamValue][]).map(
-        ([key, value]) => [
+    condition,
+    inContext,
+    fixedParams: Object.fromEntries(
+      Object.entries(condition.params).map(
+        ([key, value]: [string, CountParamValue]) => [
           key,
-          concreteParam(entry.params[key], value, context, periodBounds),
+          fixedParam(entry.params[key], value, inContext),
         ]
       )
     ),
     // Occurrence bounds already end by a replayed moment, but a reservation's
     // status may have changed since its booking.
-    ...(attribute === "reservationCount" && reservationsAsOfReplay(context)),
-  } as CountRequestOf<Condition>;
+    ...(condition.attribute === "reservationCount" &&
+      reservationsAsOfReplay(context)),
+  };
 };
 
 /** "Has no value" needs only the customers with one, so it asks for any time. */

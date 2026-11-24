@@ -14,6 +14,8 @@
       "**/*.tsx",
       "packages/**/*.mts",
       "packages/**/*.cts",
+      "apps/deskohub-workspace/**/*.mts",
+      "apps/deskohub-workspace/**/*.cts",
       "**/*.json",
       "!**/.vercel",
       "!**/.turbo",
@@ -103,6 +105,58 @@
   "overrides": [
     {
       "includes": ["packages/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "error"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "apps/deskohub-workspace/app/**",
+        "apps/deskohub-workspace/db/**",
+        "apps/deskohub-workspace/emails/**",
+        "apps/deskohub-workspace/features/**",
+        "apps/deskohub-workspace/scripts/**",
+        "apps/deskohub-workspace/shared/**",
+        "apps/deskohub-workspace/*.ts",
+        "apps/deskohub-workspace/*.tsx",
+        "apps/deskohub-workspace/*.mts",
+        "apps/deskohub-workspace/*.cts",
+        "!**/generated/**",
+        "!**/paraglide/**",
+        "!**/testing/**",
+        "!**/*.test.ts",
+        "!**/*.test.tsx",
+        "!**/*.test.mts",
+        "!**/*.test.cts",
+        "!**/*.spec.ts",
+        "!**/*.spec.tsx",
+        "!**/*.spec.mts",
+        "!**/*.spec.cts",
+        "!**/*.pw.ts",
+        "!**/*.pw.tsx",
+        "!**/*.pw.mts",
+        "!**/*.pw.cts",
+        "!**/*.test-utils.ts",
+        "!**/*.test-utils.tsx",
+        "!**/*.test-utils.mts",
+        "!**/*.test-utils.cts",
+        "!**/*.browser-harness.ts",
+        "!**/*.browser-harness.tsx",
+        "!**/*.browser-harness.mts",
+        "!**/*.browser-harness.cts",
+        "!**/*-fixture.ts",
+        "!**/*-fixture.tsx",
+        "!**/*-fixture.mts",
+        "!**/*-fixture.cts",
+        "!**/*.fixture.ts",
+        "!**/*.fixture.tsx",
+        "!**/*.fixture.mts",
+        "!**/*.fixture.cts"
+      ],
       "linter": {
         "rules": {
           "style": {

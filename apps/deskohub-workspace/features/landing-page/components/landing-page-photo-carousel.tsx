@@ -51,23 +51,41 @@ const instantTransition: Transition = {
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
 
+/** One number per entry of `Anchors`, in its order. */
+type ValuesAt<Anchors extends readonly number[]> = {
+  readonly [Index in keyof Anchors]: number;
+};
+
+/** One value per slide offset, in `slideOffsets` order. */
+type AnchoredValues = ValuesAt<typeof slideOffsets>;
+
 const interpolateAnchoredValue = (
   offset: number,
-  values: readonly number[]
-) => {
-  const clampedOffset = clamp(offset, slideOffsets[0], slideOffsets.at(-1)!);
+  values: AnchoredValues
+): number => {
+  const clampedOffset = clamp(
+    offset,
+    Math.min(...slideOffsets),
+    Math.max(...slideOffsets)
+  );
 
-  for (let index = 0; index < slideOffsets.length - 1; index++) {
-    const startOffset = slideOffsets[index]!;
-    const endOffset = slideOffsets[index + 1]!;
+  let start: { readonly offset: number; readonly value: number } = {
+    offset: slideOffsets[0],
+    value: values[0],
+  };
+  for (const [index, endOffset] of slideOffsets.entries()) {
+    const endValue = values[index];
+    if (index === 0 || endValue === undefined) continue;
 
-    if (clampedOffset > endOffset) continue;
-
-    const progress = (clampedOffset - startOffset) / (endOffset - startOffset);
-    return values[index]! + (values[index + 1]! - values[index]!) * progress;
+    if (clampedOffset <= endOffset) {
+      const progress =
+        (clampedOffset - start.offset) / (endOffset - start.offset);
+      return start.value + (endValue - start.value) * progress;
+    }
+    start = { offset: endOffset, value: endValue };
   }
 
-  return values.at(-1)!;
+  return start.value;
 };
 
 const getSlideMotion = (offset: number) => {
@@ -143,15 +161,22 @@ export function LandingPagePhotoCarousel({
     () => images.map((image) => image.lightbox),
     [images]
   );
-  const visibleSlides = getVisibleSlideOffsets(images.length).map((offset) => {
-    const virtualIndex = currentVirtualIndex + offset;
-    return {
-      image: images[wrapIndex(virtualIndex, images.length)]!,
-      isCurrent: offset === 0,
-      offset: virtualIndex - visibleVirtualIndex,
-      virtualIndex,
-    };
-  });
+  const visibleSlides = getVisibleSlideOffsets(images.length).flatMap(
+    (offset) => {
+      const virtualIndex = currentVirtualIndex + offset;
+      const image = images[wrapIndex(virtualIndex, images.length)];
+      return image
+        ? [
+            {
+              image,
+              isCurrent: offset === 0,
+              offset: virtualIndex - visibleVirtualIndex,
+              virtualIndex,
+            },
+          ]
+        : [];
+    }
+  );
 
   if (!hasImages) return null;
 

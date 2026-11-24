@@ -23,11 +23,11 @@ import {
   paymentAttemptIdSchema,
 } from "@/features/checkout/checkout-identifiers";
 import {
-  reservationOrderId,
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
 import { reservationIntervalSchema } from "@/features/reservation/reservation-interval";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { getReservationAccessInterval } from "@/features/reservation-access/backend/reservation-access.service";
 import {
   type ReservationAccessGrantId,
@@ -126,9 +126,8 @@ const makeFixtureIds = () => ({
   paymentAttemptId: paymentAttemptIdSchema.make(
     `account-history-payment-${crypto.randomUUID()}`
   ),
-  reservationId: workspaceReservationIdSchema.make(
-    `account-history-${crypto.randomUUID()}`
-  ),
+  // A standalone reservation's ID is its mirrored order's UUID.
+  reservationId: workspaceReservationIdSchema.make(crypto.randomUUID()),
 });
 
 const makeReservationHistoryDatabase = (
@@ -317,7 +316,7 @@ export function seedWorkspaceE2EReservationHistory(
         paymentAttempt: {
           id: ids.paymentAttemptId,
           workspaceReservationId: ids.reservationId,
-          orderId: reservationOrderId(ids.reservationId),
+          orderId: standaloneReservationOrderId(ids.reservationId),
           provider: "internal",
           state: "paid",
           amountValue: fixtureAmount.value,

@@ -159,15 +159,27 @@ export const moveEmailEntry = <T>(
   return next;
 };
 
+/** The keys some member of the union `T` requires. */
+type RequiredKey<T> = T extends unknown
+  ? {
+      [Key in keyof T]-?: object extends Pick<T, Key> ? never : Key;
+    }[keyof T]
+  : never;
+
+/** The keys every member of the union `T` may leave out. */
+type OptionalKey<T> = Exclude<keyof T, RequiredKey<T>>;
+
 /**
  * `object` with `key` set to `value`, or without `key` when `value` is
  * `undefined`. Draft keys are exact: an unset setting has no key at all.
  */
-export const withEmailSetting = <T extends object, K extends keyof T>(
+export const withEmailSetting = <T extends object, K extends OptionalKey<T>>(
   object: T,
   key: K,
   value: T[K] | undefined
 ): T => {
-  const { [key]: _removed, ...rest } = object;
-  return (value === undefined ? rest : { ...rest, [key]: value }) as T;
+  const next = { ...object };
+  Reflect.deleteProperty(next, key);
+  if (value !== undefined) next[key] = value;
+  return next;
 };

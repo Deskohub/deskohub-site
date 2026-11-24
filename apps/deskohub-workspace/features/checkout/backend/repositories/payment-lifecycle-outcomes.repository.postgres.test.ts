@@ -1,4 +1,4 @@
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -488,7 +488,7 @@ describe.skipIf(!testDatabase)(
         } as PreparedCustomerQuote,
       });
       return {
-        orderId: reservationOrderId(reservation.id),
+        orderId: standaloneReservationOrderId(reservation.id),
         amount: accountingSnapshot.quote.payment.expectedPrice,
         commitment: makeDiscountCommitment({
           product,
@@ -520,7 +520,7 @@ describe.skipIf(!testDatabase)(
       lifecycle((repository) =>
         repository.markPaid({
           id,
-          orderId: reservationOrderId(reservation.id),
+          orderId: standaloneReservationOrderId(reservation.id),
           paidAt,
         })
       );
@@ -533,7 +533,7 @@ describe.skipIf(!testDatabase)(
         lifecycle((repository) =>
           repository.markTerminal({
             id,
-            orderId: reservationOrderId(reservation.id),
+            orderId: standaloneReservationOrderId(reservation.id),
             state: "expired",
             failureCode: "outcome_test_expired",
           })
@@ -999,7 +999,9 @@ describe.skipIf(!testDatabase)(
           await lifecycle((repository) =>
             repository.markPaid({
               id: failed.id,
-              orderId: reservationOrderId(crypto.randomUUID() as never),
+              orderId: standaloneReservationOrderId(
+                crypto.randomUUID() as never
+              ),
               paidAt: Temporal.Now.instant(),
             })
           )

@@ -28,6 +28,16 @@ export interface WorkspaceOpeningHours {
 export const vatStatuses = ["not-vat-payer", "vat-payer"] as const;
 export type VatStatus = (typeof vatStatuses)[number];
 
+interface CompanyVatRegistration {
+  readonly vatStatus: VatStatus;
+}
+
+// Typed as the registration, so code reading the status handles both values.
+const companyVatRegistration: CompanyVatRegistration = {
+  /** The company's VAT status; `"vat-payer"` once it registers for VAT. */
+  vatStatus: "not-vat-payer",
+};
+
 export const workspaceSiteConstants = {
   brand: {
     name: "Deskohub Workspace",
@@ -63,8 +73,7 @@ export const workspaceSiteConstants = {
     identificationNumber: "24531596",
     taxIdentificationNumber: "CZ24531596",
     establishmentId: "1016069146",
-    /** The company's VAT status; `"vat-payer"` once it registers for VAT. */
-    vatStatus: "not-vat-payer" as VatStatus,
+    vatStatus: companyVatRegistration.vatStatus,
     commercialRegister: {
       court: "Městský soud v Praze",
       section: "C",

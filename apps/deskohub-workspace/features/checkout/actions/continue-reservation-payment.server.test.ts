@@ -12,10 +12,8 @@ import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
-import {
-  reservationOrderId,
-  workspaceReservationIdSchema,
-} from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { continueReservationPaymentForAuthor } from "./continue-reservation-payment.server";
 
 const orderId = workspaceReservationIdSchema.make(
@@ -51,7 +49,7 @@ const scenario = ({
   const qrAttemptId = paymentAttemptIdSchema.make("attempt-qr");
   const findPaymentWindow = mock(() =>
     Effect.succeed({
-      orderId: reservationOrderId(orderId),
+      orderId: standaloneReservationOrderId(orderId),
       accountKey: pinnedKey,
       expiresAt,
       cardAttemptId: null,
@@ -78,7 +76,7 @@ const scenario = ({
         Effect.succeed(
           qrStarted
             ? {
-                orderId: reservationOrderId(orderId),
+                orderId: standaloneReservationOrderId(orderId),
                 attemptId: qrAttemptId,
                 accountKey: pinnedKey,
                 amount: { value: 45050, currency: "CZK", exponent: 2 },

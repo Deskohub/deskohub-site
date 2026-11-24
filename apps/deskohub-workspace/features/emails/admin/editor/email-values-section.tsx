@@ -48,10 +48,8 @@ export function EmailValuesSection({
     name: ["structure", "translations"],
   });
   // The draft's encoded form is its decoded form: it has no transformations.
-  const referenced = referencedEmailValueNames({
-    structure,
-    translations,
-  } as EmailDraft);
+  const watchedDraft: EmailDraft = { structure, translations };
+  const referenced = referencedEmailValueNames(watchedDraft);
   const addCustomerRef = useRef<HTMLButtonElement>(null);
   const takenNames = () => (getValues("values") ?? []).map(({ name }) => name);
 

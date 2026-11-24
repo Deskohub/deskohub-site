@@ -7,10 +7,11 @@ import {
 } from "@/shared/utils";
 import type { DiscountCodeTableItem } from "./admin-tables";
 import type {
-  CreateCustomerDiscountCodeAdminInput,
   CreateDiscountAdminInput,
-  CreateDiscountCodeAdminInput,
+  CreateDiscountCodeAdminRequest,
   CreateVoucherAdminInput,
+  CreateVoucherAdminRequest,
+  DiscountCodeConfigurationAdminRequest,
 } from "./contracts";
 import type {
   DiscountCodeConfigurationFormValues,
@@ -52,8 +53,8 @@ const toDiscountAdjustment = (
 
 export const toCreateDiscountCodeInput = (
   values: DiscountCodeFormValues
-): CreateDiscountCodeAdminInput => ({
-  discountId: values.discountId as CreateDiscountCodeAdminInput["discountId"],
+): CreateDiscountCodeAdminRequest => ({
+  discountId: values.discountId,
   ...toDiscountCodeConfigurationInput(values),
 });
 
@@ -64,7 +65,7 @@ export const toCreateDiscountCodeInput = (
  */
 export const toDiscountCodeConfigurationInput = (
   values: DiscountCodeConfigurationFormValues
-): CreateCustomerDiscountCodeAdminInput["code"] => ({
+): DiscountCodeConfigurationAdminRequest => ({
   ...toPromotionConfigurationInput(values),
   maxUses: toOptionalCount(values.maxUses),
   maxUsesPerCustomer: toOptionalCount(values.maxUsesPerCustomer),
@@ -80,7 +81,7 @@ export const toDiscountCodeConfigurationInput = (
 export const toDiscountCodeUpdateInput = (
   values: DiscountCodeFormValues,
   loaded: Pick<DiscountCodeTableItem, "serviceDateFrom" | "serviceDateUntil">
-): CreateDiscountCodeAdminInput => {
+): CreateDiscountCodeAdminRequest => {
   const input = toCreateDiscountCodeInput(values);
   if (
     values.serviceDateFrom !== (loaded.serviceDateFrom ?? "") ||
@@ -102,17 +103,11 @@ const toPromotionConfigurationInput = (
     DiscountCodeConfigurationFormValues,
     "code" | "enabled" | "validFrom" | "validUntil"
   >
-): Omit<CreateVoucherAdminInput, "credit"> => ({
-  code: values.code
-    .trim()
-    .toUpperCase() as CreateCustomerDiscountCodeAdminInput["code"]["code"],
+): Omit<CreateVoucherAdminRequest, "credit"> => ({
+  code: values.code.trim().toUpperCase(),
   enabled: values.enabled,
-  validFrom: toOptionalLocalDateTimeInstant(
-    values.validFrom
-  ) as CreateCustomerDiscountCodeAdminInput["code"]["validFrom"],
-  validUntil: toOptionalLocalDateTimeInstant(
-    values.validUntil
-  ) as CreateCustomerDiscountCodeAdminInput["code"]["validUntil"],
+  validFrom: toOptionalLocalDateTimeInstant(values.validFrom),
+  validUntil: toOptionalLocalDateTimeInstant(values.validUntil),
 });
 
 /** None when the voucher currency is outside the catalog. */
@@ -123,7 +118,7 @@ export const toVoucherCreditInput = (
 
 export const toVoucherConfigurationInput = (
   values: VoucherFormValues
-): Omit<CreateVoucherAdminInput, "credit"> =>
+): Omit<CreateVoucherAdminRequest, "credit"> =>
   toPromotionConfigurationInput(values);
 
 const toOptionalLocalDateTimeInstant = (value: string) =>

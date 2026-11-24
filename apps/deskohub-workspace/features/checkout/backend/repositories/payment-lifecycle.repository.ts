@@ -620,6 +620,7 @@ export class PaymentLifecycleRepository extends Context.Service<
 
             yield* admitFirstBookingPayment({
               dotyposCustomerId: reservation.dotyposCustomerId,
+              orderId: input.orderId,
               workspaceReservationId,
               admitsInvitation: claimedApplications.referral !== undefined,
               operation: "createPendingProviderAttempt",
@@ -1028,6 +1029,7 @@ export class PaymentLifecycleRepository extends Context.Service<
 
             yield* admitFirstBookingPayment({
               dotyposCustomerId: reservation.dotyposCustomerId,
+              orderId: input.orderId,
               workspaceReservationId,
               admitsInvitation: claimedApplications.referral !== undefined,
               operation: "completeInternalPayment",
@@ -1882,13 +1884,18 @@ export const validateInternalPaymentCommitment = Effect.fn(
  */
 const admitFirstBookingPayment = (input: {
   readonly dotyposCustomerId: DotyposCustomerId;
+  readonly orderId: OrderId;
   readonly workspaceReservationId: WorkspaceReservationId;
   readonly admitsInvitation: boolean;
   readonly operation:
     | "createPendingProviderAttempt"
     | "completeInternalPayment";
 }) =>
-  ReferralInvitationLedger.admitFirstBooking(input).pipe(
+  ReferralInvitationLedger.admitFirstBooking({
+    dotyposCustomerId: input.dotyposCustomerId,
+    orderId: input.orderId,
+    admitsInvitation: input.admitsInvitation,
+  }).pipe(
     Effect.catchTag("ReferralFirstBookingAdmittedError", ({ message }) =>
       Effect.fail(
         lifecycleStateError(

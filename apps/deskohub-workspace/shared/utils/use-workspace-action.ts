@@ -9,11 +9,13 @@ import {
 } from "next-safe-action/hooks";
 import { useRef } from "react";
 
-type WorkspaceActionTransportErrorInput<
+// The input the action was called with, as next-safe-action types it.
+type WorkspaceActionInput<
+  ServerError,
   Schema extends StandardSchemaV1 | undefined,
-> = Schema extends StandardSchemaV1
-  ? StandardSchemaV1.InferInput<Schema>
-  : undefined;
+  ShapedErrors,
+  Data,
+> = Parameters<SingleInputActionFn<ServerError, Schema, ShapedErrors, Data>>[0];
 
 type UseWorkspaceActionOptions<
   ServerError,
@@ -23,7 +25,12 @@ type UseWorkspaceActionOptions<
 > = HookBaseOptions<ServerError, Schema, ShapedErrors, Data> & {
   readonly onTransportError?: (args: {
     readonly error: unknown;
-    readonly input: WorkspaceActionTransportErrorInput<Schema>;
+    readonly input: WorkspaceActionInput<
+      ServerError,
+      Schema,
+      ShapedErrors,
+      Data
+    >;
   }) => void;
 };
 
@@ -37,31 +44,34 @@ export function useWorkspaceAction<
   opts: UseWorkspaceActionOptions<ServerError, Schema, ShapedErrors, Data>
 ): UseActionHookReturn<ServerError, Schema, ShapedErrors, Data> {
   const { onError, onTransportError, ...hookOptions } = opts;
-  const action = useAction(safeActionFn, {
-    ...hookOptions,
-    ...(onError && {
-      onError: (args: Parameters<typeof onError>[0]) => {
-        // A rejected action call is already reported through onTransportError,
-        // and this later callback would overwrite that transport message.
-        if (onTransportError && isTransportOnlyError(args.error)) return;
-        return onError(args);
-      },
-    }),
-  });
-
   // The library applies only the latest call's result and callbacks, so a
   // call superseded before it settles mustn't report its transport error
   // over the newer call's outcome either.
   const latestCall = useRef(0);
+  // The action function sees the input as the callback's type states it, so
+  // each call records how to report its own input.
+  const reportTransportError = useRef<((cause: unknown) => void) | undefined>(
+    undefined
+  );
 
-  const handleTransportError = (
-    cause: unknown,
-    input: WorkspaceActionTransportErrorInput<Schema>
-  ) => {
-    try {
-      onTransportError?.({ error: cause, input });
-    } catch {}
-  };
+  const action = useAction<ServerError, Schema, ShapedErrors, Data>(
+    (input) => {
+      reportTransportError.current = (error) =>
+        onTransportError?.({ error, input });
+      return safeActionFn(input);
+    },
+    {
+      ...hookOptions,
+      ...(onError && {
+        onError: (args: Parameters<typeof onError>[0]) => {
+          // A rejected action call is already reported through onTransportError,
+          // and this later callback would overwrite that transport message.
+          if (onTransportError && isTransportOnlyError(args.error)) return;
+          return onError(args);
+        },
+      }),
+    }
+  );
 
   const executeAsync = async (
     input: Parameters<typeof action.executeAsync>[0]
@@ -71,10 +81,9 @@ export function useWorkspaceAction<
       return await action.executeAsync(input);
     } catch (error) {
       if (call === latestCall.current) {
-        handleTransportError(
-          error,
-          input as WorkspaceActionTransportErrorInput<Schema>
-        );
+        try {
+          reportTransportError.current?.(error);
+        } catch {}
       }
       throw error;
     }

@@ -84,12 +84,30 @@ type DiscountMutation<Kind extends DiscountAdminMutation["kind"]> = Extract<
   { readonly kind: Kind }
 >;
 
+/**
+ * A mutation as the Admin UI sends it: the encoded form the action decodes
+ * and validates on the server.
+ */
+export type DiscountAdminMutationRequest =
+  typeof discountAdminMutationSchema.Encoded;
+type DiscountMutationRequest<
+  Kind extends DiscountAdminMutationRequest["kind"],
+> = Extract<DiscountAdminMutationRequest, { readonly kind: Kind }>;
+
+/** A code's configuration as a code form sends it. */
+export type DiscountCodeConfigurationAdminRequest =
+  DiscountMutationRequest<"create-customer-code">["code"];
+/** A code for an existing discount as the code editor sends it. */
+export type CreateDiscountCodeAdminRequest =
+  typeof AdministrationExistingDiscountCodeCreateInput.Encoded;
+/** A voucher as the voucher forms send it. */
+export type CreateVoucherAdminRequest =
+  typeof AdministrationVoucherCreateInput.Encoded;
+
 export type CreateDiscountAdminInput =
   DiscountMutation<"create-discount">["discount"];
 export type UpdateDiscountAdminInput =
   DiscountMutation<"update-discount">["discount"];
-export type CreateDiscountCodeAdminInput =
-  typeof AdministrationExistingDiscountCodeCreateInput.Type;
 export type CreateManagedDiscountCodeAdminInput = Omit<
   DiscountMutation<"create-code">,
   "kind"

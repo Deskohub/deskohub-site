@@ -45,8 +45,11 @@ const lint = async (
   }
 };
 
-test("anti-slop allows independent assertions and parsed unknown values", async () => {
-  const result = await lint(`
+// Workspace production code forbids every assertion, so independent ones stay
+// allowed only in tests.
+test("anti-slop allows independent assertions in Workspace tests and parsed unknown values", async () => {
+  const result = await lint(
+    `
 declare const input: unknown;
 declare function parse(value: string): number;
 const result = parse(input as string) as number;
@@ -55,7 +58,10 @@ const payload: unknown = JSON.parse("{}");
 void result;
 void parenthesizedResult;
 void payload;
-`);
+`,
+    "apps/deskohub-workspace/scripts",
+    "probe.test.ts"
+  );
 
   expect(result.exitCode).toBe(0);
 });

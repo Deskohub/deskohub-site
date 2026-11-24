@@ -95,7 +95,7 @@ export interface CustomerAgentAuthority {
 export const isProviderRejection = (cause: unknown) =>
   cause instanceof Error &&
   cause.name === "APIError" &&
-  !(Number((cause as { readonly statusCode?: unknown }).statusCode) >= 500);
+  !(Number("statusCode" in cause ? cause.statusCode : undefined) >= 500);
 
 const invalidToken = () =>
   new CustomerAgentAuthorizationError({ reason: "invalid-token" });

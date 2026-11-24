@@ -45,26 +45,31 @@ type _CustomerIdIsRequired = Expect<
   Equal<NewOrder["dotyposCustomerId"], DotyposCustomerId>
 >;
 
+// Type-only values: a typecheck module never runs, so it reads no Temporal
+// and decodes no identities.
+declare const instant: Temporal.Instant;
+declare const orderId: OrderId;
+declare const correlationId: NexiCorrelationId;
+declare const dotyposCustomerId: DotyposCustomerId;
+declare const paymentAttemptId: PaymentAttemptId;
+
 const validInsert: NewOrder = {
   kind: "reservation",
-  correlationId: "0198c1a2-3b4c-7d5e-8f90-1a2b3c4d5e6f" as NexiCorrelationId,
-  dotyposCustomerId: "12345" as DotyposCustomerId,
+  correlationId,
+  dotyposCustomerId,
   paymentState: "paid",
   fulfillmentState: "processing",
 };
 void validInsert;
 
-// Type-only instant: a typecheck module never runs, so it reads no Temporal.
-declare const instant: Temporal.Instant;
-
 const validSelect: Order = {
-  id: "0198c1a2-3b4c-7d5e-8f90-6f5e4d3c2b1a" as OrderId,
+  id: orderId,
   kind: "reservation",
-  correlationId: "0198c1a2-3b4c-7d5e-8f90-1a2b3c4d5e6f" as NexiCorrelationId,
-  dotyposCustomerId: "12345" as DotyposCustomerId,
+  correlationId,
+  dotyposCustomerId,
   paymentState: "paid",
   fulfillmentState: "fulfilled",
-  activePaymentAttemptId: "attempt-1" as PaymentAttemptId,
+  activePaymentAttemptId: paymentAttemptId,
   paidAt: instant,
   fulfilledAt: instant,
   fulfillmentFailedAt: null,
@@ -77,8 +82,8 @@ void validSelect;
 const invalidKind: NewOrder = {
   // @ts-expect-error only the order kinds are valid order kinds
   kind: "goods",
-  correlationId: "0198c1a2-3b4c-7d5e-8f90-1a2b3c4d5e6f" as NexiCorrelationId,
-  dotyposCustomerId: "12345" as DotyposCustomerId,
+  correlationId,
+  dotyposCustomerId,
   paymentState: "paid",
   fulfillmentState: "processing",
 };

@@ -1221,55 +1221,19 @@ const openPage = async (
   return page;
 };
 
-type ReadControlMethod =
-  | "completeAnalyticsAccountSignOut"
-  | "captureSensitiveEvent"
-  | "mutateReadonlyDom"
-  | "registerLegacyInitialProperties"
-  | "removeConsentCookie"
-  | "readConsentState"
-  | "readIdentityState"
-  | "readSdkState"
-  | "readSessionState";
-
-const readControl = async <T>(
+const callFixtureControl = async <Result>(
   page: Page,
-  method: ReadControlMethod
-): Promise<T> => {
+  call: () => Result
+): Promise<Result> => {
   try {
-    const value = await page.evaluate((methodName) => {
-      const control = window.__posthogIdentityBrowserFixture;
-      if (!control) throw new Error("fixture-control-missing");
-
-      switch (methodName) {
-        case "completeAnalyticsAccountSignOut":
-          return control.completeAnalyticsAccountSignOut();
-        case "captureSensitiveEvent":
-          return control.captureSensitiveEvent();
-        case "mutateReadonlyDom":
-          return control.mutateReadonlyDom();
-        case "registerLegacyInitialProperties":
-          return control.registerLegacyInitialProperties();
-        case "removeConsentCookie":
-          return control.removeConsentCookie();
-        case "readConsentState":
-          return control.readConsentState();
-        case "readIdentityState":
-          return control.readIdentityState();
-        case "readSdkState":
-          return control.readSdkState();
-        case "readSessionState":
-          return control.readSessionState();
-      }
-    }, method);
-    return value as T;
+    return await page.evaluate(call);
   } catch {
     throw new CheckFailure("fixture-control-call");
   }
 };
 
 const readSdkState = (page: Page) =>
-  readControl<{
+  callFixtureControl<{
     readonly autocaptureDisabled: boolean;
     readonly capturedEvents: number;
     readonly capturing: boolean;
@@ -1287,15 +1251,23 @@ const readSdkState = (page: Page) =>
     readonly recordingStarted: boolean;
     readonly sessionRecordingDisabled: boolean;
     readonly surveysDisabled: boolean;
-  }>(page, "readSdkState");
+  }>(page, () => {
+    const control = window.__posthogIdentityBrowserFixture;
+    if (!control) throw new Error("fixture-control-missing");
+    return control.readSdkState();
+  });
 
 const readConsentState = (page: Page) =>
-  readControl<{
+  callFixtureControl<{
     readonly analyticsAccepted: boolean;
     readonly cookiePresent: boolean;
     readonly marketingAccepted: boolean;
     readonly necessaryAccepted: boolean;
-  }>(page, "readConsentState");
+  }>(page, () => {
+    const control = window.__posthogIdentityBrowserFixture;
+    if (!control) throw new Error("fixture-control-missing");
+    return control.readConsentState();
+  });
 
 const assertFixtureConsentCookie = async (
   page: Page,
@@ -1318,23 +1290,32 @@ const waitForFixtureConsentView = (page: Page, analyticsAccepted: boolean) =>
     .waitFor({ state: "attached", timeout: 5_000 });
 
 const readIdentityState = (page: Page) =>
-  readControl<{ readonly status: SyntheticIdentityStatus }>(
-    page,
-    "readIdentityState"
-  );
+  callFixtureControl<{ readonly status: SyntheticIdentityStatus }>(page, () => {
+    const control = window.__posthogIdentityBrowserFixture;
+    if (!control) throw new Error("fixture-control-missing");
+    return control.readIdentityState();
+  });
 
 const completeAnalyticsAccountSignOut = (page: Page) =>
-  readControl<void>(page, "completeAnalyticsAccountSignOut");
+  callFixtureControl<void>(page, () => {
+    const control = window.__posthogIdentityBrowserFixture;
+    if (!control) throw new Error("fixture-control-missing");
+    return control.completeAnalyticsAccountSignOut();
+  });
 
 const readSessionState = (page: Page) =>
-  readControl<{
+  callFixtureControl<{
     readonly expiresAtMs: number | null;
     readonly expiresAtIsDate: boolean;
     readonly hasSession: boolean;
     readonly pending: boolean;
     readonly refetching: boolean;
     readonly unavailable: boolean;
-  }>(page, "readSessionState");
+  }>(page, () => {
+    const control = window.__posthogIdentityBrowserFixture;
+    if (!control) throw new Error("fixture-control-missing");
+    return control.readSessionState();
+  });
 
 const refreshSession = (page: Page) =>
   page.evaluate(async () => {
@@ -1365,13 +1346,25 @@ const signOut = (page: Page) =>
   });
 
 const mutateReadonlyDom = (page: Page) =>
-  readControl<void>(page, "mutateReadonlyDom");
+  callFixtureControl<void>(page, () => {
+    const control = window.__posthogIdentityBrowserFixture;
+    if (!control) throw new Error("fixture-control-missing");
+    return control.mutateReadonlyDom();
+  });
 
 const registerLegacyInitialProperties = (page: Page) =>
-  readControl<boolean>(page, "registerLegacyInitialProperties");
+  callFixtureControl<boolean>(page, () => {
+    const control = window.__posthogIdentityBrowserFixture;
+    if (!control) throw new Error("fixture-control-missing");
+    return control.registerLegacyInitialProperties();
+  });
 
 const removeConsentCookie = (page: Page) =>
-  readControl<void>(page, "removeConsentCookie");
+  callFixtureControl<void>(page, () => {
+    const control = window.__posthogIdentityBrowserFixture;
+    if (!control) throw new Error("fixture-control-missing");
+    return control.removeConsentCookie();
+  });
 
 const eventNamed = (records: readonly IngestRecord[], name: string) =>
   records.flatMap((record) =>
@@ -1883,7 +1876,11 @@ type FixtureCaptureResult = {
 };
 
 const captureFixtureEvent = (page: Page) =>
-  readControl<FixtureCaptureResult>(page, "captureSensitiveEvent");
+  callFixtureControl<FixtureCaptureResult>(page, () => {
+    const control = window.__posthogIdentityBrowserFixture;
+    if (!control) throw new Error("fixture-control-missing");
+    return control.captureSensitiveEvent();
+  });
 
 const assertRejectedCapture = async (
   page: Page,
@@ -2341,8 +2338,9 @@ const runAnonymousIdentifyScenario = async (
     const anonymousEvents = fixtureEvents(server.allIngestRecords()).filter(
       (event) => eventDistinctId(event) !== undefined
     );
-    check(anonymousEvents.length > 0, "anonymous-capture-missing");
-    const anonymousDistinctId = eventDistinctId(anonymousEvents.at(-1)!);
+    const lastAnonymousEvent = anonymousEvents.at(-1);
+    check(lastAnonymousEvent !== undefined, "anonymous-capture-missing");
+    const anonymousDistinctId = eventDistinctId(lastAnonymousEvent);
     check(
       anonymousEvents.every((event) => !("referrer_type" in event.properties)),
       "referrer-type-leaked-into-custom-event"
@@ -3048,11 +3046,13 @@ const runCrossTabAndFocusScenario = async (
   server.clearIngest();
   const runId = server.createRun({ session: "A" });
   const context = await createContext(browser, runnerProblems);
-  let pageOne: Page | undefined;
-  let pageTwo: Page | undefined;
   try {
-    pageOne = await openPage(context, runId, runnerProblems, { consent: "on" });
-    pageTwo = await openPage(context, runId, runnerProblems, { consent: "on" });
+    const pageOne = await openPage(context, runId, runnerProblems, {
+      consent: "on",
+    });
+    const pageTwo = await openPage(context, runId, runnerProblems, {
+      consent: "on",
+    });
     await waitForAuthenticated(pageOne);
     await waitForAuthenticated(pageTwo);
     await waitForAuthenticatedIdentity(pageOne);
@@ -3066,7 +3066,7 @@ const runCrossTabAndFocusScenario = async (
     });
     const secondTabRefresh = refreshAnalyticsAccountIdentity(pageTwo);
     await waitFor(
-      async () => (await readSessionState(pageOne!)).refetching,
+      async () => (await readSessionState(pageOne)).refetching,
       "cross-tab-refresh-not-pending"
     );
     await assertRejectedCapture(pageOne, "pending", "cross-tab-stale-capture");
@@ -3091,7 +3091,7 @@ const runCrossTabAndFocusScenario = async (
     });
     await triggerVisibilityRefresh(pageTwo);
     await waitFor(
-      async () => (await readSessionState(pageTwo!)).refetching,
+      async () => (await readSessionState(pageTwo)).refetching,
       "focus-refresh-not-pending"
     );
     await assertRejectedCapture(pageTwo, "pending", "focus-stale-capture");
@@ -3126,11 +3126,13 @@ const runDomainNotificationIntegrationScenario = async (
   server.clearIngest();
   const runId = server.createRun({ session: "A" });
   const context = await createContext(browser, runnerProblems);
-  let pageOne: Page | undefined;
-  let pageTwo: Page | undefined;
   try {
-    pageOne = await openPage(context, runId, runnerProblems, { consent: "on" });
-    pageTwo = await openPage(context, runId, runnerProblems, { consent: "on" });
+    const pageOne = await openPage(context, runId, runnerProblems, {
+      consent: "on",
+    });
+    const pageTwo = await openPage(context, runId, runnerProblems, {
+      consent: "on",
+    });
     await waitForAuthenticated(pageOne);
     await waitForAuthenticated(pageTwo);
     await waitForAuthenticatedIdentity(pageOne);
@@ -3148,11 +3150,11 @@ const runDomainNotificationIntegrationScenario = async (
     await completeAnalyticsAccountSignOut(pageOne);
 
     await waitFor(
-      async () => (await readSessionState(pageTwo!)).refetching,
+      async () => (await readSessionState(pageTwo)).refetching,
       "domain-notification-refetch-not-pending"
     );
     await waitFor(
-      async () => (await readIdentityState(pageTwo!)).status === "pending",
+      async () => (await readIdentityState(pageTwo)).status === "pending",
       "domain-notification-pause-not-observed"
     );
 
@@ -3168,7 +3170,7 @@ const runDomainNotificationIntegrationScenario = async (
     );
     await waitForAnonymous(pageTwo);
     await waitFor(
-      async () => (await readIdentityState(pageTwo!)).status === "anonymous",
+      async () => (await readIdentityState(pageTwo)).status === "anonymous",
       "domain-notification-anonymous-identity-missing"
     );
     await sleep(150);
@@ -3222,11 +3224,9 @@ const runCrossTabConsentWithdrawalScenario = async (
   const context = await createContext(browser, runnerProblems);
   const initialRequestMark = server.allPostHogRequests().length;
   const pageOptions = { consent: "on", remoteFlags: true } as const;
-  let pageOne: Page | undefined;
-  let pageTwo: Page | undefined;
   try {
-    pageOne = await openPage(context, runId, runnerProblems, pageOptions);
-    pageTwo = await openPage(context, runId, runnerProblems, pageOptions);
+    const pageOne = await openPage(context, runId, runnerProblems, pageOptions);
+    const pageTwo = await openPage(context, runId, runnerProblems, pageOptions);
     await waitForAuthenticated(pageOne);
     await waitForAuthenticated(pageTwo);
     await waitForAuthenticatedIdentity(pageOne);
@@ -3253,8 +3253,8 @@ const runCrossTabConsentWithdrawalScenario = async (
     await waitForFixtureConsentView(pageTwo, false);
     await waitFor(async () => {
       const [one, two] = await Promise.all([
-        readSdkState(pageOne!),
-        readSdkState(pageTwo!),
+        readSdkState(pageOne),
+        readSdkState(pageTwo),
       ]);
       return (
         !one.capturing &&
@@ -3297,11 +3297,11 @@ const runCrossTabConsentWithdrawalScenario = async (
     await waitForFixtureConsentView(pageOne, true);
     await waitForFixtureConsentView(pageTwo, true);
     await waitFor(
-      async () => (await readSessionState(pageTwo!)).refetching,
+      async () => (await readSessionState(pageTwo)).refetching,
       "cross-tab-consent-reconsent-refresh-not-pending"
     );
     await waitFor(
-      async () => (await readIdentityState(pageTwo!)).status === "pending",
+      async () => (await readIdentityState(pageTwo)).status === "pending",
       "cross-tab-consent-reconsent-identity-not-pending"
     );
     await assertRejectedCapture(

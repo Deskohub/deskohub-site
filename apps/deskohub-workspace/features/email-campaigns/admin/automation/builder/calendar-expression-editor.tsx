@@ -7,6 +7,7 @@ import {
   calendarWeekdays,
   emailAutomationScheduleMinutes,
 } from "@deskohub/workspace-admin-api";
+import { Array as Arr } from "effect";
 import { ChevronDown, Plus, X } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
 import { m } from "@/features/administration/i18n";
@@ -97,7 +98,7 @@ const withoutPart = (
 const nonEmpty = <Value,>(
   values: readonly Value[]
 ): readonly [Value, ...Value[]] | undefined =>
-  values.length > 0 ? (values as readonly [Value, ...Value[]]) : undefined;
+  Arr.isReadonlyArrayNonEmpty(values) ? values : undefined;
 
 const twoDigits = (value: number) => value.toString().padStart(2, "0");
 

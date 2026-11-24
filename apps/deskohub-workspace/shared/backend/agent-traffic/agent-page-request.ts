@@ -1,3 +1,4 @@
+import { Struct } from "effect";
 import { after } from "next/server";
 import type { AppRoutes } from "@/.next/types/routes";
 import type { AgentTraffic } from "@/shared/agent-traffic/agent-traffic";
@@ -75,9 +76,7 @@ const agentPageRoutes = {
   "/[locale]/ttrpg-room": true,
 } as const satisfies Record<AgentPageRoute, true>;
 
-const matchAgentPageRoute = routeTemplateMatcher(
-  Object.keys(agentPageRoutes) as AgentPageRoute[]
-);
+const matchAgentPageRoute = routeTemplateMatcher(Struct.keys(agentPageRoutes));
 
 /**
  * The route template of the page a request asked for, without its locale

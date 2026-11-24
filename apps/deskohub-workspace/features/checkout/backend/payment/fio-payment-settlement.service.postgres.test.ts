@@ -7,7 +7,7 @@ import {
   workspaceReservations,
 } from "@/db/schema";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { FioAccounts } from "../fio/fio-accounts.service";
@@ -313,7 +313,7 @@ const createQrReservation = () => {
         stage: { reservation: "held", payment: "pending" },
         at: movement.observedAt,
       });
-      const orderId = reservationOrderId(reservation.id);
+      const orderId = standaloneReservationOrderId(reservation.id);
       const variableSymbol = "1234567890";
       const [attempt] = yield* db
         .insert(paymentAttempts)

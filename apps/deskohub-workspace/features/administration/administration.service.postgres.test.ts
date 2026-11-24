@@ -41,11 +41,11 @@ import {
 import { discountIdSchema } from "@/features/discounts/contracts";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import {
-  reservationOrderId,
   type StoredWorkspaceReservationDetails,
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import {
   fixtureReservationAuthorId,
   workspaceFixtures,
@@ -1110,7 +1110,7 @@ describe.skipIf(!testDatabase)(
           Effect.gen(function* () {
             const { db } = testDatabase;
             for (const reservationId of [fioOnly, mixed]) {
-              const orderId = reservationOrderId(reservationId);
+              const orderId = standaloneReservationOrderId(reservationId);
               const paymentAttemptId = paymentAttemptIdSchema.make(
                 `fio-${reservationId}`
               );
@@ -1145,7 +1145,7 @@ describe.skipIf(!testDatabase)(
               });
             }
 
-            const fioOrderId = reservationOrderId(fioOnly);
+            const fioOrderId = standaloneReservationOrderId(fioOnly);
             const duplicateMovementId = `duplicate-${fioOnly}`;
             yield* db.insert(fioPaymentSettlements).values({
               orderId: fioOrderId,
@@ -1165,7 +1165,11 @@ describe.skipIf(!testDatabase)(
               kind: "refund_required",
             });
             expect(pending.map(({ orderId }) => orderId).sort()).toEqual(
-              [fioOrderId, fioOrderId, reservationOrderId(mixed)].sort()
+              [
+                fioOrderId,
+                fioOrderId,
+                standaloneReservationOrderId(mixed),
+              ].sort()
             );
             for (const rows of [
               pending,

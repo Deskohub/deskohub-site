@@ -100,6 +100,7 @@ type HarnessValues = {
   };
   readonly date: string;
   readonly email: string;
+  readonly emailConfirmation?: string;
   readonly marketingConsent: boolean;
   readonly name: string;
   readonly phone: string;
@@ -117,7 +118,7 @@ function Harness({
   availability = { isPending: false },
   checkoutCustomer = { status: "signed-out" },
   date = "2026-10-20",
-  fromSearchParams = () => ({}),
+  fromSearchParams = () => undefined,
   requiresName = false,
   selectionField,
   values,
@@ -178,6 +179,11 @@ function Harness({
       }}
       availability={availability}
       checkoutCustomer={checkoutCustomer}
+      fields={{
+        selection: ["date"],
+        emailConfirmation: "emailConfirmation",
+        marketingConsent: { name: "marketingConsent", value: true },
+      }}
       form={form}
       getReservation={({ email, name, phone }) =>
         ({ email, name, phone }) as never
@@ -1001,13 +1007,16 @@ describe("ReservationCheckoutForm", () => {
     });
 
     test("applies a link's selection and says whether anything changed", () => {
-      const fromSearchParams = mock((searchParams: URLSearchParams) => ({
-        date: searchParams.get("date") ?? undefined,
-      }));
+      const fromSearchParams = mock(
+        (
+          searchParams: URLSearchParams,
+          visit: (name: "date", value: string) => void
+        ) => visit("date", searchParams.get("date") ?? "")
+      );
       render(
         <Harness
           advertisedPrice={signedPrice}
-          fromSearchParams={fromSearchParams as never}
+          fromSearchParams={fromSearchParams}
         />
       );
       const dateField = () =>

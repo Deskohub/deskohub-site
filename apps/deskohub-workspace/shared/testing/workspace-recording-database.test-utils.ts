@@ -20,6 +20,48 @@ export interface RecordingWorkspaceDatabase {
 }
 
 /**
+ * The real Workspace Drizzle client over the SQL connection a test's
+ * `acquirer` supplies, without a Postgres server. An acquirer that dies makes
+ * every statement and transaction die when it runs.
+ */
+export const makeTestDatabaseClient = Effect.fn("makeTestDatabaseClient")(
+  function* (acquirer: SqlClient.SqlClient.MakeOptions["acquirer"]) {
+    const client = yield* SqlClient.make({
+      acquirer,
+      compiler: PgClient.makeCompiler(),
+      spanAttributes: [],
+      driver: "pg",
+    }).pipe(Effect.provide(Reactivity.layer));
+    // Drizzle's Postgres session uses only the SQL client part of PgClient;
+    // the rest refuses use.
+    const unused = Effect.die(
+      new Error("The test database has no Postgres extras")
+    );
+    const pgClient: PgClient.PgClient = Object.assign(client, {
+      [PgClient.TypeId]: PgClient.TypeId,
+      config: {},
+      json: () => {
+        throw new Error("The test database has no Postgres extras");
+      },
+      listen: () => unused,
+      notify: () => unused,
+      poolStats: Effect.succeed({
+        idle: 0,
+        used: 0,
+        pending: 0,
+        min: 0,
+        max: 0,
+      }),
+    });
+    return yield* Effect.provideService(
+      databaseClient,
+      PgClient.PgClient,
+      pgClient
+    );
+  }
+);
+
+/**
  * Builds the real workspace drizzle client over a recording SQL connection so
  * tests execute the actual query-builder layer and assert on the compiled SQL
  * and bound parameters without needing a live Postgres server. Every
@@ -69,37 +111,8 @@ export const makeRecordingWorkspaceDatabase =
         Stream.die(new Error("The recording database does not stream")),
     };
 
-    const client = await Effect.runPromise(
-      SqlClient.make({
-        acquirer: Effect.succeed(connection),
-        compiler: PgClient.makeCompiler(),
-        spanAttributes: [],
-        driver: "pg",
-      }).pipe(Effect.provide(Reactivity.layer))
-    );
-    // Drizzle's Postgres session uses only the SQL client part of PgClient;
-    // the rest refuses use.
-    const unused = Effect.die(
-      new Error("The recording database has no Postgres extras")
-    );
-    const pgClient: PgClient.PgClient = Object.assign(client, {
-      [PgClient.TypeId]: PgClient.TypeId,
-      config: {},
-      json: () => {
-        throw new Error("The recording database has no Postgres extras");
-      },
-      listen: () => unused,
-      notify: () => unused,
-      poolStats: Effect.succeed({
-        idle: 0,
-        used: 0,
-        pending: 0,
-        min: 0,
-        max: 0,
-      }),
-    });
     const db = await Effect.runPromise(
-      Effect.provideService(databaseClient, PgClient.PgClient, pgClient)
+      makeTestDatabaseClient(Effect.succeed(connection))
     );
 
     return {

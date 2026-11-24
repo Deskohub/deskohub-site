@@ -11,6 +11,14 @@ const sortControlClassName =
 
 export type AdministrationSortDirection = false | "asc" | "desc";
 
+const sortDirectionAriaSort = {
+  asc: "ascending",
+  desc: "descending",
+} as const satisfies Record<
+  Exclude<AdministrationSortDirection, false>,
+  string
+>;
+
 export function AdministrationSortHead({
   children,
   className,
@@ -24,11 +32,7 @@ export function AdministrationSortHead({
   readonly href?: AdministrationHref;
   readonly onToggle?: MouseEventHandler<HTMLButtonElement>;
 }) {
-  const ariaSort = {
-    asc: "ascending",
-    desc: "descending",
-    false: "none",
-  }[String(direction)] as "ascending" | "descending" | "none";
+  const ariaSort = direction ? sortDirectionAriaSort[direction] : "none";
   if (!(href || onToggle)) {
     return <TableHead className={className}>{children}</TableHead>;
   }

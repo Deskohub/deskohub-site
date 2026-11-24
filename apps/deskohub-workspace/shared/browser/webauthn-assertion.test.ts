@@ -11,18 +11,34 @@ import { getPasskeyAssertion } from "./webauthn-assertion";
 
 const bytes = (...values: number[]) => new Uint8Array(values).buffer;
 
-const assertion = {
-  id: "credential-id",
-  rawId: bytes(1, 2, 3),
-  type: "public-key",
-  authenticatorAttachment: "platform",
-  response: {
-    authenticatorData: bytes(4),
-    clientDataJSON: bytes(5),
-    signature: bytes(6),
-    userHandle: bytes(7),
-  },
+// Bun has no WebAuthn globals, so the tests install stand-ins for the
+// classes the browser returns.
+class TestAssertionResponse {
+  readonly authenticatorData = bytes(4);
+  readonly clientDataJSON = bytes(5);
+  readonly signature = bytes(6);
+  readonly userHandle = bytes(7);
+}
+
+class TestPublicKeyCredential {
+  readonly id = "credential-id";
+  readonly rawId = bytes(1, 2, 3);
+  readonly type = "public-key";
+  readonly authenticatorAttachment = "platform";
+  constructor(
+    readonly response: TestAssertionResponse | null = new TestAssertionResponse()
+  ) {}
+}
+
+const webAuthnGlobals = {
+  PublicKeyCredential: TestPublicKeyCredential,
+  AuthenticatorAssertionResponse: TestAssertionResponse,
 };
+const originalWebAuthnGlobals = Object.keys(webAuthnGlobals).map(
+  (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const
+);
+
+const assertion = new TestPublicKeyCredential();
 
 const get = mock(
   (_options: CredentialRequestOptions): Promise<unknown> =>
@@ -54,6 +70,9 @@ describe("passkey assertions", () => {
       configurable: true,
       value: { credentials: { get } },
     });
+    for (const [name, value] of Object.entries(webAuthnGlobals)) {
+      Object.defineProperty(globalThis, name, { configurable: true, value });
+    }
   });
 
   afterAll(() => {
@@ -61,6 +80,10 @@ describe("passkey assertions", () => {
       Object.defineProperty(globalThis, "navigator", originalNavigator);
     } else {
       Reflect.deleteProperty(globalThis, "navigator");
+    }
+    for (const [name, original] of originalWebAuthnGlobals) {
+      if (original) Object.defineProperty(globalThis, name, original);
+      else Reflect.deleteProperty(globalThis, name);
     }
   });
 
@@ -131,5 +154,37 @@ describe("passkey assertions", () => {
     await expect(request()).rejects.toBe(dismissed);
     get.mockResolvedValueOnce(null);
     await expect(request()).rejects.toThrow("No passkey was picked.");
+  });
+
+  test("rejects a credential that isn't a passkey assertion", async () => {
+    const request = () =>
+      getPasskeyAssertion(requestOptions, {
+        conditional: false,
+        signal: new AbortController().signal,
+      });
+
+    get.mockResolvedValueOnce({ id: "password", type: "password" });
+    await expect(request()).rejects.toThrow(Error);
+    get.mockResolvedValueOnce(new TestPublicKeyCredential(null));
+    await expect(request()).rejects.toThrow(Error);
+  });
+
+  test("passes on every transport the passkey recorded", async () => {
+    await getPasskeyAssertion(
+      {
+        ...requestOptions,
+        allowCredentials: [
+          {
+            id: "BAU",
+            type: "public-key",
+            transports: ["usb", "smart-card", "hybrid"],
+          },
+        ],
+      },
+      { conditional: false, signal: new AbortController().signal }
+    );
+
+    const [allowed] = requested().publicKey.allowCredentials ?? [];
+    expect(allowed?.transports).toEqual(["usb", "smart-card", "hybrid"]);
   });
 });
