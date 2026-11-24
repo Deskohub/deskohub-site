@@ -11,6 +11,7 @@ import {
   Fiber,
   Layer,
   Option,
+  Schema,
 } from "effect";
 import { SqlClient, type SqlConnection } from "effect/sql";
 import type { Pool } from "pg";
@@ -118,6 +119,20 @@ export const connectWorkspacePostgresTestDatabase =
     (connection ??= connectConfiguredWorkspacePostgres());
 
 /**
+ * `database` from `connectWorkspacePostgresTestDatabase` or
+ * `createWorkspacePostgresSuiteDatabase`, for a suite that
+ * `describe.skipIf(!database)` skips when no test database is configured.
+ */
+export const requireTestDatabase = <Database>(
+  database: Database | null
+): Database => {
+  if (database === null) {
+    throw new Error("No test database: set WORKSPACE_TEST_DATABASE_URL");
+  }
+  return database;
+};
+
+/**
  * A test database no other suite uses. Helpers whose subject reads or writes
  * every row of a table, such as the automation engine planning every active
  * automation over every active consent, require one.
@@ -212,10 +227,13 @@ export interface HeldDatabaseConnection {
   readonly release: () => Promise<void>;
 }
 
-type NativeResult = {
-  readonly rows: ReadonlyArray<unknown>;
-  readonly rowCount: number | null;
-};
+// Rows stay untyped, as node-postgres leaves them, for `query<Row>` callers.
+const decodeNativeResult = Schema.decodeUnknownSync(
+  Schema.Struct({
+    rows: Schema.Array(Schema.Any),
+    rowCount: Schema.NullOr(Schema.Number),
+  })
+);
 
 class HeldRollback extends Data.TaggedError("HeldRollback") {}
 
@@ -288,13 +306,16 @@ export const holdDatabaseConnection = async (database: {
       }
       // Rejects with the driver's error, which carries the server's fields
       // (`code`, `constraint`) as node-postgres errors do.
-      const { rows, rowCount } = (await Effect.runPromise(
-        Effect.mapError(
-          connection.executeRaw(sql, params),
-          (error) => error.reason.cause
+      const { rows, rowCount } = decodeNativeResult(
+        await Effect.runPromise(
+          Effect.mapError(
+            connection.executeRaw(sql, params),
+            (error) => error.reason.cause
+          )
         )
-      )) as NativeResult;
-      return { rows: [...rows] as Row[], rowCount };
+      );
+      const typedRows: Row[] = [...rows];
+      return { rows: typedRows, rowCount };
     },
     release: async () => {
       if (!Deferred.isDoneUnsafe(ending)) await end("rollback");

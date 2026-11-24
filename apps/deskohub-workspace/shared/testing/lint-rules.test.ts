@@ -9,18 +9,54 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Schema } from "effect";
 import { commandOutput, runCommand } from "@/scripts/shared/command";
 
 const repositoryRoot = fileURLToPath(new URL("../../../..", import.meta.url));
 const fixtureRoot = mkdtempSync(join(tmpdir(), "deskohub-lint-rules-"));
 const config = join(fixtureRoot, "biome.json");
 
-const repositoryConfig = JSON.parse(
-  readFileSync(join(repositoryRoot, "biome.json"), "utf8")
-) as {
-  readonly plugins: readonly string[];
-  readonly overrides: readonly { readonly includes: readonly string[] }[];
-};
+const LintMessageReport = Schema.Struct({
+  diagnostics: Schema.Array(
+    Schema.Struct({
+      message: Schema.String,
+      location: Schema.Struct({ path: Schema.String }),
+    })
+  ),
+});
+
+const decodeJson = <
+  S extends Schema.Top & { readonly DecodingServices: never },
+>(
+  schema: S,
+  text: string
+) => Schema.decodeUnknownSync(Schema.fromJsonString(schema))(text);
+
+const readJsonFile = <
+  S extends Schema.Top & { readonly DecodingServices: never },
+>(
+  schema: S,
+  path: string
+) => decodeJson(schema, readFileSync(path, "utf8"));
+
+// The fixture configs copy the repository's, so its other keys stay.
+const OpenRecord = Schema.Record(Schema.String, Schema.Unknown);
+
+const repositoryConfig = readJsonFile(
+  Schema.StructWithRest(
+    Schema.Struct({
+      plugins: Schema.Array(Schema.String),
+      overrides: Schema.Array(
+        Schema.StructWithRest(
+          Schema.Struct({ includes: Schema.Array(Schema.String) }),
+          [OpenRecord]
+        )
+      ),
+    }),
+    [OpenRecord]
+  ),
+  join(repositoryRoot, "biome.json")
+);
 
 // Every case lives in its own `case-<n>/` directory beside its siblings, so the
 // repository's path-scoped overrides gain one leading directory segment.
@@ -1023,9 +1059,10 @@ const writeCase = (directory: string, module: string, source: string) => {
   return path;
 };
 
-const casePaths = lintCases.map(({ module, source }, index) =>
-  writeCase(`case-${index}`, module, source)
-);
+const lintCaseRuns = lintCases.map((lintCase, index) => ({
+  ...lintCase,
+  path: writeCase(`case-${index}`, lintCase.module, lintCase.source),
+}));
 const singleDiagnosticPath = writeCase(
   "case-single-diagnostic",
   "apps/deskohub-workspace/features/reservation/load-reservation.ts",
@@ -1049,12 +1086,7 @@ beforeAll(async () => {
     ],
     { cwd: repositoryRoot }
   );
-  const report = JSON.parse(result.stdout) as {
-    readonly diagnostics: readonly {
-      readonly message: string;
-      readonly location: { readonly path: string };
-    }[];
-  };
+  const report = decodeJson(LintMessageReport, result.stdout);
   for (const { message, location } of report.diagnostics) {
     const path = resolve(repositoryRoot, location.path);
     messagesByPath.set(path, [...(messagesByPath.get(path) ?? []), message]);
@@ -1063,9 +1095,9 @@ beforeAll(async () => {
 
 const messagesOf = (path: string) => messagesByPath.get(path) ?? [];
 
-lintCases.forEach(({ title, diagnostic, flagged }, index) => {
+lintCaseRuns.forEach(({ title, diagnostic, flagged, path }) => {
   test(title, () => {
-    const reported = messagesOf(casePaths[index]!).some((message) =>
+    const reported = messagesOf(path).some((message) =>
       message.includes(diagnostic)
     );
     expect(reported).toBe(flagged);
@@ -1127,12 +1159,7 @@ test("no-promise-matchers-in-browser-tests holds across Workspace browser tests"
     ],
     { cwd: repositoryRoot }
   );
-  const report = JSON.parse(result.stdout) as {
-    readonly diagnostics: readonly {
-      readonly message: string;
-      readonly location: { readonly path: string };
-    }[];
-  };
+  const report = decodeJson(LintMessageReport, result.stdout);
   // Other diagnostics, such as suppressions aimed at rules this config leaves
   // off, belong to the regular lint run.
   expect(
@@ -1196,16 +1223,18 @@ const workspaceExemptProbes = [
   "apps/deskohub-workspace/shared/testing/probe.ts",
 ];
 
-type LintReport = {
-  readonly diagnostics: readonly {
-    readonly category?: string;
-    readonly message: string;
-    readonly severity: string;
-    readonly location: { readonly path: string };
-  }[];
-};
+const LintReport = Schema.Struct({
+  diagnostics: Schema.Array(
+    Schema.Struct({
+      category: Schema.optionalKey(Schema.String),
+      message: Schema.String,
+      severity: Schema.String,
+      location: Schema.Struct({ path: Schema.String }),
+    })
+  ),
+});
 
-const diagnosticsByPath = (report: LintReport, cwd: string) => {
+const diagnosticsByPath = (report: typeof LintReport.Type, cwd: string) => {
   const byPath = new Map<string, string[]>();
   for (const { category, message, severity, location } of report.diagnostics) {
     const path = resolve(cwd, location.path);
@@ -1237,7 +1266,7 @@ const lintProduction = async (cwd: string, command: string) => {
       },
     }
   );
-  return diagnosticsByPath(JSON.parse(result.stdout) as LintReport, cwd);
+  return diagnosticsByPath(decodeJson(LintReport, result.stdout), cwd);
 };
 
 const expectAssertionDiagnostics = (
@@ -1292,19 +1321,15 @@ test("production Biome config rejects package and Workspace production assertion
   }
   // The Workspace lint script resolves the root config through git.
   await runCommand(["git", "init", "--quiet"], { cwd: productionRoot });
-  const packageManifest = JSON.parse(
-    readFileSync(
-      join(repositoryRoot, "packages/standard-schema/package.json"),
-      "utf8"
-    )
-  ) as { readonly scripts: { readonly lint: string } };
+  const packageManifest = readJsonFile(
+    Schema.Struct({ scripts: Schema.Struct({ lint: Schema.String }) }),
+    join(repositoryRoot, "packages/standard-schema/package.json")
+  );
 
-  const workspaceManifest = JSON.parse(
-    readFileSync(
-      join(repositoryRoot, "apps/deskohub-workspace/package.json"),
-      "utf8"
-    )
-  ) as { readonly scripts: { readonly "lint:biome": string } };
+  const workspaceManifest = readJsonFile(
+    Schema.Struct({ scripts: Schema.Struct({ "lint:biome": Schema.String }) }),
+    join(repositoryRoot, "apps/deskohub-workspace/package.json")
+  );
 
   expectAssertionDiagnostics(
     await lintProduction(
@@ -1346,11 +1371,14 @@ test("package lint scripts resolve the root Biome config by discovery", async ()
     .split("\n")
     .filter((path) => path !== "")
     .map((path) => {
-      const manifest = JSON.parse(
-        readFileSync(join(repositoryRoot, path), "utf8")
-      ) as {
-        readonly scripts?: { readonly lint?: string };
-      };
+      const manifest = readJsonFile(
+        Schema.Struct({
+          scripts: Schema.optionalKey(
+            Schema.Struct({ lint: Schema.optionalKey(Schema.String) })
+          ),
+        }),
+        join(repositoryRoot, path)
+      );
       return { path, lint: manifest.scripts?.lint ?? "" };
     });
   expect(scripts.length).toBeGreaterThan(0);
@@ -1360,11 +1388,16 @@ test("package lint scripts resolve the root Biome config by discovery", async ()
 });
 
 test("lint caches miss when the Biome config or a Grit plugin changes", () => {
-  const turbo = JSON.parse(
-    readFileSync(join(repositoryRoot, "turbo.json"), "utf8")
-  ) as {
-    readonly tasks: { readonly lint: { readonly inputs?: readonly string[] } };
-  };
+  const turbo = readJsonFile(
+    Schema.Struct({
+      tasks: Schema.Struct({
+        lint: Schema.Struct({
+          inputs: Schema.optionalKey(Schema.Array(Schema.String)),
+        }),
+      }),
+    }),
+    join(repositoryRoot, "turbo.json")
+  );
   expect(turbo.tasks.lint.inputs).toEqual(
     expect.arrayContaining([
       "$TURBO_DEFAULT$",
