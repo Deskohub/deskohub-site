@@ -1,3 +1,4 @@
+import { Array as Arr } from "effect";
 import {
   type CheckoutSummary,
   checkoutSummaryDiscountSchema,
@@ -52,18 +53,17 @@ export const getOfficeCheckoutSummary = (
     dailyAccessRate: getWorkspaceOfficeAccessPrice(1),
     dailySeatRate: getWorkspaceOfficeSeatPrice(1),
   };
-  const productItem =
-    summaryDiscounts.length > 0
-      ? officeCheckoutSummaryDiscountedProductItemSchema.make({
-          ...shared,
-          amount: quote.payment.expectedPrice,
-          originalAmount: quote.payment.undiscountedPrice,
-          discounts: [summaryDiscounts[0]!, ...summaryDiscounts.slice(1)],
-        })
-      : officeCheckoutSummaryProductItemSchema.make({
-          ...shared,
-          amount: quote.payment.undiscountedPrice,
-        });
+  const productItem = Arr.isReadonlyArrayNonEmpty(summaryDiscounts)
+    ? officeCheckoutSummaryDiscountedProductItemSchema.make({
+        ...shared,
+        amount: quote.payment.expectedPrice,
+        originalAmount: quote.payment.undiscountedPrice,
+        discounts: summaryDiscounts,
+      })
+    : officeCheckoutSummaryProductItemSchema.make({
+        ...shared,
+        amount: quote.payment.undiscountedPrice,
+      });
   const orderSection = checkoutSummaryOrderSectionSchema.make({
     key: "order",
     items: [productItem],

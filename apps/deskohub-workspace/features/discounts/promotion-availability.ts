@@ -120,7 +120,7 @@ const inPromotionAvailabilityOrder = <
   rules: readonly Rule[]
 ): readonly Rule[] =>
   promotionAvailabilityOrder.filter((rule): rule is Rule =>
-    (rules as readonly PromotionAvailabilityRule[]).includes(rule)
+    rules.some((given) => given === rule)
   );
 
 /** The rules each caller checks at each step, in the shared order. */
@@ -185,15 +185,99 @@ export type PromotionAvailabilityFacts<
   Stage extends PromotionAvailabilityStage,
 > = Types.UnionToIntersection<Parameters<Rules[StageRule<Stage>]["isMet"]>[0]>;
 
+/** The failure of one of `Rule`, with that rule's reason. */
+type RuleUnavailable<Rule extends PromotionAvailabilityRule> = {
+  readonly [Failed in Rule]: {
+    readonly rule: Failed;
+    readonly reason: Rules[Failed]["reason"];
+  };
+}[Rule];
+
 /** The first rule of a stage that the facts fail, and its reason. */
 export type PromotionUnavailable<
   Stage extends PromotionAvailabilityStage = PromotionAvailabilityStage,
-> = {
-  readonly [Rule in StageRule<Stage>]: {
-    readonly rule: Rule;
-    readonly reason: Rules[Rule]["reason"];
-  };
-}[StageRule<Stage>];
+> = RuleUnavailable<StageRule<Stage>>;
+
+const ruleUnavailable = <Rule extends PromotionAvailabilityRule>(
+  rule: Rule
+): RuleUnavailable<Rule> => ({
+  rule,
+  reason: promotionAvailabilityRules[rule].reason,
+});
+
+/** The first of `rules` that `isMet` refuses, in the given order. */
+const findUnmetRule = <Rule extends PromotionAvailabilityRule>(
+  rules: readonly Rule[],
+  isMet: (rule: Rule) => boolean
+): Result.Result<void, RuleUnavailable<Rule>> => {
+  const failed = rules.find((rule) => !isMet(rule));
+  return failed === undefined
+    ? Result.void
+    : Result.fail(ruleUnavailable(failed));
+};
+
+/** One evaluator per stage, each over the facts of exactly that stage. */
+type PromotionAvailabilityEvaluators = {
+  readonly [Stage in PromotionAvailabilityStage]: (
+    facts: PromotionAvailabilityFacts<Stage>
+  ) => Result.Result<void, PromotionUnavailable<Stage>>;
+};
+
+/**
+ * Each stage's evaluator, written per stage so each checks its rules against
+ * the facts of exactly that stage.
+ */
+const promotionAvailabilityEvaluators: PromotionAvailabilityEvaluators = {
+  pricingSchedule: (facts) =>
+    findUnmetRule(promotionAvailabilityStages.pricingSchedule, (rule) =>
+      promotionAvailabilityRules[rule].isMet(facts)
+    ),
+  pricingDiscountCode: (facts) =>
+    findUnmetRule(promotionAvailabilityStages.pricingDiscountCode, (rule) =>
+      promotionAvailabilityRules[rule].isMet(facts)
+    ),
+  pricingDiscountCodePreview: (facts) =>
+    findUnmetRule(
+      promotionAvailabilityStages.pricingDiscountCodePreview,
+      (rule) => promotionAvailabilityRules[rule].isMet(facts)
+    ),
+  pricingVoucher: (facts) =>
+    findUnmetRule(promotionAvailabilityStages.pricingVoucher, (rule) =>
+      promotionAvailabilityRules[rule].isMet(facts)
+    ),
+  admissionEnabled: (facts) =>
+    findUnmetRule(promotionAvailabilityStages.admissionEnabled, (rule) =>
+      promotionAvailabilityRules[rule].isMet(facts)
+    ),
+  admissionDiscountCodeSchedule: (facts) =>
+    findUnmetRule(
+      promotionAvailabilityStages.admissionDiscountCodeSchedule,
+      (rule) => promotionAvailabilityRules[rule].isMet(facts)
+    ),
+  admissionVoucherSchedule: (facts) =>
+    findUnmetRule(
+      promotionAvailabilityStages.admissionVoucherSchedule,
+      (rule) => promotionAvailabilityRules[rule].isMet(facts)
+    ),
+  admissionAudience: (facts) =>
+    findUnmetRule(promotionAvailabilityStages.admissionAudience, (rule) =>
+      promotionAvailabilityRules[rule].isMet(facts)
+    ),
+  admissionDiscountCodeUses: (facts) =>
+    findUnmetRule(
+      promotionAvailabilityStages.admissionDiscountCodeUses,
+      (rule) => promotionAvailabilityRules[rule].isMet(facts)
+    ),
+  admissionVoucherUses: (facts) =>
+    findUnmetRule(promotionAvailabilityStages.admissionVoucherUses, (rule) =>
+      promotionAvailabilityRules[rule].isMet(facts)
+    ),
+  readmissionDiscountCodeUses: (facts) =>
+    findUnmetRule(
+      promotionAvailabilityStages.readmissionDiscountCodeUses,
+      (rule) => promotionAvailabilityRules[rule].isMet(facts)
+    ),
+};
 
 /**
  * Checks the rules of one caller's stage in the shared order and returns
@@ -204,24 +288,8 @@ export const evaluatePromotionAvailability = <
 >(
   stage: Stage,
   facts: PromotionAvailabilityFacts<Stage>
-): Result.Result<void, PromotionUnavailable<Stage>> => {
-  const rules: readonly PromotionAvailabilityRule[] =
-    promotionAvailabilityStages[stage];
-  const failed = rules.find(
-    (rule) =>
-      !(
-        promotionAvailabilityRules[rule].isMet as (
-          facts: PromotionAvailabilityFacts<Stage>
-        ) => boolean
-      )(facts)
-  );
-  return failed === undefined
-    ? Result.void
-    : Result.fail({
-        rule: failed,
-        reason: promotionAvailabilityRules[failed].reason,
-      } as PromotionUnavailable<Stage>);
-};
+): Result.Result<void, PromotionUnavailable<Stage>> =>
+  promotionAvailabilityEvaluators[stage](facts);
 
 /** The credit a voucher still grants after its active claims' amounts. */
 export const getAvailableVoucherCredit = (

@@ -1,3 +1,4 @@
+import { Array as Arr } from "effect";
 import {
   type CheckoutSummary,
   type CheckoutSummaryOrderItem,
@@ -41,20 +42,19 @@ export const getCoworkCheckoutSummary = (
   );
   const discountedProductPrice =
     quote.payment.discounts.at(-1)?.subtotalAfter ?? productQuoteItem.amount;
-  const productItem =
-    summaryDiscounts.length > 0
-      ? coworkCheckoutSummaryDiscountedProductItemSchema.make({
-          key: productKey,
-          product,
-          amount: discountedProductPrice,
-          originalAmount: productQuoteItem.amount,
-          discounts: [summaryDiscounts[0]!, ...summaryDiscounts.slice(1)],
-        })
-      : coworkCheckoutSummaryProductItemSchema.make({
-          key: productKey,
-          product,
-          amount: productQuoteItem.amount,
-        });
+  const productItem = Arr.isReadonlyArrayNonEmpty(summaryDiscounts)
+    ? coworkCheckoutSummaryDiscountedProductItemSchema.make({
+        key: productKey,
+        product,
+        amount: discountedProductPrice,
+        originalAmount: productQuoteItem.amount,
+        discounts: summaryDiscounts,
+      })
+    : coworkCheckoutSummaryProductItemSchema.make({
+        key: productKey,
+        product,
+        amount: productQuoteItem.amount,
+      });
   const orderItems: CheckoutSummaryOrderItem[] = [productItem];
 
   if (addonQuoteItem?.type === "coffee") {

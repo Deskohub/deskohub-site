@@ -137,9 +137,7 @@ export function isWorkspaceProductMonitorOption(
 ): value is WorkspaceProductMonitorOption {
   return (
     value !== undefined &&
-    workspaceProductMonitorOptions.includes(
-      value as WorkspaceProductMonitorOption
-    )
+    workspaceProductMonitorOptions.some((option) => option === value)
   );
 }
 
@@ -148,7 +146,7 @@ export function isWorkspaceCoworkCurrentProductTier(
 ): value is WorkspaceCoworkCurrentTier {
   return (
     value !== undefined &&
-    workspaceCoworkCurrentTiers.includes(value as WorkspaceCoworkCurrentTier)
+    workspaceCoworkCurrentTiers.some((tier) => tier === value)
   );
 }
 

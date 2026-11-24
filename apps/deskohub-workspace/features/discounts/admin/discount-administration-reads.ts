@@ -26,7 +26,10 @@ import {
   type SalesCalendarId,
 } from "@/shared/backend/config/calendar-resource.config";
 import { workspaceSiteConstants } from "@/shared/utils";
-import type { DiscountAdjustment } from "../contracts";
+import {
+  decodeStoredDiscountAdjustment,
+  type StoredDiscountAdjustment,
+} from "../discount-definition";
 import type { DiscountCodeId, VoucherId } from "../persistence-contracts";
 import { getAvailableVoucherCredit } from "../promotion-availability";
 import { toAdminCalendarSale } from "./admin-calendar-sale";
@@ -83,14 +86,13 @@ export const makeDiscountAdministrationReads = Effect.gen(function* () {
         },
       })
       .pipe(
-        Effect.map((rows) =>
-          rows
-            .map(toAdminDiscount)
-            .toSorted((left, right) =>
-              (left.labels["en-US"] ?? "").localeCompare(
-                right.labels["en-US"] ?? ""
-              )
+        Effect.flatMap((rows) => Effect.forEach(rows, toAdminDiscount)),
+        Effect.map((discounts) =>
+          discounts.toSorted((left, right) =>
+            (left.labels["en-US"] ?? "").localeCompare(
+              right.labels["en-US"] ?? ""
             )
+          )
         )
       )
   );
@@ -313,21 +315,29 @@ export const makeDiscountAdministrationReads = Effect.gen(function* () {
         },
       }),
     }).pipe(
-      Effect.map(({ codeRows, discountGroups, voucherRows }) => ({
+      Effect.bind("codes", ({ codeRows }) =>
+        Effect.forEach(codeRows, (row) =>
+          toDiscountAdjustment(row.discount).pipe(
+            Effect.map((discountAdjustment) => ({
+              ...toAdminDiscountCode(row),
+              discountAdjustment,
+              discountLabel: row.discount.labels["en-US"],
+              discountLabels: row.discount.labels,
+              eligible: row.promotion.customers.some(
+                ({ dotyposCustomerId }) =>
+                  dotyposCustomerId === input.customerId
+              ),
+            }))
+          )
+        )
+      ),
+      Effect.map(({ codeRows, codes, discountGroups, voucherRows }) => ({
         discountGroups: discountGroups
           .flatMap(toAdminDiscountGroup)
           .toSorted((left, right) => left.name.localeCompare(right.name)),
-        codes: codeRows
-          .map((row) => ({
-            ...toAdminDiscountCode(row),
-            discountAdjustment: toDiscountAdjustment(row.discount),
-            discountLabel: row.discount.labels["en-US"],
-            discountLabels: row.discount.labels,
-            eligible: row.promotion.customers.some(
-              ({ dotyposCustomerId }) => dotyposCustomerId === input.customerId
-            ),
-          }))
-          .toSorted((left, right) => left.code.localeCompare(right.code)),
+        codes: codes.toSorted((left, right) =>
+          left.code.localeCompare(right.code)
+        ),
         claims: codeRows
           .flatMap((row) =>
             row.redemptions
@@ -621,38 +631,27 @@ const toAdminVoucherClaim = (
   releaseReason: row.releaseReason,
 });
 
-const toDiscountAdjustment = (
-  row: Pick<
-    StoredDiscount,
-    | "fixedAmountCurrency"
-    | "fixedAmountExponent"
-    | "fixedAmountValue"
-    | "percentageBasisPoints"
-  >
-): DiscountAdjustment =>
-  row.percentageBasisPoints === null
-    ? {
-        kind: "fixed",
-        amount: {
-          value: row.fixedAmountValue!,
-          exponent: row.fixedAmountExponent!,
-          currency: row.fixedAmountCurrency!,
-        },
-      }
-    : {
-        kind: "percentage",
-        basisPoints: row.percentageBasisPoints,
-      };
+/**
+ * A listed discount's adjustment. Stored rows hold exactly one adjustment, so
+ * a row that does not decode is a defect.
+ */
+const toDiscountAdjustment = (row: StoredDiscountAdjustment) =>
+  decodeStoredDiscountAdjustment({ row }).pipe(Effect.orDie);
 
-const toAdminDiscount = (row: AdminDiscountRow): AdminDiscount => ({
-  id: row.id,
-  labels: row.labels,
-  adjustment: toDiscountAdjustment(row),
-  products: row.productTargets.map(({ productTarget }) => productTarget),
-  codeCount: row.codes.length,
-  createdAt: row.createdAt,
-  updatedAt: row.updatedAt,
-});
+const toAdminDiscount = (row: AdminDiscountRow) =>
+  toDiscountAdjustment(row).pipe(
+    Effect.map(
+      (adjustment): AdminDiscount => ({
+        id: row.id,
+        labels: row.labels,
+        adjustment,
+        products: row.productTargets.map(({ productTarget }) => productTarget),
+        codeCount: row.codes.length,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      })
+    )
+  );
 
 const loadCalendarDashboard = (input: {
   readonly calendar: GoogleCalendarService["Service"];
