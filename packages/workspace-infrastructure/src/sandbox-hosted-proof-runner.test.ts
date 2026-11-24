@@ -529,6 +529,15 @@ describe("post-destroy inventory", () => {
           "zones/europe-west1-b": { warning: { code: "UNREACHABLE" } },
         },
       },
+      { items: {}, warning: { code: "PARTIAL_SUCCESS" } },
+      {
+        items: {
+          "regions/europe-west1": { warning: { code: "PARTIAL_SUCCESS" } },
+        },
+      },
+      { items: false },
+      { items: { global: { forwardingRules: false } } },
+      { items: {}, unreachables: "regions/europe-west4" },
     ];
     for (const body of partial) {
       const { exitCode, output } = inventory([
@@ -538,6 +547,32 @@ describe("post-destroy inventory", () => {
       expect({ body, exitCode }).toEqual({ body, exitCode: 1 });
       expect(output).toContain("teardown unverified: forwarding-rules");
     }
+  });
+
+  test("finds a resource on a later Compute page", () => {
+    const { exitCode, output } = inventory([
+      {
+        tool: "curl",
+        pattern:
+          "/aggregated/backendServices\\?maxResults=500&returnPartialSuccess=false&pageToken=a%2Bb$",
+        stdout: JSON.stringify({
+          items: {
+            "regions/europe-west1": {
+              backendServices: [{ name: "legacy-backend" }],
+            },
+          },
+        }),
+      },
+      computeList("backendServices", {
+        items: { global: { warning: { code: "NO_RESULTS_ON_PAGE" } } },
+        nextPageToken: "a+b",
+      }),
+      listing("^storage ls -r", emptiedState),
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain(
+      "proof resources remain in backend-services: legacy-backend"
+    );
   });
 
   test("fails when any class cannot be listed", () => {

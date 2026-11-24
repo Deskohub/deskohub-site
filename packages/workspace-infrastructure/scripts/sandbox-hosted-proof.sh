@@ -275,19 +275,28 @@ project_sink_rows() {
 # The names of one Compute collection in every region, zone and global
 # scope of the project, from its aggregatedList pages. gcloud drops a
 # response's top-level `unreachables` and exits 0, so the raw pages are
-# read: partial success is not requested, and any unreachable scope, a
-# malformed page or more than 20 pages fails rather than reading as empty.
+# read: partial success is not requested, and any warning but an empty
+# page's, at page or scope level, any unreachable scope, a malformed page
+# or more than 20 pages fails rather than reading as empty.
 compute_names() {
   local collection="$1" body url page_token="" pages="" count=0
   while true; do
     url="https://compute.googleapis.com/compute/v1/projects/${project_id}/aggregated/${collection}?maxResults=500&returnPartialSuccess=false"
     [[ -z "$page_token" ]] || url+="&pageToken=${page_token}"
     body="$(google_get '{"items":{}}' "$url")" || return 1
-    jq -se 'length == 1 and (.[0] | type == "object"
-      and ((.unreachables // []) | length == 0)
-      and ((.items // {}) | type == "object")
-      and all((.items // {})[]; (.warning.code // "") != "UNREACHABLE"))' >/dev/null 2>&1 <<<"$body" ||
-      return 1
+    jq -se --arg collection "$collection" '
+      def empty_or(warning): warning == null or warning == {code: "NO_RESULTS_ON_PAGE"}
+        or (warning | type == "object" and .code == "NO_RESULTS_ON_PAGE");
+      length == 1 and (.[0] | type == "object"
+        and ((has("items") | not) or (.items | type == "object"))
+        and ((has("unreachables") | not) or (.unreachables == []))
+        and ((has("nextPageToken") | not) or (.nextPageToken | type == "string"))
+        and empty_or(.warning)
+        and all((.items // {})[]; type == "object"
+          and empty_or(.warning)
+          and ((has($collection) | not) or (.[$collection] | type == "array"
+            and all(.[]; type == "object" and (.name | type == "string"))))))' \
+      >/dev/null 2>&1 <<<"$body" || return 1
     pages+="${body}"$'\n'
     page_token="$(jq -r '.nextPageToken // empty | @uri' <<<"$body")" || return 1
     [[ -n "$page_token" ]] || break
