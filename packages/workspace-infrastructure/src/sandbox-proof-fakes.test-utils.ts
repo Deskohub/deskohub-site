@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as Predicate from "effect/Predicate";
 
 /**
  * Stateful fakes of the CLIs the sandbox proof runner calls, for offline
@@ -32,6 +33,8 @@ export interface FakeRule {
   readonly exit?: number;
   /** World keys this call sets before it answers. */
   readonly set?: Record<string, unknown>;
+  /** Seconds this call advances the fake clock by. */
+  readonly advance?: number;
 }
 
 /** One state object: its live generation, if any, and every generation. */
@@ -68,6 +71,13 @@ export interface FakeWorld {
   readonly failedServiceReads?: number;
   /** Set by an `apply` deliver: the detached child's process ID. */
   readonly detachedChildPid?: number;
+  /**
+   * Seconds each access token has left, by token, as tokeninfo answers;
+   * an unknown token gets a 400.
+   */
+  readonly tokenLifetimes?: Record<string, number>;
+  /** Seconds the fake clock moves while tokeninfo answers. */
+  readonly tokeninfoDelay?: number;
   /** The fake clock's start, in epoch seconds; defaults to the real clock. */
   readonly now?: number;
   readonly [key: string]: unknown;
@@ -85,7 +95,7 @@ const realBun = process.execPath;
 const realDate = Bun.which("date") ?? "/bin/date";
 const realSetsid = Bun.which("setsid") ?? "/usr/bin/setsid";
 const realSleep = Bun.which("sleep") ?? "/bin/sleep";
-const fakeTools = ["gcloud", "bun", "curl", "docker", "terraform"];
+const fakeTools = ["gcloud", "bun", "curl", "docker"];
 
 /**
  * `date +%s` and `date -u +%s` read the fake clock; any other form is the
@@ -114,8 +124,82 @@ const print = (line: string) => {
   process.stdout.write(`${line}\n`);
 };
 
-const readWorld = (path: string): FakeWorld =>
-  JSON.parse(readFileSync(path, "utf8")) as FakeWorld;
+/*
+ * The fake CLIs read the world on every call, so it is checked with plain
+ * predicates: loading Effect Schema would add about 60 ms to each call.
+ */
+const isOptional =
+  (is: (value: unknown) => boolean) =>
+  (value: unknown): boolean =>
+    value === undefined || is(value);
+const isArrayOf =
+  (is: (value: unknown) => boolean) =>
+  (value: unknown): boolean =>
+    Array.isArray(value) && value.every(is);
+const isRecordOf =
+  (is: (value: unknown) => boolean) =>
+  (value: unknown): boolean =>
+    Predicate.isReadonlyObject(value) && Object.values(value).every(is);
+const hasFields = (
+  value: unknown,
+  fields: Record<string, (field: unknown) => boolean>
+) =>
+  Predicate.isReadonlyObject(value) &&
+  Object.entries(fields).every(([key, is]) => is(value[key]));
+
+const optionalString = isOptional(Predicate.isString);
+const optionalNumber = isOptional(Predicate.isNumber);
+const optionalBoolean = isOptional(Predicate.isBoolean);
+
+const isFakeRule = (value: unknown) =>
+  hasFields(value, {
+    tool: Predicate.isString,
+    pattern: Predicate.isString,
+    stdout: optionalString,
+    exit: optionalNumber,
+    set: isOptional(Predicate.isReadonlyObject),
+    advance: optionalNumber,
+  });
+
+const isFakeObject = (value: unknown) =>
+  hasFields(value, {
+    live: Predicate.or(Predicate.isString, Predicate.isNull),
+    generations: isRecordOf(Predicate.isString),
+  });
+
+const interruptedDeliveries: ReadonlyArray<unknown> = [
+  "apply",
+  "exit",
+  "exit-after-failed-read",
+] satisfies ReadonlyArray<FakeWorld["interruptedDeliver"]>;
+
+const isFakeWorld = (value: unknown): value is FakeWorld =>
+  hasFields(value, {
+    rules: isOptional(isArrayOf(isFakeRule)),
+    objects: isOptional(isRecordOf(isFakeObject)),
+    listNoncurrent: optionalBoolean,
+    nextGeneration: optionalNumber,
+    files: isOptional(isRecordOf(Predicate.isString)),
+    serviceGenerations: isOptional(isRecordOf(Predicate.isNumber)),
+    interruptedDeliver: isOptional((field) =>
+      interruptedDeliveries.includes(field)
+    ),
+    serviceReadsFailAfterDeliver: optionalBoolean,
+    deliverStarted: optionalBoolean,
+    failedServiceReads: optionalNumber,
+    detachedChildPid: optionalNumber,
+    tokenLifetimes: isOptional(isRecordOf(Predicate.isNumber)),
+    tokeninfoDelay: optionalNumber,
+    now: optionalNumber,
+  });
+
+const readWorld = (path: string): FakeWorld => {
+  const world: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (!isFakeWorld(world)) {
+    throw new Error(`the fake world in ${path} is malformed`);
+  }
+  return world;
+};
 
 const writeWorld = (path: string, world: FakeWorld) => {
   writeFileSync(`${path}.next`, JSON.stringify(world));
@@ -161,6 +245,7 @@ export const withProofFakes = <A>(
         SANDBOX_PROOF_DIR: proofDir,
         FAKE_WORLD: worldFile,
         FAKE_CALLS: callsLog,
+        FAKE_CLOCK: clockFile,
       },
       proofDir,
       world: () => readWorld(worldFile),
@@ -225,6 +310,15 @@ const fakeStorage = (
             crc32c_hash: object.generations[object.live],
           })
     );
+    return 0;
+  }
+  if (verb === "cat") {
+    const content = world.files?.[objectName(positional[2] ?? "")];
+    if (content === undefined) {
+      console.error("ERROR: One or more URLs matched no objects.");
+      return 1;
+    }
+    process.stdout.write(content);
     return 0;
   }
   if (verb === "cp" || verb === "rm") {
@@ -333,6 +427,15 @@ const interruptedDeliver = async (
   return 0;
 };
 
+/** Move the fake clock on, as a slow call would. */
+const advanceClock = (seconds: number) => {
+  if (seconds === 0) return;
+  const clock = process.env.FAKE_CLOCK ?? "";
+  const now = Number(readFileSync(clock, "utf8").trim());
+  writeFileSync(`${clock}.next`, `${now + seconds}\n`);
+  renameSync(`${clock}.next`, clock);
+};
+
 const runFake = async (tool: string, args: ReadonlyArray<string>) => {
   const worldFile = process.env.FAKE_WORLD ?? "";
   appendFileSync(process.env.FAKE_CALLS ?? "", `${tool} ${args.join(" ")}\n`);
@@ -355,6 +458,21 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     return interruptedDeliver(world, save);
   }
   const joined = args.join(" ");
+  if (
+    tool === "curl" &&
+    world.tokenLifetimes !== undefined &&
+    joined.includes("oauth2.googleapis.com/tokeninfo")
+  ) {
+    const token = (await Bun.stdin.text()).trim();
+    const seconds = world.tokenLifetimes[token];
+    advanceClock(world.tokeninfoDelay ?? 0);
+    if (seconds === undefined) {
+      print('{"error":"invalid_token"}');
+      return 22;
+    }
+    print(JSON.stringify({ expires_in: String(seconds) }));
+    return 0;
+  }
   const rule = world.rules?.find(
     (candidate) =>
       candidate.tool === tool && new RegExp(candidate.pattern).test(joined)
@@ -363,6 +481,7 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     if (rule.set !== undefined) {
       save({ ...world, ...rule.set });
     }
+    advanceClock(rule.advance ?? 0);
     if (rule.stdout !== undefined) {
       print(rule.stdout);
     }

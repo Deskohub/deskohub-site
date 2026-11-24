@@ -20,7 +20,7 @@ import {
   emptyReleaseRecord,
   GitSha,
   type MaterializedDeployment,
-  type ReleaseId,
+  ReleaseId,
   ReleaseRecord,
   templateRevisionOf,
 } from "./release-record";
@@ -126,7 +126,7 @@ const release = (
 describe("release reconciler", () => {
   test("stages, promotes and settles with an advancing generation", () => {
     const first = release(emptyReleaseRecord, shaA, digestA, t0);
-    expect(first.releaseId).toBe("r1-aaaaaaa" as ReleaseId);
+    expect(first.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
     expect(first.pending.generation).toBe(2);
     expect(first.pending.active).toBeNull();
     expect(first.settled).toMatchObject({
@@ -208,7 +208,7 @@ describe("release reconciler", () => {
       failure(
         restore(settled, {
           expectedGeneration: 1,
-          releaseId: "r1-aaaaaaa" as ReleaseId,
+          releaseId: ReleaseId.make("r1-aaaaaaa"),
           liveTemplate: templateOf(settled.materialized),
           specFingerprintOf,
           now: t0,
@@ -459,7 +459,7 @@ describe("declared web template", () => {
     run(
       restore(record, {
         expectedGeneration: record.generation,
-        releaseId: "r1-aaaaaaa" as ReleaseId,
+        releaseId: ReleaseId.make("r1-aaaaaaa"),
         now: later(2),
         liveTemplate,
         specFingerprintOf: fingerprint,
@@ -503,7 +503,7 @@ describe("declared web template", () => {
       },
     });
     const restored = settleRestore(pending);
-    expect(restored.active?.releaseId).toBe("r1-aaaaaaa" as ReleaseId);
+    expect(restored.active?.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
     expect(restored.materialized).toEqual(pending.materialized);
     // Traffic still targets the release's own revision.
     expect(restored.active?.revision).toBe("workspace-web-r1-aaaaaaa");
@@ -575,7 +575,7 @@ describe("declared web template", () => {
     const pending = run(
       restore(staged, {
         expectedGeneration: staged.generation,
-        releaseId: "r4-bbbbbbb" as ReleaseId,
+        releaseId: ReleaseId.make("r4-bbbbbbb"),
         now: later(2),
         liveTemplate:
           failedCandidate === null
@@ -636,7 +636,9 @@ describe("declared web template", () => {
       })
     );
     expect(refreshed.candidate).toBeNull();
-    expect(refreshed.materialized?.releaseId).toBe("r4-bbbbbbb" as ReleaseId);
+    expect(refreshed.materialized?.releaseId).toBe(
+      ReleaseId.make("r4-bbbbbbb")
+    );
     // A candidate whose verification apply never ran is dropped too: only
     // that apply may declare its name.
     const kept = run(

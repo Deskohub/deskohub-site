@@ -9,6 +9,7 @@ import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import { ImageDigest } from "../config/stack-config";
 import { sandboxConfig } from "../config/stack-config.test-utils";
+import { refusedCredentials } from "../google-credentials.test-utils";
 import { trafficReadback } from "../readback";
 import {
   templateSpecAnnotation,
@@ -605,9 +606,8 @@ describe("Cloud Run service readback", () => {
 
   test("credentials that fail or hang fail unavailable without a request", async () => {
     for (const credentials of [
-      // The provider's credential error class is not exported; any failure
-      // of the credential lookup must surface the same way.
-      Effect.fail("no credentials") as unknown as typeof Credentials.Service,
+      // Any failure of the credential lookup must surface the same way.
+      refusedCredentials("no credentials"),
       Effect.never,
       Effect.die("token lookup crashed"),
     ]) {

@@ -6,5 +6,10 @@
     "composite": false,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "alchemy.run.ts", "release.run.ts"]
+  "include": [
+    "src/**/*.ts",
+    "sandbox-probe/**/*.ts",
+    "alchemy.run.ts",
+    "release.run.ts"
+  ]
 }

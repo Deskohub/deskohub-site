@@ -130,8 +130,8 @@ test("runs Mobile's tests and the repository-wide tests in Workspace validation,
   expect(doc.jobs["test-functional"]?.needs).toContain("validate-workspace");
 });
 
-test("lints and tests the Workspace infrastructure and validates its edge Terraform offline", () => {
-  // No app depends on either, so the test shards never cover them.
+test("lints and tests the Workspace infrastructure", () => {
+  // No app depends on it, so the test shards never cover it.
   const steps = workflowSteps(doc, "validate-workspace");
   const infrastructure = steps.find(
     (step) => step.name === "Lint and test the Workspace infrastructure"
@@ -139,38 +139,16 @@ test("lints and tests the Workspace infrastructure and validates its edge Terraf
   expect(infrastructure?.run).toBe(
     "bun turbo lint test --filter=@deskohub/workspace-infrastructure"
   );
-
-  const setup = steps.find((step) =>
-    step.uses?.startsWith("hashicorp/setup-terraform@")
-  );
-  expect(setup?.uses).toMatch(/^hashicorp\/setup-terraform@[0-9a-f]{40}$/);
-  expect(setup?.with?.terraform_version).toMatch(/^\d+\.\d+\.\d+$/);
-
-  const terraform = steps.find(
-    (step) => step.name === "Validate the Workspace edge Terraform"
-  );
+  expect(infrastructure?.if).toBeUndefined();
+  expect(infrastructure?.["continue-on-error"]).toBeUndefined();
+  // Alchemy owns the whole Workspace stack, edge included.
   expect(
-    (terraform?.run ?? "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-  ).toEqual([
-    "terraform fmt -check -recursive infra/workspace-edge",
-    "terraform -chdir=infra/workspace-edge init -backend=false -lockfile=readonly -input=false",
-    "terraform -chdir=infra/workspace-edge validate",
-  ]);
-  // Terraform's working data stays outside the checkout.
-  expect(terraform?.env?.TF_DATA_DIR).toStartWith(
-    `${["${{", "runner.temp", "}}"].join(" ")}/`
-  );
-
-  for (const step of [infrastructure, setup, terraform]) {
-    expect(step?.if).toBeUndefined();
-    expect(step?.["continue-on-error"]).toBeUndefined();
-  }
-  expect(steps.indexOf(setup as WorkflowStep)).toBeLessThan(
-    steps.indexOf(terraform as WorkflowStep)
-  );
+    steps.filter(
+      (step) =>
+        step.uses?.startsWith("hashicorp/") ||
+        /\bterraform\b/.test(step.run ?? "")
+    )
+  ).toEqual([]);
   expect(doc.jobs["test-functional"]?.needs).toContain("validate-workspace");
 });
 

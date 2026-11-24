@@ -256,7 +256,7 @@ export const webTraffic = (
 
 /**
  * The public web service. Only the external load balancer reaches it
- * (`infra/workspace-edge`), and its default URL is off so traffic cannot
+ * (`declareWorkspaceEdge`), and its default URL is off so traffic cannot
  * bypass Cloud Armor.
  *
  * The template is the candidate, else the revision last materialized; only

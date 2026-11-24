@@ -194,6 +194,8 @@ export const declareWorkspaceServices = (
 
     return {
       webService: webService.name,
+      /** The short service ID the edge's serverless NEG names. */
+      webServiceId: webService.serviceId,
       webLatestReadyRevision: webService.latestReadyRevision,
       tasksWorkerUri: tasksWorker.uri,
       schedulerWorkerUri: schedulerWorker.uri,

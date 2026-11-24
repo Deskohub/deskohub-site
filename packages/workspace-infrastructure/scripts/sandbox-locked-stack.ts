@@ -148,9 +148,7 @@ const runLocked = (action: LockedStackAction) =>
             Effect.flatMap((handle) => handle.exitCode),
             Effect.scoped
           );
-        if (
-          (spec.acceptedExitCodes as ReadonlyArray<number>).includes(exitCode)
-        ) {
+        if (spec.acceptedExitCodes.some((code) => code === exitCode)) {
           yield* Ref.set(applyInFlight, false);
         }
         return exitCode;

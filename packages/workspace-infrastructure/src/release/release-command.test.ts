@@ -7,6 +7,7 @@ import * as Exit from "effect/Exit";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import { GcpRegion, type WorkspaceStackConfig } from "../config/stack-config";
 import { sandboxConfig } from "../config/stack-config.test-utils";
 import {
@@ -30,6 +31,10 @@ import {
 } from "./release-record-store";
 import { describeStoredRecord, writerFingerprint } from "./release-writer";
 import { heldBy } from "./release-writer.test-utils";
+
+const decodeStoredRecord = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+);
 
 /**
  * Runs one command against an in-memory record and a project with no
@@ -202,7 +207,7 @@ const runOnRuntime = async (
   const stored = storage.get(location.bucket, location.object);
   return {
     exit,
-    record: stored === undefined ? undefined : JSON.parse(stored.body),
+    record: stored === undefined ? undefined : decodeStoredRecord(stored.body),
     writes: storage.requests.filter(({ method }) => method === "POST"),
     cloudRunReads,
   };
@@ -224,7 +229,7 @@ describe("workspace release runtime region", () => {
       locked
     );
     expect(Exit.isSuccess(result.exit)).toBe(true);
-    expect(result.record.writer).toBeNull();
+    expect(result.record?.writer).toBeNull();
   });
 
   test("unlock refuses a config in another region before reading Cloud Run", async () => {

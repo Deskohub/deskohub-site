@@ -28,12 +28,25 @@ export const sandboxProofBudget = {
 export const stackConfigDeclaresTelemetryCollector =
   "telemetryCollectorImage" in SandboxStackConfig.fields;
 
+/**
+ * The proof's edge: plain HTTP through the load balancer's IP, since the
+ * sandbox has no DNS, with WAF rules in preview and no static CDN. The
+ * stack declares it with the first release and destroys it with the stack.
+ */
+export const sandboxProofEdge = {
+  domains: [],
+  enableHttps: false,
+  staticCdnEnabled: false,
+  wafPreview: true,
+} as const;
+
 const serviceAccount = (projectId: string, name: string) =>
   [name, `${projectId}.iam.gserviceaccount.com`].join("@");
 
 /**
  * The sandbox stack config input: the accounts the bootstrap script
- * creates, no secrets, single-instance capacity and paused schedules.
+ * creates, no secrets, single-instance capacity, paused schedules and the
+ * plain-HTTP proof edge.
  */
 export const sandboxProofStackConfigInput = (
   identity: SandboxProofIdentity
@@ -75,6 +88,7 @@ export const sandboxProofStackConfigInput = (
   schedulesEnabled: false,
   alertNotificationChannels: [],
   budget: sandboxProofBudget,
+  edge: sandboxProofEdge,
   ...(identity.telemetryCollectorImage === undefined
     ? {}
     : { telemetryCollectorImage: identity.telemetryCollectorImage }),

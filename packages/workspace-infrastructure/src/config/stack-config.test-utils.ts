@@ -7,8 +7,8 @@ import {
 const projectId = "deskohub-ws-sandbox";
 
 /** A service account identifier in the synthetic project, not a mailbox. */
-export const sandboxServiceAccount = (name: string) =>
-  `${name}@${projectId}.iam.gserviceaccount.com`;
+export const sandboxServiceAccount = (name: string, project = projectId) =>
+  `${name}@${project}.iam.gserviceaccount.com`;
 
 /** A synthetic sandbox configuration: identifiers only, no real project. */
 export const sandboxConfigInput = {
@@ -64,3 +64,21 @@ export const productionConfig: WorkspaceStackConfig = Effect.runSync(
 export const previewConfig: WorkspaceStackConfig = Effect.runSync(
   decodeWorkspaceStackConfig({ ...sharedInput, stage: "preview" })
 );
+
+/**
+ * The sandbox input moved to another project: its state bucket and every
+ * service account follow the project.
+ */
+export const sandboxConfigInputIn = (project: string) => ({
+  ...sandboxConfigInput,
+  projectId: project,
+  stateBucket: `${project}-workspace-state`,
+  serviceAccounts: Object.fromEntries(
+    Object.entries(sandboxConfigInput.serviceAccounts).map(
+      ([role, account]) => [
+        role,
+        sandboxServiceAccount(account.slice(0, account.indexOf("@")), project),
+      ]
+    )
+  ),
+});

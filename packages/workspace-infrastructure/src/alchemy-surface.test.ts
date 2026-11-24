@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 import * as ArtifactRegistry from "@alchemy.run/gcp/ArtifactRegistry";
 import * as CloudScheduler from "@alchemy.run/gcp/CloudScheduler";
 import * as CloudTasks from "@alchemy.run/gcp/CloudTasks";
+import * as Compute from "@alchemy.run/gcp/Compute";
 import * as IAM from "@alchemy.run/gcp/IAM";
+import * as Logging from "@alchemy.run/gcp/Logging";
 import * as Monitoring from "@alchemy.run/gcp/Monitoring";
 import * as Run from "@alchemy.run/gcp/Run";
 import * as Storage from "@alchemy.run/gcp/Storage";
 import { isOutput } from "alchemy/Output";
-import { Stack } from "alchemy/Stack";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -44,6 +45,9 @@ import {
   runAsHolder,
   testWriterToken,
 } from "./release/release-writer.test-utils";
+import { EdgeBackendService } from "./resources/edge-backend-service";
+import { declareWorkspaceEdge } from "./resources/edge-declarations";
+import { EdgeSecurityPolicy } from "./resources/edge-security-policy";
 import {
   alertPolicyDeclarations,
   artifactRepositoryProps,
@@ -60,38 +64,13 @@ import {
   webTemplateSpecFingerprint,
   workerServiceProps,
 } from "./resources/service-declarations";
+import { evaluate } from "./stack-evaluation.test-utils";
 import { workspaceSurfaceClassification } from "./surface-classification";
 import {
   declareRecordedWorkspaceServices,
   declareWorkspaceFoundation,
   declareWorkspaceServices,
 } from "./workspace-stack";
-
-type RegisteredResource = {
-  readonly Type: string;
-  // biome-ignore lint/suspicious/noExplicitAny: Alchemy registers raw input props.
-  readonly Props: any;
-};
-
-/**
- * Evaluate a declaration against an empty in-memory stack. Registration
- * runs the real beta.87 constructors (and their logical-ID checks) without
- * providers, state or credentials.
- */
-const evaluate = async <A, E, R>(declaration: Effect.Effect<A, E, R>) => {
-  const resources: Record<string, RegisteredResource> = {};
-  const registration = declaration.pipe(
-    Effect.provideService(Stack, {
-      name: "DeskohubWorkspaceTest",
-      stage: "sandbox",
-      resources,
-      bindings: {},
-      actions: {},
-    } as never)
-  ) as Effect.Effect<A, E>; // Providers are only used on deploy, never here.
-  const exit = await Effect.runPromiseExit(registration);
-  return { exit, resources };
-};
 
 const countBy = (values: ReadonlyArray<string>) => {
   const counts: Record<string, number> = {};
@@ -145,6 +124,12 @@ const servingRecord = () => {
   );
 };
 
+/** A readback for declarations that must not consult the live services. */
+const unconsultedReadback = ReleaseServiceReadback.of({
+  service: () => Effect.die(new Error("the declaration read a live service")),
+  revision: () => Effect.die(new Error("the declaration read a live revision")),
+});
+
 describe("Alchemy beta.87 surface", () => {
   test("pins exact versions and installs exactly them", async () => {
     expect(packageJson.dependencies).toEqual({
@@ -159,14 +144,25 @@ describe("Alchemy beta.87 surface", () => {
     expect(await installedVersion("effect")).toBe("4.1.4");
   });
 
-  test("names only resource types the installed provider defines", () => {
+  test("names only resource types the stack's providers define", () => {
     const constructors: Record<string, { readonly Type?: unknown }> = {
       "GCP.ArtifactRegistry.Repository": ArtifactRegistry.Repository,
       "GCP.CloudScheduler.Job": CloudScheduler.Job,
       "GCP.CloudTasks.Queue": CloudTasks.Queue,
+      "GCP.Compute.GlobalAddress": Compute.GlobalAddress,
+      "GCP.Compute.GlobalForwardingRule": Compute.GlobalForwardingRule,
+      "GCP.Compute.RegionNetworkEndpointGroup":
+        Compute.RegionNetworkEndpointGroup,
+      "GCP.Compute.SslCertificate": Compute.SslCertificate,
+      "GCP.Compute.TargetHttpProxy": Compute.TargetHttpProxy,
+      "GCP.Compute.TargetHttpsProxy": Compute.TargetHttpsProxy,
+      "GCP.Compute.UrlMap": Compute.UrlMap,
       "GCP.IAM.Member": IAM.Member,
+      "GCP.Logging.Exclusion": Logging.Exclusion,
       "GCP.Monitoring.AlertPolicy": Monitoring.AlertPolicy,
       "GCP.Storage.Bucket": Storage.Bucket,
+      "DeskohubWorkspace.EdgeBackendService": EdgeBackendService,
+      "DeskohubWorkspace.EdgeSecurityPolicy": EdgeSecurityPolicy,
     };
     const alchemyOwned = workspaceSurfaceClassification.flatMap((item) =>
       item.owner.kind === "alchemy" ? [item.owner.resourceType] : []
@@ -178,16 +174,12 @@ describe("Alchemy beta.87 surface", () => {
       }
       expect(constructors[resourceType]?.Type).toBe(resourceType);
     }
+    // The edge has no Terraform owner left.
     expect(
-      workspaceSurfaceClassification
-        .filter((item) => item.owner.kind === "terraform")
-        .map((item) => item.capability)
-    ).toEqual([
-      "External HTTPS load balancer and serverless NEG",
-      "Cloud Armor security policy",
-      "Cloud CDN policy",
-      "Log Router exclusions for token-bearing routes",
-    ]);
+      new Set(workspaceSurfaceClassification.map((item) => item.owner.kind))
+    ).toEqual(
+      new Set(["alchemy", "owner-bootstrap", "release-flow", "deferred"])
+    );
   });
 
   test("registers every foundation resource under a distinct logical ID", async () => {
@@ -270,6 +262,36 @@ describe("Alchemy beta.87 surface", () => {
     expect(secretOf("WorkspaceSchedulerWorker")).toBeUndefined();
   });
 
+  test("points the edge's endpoint group at the declared web service ID", async () => {
+    const served = await evaluate(
+      Effect.gen(function* () {
+        const services = yield* declareWorkspaceServices(
+          sandboxConfig,
+          servingRecord(),
+          now
+        );
+        return yield* declareWorkspaceEdge(
+          sandboxConfig,
+          {
+            domains: ["workspace.example.com"],
+            enableHttps: true,
+            staticCdnEnabled: false,
+            wafPreview: true,
+            authRateLimitPerMinute: 120,
+          },
+          services?.webServiceId ?? "missing-web-service"
+        );
+      })
+    );
+    expect(served.exit._tag).toBe("Success");
+    const { resources } = served;
+    // The NEG takes the web service's short ID attribute, by reference.
+    expect(resources.WorkspaceWeb?.Props.serviceId).toBe("workspace-web");
+    const service = resources.EdgeWebEndpointGroup?.Props.cloudRun.service;
+    expect(isOutput(service)).toBe(true);
+    expect(Bun.inspect(service)).toBe("WorkspaceWeb.serviceId");
+  });
+
   test("declares services only from the record at the fenced generation", async () => {
     const record = servingRecord();
     const fromStore = (expectedGeneration: number | null) =>
@@ -280,7 +302,10 @@ describe("Alchemy beta.87 surface", () => {
         return yield* declareRecordedWorkspaceServices(
           sandboxConfig,
           runAsHolder(expectedGeneration)
-        ).pipe(Effect.provideService(ReleaseRecordStore, store));
+        ).pipe(
+          Effect.provideService(ReleaseRecordStore, store),
+          Effect.provideService(ReleaseServiceReadback, unconsultedReadback)
+        );
       });
 
     const stale = await evaluate(fromStore(record.generation - 1));
@@ -309,7 +334,10 @@ describe("Alchemy beta.87 surface", () => {
           return yield* declareRecordedWorkspaceServices(
             sandboxConfig,
             runAsHolder(null)
-          ).pipe(Effect.provideService(ReleaseRecordStore, store));
+          ).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.provideService(ReleaseServiceReadback, unconsultedReadback)
+          );
         })
       );
     const serving = servingRecord();
@@ -462,7 +490,10 @@ describe("Alchemy beta.87 surface", () => {
           return yield* declareRecordedWorkspaceServices(previewConfig, {
             writer: Option.none(),
             generation: expectedGeneration,
-          }).pipe(Effect.provideService(ReleaseRecordStore, store));
+          }).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.provideService(ReleaseServiceReadback, unconsultedReadback)
+          );
         })
       );
     const plain = await preview(null);
@@ -525,7 +556,10 @@ describe("Alchemy beta.87 surface", () => {
           return yield* declareRecordedWorkspaceServices(
             sandboxConfig,
             runAsHolder(generation)
-          ).pipe(Effect.provideService(ReleaseRecordStore, store));
+          ).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.provideService(ReleaseServiceReadback, unconsultedReadback)
+          );
         })
       );
     // An inherited generation never turns a plain deploy into a fenced one.
@@ -608,14 +642,11 @@ describe("Alchemy beta.87 surface", () => {
     const queueTarget = queueProps(sandboxConfig, queueContract);
     const jobTarget = scheduleJobProps(sandboxConfig, scheduleContract);
     const environment = (workload: "tasks-worker" | "scheduler-worker") => {
-      const containers = (workerServiceProps(sandboxConfig, workload, digest)
-        .template?.containers ?? []) as Array<{
-        env: Array<{ name: string; value: string }>;
-      }>;
-      const [app] = containers;
-      return Object.fromEntries(
-        (app?.env ?? []).map(({ name, value }) => [name, value])
-      );
+      const [app] =
+        workerServiceProps(sandboxConfig, workload, digest).template
+          ?.containers ?? [];
+      const env = app !== undefined && "env" in app ? (app.env ?? []) : [];
+      return Object.fromEntries(env.map(({ name, value }) => [name, value]));
     };
     expect(environment("tasks-worker")).toMatchObject({
       WORKSPACE_TASKS_AUDIENCE: queueTarget.httpTarget?.oidcToken?.audience,
@@ -659,8 +690,7 @@ describe("Alchemy beta.87 surface", () => {
     }
 
     for (const props of declared(withCollector)) {
-      const [app, collector, ...rest] = (props?.template?.containers ??
-        []) as Array<Record<string, unknown>>;
+      const [app, collector, ...rest] = props?.template?.containers ?? [];
       expect(rest).toEqual([]);
       // The app stays first, so readback reads its image as the template's.
       expect(app).toMatchObject({
@@ -669,7 +699,9 @@ describe("Alchemy beta.87 surface", () => {
         ports: [{ containerPort: 8080 }],
         dependsOn: ["otel-collector"],
       });
-      expect(app?.env).toContainEqual({
+      expect(
+        app !== undefined && "env" in app ? app.env : undefined
+      ).toContainEqual({
         name: "WORKSPACE_OTLP_ENDPOINT",
         value: "http://127.0.0.1:4318",
       });

@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import {
   isLockedStackAction,
   lockedStackActions,
@@ -30,36 +31,51 @@ const runner = new URL("../scripts/sandbox-hosted-proof.sh", import.meta.url)
   .pathname;
 const packageRoot = new URL("..", import.meta.url).pathname;
 
-interface Step {
-  readonly id?: string;
-  readonly name?: string;
-  readonly if?: string;
-  readonly uses?: string;
-  readonly run?: string;
-  readonly env?: Record<string, string>;
-  readonly with?: Record<string, string | boolean>;
-  readonly "timeout-minutes"?: number;
-}
-interface Workflow {
-  readonly on: {
-    readonly workflow_dispatch: {
-      readonly inputs: Record<
-        string,
-        { type: string; default: string; options: ReadonlyArray<string> }
-      >;
-    };
-  };
-  readonly concurrency: Record<string, unknown>;
-  readonly env: Record<string, string>;
-  readonly jobs: Record<
-    string,
-    { readonly steps: ReadonlyArray<Step>; readonly "timeout-minutes": string }
-  >;
-}
+const StringRecord = Schema.Record(Schema.String, Schema.String);
+const Step = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
+  if: Schema.optionalKey(Schema.String),
+  uses: Schema.optionalKey(Schema.String),
+  run: Schema.optionalKey(Schema.String),
+  env: Schema.optionalKey(StringRecord),
+  with: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Union([Schema.String, Schema.Finite, Schema.Boolean])
+    )
+  ),
+  "timeout-minutes": Schema.optionalKey(Schema.Finite),
+});
+type Step = typeof Step.Type;
+const Workflow = Schema.Struct({
+  on: Schema.Struct({
+    workflow_dispatch: Schema.Struct({
+      inputs: Schema.Record(
+        Schema.String,
+        Schema.Struct({
+          type: Schema.String,
+          default: Schema.String,
+          options: Schema.Array(Schema.String),
+        })
+      ),
+    }),
+  }),
+  concurrency: Schema.Record(Schema.String, Schema.Unknown),
+  env: StringRecord,
+  jobs: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      steps: Schema.Array(Step),
+      "timeout-minutes": Schema.String,
+    })
+  ),
+});
 
-const workflow = Bun.YAML.parse(
-  await Bun.file(workflowFile).text()
-) as Workflow;
+const workflowText = await Bun.file(workflowFile).text();
+const workflow = Schema.decodeUnknownSync(Workflow)(
+  Bun.YAML.parse(workflowText)
+);
 const steps = workflow.jobs.smoke?.steps ?? [];
 const runnerScript = readFileSync(runner, "utf8");
 
@@ -80,7 +96,7 @@ const proofPhases = [
   "foundation",
   "images",
   "deliver-v1",
-  "edge-apply",
+  "edge-readback",
   "deliver-v2",
   "drift",
   "interrupt-recover",
@@ -88,11 +104,7 @@ const proofPhases = [
   "restore-v1",
   "edge-privacy",
 ];
-const teardownPhases = [
-  "edge-destroy",
-  "stack-destroy",
-  "post-destroy-inventory",
-];
+const teardownPhases = ["stack-destroy", "post-destroy-inventory"];
 const teardownCondition =
   "always() && inputs.mode != 'read-only' && steps.preflight.outcome == 'success'";
 
@@ -102,7 +114,7 @@ const withFakeTools = <A>(run: (env: Record<string, string>) => A) => {
   const bin = join(dir, "bin");
   mkdirSync(bin);
   const calls = join(dir, "calls.log");
-  for (const tool of ["gcloud", "docker", "terraform", "curl", "setsid"]) {
+  for (const tool of ["gcloud", "docker", "curl", "setsid"]) {
     const path = join(bin, tool);
     writeFileSync(
       path,
@@ -198,6 +210,21 @@ describe("sandbox workflow modes", () => {
     expect(steps[guard]?.if).toBe("inputs.mode != 'read-only'");
   });
 
+  test("leaves the token's expiry to the runner, never an estimate", () => {
+    // The runner reads each token's remaining lifetime from tokeninfo.
+    expect(workflowText).not.toContain("GOOGLE_ACCESS_TOKEN_EXPIRES_AT");
+  });
+
+  test("sets up no Terraform: Alchemy owns the edge", () => {
+    expect(
+      steps.filter(
+        (step) =>
+          step.uses?.startsWith("hashicorp/") ||
+          /\bterraform\b/.test(step.run ?? "")
+      )
+    ).toEqual([]);
+  });
+
   test("runs no mutating phase in read-only mode", () => {
     for (const { phase, step } of phaseSteps) {
       if (phase === "readonly-inventory") {
@@ -226,7 +253,6 @@ describe("sandbox workflow modes", () => {
     for (const phase of [
       "preflight",
       ...proofPhases.slice(1),
-      "edge-destroy",
       "stack-destroy",
     ]) {
       expect(stepFor(phase)?.env?.GOOGLE_ACCESS_TOKEN).toBe(
@@ -344,11 +370,12 @@ describe("sandbox proof runner", () => {
       "bun run release deliver --sha",
       "bun run release status",
       "bun run release plan",
-      "terraform -chdir=",
-      "prefix=terraform/workspace-edge/sandbox-proof",
-      "-auto-approve",
-      "enable_https=false",
+      "gcloud storage cat gs://deskohub-workspace-sandbox-workspace-state/DeskohubWorkspace/sandbox/__stack_output__.json",
+      "gcloud compute backend-services describe workspace-sandbox-dynamic",
+      "gcloud compute backend-services describe workspace-sandbox-static",
+      "gcloud compute security-policies describe workspace-sandbox-edge",
       "http://198.51.100.10/healthz",
+      "http://198.51.100.10/robots.txt",
       "bun run release deliver --sha",
       "gcloud artifacts repositories update workspace",
       "bun scripts/sandbox-locked-stack.ts drift",
@@ -373,7 +400,6 @@ describe("sandbox proof runner", () => {
       "token=synthetic-probe-marker",
       "gcloud logging read",
       "cloudtrace.googleapis.com",
-      "destroy -input=false -auto-approve",
       "bun scripts/sandbox-locked-stack.ts destroy",
       "gcloud storage rm gs://deskohub-workspace-sandbox-workspace-state/workspace-release-record.sandbox.json",
       "gcloud storage rm gs://deskohub-workspace-sandbox-workspace-state/sandbox-proof/run.env",
@@ -391,7 +417,6 @@ describe("sandbox proof runner", () => {
     expect(output).not.toContain("release deliver");
     expect(output).not.toContain("docker");
     expectInOrder(output, [
-      "destroy -input=false -auto-approve",
       "bun scripts/sandbox-locked-stack.ts destroy",
       "gcloud storage ls -r",
     ]);
@@ -421,6 +446,14 @@ describe("sandbox proof stack config", () => {
     );
     expect(config.secrets).toEqual([]);
     expect(config.schedulesEnabled).toBe(false);
+    // The plain-HTTP proof edge, allowed in the approved sandbox only.
+    expect(config.edge).toEqual({
+      domains: [],
+      enableHttps: false,
+      staticCdnEnabled: false,
+      wafPreview: true,
+      authRateLimitPerMinute: 120,
+    });
     expect(
       JSON.parse(await Effect.runPromise(sandboxProofStackConfig(identity)))
     ).toMatchObject({ projectNumber: "759037106024", stage: "sandbox" });

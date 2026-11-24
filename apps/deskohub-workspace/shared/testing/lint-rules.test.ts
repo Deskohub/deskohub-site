@@ -917,6 +917,26 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["permits tests", "new Pool({});\n", false, "apps/deskohub-workspace/features/x/probe.postgres.test.ts"],
     ],
   },
+  {
+    name: "no-type-assertions-in-workspace-infrastructure", diagnostic: "only `as const` is allowed",
+    module: "packages/workspace-infrastructure/src/resources/edge-compute-api.ts",
+    cases: [
+      ["rejects asserting an operation to a library parameter type", "export const settle = waitGlobalOperation(project, operation as Parameters<typeof waitGlobalOperation>[1]);\n", true],
+      ["rejects asserting parsed JSON", "export const parsed = JSON.parse(body) as { error?: { message?: unknown } };\n", true],
+      ["rejects as never", 'export const scheme = "EXTERNAL" as never;\n', true],
+      ["rejects as unknown as", "export const credentials = failure as unknown as Credentials;\n", true],
+      ["rejects an angle-bracket assertion", "export const policy = <EdgeCdnPolicy>live;\n", true, "packages/workspace-infrastructure/scripts/probe.ts"],
+      ["rejects assertions in tests", "export const value = exit.value as EdgeBackendServiceAttributes;\n", true, "packages/workspace-infrastructure/src/resources/edge-backend-service.test.ts"],
+      ["rejects assertions in the sandbox probe tests", "export const { port } = server.address() as AddressInfo;\n", true, "packages/workspace-infrastructure/sandbox-probe/probe.test.ts"],
+      ["rejects a const angle-bracket assertion", "export const codes = <const>[0, 2];\n", true, "packages/workspace-infrastructure/scripts/probe.ts"],
+      ["rejects assertions in a new top-level module", "export const value = input as string;\n", true, "packages/workspace-infrastructure/review-probe.ts"],
+      ["rejects assertions in an ES module file", "export const value = input as string;\n", true, "packages/workspace-infrastructure/review-probe.mts"],
+      ["rejects assertions in a CommonJS module file", "export const value = input as string;\n", true, "packages/workspace-infrastructure/src/review-probe.cts"],
+      ["permits as const", 'export const conflict = { status: "conflict" as const, codes: [0, 2] as const };\n', false],
+      ["permits satisfies", "export const settled = { name } satisfies ComputeOperation;\n", false],
+      ["permits assertions outside workspace infrastructure", "export const value = input as Settled;\n", false, "packages/workspace-admin-api/src/probe.ts"],
+    ],
+  },
 ];
 
 const lintCases = rules.flatMap(({ name, diagnostic, module, cases }) =>

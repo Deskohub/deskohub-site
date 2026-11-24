@@ -14,6 +14,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import { type GoogleApiCall, makeGoogleApi } from "./google-api";
+import { refusedCredentials } from "./google-credentials.test-utils";
 
 // Synthetic; the fake only checks that it is sent as the bearer token.
 const accessToken = "synthetic-access-token";
@@ -102,9 +103,9 @@ const readCall = (
   ...overrides,
 });
 
-const fixedCredentials = Effect.succeed({
+const fixedCredentials: typeof Credentials.Service = Effect.succeed({
   accessToken: Redacted.make(accessToken),
-}) as typeof Credentials.Service;
+});
 
 /** Run one call against the fake, skipping every timeout and backoff. */
 const run = (
@@ -156,7 +157,7 @@ describe("Google API calls", () => {
         Effect.succeed({
           accessToken: Redacted.make(accessToken),
           quotaProject: "quota-project",
-        }) as typeof Credentials.Service
+        })
       )
     );
     expect(
@@ -261,17 +262,17 @@ describe("Google API calls", () => {
 
   test("ends on a failed token lookup without a request, a retry or its text", async () => {
     let lookups = 0;
+    const lookupsOf = (
+      lookup: typeof Credentials.Service
+    ): typeof Credentials.Service =>
+      Effect.suspend(() => {
+        lookups += 1;
+        return lookup;
+      });
+    // Any failure or defect of the lookup must surface the same way.
     for (const credentials of [
-      // The provider's credential error class is not exported; any failure
-      // or defect of the lookup must surface the same way.
-      Effect.suspend(() => {
-        lookups += 1;
-        return Effect.fail({ message: `refused ${accessToken}` });
-      }) as unknown as typeof Credentials.Service,
-      Effect.suspend(() => {
-        lookups += 1;
-        return Effect.die(new Error(`crashed on ${accessToken}`));
-      }) as unknown as typeof Credentials.Service,
+      lookupsOf(refusedCredentials(`refused ${accessToken}`)),
+      lookupsOf(Effect.die(new Error(`crashed on ${accessToken}`))),
     ]) {
       const fake = fakeGoogleApi([{ status: 200 }]);
       const error = failure(await run(fake, readCall(), credentials));
@@ -293,11 +294,13 @@ describe("Google API calls", () => {
 
   test("looks a token up once per call when asked, ending on a stalled lookup", async () => {
     let lookups = 0;
-    const counted = (lookup: typeof Credentials.Service) =>
+    const counted = (
+      lookup: typeof Credentials.Service
+    ): typeof Credentials.Service =>
       Effect.suspend(() => {
         lookups += 1;
         return lookup;
-      }) as typeof Credentials.Service;
+      });
     const fake = fakeGoogleApi([{ status: 503 }, { status: 200 }]);
     expect(
       success(

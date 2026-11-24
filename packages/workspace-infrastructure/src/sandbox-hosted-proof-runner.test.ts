@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import * as Schema from "effect/Schema";
 import {
   type FakeRule,
   type FakeWorld,
@@ -40,15 +41,15 @@ const sandboxEnv = {
   GITHUB_RUN_ATTEMPT: "1",
   GOOGLE_ACCESS_TOKEN: "fake-access-token",
   // Far in the future, so the runner never mints a token.
-  GOOGLE_ACCESS_TOKEN_MINTED_AT: "99999999999",
+  GOOGLE_ACCESS_TOKEN_EXPIRES_AT: "99999999999",
 };
 
 const runPhase = (
   fakes: ProofFakes,
-  phase: string,
+  phase: string | ReadonlyArray<string>,
   env: Record<string, string> = {}
 ) => {
-  const result = Bun.spawnSync(["bash", runner, phase], {
+  const result = Bun.spawnSync(["bash", runner, ...[phase].flat()], {
     cwd: packageRoot,
     env: {
       HOME: process.env.HOME ?? "/tmp",
@@ -253,19 +254,27 @@ describe("teardown deadline", () => {
 });
 
 describe("disposable queue IDs", () => {
+  /** The disposable queue suffix the stack config the runner wrote declares. */
+  const queueSuffixOf = (fakes: ProofFakes) =>
+    Schema.decodeSync(
+      Schema.fromJsonString(
+        Schema.Struct({
+          disposableQueueSuffix: Schema.optionalKey(Schema.String),
+        })
+      )
+    )(readFileSync(join(fakes.proofDir, "stack-config.json"), "utf8"))
+      .disposableQueueSuffix;
+
   const foundation = (runId: string) =>
     withProofFakes({}, (fakes) => {
       const { exitCode, output } = runPhase(fakes, "foundation", {
         GITHUB_RUN_ID: runId,
         GITHUB_RUN_ATTEMPT: "2",
       });
-      const config = JSON.parse(
-        readFileSync(join(fakes.proofDir, "stack-config.json"), "utf8")
-      ) as { disposableQueueSuffix?: string };
       return {
         exitCode,
         output,
-        suffix: config.disposableQueueSuffix,
+        suffix: queueSuffixOf(fakes),
         recorded: fakes.world().files?.["sandbox-proof/run.env"],
         calls: fakes.calls(),
       };
@@ -349,10 +358,7 @@ describe("disposable queue IDs", () => {
           SANDBOX_PROOF_MODE: "cleanup-only",
         });
         expect(exitCode).toBe(0);
-        const config = JSON.parse(
-          readFileSync(join(fakes.proofDir, "stack-config.json"), "utf8")
-        ) as { disposableQueueSuffix?: string };
-        expect(config.disposableQueueSuffix).toBe("r111-2");
+        expect(queueSuffixOf(fakes)).toBe("r111-2");
       }
     );
   });
@@ -375,7 +381,7 @@ describe("state snapshot and restore", () => {
     },
   });
   const locked = { WORKSPACE_RELEASE_WRITER: "fake-writer" };
-  const manifest = (fakes: ProofFakes, file: string) =>
+  const manifest = (fakes: ProofFakes, file: string): unknown =>
     JSON.parse(readFileSync(join(fakes.proofDir, file), "utf8"));
 
   test("snapshots one live generation per object despite noncurrent history", () => {
@@ -515,13 +521,14 @@ describe("state snapshot and restore", () => {
   test("fails when a restored object does not read back as the snapshot", () => {
     withProofFakes(stateWorld(), (fakes) => {
       expect(runPhase(fakes, "state-snapshot-locked", locked).exitCode).toBe(0);
-      const snapshot = manifest(fakes, "state-live.json") as Array<{
-        crc32c: string;
-      }>;
-      snapshot[0] = { ...snapshot[0], crc32c: "crc-never-written" } as {
-        crc32c: string;
-      };
-      seed(fakes, { "state-snapshot.json": JSON.stringify(snapshot) });
+      const [first, ...rest] = Schema.decodeUnknownSync(
+        Schema.Array(Schema.Record(Schema.String, Schema.Unknown))
+      )(manifest(fakes, "state-live.json"));
+      if (first === undefined) {
+        throw new Error("expected the snapshot to list an object");
+      }
+      const altered = [{ ...first, crc32c: "crc-never-written" }, ...rest];
+      seed(fakes, { "state-snapshot.json": JSON.stringify(altered) });
       const { exitCode, output } = runPhase(
         fakes,
         "state-restore-locked",
@@ -705,8 +712,360 @@ describe("interrupting a deliver mid-apply", () => {
   });
 });
 
+describe("Alchemy access token", () => {
+  // Every Alchemy phase must start with the stack destroy's 30-minute
+  // budget left on the token it hands Alchemy.
+  const now = 1_800_000_000;
+  const lifetime = (seconds: number): FakeRule => ({
+    tool: "curl",
+    pattern: "oauth2\\.googleapis\\.com/tokeninfo",
+    stdout: JSON.stringify({ expires_in: String(seconds) }),
+  });
+  const run = (
+    phases: string | ReadonlyArray<string>,
+    expiresIn: number,
+    rules: ReadonlyArray<FakeRule> = [lifetime(3599)]
+  ) =>
+    withProofFakes({ now, rules }, (fakes) => {
+      const result = runPhase(fakes, phases, {
+        GOOGLE_ACCESS_TOKEN_EXPIRES_AT: String(now + expiresIn),
+      });
+      return {
+        ...result,
+        // A minted token is masked before any use.
+        mints: result.output.split("::add-mask::").length - 1,
+        calls: fakes.calls(),
+      };
+    });
+
+  test("mints a fresh token once under 30 minutes remain", () => {
+    for (const [left, mints] of [
+      [1800, 0],
+      [1799, 1],
+    ] as const) {
+      const result = run("foundation", left);
+      expect({ left, exitCode: result.exitCode, mints: result.mints }).toEqual({
+        left,
+        exitCode: 0,
+        mints,
+      });
+    }
+  });
+
+  test("verifies the workflow's token by its own remaining lifetime", () => {
+    // However long ago the auth step minted it, only tokeninfo decides.
+    for (const [left, mints] of [
+      [3000, 0],
+      [1790, 1],
+      [undefined, 1],
+    ] as const) {
+      const { exitCode, output } = withProofFakes(
+        {
+          now,
+          tokenLifetimes: {
+            "fake-access-token": 3599,
+            ...(left === undefined ? {} : { "workflow-token": left }),
+          },
+        },
+        (fakes) =>
+          runPhase(fakes, "foundation", {
+            GOOGLE_ACCESS_TOKEN: "workflow-token",
+            GOOGLE_ACCESS_TOKEN_EXPIRES_AT: "",
+          })
+      );
+      expect({
+        left,
+        exitCode,
+        mints: output.split("::add-mask::").length - 1,
+      }).toEqual({ left, exitCode: 0, mints });
+    }
+  });
+
+  test("counts a slow tokeninfo reply against the token", () => {
+    // Each reply takes 5 s, so a reported 1801 s or 1803 s leaves less
+    // than 30 minutes once it arrives.
+    const withLifetimes = (lifetimes: Record<string, number>) =>
+      withProofFakes(
+        { now, tokenLifetimes: lifetimes, tokeninfoDelay: 5 },
+        (fakes) => {
+          const result = runPhase(fakes, "foundation", {
+            GOOGLE_ACCESS_TOKEN: "workflow-token",
+            GOOGLE_ACCESS_TOKEN_EXPIRES_AT: "",
+          });
+          return {
+            exitCode: result.exitCode,
+            mints: result.output.split("::add-mask::").length - 1,
+          };
+        }
+      );
+    // The workflow's token is replaced, and the fresh one accepted.
+    expect(
+      withLifetimes({ "workflow-token": 1801, "fake-access-token": 3599 })
+    ).toEqual({ exitCode: 0, mints: 1 });
+    // A fresh token short of 30 minutes on arrival is refused.
+    expect(withLifetimes({ "fake-access-token": 1803 })).toEqual({
+      exitCode: 1,
+      mints: 1,
+    });
+  });
+
+  test("refreshes between phases of one run by the token's real expiry", () => {
+    // The minted token has 1805 s; the first deploy takes 600 s of it.
+    const { exitCode, mints } = run(["foundation", "foundation"], 0, [
+      lifetime(1805),
+      { tool: "bun", pattern: "^release\\.run\\.ts deploy", advance: 600 },
+    ]);
+    expect({ exitCode, mints }).toEqual({ exitCode: 0, mints: 2 });
+  });
+
+  test("refuses a token with less than 30 minutes left", () => {
+    for (const rules of [[lifetime(600)], []]) {
+      const { exitCode, output, calls } = run("foundation", 0, rules);
+      expect({
+        exitCode,
+        refused: output.includes("access token"),
+        deployed: calls.some((call) => call.includes("release.run.ts deploy")),
+      }).toEqual({ exitCode: 1, refused: true, deployed: false });
+    }
+  });
+
+  test("takes the inventories even when no token can be verified", () => {
+    for (const phase of ["baseline-inventory", "post-destroy-inventory"]) {
+      const { exitCode, mints, calls } = run(phase, 0, []);
+      expect({
+        phase,
+        exitCode,
+        mints,
+        listed: calls.includes(
+          "gcloud run services list --project=deskohub-workspace-sandbox --region=europe-west1 --format=value(metadata.name)"
+        ),
+      }).toEqual({ phase, exitCode: 0, mints: 0, listed: true });
+    }
+  });
+});
+
+describe("edge readback from the stack outputs", () => {
+  const outputObject = `${stackPrefix}__stack_output__.json`;
+  const filter =
+    '(resource.type="http_load_balancer" OR (resource.type="cloud_run_revision" AND log_id("run.googleapis.com/requests"))) AND httpRequest.requestUrl=~"^https?://[^/]+(/app/auth/callback)([/?#]|$)"';
+  const policy = "workspace-sandbox-edge";
+  const edgeOutputs = {
+    edgeIpAddress: "203.0.113.7",
+    edgeProtocol: "http",
+    securityPolicy: policy,
+    backendServices: {
+      dynamic: "workspace-sandbox-dynamic",
+      static: "workspace-sandbox-static",
+    },
+    tokenRouteExclusionFilter: filter,
+  };
+  const policyLink = `https://www.googleapis.com/compute/v1/projects/${projectId}/global/securityPolicies/${policy}`;
+  const waf = (priority: number, set: string) => ({
+    priority,
+    action: "deny(403)",
+    preview: true,
+    match: {
+      expr: {
+        expression: `evaluatePreconfiguredWaf('${set}-v33-stable', {'sensitivity': 1})`,
+      },
+    },
+  });
+  const throttle = {
+    priority: 2000,
+    action: "throttle",
+    match: { expr: { expression: "request.path.startsWith('/api/auth/')" } },
+    rateLimitOptions: {
+      conformAction: "allow",
+      exceedAction: "deny(429)",
+      enforceOnKey: "IP",
+      rateLimitThreshold: { count: 120, intervalSec: 60 },
+    },
+  };
+  // As Compute returns the sandbox policy the stack declares.
+  const policyRules: ReadonlyArray<Record<string, unknown>> = [
+    waf(1000, "sqli"),
+    waf(1010, "xss"),
+    throttle,
+    { priority: 2147483647, action: "allow" },
+  ];
+  const withThrottle = (changes: Record<string, unknown>) =>
+    policyRules.map((rule) =>
+      rule.priority === 2000 ? { ...throttle, ...changes } : rule
+    );
+  const liveEdge = (
+    overrides: ReadonlyArray<FakeRule> = []
+  ): ReadonlyArray<FakeRule> => [
+    ...overrides,
+    {
+      tool: "gcloud",
+      pattern: "^compute backend-services describe workspace-sandbox-",
+      stdout: policyLink,
+    },
+    {
+      tool: "gcloud",
+      pattern: `^compute security-policies describe ${policy} `,
+      stdout: JSON.stringify({ rules: policyRules }),
+    },
+    {
+      tool: "curl",
+      pattern: "http://203\\.0\\.113\\.7/healthz$",
+      stdout: JSON.stringify({ status: "ok", version: "v1" }),
+    },
+    {
+      tool: "curl",
+      pattern: "http://203\\.0\\.113\\.7/robots\\.txt$",
+      stdout: "text/plain; charset=utf-8",
+    },
+  ];
+  const readback = (
+    outputs: Record<string, unknown> | null,
+    overrides: ReadonlyArray<FakeRule> = []
+  ) =>
+    withProofFakes(
+      {
+        rules: liveEdge(overrides),
+        files:
+          outputs === null
+            ? {}
+            : // The rest of the stack's outputs persist beside the edge's.
+              {
+                [outputObject]: JSON.stringify({
+                  services: { webServiceId: "workspace-web" },
+                  ...outputs,
+                }),
+              },
+      },
+      (fakes) => {
+        const result = runPhase(fakes, "edge-readback");
+        const read = (name: string) =>
+          existsSync(join(fakes.proofDir, name))
+            ? readFileSync(join(fakes.proofDir, name), "utf8")
+            : null;
+        return {
+          ...result,
+          edgeEnv: read("edge.env"),
+          filter: read("edge-exclusion-filter.txt"),
+          kept: read("edge-outputs.json"),
+          calls: fakes.calls(),
+        };
+      }
+    );
+
+  test("records the edge the locked deploy output and checks v1 through it", () => {
+    const {
+      exitCode,
+      output,
+      edgeEnv,
+      filter: recorded,
+      kept,
+      calls,
+    } = readback(edgeOutputs);
+    expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
+      exitCode: 0,
+      output: "",
+    });
+    expect(edgeEnv).toBe("EDGE_IP=203.0.113.7\n");
+    // Byte for byte what the privacy phase compares the live exclusion to.
+    expect(recorded).toBe(filter);
+    expect(JSON.parse(kept ?? "null")).toEqual(edgeOutputs);
+    expect(calls).toContain(
+      `gcloud storage cat gs://${stateBucket}/${outputObject}`
+    );
+    // Reading back writes nothing: no deploy, destroy or upload.
+    expect(
+      calls.filter((call) =>
+        /release\.run\.ts (deliver|deploy)|sandbox-locked-stack|storage (cp|rm)/.test(
+          call
+        )
+      )
+    ).toEqual([]);
+  });
+
+  test("fails when the stack declared no edge", () => {
+    const { edgeIpAddress: _, ...withoutIp } = edgeOutputs;
+    for (const outputs of [null, {}, withoutIp]) {
+      const { exitCode, edgeEnv } = readback(outputs);
+      expect({ outputs, exitCode, edgeEnv }).toEqual({
+        outputs,
+        exitCode: 1,
+        edgeEnv: null,
+      });
+    }
+  });
+
+  test("fails on an HTTPS edge or edge names the proof would not inventory", () => {
+    for (const outputs of [
+      { ...edgeOutputs, edgeProtocol: "https" },
+      { ...edgeOutputs, securityPolicy: "other-policy" },
+      {
+        ...edgeOutputs,
+        backendServices: { ...edgeOutputs.backendServices, static: "other" },
+      },
+      { ...edgeOutputs, tokenRouteExclusionFilter: "" },
+    ]) {
+      expect(readback(outputs).exitCode).toBe(1);
+    }
+  });
+
+  test("fails unless both backends enforce the policy as declared", () => {
+    const detached: FakeRule = {
+      tool: "gcloud",
+      pattern: "^compute backend-services describe workspace-sandbox-static",
+      stdout: "",
+    };
+    const unreadable: FakeRule = {
+      tool: "gcloud",
+      pattern: "^compute backend-services describe workspace-sandbox-dynamic",
+      exit: 1,
+    };
+    const rules = (next: ReadonlyArray<unknown>): FakeRule => ({
+      tool: "gcloud",
+      pattern: "^compute security-policies describe",
+      stdout: JSON.stringify({ rules: next }),
+    });
+    for (const override of [
+      detached,
+      unreadable,
+      // A WAF rule enforced instead of previewed.
+      rules(
+        policyRules.map((rule) =>
+          rule.priority === 1010 ? { ...rule, preview: false } : rule
+        )
+      ),
+      // A WAF rule matching another rule set.
+      rules(
+        policyRules.map((rule) =>
+          rule.priority === 1000 ? waf(1000, "lfi") : rule
+        )
+      ),
+      // The auth throttle only previewed, on another route, at another
+      // limit, or missing.
+      rules(withThrottle({ preview: true })),
+      rules(
+        withThrottle({
+          match: { expr: { expression: "request.path.startsWith('/x/')" } },
+        })
+      ),
+      rules(
+        withThrottle({
+          rateLimitOptions: {
+            ...throttle.rateLimitOptions,
+            rateLimitThreshold: { count: 1000, intervalSec: 60 },
+          },
+        })
+      ),
+      rules(policyRules.filter((rule) => rule.priority !== 2000)),
+    ]) {
+      const { exitCode, calls } = readback(edgeOutputs, [override]);
+      expect({ override, exitCode }).toEqual({ override, exitCode: 1 });
+      // No request is sent through an unverified edge.
+      expect(calls.some((call) => call.startsWith("curl"))).toBe(false);
+    }
+  });
+});
+
 describe("token-route privacy and telemetry", () => {
-  // The filter Terraform builds in infra/workspace-edge/request-log-exclusions.tf.
+  // A token-route exclusion filter as the stack's edge outputs it.
   const lbSource = 'resource.type="http_load_balancer"';
   const runSource =
     'resource.type="cloud_run_revision" AND log_id("run.googleapis.com/requests")';
@@ -905,7 +1264,7 @@ describe("token-route privacy and telemetry", () => {
     }
   });
 
-  test("sends no marker unless the live exclusion is the full Terraform filter", () => {
+  test("sends no marker unless the live exclusion is the stack's full filter", () => {
     const liveExclusion = (filter: string): FakeRule => ({
       tool: "curl",
       pattern: "logging\\.googleapis\\.com/v2/projects/.*/exclusions",
@@ -914,13 +1273,15 @@ describe("token-route privacy and telemetry", () => {
     const withoutCloudRun = `${lbSource} AND httpRequest.requestUrl=~"^https?://[^/]+(${routes})([/?#]|$)"`;
     const withoutRoute = exclusionFilter.replace("/app/auth/callback|", "");
     for (const [overrides, recorded] of [
-      // No filter recorded by the edge apply.
+      // No filter recorded by the edge readback.
       [[], null],
-      // The live exclusion differs from what Terraform applied.
+      // The live exclusion differs from what the stack outputs.
       [[liveExclusion(withoutCloudRun)], exclusionFilter],
-      // Terraform's own filter misses Cloud Run request logs or a route.
+      // The stack's own filter misses Cloud Run request logs or a route.
       [[liveExclusion(withoutCloudRun)], withoutCloudRun],
       [[liveExclusion(withoutRoute)], withoutRoute],
+      // Not byte for byte the recorded filter.
+      [[liveExclusion(`${exclusionFilter}\n`)], exclusionFilter],
     ] satisfies ReadonlyArray<[ReadonlyArray<FakeRule>, string | null]>) {
       const { exitCode, markerSent } = privacy(overrides, recorded);
       expect({ recorded, exitCode, markerSent }).toEqual({
