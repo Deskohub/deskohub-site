@@ -31,7 +31,7 @@ export const schemaTables = Object.entries({
   return [
     {
       exportName,
-      table: value as PgTable,
+      table: value,
       name: config.name,
       id: `${config.schema ?? "public"}.${config.name}`,
     },

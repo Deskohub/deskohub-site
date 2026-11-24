@@ -79,15 +79,10 @@ const validSelect: Order = {
 };
 void validSelect;
 
-const invalidKind: NewOrder = {
-  // @ts-expect-error only the order kinds are valid order kinds
-  kind: "goods",
-  correlationId,
-  dotyposCustomerId,
-  paymentState: "paid",
-  fulfillmentState: "processing",
-};
-void invalidKind;
+// Only the order kinds are valid order kinds.
+type _GoodsKindIsRejected = Expect<
+  "goods" extends NewOrder["kind"] ? false : true
+>;
 
 // Keep the table import live so the inferred types stay bound to the schema.
 void orders;
