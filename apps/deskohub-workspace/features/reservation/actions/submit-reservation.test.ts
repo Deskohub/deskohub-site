@@ -1,5 +1,5 @@
 import "@/shared/polyfills/temporal";
-import { orderIdSchema } from "@/features/order";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
@@ -74,7 +74,8 @@ const runSubmitReservation = async (options?: {
       Effect.succeed({
         status: "redirect" as const,
         redirectUrl: "https://payments.example.test/checkout",
-        statusUrl: "/en-US/reservation/status/reservation-id",
+        statusUrl:
+          "/en-US/reservation/status/0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
       })
     );
 
@@ -133,13 +134,11 @@ const runSubmitReservation = async (options?: {
               : undefined,
         }),
         Layer.mock(QrPaymentRepository, {
-          findPaymentWindow: () =>
+          findPaymentWindow: (reservationId) =>
             Effect.succeed(
               options?.pinnedAccountKey
                 ? {
-                    orderId: orderIdSchema.make(
-                      "0198c1a2-3b4c-7d5e-8f90-1a2b3c4d5e6f"
-                    ),
+                    orderId: standaloneReservationOrderId(reservationId),
                     accountKey: options.pinnedAccountKey,
                     expiresAt: Temporal.Now.instant().add({ minutes: 1 }),
                     cardAttemptId: null,
@@ -197,7 +196,7 @@ describe("submitWorkspaceReservation", () => {
     "returns the paid reservation to a second signed Pay tab using %s",
     async (method) => {
       const redirectUrl =
-        "/en-US/reservation/status/reservation-id?outcome=success";
+        "/en-US/reservation/status/0198c1a2-61c4-7e64-83f3-b3b69dc0dac5?outcome=success";
       const createHostedPaymentCheckout = mock(() =>
         Effect.succeed({
           status: "redirect" as const,
@@ -400,7 +399,8 @@ describe("submitWorkspaceReservation", () => {
         return {
           status: "redirect" as const,
           redirectUrl: "https://payments.example.test/checkout",
-          statusUrl: "/en-US/reservation/status/reservation-id",
+          statusUrl:
+            "/en-US/reservation/status/0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
         };
       })
     );
@@ -429,7 +429,8 @@ describe("submitWorkspaceReservation", () => {
       message: "Checkout started successfully",
       status: "redirect",
       redirectUrl: "https://payments.example.test/checkout",
-      statusUrl: "/en-US/reservation/status/reservation-id",
+      statusUrl:
+        "/en-US/reservation/status/0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
     });
   });
 
@@ -438,9 +439,10 @@ describe("submitWorkspaceReservation", () => {
       "a hosted payment",
       {
         status: "redirect",
-        orderId: "reservation-id",
+        orderId: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
         redirectUrl: "https://payments.example.test/checkout",
-        statusUrl: "/en-US/reservation/status/reservation-id",
+        statusUrl:
+          "/en-US/reservation/status/0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
       },
       ["message", "redirectUrl", "status", "statusUrl"],
     ],
@@ -448,8 +450,9 @@ describe("submitWorkspaceReservation", () => {
       "a paid order",
       {
         status: "redirect",
-        orderId: "reservation-id",
-        redirectUrl: "/en-US/reservation/status/reservation-id",
+        orderId: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
+        redirectUrl:
+          "/en-US/reservation/status/0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
         paid: true,
       },
       ["message", "paid", "redirectUrl", "status"],
