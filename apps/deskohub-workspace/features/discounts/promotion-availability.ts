@@ -227,7 +227,7 @@ type PromotionAvailabilityEvaluators = {
  * Each stage's evaluator, written per stage so each checks its rules against
  * the facts of exactly that stage.
  */
-const promotionAvailabilityEvaluators = {
+const promotionAvailabilityEvaluators: PromotionAvailabilityEvaluators = {
   pricingSchedule: (facts) =>
     findUnmetRule(promotionAvailabilityStages.pricingSchedule, (rule) =>
       promotionAvailabilityRules[rule].isMet(facts)
@@ -277,14 +277,7 @@ const promotionAvailabilityEvaluators = {
       promotionAvailabilityStages.readmissionDiscountCodeUses,
       (rule) => promotionAvailabilityRules[rule].isMet(facts)
     ),
-} satisfies PromotionAvailabilityEvaluators;
-
-/** Looks up a stage's evaluator, keeping the stage's own facts and failure. */
-const evaluateStage = <Stage extends PromotionAvailabilityStage>(
-  evaluators: PromotionAvailabilityEvaluators,
-  stage: Stage,
-  facts: PromotionAvailabilityFacts<Stage>
-) => evaluators[stage](facts);
+};
 
 /**
  * Checks the rules of one caller's stage in the shared order and returns
@@ -296,7 +289,7 @@ export const evaluatePromotionAvailability = <
   stage: Stage,
   facts: PromotionAvailabilityFacts<Stage>
 ): Result.Result<void, PromotionUnavailable<Stage>> =>
-  evaluateStage(promotionAvailabilityEvaluators, stage, facts);
+  promotionAvailabilityEvaluators[stage](facts);
 
 /** The credit a voucher still grants after its active claims' amounts. */
 export const getAvailableVoucherCredit = (

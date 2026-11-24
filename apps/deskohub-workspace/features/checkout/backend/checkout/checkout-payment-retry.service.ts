@@ -410,8 +410,8 @@ const implementation = Effect.gen(function* () {
       const holdExpiresAt = hold.reservation.reservationHoldExpiresAt;
       if (!holdExpiresAt) return refused("needs_review");
 
-      // A rebuilt order today's rules refuse, such as a stored phone, is
-      // refused like one that doesn't decode as a Pay state.
+      // A rebuilt order or quote that no longer decodes as a family's Pay
+      // state pricing is refused, as one that doesn't build a Pay state is.
       const pricing = yield* decodeSignedPayStatePricing({
         reservation: {
           ...retry.recreated.reservation,
