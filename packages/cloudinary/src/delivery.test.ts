@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import { buildVersionedDeliveryUrl } from "./delivery";
 import { CloudinaryAssetSchema } from "./schema";
 
-const makeAsset = (overrides: Record<string, unknown>) =>
+const makeAsset = (overrides: Partial<typeof CloudinaryAssetSchema.Encoded>) =>
   Schema.decodeUnknownSync(CloudinaryAssetSchema)({
     public_id: "avatars/live/account-1",
     secure_url:

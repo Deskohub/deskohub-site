@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Array as Arr, Effect, Layer, Option } from "effect";
 import {
   EmailDeliveryIdSchema,
   type EmailMessage,
@@ -181,7 +181,15 @@ export const makeEmailProviderFake = ({
     name,
     send: (message) =>
       request("send", [message], message.idempotencyKey).pipe(
-        Effect.map((results) => results[0]!)
+        Effect.flatMap((results) =>
+          Option.match(Arr.head(results), {
+            onNone: () =>
+              Effect.die(
+                new RangeError("The fake answered a send without a result")
+              ),
+            onSome: Effect.succeed,
+          })
+        )
       ),
     sendBatch: (messages, options) =>
       request(

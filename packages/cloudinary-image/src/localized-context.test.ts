@@ -1,10 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import type { CloudinaryAsset } from "@deskohub/cloudinary";
+import {
+  type CloudinaryAsset,
+  CloudinaryAssetSchema,
+  CloudinaryPublicIdSchema,
+} from "@deskohub/cloudinary";
 import { getLocalizedCloudinaryContextValue } from "./localized-context";
 
 const assetWith = (
   custom: NonNullable<NonNullable<CloudinaryAsset["context"]>["custom"]>
-) => ({ context: { custom } }) as CloudinaryAsset;
+) =>
+  CloudinaryAssetSchema.make({
+    context: { custom },
+    created_at: "2026-01-01T00:00:00Z",
+    format: "jpg",
+    height: 600,
+    public_id: CloudinaryPublicIdSchema.make("gallery/localized"),
+    resource_type: "image",
+    secure_url:
+      "https://res.cloudinary.com/demo/image/upload/gallery/localized.jpg",
+    url: "http://res.cloudinary.com/demo/image/upload/gallery/localized.jpg",
+    width: 800,
+  });
 
 describe("getLocalizedCloudinaryContextValue", () => {
   test("reads the locale's own value first", () => {

@@ -2,8 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
-import type { PostHogFeatureFlagSnapshot } from "./contract";
+import { Effect, type Schema } from "effect";
+import {
+  decodePostHogFeatureFlagPayload,
+  type PostHogFeatureFlagContract,
+  type PostHogFeatureFlagSnapshot,
+} from "./contract";
 import type { PostHogFeatureFlagDefinition } from "./definitions";
 import {
   renderPostHogFeatureFlagContract,
@@ -22,13 +26,35 @@ const definitions: readonly PostHogFeatureFlagDefinition[] = [
   },
 ];
 
+interface RenderedFlags {
+  readonly __proto__: {
+    readonly payload: { readonly __proto__: number } | undefined;
+    readonly value: false | "control";
+  };
+  readonly overlapping: {
+    readonly payload:
+      | { readonly Z: number }
+      | { readonly a: number; readonly Z: number }
+      | undefined;
+    readonly value: false | "narrow" | "wide";
+  };
+}
+
 describe("renderPostHogFeatureFlagContract", () => {
   test("renders sorted keys, variants, and structural payload types", async () => {
     const contract = await Effect.runPromise(
       renderPostHogFeatureFlagContract([...definitions].reverse())
     );
 
-    expect(contract).toContain('  "meeting_room_page",\n  "room_experience",');
+    expect(contract.indexOf('  "meeting_room_page": {')).toBeLessThan(
+      contract.indexOf('  "room_experience": {')
+    );
+    expect(contract).toContain(
+      'value: Schema.Literals([false, "control", "treatment"]),'
+    );
+    expect(contract).toContain(
+      'payload: Schema.Union([Schema.String, Schema.Undefined, Schema.Struct({ "capacity": Schema.Number, "features": Schema.Array(Schema.Union([Schema.Boolean, Schema.String])) })]),'
+    );
     expect(contract).toContain(
       'readonly value: false | "control" | "treatment";'
     );
@@ -65,6 +91,9 @@ describe("renderPostHogFeatureFlagContract", () => {
     expect(contract).toContain(
       "readonly payload: readonly (number | string)[] | undefined;"
     );
+    expect(contract).toContain(
+      'payload: Schema.Union([Schema.Undefined, Schema.Struct({ "list": Schema.Array(Schema.Unknown), "settings": Schema.Record(Schema.String, Schema.Never) }), Schema.Struct({ "rooms": Schema.Array(Schema.Struct({ "open": Schema.Null, "seats": Schema.Number })) })]),'
+    );
   });
 
   test("never copies configured payload values into generated source", async () => {
@@ -80,6 +109,48 @@ describe("renderPostHogFeatureFlagContract", () => {
 
     expect(contract).toContain('readonly "apiKey": string;');
     expect(contract).not.toContain("do-not-commit-this-value");
+  });
+
+  test("renders decoders that keep own __proto__ keys and every declared field", async () => {
+    const directory = mkdtempSync(join(import.meta.dir, ".tmp-render-test-"));
+    try {
+      const contractFile = join(directory, "contract.ts");
+      await Bun.write(
+        contractFile,
+        await Effect.runPromise(
+          renderPostHogFeatureFlagContract([
+            {
+              key: "__proto__",
+              payloads: { control: '{"__proto__":1}' },
+              variants: ["control"],
+            },
+            {
+              key: "overlapping",
+              payloads: { narrow: '{"Z":1}', wide: '{"a":1,"Z":2}' },
+              variants: ["narrow", "wide"],
+            },
+          ])
+        )
+      );
+      const postHogFeatureFlags: PostHogFeatureFlagContract<RenderedFlags> = (
+        await import(contractFile)
+      ).postHogFeatureFlags;
+      const payloadOf = (
+        key: keyof RenderedFlags,
+        payload: Schema.Json
+      ): Schema.Json | undefined =>
+        decodePostHogFeatureFlagPayload(postHogFeatureFlags, key)(payload);
+
+      expect(postHogFeatureFlags.keys).toEqual(["__proto__", "overlapping"]);
+      expect(payloadOf("__proto__", JSON.parse('{"__proto__":1}'))).toEqual(
+        JSON.parse('{"__proto__":1}')
+      );
+      expect(payloadOf("__proto__", {})).toBeUndefined();
+      expect(payloadOf("overlapping", { a: 1, Z: 2 })).toEqual({ a: 1, Z: 2 });
+      expect(payloadOf("overlapping", { Z: 1 })).toEqual({ Z: 1 });
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 
   test("uses unknown for redacted payloads", async () => {

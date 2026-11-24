@@ -5,7 +5,7 @@ import {
   resendSimulatorAddress,
   testEmailAddress,
 } from "@deskohub/test-email";
-import { Effect, Layer, References } from "effect";
+import { Effect, Layer, Predicate, References } from "effect";
 import {
   type EmailBatchResult,
   EmailDeliveryIdSchema,
@@ -38,7 +38,7 @@ const config: EmailProviderConfig = {
 const realRecipient = { email: resendSimulatorAddress("delivered", "ada") };
 
 const message: EmailMessage = {
-  from: undefined as never,
+  from: config.defaultFrom,
   to: realRecipient,
   subject: "Hello",
   html: "<p>Hello</p>",
@@ -436,10 +436,10 @@ describe("batch failover", () => {
       "batch-1",
     ]);
     expect(second.batches).toHaveLength(1);
-    expect(second.batches[0]!.messages.map((sent) => sent.to)).toEqual([
+    expect(second.batches[0]?.messages.map((sent) => sent.to)).toEqual([
       { email: batchRecipient("throttled") },
     ]);
-    expect(second.batches[0]!.idempotencyKey).toMatch(
+    expect(second.batches[0]?.idempotencyKey).toMatch(
       /^batch-1:fallback:[0-9a-f]{16}$/
     );
     expect(recorded.sent.map((event) => event.provider)).toEqual([
@@ -460,7 +460,7 @@ describe("batch failover", () => {
   });
 
   test("derives the same fallback key for the same subset", async () => {
-    const keys: string[] = [];
+    const keys: (string | undefined)[] = [];
     for (const _attempt of [1, 2]) {
       const second = scriptedProvider("resend", () => "accept");
       await runWithEmail(
@@ -472,9 +472,10 @@ describe("batch failover", () => {
           ],
         })
       );
-      keys.push(second.batches[0]!.idempotencyKey);
+      keys.push(second.batches[0]?.idempotencyKey);
     }
 
+    expect(keys[0]).toBeDefined();
     expect(keys[0]).toBe(keys[1]);
   });
 
@@ -619,9 +620,10 @@ describe("batch failover", () => {
     expect(fallback.requests().map(({ key }) => key)).toEqual([
       `membership-drift:marketing:fallback:${subset.slice(0, 16)}`,
     ]);
-    expect(fallback.mailed()).toEqual(
-      [recipients[0]!, recipients[3]!].map(({ to }) => [to].flat()[0]!.email)
-    );
+    expect(fallback.mailed()).toEqual([
+      batchRecipient("accepted"),
+      batchRecipient("in-flight"),
+    ]);
     expect(results.map(({ status }) => status)).toEqual([
       "sent",
       "sent",
@@ -824,16 +826,16 @@ describe("delivery observer", () => {
       lines.push(
         args
           .map((arg) =>
-            typeof arg === "string" ? arg : (JSON.stringify(arg) ?? "")
+            Predicate.isString(arg) ? arg : (JSON.stringify(arg) ?? "")
           )
           .join(" ")
       );
     };
-    const captured = lines as string[] & { restore: () => void };
-    captured.restore = () => {
-      console.log = original;
-    };
-    return captured;
+    return Object.assign(lines, {
+      restore: () => {
+        console.log = original;
+      },
+    });
   };
 
   test("EmailDeliveryObserver.none is the default and logs each event's non-personal facts", async () => {
@@ -1041,15 +1043,16 @@ describe("idempotency keys", () => {
     ]);
   });
 
-  test("fills the default sender", async () => {
+  test("keeps the caller's sender", async () => {
     const provider = scriptedProvider("resend", () => "accept");
+    const sender = { email: testEmailAddress("reservations"), name: "Desk" };
 
     await runWithEmail(
-      send(message),
+      send({ ...message, from: sender }),
       chains({ transactional: [provider.provider] })
     );
 
-    expect(provider.sends[0]!.from).toEqual(config.defaultFrom);
+    expect(provider.sends[0]?.from).toEqual(sender);
   });
 });
 

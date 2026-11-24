@@ -8,9 +8,11 @@ import {
   Fiber,
   Layer,
   Logger,
+  Predicate,
   Random,
   Redacted,
   References,
+  Schema,
 } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
@@ -19,7 +21,7 @@ import { TestClock } from "effect/testing";
 export type FakeAnswer =
   | {
       readonly status: number;
-      readonly body?: unknown;
+      readonly body?: Schema.Json;
       readonly headers?: Record<string, string>;
     }
   | { readonly fails: "network" }
@@ -34,7 +36,7 @@ export interface RecordedRequest {
   readonly url: string;
   readonly method: string;
   readonly headers: Headers;
-  readonly body: Record<string, unknown> | undefined;
+  readonly body: Schema.JsonObject | undefined;
   readonly at: number;
 }
 
@@ -73,63 +75,67 @@ export const makeFakePostHog = (
   // Requests whose answer is on its way; the test clock waits for them.
   let settling = 0;
 
-  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    settling += 1;
-    const rawBody = init?.body
-      ? await new Response(init.body).text()
-      : undefined;
-    const request: RecordedRequest = {
-      url: input instanceof Request ? input.url : String(input),
-      method: init?.method ?? "GET",
-      headers: new Headers(init?.headers),
-      body: rawBody ? JSON.parse(rawBody) : undefined,
-      at: clock.now,
-    };
-    const index = requests.push(request) - 1;
-    const next = answer(index, request);
-    inFlight += 1;
-    maxInFlight = Math.max(maxInFlight, inFlight);
-    try {
-      if ("hangs" in next) {
-        settling -= 1;
-        return await new Promise<Response>((_, reject) => {
-          init?.signal?.addEventListener("abort", () =>
-            reject(new DOMException("aborted", "AbortError"))
+  // Bun types `fetch` with a `preconnect` helper; the fake keeps the real one.
+  const fetch = Object.assign(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      settling += 1;
+      const rawBody = init?.body
+        ? await new Response(init.body).text()
+        : undefined;
+      const request: RecordedRequest = {
+        url: input instanceof Request ? input.url : String(input),
+        method: init?.method ?? "GET",
+        headers: new Headers(init?.headers),
+        body: rawBody ? decodeRequestBody(rawBody) : undefined,
+        at: clock.now,
+      };
+      const index = requests.push(request) - 1;
+      const next = answer(index, request);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        if ("hangs" in next) {
+          settling -= 1;
+          return await new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError"))
+            );
+          });
+        }
+        if ("stallsBody" in next) {
+          settling -= 1;
+          return new Response(new ReadableStream({ start() {} }), {
+            status: 202,
+          });
+        }
+        if ("breaksBody" in next) {
+          settling -= 1;
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new TypeError("connection reset"));
+              },
+            }),
+            { status: 202 }
           );
+        }
+        if ("fails" in next) {
+          settling -= 1;
+          throw new TypeError("fetch failed");
+        }
+        // Settle on a later tick, so concurrent requests overlap.
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        settling -= 1;
+        return new Response(serializeBody(next.body), {
+          status: next.status,
+          headers: next.headers,
         });
+      } finally {
+        inFlight -= 1;
       }
-      if ("stallsBody" in next) {
-        settling -= 1;
-        return new Response(new ReadableStream({ start() {} }), {
-          status: 202,
-        });
-      }
-      if ("breaksBody" in next) {
-        settling -= 1;
-        return new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.error(new TypeError("connection reset"));
-            },
-          }),
-          { status: 202 }
-        );
-      }
-      if ("fails" in next) {
-        settling -= 1;
-        throw new TypeError("fetch failed");
-      }
-      // Settle on a later tick, so concurrent requests overlap.
-      await new Promise((resolve) => setTimeout(resolve, 1));
-      settling -= 1;
-      return new Response(serializeBody(next.body), {
-        status: next.status,
-        headers: next.headers,
-      });
-    } finally {
-      inFlight -= 1;
-    }
-  }) as typeof globalThis.fetch;
+    },
+    { preconnect: globalThis.fetch.preconnect }
+  );
 
   return {
     fetch,
@@ -144,9 +150,13 @@ export const makeFakePostHog = (
   };
 };
 
-const serializeBody = (body: unknown) => {
+const decodeRequestBody = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.JsonObject)
+);
+
+const serializeBody = (body: Schema.Json | undefined) => {
   if (body === undefined) return null;
-  return typeof body === "string" ? body : JSON.stringify(body);
+  return Predicate.isString(body) ? body : JSON.stringify(body);
 };
 
 export type FakePostHog = ReturnType<typeof makeFakePostHog>;

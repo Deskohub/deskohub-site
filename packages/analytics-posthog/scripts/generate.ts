@@ -2,7 +2,7 @@ import * as OpenApiGenerator from "@effect/openapi-generator/OpenApiGenerator";
 import * as OpenApiPatch from "@effect/openapi-generator/OpenApiPatch";
 import { Config, Data, Effect } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
-import type { OpenAPISpec } from "effect/http-api/OpenApi";
+import { isOpenApiDocument } from "./openapi-document";
 
 const generatedClientPath = Bun.fileURLToPath(
   new URL("../src/generated/effect.gen.ts", import.meta.url)
@@ -120,17 +120,23 @@ const generatePostHogClient = Effect.gen(function* () {
         })
     )
   );
-  const generator = yield* OpenApiGenerator.OpenApiGenerator;
-  const generatedClient = yield* generator.generate(
-    compatibleSchema as unknown as OpenAPISpec,
-    {
-      // Keeps objects that omit `additionalProperties` as `Schema.Struct`s
-      // with `.fields` instead of open records of JSON values.
-      closeObjects: true,
-      format: "httpclient",
-      name: "PostHogClient",
-    }
+  const openApiDocument = yield* Effect.succeed(compatibleSchema).pipe(
+    Effect.filterOrFail(
+      isOpenApiDocument,
+      () =>
+        new PostHogOpenApiGenerationError({
+          message: "PostHog's OpenAPI schema is not an OpenAPI document.",
+        })
+    )
   );
+  const generator = yield* OpenApiGenerator.OpenApiGenerator;
+  const generatedClient = yield* generator.generate(openApiDocument, {
+    // Keeps objects that omit `additionalProperties` as `Schema.Struct`s
+    // with `.fields` instead of open records of JSON values.
+    closeObjects: true,
+    format: "httpclient",
+    name: "PostHogClient",
+  });
   yield* writeGeneratedClient(generatedClient);
 });
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Logger, References } from "effect";
+import { type Context, Effect, Logger, Predicate, References } from "effect";
 import type { EmailMessage } from "../../types/email.types";
 import { ConsoleEmailProvider } from "./console-provider";
 
@@ -38,20 +38,21 @@ const ordinaryMessage = (
   ...overrides,
 });
 
-const envState: { [key: string]: string | undefined } = {};
+/** Each variable a test set, with its value before the test. */
+const envState = new Map<string, string | undefined>();
 
 const setEnv = (key: string, value: string | undefined) => {
-  if (!(key in envState)) envState[key] = process.env[key];
+  if (!envState.has(key)) envState.set(key, process.env[key]);
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
 };
 
 afterEach(() => {
-  for (const [key, value] of Object.entries(envState)) {
+  for (const [key, value] of envState) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
-    delete envState[key];
   }
+  envState.clear();
 });
 
 const captureConsole = (): {
@@ -72,31 +73,35 @@ const captureConsole = (): {
   };
 };
 
-const collectStrings = (value: unknown, into: string[] = []): string[] => {
-  if (typeof value === "string") into.push(value);
-  else if (Array.isArray(value)) {
-    for (const item of value) collectStrings(item, into);
-  } else if (value && typeof value === "object") {
-    for (const [key, item] of Object.entries(value)) {
-      into.push(key);
-      collectStrings(item, into);
-    }
-  }
-  return into;
+type LogAnnotations = Context.Service.Shape<
+  typeof References.CurrentLogAnnotations
+>;
+
+type CapturedLogEntry = {
+  readonly message: unknown;
+  readonly annotations: LogAnnotations;
+};
+
+/** Every string and property name that serializing `value` reaches. */
+const collectStrings = (
+  value: readonly unknown[][] | readonly CapturedLogEntry[]
+): string[] => {
+  const strings: string[] = [];
+  JSON.stringify(value, (key, item) => {
+    strings.push(key);
+    if (Predicate.isString(item)) strings.push(item);
+    return item;
+  });
+  return strings;
 };
 
 const recordText = (records: readonly unknown[][]): string =>
   records
     .map((args) =>
-      args.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+      args.map((arg) => (Predicate.isString(arg) ? arg : JSON.stringify(arg)))
     )
     .map((parts) => parts.join(" "))
     .join("\n");
-
-type CapturedLogEntry = {
-  readonly message: unknown;
-  readonly annotations: Readonly<Record<string, unknown>>;
-};
 
 const captureLogs = (entries: CapturedLogEntry[]) =>
   Logger.make((options) => {
@@ -104,13 +109,10 @@ const captureLogs = (entries: CapturedLogEntry[]) =>
       ? options.message
       : [options.message];
     const message = parts[0];
-    const inlineAnnotations =
-      parts.length > 1 && parts[1] && typeof parts[1] === "object"
-        ? (parts[1] as Record<string, unknown>)
-        : {};
+    const inlineAnnotations = Predicate.isObject(parts[1]) ? parts[1] : {};
     const fiberAnnotations = options.fiber.getRef(
       References.CurrentLogAnnotations
-    ) as Readonly<Record<string, unknown>> | undefined;
+    );
     entries.push({
       message,
       annotations: { ...fiberAnnotations, ...inlineAnnotations },
@@ -139,8 +141,8 @@ const expectNoSensitiveLeaks = (
   consoleRecords: readonly unknown[][],
   logEntries: readonly CapturedLogEntry[]
 ) => {
-  const consoleStrings = collectStrings(consoleRecords as unknown);
-  const logStrings = collectStrings(logEntries as unknown);
+  const consoleStrings = collectStrings(consoleRecords);
+  const logStrings = collectStrings(logEntries);
   for (const secret of [
     "secret-token",
     sensitiveSubject,
