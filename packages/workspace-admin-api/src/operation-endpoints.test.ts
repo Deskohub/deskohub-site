@@ -23,6 +23,7 @@ import {
   HttpApiClient,
   HttpApiEndpoint,
   HttpApiGroup,
+  HttpApiMiddleware,
 } from "effect/http-api";
 import {
   administrationOperations,
@@ -45,7 +46,6 @@ import {
   type OperationGroupServer,
   type OperationRequest,
   operationGroup,
-  operationGroupApi,
   operationGroupHandlers,
   operationHandler,
   operationRequest,
@@ -216,29 +216,26 @@ const notesServer: OperationGroupServer<
   typeof NoteEndpoints,
   NoteOperations
 > = (api, invoker, outputs) =>
-  HttpApiBuilder.group(
-    operationGroupApi(api, NoteEndpoints),
-    "notes",
-    (handlers) =>
-      Effect.map(invoker, (invoke) => {
-        const serve = operationHandler(
-          NoteEndpoints,
-          noteOperations,
-          invoke,
-          outputs
-        );
-        return handlers.handleAll({
-          listNotes: serve("listNotes"),
-          getNote: serve("getNote"),
-          searchNotes: serve("searchNotes"),
-          createNote: serve("createNote"),
-          editNote: serve("editNote"),
-          archiveNote: serve("archiveNote"),
-          renameNote: serve("renameNote"),
-          previewNote: serve("previewNote"),
-          countNotes: serve("countNotes"),
-        });
-      })
+  HttpApiBuilder.group(api, "notes", (handlers) =>
+    Effect.map(invoker, (invoke) => {
+      const serve = operationHandler(
+        NoteEndpoints,
+        noteOperations,
+        invoke,
+        outputs
+      );
+      return handlers.handleAll({
+        listNotes: serve("listNotes"),
+        getNote: serve("getNote"),
+        searchNotes: serve("searchNotes"),
+        createNote: serve("createNote"),
+        editNote: serve("editNote"),
+        archiveNote: serve("archiveNote"),
+        renameNote: serve("renameNote"),
+        previewNote: serve("previewNote"),
+        countNotes: serve("countNotes"),
+      });
+    })
   );
 
 const Notes = operationGroup(NoteEndpoints, noteOperations, notesServer);
@@ -681,20 +678,17 @@ describe("operation endpoints", () => {
       typeof getNoteOnly,
       NoteOperations
     > = (api, invoker, outputs) =>
-      HttpApiBuilder.group(
-        operationGroupApi(api, getNoteOnly),
-        "getNoteOnly",
-        (handlers) =>
-          Effect.map(invoker, (invoke) =>
-            handlers.handleAll({
-              getNote: operationHandler(
-                getNoteOnly,
-                noteOperations,
-                invoke,
-                outputs
-              )("getNote"),
-            })
-          )
+      HttpApiBuilder.group(api, "getNoteOnly", (handlers) =>
+        Effect.map(invoker, (invoke) =>
+          handlers.handleAll({
+            getNote: operationHandler(
+              getNoteOnly,
+              noteOperations,
+              invoke,
+              outputs
+            )("getNote"),
+          })
+        )
       );
     expect(() =>
       operationGroup(getNoteOnly, noteOperations, getNoteServer)
@@ -761,9 +755,6 @@ describe("operation endpoints", () => {
     } finally {
       await composed.dispose();
     }
-    expect(() => operationGroupApi(HttpApi.make("empty"), Notes)).toThrow(
-      `empty doesn't serve ${Notes.identifier}.`
-    );
   });
 
   test("the helpers take their base type arguments explicitly", () => {
@@ -831,20 +822,17 @@ const talliesServer: OperationGroupServer<
   typeof TallyEndpoints,
   typeof tallyOperations
 > = (api, invoker, outputs) =>
-  HttpApiBuilder.group(
-    operationGroupApi(api, TallyEndpoints),
-    "tallies",
-    (handlers) =>
-      Effect.map(invoker, (invoke) =>
-        handlers.handleAll({
-          tally: operationHandler(
-            TallyEndpoints,
-            tallyOperations,
-            invoke,
-            outputs
-          )("tally"),
-        })
-      )
+  HttpApiBuilder.group(api, "tallies", (handlers) =>
+    Effect.map(invoker, (invoke) =>
+      handlers.handleAll({
+        tally: operationHandler(
+          TallyEndpoints,
+          tallyOperations,
+          invoke,
+          outputs
+        )("tally"),
+      })
+    )
   );
 
 const Tallies = operationGroup(TallyEndpoints, tallyOperations, talliesServer);
@@ -1004,38 +992,88 @@ describe("an operation whose input encodes with a service", () => {
   });
 });
 
+/** Marks requests, as middleware an API adds after binding a group may. */
+class ReviewMarker extends HttpApiMiddleware.Service<ReviewMarker>()(
+  "@deskohub/workspace-admin-api/test/ReviewMarker"
+) {}
+
 /** Notes an API composed into another, as an annotation `addHttpApi` carries. */
 class ComposedNote extends Context.Service<ComposedNote, string>()(
   "@deskohub/workspace-admin-api/test/ComposedNote"
 ) {}
 
 describe("the API serving one group", () => {
-  const pairGroup = <Success extends Schema.Top>(success: Success) =>
-    HttpApiGroup.make("pairs").add(
-      HttpApiEndpoint.get("getPair", "/pair", { success })
+  test("is one serving the group with its own codecs", () => {
+    const otherTallyOperations = defineOperations({
+      tally: query({
+        input: tallyOperations.tally.input,
+        output: Schema.Boolean,
+      }),
+    });
+    const OtherTallies = administrationOperationGroupCheckingDhwFirst(
+      HttpApiGroup.make("tallies").add(
+        HttpApiEndpoint.get(
+          ...queryRequest(otherTallyOperations.tally, "/tallies", noteErrors)
+        ).pipe(servesOperation(otherTallyOperations.tally))
+      )
     );
-  const StringPairs = pairGroup(Schema.String);
-  const NumberPairs = pairGroup(Schema.Number);
-
-  test("isn't another group with the same identifier and routes", () => {
-    const api = HttpApi.make("pairsApi").add(StringPairs).add(NumberPairs);
-    expect(() => operationGroupApi(api, StringPairs)).toThrow(
-      "pairsApi doesn't serve pairs."
+    type GroupsOf<Api> =
+      Api extends HttpApi.HttpApi<"talliesApi", infer Groups> ? Groups : never;
+    type ServingTallies<Api> = Parameters<
+      typeof operationGroupHandlers<
+        "talliesApi",
+        GroupsOf<Api>,
+        typeof Tallies,
+        never,
+        never,
+        never,
+        never
+      >
+    >[0];
+    const serving = HttpApi.make("talliesApi").add(Tallies);
+    expectTypeOf(serving).toMatchTypeOf<ServingTallies<typeof serving>>();
+    const otherCodecs = HttpApi.make("talliesApi").add(OtherTallies);
+    expectTypeOf(otherCodecs).not.toMatchTypeOf<
+      ServingTallies<typeof otherCodecs>
+    >();
+    const twice = HttpApi.make("talliesApi").add(Tallies).add(OtherTallies);
+    expectTypeOf(twice).not.toMatchTypeOf<ServingTallies<typeof twice>>();
+    const empty = HttpApi.make("talliesApi");
+    expectTypeOf(empty).not.toMatchTypeOf<ServingTallies<typeof empty>>();
+    const unauthenticated = HttpApi.make("talliesApi").add(
+      HttpApiGroup.make("tallies")
+        .add(
+          HttpApiEndpoint.get(
+            ...queryRequest(tallyOperations.tally, "/tallies", noteErrors)
+          ).pipe(servesOperation(tallyOperations.tally))
+        )
+        .prefix("/api/v1/cli")
     );
-    expect(operationGroupApi(api, NumberPairs).groups.pairs.endpoints).toBe(
-      NumberPairs.endpoints
-    );
+    expectTypeOf(unauthenticated).not.toMatchTypeOf<
+      ServingTallies<typeof unauthenticated>
+    >();
   });
 
-  test("serves the group an API composed with addHttpApi serves, with its annotations", () => {
-    const inner = HttpApi.make("innerApi")
-      .add(StringPairs)
-      .annotate(ComposedNote, "inner");
-    const composed = HttpApi.make("outerApi").addHttpApi(inner);
-    const served = operationGroupApi(composed, StringPairs).groups.pairs;
-    expect(served.endpoints).toBe(StringPairs.endpoints);
-    expect(Context.getOption(served.annotations, ComposedNote)).toEqual(
-      Option.some("inner")
+  test("refuses a group with its types but other codecs", () => {
+    const redeclared = HttpApi.make("talliesApi").add(
+      administrationOperationGroupCheckingDhwFirst(
+        HttpApiGroup.make("tallies").add(
+          HttpApiEndpoint.get(
+            ...queryRequest(tallyOperations.tally, "/tallies", noteErrors)
+          ).pipe(servesOperation(tallyOperations.tally))
+        )
+      )
+    );
+    expect(() =>
+      operationGroupHandlers(
+        redeclared,
+        Tallies,
+        Effect.succeed((_name: "tally", input: { readonly count: string }) =>
+          Effect.succeed(JSON.stringify(input))
+        )
+      )
+    ).toThrow(
+      "talliesApi serves tallies with other codecs or without its middleware."
     );
   });
 });
@@ -1092,44 +1130,109 @@ describe("an API that transforms a group after binding it", () => {
     expect(await respond(served, getNoteAt())).toEqual(await expected());
   });
 
-  test("serves it with its endpoints annotated", async () => {
-    const annotated = HttpApi.make("annotated").add(
-      Notes.annotateEndpointsMerge(Context.empty())
+  /** What `ReviewMarker` saw of a request. */
+  type Seen = readonly [
+    endpoint: string,
+    endpointNote: Option.Option<string>,
+    groupNote: Option.Option<string>,
+  ];
+
+  /** The endpoints `ReviewMarker` saw, with their and their group's `ComposedNote`. */
+  const markerLayer = (seen: Array<Seen>) =>
+    Layer.succeed(ReviewMarker, (httpEffect, { endpoint, group }) =>
+      Effect.andThen(
+        Effect.sync(() => {
+          seen.push([
+            endpoint.identifier,
+            Context.getOption(endpoint.annotations, ComposedNote),
+            Context.getOption(group.annotations, ComposedNote),
+          ]);
+        }),
+        httpEffect
+      )
     );
+
+  test("requires and runs middleware the API adds after binding it", async () => {
+    const marked = api.middleware(ReviewMarker);
+    const handlers = operationGroupHandlers(
+      marked,
+      Notes,
+      Effect.succeed(echoInput)
+    );
+    expectTypeOf<ReviewMarker>().toMatchTypeOf<
+      Layer.Services<typeof handlers>
+    >();
+    const plain = operationGroupHandlers(api, Notes, Effect.succeed(echoInput));
+    expectTypeOf<ReviewMarker>().not.toMatchTypeOf<
+      Layer.Services<typeof plain>
+    >();
+    const unmarked = HttpApiBuilder.layer(marked).pipe(
+      Layer.provide(handlers),
+      Layer.provide(administrationMiddleware),
+      Layer.provide(HttpServer.layerServices)
+    );
+    expectTypeOf<ReviewMarker>().toMatchTypeOf<
+      Layer.Services<typeof unmarked>
+    >();
+    const seen: Array<Seen> = [];
+    const served = HttpRouter.toWebHandler(
+      unmarked.pipe(Layer.provide(markerLayer(seen))),
+      { disableLogger: true }
+    );
+    expect(await respond(served, getNoteAt())).toEqual(await expected());
+    expect(seen).toEqual([["getNote", Option.none(), Option.none()]]);
+  });
+
+  test("serves it with its endpoints annotated", async () => {
+    const annotated = HttpApi.make("annotated")
+      .add(Notes.annotateEndpointsMerge(Context.make(ComposedNote, "endpoint")))
+      .middleware(ReviewMarker);
+    const seen: Array<Seen> = [];
     const served = HttpRouter.toWebHandler(
       HttpApiBuilder.layer(annotated).pipe(
         Layer.provide(
           operationGroupHandlers(annotated, Notes, Effect.succeed(echoInput))
         ),
         Layer.provide(administrationMiddleware),
+        Layer.provide(markerLayer(seen)),
         Layer.provide(HttpServer.layerServices)
       ),
       { disableLogger: true }
     );
     expect(await respond(served, getNoteAt())).toEqual(await expected());
+    expect(seen).toEqual([["getNote", Option.some("endpoint"), Option.none()]]);
   });
 
-  // A prefix changes the group's path types, so `operationGroupHandlers`
-  // takes no prefixed API; the group's server it runs still serves one.
+  test("serves it with the annotations an API composed with addHttpApi carries", async () => {
+    const composed = HttpApi.make("outerApi")
+      .addHttpApi(api.annotate(ComposedNote, "inner"))
+      .middleware(ReviewMarker);
+    const seen: Array<Seen> = [];
+    const served = HttpRouter.toWebHandler(
+      HttpApiBuilder.layer(composed).pipe(
+        Layer.provide(
+          operationGroupHandlers(composed, Notes, Effect.succeed(echoInput))
+        ),
+        Layer.provide(administrationMiddleware),
+        Layer.provide(markerLayer(seen)),
+        Layer.provide(HttpServer.layerServices)
+      ),
+      { disableLogger: true }
+    );
+    expect(await respond(served, getNoteAt())).toEqual(await expected());
+    expect(seen).toEqual([["getNote", Option.none(), Option.some("inner")]]);
+  });
+
   test("serves it at the prefix a composed API adds", async () => {
     const prefixed = HttpApi.make("prefixed").addHttpApi(api).prefix("/v2");
-    type PrefixedGroups =
-      typeof prefixed extends HttpApi.HttpApi<"prefixed", infer Groups>
-        ? Groups
-        : never;
+    const path: "/v2/api/v1/cli/notes/:noteId" =
+      prefixed.groups.notes.endpoints.getNote.path;
+    expect(path).toBe("/v2/api/v1/cli/notes/:noteId");
     const serve = () =>
       HttpRouter.toWebHandler(
         HttpApiBuilder.layer(prefixed).pipe(
           Layer.provide(
-            notesServer<
-              "prefixed",
-              PrefixedGroups,
-              never,
-              never,
-              never,
-              never,
-              never
-            >(prefixed, Effect.succeed(echoInput), undefined)
+            operationGroupHandlers(prefixed, Notes, Effect.succeed(echoInput))
           ),
           Layer.provide(administrationMiddleware),
           Layer.provide(HttpServer.layerServices)

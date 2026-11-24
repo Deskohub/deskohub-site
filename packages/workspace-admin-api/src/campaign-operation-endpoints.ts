@@ -15,7 +15,6 @@ import {
   bodyRequest,
   type OperationGroupServer,
   operationGroup,
-  operationGroupApi,
   operationHandler,
   paramsBodyRequest,
   paramsFieldRequest,
@@ -277,42 +276,39 @@ const campaignServer: OperationGroupServer<
   typeof campaignEndpoints,
   typeof emailCampaignOperations
 > = (api, invoker, outputs) =>
-  HttpApiBuilder.group(
-    operationGroupApi(api, campaignEndpoints),
-    "campaigns",
-    (handlers) =>
-      Effect.map(invoker, (invoke) => {
-        const serve = operationHandler(
-          campaignEndpoints,
-          emailCampaignOperations,
-          invoke,
-          outputs
-        );
-        return handlers.handleAll({
-          listCampaignAudiences: serve("listCampaignAudiences"),
-          getCampaignAudience: serve("getCampaignAudience"),
-          createCampaignAudience: serve("createCampaignAudience"),
-          updateCampaignAudience: serve("updateCampaignAudience"),
-          archiveCampaignAudience: serve("archiveCampaignAudience"),
-          unarchiveCampaignAudience: serve("unarchiveCampaignAudience"),
-          deleteCampaignAudience: serve("deleteCampaignAudience"),
-          listCampaignTemplates: serve("listCampaignTemplates"),
-          previewCampaignTemplate: serve("previewCampaignTemplate"),
-          listCampaigns: serve("listCampaigns"),
-          getCampaign: serve("getCampaign"),
-          getCampaignEditorContent: serve("getCampaignEditorContent"),
-          createCampaign: serve("createCampaign"),
-          updateCampaign: serve("updateCampaign"),
-          duplicateCampaign: serve("duplicateCampaign"),
-          deleteCampaign: serve("deleteCampaign"),
-          previewCampaignRecipients: serve("previewCampaignRecipients"),
-          getCampaignSettings: serve("getCampaignSettings"),
-          testSendCampaign: serve("testSendCampaign"),
-          sendCampaign: serve("sendCampaign"),
-          retryCampaign: serve("retryCampaign"),
-          getCampaignSendStatus: serve("getCampaignSendStatus"),
-        });
-      })
+  HttpApiBuilder.group(api, "campaigns", (handlers) =>
+    Effect.map(invoker, (invoke) => {
+      const serve = operationHandler(
+        campaignEndpoints,
+        emailCampaignOperations,
+        invoke,
+        outputs
+      );
+      return handlers.handleAll({
+        listCampaignAudiences: serve("listCampaignAudiences"),
+        getCampaignAudience: serve("getCampaignAudience"),
+        createCampaignAudience: serve("createCampaignAudience"),
+        updateCampaignAudience: serve("updateCampaignAudience"),
+        archiveCampaignAudience: serve("archiveCampaignAudience"),
+        unarchiveCampaignAudience: serve("unarchiveCampaignAudience"),
+        deleteCampaignAudience: serve("deleteCampaignAudience"),
+        listCampaignTemplates: serve("listCampaignTemplates"),
+        previewCampaignTemplate: serve("previewCampaignTemplate"),
+        listCampaigns: serve("listCampaigns"),
+        getCampaign: serve("getCampaign"),
+        getCampaignEditorContent: serve("getCampaignEditorContent"),
+        createCampaign: serve("createCampaign"),
+        updateCampaign: serve("updateCampaign"),
+        duplicateCampaign: serve("duplicateCampaign"),
+        deleteCampaign: serve("deleteCampaign"),
+        previewCampaignRecipients: serve("previewCampaignRecipients"),
+        getCampaignSettings: serve("getCampaignSettings"),
+        testSendCampaign: serve("testSendCampaign"),
+        sendCampaign: serve("sendCampaign"),
+        retryCampaign: serve("retryCampaign"),
+        getCampaignSendStatus: serve("getCampaignSendStatus"),
+      });
+    })
   );
 
 /**
@@ -492,35 +488,32 @@ const automationServer: OperationGroupServer<
   typeof automationEndpoints,
   typeof emailAutomationOperations
 > = (api, invoker, outputs) =>
-  HttpApiBuilder.group(
-    operationGroupApi(api, automationEndpoints),
-    "automations",
-    (handlers) =>
-      Effect.map(invoker, (invoke) => {
-        const serve = operationHandler(
-          automationEndpoints,
-          emailAutomationOperations,
-          invoke,
-          outputs
-        );
-        return handlers.handleAll({
-          getAutomation: serve("getAutomation"),
-          updateAutomationFlow: serve("updateAutomationFlow"),
-          dryRunAutomation: serve("dryRunAutomation"),
-          getAutomationDryRun: serve("getAutomationDryRun"),
-          activateAutomation: serve("activateAutomation"),
-          pauseAutomation: serve("pauseAutomation"),
-          resumeAutomation: serve("resumeAutomation"),
-          archiveAutomation: serve("archiveAutomation"),
-          listAutomationVersions: serve("listAutomationVersions"),
-          getAutomationVersion: serve("getAutomationVersion"),
-          getAutomationRunStats: serve("getAutomationRunStats"),
-          listAutomationRuns: serve("listAutomationRuns"),
-          getAutomationRun: serve("getAutomationRun"),
-          previewCalendarExpression: serve("previewCalendarExpression"),
-          getAutomationEngineHealth: serve("getAutomationEngineHealth"),
-        });
-      })
+  HttpApiBuilder.group(api, "automations", (handlers) =>
+    Effect.map(invoker, (invoke) => {
+      const serve = operationHandler(
+        automationEndpoints,
+        emailAutomationOperations,
+        invoke,
+        outputs
+      );
+      return handlers.handleAll({
+        getAutomation: serve("getAutomation"),
+        updateAutomationFlow: serve("updateAutomationFlow"),
+        dryRunAutomation: serve("dryRunAutomation"),
+        getAutomationDryRun: serve("getAutomationDryRun"),
+        activateAutomation: serve("activateAutomation"),
+        pauseAutomation: serve("pauseAutomation"),
+        resumeAutomation: serve("resumeAutomation"),
+        archiveAutomation: serve("archiveAutomation"),
+        listAutomationVersions: serve("listAutomationVersions"),
+        getAutomationVersion: serve("getAutomationVersion"),
+        getAutomationRunStats: serve("getAutomationRunStats"),
+        listAutomationRuns: serve("listAutomationRuns"),
+        getAutomationRun: serve("getAutomationRun"),
+        previewCalendarExpression: serve("previewCalendarExpression"),
+        getAutomationEngineHealth: serve("getAutomationEngineHealth"),
+      });
+    })
   );
 
 /** The CLI's automation endpoints, with the campaign endpoints' errors. */

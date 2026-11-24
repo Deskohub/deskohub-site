@@ -443,27 +443,162 @@ type GroupRequirements<
       : never
     : never;
 
-/** The layer serving `Group` within the API `ApiId`. */
+/**
+ * `Endpoint` as an API serves it: its path under `Prefix`, and the
+ * middleware `Middleware` requiring `MiddlewareServices` in place of its
+ * own. Effect's `prefix` and `middleware` change only these, and
+ * `annotate` and `addHttpApi` none of the endpoint's type.
+ */
+type ServedEndpoint<
+  Endpoint,
+  Prefix extends string,
+  Middleware,
+  MiddlewareServices,
+> =
+  Endpoint extends HttpApiEndpoint.HttpApiEndpoint<
+    infer Identifier,
+    infer Method,
+    infer Path,
+    infer Params,
+    infer Query,
+    infer Payload,
+    infer Headers,
+    infer Success,
+    infer Error,
+    infer _Middleware,
+    infer _MiddlewareServices
+  >
+    ? HttpApiEndpoint.HttpApiEndpoint<
+        Identifier,
+        Method,
+        `${Prefix}${Path}`,
+        Params,
+        Query,
+        Payload,
+        Headers,
+        Success,
+        Error,
+        Middleware,
+        MiddlewareServices
+      >
+    : never;
+
+/**
+ * `Group` as an API serves it: each endpoint under `Prefix`, with the
+ * middleware `Middleware` requiring `MiddlewareServices`, its codecs
+ * `Group`'s own.
+ */
+export type ServedGroup<
+  Group,
+  Prefix extends string,
+  Middleware,
+  MiddlewareServices,
+> =
+  Group extends HttpApiGroup.HttpApiGroup<
+    infer Id,
+    infer Endpoints,
+    infer TopLevel
+  >
+    ? HttpApiGroup.HttpApiGroup<
+        Id,
+        ServedEndpoint<Endpoints, Prefix, Middleware, MiddlewareServices>,
+        TopLevel
+      >
+    : never;
+
+/** The group `Groups` serves under the identifier of `Group`. */
+type ServedAs<
+  Groups,
+  Group extends HttpApiGroup.Constraint,
+> = HttpApiGroup.WithIdentifier<Groups, HttpApiGroup.Identifier<Group>>;
+
+/** The endpoint of `Group` named `Identifier`. */
+type EndpointNamed<Group, Identifier> = Extract<
+  HttpApiGroup.Endpoints<Group>,
+  { readonly identifier: Identifier }
+>;
+
+/** The prefix `Served`'s paths add to those of `Group`. */
+type PrefixOf<Served, Group> =
+  HttpApiGroup.Endpoints<Group> extends infer Declared
+    ? Declared extends HttpApiEndpoint.Constraint
+      ? EndpointNamed<Served, Declared["identifier"]> extends {
+          readonly path: infer ServedPath extends string;
+        }
+        ? Declared extends { readonly path: infer Path extends string }
+          ? ServedPath extends `${infer Prefix}${Path}`
+            ? Prefix
+            : never
+          : never
+        : never
+      : never
+    : never;
+
+/** An API serving `Group` as `ServedGroup<Group, ...>` describes. */
+type ServingApi<
+  Group extends HttpApiGroup.Constraint,
+  Prefix extends string,
+  Middleware,
+  MiddlewareServices,
+> = {
+  readonly groups: {
+    readonly [Id in Group["identifier"]]: ServedGroup<
+      Group,
+      Prefix,
+      Middleware,
+      MiddlewareServices
+    >;
+  };
+};
+
+/**
+ * Whether `Middleware` keeps the middleware of every endpoint of `Group`:
+ * an API adds middleware to a group but never removes it.
+ */
+type KeepsMiddleware<Group, Middleware> = [
+  HttpApiEndpoint.Middleware<HttpApiGroup.Endpoints<Group>>,
+] extends [Middleware]
+  ? unknown
+  : never;
+
+/**
+ * The layer serving `Group` within `api`, the API serving only `Group` as
+ * an API serves it, with its prefix and middleware.
+ */
 export type OperationGroupServer<
   Group extends HttpApiGroup.Constraint,
   Ops extends Operations,
 > = <
   ApiId extends string,
-  Groups extends HttpApiGroup.Constraint,
-  Failure extends HttpApiEndpoint.Errors<HttpApiGroup.Endpoints<Group>>,
+  Prefix extends string,
+  Middleware,
+  MiddlewareServices,
+  Failure extends HttpApiEndpoint.Errors<
+    HttpApiGroup.Endpoints<
+      ServedGroup<Group, Prefix, Middleware, MiddlewareServices>
+    >
+  >,
   E,
   R,
   Services,
   AdapterServices,
 >(
-  api: HttpApi.HttpApi<ApiId, Groups>,
+  api: HttpApi.HttpApi<
+    ApiId,
+    ServedGroup<Group, Prefix, Middleware, MiddlewareServices>
+  >,
   invoker: Effect.Effect<OperationInvoke<Ops, Failure, Services>, E, R>,
   outputs: OutputAdapters<Ops, AdapterServices> | undefined
 ) => Layer.Layer<
   HttpApiGroup.Service<ApiId, HttpApiGroup.Identifier<Group>>,
   E,
   Exclude<
-    R | GroupRequirements<Group, Ops, Services | AdapterServices>,
+    | R
+    | GroupRequirements<
+        ServedGroup<Group, Prefix, Middleware, MiddlewareServices>,
+        Ops,
+        Services | AdapterServices
+      >,
     Scope.Scope
   >
 >;
@@ -501,18 +636,18 @@ type OperationsOf<Group extends OperationBinding> =
 type BoundGroupOf<Group extends OperationBinding> =
   Group[typeof operationBinding]["group"];
 
-/**
- * `group`, whose endpoints each serve the operation of their name in
- * `operations`, bound to them and to `serve`, the layer serving every
- * endpoint. Declare `serve` where the group is: `HttpApiBuilder.group` on
- * `operationGroupApi(api, group)`, its `handleAll` taking `operationHandler`'s
- * handler for each endpoint.
- */
 /** Operations each named after its key, as a group's endpoints are. */
 export type SelfNamedOperations<Ops> = {
   readonly [Name in keyof Ops]: Operation<Name & string>;
 };
 
+/**
+ * `group`, whose endpoints each serve the operation of their name in
+ * `operations`, bound to them and to `serve`, the layer serving every
+ * endpoint. Declare `serve` where the group is: `HttpApiBuilder.group` on
+ * the API it takes, its `handleAll` taking `operationHandler`'s handler for
+ * each endpoint.
+ */
 export const operationGroup = <
   Group extends HttpApiGroup.Constraint,
   Ops extends SelfNamedOperations<Ops> & Operations,
@@ -543,89 +678,53 @@ export const operationGroup = <
 };
 
 /**
- * Whether `served` and `declared` are one endpoint, however an API
- * transformed it: Effect's `prefix`, `middleware` and `annotate` rebuild an
- * endpoint with its method and codecs carried over by reference. Paths
- * aren't compared, so a prefixed endpoint still matches.
+ * Whether `served` and `declared` decode and encode alike: Effect's
+ * `prefix`, `middleware` and `annotate` rebuild an endpoint with its
+ * method and codecs carried over by reference, and add middleware after
+ * its own.
  */
-const sameEndpoint = (
+const servesAlike = (
   served: HttpApiEndpoint.Top,
   declared: HttpApiEndpoint.Top
-): boolean =>
-  served.method === declared.method &&
-  served.params === declared.params &&
-  served.query === declared.query &&
-  served.headers === declared.headers &&
-  served.payload === declared.payload &&
-  served.success === declared.success &&
-  served.error === declared.error &&
-  served.disableCodecs === declared.disableCodecs;
-
-/**
- * Whether `served` is `group` as an API serves it: `group` itself, or a
- * copy the API made with its own prefix, middleware or annotations, as
- * `addHttpApi` and `HttpApi.middleware` make, whose endpoints decode and
- * encode as `group`'s do. A group that only shares `group`'s identifier
- * and routes isn't it: its endpoints may decode and encode differently.
- */
-const servesGroup =
-  <
-    Id extends string,
-    Endpoints extends HttpApiEndpoint.Constraint,
-    TopLevel extends boolean,
-  >(
-    group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>
-  ) =>
-  (
-    candidate: HttpApiGroup.Constraint
-  ): candidate is HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel> => {
-    const declared = httpApiGroupOf(group);
-    const served = httpApiGroupOf(candidate);
-    const names = Object.keys(declared.endpoints);
-    return (
-      served.identifier === declared.identifier &&
-      served.topLevel === declared.topLevel &&
-      Object.keys(served.endpoints).length === names.length &&
-      names.every((name) => {
-        const endpoint: HttpApiEndpoint.Top | undefined =
-          served.endpoints[name];
-        const declaredEndpoint: HttpApiEndpoint.Top | undefined =
-          declared.endpoints[name];
-        return (
-          endpoint !== undefined &&
-          declaredEndpoint !== undefined &&
-          sameEndpoint(endpoint, declaredEndpoint)
-        );
-      })
-    );
-  };
-
-/**
- * The API serving `group` alone, as `api` declares it, for building the
- * group's handlers where its endpoints are known: the group as `api` serves
- * it, with the prefix, middleware and annotations `api` gives it. Throws
- * unless `api` serves `group`.
- */
-export const operationGroupApi = <
-  ApiId extends string,
-  Groups extends HttpApiGroup.Constraint,
-  Id extends string,
-  Endpoints extends HttpApiEndpoint.Constraint,
-  TopLevel extends boolean,
->(
-  api: HttpApi.HttpApi<ApiId, Groups>,
-  group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>
-) => {
-  const groups: ReadonlyArray<HttpApiGroup.Constraint> = Object.values(
-    api.groups
+): boolean => {
+  const kept = Array.from(served.middlewares).filter((middleware) =>
+    declared.middlewares.has(middleware)
   );
-  const served = groups.find(servesGroup(group));
-  if (served === undefined) {
-    throw new Error(`${api.identifier} doesn't serve ${group.identifier}.`);
-  }
-  return HttpApi.make(api.identifier)
-    .add(served)
-    .annotateMerge(api.annotations);
+  const own = Array.from(declared.middlewares);
+  return (
+    served.method === declared.method &&
+    served.params === declared.params &&
+    served.query === declared.query &&
+    served.headers === declared.headers &&
+    served.payload === declared.payload &&
+    served.success === declared.success &&
+    served.error === declared.error &&
+    served.disableCodecs === declared.disableCodecs &&
+    kept.length === own.length &&
+    kept.every((middleware, index) => middleware === own[index])
+  );
+};
+
+/** Whether `served` has `declared`'s endpoints, each serving alike. */
+const servesGroupAlike = (
+  served: HttpApiGroup.Constraint,
+  declared: HttpApiGroup.Constraint
+): boolean => {
+  const { endpoints } = httpApiGroupOf(served);
+  const own = httpApiGroupOf(declared).endpoints;
+  const names = Object.keys(own);
+  return (
+    Object.keys(endpoints).length === names.length &&
+    names.every((name) => {
+      const endpoint: HttpApiEndpoint.Top | undefined = endpoints[name];
+      const declaredEndpoint: HttpApiEndpoint.Top | undefined = own[name];
+      return (
+        endpoint !== undefined &&
+        declaredEndpoint !== undefined &&
+        servesAlike(endpoint, declaredEndpoint)
+      );
+    })
+  );
 };
 
 /** An operation's input fields by name, before its schema decodes them. */
@@ -798,14 +897,18 @@ export const operationHandler =
  * Serves every endpoint of an operation group by running the operation of
  * its name on the input its request carries. `outputs` adapts an
  * operation's output for the caller, as withholding what an older `dhw`
- * can't decode.
+ * can't decode. The group is served as `api` serves it, with the prefix
+ * and middleware `api` gives it. Throws unless `api` serves it with its own
+ * codecs and middleware.
  */
 export const operationGroupHandlers = <
   ApiId extends string,
   Groups extends HttpApiGroup.Constraint,
-  Group extends Groups & OperationBinding,
+  Group extends OperationBinding,
   Failure extends HttpApiEndpoint.Errors<
-    HttpApiGroup.Endpoints<BoundGroupOf<Group>>
+    HttpApiGroup.Endpoints<
+      ServedGroup<BoundGroupOf<Group>, Prefix, Middleware, MiddlewareServices>
+    >
   >,
   E,
   R,
@@ -815,8 +918,20 @@ export const operationGroupHandlers = <
     AdapterServices
   > = NoOutputs,
   AdapterServices = OutputServices<Outputs>,
+  Prefix extends string = PrefixOf<
+    ServedAs<Groups, BoundGroupOf<Group>>,
+    BoundGroupOf<Group>
+  >,
+  Middleware = HttpApiEndpoint.Middleware<
+    HttpApiGroup.Endpoints<ServedAs<Groups, BoundGroupOf<Group>>>
+  >,
+  MiddlewareServices = HttpApiEndpoint.MiddlewareServices<
+    HttpApiGroup.Endpoints<ServedAs<Groups, BoundGroupOf<Group>>>
+  >,
 >(
-  api: HttpApi.HttpApi<ApiId, Groups>,
+  api: HttpApi.HttpApi<ApiId, Groups> &
+    ServingApi<BoundGroupOf<Group>, Prefix, Middleware, MiddlewareServices> &
+    KeepsMiddleware<BoundGroupOf<Group>, Middleware>,
   group: Group & OperationServer<BoundGroupOf<Group>, OperationsOf<Group>>,
   invoker: Effect.Effect<
     OperationInvoke<OperationsOf<Group>, Failure, Services>,
@@ -829,5 +944,33 @@ export const operationGroupHandlers = <
     BoundGroupOf<Group>,
     OperationsOf<Group>
   > = group;
-  return server[operationServer](api, invoker, outputs);
+  const serving: ServingApi<
+    BoundGroupOf<Group>,
+    Prefix,
+    Middleware,
+    MiddlewareServices
+  > = api;
+  const { group: declared } = group[operationBinding];
+  const identifier: BoundGroupOf<Group>["identifier"] = declared.identifier;
+  const served = serving.groups[identifier];
+  if (!servesGroupAlike(served, declared)) {
+    throw new Error(
+      `${api.identifier} serves ${identifier} with other codecs or without its middleware.`
+    );
+  }
+  return server[operationServer]<
+    ApiId,
+    Prefix,
+    Middleware,
+    MiddlewareServices,
+    Failure,
+    E,
+    R,
+    Services,
+    AdapterServices
+  >(
+    HttpApi.make(api.identifier).add(served).annotateMerge(api.annotations),
+    invoker,
+    outputs
+  );
 };
