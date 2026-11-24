@@ -139,7 +139,7 @@ describe("sandbox RPC probe verdict", () => {
 const echoingProbe = Layer.mergeAll(
   HttpRouter.add(
     "GET",
-    "/healthz",
+    "/health",
     HttpServerResponse.json({ status: "ok", version: marker })
   ),
   RpcServer.layerHttp({

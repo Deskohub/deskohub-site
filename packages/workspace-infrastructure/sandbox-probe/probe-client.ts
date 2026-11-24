@@ -1,4 +1,4 @@
-// The hosted proof's caller for the probe image: checks /healthz, then calls
+// The hosted proof's caller for the probe image: checks /health, then calls
 // each SandboxProbeRpcs RPC over POST /rpc with SchemaBinary and reports one
 // verdict. Failures name the step and error tag only, and every remote string
 // in the verdict is redacted, so it never carries the token or the marker.
@@ -204,18 +204,18 @@ const probeRpcClient = (
 type ProbeRpcClient = Effect.Success<ReturnType<typeof probeRpcClient>>;
 
 const checkHealth = (http: HttpClient.HttpClient, origin: string) =>
-  http.get(`${origin}/healthz`).pipe(
-    Effect.mapError((error) => `healthz: ${error._tag}`),
+  http.get(`${origin}/health`).pipe(
+    Effect.mapError((error) => `health: ${error._tag}`),
     Effect.flatMap((response) =>
       response.status === 200
         ? HttpClientResponse.schemaBodyJson(HealthBody)(response).pipe(
             Effect.map(({ version }) => version),
-            Effect.mapError((error) => `healthz: ${error._tag}`)
+            Effect.mapError((error) => `health: ${error._tag}`)
           )
-        : Effect.fail(`healthz: status ${response.status}`)
+        : Effect.fail(`health: status ${response.status}`)
     ),
     Effect.result,
-    settleStep("healthz")
+    settleStep("health")
   );
 
 const ingestMarker = (rpc: ProbeRpcClient, marker: string) =>
@@ -273,7 +273,7 @@ const healthFailures = (target: ProbeTarget, health: ProbeSteps["health"]) =>
       target.expectVersion === undefined || reported === target.expectVersion
         ? []
         : [
-            `healthz: version ${printable(reported, printableVersion)}, expected ${target.expectVersion}`,
+            `health: version ${printable(reported, printableVersion)}, expected ${target.expectVersion}`,
           ],
     onFailure: (failure) => [failure],
   });
