@@ -649,6 +649,22 @@ describe("sandbox bootstrap script", () => {
     expect(result.stdout.toString()).toBe("");
   });
 
+  test("rejects a multibyte project name in a UTF-8 locale", () => {
+    // 41 two-byte letters: 88 characters but 129 bytes of subject, and
+    // [a-z] admits them under en_US.UTF-8 collation.
+    const args = [...dryRunArgs];
+    args[args.indexOf("--vercel-project") + 1] = "\u00e9".repeat(41);
+    const result = Bun.spawnSync(["bash", bootstrapScript, ...args], {
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        LC_ALL: "en_US.UTF-8",
+      },
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("--vercel-project");
+    expect(result.stdout.toString()).toBe("");
+  });
+
   test("passes bash -n", () => {
     const result = Bun.spawnSync(["bash", "-n", bootstrapScript]);
     expect(result.exitCode).toBe(0);

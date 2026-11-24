@@ -92,30 +92,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "$project_id" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || fail "--project-id must be a Google Cloud project ID"
-[[ "$region" =~ ^[a-z]+-[a-z]+[0-9]$ ]] || fail "--region must be a Google Cloud region"
-[[ "$github_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "--github-repository must be <owner>/<name>"
-[[ "$github_owner_id" =~ ^[1-9][0-9]*$ ]] || fail "--github-owner-id must be the numeric owner ID"
-[[ "$github_repository_id" =~ ^[1-9][0-9]*$ ]] || fail "--github-repository-id must be the numeric repository ID"
-[[ "$max_spend" =~ ^[1-9][0-9]*$ ]] || fail "--max-spend must be a whole amount"
-[[ "$currency" =~ ^[A-Z]{3}$ ]] || fail "--currency must be an ISO 4217 code"
-[[ "$teardown_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || fail "--teardown-date must be YYYY-MM-DD"
-# The Vercel values land in the provider's CEL condition and the trusted
-# subject, so they admit no quote, colon or space.
-[[ "$vercel_team_slug" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || fail "--vercel-team-slug must be the Vercel team slug"
-[[ "$vercel_project" =~ ^[a-z0-9._-]{1,100}$ ]] || fail "--vercel-project must be the Vercel project name"
-[[ "$vercel_owner_id" =~ ^team_[A-Za-z0-9]+$ ]] || fail "--vercel-owner-id must be the Vercel team ID"
-[[ "$vercel_project_id" =~ ^prj_[A-Za-z0-9]+$ ]] || fail "--vercel-project-id must be the Vercel project ID"
-# google.subject maps to at most 127 bytes; the inputs are ASCII.
-vercel_subject="owner:${vercel_team_slug}:project:${vercel_project}:environment:preview"
-((${#vercel_subject} <= 127)) ||
-  fail "--vercel-team-slug and --vercel-project make a preview subject longer than Google's 127 bytes"
-for secret_id in "${managed_secrets[@]}"; do
-  [[ "$secret_id" =~ ^[A-Za-z0-9_-]{1,255}$ ]] || fail "--managed-secret must be a Secret Manager secret ID"
-done
-if [[ -n "$project_number" && ! "$project_number" =~ ^[1-9][0-9]{5,19}$ ]]; then
-  fail "--project-number must be numeric"
-fi
+validate_inputs() {
+  # Byte-wise: in a UTF-8 locale, ranges such as [a-z] admit accented
+  # letters and ${#…} counts characters, not bytes.
+  local LC_ALL=C
+  [[ "$project_id" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || fail "--project-id must be a Google Cloud project ID"
+  [[ "$region" =~ ^[a-z]+-[a-z]+[0-9]$ ]] || fail "--region must be a Google Cloud region"
+  [[ "$github_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "--github-repository must be <owner>/<name>"
+  [[ "$github_owner_id" =~ ^[1-9][0-9]*$ ]] || fail "--github-owner-id must be the numeric owner ID"
+  [[ "$github_repository_id" =~ ^[1-9][0-9]*$ ]] || fail "--github-repository-id must be the numeric repository ID"
+  [[ "$max_spend" =~ ^[1-9][0-9]*$ ]] || fail "--max-spend must be a whole amount"
+  [[ "$currency" =~ ^[A-Z]{3}$ ]] || fail "--currency must be an ISO 4217 code"
+  [[ "$teardown_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || fail "--teardown-date must be YYYY-MM-DD"
+  # The Vercel values land in the provider's CEL condition and the trusted
+  # subject, so they admit no quote, colon or space.
+  [[ "$vercel_team_slug" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || fail "--vercel-team-slug must be the Vercel team slug"
+  [[ "$vercel_project" =~ ^[a-z0-9._-]{1,100}$ ]] || fail "--vercel-project must be the Vercel project name"
+  [[ "$vercel_owner_id" =~ ^team_[A-Za-z0-9]+$ ]] || fail "--vercel-owner-id must be the Vercel team ID"
+  [[ "$vercel_project_id" =~ ^prj_[A-Za-z0-9]+$ ]] || fail "--vercel-project-id must be the Vercel project ID"
+  # google.subject maps to at most 127 bytes; the C locale counts bytes.
+  vercel_subject="owner:${vercel_team_slug}:project:${vercel_project}:environment:preview"
+  ((${#vercel_subject} <= 127)) ||
+    fail "--vercel-team-slug and --vercel-project make a preview subject longer than Google's 127 bytes"
+  for secret_id in "${managed_secrets[@]}"; do
+    [[ "$secret_id" =~ ^[A-Za-z0-9_-]{1,255}$ ]] || fail "--managed-secret must be a Secret Manager secret ID"
+  done
+  if [[ -n "$project_number" && ! "$project_number" =~ ^[1-9][0-9]{5,19}$ ]]; then
+    fail "--project-number must be numeric"
+  fi
+}
+validate_inputs
 
 print_command() {
   printf '+'
