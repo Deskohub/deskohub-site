@@ -1,25 +1,71 @@
 import { definePostHogFeatureFlags } from "@deskohub/analytics-posthog/feature-flags";
+import { Schema } from "effect";
 
 /** Generated from PostHog feature flag definitions. Do not edit manually. */
 export const postHogFeatureFlags = definePostHogFeatureFlags<
   PostHogFeatureFlagDefinitions
->([
-  "account_avatars",
-  "agent_booking",
-  "calendar_sales",
-  "cowork_passes",
-  "customer_discounts",
-  "discount_codes",
-  "login_email_code",
-  "login_passkeys",
-  "meeting_room_page",
-  "office_page",
-  "online_withdrawal",
-  "overnight_stays",
-  "referrals",
-  "seating_map",
-  "webmcp_site_tools",
-] as const);
+>({
+  "account_avatars": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "agent_booking": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "calendar_sales": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "cowork_passes": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "customer_discounts": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "discount_codes": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "login_email_code": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "login_passkeys": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "meeting_room_page": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "office_page": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "online_withdrawal": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "overnight_stays": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "referrals": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "seating_map": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+  "webmcp_site_tools": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
+});
 
 export type PostHogFeatureFlagKey =
   (typeof postHogFeatureFlags.keys)[number];

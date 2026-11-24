@@ -28,7 +28,15 @@ describe("renderPostHogFeatureFlagContract", () => {
       renderPostHogFeatureFlagContract([...definitions].reverse())
     );
 
-    expect(contract).toContain('  "meeting_room_page",\n  "room_experience",');
+    expect(contract.indexOf('  "meeting_room_page": {')).toBeLessThan(
+      contract.indexOf('  "room_experience": {')
+    );
+    expect(contract).toContain(
+      'value: Schema.Literals([false, "control", "treatment"]),'
+    );
+    expect(contract).toContain(
+      'payload: Schema.Union([Schema.String, Schema.Undefined, Schema.Struct({ "capacity": Schema.Number, "features": Schema.Array(Schema.Union([Schema.Boolean, Schema.String])) })]),'
+    );
     expect(contract).toContain(
       'readonly value: false | "control" | "treatment";'
     );
@@ -64,6 +72,9 @@ describe("renderPostHogFeatureFlagContract", () => {
     );
     expect(contract).toContain(
       "readonly payload: readonly (number | string)[] | undefined;"
+    );
+    expect(contract).toContain(
+      'payload: Schema.Union([Schema.Undefined, Schema.Struct({ "list": Schema.Array(Schema.Unknown), "settings": Schema.Record(Schema.String, Schema.Never) }), Schema.Struct({ "rooms": Schema.Array(Schema.Struct({ "open": Schema.Null, "seats": Schema.Number })) })]),'
     );
   });
 

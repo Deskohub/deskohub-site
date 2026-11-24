@@ -1,10 +1,14 @@
 import { describe, expect, mock, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import type {
   AllFlagsOptions,
   OverrideFeatureFlagsOptions,
+  PostHog,
   PostHogOptions,
 } from "posthog-node";
+
+type FlagsAndPayloads = Awaited<ReturnType<PostHog["getAllFlagsAndPayloads"]>>;
+
 import { PostHogDistinctId } from "../identifiers";
 import { definePostHogFeatureFlags } from "./contract";
 
@@ -16,7 +20,10 @@ const evaluateFlags = mock((_distinctId: string, _options?: AllFlagsOptions) =>
   })
 );
 const getAllFlagsAndPayloads = mock(
-  (_distinctId: string, _options?: AllFlagsOptions) =>
+  (
+    _distinctId: string,
+    _options?: AllFlagsOptions
+  ): Promise<FlagsAndPayloads> =>
     Promise.resolve({
       featureFlags: {
         meeting_room_page: true,
@@ -57,7 +64,16 @@ const contract = definePostHogFeatureFlags<{
     readonly payload: { readonly capacity: number } | undefined;
     readonly value: false | "control" | "treatment";
   };
-}>(["meeting_room_page", "room_experience"]);
+}>({
+  meeting_room_page: { payload: Schema.Undefined, value: Schema.Boolean },
+  room_experience: {
+    payload: Schema.Union([
+      Schema.Undefined,
+      Schema.Struct({ capacity: Schema.Number }),
+    ]),
+    value: Schema.Literals([false, "control", "treatment"]),
+  },
+});
 
 const globalReleaseId = PostHogDistinctId.make("global-release");
 const visitorId = PostHogDistinctId.make("visitor-id");
@@ -97,6 +113,39 @@ describe("makePostHogNodeFeatureFlagService", () => {
     });
     expect(evaluateFlags).not.toHaveBeenCalled();
     expect(createClient).toHaveBeenCalledTimes(1);
+
+    await Effect.runPromise(featureFlags.shutdown);
+  });
+
+  test("drops a value or payload the contract does not declare", async () => {
+    const { makePostHogNodeFeatureFlagService } = await import("./node");
+    getAllFlagsAndPayloads.mockImplementationOnce(() =>
+      Promise.resolve({
+        featureFlags: {
+          meeting_room_page: "control",
+          room_experience: "retired",
+        },
+        featureFlagPayloads: {
+          room_experience: { capacity: "eight" },
+        },
+      })
+    );
+    const featureFlags = makePostHogNodeFeatureFlagService(contract, {
+      projectToken: "phc_test",
+    });
+
+    const snapshot = await Effect.runPromise(
+      featureFlags.evaluateFlags({
+        subject: {
+          distinctId: globalReleaseId,
+          sendFeatureFlagEvents: false,
+        },
+      })
+    );
+
+    expect(snapshot.getFlag("meeting_room_page")).toBeUndefined();
+    expect(snapshot.getFlag("room_experience")).toBeUndefined();
+    expect(snapshot.getFlagPayload("room_experience")).toBeUndefined();
 
     await Effect.runPromise(featureFlags.shutdown);
   });

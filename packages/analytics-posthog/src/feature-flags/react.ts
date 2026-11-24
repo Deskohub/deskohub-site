@@ -1,5 +1,6 @@
 "use client";
 
+import { Predicate } from "effect";
 import type { FeatureFlagResult } from "posthog-js";
 import {
   createContext,
@@ -9,13 +10,15 @@ import {
   useEffect,
   useState,
 } from "react";
-import type {
-  PostHogFeatureFlagContract,
-  PostHogFeatureFlagDefinitionContract,
-  PostHogFeatureFlagKey,
-  PostHogFeatureFlagOverrides,
-  PostHogFeatureFlagPayload,
-  PostHogFeatureFlagValue,
+import {
+  decodePostHogFeatureFlagPayload,
+  decodePostHogFeatureFlagValue,
+  type PostHogFeatureFlagContract,
+  type PostHogFeatureFlagDefinitionContract,
+  type PostHogFeatureFlagKey,
+  type PostHogFeatureFlagOverrides,
+  type PostHogFeatureFlagPayload,
+  type PostHogFeatureFlagValue,
 } from "./contract";
 
 type ValidDefinitions<Definitions> = {
@@ -39,9 +42,9 @@ export type TypedPostHogFeatureFlagResult<
   Key extends PostHogFeatureFlagKey<Definitions>,
 > = Omit<FeatureFlagResult, "key" | "payload" | "variant"> & {
   readonly key: Key;
-  readonly payload: PostHogFeatureFlagPayload<Definitions, Key>;
+  readonly payload: PostHogFeatureFlagPayload<Definitions, Key> | undefined;
   readonly variant:
-    | Extract<PostHogFeatureFlagValue<Definitions, Key>, string>
+    | (PostHogFeatureFlagValue<Definitions, Key> & string)
     | undefined;
 };
 
@@ -90,15 +93,24 @@ export function PostHogClientProvider({
 }
 
 /** Reads a flag value, then again whenever the client or its flags change. */
-const useFeatureFlagRead = <Value>(
-  flag: string,
-  read: (client: PostHogFeatureFlagClient, flag: string) => Value | undefined
+/**
+ * Reads `flag` from the current client and rereads it whenever PostHog
+ * reloads flags. The state keeps the flag it was read for, so a render
+ * after `flag` changes never returns the previous flag's value.
+ */
+const useFeatureFlagRead = <Flag extends string, Value>(
+  flag: Flag,
+  read: (client: PostHogFeatureFlagClient, flag: Flag) => Value | undefined
 ): Value | undefined => {
   const source = useContext(PostHogClientContext);
-  const [value, setValue] = useState(() => {
+  const readCurrent = (currentFlag: Flag) => {
     const client = source.getClient();
-    return client === undefined ? undefined : read(client, flag);
-  });
+    return client === undefined ? undefined : read(client, currentFlag);
+  };
+  const [state, setState] = useState(() => ({
+    flag,
+    value: readCurrent(flag),
+  }));
 
   useEffect(() => {
     let unsubscribeFlags: (() => void) | undefined;
@@ -108,9 +120,9 @@ const useFeatureFlagRead = <Value>(
       const client = source.getClient();
       if (client === undefined) return;
 
-      setValue(read(client, flag));
+      setState({ flag, value: read(client, flag) });
       unsubscribeFlags = client.onFeatureFlags(() =>
-        setValue(read(client, flag))
+        setState({ flag, value: read(client, flag) })
       );
     };
 
@@ -122,23 +134,51 @@ const useFeatureFlagRead = <Value>(
     };
   }, [flag, read, source]);
 
-  return value;
+  return state.flag === flag ? state.value : readCurrent(flag);
 };
 
 const readEnabled = (client: PostHogFeatureFlagClient, flag: string) =>
   client.isFeatureEnabled(flag);
-const readResult = (client: PostHogFeatureFlagClient, flag: string) =>
-  client.getFeatureFlagResult(flag);
-const readVariantKey = (client: PostHogFeatureFlagClient, flag: string) =>
-  client.getFeatureFlag(flag);
-const readPayload = (client: PostHogFeatureFlagClient, flag: string) =>
-  client.getFeatureFlagResult(flag, { send_event: false })?.payload;
 
 export const createPostHogReactFeatureFlags = <
   const Definitions extends ValidDefinitions<Definitions>,
 >(
-  _contract: PostHogFeatureFlagContract<Definitions>
+  contract: PostHogFeatureFlagContract<Definitions>
 ) => {
+  const readResult = <Key extends PostHogFeatureFlagKey<Definitions>>(
+    client: PostHogFeatureFlagClient,
+    flag: Key
+  ): TypedPostHogFeatureFlagResult<Definitions, Key> | undefined => {
+    const result = client.getFeatureFlagResult(flag);
+    if (result === undefined || result.key !== flag) return undefined;
+
+    const variant = decodePostHogFeatureFlagValue(
+      contract,
+      flag
+    )(result.variant);
+    return {
+      ...result,
+      key: flag,
+      payload: decodePostHogFeatureFlagPayload(contract, flag)(result.payload),
+      variant: Predicate.isString(variant) ? variant : undefined,
+    };
+  };
+
+  const readVariantKey = <Key extends PostHogFeatureFlagKey<Definitions>>(
+    client: PostHogFeatureFlagClient,
+    flag: Key
+  ) =>
+    decodePostHogFeatureFlagValue(contract, flag)(client.getFeatureFlag(flag));
+
+  const readPayload = <Key extends PostHogFeatureFlagKey<Definitions>>(
+    client: PostHogFeatureFlagClient,
+    flag: Key
+  ) =>
+    decodePostHogFeatureFlagPayload(
+      contract,
+      flag
+    )(client.getFeatureFlagResult(flag, { send_event: false })?.payload);
+
   function useFeatureFlagEnabled<
     Key extends PostHogFeatureFlagKey<Definitions>,
   >(flag: Key): boolean | undefined;
@@ -154,26 +194,19 @@ export const createPostHogReactFeatureFlags = <
   function useFeatureFlagResult<Key extends PostHogFeatureFlagKey<Definitions>>(
     flag: Key
   ) {
-    return useFeatureFlagRead(flag, readResult) as
-      | TypedPostHogFeatureFlagResult<Definitions, Key>
-      | undefined;
+    return useFeatureFlagRead(flag, readResult);
   }
 
   function useFeatureFlagVariantKey<
     Key extends PostHogFeatureFlagKey<Definitions>,
   >(flag: Key) {
-    return useFeatureFlagRead(flag, readVariantKey) as
-      | PostHogFeatureFlagValue<Definitions, Key>
-      | undefined;
+    return useFeatureFlagRead(flag, readVariantKey);
   }
 
   function useFeatureFlagPayload<
     Key extends PostHogFeatureFlagKey<Definitions>,
   >(flag: Key) {
-    return useFeatureFlagRead(flag, readPayload) as PostHogFeatureFlagPayload<
-      Definitions,
-      Key
-    >;
+    return useFeatureFlagRead(flag, readPayload);
   }
 
   const applyFeatureFlagOverrides = (

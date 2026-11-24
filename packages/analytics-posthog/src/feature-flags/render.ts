@@ -1,4 +1,4 @@
-import { Effect, Option, Predicate, Schema } from "effect";
+import { Effect, Match, Option, Order, Predicate, Schema } from "effect";
 import Mustache from "mustache";
 import type { PostHogFeatureFlagDefinition } from "./definitions";
 import { PostHogFeatureFlagError } from "./errors";
@@ -22,8 +22,10 @@ type PayloadType =
 interface PostHogFeatureFlagContractTemplateView {
   readonly featureFlags: readonly {
     readonly keyLiteral: string;
+    readonly payloadSchema: string;
     readonly payloadType: string;
     readonly hasVariants: boolean;
+    readonly valueSchema: string;
     readonly variantLiterals: readonly string[];
   }[];
 }
@@ -51,8 +53,10 @@ export const renderPostHogFeatureFlagContract = Effect.fn(
   return Mustache.render(template, {
     featureFlags: sortedDefinitions.map((definition) => ({
       keyLiteral: JSON.stringify(definition.key),
+      payloadSchema: renderPayloadSchemaForFlag(definition),
       payloadType: renderPayloadTypeForFlag(definition),
       hasVariants: definition.variants.length > 0,
+      valueSchema: renderValueSchemaForFlag(definition),
       variantLiterals: definition.variants.map((variant) =>
         JSON.stringify(variant)
       ),
@@ -112,11 +116,24 @@ const readTemplate = (name: string) =>
       }),
   });
 
+const payloadTypesForFlag = (
+  definition: PostHogFeatureFlagDefinition
+): readonly PayloadType[] => [
+  { kind: "undefined" },
+  ...Object.values(definition.payloads).map(inferPayloadType),
+];
+
 const renderPayloadTypeForFlag = (definition: PostHogFeatureFlagDefinition) =>
-  renderPayloadTypeUnion([
-    { kind: "undefined" },
-    ...Object.values(definition.payloads).map(inferPayloadType),
-  ]);
+  renderPayloadTypeUnion(payloadTypesForFlag(definition));
+
+const renderPayloadSchemaForFlag = (definition: PostHogFeatureFlagDefinition) =>
+  renderPayloadSchemaUnion(payloadTypesForFlag(definition));
+
+/** The schema of the value type the template renders for `definition`. */
+const renderValueSchemaForFlag = (definition: PostHogFeatureFlagDefinition) =>
+  definition.variants.length === 0
+    ? "Schema.Boolean"
+    : `Schema.Literals([false, ${definition.variants.map((variant) => JSON.stringify(variant)).join(", ")}])`;
 
 const inferPayloadType = (payload: Schema.Json): PayloadType => {
   if (!Predicate.isString(payload)) return inferJsonPayloadType(payload, 0);
@@ -204,3 +221,41 @@ const renderObjectPayloadType = (
         ),
         "}",
       ].join(" ");
+
+/**
+ * The schema that decodes exactly the type `renderPayloadTypeUnion` renders
+ * for the same `types`, with its members in the same order.
+ */
+const renderPayloadSchemaUnion = (types: readonly PayloadType[]): string => {
+  const schemasByType = new Map(
+    types.map((type) => [renderPayloadType(type), renderPayloadSchema(type)])
+  );
+  if (schemasByType.has("unknown")) return "Schema.Unknown";
+
+  const schemas = [...schemasByType]
+    .toSorted(
+      Order.mapInput(Order.String, ([type]: readonly [string, string]) => type)
+    )
+    .map(([, schema]) => schema);
+  return schemas.length === 1
+    ? schemas.join("")
+    : `Schema.Union([${schemas.join(", ")}])`;
+};
+
+const renderPayloadSchema = (type: PayloadType): string =>
+  Match.value(type).pipe(
+    Match.discriminatorsExhaustive("kind")({
+      array: ({ items }) =>
+        `Schema.Array(${renderPayloadSchemaUnion(items.length > 0 ? items : [{ kind: "unknown" }])})`,
+      boolean: () => "Schema.Boolean",
+      null: () => "Schema.Null",
+      number: () => "Schema.Number",
+      object: ({ properties }) =>
+        properties.length === 0
+          ? "Schema.Record(Schema.String, Schema.Never)"
+          : `Schema.Struct({ ${properties.map((property) => `${JSON.stringify(property.key)}: ${renderPayloadSchema(property.value)}`).join(", ")} })`,
+      string: () => "Schema.String",
+      undefined: () => "Schema.Undefined",
+      unknown: () => "Schema.Unknown",
+    })
+  );

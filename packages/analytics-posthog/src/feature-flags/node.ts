@@ -6,13 +6,15 @@ import {
   type PostHogOptions,
 } from "posthog-node";
 import type { PostHogDistinctId } from "../identifiers";
-import type {
-  PostHogFeatureFlagContract,
-  PostHogFeatureFlagDefinitionContract,
-  PostHogFeatureFlagKey,
-  PostHogFeatureFlagOverrides,
-  PostHogFeatureFlagPayload,
-  PostHogFeatureFlagValue,
+import {
+  decodePostHogFeatureFlagPayload,
+  decodePostHogFeatureFlagValue,
+  type PostHogFeatureFlagContract,
+  type PostHogFeatureFlagDefinitionContract,
+  type PostHogFeatureFlagKey,
+  type PostHogFeatureFlagOverrides,
+  type PostHogFeatureFlagPayload,
+  type PostHogFeatureFlagValue,
 } from "./contract";
 
 type ValidDefinitions<Definitions> = {
@@ -78,7 +80,8 @@ export const makePostHogNodeFeatureFlagService = <
                 options,
               }).pipe(
                 Effect.map((snapshot) =>
-                  toTypedPostHogFeatureFlagEvaluationSnapshot<Definitions>(
+                  toTypedPostHogFeatureFlagEvaluationSnapshot(
+                    contract,
                     snapshot
                   )
                 )
@@ -139,7 +142,7 @@ export interface TypedPostHogFeatureFlagEvaluationSnapshot<Definitions> {
   ) => PostHogFeatureFlagValue<Definitions, Key> | undefined;
   readonly getFlagPayload: <Key extends PostHogFeatureFlagKey<Definitions>>(
     key: Key
-  ) => PostHogFeatureFlagPayload<Definitions, Key>;
+  ) => PostHogFeatureFlagPayload<Definitions, Key> | undefined;
   readonly isEnabled: <Key extends PostHogFeatureFlagKey<Definitions>>(
     key: Key
   ) => boolean;
@@ -149,7 +152,7 @@ export interface TypedPostHogFeatureFlagEvaluationSnapshot<Definitions> {
 export const createPostHogNodeFeatureFlags = <
   const Definitions extends ValidDefinitions<Definitions>,
 >(
-  _contract: PostHogFeatureFlagContract<Definitions>,
+  contract: PostHogFeatureFlagContract<Definitions>,
   client: PostHogFeatureFlagEvaluationClient
 ) => ({
   evaluateFlags: (
@@ -175,20 +178,24 @@ export const createPostHogNodeFeatureFlags = <
         }),
     }).pipe(
       Effect.map((snapshot) =>
-        toTypedPostHogFeatureFlagEvaluationSnapshot<Definitions>(snapshot)
+        toTypedPostHogFeatureFlagEvaluationSnapshot(contract, snapshot)
       )
     ),
 });
 
-const toTypedPostHogFeatureFlagEvaluationSnapshot = <Definitions>(
+const toTypedPostHogFeatureFlagEvaluationSnapshot = <
+  Definitions extends ValidDefinitions<Definitions>,
+>(
+  contract: PostHogFeatureFlagContract<Definitions>,
   snapshot: PostHogFeatureFlagEvaluationSnapshot
 ): TypedPostHogFeatureFlagEvaluationSnapshot<Definitions> => ({
-  getFlag: <Key extends PostHogFeatureFlagKey<Definitions>>(key: Key) =>
-    snapshot.getFlag(key) as
-      | PostHogFeatureFlagValue<Definitions, Key>
-      | undefined,
-  getFlagPayload: <Key extends PostHogFeatureFlagKey<Definitions>>(key: Key) =>
-    snapshot.getFlagPayload(key) as PostHogFeatureFlagPayload<Definitions, Key>,
+  getFlag: (key) =>
+    decodePostHogFeatureFlagValue(contract, key)(snapshot.getFlag(key)),
+  getFlagPayload: (key) =>
+    decodePostHogFeatureFlagPayload(
+      contract,
+      key
+    )(snapshot.getFlagPayload(key)),
   isEnabled: (key) => snapshot.isEnabled(key),
   raw: snapshot,
 });
