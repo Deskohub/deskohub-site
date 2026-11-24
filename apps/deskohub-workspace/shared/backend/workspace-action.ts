@@ -395,38 +395,26 @@ const handleWorkspaceActionValidationFailure = async <
     );
   }).pipe(runWorkspaceEffect(operation, { boundary: "action" }));
 
-  // A field is a top-level name of the errors next-safe-action built; an
-  // issue under any other first segment is reported with its path instead.
-  const isFieldName = (
-    name: string
-  ): name is Extract<keyof WorkspaceActionFieldErrors<S>, string> =>
-    name !== "_errors" && Object.hasOwn(validationErrors, name);
   const formErrors: string[] = [];
-  const fieldMessages = new Map<
-    Extract<keyof WorkspaceActionFieldErrors<S>, string>,
-    string[]
-  >();
+  const fieldMessages = new Map<string, string[]>();
 
   for (const { message, path } of issues) {
     const [field, ...nested] = path;
     if (field === undefined) {
       formErrors.push(message);
-    } else if (isFieldName(field)) {
+    } else {
       const nestedPath = formatWorkspaceActionValidationPath(nested, "");
       fieldMessages.set(field, [
         ...(fieldMessages.get(field) ?? []),
         nestedPath ? `${nestedPath}: ${message}` : message,
       ]);
-    } else {
-      formErrors.push(
-        `${formatWorkspaceActionValidationPath(path, "")}: ${message}`
-      );
     }
   }
 
   const fieldErrors: WorkspaceActionFieldErrors<S> = {};
   for (const [field, messages] of fieldMessages) {
-    // An own data property, so a field such as `__proto__` stays a field.
+    // Each issue's first path segment names its field. The field is written
+    // as an own data property, so a field such as `__proto__` stays a field.
     Object.defineProperty(fieldErrors, field, {
       configurable: true,
       enumerable: true,

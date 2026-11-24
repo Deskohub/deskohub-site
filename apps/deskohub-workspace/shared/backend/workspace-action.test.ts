@@ -154,7 +154,7 @@ describe("Workspace actions", () => {
     });
   });
 
-  test("reports an issue outside the form's fields with its path", async () => {
+  test("returns field errors under a field named _errors", async () => {
     const { defineWorkspaceAction } = await import("./workspace-action");
     const action = defineWorkspaceAction(
       {
@@ -168,8 +168,7 @@ describe("Workspace actions", () => {
 
     await expect(action({ _errors: { code: 123 } })).resolves.toMatchObject({
       validationErrors: {
-        formErrors: [expect.stringMatching(/^code: /)],
-        fieldErrors: {},
+        fieldErrors: { code: [expect.any(String)] },
       },
     });
   });
