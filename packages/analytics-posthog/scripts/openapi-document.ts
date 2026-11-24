@@ -1,5 +1,4 @@
 import { Schema } from "effect";
-import type { OpenAPISpec } from "effect/http-api/OpenApi";
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 
@@ -46,19 +45,12 @@ const OpenApiPathItem = Schema.Struct({
 });
 
 /**
- * Every field `@effect/openapi-generator` reads from a document, typed the
- * way the generator reads it: optional where it falls back, and each schema,
- * parameter, request body and response left as JSON for it to resolve.
- *
- * Effect publishes the generator's input as `OpenAPISpec`, the type of the
- * documents `OpenApi.fromApi` emits. That type is stricter than the
- * documents the generator accepts: PostHog's schema has `$ref` parameters,
- * optional request bodies, and operations without `security`, all of which
- * the generator resolves or defaults. Decoding into `OpenAPISpec` itself
- * would reject that schema, and filling its required fields would change the
- * generated client, so this shape checks the generator's real input instead.
+ * A JSON document as `@effect/openapi-generator` reads it
+ * (`OpenApiGenerator.OpenApiDocument`): every field it reads, optional where
+ * it falls back, with each `$ref`-able parameter, request body, response and
+ * component schema left as JSON for it to resolve.
  */
-const OpenApiDocumentShape = Schema.Struct({
+export const OpenApiDocument = Schema.Struct({
   components: Schema.optionalKey(
     Schema.Struct({
       schemas: Schema.optionalKey(JsonObject),
@@ -99,9 +91,15 @@ const OpenApiDocumentShape = Schema.Struct({
   ),
 });
 
-const isOpenApiDocument = Schema.is(OpenApiDocumentShape);
+const isOpenApiDocumentShape = Schema.is(OpenApiDocument);
 
-/** A JSON document whose structure the OpenAPI generator can walk. */
-export const OpenApiDocument = Schema.declare<OpenAPISpec>(
-  (document): document is OpenAPISpec => isOpenApiDocument(document)
-);
+/**
+ * Whether `document` has the `OpenApiDocument` shape. It narrows the
+ * document itself instead of decoding a copy, so the fields the shape does
+ * not name, such as `components.parameters` that `$ref`s point into, reach
+ * the generator.
+ */
+export const isOpenApiDocument = (
+  document: Schema.Json
+): document is Schema.Json & typeof OpenApiDocument.Type =>
+  isOpenApiDocumentShape(document);

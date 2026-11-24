@@ -1,8 +1,8 @@
 import * as OpenApiGenerator from "@effect/openapi-generator/OpenApiGenerator";
 import * as OpenApiPatch from "@effect/openapi-generator/OpenApiPatch";
-import { Config, Data, Effect, Schema } from "effect";
+import { Config, Data, Effect } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
-import { OpenApiDocument } from "./openapi-document";
+import { isOpenApiDocument } from "./openapi-document";
 
 const generatedClientPath = Bun.fileURLToPath(
   new URL("../src/generated/effect.gen.ts", import.meta.url)
@@ -120,14 +120,12 @@ const generatePostHogClient = Effect.gen(function* () {
         })
     )
   );
-  const openApiDocument = yield* Schema.decodeUnknownEffect(OpenApiDocument)(
-    compatibleSchema
-  ).pipe(
-    Effect.mapError(
-      (cause) =>
+  const openApiDocument = yield* Effect.succeed(compatibleSchema).pipe(
+    Effect.filterOrFail(
+      isOpenApiDocument,
+      () =>
         new PostHogOpenApiGenerationError({
           message: "PostHog's OpenAPI schema is not an OpenAPI document.",
-          cause,
         })
     )
   );
