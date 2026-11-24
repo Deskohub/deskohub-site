@@ -61,7 +61,10 @@ export type WorkspaceReservationId = Schema.Schema.Type<
  */
 export const reservationOrderId = (
   reservationId: WorkspaceReservationId
-): OrderId => orderIdSchema.make(reservationId);
+): OrderId =>
+  // The reservation ID doubles as its order's ID, so the UUID check is
+  // skipped on purpose: the database generates both as the same UUIDv7.
+  orderIdSchema.make(reservationId, { disableChecks: true });
 
 /** The reservation ID carried by an order already known to be a reservation. */
 export const reservationIdForOrder = (
