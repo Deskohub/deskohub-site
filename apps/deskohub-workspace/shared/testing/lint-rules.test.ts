@@ -1120,3 +1120,158 @@ test("no-promise-matchers-in-browser-tests holds across Workspace browser tests"
       .map(({ location }) => location.path)
   ).toEqual([]);
 });
+
+// The corpus above lints with Biome's default file set, so these cases lint a
+// copy of the repository layout with the production `files.includes` and run
+// a package's own `lint` script from its directory, the way Turbo runs it.
+const productionRoot = join(fixtureRoot, "production");
+const assertionProbe =
+  "export const probe = (input?: string) => input! as string;\n";
+const productionProbes = [
+  "packages/standard-schema/src/probe.ts",
+  "packages/standard-schema/probe.ts",
+  "packages/standard-schema/probe.mts",
+  "packages/standard-schema/probe.cts",
+  "packages/standard-schema/src/probe.mts",
+  "packages/standard-schema/src/probe.cts",
+];
+const generatedProbes = [
+  "packages/standard-schema/generated/probe.mts",
+  "packages/standard-schema/generated/probe.cts",
+];
+
+type LintReport = {
+  readonly diagnostics: readonly {
+    readonly category?: string;
+    readonly message: string;
+    readonly location: { readonly path: string };
+  }[];
+};
+
+const diagnosticsByPath = (report: LintReport, cwd: string) => {
+  const byPath = new Map<string, string[]>();
+  for (const { category, message, location } of report.diagnostics) {
+    const path = resolve(cwd, location.path);
+    byPath.set(path, [
+      ...(byPath.get(path) ?? []),
+      `${category ?? ""} ${message}`,
+    ]);
+  }
+  return byPath;
+};
+
+const lintProduction = async (cwd: string, command: string) => {
+  const result = await runCommand(
+    ["bash", "-c", `${command} --reporter=json --max-diagnostics=none`],
+    {
+      cwd,
+      env: {
+        ...process.env,
+        PATH: `${join(repositoryRoot, "node_modules/.bin")}:${process.env.PATH ?? ""}`,
+      },
+    }
+  );
+  return diagnosticsByPath(JSON.parse(result.stdout) as LintReport, cwd);
+};
+
+const expectAssertionDiagnostics = (byPath: Map<string, string[]>) => {
+  for (const probe of productionProbes) {
+    const messages = byPath.get(join(productionRoot, probe)) ?? [];
+    expect({
+      probe,
+      assertion: messages.some((m) =>
+        m.includes("[anti-slop/no-type-assertions]")
+      ),
+    }).toEqual({ probe, assertion: true });
+    expect({
+      probe,
+      nonNull: messages.some((m) =>
+        m.includes("lint/style/noNonNullAssertion")
+      ),
+    }).toEqual({ probe, nonNull: true });
+  }
+  for (const probe of generatedProbes) {
+    expect(byPath.get(join(productionRoot, probe)) ?? []).toEqual([]);
+  }
+};
+
+test("production Biome config rejects package assertions in every module kind from the root and from the package", async () => {
+  writeCase(
+    "production",
+    "biome.json",
+    JSON.stringify({
+      ...repositoryConfig,
+      vcs: { enabled: false },
+      plugins: repositoryConfig.plugins.map((plugin) =>
+        join(repositoryRoot, plugin)
+      ),
+    })
+  );
+  for (const probe of [...productionProbes, ...generatedProbes]) {
+    writeCase("production", probe, assertionProbe);
+  }
+  const packageManifest = JSON.parse(
+    readFileSync(
+      join(repositoryRoot, "packages/standard-schema/package.json"),
+      "utf8"
+    )
+  ) as { readonly scripts: { readonly lint: string } };
+
+  expectAssertionDiagnostics(
+    await lintProduction(productionRoot, "biome lint packages")
+  );
+  expectAssertionDiagnostics(
+    await lintProduction(
+      join(productionRoot, "packages/standard-schema"),
+      packageManifest.scripts.lint
+    )
+  );
+});
+
+test("package lint scripts resolve the root Biome config by discovery", async () => {
+  // A relative --config-path makes Biome 2.5 match override globs against
+  // paths relative to the working directory, so `packages/**` overrides stop
+  // applying when a package lints itself.
+  const manifests = await commandOutput(
+    ["git", "ls-files", "--", "packages/*/package.json"],
+    {
+      cwd: repositoryRoot,
+    }
+  );
+  const scripts = manifests
+    .split("\n")
+    .filter((path) => path !== "")
+    .map((path) => {
+      const manifest = JSON.parse(
+        readFileSync(join(repositoryRoot, path), "utf8")
+      ) as {
+        readonly scripts?: { readonly lint?: string };
+      };
+      return { path, lint: manifest.scripts?.lint ?? "" };
+    });
+  expect(scripts.length).toBeGreaterThan(0);
+  expect(scripts.filter(({ lint }) => lint.includes("--config-path"))).toEqual(
+    []
+  );
+});
+
+test("lint caches miss when the Biome config or a Grit plugin changes", () => {
+  const turbo = JSON.parse(
+    readFileSync(join(repositoryRoot, "turbo.json"), "utf8")
+  ) as {
+    readonly tasks: { readonly lint: { readonly inputs?: readonly string[] } };
+  };
+  expect(turbo.tasks.lint.inputs).toEqual(
+    expect.arrayContaining([
+      "$TURBO_DEFAULT$",
+      "$TURBO_ROOT$/biome.json",
+      "$TURBO_ROOT$/lint/*.grit",
+    ])
+  );
+  // `lint/*.grit` covers a plugin only when it sits directly in `lint/`.
+  expect(
+    repositoryConfig.plugins.filter(
+      (plugin) => !/^\.\/lint\/[^/]+\.grit$/.test(plugin)
+    )
+  ).toEqual([]);
+});

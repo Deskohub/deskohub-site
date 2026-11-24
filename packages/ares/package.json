@@ -9,7 +9,7 @@
   },
   "scripts": {
     "generate": "bun ../../scripts/generate-effect-openapi-client.ts --spec ./openapi/ares-api.yaml --name AresClient --output ./src/generated/effect.gen.ts",
-    "lint": "cd ../.. && biome check packages/ares/src --config-path biome.json --vcs-root .",
+    "lint": "biome check .",
     "test": "bun test",
     "typecheck": "tsc --project tsconfig.json"
   },
