@@ -5,9 +5,11 @@ import { showBookingResultSchema } from "./show-booking.schema";
 
 const { customerAgentCatalog } = await import("./customer-agent-catalog");
 const { CallableAgentTools } = await import("./agent-tool");
-const { agentToolResultOf, makeAgentToolTestServices } = await import(
-  "./agent-tools.test-utils"
-);
+const {
+  agentToolResultOf,
+  makeAgentToolTestServices,
+  unreadCustomerAgentToolServices,
+} = await import("./agent-tools.test-utils");
 
 const clients = ["chatgpt", "claude", "other"] as const;
 
@@ -169,6 +171,8 @@ describe("customerAgentCatalog", () => {
             new Set(["show_booking", "start_reservation"])
           ),
           Effect.provide(makeAgentToolTestServices().layer),
+          // show_booking reads only the public services the test layer has.
+          Effect.provide(unreadCustomerAgentToolServices),
           Effect.runPromise
         )
         .then(agentToolResultOf(showBookingResultSchema));

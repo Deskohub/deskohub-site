@@ -15,6 +15,7 @@ import { getQuoteResultSchema } from "./get-quote.schema";
 const {
   agentToolResultOf,
   makeAgentToolTestServices,
+  unreadCustomerAgentToolServices,
   workspaceDateFromToday,
   workspaceInstantToday,
 } = await import("./agent-tools.test-utils");
@@ -41,6 +42,7 @@ const quote = (
     .call(args)
     .pipe(
       Effect.provide(services.layer),
+      Effect.provide(unreadCustomerAgentToolServices),
       now === undefined ? (effect) => effect : atInstant(now),
       Effect.runPromise
     )
@@ -52,7 +54,12 @@ const quoteFailure = (
 ) =>
   getQuoteTool
     .call(args)
-    .pipe(Effect.flip, Effect.provide(services.layer), Effect.runPromise);
+    .pipe(
+      Effect.flip,
+      Effect.provide(services.layer),
+      Effect.provide(unreadCustomerAgentToolServices),
+      Effect.runPromise
+    );
 
 /** The total the reservation page would advertise for the same request. */
 const advertisedTotal = (

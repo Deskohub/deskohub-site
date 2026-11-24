@@ -53,6 +53,13 @@ const listOfferingsResult = (): ListOfferingsResult => ({
  * An MCP Apps host the view connects to, recording the calls the view makes
  * through it.
  */
+/** What the booking host asked of its app. */
+class FakeHostCalls {
+  readonly tools: Array<ToolCall> = [];
+  readonly links: Array<string> = [];
+  closed = 0;
+}
+
 /** The handlers the booking host sets on its app. */
 class FakeAppHandlers {
   ontoolinput: ((input: ToolInput) => void) | undefined = undefined;
@@ -74,11 +81,7 @@ const fakeHost = ({
   readonly tools?: Readonly<Record<string, ToolResult>>;
   readonly link?: "opened" | "refused" | "unreachable";
 } = {}) => {
-  const calls = {
-    tools: [] as ToolCall[],
-    links: [] as string[],
-    closed: 0,
-  };
+  const calls = new FakeHostCalls();
   const app = Object.assign(new FakeAppHandlers(), {
     connect,
     close: () => {

@@ -5,6 +5,7 @@ import { testEmailAddress } from "@deskohub/test-email";
 import {
   AdministrationAssistantConnectionId,
   type AdministrationChannel,
+  AdministrationInvoiceId,
   CliMutationInProgress,
   CliMutationRequestId,
   CliSessionId,
@@ -30,6 +31,7 @@ import {
   customerAccountIdSchema,
 } from "@/features/account/customer-account";
 import { InvoiceAdministrationService } from "@/features/accounting/admin/invoice-administration.service";
+import { invoiceAdministrationDetail } from "@/features/accounting/admin/invoice-detail.test-utils";
 import { AdministrationActionLog } from "@/features/admin-cli/administration-action-log.service";
 import { AdministrationRequestLedger } from "@/features/admin-cli/administration-request-ledger.service";
 import {
@@ -878,7 +880,9 @@ describe("invoice cancellation tools through the assistant API", () => {
     grant: grantOf({}),
   };
   const tools = makeAdministrationAgentTools(administrationOperationTools);
-  const invoiceId = "01980000-0000-7000-8000-0000000000f1";
+  const invoiceId = Schema.decodeUnknownSync(AdministrationInvoiceId)(
+    "01980000-0000-7000-8000-0000000000f1"
+  );
   const cancellation = {
     cancelledAt: "2026-11-15T10:00:00Z",
     cause: "invoice_cancellation",
@@ -893,11 +897,10 @@ describe("invoice cancellation tools through the assistant API", () => {
       needsAttention: false,
     },
   } as const;
-  const detail = {
+  const detail = invoiceAdministrationDetail({
     id: invoiceId,
     invoiceNumber: "WS-FV-2026-000009",
     issuedAt: "2026-11-01T10:00:00Z",
-    customerId: null,
     customerName: "Synthetic Customer",
     reservationId: null,
     total: "1000",
@@ -929,7 +932,7 @@ describe("invoice cancellation tools through the assistant API", () => {
     },
     pdfUrl: `/admin/invoices/${invoiceId}/pdf`,
     cancellationPlan: { customerNotice: "owed", reservation: "none" },
-  } as const;
+  });
   const serveInvoices = () => {
     const changes: Array<{
       readonly operation: string;

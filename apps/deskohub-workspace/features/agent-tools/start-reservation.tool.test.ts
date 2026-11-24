@@ -198,7 +198,8 @@ describe("start_reservation", () => {
     expect(declinedRequest.reservation).toEqual(plainRequest.reservation);
     // The booked time stays; only the flag is added, which makes it another
     // selection.
-    expect(earlyRequest.reservation).toEqual({
+    // The selection gains a field its kind declares only optionally.
+    expect<unknown>(earlyRequest.reservation).toEqual({
       ...plainRequest.reservation,
       earlySetup: true,
     });

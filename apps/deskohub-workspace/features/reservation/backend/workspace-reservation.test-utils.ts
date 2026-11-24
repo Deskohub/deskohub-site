@@ -2,8 +2,13 @@ import {
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
 } from "@deskohub/dotypos";
+import { NexiCorrelationIdSchema } from "@deskohub/nexi";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import type { PayableReservation } from "@/features/checkout/backend/checkout/payable-checkout.service";
+import {
+  checkoutAttemptKeySchema,
+  checkoutSessionKeySchema,
+} from "@/features/checkout/checkout-identifiers";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import type { WorkspaceReservation } from "./workspace-reservation.repository";
 
@@ -24,9 +29,9 @@ export const workspaceReservationFixture = (
     passDayTableId: null,
     passDayHoldRequestedAt: null,
     passDayHoldGeneration: null,
-    checkoutSessionKey: "session-key",
-    checkoutAttemptKey: "attempt-key",
-    correlationId: "correlation-id",
+    checkoutSessionKey: checkoutSessionKeySchema.make("session-key"),
+    checkoutAttemptKey: checkoutAttemptKeySchema.make("attempt-key"),
+    correlationId: NexiCorrelationIdSchema.make("correlation-id"),
     agentClientId: null,
     agentSelectionKey: null,
     reservationPurpose: null,

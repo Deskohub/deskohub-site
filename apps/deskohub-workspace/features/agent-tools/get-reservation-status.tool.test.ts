@@ -27,7 +27,7 @@ import { inMemoryCustomerAgentCallServices } from "./agent-tools.test-utils";
 import { getReservationStatusTool } from "./get-reservation-status.tool";
 
 const accountId = customerAccountIdSchema.make("account-1");
-const linkedCustomerId = "60111";
+const linkedCustomerId = dotyposCustomerIdSchema.make("60111");
 
 let stored: WorkspaceReservation | null;
 const getStatus = mock(
@@ -72,7 +72,7 @@ const services = Layer.mergeAll(
       activeAccountId: Effect.succeed(accountId),
       resolve: Effect.succeed({
         accountId,
-        dotyposCustomerId: dotyposCustomerIdSchema.make(linkedCustomerId),
+        dotyposCustomerId: linkedCustomerId,
       }),
     },
   }))
@@ -99,7 +99,7 @@ describe("get_reservation_status", () => {
     getStatus.mockClear();
     stored = workspaceReservationFixture({
       authorAccountId: accountId,
-      dotyposCustomerId: "90000",
+      dotyposCustomerId: dotyposCustomerIdSchema.make("90000"),
     });
   });
 
@@ -224,7 +224,7 @@ describe("get_reservation_status", () => {
   test("refuses another customer's order exactly like a missing one", async () => {
     stored = workspaceReservationFixture({
       authorAccountId: customerAccountIdSchema.make("another-account"),
-      dotyposCustomerId: "90001",
+      dotyposCustomerId: dotyposCustomerIdSchema.make("90001"),
     });
     const foreign = await status();
     stored = null;
