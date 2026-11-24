@@ -125,8 +125,31 @@ const sinksPage = (
   ),
 });
 
-/** Logging reads every inventory needs: no exclusions, no custom sinks. */
+/** One Compute collection's aggregatedList answer, by scope. */
+const computeList = (
+  collection: string,
+  body: Schema.JsonObject
+): FakeRule => ({
+  tool: "curl",
+  pattern: `compute\\.googleapis\\.com/compute/v1/projects/${projectId}/aggregated/${collection}\\?maxResults=500&returnPartialSuccess=false$`,
+  stdout: JSON.stringify(body),
+});
+
+/**
+ * Reads every inventory needs: no exclusions, no custom sinks, and every
+ * Compute collection complete and empty.
+ */
 const readableLogging: ReadonlyArray<FakeRule> = [
+  {
+    tool: "curl",
+    pattern: "compute\\.googleapis\\.com/compute/v1/projects/.*/aggregated/",
+    stdout: JSON.stringify({
+      items: {
+        global: { warning: { code: "NO_RESULTS_ON_PAGE" } },
+        "regions/europe-west1": { warning: { code: "NO_RESULTS_ON_PAGE" } },
+      },
+    }),
+  },
   noExclusions,
   sinksPage(`projects/${projectId}`, [
     { name: "_Default", destination: "logging/_Default" },
@@ -409,7 +432,7 @@ describe("read-only inventory", () => {
             [{ name: "_Default", destination: "logging/_Default" }],
             { next: "page-2" }
           ),
-          noExclusions,
+          ...readableLogging,
         ],
       },
       (fakes) => runPhase(fakes, "readonly-inventory")
@@ -466,7 +489,7 @@ describe("post-destroy inventory", () => {
             [{ name: "_Default", destination: "logging/_Default" }],
             { next: "page-2" }
           ),
-          noExclusions,
+          ...readableLogging,
         ],
       },
       (fakes) => {
@@ -498,18 +521,23 @@ describe("post-destroy inventory", () => {
     });
   });
 
-  test("fails on a partial Compute listing that exited 0", () => {
-    const { exitCode, output } = inventory([
+  test("fails on a partial Compute listing", () => {
+    const partial: ReadonlyArray<Schema.JsonObject> = [
+      { items: {}, unreachables: ["regions/europe-west4"] },
       {
-        tool: "gcloud",
-        pattern: "^compute forwarding-rules list",
-        stderr:
-          "WARNING: Some requests did not succeed:\n - region unreachable",
+        items: {
+          "zones/europe-west1-b": { warning: { code: "UNREACHABLE" } },
+        },
       },
-      listing("^storage ls -r", emptiedState),
-    ]);
-    expect(exitCode).toBe(1);
-    expect(output).toContain("teardown unverified: forwarding-rules");
+    ];
+    for (const body of partial) {
+      const { exitCode, output } = inventory([
+        computeList("forwardingRules", body),
+        listing("^storage ls -r", emptiedState),
+      ]);
+      expect({ body, exitCode }).toEqual({ body, exitCode: 1 });
+      expect(output).toContain("teardown unverified: forwarding-rules");
+    }
   });
 
   test("fails when any class cannot be listed", () => {
@@ -522,21 +550,27 @@ describe("post-destroy inventory", () => {
   });
 
   test("lists every Compute class across all of the project's scopes", () => {
-    const calls = withProofFakes(
+    const { exitCode, calls } = withProofFakes(
       { rules: [listing("^storage ls -r", emptiedState), ...readableLogging] },
-      (fakes) => {
-        runPhase(fakes, "post-destroy-inventory");
-        return fakes
-          .calls()
-          .filter((call) => call.startsWith("gcloud compute"));
-      }
+      (fakes) => ({
+        exitCode: runPhase(fakes, "post-destroy-inventory").exitCode,
+        calls: fakes.calls().filter((call) => call.includes("/aggregated/")),
+      })
     );
-    expect(calls).toHaveLength(9);
-    for (const call of calls) {
-      expect(call).toMatch(
-        /^gcloud compute [a-z-]+ list --project=deskohub-workspace-sandbox --format=value\(name\)$/
-      );
-    }
+    expect(exitCode).toBe(0);
+    expect(
+      calls.map((call) => call.match(/\/aggregated\/([A-Za-z]+)\?/)?.[1])
+    ).toEqual([
+      "forwardingRules",
+      "addresses",
+      "backendServices",
+      "urlMaps",
+      "targetHttpProxies",
+      "targetHttpsProxies",
+      "networkEndpointGroups",
+      "securityPolicies",
+      "sslCertificates",
+    ]);
   });
 
   test("finds leftover proof resources by their bare IDs", () => {
@@ -563,8 +597,12 @@ describe("post-destroy inventory", () => {
       listing("^run revisions list", "workspace-api-00001-abc"),
       // No load balancer, NEG, Cloud Armor, certificate or exclusion of
       // any name, and no project-level invoker grant.
-      listing("^compute forwarding-rules list", "legacy-http"),
-      listing("^compute security-policies list", "legacy-armor"),
+      computeList("forwardingRules", {
+        items: { global: { forwardingRules: [{ name: "legacy-http" }] } },
+      }),
+      computeList("securityPolicies", {
+        items: { global: { securityPolicies: [{ name: "legacy-armor" }] } },
+      }),
       sinksPage(`projects/${projectId}`, [
         {
           name: "export",
@@ -1247,6 +1285,15 @@ describe("Alchemy access token", () => {
         deployed: calls.some((call) => call.includes("release.run.ts deploy")),
       }).toEqual({ exitCode: 1, refused: true, deployed: false });
     }
+  });
+
+  test("prints no minted token outside GitHub Actions", () => {
+    const output = withProofFakes({ now, rules: [lifetime(3599)] }, (fakes) =>
+      runPhase(fakes, "foundation", {
+        GOOGLE_ACCESS_TOKEN_EXPIRES_AT: String(now + 60),
+      })
+    ).output;
+    expect(output).not.toContain("fake-access-token");
   });
 
   test("takes the inventories even when no token can be verified", () => {
@@ -2295,14 +2342,7 @@ describe("baseline inventory", () => {
     );
 
   test("passes when no edge or log exclusion resource exists", () => {
-    // gcloud reports an empty list on stderr; that is no partial listing.
-    const { exitCode, output } = baseline([
-      {
-        tool: "gcloud",
-        pattern: "^compute url-maps list",
-        stderr: "Listed 0 items.",
-      },
-    ]);
+    const { exitCode, output } = baseline([]);
     expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
       exitCode: 0,
       output: "",
@@ -2312,12 +2352,14 @@ describe("baseline inventory", () => {
   test("fails on any edge resource, any exclusion or an unreadable class", () => {
     for (const [rule, message] of [
       [
-        {
-          tool: "gcloud",
-          pattern: "^compute forwarding-rules list",
-          stdout: "legacy-http",
-        },
-        "the project already holds forwarding-rules: legacy-http",
+        computeList("networkEndpointGroups", {
+          items: {
+            "zones/europe-west1-b": {
+              networkEndpointGroups: [{ name: "legacy-neg" }],
+            },
+          },
+        }),
+        "the project already holds network-endpoint-groups: legacy-neg",
       ],
       [
         {
@@ -2338,17 +2380,23 @@ describe("baseline inventory", () => {
         "the project already holds sink-exclusions: export\tdrop-noise",
       ],
       [
-        { tool: "gcloud", pattern: "^compute ssl-certificates list", exit: 1 },
+        { ...computeList("sslCertificates", {}), stdout: undefined, exit: 22 },
         "ssl-certificates is unreadable",
       ],
       [
-        {
-          tool: "gcloud",
-          pattern: "^compute network-endpoint-groups list",
-          stderr:
-            "WARNING: Some requests did not succeed:\n - The resource 'projects/x/zones/europe-west1-b' is not ready",
-        },
-        "network-endpoint-groups is unreadable",
+        computeList("urlMaps", {
+          items: {},
+          unreachables: ["regions/us-east1"],
+        }),
+        "url-maps is unreadable",
+      ],
+      [
+        computeList("targetHttpsProxies", {
+          items: {
+            "regions/europe-west1": { warning: { code: "UNREACHABLE" } },
+          },
+        }),
+        "target-https-proxies is unreadable",
       ],
     ] as const) {
       const { exitCode, output } = baseline([rule]);

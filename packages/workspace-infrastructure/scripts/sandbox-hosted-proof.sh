@@ -272,6 +272,31 @@ project_sink_rows() {
   $dry_run || jq -r '.[] | [.name, .destination] | @tsv' <<<"$sinks"
 }
 
+# The names of one Compute collection in every region, zone and global
+# scope of the project, from its aggregatedList pages. gcloud drops a
+# response's top-level `unreachables` and exits 0, so the raw pages are
+# read: partial success is not requested, and any unreachable scope, a
+# malformed page or more than 20 pages fails rather than reading as empty.
+compute_names() {
+  local collection="$1" body url page_token="" pages="" count=0
+  while true; do
+    url="https://compute.googleapis.com/compute/v1/projects/${project_id}/aggregated/${collection}?maxResults=500&returnPartialSuccess=false"
+    [[ -z "$page_token" ]] || url+="&pageToken=${page_token}"
+    body="$(google_get '{"items":{}}' "$url")" || return 1
+    jq -se 'length == 1 and (.[0] | type == "object"
+      and ((.unreachables // []) | length == 0)
+      and ((.items // {}) | type == "object")
+      and all((.items // {})[]; (.warning.code // "") != "UNREACHABLE"))' >/dev/null 2>&1 <<<"$body" ||
+      return 1
+    pages+="${body}"$'\n'
+    page_token="$(jq -r '.nextPageToken // empty | @uri' <<<"$body")" || return 1
+    [[ -n "$page_token" ]] || break
+    count=$((count + 1))
+    ((count < 20)) || return 1
+  done
+  $dry_run || jq -r --arg collection "$collection" '(.items // {})[] | (.[$collection] // [])[] | .name' <<<"$pages"
+}
+
 # Every exclusion on any of the project's sinks as `sink<TAB>exclusion`
 # rows: the project exclusions API covers only _Default.
 project_sink_exclusion_rows() {
@@ -753,20 +778,18 @@ take_inventory() {
   local dir="${proof_dir}/inventory-$1"
   mkdir -p "$dir"
   local p=(--project="$project_id")
-  # Compute lists without a scope flag are aggregated: every region, zone
-  # and global scope of the project.
   inventory_class "$dir" run-services gcloud run services list "${p[@]}" --region="$region" --format='value(metadata.name)'
   inventory_class "$dir" run-revisions gcloud run revisions list "${p[@]}" --region="$region" --format='value(metadata.name)'
   inventory_class "$dir" artifact-repositories gcloud artifacts repositories list "${p[@]}" --location="$region" --format='value(name)'
-  inventory_class "$dir" forwarding-rules gcloud compute forwarding-rules list "${p[@]}" --format='value(name)'
-  inventory_class "$dir" addresses gcloud compute addresses list "${p[@]}" --format='value(name)'
-  inventory_class "$dir" backend-services gcloud compute backend-services list "${p[@]}" --format='value(name)'
-  inventory_class "$dir" url-maps gcloud compute url-maps list "${p[@]}" --format='value(name)'
-  inventory_class "$dir" target-http-proxies gcloud compute target-http-proxies list "${p[@]}" --format='value(name)'
-  inventory_class "$dir" target-https-proxies gcloud compute target-https-proxies list "${p[@]}" --format='value(name)'
-  inventory_class "$dir" network-endpoint-groups gcloud compute network-endpoint-groups list "${p[@]}" --format='value(name)'
-  inventory_class "$dir" security-policies gcloud compute security-policies list "${p[@]}" --format='value(name)'
-  inventory_class "$dir" ssl-certificates gcloud compute ssl-certificates list "${p[@]}" --format='value(name)'
+  inventory_class "$dir" forwarding-rules compute_names forwardingRules
+  inventory_class "$dir" addresses compute_names addresses
+  inventory_class "$dir" backend-services compute_names backendServices
+  inventory_class "$dir" url-maps compute_names urlMaps
+  inventory_class "$dir" target-http-proxies compute_names targetHttpProxies
+  inventory_class "$dir" target-https-proxies compute_names targetHttpsProxies
+  inventory_class "$dir" network-endpoint-groups compute_names networkEndpointGroups
+  inventory_class "$dir" security-policies compute_names securityPolicies
+  inventory_class "$dir" ssl-certificates compute_names sslCertificates
   inventory_class "$dir" logging-exclusions project_exclusion_names
   inventory_class "$dir" logging-sinks project_sink_rows
   inventory_class "$dir" sink-exclusions project_sink_exclusion_rows
