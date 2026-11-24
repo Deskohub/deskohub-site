@@ -317,8 +317,10 @@ const successResultSchema = ({
   const json = Schema.toCodecJson(administrationContractCodec(success));
   if (wrapsResult) return Schema.Struct({ items: json });
   // A trust boundary: `encodesToObject` decided that this success's JSON is
-  // an object, which only its AST shows. MCP publishes the decoded side, so
-  // the schema stays the success's own JSON codec.
+  // an object, which only its AST shows. It assumes agent tool success codecs
+  // decode objects to objects; no current endpoint decodes one to anything
+  // else. MCP publishes the decoded side, so the schema stays the success's
+  // own JSON codec.
   return Schema.make<JsonObjectSchema>(json.ast);
 };
 

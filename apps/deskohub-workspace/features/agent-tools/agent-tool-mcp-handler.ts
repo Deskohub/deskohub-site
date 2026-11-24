@@ -430,6 +430,7 @@ const listSecuritySchemes = (server: McpServer) => {
     const listed = toWireJson(
       await listTools({ jsonrpc: "2.0", id: 0, ...request }, context)
     );
+    // A non-object outputSchema is spec-invalid and now fails the listing.
     if (!isSpecType.ListToolsResult(listed)) {
       throw new ProtocolError(
         ProtocolErrorCode.InternalError,

@@ -150,7 +150,9 @@ const answerFailure = <E>(failure: E): FailureAnswer<E> => {
  * fixed codes it carries first: an account access failure as
  * `accountAccessApiFailure` maps it, a withheld feature as unavailable until
  * released, and anything else, such as an account service whose layer
- * couldn't be built, as unavailable.
+ * couldn't be built, as unavailable. `E` must be the operation's own failure
+ * union: for `unknown`, the answer type leaves a withheld feature's answer
+ * out, though one can still occur.
  */
 export const answerCustomerApiFailure =
   (operation: string) =>
