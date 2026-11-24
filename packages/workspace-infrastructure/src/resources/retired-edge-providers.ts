@@ -339,21 +339,28 @@ const makeRetiredEdgeComputeApi = Effect.fnUntraced(function* () {
     const operationUrl = `${computeRoot}/projects/${project}/global/operations/${name}`;
     const poll = send(
       resource,
-      `operation ${name}`,
+      "wait",
       HttpClientRequest.get(operationUrl),
-      operationAnswer(resource, `operation ${name}`)
+      operationAnswer(resource, "wait")
     ).pipe(
-      Effect.mapError(
-        (error) =>
-          new RetiredEdgeComputeOperationUnreadable({
-            resource,
-            operation: name,
-            reason: error.reason,
-          })
-      ),
+      // A freshly started global operation can 404 briefly before becoming visible.
+      Effect.retry({
+        while: (error) => error.status === 404,
+        times: 5,
+        schedule: Schedule.exponential("250 millis"),
+      }),
       Effect.filterOrFail(
         (current) => current.status === "DONE",
         () => new ComputeOperationPending()
+      ),
+      Effect.catchTag("RetiredEdgeComputeRequestFailed", (error) =>
+        Effect.fail(
+          new RetiredEdgeComputeOperationUnreadable({
+            resource,
+            operation: name,
+            reason: error.message,
+          })
+        )
       ),
       Effect.retry({
         while: (error) => error._tag === "ComputeOperationPending",

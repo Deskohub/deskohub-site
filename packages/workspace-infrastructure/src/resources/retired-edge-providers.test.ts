@@ -342,6 +342,13 @@ describe("retired edge deletion providers", () => {
         ) {
           const count = (operationsPolled.get("op-del-static") ?? 0) + 1;
           operationsPolled.set("op-del-static", count);
+          // A freshly accepted Compute global operation can briefly 404.
+          if (count === 1) {
+            return {
+              status: 404,
+              body: { error: { message: "operation not visible yet" } },
+            };
+          }
           return {
             status: 200,
             body: { name: "op-del-static", status: "DONE" },
@@ -395,7 +402,12 @@ describe("retired edge deletion providers", () => {
     expect(staticDeleteIndex).toBeGreaterThanOrEqual(0);
     expect(policyDeleteIndex).toBeGreaterThan(dynamicDeleteIndex);
     expect(policyDeleteIndex).toBeGreaterThan(staticDeleteIndex);
-    expect(operationsPolled.get("op-del-static")).toBe(1);
+    expect(operationsPolled.get("op-del-static")).toBe(2);
+    expect(
+      deletes.filter((call) =>
+        call.url.includes("/backendServices/workspace-sandbox-static-backend")
+      )
+    ).toHaveLength(1);
   });
 
   test("enforces the writer lock fence before touching pre-rename state or Compute", async () => {
