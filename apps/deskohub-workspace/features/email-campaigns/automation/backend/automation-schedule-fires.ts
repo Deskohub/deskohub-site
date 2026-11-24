@@ -1,9 +1,6 @@
 import "server-only";
 
-import {
-  type DotyposCustomerId,
-  DotyposCustomerIdSchema,
-} from "@deskohub/dotypos";
+import type { DotyposCustomerId } from "@deskohub/dotypos";
 import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 import { WorkspaceTransaction } from "@/db/database.service";
@@ -36,7 +33,7 @@ const maxFiresPerCall = 60;
 
 export const fireChunkSubjectSchema = Schema.Struct({
   fireAt: instantFromIsoStringSchema,
-  customerIds: Schema.Array(DotyposCustomerIdSchema),
+  customerIds: Schema.Array(Schema.String),
 });
 export type FireChunkSubject = typeof fireChunkSubjectSchema.Type;
 

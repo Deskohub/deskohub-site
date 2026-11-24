@@ -1,7 +1,10 @@
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import {
+  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
 import type { AutomationFlowType as AutomationFlow } from "@deskohub/workspace-admin-api";
 import { and, eq, sql } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { emailCampaignAutomationScheduleFires as fires } from "@/db/schema";
 import { currentInstant } from "@/shared/utils/temporal";
@@ -21,7 +24,6 @@ import {
 } from "./automation-run-entry";
 import {
   enterScheduleFire,
-  type FireChunkSubject,
   fireChunkSubjectSchema,
   lockScheduleFireEntry,
   planNextFire,
@@ -50,6 +52,13 @@ type FireChunkEvaluation =
   | { readonly _tag: "Undecodable" }
   /** The fire isn't entering any more; the commit's recheck drops the unit. */
   | { readonly _tag: "Stale" };
+
+/** The fire chunk's subject, with its customers decoded as Dotypos ids. */
+const fireChunkUnitSubjectSchema = Schema.Struct({
+  ...fireChunkSubjectSchema.fields,
+  customerIds: Schema.Array(DotyposCustomerIdSchema),
+});
+type FireChunkSubject = typeof fireChunkUnitSubjectSchema.Type;
 
 const campaignOf = (unit: ClaimedAutomationUnit<FireChunkSubject>) =>
   unit.campaignId === null
@@ -137,7 +146,7 @@ export const makeFireChunkHandler = Effect.gen(function* () {
   const handler: AutomationUnitHandler<FireChunkSubject, FireChunkEvaluation> =
     {
       kind: "fire-chunk",
-      subject: fireChunkSubjectSchema,
+      subject: fireChunkUnitSubjectSchema,
       // Fire chunks never expire (D34); only a solo chunk that keeps missing
       // its deadline counts as unavailable, so it can't block the fire.
       expire: Effect.fn("fireChunk.expire")(function* (

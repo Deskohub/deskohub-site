@@ -1,5 +1,6 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import {
+  type AudienceAttributeKind,
   type AudienceAttributeOfKind,
   type AudienceBooleanAttributeDefinition,
   type AudienceConditionOf,
@@ -73,54 +74,52 @@ export type AudienceConditionView =
       >;
     };
 
-const countConditionView = (
-  condition: AudienceConditionOf<AudienceAttributeOfKind<"count">>
-): AudienceConditionView => ({
-  kind: "count",
-  entry: audienceAttributeCatalogue[condition.attribute],
-  condition,
-});
+/**
+ * Whether the condition's attribute is of `kind`, by its catalogue entry.
+ * The catalogue keys each entry by its attribute, so the entry's kind is
+ * the kind of the condition's attribute.
+ */
+const isConditionOfKind =
+  <Kind extends AudienceAttributeKind>(kind: Kind) =>
+  (
+    condition: AudienceCondition
+  ): condition is AudienceConditionOf<AudienceAttributeOfKind<Kind>> =>
+    audienceAttributeCatalogue[condition.attribute].kind === kind;
 
-const dateConditionView = (
-  condition: AudienceConditionOf<AudienceAttributeOfKind<"date">>
-): AudienceConditionView => ({
-  kind: "date",
-  entry: audienceAttributeCatalogue[condition.attribute],
-  condition,
-});
-
-const setConditionView = (
-  condition: AudienceConditionOf<AudienceAttributeOfKind<"set">>
-): AudienceConditionView => ({
-  kind: "set",
-  entry: audienceAttributeCatalogue[condition.attribute],
-  condition,
-});
-
-const booleanConditionView = (
-  condition: AudienceConditionOf<AudienceAttributeOfKind<"boolean">>
-): AudienceConditionView => ({
-  kind: "boolean",
-  entry: audienceAttributeCatalogue[condition.attribute],
-  condition,
-});
+const isCountCondition = isConditionOfKind("count");
+const isDateCondition = isConditionOfKind("date");
+const isSetCondition = isConditionOfKind("set");
 
 export const viewAudienceCondition = (
   condition: AudienceCondition
-): AudienceConditionView =>
-  Match.value(condition).pipe(
-    Match.discriminatorsExhaustive("attribute")({
-      reservationCount: countConditionView,
-      campaignEmailCount: countConditionView,
-      firstVisit: dateConditionView,
-      lastVisit: dateConditionView,
-      accountCreated: dateConditionView,
-      hasAccount: booleanConditionView,
-      locale: setConditionView,
-      dotyposTags: setConditionView,
-      discountGroup: setConditionView,
-    })
-  );
+): AudienceConditionView => {
+  if (isCountCondition(condition)) {
+    return {
+      kind: "count",
+      entry: audienceAttributeCatalogue[condition.attribute],
+      condition,
+    };
+  }
+  if (isDateCondition(condition)) {
+    return {
+      kind: "date",
+      entry: audienceAttributeCatalogue[condition.attribute],
+      condition,
+    };
+  }
+  if (isSetCondition(condition)) {
+    return {
+      kind: "set",
+      entry: audienceAttributeCatalogue[condition.attribute],
+      condition,
+    };
+  }
+  return {
+    kind: "boolean",
+    entry: audienceAttributeCatalogue[condition.attribute],
+    condition,
+  };
+};
 
 /**
  * Three-valued result: a Dotypos condition is `unknown` until the customer's

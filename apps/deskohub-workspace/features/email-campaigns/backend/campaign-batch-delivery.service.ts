@@ -582,13 +582,9 @@ export class CampaignBatchDelivery extends Context.Service<
               Match.exhaustive
             )
           ),
-          Effect.bind(
+          Effect.let(
             "localized",
-            Effect.fnUntraced(function* ({
-              send,
-              recipient,
-              personalizedContent,
-            }) {
+            ({ send, recipient, personalizedContent }) => {
               if (personalizedContent) {
                 return {
                   locale: recipient.locale,
@@ -602,15 +598,14 @@ export class CampaignBatchDelivery extends Context.Service<
               if (rendered) {
                 return { ...rendered, sensitive: true };
               }
-              // Sends start only once the campaign has content.
-              const localized = yield* Effect.fromOption(
-                campaignContentForRecipient(
+              return {
+                ...campaignContentForRecipient(
                   send.campaign.content,
                   recipient.locale
-                )
-              ).pipe(Effect.orDie);
-              return { ...localized, sensitive: false };
-            })
+                ),
+                sensitive: false,
+              };
+            }
           ),
           Effect.flatMap(
             ({

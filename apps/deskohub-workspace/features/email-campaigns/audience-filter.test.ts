@@ -9,6 +9,7 @@ import {
   audienceAttributeCatalogue,
 } from "@deskohub/workspace-admin-api";
 import { Option, Result, Schema } from "effect";
+import { newCondition } from "./admin/audiences/audience-filter-editing";
 import {
   type AudienceCandidate,
   type AudienceCondition,
@@ -26,6 +27,7 @@ import {
   countFactRequest,
   dateFactRequest,
   matchesSet,
+  viewAudienceCondition,
 } from "./audience-filter";
 import { evaluateAudienceFilter } from "./backend/audience-evaluation";
 import {
@@ -215,6 +217,14 @@ describe("evaluateAudienceFilter", () => {
         { facts }
       )
     ).toBe("match");
+  });
+
+  test("views every catalogued condition by its entry's kind", () => {
+    for (const entry of Object.values(audienceAttributeCatalogue)) {
+      const view = viewAudienceCondition(newCondition(entry.attribute));
+      expect(view.kind).toBe(entry.kind);
+      expect(view.entry).toBe(entry);
+    }
   });
 
   test("keeps choice params and the product filter as they are", () => {
