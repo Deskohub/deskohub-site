@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Effect } from "effect";
 import {
   CustomerAccountAccessError,
   customerAccountIdSchema,
+  type LinkedCustomerAccount,
 } from "@/features/account/customer-account";
 import { MarketingManagementError } from "./marketing-management.service";
 import {
@@ -16,9 +18,9 @@ import {
 
 const accountId = customerAccountIdSchema.make("account-a");
 
-const account = (customerId: string) => ({
+const account = (customerId: string): LinkedCustomerAccount => ({
   accountId,
-  dotyposCustomerId: customerId,
+  dotyposCustomerId: DotyposCustomerIdSchema.make(customerId),
 });
 
 const resolve = (input: {

@@ -1554,7 +1554,10 @@ describe("getQuote", () => {
     async (_case, failure) => {
       const api = makeCustomerApiTestServer({
         bookingCatalog: pricedCatalog({
-          pricing: pricingWith(() => Effect.fail(failure)),
+          // The pricing service declares these; the sale lookup doesn't.
+          pricing: Layer.mock(CheckoutPricingService, {
+            quoteAdvertisement: () => Effect.fail(failure),
+          }),
         }),
       });
 

@@ -51,6 +51,7 @@ import {
 } from "@/features/checkout/backend/checkout/pay-state-checkout-view";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
+import { InviteeEmail } from "@/features/office/office-people";
 import {
   ReservationAccessService,
   type ReservationAccessViewModel,
@@ -61,6 +62,7 @@ import {
   ReservationAuthorizationUnavailableError,
 } from "@/features/reservation/backend/reservation-authorization.service";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { reservationInviteeIdSchema } from "@/features/reservation-invitees/reservation-invitee";
 import { contractWithdrawalFixture } from "@/features/withdrawal/backend/contract-withdrawal.test-utils";
 import { WithdrawalRepository } from "@/features/withdrawal/backend/withdrawal.repository";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
@@ -672,8 +674,8 @@ describe("getReservationStatus", () => {
             resendable,
             invitees: [
               {
-                id: "office-guest",
-                email,
+                id: reservationInviteeIdSchema.make("office-guest"),
+                email: InviteeEmail.make(email),
                 invitationSentAt: null,
                 resendAvailableAt: resendable ? resendAvailableAt : undefined,
               },
