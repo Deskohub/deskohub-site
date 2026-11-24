@@ -106,6 +106,10 @@ done
 [[ "$vercel_project" =~ ^[a-z0-9._-]{1,100}$ ]] || fail "--vercel-project must be the Vercel project name"
 [[ "$vercel_owner_id" =~ ^team_[A-Za-z0-9]+$ ]] || fail "--vercel-owner-id must be the Vercel team ID"
 [[ "$vercel_project_id" =~ ^prj_[A-Za-z0-9]+$ ]] || fail "--vercel-project-id must be the Vercel project ID"
+# google.subject maps to at most 127 bytes; the inputs are ASCII.
+vercel_subject="owner:${vercel_team_slug}:project:${vercel_project}:environment:preview"
+((${#vercel_subject} <= 127)) ||
+  fail "--vercel-team-slug and --vercel-project make a preview subject longer than Google's 127 bytes"
 for secret_id in "${managed_secrets[@]}"; do
   [[ "$secret_id" =~ ^[A-Za-z0-9_-]{1,255}$ ]] || fail "--managed-secret must be a Secret Manager secret ID"
 done
@@ -193,7 +197,8 @@ run_revoke() {
   if output="$("$@" 2>&1)"; then
     return 0
   fi
-  if grep -qiE 'not found|NOT_FOUND' <<<"$output"; then
+  # Only gcloud's own missing-binding refusal proves the policy was read.
+  if grep -qF 'Policy binding with the specified principal, role, and condition not found' <<<"$output"; then
     echo "already absent; continuing"
     return 0
   fi
@@ -251,7 +256,6 @@ trusted_workflow_ref="${github_repository}/${trusted_workflow_path}@${trusted_re
 trusted_subject="repo:${github_repository}:environment:${environment_name}"
 vercel_pool_name="projects/${project_number}/locations/global/workloadIdentityPools/${vercel_pool_id}"
 vercel_issuer="https://oidc.vercel.com/${vercel_team_slug}"
-vercel_subject="owner:${vercel_team_slug}:project:${vercel_project}:environment:preview"
 
 echo "== APIs"
 run gcloud services enable --project "$project_id" \

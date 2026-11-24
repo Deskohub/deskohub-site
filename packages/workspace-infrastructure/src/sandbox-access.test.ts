@@ -326,30 +326,37 @@ describe("sandbox bootstrap script", () => {
     );
   });
 
-  test("grants the frontend preview identity only once the Vercel provider is trusted", () => {
-    const frontendGrant = (calls: ReadonlyArray<string>) =>
-      calls.some(
-        (call) =>
-          call.startsWith(
-            "iam service-accounts add-iam-policy-binding workspace-frontend-preview@"
-          ) && call.includes("workloadIdentityUser")
-      );
-    const trusted = runLiveBootstrap(
+  const frontendGrant = (calls: ReadonlyArray<string>) =>
+    calls.some(
+      (call) =>
+        call.startsWith(
+          "iam service-accounts add-iam-policy-binding workspace-frontend-preview@"
+        ) && call.includes("workloadIdentityUser")
+    );
+
+  test("grants the frontend preview identity once the Vercel provider is trusted", () => {
+    const { result, calls } = runLiveBootstrap(
       { projectNumber: "123456789012" },
       ...liveArgs
     );
-    expect(trusted.result.exitCode).toBe(0);
-    expect(frontendGrant(trusted.calls)).toBe(true);
+    expect(result.exitCode).toBe(0);
+    expect(frontendGrant(calls)).toBe(true);
+  });
 
-    for (const [answers, message] of [
-      [
-        {
-          vercelProviders: `${vercelPool}/providers/vercel\n${vercelPool}/providers/other`,
-        },
-        "must contain only provider vercel",
-      ],
-      [{ vercelJwksJson: '{"keys":[]}' }, "uploaded signing keys"],
-    ] as const) {
+  test.each([
+    {
+      answers: {
+        vercelProviders: `${vercelPool}/providers/vercel\n${vercelPool}/providers/other`,
+      },
+      message: "must contain only provider vercel",
+    },
+    {
+      answers: { vercelJwksJson: '{"keys":[]}' },
+      message: "uploaded signing keys",
+    },
+  ])(
+    "withholds the frontend preview identity when the Vercel provider is not trusted: $message",
+    ({ answers, message }) => {
       const { result, calls } = runLiveBootstrap(
         { projectNumber: "123456789012", ...answers },
         ...liveArgs
@@ -358,10 +365,10 @@ describe("sandbox bootstrap script", () => {
       expect(result.stderr.toString()).toContain(message);
       expect(frontendGrant(calls)).toBe(false);
     }
-  });
+  );
 
   test("treats an already removed trace-writer grant as removed", () => {
-    const absent = runLiveBootstrap(
+    const { result, calls } = runLiveBootstrap(
       {
         projectNumber: "123456789012",
         removeBindingError:
@@ -369,29 +376,34 @@ describe("sandbox bootstrap script", () => {
       },
       ...liveArgs
     );
-    expect(absent.result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(0);
     expect(
-      absent.calls.filter((call) =>
+      calls.filter((call) =>
         call.startsWith("projects remove-iam-policy-binding")
       )
     ).toHaveLength(6);
-    expect(absent.result.stdout.toString()).toContain(
-      "already absent; continuing"
-    );
-
-    const denied = runLiveBootstrap(
-      {
-        projectNumber: "123456789012",
-        removeBindingError: "ERROR: PERMISSION_DENIED",
-      },
-      ...liveArgs
-    );
-    expect(denied.result.exitCode).toBe(1);
-    expect(denied.result.stderr.toString()).toContain("PERMISSION_DENIED");
+    expect(result.stdout.toString()).toContain("already absent; continuing");
   });
 
-  test("refuses a state bucket outside the stage's region before changing it", () => {
-    for (const bucketLocation of ["EUROPE-WEST3\tregion", "EU\tmulti-region"]) {
+  test.each([
+    "ERROR: PERMISSION_DENIED",
+    "ERROR: (gcloud.projects.remove-iam-policy-binding) NOT_FOUND: Requested entity was not found.",
+  ])(
+    "stops when removing a trace-writer grant fails otherwise: %s",
+    (removeBindingError) => {
+      const { result } = runLiveBootstrap(
+        { projectNumber: "123456789012", removeBindingError },
+        ...liveArgs
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain(removeBindingError);
+      expect(result.stdout.toString()).not.toContain("already absent");
+    }
+  );
+
+  test.each(["EUROPE-WEST3\tregion", "EU\tmulti-region"])(
+    "refuses a state bucket outside the stage's region before changing it: %s",
+    (bucketLocation) => {
       const { result, calls } = runLiveBootstrap(
         { projectNumber: "123456789012", bucketLocation },
         ...liveArgs
@@ -402,7 +414,7 @@ describe("sandbox bootstrap script", () => {
         calls.some((call) => call.startsWith("storage buckets update"))
       ).toBe(false);
     }
-  });
+  );
 
   test("merges the spend and teardown labels with the project's other labels", () => {
     const { result, calls, curlCalls, curlStdin } = runLiveBootstrap(
@@ -495,6 +507,7 @@ describe("sandbox bootstrap script", () => {
     for (const api of [
       "cloudtrace.googleapis.com",
       "cloudscheduler.googleapis.com",
+      "compute.googleapis.com",
       "sts.googleapis.com",
       "iamcredentials.googleapis.com",
     ]) {
@@ -602,13 +615,14 @@ describe("sandbox bootstrap script", () => {
     );
   });
 
-  test("rejects Vercel values that could widen the provider condition", () => {
-    for (const [flag, value] of [
-      ["--vercel-owner-id", "team_x' || true || '"],
-      ["--vercel-project-id", "example-project"],
-      ["--vercel-project", "example:environment:production"],
-      ["--vercel-team-slug", ""],
-    ] as const) {
+  test.each([
+    ["--vercel-owner-id", "team_x' || true || '"],
+    ["--vercel-project-id", "example-project"],
+    ["--vercel-project", "example:environment:production"],
+    ["--vercel-team-slug", ""],
+  ] as const)(
+    "rejects a %s that could widen the provider condition",
+    (flag, value) => {
       const args = [...dryRunArgs];
       args[args.indexOf(flag) + 1] = value;
       const result = runBootstrap(...args);
@@ -616,6 +630,23 @@ describe("sandbox bootstrap script", () => {
       expect(result.stderr.toString()).toContain(flag);
       expect(result.stdout.toString()).toBe("");
     }
+  );
+
+  // owner:example-team:project:<name>:environment:preview is 47 bytes
+  // plus the project name; Google maps subjects of at most 127 bytes.
+  test("accepts a preview subject of 127 bytes", () => {
+    const args = [...dryRunArgs];
+    args[args.indexOf("--vercel-project") + 1] = "p".repeat(80);
+    expect(runBootstrap(...args).exitCode).toBe(0);
+  });
+
+  test("rejects a preview subject of 128 bytes before any change", () => {
+    const args = [...dryRunArgs];
+    args[args.indexOf("--vercel-project") + 1] = "p".repeat(81);
+    const result = runBootstrap(...args);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("127 bytes");
+    expect(result.stdout.toString()).toBe("");
   });
 
   test("passes bash -n", () => {
