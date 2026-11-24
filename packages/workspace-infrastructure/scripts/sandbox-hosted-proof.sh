@@ -734,15 +734,17 @@ verify_edge_security() {
       fail "backend service ${backend} is unreadable; its Cloud Armor policy is unverified"
     expect_equal "${backend} Cloud Armor policy" "${attached##*/}" "$edge_security_policy"
   done
+  # The whole policy: gcloud prints a lone projected field such as
+  # `json(rules)` as the bare value, not an object holding it.
   rules="$(capture '{"rules":[]}' gcloud compute security-policies describe "$edge_security_policy" \
-    --project="$project_id" --format='json(rules)')" ||
+    --project="$project_id" --format=json)" ||
     fail "Cloud Armor policy ${edge_security_policy} is unreadable"
   if $dry_run; then
-    echo "  expect the declared SQLi and XSS rules in preview and the auth throttle enforced" >&2
+    echo "  expect the declared SQLi and XSS rules in preview, the auth throttle enforced and the default allow" >&2
     return 0
   fi
   # Each rule as the stack declares it for the sandbox: matcher, action,
-  # preview and the auth throttle's limit.
+  # preview, the auth throttle's limit and the enforced match-all default.
   jq -e --arg sqli "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})" \
     --arg xss "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})" \
     --arg auth "request.path.startsWith('/api/auth/')" \
@@ -758,8 +760,11 @@ verify_edge_security() {
         and .rateLimitOptions.exceedAction == "deny(429)"
         and .rateLimitOptions.enforceOnKey == "IP"
         and .rateLimitOptions.rateLimitThreshold.count == $limit
-        and .rateLimitOptions.rateLimitThreshold.intervalSec == 60)]
-    | length == 3 and all' >/dev/null <<<"$rules" ||
+        and .rateLimitOptions.rateLimitThreshold.intervalSec == 60),
+      (rule(2147483647) | .action == "allow" and .preview != true
+        and .match.versionedExpr == "SRC_IPS_V1"
+        and .match.config.srcIpRanges == ["*"])]
+    | length == 4 and all' >/dev/null <<<"$rules" ||
     fail "Cloud Armor policy ${edge_security_policy} does not hold the declared WAF preview rules and auth throttle"
   echo "both backends enforce ${edge_security_policy}: WAF rules in preview, auth throttle enforced"
 }
@@ -1253,7 +1258,7 @@ verify_probe_telemetry() {
     if entries="$(capture '[{}]' gcloud logging read \
       "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${web_service}\" AND jsonPayload.otlp.traceId=\"${trace_id}\"" \
       --project="$project_id" --freshness=1h --limit=1 --format='json(timestamp,jsonPayload.otlp)')"; then
-      [[ "$(jq 'length' <<<"$entries")" != 0 ]] && {
+      jq -e 'length > 0' >/dev/null <<<"$entries" 2>&1 && {
         found=true
         break
       }
@@ -1303,9 +1308,9 @@ phase_edge_privacy() {
   for attempt in $(seq 1 8); do
     requests="$(capture '[{}]' gcloud logging read \
       "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${web_service}\" AND log_id(\"run.googleapis.com/requests\") AND timestamp>=\"${start}\"" \
-      --project="$project_id" --freshness=1h --limit=1 --format='json(timestamp)')" ||
+      --project="$project_id" --freshness=1h --limit=1 --format='json(logName,timestamp)')" ||
       fail "Cloud Run request logs are unreadable; marker absence unverified"
-    [[ "$(jq 'length' <<<"$requests")" != 0 ]] && {
+    jq -e 'length > 0' >/dev/null <<<"$requests" 2>&1 && {
       control=true
       break
     }
