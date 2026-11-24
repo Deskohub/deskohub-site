@@ -176,16 +176,14 @@ const scheduleRoutes = Effect.gen(function* () {
 const probeRoutes = Layer.unwrap(
   Effect.gen(function* () {
     const identity = yield* ProbeIdentity;
-    const healthBody = HttpServerResponse.json({
-      status: "ok",
-      version: identity.version,
-      role: identity.role,
-    });
-    // /healthz serves the startup probe; Cloud Run may reserve it on the
-    // public URL, so callers outside the container use /health.
-    const health = Layer.mergeAll(
-      HttpRouter.add("GET", "/healthz", healthBody),
-      HttpRouter.add("GET", "/health", healthBody)
+    const health = HttpRouter.add(
+      "GET",
+      "/healthz",
+      HttpServerResponse.json({
+        status: "ok",
+        version: identity.version,
+        role: identity.role,
+      })
     );
     const roleRoutes = yield* Match.value(identity.role).pipe(
       Match.when("api", () => Effect.succeed(apiRoutes)),

@@ -15,10 +15,10 @@ import {
 export const probeVersion = "v2";
 
 /** A probe identity for `role` and a log that records every line it writes. */
-export const probeTestContext = (role: ServiceRole) => {
+export const probeTestContext = (role: ServiceRole, version = probeVersion) => {
   const lines: ProbeLogLine[] = [];
   const layer = Layer.mergeAll(
-    Layer.succeed(ProbeIdentity)({ role, version: probeVersion }),
+    Layer.succeed(ProbeIdentity)({ role, version }),
     Layer.succeed(ProbeLog)({
       write: (line) =>
         Effect.sync(() => {
@@ -39,9 +39,10 @@ export const runWithProbe = <A, E>(
   role: ServiceRole,
   use: (
     probe: RunningProbe
-  ) => Effect.Effect<A, E, HttpClient.HttpClient | Scope.Scope>
+  ) => Effect.Effect<A, E, HttpClient.HttpClient | Scope.Scope>,
+  version = probeVersion
 ) => {
-  const { lines, layer } = probeTestContext(role);
+  const { lines, layer } = probeTestContext(role, version);
   return Effect.runPromise(
     Effect.gen(function* () {
       const server = yield* HttpServer.HttpServer;

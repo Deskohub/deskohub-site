@@ -62,6 +62,17 @@ describe("sandbox RPC probe verdict", () => {
     });
   });
 
+  test("accepts a matching version with build metadata", async () => {
+    const version = "1.2.3+build.7";
+    const verdict = await runWithProbe(
+      "api",
+      ({ origin }) =>
+        runSandboxRpcProbe({ ...targetAt(origin), expectVersion: version }),
+      version
+    );
+    expect(verdict).toMatchObject({ ok: true, version, failures: [] });
+  });
+
   test("fails on an unexpected build version", async () => {
     const verdict = await runWithProbe("api", ({ origin }) =>
       runSandboxRpcProbe({ ...targetAt(origin), expectVersion: "v9" })
@@ -182,10 +193,11 @@ describe("sandbox RPC probe verdict against an impostor", () => {
     );
     expect(verdict).toMatchObject({
       ok: false,
+      version: "[redacted]",
       markerSha256: "",
       markerMatches: false,
       failDecoded: "ProbeRejected",
-      countChunks: [0, 1, 2],
+      countChunks: [],
     });
     expect(
       verdict.failures.some((failure) => failure.startsWith("Probe.count"))

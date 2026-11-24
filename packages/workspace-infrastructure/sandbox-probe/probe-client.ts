@@ -56,10 +56,9 @@ export const setupFailureVerdict = (failure: string): ProbeVerdict => ({
   failures: [failure],
 });
 
-const printable = (contentType: string) =>
-  contentType === "" || printableContentType.test(contentType)
-    ? contentType
-    : "[unprintable]";
+/** The remote value when it matches `pattern`, else a placeholder. */
+const printable = (value: string, pattern: RegExp) =>
+  value === "" || pattern.test(value) ? value : "[unprintable]";
 
 interface RpcResponseMeta {
   readonly status: number;
@@ -68,8 +67,11 @@ interface RpcResponseMeta {
 
 const HealthBody = Schema.Struct({
   status: Schema.Literal("ok"),
-  version: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._-]{1,64}$/)),
+  version: Schema.String,
 });
+
+/** A version the verdict may print; anything else shows as a placeholder. */
+const printableVersion = /^[\w.+-]{1,64}$/;
 
 /** A content type the verdict may print; anything else shows as a placeholder. */
 const printableContentType = /^[\w.+/-]{1,64}(?:;\s*[\w.+/=-]{1,64})*$/;
@@ -111,7 +113,10 @@ const authorizedClient = (target: ProbeTarget) =>
 /** What the client saw on the wire: each /rpc response and the stream chunk frame count. */
 interface RpcObservations {
   readonly responses: Ref.Ref<ReadonlyArray<RpcResponseMeta>>;
-  readonly chunkFrames: Ref.Ref<number>;
+  /** Request ids of the Probe.count calls sent. */
+  readonly countRequests: Ref.Ref<ReadonlyArray<string>>;
+  /** Request id of every decoded `Chunk` frame. */
+  readonly chunkFrames: Ref.Ref<ReadonlyArray<string>>;
 }
 
 const observeResponses =
@@ -122,7 +127,10 @@ const observeResponses =
           ...seen,
           {
             status: response.status,
-            contentType: printable(response.headers["content-type"] ?? ""),
+            contentType: printable(
+              response.headers["content-type"] ?? "",
+              printableContentType
+            ),
           },
         ])
       )
@@ -145,6 +153,21 @@ const observedProtocol = (
     ).pipe(
       Effect.map((protocol) => ({
         ...protocol,
+        send: (
+          clientId: number,
+          request: Parameters<typeof protocol.send>[1],
+          transferables?: Parameters<typeof protocol.send>[2]
+        ) =>
+          Effect.andThen(
+            Predicate.isTagged(request, "Request") &&
+              request.tag === "Probe.count"
+              ? Ref.update(observations.countRequests, (ids) => [
+                  ...ids,
+                  String(request.id),
+                ])
+              : Effect.void,
+            protocol.send(clientId, request, transferables)
+          ),
         run: (
           clientId: number,
           onMessage: Parameters<typeof protocol.run>[1]
@@ -152,7 +175,10 @@ const observedProtocol = (
           protocol.run(clientId, (message) =>
             Effect.andThen(
               Predicate.isTagged(message, "Chunk")
-                ? Ref.update(observations.chunkFrames, (frames) => frames + 1)
+                ? Ref.update(observations.chunkFrames, (frames) => [
+                    ...frames,
+                    String(message.requestId),
+                  ])
                 : Effect.void,
               onMessage(message)
             )
@@ -178,9 +204,7 @@ const probeRpcClient = (
 type ProbeRpcClient = Effect.Success<ReturnType<typeof probeRpcClient>>;
 
 const checkHealth = (http: HttpClient.HttpClient, origin: string) =>
-  // Cloud Run reserves some paths ending in "z" on its public URL, so the
-  // caller uses /health; the startup probe keeps /healthz.
-  http.get(`${origin}/health`).pipe(
+  http.get(`${origin}/healthz`).pipe(
     Effect.mapError((error) => `healthz: ${error._tag}`),
     Effect.flatMap((response) =>
       response.status === 200
@@ -248,7 +272,9 @@ const healthFailures = (target: ProbeTarget, health: ProbeSteps["health"]) =>
     onSuccess: (reported) =>
       target.expectVersion === undefined || reported === target.expectVersion
         ? []
-        : [`healthz: version ${reported}, expected ${target.expectVersion}`],
+        : [
+            `healthz: version ${printable(reported, printableVersion)}, expected ${target.expectVersion}`,
+          ],
     onFailure: (failure) => [failure],
   });
 
@@ -262,6 +288,10 @@ const responseFailures = (responses: ProbeSteps["responses"]) =>
           : [`rpc response ${index}: content type ${contentType}`]),
       ]);
 
+const countValuesValid = (values: ReadonlyArray<number>) =>
+  values.length === expectedCount &&
+  values.every((value, index) => value === index);
+
 /** Probe.count must stream 0, 1, 2 in three chunk frames, so one value each. */
 const countFailures = (
   count: ProbeSteps["count"],
@@ -269,10 +299,7 @@ const countFailures = (
 ) => [
   ...Result.match(count, {
     onSuccess: (values) =>
-      values.length === expectedCount &&
-      values.every((value, index) => value === index)
-        ? []
-        : [`Probe.count: values ${values.join(",")}`],
+      countValuesValid(values) ? [] : ["Probe.count: unexpected values"],
     onFailure: (failure) => [failure],
   }),
   ...(chunkFrames === expectedCount
@@ -301,13 +328,18 @@ const probeVerdict = (target: ProbeTarget, steps: ProbeSteps): ProbeVerdict => {
   const version = Result.getOrNull(steps.health);
   return {
     ok: failures.length === 0,
-    version: version === null ? null : redact(version),
+    version:
+      version === null ? null : redact(printable(version, printableVersion)),
     status: first?.status ?? 0,
     contentType: redact(first?.contentType ?? ""),
     markerSha256: markerMatches ? expectedDigest : "",
     markerMatches,
     failDecoded: Result.getOrNull(steps.rejected),
-    countChunks: Result.getOrElse(steps.count, () => []),
+    // Echoed only once validated, so a hostile stream can't smuggle values out.
+    countChunks:
+      countFailures(steps.count, steps.chunkFrames).length === 0
+        ? Result.getOrElse(steps.count, () => [])
+        : [],
     failures,
   };
 };
@@ -319,7 +351,8 @@ export const runSandboxRpcProbe = (target: ProbeTarget) => {
     Effect.bind("observations", () =>
       Effect.all({
         responses: Ref.make<ReadonlyArray<RpcResponseMeta>>([]),
-        chunkFrames: Ref.make(0),
+        countRequests: Ref.make<ReadonlyArray<string>>([]),
+        chunkFrames: Ref.make<ReadonlyArray<string>>([]),
       })
     ),
     Effect.bind("http", () => authorizedClient(target)),
@@ -333,8 +366,16 @@ export const runSandboxRpcProbe = (target: ProbeTarget) => {
     Effect.bind("responses", ({ observations }) =>
       Ref.get(observations.responses)
     ),
-    Effect.bind("chunkFrames", ({ observations }) =>
-      Ref.get(observations.chunkFrames)
+    Effect.bind("countRequests", ({ observations }) =>
+      Ref.get(observations.countRequests)
+    ),
+    Effect.bind("chunkFrames", ({ observations, countRequests }) =>
+      Ref.get(observations.chunkFrames).pipe(
+        // Only frames answering Probe.count count toward its framing.
+        Effect.map(
+          (frames) => frames.filter((id) => countRequests.includes(id)).length
+        )
+      )
     ),
     Effect.map((steps) => probeVerdict(target, steps)),
     Effect.scoped,
