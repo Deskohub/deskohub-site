@@ -3,6 +3,7 @@ import { isRememberedMeetingRoomReservationAvailable } from "@/features/reservat
 import {
   createReservationPage,
   type ReservationPageRestoration,
+  withoutPageData,
 } from "@/features/reservation/components/create-reservation-page.server";
 import { getMeetingRoomDurationAdvertisedPriceRequests } from "@/features/reservation/meeting-room-advertised-price";
 import {
@@ -21,6 +22,7 @@ import {
 export const meetingRoomReservationPage = createReservationPage({
   fallback: (locale) => <MeetingRoomReservationFormFallback locale={locale} />,
   kind: "meeting-room",
+  loadPageData: withoutPageData,
   pathname: meetingRoomReservationPath,
   prefillsContact: true,
   // An ended reservation can't reopen the form.

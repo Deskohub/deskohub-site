@@ -1,12 +1,7 @@
 "use client";
 
 import { type ReactNode, useEffect, useRef } from "react";
-import type {
-  FieldValues,
-  Path,
-  PathValue,
-  UseFormReturn,
-} from "react-hook-form";
+import type { FieldValues, UseFormReturn } from "react-hook-form";
 import { usePrepareReservationSiteTool } from "@/features/agent-tools/webmcp/use-prepare-reservation-site-tool";
 import type { CheckoutSessionId } from "@/features/checkout/checkout-identifiers";
 import type { CheckoutStatusSummaryPresentation } from "@/features/checkout/checkout-status-summary-presentation";
@@ -30,7 +25,9 @@ import { ReservationBillingFields } from "./reservation-billing-fields";
 import {
   continueReservationToContact,
   isReservationSubmitDisabled,
+  type ReservationCheckoutFormFields,
   type ReservationFormData,
+  type ReservationFormFieldValue,
   type ReservationFormSubmission,
   type ReservationSubmitOptions,
   submitReservationForm,
@@ -95,6 +92,7 @@ type ReservationCheckoutFormProps<
   readonly entryPackId?: OrderId;
   readonly applyEntryPack?: (passId: OrderId) => boolean;
   readonly children: ReactNode;
+  readonly fields: ReservationCheckoutFormFields<Input>;
   readonly form: UseFormReturn<Input, unknown, Data>;
   readonly getOfficeSelection?: (data: Data) => CheckoutOfficeSelection;
   readonly getReservation: (data: Data) => ReservationOrderIssuanceData;
@@ -108,7 +106,7 @@ type ReservationCheckoutFormProps<
     readonly officeSelection?: OfficeReservationDetails;
     readonly fromSearchParams: (
       searchParams: URLSearchParams
-    ) => Partial<Input>;
+    ) => readonly ReservationFormFieldValue<Input>[];
   };
 };
 
@@ -145,6 +143,7 @@ function useReservationFormSiteTool<Input extends FieldValues>({
   asksMarketingConsent,
   availability,
   entryPackId,
+  fields,
   form,
   locale,
   selection,
@@ -162,6 +161,7 @@ function useReservationFormSiteTool<Input extends FieldValues>({
     readonly isPending: boolean;
     readonly unavailableMessage?: string;
   };
+  readonly fields: ReservationCheckoutFormFields<Input>;
   readonly form: Pick<UseFormReturn<Input>, "getValues" | "setValue">;
   readonly locale: Locale;
   readonly selection: ReservationCheckoutFormProps<
@@ -172,26 +172,23 @@ function useReservationFormSiteTool<Input extends FieldValues>({
     options: ReservationSubmitOptions
   ) => Promise<ReservationFormSubmission>;
 }) {
-  const marketingConsentField = "marketingConsent" as Path<Input>;
+  const { marketingConsent } = fields;
   usePrepareReservationSiteTool({
     asksMarketingConsent,
     ...(applyEntryPack && { applyEntryPack }),
     ...(entryPackId && { entryPackId }),
-    hasMarketingConsent: () => form.getValues(marketingConsentField) === true,
+    hasMarketingConsent: () =>
+      Object.is(form.getValues(marketingConsent.name), marketingConsent.value),
     giveMarketingConsent: () =>
-      form.setValue(
-        marketingConsentField,
-        true as PathValue<Input, Path<Input>>,
-        { shouldDirty: true, shouldTouch: true }
-      ),
+      form.setValue(marketingConsent.name, marketingConsent.value, {
+        shouldDirty: true,
+        shouldTouch: true,
+      }),
     applySelection: (searchParams) => {
       let changed = false;
-      for (const [name, value] of Object.entries(
-        selection.fromSearchParams(searchParams)
-      )) {
-        const field = name as Path<Input>;
-        if (Object.is(form.getValues(field), value)) continue;
-        form.setValue(field, value, {
+      for (const { name, value } of selection.fromSearchParams(searchParams)) {
+        if (Object.is(form.getValues(name), value)) continue;
+        form.setValue(name, value, {
           shouldDirty: true,
           shouldValidate: true,
         });
@@ -200,14 +197,11 @@ function useReservationFormSiteTool<Input extends FieldValues>({
       return changed;
     },
     captureSelection: (searchParams) => {
-      const fields = Object.keys(selection.fromSearchParams(searchParams)).map(
-        (name) => {
-          const field = name as Path<Input>;
-          return { field, value: form.getValues(field) };
-        }
-      );
+      const captured = selection
+        .fromSearchParams(searchParams)
+        .map(({ name: field }) => ({ field, value: form.getValues(field) }));
       return () =>
-        fields.every(({ field, value }) =>
+        captured.every(({ field, value }) =>
           Object.is(form.getValues(field), value)
         );
     },
@@ -344,6 +338,7 @@ export function ReservationCheckoutForm<
   checkoutSessionId,
   children,
   entryPackId,
+  fields,
   form,
   getOfficeSelection,
   getReservation,
@@ -377,6 +372,7 @@ export function ReservationCheckoutForm<
     checkoutStep,
     emailVerification,
     entryPackId,
+    fields,
     form,
     getOfficeSelection,
     getReservation,
@@ -391,6 +387,7 @@ export function ReservationCheckoutForm<
     availability,
     ...(applyEntryPack && { applyEntryPack }),
     ...(entryPackId && { entryPackId }),
+    fields,
     form,
     locale,
     selection,

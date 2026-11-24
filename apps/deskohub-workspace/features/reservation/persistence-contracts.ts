@@ -1,5 +1,5 @@
 import { Match, Schema } from "effect";
-import type { OrderId } from "@/features/order";
+import { type OrderId, orderIdSchema } from "@/features/order";
 import type { NormalizedCoworkReservationOrder } from "@/features/reservation/cowork-reservation";
 import {
   getStoredCoworkReservationDetails,
@@ -61,10 +61,7 @@ export type WorkspaceReservationId = Schema.Schema.Type<
  */
 export const reservationOrderId = (
   reservationId: WorkspaceReservationId
-): OrderId => {
-  const id: string = reservationId;
-  return id as OrderId;
-};
+): OrderId => orderIdSchema.make(reservationId);
 
 /** The reservation ID carried by an order already known to be a reservation. */
 export const reservationIdForOrder = (

@@ -205,28 +205,28 @@ export function ReservationBillingAddressFields({
       <BillingTextField
         autoComplete="address-line1"
         label={m.reservationBillingAddressLine1Label({}, { locale })}
-        name={`${address}.line1` as BillingFieldName}
+        name={`${address}.line1` as const}
       />
       <BillingTextField
         autoComplete="address-line2"
         label={m.reservationBillingAddressLine2Label({}, { locale })}
-        name={`${address}.line2` as BillingFieldName}
+        name={`${address}.line2` as const}
         optional
       />
       <BillingTextField
         autoComplete="address-level2"
         label={m.reservationBillingCityLabel({}, { locale })}
-        name={`${address}.city` as BillingFieldName}
+        name={`${address}.city` as const}
       />
       <BillingTextField
         autoComplete="postal-code"
         label={m.reservationBillingPostalCodeLabel({}, { locale })}
-        name={`${address}.postalCode` as BillingFieldName}
+        name={`${address}.postalCode` as const}
       />
       <BillingCountryField
         label={m.reservationBillingCountryLabel({}, { locale })}
         locale={locale}
-        name={`${address}.country` as BillingFieldName}
+        name={`${address}.country` as const}
       />
     </div>
   );

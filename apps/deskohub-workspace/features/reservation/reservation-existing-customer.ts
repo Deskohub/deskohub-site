@@ -39,6 +39,15 @@ export type CustomerLastReservationForKind<
   Kind extends WorkspaceReservationKind,
 > = Extract<CustomerLastReservation, { readonly kind: Kind }>;
 
+/** Whether a customer's last reservation belongs to the `kind` family. */
+export const isCustomerLastReservationForKind = <
+  Kind extends WorkspaceReservationKind,
+>(
+  reservation: CustomerLastReservation,
+  kind: Kind
+): reservation is CustomerLastReservationForKind<Kind> =>
+  reservation.kind === kind;
+
 export type ReservationExistingCustomer<
   Kind extends WorkspaceReservationKind = WorkspaceReservationKind,
 > = {

@@ -37,6 +37,8 @@ type ReservationTypeInputProps<Value extends ReservationTypeValue> = Omit<
   readonly presentation?: ReservationTypePresentation;
   readonly ref?: Ref<HTMLDivElement>;
   readonly value: Value;
+  /** The values the options offer; a change to any other value is ignored. */
+  readonly values: readonly Value[];
 };
 
 type ReservationTypeOptionProps<Value extends ReservationTypeValue> = {
@@ -67,6 +69,7 @@ export function ReservationTypeInput<Value extends ReservationTypeValue>({
   presentation,
   ref,
   value,
+  values,
   "aria-describedby": ariaDescribedBy,
   "aria-invalid": ariaInvalid,
   "aria-required": ariaRequired,
@@ -80,7 +83,10 @@ export function ReservationTypeInput<Value extends ReservationTypeValue>({
       ariaRequired: ariaRequired === true || ariaRequired === "true",
       name,
       onBlur,
-      onChange: (nextValue) => onChange(nextValue as Value),
+      onChange: (nextValue) => {
+        const offered = values.find((candidate) => candidate === nextValue);
+        if (offered !== undefined) onChange(offered);
+      },
       presentation,
       value,
     }),
@@ -94,6 +100,7 @@ export function ReservationTypeInput<Value extends ReservationTypeValue>({
       onChange,
       presentation,
       value,
+      values,
     ]
   );
 

@@ -1,3 +1,4 @@
+import { Struct } from "effect";
 import {
   hasReservationSelectionSearchParams,
   type ReservationSelectionSearchParams,
@@ -49,12 +50,7 @@ export const defineSelectionLink = <
   const readSelection = (
     searchParams: SupportedSearchParams,
     ...args: ReadArgs
-  ): Pick<Values, Param> => {
-    const values = read(searchParams, ...args);
-    return Object.fromEntries(
-      params.map((name) => [name, values[name]])
-    ) as Pick<Values, Param>;
-  };
+  ): Pick<Values, Param> => Struct.pick(read(searchParams, ...args), params);
 
   return {
     kind,
@@ -62,6 +58,14 @@ export const defineSelectionLink = <
     read,
     /** The selection a link names, as form values. */
     readSelection,
+    /** The selection a link names, as form fields in the declared order. */
+    readFieldValues: (
+      searchParams: SupportedSearchParams,
+      ...args: ReadArgs
+    ) => {
+      const values = read(searchParams, ...args);
+      return params.map((name) => ({ name, value: values[name] }));
+    },
     /**
      * Restored form values with the selection a URL names beside them.
      *
@@ -71,29 +75,23 @@ export const defineSelectionLink = <
      * restored selection, while the restoration keeps the checkout, its hold
      * replacement, the contact details, and the discount intent.
      */
-    restore: <Restored extends Pick<Values, Param> | undefined>(
+    restore: <Restored extends Pick<Values, Param>>(
       restored: Restored,
       searchParams: SupportedSearchParams,
       ...args: ReadArgs
-    ): Restoration<Restored, Pick<Values, Param>> => {
-      const restoration: object | undefined =
-        restored &&
-        hasReservationSelectionSearchParams(searchParams, namedParams)
-          ? { ...restored, ...readSelection(searchParams, ...args) }
-          : restored;
-      return restoration as Restoration<Restored, Pick<Values, Param>>;
-    },
+    ): Omit<Restored, Param> & Pick<Values, Param> =>
+      hasReservationSelectionSearchParams(searchParams, namedParams)
+        ? {
+            ...Struct.omit(restored, params),
+            ...readSelection(searchParams, ...args),
+          }
+        : restored,
     /** A selection as link parameters, in the declared order. */
     write: (
       selection: Selection
     ): ReservationSelectionSearchParams & {
       readonly [Name in Param]: string | undefined;
-    } => {
-      const written = write(selection);
-      return Object.fromEntries(
-        params.map((name) => [name, written[name]])
-      ) as { readonly [Name in Param]: string | undefined };
-    },
+    } => Struct.pick(write(selection), params),
     /** A stored reservation's selection, ready for a reservation page link. */
     fromStored: (
       stored: Stored
@@ -103,11 +101,6 @@ export const defineSelectionLink = <
     },
   };
 };
-
-/** Restored values with their selection fields replaced by a link's. */
-type Restoration<Restored, Selection> = Restored extends undefined
-  ? undefined
-  : Omit<Restored, keyof Selection> & Selection;
 
 /** A selection one family's link can name, tagged with its family. */
 export type LinkedSelection<

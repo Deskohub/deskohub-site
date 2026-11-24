@@ -40,6 +40,7 @@ describe("ReservationTypeInput", () => {
         onChange={onChange}
         presentation="illustrated"
         value="open-space"
+        values={["open-space", "reserved-desk", "workstation"]}
       >
         <ReservationTypeOption
           price="CZK 290 / day"
@@ -85,12 +86,39 @@ describe("ReservationTypeInput", () => {
     expect(onChange).toHaveBeenCalledWith("reserved-desk");
   });
 
+  test("ignores a change to a value the input doesn't offer", () => {
+    const onChange = mock(() => undefined);
+    const view = render(
+      <ReservationTypeInput
+        idPrefix="cowork-tier"
+        onChange={onChange}
+        value="open-space"
+        values={["open-space"]}
+      >
+        <ReservationTypeOption
+          price="CZK 290 / day"
+          title="Open Space"
+          value="open-space"
+        />
+        <ReservationTypeOption
+          price="CZK 390 / day"
+          title="Reserved Desk"
+          value="reserved-desk"
+        />
+      </ReservationTypeInput>
+    );
+
+    fireEvent.click(view.getByRole("radio", { name: /Reserved Desk/ }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   test("shows an option's illustration only in the illustrated presentation", () => {
     const options = (presentation?: "illustrated") => (
       <ReservationTypeInput
         onChange={() => undefined}
         presentation={presentation}
         value="open-space"
+        values={["open-space"]}
       >
         <ReservationTypeOption
           illustration={<svg data-testid="desk" />}
