@@ -39,7 +39,9 @@ mock.module("server-only", () => ({}));
 /** The status page route's `maxDuration`. */
 const statusPageMaxDurationSeconds = 60;
 
-const orderId = workspaceReservationIdSchema.make("reservation-stalled-nexi");
+const orderId = workspaceReservationIdSchema.make(
+  "0198c1a2-58cb-72a4-84fd-084db1c4c63b"
+);
 const createdAt = Temporal.Instant.from("2026-06-01T10:00:00Z");
 
 const pendingReservation = {

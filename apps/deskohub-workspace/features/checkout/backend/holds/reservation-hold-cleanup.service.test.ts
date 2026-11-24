@@ -46,7 +46,7 @@ describe("ReservationHoldCleanupService", () => {
         "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
       );
 
-      const orderId = "reservation-cleanup-provider-paid";
+      const orderId = "0198c1a2-a205-7a6d-8074-1f4a191643f8";
       const attemptId = "attempt-cleanup-provider-paid";
       const cancelReservation = mock(() => Effect.void);
       const claimCancellation = mock(() => Effect.succeed(null));
@@ -142,7 +142,7 @@ describe("ReservationHoldCleanupService", () => {
       "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
     );
 
-    const orderId = "reservation-cleanup-provider-pending";
+    const orderId = "0198c1a2-f317-74b0-8c00-931fc7799e18";
     const attemptId = "attempt-cleanup-provider-pending";
     const now = Temporal.Instant.from("2026-06-02T10:00:00.000Z");
     const activeReservation = {
@@ -238,7 +238,7 @@ describe("ReservationHoldCleanupService", () => {
       "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
     );
 
-    const orderId = "reservation-cleanup-abandoned";
+    const orderId = "0198c1a2-eb5e-70fc-815d-10d00be06855";
     const attemptId = "attempt-cleanup-abandoned";
     const checkedAt = Temporal.Instant.from("2026-06-02T10:00:00.000Z");
     const claimed = {
@@ -354,7 +354,7 @@ describe("ReservationHoldCleanupService", () => {
       "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
     );
 
-    const orderId = "reservation-cleanup-provider-failed";
+    const orderId = "0198c1a2-f317-737f-823d-4c70fc76ec7b";
     const attemptId = "attempt-cleanup-provider-failed";
     const markTerminalForReservation = mock(() => Effect.die("not used"));
     const claimCancellation = mock(() => Effect.succeed(null));
@@ -429,8 +429,8 @@ describe("ReservationHoldCleanupService", () => {
     const statuses = {
       "reservation-sweep-new": "NEW",
       "reservation-sweep-cancelled": "CANCELLED",
-      "reservation-sweep-confirmed": "CONFIRMED",
-      "reservation-sweep-unreadable": undefined,
+      "0198c1a2-9857-77d2-8d7f-92c5539c944f": "CONFIRMED",
+      "0198c1a2-ff26-7e37-87c0-67407bb1b189": undefined,
     } as const;
     type OrderId = keyof typeof statuses;
     const orderIds = Object.keys(statuses) as OrderId[];
@@ -527,12 +527,12 @@ describe("ReservationHoldCleanupService", () => {
     expect(markCancellationFailed.mock.calls.map(([marker]) => marker)).toEqual(
       [
         {
-          id: "reservation-sweep-confirmed",
+          id: "0198c1a2-9857-77d2-8d7f-92c5539c944f",
           claimedAt: claimStamp,
           failureCode: "dotypos_cancel_failed",
         },
         {
-          id: "reservation-sweep-unreadable",
+          id: "0198c1a2-ff26-7e37-87c0-67407bb1b189",
           claimedAt: claimStamp,
           failureCode: "dotypos_cancel_failed",
         },

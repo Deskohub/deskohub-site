@@ -8,10 +8,7 @@ import type { CheckoutQrPayment } from "@/features/checkout/components/checkout-
 import { createReservationPaymentQrPayload } from "@/features/checkout/reservation-payment-qr";
 import type { Locale } from "@/features/i18n";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import {
-  reservationOrderId,
-  type WorkspaceReservationId,
-} from "@/features/reservation/persistence-contracts";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { formatMoney } from "@/shared/money/money";
 import { formatInstantDateTime } from "@/shared/utils/date-time-format";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
@@ -50,7 +47,7 @@ export const readAuthorPaymentWindow = Effect.fn(
     return undefined;
 
   const payments = yield* QrPaymentRepository;
-  const window = yield* payments.findPaymentWindow(reservationOrderId(orderId));
+  const window = yield* payments.findPaymentWindow(orderId);
   const now = yield* currentPreciseInstant;
   if (!window || Temporal.Instant.compare(window.expiresAt, now) <= 0)
     return undefined;

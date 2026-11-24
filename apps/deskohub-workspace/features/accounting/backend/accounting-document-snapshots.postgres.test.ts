@@ -1,4 +1,4 @@
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, mock, test } from "bun:test";
@@ -130,7 +130,7 @@ const prepareFor = (
   reference: AccountingRecordReference,
   overrides: Partial<{
     readonly snapshot: AccountingDocumentSnapshot;
-    readonly orderId: ReturnType<typeof reservationOrderId>;
+    readonly orderId: ReturnType<typeof standaloneReservationOrderId>;
     readonly amount: AccountingDocumentSnapshot["quote"]["payment"]["expectedPrice"];
     readonly locale: AccountingDocumentSnapshot["locale"];
   }> = {}
@@ -138,7 +138,7 @@ const prepareFor = (
   Effect.flatMap(AccountingDocumentSnapshots, (snapshots) =>
     snapshots.prepare({
       snapshot,
-      orderId: reservationOrderId(snapshot.workspaceReservationId),
+      orderId: standaloneReservationOrderId(snapshot.workspaceReservationId),
       amount: snapshot.quote.payment.expectedPrice,
       locale: snapshot.locale,
       reference,
@@ -256,7 +256,7 @@ describe("AccountingDocumentSnapshots.prepare", () => {
     {
       name: "another reservation's snapshot",
       change: () => ({
-        orderId: reservationOrderId(
+        orderId: standaloneReservationOrderId(
           workspaceReservationIdSchema.make(randomUUID())
         ),
       }),

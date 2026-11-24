@@ -19,10 +19,8 @@ import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
 import { parseReferralCode } from "@/features/referrals/client";
 import { getReferralBenefitIds } from "@/features/referrals/referral-benefits";
-import {
-  reservationOrderId,
-  workspaceReservationIdSchema,
-} from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import type {
   DatabaseClient,
@@ -139,9 +137,11 @@ const insertReferralOwner = Effect.fn("seedWorkspaceE2EReferralOwner")(
 
 /**
  * Local paid-booking evidence is keyed by this prefix, so cleanup removes only
- * the rows a fixture seeded for its journaled synthetic customers.
+ * the rows a fixture seeded for its journaled synthetic customers. A seeded ID
+ * stays a UUID, as its mirrored order's ID must; the prefix replaces its first
+ * group with a timestamp no UUIDv7 reaches for millennia.
  */
-const seededReservationIdPrefix = "account-referral-history-";
+const seededReservationIdPrefix = "e2e5eed0";
 
 /**
  * Inserts a confirmed booking of the customer's Dotypos reservation, paid when
@@ -168,7 +168,7 @@ const insertPaidHistoryReservation = Effect.fn(
     at: paidAt,
     overrides: {
       id: workspaceReservationIdSchema.make(
-        `${seededReservationIdPrefix}${crypto.randomUUID()}`
+        `${seededReservationIdPrefix}${crypto.randomUUID().slice(8)}`
       ),
       dotyposReservationId: input.dotyposReservationId,
       reservationCreatedAt: paidAt,
@@ -251,7 +251,7 @@ export const seedWorkspaceE2EReferrerSavings = (input: {
               ),
               state: "paid",
               workspaceReservationId: reservation.id,
-              orderId: reservationOrderId(reservation.id),
+              orderId: standaloneReservationOrderId(reservation.id),
             })
             .returning({ id: paymentAttempts.id });
           if (!attempt) {

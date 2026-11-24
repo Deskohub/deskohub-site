@@ -972,7 +972,7 @@ describe("CheckoutService", () => {
     );
     const payment = (method: "card" | "qr") =>
       createCheckoutHarness({
-        orderId: "entry-pack-workstation-payment",
+        orderId: "0198c1a2-27c4-76a6-88fd-de52b44b417b",
         acceptedQuote: quote,
         coworkPassesEnabled: true,
         affirm: mock(() =>
@@ -1018,7 +1018,7 @@ describe("CheckoutService", () => {
         })
       );
       const harness = await createCheckoutHarness({
-        orderId: "closed-entry-pack-payment",
+        orderId: "0198c1a2-171d-7d67-8305-6d2910b843c0",
         acceptedQuote: quote,
         affirm: mock(() =>
           Effect.succeed({ quote, commitment: emptyCommitment })
@@ -1046,7 +1046,7 @@ describe("CheckoutService", () => {
         },
       })
     );
-    const orderId = "entry-pack-payment-after-gate-closed";
+    const orderId = "0198c1a2-b791-7532-8ecb-d87424cbaad3";
     const activeAttempt = {
       ...makeAttempt({
         id: "active-entry-pack-attempt",
@@ -1073,13 +1073,13 @@ describe("CheckoutService", () => {
 
   test("starts a public QR payment against the accepted reservation", async () => {
     const harness = await createCheckoutHarness({
-      orderId: "public-qr-reservation",
+      orderId: "0198c1a2-06cf-784b-8680-c10d65fcc09d",
       startPayment: { method: "qr", fio: { accountKey: "receiving-account" } },
     });
 
     expect(await Effect.runPromise(harness.effect)).toMatchObject({
       status: "qr_pending",
-      orderId: "public-qr-reservation",
+      orderId: "0198c1a2-06cf-784b-8680-c10d65fcc09d",
       accountKey: "receiving-account",
     });
     expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
@@ -1091,7 +1091,7 @@ describe("CheckoutService", () => {
     readonly observe: () => Effect.Effect<PaymentPageProviderObservation>;
   }) =>
     createCheckoutHarness({
-      orderId: "public-card-reservation",
+      orderId: "0198c1a2-6bf7-7d9a-8a46-a6b0969e4dc6",
       resumePayment: "card",
       resumeNow: input.now,
       publicPaymentExpiresAt:
@@ -1111,7 +1111,7 @@ describe("CheckoutService", () => {
 
     expect(await Effect.runPromise(harness.effect)).toMatchObject({
       status: "redirect",
-      orderId: "public-card-reservation",
+      orderId: "0198c1a2-6bf7-7d9a-8a46-a6b0969e4dc6",
       redirectUrl: "https://payments.example/hosted",
     });
     expect(harness.observePaymentPage).toHaveBeenCalledTimes(1);
@@ -1185,7 +1185,7 @@ describe("CheckoutService", () => {
   test.each(["signed checkout", "status"] as const)(
     "checks the activity of a concurrently attached card during %s",
     async (entry) => {
-      const orderId = "concurrent-public-card";
+      const orderId = "0198c1a2-dcf5-7a11-8a92-665b1184ae7b";
       const accepted = makeAttempt({ orderId, id: "existing-attempt" });
       const harness = await createCheckoutHarness({
         orderId,
@@ -1236,7 +1236,7 @@ describe("CheckoutService", () => {
   ] as const)(
     "a legacy signed submission does not reopen a card page with %s",
     async (_, expiresAt) => {
-      const orderId = "legacy-shared-window";
+      const orderId = "0198c1a2-bb2d-72b0-8482-892150fc34f6";
       const attempt = makeAttempt({
         orderId,
         id: "legacy-shared-card",
@@ -1265,7 +1265,7 @@ describe("CheckoutService", () => {
   );
 
   test("a legacy signed submission sees a shared window opened under the account lock", async () => {
-    const orderId = "legacy-new-shared-window";
+    const orderId = "0198c1a2-2f7c-7471-883f-fb29c9fd496a";
     const attempt = makeAttempt({
       orderId,
       id: "new-shared-card",
@@ -1296,7 +1296,7 @@ describe("CheckoutService", () => {
   test.each(["at entry", "under the account lock"] as const)(
     "a QR selection never opens a pre-release card attempt found %s",
     async (discovery) => {
-      const orderId = "qr-on-existing-legacy-card";
+      const orderId = "0198c1a2-0f84-714d-81fd-3491555b09b6";
       const attempt = makeAttempt({
         orderId,
         id: "existing-legacy-card",
@@ -1329,7 +1329,7 @@ describe("CheckoutService", () => {
   );
 
   test("a real order-bound retry token with a shared window reads no payment attempt", async () => {
-    const orderId = "shared-signed-retry";
+    const orderId = "0198c1a2-0093-7091-88d0-f9cc5757c57b";
     const harness = await createCheckoutHarness({
       orderId,
       sharedWindow: "visible",
@@ -1352,7 +1352,7 @@ describe("CheckoutService", () => {
   });
 
   test("a legacy signed submission can still reuse its windowless card session", async () => {
-    const orderId = "legacy-windowless-card";
+    const orderId = "0198c1a2-3bb6-7672-8bb9-798e2da0123f";
     const attempt = makeAttempt({
       orderId,
       id: "windowless-card",
@@ -1379,7 +1379,7 @@ describe("CheckoutService", () => {
 
   test("does not require an early-performance request after the withdrawal period", async () => {
     const harness = await createCheckoutHarness({
-      orderId: "reservation-after-withdrawal-period",
+      orderId: "0198c1a2-1bea-70b9-853e-2f1f2bd003ee",
       earlyPerformanceConsent: false,
     });
 
@@ -1407,10 +1407,10 @@ describe("CheckoutService", () => {
         .toString(),
     });
     const harness = await createCheckoutHarness({
-      orderId: "reservation-missing-early-performance-consent",
+      orderId: "0198c1a2-77be-7a82-81e0-62a6cf125055",
       earlyPerformanceConsent: false,
       payStateToken: buildPayStateToken({
-        orderId: "reservation-missing-early-performance-consent",
+        orderId: "0198c1a2-77be-7a82-81e0-62a6cf125055",
         reservation: nearTermReservation,
       }),
     });
@@ -1441,7 +1441,7 @@ describe("CheckoutService", () => {
       });
 
     test("returns the pending price review first", async () => {
-      const orderId = "reservation-review-before-early-performance";
+      const orderId = "0198c1a2-83f1-7cd1-8ecb-40697d5bdc0a";
       const harness = await createCheckoutHarness({
         orderId,
         earlyPerformanceConsent: false,
@@ -1462,7 +1462,7 @@ describe("CheckoutService", () => {
     });
 
     test("returns a repriced order's review first", async () => {
-      const orderId = "reservation-reprice-before-early-performance";
+      const orderId = "0198c1a2-f42a-77e2-881d-1783794909ba";
       const reservation = nearTermReservation();
       const affirm = mock(() =>
         Effect.succeed({
@@ -1506,9 +1506,9 @@ describe("CheckoutService", () => {
         .toString(),
     });
     const harness = await createCheckoutHarness({
-      orderId: "reservation-records-legal-evidence",
+      orderId: "0198c1a2-366e-7be4-8fc8-a79772eb4b33",
       payStateToken: buildPayStateToken({
-        orderId: "reservation-records-legal-evidence",
+        orderId: "0198c1a2-366e-7be4-8fc8-a79772eb4b33",
         reservation: nearTermReservation,
       }),
     });
@@ -1547,10 +1547,10 @@ describe("CheckoutService", () => {
         .toString(),
     });
     const harness = await createCheckoutHarness({
-      orderId: "reservation-german-phone",
+      orderId: "0198c1a2-2fda-7a0c-8ffc-662241a053c3",
       locale: "de-DE",
       payStateToken: buildPayStateToken({
-        orderId: "reservation-german-phone",
+        orderId: "0198c1a2-2fda-7a0c-8ffc-662241a053c3",
         locale: "de-DE",
         reservation: germanReservation,
       }),
@@ -1573,7 +1573,7 @@ describe("CheckoutService", () => {
   test("creates the attempt before attaching the hosted payment page", async () => {
     const events: string[] = [];
     const harness = await createCheckoutHarness({
-      orderId: "reservation-provider-inputs",
+      orderId: "0198c1a2-c605-7550-8016-ede1ef402d00",
       createHostedPaymentPage: mock(() => {
         events.push("provider-created");
         return Effect.succeed({
@@ -1631,7 +1631,7 @@ describe("CheckoutService", () => {
 
     test("name a new attempt by its identifiers, never its record or hosted page", async () => {
       const harness = await createCheckoutHarness({
-        orderId: "reservation-annotated-attempt",
+        orderId: "0198c1a2-71df-77f8-81ae-239f5f6ac5cf",
         createHostedPaymentPage: mock(() =>
           Effect.succeed({
             securityToken: "provider-security-token",
@@ -1674,7 +1674,7 @@ describe("CheckoutService", () => {
 
       try {
         const harness = await createCheckoutHarness({
-          orderId: "reservation-create-log-currency",
+          orderId: "0198c1a2-fe36-79c9-8644-d2d9220d2d74",
         });
         const rows = await captureAnnotations(
           harness.effect,
@@ -1690,7 +1690,7 @@ describe("CheckoutService", () => {
     });
 
     test("name a reused active attempt by its identifiers, never its record", async () => {
-      const orderId = "reservation-annotated-reuse";
+      const orderId = "0198c1a2-98c7-7cca-8e8a-4efa31f08fc1";
       const activeAttempt = makeAttempt({
         id: "active-attempt-annotated",
         orderId,
@@ -1726,7 +1726,7 @@ describe("CheckoutService", () => {
   test("stores the app a new hosted payment returns to before creating it", async () => {
     const events: string[] = [];
     const harness = await createCheckoutHarness({
-      orderId: "reservation-native-return",
+      orderId: "0198c1a2-7bda-738d-895a-69b662715f25",
       returnTarget: "native-app",
       createHostedPaymentPage: mock(() => {
         events.push("provider-created");
@@ -1747,29 +1747,40 @@ describe("CheckoutService", () => {
     expect(result).toMatchObject({
       status: "redirect",
       redirectUrl: "https://payments.example/hosted",
-      statusUrl: "/en-US/reservation/status/reservation-native-return",
+      statusUrl:
+        "/en-US/reservation/status/0198c1a2-7bda-738d-895a-69b662715f25",
     });
     expect(harness.recordPaymentReturnTarget.mock.calls).toEqual([
-      [{ id: "reservation-native-return", paymentReturnTarget: "native-app" }],
+      [
+        {
+          id: "0198c1a2-7bda-738d-895a-69b662715f25",
+          paymentReturnTarget: "native-app",
+        },
+      ],
     ]);
     expect(events).toEqual(["target-recorded", "provider-created"]);
   });
 
   test("clears the stored app of a hosted payment a site submission starts", async () => {
     const harness = await createCheckoutHarness({
-      orderId: "reservation-site-return",
+      orderId: "0198c1a2-91a0-7bc8-8c0a-3e962edbcab0",
     });
 
     await Effect.runPromise(harness.effect);
 
     expect(harness.recordPaymentReturnTarget.mock.calls).toEqual([
-      [{ id: "reservation-site-return", paymentReturnTarget: undefined }],
+      [
+        {
+          id: "0198c1a2-91a0-7bc8-8c0a-3e962edbcab0",
+          paymentReturnTarget: undefined,
+        },
+      ],
     ]);
   });
 
   test("does not start a hosted payment whose return target could not be stored", async () => {
     const harness = await createCheckoutHarness({
-      orderId: "reservation-return-store-fails",
+      orderId: "0198c1a2-413a-7493-8949-6ad4d4b00582",
       returnTarget: "web-app",
     });
     harness.recordPaymentReturnTarget.mockImplementation(() =>
@@ -1831,7 +1842,7 @@ describe("CheckoutService", () => {
 
     test("completes a slow Dotypos update followed by a slow sandbox hosted page", async () => {
       const harness = await createSlowProviderHarness(
-        "reservation-slow-sandbox-providers"
+        "0198c1a2-ab83-7565-8b21-059af9816b5c"
       );
 
       const exit = await submitWithinDeadline(harness.effect, "preview");
@@ -1851,7 +1862,7 @@ describe("CheckoutService", () => {
       // 20 seconds of Dotypos and 36 of Nexi outlast the production
       // deadline of about 55 seconds.
       const harness = await createSlowProviderHarness(
-        "reservation-hosted-page-past-deadline",
+        "0198c1a2-a926-7ba0-8d60-9cf4556f5b00",
         "36 seconds"
       );
 
@@ -1864,7 +1875,7 @@ describe("CheckoutService", () => {
         },
       });
       expect(harness.attachHostedPaymentPage).toHaveBeenCalledWith({
-        id: "attempt-reservation-hosted-page-past-deadline",
+        id: "attempt-0198c1a2-a926-7ba0-8d60-9cf4556f5b00",
         securityToken: "provider-security-token",
         providerRedirectUrl: "https://payments.example/hosted",
       });
@@ -1942,7 +1953,7 @@ describe("CheckoutService", () => {
 
       test("starts the hosted payment within the pay submit deadline", async () => {
         const harness = await createCalendarRetryHarness(
-          `reservation-calendar-retry-${deploymentEnvironment}`
+          `0198c1a2-3b4c-7d5e-8f90-a1000000000${deploymentEnvironment === "production" ? 1 : 2}`
         );
 
         const exit = await submitWithin(harness.effect, true);
@@ -1958,7 +1969,7 @@ describe("CheckoutService", () => {
 
       test("would be interrupted without the Calendar retry budget", async () => {
         const harness = await createCalendarRetryHarness(
-          `reservation-calendar-retry-unbudgeted-${deploymentEnvironment}`
+          `0198c1a2-3b4c-7d5e-8f90-a2000000000${deploymentEnvironment === "production" ? 1 : 2}`
         );
 
         const exit = await submitWithin(harness.effect, false);
@@ -1974,7 +1985,7 @@ describe("CheckoutService", () => {
   );
 
   test("redirects a reusable active attempt before discount affirmation and note refresh", async () => {
-    const orderId = "reservation-reuses-provider-attempt";
+    const orderId = "0198c1a2-f770-7934-8b90-d149e22ea3d7";
     const activeAttempt = makeAttempt({
       id: "active-attempt",
       orderId,
@@ -1996,10 +2007,10 @@ describe("CheckoutService", () => {
 
     expect(result).toEqual({
       status: "redirect",
-      orderId: "reservation-reuses-provider-attempt",
+      orderId: "0198c1a2-f770-7934-8b90-d149e22ea3d7",
       redirectUrl: "https://payments.example/existing",
       statusUrl:
-        "/en-US/reservation/status/reservation-reuses-provider-attempt",
+        "/en-US/reservation/status/0198c1a2-f770-7934-8b90-d149e22ea3d7",
     });
     expect(harness.findAttempt).toHaveBeenCalledWith(activeAttempt.id);
     expect(harness.affirm).not.toHaveBeenCalled();
@@ -2012,7 +2023,7 @@ describe("CheckoutService", () => {
   });
 
   test("points a reused hosted payment's return at the app that submitted last", async () => {
-    const orderId = "reservation-reuses-for-app";
+    const orderId = "0198c1a2-66d6-7998-8d99-4aadce3bb967";
     const activeAttempt = makeAttempt({
       id: "active-attempt",
       orderId,
@@ -2040,7 +2051,7 @@ describe("CheckoutService", () => {
   });
 
   test("does not reuse an active attempt whose amount differs from the signed summary", async () => {
-    const orderId = "reservation-rejects-mismatched-provider-attempt";
+    const orderId = "0198c1a2-b2de-7213-8b47-9f2c0c488244";
     const activeAttempt = makeAttempt({
       id: "active-attempt",
       orderId,
@@ -2068,7 +2079,7 @@ describe("CheckoutService", () => {
 
   test("returns the existing pricing change for a review-required state before provider work", async () => {
     const harness = await createCheckoutHarness({
-      orderId: "reservation-review-required",
+      orderId: "0198c1a2-5f08-766e-82c9-40bd85696fb3",
       changedKeys: {
         sectionKeys: ["order", "total"],
         itemKeys: ["product:cowork:reserved-desk"],
@@ -2099,7 +2110,7 @@ describe("CheckoutService", () => {
 
   test("rejects checkout without legal consent before reading the reservation", async () => {
     const harness = await createCheckoutHarness({
-      orderId: "reservation-without-legal-consent",
+      orderId: "0198c1a2-700a-7a21-8c7d-f126a26173cb",
       legalConsent: false,
     });
 
@@ -2115,7 +2126,7 @@ describe("CheckoutService", () => {
 
   test("asks for legal consent before a pending price review", async () => {
     const harness = await createCheckoutHarness({
-      orderId: "reservation-review-without-legal-consent",
+      orderId: "0198c1a2-b897-7479-87b3-8f0721d515df",
       legalConsent: false,
       changedKeys: {
         sectionKeys: ["total"],
@@ -2141,7 +2152,7 @@ describe("CheckoutService", () => {
   ] satisfies readonly CheckoutUnavailableReason[])(
     "reports checkout in progress without pricing or provider work when an unpaid order's checkout is unavailable (%s)",
     async (reason) => {
-      const orderId = "reservation-in-progress";
+      const orderId = "0198c1a2-bfd5-7f50-81c4-9a4059801557";
       const harness = await createCheckoutHarness({
         orderId,
         confirm: mock(() =>
@@ -2173,7 +2184,7 @@ describe("CheckoutService", () => {
   ])(
     "keeps checkout in progress for a live active attempt without $name",
     async (attemptOverrides) => {
-      const orderId = "reservation-incomplete-provider-attempt";
+      const orderId = "0198c1a2-036c-72a8-822b-a9bc0a512336";
       const activeAttempt = makeAttempt({
         id: "active-attempt",
         orderId,
@@ -2201,7 +2212,7 @@ describe("CheckoutService", () => {
       name: "an active attempt that has ended",
       activeAttempt: makeAttempt({
         id: "active-attempt",
-        orderId: "reservation-starts-new-attempt",
+        orderId: "0198c1a2-2412-7ef6-88b8-c5ff7ed917d6",
         state: "failed",
         securityToken: "active-security-token",
         providerRedirectUrl: "https://payments.example/existing",
@@ -2210,7 +2221,7 @@ describe("CheckoutService", () => {
     { name: "an active attempt that is gone", activeAttempt: null },
   ])("starts a new provider session after $name", async ({ activeAttempt }) => {
     const harness = await createCheckoutHarness({
-      orderId: "reservation-starts-new-attempt",
+      orderId: "0198c1a2-2412-7ef6-88b8-c5ff7ed917d6",
       activeAttempt,
       reservationOverrides: { activePaymentAttemptId: "active-attempt" },
     });
@@ -2220,9 +2231,10 @@ describe("CheckoutService", () => {
     expect(harness.findAttempt).toHaveBeenCalledWith("active-attempt");
     expect(result).toEqual({
       status: "redirect",
-      orderId: "reservation-starts-new-attempt",
+      orderId: "0198c1a2-2412-7ef6-88b8-c5ff7ed917d6",
       redirectUrl: "https://payments.example/hosted",
-      statusUrl: "/en-US/reservation/status/reservation-starts-new-attempt",
+      statusUrl:
+        "/en-US/reservation/status/0198c1a2-2412-7ef6-88b8-c5ff7ed917d6",
     });
     expect(harness.createPendingProviderAttempt).toHaveBeenCalledTimes(1);
   });
@@ -2230,7 +2242,7 @@ describe("CheckoutService", () => {
   test("decides again under the account lock before it records the evidence and starts the payment", async () => {
     const lockProbe = { held: false };
     const harness = await createCheckoutHarness({
-      orderId: "reservation-starts-under-account-lock",
+      orderId: "0198c1a2-36a5-7e6c-8fb3-b1ef8f99dc00",
       accountAuthority: { session: {}, lockProbe },
     });
 
@@ -2244,7 +2256,7 @@ describe("CheckoutService", () => {
   });
 
   test("returns the payment another submission started while this one waited for the account lock, without new evidence or a second payment", async () => {
-    const orderId = "reservation-started-by-concurrent-submission";
+    const orderId = "0198c1a2-1151-7b43-89a4-635edfb15cdb";
     const concurrentAttempt = makeAttempt({
       id: "concurrent-attempt",
       orderId,
@@ -2277,7 +2289,7 @@ describe("CheckoutService", () => {
   });
 
   test("fails a Pay state for another locale without reading its reservation", async () => {
-    const orderId = "reservation-other-locale";
+    const orderId = "0198c1a2-91dc-7a36-8f13-467b50a29348";
     const harness = await createCheckoutHarness({
       orderId,
       locale: "en-US",
@@ -2298,7 +2310,7 @@ describe("CheckoutService", () => {
 
   test("affirms the accepted discounts with the checkout locale, stored customer, and encrypted code", async () => {
     const submittedCode = canonicalCode("CANONICAL-SECRET-CODE");
-    const orderId = "reservation-affirms-code";
+    const orderId = "0198c1a2-a06e-7b48-84d2-424d6d256720";
     const acceptedQuote = buildCoworkReservationQuote(reservationData);
     const affirm = mock(() =>
       Effect.succeed({
@@ -2356,9 +2368,9 @@ describe("CheckoutService", () => {
           },
         },
         resultUrl:
-          "http://deskohub.test/cs-CZ/checkout/pay/return/reservation-affirms-code",
+          "http://deskohub.test/cs-CZ/checkout/pay/return/0198c1a2-a06e-7b48-84d2-424d6d256720",
         cancelUrl:
-          "http://deskohub.test/cs-CZ/checkout/pay/return/reservation-affirms-code?outcome=cancelled",
+          "http://deskohub.test/cs-CZ/checkout/pay/return/0198c1a2-a06e-7b48-84d2-424d6d256720?outcome=cancelled",
       })
     );
   });
@@ -2370,7 +2382,7 @@ describe("CheckoutService", () => {
 
     try {
       const harness = await createCheckoutHarness({
-        orderId: "reservation-lookalike-nexi-origin",
+        orderId: "0198c1a2-b057-7319-8deb-004e8e44f2e8",
       });
 
       await Effect.runPromise(harness.effect);
@@ -2399,7 +2411,7 @@ describe("CheckoutService", () => {
       })
     );
     const harness = await createCheckoutHarness({
-      orderId: "reservation-zero-total",
+      orderId: "0198c1a2-798d-74a9-84a7-0f1bc035ccf0",
       acceptedQuote,
       affirm,
     });
@@ -2408,18 +2420,18 @@ describe("CheckoutService", () => {
 
     expect(result).toEqual({
       status: "redirect",
-      orderId: "reservation-zero-total",
+      orderId: "0198c1a2-798d-74a9-84a7-0f1bc035ccf0",
       redirectUrl:
-        "/en-US/reservation/status/reservation-zero-total?outcome=success",
+        "/en-US/reservation/status/0198c1a2-798d-74a9-84a7-0f1bc035ccf0?outcome=success",
       paid: true,
     });
     expect(harness.completeInternalPayment).toHaveBeenCalledWith({
-      orderId: "reservation-zero-total",
+      orderId: "0198c1a2-798d-74a9-84a7-0f1bc035ccf0",
       amount: money(0),
       commitment: fullyDiscountedCommitment,
       locale: "en-US",
       accountingSnapshot: expect.objectContaining({
-        workspaceReservationId: "reservation-zero-total",
+        workspaceReservationId: "0198c1a2-798d-74a9-84a7-0f1bc035ccf0",
         buyer: { kind: "person", legalName: "Ada Lovelace" },
         billing: { purpose: "personal", invoice: "none" },
         delivery: { email: testEmailAddressForAda },
@@ -2429,7 +2441,7 @@ describe("CheckoutService", () => {
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
     expect(harness.attachHostedPaymentPage).not.toHaveBeenCalled();
     expect(harness.fulfillPaidOrder).toHaveBeenCalledWith(
-      "reservation-zero-total"
+      "0198c1a2-798d-74a9-84a7-0f1bc035ccf0"
     );
     expect(harness.analyticsEvents).toContainEqual(
       expect.objectContaining({
@@ -2443,7 +2455,7 @@ describe("CheckoutService", () => {
   });
 
   test("does not complete an internal payment when the live hold changes after checkout preparation", async () => {
-    const orderId = "reservation-zero-total-hold-race";
+    const orderId = "0198c1a2-29c2-7a90-87ec-2d910d7d9f83";
     let validationCount = 0;
     const confirm = mock(() => {
       validationCount += 1;
@@ -2507,7 +2519,7 @@ describe("CheckoutService", () => {
       )
     );
     const harness = await createCheckoutHarness({
-      orderId: "reservation-zero-total-fulfillment-fails",
+      orderId: "0198c1a2-8a82-7b72-86f9-80df612b1338",
       acceptedQuote,
       affirm,
       run: fulfillPaidOrder,
@@ -2522,7 +2534,7 @@ describe("CheckoutService", () => {
 
   test("returns an already-paid checkout status and retries fulfillment idempotently", async () => {
     const harness = await createCheckoutHarness({
-      orderId: "reservation-already-paid",
+      orderId: "0198c1a2-ebb8-74e3-8fa2-76f32e5aed72",
       reservationOverrides: {
         paymentState: "paid",
         paidAt: testInstant(),
@@ -2533,13 +2545,13 @@ describe("CheckoutService", () => {
 
     expect(result).toEqual({
       status: "redirect",
-      orderId: "reservation-already-paid",
+      orderId: "0198c1a2-ebb8-74e3-8fa2-76f32e5aed72",
       redirectUrl:
-        "/en-US/reservation/status/reservation-already-paid?outcome=success",
+        "/en-US/reservation/status/0198c1a2-ebb8-74e3-8fa2-76f32e5aed72?outcome=success",
       paid: true,
     });
     expect(harness.fulfillPaidOrder).toHaveBeenCalledWith(
-      "reservation-already-paid"
+      "0198c1a2-ebb8-74e3-8fa2-76f32e5aed72"
     );
     expect(harness.affirm).not.toHaveBeenCalled();
     expect(harness.completeInternalPayment).not.toHaveBeenCalled();
@@ -2556,7 +2568,7 @@ describe("CheckoutService", () => {
         .add({ days: 1 })
         .toString(),
     });
-    const orderId = "reservation-paid-after-consent-cutoff";
+    const orderId = "0198c1a2-a219-7f3f-8046-772dc5b1327d";
     const harness = await createCheckoutHarness({
       orderId,
       earlyPerformanceConsent: false,
@@ -2584,7 +2596,7 @@ describe("CheckoutService", () => {
   });
 
   test("leads a resubmitted Pay state for an order paid meanwhile to its completed checkout", async () => {
-    const orderId = "reservation-paid-race";
+    const orderId = "0198c1a2-cd20-7caf-8be4-a6f459d2c7dd";
     const confirm = mock(() =>
       Effect.fail(
         new CheckoutUnavailableError({
@@ -2650,7 +2662,7 @@ describe("CheckoutService", () => {
         commitment: emptyCommitment,
       })
     );
-    const orderId = "meeting-room-pricing-changed";
+    const orderId = "0198c1a2-f3e0-7a84-80ef-fe152a064ba5";
     const checkoutSessionId = "meeting-room-session-id";
     const acceptedQuote = buildMeetingRoomQuote(acceptedDiscountQuote);
     const harness = await createCheckoutHarness({
@@ -2706,7 +2718,7 @@ describe("CheckoutService", () => {
 
   test("allows payment for a started whole day before its end", async () => {
     const wholeDayReservation = buildStartedWholeDayReservation();
-    const orderId = "meeting-room-started-whole-day";
+    const orderId = "0198c1a2-df82-7c08-82d5-e86e91799583";
     const quote = buildMeetingRoomQuote(undefined, wholeDayReservation);
     const affirm = mock(() =>
       Effect.succeed({
@@ -2746,7 +2758,7 @@ describe("CheckoutService", () => {
 
   test("rejects payment after a meeting-room reservation ends", async () => {
     const endedReservation = buildEndedMeetingRoomReservation();
-    const orderId = "meeting-room-ended";
+    const orderId = "0198c1a2-43f9-7d31-84e8-9e8bab70f867";
     const quote = buildMeetingRoomQuote(undefined, endedReservation);
     const harness = await createCheckoutHarness({
       orderId,
@@ -2782,7 +2794,7 @@ describe("CheckoutService", () => {
 
   test("rejects payment after an office reservation ends", async () => {
     const endedReservation = buildEndedOfficeReservation();
-    const orderId = "office-ended";
+    const orderId = "0198c1a2-d9f9-7fb3-81ef-5236d54eaf1f";
     const harness = await createCheckoutHarness({
       orderId,
       payStateToken: buildOfficePayStateToken({
@@ -2817,7 +2829,7 @@ describe("CheckoutService", () => {
       "reserved-desk",
       "2099-06-10"
     );
-    const orderId = "cowork-reserved-desk-ended-at-midnight";
+    const orderId = "0198c1a2-5d46-7561-87a7-cc0c3ce7ee08";
 
     try {
       const harness = await createCheckoutHarness({
@@ -2850,7 +2862,7 @@ describe("CheckoutService", () => {
       "reserved-desk",
       "2099-06-10"
     );
-    const orderId = "cowork-reserved-desk-before-midnight";
+    const orderId = "0198c1a2-a23b-70bf-809c-e604edc96e04";
 
     try {
       const harness = await createCheckoutHarness({
@@ -2884,7 +2896,7 @@ describe("CheckoutService", () => {
       "open-space",
       "2099-06-10"
     );
-    const orderId = "cowork-open-space-ended-at-cutoff";
+    const orderId = "0198c1a2-9f8d-7d9e-878a-35285311e01d";
 
     try {
       const harness = await createCheckoutHarness({
@@ -2917,7 +2929,7 @@ describe("CheckoutService", () => {
       "reserved-desk",
       "2099-06-10"
     );
-    const orderId = "cowork-reserved-desk-ended-active-payment";
+    const orderId = "0198c1a2-1007-7650-822c-f201567a4052";
     const activeAttempt = {
       ...makeAttempt({
         id: "cowork-active-attempt",
@@ -2969,7 +2981,7 @@ describe("CheckoutService", () => {
       "reserved-desk",
       "2099-06-10"
     );
-    const orderId = "cowork-ends-during-payment-preparation";
+    const orderId = "0198c1a2-e669-7a55-8561-6124c9c20348";
     const affirm = mock(() => {
       now = Temporal.Instant.from("2099-06-10T22:00:00Z");
       return Effect.succeed({
@@ -3010,7 +3022,7 @@ describe("CheckoutService", () => {
       "reserved-desk",
       "2099-06-10"
     );
-    const orderId = "cowork-ends-during-final-revalidation";
+    const orderId = "0198c1a2-ca48-7390-8c94-2c1e454eee9a";
     let revalidationCount = 0;
     const confirm = mock(() => {
       revalidationCount += 1;
@@ -3068,7 +3080,7 @@ describe("CheckoutService", () => {
         discountQuote: zeroTotalQuote,
       }
     );
-    const orderId = "cowork-zero-total-ends-during-final-revalidation";
+    const orderId = "0198c1a2-e6ac-79d7-8ecd-e17dd99a57d6";
     let revalidationCount = 0;
     const confirm = mock(() => {
       revalidationCount += 1;
@@ -3116,7 +3128,7 @@ describe("CheckoutService", () => {
 
   test("recovers an active provider session after the meeting-room reservation ends", async () => {
     const endedReservation = buildEndedMeetingRoomReservation();
-    const orderId = "meeting-room-ended-active-payment";
+    const orderId = "0198c1a2-da0d-7c0b-8dc7-fcf158cdc7c9";
     const quote = buildMeetingRoomQuote(undefined, endedReservation);
     const activeAttempt = {
       ...makeAttempt({
@@ -3174,7 +3186,7 @@ describe("CheckoutService", () => {
       email: testEmailAddressForAda,
       phone: "+420 777 777 777",
     });
-    const orderId = "meeting-room-ends-during-payment-preparation";
+    const orderId = "0198c1a2-10a4-73ba-8520-c07c4c1fc60b";
     const quote = buildMeetingRoomQuote(undefined, reservation);
     const affirm = mock(() => {
       now = Temporal.Instant.from("2099-06-10T12:00:00.001Z");
@@ -3217,7 +3229,7 @@ describe("CheckoutService", () => {
 
   test("recovers an already-paid whole day after its start", async () => {
     const wholeDayReservation = buildStartedWholeDayReservation();
-    const orderId = "meeting-room-paid-whole-day";
+    const orderId = "0198c1a2-9cb3-7911-8a33-cb7fb85a0b7d";
     const harness = await createCheckoutHarness({
       orderId,
       payStateToken: buildMeetingRoomPayStateToken({
@@ -3238,9 +3250,9 @@ describe("CheckoutService", () => {
 
     expect(result).toEqual({
       status: "redirect",
-      orderId: "meeting-room-paid-whole-day",
+      orderId: "0198c1a2-9cb3-7911-8a33-cb7fb85a0b7d",
       redirectUrl:
-        "/en-US/reservation/status/meeting-room-paid-whole-day?outcome=success",
+        "/en-US/reservation/status/0198c1a2-9cb3-7911-8a33-cb7fb85a0b7d?outcome=success",
       paid: true,
     });
     expect(harness.fulfillPaidOrder).toHaveBeenCalledWith(orderId);
@@ -3249,7 +3261,7 @@ describe("CheckoutService", () => {
   });
 
   test("pays an in-flight checkout signed before staff labels without pricing_changed, recording the affirmed staff label", async () => {
-    const orderId = "reservation-before-staff-label";
+    const orderId = "0198c1a2-a553-7086-8cee-565f617a2093";
     const acceptedQuote = buildCoworkReservationQuote(reservationData, {
       discountQuote: discountedQuote,
     });
@@ -3306,7 +3318,7 @@ describe("CheckoutService", () => {
       discountQuote: discountedQuote,
     });
     const acceptedToken = buildPayStateToken({
-      orderId: "reservation-label-edited",
+      orderId: "0198c1a2-a04a-7521-8d79-84c4bca5f2a2",
       quote: acceptedQuote,
       checkoutSessionId: "reservation-label-edited-session-id",
     });
@@ -3319,7 +3331,7 @@ describe("CheckoutService", () => {
       })
     );
     const harness = await createCheckoutHarness({
-      orderId: "reservation-label-edited",
+      orderId: "0198c1a2-a04a-7521-8d79-84c4bca5f2a2",
       acceptedQuote,
       checkoutSessionId: "reservation-label-edited-session-id",
       affirm,
@@ -3367,7 +3379,7 @@ describe("CheckoutService", () => {
       })
     );
     const harness = await createCheckoutHarness({
-      orderId: "reservation-requested-intent-drop",
+      orderId: "0198c1a2-e914-7d79-8e66-c68517a6848e",
       acceptedQuote: buildCoworkReservationQuote(reservationData, {
         discountQuote: discountedQuote,
       }),
@@ -3401,7 +3413,7 @@ describe("CheckoutService", () => {
       itemKeys: ["product:cowork:profi", "total:final"] as const,
     };
     const harness = await createCheckoutHarness({
-      orderId: "reservation-requested-intent-review",
+      orderId: "0198c1a2-2cea-7934-8ace-7280ddb408cc",
       requestedDiscountCode: requestedCode,
       changedKeys,
     });
@@ -3434,7 +3446,7 @@ describe("CheckoutService", () => {
       })
     );
     const harness = await createCheckoutHarness({
-      orderId: "reservation-pricing-changed",
+      orderId: "0198c1a2-b124-7214-84aa-afc0b54676b6",
       acceptedQuote: buildCoworkReservationQuote(reservationData, {
         discountQuote: discountedQuote,
       }),
@@ -3481,7 +3493,7 @@ describe("CheckoutService", () => {
       discountIds: [application.discount.id],
     });
     const harness = await createCheckoutHarness({
-      orderId: "reservation-discount-affirmation-unavailable",
+      orderId: "0198c1a2-f562-71d8-848e-7c930e50dee3",
       acceptedQuote: buildCoworkReservationQuote(reservationData, {
         discountQuote: discountedQuote,
       }),
@@ -3522,7 +3534,7 @@ describe("CheckoutService", () => {
       });
     });
     const harness = await createCheckoutHarness({
-      orderId: "reservation-refreshes-note",
+      orderId: "0198c1a2-2cfd-770a-8616-e6275dd179d4",
       acceptedQuote,
       affirm,
       createHostedPaymentPage,
@@ -3536,9 +3548,10 @@ describe("CheckoutService", () => {
 
     expect(result).toEqual({
       status: "redirect",
-      orderId: "reservation-refreshes-note",
+      orderId: "0198c1a2-2cfd-770a-8616-e6275dd179d4",
       redirectUrl: "https://payments.example/hosted",
-      statusUrl: "/en-US/reservation/status/reservation-refreshes-note",
+      statusUrl:
+        "/en-US/reservation/status/0198c1a2-2cfd-770a-8616-e6275dd179d4",
     });
     expect(events).toEqual(["note-updated", "provider-created"]);
     expect(harness.updateReservation).toHaveBeenCalledTimes(1);
@@ -3552,7 +3565,7 @@ describe("CheckoutService", () => {
 
   test("does not create a payment attempt when the Dotypos note refresh fails", async () => {
     const harness = await createCheckoutHarness({
-      orderId: "reservation-note-refresh-fails",
+      orderId: "0198c1a2-cb54-7e02-8fd4-03b393f3ef8a",
     });
     harness.updateReservation.mockImplementation(() =>
       Effect.fail(new CheckoutTestFailure({ message: "Dotypos update failed" }))
@@ -3581,7 +3594,7 @@ describe("CheckoutService", () => {
       )
     );
     const harness = await createCheckoutHarness({
-      orderId: "reservation-hpp-create-fails",
+      orderId: "0198c1a2-c6e4-72b6-8ecd-d55689fe8e54",
       createHostedPaymentPage,
     });
 
@@ -3589,8 +3602,8 @@ describe("CheckoutService", () => {
 
     expect(harness.markTerminalForReservation).toHaveBeenCalledTimes(1);
     expect(harness.markTerminalForReservation).toHaveBeenCalledWith({
-      id: "attempt-reservation-hpp-create-fails",
-      orderId: "reservation-hpp-create-fails",
+      id: "attempt-0198c1a2-c6e4-72b6-8ecd-d55689fe8e54",
+      orderId: "0198c1a2-c6e4-72b6-8ecd-d55689fe8e54",
       state: "failed",
       failureCode: "nexi_hpp_create_failed",
       providerStatus: "hpp_create_failed",
@@ -3610,7 +3623,7 @@ describe("CheckoutService", () => {
       )
     );
     const harness = await createCheckoutHarness({
-      orderId: "reservation-hpp-create-ambiguous",
+      orderId: "0198c1a2-5a25-71ee-87c6-32d4704ae49f",
       createHostedPaymentPage,
     });
 
@@ -3649,7 +3662,7 @@ describe("CheckoutService", () => {
       )
     );
     const harness = await createCheckoutHarness({
-      orderId: "reservation-code-claim-race",
+      orderId: "0198c1a2-f7a9-7105-842b-7b86f3b3b295",
       acceptedQuote,
       requestedDiscountCode: requestedCode,
       accountAuthority: { session: {}, activityState: "active" },
@@ -3716,7 +3729,7 @@ describe("CheckoutService", () => {
       )
     );
     const harness = await createCheckoutHarness({
-      orderId: "reservation-zero-total-claim-race",
+      orderId: "0198c1a2-6f7a-7246-87d3-bc8f921f2a2e",
       acceptedQuote,
       requestedDiscountCode: requestedCode,
       affirm,
@@ -3748,7 +3761,7 @@ describe("CheckoutService", () => {
   test("starts its author's checkout after the session ended without consulting account activity", async () => {
     const author = customerAccountIdSchema.make(crypto.randomUUID());
     const harness = await createCheckoutHarness({
-      orderId: "reservation-signed-out-author",
+      orderId: "0198c1a2-99b1-754d-8a98-8177431f4513",
       reservationOverrides: { authorAccountId: author },
       accountAuthority: { session: null },
     });
@@ -3765,7 +3778,7 @@ describe("CheckoutService", () => {
   test("does not make a payer the author of a reservation another account created", async () => {
     const author = customerAccountIdSchema.make(crypto.randomUUID());
     const harness = await createCheckoutHarness({
-      orderId: "reservation-paid-by-another-account",
+      orderId: "0198c1a2-c6c5-7df4-8df7-1958f48a450c",
       reservationOverrides: { authorAccountId: author },
       accountAuthority: { session: {}, activityState: "active" },
     });
@@ -3785,7 +3798,7 @@ describe("CheckoutService", () => {
     const lockProbe = { held: false };
     const lockSamples: boolean[] = [];
     const harness = await createCheckoutHarness({
-      orderId: "reservation-lock-held-checkout",
+      orderId: "0198c1a2-fc71-79d9-82b5-90ca12ae3aee",
       accountAuthority: { session: {}, activityState: "active", lockProbe },
       createHostedPaymentPage: mock(() => {
         lockSamples.push(lockProbe.held);
@@ -3804,7 +3817,7 @@ describe("CheckoutService", () => {
 
   test("stops a deletion-marked account before updating the reservation or starting payment", async () => {
     const harness = await createCheckoutHarness({
-      orderId: "reservation-deletion-marked-account-activity",
+      orderId: "0198c1a2-35ef-773b-86ec-8b35c8f9e29d",
       accountAuthority: {
         session: { deletionRequested: true },
         activityState: "deletion-requested",
@@ -3833,7 +3846,7 @@ describe("CheckoutService", () => {
 
   test("stops checkout when the account row disappears during the authority window", async () => {
     const harness = await createCheckoutHarness({
-      orderId: "reservation-removed-account-activity",
+      orderId: "0198c1a2-37a9-7cb2-8b36-fd9751072ec0",
       accountAuthority: { session: {}, activityState: "missing" },
     });
 
@@ -3879,7 +3892,7 @@ describe("CheckoutService", () => {
       ).exp;
 
     test("keeps the signed deadline while a pending review moves the token's expiry", async () => {
-      const orderId = "reservation-review-hold-deadline";
+      const orderId = "0198c1a2-2bbe-7a5a-8331-107b6fb88a7d";
       const payStateToken = buildPayStateToken({
         orderId,
         changedKeys: { sectionKeys: ["total"], itemKeys: ["total:final"] },
@@ -3895,7 +3908,7 @@ describe("CheckoutService", () => {
     });
 
     test("keeps the signed deadline while a repricing moves the token's expiry", async () => {
-      const orderId = "reservation-reprice-hold-deadline";
+      const orderId = "0198c1a2-d876-751b-8c96-e5bec3187e92";
       const payStateToken = buildPayStateToken({
         orderId,
         quote: buildCoworkReservationQuote(reservationData, {
@@ -3967,7 +3980,7 @@ describe("CheckoutService", () => {
 
 describe("a Pay state whose entered code was removed", () => {
   test("asks for the new price to be reviewed, then pays it once accepted", async () => {
-    const orderId = "reservation-removed-code";
+    const orderId = "0198c1a2-c92d-72eb-8070-9af0578034a6";
     const [
       { clearDiscountCodeFromPayState },
       { acceptPayStatePriceChange },

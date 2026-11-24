@@ -15,7 +15,7 @@ import { LatePaymentRecoveryQueueService } from "@/features/checkout/backend/pay
 import { FioPaymentSettlementRepository } from "@/features/checkout/backend/repositories/fio-payment-settlement.repository";
 import { PaymentLifecycleRepository } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import { QrPaymentRepository } from "@/features/checkout/backend/repositories/qr-payment.repository";
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { makeMemoryQueue } from "@/shared/backend/queue/memory-queue.test-utils";
 import {
   QueueMessageSendError,
@@ -151,7 +151,7 @@ const createHarness = () => {
             const reservation = yield* workspaceFixtures(db).reservation({
               stage: { reservation: "held", payment: "pending" },
             });
-            const orderId = reservationOrderId(reservation.id);
+            const orderId = standaloneReservationOrderId(reservation.id);
             const qrId = crypto.randomUUID();
             const cardId = crypto.randomUUID();
             const variableSymbol = yield* Effect.promise(async () => {

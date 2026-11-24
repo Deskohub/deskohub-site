@@ -19,7 +19,7 @@ import {
   WorkspaceReservationService,
 } from "@/features/reservation/backend/workspace-reservation.service";
 import {
-  reservationOrderId,
+  findReservationOrderId,
   type StoredWorkspaceReservationDetails,
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
@@ -108,7 +108,10 @@ export class ReservationWithdrawals extends Context.Service<
           const contractAt = getContractAt(evidence) ?? reservation.paidAt;
           if (
             paidAttempt?.state !== "paid" ||
-            paidAttempt.orderId !== reservationOrderId(reservation.id) ||
+            !Option.contains(
+              findReservationOrderId(reservation.id),
+              paidAttempt.orderId
+            ) ||
             !contractAt
           ) {
             return Option.none();

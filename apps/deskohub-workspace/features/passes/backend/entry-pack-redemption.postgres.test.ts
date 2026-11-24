@@ -25,11 +25,9 @@ import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { orderIdSchema } from "@/features/order";
 import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/reservation-audit.test-utils";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import {
-  getStoredWorkspaceReservationDetails,
-  reservationOrderId,
-} from "@/features/reservation/persistence-contracts";
+import { getStoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { reservationOrderIssuanceSchema } from "@/features/reservation/reservation-order";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   holdPostgresTransaction,
@@ -570,7 +568,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             reservation: selection(serviceDate, coffee),
             entryPack: { passId, tier: "open-space" },
           });
-          const orderId = reservationOrderId(reservation.id);
+          const orderId = standaloneReservationOrderId(reservation.id);
           const payment = {
             orderId,
             amount: prepared.quote.payment.expectedPrice,

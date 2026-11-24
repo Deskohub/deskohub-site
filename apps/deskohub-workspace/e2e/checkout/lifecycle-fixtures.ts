@@ -5,7 +5,7 @@ import { PaymentTerminalTransitions } from "@/features/checkout/backend/reposito
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { tryWorkspaceE2ESync, type WorkspaceE2EError } from "../errors";
 import { readCheckoutRow } from "../integrations/database";
 import { E2EDatabase } from "../integrations/database.service";
@@ -49,7 +49,7 @@ export const retireRejectedAttempt = (
       PaymentTerminalTransitions.use((transitions) =>
         transitions.markTerminal({
           id: paymentAttemptId,
-          orderId: reservationOrderId(orderId),
+          orderId: standaloneReservationOrderId(orderId),
           state: "failed",
           failureCode,
           ...(fallback
