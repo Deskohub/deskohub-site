@@ -148,7 +148,9 @@ describe("OperationAdministrationDetail", () => {
       m.administrationPaymentNotReported({}, { locale: "en-US" }),
     ]);
     // Type, result, origin, time, and amount; the reversal is not applicable.
-    expect(values.filter((value) => unreported.has(value!))).toHaveLength(5);
+    expect(
+      values.filter((value) => value !== null && unreported.has(value))
+    ).toHaveLength(5);
     expect(values).toContain(
       m.administrationOperationNotApplicable({}, { locale: "en-US" })
     );

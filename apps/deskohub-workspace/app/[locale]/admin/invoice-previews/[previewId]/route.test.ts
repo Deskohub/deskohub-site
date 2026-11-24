@@ -47,7 +47,7 @@ InvoicePreviews.Live = Layer.mock(InvoicePreviews)({
         input.administratorAccountId === access.administrator.accountId
         ? Option.some({ bytes, fileName: "WS-FA-2026-000001-preview.pdf" })
         : Option.none();
-    }) as never,
+    }),
 });
 
 const { GET } = await import("./route");

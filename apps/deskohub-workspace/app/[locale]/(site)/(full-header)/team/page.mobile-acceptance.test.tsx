@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, mock, test } from "bun:test";
 import { type Browser, chromium } from "@playwright/test";
-import { createElement, type ReactElement, type ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { type Locale, m } from "@/features/i18n";
 import { MeetingRoomReleaseGate } from "@/features/meeting-room/backend/meeting-room-release-gate";
@@ -102,7 +102,7 @@ beforeAll(async () => {
 
   const teamPage = await LocalizedTeamPage();
   const layout = await FullHeaderLayout({ children: teamPage });
-  const stream = await renderToReadableStream(layout as ReactElement);
+  const stream = await renderToReadableStream(layout);
   pageMarkup = await new Response(stream).text();
 
   appStyles = await compileWorkspaceAppStyles();

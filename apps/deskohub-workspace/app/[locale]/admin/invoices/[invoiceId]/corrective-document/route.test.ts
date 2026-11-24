@@ -47,7 +47,7 @@ InvoiceAdministrationService.Live = Layer.mock(InvoiceAdministrationService)({
       return found
         ? Effect.succeed({ bytes, fileName: "WS-OD-2026-000001.pdf" as const })
         : Effect.fail(new InvoiceAdministrationNotFoundError({ invoiceId }));
-    }) as never,
+    }),
 });
 
 const { GET } = await import("./route");

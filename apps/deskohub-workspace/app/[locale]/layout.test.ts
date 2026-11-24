@@ -1,5 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
+import { Schema } from "effect";
+import { createElement, type ReactNode } from "react";
+import { requireElement } from "@/app/route-element.test-utils";
 import { getPublicCatalogOfferings } from "@/features/checkout/public-offerings";
 import { classifiedConstancy } from "@/features/feature-flags/backend/feature-flag-constancy.test-utils";
 import type { PostHogFeatureFlagKey } from "@/features/feature-flags/generated/contract";
@@ -8,6 +10,13 @@ import { nextFontLocal } from "@/shared/testing/next-font-local.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 
 mock.module("next/font/local", () => nextFontLocal);
+
+/** An icon link the metadata declares, with the file it points at. */
+const LinkedIcon = Schema.Struct({ url: Schema.String, type: Schema.String });
+/** The favicons and the Apple touch icon the layout links. */
+const decodeLinkedIcons = Schema.decodeUnknownSync(
+  Schema.Struct({ icon: Schema.Array(LinkedIcon), apple: LinkedIcon })
+);
 
 // Outside a Next.js render there is no cache to configure.
 const nextCache = await import("next/cache");
@@ -96,11 +105,10 @@ describe("localized route layout", () => {
 
   test("links icons that the app serves, a share image and a theme colour", async () => {
     const { generateMetadata, viewport } = await import("./layout");
-    type Icon = { url: string; type: string };
     const { icons, openGraph } = await generateMetadata({
       params: Promise.resolve({ locale: "en-US" }),
     });
-    const { icon, apple } = icons as { icon: Icon[]; apple: Icon };
+    const { icon, apple } = decodeLinkedIcons(icons);
     const linked = [...icon, apple];
 
     expect(linked.map(({ type }) => type)).toEqual([
@@ -135,26 +143,29 @@ describe("localized route layout", () => {
     const { TemporalLoader } = await import(
       "@/shared/polyfills/temporal-loader"
     );
-    type Element = { type: unknown; props: { children?: unknown } };
-    const html = (await LocaleLayout({
-      children: page,
-      params: Promise.resolve({ locale: "en-US" }),
-    })) as Element;
-    const [head] = [html.props.children].flat() as Element[];
-    const [first] = [head?.props.children].flat() as Element[];
+    type Props = { children?: ReactNode };
+    const html = requireElement<Props>(
+      await LocaleLayout({
+        children: page,
+        params: Promise.resolve({ locale: "en-US" }),
+      })
+    );
+    const head = requireElement<Props>([html.props.children].flat()[0]);
+    const first = requireElement([head.props.children].flat()[0]);
 
-    expect(head?.type).toBe("head");
-    expect(first?.type).toBe(TemporalLoader);
+    expect(head.type).toBe("head");
+    expect(first.type).toBe(TemporalLoader);
   });
 
   test("sets a text font stack only where the script needs one, and the language name faces everywhere", async () => {
     const { default: LocaleLayout } = await import("./layout");
-    type Element = { props: { style?: Record<string, string> } };
     const render = async (locale: string) =>
-      (await LocaleLayout({
-        children: page,
-        params: Promise.resolve({ locale }),
-      })) as Element;
+      requireElement<{ style?: Record<string, string> }>(
+        await LocaleLayout({
+          children: page,
+          params: Promise.resolve({ locale }),
+        })
+      );
     const languageNameFaces = {
       "--font-language-name-uk-UA":
         "'../../assets/fonts/Montserrat/language-name-cyrillic.woff2'",

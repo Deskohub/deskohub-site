@@ -8,10 +8,21 @@ import {
   setSystemTime,
   test,
 } from "bun:test";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Effect, Layer } from "effect";
-import type { AdministrationReservationExportInput } from "@/features/administration/administration.service";
+import type {
+  AdministrationReservationExportInput,
+  AdministrationReservationSummary,
+  AdministrationService as AdministrationServiceContract,
+} from "@/features/administration/administration.service";
 import { mockAdministratorAccess } from "@/features/administrators/server/administrator-access.test-utils";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 
 const access = mockAdministratorAccess();
 
@@ -23,15 +34,15 @@ const { AdministrationListSourceUnavailableError } = await import(
 );
 
 const exportInputs: AdministrationReservationExportInput[] = [];
-let exportResult: Effect.Effect<readonly unknown[], unknown> = Effect.succeed(
-  []
-);
+let exportResult: ReturnType<
+  AdministrationServiceContract["Service"]["exportReservations"]
+> = Effect.succeed([]);
 AdministrationService.Live = Layer.mock(AdministrationService)({
   exportReservations: (input) =>
     Effect.suspend(() => {
       exportInputs.push(input);
       return exportResult;
-    }) as never,
+    }),
 });
 
 const { GET } = await import("./route");
@@ -44,20 +55,22 @@ const requestExport = (query = "", locale = "en-US") =>
     { params: Promise.resolve({ locale }) }
   );
 
-const reservation = {
-  id: "0198-export-reservation",
-  dotyposReservationId: "dotypos-booking-1",
-  customerId: "dotypos-customer-1",
+const reservation: AdministrationReservationSummary = {
+  id: workspaceReservationIdSchema.make("0198-export-reservation"),
+  dotyposReservationId: DotyposReservationIdSchema.make("dotypos-booking-1"),
+  customerId: DotyposCustomerIdSchema.make("dotypos-customer-1"),
   customer: {
-    id: "dotypos-customer-1",
+    id: DotyposCustomerIdSchema.make("dotypos-customer-1"),
     displayName: "Jana Nováková",
     hasName: true,
+    lifecycle: "active",
     email: testEmailAddress("export-jana"),
     phone: "+420 777 000 000",
   },
   liveDetailsAvailable: true,
   startsAt: "2026-08-20T08:00:00Z",
   endsAt: "2026-08-20T10:00:00Z",
+  setupStartsAt: null,
   date: "2026-08-20",
   type: "meeting-room",
   product: { kind: "meeting-room" },
@@ -68,7 +81,7 @@ const reservation = {
   statusNoteCode: null,
   createdAt: "2026-08-01T07:30:00Z",
   latestPayment: {
-    id: "payment-attempt-1",
+    id: paymentAttemptIdSchema.make("payment-attempt-1"),
     state: "paid",
     refundState: "not_required",
     providerOrderId: null,
@@ -77,6 +90,7 @@ const reservation = {
     stateLabel: "Paid",
     failureCode: null,
     amount: { value: 125_050, exponent: 2, currency: "CZK" },
+    refundTarget: null,
     refundedAmount: null,
     refundedAt: null,
     createdAt: "2026-08-01T07:30:00Z",
@@ -171,7 +185,7 @@ describe("GET /[locale]/admin/reservations/export", () => {
 
     expect(exportInputs).toEqual([
       {
-        customerId: "dotypos-customer-1",
+        customerId: DotyposCustomerIdSchema.make("dotypos-customer-1"),
         direction: "asc",
         from: "2026-08-01",
         sort: "date",
@@ -216,7 +230,13 @@ describe("GET /[locale]/admin/reservations/export", () => {
   });
 
   test("answers 500 without a file when the export fails otherwise", async () => {
-    exportResult = Effect.fail(new Error("database unavailable"));
+    exportResult = Effect.fail(
+      new EffectDrizzleQueryError({
+        query: "select reservations",
+        params: [],
+        cause: new Error("database unavailable"),
+      })
+    );
 
     const response = await requestExport();
 
