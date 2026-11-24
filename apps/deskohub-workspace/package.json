@@ -34,7 +34,7 @@
     "e2e:coordination:generate": "drizzle-kit generate --config e2e/coordination/drizzle.config.ts",
     "e2e:coordination:provision": "drizzle-kit migrate --config e2e/coordination/drizzle.config.ts && bun scripts/workspace-e2e-coordination-provision.ts",
     "test:e2e": "bun scripts/workspace-e2e.ts",
-    "lint:biome": "find . -mindepth 1 -maxdepth 1 \\( -type d ! -name e2e ! -name e2e-artifacts ! -name node_modules ! -name public ! -name assets ! -name docs ! -name project.inlang ! -name '.*' -o -type f \\( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' \\) \\) -exec biome check --config-path \"$(git rev-parse --show-toplevel)/biome.json\" {} +",
+    "lint:biome": "find . -mindepth 1 -maxdepth 1 ! -name e2e ! -name e2e-artifacts ! -name node_modules ! -name .next ! -name .turbo ! -name .vercel -exec biome check --no-errors-on-unmatched --config-path \"$(git rev-parse --show-toplevel)/biome.json\" {} +",
     "lint:eslint": "eslint --ext .ts,.tsx app db emails features scripts shared proxy.ts",
     "lint:knip": "knip --directory ../.. --workspace apps/deskohub-workspace",
     "test": "bun test --preload ./shared/testing/workspace-test-env.ts --parallel=1 --timeout 30000 --path-ignore-patterns='**/*.{build,repository-wide}.test.ts'",

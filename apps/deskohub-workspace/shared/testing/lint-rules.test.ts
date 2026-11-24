@@ -1214,6 +1214,10 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/scripts/probe.test.ts",
   "apps/deskohub-workspace/types/probe.test.ts",
   "apps/deskohub-workspace/lib/future.test.ts",
+  "apps/deskohub-workspace/docs/probe.test.ts",
+  "apps/deskohub-workspace/assets/probe.test.ts",
+  "apps/deskohub-workspace/public/probe.test.ts",
+  "apps/deskohub-workspace/.config/probe.test.ts",
   "apps/deskohub-workspace/features/emails/probe.test.ts",
   "apps/deskohub-workspace/features/checkout/product-catalog.ts",
 ];
