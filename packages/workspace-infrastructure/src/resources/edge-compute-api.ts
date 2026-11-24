@@ -6,7 +6,7 @@ import {
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import { HttpClientRequest, type HttpClientResponse } from "effect/http";
+import { HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -66,6 +66,12 @@ export class EdgeComputeResourceNotConverged extends Data.TaggedError(
   }
 }
 
+/** A Compute resource as an insert writes it; each one names itself. */
+export interface ComputeResourceBody {
+  readonly name: string;
+  readonly description: string;
+}
+
 export const computeRoot = "https://compute.googleapis.com/compute/v1";
 
 const computeRetry: GoogleApiRetryPolicy = {
@@ -74,11 +80,11 @@ const computeRetry: GoogleApiRetryPolicy = {
   retries: 4,
 };
 
-const noAnswerReasons: Record<GoogleApiNoAnswer, string> = {
+const noAnswerReasons = {
   unreachable: "Compute API unreachable",
   "no-answer-in-time": "Compute API did not answer in time",
   "credentials-stalled": "credentials lookup stalled",
-};
+} satisfies Record<GoogleApiNoAnswer, string>;
 
 /**
  * A Compute operation as the waiter reads it. The error envelope is kept:
@@ -272,14 +278,9 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
 
   /** Decode a JSON answer; an unreadable one fails the request. */
   const decodeJson =
-    <A>(
-      decodeBody: (body: unknown) => Effect.Effect<A, unknown>,
-      resource: string,
-      operation: string
-    ) =>
+    <A>(body: Schema.Decoder<A>, resource: string, operation: string) =>
     (response: HttpClientResponse.HttpClientResponse) =>
-      response.json.pipe(
-        Effect.flatMap(decodeBody),
+      HttpClientResponse.schemaBodyJson(body)(response).pipe(
         Effect.mapError(
           () =>
             new EdgeComputeRequestFailed({
@@ -291,22 +292,16 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
         )
       );
 
-  const decodeOperation = Schema.decodeUnknownEffect(ComputeOperation);
-
   /** An operation answer on 200, else `undefined`. */
   const operationAnswer =
     (resource: string, operation: string) =>
     (response: HttpClientResponse.HttpClientResponse) =>
       response.status === 200
-        ? decodeJson(decodeOperation, resource, operation)(response)
+        ? decodeJson(ComputeOperation, resource, operation)(response)
         : undefined;
 
   /** A GET whose 404 means the object does not exist. */
-  const get = <A>(
-    resource: string,
-    url: string,
-    decodeBody: (body: unknown) => Effect.Effect<A, unknown>
-  ) =>
+  const get = <A>(resource: string, url: string, body: Schema.Decoder<A>) =>
     send<A | undefined>(
       resource,
       "get",
@@ -316,7 +311,7 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
           return Effect.undefined;
         }
         return response.status === 200
-          ? decodeJson(decodeBody, resource, "get")(response)
+          ? decodeJson(body, resource, "get")(response)
           : undefined;
       }
     );
@@ -429,7 +424,11 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
     mutateOnce,
     settle,
     /** An insert's operation, or `conflict` when the name is taken. */
-    insert: (resource: string, url: string, body: object) =>
+    insert: <Body extends ComputeResourceBody>(
+      resource: string,
+      url: string,
+      body: Body
+    ) =>
       send<"conflict" | ComputeOperation>(
         resource,
         "insert",

@@ -3,6 +3,7 @@ import * as Provider from "alchemy/Provider";
 import { Resource } from "alchemy/Resource";
 import * as Effect from "effect/Effect";
 import { HttpClientRequest } from "effect/http";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   computeResourcePath,
@@ -131,8 +132,6 @@ const LiveBackendService = Schema.Struct({
 });
 
 type LiveBackendService = typeof LiveBackendService.Type;
-const decodeBackend = Schema.decodeUnknownEffect(LiveBackendService);
-
 const backendServiceUrl = (project: string, name: string) =>
   `${computeRoot}/projects/${project}/global/backendServices/${name}`;
 
@@ -167,13 +166,10 @@ const toAttributes = (
             },
           }
         : undefined,
-    logConfig: {
-      enable: live.logConfig?.enable === true,
-      ...(live.logConfig?.enable === true &&
-      live.logConfig.sampleRate !== undefined
-        ? { sampleRate: live.logConfig.sampleRate }
-        : {}),
-    },
+    logConfig:
+      live.logConfig?.enable === true && live.logConfig.sampleRate !== undefined
+        ? { enable: true, sampleRate: live.logConfig.sampleRate }
+        : { enable: live.logConfig?.enable === true },
     description: parseOwnedDescription(live.description).description,
   };
 };
@@ -183,19 +179,23 @@ const toAttributes = (
  * sent, as Terraform did: Compute keeps its defaults and `enableCDN: false`
  * alone turns caching off.
  */
-const desiredBody = (props: EdgeBackendServiceProps, description: string) => ({
-  name: props.name,
-  description,
-  loadBalancingScheme: props.loadBalancingScheme,
-  protocol: props.protocol,
-  backends: [{ group: props.backendGroup }],
-  logConfig:
-    props.logConfig.enable && props.logConfig.sampleRate !== undefined
-      ? { enable: true, sampleRate: props.logConfig.sampleRate }
-      : { enable: props.logConfig.enable },
-  enableCDN: props.cdnPolicy !== undefined,
-  ...(props.cdnPolicy === undefined ? {} : { cdnPolicy: props.cdnPolicy }),
-});
+const desiredBody = (props: EdgeBackendServiceProps, description: string) => {
+  const body = {
+    name: props.name,
+    description,
+    loadBalancingScheme: props.loadBalancingScheme,
+    protocol: props.protocol,
+    backends: [{ group: props.backendGroup }],
+    logConfig:
+      props.logConfig.enable && props.logConfig.sampleRate !== undefined
+        ? { enable: true, sampleRate: props.logConfig.sampleRate }
+        : { enable: props.logConfig.enable },
+    enableCDN: props.cdnPolicy !== undefined,
+  };
+  return props.cdnPolicy === undefined
+    ? body
+    : { ...body, cdnPolicy: props.cdnPolicy };
+};
 
 /** The declared fields the live backend does not match. */
 export const backendServiceDrift = (
@@ -268,8 +268,10 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
     }
     // Identity fields are plain strings; an unresolved one cannot differ yet.
     const changed = (key: "project" | "name" | "loadBalancingScheme") => {
-      const next = resolvedStringProp(news, key);
-      return next !== undefined && next !== previous[key];
+      return Option.exists(
+        resolvedStringProp(key)(news),
+        (next) => next !== previous[key]
+      );
     };
     if (changed("project") || changed("name")) {
       return { action: "replace" as const, deleteFirst: false };
@@ -288,7 +290,7 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
     const live = yield* api.get(
       `Backend service ${name}`,
       backendServiceUrl(project, name),
-      decodeBackend
+      LiveBackendService
     );
     if (live === undefined) {
       return undefined;
@@ -310,7 +312,7 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
     // Every readback must still be the object admitted below.
     let admittedId: string | undefined;
     const read = (operation: string) =>
-      api.get(resource, url, decodeBackend).pipe(
+      api.get(resource, url, LiveBackendService).pipe(
         Effect.flatMap((live) => requirePresent(resource, operation, live)),
         Effect.filterOrFail(
           (live) => admittedId === undefined || live.id === admittedId,
@@ -318,7 +320,7 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
         )
       );
 
-    let live = yield* api.get(resource, url, decodeBackend);
+    let live = yield* api.get(resource, url, LiveBackendService);
     if (live === undefined) {
       const inserted = yield* api.insert(
         resource,
@@ -427,7 +429,7 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
     const resource = `Backend service ${output.name}`;
     const url = backendServiceUrl(output.project, output.name);
     // A same-name object someone else recreated is not ours to delete.
-    const live = yield* api.get(resource, url, decodeBackend);
+    const live = yield* api.get(resource, url, LiveBackendService);
     if (live === undefined || !(yield* isAdmitted(id, output.id, live))) {
       return;
     }

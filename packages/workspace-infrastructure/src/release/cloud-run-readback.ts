@@ -148,12 +148,12 @@ const servingImageDigest = (revision: CloudRunRevision) => {
   return isImageDigest(digest) ? digest : null;
 };
 
-const noAnswerReasons: Record<GoogleApiNoAnswer, string> = {
+const noAnswerReasons = {
   unreachable: "no response from Cloud Run",
   "no-answer-in-time": "Cloud Run timed out",
   // Unreachable with a token looked up once per read.
   "credentials-stalled": "credentials unavailable",
-};
+} satisfies Record<GoogleApiNoAnswer, string>;
 
 /** A body cut off mid-read: a later read can succeed. */
 const isInterruptedBody = ({ status }: ReleaseReadbackUnavailable) =>
@@ -264,10 +264,13 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
     // A LATEST row before its revision resolves names none; it never
     // passes as a revision, so it cannot satisfy a single-revision check.
     const traffic = (live.trafficStatuses ?? []).flatMap(
-      ({ revision, percent, tag }): ReadonlyArray<ObservedTrafficStatus> =>
-        revision
-          ? [{ revision, percent: percent ?? 0, ...(tag ? { tag } : {}) }]
-          : []
+      ({ revision, percent, tag }): ReadonlyArray<ObservedTrafficStatus> => {
+        if (!revision) {
+          return [];
+        }
+        const status = { revision, percent: percent ?? 0 };
+        return [tag ? { ...status, tag } : status];
+      }
     );
     const routed = new Set(
       traffic

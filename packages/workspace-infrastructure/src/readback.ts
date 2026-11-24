@@ -67,11 +67,11 @@ export interface ReadbackDrift {
   readonly observed: string;
 }
 
-const expectedIngress: Record<WorkspaceWorkload, string> = {
+const expectedIngress = {
   web: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
   "tasks-worker": "INGRESS_TRAFFIC_INTERNAL_ONLY",
   "scheduler-worker": "INGRESS_TRAFFIC_INTERNAL_ONLY",
-};
+} satisfies Record<WorkspaceWorkload, string>;
 
 /**
  * The release-relevant view of live traffic: the single revision holding

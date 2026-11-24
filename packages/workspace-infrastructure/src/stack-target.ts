@@ -104,11 +104,11 @@ const BucketLocationJson = Schema.fromJsonString(
 );
 const decodeBucketLocation = Schema.decodeUnknownEffect(BucketLocationJson);
 
-const noAnswerReasons: Record<GoogleApiNoAnswer, string> = {
+const noAnswerReasons = {
   unreachable: "Cloud Storage could not be reached",
   "no-answer-in-time": "Cloud Storage did not answer in time",
   "credentials-stalled": "Google Cloud credentials did not resolve in time",
-};
+} satisfies Record<GoogleApiNoAnswer, string>;
 
 const readStateBucketLocation = Effect.fnUntraced(function* (
   config: WorkspaceStackConfig

@@ -1,6 +1,7 @@
 import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 
@@ -333,11 +334,13 @@ const secretMaterialPatterns: ReadonlyArray<RegExp> = [
 const secretKeyPattern =
   /^(?:value|secretValue|password|token|apiKey|privateKey|credentials?|connectionString)$/i;
 
+const isJsonObject = Schema.is(Schema.JsonObject);
+
 const findSecretMaterial = (
-  input: unknown,
+  input: Schema.Json,
   path: ReadonlyArray<string> = []
 ): ReadonlyArray<string> => {
-  if (typeof input === "string") {
+  if (Predicate.isString(input)) {
     return secretMaterialPatterns.some((pattern) => pattern.test(input))
       ? [path.join(".") || "<root>"]
       : [];
@@ -347,7 +350,7 @@ const findSecretMaterial = (
       findSecretMaterial(item, [...path, String(index)])
     );
   }
-  if (typeof input === "object" && input !== null) {
+  if (isJsonObject(input)) {
     return Object.entries(input).flatMap(([key, value]) =>
       secretKeyPattern.test(key)
         ? [[...path, key].join(".")]
@@ -378,48 +381,49 @@ export const workspaceStateBucket = (projectId: GcpProjectId) =>
  * `value` or credential field never reaches a resource; known secret
  * shapes fail under any key.
  */
-export const decodeWorkspaceStackConfig = (input: unknown) =>
-  Effect.gen(function* () {
-    const secretPaths = findSecretMaterial(input);
-    if (secretPaths.length > 0) {
-      return yield* new WorkspaceStackConfigInvalid({
-        paths: secretPaths,
-        reason: "secret-material",
-      });
-    }
-    const config = yield* Schema.decodeUnknownEffect(WorkspaceStackConfig)(
-      input,
-      { onExcessProperty: "error", errors: "all" }
-    ).pipe(
-      Effect.mapError(
-        (error) =>
-          new WorkspaceStackConfigInvalid({
-            paths: issuePaths(error.issue),
-            reason: "schema",
-          })
-      )
-    );
-    const identityPaths = [
-      ...serviceAccountProblems(config),
-      ...(config.stateBucket === workspaceStateBucket(config.projectId)
-        ? []
-        : ["stateBucket"]),
-    ];
-    if (identityPaths.length > 0) {
-      return yield* new WorkspaceStackConfigInvalid({
-        paths: identityPaths,
-        reason: "identity",
-      });
-    }
-    const edgePaths = edgeProblems(config);
-    if (edgePaths.length > 0) {
-      return yield* new WorkspaceStackConfigInvalid({
-        paths: edgePaths,
-        reason: "edge",
-      });
-    }
-    return config;
-  });
+export const decodeWorkspaceStackConfig = Effect.fn(
+  "WorkspaceStack.decodeWorkspaceStackConfig"
+)(function* (input: Schema.Json) {
+  const secretPaths = findSecretMaterial(input);
+  if (secretPaths.length > 0) {
+    return yield* new WorkspaceStackConfigInvalid({
+      paths: secretPaths,
+      reason: "secret-material",
+    });
+  }
+  const config = yield* Schema.decodeUnknownEffect(WorkspaceStackConfig)(
+    input,
+    { onExcessProperty: "error", errors: "all" }
+  ).pipe(
+    Effect.mapError(
+      (error) =>
+        new WorkspaceStackConfigInvalid({
+          paths: issuePaths(error.issue),
+          reason: "schema",
+        })
+    )
+  );
+  const identityPaths = [
+    ...serviceAccountProblems(config),
+    ...(config.stateBucket === workspaceStateBucket(config.projectId)
+      ? []
+      : ["stateBucket"]),
+  ];
+  if (identityPaths.length > 0) {
+    return yield* new WorkspaceStackConfigInvalid({
+      paths: identityPaths,
+      reason: "identity",
+    });
+  }
+  const edgePaths = edgeProblems(config);
+  if (edgePaths.length > 0) {
+    return yield* new WorkspaceStackConfigInvalid({
+      paths: edgePaths,
+      reason: "edge",
+    });
+  }
+  return config;
+});
 
 /**
  * Preview declares no web service for an edge to front (#1455). Plain HTTP
@@ -481,7 +485,7 @@ export const configuredWorkspaceStack = Config.String(
   "WORKSPACE_STACK_CONFIG"
 ).pipe(
   Effect.flatMap((raw) =>
-    Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(raw)
+    Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(raw)
   ),
   Effect.flatMap(decodeWorkspaceStackConfig)
 );

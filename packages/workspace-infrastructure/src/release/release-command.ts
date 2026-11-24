@@ -37,7 +37,7 @@ export class ReleaseStack extends Context.Service<
   WorkspaceStackConfig
 >()("@deskohub/workspace-infrastructure/ReleaseStack") {}
 
-const printJson = (value: unknown) =>
+const printJson = <Value>(value: Value) =>
   Console.log(JSON.stringify(value, null, 2));
 
 const deliverCommand = Command.make(
@@ -50,15 +50,17 @@ const deliverCommand = Command.make(
       Flag.withDescription("The image's sha256 digest in Artifact Registry")
     ),
   },
-  ({ sha, imageDigest }) =>
-    Effect.gen(function* () {
-      const input = {
-        sha: yield* Schema.decodeEffect(GitSha)(sha),
-        imageDigest: yield* Schema.decodeEffect(ImageDigest)(imageDigest),
-      };
-      const config = yield* ReleaseStack;
-      yield* printJson(yield* deliverRelease(config, input));
-    })
+  Effect.fn("WorkspaceReleaseCommand.deliver")(function* ({
+    sha,
+    imageDigest,
+  }) {
+    const input = {
+      sha: yield* Schema.decodeEffect(GitSha)(sha),
+      imageDigest: yield* Schema.decodeEffect(ImageDigest)(imageDigest),
+    };
+    const config = yield* ReleaseStack;
+    yield* printJson(yield* deliverRelease(config, input));
+  })
 ).pipe(
   Command.withDescription(
     "Stage a digest-pinned build, verify its zero-traffic revision, promote and settle it"
@@ -77,23 +79,27 @@ const restoreCommand = Command.make(
       )
     ),
   },
-  ({ releaseId, expectedGeneration }) =>
-    Effect.gen(function* () {
-      const input = {
-        releaseId: yield* Schema.decodeEffect(ReleaseId)(releaseId),
-        expectedGeneration,
-      };
-      const config = yield* ReleaseStack;
-      yield* printJson(yield* restoreRelease(config, input));
-    })
+  Effect.fn("WorkspaceReleaseCommand.restore")(function* ({
+    releaseId,
+    expectedGeneration,
+  }) {
+    const input = {
+      releaseId: yield* Schema.decodeEffect(ReleaseId)(releaseId),
+      expectedGeneration,
+    };
+    const config = yield* ReleaseStack;
+    yield* printJson(yield* restoreRelease(config, input));
+  })
 ).pipe(
   Command.withDescription(
     "Move traffic back to an earlier verified release and settle it"
   )
 );
 
-const recoverCommand = Command.make("recover", {}, () =>
-  Effect.gen(function* () {
+const recoverCommand = Command.make(
+  "recover",
+  {},
+  Effect.fn("WorkspaceReleaseCommand.recover")(function* () {
     const config = yield* ReleaseStack;
     yield* printJson(yield* recoverRelease(config));
   })
@@ -104,8 +110,10 @@ const recoverCommand = Command.make("recover", {}, () =>
 );
 
 const stackCommand = (action: "deploy" | "plan", description: string) =>
-  Command.make(action, {}, () =>
-    Effect.gen(function* () {
+  Command.make(
+    action,
+    {},
+    Effect.fn(`WorkspaceReleaseCommand.${action}`)(function* () {
       yield* runStack(yield* ReleaseStack, action);
     })
   ).pipe(Command.withDescription(description));
@@ -119,19 +127,20 @@ const unlockCommand = Command.make(
       )
     ),
   },
-  ({ holder }) =>
-    Effect.gen(function* () {
-      const cleared = yield* unlockReleaseWriter(yield* ReleaseStack, holder);
-      yield* printJson({ cleared });
-    })
+  Effect.fn("WorkspaceReleaseCommand.unlock")(function* ({ holder }) {
+    const cleared = yield* unlockReleaseWriter(yield* ReleaseStack, holder);
+    yield* printJson({ cleared });
+  })
 ).pipe(
   Command.withDescription(
     "Break-glass: clear the writer lock of a run you confirmed has stopped. Writes that run already sent (Cloud Run services carry no etag; its Alchemy state and foundation resource writes are not fenced) can still land after the unlock, over a newer release decision. Hosted workflows must run each stage under a concurrency group that never cancels a run in progress."
   )
 );
 
-const statusCommand = Command.make("status", {}, () =>
-  Effect.gen(function* () {
+const statusCommand = Command.make(
+  "status",
+  {},
+  Effect.fn("WorkspaceReleaseCommand.status")(function* () {
     const store = yield* ReleaseRecordStore;
     yield* printJson(describeStoredRecord(yield* store.read));
   })

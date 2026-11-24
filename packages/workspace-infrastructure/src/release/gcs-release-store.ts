@@ -85,11 +85,11 @@ const encodeStoredRecord = Schema.encodeEffect(StoredRecordJson);
 const decodeUploadedObject = Schema.decodeUnknownEffect(UploadedObjectJson);
 const sameRecord = Schema.toEquivalence(ReleaseRecord);
 
-const noAnswerReasons: Record<GoogleApiNoAnswer, string> = {
+const noAnswerReasons = {
   unreachable: "Cloud Storage could not be reached",
   "no-answer-in-time": "Cloud Storage did not answer in time",
   "credentials-stalled": "Google Cloud credentials did not resolve in time",
-};
+} satisfies Record<GoogleApiNoAnswer, string>;
 
 /** A refusal no retry can fix; 429 and 5xx never reach it. */
 const refusal = (operation: "read" | "write", status: number) =>
@@ -165,7 +165,7 @@ export const makeGcsReleaseRecordStore = Effect.fn(
           status: null,
           reason: "Google Cloud credentials are unavailable",
         }),
-      ...(onAttemptFailure ? { onAttemptFailure } : {}),
+      onAttemptFailure,
     });
 
   const bodyText = (response: HttpClientResponse.HttpClientResponse) =>

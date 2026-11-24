@@ -210,8 +210,8 @@ const releaseReleaseWriter = Effect.fn("WorkspaceRelease.releaseReleaseWriter")(
 export const withReleaseWriter =
   (config: WorkspaceStackConfig, operation: ReleaseOperation) =>
   <A, E, R>(operationEffect: Effect.Effect<A, E, R>) =>
-    Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
+    Effect.uninterruptibleMask(
+      Effect.fn("WorkspaceRelease.withReleaseWriter")(function* (restore) {
         // The checks stay interruptible; once the lock is written, the
         // operation's end always releases it or marks it in doubt.
         const { writer, take } = yield* restore(
