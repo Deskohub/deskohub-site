@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Predicate from "effect/Predicate";
-import type * as Schema from "effect/Schema";
+import * as Schema from "effect/Schema";
 import {
   isLockedStackAction,
   lockedStackInvocation,
@@ -271,6 +271,8 @@ const writeWorld = (path: string, world: FakeWorld) => {
 export interface ProofFakes {
   readonly env: Record<string, string>;
   readonly proofDir: string;
+  /** The runner's private directory: the marker and ID token file. */
+  readonly privateDir: string;
   readonly world: () => FakeWorld;
   readonly calls: () => ReadonlyArray<string>;
 }
@@ -283,6 +285,7 @@ export const withProofFakes = <A>(
   const dir = mkdtempSync(join(tmpdir(), "sandbox-proof-fakes-"));
   const bin = join(dir, "bin");
   const proofDir = join(dir, "proof");
+  const privateDir = join(dir, "private");
   const worldFile = join(dir, "world.json");
   const callsLog = join(dir, "calls.log");
   const clockFile = join(dir, "clock");
@@ -305,11 +308,13 @@ export const withProofFakes = <A>(
       env: {
         PATH: `${bin}:${process.env.PATH ?? ""}`,
         SANDBOX_PROOF_DIR: proofDir,
+        SANDBOX_PROOF_PRIVATE_DIR: privateDir,
         FAKE_WORLD: worldFile,
         FAKE_CALLS: callsLog,
         FAKE_CLOCK: clockFile,
       },
       proofDir,
+      privateDir,
       world: () => readWorld(worldFile),
       calls: () =>
         existsSync(callsLog)
@@ -469,7 +474,7 @@ const interruptedDeliver = async (
     await Bun.sleep(10);
   }
   const generations = { ...(world.serviceGenerations ?? {}) };
-  generations["workspace-web"] = (generations["workspace-web"] ?? 1) + 1;
+  generations["workspace-api"] = (generations["workspace-api"] ?? 1) + 1;
   save({
     ...world,
     serviceGenerations: generations,
@@ -490,6 +495,33 @@ const interruptedDeliver = async (
 };
 
 /** Move the fake clock on, as a slow call would. */
+const fakeImage =
+  "europe-west1-docker.pkg.dev/deskohub-workspace-sandbox/workspace/workspace";
+
+/** The run.app URL the fake reports for a Cloud Run service. */
+export const fakeServiceUrl = (service: string) =>
+  `https://${service}-759037106024.europe-west1.run.app`;
+
+/** A Ready service sending all its traffic to one live revision. */
+const fakeReadyService = (service: string) => ({
+  metadata: { name: service, annotations: {} },
+  status: {
+    url: fakeServiceUrl(service),
+    conditions: [{ type: "Ready", status: "True" }],
+    traffic: [{ revisionName: `${service}-live`, percent: 100 }],
+  },
+});
+
+const ActiveRelease = Schema.Struct({
+  record: Schema.Struct({
+    active: Schema.Struct({ imageDigest: Schema.String }),
+  }),
+});
+const isActiveRelease = Schema.is(ActiveRelease);
+/** The image digest of the release `release status` reports active. */
+const activeDigest = ({ status }: FakeWorld) =>
+  isActiveRelease(status) ? status.record.active.imageDigest : undefined;
+
 const advanceClock = (seconds: number) => {
   if (seconds === 0) return;
   const clock = process.env.FAKE_CLOCK ?? "";
@@ -506,12 +538,8 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     world = next;
     writeWorld(worldFile, next);
   };
-  // The package's own config and edge declarations run for real.
-  if (
-    tool === "bun" &&
-    (args[0] === "scripts/sandbox-stack-config.ts" ||
-      args[0] === "scripts/sandbox-edge-declaration.ts")
-  ) {
+  // The package's own stack config runs for real.
+  if (tool === "bun" && args[0] === "scripts/sandbox-stack-config.ts") {
     return Bun.spawnSync([realBun, ...args], {
       stdio: ["inherit", "inherit", "inherit"],
     }).exitCode;
@@ -594,7 +622,25 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
       print("fake-access-token");
       return 0;
     }
+    if (
+      args[0] === "run" &&
+      args[1] === "revisions" &&
+      args[2] === "describe"
+    ) {
+      // Every live revision runs the release's active image.
+      print(`${fakeImage}@${activeDigest(world) ?? "sha256:none"}`);
+      return 0;
+    }
     if (args[0] === "run" && args[1] === "services" && args[2] === "describe") {
+      const service = args[3] ?? "";
+      if (flag(args, "--format") === "value(status.url)") {
+        print(fakeServiceUrl(service));
+        return 0;
+      }
+      if (flag(args, "--format") === "json") {
+        print(JSON.stringify(fakeReadyService(service)));
+        return 0;
+      }
       if (world.serviceReadsFailAfterDeliver && world.deliverStarted) {
         save({
           ...world,
