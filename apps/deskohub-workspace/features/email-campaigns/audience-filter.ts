@@ -14,12 +14,14 @@ import {
   type AudienceFilterGroupOf,
   type AudienceFilterOf,
   type AudienceFilterType,
+  type AudienceParam,
   type AudienceSetAttributeDefinition,
   type AudienceSetOperatorType,
   audienceAttributeCatalogue,
   AudienceFilter as audienceFilterContractSchema,
   CampaignEmailSource as CampaignEmailSourceSchema,
   type CampaignEmailSourceType,
+  DatePeriod as DatePeriodSchema,
   type ReservationProductFilterType,
 } from "@deskohub/workspace-admin-api";
 import { Match, Option, Schema } from "effect";
@@ -134,48 +136,33 @@ export type AudienceCandidate = {
 };
 
 /**
- * The count params the evaluation context fixes: a period becomes the
- * instants it covers, and a campaign source the campaign whose emails count.
- * Every count attribute counts in a `period`; one that counts campaign
- * emails names their source `campaign`. The resolver catalogue rejects
- * attributes that place them elsewhere.
+ * Fixes a count condition's params in one evaluation context: a period
+ * becomes the instants it covers, and a campaign source the campaign whose
+ * emails count (`null` when it names the evaluating campaign and there is
+ * none).
  */
-export type ContextualCountParam = "period" | "campaign";
+export type CountParamsInContext = {
+  readonly bounds: (period: DatePeriod) => DatePeriodBounds;
+  readonly campaign: (source: CampaignEmailSourceType) => CampaignId | null;
+};
 
-/** The params a count resolver reads as decoded; its request fixes the rest. */
-export type CountRequestParams<Params> = Omit<Params, ContextualCountParam>;
-
-/** What a count request fixes from its evaluation context. */
-export type CountRequestContext = {
-  /** The instants the period covers in the context. */
-  readonly bounds: DatePeriodBounds;
-  /**
-   * The campaign whose emails count, when the condition names a source:
-   * `null` when it names the evaluating campaign and there is none.
-   */
-  readonly campaign?: CampaignId | null;
+/**
+ * What one count condition counts in one evaluation context. Its fixed
+ * params, each fixed by its part in the condition's catalogue entry, decide
+ * its lookup: requests whose attribute, fixed params, and reservation moment
+ * agree share one, so subjects with different contexts share it whenever
+ * their bounds and campaign agree. Resolvers fix the params they read
+ * through `inContext`, which gives the same values.
+ */
+export type AudienceCountRequestOf<Condition extends AudienceCountCondition> = {
+  readonly condition: Condition;
+  readonly inContext: CountParamsInContext;
+  readonly fixedParams: { readonly [param: string]: FixedCountParamValue };
   /** Reservations count as they stood then (reservation counts). */
   readonly reservationsAsOf?: Temporal.Instant;
 };
 
-/**
- * What one count condition counts in one evaluation context: the condition's
- * attribute and decoded params, with its period and campaign source fixed by
- * the context. Requests that agree on all but their raw period and campaign
- * source share one lookup, so subjects with different contexts share it
- * whenever their bounds and campaign agree.
- */
-export type AudienceCountRequestOf<Condition extends AudienceCountCondition> =
-  CountRequestContext & {
-    readonly attribute: Condition["attribute"];
-    readonly params: Condition["params"];
-  };
-
-/**
- * A count request of any catalogued count attribute, as
- * {@link countFactRequest} builds it. The type doesn't tie each attribute
- * to its own params; resolvers read them through their attribute's resolver.
- */
+/** A count request of any catalogued count attribute. */
 export type AudienceCountRequest = AudienceCountRequestOf<
   AudienceConditionOf<AudienceAttributeOfKind<"count">>
 >;
@@ -211,34 +198,24 @@ export type AudienceFacts = {
 };
 
 /**
- * A count request's lookup: its attribute, the params it reads as decoded,
- * and what its context fixes, without the raw period and campaign source.
- * An omitted campaign (any campaign) stays apart from `null` (none).
- */
-const countFactLookup = ({
-  attribute,
-  params: { period: _period, campaign: _campaign, ...params },
-  bounds,
-  campaign,
-  reservationsAsOf,
-}: AudienceCountRequestOf<AudienceCountCondition>) => ({
-  attribute,
-  params,
-  bounds,
-  campaign,
-  reservationsAsOf,
-});
-
-/**
  * Requests are built from decoded schema values in the entry's param order,
- * so their key order is stable; instants serialize as ISO strings.
+ * so their key order is stable; instants serialize as ISO strings. A count
+ * request keys on what decides its lookup.
  */
 export const audienceFactKey = (
   request:
     | AudienceCountRequestOf<AudienceCountCondition>
     | AudienceDateRequest<string>
 ): string =>
-  JSON.stringify("params" in request ? countFactLookup(request) : request);
+  JSON.stringify(
+    "condition" in request
+      ? {
+          attribute: request.condition.attribute,
+          params: request.fixedParams,
+          reservationsAsOf: request.reservationsAsOf,
+        }
+      : request
+  );
 
 const anyTime: DatePeriod = { _tag: "AnyTime" };
 
@@ -280,7 +257,47 @@ const reservationsAsOfReplay = ({
   replayed,
 }: AudienceEvaluationContext) => (replayed ? { reservationsAsOf: now } : {});
 
+/**
+ * What a count param holds: a choice, a period, a campaign source, or the
+ * product filter, which isn't a catalogued param. An optional param may be
+ * absent.
+ */
+type CountParamValue =
+  | string
+  | DatePeriod
+  | CampaignEmailSourceType
+  | ReservationProductFilterType
+  | undefined;
+
+/** A count param value as its context fixes it. */
+type FixedCountParamValue =
+  | CountParamValue
+  | DatePeriodBounds
+  | CampaignId
+  | null;
+
+const isDatePeriod = Schema.is(DatePeriodSchema);
 const isCampaignEmailSource = Schema.is(CampaignEmailSourceSchema);
+
+/** One param value fixed by the context, by its param's part. */
+const fixedParam = (
+  param: AudienceParam | undefined,
+  value: CountParamValue,
+  inContext: CountParamsInContext
+) =>
+  param === undefined
+    ? // The product filter isn't a catalogued param; it needs no context.
+      value
+    : Match.value(param).pipe(
+        Match.discriminatorsExhaustive("part")({
+          choice: () => value,
+          // The condition decoded with the param's schema, so the value is
+          // of its part.
+          period: () => (isDatePeriod(value) ? inContext.bounds(value) : value),
+          campaign: () =>
+            isCampaignEmailSource(value) ? inContext.campaign(value) : value,
+        })
+      );
 
 /**
  * Whether a count dates what it counts by when it happened, rather than by
@@ -291,28 +308,37 @@ const datesOccurrences = ({ attribute, params }: AudienceCountCondition) =>
   (attribute === "reservationCount" && params.dateBasis === "booking");
 
 /**
- * The count condition's request in one evaluation context. A reservation
- * count in a replay counts the reservations as they stood then.
+ * The count condition's request in one evaluation context, with each param
+ * fixed by its part in the condition's catalogue entry. A reservation count
+ * in a replay counts the reservations as they stood then.
  */
 export const countFactRequest = <Condition extends AudienceCountCondition>(
+  entry: Pick<AudienceCountAttributeDefinition, "params">,
   condition: Condition,
   context: AudienceEvaluationContext
 ): AudienceCountRequestOf<Condition> => {
-  const { attribute, params } = condition;
-  const { campaign } = params;
   const periodBounds = datesOccurrences(condition)
     ? occurrenceBounds
     : datePeriodBounds;
+  const inContext: CountParamsInContext = {
+    bounds: (period) => periodBounds(period, context),
+    campaign: (source) => concreteCampaignSource(source, context),
+  };
   return {
-    attribute,
-    params,
-    bounds: periodBounds(params.period, context),
-    ...(isCampaignEmailSource(campaign) && {
-      campaign: concreteCampaignSource(campaign, context),
-    }),
+    condition,
+    inContext,
+    fixedParams: Object.fromEntries(
+      Object.entries(condition.params).map(
+        ([key, value]: [string, CountParamValue]) => [
+          key,
+          fixedParam(entry.params[key], value, inContext),
+        ]
+      )
+    ),
     // Occurrence bounds already end by a replayed moment, but a reservation's
     // status may have changed since its booking.
-    ...(attribute === "reservationCount" && reservationsAsOfReplay(context)),
+    ...(condition.attribute === "reservationCount" &&
+      reservationsAsOfReplay(context)),
   };
 };
 
@@ -376,8 +402,8 @@ export const collectAudienceFactRequests = (
     for (const view of views) {
       Match.value(view).pipe(
         Match.discriminatorsExhaustive("kind")({
-          count: ({ condition }) => {
-            const request = countFactRequest(condition, context);
+          count: ({ entry, condition }) => {
+            const request = countFactRequest(entry, condition, context);
             counts.set(audienceFactKey(request), request);
           },
           date: ({ condition }) => {

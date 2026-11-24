@@ -201,7 +201,11 @@ describe("evaluateAudienceFilter", () => {
 
   test("compares the resolved count of the condition's own request", () => {
     const facts = countFacts(
-      countFactRequest(marketingEmailsLastTenDays, context),
+      countFactRequest(
+        audienceAttributeCatalogue.campaignEmailCount,
+        marketingEmailsLastTenDays,
+        context
+      ),
       new Map([[customerId, 1]])
     );
     expect(evaluate(marketingEmailsLastTenDays, { facts })).toBe("noMatch");
@@ -227,7 +231,10 @@ describe("evaluateAudienceFilter", () => {
 
   test("keeps choice params and the product filter as they are", () => {
     const product = { family: "cowork", properties: [] } as const;
-    const { params } = countFactRequest(
+    const {
+      condition: { params },
+    } = countFactRequest(
+      audienceAttributeCatalogue.reservationCount,
       {
         ...reservationsVisitedInMarch,
         params: { ...reservationsVisitedInMarch.params, product },
@@ -335,21 +342,30 @@ describe("collectAudienceFactRequests", () => {
     );
 
     // Periods are fixed to their instants in the context.
-    expect(requests.counts).toEqual([
+    expect(
+      requests.counts.map(({ condition, fixedParams }) => ({
+        attribute: condition.attribute,
+        params: fixedParams,
+      }))
+    ).toEqual([
       {
         attribute: "reservationCount",
-        params: reservationsVisitedInMarch.params,
-        bounds: {
-          startsAtOrAfter: Temporal.Instant.from("2026-02-28T23:00:00Z"),
-          startsBefore: Temporal.Instant.from("2026-03-31T22:00:00Z"),
+        params: {
+          dateBasis: "visit",
+          period: {
+            startsAtOrAfter: Temporal.Instant.from("2026-02-28T23:00:00Z"),
+            startsBefore: Temporal.Instant.from("2026-03-31T22:00:00Z"),
+          },
         },
       },
       {
         attribute: "campaignEmailCount",
-        params: marketingEmailsLastTenDays.params,
-        bounds: {
-          startsAtOrAfter: Temporal.Instant.from("2026-10-05T10:00:00Z"),
-          startsAtOrBefore: now,
+        params: {
+          purpose: "marketing",
+          period: {
+            startsAtOrAfter: Temporal.Instant.from("2026-10-05T10:00:00Z"),
+            startsAtOrBefore: now,
+          },
         },
       },
     ]);
@@ -443,11 +459,9 @@ describe("collectAudienceFactRequests", () => {
       ]
     );
     // Two trigger windows, and one last-ten-days count for every context.
-    expect(requests.counts.map(({ attribute }) => attribute)).toEqual([
-      "reservationCount",
-      "campaignEmailCount",
-      "reservationCount",
-    ]);
+    expect(requests.counts.map(({ condition }) => condition.attribute)).toEqual(
+      ["reservationCount", "campaignEmailCount", "reservationCount"]
+    );
   });
 
   test("fixes a campaign source to the evaluating campaign", () => {
@@ -462,17 +476,21 @@ describe("collectAudienceFactRequests", () => {
       operator: "eq",
       value: 0,
     } as const satisfies AudienceCondition;
+    const entry = audienceAttributeCatalogue.campaignEmailCount;
     const campaignId = campaignIdSchema.make("campaign-1");
     expect(
-      countFactRequest(fromThisCampaign, {
+      countFactRequest(entry, fromThisCampaign, {
         ...context,
         campaignId: Option.some(campaignId),
-      }).campaign
+      }).fixedParams.campaign
     ).toBe(campaignId);
     // Without a campaign of its own, "this campaign" sent nothing.
-    expect(countFactRequest(fromThisCampaign, context).campaign).toBeNull();
+    expect(
+      countFactRequest(entry, fromThisCampaign, context).fixedParams.campaign
+    ).toBeNull();
     expect(
       countFactRequest(
+        entry,
         {
           ...fromThisCampaign,
           params: {
@@ -484,7 +502,7 @@ describe("collectAudienceFactRequests", () => {
           },
         },
         context
-      ).campaign
+      ).fixedParams.campaign
     ).toBe(campaignIdSchema.make("campaign-2"));
   });
 
@@ -504,30 +522,35 @@ describe("collectAudienceFactRequests", () => {
       params: { dateBasis: "booking", period: sinceMarch },
     } as const satisfies AudienceCondition;
     const march = Temporal.Instant.from("2026-02-28T23:00:00Z");
+    const { campaignEmailCount, reservationCount } = audienceAttributeCatalogue;
 
-    expect(countFactRequest(emailsSinceMarch, replayed).bounds).toEqual({
-      startsAtOrAfter: march,
-      startsAtOrBefore: now,
-    });
-    expect(countFactRequest(bookingsSinceMarch, replayed).bounds).toEqual({
-      startsAtOrAfter: march,
-      startsAtOrBefore: now,
-    });
+    expect(
+      countFactRequest(campaignEmailCount, emailsSinceMarch, replayed)
+        .fixedParams.period
+    ).toEqual({ startsAtOrAfter: march, startsAtOrBefore: now });
+    expect(
+      countFactRequest(reservationCount, bookingsSinceMarch, replayed)
+        .fixedParams.period
+    ).toEqual({ startsAtOrAfter: march, startsAtOrBefore: now });
     // The present has no later emails or bookings; visits may lie ahead
     // either way.
-    expect(countFactRequest(emailsSinceMarch, context).bounds).toEqual({
-      startsAtOrAfter: march,
-    });
-    expect(countFactRequest(bookingsSinceMarch, context).bounds).toEqual({
-      startsAtOrAfter: march,
-    });
-    expect(countFactRequest(visitsSinceMarch, replayed).bounds).toEqual({
-      startsAtOrAfter: march,
-    });
+    expect(
+      countFactRequest(campaignEmailCount, emailsSinceMarch, context)
+        .fixedParams.period
+    ).toEqual({ startsAtOrAfter: march });
+    expect(
+      countFactRequest(reservationCount, bookingsSinceMarch, context)
+        .fixedParams.period
+    ).toEqual({ startsAtOrAfter: march });
+    expect(
+      countFactRequest(reservationCount, visitsSinceMarch, replayed).fixedParams
+        .period
+    ).toEqual({ startsAtOrAfter: march });
   });
 
   test("counts and dates reservations as they stood at a replayed moment", () => {
     const replayed = { ...context, replayed: true };
+    const { reservationCount, campaignEmailCount } = audienceAttributeCatalogue;
     const visitsAnyTime = {
       ...reservationsVisitedInMarch,
       params: { dateBasis: "visit", period: { _tag: "AnyTime" } },
@@ -537,26 +560,28 @@ describe("collectAudienceFactRequests", () => {
       params: { dateBasis: "booking", period: { _tag: "AnyTime" } },
     } as const satisfies AudienceCondition;
 
-    expect(countFactRequest(visitsAnyTime, replayed).reservationsAsOf).toEqual(
-      now
-    );
+    expect(
+      countFactRequest(reservationCount, visitsAnyTime, replayed)
+        .reservationsAsOf
+    ).toEqual(now);
     expect(
       dateFactRequest(lastVisitNotRecent, replayed).reservationsAsOf
     ).toEqual(now);
     // Live evaluations count reservations as they are now.
-    expect(countFactRequest(visitsAnyTime, context)).not.toHaveProperty(
-      "reservationsAsOf"
-    );
+    expect(
+      countFactRequest(reservationCount, visitsAnyTime, context)
+    ).not.toHaveProperty("reservationsAsOf");
     expect(dateFactRequest(lastVisitNotRecent, context)).not.toHaveProperty(
       "reservationsAsOf"
     );
     // Booking bounds end by the replayed moment, but statuses change later.
     expect(
-      countFactRequest(bookingsAnyTime, replayed).reservationsAsOf
+      countFactRequest(reservationCount, bookingsAnyTime, replayed)
+        .reservationsAsOf
     ).toEqual(now);
     // Email counts need only their occurrence bounds.
     expect(
-      countFactRequest(marketingEmailsLastTenDays, replayed)
+      countFactRequest(campaignEmailCount, marketingEmailsLastTenDays, replayed)
     ).not.toHaveProperty("reservationsAsOf");
     // A live and a replayed evaluation at the same moment look up apart.
     expect(

@@ -104,14 +104,14 @@ export const audienceConditionOutcome = ({
     Match.value(viewAudienceCondition(condition)).pipe(
       Match.discriminatorsExhaustive("kind")({
         // A candidate without records has no entry, so it counts zero.
-        count: ({ condition: count }) =>
+        count: ({ entry, condition: count }) =>
           outcomeOf(
             compareCount(
               count.operator,
               facts.counts
                 .get(
                   factKeyOf(condition, context, () =>
-                    countFactRequest(count, context)
+                    countFactRequest(entry, count, context)
                   )
                 )
                 ?.get(id) ?? 0,

@@ -8,8 +8,6 @@ import type {
   AudienceAttributeDefinition,
   AudienceConditionIn,
   AudienceConditionOf,
-  CampaignEmailSourceType,
-  DatePeriodType,
   ReservationStay,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Match } from "effect";
@@ -18,9 +16,7 @@ import type {
   AudienceCandidate,
   AudienceDateFacts,
   AudienceDateRequest,
-  ContextualCountParam,
-  CountRequestContext,
-  CountRequestParams,
+  CountParamsInContext,
 } from "../audience-filter";
 import {
   type DatePeriodBounds,
@@ -78,21 +74,18 @@ export type AudienceCountResolver<Params> = {
     resolution: AudienceResolution
   ) => Resolved<ReadonlyMap<DotyposCustomerId, number>>;
   readonly readsVisits: (
-    request: Pick<AudienceCountResolverRequest<Params>, "params" | "bounds">
+    request: Pick<AudienceCountResolverRequest<Params>, "params" | "inContext">
   ) => boolean;
 };
 
 /**
- * A count request as its attribute's resolver reads it: the campaign only
- * when its params name a campaign source.
+ * A count request as its attribute's resolver reads it: the condition's
+ * params as decoded, fixed through `inContext` where the count needs them.
  */
-type AudienceCountResolverRequest<Params> = Omit<
-  CountRequestContext,
-  "campaign"
-> & {
-  readonly params: CountRequestParams<Params>;
-} & {
-  readonly [Param in keyof Params & "campaign"]?: CountRequestContext[Param];
+type AudienceCountResolverRequest<Params> = {
+  readonly params: Params;
+  readonly inContext: CountParamsInContext;
+  readonly reservationsAsOf?: Temporal.Instant;
 };
 
 /**
@@ -157,42 +150,8 @@ type ValueIn<
     : never;
 
 /**
- * Params a request would leave unfixed: a period or campaign source under
- * another name than its {@link ContextualCountParam}, or a `campaign` that
- * isn't a campaign source.
- */
-type MisplacedContextualParam<Params> = {
-  readonly [Param in keyof Params]-?: Param extends ContextualCountParam
-    ? Exclude<Params[Param], undefined> extends ContextualParamValue[Param]
-      ? never
-      : Param
-    : [
-          Extract<Params[Param], ContextualParamValue[ContextualCountParam]>,
-        ] extends [never]
-      ? never
-      : Param;
-}[keyof Params];
-
-/** What each contextual param holds before its request fixes it. */
-type ContextualParamValue = {
-  readonly period: DatePeriodType;
-  readonly campaign: CampaignEmailSourceType;
-};
-
-/**
- * A count attribute's resolver, or `never` when its params put what the
- * context fixes where its request can't fix it.
- */
-type AudienceCountResolverOf<Params> = [
-  MisplacedContextualParam<Params>,
-] extends [never]
-  ? AudienceCountResolver<Params>
-  : never;
-
-/**
  * One resolver per catalogued attribute, of its kind's shape. An attribute
- * added to the catalogue without a resolver fails the typecheck here, as
- * does a count attribute with a misplaced period or campaign source.
+ * added to the catalogue without a resolver fails the typecheck here.
  */
 export type AudienceAttributeResolvers<
   Catalogue extends CatalogueEntries = AudienceAttributeCatalogue,
@@ -200,7 +159,7 @@ export type AudienceAttributeResolvers<
   readonly [Attribute in AttributeOfKindIn<
     Catalogue,
     "count"
-  >]: AudienceCountResolverOf<AudienceCountParams<Attribute, Catalogue>>;
+  >]: AudienceCountResolver<AudienceCountParams<Attribute, Catalogue>>;
 } & {
   readonly [Attribute in AttributeOfKindIn<
     Catalogue,
@@ -228,14 +187,15 @@ const database = CampaignRecipientResolutionError.database;
  */
 const countReservations = (
   {
-    params: { dateBasis, status, stay, payment, product },
-    bounds,
+    params: { dateBasis, period, status, stay, payment, product },
+    inContext,
     reservationsAsOf,
   }: AudienceCountResolverRequest<
     AudienceConditionOf<"reservationCount">["params"]
   >,
   { candidates, scope, visitsIn, visitEndsIn }: AudienceResolution
 ) => {
+  const bounds = inContext.bounds(period);
   const selection = {
     ...(status && { status }),
     ...(product && { product }),
@@ -366,27 +326,29 @@ const visitDates =
 export const audienceAttributeResolvers: AudienceAttributeResolvers = {
   reservationCount: {
     count: countReservations,
-    readsVisits: ({ params: { dateBasis, stay }, bounds }) =>
+    readsVisits: ({ params: { dateBasis, period, stay }, inContext }) =>
       dateBasis === "visitEnd" ||
       (dateBasis === "visit" &&
-        (stay !== undefined || !isUnboundedPeriod(bounds))),
+        (stay !== undefined || !isUnboundedPeriod(inContext.bounds(period)))),
   },
   campaignEmailCount: {
     // The evaluating campaign without one (`null`) has sent nobody anything.
     count: (
-      { params: { purpose }, bounds, campaign },
+      { params: { purpose, period, campaign: source }, inContext },
       { candidates, scope }
-    ) =>
-      campaign === null
+    ) => {
+      const campaign = source && inContext.campaign(source);
+      return campaign === null
         ? Effect.succeed(new Map<DotyposCustomerId, number>())
         : candidates
             .countReceivedCampaignEmails({
               ...(purpose !== "any" && { purpose }),
               ...(campaign && { campaignId: campaign }),
-              dispatched: bounds,
+              dispatched: inContext.bounds(period),
               customers: scopedCustomers(scope),
             })
-            .pipe(Effect.mapError(database)),
+            .pipe(Effect.mapError(database));
+    },
     readsVisits: () => false,
   },
   firstVisit: { dates: visitDates("earliest"), readsVisits: true },

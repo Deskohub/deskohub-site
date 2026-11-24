@@ -7,7 +7,11 @@ import {
   DotyposReservationIdSchema,
 } from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
-import type { ReservationProductFilterType } from "@deskohub/workspace-admin-api";
+import {
+  type AudienceConditionOf,
+  audienceAttributeCatalogue,
+  type ReservationProductFilterType,
+} from "@deskohub/workspace-admin-api";
 import { Cause, Effect, Exit, Layer, Option } from "effect";
 import { TestClock } from "effect/testing";
 import type { ReservationVisit } from "@/features/reservation/backend/reservation-visits.service";
@@ -17,6 +21,7 @@ import {
   type AudienceFacts,
   type AudienceFilter,
   audienceFactKey,
+  countFactRequest,
 } from "../audience-filter";
 import {
   type DatePeriod,
@@ -289,6 +294,24 @@ const reservations = (
   operator: "gt",
   value: 0,
 });
+
+/** The key of a reservation-count request evaluated now. */
+const reservationsKey = (
+  params: AudienceConditionOf<"reservationCount">["params"]
+) =>
+  audienceFactKey(
+    countFactRequest(
+      audienceAttributeCatalogue.reservationCount,
+      {
+        attribute: "reservationCount",
+        _tag: "Condition",
+        params,
+        operator: "gt",
+        value: 0,
+      },
+      audienceEvaluationAt(now)
+    )
+  );
 
 describe("AudienceFactsService periods", () => {
   test("counts emails dispatched in the last N days up to the send time", async () => {
@@ -800,23 +823,12 @@ describe("AudienceFactsService fetched facts", () => {
     expect(fetchedFacts).toEqual(liveFacts);
     expect(
       liveFacts.counts.get(
-        audienceFactKey({
-          attribute: "reservationCount",
-          params: { dateBasis: "visit", period: recent },
-          bounds: datePeriodBounds(recent, audienceEvaluationAt(now)),
-        })
+        reservationsKey({ dateBasis: "visit", period: recent })
       )
     ).toEqual(new Map([[ids[0]!, 2]]));
     expect(
       liveFacts.counts.get(
-        audienceFactKey({
-          attribute: "reservationCount",
-          params: { dateBasis: "booking", period: { _tag: "AnyTime" } },
-          bounds: datePeriodBounds(
-            { _tag: "AnyTime" },
-            audienceEvaluationAt(now)
-          ),
-        })
+        reservationsKey({ dateBasis: "booking", period: { _tag: "AnyTime" } })
       )
     ).toEqual(
       new Map([

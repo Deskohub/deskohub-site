@@ -1,13 +1,14 @@
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import {
+  type AudienceConditionOf,
   audienceAttributeCatalogue,
   campaignSourceParam,
-  choiceParam,
   countAttribute,
   defineAudienceAttributeCatalogue,
   periodParam,
 } from "@deskohub/workspace-admin-api";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
+import type { AudienceCountRequest } from "./audience-filter";
 import {
   type AudienceAttributeResolvers,
   audienceAttributeResolvers,
@@ -64,35 +65,35 @@ type Equal<X, Y> =
     ? true
     : false;
 
-/**
- * Its resolver reads the period as the request's bounds, and no campaign,
- * since it names no campaign source.
- */
-type GiftCardCountRequest = Parameters<
-  (typeof extendedResolvers)["giftCardCount"]["count"]
->[0];
-export type GiftCardCountRequestChecks = [
-  Expect<Equal<keyof GiftCardCountRequest["params"], never>>,
+/** A request pairs each attribute with its own params only. */
+type MismatchedRequest = Omit<AudienceCountRequest, "condition"> & {
+  readonly condition: Omit<
+    AudienceConditionOf<"reservationCount">,
+    "params"
+  > & {
+    readonly params: AudienceConditionOf<"campaignEmailCount">["params"];
+  };
+};
+export type CountRequestPairingChecks = [
   Expect<
-    Equal<keyof GiftCardCountRequest, "bounds" | "reservationsAsOf" | "params">
+    Equal<MismatchedRequest extends AudienceCountRequest ? true : false, false>
   >,
 ];
 
-const countPresentation = {
+/**
+ * A campaign source may take any name: its entry's part decides that the
+ * request fixes it, and its resolver fixes it through `inContext`.
+ */
+export const sourcedEmailCount = countAttribute("sourcedEmailCount", {
   label: "Emails received",
   section: "Reservations",
+  params: { period: periodParam, source: campaignSourceParam },
   editor: {
     lead: [{ text: "emails received" }],
     period: "Emails",
     count: "Email count",
   },
   summary: { verb: "received", noun: { one: "email", other: "emails" } },
-} as const;
-
-/** A campaign source only its request's `campaign` param can fix. */
-const sourcedEmailCount = countAttribute("sourcedEmailCount", {
-  ...countPresentation,
-  params: { period: periodParam, source: campaignSourceParam },
   defaults: {
     params: { period: { _tag: "AnyTime" } },
     operator: "gte",
@@ -100,43 +101,28 @@ const sourcedEmailCount = countAttribute("sourcedEmailCount", {
   },
 });
 
-/** A `campaign` param that isn't a campaign source. */
-const campaignChoiceCount = countAttribute("campaignChoiceCount", {
-  ...countPresentation,
-  params: {
-    period: periodParam,
-    campaign: choiceParam(Schema.Literals(["welcome", "promotion"]), {
-      label: "Campaign",
-      control: "select",
-      options: {
-        welcome: { label: "welcome" },
-        promotion: { label: "promotion" },
-      },
-    }),
-  },
-  defaults: {
-    params: { period: { _tag: "AnyTime" }, campaign: "welcome" },
-    operator: "gte",
-    value: 1,
-  },
+export const sourcedCatalogue = defineAudienceAttributeCatalogue({
+  ...audienceAttributeCatalogue,
+  sourcedEmailCount,
 });
 
-/** Neither gets a resolver its request could feed. */
-export type MisplacedContextualParamChecks = [
-  Expect<
-    Equal<
-      AudienceAttributeResolvers<{
-        readonly sourcedEmailCount: typeof sourcedEmailCount;
-      }>["sourcedEmailCount"],
-      never
-    >
-  >,
-  Expect<
-    Equal<
-      AudienceAttributeResolvers<{
-        readonly campaignChoiceCount: typeof campaignChoiceCount;
-      }>["campaignChoiceCount"],
-      never
-    >
-  >,
-];
+export const sourcedResolvers: AudienceAttributeResolvers<
+  typeof sourcedCatalogue
+> = {
+  ...audienceAttributeResolvers,
+  sourcedEmailCount: {
+    // Counts one email for the fixed campaign, so a test sees which it was.
+    count: ({ params: { source }, inContext }) =>
+      Effect.succeed(
+        new Map([
+          [
+            DotyposCustomerIdSchema.make(
+              String(source && inContext.campaign(source))
+            ),
+            1,
+          ],
+        ])
+      ),
+    readsVisits: () => false,
+  },
+};
