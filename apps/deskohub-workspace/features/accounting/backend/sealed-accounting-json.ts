@@ -108,37 +108,51 @@ interface SealedAccountingRecord<A> {
   readonly schema: Schema.Decoder<A>;
 }
 
+type SealedAccountingJsonService<A, Plaintext> = Effect.Effect<
+  SealedAccountingJson<A, Plaintext>,
+  never,
+  WorkspaceDatabase | AccountingSnapshotKeyService
+>;
+
 /**
  * Stores values of one kind as versionless JSON that PostgreSQL `pgcrypto`
- * encrypts, read beside plaintext columns of the same row. Keys and plaintext
- * reach the database only as sensitive parameters, and the encrypting and
- * decrypting statements run untraced.
+ * encrypts. Keys and plaintext reach the database only as sensitive
+ * parameters, and the encrypting and decrypting statements run untraced.
  */
-export const sealedAccountingJson = <
+export function sealedAccountingJson<A>(
+  record: SealedAccountingRecord<A> & {
+    /** No columns are read beside the ciphertext: opened plaintext is empty. */
+    readonly plaintext: { readonly [column: string]: never };
+  }
+): SealedAccountingJsonService<A, SelectResultFields<Record<never, PgColumn>>>;
+export function sealedAccountingJson<
   A,
   const Plaintext extends Record<string, PgColumn>,
 >(
   record: SealedAccountingRecord<A> & {
-    /**
-     * Columns read beside the ciphertext, in this order. At least one: a
-     * record without any opens through `sealedAccountingJsonWithoutPlaintext`.
-     */
-    readonly plaintext: Plaintext &
-      (keyof Plaintext extends never ? never : unknown);
+    /** Columns read beside the ciphertext, in this order. */
+    readonly plaintext: Plaintext;
   }
-) => makeSealedAccountingJson(record, record.plaintext, Option.fromNullishOr);
+): SealedAccountingJsonService<A, SelectResultFields<Plaintext>>;
+export function sealedAccountingJson<
+  A,
+  const Plaintext extends Record<string, PgColumn>,
+>(record: SealedAccountingRecord<A> & { readonly plaintext: Plaintext }) {
+  // Drizzle leaves a nested selection without columns out of the row.
+  if (Object.keys(record.plaintext).length === 0) {
+    return makeSealedAccountingJson(record, {}, () => Option.some({}));
+  }
+  return makeSealedAccountingJson<A, Plaintext, SelectResultFields<Plaintext>>(
+    record,
+    record.plaintext,
+    (selected) =>
+      selected === undefined ? Option.none() : Option.some(selected)
+  );
+}
 
 /**
- * `sealedAccountingJson` for a record that reads no plaintext columns: its
- * opened plaintext is empty.
- */
-export const sealedAccountingJsonWithoutPlaintext = <A>(
-  record: SealedAccountingRecord<A>
-) => makeSealedAccountingJson(record, {}, () => Option.some({}));
-
-/**
- * Drizzle leaves a nested selection without columns out of the row, so
- * `readPlaintext` receives `undefined` for an empty `plaintext`.
+ * Opens records through `readPlaintext`, which receives `undefined` when the
+ * row holds no plaintext selection.
  */
 const makeSealedAccountingJson = <
   A,
@@ -150,7 +164,7 @@ const makeSealedAccountingJson = <
   readPlaintext: (
     selected: SelectResultFields<Plaintext> | undefined
   ) => Option.Option<P>
-) =>
+): SealedAccountingJsonService<A, P> =>
   Effect.gen(function* () {
     const { db } = yield* WorkspaceDatabase;
     const keys = yield* AccountingSnapshotKeyService;
