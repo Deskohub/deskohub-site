@@ -536,6 +536,8 @@ describe("post-destroy inventory", () => {
         },
       },
       { items: false },
+      { items: {}, warning: null },
+      { items: { global: { warning: null } } },
       { items: { global: { forwardingRules: false } } },
       { items: {}, unreachables: "regions/europe-west4" },
     ];

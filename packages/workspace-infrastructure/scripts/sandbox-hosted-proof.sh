@@ -285,15 +285,16 @@ compute_names() {
     [[ -z "$page_token" ]] || url+="&pageToken=${page_token}"
     body="$(google_get '{"items":{}}' "$url")" || return 1
     jq -se --arg collection "$collection" '
-      def empty_or(warning): warning == null or warning == {code: "NO_RESULTS_ON_PAGE"}
-        or (warning | type == "object" and .code == "NO_RESULTS_ON_PAGE");
+      # A warning, when present at all, must be NO_RESULTS_ON_PAGE.
+      def quiet: (has("warning") | not)
+        or (.warning | type == "object" and .code == "NO_RESULTS_ON_PAGE");
       length == 1 and (.[0] | type == "object"
         and ((has("items") | not) or (.items | type == "object"))
         and ((has("unreachables") | not) or (.unreachables == []))
         and ((has("nextPageToken") | not) or (.nextPageToken | type == "string"))
-        and empty_or(.warning)
+        and quiet
         and all((.items // {})[]; type == "object"
-          and empty_or(.warning)
+          and quiet
           and ((has($collection) | not) or (.[$collection] | type == "array"
             and all(.[]; type == "object" and (.name | type == "string"))))))' \
       >/dev/null 2>&1 <<<"$body" || return 1
