@@ -159,10 +159,15 @@ export const moveEmailEntry = <T>(
   return next;
 };
 
-/** The keys of `T` an object may leave out. */
-type OptionalKey<T> = {
-  [Key in keyof T]-?: object extends Pick<T, Key> ? Key : never;
-}[keyof T];
+/** The keys some member of the union `T` requires. */
+type RequiredKey<T> = T extends unknown
+  ? {
+      [Key in keyof T]-?: object extends Pick<T, Key> ? never : Key;
+    }[keyof T]
+  : never;
+
+/** The keys every member of the union `T` may leave out. */
+type OptionalKey<T> = Exclude<keyof T, RequiredKey<T>>;
 
 /**
  * `object` with `key` set to `value`, or without `key` when `value` is
