@@ -6,12 +6,13 @@ import {
   describe,
   expect,
   mock,
+  spyOn,
   test,
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Effect, Layer, Schema } from "effect";
-import type { ComponentProps, ReactElement, ReactNode } from "react";
+import { type ComponentProps, isValidElement } from "react";
 import type { PreloadedAdvertisedPrice } from "@/features/checkout/advertised-price";
 import { makeOfficePayRouteFixture } from "@/features/checkout/backend/checkout/office-pay-route.test-utils";
 import { getOfficeCheckoutSummary } from "@/features/checkout/checkout-summary-office";
@@ -31,6 +32,7 @@ import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date
 import type { ReservationCheckoutAccount } from "@/features/reservation/reservation-existing-customer";
 import { getOfficeAvailabilityQuery } from "@/features/reservation/workspace-availability";
 import { formatMoney, moneyWithValue } from "@/shared/money/money";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import {
   workspaceUseAction,
@@ -205,27 +207,29 @@ describe("OfficeReservationForm", () => {
   test("loads the month calendar without seat or interval filters and bounds the stay before an unavailable date", async () => {
     const today = decodePlainDate("2026-08-10");
     const requests: URL[] = [];
-    globalThis.fetch = mock((request: RequestInfo | URL) => {
-      const url = new URL(String(request), "https://workspace.example.test");
-      requests.push(url);
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            date: undefined,
-            from: "2026-08-10",
-            to: "2026-09-10",
-            unavailableDates: ["2026-08-12"],
-            reservedDeskWorkstationRequiredDates: [],
-            unavailableCoworkTiers: [],
-            meetingRoomUnavailable: false,
-            officeUnavailable: false,
-            unavailableMonitorOptions: [],
-            notices: [],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      );
-    }) as typeof fetch;
+    spyOn(globalThis, "fetch").mockImplementation(
+      (request: RequestInfo | URL) => {
+        const url = new URL(String(request), "https://workspace.example.test");
+        requests.push(url);
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              date: undefined,
+              from: "2026-08-10",
+              to: "2026-09-10",
+              unavailableDates: ["2026-08-12"],
+              reservedDeskWorkstationRequiredDates: [],
+              unavailableCoworkTiers: [],
+              meetingRoomUnavailable: false,
+              officeUnavailable: false,
+              unavailableMonitorOptions: [],
+              notices: [],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+    );
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -264,12 +268,13 @@ describe("OfficeReservationForm", () => {
 
   test("bounds the stay from page-loaded availability without a client request", () => {
     const today = decodePlainDate("2026-08-10");
-    const fetchCalls = mock((_request: RequestInfo | URL) =>
+    const fetchCalls = spyOn(globalThis, "fetch");
+    fetchCalls.mockClear();
+    fetchCalls.mockImplementation((_request: RequestInfo | URL) =>
       Promise.resolve(
         officeAvailabilityResponse({ from: today, to: "2026-09-10" })
       )
     );
-    globalThis.fetch = fetchCalls as typeof fetch;
     const query = getOfficeAvailabilityQuery(today);
 
     const view = renderOfficeForm({
@@ -495,23 +500,33 @@ describe("OfficeReservationForm", () => {
     const page = await officeReservationPage.Page({
       searchParams: Promise.resolve(searchParams),
     });
-    const requestContent = (
-      page as ReactElement<{
-        children: ReactElement<{
-          searchParams: Promise<typeof searchParams>;
-        }>;
-      }>
-    ).props.children;
-    const renderContent = requestContent.type as (
-      props: typeof requestContent.props
-    ) => Promise<ReactNode>;
-    const content = await renderContent(requestContent.props);
+    if (!isValidElement<{ readonly children?: unknown }>(page)) {
+      throw new Error("Expected the reservation page element");
+    }
+    const requestContent = page.props.children;
+    if (
+      !isValidElement(requestContent) ||
+      !(requestContent.type instanceof Function)
+    ) {
+      throw new Error("Expected the page's request content component");
+    }
+    // The request content is an async server component; resolve it as the server would.
+    const content: unknown = await Reflect.apply(
+      requestContent.type,
+      undefined,
+      [requestContent.props]
+    );
+    if (!isValidElement(content)) {
+      throw new Error("Expected the resolved request content");
+    }
     const view = render(
       <QueryClientProvider client={new QueryClient()}>
         {content}
       </QueryClientProvider>
     );
-    const freshQuote = prices[seats - 1]!.advertisedPrice.quote;
+    const heldSeatsPrice = prices[seats - 1];
+    if (!heldSeatsPrice) throw new Error("Expected the held seats' price");
+    const freshQuote = heldSeatsPrice.advertisedPrice.quote;
     const freshTotal = freshQuote.payment.expectedPrice;
     const total = formatMoney(
       moneyWithValue(freshTotal.value / 2, freshTotal),
@@ -522,7 +537,11 @@ describe("OfficeReservationForm", () => {
       const expectedPrices =
         draft === "different-dates" ? changedPrices : prices;
       await act(async () => fresh.resolve({ data: expectedPrices }));
-      const freshPrice = expectedPrices[expectedSeats - 1]!.advertisedPrice;
+      const expectedSeatsPrice = expectedPrices[expectedSeats - 1];
+      if (!expectedSeatsPrice) {
+        throw new Error("Expected the expected seats' price");
+      }
+      const freshPrice = expectedSeatsPrice.advertisedPrice;
       await waitFor(() =>
         expect(normalizeSpaces(view.container.textContent)).toContain(
           normalizeSpaces(
@@ -530,9 +549,10 @@ describe("OfficeReservationForm", () => {
           )
         )
       );
-      const submit = view.container.querySelector<HTMLButtonElement>(
-        "#reservation-submit"
-      )!;
+      const submit = elementOf(
+        view.container.querySelector("#reservation-submit"),
+        HTMLButtonElement
+      );
       await waitFor(() => expect(submit.disabled).toBe(false));
       fireEvent.click(submit);
       await waitFor(() =>
@@ -608,8 +628,11 @@ describe("OfficeReservationForm", () => {
     fireEvent.click(view.getByRole("button", { name: "Change" }));
     const dayCount = view.getByRole("spinbutton", { name: "Number of days" });
     fireEvent.change(dayCount, { target: { value: "3" } });
+    const changedSeatsPrice = changedPrices[seats - 1];
+    if (!changedSeatsPrice)
+      throw new Error("Expected the changed seats' price");
     const changedTotal =
-      changedPrices[seats - 1]!.advertisedPrice.quote.payment.expectedPrice;
+      changedSeatsPrice.advertisedPrice.quote.payment.expectedPrice;
     await waitFor(() =>
       expect(normalizeSpaces(view.container.textContent)).toContain(
         normalizeSpaces(formatMoney(changedTotal, "en-US"))
@@ -623,7 +646,10 @@ describe("OfficeReservationForm", () => {
       ).toBe(false)
     );
     fireEvent.click(
-      view.container.querySelector<HTMLButtonElement>("#reservation-submit")!
+      elementOf(
+        view.container.querySelector("#reservation-submit"),
+        HTMLButtonElement
+      )
     );
     await waitFor(() =>
       expect(executeAsync).toHaveBeenCalledWith(
@@ -834,9 +860,12 @@ describe("OfficeReservationForm", () => {
       today: startsOn,
     });
     const removeYourself = () =>
-      view.getByRole("button", {
-        name: m.officePeopleRemoveYourself({}, { locale: "en-US" }),
-      }) as HTMLButtonElement;
+      elementOf(
+        view.getByRole("button", {
+          name: m.officePeopleRemoveYourself({}, { locale: "en-US" }),
+        }),
+        HTMLButtonElement
+      );
 
     expect(removeYourself().disabled).toBe(true);
     fireEvent.change(
@@ -852,9 +881,12 @@ describe("OfficeReservationForm", () => {
     );
     fireEvent.click(removeYourself());
 
-    const remaining = view.getByRole("button", {
-      name: m.officePeopleRemove({ email: janaEmail }, { locale: "en-US" }),
-    }) as HTMLButtonElement;
+    const remaining = elementOf(
+      view.getByRole("button", {
+        name: m.officePeopleRemove({ email: janaEmail }, { locale: "en-US" }),
+      }),
+      HTMLButtonElement
+    );
     expect(remaining.disabled).toBe(true);
     fireEvent.click(
       view.getByRole("button", {
@@ -1029,7 +1061,7 @@ describe("OfficeReservationForm", () => {
         email: contactEmail,
         // Edit from Pay restores the people of the held reservation.
         people: { contactAttends: false, invitees: [contactEmail] },
-      } as ComponentProps<typeof OfficeReservationForm>["initialValues"],
+      },
       today: startsOn,
     });
 
@@ -1128,11 +1160,11 @@ describe("OfficeReservationForm", () => {
 
   test("validates an empty start date when its calendar closes", async () => {
     const today = decodePlainDate("2026-08-10");
-    globalThis.fetch = mock(() =>
+    spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(
         officeAvailabilityResponse({ from: "2026-08-10", to: "2026-09-10" })
       )
-    ) as typeof fetch;
+    );
     const view = renderOfficeForm({
       initialValues: officeReservationDefaultValues,
       today,
@@ -1155,7 +1187,7 @@ describe("OfficeReservationForm", () => {
 
   test("keeps a typed unavailable start date out of the form", async () => {
     const today = decodePlainDate("2026-08-10");
-    globalThis.fetch = mock(() =>
+    spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(
         officeAvailabilityResponse({
           from: "2026-08-10",
