@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { Schema } from "effect";
 
 /**
  * Parses a tracked GitHub Actions workflow into typed objects so tests can
@@ -6,85 +7,144 @@ import { readFileSync } from "node:fs";
  * instead of pinned YAML substrings.
  */
 
-export interface WorkflowStep {
-  readonly name?: string;
-  readonly run?: string;
-  readonly uses?: string;
-  readonly id?: string;
-  readonly if?: string;
-  readonly "working-directory"?: string;
-  readonly "continue-on-error"?: boolean;
-  readonly "timeout-minutes"?: number;
-  readonly env?: Record<string, string>;
-  readonly with?: Record<string, string | boolean>;
-  readonly outputs?: Record<string, string>;
-}
+const StringRecord = Schema.Record(Schema.String, Schema.String);
+
+/** Step `env` and `with` values YAML may write unquoted (`fetch-depth: 0`). */
+const StepValueRecord = Schema.Record(
+  Schema.String,
+  Schema.Union([Schema.String, Schema.Number, Schema.Boolean])
+);
+
+/**
+ * A YAML mapping with the keys these contracts read declared and every other
+ * key kept as is, so tests still see the whole document (`strategy`, other
+ * triggers) instead of a decode that silently drops it.
+ */
+const OpenMapping = <const Fields extends Schema.Struct.Fields>(
+  fields: Fields
+) =>
+  Schema.StructWithRest(Schema.Struct(fields), [
+    Schema.Record(Schema.String, Schema.Unknown),
+  ]);
+
+const WorkflowStep = OpenMapping({
+  name: Schema.optionalKey(Schema.String),
+  run: Schema.optionalKey(Schema.String),
+  uses: Schema.optionalKey(Schema.String),
+  id: Schema.optionalKey(Schema.String),
+  if: Schema.optionalKey(Schema.String),
+  "working-directory": Schema.optionalKey(Schema.String),
+  "continue-on-error": Schema.optionalKey(Schema.Boolean),
+  "timeout-minutes": Schema.optionalKey(Schema.Number),
+  env: Schema.optionalKey(StepValueRecord),
+  with: Schema.optionalKey(StepValueRecord),
+  outputs: Schema.optionalKey(StringRecord),
+});
+export type WorkflowStep = typeof WorkflowStep.Type;
 
 /** Cache access a job's token gets (`cache-mode`). */
-type WorkflowCacheMode = "none" | "read" | "write" | "write-only";
+const WorkflowCacheMode = Schema.Literals([
+  "none",
+  "read",
+  "write",
+  "write-only",
+]);
 
-interface WorkflowJob {
-  readonly name?: string;
-  readonly if?: string;
-  readonly needs?: string | readonly string[];
-  readonly concurrency?: {
-    readonly group: string;
-    readonly "cancel-in-progress"?: boolean | string;
-  };
-  readonly outputs?: Record<string, string>;
-  readonly "cache-mode"?: WorkflowCacheMode;
-  readonly "runs-on"?: string;
-  readonly steps?: readonly WorkflowStep[];
-  readonly "timeout-minutes"?: number;
-  readonly permissions?: Record<string, string>;
-  readonly env?: Record<string, string>;
-  readonly services?: Readonly<Record<string, WorkflowService>>;
-}
+const WorkflowConcurrency = Schema.Struct({
+  group: Schema.String,
+  "cancel-in-progress": Schema.optionalKey(
+    Schema.Union([Schema.Boolean, Schema.String])
+  ),
+});
 
-interface WorkflowService {
-  readonly image: string;
-  readonly env?: Record<string, string>;
-  readonly ports?: readonly string[];
-  readonly options?: string;
-}
+const WorkflowService = Schema.Struct({
+  image: Schema.String,
+  env: Schema.optionalKey(StringRecord),
+  ports: Schema.optionalKey(Schema.Array(Schema.String)),
+  options: Schema.optionalKey(Schema.String),
+});
 
-interface WorkflowDispatchInput {
-  readonly default?: boolean | string;
-  readonly description?: string;
-  readonly required?: boolean;
-  readonly type?: string;
-}
+const WorkflowJob = OpenMapping({
+  name: Schema.optionalKey(Schema.String),
+  if: Schema.optionalKey(Schema.String),
+  needs: Schema.optionalKey(
+    Schema.Union([Schema.String, Schema.Array(Schema.String)])
+  ),
+  concurrency: Schema.optionalKey(WorkflowConcurrency),
+  outputs: Schema.optionalKey(StringRecord),
+  "cache-mode": Schema.optionalKey(WorkflowCacheMode),
+  "runs-on": Schema.optionalKey(Schema.String),
+  steps: Schema.optionalKey(Schema.Array(WorkflowStep)),
+  /** Minutes, or an expression such as `${{ inputs.mode == ... }}`. */
+  "timeout-minutes": Schema.optionalKey(
+    Schema.Union([Schema.Number, Schema.String])
+  ),
+  permissions: Schema.optionalKey(StringRecord),
+  env: Schema.optionalKey(StringRecord),
+  services: Schema.optionalKey(Schema.Record(Schema.String, WorkflowService)),
+});
 
-export interface WorkflowDoc {
-  readonly "cache-mode"?: WorkflowCacheMode;
-  readonly concurrency?: WorkflowJob["concurrency"];
-  readonly jobs: Readonly<Record<string, WorkflowJob>>;
-  readonly on?: Readonly<{
-    readonly schedule?: readonly { readonly cron: string }[];
-    readonly workflow_dispatch?: null | {
-      readonly inputs?: Readonly<Record<string, WorkflowDispatchInput>>;
-    };
-  }>;
-  readonly permissions?: Record<string, string>;
-}
+const WorkflowDispatchInput = Schema.Struct({
+  default: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.String])),
+  description: Schema.optionalKey(Schema.String),
+  required: Schema.optionalKey(Schema.Boolean),
+  type: Schema.optionalKey(Schema.String),
+});
+
+const WorkflowDoc = OpenMapping({
+  "cache-mode": Schema.optionalKey(WorkflowCacheMode),
+  concurrency: Schema.optionalKey(WorkflowConcurrency),
+  jobs: Schema.Record(Schema.String, WorkflowJob),
+  on: Schema.optionalKey(
+    OpenMapping({
+      schedule: Schema.optionalKey(
+        Schema.Array(Schema.Struct({ cron: Schema.String }))
+      ),
+      workflow_dispatch: Schema.optionalKey(
+        Schema.NullOr(
+          Schema.Struct({
+            inputs: Schema.optionalKey(
+              Schema.Record(Schema.String, WorkflowDispatchInput)
+            ),
+          })
+        )
+      ),
+    })
+  ),
+  permissions: Schema.optionalKey(StringRecord),
+});
+export type WorkflowDoc = typeof WorkflowDoc.Type;
+
+const decodeWorkflow = Schema.decodeUnknownSync(WorkflowDoc);
 
 export const parseWorkflow = (path: string): WorkflowDoc =>
-  Bun.YAML.parse(readFileSync(path, "utf8")) as WorkflowDoc;
+  decodeWorkflow(Bun.YAML.parse(readFileSync(path, "utf8")));
 
 /** A tracked composite action (`.github/actions/<name>/action.yml`). */
-export interface CompositeActionDoc {
-  readonly inputs?: Readonly<
-    Record<string, { readonly required?: boolean; readonly default?: string }>
-  >;
-  readonly outputs?: Readonly<Record<string, { readonly value: string }>>;
-  readonly runs: {
-    readonly using: string;
-    readonly steps: readonly WorkflowStep[];
-  };
-}
+const CompositeActionDoc = OpenMapping({
+  inputs: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        required: Schema.optionalKey(Schema.Boolean),
+        default: Schema.optionalKey(Schema.String),
+      })
+    )
+  ),
+  outputs: Schema.optionalKey(
+    Schema.Record(Schema.String, Schema.Struct({ value: Schema.String }))
+  ),
+  runs: OpenMapping({
+    using: Schema.String,
+    steps: Schema.Array(WorkflowStep),
+  }),
+});
+export type CompositeActionDoc = typeof CompositeActionDoc.Type;
+
+const decodeCompositeAction = Schema.decodeUnknownSync(CompositeActionDoc);
 
 export const parseCompositeAction = (path: string): CompositeActionDoc =>
-  Bun.YAML.parse(readFileSync(path, "utf8")) as CompositeActionDoc;
+  decodeCompositeAction(Bun.YAML.parse(readFileSync(path, "utf8")));
 
 export const workflowJobs = (doc: WorkflowDoc): readonly string[] =>
   Object.keys(doc.jobs);
@@ -162,8 +222,10 @@ const tokenizeExpression = (
       tokens.push({ kind: "operator", value: operator });
     } else if (text !== undefined) {
       tokens.push({ kind: "string", value: text.replaceAll("''", "'") });
+    } else if (path !== undefined) {
+      tokens.push({ kind: "path", value: path });
     } else {
-      tokens.push({ kind: "path", value: path as string });
+      throw new Error(`unsupported workflow expression syntax: ${source}`);
     }
   }
   return tokens;
@@ -276,7 +338,7 @@ export const evaluateWorkflowValue = (
   if (expression === null) {
     throw new Error(`expected a single workflow expression: ${value}`);
   }
-  const result = evaluateExpression(expression[1] as string, context);
+  const result = evaluateExpression(expression[1] ?? "", context);
   if (result.kind === "null") {
     return "";
   }

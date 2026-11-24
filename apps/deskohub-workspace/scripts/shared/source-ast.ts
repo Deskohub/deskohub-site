@@ -40,10 +40,8 @@ export const parseTrackedSource = (filePath: string): ParsedSource => {
 
 type NodeCandidate = { readonly type?: unknown };
 
-const isNode = (value: NodeCandidate): value is { readonly type: string } =>
-  isString(value.type);
-
-const asNode = (value: NodeCandidate): AnyNode => value as AnyNode;
+/** A child object is a syntax node when it carries a string `type`. */
+const isNode = (value: NodeCandidate): value is AnyNode => isString(value.type);
 
 /** Every syntax node in the tree, parents before children. */
 export const nodesOf = (root: AnyNode): readonly AnyNode[] => {
@@ -56,11 +54,11 @@ export const nodesOf = (root: AnyNode): readonly AnyNode[] => {
       if (Array.isArray(value)) {
         for (const entry of value) {
           if (entry !== null && entry !== undefined && isNode(entry)) {
-            visit(asNode(entry));
+            visit(entry);
           }
         }
       } else if (isNode(value)) {
-        visit(asNode(value));
+        visit(value);
       }
     }
   };
@@ -71,7 +69,7 @@ export const nodesOf = (root: AnyNode): readonly AnyNode[] => {
 type RangedNode = AnyNode & { readonly range: [number, number] };
 
 const hasRange = (node: AnyNode): node is RangedNode =>
-  Array.isArray((node as RangedNode).range);
+  Array.isArray(node.range);
 
 /** True when `inner` sits lexically inside `outer` (range containment). */
 export const containsNode = (outer: AnyNode, inner: AnyNode): boolean =>

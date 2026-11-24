@@ -18,8 +18,13 @@
  * without running its listeners, so the command would outlive it.
  */
 
-import { spawn as spawnNodeProcess } from "node:child_process";
-import type { Readable } from "node:stream";
+import {
+  type ChildProcessByStdio,
+  type SpawnOptionsWithStdioTuple,
+  type StdioPipe,
+  spawn as spawnNodeProcess,
+} from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 
 export interface CommandOptions {
   readonly cwd?: string;
@@ -126,16 +131,38 @@ const spawnWithBun = (request: SpawnRequest): SpawnedCommand => {
   };
 };
 
+type CallerEnvironmentSpawnOptions = Omit<
+  SpawnOptionsWithStdioTuple<StdioPipe, StdioPipe, StdioPipe>,
+  "env"
+> & { readonly env?: Readonly<Record<string, string | undefined>> };
+
+/**
+ * Node's spawn, taking the caller's environment as is. Next's global types
+ * make `NODE_ENV` required on `ProcessEnv` (their own TODO says it should be
+ * optional), yet, as with Bun.spawn, the child gets exactly the caller's
+ * environment, which may leave it unset. `ProcessEnv` is a subtype of the
+ * caller's record, so Node's spawn fits this method signature.
+ */
+type CallerEnvironmentSpawner = {
+  spawn(
+    command: string,
+    args: readonly string[],
+    options: CallerEnvironmentSpawnOptions
+  ): ChildProcessByStdio<Writable, Readable, Readable>;
+};
+
+const nodeChildProcess: CallerEnvironmentSpawner = {
+  spawn: spawnNodeProcess,
+};
+
 const spawnWithNode = async (
   request: SpawnRequest
 ): Promise<SpawnedCommand> => {
   const [executable = "", ...args] = request.command;
-  const child = spawnNodeProcess(executable, args, {
+  const child = nodeChildProcess.spawn(executable, args, {
     cwd: request.cwd,
     detached: request.detached,
-    // Next's global types require NODE_ENV on ProcessEnv. As with Bun.spawn,
-    // the child gets exactly the caller's environment.
-    env: request.env as NodeJS.ProcessEnv | undefined,
+    env: request.env,
     // stdin is always a pipe, ended at once when there is no input, so the
     // spawn overload types every stream as present.
     stdio: ["pipe", "pipe", "pipe"],
