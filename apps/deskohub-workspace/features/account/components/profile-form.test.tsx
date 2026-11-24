@@ -703,25 +703,27 @@ describe("ProfileForm", () => {
         "You have unsaved profile changes. Leave this page?"
       );
 
-      let resolveUpdate!: (result: ActionResult) => void;
-      const pendingUpdate = new Promise<ActionResult>((resolve) => {
-        resolveUpdate = resolve;
-      });
-      updateCustomerProfile.mockImplementationOnce(() => pendingUpdate);
+      const pendingUpdate = Promise.withResolvers<ActionResult>();
+      updateCustomerProfile.mockImplementationOnce(() => pendingUpdate.promise);
       await act(async () => {
         fireEvent.submit(form);
       });
 
       expect(completeCustomerProfile).toHaveBeenCalledTimes(1);
       expect(updateCustomerProfile).toHaveBeenCalledTimes(1);
-      // The completion stays reported until the update settles.
+      // The completion stays reported until the update settles, while the
+      // pending update holds the submit button.
       expect(
         view.container.querySelector("#account-profile-feedback p")
       ).not.toBeNull();
+      expect(
+        view.container.querySelector<HTMLButtonElement>("button[type='submit']")
+          ?.disabled
+      ).toBe(true);
 
       await act(async () => {
-        resolveUpdate({ data: { status: "updated" } });
-        await pendingUpdate;
+        pendingUpdate.resolve({ data: { status: "updated" } });
+        await pendingUpdate.promise;
       });
 
       expect(workspaceRouterRefresh).toHaveBeenCalledTimes(1);
