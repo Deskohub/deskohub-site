@@ -32,7 +32,7 @@ const cloudinary = {
 const originalFetch = globalThis.fetch;
 const rejectingFetch: typeof globalThis.fetch = Object.assign(
   async (input) => {
-    requestedTags.push(String(input).split("/").at(-1)!.replace(".json", ""));
+    requestedTags.push(String(input).replace(/^.*\//, "").replace(".json", ""));
     tagListAttempts += 1;
     return new Response(
       tagListStatus === 200 ? JSON.stringify({ resources }) : providerMessage,

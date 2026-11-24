@@ -8,6 +8,7 @@ import {
 } from "@/shared/testing/workspace-component-test-env";
 
 registerWorkspaceComponentTestEnv();
+const environmentMatchMedia = window.matchMedia.bind(window);
 
 const { customerMcpServerUrl } = await import(
   "@/features/account/customer-agent-routes"
@@ -25,10 +26,11 @@ beforeEach(() => {
   phone = false;
   writeText.mockReset();
   writeText.mockImplementation(async () => {});
-  window.matchMedia = ((query: string) => ({
-    matches: phone,
-    media: query,
-  })) as typeof window.matchMedia;
+  window.matchMedia = (query) => {
+    const mediaQuery = environmentMatchMedia(query);
+    Object.defineProperty(mediaQuery, "matches", { value: phone });
+    return mediaQuery;
+  };
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText },

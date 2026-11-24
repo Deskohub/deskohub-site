@@ -87,13 +87,12 @@ describe.skipIf(!database)("email publication on disposable Postgres", () => {
   test("publishes an uploaded image and prunes only unused unfinished definitions", async () => {
     const email = await create(withImage(uploaded));
     const version = await publish(email.id);
-    expect(version.document.values.map(({ name }) => name as string)).toEqual([
-      "display_name",
-      "visits",
-    ]);
-    expect(version.requiredValueNames as readonly string[]).toEqual([
-      "display_name",
-    ]);
+    const valueNames: readonly string[] = version.document.values.map(
+      ({ name }) => name
+    );
+    const requiredValueNames: readonly string[] = version.requiredValueNames;
+    expect(valueNames).toEqual(["display_name", "visits"]);
+    expect(requiredValueNames).toEqual(["display_name"]);
   });
 
   test("refuses images that aren't editor uploads, even after saving them in a draft", async () => {

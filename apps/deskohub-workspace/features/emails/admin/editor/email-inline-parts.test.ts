@@ -243,8 +243,11 @@ const random = (seed: number) => () => {
 };
 
 const randomPart = (next: () => number): EmailDraftInlinePart => {
-  const pick = <T>(values: readonly T[]): T =>
-    values[Math.floor(next() * values.length)] as T;
+  const pick = <T>(values: readonly T[]): T => {
+    const value = values[Math.floor(next() * values.length)];
+    if (value === undefined) throw new Error("There is no value to pick.");
+    return value;
+  };
   const marks = {
     ...pick([{}, { bold: true }, { bold: false }]),
     ...pick([{}, { italic: true }, { italic: false }]),

@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { languageNames } from "@/features/i18n/language-labels";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -195,9 +196,10 @@ test("offers optional-field toggles when a block has a display condition and for
   await waitFor(() => expect(renderer.requests).toHaveLength(1));
   expect(renderer.requests[0]?.omittedFields).toBeUndefined();
 
-  const toggle = view.getByRole("checkbox", {
-    name: "pass.deskLabel",
-  }) as HTMLInputElement;
+  const toggle = elementOf(
+    view.getByRole("checkbox", { name: "pass.deskLabel" }),
+    HTMLInputElement
+  );
   expect(toggle.checked).toBe(true);
 
   await act(async () => {

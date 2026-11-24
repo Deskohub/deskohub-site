@@ -3,7 +3,11 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Schema } from "effect";
 import { isValidElement, type ReactNode } from "react";
 import { renderToString } from "react-dom/server";
-import { getAdvertisedProductItem } from "@/features/checkout/advertised-price";
+import {
+  type AdvertisedPriceRequest,
+  getAdvertisedProductItem,
+  type PreloadedAdvertisedPrice,
+} from "@/features/checkout/advertised-price";
 import {
   buildCoworkCheckoutSummary,
   buildCoworkReservationQuote,
@@ -14,6 +18,7 @@ import { discountIdSchema } from "@/features/discounts/contracts";
 import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import type { HeldEntryPack } from "@/features/passes/backend/held-entry-packs";
+import { advertiseCowork } from "@/features/reservation/advertised-price.test-utils";
 import { recordReservationPagePreloads } from "@/features/reservation/backend/reservation-page-preloads.service.mock";
 import {
   type NormalizedCoworkReservationOrder,
@@ -24,6 +29,7 @@ import {
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import type { CustomerLastReservationForKind } from "@/features/reservation/reservation-existing-customer";
+import { coworkReservationKind } from "@/features/reservation/reservation-kind";
 import { getCoworkAvailabilityQueries } from "@/features/reservation/workspace-availability";
 import { Button } from "@/shared/components/ui/button";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -62,14 +68,21 @@ const { CoworkOfferReplaced, coworkReservationPage } = await import(
   "./cowork-reservation-page"
 );
 
-// Each request preloads, without a price the structured data could use.
-const loadAdvertisedPrices = mock((requests: ReadonlyArray<unknown>) =>
-  Effect.succeed(requests.map((request) => ({ request })))
+// Each request preloads at the price the server advertises for it.
+const loadAdvertisedPrices = mock(
+  (
+    requests: ReadonlyArray<AdvertisedPriceRequest>
+  ): Effect.Effect<ReadonlyArray<PreloadedAdvertisedPrice>> =>
+    Effect.succeed(
+      requests.flatMap(({ reservation, ...request }) =>
+        reservation.kind === coworkReservationKind
+          ? [advertiseCowork({ ...request, reservation })]
+          : []
+      )
+    )
 );
 const recordEveryPricePreload = () =>
-  recordReservationPagePreloads({
-    advertisedPrices: (requests) => loadAdvertisedPrices(requests) as never,
-  });
+  recordReservationPagePreloads({ advertisedPrices: loadAdvertisedPrices });
 let preloads = recordEveryPricePreload();
 
 type CoworkPageRequest = Parameters<
@@ -648,7 +661,7 @@ test("offers the restart state for a legacy basic reservation in en-US", async (
     entryTier: "basic",
     coffee: false,
     date: "2099-08-01",
-  }) as NormalizedCoworkReservationOrder;
+  });
 
   const content = await loadCoworkReservationContent({
     locale: "en-US",
@@ -681,7 +694,7 @@ test("restores a signed current-tier open-space reservation into the form", asyn
     entryTier: "open-space",
     coffee: true,
     date: "2099-08-01",
-  }) as NormalizedCoworkReservationOrder;
+  });
 
   const form = await renderCoworkReservationForm({
     locale: "en-US",
@@ -714,7 +727,7 @@ test("reopens the cowork selection edited after returning from Pay with the rest
     coffee: true,
     monitorOption: "2x27-qhd",
     date: "2099-08-01",
-  }) as NormalizedCoworkReservationOrder;
+  });
 
   const form = await renderCoworkReservationForm({
     locale: "en-US",
@@ -755,7 +768,7 @@ test("restores a signed current-tier reserved-desk reservation into the form", a
     coffee: true,
     monitorOption: "2x27-qhd",
     date: "2099-08-01",
-  }) as NormalizedCoworkReservationOrder;
+  });
 
   const form = await renderCoworkReservationForm({
     locale: "en-US",

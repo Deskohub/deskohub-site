@@ -12,6 +12,7 @@ import { testEmailAddress } from "@deskohub/test-email";
 import type { ContactFormState } from "@/features/contact/actions/contact";
 import type { submitContactForm } from "@/features/contact/actions/submit-contact";
 import { m } from "@/features/i18n";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -83,12 +84,19 @@ describe("ContactForm", () => {
       ).toBe("true")
     );
 
-    for (const [label, value] of [
-      ["Name", "Grace Hopper"],
-      ["Email", graceEmail],
-      ["Message", "Please contact me about a meeting room."],
-    ]) {
-      const field = view.getByLabelText(label) as HTMLInputElement;
+    for (const [label, value, fieldType] of [
+      ["Name", "Grace Hopper", HTMLInputElement],
+      ["Email", graceEmail, HTMLInputElement],
+      [
+        "Message",
+        "Please contact me about a meeting room.",
+        HTMLTextAreaElement,
+      ],
+    ] as const) {
+      const field = elementOf<HTMLInputElement | HTMLTextAreaElement>(
+        view.getByLabelText(label),
+        fieldType
+      );
       fireEvent.change(field, { target: { value } });
       expect(field.value).toBe(value);
     }
@@ -122,7 +130,9 @@ describe("ContactForm", () => {
       "Please contact me about a meeting room."
     );
     await waitFor(() =>
-      expect((view.getByLabelText("Name") as HTMLInputElement).value).toBe("")
+      expect(
+        elementOf(view.getByLabelText("Name"), HTMLInputElement).value
+      ).toBe("")
     );
     expect(view.getByText("Sent")).toBeTruthy();
   });
@@ -131,7 +141,7 @@ describe("ContactForm", () => {
     contactSearchParams = "name=Query+Prefill";
     const { ContactForm } = await import("./contact-form");
     const view = render(<ContactForm locale="en-US" />);
-    const nameInput = view.getByLabelText("Name") as HTMLInputElement;
+    const nameInput = elementOf(view.getByLabelText("Name"), HTMLInputElement);
 
     await waitFor(() => expect(nameInput.value).toBe("Query Prefill"));
     fireEvent.change(nameInput, { target: { value: "X" } });
@@ -139,7 +149,9 @@ describe("ContactForm", () => {
     view.rerender(<ContactForm locale="en-US" />);
 
     await waitFor(() =>
-      expect((view.getByLabelText("Name") as HTMLInputElement).value).toBe("X")
+      expect(
+        elementOf(view.getByLabelText("Name"), HTMLInputElement).value
+      ).toBe("X")
     );
   });
 
@@ -167,10 +179,9 @@ describe("ContactForm", () => {
     ).toBeTruthy();
     expect(calls).toHaveLength(0);
     expect(
-      (
-        view.getByLabelText(
-          m.contactNameLabel({}, { locale })
-        ) as HTMLInputElement
+      elementOf(
+        view.getByLabelText(m.contactNameLabel({}, { locale })),
+        HTMLInputElement
       ).value
     ).toBe(" A ");
   });
@@ -196,7 +207,9 @@ describe("ContactForm", () => {
     expect(calls[0]?.get("name")).toBe("Ada Lovelace");
     expect(calls[0]?.get("locale")).toBe("en-US");
     await waitFor(() =>
-      expect((view.getByLabelText("Name") as HTMLInputElement).value).toBe("")
+      expect(
+        elementOf(view.getByLabelText("Name"), HTMLInputElement).value
+      ).toBe("")
     );
     await waitFor(() =>
       expect(
@@ -264,16 +277,16 @@ describe("ContactForm", () => {
 
     await waitFor(() =>
       expect(
-        (
-          view.getByLabelText(
-            m.contactNameLabel({}, { locale })
-          ) as HTMLInputElement
+        elementOf(
+          view.getByLabelText(m.contactNameLabel({}, { locale })),
+          HTMLInputElement
         ).value
       ).toBe(state.values?.name)
     );
-    const nameInput = view.getByLabelText(
-      m.contactNameLabel({}, { locale })
-    ) as HTMLInputElement;
+    const nameInput = elementOf(
+      view.getByLabelText(m.contactNameLabel({}, { locale })),
+      HTMLInputElement
+    );
     expect(nameInput.getAttribute("aria-invalid")).toBe("true");
     expect(nameInput.getAttribute("aria-describedby")).toBe("name-error");
     expect(view.getByText(nameError).getAttribute("role")).toBe("alert");
@@ -310,7 +323,7 @@ describe("ContactForm", () => {
         view.getByText(m.contactEmailSendError({}, { locale: "en-US" }))
       ).toBeTruthy()
     );
-    expect((view.getByLabelText("Name") as HTMLInputElement).value).toBe(
+    expect(elementOf(view.getByLabelText("Name"), HTMLInputElement).value).toBe(
       "Edited Name"
     );
   });

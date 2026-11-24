@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { FormProvider, type UseFormReturn, useForm } from "react-hook-form";
 import { m } from "@/features/administration/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -367,10 +368,9 @@ test("reorders and deletes values", async () => {
   const names = () => values()?.map((definition) => definition.name);
   const button = (label: string) => view.getByRole("button", { name: label });
   expect(
-    (
-      button(
-        m.emailsEditorValuesMoveUp({ name: "first" }, { locale })
-      ) as HTMLButtonElement
+    elementOf(
+      button(m.emailsEditorValuesMoveUp({ name: "first" }, { locale })),
+      HTMLButtonElement
     ).disabled
   ).toBe(true);
   await act(async () => {
@@ -489,9 +489,12 @@ test("edits a moved value at its new place and follows a host reset", async () =
       })
     );
   });
-  const firstName = definitionAt(1).getByLabelText(
-    m.emailsEditorValuesNameLabel({}, { locale })
-  ) as HTMLInputElement;
+  const firstName = elementOf(
+    definitionAt(1).getByLabelText(
+      m.emailsEditorValuesNameLabel({}, { locale })
+    ),
+    HTMLInputElement
+  );
   expect(firstName.value).toBe("first");
   await type(firstName, "renamed");
   expect(values()?.map((definition) => definition.name)).toEqual([
@@ -508,12 +511,16 @@ test("edits a moved value at its new place and follows a host reset", async () =
   });
   expect(view.getAllByRole("listitem")).toHaveLength(1);
   expect(
-    (byId(emailEditorFieldIds.valueSetting(0, "name")) as HTMLInputElement)
-      .value
+    elementOf(
+      byId(emailEditorFieldIds.valueSetting(0, "name")),
+      HTMLInputElement
+    ).value
   ).toBe("restored");
   expect(
-    (byId(emailEditorFieldIds.valueSetting(0, "validDays")) as HTMLInputElement)
-      .value
+    elementOf(
+      byId(emailEditorFieldIds.valueSetting(0, "validDays")),
+      HTMLInputElement
+    ).value
   ).toBe("3");
 });
 

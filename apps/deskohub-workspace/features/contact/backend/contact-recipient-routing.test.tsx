@@ -2,7 +2,7 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { resendSimulatorAddress, testEmailAddress } from "@deskohub/test-email";
-import { ConfigProvider, Effect, Layer, Logger } from "effect";
+import { ConfigProvider, Effect, Layer, Logger, Schema } from "effect";
 import * as envModule from "@/env";
 import { m } from "@/features/i18n";
 import { WorkspaceEmailLayer } from "@/shared/backend/config/email.config";
@@ -50,10 +50,14 @@ beforeEach(() => {
   resendPayloads.length = 0;
 });
 
+const decodeConsoleEmailFacts = Schema.decodeUnknownSync(
+  Schema.Struct({ to: Schema.Array(Schema.String) })
+);
+
 const consoleRecipients = (records: unknown[][]) =>
   records
     .filter(([message]) => message === "Console Email Provider - Sending Email")
-    .map(([, facts]) => (facts as { readonly to: readonly string[] }).to);
+    .map(([, facts]) => decodeConsoleEmailFacts(facts).to);
 
 const submit = (email: string) => {
   const consoleLogs: unknown[][] = [];
