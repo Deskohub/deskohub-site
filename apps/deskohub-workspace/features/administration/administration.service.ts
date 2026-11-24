@@ -1561,20 +1561,18 @@ export class AdministrationService extends Context.Service<
        * the restore plans it. An unreadable invoice or a failed read issues
        * none, so the preview promises none.
        */
-      const isInvoiceReissuedOnRestore = (reservationId: string) =>
-        reservationInvoices
-          .planRestoredInvoice({
-            reservationId: reservationId as WorkspaceReservationId,
-          })
-          .pipe(
-            Effect.map((plan) => plan.kind === "reissue"),
-            Effect.catch((cause) =>
-              Effect.logWarning(
-                "The restore preview could not read the reservation's cancelled invoice.",
-                cause
-              ).pipe(Effect.as(false))
-            )
-          );
+      const isInvoiceReissuedOnRestore = (
+        reservationId: WorkspaceReservationId
+      ) =>
+        reservationInvoices.planRestoredInvoice({ reservationId }).pipe(
+          Effect.map((plan) => plan.kind === "reissue"),
+          Effect.catch((cause) =>
+            Effect.logWarning(
+              "The restore preview could not read the reservation's cancelled invoice.",
+              cause
+            ).pipe(Effect.as(false))
+          )
+        );
 
       const loadLiveReservation = Effect.fn(
         "AdministrationService.loadLiveReservation"
@@ -2673,7 +2671,7 @@ export class AdministrationService extends Context.Service<
                         )
                       )
                       .pipe(Effect.flatMap(StoredReservationDetails.decodeRows))
-                  : Effect.succeed([] as readonly SafeReservationRow[]),
+                  : Effect.succeed<readonly SafeReservationRow[]>([]),
               tables: loadBookingTables(),
             },
             { concurrency: 3 }

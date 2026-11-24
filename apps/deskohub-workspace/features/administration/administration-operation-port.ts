@@ -37,6 +37,20 @@ export type OperationResults<
 };
 
 /**
+ * What the port answers per operation: the handler's result, or, for a ledger
+ * operation, the first result the ledger replays, which only its contract
+ * output describes.
+ */
+export type OperationPortResults<
+  Ops extends Operations,
+  Results extends OperationResults<Ops> = OperationResults<Ops>,
+> = {
+  readonly [Name in keyof Ops]:
+    | Results[Name]
+    | OperationOutput<Ops[Name & LedgerOperationName<Ops>]>;
+};
+
+/**
  * One handler per operation of a group; a missing one fails the typecheck.
  * A handler may read who acts, for provenance.
  */
@@ -175,7 +189,7 @@ export interface AdministrationOperationPort<
     name: Name,
     input: OperationInput<Ops[Name]>
   ) => Effect.Effect<
-    Results[Name],
+    OperationPortResults<Ops, Results>[Name],
     AdministrationOperationError,
     CurrentAdministrator | R
   >;
@@ -191,6 +205,18 @@ export type AdministratorGrantReadFailure = Effect.Error<
  * group's `toOperationError` maps each domain failure to its port category
  * with a stable code, and passes port errors through unchanged.
  */
+/**
+ * What the port needs of each operation: an input schema that decodes without
+ * services, and a literal ledger flag, so `LedgerOperationName` names exactly
+ * the operations whose flag is `true`.
+ */
+type PortableOperations<Ops extends Operations> = {
+  readonly [Name in keyof Ops]: {
+    readonly input: Schema.Decoder<OperationDecodedInput<Ops[Name]>>;
+    readonly ledger: boolean extends Ops[Name]["ledger"] ? never : boolean;
+  };
+};
+
 export const makeAdministrationOperationPort = <
   Ops extends Operations,
   Cause,
@@ -206,7 +232,7 @@ export const makeAdministrationOperationPort = <
 }: {
   /** Names the port's spans, as `<group>.invoke`. */
   readonly group: string;
-  readonly operations: Ops;
+  readonly operations: Ops & PortableOperations<Ops>;
   readonly handlers: OperationHandlers<Ops, Cause, R, Results>;
   /** The adapter's ledger for the group's ledger operations. */
   readonly ledger: Context.Key<Ledger, OperationLedger<Ops>>;
@@ -239,33 +265,39 @@ export const makeAdministrationOperationPort = <
     const invoke = <Name extends keyof Ops & string>(
       name: Name,
       input: OperationInput<Ops[Name]>
-    ) => {
-      const operation: Ops[Name] = operations[name];
+    ): Effect.Effect<
+      OperationPortResults<Ops, Results>[Name],
+      AdministrationOperationError,
+      CurrentAdministrator | R | Ledger
+    > => {
+      const operation = operations[name];
       const handle: OperationHandlers<Ops, Cause, R, Results>[Name] =
         handlers[name];
       return authorize.pipe(
-        Effect.andThen(
-          // An operation's input schema decodes without services.
-          decodeOperationInput(
-            operation.input as Schema.Decoder<OperationDecodedInput<Ops[Name]>>,
-            input
-          )
-        ),
+        Effect.andThen(decodeOperationInput(operation.input, input)),
         Effect.flatMap((decoded) => {
           const applied = handle(decoded).pipe(
             Effect.mapError(toOperationError)
           );
-          return operation.ledger
-            ? Effect.flatMap(
-                ledger,
-                (requests) =>
-                  // The registry pairs a ledger operation's name with its
-                  // input, which a generic name can't express.
-                  requests.applyOnce({
-                    operation: name,
-                    input: decoded,
-                    apply: applied,
-                  } as never) as typeof applied
+          const entry = { operation: name, input: decoded, apply: applied };
+          type LedgerName = Name & LedgerOperationName<Ops>;
+          // The registry's literal ledger flag is what makes the entry's name a
+          // ledger operation's; the entry pairs it with that operation's
+          // decoded input and handler.
+          const isLedgerEntry = (
+            candidate: typeof entry
+          ): candidate is typeof entry &
+            OperationLedgerEntry<
+              Ops,
+              LedgerName,
+              AdministrationOperationError,
+              R
+            > => operations[candidate.operation].ledger;
+          return isLedgerEntry(entry)
+            ? Effect.flatMap(ledger, (requests) =>
+                requests.applyOnce<LedgerName, AdministrationOperationError, R>(
+                  entry
+                )
               )
             : applied;
         }),
@@ -273,11 +305,7 @@ export const makeAdministrationOperationPort = <
         Effect.withSpan(`${group}.invoke`, {
           attributes: { operation: name },
         })
-      ) as Effect.Effect<
-        Results[Name],
-        AdministrationOperationError,
-        CurrentAdministrator | R | Ledger
-      >;
+      );
     };
 
     return { invoke } satisfies AdministrationOperationPort<

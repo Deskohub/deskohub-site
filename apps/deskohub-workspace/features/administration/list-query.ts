@@ -189,9 +189,8 @@ export function defineAdministrationListQuery<
       exportHref: (query: Query) =>
         getHrefWithSearchParams(exportPath, getValues(query)),
       parseExport: (searchParams: SearchParamsRecord) => {
-        const { page: _, ...input } = parse(searchParams) as Query & {
-          readonly page?: number;
-        };
+        const { page: _, ...input }: Query & { readonly page?: unknown } =
+          parse(searchParams);
         return input;
       },
     }),

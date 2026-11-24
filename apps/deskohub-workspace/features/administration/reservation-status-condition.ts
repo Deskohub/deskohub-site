@@ -47,7 +47,7 @@ const statesAsOf = (asOf: Temporal.Instant): ReservationStates => {
   const by = (instant: SQLWrapper) =>
     sql`${instant} <= ${temporalInstantToDate(asOf)}`;
   const enteredBy = (state: SQL, enteredAt: SQLWrapper) =>
-    and(state, or(sql`${enteredAt} is null`, by(enteredAt)))!;
+    and(state, or(sql`${enteredAt} is null`, by(enteredAt))) ?? sql`false`;
   return {
     confirmed: by(workspaceReservations.reservationConfirmedAt),
     cancelled: enteredBy(
@@ -76,20 +76,20 @@ const statesAt = (asOf: Temporal.Instant | undefined) =>
 const cancellationUnsettled = sql`${workspaceReservations.reservationState} in ('cancelling', 'cancellation_failed')`;
 
 const notCancelled = (states: ReservationStates) =>
-  and(not(states.cancelled), not(cancellationUnsettled))!;
+  and(not(states.cancelled), not(cancellationUnsettled)) ?? sql`false`;
 
 const neitherFulfilledNorFailed = (states: ReservationStates) =>
   and(
     not(states.fulfillmentFailed),
     not(states.fulfilled),
     sql`${workspaceReservations.reservationState} <> 'cancellation_failed'`
-  )!;
+  ) ?? sql`false`;
 
 const successful = (states: ReservationStates) =>
-  and(states.fulfilled, notCancelled(states))!;
+  and(states.fulfilled, notCancelled(states)) ?? sql`false`;
 
 const booked = (states: ReservationStates) =>
-  and(states.confirmed, notCancelled(states))!;
+  and(states.confirmed, notCancelled(states)) ?? sql`false`;
 
 /** A reservation the customer received: fulfilled and never cancelled. */
 export const successfulReservationCondition = successful(currentStates);
@@ -168,16 +168,20 @@ export const reservationStatusCondition = (
     return successful(states);
   }
   if (status === "cancelled") {
-    return and(
-      neitherFulfilledNorFailed(states),
-      or(states.cancelled, states.holdExpired)
-    )!;
+    return (
+      and(
+        neitherFulfilledNorFailed(states),
+        or(states.cancelled, states.holdExpired)
+      ) ?? sql`false`
+    );
   }
-  return and(
-    neitherFulfilledNorFailed(states),
-    not(states.cancelled),
-    not(states.holdExpired)
-  )!;
+  return (
+    and(
+      neitherFulfilledNorFailed(states),
+      not(states.cancelled),
+      not(states.holdExpired)
+    ) ?? sql`false`
+  );
 };
 
 /** A status group a reservation condition reads, or `booked` without one. */
