@@ -212,7 +212,7 @@ describe("sealed accounting JSON statements", () => {
         params: [paymentAttemptId, 1],
       },
       {
-        sql: 'select pgp_sym_decrypt("encrypted_snapshot", /* deskohub:sensitive */ $1) from "accounting_document_snapshots" where "accounting_document_snapshots"."payment_attempt_id" = $2 limit $3',
+        sql: 'select "payment_attempt_id", pgp_sym_decrypt("encrypted_snapshot", /* deskohub:sensitive */ $1) from "accounting_document_snapshots" where "accounting_document_snapshots"."payment_attempt_id" = $2 limit $3',
         params: [keySecret, paymentAttemptId, 1],
       },
     ]);
