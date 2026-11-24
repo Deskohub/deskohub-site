@@ -6,23 +6,22 @@ import {
   type PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
 
-declare global {
-  interface CredentialsContainer {
-    // WebAuthn types a descriptor's transports as DOMString values, so a
-    // browser skips the ones it doesn't know; TypeScript's DOM lib lists only
-    // five of the transports a passkey can record, without `smart-card`.
-    get(
-      options: Omit<CredentialRequestOptions, "publicKey"> & {
-        readonly publicKey: Omit<
-          PublicKeyCredentialRequestOptions,
-          "allowCredentials"
-        > & {
-          readonly allowCredentials?: PublicKeyCredentialDescriptorFuture[];
-        };
-      }
-    ): Promise<Credential | null>;
-  }
-}
+// WebAuthn types a descriptor's transports as DOMString values, so a browser
+// skips the ones it doesn't know; TypeScript's DOM lib lists only five of the
+// transports a passkey can record, without `smart-card`. Seen through this
+// method signature, `navigator.credentials` accepts every transport.
+type PasskeyCredentials = {
+  get(
+    options?: Omit<CredentialRequestOptions, "publicKey"> & {
+      readonly publicKey?: Omit<
+        PublicKeyCredentialRequestOptions,
+        "allowCredentials"
+      > & {
+        readonly allowCredentials?: PublicKeyCredentialDescriptorFuture[];
+      };
+    }
+  ): Promise<Credential | null>;
+};
 
 /** A passkey assertion as the server verifies it. */
 export type PasskeyAssertion = Omit<
@@ -61,7 +60,8 @@ export const getPasskeyAssertion = async (
     signal,
   }: { readonly conditional: boolean; readonly signal: AbortSignal }
 ): Promise<PasskeyAssertion> => {
-  const credential = await navigator.credentials.get({
+  const credentials: PasskeyCredentials = navigator.credentials;
+  const credential = await credentials.get({
     mediation: conditional ? "conditional" : undefined,
     publicKey: {
       ...options,
