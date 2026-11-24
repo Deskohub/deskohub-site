@@ -1083,21 +1083,25 @@ describe("edge readback from the live edge", () => {
     throttle,
     defaultRule,
   ];
-  // `security-policies describe --format=json` as gcloud prints it: the
-  // whole policy, `preview: false` omitted as Compute omits it.
+  // The policy as Compute returns it, `preview: false` omitted as Compute
+  // omits it.
+  const policyResource = (rules: ReadonlyArray<Record<string, unknown>>) => ({
+    kind: "compute#securityPolicy",
+    id: "4815162342",
+    name: policy,
+    type: "CLOUD_ARMOR",
+    fingerprint: "c2FuZGJveA==",
+    selfLink: policyLink,
+    rules: rules.map((rule) => ({
+      kind: "compute#securityPolicyRule",
+      ...rule,
+    })),
+  });
+  // `security-policies describe --format=json` as Google Cloud SDK 594.0.1
+  // prints it: the describe request's one-element result list, as run
+  // 45305300114 read it.
   const policyDescription = (rules: ReadonlyArray<Record<string, unknown>>) =>
-    JSON.stringify({
-      kind: "compute#securityPolicy",
-      id: "4815162342",
-      name: policy,
-      type: "CLOUD_ARMOR",
-      fingerprint: "c2FuZGJveA==",
-      selfLink: policyLink,
-      rules: rules.map((rule) => ({
-        kind: "compute#securityPolicyRule",
-        ...rule,
-      })),
-    });
+    JSON.stringify([policyResource(rules)]);
   const withThrottle = (changes: Record<string, unknown>) =>
     policyRules.map((rule) =>
       rule.priority === 2000 ? { ...throttle, ...changes } : rule
@@ -1133,13 +1137,6 @@ describe("edge readback from the live edge", () => {
       tool: "gcloud",
       pattern: "^compute backend-services describe workspace-sandbox-",
       stdout: policyLink,
-    },
-    {
-      tool: "gcloud",
-      // gcloud prints a lone projected field bare: `json(rules)` is the
-      // rules array itself, as run 45299832216 read it.
-      pattern: `^compute security-policies describe ${policy} .*--format=json\\(rules\\)$`,
-      stdout: JSON.stringify(policyRules),
     },
     {
       tool: "gcloud",
@@ -1247,6 +1244,63 @@ describe("edge readback from the live edge", () => {
         });
         expect(calls.some((call) => call.startsWith("curl"))).toBe(false);
       }
+    },
+    readbackTimeout
+  );
+
+  test(
+    "reads the policy from the one-element list or a bare object, never from no or several policies",
+    () => {
+      const described = (stdout: string): FakeRule => ({
+        tool: "gcloud",
+        pattern: "^compute security-policies describe .*--format=json$",
+        stdout,
+      });
+      const bare = readback([
+        described(JSON.stringify(policyResource(policyRules))),
+      ]);
+      expect({
+        exitCode: bare.exitCode,
+        output: bare.exitCode === 0 ? "" : bare.output,
+      }).toEqual({ exitCode: 0, output: "" });
+      for (const stdout of [
+        "[]",
+        JSON.stringify([
+          policyResource(policyRules),
+          policyResource(policyRules),
+        ]),
+        "[null]",
+      ]) {
+        const { exitCode, calls } = readback([described(stdout)]);
+        expect({ stdout, exitCode }).toEqual({ stdout, exitCode: 1 });
+        expect(calls.some((call) => call.startsWith("curl"))).toBe(false);
+      }
+    },
+    readbackTimeout
+  );
+
+  test(
+    "names each rule that differs from the declaration",
+    () => {
+      const { exitCode, output } = readback([
+        {
+          tool: "gcloud",
+          pattern: "^compute security-policies describe .*--format=json$",
+          stdout: policyDescription(
+            withThrottle({ preview: true }).map((rule) =>
+              rule.priority === 1010 ? { ...rule, preview: false } : rule
+            )
+          ),
+        },
+      ]);
+      const error =
+        output.split("\n").find((line) => line.startsWith("::error::")) ?? "";
+      expect(exitCode).toBe(1);
+      expect(
+        ["1000", "1010", "2000", "2147483647"].filter((priority) =>
+          new RegExp(`\\b${priority}\\b`).test(error)
+        )
+      ).toEqual(["1010", "2000"]);
     },
     readbackTimeout
   );
