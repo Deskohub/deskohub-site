@@ -61,6 +61,7 @@ import {
   AdministrationVoucher,
   AdministrationWorkspaceSiteLocalWholeHourDateTime,
   administrationOperationGroup,
+  administrationOperationGroupCheckingDhwFirst,
   CliBuildTarget,
   CliClientCompatibility,
   CliClientName,
@@ -1151,14 +1152,13 @@ describe("administration operation groups", () => {
 
   const SampleApi = HttpApi.make("sampleApi")
     .add(
-      administrationOperationGroup(
+      administrationOperationGroupCheckingDhwFirst(
         HttpApiGroup.make("checkedFirst").add(
           read("read", "/first").annotate(
             MinimumDhwVersion,
             Option.some(minimum)
           )
-        ),
-        { checkDhwVersionBeforeAuthentication: true }
+        )
       )
     )
     .add(
@@ -1260,14 +1260,42 @@ describe("administration operation groups", () => {
     ).toEqual([true, true]);
   });
 
+  test("a group's type requires the dhw check exactly when it installs one", () => {
+    const checkedFirst = administrationOperationGroupCheckingDhwFirst(
+      HttpApiGroup.make("checkedFirst").add(read("read", "/read"))
+    );
+    const unchecked = administrationOperationGroup(
+      HttpApiGroup.make("unchecked").add(read("read", "/read"))
+    );
+    const checkedFirstRequires: CliClientCompatibility extends HttpApiEndpoint.Middleware<
+      typeof checkedFirst.endpoints.read
+    >
+      ? true
+      : false = true;
+    const uncheckedRequires: CliClientCompatibility extends HttpApiEndpoint.Middleware<
+      typeof unchecked.endpoints.read
+    >
+      ? true
+      : false = false;
+
+    const uncheckedMiddlewares: ReadonlySet<unknown> =
+      unchecked.endpoints.read.middlewares;
+    expect([
+      checkedFirst.endpoints.read.middlewares.has(CliClientCompatibility),
+      uncheckedMiddlewares.has(CliClientCompatibility),
+    ]).toEqual([checkedFirstRequires, uncheckedRequires]);
+  });
+
   test("refuses a minimum nothing checks, a check after a first one, and a CLI-only endpoint", () => {
     const declare =
-      (
-        group: HttpApiGroup.Constraint,
-        options?: { readonly checkDhwVersionBeforeAuthentication: true }
+      <Id extends string, Endpoints extends HttpApiEndpoint.Constraint>(
+        group: HttpApiGroup.HttpApiGroup<Id, Endpoints>,
+        checksFirst?: "checksFirst"
       ) =>
       () =>
-        administrationOperationGroup(group, options);
+        checksFirst === undefined
+          ? administrationOperationGroup(group)
+          : administrationOperationGroupCheckingDhwFirst(group);
 
     expect(
       declare(
@@ -1291,7 +1319,7 @@ describe("administration operation groups", () => {
         HttpApiGroup.make("checkedTwice").add(
           read("read", "/read").pipe(requiresDhw(minimum))
         ),
-        { checkDhwVersionBeforeAuthentication: true }
+        "checksFirst"
       )
     ).toThrow("checkedTwice.read");
     expect(

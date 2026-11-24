@@ -391,7 +391,12 @@ export const makeAudienceFilterSchemas = <
       .map(({ label }) => label.toLowerCase())
       .join(", ")}.`,
   });
-  return { condition: Schema.Union(members), filter };
+  // A condition's ids are branded strings, carried as is, so the trees'
+  // callers type them by their decoded shape on both sides.
+  return {
+    condition: Schema.toType(Schema.Union(members)),
+    filter: Schema.toType(filter),
+  };
 };
 
 const schemas = makeAudienceFilterSchemas(audienceAttributeCatalogue);

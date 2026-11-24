@@ -109,8 +109,7 @@ export const scheduleMinutesOffTick = (
  * current definition, so an audience edit takes effect without a new version.
  */
 export const InSavedAudience = Schema.TaggedStruct("InAudience", {
-  // Like a condition's campaign id, the wire carries the branded id as is.
-  audienceId: Schema.toType(AdministrationCampaignAudienceId),
+  audienceId: AdministrationCampaignAudienceId,
   operator: Schema.Literals(["in", "notIn"]),
 }).annotate({
   identifier: "InSavedAudience",

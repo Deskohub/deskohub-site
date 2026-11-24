@@ -226,11 +226,7 @@ export type AudiencePeriodParam = typeof periodParam;
  * campaign of their own, so only they accept `This`.
  */
 export const CampaignEmailSource = Schema.Union([
-  // The wire carries the branded id as is, so the encoded condition is the
-  // decoded one, as `AudienceFilter`'s codec type states.
-  Schema.TaggedStruct("Specific", {
-    campaignId: Schema.toType(AdministrationCampaignId),
-  }),
+  Schema.TaggedStruct("Specific", { campaignId: AdministrationCampaignId }),
   Schema.TaggedStruct("This", {}),
 ]).annotate({
   identifier: "CampaignEmailSource",

@@ -1,6 +1,14 @@
 import { afterAll, describe, expect, expectTypeOf, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Context, Effect, Layer, Option, Schema, Struct } from "effect";
+import {
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+  SchemaGetter,
+  Struct,
+} from "effect";
 import {
   HttpClient,
   HttpClientRequest,
@@ -12,8 +20,8 @@ import {
   HttpApi,
   HttpApiBuilder,
   HttpApiClient,
-  type HttpApiEndpoint,
-  type HttpApiGroup,
+  HttpApiEndpoint,
+  HttpApiGroup,
 } from "effect/http-api";
 import {
   administrationOperations,
@@ -24,22 +32,36 @@ import {
 import {
   defineOperations,
   mutation,
+  type Operation,
   type OperationInput,
   query,
 } from "./administration-operation-port";
 import { NoInput } from "./campaign-operations";
 import { DhwVersion, MinimumDhwVersion } from "./dhw-version";
 import {
+  bareRequest,
+  bodyRequest,
+  type OperationGroupServer,
   type OperationRequest,
   operationGroup,
+  operationGroupApi,
   operationGroupHandlers,
+  operationHandler,
   operationRequest,
-  route,
+  paramsBodyRequest,
+  paramsFieldRequest,
+  paramsQueryRequest,
+  paramsRequest,
+  queryRequest,
+  type SelfNamedOperations,
+  type ServedOperationOptions,
+  servesOperation,
 } from "./operation-endpoints";
 import {
   AdministrationAccountId,
   AdministrationActionRecord,
   AdministrationAuthentication,
+  administrationOperationGroupCheckingDhwFirst,
   CliClientCompatibility,
   CliInputInvalid,
   CliMutationRequestId,
@@ -108,30 +130,117 @@ const noteOperations = defineOperations({
 });
 type NoteOperations = typeof noteOperations;
 
-const Notes = operationGroup(
-  "notes",
-  noteOperations,
-  {
-    listNotes: route.get("/notes"),
-    getNote: route.get("/notes/:noteId"),
-    searchNotes: route.get("/folders/:folderId/notes", { query: true }),
-    createNote: route.post("/notes", {
-      behavior: writeOperation({ idempotent: true }),
-    }),
-    editNote: route.patch("/notes/:noteId", {
-      behavior: writeOperation({ idempotent: false }),
-    }),
-    archiveNote: route.post("/notes/:noteId/archive", {
-      behavior: destructiveOperation({ idempotent: true }),
-    }),
-    renameNote: route.patch("/notes/:noteId/title", {
-      behavior: writeOperation({ idempotent: true }),
-    }),
-    previewNote: route.post("/notes/:noteId/preview", { body: "draft" }),
-    countNotes: route.get("/note-counts", { query: true }),
-  },
-  { errors: [CliInputInvalid.schema] }
+const noteErrors = [CliInputInvalid.schema] as const;
+
+const NoteEndpoints = administrationOperationGroupCheckingDhwFirst(
+  HttpApiGroup.make("notes").add(
+    HttpApiEndpoint.get(
+      ...bareRequest(noteOperations.listNotes, "/notes", noteErrors)
+    ).pipe(servesOperation(noteOperations.listNotes)),
+    HttpApiEndpoint.get(
+      ...paramsRequest(
+        noteOperations.getNote,
+        "/notes/:noteId",
+        ["noteId"],
+        noteErrors
+      )
+    ).pipe(servesOperation(noteOperations.getNote)),
+    HttpApiEndpoint.get(
+      ...paramsQueryRequest(
+        noteOperations.searchNotes,
+        "/folders/:folderId/notes",
+        ["folderId"],
+        noteErrors
+      )
+    ).pipe(servesOperation(noteOperations.searchNotes)),
+    HttpApiEndpoint.post(
+      ...bodyRequest(noteOperations.createNote, "/notes", noteErrors)
+    ).pipe(
+      servesOperation(noteOperations.createNote, {
+        behavior: writeOperation({ idempotent: true }),
+      })
+    ),
+    HttpApiEndpoint.patch(
+      ...paramsBodyRequest(
+        noteOperations.editNote,
+        "/notes/:noteId",
+        ["noteId"],
+        noteErrors
+      )
+    ).pipe(
+      servesOperation(noteOperations.editNote, {
+        behavior: writeOperation({ idempotent: false }),
+      })
+    ),
+    HttpApiEndpoint.post(
+      ...paramsRequest(
+        noteOperations.archiveNote,
+        "/notes/:noteId/archive",
+        ["noteId"],
+        noteErrors
+      )
+    ).pipe(
+      servesOperation(noteOperations.archiveNote, {
+        behavior: destructiveOperation({ idempotent: true }),
+      })
+    ),
+    HttpApiEndpoint.patch(
+      ...paramsBodyRequest(
+        noteOperations.renameNote,
+        "/notes/:noteId/title",
+        ["noteId"],
+        noteErrors
+      )
+    ).pipe(
+      servesOperation(noteOperations.renameNote, {
+        behavior: writeOperation({ idempotent: true }),
+      })
+    ),
+    HttpApiEndpoint.post(
+      ...paramsFieldRequest(
+        noteOperations.previewNote,
+        "/notes/:noteId/preview",
+        ["noteId"],
+        "draft",
+        noteErrors
+      )
+    ).pipe(servesOperation(noteOperations.previewNote, { body: "draft" })),
+    HttpApiEndpoint.get(
+      ...queryRequest(noteOperations.countNotes, "/note-counts", noteErrors)
+    ).pipe(servesOperation(noteOperations.countNotes))
+  )
 );
+
+const notesServer: OperationGroupServer<
+  typeof NoteEndpoints,
+  NoteOperations
+> = (api, invoker, outputs) =>
+  HttpApiBuilder.group(
+    operationGroupApi(api, NoteEndpoints),
+    "notes",
+    (handlers) =>
+      Effect.map(invoker, (invoke) => {
+        const serve = operationHandler(
+          NoteEndpoints,
+          noteOperations,
+          invoke,
+          outputs
+        );
+        return handlers.handleAll({
+          listNotes: serve("listNotes"),
+          getNote: serve("getNote"),
+          searchNotes: serve("searchNotes"),
+          createNote: serve("createNote"),
+          editNote: serve("editNote"),
+          archiveNote: serve("archiveNote"),
+          renameNote: serve("renameNote"),
+          previewNote: serve("previewNote"),
+          countNotes: serve("countNotes"),
+        });
+      })
+  );
+
+const Notes = operationGroup(NoteEndpoints, noteOperations, notesServer);
 
 const inputs = {
   listNotes: {},
@@ -459,11 +568,10 @@ describe("operation endpoints", () => {
         minimumDhwVersion: DhwVersion.make("1.2.3"),
       }),
     });
-    const group = operationGroup(
-      "versioned",
-      versioned,
-      { getNote: route.get("/notes/:noteId") },
-      { errors: [] }
+    const group = HttpApiGroup.make("versioned").add(
+      HttpApiEndpoint.get(
+        ...paramsRequest(versioned.getNote, "/notes/:noteId", ["noteId"], [])
+      ).pipe(servesOperation(versioned.getNote))
     );
     const minimums: Array<unknown> = [];
     HttpApi.reflect(HttpApi.make("versionedApi").add(group), {
@@ -476,58 +584,253 @@ describe("operation endpoints", () => {
     expect(minimums).toEqual([Option.some("1.2.3")]);
   });
 
-  test("a route that can't serve its operation fails the typecheck", () => {
-    const refused = () => [
-      operationGroup(
-        "refused",
-        noteOperations,
-        {
-          // @ts-expect-error a query is a read and declares no behavior
-          listNotes: route.get("/notes", { behavior: readOperation }),
-          // @ts-expect-error noteId is input beyond the path with no place
-          getNote: route.get("/notes"),
-          // @ts-expect-error :folder is no input field
-          searchNotes: route.get("/folders/:folder/notes", { query: true }),
-          // @ts-expect-error a replayed mutation is idempotent
-          createNote: route.post("/notes", {
-            behavior: writeOperation({ idempotent: false }),
-          }),
-          // @ts-expect-error a mutation declares its behavior
-          editNote: route.patch("/notes/:noteId"),
-          archiveNote: route.post("/notes/:noteId/archive", {
-            behavior: destructiveOperation({ idempotent: true }),
-          }),
-          renameNote: route.patch("/notes/:noteId/title", {
-            behavior: writeOperation({ idempotent: true }),
-          }),
-          // @ts-expect-error draft has no place beside a body of text
-          previewNote: route.post("/notes/:noteId/preview", { body: "text" }),
-          countNotes: route.get("/note-counts", { query: true }),
-        },
-        { errors: [] }
-      ),
-      // @ts-expect-error every operation has a route
-      operationGroup("partial", noteOperations, {}, { errors: [] }),
-    ];
-
-    expect(refused).toBeFunction();
+  test("a request that can't carry its operation's input fails the typecheck", () => {
+    type GetNote = typeof noteOperations.getNote;
+    type SearchNotes = typeof noteOperations.searchNotes;
+    // A path without the keys' parameter takes no path.
+    expectTypeOf("/notes" as const).not.toMatchTypeOf<
+      Parameters<
+        typeof paramsRequest<
+          "getNote",
+          GetNote["input"]["fields"],
+          typeof ReceivedInput,
+          "/notes",
+          readonly ["noteId"],
+          readonly []
+        >
+      >[1]
+    >();
+    // Input beyond the path parameters has no place in a params-only request.
+    expectTypeOf(["folderId"] as const).not.toMatchTypeOf<
+      Parameters<
+        typeof paramsRequest<
+          "searchNotes",
+          SearchNotes["input"]["fields"],
+          typeof ReceivedInput,
+          "/folders/:folderId/notes",
+          readonly ["folderId"],
+          readonly []
+        >
+      >[2]
+    >();
+    // An input with fields isn't one a bare request carries.
+    expectTypeOf(noteOperations.getNote).not.toMatchTypeOf<
+      Parameters<
+        typeof bareRequest<
+          "getNote",
+          typeof ReceivedInput,
+          "/notes",
+          readonly []
+        >
+      >[0]
+    >();
   });
 
-  test("a mutation without a behavior is refused at run time too", () => {
-    // The compiler accepts the route only alongside the problem it names.
-    const archiveRoute = {
-      ...route.post("/notes/:noteId/archive"),
-      problem: "archiveNote is a mutation and declares its behavior",
-    } as const;
+  test("an endpoint serves only the operation it is named after, as its kind allows", () => {
+    // The endpoint `servesOperation` takes is named after its operation.
+    type ServedName<Op extends Operation> = HttpApiEndpoint.Identifier<
+      Parameters<ReturnType<typeof servesOperation<Op>>>[0]
+    >;
+    expectTypeOf<
+      ServedName<typeof noteOperations.getNote>
+    >().toEqualTypeOf<"getNote">();
+    expectTypeOf<
+      ServedName<typeof noteOperations.archiveNote>
+    >().toEqualTypeOf<"archiveNote">();
+    // A query is a read and declares no behavior.
+    expectTypeOf({ behavior: readOperation }).not.toMatchTypeOf<
+      ServedOperationOptions<typeof noteOperations.listNotes, never>
+    >();
+    // A mutation declares its behavior, and a replayed one is idempotent.
+    expectTypeOf({}).not.toMatchTypeOf<
+      ServedOperationOptions<typeof noteOperations.editNote, never>
+    >();
+    expectTypeOf({
+      behavior: writeOperation({ idempotent: false }),
+    }).not.toMatchTypeOf<
+      ServedOperationOptions<typeof noteOperations.createNote, never>
+    >();
+    expectTypeOf({
+      behavior: writeOperation({ idempotent: true }),
+    }).toMatchTypeOf<
+      ServedOperationOptions<typeof noteOperations.createNote, never>
+    >();
+  });
+
+  test("a group's endpoints are its operations, each under its own name", () => {
+    type Aliased = { readonly alias: typeof noteOperations.getNote };
+    expectTypeOf<Aliased>().not.toMatchTypeOf<SelfNamedOperations<Aliased>>();
+    expectTypeOf<NoteOperations>().toMatchTypeOf<
+      SelfNamedOperations<NoteOperations>
+    >();
+    expectTypeOf<keyof typeof Notes.endpoints>().toEqualTypeOf<
+      keyof NoteOperations
+    >();
+    expect(Object.keys(Notes.endpoints)).toEqual(Object.keys(noteOperations));
+
+    const getNoteOnly = HttpApiGroup.make("getNoteOnly").add(
+      HttpApiEndpoint.get(
+        ...paramsRequest(
+          noteOperations.getNote,
+          "/notes/:noteId",
+          ["noteId"],
+          noteErrors
+        )
+      ).pipe(servesOperation(noteOperations.getNote))
+    );
+    const getNoteServer: OperationGroupServer<
+      typeof getNoteOnly,
+      NoteOperations
+    > = (api, invoker, outputs) =>
+      HttpApiBuilder.group(
+        operationGroupApi(api, getNoteOnly),
+        "getNoteOnly",
+        (handlers) =>
+          Effect.map(invoker, (invoke) =>
+            handlers.handleAll({
+              getNote: operationHandler(
+                getNoteOnly,
+                noteOperations,
+                invoke,
+                outputs
+              )("getNote"),
+            })
+          )
+      );
     expect(() =>
-      operationGroup(
-        "unchecked",
-        defineOperations({
-          archiveNote: mutation({ input: NoteRef, output: ReceivedInput }),
-        }),
-        { archiveNote: archiveRoute },
-        { errors: [] }
+      operationGroup(getNoteOnly, noteOperations, getNoteServer)
+    ).toThrow("getNoteOnly serves no endpoint for listNotes.");
+  });
+});
+
+/** Encodes a count with a service, as an input schema may. */
+class CountEncoder extends Context.Service<CountEncoder, number>()(
+  "@deskohub/workspace-admin-api/test/CountEncoder"
+) {}
+
+const tallyOperations = defineOperations({
+  tally: query({
+    input: Schema.Struct({
+      count: Schema.NumberFromString.pipe(
+        Schema.decodeTo(Schema.Number, {
+          decode: SchemaGetter.passthrough<number>(),
+          encode: SchemaGetter.transformEffect((count: number) =>
+            Effect.gen(function* () {
+              const offset = yield* CountEncoder;
+              return count + offset;
+            })
+          ),
+        })
+      ),
+    }).annotate(strictParseOptions),
+    output: ReceivedInput,
+  }),
+});
+
+const TallyEndpoints = administrationOperationGroupCheckingDhwFirst(
+  HttpApiGroup.make("tallies").add(
+    HttpApiEndpoint.get(
+      ...queryRequest(tallyOperations.tally, "/tallies", noteErrors)
+    ).pipe(servesOperation(tallyOperations.tally))
+  )
+);
+
+const talliesServer: OperationGroupServer<
+  typeof TallyEndpoints,
+  typeof tallyOperations
+> = (api, invoker, outputs) =>
+  HttpApiBuilder.group(
+    operationGroupApi(api, TallyEndpoints),
+    "tallies",
+    (handlers) =>
+      Effect.map(invoker, (invoke) =>
+        handlers.handleAll({
+          tally: operationHandler(
+            TallyEndpoints,
+            tallyOperations,
+            invoke,
+            outputs
+          )("tally"),
+        })
       )
-    ).toThrow("archiveNote is a mutation without a behavior.");
+  );
+
+const Tallies = operationGroup(TallyEndpoints, tallyOperations, talliesServer);
+
+describe("an operation whose input encodes with a service", () => {
+  const tallyApi = HttpApi.make("talliesApi").add(Tallies);
+  const tallyHandlers = operationGroupHandlers(
+    tallyApi,
+    Tallies,
+    Effect.succeed((_name: "tally", input: { readonly count: string }) =>
+      Effect.succeed(JSON.stringify(input))
+    )
+  );
+
+  test("requires that service to be served", () => {
+    type Requirements =
+      typeof tallyHandlers extends Layer.Layer<
+        infer _Provided,
+        infer _Error,
+        infer Required
+      >
+        ? Required
+        : never;
+    const required: HttpRouter.Request<
+      "Requires",
+      CountEncoder
+    > extends Requirements
+      ? true
+      : false = true;
+    expect(required).toBe(true);
+  });
+
+  test("re-encodes the input with that service", async () => {
+    const tallyServer = HttpRouter.toWebHandler(
+      HttpApiBuilder.layer(tallyApi).pipe(
+        Layer.provide(tallyHandlers),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(AdministrationAuthentication, {
+              bearer: (httpEffect) =>
+                Effect.provideService(httpEffect, CurrentAdministrationCaller, {
+                  actor: {
+                    accountId: AdministrationAccountId.make("account-1"),
+                    email: testEmailAddress("tally-administrator"),
+                  },
+                  channel: {
+                    _tag: "CliSession",
+                    sessionId: CliSessionId.make(
+                      "01980000-0000-7000-8000-000000000000"
+                    ),
+                  },
+                }),
+            }),
+            Layer.succeed(
+              AdministrationActionRecord,
+              (httpEffect) => httpEffect
+            ),
+            Layer.succeed(CliClientCompatibility, (httpEffect) => httpEffect)
+          )
+        ),
+        Layer.provide(HttpServer.layerServices)
+      ),
+      { disableLogger: true }
+    );
+    try {
+      const response = await tallyServer.handler(
+        new Request(
+          "https://workspace.deskohub.test/api/v1/cli/tallies?count=3",
+          {
+            headers: { authorization: "Bearer session" },
+          }
+        ),
+        Context.make(CountEncoder, 10)
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toBe(JSON.stringify({ count: "13" }));
+    } finally {
+      await tallyServer.dispose();
+    }
   });
 });

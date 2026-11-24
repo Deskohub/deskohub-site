@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Result, Schema } from "effect";
 import { administrationInputParseOptions } from "./administration-input-parse-options";
+import { CampaignEmailSource } from "./audience-attribute-kinds";
 import { AudienceCondition, AudienceFilter } from "./audience-filter";
 import {
   AutomationConditionFilter,
@@ -20,6 +21,7 @@ import {
   automationRunEventDetails,
   automationRunSkipReasons,
   automationSendDeferralCauses,
+  InSavedAudience,
   scheduleMinutesOffTick,
 } from "./email-automations";
 
@@ -600,5 +602,21 @@ describe("audience codecs", () => {
     expect([condition, filter, automationFilter].every(Schema.isSchema)).toBe(
       true
     );
+  });
+});
+
+describe("audience leaves", () => {
+  test("take plain-string ids on their encoded side", () => {
+    const specific: typeof CampaignEmailSource.Encoded = {
+      _tag: "Specific",
+      campaignId: "campaign-1",
+    };
+    const inAudience: typeof InSavedAudience.Encoded = {
+      _tag: "InAudience",
+      operator: "in",
+      audienceId: "audience-1",
+    };
+    expect(Schema.is(CampaignEmailSource)(specific)).toBe(true);
+    expect(Schema.is(InSavedAudience)(inAudience)).toBe(true);
   });
 });
