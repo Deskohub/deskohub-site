@@ -286,6 +286,55 @@ describe("release command output", () => {
   });
 });
 
+// One page of a parent's sinks as the Logging API lists them; a later
+// page is the one asked for by the earlier page's token.
+const sinksPage = (
+  parent: string,
+  sinks: ReadonlyArray<Record<string, unknown>>,
+  page: { readonly token?: string; readonly next?: string } = {}
+): FakeRule => ({
+  tool: "curl",
+  pattern: `logging\\.googleapis\\.com/v2/${parent}/sinks\\?pageSize=100${
+    page.token === undefined ? "" : `&pageToken=${page.token}`
+  }$`,
+  stdout: JSON.stringify(
+    page.next === undefined ? { sinks } : { sinks, nextPageToken: page.next }
+  ),
+});
+describe("read-only inventory", () => {
+  test("reports the project's log sinks from every page", () => {
+    const { exitCode, output } = withProofFakes(
+      {
+        rules: [
+          sinksPage(
+            `projects/${projectId}`,
+            [{ name: "export", destination: "bigquery.googleapis.com/x" }],
+            { token: "page-2" }
+          ),
+          sinksPage(
+            `projects/${projectId}`,
+            [{ name: "_Default", destination: "logging/_Default" }],
+            { next: "page-2" }
+          ),
+        ],
+      },
+      (fakes) => runPhase(fakes, "readonly-inventory")
+    );
+    expect({
+      exitCode,
+      sinks: output
+        .split("\n")
+        .filter((line) => /^(_Default|export)\t/.test(line)),
+    }).toEqual({
+      exitCode: 0,
+      sinks: [
+        "_Default\tlogging/_Default",
+        "export\tbigquery.googleapis.com/x",
+      ],
+    });
+  });
+});
+
 describe("post-destroy inventory", () => {
   const state = `gs://${stateBucket}`;
   // `storage ls -r` once the stack is gone: folder headings, the
@@ -306,6 +355,42 @@ describe("post-destroy inventory", () => {
     tool: "gcloud",
     pattern,
     stdout,
+  });
+
+  test("lists the project's log sinks from every page", () => {
+    const listed = withProofFakes(
+      {
+        rules: [
+          listing("^storage ls -r", emptiedState),
+          sinksPage(
+            `projects/${projectId}`,
+            [{ name: "export", destination: "bigquery.googleapis.com/x" }],
+            { token: "page-2" }
+          ),
+          sinksPage(
+            `projects/${projectId}`,
+            [{ name: "_Default", destination: "logging/_Default" }],
+            { next: "page-2" }
+          ),
+        ],
+      },
+      (fakes) => {
+        const { exitCode } = runPhase(fakes, "post-destroy-inventory");
+        const file = join(
+          fakes.proofDir,
+          "inventory-post-destroy",
+          "logging-sinks.txt"
+        );
+        return {
+          exitCode,
+          sinks: existsSync(file) ? readFileSync(file, "utf8") : null,
+        };
+      }
+    );
+    expect(listed).toEqual({
+      exitCode: 0,
+      sinks: "_Default\tlogging/_Default\nexport\tbigquery.googleapis.com/x\n",
+    });
   });
 
   test("counts folder headings and the lease as no residue", () => {
@@ -1394,21 +1479,6 @@ describe("token-route privacy and telemetry", () => {
     { name: "_Required", destination: "logging/_Required" },
     { name: "_Default", destination: "logging/_Default" },
   ];
-  // One page of a parent's sinks as the Logging API lists them; a later
-  // page is the one asked for by the earlier page's token.
-  const sinksPage = (
-    parent: string,
-    sinks: ReadonlyArray<Record<string, unknown>>,
-    page: { readonly token?: string; readonly next?: string } = {}
-  ): FakeRule => ({
-    tool: "curl",
-    pattern: `logging\\.googleapis\\.com/v2/${parent}/sinks\\?pageSize=100${
-      page.token === undefined ? "" : `&pageToken=${page.token}`
-    }$`,
-    stdout: JSON.stringify(
-      page.next === undefined ? { sinks } : { sinks, nextPageToken: page.next }
-    ),
-  });
   const traceBody = JSON.stringify({
     traceId,
     spans: [{ name: "sandbox-probe.synthetic" }],
@@ -1601,6 +1671,14 @@ describe("token-route privacy and telemetry", () => {
         ),
         sinksPage("folders/4242", [], { next: "page+2" }),
       ],
+      // A later page answered with no body.
+      [
+        {
+          ...sinksPage(`projects/${projectId}`, [], { token: "page-2" }),
+          stdout: "",
+        },
+        sinksPage(`projects/${projectId}`, projectSinks, { next: "page-2" }),
+      ],
       // Pages without end.
       [
         sinksPage("folders/4242", [], { token: "again", next: "again" }),
@@ -1655,6 +1733,33 @@ describe("token-route privacy and telemetry", () => {
       });
     }
   });
+
+  test("sends the marker once every page of sinks, over 128 KiB, is covered", () => {
+    // Sinks whose own filters are long, each excluding the token routes.
+    const covered = (name: string) => ({
+      name,
+      destination: "storage.googleapis.com/y",
+      filter: `logName:"${name}" OR ${"x".repeat(1600)}`,
+      exclusions: [{ name: "tokens", filter: exclusionFilter }],
+    });
+    const firstPage = Array.from({ length: 95 }, (_, index) =>
+      covered(`export-${index}`)
+    );
+    expect(JSON.stringify(firstPage).length).toBeGreaterThan(128 * 1024);
+    const { exitCode, output, markerSent } = privacy([
+      sinksPage(`projects/${projectId}`, [covered("export-late")], {
+        token: "page-2",
+      }),
+      sinksPage(`projects/${projectId}`, [...projectSinks, ...firstPage], {
+        next: "page-2",
+      }),
+    ]);
+    expect({
+      exitCode,
+      output: exitCode === 0 ? "" : output,
+      markerSent,
+    }).toEqual({ exitCode: 0, output: "", markerSent: true });
+  }, 60_000);
 
   test("accepts an inherited sink that excludes the same filter", () => {
     const { exitCode, output } = privacy([

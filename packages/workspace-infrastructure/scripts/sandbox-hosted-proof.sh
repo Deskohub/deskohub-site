@@ -221,21 +221,32 @@ project_exclusions_json() {
 # as a JSON array, from the Logging API page by page: `gcloud logging sinks
 # list` in the pinned SDK sends one request and drops nextPageToken
 # (surface/logging/sinks/list.py), so a sink on a later page would go
-# unchecked. More than 20 pages (2,000 sinks) fails rather than paging
-# without end.
+# unseen. Each response must be exactly one JSON object (`{}` is an empty
+# page); anything else, or more than 20 pages (2,000 sinks), fails. Pages
+# reach jq on stdin, never as arguments, so no list outgrows ARG_MAX.
 log_sinks_json() {
-  local parent="$1" body url page_token="" pages=0 sinks='[]'
+  local parent="$1" body url page_token="" count=0 pages=""
   while true; do
     url="https://logging.googleapis.com/v2/${parent}/sinks?pageSize=100"
     [[ -z "$page_token" ]] || url+="&pageToken=${page_token}"
     body="$(google_get '{"sinks":[]}' "$url")" || return 1
-    sinks="$(jq -c --argjson sinks "$sinks" '$sinks + (.sinks // [])' <<<"$body")" || return 1
+    jq -se 'length == 1 and (.[0] | type == "object"
+      and ((.sinks // []) | type == "array")
+      and ((.nextPageToken // "") | type == "string"))' >/dev/null <<<"$body" || return 1
+    pages+="${body}"$'\n'
     page_token="$(jq -r '.nextPageToken // empty | @uri' <<<"$body")" || return 1
     [[ -n "$page_token" ]] || break
-    pages=$((pages + 1))
-    ((pages < 20)) || return 1
+    count=$((count + 1))
+    ((count < 20)) || return 1
   done
-  printf '%s\n' "$sinks"
+  jq -cs '[.[] | (.sinks // [])[]]' <<<"$pages"
+}
+
+# The project's own sinks as `name<TAB>destination` rows, every page.
+project_sink_rows() {
+  local sinks
+  sinks="$(log_sinks_json "projects/${project_id}")" || return 1
+  $dry_run || jq -r '.[] | [.name, .destination] | @tsv' <<<"$sinks"
 }
 
 project_exclusion_names() {
@@ -567,7 +578,7 @@ take_inventory() {
   inventory_class "$dir" security-policies gcloud compute security-policies list "${p[@]}" --format='value(name)'
   inventory_class "$dir" ssl-certificates gcloud compute ssl-certificates list "${p[@]}" --global --format='value(name)'
   inventory_class "$dir" logging-exclusions project_exclusion_names
-  inventory_class "$dir" logging-sinks gcloud logging sinks list "${p[@]}" --format='value(name,destination)'
+  inventory_class "$dir" logging-sinks project_sink_rows
   inventory_class "$dir" tasks-queues gcloud tasks queues list "${p[@]}" --location="$region" --format='value(name)'
   inventory_class "$dir" scheduler-jobs gcloud scheduler jobs list "${p[@]}" --location="$region" --format='value(name)'
   inventory_class "$dir" storage-buckets gcloud storage buckets list "${p[@]}" --format='value(name)'
@@ -675,7 +686,7 @@ phase_readonly_inventory() {
   else
     notice "enabled APIs unverified (denied)"
   fi
-  run gcloud logging sinks list --project="$project_id" --format='table(name,destination,filter)' ||
+  project_sink_rows ||
     notice "log sinks unverified (denied); inherited folder/organization sinks are not listed"
   local exclusions
   if exclusions="$(project_exclusions_json)"; then
