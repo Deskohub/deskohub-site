@@ -250,7 +250,12 @@ export class CampaignAudienceService extends Context.Service<
             .insert(emailCampaignAudiences)
             .values({ title: input.title, filter: input.filter })
             .returning();
-          return audience!;
+          if (!audience) {
+            return yield* Effect.die(
+              "Campaign audience insert returned no row."
+            );
+          }
+          return audience;
         }),
         update: Effect.fn("CampaignAudienceService.update")(function* ({
           audienceId,

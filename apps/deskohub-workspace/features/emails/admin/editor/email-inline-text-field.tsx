@@ -1,6 +1,7 @@
 "use client";
 
 import { EditorContent, useEditor } from "@tiptap/react";
+import { Schema } from "effect";
 import { useEffect, useId, useMemo } from "react";
 import { useWatch } from "react-hook-form";
 import { m } from "@/features/administration/i18n";
@@ -55,6 +56,9 @@ export type EmailInlineTextFieldProps = {
 };
 
 const noLinks: Readonly<Record<string, string>> = {};
+
+/** The defined value names, carried through the effect as one JSON string. */
+const definedNamesJson = Schema.fromJsonString(Schema.Array(Schema.String));
 
 /**
  * The text as its editor shows it: on one line, and without formatting in a
@@ -211,7 +215,7 @@ export function EmailInlineTextField({
     if (editor)
       setEmailInlineValueNames(
         editor,
-        new Set(JSON.parse(definedNames) as string[])
+        new Set(Schema.decodeSync(definedNamesJson)(definedNames))
       );
   }, [editor, definedNames]);
 

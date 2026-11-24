@@ -2,7 +2,8 @@ import { effectSchemaResolver } from "@deskohub/effect-schema-resolver";
 import { get } from "react-hook-form";
 import type { Locale } from "@/features/i18n";
 import {
-  type AutomationFlowFormValues,
+  type AutomationFlowDraftValues,
+  type AutomationFlowFormOutput,
   createAutomationFlowFormSchema,
 } from "./automation-flow-form";
 
@@ -11,13 +12,18 @@ import {
  * the way the builder's form resolves them.
  */
 export const automationFlowFormErrors = async (
-  values: AutomationFlowFormValues,
+  values: AutomationFlowDraftValues,
   locale: Locale = "en-US"
 ) => {
-  const { errors } = await effectSchemaResolver(
-    createAutomationFlowFormSchema(locale),
-    { onExcessProperty: "error" }
-  )(values, undefined, { fields: {}, shouldUseNativeValidation: false });
+  const { errors } = await effectSchemaResolver<
+    AutomationFlowDraftValues,
+    undefined,
+    AutomationFlowFormOutput
+  >(createAutomationFlowFormSchema(locale), { onExcessProperty: "error" })(
+    values,
+    undefined,
+    { fields: {}, shouldUseNativeValidation: false }
+  );
   return {
     paths: Object.keys(errors),
     at: (path: string): string | undefined => get(errors, path)?.message,

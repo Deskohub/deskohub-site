@@ -67,7 +67,7 @@ export const resolveRecipientLocale = (sources: {
  * The content a recipient reads: their locale's, else the first locale of
  * their locale's fallback chain with content, else the campaign's first
  * content locale (an audience restricted to it). The campaign must have
- * content.
+ * content; sends and test sends require it before rendering.
  */
 export const campaignContentForRecipient = (
   content: CampaignLocalizedContent,
@@ -78,8 +78,11 @@ export const campaignContentForRecipient = (
     ...getLocaleDefinition(recipientLocale).fallbackChain,
     ...campaignContentLocales(content),
   ];
-  const chosen = candidates.find((candidate) => content[candidate]);
-  return { locale: chosen!, content: content[chosen!]! };
+  for (const locale of candidates) {
+    const localeContent = content[locale];
+    if (localeContent) return { locale, content: localeContent };
+  }
+  throw new Error("The campaign has no content to render.");
 };
 
 /**

@@ -142,4 +142,4 @@ const contractConstants = (
 };
 
 const isContractKey = (key: string): key is PostHogFeatureFlagKey =>
-  postHogFeatureFlags.keys.includes(key as PostHogFeatureFlagKey);
+  postHogFeatureFlags.keys.some((contractKey) => contractKey === key);

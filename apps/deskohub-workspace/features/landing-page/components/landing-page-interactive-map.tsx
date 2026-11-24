@@ -52,7 +52,8 @@ export function LandingPageInteractiveMap({
   const handleTilesLoad = useEffectEvent(() => onTilesLoad?.());
 
   useEffect(() => {
-    const container = mapContainerRef.current!;
+    const container = mapContainerRef.current;
+    if (!container) return;
     const map = L.map(container, {
       dragging: false,
       // Tiles pop in over the static map, which shows the same pixels.

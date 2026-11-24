@@ -1,6 +1,7 @@
-import type { JSONContent, MarkdownToken } from "@tiptap/core";
+import { fromString, type JSONContent } from "@tiptap/core";
 import Image from "@tiptap/extension-image";
 import { Predicate } from "effect";
+import { htmlAttributeText } from "./campaign-body-attribute-text";
 import type {
   CampaignBodyAttributeValue,
   CampaignBodyNode,
@@ -109,6 +110,21 @@ const imageLayoutMarkdown = (attrs: JSONContent["attrs"]) => {
 };
 
 /**
+ * A pasted image's dimension as TipTap reads it, except that a number too
+ * long to hold is left unset, so the paste fits the body format.
+ */
+const pastedImageDimension = (
+  element: HTMLElement,
+  name: "width" | "height"
+) => {
+  const dimension: unknown = fromString(element.getAttribute(name));
+  return dimension === Number.POSITIVE_INFINITY ||
+    dimension === Number.NEGATIVE_INFINITY
+    ? null
+    : dimension;
+};
+
+/**
  * A block image from the Deskohub Cloudinary account, with its alignment and
  * natural width. The renderer shows it at that width, capped to the body
  * column, so alignment has room to show; an image without a width fills the
@@ -118,6 +134,17 @@ export const CampaignImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
+      src: { default: null, parseHTML: htmlAttributeText("src") },
+      alt: { default: null, parseHTML: htmlAttributeText("alt") },
+      title: { default: null, parseHTML: htmlAttributeText("title") },
+      width: {
+        default: null,
+        parseHTML: (element) => pastedImageDimension(element, "width"),
+      },
+      height: {
+        default: null,
+        parseHTML: (element) => pastedImageDimension(element, "height"),
+      },
       align: {
         default: defaultCampaignImageAlignment,
         parseHTML: (element) => element.getAttribute("data-align"),
@@ -157,7 +184,7 @@ export const CampaignImage = Image.extend({
       if (!layout || token?.type !== "image" || rest.length > 0) {
         return undefined;
       }
-      return { ...token, type: "image", raw, ...layout } as MarkdownToken;
+      return { ...token, type: "image", raw, ...layout };
     },
   },
 

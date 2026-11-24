@@ -15,9 +15,6 @@ import {
   type AutomationRunSummaryType as AutomationRunSummary,
   AutomationRunTimelineEntry,
   type AutomationRunTimelineEntryType,
-  automationRunOutcomes,
-  automationRunSkipReasons,
-  automationRunStates,
 } from "@deskohub/workspace-admin-api";
 import { and, asc, count, desc, eq, lt, or } from "drizzle-orm";
 import {
@@ -27,6 +24,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Record as Rec,
   Schema,
 } from "effect";
 import {
@@ -470,20 +468,40 @@ type RunCountGroup = {
   readonly runs: number;
 };
 
+/** Every run state, outcome, and skip reason, none counted yet. */
+const noRunStateCounts = {
+  active: 0,
+  sending: 0,
+  ended: 0,
+} satisfies Record<AutomationRunState, number>;
+const noRunOutcomeCounts = {
+  sent: 0,
+  unconfirmed: 0,
+  "condition-failed": 0,
+  skipped: 0,
+  failed: 0,
+  withdrawn: 0,
+  archived: 0,
+} satisfies Record<AutomationRunOutcome, number>;
+const noSkipReasonCounts = {
+  "missing-from-dotypos": 0,
+  "deleted-customer": 0,
+  "missing-email": 0,
+  "invalid-email": 0,
+  "consent-withdrawn": 0,
+  "outside-test-domain": 0,
+  "pass-holder": 0,
+  "already-sent-once": 0,
+} satisfies Record<AutomationRunSkipReasonType, number>;
+
 /** Counts by state and by outcome, every key present. */
 const runCounts = (groups: readonly RunCountGroup[]) => ({
-  byState: Object.fromEntries(
-    automationRunStates.map((state) => [
-      state,
-      sumRuns(groups.filter((group) => group.state === state)),
-    ])
-  ) as Record<AutomationRunState, number>,
-  byOutcome: Object.fromEntries(
-    automationRunOutcomes.map((outcome) => [
-      outcome,
-      sumRuns(groups.filter((group) => group.outcome === outcome)),
-    ])
-  ) as Record<AutomationRunOutcome, number>,
+  byState: Rec.map(noRunStateCounts, (_, state) =>
+    sumRuns(groups.filter((group) => group.state === state))
+  ),
+  byOutcome: Rec.map(noRunOutcomeCounts, (_, outcome) =>
+    sumRuns(groups.filter((group) => group.outcome === outcome))
+  ),
 });
 
 /** Skipped runs by reason, every reason present. */
@@ -492,17 +510,13 @@ const skipReasonCounts = (
     readonly outcomeReason: string | null;
   })[]
 ) =>
-  Object.fromEntries(
-    automationRunSkipReasons.map((reason) => [
-      reason,
-      sumRuns(
-        groups.filter(
-          (group) =>
-            group.outcome === "skipped" && group.outcomeReason === reason
-        )
-      ),
-    ])
-  ) as Record<AutomationRunSkipReasonType, number>;
+  Rec.map(noSkipReasonCounts, (_, reason) =>
+    sumRuns(
+      groups.filter(
+        (group) => group.outcome === "skipped" && group.outcomeReason === reason
+      )
+    )
+  );
 
 const sumRuns = (groups: readonly RunCountGroup[]) =>
   groups.reduce((total, group) => total + group.runs, 0);

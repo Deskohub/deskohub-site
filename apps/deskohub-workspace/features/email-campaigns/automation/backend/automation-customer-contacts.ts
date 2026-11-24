@@ -37,7 +37,9 @@ export const readAutomationCustomerContacts = Effect.fn(
     .pipe(
       Effect.flatMap((profiles) =>
         Effect.map(DateTime.nowAsDate, (now) =>
-          Option.some(
+          Option.some<
+            ReadonlyMap<DotyposCustomerId, AutomationCustomerContact>
+          >(
             new Map(
               [...profiles].map(([id, profile]) => {
                 const customer = describeAdministrationCustomer(profile, now);
@@ -55,7 +57,7 @@ export const readAutomationCustomerContacts = Effect.fn(
                       };
                 return [id, contact] as const;
               })
-            ) as ReadonlyMap<DotyposCustomerId, AutomationCustomerContact>
+            )
           )
         )
       ),

@@ -219,14 +219,15 @@ export const getLocaleFontStyle = (
     scriptTypography[getLocaleDefinition(locale).script];
   if (textFaces.length === 0 && companions.length === 0) return undefined;
   const [brandFace, ...brandFallbacks] = brandFamilies.split(", ");
-  return {
+  const textFontProperties: Readonly<Record<`--${string}`, string>> = {
     "--font-text": [
       ...textFaces,
       brandFace,
       ...companions,
       ...brandFallbacks,
     ].join(", "),
-  } as CSSProperties;
+  };
+  return textFontProperties;
 };
 
 const languageNameFaces: Readonly<
@@ -243,7 +244,7 @@ const languageNameFaces: Readonly<
  * face of each such locale, under the property `languageNameStyle`
  * (`./language-labels`) reads.
  */
-export const languageNameFontStyle = Object.fromEntries(
+export const languageNameFontStyle: CSSProperties = Object.fromEntries(
   supportedLocales.flatMap((locale) => {
     const { script } = getLocaleDefinition(locale);
     return script === "latin"
@@ -255,4 +256,4 @@ export const languageNameFontStyle = Object.fromEntries(
           ] as const,
         ];
   })
-) as CSSProperties;
+);

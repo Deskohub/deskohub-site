@@ -16,7 +16,10 @@ import {
   appendFilter,
   asRootGroup,
   type DatePeriodKind,
+  editedCountCondition,
+  editedDateCondition,
   newCondition,
+  newConditionFrom,
   newNestedGroup,
   removeFilterAt,
   replaceFilterAt,
@@ -195,5 +198,101 @@ describe("the attribute catalogue in the builder", () => {
       if (placeholders.has(attribute)) expect(decode).toThrow();
       else expect(decode()).toEqual(newCondition(attribute));
     }
+  });
+});
+
+describe("newCondition", () => {
+  test("starts every attribute from its own entry's defaults", () => {
+    for (const attribute of attributes) {
+      expect(newCondition(attribute)).toEqual(
+        newConditionFrom(audienceAttributeCatalogue[attribute])
+      );
+    }
+  });
+
+  test("keeps the empty placeholder values the operator fills", () => {
+    expect(newCondition("dotyposTags")).toMatchObject({ value: [] });
+    expect(newCondition("discountGroup")).toMatchObject({ value: [] });
+  });
+});
+
+describe("editedCountCondition", () => {
+  const reservations = newConditionFrom(
+    audienceAttributeCatalogue.reservationCount
+  );
+  const emails = newConditionFrom(
+    audienceAttributeCatalogue.campaignEmailCount
+  );
+
+  test("keeps an edit of the attribute's own params, in the order emitted", () => {
+    const edited = {
+      ...reservations,
+      params: { ...reservations.params, status: "complete", stay: "day" },
+    };
+    const kept = editedCountCondition("reservationCount", edited);
+    expect(kept).toEqual(edited);
+    expect(Object.keys(kept ?? {})).toEqual(Object.keys(edited));
+  });
+
+  test("keeps an unfinished comparison the form reports later", () => {
+    const edited = { ...reservations, operator: "lt" as const, value: -1 };
+    expect(editedCountCondition("reservationCount", edited)).toEqual(edited);
+  });
+
+  test("refuses another attribute's condition", () => {
+    expect(editedCountCondition("reservationCount", emails)).toBeUndefined();
+  });
+
+  test("refuses a choice the attribute doesn't offer", () => {
+    expect(
+      editedCountCondition("reservationCount", {
+        ...reservations,
+        params: { ...reservations.params, dateBasis: "purchase" },
+      })
+    ).toBeUndefined();
+    expect(
+      editedCountCondition("campaignEmailCount", {
+        ...emails,
+        params: { ...emails.params, purpose: "visit" },
+      })
+    ).toBeUndefined();
+  });
+
+  test("refuses a product filter on an attribute without one", () => {
+    expect(
+      editedCountCondition("campaignEmailCount", {
+        ...emails,
+        params: {
+          ...emails.params,
+          product: { family: "cowork", properties: [] },
+        },
+      })
+    ).toBeUndefined();
+  });
+});
+
+describe("editedDateCondition", () => {
+  const lastVisit = newConditionFrom(audienceAttributeCatalogue.lastVisit);
+  const accountCreated = newConditionFrom(
+    audienceAttributeCatalogue.accountCreated
+  );
+  const product = { family: "cowork" as const, properties: [] };
+
+  test("keeps an edit of the attribute's own condition", () => {
+    const edited = { ...lastVisit, params: { product } };
+    expect(editedDateCondition("lastVisit", edited)).toEqual(edited);
+  });
+
+  test("refuses another attribute's condition", () => {
+    expect(editedDateCondition("lastVisit", accountCreated)).toBeUndefined();
+  });
+
+  test("refuses a product filter on an attribute without one", () => {
+    expect(
+      editedDateCondition("accountCreated", {
+        ...accountCreated,
+        params: { product },
+      })
+    ).toBeUndefined();
   });
 });

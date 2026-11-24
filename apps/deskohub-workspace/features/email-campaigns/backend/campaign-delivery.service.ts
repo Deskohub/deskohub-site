@@ -493,11 +493,15 @@ export class CampaignDeliveryService extends Context.Service<
                           BatchRequest.First({
                             batch,
                             messages: publication
-                              ? prepared.messages.filter((_, index) =>
-                                  batch.dotyposCustomerIds.includes(
-                                    prepared.reachable[index]!.dotyposCustomerId
-                                  )
-                                )
+                              ? prepared.messages.filter((_, index) => {
+                                  const recipient = prepared.reachable[index];
+                                  return (
+                                    recipient !== undefined &&
+                                    batch.dotyposCustomerIds.includes(
+                                      recipient.dotyposCustomerId
+                                    )
+                                  );
+                                })
                               : prepared.messages,
                             ...(publication && {
                               personalized: {

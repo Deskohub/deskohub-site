@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import { useWatch } from "react-hook-form";
-import type { Locale } from "@/features/i18n";
+import { isLocale, type Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { useEmailDraftForm } from "./email-draft-form";
 import { emailEditorProblemsId } from "./email-editor-field-ids";
@@ -124,8 +124,12 @@ export function EmailEditorProvider({
     problems,
     problemsByField,
     focusProblem: (problem) => {
-      if (problem.locale && locales.includes(problem.locale as Locale))
-        setActiveLocale(problem.locale as Locale);
+      if (
+        problem.locale &&
+        isLocale(problem.locale) &&
+        locales.includes(problem.locale)
+      )
+        setActiveLocale(problem.locale);
       if (problem.fieldId) setFocusRequest({ fieldId: problem.fieldId });
     },
   };

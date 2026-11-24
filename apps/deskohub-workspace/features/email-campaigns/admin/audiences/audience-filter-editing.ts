@@ -1,15 +1,17 @@
 import {
-  type AdministrationCampaignAudienceIdType,
   type AudienceAttribute,
   type AudienceAttributeDefinition,
+  type AudienceAttributeOfKind,
+  type AudienceConditionOf,
+  type AudienceCountCondition,
+  type AudienceDateCondition,
   type AudienceFilterGroupOf,
   type AudienceFilterOf,
-  type AutomationConditionLeaf,
   audienceAttributeCatalogue,
   type DatePeriodUnitType,
   type InSavedAudienceType as InSavedAudience,
 } from "@deskohub/workspace-admin-api";
-import { Match } from "effect";
+import { Match, Schema } from "effect";
 import type {
   AudienceCondition,
   AudienceFilterGroup,
@@ -18,8 +20,25 @@ import type { DatePeriod } from "../../date-period";
 
 export type { AudienceCondition, AudienceFilterGroup };
 
+/**
+ * The audience a new saved-audience membership leaf holds until the operator
+ * picks one. It is no valid audience ID, so the form reports it as missing.
+ */
+export const unchosenSavedAudience = "";
+
+/** Saved-audience membership as the builder holds it, possibly with no audience picked yet. */
+export type SavedAudienceMembershipDraft = {
+  readonly _tag: InSavedAudience["_tag"];
+  readonly operator: InSavedAudience["operator"];
+  readonly audienceId:
+    | InSavedAudience["audienceId"]
+    | typeof unchosenSavedAudience;
+};
+
 /** A leaf the builder edits: a catalogue condition or saved-audience membership. */
-export type AudienceFilterLeaf = AutomationConditionLeaf;
+export type AudienceFilterLeaf =
+  | AudienceCondition
+  | SavedAudienceMembershipDraft;
 
 /** The builder always edits a group, so a bare stored condition gets an AND root. */
 export const asRootGroup = <Leaf extends AudienceFilterLeaf>(
@@ -38,29 +57,153 @@ const monthBeforeTrigger: DatePeriod = {
   unit: "month",
 };
 
+/**
+ * Whether a tree holds only catalogue conditions, so a saved audience can
+ * keep it: no leaf is saved-audience membership.
+ */
+export const holdsOnlyConditions = (
+  group: AudienceFilterGroupOf<AudienceFilterLeaf>
+): group is AudienceFilterGroup =>
+  group.filters.every((filter) =>
+    filter._tag === "Group"
+      ? holdsOnlyConditions(filter)
+      : filter._tag === "Condition"
+  );
+
 /** A condition with the entry's defaults. */
-export const newConditionFrom = ({
+export const newConditionFrom = <
+  const Attribute extends AudienceAttributeDefinition["attribute"],
+  Defaults extends AudienceAttributeDefinition["defaults"],
+>({
   attribute,
   defaults,
-}: AudienceAttributeDefinition) => ({
+}: {
+  readonly attribute: Attribute;
+  readonly defaults: Defaults;
+}) => ({
   attribute,
   _tag: "Condition" as const,
   ...defaults,
 });
 
+const {
+  reservationCount,
+  firstVisit,
+  lastVisit,
+  campaignEmailCount,
+  hasAccount,
+  accountCreated,
+  locale: localeAttribute,
+  dotyposTags,
+  discountGroup,
+} = audienceAttributeCatalogue;
+
+/** Each attribute's starting condition, typed against its own condition shape. */
+const newConditions = {
+  reservationCount: () => newConditionFrom(reservationCount),
+  firstVisit: () => newConditionFrom(firstVisit),
+  lastVisit: () => newConditionFrom(lastVisit),
+  campaignEmailCount: () => newConditionFrom(campaignEmailCount),
+  hasAccount: () => newConditionFrom(hasAccount),
+  accountCreated: () => newConditionFrom(accountCreated),
+  locale: () => newConditionFrom(localeAttribute),
+  dotyposTags: () => newConditionFrom(dotyposTags),
+  discountGroup: () => newConditionFrom(discountGroup),
+} satisfies {
+  readonly [Attribute in AudienceAttribute]: () => AudienceConditionOf<Attribute>;
+};
+
 /** Starting values for a condition an operator adds or switches to. */
 export const newCondition = (attribute: AudienceAttribute): AudienceCondition =>
-  // Each entry's defaults are typed against its own attribute's condition.
-  newConditionFrom(audienceAttributeCatalogue[attribute]) as AudienceCondition;
+  newConditions[attribute]();
 
 /**
- * The audience a new saved-audience membership leaf holds until the operator
- * picks one. It is no valid audience ID, so the form reports it as missing.
+ * The choice and campaign params each count attribute accepts. The period
+ * and comparison stay as the controls emit them: an unfinished edit may fail
+ * their refinements until the form reports it.
  */
-export const unchosenSavedAudience = "" as AdministrationCampaignAudienceIdType;
+const isReservationCountChoices = Schema.is(
+  Schema.Struct({
+    dateBasis: reservationCount.params.dateBasis.field,
+    status: reservationCount.params.status.field,
+    stay: reservationCount.params.stay.field,
+    payment: reservationCount.params.payment.field,
+  })
+);
+
+const isCampaignEmailCountChoices = Schema.is(
+  Schema.Struct({
+    purpose: campaignEmailCount.params.purpose.field,
+    campaign: campaignEmailCount.params.campaign.field,
+  })
+);
+
+type CountAttribute = AudienceAttributeOfKind<"count">;
+type DateAttribute = AudienceAttributeOfKind<"date">;
+
+const countConditions = {
+  reservationCount: (edited) => {
+    const { attribute, params } = edited;
+    return attribute === "reservationCount" && isReservationCountChoices(params)
+      ? { ...edited, attribute, params }
+      : undefined;
+  },
+  campaignEmailCount: (edited) => {
+    const { attribute, params } = edited;
+    return attribute === "campaignEmailCount" &&
+      params.product === undefined &&
+      isCampaignEmailCountChoices(params)
+      ? { ...edited, attribute, params }
+      : undefined;
+  },
+} satisfies {
+  readonly [Attribute in CountAttribute]: (
+    edited: AudienceCountCondition
+  ) => AudienceConditionOf<Attribute> | undefined;
+};
+
+/**
+ * The catalogue condition of `attribute` that the shared count controls
+ * emitted, or `undefined` when the edit isn't one: another attribute, a
+ * choice the attribute doesn't offer, or a product filter on an attribute
+ * without one.
+ */
+export const editedCountCondition = (
+  attribute: CountAttribute,
+  edited: AudienceCountCondition
+): AudienceCondition | undefined => countConditions[attribute](edited);
+
+const dateConditions = {
+  firstVisit: (edited) =>
+    edited.attribute === "firstVisit"
+      ? { ...edited, attribute: edited.attribute }
+      : undefined,
+  lastVisit: (edited) =>
+    edited.attribute === "lastVisit"
+      ? { ...edited, attribute: edited.attribute }
+      : undefined,
+  accountCreated: (edited) =>
+    edited.attribute === "accountCreated" && edited.params === undefined
+      ? { ...edited, attribute: edited.attribute }
+      : undefined,
+} satisfies {
+  readonly [Attribute in DateAttribute]: (
+    edited: AudienceDateCondition
+  ) => AudienceConditionOf<Attribute> | undefined;
+};
+
+/**
+ * The catalogue condition of `attribute` that the shared date controls
+ * emitted, or `undefined` when the edit isn't one: another attribute or a
+ * product filter on an attribute without one.
+ */
+export const editedDateCondition = (
+  attribute: DateAttribute,
+  edited: AudienceDateCondition
+): AudienceCondition | undefined => dateConditions[attribute](edited);
 
 /** "Is in saved audience" with no audience picked yet. */
-export const newSavedAudienceMembership = (): InSavedAudience => ({
+export const newSavedAudienceMembership = (): SavedAudienceMembershipDraft => ({
   _tag: "InAudience",
   operator: "in",
   audienceId: unchosenSavedAudience,
