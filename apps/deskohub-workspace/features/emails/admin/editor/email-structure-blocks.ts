@@ -159,11 +159,16 @@ export const moveEmailEntry = <T>(
   return next;
 };
 
+/** The keys of `T` an object may leave out. */
+type OptionalKey<T> = {
+  [Key in keyof T]-?: object extends Pick<T, Key> ? Key : never;
+}[keyof T];
+
 /**
  * `object` with `key` set to `value`, or without `key` when `value` is
  * `undefined`. Draft keys are exact: an unset setting has no key at all.
  */
-export const withEmailSetting = <T extends object, K extends keyof T>(
+export const withEmailSetting = <T extends object, K extends OptionalKey<T>>(
   object: T,
   key: K,
   value: T[K] | undefined

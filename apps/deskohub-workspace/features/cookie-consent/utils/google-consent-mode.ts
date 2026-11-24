@@ -36,20 +36,20 @@ const consentSignalsByCategory = {
 
 type Gtag = NonNullable<Window["gtag"]>;
 
-/** The page's gtag queue, installed on first use so calls queue before GTM loads. */
+/**
+ * Calls the page's gtag as a method of `window`, installing a queueing one
+ * first so calls queue before GTM loads.
+ */
 function getGtag(): Gtag | undefined {
   if (globalThis.window === undefined) return undefined;
 
   window.dataLayer = window.dataLayer || [];
 
-  if (window.gtag) return window.gtag;
-
-  const gtag: Gtag = function gtag(...gtagArguments) {
+  window.gtag ||= function gtag(...gtagArguments) {
     window.dataLayer?.push(gtagArguments);
   };
-  window.gtag = gtag;
 
-  return gtag;
+  return (...gtagArguments) => window.gtag?.(...gtagArguments);
 }
 
 /** Queues Google consent mode's denied-by-default state before any tag runs. */
