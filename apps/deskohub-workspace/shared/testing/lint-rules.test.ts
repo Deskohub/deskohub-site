@@ -1165,7 +1165,12 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/reservation/probe.ts",
   "apps/deskohub-workspace/scripts/probe.ts",
   "apps/deskohub-workspace/shared/probe.ts",
+  "apps/deskohub-workspace/shared/probe.mts",
+  "apps/deskohub-workspace/features/reservation/probe.cts",
   "apps/deskohub-workspace/probe.ts",
+  "apps/deskohub-workspace/probe.tsx",
+  "apps/deskohub-workspace/probe.mts",
+  "apps/deskohub-workspace/probe.cts",
 ];
 const generatedProbes = [
   "packages/standard-schema/generated/probe.mts",
