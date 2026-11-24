@@ -99,16 +99,22 @@ const startSending = <E, R>(input: {
         createdAt: verdict.now,
       })
       .returning({ id: emailCampaignSends.id });
+    if (!updated) {
+      return yield* Effect.die("Campaign send status update returned no row.");
+    }
+    if (!send) {
+      return yield* Effect.die("Campaign send insert returned no row.");
+    }
     if (input.send.recipients.length > 0) {
       yield* db.insert(emailCampaignRecipients).values(
         input.send.recipients.map((recipient) => ({
           ...recipient,
-          sendId: send!.id,
+          sendId: send.id,
           statusUpdatedAt: verdict.now,
         }))
       );
     }
-    return { _tag: "Confirmed" as const, campaign: updated!, sendId: send!.id };
+    return { _tag: "Confirmed" as const, campaign: updated, sendId: send.id };
   });
 
 /** Older requested batches may already have reached a provider. */

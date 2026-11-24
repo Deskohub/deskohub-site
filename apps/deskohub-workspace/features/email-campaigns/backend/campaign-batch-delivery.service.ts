@@ -1372,6 +1372,7 @@ export class CampaignBatchDelivery extends Context.Service<
                     const ineligible = customerIds.flatMap(
                       (customerId, index): RecipientRequestDenial[] => {
                         const row = byId.get(customerId);
+                        const position = positions[index];
                         let reason:
                           | RecipientRequestDenial["reason"]
                           | undefined;
@@ -1381,7 +1382,9 @@ export class CampaignBatchDelivery extends Context.Service<
                           reason = "offer-unavailable";
                         else if (
                           identities.get(customerId) !==
-                          messages[positions[index]!]?.recipientIdentity
+                          (position === undefined
+                            ? undefined
+                            : messages[position]?.recipientIdentity)
                         )
                           reason = "recipient-payload-changed";
                         if (!reason) return [];
