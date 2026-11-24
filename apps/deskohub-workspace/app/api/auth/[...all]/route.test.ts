@@ -25,21 +25,18 @@ const callRoute = async (
   method: "GET" | "POST",
   init: RequestInit = {}
 ) => {
-  const { GET, POST } = (await import("./route")) as {
-    GET: (request: Request) => Promise<Response>;
-    POST: (request: Request) => Promise<Response>;
-  };
+  const { GET, POST } = await import("./route");
   const handler = method === "GET" ? GET : POST;
   wrapperIpCounter += 1;
+  const headers = new Headers({
+    origin: `https://${HOST}`,
+    "x-vercel-forwarded-for": `192.0.2.${wrapperIpCounter}`,
+  });
+  new Headers(init.headers).forEach((value, name) => {
+    headers.set(name, value);
+  });
   return handler(
-    new Request(`https://${HOST}/api/auth${path}`, {
-      ...init,
-      headers: {
-        origin: `https://${HOST}`,
-        "x-vercel-forwarded-for": `192.0.2.${wrapperIpCounter}`,
-        ...((init.headers as Record<string, string>) ?? {}),
-      },
-    })
+    new Request(`https://${HOST}/api/auth${path}`, { ...init, headers })
   );
 };
 

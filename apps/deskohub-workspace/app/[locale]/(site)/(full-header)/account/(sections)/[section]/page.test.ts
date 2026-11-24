@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import type { ReactElement } from "react";
+import { requireElement } from "@/app/route-element.test-utils";
 
 const AccountSectionPathCheck = mock(() => null);
 const getAccountSectionMetadata = mock((locale: string, section: string) => ({
@@ -20,9 +20,11 @@ const { default: CustomerAccountSectionPage, generateMetadata } = await import(
 );
 
 test("checks the section in the path", async () => {
-  const route = CustomerAccountSectionPage({
-    params: Promise.resolve({ section: "security" }),
-  }) as ReactElement<{ readonly section: Promise<string> }>;
+  const route = requireElement<{ readonly section: Promise<string> }>(
+    CustomerAccountSectionPage({
+      params: Promise.resolve({ section: "security" }),
+    })
+  );
 
   expect(route.type).toBe(AccountSectionPathCheck);
   expect(await route.props.section).toBe("security");

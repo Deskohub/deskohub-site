@@ -7,6 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import {
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
@@ -41,6 +42,7 @@ const fullBooking: AdministrationBookingSummary = {
     id: customerId,
     displayName: "Ada Lovelace",
     hasName: true,
+    lifecycle: "active",
     email: customerEmail,
     phone: "+420 111 222 333",
   },
@@ -144,11 +146,13 @@ describe("BookingAdministrationDetail", () => {
   });
 
   test("falls back to the phone when the customer has no email", async () => {
+    const customer = fullBooking.customer;
+    assert(customer);
     detail = {
       ...fullDetail,
       booking: {
         ...fullBooking,
-        customer: { ...fullBooking.customer!, email: null },
+        customer: { ...customer, email: null },
       },
     };
     const view = within(await prerenderBookingDetail());

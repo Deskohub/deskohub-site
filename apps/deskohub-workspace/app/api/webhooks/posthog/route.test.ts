@@ -1,7 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import {
   createWorkspaceEnv,
   env,
@@ -59,19 +59,24 @@ mock.module("@/shared/backend/email/posthog-email-delivery-polling", () => ({
 
 const { GET, POST } = await import("./route");
 
-interface WebhookResponseBody {
-  readonly message?: string;
-  readonly status?: string;
-  readonly reason?: string;
-  readonly error?: string;
-  readonly code?: string;
-}
+const webhookResponseBodySchema = Schema.Struct({
+  message: Schema.optionalKey(Schema.String),
+  status: Schema.optionalKey(Schema.String),
+  reason: Schema.optionalKey(Schema.String),
+  error: Schema.optionalKey(Schema.String),
+  code: Schema.optionalKey(Schema.String),
+});
 
 const send = async (request: Request) => {
   const response = await POST(request);
   return {
     status: response.status,
-    body: (await response.json()) as WebhookResponseBody,
+    body: Schema.decodeUnknownSync(webhookResponseBodySchema)(
+      await response.json(),
+      {
+        onExcessProperty: "error",
+      }
+    ),
   };
 };
 
