@@ -9,18 +9,37 @@ export type ContractServices<Groups extends HttpApiGroup.Constraint> =
   | HttpApiEndpoint.ServerServices<HttpApiGroup.Endpoints<Groups>>
   | HttpApiEndpoint.ClientServices<HttpApiGroup.Endpoints<Groups>>;
 
+/** A group whose identifier was widened to `string`, losing its endpoints' types. */
+type ErasedGroup<Group> = Group extends HttpApiGroup.Constraint
+  ? string extends HttpApiGroup.Identifier<Group>
+    ? Group
+    : never
+  : never;
+
+/** An endpoint whose identifier was widened to `string`, losing its schemas' types. */
+type ErasedEndpoint<Endpoint> = Endpoint extends HttpApiEndpoint.Constraint
+  ? string extends HttpApiEndpoint.Identifier<Endpoint>
+    ? Endpoint
+    : never
+  : never;
+
 /**
- * Accepts only an API whose schemas are typed and need no services: one
- * whose groups were widened, so its endpoints and their services are
- * unknown, or whose schemas need any service, fails to typecheck.
+ * Accepts only an API whose schemas are typed and need no services. An API
+ * with a group or endpoint widened to its constraint, whose services are then
+ * unknown, or whose schemas need any service, fails to typecheck. A group
+ * with no endpoints is typed, and passes.
  */
 export type ServiceFreeContract<Groups extends HttpApiGroup.Constraint> = [
-  HttpApiGroup.Endpoints<Groups>,
+  ErasedGroup<Groups> | ErasedEndpoint<HttpApiGroup.Endpoints<Groups>>,
 ] extends [never]
-  ? { readonly contractEndpoints: "typed endpoints" }
-  : [ContractServices<Groups>] extends [never]
+  ? [ContractServices<Groups>] extends [never]
     ? unknown
-    : { readonly contractServices: ContractServices<Groups> };
+    : { readonly contractServices: ContractServices<Groups> }
+  : {
+      readonly erasedContract:
+        | ErasedGroup<Groups>
+        | ErasedEndpoint<HttpApiGroup.Endpoints<Groups>>;
+    };
 
 /**
  * A reflected Administration API schema as the codec it is. Reflection types
