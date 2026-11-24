@@ -42,7 +42,7 @@ export interface ObservedService {
   readonly templateReady?: boolean | undefined;
 }
 
-/** The live web template, or null while the service does not exist. */
+/** The live API template, or null while the service does not exist. */
 export const liveTemplateOf = (
   observed: ObservedService | null
 ): LiveTemplate | null =>
@@ -68,7 +68,7 @@ export interface ReadbackDrift {
 }
 
 const expectedIngress = {
-  web: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
+  api: "INGRESS_TRAFFIC_ALL",
   "tasks-worker": "INGRESS_TRAFFIC_INTERNAL_ONLY",
   "scheduler-worker": "INGRESS_TRAFFIC_INTERNAL_ONLY",
 } satisfies Record<WorkspaceWorkload, string>;
@@ -103,8 +103,8 @@ export const trafficReadback = (observed: ObservedService): TrafficReadback => {
 
 /**
  * Drift between a live service and its declaration's fixed contract:
- * ingress, invoker IAM, and the deterministic worker URL queues and
- * schedules target.
+ * ingress, invoker IAM (required on every service), and the deterministic
+ * URL that the frontend, queues and schedules target and mint ID tokens for.
  */
 export const serviceReadbackDrift = (
   config: WorkspaceStackConfig,
@@ -114,7 +114,6 @@ export const serviceReadbackDrift = (
     expected === actual
       ? []
       : [{ workload: observed.workload, field, expected, observed: actual }];
-  const isWorker = observed.workload !== "web";
   return [
     ...drift(
       "ingress",
@@ -123,30 +122,28 @@ export const serviceReadbackDrift = (
     ),
     ...drift(
       "invokerIamDisabled",
-      String(!isWorker),
+      "false",
       String(observed.invokerIamDisabled)
     ),
-    ...(isWorker
-      ? drift(
-          "url",
-          workloadUrl(config, observed.workload),
-          observed.urls.find(
-            (url) => url === workloadUrl(config, observed.workload)
-          ) ??
-            observed.uri ??
-            "<unset>"
-        )
-      : []),
+    ...drift(
+      "url",
+      workloadUrl(config, observed.workload),
+      observed.urls.find(
+        (url) => url === workloadUrl(config, observed.workload)
+      ) ??
+        observed.uri ??
+        "<unset>"
+    ),
   ];
 };
 
 /**
- * Drift between the live web service and the release record: untagged
+ * Drift between the live API service and the release record: untagged
  * traffic must reach the expected release's revision and digest under the
  * record's traffic generation. Split, reconciling or failed traffic is
  * reported as unavailable rather than passing.
  */
-export const webTrafficDrift = (
+export const apiTrafficDrift = (
   record: ReleaseRecord,
   observed: ObservedService
 ): ReadonlyArray<ReadbackDrift> => {
@@ -157,7 +154,7 @@ export const webTrafficDrift = (
       ? []
       : [
           {
-            workload: "web" as const,
+            workload: "api" as const,
             field,
             expected: wanted,
             observed: actual ?? "<unavailable>",

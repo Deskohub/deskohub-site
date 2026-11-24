@@ -27,7 +27,7 @@ export class ReleaseServicesReconciling extends Data.TaggedError(
 }> {}
 
 export const releaseWorkloads: ReadonlyArray<WorkspaceWorkload> = [
-  "web",
+  "api",
   "tasks-worker",
   "scheduler-worker",
 ];
@@ -43,7 +43,7 @@ export const observeReleaseServices = Effect.gen(function* () {
 });
 
 /**
- * Refuse a record without a serving release while the web service or
+ * Refuse a record without a serving release while the API service or
  * either worker exists. Callers run it on the record version they are about
  * to write over, so no newer record slips in between check and write.
  */

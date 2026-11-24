@@ -16,7 +16,7 @@ import type { ObservedService, ObservedTrafficStatus } from "../readback";
 import { templateSpecAnnotation } from "../resources/service-declarations";
 import {
   workloadServiceIds,
-  workspaceWebServiceId,
+  workspaceApiServiceId,
 } from "../resources/workload-names";
 import {
   type ObservedRevision,
@@ -327,7 +327,7 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
     revision: Effect.fn("CloudRunServiceReadback.revision")(function* (
       revision: string
     ) {
-      return yield* readRevision(workspaceWebServiceId, revision);
+      return yield* readRevision(workspaceApiServiceId, revision);
     }),
   });
 });

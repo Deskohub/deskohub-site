@@ -2,9 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as ArtifactRegistry from "@alchemy.run/gcp/ArtifactRegistry";
 import * as CloudScheduler from "@alchemy.run/gcp/CloudScheduler";
 import * as CloudTasks from "@alchemy.run/gcp/CloudTasks";
-import * as Compute from "@alchemy.run/gcp/Compute";
 import * as IAM from "@alchemy.run/gcp/IAM";
-import * as Logging from "@alchemy.run/gcp/Logging";
 import * as Monitoring from "@alchemy.run/gcp/Monitoring";
 import * as Run from "@alchemy.run/gcp/Run";
 import * as Storage from "@alchemy.run/gcp/Storage";
@@ -45,25 +43,23 @@ import {
   runAsHolder,
   testWriterToken,
 } from "./release/release-writer.test-utils";
-import { EdgeBackendService } from "./resources/edge-backend-service";
-import { declareWorkspaceEdge } from "./resources/edge-declarations";
-import { EdgeSecurityPolicy } from "./resources/edge-security-policy";
 import {
   alertPolicyDeclarations,
   artifactRepositoryProps,
   mobileUpdatesBucketProps,
   mobileUpdatesPublisherGrant,
   secretAccessorGrants,
-  workerInvokerGrants,
+  serviceInvokerGrants,
 } from "./resources/platform-declarations";
 import { queueProps } from "./resources/queue-declarations";
 import { scheduleJobProps } from "./resources/schedule-declarations";
 import {
+  apiServiceProps,
+  apiTemplateSpecFingerprint,
   templateSpecAnnotation,
-  webServiceProps,
-  webTemplateSpecFingerprint,
   workerServiceProps,
 } from "./resources/service-declarations";
+import { workloadUrl } from "./resources/workload-names";
 import { evaluate } from "./stack-evaluation.test-utils";
 import { workspaceSurfaceClassification } from "./surface-classification";
 import {
@@ -114,7 +110,7 @@ const servingRecord = () => {
     settleApply(pending, {
       expectedGeneration: 2,
       readback: {
-        servingRevision: "workspace-web-r1-aaaaaaa",
+        servingRevision: "workspace-api-r1-aaaaaaa",
         servingImageDigest: digest,
         trafficGeneration: 1,
       },
@@ -150,20 +146,9 @@ describe("Alchemy beta.87 surface", () => {
         "GCP.ArtifactRegistry.Repository": ArtifactRegistry.Repository,
         "GCP.CloudScheduler.Job": CloudScheduler.Job,
         "GCP.CloudTasks.Queue": CloudTasks.Queue,
-        "GCP.Compute.GlobalAddress": Compute.GlobalAddress,
-        "GCP.Compute.GlobalForwardingRule": Compute.GlobalForwardingRule,
-        "GCP.Compute.RegionNetworkEndpointGroup":
-          Compute.RegionNetworkEndpointGroup,
-        "GCP.Compute.SslCertificate": Compute.SslCertificate,
-        "GCP.Compute.TargetHttpProxy": Compute.TargetHttpProxy,
-        "GCP.Compute.TargetHttpsProxy": Compute.TargetHttpsProxy,
-        "GCP.Compute.UrlMap": Compute.UrlMap,
         "GCP.IAM.Member": IAM.Member,
-        "GCP.Logging.Exclusion": Logging.Exclusion,
         "GCP.Monitoring.AlertPolicy": Monitoring.AlertPolicy,
         "GCP.Storage.Bucket": Storage.Bucket,
-        "DeskohubWorkspace.EdgeBackendService": EdgeBackendService,
-        "DeskohubWorkspace.EdgeSecurityPolicy": EdgeSecurityPolicy,
       })
     );
     const alchemyOwned = workspaceSurfaceClassification.flatMap((item) =>
@@ -176,7 +161,11 @@ describe("Alchemy beta.87 surface", () => {
       }
       expect(constructors.get(resourceType)?.Type).toBe(resourceType);
     }
-    // The edge has no Terraform owner left.
+    // No load balancer, CDN, Cloud Armor or log exclusion fronts the
+    // IAM-private services, and nothing is owned by Terraform.
+    expect(
+      alchemyOwned.filter((type) => /^GCP\.(Compute|Logging)\./.test(type))
+    ).toEqual([]);
     expect(
       new Set(workspaceSurfaceClassification.map((item) => item.owner.kind))
     ).toEqual(
@@ -193,18 +182,26 @@ describe("Alchemy beta.87 surface", () => {
     expect(countBy(types)).toEqual({
       "GCP.ArtifactRegistry.Repository": 1,
       "GCP.Storage.Bucket": 1,
-      "GCP.IAM.Member": 2,
+      "GCP.IAM.Member": 3,
       "GCP.CloudTasks.Queue": 6,
       "GCP.CloudScheduler.Job": 10,
       "GCP.Monitoring.AlertPolicy": 3,
     });
-    // Both publisher grants name the declared bucket's output.
-    for (const id of ["MobileUpdatesPublisher", "MobileUpdatesPublisherRead"]) {
+    // The publisher and API reader grants name the declared bucket's output.
+    for (const id of [
+      "MobileUpdatesPublisher",
+      "MobileUpdatesPublisherRead",
+      "MobileUpdatesApiRead",
+    ]) {
       expect(isOutput(enabled.resources[id]?.Props.name)).toBe(true);
     }
     expect(enabled.resources.MobileUpdatesPublisherRead?.Props.role).toBe(
       "roles/storage.legacyObjectReader"
     );
+    expect(enabled.resources.MobileUpdatesApiRead?.Props).toMatchObject({
+      role: "roles/storage.objectViewer",
+      member: `serviceAccount:${sandboxConfig.serviceAccounts.apiRuntime}`,
+    });
   });
 
   test("declares no Scheduler job where schedules are not authorized", async () => {
@@ -215,6 +212,45 @@ describe("Alchemy beta.87 surface", () => {
         (entry) => entry.Type === "GCP.CloudScheduler.Job"
       )
     ).toEqual([]);
+  });
+
+  test("declares the paused proof tick job only for a run-suffixed sandbox", async () => {
+    const proofRun = await evaluate(
+      declareWorkspaceFoundation(
+        Effect.runSync(
+          decodeWorkspaceStackConfig({
+            ...sandboxConfigInput,
+            disposableQueueSuffix: "r42-1",
+          })
+        )
+      )
+    );
+    expect(proofRun.exit._tag).toBe("Success");
+    const jobs = Object.values(proofRun.resources).filter(
+      (entry) => entry.Type === "GCP.CloudScheduler.Job"
+    );
+    expect(jobs.map((job) => job.Props)).toEqual([
+      expect.objectContaining({
+        jobId: "workspace-proof-tick-r42-1",
+        paused: true,
+        httpTarget: expect.objectContaining({
+          uri: `${workloadUrl(sandboxConfig, "scheduler-worker")}/api/cron/workspace/proof-tick`,
+          oidcToken: {
+            serviceAccountEmail: sandboxConfig.serviceAccounts.schedulerInvoker,
+            audience: workloadUrl(sandboxConfig, "scheduler-worker"),
+          },
+        }),
+      }),
+    ]);
+    const production = await evaluate(
+      declareWorkspaceFoundation(productionConfig)
+    );
+    expect(
+      Object.values(production.resources).some(
+        (entry) =>
+          entry.Props.jobId?.startsWith("workspace-proof-tick") === true
+      )
+    ).toBe(false);
   });
 
   test("fails closed for preview services until IAP exists", async () => {
@@ -248,50 +284,76 @@ describe("Alchemy beta.87 surface", () => {
       countBy(Object.values(resources).map((entry) => entry.Type))
     ).toMatchObject({
       "GCP.Run.Service": 3,
-      "GCP.IAM.Member": 6,
+      // Three foundation grants, four invokers and two secret accessors.
+      "GCP.IAM.Member": 9,
     });
-    for (const id of ["TasksWorkerInvoker", "SchedulerWorkerInvoker"]) {
+    for (const id of [
+      "TasksWorkerInvoker",
+      "SchedulerWorkerInvoker",
+      "FrontendApiInvoker",
+      "DeployerApiInvoker",
+    ]) {
       expect(isOutput(resources[id]?.Props.name)).toBe(true);
     }
     const secretOf = (id: string) =>
       resources[id]?.Props.template.containers[0].env.find(
         (env: { name: string }) => env.name === "DATABASE_URL"
       )?.valueSource.secretKeyRef;
-    for (const id of ["WorkspaceWeb", "WorkspaceTasksWorker"]) {
+    for (const id of ["WorkspaceApi", "WorkspaceTasksWorker"]) {
       expect(isOutput(secretOf(id)?.secret)).toBe(true);
       expect(secretOf(id)?.version).toBe("3");
     }
     expect(secretOf("WorkspaceSchedulerWorker")).toBeUndefined();
   });
 
-  test("points the edge's endpoint group at the declared web service ID", async () => {
-    const served = await evaluate(
-      Effect.gen(function* () {
-        const services = yield* declareWorkspaceServices(
-          sandboxConfig,
-          servingRecord(),
-          now
-        );
-        return yield* declareWorkspaceEdge(
-          sandboxConfig,
-          {
-            domains: ["workspace.example.com"],
-            enableHttps: true,
-            staticCdnEnabled: false,
-            wafPreview: true,
-            authRateLimitPerMinute: 120,
-          },
-          services?.webServiceId ?? "missing-web-service"
-        );
-      })
-    );
-    expect(served.exit._tag).toBe("Success");
-    const { resources } = served;
-    // The NEG takes the web service's short ID attribute, by reference.
-    expect(resources.WorkspaceWeb?.Props.serviceId).toBe("workspace-web");
-    const service = resources.EdgeWebEndpointGroup?.Props.cloudRun.service;
-    expect(isOutput(service)).toBe(true);
-    expect(Bun.inspect(service)).toBe("WorkspaceWeb.serviceId");
+  test("lets only the frontend, and in the sandbox the deployer, invoke the API", async () => {
+    const invokersOf = async (config: WorkspaceStackConfig) => {
+      const served = await evaluate(
+        declareWorkspaceServices(config, servingRecord(), now)
+      );
+      expect(served.exit._tag).toBe("Success");
+      return Object.entries(served.resources)
+        .filter(([, entry]) => entry.Props.role === "roles/run.invoker")
+        .map(([id, entry]) => ({
+          id,
+          service: Bun.inspect(entry.Props.name),
+          member: entry.Props.member,
+        }));
+    };
+    expect(await invokersOf(sandboxConfig)).toEqual([
+      {
+        id: "TasksWorkerInvoker",
+        service: "WorkspaceTasksWorker.name",
+        member: `serviceAccount:${sandboxConfig.serviceAccounts.tasksInvoker}`,
+      },
+      {
+        id: "SchedulerWorkerInvoker",
+        service: "WorkspaceSchedulerWorker.name",
+        member: `serviceAccount:${sandboxConfig.serviceAccounts.schedulerInvoker}`,
+      },
+      {
+        id: "FrontendApiInvoker",
+        service: "WorkspaceApi.name",
+        member: `serviceAccount:${sandboxConfig.serviceAccounts.frontendInvoker}`,
+      },
+      {
+        id: "DeployerApiInvoker",
+        service: "WorkspaceApi.name",
+        member: `serviceAccount:${sandboxConfig.serviceAccounts.deployer}`,
+      },
+    ]);
+    const production = await invokersOf(productionConfig);
+    expect(production.map((grant) => grant.id)).toEqual([
+      "TasksWorkerInvoker",
+      "SchedulerWorkerInvoker",
+      "FrontendApiInvoker",
+    ]);
+    // No service is public.
+    expect(
+      [...(await invokersOf(sandboxConfig)), ...production].filter((grant) =>
+        /allUsers|allAuthenticatedUsers/.test(grant.member)
+      )
+    ).toEqual([]);
   });
 
   test("declares services only from the record at the fenced generation", async () => {
@@ -369,27 +431,27 @@ describe("Alchemy beta.87 surface", () => {
     expect(refused.resources).toEqual({});
   });
 
-  test("a plan declares the web template its following deploy decides", async () => {
+  test("a plan declares the API template its following deploy decides", async () => {
     const record = servingRecord();
     // Cloud Run runs the release's template from an older spec.
     const olderSpec = ReleaseServiceReadback.of({
       service: (workload) =>
         Effect.succeed(
-          workload === "web"
+          workload === "api"
             ? {
                 workload,
-                uri: undefined,
-                urls: [],
-                ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
-                invokerIamDisabled: true,
+                uri: workloadUrl(sandboxConfig, "api"),
+                urls: [workloadUrl(sandboxConfig, "api")],
+                ingress: "INGRESS_TRAFFIC_ALL",
+                invokerIamDisabled: false,
                 terminalConditionState: "CONDITION_SUCCEEDED",
                 reconciling: false,
                 traffic: [
-                  { revision: "workspace-web-r1-aaaaaaa", percent: 100 },
+                  { revision: "workspace-api-r1-aaaaaaa", percent: 100 },
                 ],
-                revisionDigests: { "workspace-web-r1-aaaaaaa": digest },
+                revisionDigests: { "workspace-api-r1-aaaaaaa": digest },
                 annotations: {},
-                templateRevision: "workspace-web-r1-aaaaaaa",
+                templateRevision: "workspace-api-r1-aaaaaaa",
                 templateImageDigest: digest,
                 templateSpecFingerprint: "spec-older",
                 templateReady: true,
@@ -417,39 +479,39 @@ describe("Alchemy beta.87 surface", () => {
 
     const planned = await declareAs("plan");
     expect(planned.exit._tag).toBe("Success");
-    const template = planned.resources.WorkspaceWeb?.Props.template;
+    const template = planned.resources.WorkspaceApi?.Props.template;
     expect(template?.revision).toBe(
-      `workspace-web-r1-aaaaaaa-t${record.generation + 1}`
+      `workspace-api-r1-aaaaaaa-t${record.generation + 1}`
     );
     expect(template?.annotations?.[templateSpecAnnotation]).toBe(
-      webTemplateSpecFingerprint(sandboxConfig, digest)
+      apiTemplateSpecFingerprint(sandboxConfig, digest)
     );
     // The plan persisted nothing; a deploy persists the decision first.
     if (planned.exit._tag === "Success") {
       expect(planned.exit.value.stored).toEqual(heldBy(record, "plan"));
     }
     const deployed = await declareAs("deploy");
-    expect(deployed.resources.WorkspaceWeb?.Props.template?.revision).toBe(
-      "workspace-web-r1-aaaaaaa"
+    expect(deployed.resources.WorkspaceApi?.Props.template?.revision).toBe(
+      "workspace-api-r1-aaaaaaa"
     );
   });
 
-  test("refuses an empty record while the web service is live", async () => {
-    const liveWeb = (live: boolean) =>
+  test("refuses an empty record while the API service is live", async () => {
+    const liveApi = (live: boolean) =>
       ReleaseServiceReadback.of({
         service: (workload) =>
           Effect.succeed(
-            live && workload === "web"
+            live && workload === "api"
               ? {
                   workload,
-                  uri: undefined,
-                  urls: [],
-                  ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
-                  invokerIamDisabled: true,
+                  uri: workloadUrl(sandboxConfig, "api"),
+                  urls: [workloadUrl(sandboxConfig, "api")],
+                  ingress: "INGRESS_TRAFFIC_ALL",
+                  invokerIamDisabled: false,
                   terminalConditionState: "CONDITION_SUCCEEDED",
                   reconciling: false,
                   traffic: [
-                    { revision: "workspace-web-r3-aaaaaaa", percent: 100 },
+                    { revision: "workspace-api-r3-aaaaaaa", percent: 100 },
                   ],
                   revisionDigests: {},
                   annotations: {},
@@ -469,7 +531,7 @@ describe("Alchemy beta.87 surface", () => {
             runAsHolder(null)
           ).pipe(
             Effect.provideService(ReleaseRecordStore, store),
-            Effect.provideService(ReleaseServiceReadback, liveWeb(live))
+            Effect.provideService(ReleaseServiceReadback, liveApi(live))
           );
         })
       );
@@ -596,7 +658,7 @@ describe("Alchemy beta.87 surface", () => {
     expect(tasks.template?.containers?.[0]).toMatchObject({
       image: `europe-west1-docker.pkg.dev/deskohub-ws-sandbox/workspace/workspace@${digest}`,
       env: [
-        { name: "WORKSPACE_RUNTIME_ROLE", value: "tasks-worker" },
+        { name: "WORKSPACE_SERVICE_ROLE", value: "tasks-worker" },
         {
           name: "WORKSPACE_TASKS_AUDIENCE",
           value: tasks.customAudiences?.[0],
@@ -621,7 +683,7 @@ describe("Alchemy beta.87 surface", () => {
     // The secret is not granted to the scheduler worker.
     expect(scheduler.template?.containers?.[0]).toMatchObject({
       env: [
-        { name: "WORKSPACE_RUNTIME_ROLE", value: "scheduler-worker" },
+        { name: "WORKSPACE_SERVICE_ROLE", value: "scheduler-worker" },
         {
           name: "WORKSPACE_SCHEDULER_AUDIENCE",
           value: scheduler.customAudiences?.[0],
@@ -660,75 +722,37 @@ describe("Alchemy beta.87 surface", () => {
       WORKSPACE_SCHEDULER_INVOKER_EMAIL:
         jobTarget.httpTarget?.oidcToken?.serviceAccountEmail,
     });
-    // The public web service accepts no Google invoker.
-    const web = webServiceProps(sandboxConfig, record, now);
+    // The API service takes no Cloud Tasks or Scheduler invoker identity.
+    const api = apiServiceProps(sandboxConfig, record, now);
     expect(
-      JSON.stringify(web?.template?.containers?.[0]).includes("INVOKER")
+      JSON.stringify(api?.template?.containers?.[0]).includes("INVOKER")
     ).toBe(false);
   });
 
-  test("adds the collector sidecar only when the stage names its image", () => {
+  test("runs the app alone on port 8080 with a /healthz startup probe", () => {
     const record = servingRecord();
-    const collectorDigest = `sha256:${"c".repeat(64)}`;
-    const withCollector = Effect.runSync(
-      decodeWorkspaceStackConfig({
-        ...sandboxConfigInput,
-        telemetryCollectorImage: collectorDigest,
-      })
-    );
-    const declared = (config: WorkspaceStackConfig) => [
-      webServiceProps(config, record, now),
-      workerServiceProps(config, "tasks-worker", digest),
-      workerServiceProps(config, "scheduler-worker", digest),
-    ];
-
-    // Without the field every service runs the app alone, unnamed.
-    for (const props of declared(sandboxConfig)) {
+    for (const props of [
+      apiServiceProps(sandboxConfig, record, now),
+      workerServiceProps(sandboxConfig, "tasks-worker", digest),
+      workerServiceProps(sandboxConfig, "scheduler-worker", digest),
+    ]) {
       const containers = props?.template?.containers ?? [];
       expect(containers).toHaveLength(1);
-      expect(containers[0]).not.toHaveProperty("name");
-      expect(containers[0]).not.toHaveProperty("dependsOn");
-      expect(JSON.stringify(containers)).not.toContain("OTLP");
-    }
-
-    for (const props of declared(withCollector)) {
-      const [app, collector, ...rest] = props?.template?.containers ?? [];
-      expect(rest).toEqual([]);
-      // The app stays first, so readback reads its image as the template's.
-      expect(app).toMatchObject({
-        name: "workspace",
+      expect(containers[0]).toMatchObject({
         image: `europe-west1-docker.pkg.dev/deskohub-ws-sandbox/workspace/workspace@${digest}`,
         ports: [{ containerPort: 8080 }],
-        dependsOn: ["otel-collector"],
+        startupProbe: { httpGet: { path: "/healthz", port: 8080 } },
       });
-      expect(
-        app !== undefined && "env" in app ? app.env : undefined
-      ).toContainEqual({
-        name: "WORKSPACE_OTLP_ENDPOINT",
-        value: "http://127.0.0.1:4318",
-      });
-      // Only the app takes ingress; the collector serves its health port.
-      expect(collector).toEqual({
-        name: "otel-collector",
-        image: `europe-west1-docker.pkg.dev/deskohub-ws-sandbox/workspace/workspace-otel-collector@${collectorDigest}`,
-        startupProbe: expect.objectContaining({
-          httpGet: { path: "/", port: 13133 },
-        }),
-        livenessProbe: expect.objectContaining({
-          httpGet: { path: "/", port: 13133 },
-        }),
-      });
+      // Telemetry leaves the app directly; no collector sidecar or
+      // loopback exporter is wired.
+      expect(JSON.stringify(containers)).not.toContain("OTLP");
+      expect(JSON.stringify(containers)).not.toContain("TRACE_PROJECT");
     }
-
-    // The sidecar is part of the web spec, so it mints its own revision.
-    expect(webTemplateSpecFingerprint(withCollector, digest)).not.toBe(
-      webTemplateSpecFingerprint(sandboxConfig, digest)
-    );
   });
 
-  test("plans the web service from the release record only", () => {
+  test("plans the API service from the release record only", () => {
     expect(
-      webServiceProps(sandboxConfig, emptyReleaseRecord, now)
+      apiServiceProps(sandboxConfig, emptyReleaseRecord, now)
     ).toBeUndefined();
     const staged = Effect.runSync(
       stage(emptyReleaseRecord, {
@@ -748,12 +772,15 @@ describe("Alchemy beta.87 surface", () => {
         candidateReadback: null,
       })
     );
-    expect(webServiceProps(sandboxConfig, pending, now)).toMatchObject({
-      serviceId: "workspace-web",
-      ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
-      defaultUriDisabled: true,
-      template: { revision: "workspace-web-r1-aaaaaaa" },
-      traffic: [{ revision: "workspace-web-r1-aaaaaaa", percent: 100 }],
+    const api = apiServiceProps(sandboxConfig, pending, now);
+    // The default run.app URL stays on; IAM, not ingress, keeps it private.
+    expect(api).not.toHaveProperty("defaultUriDisabled");
+    expect(api).toMatchObject({
+      serviceId: "workspace-api",
+      ingress: "INGRESS_TRAFFIC_ALL",
+      invokerIamDisabled: false,
+      template: { revision: "workspace-api-r1-aaaaaaa" },
+      traffic: [{ revision: "workspace-api-r1-aaaaaaa", percent: 100 }],
     });
   });
 
@@ -771,7 +798,7 @@ describe("Alchemy beta.87 surface", () => {
     expect(mobileUpdatesBucketProps(productionConfig).forceDestroy).toBe(false);
     expect(
       [
-        ...workerInvokerGrants(sandboxConfig),
+        ...serviceInvokerGrants(sandboxConfig),
         ...secretAccessorGrants(sandboxConfig),
         mobileUpdatesPublisherGrant(sandboxConfig),
       ].map(({ props }) => [
@@ -791,9 +818,19 @@ describe("Alchemy beta.87 surface", () => {
         `serviceAccount:${sandboxConfig.serviceAccounts.schedulerInvoker}`,
       ],
       [
+        "workspace-api",
+        "roles/run.invoker",
+        `serviceAccount:${sandboxConfig.serviceAccounts.frontendInvoker}`,
+      ],
+      [
+        "workspace-api",
+        "roles/run.invoker",
+        `serviceAccount:${sandboxConfig.serviceAccounts.deployer}`,
+      ],
+      [
         "workspace-database-url",
         "roles/secretmanager.secretAccessor",
-        `serviceAccount:${sandboxConfig.serviceAccounts.webRuntime}`,
+        `serviceAccount:${sandboxConfig.serviceAccounts.apiRuntime}`,
       ],
       [
         "workspace-database-url",

@@ -37,7 +37,7 @@ export class ReleaseServiceReadback extends Context.Service<
     readonly service: (
       workload: WorkspaceWorkload
     ) => Effect.Effect<ObservedService | null, ReleaseReadbackUnavailable>;
-    /** One web service revision, or null when Cloud Run has none by that name. */
+    /** One API service revision, or null when Cloud Run has none by that name. */
     readonly revision: (
       revision: string
     ) => Effect.Effect<ObservedRevision | null, ReleaseReadbackUnavailable>;

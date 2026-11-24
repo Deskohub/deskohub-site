@@ -23,7 +23,6 @@ import {
   workloadAudience,
   workloadRuntimeServiceAccount,
   workloadServiceIds,
-  workspaceArtifactRepositoryId,
   workspaceImageReference,
   workspaceLabels,
 } from "./workload-names";
@@ -45,6 +44,9 @@ const secretEnvironment = (
       },
     }));
 
+/** The port every Workspace container listens on. */
+const workspaceContainerPort = 8080;
+
 /** A worker's request timeout covers the longest handler budget it serves. */
 const workerTimeout = (workload: "tasks-worker" | "scheduler-worker") =>
   toGcpDuration(
@@ -62,14 +64,14 @@ const workerTimeout = (workload: "tasks-worker" | "scheduler-worker") =>
 
 /**
  * The OIDC identity and audience a private worker accepts, the ones its
- * queue or schedule signs tokens with; the web service accepts none.
+ * queue or schedule signs tokens with; the API service accepts none.
  */
 const invokerEnvironment = (
   config: WorkspaceStackConfig,
   workload: WorkspaceWorkload
 ) => {
   switch (workload) {
-    case "web":
+    case "api":
       return [];
     case "tasks-worker":
       return [
@@ -96,84 +98,34 @@ const invokerEnvironment = (
   }
 };
 
-/** The collector sidecar image in the stage's Workspace repository. */
-export const workspaceTelemetryCollectorImageName = "workspace-otel-collector";
-
-/** The name of the app container once the revision has a sidecar. */
-export const workspaceAppContainerName = "workspace";
-
-/** The name of the OpenTelemetry collector sidecar container. */
-export const telemetryCollectorContainerName = "otel-collector";
-
 /**
- * The collector's loopback OTLP/HTTP receiver, as
- * `apps/deskohub-workspace/otel-collector.cloudrun.yaml` binds it.
- */
-export const telemetryCollectorOtlpEndpoint = "http://127.0.0.1:4318";
-
-/** The collector's `health_check` extension port, from the same config. */
-const telemetryCollectorHealthPort = 13133;
-
-const telemetryCollectorContainer = (
-  config: WorkspaceStackConfig,
-  imageDigest: ImageDigest
-) => ({
-  name: telemetryCollectorContainerName,
-  image: `${config.region}-docker.pkg.dev/${config.projectId}/${workspaceArtifactRepositoryId}/${workspaceTelemetryCollectorImageName}@${imageDigest}`,
-  // The app starts only once the collector reports healthy.
-  startupProbe: {
-    httpGet: { path: "/", port: telemetryCollectorHealthPort },
-    periodSeconds: 2,
-    timeoutSeconds: 1,
-    failureThreshold: 30,
-  },
-  livenessProbe: {
-    httpGet: { path: "/", port: telemetryCollectorHealthPort },
-    periodSeconds: 30,
-    timeoutSeconds: 5,
-    failureThreshold: 3,
-  },
-});
-
-/**
- * The containers of a revision: the app alone, or, when the stage names a
- * collector image, the named app container that alone takes ingress and
- * starts after the collector sidecar it exports spans to.
+ * The single container of a revision. Every service runs the same image;
+ * `WORKSPACE_SERVICE_ROLE` picks the routes it mounts, so a worker never
+ * serves `/rpc` and the API never serves worker paths. Telemetry goes from
+ * the app to PostHog directly; no collector runs beside it.
  */
 const containers = (
   config: WorkspaceStackConfig,
   workload: WorkspaceWorkload,
   imageDigest: ImageDigest
-) => {
-  const app = {
+) => [
+  {
     image: workspaceImageReference(config, imageDigest),
-    ports: [{ containerPort: 8080 }],
+    ports: [{ containerPort: workspaceContainerPort }],
     env: [
-      { name: "WORKSPACE_RUNTIME_ROLE", value: workload },
+      { name: "WORKSPACE_SERVICE_ROLE", value: workload },
       ...invokerEnvironment(config, workload),
       ...secretEnvironment(config, workload),
     ],
-  };
-  const collectorImage = config.telemetryCollectorImage;
-  if (collectorImage === undefined) {
-    return [app];
-  }
-  return [
-    {
-      name: workspaceAppContainerName,
-      ...app,
-      env: [
-        ...app.env,
-        {
-          name: "WORKSPACE_OTLP_ENDPOINT",
-          value: telemetryCollectorOtlpEndpoint,
-        },
-      ],
-      dependsOn: [telemetryCollectorContainerName],
+    // Cloud Run routes traffic to an instance only once it reports healthy.
+    startupProbe: {
+      httpGet: { path: "/healthz", port: workspaceContainerPort },
+      periodSeconds: 2,
+      timeoutSeconds: 1,
+      failureThreshold: 30,
     },
-    telemetryCollectorContainer(config, collectorImage),
-  ];
-};
+  },
+];
 
 /**
  * The template annotation carrying the fingerprint of the template spec,
@@ -181,29 +133,29 @@ const containers = (
  */
 export const templateSpecAnnotation = "deskohub.workspace/template-spec";
 
-/** The web revision template for one image, without its revision name. */
-const webTemplateSpec = (
+/** The API revision template for one image, without its revision name. */
+const apiTemplateSpec = (
   config: WorkspaceStackConfig,
   imageDigest: ImageDigest
 ) => ({
-  serviceAccount: config.serviceAccounts.webRuntime,
+  serviceAccount: config.serviceAccounts.apiRuntime,
   timeout: "300s",
   scaling: {
     minInstanceCount: 0,
-    maxInstanceCount: config.capacity.webMaxInstances,
+    maxInstanceCount: config.capacity.apiMaxInstances,
   },
-  containers: containers(config, "web", imageDigest),
+  containers: containers(config, "api", imageDigest),
 });
 
 /**
- * A short sha256 fingerprint of the web template spec for one image. Two
+ * A short sha256 fingerprint of the API template spec for one image. Two
  * templates with the same fingerprint may share a revision name.
  */
-export const webTemplateSpecFingerprint = (
+export const apiTemplateSpecFingerprint = (
   config: WorkspaceStackConfig,
   imageDigest: ImageDigest
 ) =>
-  sha256Hex(JSON.stringify(webTemplateSpec(config, imageDigest))).slice(0, 16);
+  sha256Hex(JSON.stringify(apiTemplateSpec(config, imageDigest))).slice(0, 16);
 
 /** The service annotation carrying the record's traffic generation. */
 export const trafficGenerationAnnotation =
@@ -235,7 +187,7 @@ const byReleaseId = Order.mapInput(
  * compares the traffic array in order, so an order taken from the record
  * would make the next plan report an update.
  */
-export const webTraffic = (
+export const apiTraffic = (
   record: ReleaseRecord,
   now: DateTime.Utc
 ): ReadonlyArray<TrafficTarget> => {
@@ -270,9 +222,10 @@ export const webTraffic = (
 };
 
 /**
- * The public web service. Only the external load balancer reaches it
- * (`declareWorkspaceEdge`), and its default URL is off so traffic cannot
- * bypass Cloud Armor.
+ * The IAM-private API service. Its default `run.app` URL takes traffic
+ * from anywhere, and Cloud Run rejects every caller without
+ * `roles/run.invoker` before a request reaches the container: only the
+ * frontend identity (and, in the sandbox, the deployer) holds it.
  *
  * The template is the candidate, else the revision last materialized; only
  * the very first release takes its template from the pending promotion. A
@@ -281,13 +234,13 @@ export const webTraffic = (
  * is declared before a release serves.
  */
 /**
- * The revision name and image the web template is declared with: the
+ * The revision name and image the API template is declared with: the
  * candidate, else the materialized template under the name the record
  * declared it, else the serving release. `specFingerprint` is the spec a
  * minted name was decided for, or null for a release's own name. Null
  * before a release serves.
  */
-export const declaredWebTemplate = (record: ReleaseRecord) => {
+export const declaredApiTemplate = (record: ReleaseRecord) => {
   const serving = servingDeployment(record);
   if (serving === null) {
     return null;
@@ -306,37 +259,36 @@ export const declaredWebTemplate = (record: ReleaseRecord) => {
   };
 };
 
-export const webServiceProps = (
+export const apiServiceProps = (
   config: WorkspaceStackConfig,
   record: ReleaseRecord,
   now: DateTime.Utc
 ): ServiceProps | undefined => {
-  const template = declaredWebTemplate(record);
+  const template = declaredApiTemplate(record);
   if (template === null) {
     return undefined;
   }
   const { revision } = template;
   return {
-    serviceId: workloadServiceIds.web,
+    serviceId: workloadServiceIds.api,
     location: config.region,
     labels: workspaceLabels(config),
-    ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
-    invokerIamDisabled: true,
-    defaultUriDisabled: true,
+    ingress: "INGRESS_TRAFFIC_ALL",
+    invokerIamDisabled: false,
     annotations: {
       [trafficGenerationAnnotation]: String(record.trafficGeneration),
     },
     template: {
       revision,
       annotations: {
-        [templateSpecAnnotation]: webTemplateSpecFingerprint(
+        [templateSpecAnnotation]: apiTemplateSpecFingerprint(
           config,
           template.imageDigest
         ),
       },
-      ...webTemplateSpec(config, template.imageDigest),
+      ...apiTemplateSpec(config, template.imageDigest),
     },
-    traffic: [...webTraffic(record, now)],
+    traffic: [...apiTraffic(record, now)],
   };
 };
 

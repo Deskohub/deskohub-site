@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
 import {
   decodeWorkspaceStackConfig,
-  plainHttpEdgeProject,
   type WorkspaceStackConfig,
 } from "./stack-config";
 
@@ -20,7 +19,8 @@ export const sandboxConfigInput = {
   mobileUpdatesBucket: "deskohub-ws-sandbox-mobile-updates",
   serviceAccounts: {
     deployer: sandboxServiceAccount("workspace-deployer"),
-    webRuntime: sandboxServiceAccount("workspace-web"),
+    apiRuntime: sandboxServiceAccount("workspace-api"),
+    frontendInvoker: sandboxServiceAccount("workspace-frontend-preview"),
     tasksWorkerRuntime: sandboxServiceAccount("workspace-tasks-worker"),
     schedulerWorkerRuntime: sandboxServiceAccount("workspace-scheduler-worker"),
     tasksInvoker: sandboxServiceAccount("workspace-tasks-invoker"),
@@ -29,14 +29,14 @@ export const sandboxConfigInput = {
   },
   secrets: [
     {
-      consumers: ["web", "tasks-worker"],
+      consumers: ["api", "tasks-worker"],
       environmentVariable: "DATABASE_URL",
       secretId: "workspace-database-url",
       version: "3",
     },
   ],
   capacity: {
-    webMaxInstances: 2,
+    apiMaxInstances: 2,
     workerMaxInstances: 1,
     queueMaxConcurrentDispatches: 2,
     queueMaxDispatchesPerSecond: 1,
@@ -84,15 +84,7 @@ export const sandboxConfigInputIn = (project: string) => ({
   ),
 });
 
-/** The hosted proof's stack: the approved project with a plain-HTTP edge. */
-export const plainHttpProofConfig: WorkspaceStackConfig = Effect.runSync(
-  decodeWorkspaceStackConfig({
-    ...sandboxConfigInputIn(plainHttpEdgeProject),
-    edge: {
-      domains: [],
-      enableHttps: false,
-      staticCdnEnabled: false,
-      wafPreview: true,
-    },
-  })
+/** The hosted proof's stack, in the approved sandbox project. */
+export const hostedProofConfig: WorkspaceStackConfig = Effect.runSync(
+  decodeWorkspaceStackConfig(sandboxConfigInputIn("deskohub-workspace-sandbox"))
 );

@@ -19,9 +19,6 @@ import {
   releaseRecordLocation,
 } from "./src/release/gcs-release-store";
 import { requireStackWriter } from "./src/release/release-writer";
-import { EdgeBackendServiceProvider } from "./src/resources/edge-backend-service";
-import { declareWorkspaceEdge } from "./src/resources/edge-declarations";
-import { EdgeSecurityPolicyProvider } from "./src/resources/edge-security-policy";
 import { verifyStackTarget } from "./src/stack-target";
 import {
   declareRecordedWorkspaceServices,
@@ -65,21 +62,13 @@ const releasePlatform = (config: WorkspaceStackConfig) =>
  * only the release command's own runs touch the stack. Preview declares no
  * release-owned services and stays lock-free (#1455).
  *
- * Once a release serves, a config with `edge` also declares the stage's
- * load balancer, Cloud Armor policy and token-route log exclusion in front
- * of the web service, and outputs `edgeIpAddress`,
- * `edgeProtocol`, `securityPolicy`, `backendServices` and
- * `tokenRouteExclusionFilter`.
+ * The services are IAM-private: no load balancer, CDN or Cloud Armor sits
+ * in front of them, and only granted identities reach their `run.app` URLs.
  */
 export default Alchemy.Stack(
   "DeskohubWorkspace",
   {
-    // The edge's own providers reuse the GCP credentials and HTTP client
-    // the native providers resolve.
-    providers: Layer.mergeAll(
-      EdgeBackendServiceProvider,
-      EdgeSecurityPolicyProvider
-    ).pipe(Layer.provideMerge(GCP.providers())),
+    providers: GCP.providers(),
     state: Layer.unwrap(
       stackConfig.pipe(
         Effect.map((config) =>
@@ -114,17 +103,6 @@ export default Alchemy.Stack(
       // preview stops the deploy before any service is planned.
       Effect.orDie
     );
-    // The edge fronts the declared web service: its endpoint group names
-    // the service's output, so it is created after it and destroyed before
-    // it. Before the first release serves there is no service and no edge.
-    const edge =
-      config.edge === undefined || services === undefined
-        ? {}
-        : yield* declareWorkspaceEdge(
-            config,
-            config.edge,
-            services.webServiceId
-          );
-    return { ...foundation, services, ...edge };
+    return { ...foundation, services };
   })
 );
