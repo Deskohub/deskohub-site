@@ -31,6 +31,7 @@ import {
   AdministrationActionLog,
 } from "./administration-action-log.service";
 import { mapServiceFailure } from "./administration-api-failure";
+import { administrationContractCodec } from "./administration-contract-codec";
 
 /** How long recording a request's end may hold its response. */
 const finishTimeout = "5 seconds";
@@ -201,10 +202,9 @@ const requestsDryRun = (
                 // The first member that decodes, as the union decodes it.
                 Option.firstSomeOf(
                   schemas.map((schema) =>
-                    Schema.decodeUnknownOption(schema as Schema.Codec<unknown>)(
-                      body,
-                      payloadParseOptionsOf(annotations)
-                    )
+                    Schema.decodeUnknownOption(
+                      administrationContractCodec(schema)
+                    )(body, payloadParseOptionsOf(annotations))
                   )
                 ).pipe(
                   Option.exists(

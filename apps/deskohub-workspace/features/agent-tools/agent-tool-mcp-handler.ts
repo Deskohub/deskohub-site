@@ -1,9 +1,11 @@
 import {
   type CallToolResult,
   createMcpHandler,
-  type ListToolsResult,
+  isSpecType,
   McpServer,
   originValidationResponse,
+  ProtocolError,
+  ProtocolErrorCode,
   type StandardSchemaWithJSON,
 } from "@modelcontextprotocol/server";
 import type { StandardJSONSchemaV1 } from "@standard-schema/spec";
@@ -416,10 +418,17 @@ const listSecuritySchemes = (server: McpServer) => {
   const listTools = server.server["_getRequestHandler"]("tools/list");
   if (listTools === undefined) return;
   server.server.setRequestHandler("tools/list", async (request, context) => {
-    const listed = (await listTools(
+    const listed = await listTools(
       { jsonrpc: "2.0", id: 0, ...request },
       context
-    )) as ListToolsResult;
+    );
+    // The stored handler is typed for any method; its listing is the SDK's.
+    if (!isSpecType.ListToolsResult(listed)) {
+      throw new ProtocolError(
+        ProtocolErrorCode.InternalError,
+        "The tool listing isn't a tools/list result."
+      );
+    }
     return {
       ...listed,
       tools: listed.tools.map((tool) => ({

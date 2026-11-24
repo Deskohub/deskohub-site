@@ -91,10 +91,7 @@ const makeInvitedReservations = Effect.gen(function* () {
     const productName = getReservationProductName(product, locale);
     const bookers = yield* Effect.forEach(
       [...new Set(orders.map(({ row }) => row.dotyposCustomerId))],
-      (id) =>
-        readBooker(id as DotyposCustomerId).pipe(
-          Effect.map((name) => [id, name] as const)
-        ),
+      (id) => readBooker(id).pipe(Effect.map((name) => [id, name] as const)),
       { concurrency }
     );
     const bookerNames = new Map(bookers);

@@ -25,6 +25,7 @@ import {
   type HttpApiGroup,
 } from "effect/http-api";
 import type { CustomerAccountId } from "@/features/account/customer-account";
+import { administrationContractCodec } from "@/features/admin-cli/administration-contract-codec";
 import { AdministratorAgentAuthorization } from "@/features/administrators/backend/administrator-agent-authorization.service";
 import {
   type AgentTool,
@@ -162,7 +163,7 @@ const decodePart = (
   value: Schema.Json,
   fieldOf: (path: string | undefined) => string | undefined
 ) =>
-  Schema.decodeUnknownEffect(schema as Schema.Decoder<unknown>)(value, {
+  Schema.decodeUnknownEffect(administrationContractCodec(schema))(value, {
     onExcessProperty: "error",
     errors: "first",
   }).pipe(
@@ -239,7 +240,9 @@ const successOf = (
 };
 
 const isBinary = (success: Schema.Top) =>
-  Schema.is(Schema.toType(success) as Schema.Schema<unknown>)(new Uint8Array());
+  Schema.is(Schema.toType(administrationContractCodec(success)))(
+    new Uint8Array()
+  );
 
 /**
  * Refuses an operation whose success or errors can carry a credential the
@@ -308,11 +311,11 @@ const successResultSchema = ({
         "The document, attached to the result as an embedded resource, and linked as a resource link when it has a downloadUrl.",
     });
   }
-  const json = Schema.toCodecJson(success as Schema.Codec<unknown>);
+  const json = Schema.toCodecJson(administrationContractCodec(success));
   // `encodesToObject` decided whether the JSON is an object; wrapped, it is.
-  return (
-    wrapsResult ? Schema.Struct({ items: json }) : json
-  ) as JsonObjectSchema;
+  return Schema.make<JsonObjectSchema>(
+    (wrapsResult ? Schema.Struct({ items: json }) : json).ast
+  );
 };
 
 const outputSchema = ({
@@ -702,7 +705,7 @@ export const deriveAdministrationOperationTools = <
 
 const toJson = <Value>(schema: Schema.Top, value: Value) =>
   Schema.encodeUnknownEffect(
-    Schema.toCodecJson(schema as Schema.Codec<unknown>)
+    Schema.toCodecJson(administrationContractCodec(schema))
   )(value);
 
 const decodeJsonObject = Schema.decodeUnknownEffect(
@@ -717,7 +720,7 @@ const encodeOperationError = <OperationError>(
   Option.firstSomeOf(
     tool.errors.map((schema) =>
       Schema.encodeUnknownOption(
-        Schema.toCodecJson(schema as Schema.Codec<unknown>)
+        Schema.toCodecJson(administrationContractCodec(schema))
       )(error).pipe(Option.flatMap(decodeAdministrationError))
     )
   );

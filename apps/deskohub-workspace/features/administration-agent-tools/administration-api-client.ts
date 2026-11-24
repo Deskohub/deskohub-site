@@ -1,5 +1,5 @@
 import { WorkspaceAdminApi } from "@deskohub/workspace-admin-api";
-import { Context, Effect, Layer, Option, Redacted } from "effect";
+import { Context, Effect, Layer, Option, Predicate, Redacted } from "effect";
 import {
   FetchHttpClient,
   HttpClient,
@@ -54,6 +54,22 @@ type EndpointCall = (
   unknown,
   AdministrationAgentAccessToken
 >;
+
+/** The value an object holds under `name`, if it has one. */
+const propertyOf =
+  (name: string) =>
+  <Value>(value: Value) =>
+    Predicate.hasProperty(value, name)
+      ? Option.fromNullishOr(value[name])
+      : Option.none();
+
+/**
+ * Whether a client member is an endpoint's method. The tools reach
+ * operations by name and check each request part against the endpoint's
+ * schemas themselves, so a method is called with the request they checked.
+ */
+const isEndpointCall = <Value>(value: Value): value is Value & EndpointCall =>
+  Predicate.isFunction(value);
 
 interface IAdministrationApiClient {
   /**
@@ -114,19 +130,16 @@ export class AdministrationApiClient extends Context.Service<
             })
           )
         );
-        // The tools reach operations by name and check each request part
-        // against the endpoint's schemas themselves.
-        const client = (yield* HttpApiClient.makeWith(api, {
+        const client = yield* HttpApiClient.makeWith(api, {
           httpClient,
           baseUrl,
-        })) as Readonly<Record<string, Readonly<Record<string, EndpointCall>>>>;
+        });
         return {
           call: (operation, request) =>
-            Option.fromNullishOr(
-              client[operation.split(".")[0] ?? ""]?.[
-                operation.split(".")[1] ?? ""
-              ]
-            ).pipe(
+            Option.some(client).pipe(
+              Option.flatMap(propertyOf(operation.split(".")[0] ?? "")),
+              Option.flatMap(propertyOf(operation.split(".")[1] ?? "")),
+              Option.filter(isEndpointCall),
               Option.match({
                 onNone: () =>
                   Effect.die(new Error(`Unknown operation ${operation}.`)),

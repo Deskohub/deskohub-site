@@ -1,13 +1,15 @@
 import {
-  AdministrationDiscountMutationResult,
-  type AdministrationDiscountMutationResultType,
   type AdministrationDiscountMutationType,
-  type AdministrationOperationError,
   type CliMutationRequestIdType,
   CurrentAdministrationCaller,
+  discountOperations,
+  type LedgerOperationName,
 } from "@deskohub/workspace-admin-api";
 import { Effect } from "effect";
-import { startOperationSettlement } from "@/features/administration/administration-operation-port";
+import {
+  type OperationLedger,
+  startOperationSettlement,
+} from "@/features/administration/administration-operation-port";
 import {
   type DiscountRequestLedger,
   discountOperationSettlements,
@@ -18,6 +20,23 @@ import {
   StoredResult,
 } from "./administration-request-ledger.service";
 import { toOperationLedgerFailure } from "./cli-administration-operations.server";
+
+type DiscountOperationRegistry =
+  DiscountRequestLedger["Service"] extends OperationLedger<infer Ops>
+    ? Ops
+    : never;
+
+/**
+ * The result schema of each ledger operation, by name. Typed per name, so an
+ * operation's name picks its own result schema.
+ */
+type DiscountResults = {
+  readonly [Name in LedgerOperationName<DiscountOperationRegistry>]: DiscountOperationRegistry[Name]["output"];
+};
+
+const discountResults: DiscountResults = {
+  mutateDiscounts: discountOperations.mutateDiscounts.output,
+};
 
 /**
  * The administration API's discount ledger for one request: the caller's
@@ -34,41 +53,21 @@ export const cliDiscountRequestLedger = (
     readonly mutation: AdministrationDiscountMutationType;
   }
 ): DiscountRequestLedger["Service"] => ({
-  applyOnce: ({ apply }) =>
-    // The port hands its one ledger operation over failing with port errors
-    // and needing no services; a generic entry can't express either.
-    applyDiscountMutation(
-      ledger,
-      caller,
-      payload.requestId,
-      payload.mutation,
-      apply as never
-    ) as never,
-});
-
-const applyDiscountMutation = (
-  ledger: AdministrationRequestLedger["Service"],
-  caller: CurrentAdministrationCaller["Service"],
-  requestId: CliMutationRequestIdType,
-  mutation: AdministrationDiscountMutationType,
-  apply: Effect.Effect<
-    AdministrationDiscountMutationResultType,
-    AdministrationOperationError
-  >
-) =>
-  ledger
-    .applyOnceWithEffects({
-      requestId,
-      mutation,
-      stored: StoredResult.unchanged(AdministrationDiscountMutationResult),
-      apply,
-      afterSettled: startOperationSettlement(
-        discountOperationSettlements.mutateDiscounts,
-        mutation
+  applyOnce: (entry) =>
+    ledger
+      .applyOnceWithEffects({
+        requestId: payload.requestId,
+        mutation: payload.mutation,
+        stored: StoredResult.unchanged(discountResults[entry.operation]),
+        apply: entry.apply,
+        afterSettled: startOperationSettlement(
+          discountOperationSettlements.mutateDiscounts,
+          payload.mutation
+        ),
+        recovery: discountMutationRecovery,
+      })
+      .pipe(
+        Effect.mapError(toOperationLedgerFailure),
+        Effect.provideService(CurrentAdministrationCaller, caller)
       ),
-      recovery: discountMutationRecovery,
-    })
-    .pipe(
-      Effect.mapError(toOperationLedgerFailure),
-      Effect.provideService(CurrentAdministrationCaller, caller)
-    );
+});

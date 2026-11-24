@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import type { DocumentWithModelContext, ModelContext } from "./webmcp";
 
 /**
@@ -11,5 +12,5 @@ const hasModelContext = (
   candidate: Document
 ): candidate is DocumentWithModelContext =>
   "modelContext" in candidate &&
-  typeof (candidate as Partial<DocumentWithModelContext>).modelContext
-    ?.registerTool === "function";
+  Predicate.hasProperty(candidate.modelContext, "registerTool") &&
+  Predicate.isFunction(candidate.modelContext.registerTool);
