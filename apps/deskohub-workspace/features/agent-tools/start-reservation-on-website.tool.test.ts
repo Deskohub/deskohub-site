@@ -2,7 +2,7 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, mock, test } from "bun:test";
 import { Effect, type Schema } from "effect";
 import type { PreparePayStateInput } from "@/features/reservation/actions/prepare-pay-state.schema";
-import type { GetQuoteResult } from "./get-quote.schema";
+import { getQuoteResultSchema } from "./get-quote.schema";
 
 /** Every call of the booking operation, which must never run here. */
 const bookingCalls: PreparePayStateInput[] = [];
@@ -20,9 +20,8 @@ mock.module(
   })
 );
 
-const { makeAgentToolTestServices, workspaceDateFromToday } = await import(
-  "./agent-tools.test-utils"
-);
+const { agentToolResultOf, makeAgentToolTestServices, workspaceDateFromToday } =
+  await import("./agent-tools.test-utils");
 const { getQuoteTool } = await import("./get-quote.tool");
 const { startReservationOnWebsiteTool } = await import(
   "./start-reservation-on-website.tool"
@@ -54,7 +53,9 @@ describe("start_reservation on the website", () => {
 
       const [result, quote] = await Promise.all([
         run(startReservationOnWebsiteTool.call(args), services),
-        run(getQuoteTool.call(args), services) as Promise<GetQuoteResult>,
+        run(getQuoteTool.call(args), services).then(
+          agentToolResultOf(getQuoteResultSchema)
+        ),
       ]);
 
       expect(result).toMatchObject({

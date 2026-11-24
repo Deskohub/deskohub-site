@@ -4,9 +4,10 @@ import { Effect, type Schema } from "effect";
 import { m } from "@/features/i18n";
 import { meetingRoomSelectionLink } from "@/features/reservation/meeting-room-selection-link";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
-import type { CheckAvailabilityResult } from "./check-availability.schema";
+import { checkAvailabilityResultSchema } from "./check-availability.schema";
 
 const {
+  agentToolResultOf,
   agentToolTestOfficeSeats,
   makeAgentToolTestServices,
   makeTestOccupancy,
@@ -26,7 +27,8 @@ const checkAvailability = (
       Effect.provide(services.layer),
       now === undefined ? (effect) => effect : atInstant(now),
       Effect.runPromise
-    ) as Promise<CheckAvailabilityResult>;
+    )
+    .then(agentToolResultOf(checkAvailabilityResultSchema));
 
 const checkAvailabilityFailure = (
   args: Schema.Json,
@@ -38,11 +40,13 @@ const checkAvailabilityFailure = (
 
 describe("check_availability", () => {
   test("answers cowork days from the advisory snapshot without calling Dotypos", async () => {
-    const [first, busy, last] = [1, 2, 3].map(workspaceDateFromToday);
+    const first = workspaceDateFromToday(1);
+    const busy = workspaceDateFromToday(2);
+    const last = workspaceDateFromToday(3);
     const services = makeAgentToolTestServices({
       occupancy: [
-        makeTestOccupancy({ tableId: "open-1", date: busy! }),
-        makeTestOccupancy({ tableId: "desk-1", date: busy! }),
+        makeTestOccupancy({ tableId: "open-1", date: busy }),
+        makeTestOccupancy({ tableId: "desk-1", date: busy }),
       ],
     });
 
@@ -131,19 +135,20 @@ describe("check_availability", () => {
   });
 
   test("reports the setup time before a free start as taken when the room is booked until the start", async () => {
-    const [booked, next] = [5, 6].map(workspaceDateFromToday);
+    const booked = workspaceDateFromToday(5);
+    const next = workspaceDateFromToday(6);
     const services = makeAgentToolTestServices({
-      occupancy: [makeTestOccupancy({ tableId: "room-1", date: booked! })],
+      occupancy: [makeTestOccupancy({ tableId: "room-1", date: booked })],
     });
 
     const midnight = await checkAvailability(
-      { family: "meeting-room", date: next!, duration: "day:1" },
+      { family: "meeting-room", date: next, duration: "day:1" },
       services
     );
     const morning = await checkAvailability(
       {
         family: "meeting-room",
-        date: next!,
+        date: next,
         start_time: "09:00",
         duration: "hour:4",
       },
@@ -166,10 +171,11 @@ describe("check_availability", () => {
 
   test("checks today's whole meeting-room day in the afternoon and links the same selection", async () => {
     const now = workspaceInstantToday("15:20");
-    const [today, tomorrow] = [0, 1].map(workspaceDateFromToday);
+    const today = workspaceDateFromToday(0);
+    const tomorrow = workspaceDateFromToday(1);
 
     const result = await checkAvailability(
-      { family: "meeting-room", date: today!, duration: "day:1" },
+      { family: "meeting-room", date: today, duration: "day:1" },
       makeAgentToolTestServices(),
       now
     );
@@ -192,9 +198,11 @@ describe("check_availability", () => {
   });
 
   test("checks every office date and the seat capacity", async () => {
-    const [first, busy, last] = [1, 2, 3].map(workspaceDateFromToday);
+    const first = workspaceDateFromToday(1);
+    const busy = workspaceDateFromToday(2);
+    const last = workspaceDateFromToday(3);
     const services = makeAgentToolTestServices({
-      occupancy: [makeTestOccupancy({ tableId: "office-1", date: busy! })],
+      occupancy: [makeTestOccupancy({ tableId: "office-1", date: busy })],
     });
 
     const busyRange = await checkAvailability(

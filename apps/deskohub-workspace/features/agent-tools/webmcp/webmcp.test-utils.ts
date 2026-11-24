@@ -1,7 +1,7 @@
 import { mock } from "bun:test";
 import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import { Schema } from "effect";
-import type { ModelContextTool } from "./webmcp";
+import type { ModelContext, ModelContextTool } from "./webmcp";
 
 const localeProperty = { type: "string", enum: [...supportedLocales] };
 
@@ -130,12 +130,17 @@ export const installFakeModelContext = () => {
       );
     }
   );
+  const context: ModelContext = Object.assign(new EventTarget(), {
+    registerTool,
+  });
   Object.defineProperty(document, "modelContext", {
     configurable: true,
-    value: Object.assign(new EventTarget(), { registerTool }),
+    value: context,
   });
 
   return {
+    /** The model context installed on `document`. */
+    context,
     registered,
     registerTool,
     getTool: (name: string) => {

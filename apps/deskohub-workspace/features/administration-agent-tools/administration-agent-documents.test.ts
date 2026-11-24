@@ -2,7 +2,7 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Option } from "effect";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { invoicePreviewIdSchema } from "@/features/accounting/admin/invoice-preview-id";
 import { InvoicePreviews } from "@/features/accounting/admin/invoice-previews.service";
 import { AccountingRecordUnavailable } from "@/features/accounting/backend/sealed-accounting-json";
@@ -16,7 +16,7 @@ import { administrationOperationTools } from "./administration-agent-tools";
 const previewId = invoicePreviewIdSchema.make(crypto.randomUUID());
 const invoiceId = invoiceIdSchema.make(crypto.randomUUID());
 const expiresAt = Temporal.Instant.from("2026-11-18T10:15:00Z");
-const owner = "synthetic-administrator" as CustomerAccountId;
+const owner = customerAccountIdSchema.make("synthetic-administrator");
 
 const link = (
   document: Pick<AdministrationDocument, "reference" | "args">,

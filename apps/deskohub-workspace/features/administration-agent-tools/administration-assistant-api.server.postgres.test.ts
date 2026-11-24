@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import { Predicate } from "effect";
 import { handleWorkspaceAdminApiRequest } from "@/features/admin-cli/workspace-admin-api.server";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 
@@ -22,9 +23,10 @@ describe.skipIf(!testDatabase)("the CLI route on disposable Postgres", () => {
       );
 
       expect(token).toHaveLength(43);
+      const body: unknown = await response.json();
       expect([
         response.status,
-        ((await response.json()) as { readonly _tag?: string })._tag,
+        Predicate.hasProperty(body, "_tag") ? body._tag : undefined,
       ]).toEqual([401, "CliSessionUnauthorized"]);
     }
   });

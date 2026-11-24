@@ -2,9 +2,10 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
 import { Effect, type Schema } from "effect";
 import { m } from "@/features/i18n";
-import type { ListOfferingsResult } from "./list-offerings.schema";
+import { listOfferingsResultSchema } from "./list-offerings.schema";
 
 const {
+  agentToolResultOf,
   agentToolTestOfficeSeats,
   makeAgentToolTestServices,
   workspaceDateFromToday,
@@ -17,10 +18,8 @@ const listOfferings = (
 ) =>
   listOfferingsTool
     .call(args)
-    .pipe(
-      Effect.provide(services.layer),
-      Effect.runPromise
-    ) as Promise<ListOfferingsResult>;
+    .pipe(Effect.provide(services.layer), Effect.runPromise)
+    .then(agentToolResultOf(listOfferingsResultSchema));
 
 const czk = (amount: number) => ({ amount, currency: "CZK" });
 
