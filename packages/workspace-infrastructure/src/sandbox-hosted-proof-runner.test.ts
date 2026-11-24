@@ -1625,11 +1625,8 @@ describe("private access", () => {
     pattern: `^scheduler jobs describe workspace-proof-${name}-r111-1 `,
     stdout: JSON.stringify({
       state: "PAUSED",
-      httpTarget: {
-        uri,
-        httpMethod: "GET",
-        ...(oidcToken === undefined ? {} : { oidcToken }),
-      },
+      // JSON drops an undefined token, as gcloud omits an unsigned one.
+      httpTarget: { uri, httpMethod: "GET", oidcToken },
     }),
   });
   const refused = (name: string): FakeRule => ({

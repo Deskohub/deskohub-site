@@ -64,30 +64,34 @@ export const sandboxProofScheduleJobs = (
     workload: "tasks-worker" | "scheduler-worker",
     path: string,
     signed: boolean
-  ) => ({
-    id,
-    props: {
-      jobId: `workspace-proof-${name}-${suffix}`,
-      location: config.region,
-      schedule: "0 0 1 1 *",
-      timeZone: workspaceScheduleTimeZone,
-      attemptDeadline: toGcpDuration(Duration.seconds(60)),
-      retryConfig: { retryCount: 0 },
-      httpTarget: {
-        uri: `${workloadUrl(config, workload)}${path}`,
-        httpMethod: "GET",
-        ...(signed
-          ? {
-              oidcToken: {
-                serviceAccountEmail: config.serviceAccounts.schedulerInvoker,
-                audience: workloadAudience(config, workload),
-              },
-            }
-          : {}),
-      },
-      paused: true,
-    } satisfies JobProps,
-  });
+  ) => {
+    const unsigned = {
+      uri: `${workloadUrl(config, workload)}${path}`,
+      httpMethod: "GET",
+    } satisfies JobProps["httpTarget"];
+    const httpTarget: JobProps["httpTarget"] = signed
+      ? {
+          ...unsigned,
+          oidcToken: {
+            serviceAccountEmail: config.serviceAccounts.schedulerInvoker,
+            audience: workloadAudience(config, workload),
+          },
+        }
+      : unsigned;
+    return {
+      id,
+      props: {
+        jobId: `workspace-proof-${name}-${suffix}`,
+        location: config.region,
+        schedule: "0 0 1 1 *",
+        timeZone: workspaceScheduleTimeZone,
+        attemptDeadline: toGcpDuration(Duration.seconds(60)),
+        retryConfig: { retryCount: 0 },
+        httpTarget,
+        paused: true,
+      } satisfies JobProps,
+    };
+  };
   const tick = "/api/cron/workspace/proof-tick";
   const task = "/api/queues/workspace/proof-deny";
   return [
