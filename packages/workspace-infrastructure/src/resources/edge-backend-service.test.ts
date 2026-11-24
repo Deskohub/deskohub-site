@@ -18,6 +18,7 @@ import {
   foreignMarker as foreignMarkerOf,
   type Live,
   lifecycleInput as lifecycleInputOf,
+  liveOf,
   mutations,
   ownMarker as ownMarkerOf,
   project,
@@ -115,21 +116,22 @@ const recorded = (id = ""): EdgeBackendServiceAttributes => ({
 const converged = (
   props: EdgeBackendServiceProps,
   description = ownMarker
-): Live => ({
-  name: props.name,
-  id: "1234",
-  selfLink: `${computeLinkRoot}/global/backendServices/${props.name}`,
-  creationTimestamp: "2026-11-01T00:00:00Z",
-  description,
-  fingerprint: "fp-existing",
-  loadBalancingScheme: props.loadBalancingScheme,
-  protocol: props.protocol,
-  backends: [{ group: props.backendGroup }],
-  securityPolicy: props.securityPolicy,
-  logConfig: props.logConfig,
-  enableCDN: props.cdnPolicy !== undefined,
-  ...(props.cdnPolicy === undefined ? {} : { cdnPolicy: props.cdnPolicy }),
-});
+): Live =>
+  liveOf({
+    name: props.name,
+    id: "1234",
+    selfLink: `${computeLinkRoot}/global/backendServices/${props.name}`,
+    creationTimestamp: "2026-11-01T00:00:00Z",
+    description,
+    fingerprint: "fp-existing",
+    loadBalancingScheme: props.loadBalancingScheme,
+    protocol: props.protocol,
+    backends: [{ group: props.backendGroup }],
+    securityPolicy: props.securityPolicy,
+    logConfig: props.logConfig,
+    enableCDN: props.cdnPolicy !== undefined,
+    cdnPolicy: props.cdnPolicy,
+  });
 
 describe("EdgeBackendService provider", () => {
   test("inserts a dynamic backend without CDN, then attaches Cloud Armor", async () => {
@@ -257,7 +259,7 @@ describe("EdgeBackendService provider", () => {
   test("an insert conflict with our own backend converges it", async () => {
     const fake = fakeCompute({
       appearOnInsert: [
-        { ...converged(dynamicProps), securityPolicy: undefined },
+        liveOf({ ...converged(dynamicProps), securityPolicy: undefined }),
       ],
     });
     const exit = await run(fake, (provider) =>

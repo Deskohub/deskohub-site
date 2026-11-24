@@ -72,17 +72,19 @@ const seed = (fakes: ProofFakes, files: Record<string, string>) => {
   }
 };
 
-const settled = (digest?: string) => ({
-  version: "1",
-  record: {
-    generation: 3,
-    writer: null,
-    pendingApply: null,
-    ...(digest === undefined
-      ? {}
-      : { active: { imageDigest: digest, releaseId: "release-3" } }),
-  },
-});
+const settled = (digest?: string) => {
+  const record = { generation: 3, writer: null, pendingApply: null };
+  return {
+    version: "1",
+    record:
+      digest === undefined
+        ? record
+        : {
+            ...record,
+            active: { imageDigest: digest, releaseId: "release-3" },
+          },
+  };
+};
 
 const isAlive = (pid: number) => {
   try {
@@ -139,12 +141,10 @@ describe("cleanup under the writer lock", () => {
   test("leaves a lock whose holder this run did not prove dead", () => {
     for (const deadHolder of [null, "another-holder"]) {
       withProofFakes(heldBy("live-holder"), (fakes) => {
-        seed(fakes, {
-          "stack-config.json": "{}",
-          ...(deadHolder === null
-            ? {}
-            : { "interrupted-dead-holder": `${deadHolder}\n` }),
-        });
+        seed(fakes, { "stack-config.json": "{}" });
+        if (deadHolder !== null) {
+          seed(fakes, { "interrupted-dead-holder": `${deadHolder}\n` });
+        }
         const { exitCode, output } = runPhase(fakes, "stack-destroy");
         expect(exitCode).toBe(1);
         expect(output).toContain("whose death this run did not establish");
@@ -762,10 +762,10 @@ describe("Alchemy access token", () => {
       const { exitCode, output } = withProofFakes(
         {
           now,
-          tokenLifetimes: {
-            "fake-access-token": 3599,
-            ...(left === undefined ? {} : { "workflow-token": left }),
-          },
+          tokenLifetimes:
+            left === undefined
+              ? { "fake-access-token": 3599 }
+              : { "fake-access-token": 3599, "workflow-token": left },
         },
         (fakes) =>
           runPhase(fakes, "foundation", {
@@ -882,13 +882,13 @@ describe("edge readback from the stack outputs", () => {
     },
   };
   // As Compute returns the sandbox policy the stack declares.
-  const policyRules: ReadonlyArray<Record<string, unknown>> = [
+  const policyRules = [
     waf(1000, "sqli"),
     waf(1010, "xss"),
     throttle,
     { priority: 2147483647, action: "allow" },
   ];
-  const withThrottle = (changes: Record<string, unknown>) =>
+  const withThrottle = (changes: Schema.JsonObject) =>
     policyRules.map((rule) =>
       rule.priority === 2000 ? { ...throttle, ...changes } : rule
     );
@@ -918,7 +918,7 @@ describe("edge readback from the stack outputs", () => {
     },
   ];
   const readback = (
-    outputs: Record<string, unknown> | null,
+    outputs: Schema.JsonObject | null,
     overrides: ReadonlyArray<FakeRule> = []
   ) =>
     withProofFakes(
@@ -1157,12 +1157,10 @@ describe("token-route privacy and telemetry", () => {
     recordedFilter: string | null = exclusionFilter
   ) =>
     withProofFakes({ rules: rules(overrides) }, (fakes) => {
-      seed(fakes, {
-        "edge.env": "EDGE_IP=198.51.100.10\n",
-        ...(recordedFilter === null
-          ? {}
-          : { "edge-exclusion-filter.txt": recordedFilter }),
-      });
+      seed(fakes, { "edge.env": "EDGE_IP=198.51.100.10\n" });
+      if (recordedFilter !== null) {
+        seed(fakes, { "edge-exclusion-filter.txt": recordedFilter });
+      }
       const result = runPhase(fakes, "edge-privacy");
       return {
         ...result,
