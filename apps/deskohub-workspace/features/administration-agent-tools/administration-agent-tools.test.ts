@@ -199,7 +199,7 @@ describe("administration agent tool for restoring a reservation", () => {
 
 describe("administration agent tool derivation", () => {
   const Secret = Schema.String.annotate({ credential: true });
-  const apiWith = (group: HttpApiGroup.Constraint) =>
+  const apiWith = <Group extends HttpApiGroup.Constraint>(group: Group) =>
     HttpApi.make("testApi").add(group);
   const authenticated = <Group extends HttpApiGroup.Constraint>(group: Group) =>
     group.middleware(AdministrationAuthentication);

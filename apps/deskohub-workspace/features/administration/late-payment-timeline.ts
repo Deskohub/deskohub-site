@@ -34,11 +34,6 @@ export const buildLatePaymentTimeline = (
     tone: "warning",
   }));
 
-type CompletedLatePaymentRecoveryState = Exclude<
-  LatePaymentRecoveryState,
-  "pending" | "processing"
->;
-
 /**
  * The timeline of each late-payment recovery: when it started and, once it
  * completed, how it ended.
@@ -56,11 +51,15 @@ export const buildLatePaymentRecoveryTimeline = (
       occurredAt: recovery.verifiedPaidAt.toString(),
       tone: "warning",
     };
-    if (!recovery.completedAt) return [detected];
+    const { state } = recovery;
+    // A completed recovery has an outcome state; the database check
+    // `late_payment_recoveries_completion_check` pairs the two.
+    if (!recovery.completedAt || state === "pending" || state === "processing")
+      return [detected];
     return [
       detected,
       {
-        id: `late-payment-recovery-${recovery.paymentAttemptId}-${recovery.state}`,
+        id: `late-payment-recovery-${recovery.paymentAttemptId}-${state}`,
         event: {
           source: "reservation",
           kind: (
@@ -69,13 +68,13 @@ export const buildLatePaymentRecoveryTimeline = (
               refund_required: "late_payment_recovery_refund_required",
               review_required: "late_payment_recovery_review_required",
             } as const
-          )[recovery.state as CompletedLatePaymentRecoveryState],
+          )[state],
         },
         title: {
           recovered: "Late payment recovered",
           refund_required: "Late payment — refund required",
           review_required: "Late payment recovery needs review",
-        }[recovery.state as CompletedLatePaymentRecoveryState],
+        }[state],
         description: {
           recovered:
             "Workspace secured a valid booking and continued normal paid fulfillment.",
@@ -83,9 +82,9 @@ export const buildLatePaymentRecoveryTimeline = (
             "The reservation could not be safely recovered. Refund the payment in Nexi.",
           review_required:
             "Workspace could not safely determine or complete recovery. Operator review is required.",
-        }[recovery.state as CompletedLatePaymentRecoveryState],
+        }[state],
         occurredAt: recovery.completedAt.toString(),
-        tone: recovery.state === "recovered" ? "positive" : "warning",
+        tone: state === "recovered" ? "positive" : "warning",
       },
     ];
   });

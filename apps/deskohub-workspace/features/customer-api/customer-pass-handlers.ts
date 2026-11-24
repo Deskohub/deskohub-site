@@ -22,6 +22,7 @@ import { runToCompletion } from "@/shared/backend/run-to-completion";
 import {
   answerCustomerApiFailure,
   type CustomerAccountApiFailure,
+  type CustomerApiFailure,
 } from "./customer-api-failure";
 import { CustomerPassLayers } from "./customer-pass-layers";
 import {
@@ -38,10 +39,10 @@ type PassReadFailure = CustomerAccountApiFailure | CustomerPassesUnavailable;
 const failPassRequest = <E>(
   operation: string,
   failure: E
-): Effect.Effect<never, PassReadFailure> =>
+): Effect.Effect<never, CustomerApiFailure<E> | CustomerPassesUnavailable> =>
   failure instanceof CustomerPassesClosed
     ? Effect.fail(new CustomerPassesUnavailable())
-    : answerCustomerApiFailure(operation)(Effect.fail<unknown>(failure));
+    : answerCustomerApiFailure(operation)(Effect.fail(failure));
 
 const answerPassFailure =
   (operation: string) =>
@@ -53,7 +54,7 @@ type PassPurchaseFailure = PassReadFailure | CustomerPassPurchaseRefused;
 const failPurchaseRequest = <E>(
   operation: string,
   failure: E
-): Effect.Effect<never, PassPurchaseFailure> => {
+): Effect.Effect<never, PassPurchaseFailure | CustomerApiFailure<E>> => {
   if (failure instanceof CustomerPassPurchaseRefused)
     return Effect.fail(failure);
   if (failure instanceof Schema.SchemaError) {

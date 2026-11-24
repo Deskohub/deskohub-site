@@ -6,7 +6,6 @@ import { Data, Effect, Layer, Option, Predicate, Result } from "effect";
 import { notFound } from "next/navigation";
 import type {
   FlattenedValidationErrors,
-  SafeActionResult,
   ValidationErrors,
 } from "next-safe-action";
 import type { SingleInputActionFn } from "next-safe-action/hooks";
@@ -257,54 +256,43 @@ export const defineAdministrationAction = <
         : new PublicSafeActionError({ message, cause: failure });
     };
 
-  const action = defineWorkspaceAction(
-    workspaceOptions,
-    (input, context) =>
-      requireAdministratorAuthorization.pipe(
-        Effect.flatMap((administrator) =>
-          handler(input, context).pipe(
-            Effect.map(
-              (result): SettledAdministrationAction<A> => ({
-                result,
-                locale: context.locale,
-                revalidates: revalidates?.(input, result) ?? [],
-                refresh: () => refreshes?.(input, result),
-              })
-            ),
-            Effect.provide(callingFromAdminUi(capabilities, administrator))
-          )
-        ),
-        Effect.catchIf(
-          (failure) =>
-            unauthorizedResult !== undefined &&
-            Predicate.isTagged(failure, "AdministratorUnauthorizedError"),
-          () =>
-            Effect.succeed<SettledAdministrationAction<A>>({
-              result: unauthorizedResult as A,
+  const action = defineWorkspaceAction(workspaceOptions, (input, context) =>
+    requireAdministratorAuthorization.pipe(
+      Effect.flatMap((administrator) =>
+        handler(input, context).pipe(
+          Effect.map(
+            (result): SettledAdministrationAction<A> => ({
+              result,
               locale: context.locale,
-              revalidates: [],
-              refresh: () => undefined,
+              revalidates: revalidates?.(input, result) ?? [],
+              refresh: () => refreshes?.(input, result),
             })
-        ),
-        Effect.mapError(toPublicFailure(context.locale))
-      ) as Effect.Effect<
-        SettledAdministrationAction<A>,
-        E | LE | AdministratorUnauthorizedError | PublicSafeActionError
-      >
+          ),
+          Effect.provide(callingFromAdminUi(capabilities, administrator))
+        )
+      ),
+      Effect.catchFilter(
+        (failure) =>
+          unauthorizedResult !== undefined &&
+          Predicate.isTagged(failure, "AdministratorUnauthorizedError")
+            ? Result.succeed(unauthorizedResult)
+            : Result.fail(failure),
+        (result) =>
+          Effect.succeed<SettledAdministrationAction<A>>({
+            result,
+            locale: context.locale,
+            revalidates: [],
+            refresh: () => undefined,
+          })
+      ),
+      Effect.mapError(toPublicFailure(context.locale))
+    )
   );
 
-  type ActionResult = SafeActionResult<
-    string,
-    S,
-    AdministrationValidationErrors<S>,
-    A
-  >;
-
   const administrationAction: AdministrationAction<S, A> = async (input) => {
-    const { data, ...settled } = await action(
-      input as Parameters<typeof action>[0]
-    );
-    if (data === undefined) return settled as ActionResult;
+    const settled = await action(input);
+    if (settled.data === undefined) return settled;
+    const { data } = settled;
 
     const { refreshed, revalidated } = applySettledChanges(data);
     if (Result.isFailure(refreshed) || Result.isFailure(revalidated)) {
@@ -334,9 +322,9 @@ export const defineAdministrationAction = <
           {},
           { locale: data.locale }
         ),
-      } as ActionResult;
+      };
     }
-    return { ...settled, data: data.result } as ActionResult;
+    return { ...settled, data: data.result };
   };
   return administrationAction;
 };

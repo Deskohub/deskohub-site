@@ -66,6 +66,11 @@ const toSelectionRejectionAnswer = (reason: BookingSelectionRejection) =>
     })
   );
 
+const isSelectionInvalid = <E>(
+  failure: E
+): failure is Extract<E, CustomerBookingSelectionInvalid> =>
+  failure instanceof CustomerBookingSelectionInvalid;
+
 /**
  * Answers a selection the booking pages wouldn't accept with its public
  * error, keeps a field the contract itself refuses (such as early setup for
@@ -99,10 +104,7 @@ export const answerBookingSelectionFailure =
             return Effect.fail(toSelectionRejectionAnswer(failure.reason));
           if (failure instanceof EntryPackUnavailableError)
             return Effect.fail(entryPackUnavailableAnswer());
-          if (failure instanceof CustomerBookingSelectionInvalid)
-            return Effect.fail(
-              failure as Extract<E, CustomerBookingSelectionInvalid>
-            );
+          if (isSelectionInvalid(failure)) return Effect.fail(failure);
           return Effect.fail(failure).pipe(answerSessionApiFailure(operation));
         }
       )

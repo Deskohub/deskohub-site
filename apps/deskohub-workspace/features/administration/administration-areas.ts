@@ -192,6 +192,12 @@ const findPage = (
     : parent?.record && { page: parent.record, record: true };
 };
 
+/** Whether `area` names an area whose collection has a page per record. */
+const isAdministrationRecordArea = (
+  area: string
+): area is AdministrationRecordArea =>
+  findPage(administrationOverview, area)?.page.record !== undefined;
+
 /**
  * The area and record ID a path under `/admin` names, when its second segment
  * is the area's record page rather than a named page such as `new`.
@@ -202,14 +208,18 @@ export const findAdministrationRecord = (
   | { readonly area: AdministrationRecordArea; readonly recordId: string }
   | undefined => {
   const [area, recordId] = segments;
-  if (area === undefined || recordId === undefined) return undefined;
+  if (
+    area === undefined ||
+    recordId === undefined ||
+    !isAdministrationRecordArea(area)
+  ) {
+    return undefined;
+  }
   const found = findPage(
     findPage(administrationOverview, area)?.page,
     recordId
   );
-  return found?.record
-    ? { area: area as AdministrationRecordArea, recordId }
-    : undefined;
+  return found?.record ? { area, recordId } : undefined;
 };
 
 /** A link in the administration's breadcrumb trail. */

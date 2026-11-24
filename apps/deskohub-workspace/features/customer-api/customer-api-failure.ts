@@ -68,9 +68,45 @@ export const accountAccessApiFailure = (
  */
 export type CustomerApiFailure<E> =
   | CustomerAccountApiFailure
-  | ([Extract<E, AccountFeatureWithheldError>] extends [never]
-      ? never
-      : CustomerFeatureUnavailable);
+  | WithheldFeatureAnswer<E>;
+
+/**
+ * `Answer` when a failure of type `Failure` can occur, and nothing when it
+ * can't: an endpoint answers only the failures its operation can fail with.
+ */
+export type PossibleFailureAnswer<Failure, Answer> = [Failure] extends [never]
+  ? never
+  : Answer;
+
+/**
+ * Answers a failure that occurred with `answer`. A failure value proves its
+ * type can occur, which TypeScript can't derive for a generic type.
+ */
+export function answerOccurredFailure<Failure, Answer>(
+  failure: Failure,
+  answer: Answer
+): PossibleFailureAnswer<Failure, Answer>;
+export function answerOccurredFailure<Failure, Answer>(
+  _failure: Failure,
+  answer: Answer
+): Answer {
+  return answer;
+}
+
+type WithheldFeatureAnswer<E> = PossibleFailureAnswer<
+  Extract<E, AccountFeatureWithheldError>,
+  CustomerFeatureUnavailable
+>;
+
+/**
+ * Whether the failure is a withheld feature. `E` must be the operation's own
+ * failure union, as every caller passes it: for a wider `E`, such as
+ * `unknown`, `Extract` is `never`.
+ */
+const isFeatureWithheld = <E>(
+  failure: E
+): failure is Extract<E, AccountFeatureWithheldError> =>
+  failure instanceof AccountFeatureWithheldError;
 
 type FailureAnswer<E> = {
   readonly answer: CustomerApiFailure<E>;
@@ -90,12 +126,13 @@ const answerFailure = <E>(failure: E): FailureAnswer<E> => {
       },
     };
   }
-  if (failure instanceof AccountFeatureWithheldError) {
+  if (isFeatureWithheld(failure)) {
     return {
       // Only an operation that can withhold its feature fails this way.
-      answer: new CustomerFeatureUnavailable({
-        feature: failure.feature,
-      }) as CustomerApiFailure<E>,
+      answer: answerOccurredFailure(
+        failure,
+        new CustomerFeatureUnavailable({ feature: failure.feature })
+      ),
       codes: { feature: failure.feature },
     };
   }
@@ -113,7 +150,9 @@ const answerFailure = <E>(failure: E): FailureAnswer<E> => {
  * fixed codes it carries first: an account access failure as
  * `accountAccessApiFailure` maps it, a withheld feature as unavailable until
  * released, and anything else, such as an account service whose layer
- * couldn't be built, as unavailable.
+ * couldn't be built, as unavailable. `E` must be the operation's own failure
+ * union: for `unknown`, the answer type leaves a withheld feature's answer
+ * out, though one can still occur.
  */
 export const answerCustomerApiFailure =
   (operation: string) =>
@@ -133,10 +172,10 @@ export const answerCustomerApiFailure =
  * The public errors of an endpoint that reads only the session, never the
  * account's Dotypos link.
  */
-export type CustomerSessionApiFailure<E> = Exclude<
-  CustomerApiFailure<E>,
-  CustomerAccountLinkRequired
->;
+export type CustomerSessionApiFailure<E> =
+  | CustomerSessionRequired
+  | CustomerServiceUnavailable
+  | WithheldFeatureAnswer<E>;
 
 /**
  * Answers the failure of an endpoint that reads only the session, such as
@@ -154,7 +193,7 @@ export const answerSessionApiFailure =
         const sessionAnswer: CustomerSessionApiFailure<E> =
           answer instanceof CustomerAccountLinkRequired
             ? new CustomerServiceUnavailable()
-            : (answer as CustomerSessionApiFailure<E>);
+            : answer;
         return logFailedRequest(operation, sessionAnswer._tag, codes).pipe(
           Effect.andThen(Effect.fail(sessionAnswer))
         );
