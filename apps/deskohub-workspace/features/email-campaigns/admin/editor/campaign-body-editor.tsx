@@ -8,12 +8,13 @@ import {
   ReactNodeViewRenderer,
   useEditor,
 } from "@tiptap/react";
-import { useMemo } from "react";
+import { Option, Schema } from "effect";
+import { useMemo, useRef } from "react";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { cn } from "@/shared/utils";
-import type { CampaignBodyNode } from "../../body/campaign-body-document";
+import { CampaignBodyNode } from "../../body/campaign-body-document";
 import { campaignBodyExtensions } from "../../body/campaign-body-extensions";
 import { CampaignCtaButton } from "../../body/campaign-cta-button";
 import { campaignBodyColumnWidth } from "../../body/campaign-image";
@@ -51,6 +52,20 @@ const campaignBodyEditorExtensions = (
   }),
 ];
 
+/** A body node as TipTap takes it: the same JSON with mutable arrays. */
+const editorContent = ({
+  content,
+  marks,
+  ...node
+}: CampaignBodyNode): JSONContent => ({
+  ...node,
+  ...(content && { content: content.map(editorContent) }),
+  ...(marks && { marks: [...marks] }),
+});
+
+/** The editor's document as a body node. */
+const decodeBodyNode = Schema.decodeUnknownOption(CampaignBodyNode);
+
 /** Rich-text editor for one locale's campaign body. */
 export function CampaignBodyEditor({
   contentLocale,
@@ -74,9 +89,12 @@ export function CampaignBodyEditor({
     () => campaignBodyEditorExtensions(locale, contentLocale),
     [locale, contentLocale]
   );
+  // The document the form holds, which the editor returns to after an edit
+  // the body format can't hold.
+  const held = useRef(value);
   const editor = useEditor({
     extensions,
-    content: value as JSONContent,
+    content: editorContent(value),
     immediatelyRender: false,
     shouldRerenderOnTransaction: false,
     editorProps: {
@@ -105,8 +123,18 @@ export function CampaignBodyEditor({
     // ProseMirror builds node attributes as null-prototype objects, which a
     // Server Action can't receive: React passes them as opaque references.
     // A structured clone gives the form plain objects.
-    onUpdate: ({ editor }) =>
-      onChange(structuredClone(editor.getJSON()) as CampaignBodyNode),
+    onUpdate: ({ editor }) => {
+      const doc = decodeBodyNode(structuredClone(editor.getJSON()));
+      if (Option.isSome(doc)) {
+        held.current = doc.value;
+        onChange(doc.value);
+      } else {
+        // The form never got this edit, so the editor mustn't show it.
+        editor.commands.setContent(editorContent(held.current), {
+          emitUpdate: false,
+        });
+      }
+    },
   });
 
   return (

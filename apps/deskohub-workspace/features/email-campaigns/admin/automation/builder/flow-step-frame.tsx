@@ -1,5 +1,6 @@
 "use client";
 
+import { Struct } from "effect";
 import {
   ArrowDown,
   ArrowUp,
@@ -149,33 +150,30 @@ export function InsertStepMenu({
         align="center"
         className="w-80 max-w-[calc(100vw-2rem)]"
       >
-        {(
-          Object.entries(insertableSteps) as [
-            InsertableStepKind,
-            (typeof insertableSteps)[InsertableStepKind],
-          ][]
-        ).map(([kind, { icon: Icon, label, description }]) => (
-          <DropdownMenuItem
-            key={kind}
-            onSelect={() => onInsert(kind)}
-            className="items-start gap-3 py-2.5"
-          >
-            <span
-              aria-hidden
-              className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-md bg-navy-blue/6"
+        {Struct.keys(insertableSteps)
+          .map((kind) => [kind, insertableSteps[kind]] as const)
+          .map(([kind, { icon: Icon, label, description }]) => (
+            <DropdownMenuItem
+              key={kind}
+              onSelect={() => onInsert(kind)}
+              className="items-start gap-3 py-2.5"
             >
-              <Icon className="h-4 w-4" />
-            </span>
-            <span className="min-w-0">
-              <span className="block font-semibold text-sm">
-                {label({}, { locale })}
+              <span
+                aria-hidden
+                className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-md bg-navy-blue/6"
+              >
+                <Icon className="h-4 w-4" />
               </span>
-              <span className="block text-navy-blue/60 text-xs leading-5">
-                {description({}, { locale })}
+              <span className="min-w-0">
+                <span className="block font-semibold text-sm">
+                  {label({}, { locale })}
+                </span>
+                <span className="block text-navy-blue/60 text-xs leading-5">
+                  {description({}, { locale })}
+                </span>
               </span>
-            </span>
-          </DropdownMenuItem>
-        ))}
+            </DropdownMenuItem>
+          ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );

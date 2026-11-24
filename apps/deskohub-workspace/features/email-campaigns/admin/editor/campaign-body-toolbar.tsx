@@ -2,7 +2,7 @@
 
 import { NodeSelection } from "@tiptap/pm/state";
 import { type Editor, useEditorState } from "@tiptap/react";
-import { Effect, Option, Result } from "effect";
+import { Effect, Option, Result, Schema } from "effect";
 import {
   AlignHorizontalJustifyCenter,
   AlignHorizontalJustifyEnd,
@@ -71,7 +71,9 @@ import {
   type PassOfferValues,
 } from "./pass-offer-dialog";
 
-type BlockType = "paragraph" | "h1" | "h2" | "h3";
+const BlockType = Schema.Literals(["paragraph", "h1", "h2", "h3"]);
+type BlockType = typeof BlockType.Type;
+const isBlockType = Schema.is(BlockType);
 
 const headingLevels = { h1: 1, h2: 2, h3: 3 } as const;
 
@@ -351,7 +353,7 @@ function BlockTypeSelect({
       // the value changes before the menu ever opened; applying that
       // would steal focus into the editor.
       onValueChange={(value) => {
-        if (value) setBlockType(value as BlockType);
+        if (isBlockType(value)) setBlockType(value);
       }}
       value={blockType}
     >

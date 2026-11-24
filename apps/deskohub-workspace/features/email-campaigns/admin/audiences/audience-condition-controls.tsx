@@ -10,10 +10,11 @@ import {
   type AudienceDateCondition,
   type AudienceSetAttributeDefinition,
   type AudienceSetCondition,
+  CampaignEmailSource,
   type CampaignEmailSourceType,
   type DatePeriodUnitType,
 } from "@deskohub/workspace-admin-api";
-import { Match } from "effect";
+import { Match, Schema } from "effect";
 import { ChevronDown } from "lucide-react";
 import { useId, useState } from "react";
 import { m } from "@/features/administration/i18n";
@@ -438,6 +439,14 @@ const absentValue = "absent";
 /** The picker value standing for the automation's own campaign. */
 const thisCampaignValue = "this";
 
+const isCampaignEmailSource = Schema.is(CampaignEmailSource);
+
+/** A param's value when it is a campaign source; unset otherwise. */
+const campaignSource = (
+  value: AudienceCountCondition["params"][string] | undefined
+): CampaignEmailSourceType | undefined =>
+  isCampaignEmailSource(value) ? value : undefined;
+
 /**
  * Whose emails count: any campaign, this campaign where `holder` can hold
  * it, or one picked by name, searchable and badged with each campaign's
@@ -541,9 +550,7 @@ const pinnedChoice = "any";
  * attributes, then "<period> is <comparison>". Every count attribute edits
  * through it: its catalogue entry gives the parameters, its wording the words.
  */
-export function CountConditionControls<
-  Condition extends AudienceCountCondition,
->({
+export function CountConditionControls({
   entry,
   wording,
   value: condition,
@@ -551,7 +558,7 @@ export function CountConditionControls<
   errorAt,
   lookups,
   holder = "saved-audience",
-}: ControlProps<Condition> & {
+}: ControlProps<AudienceCountCondition> & {
   readonly entry: AudienceCountAttributeDefinition;
   readonly wording: AudienceCountWording;
   readonly lookups: AudienceValueLookups;
@@ -561,8 +568,7 @@ export function CountConditionControls<
   const locale = useRouteLocale();
   const { params } = condition;
   const changeParams = (next: AudienceCountCondition["params"]) =>
-    // The entry's params keep the condition's own shape.
-    onChange({ ...condition, params: next } as Condition);
+    onChange({ ...condition, params: next });
   const campaignChosen = Object.entries(entry.params).some(
     ([name, param]) => param.part === "campaign" && params[name] !== undefined
   );
@@ -600,7 +606,7 @@ export function CountConditionControls<
                 wording={sourceWording}
                 campaigns={lookups.campaigns}
                 holder={holder}
-                value={params[token.param] as CampaignEmailSourceType}
+                value={campaignSource(params[token.param])}
                 onChange={(source) => {
                   const { [token.param]: _, ...rest } = params;
                   if (source === undefined) {
@@ -697,14 +703,14 @@ const dateOperatorKeys = ["in", "notIn", "none"] as const;
  * attribute's own wording for no value ("never visited"), then the
  * reservation product for reservation-based attributes.
  */
-export function DateConditionControls<Condition extends AudienceDateCondition>({
+export function DateConditionControls({
   entry: { reservationProduct },
   wording: { label, noValue },
   value: condition,
   onChange,
   errorAt,
   holder = "saved-audience",
-}: ControlProps<Condition> & {
+}: ControlProps<AudienceDateCondition> & {
   readonly entry: AudienceDateAttributeDefinition;
   readonly wording: AudienceDateWording;
   /** What holds the condition, which decides the periods offered. */
@@ -737,7 +743,7 @@ export function DateConditionControls<Condition extends AudienceDateCondition>({
                 attribute: condition.attribute,
                 ...params,
                 operator,
-              } as Condition);
+              });
             } else if (operator === "in" || operator === "notIn") {
               onChange({
                 _tag: "Condition",
@@ -745,7 +751,7 @@ export function DateConditionControls<Condition extends AudienceDateCondition>({
                 ...params,
                 operator,
                 value: period,
-              } as Condition);
+              });
             }
           }}
         >
@@ -786,9 +792,7 @@ export function DateConditionControls<Condition extends AudienceDateCondition>({
           value={condition.params?.product}
           onChange={(product) => {
             const { params: _, ...rest } = condition;
-            onChange(
-              (product ? { ...rest, params: { product } } : rest) as Condition
-            );
+            onChange(product ? { ...rest, params: { product } } : rest);
           }}
           errorAt={withPath(errorAt, "params.product")}
         />

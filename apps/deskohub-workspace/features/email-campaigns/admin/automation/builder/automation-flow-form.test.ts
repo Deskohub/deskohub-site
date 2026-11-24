@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { AutomationFlow } from "@deskohub/workspace-admin-api";
 import { Schema } from "effect";
+import { newSavedAudienceMembership } from "../../audiences/audience-filter-editing";
 import { emptyFlowSteps } from "./automation-flow-editing";
 import {
+  type AutomationFlowDraftValues,
   type AutomationFlowFormValues,
   automationFlowFormValues,
   createAutomationFlowFormSchema,
@@ -115,5 +117,28 @@ describe("createAutomationFlowFormSchema", () => {
       steps: [],
     });
     expect(errors.paths).toEqual([]);
+  });
+});
+
+describe("a saved-audience membership with no audience picked", () => {
+  test("stays in the form until submission reports it at its audience", async () => {
+    const values: AutomationFlowDraftValues = {
+      trigger: { _tag: "AccountCreated" },
+      steps: [
+        {
+          _tag: "Condition",
+          id: "condition-1",
+          filter: {
+            _tag: "Group",
+            operator: "and",
+            filters: [newSavedAudienceMembership()],
+          },
+        },
+        send,
+      ],
+    };
+    const errors = await automationFlowFormErrors(values);
+    expect(errors.paths).toEqual(["steps"]);
+    expect(errors.at("steps.0.filter.filters.0.audienceId")).toBeTruthy();
   });
 });
