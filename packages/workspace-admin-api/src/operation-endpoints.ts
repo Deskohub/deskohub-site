@@ -543,22 +543,68 @@ export const operationGroup = <
 };
 
 /**
- * Whether `served` is `group` as an API serves it: `group` itself, or the
- * copy `addHttpApi` makes, which shares `group`'s endpoints and adds the
- * composed API's annotations. A group that only shares `group`'s identifier
+ * Whether `served` and `declared` are one endpoint, however an API
+ * transformed it: Effect's `prefix`, `middleware` and `annotate` rebuild an
+ * endpoint with its method and codecs carried over by reference. Paths
+ * aren't compared, so a prefixed endpoint still matches.
+ */
+const sameEndpoint = (
+  served: HttpApiEndpoint.Top,
+  declared: HttpApiEndpoint.Top
+): boolean =>
+  served.method === declared.method &&
+  served.params === declared.params &&
+  served.query === declared.query &&
+  served.headers === declared.headers &&
+  served.payload === declared.payload &&
+  served.success === declared.success &&
+  served.error === declared.error &&
+  served.disableCodecs === declared.disableCodecs;
+
+/**
+ * Whether `served` is `group` as an API serves it: `group` itself, or a
+ * copy the API made with its own prefix, middleware or annotations, as
+ * `addHttpApi` and `HttpApi.middleware` make, whose endpoints decode and
+ * encode as `group`'s do. A group that only shares `group`'s identifier
  * and routes isn't it: its endpoints may decode and encode differently.
  */
 const servesGroup =
-  (group: HttpApiGroup.Top) =>
-  (served: HttpApiGroup.Top): boolean =>
-    served.identifier === group.identifier &&
-    served.topLevel === group.topLevel &&
-    served.endpoints === group.endpoints;
+  <
+    Id extends string,
+    Endpoints extends HttpApiEndpoint.Constraint,
+    TopLevel extends boolean,
+  >(
+    group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>
+  ) =>
+  (
+    candidate: HttpApiGroup.Constraint
+  ): candidate is HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel> => {
+    const declared = httpApiGroupOf(group);
+    const served = httpApiGroupOf(candidate);
+    const names = Object.keys(declared.endpoints);
+    return (
+      served.identifier === declared.identifier &&
+      served.topLevel === declared.topLevel &&
+      Object.keys(served.endpoints).length === names.length &&
+      names.every((name) => {
+        const endpoint: HttpApiEndpoint.Top | undefined =
+          served.endpoints[name];
+        const declaredEndpoint: HttpApiEndpoint.Top | undefined =
+          declared.endpoints[name];
+        return (
+          endpoint !== undefined &&
+          declaredEndpoint !== undefined &&
+          sameEndpoint(endpoint, declaredEndpoint)
+        );
+      })
+    );
+  };
 
 /**
  * The API serving `group` alone, as `api` declares it, for building the
- * group's handlers where its endpoints are known: `group` with the
- * annotations `api` serves it with. Throws unless `api` serves `group`.
+ * group's handlers where its endpoints are known: the group as `api` serves
+ * it, with the prefix, middleware and annotations `api` gives it. Throws
+ * unless `api` serves `group`.
  */
 export const operationGroupApi = <
   ApiId extends string,
@@ -570,14 +616,15 @@ export const operationGroupApi = <
   api: HttpApi.HttpApi<ApiId, Groups>,
   group: HttpApiGroup.HttpApiGroup<Id, Endpoints, TopLevel>
 ) => {
-  const served = Object.values(api.groups)
-    .filter(HttpApiGroup.isHttpApiGroup)
-    .find(servesGroup(httpApiGroupOf(group)));
+  const groups: ReadonlyArray<HttpApiGroup.Constraint> = Object.values(
+    api.groups
+  );
+  const served = groups.find(servesGroup(group));
   if (served === undefined) {
     throw new Error(`${api.identifier} doesn't serve ${group.identifier}.`);
   }
   return HttpApi.make(api.identifier)
-    .add(group.annotateMerge(served.annotations))
+    .add(served)
     .annotateMerge(api.annotations);
 };
 

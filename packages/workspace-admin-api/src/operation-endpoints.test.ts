@@ -1039,3 +1039,104 @@ describe("the API serving one group", () => {
     );
   });
 });
+
+describe("an API that transforms a group after binding it", () => {
+  /** A `getNote` request for note-1 under `prefix`. */
+  const getNoteAt = (prefix = "") =>
+    new Request(`${baseUrl}${prefix}/api/v1/cli/notes/note-1`, {
+      headers: { authorization: "Bearer session" },
+    });
+
+  /** The response `served` gives `request`, disposing of `served` after. */
+  const respond = async (
+    served: {
+      readonly handler: (
+        request: Request,
+        context: Context.Context<never>
+      ) => Promise<Response>;
+      readonly dispose: () => Promise<void>;
+    },
+    request: Request
+  ) => {
+    try {
+      const response = await served.handler(request, Context.empty());
+      return { status: response.status, body: await response.text() };
+    } finally {
+      await served.dispose();
+    }
+  };
+
+  /** The response the API that binds `Notes` gives a `getNote` request. */
+  const expected = async () => {
+    const response = await server.handler(getNoteAt());
+    expect(response.status).toBe(200);
+    return { status: response.status, body: await response.text() };
+  };
+
+  test("serves it with authentication middleware applied again", async () => {
+    const authenticated = api.middleware(AdministrationAuthentication);
+    const served = HttpRouter.toWebHandler(
+      HttpApiBuilder.layer(authenticated).pipe(
+        Layer.provide(
+          operationGroupHandlers(
+            authenticated,
+            Notes,
+            Effect.succeed(echoInput)
+          )
+        ),
+        Layer.provide(administrationMiddleware),
+        Layer.provide(HttpServer.layerServices)
+      ),
+      { disableLogger: true }
+    );
+    expect(await respond(served, getNoteAt())).toEqual(await expected());
+  });
+
+  test("serves it with its endpoints annotated", async () => {
+    const annotated = HttpApi.make("annotated").add(
+      Notes.annotateEndpointsMerge(Context.empty())
+    );
+    const served = HttpRouter.toWebHandler(
+      HttpApiBuilder.layer(annotated).pipe(
+        Layer.provide(
+          operationGroupHandlers(annotated, Notes, Effect.succeed(echoInput))
+        ),
+        Layer.provide(administrationMiddleware),
+        Layer.provide(HttpServer.layerServices)
+      ),
+      { disableLogger: true }
+    );
+    expect(await respond(served, getNoteAt())).toEqual(await expected());
+  });
+
+  // A prefix changes the group's path types, so `operationGroupHandlers`
+  // takes no prefixed API; the group's server it runs still serves one.
+  test("serves it at the prefix a composed API adds", async () => {
+    const prefixed = HttpApi.make("prefixed").addHttpApi(api).prefix("/v2");
+    type PrefixedGroups =
+      typeof prefixed extends HttpApi.HttpApi<"prefixed", infer Groups>
+        ? Groups
+        : never;
+    const serve = () =>
+      HttpRouter.toWebHandler(
+        HttpApiBuilder.layer(prefixed).pipe(
+          Layer.provide(
+            notesServer<
+              "prefixed",
+              PrefixedGroups,
+              never,
+              never,
+              never,
+              never,
+              never
+            >(prefixed, Effect.succeed(echoInput), undefined)
+          ),
+          Layer.provide(administrationMiddleware),
+          Layer.provide(HttpServer.layerServices)
+        ),
+        { disableLogger: true }
+      );
+    expect(await respond(serve(), getNoteAt("/v2"))).toEqual(await expected());
+    expect((await respond(serve(), getNoteAt())).status).toBe(404);
+  });
+});
