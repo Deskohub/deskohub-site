@@ -286,6 +286,61 @@ describe("release command output", () => {
   });
 });
 
+// One page of a parent's sinks as the Logging API lists them; a later
+// page is the one asked for by the earlier page's token.
+const sinksPage = (
+  parent: string,
+  sinks: ReadonlyArray<Record<string, unknown>>,
+  page: { readonly token?: string; readonly next?: string } = {}
+): FakeRule => ({
+  tool: "curl",
+  pattern: `logging\\.googleapis\\.com/v2/${parent}/sinks\\?pageSize=100${
+    page.token === undefined ? "" : `&pageToken=${page.token}`
+  }$`,
+  stdout: JSON.stringify(
+    page.next === undefined ? { sinks } : { sinks, nextPageToken: page.next }
+  ),
+});
+describe("read-only inventory", () => {
+  test("reports the project's log sinks from every page", () => {
+    const { exitCode, output } = withProofFakes(
+      {
+        rules: [
+          sinksPage(
+            `projects/${projectId}`,
+            [
+              {
+                name: "export",
+                destination: "bigquery.googleapis.com/x",
+                filter: "severity>=ERROR",
+              },
+            ],
+            { token: "page-2" }
+          ),
+          sinksPage(
+            `projects/${projectId}`,
+            [{ name: "_Default", destination: "logging/_Default" }],
+            { next: "page-2" }
+          ),
+        ],
+      },
+      (fakes) => runPhase(fakes, "readonly-inventory")
+    );
+    expect({
+      exitCode,
+      sinks: output
+        .split("\n")
+        .filter((line) => /^(_Default|export)\t/.test(line)),
+    }).toEqual({
+      exitCode: 0,
+      sinks: [
+        "_Default\tlogging/_Default\t(empty filter)",
+        "export\tbigquery.googleapis.com/x\tseverity>=ERROR",
+      ],
+    });
+  });
+});
+
 describe("post-destroy inventory", () => {
   const state = `gs://${stateBucket}`;
   // `storage ls -r` once the stack is gone: folder headings, the
@@ -306,6 +361,42 @@ describe("post-destroy inventory", () => {
     tool: "gcloud",
     pattern,
     stdout,
+  });
+
+  test("lists the project's log sinks from every page", () => {
+    const listed = withProofFakes(
+      {
+        rules: [
+          listing("^storage ls -r", emptiedState),
+          sinksPage(
+            `projects/${projectId}`,
+            [{ name: "export", destination: "bigquery.googleapis.com/x" }],
+            { token: "page-2" }
+          ),
+          sinksPage(
+            `projects/${projectId}`,
+            [{ name: "_Default", destination: "logging/_Default" }],
+            { next: "page-2" }
+          ),
+        ],
+      },
+      (fakes) => {
+        const { exitCode } = runPhase(fakes, "post-destroy-inventory");
+        const file = join(
+          fakes.proofDir,
+          "inventory-post-destroy",
+          "logging-sinks.txt"
+        );
+        return {
+          exitCode,
+          sinks: existsSync(file) ? readFileSync(file, "utf8") : null,
+        };
+      }
+    );
+    expect(listed).toEqual({
+      exitCode: 0,
+      sinks: "_Default\tlogging/_Default\nexport\tbigquery.googleapis.com/x\n",
+    });
   });
 
   test("counts folder headings and the lease as no residue", () => {
@@ -1083,21 +1174,25 @@ describe("edge readback from the live edge", () => {
     throttle,
     defaultRule,
   ];
-  // `security-policies describe --format=json` as gcloud prints it: the
-  // whole policy, `preview: false` omitted as Compute omits it.
+  // The policy as Compute returns it, `preview: false` omitted as Compute
+  // omits it.
+  const policyResource = (rules: ReadonlyArray<Record<string, unknown>>) => ({
+    kind: "compute#securityPolicy",
+    id: "4815162342",
+    name: policy,
+    type: "CLOUD_ARMOR",
+    fingerprint: "c2FuZGJveA==",
+    selfLink: policyLink,
+    rules: rules.map((rule) => ({
+      kind: "compute#securityPolicyRule",
+      ...rule,
+    })),
+  });
+  // `security-policies describe --format=json` as Google Cloud SDK 594.0.1
+  // prints it: the describe request's one-element result list, as run
+  // 45305300114 read it.
   const policyDescription = (rules: ReadonlyArray<Record<string, unknown>>) =>
-    JSON.stringify({
-      kind: "compute#securityPolicy",
-      id: "4815162342",
-      name: policy,
-      type: "CLOUD_ARMOR",
-      fingerprint: "c2FuZGJveA==",
-      selfLink: policyLink,
-      rules: rules.map((rule) => ({
-        kind: "compute#securityPolicyRule",
-        ...rule,
-      })),
-    });
+    JSON.stringify([policyResource(rules)]);
   const withThrottle = (changes: Record<string, unknown>) =>
     policyRules.map((rule) =>
       rule.priority === 2000 ? { ...throttle, ...changes } : rule
@@ -1133,13 +1228,6 @@ describe("edge readback from the live edge", () => {
       tool: "gcloud",
       pattern: "^compute backend-services describe workspace-sandbox-",
       stdout: policyLink,
-    },
-    {
-      tool: "gcloud",
-      // gcloud prints a lone projected field bare: `json(rules)` is the
-      // rules array itself, as run 45299832216 read it.
-      pattern: `^compute security-policies describe ${policy} .*--format=json\\(rules\\)$`,
-      stdout: JSON.stringify(policyRules),
     },
     {
       tool: "gcloud",
@@ -1247,6 +1335,63 @@ describe("edge readback from the live edge", () => {
         });
         expect(calls.some((call) => call.startsWith("curl"))).toBe(false);
       }
+    },
+    readbackTimeout
+  );
+
+  test(
+    "reads the policy from the one-element list or a bare object, never from no or several policies",
+    () => {
+      const described = (stdout: string): FakeRule => ({
+        tool: "gcloud",
+        pattern: "^compute security-policies describe .*--format=json$",
+        stdout,
+      });
+      const bare = readback([
+        described(JSON.stringify(policyResource(policyRules))),
+      ]);
+      expect({
+        exitCode: bare.exitCode,
+        output: bare.exitCode === 0 ? "" : bare.output,
+      }).toEqual({ exitCode: 0, output: "" });
+      for (const stdout of [
+        "[]",
+        JSON.stringify([
+          policyResource(policyRules),
+          policyResource(policyRules),
+        ]),
+        "[null]",
+      ]) {
+        const { exitCode, calls } = readback([described(stdout)]);
+        expect({ stdout, exitCode }).toEqual({ stdout, exitCode: 1 });
+        expect(calls.some((call) => call.startsWith("curl"))).toBe(false);
+      }
+    },
+    readbackTimeout
+  );
+
+  test(
+    "names each rule that differs from the declaration",
+    () => {
+      const { exitCode, output } = readback([
+        {
+          tool: "gcloud",
+          pattern: "^compute security-policies describe .*--format=json$",
+          stdout: policyDescription(
+            withThrottle({ preview: true }).map((rule) =>
+              rule.priority === 1010 ? { ...rule, preview: false } : rule
+            )
+          ),
+        },
+      ]);
+      const error =
+        output.split("\n").find((line) => line.startsWith("::error::")) ?? "";
+      expect(exitCode).toBe(1);
+      expect(
+        ["1000", "1010", "2000", "2147483647"].filter((priority) =>
+          new RegExp(`\\b${priority}\\b`).test(error)
+        )
+      ).toEqual(["1010", "2000"]);
     },
     readbackTimeout
   );
@@ -1361,18 +1506,10 @@ describe("token-route privacy and telemetry", () => {
         { id: "4242", type: "folder" },
       ]),
     },
-    {
-      tool: "gcloud",
-      pattern: "^logging sinks list --project=",
-      stdout: JSON.stringify(projectSinks),
-    },
-    {
-      tool: "gcloud",
-      pattern: "^logging sinks list --folder=4242",
-      stdout: JSON.stringify([
-        { name: "_Default", destination: "logging/folder" },
-      ]),
-    },
+    sinksPage(`projects/${projectId}`, projectSinks),
+    sinksPage("folders/4242", [
+      { name: "_Default", destination: "logging/folder" },
+    ]),
     {
       tool: "curl",
       pattern: "/healthz$",
@@ -1500,45 +1637,80 @@ describe("token-route privacy and telemetry", () => {
 
   test("sends no marker while any sink could receive token-route logs", () => {
     for (const override of [
-      {
-        tool: "gcloud",
-        pattern: "^logging sinks list --project=",
-        stdout: JSON.stringify([
+      [
+        sinksPage(`projects/${projectId}`, [
           ...projectSinks,
           { name: "export", destination: "bigquery.googleapis.com/x" },
         ]),
-      },
-      {
-        tool: "gcloud",
-        pattern: "^logging sinks list --folder=4242",
-        stdout: JSON.stringify([
+      ],
+      [
+        sinksPage("folders/4242", [
           {
             name: "org-export",
             destination: "storage.googleapis.com/y",
             includeChildren: true,
           },
         ]),
-      },
-      { tool: "gcloud", pattern: "^logging sinks list --folder=4242", exit: 1 },
-      { tool: "gcloud", pattern: "^projects get-ancestors", exit: 1 },
-      {
-        tool: "curl",
-        pattern: "logging\\.googleapis\\.com/v2/projects/.*/exclusions",
-        stdout: JSON.stringify({
-          exclusions: [
-            { name: exclusionName, filter: exclusionFilter, disabled: true },
+      ],
+      [{ ...sinksPage("folders/4242", []), stdout: undefined, exit: 1 }],
+      // An uncovered export on a later page of the project's or the
+      // folder's sinks, which `gcloud logging sinks list` never reads.
+      [
+        sinksPage(
+          `projects/${projectId}`,
+          [{ name: "export", destination: "bigquery.googleapis.com/x" }],
+          { token: "page-2" }
+        ),
+        sinksPage(`projects/${projectId}`, projectSinks, { next: "page-2" }),
+      ],
+      [
+        sinksPage(
+          "folders/4242",
+          [
+            {
+              name: "org-export",
+              destination: "storage.googleapis.com/y",
+              includeChildren: true,
+            },
           ],
-        }),
-      },
-    ] satisfies ReadonlyArray<FakeRule>) {
-      const { exitCode, markerSent } = privacy([override]);
+          { token: "page%2B2" }
+        ),
+        sinksPage("folders/4242", [], { next: "page+2" }),
+      ],
+      // A later page answered with no body.
+      [
+        {
+          ...sinksPage(`projects/${projectId}`, [], { token: "page-2" }),
+          stdout: "",
+        },
+        sinksPage(`projects/${projectId}`, projectSinks, { next: "page-2" }),
+      ],
+      // Pages without end.
+      [
+        sinksPage("folders/4242", [], { token: "again", next: "again" }),
+        sinksPage("folders/4242", [], { next: "again" }),
+      ],
+      [{ tool: "gcloud", pattern: "^projects get-ancestors", exit: 1 }],
+      [
+        {
+          tool: "curl",
+          pattern: "logging\\.googleapis\\.com/v2/projects/.*/exclusions",
+          stdout: JSON.stringify({
+            exclusions: [
+              { name: exclusionName, filter: exclusionFilter, disabled: true },
+            ],
+          }),
+        },
+      ],
+    ] satisfies ReadonlyArray<ReadonlyArray<FakeRule>>) {
+      const { exitCode, markerSent } = privacy(override);
       expect({ override, exitCode, markerSent }).toEqual({
         override,
         exitCode: 1,
         markerSent: false,
       });
     }
-  });
+  }, 60_000);
 
   test("sends no marker unless the live exclusion is the stack's full filter", () => {
     const liveExclusion = (filter: string): FakeRule => ({
@@ -1568,20 +1740,43 @@ describe("token-route privacy and telemetry", () => {
     }
   });
 
+  test("sends the marker once every page of sinks, over 128 KiB, is covered", () => {
+    // Sinks whose own filters are long, each excluding the token routes.
+    const covered = (name: string) => ({
+      name,
+      destination: "storage.googleapis.com/y",
+      filter: `logName:"${name}" OR ${"x".repeat(1600)}`,
+      exclusions: [{ name: "tokens", filter: exclusionFilter }],
+    });
+    const firstPage = Array.from({ length: 95 }, (_, index) =>
+      covered(`export-${index}`)
+    );
+    expect(JSON.stringify(firstPage).length).toBeGreaterThan(128 * 1024);
+    const { exitCode, output, markerSent } = privacy([
+      sinksPage(`projects/${projectId}`, [covered("export-late")], {
+        token: "page-2",
+      }),
+      sinksPage(`projects/${projectId}`, [...projectSinks, ...firstPage], {
+        next: "page-2",
+      }),
+    ]);
+    expect({
+      exitCode,
+      output: exitCode === 0 ? "" : output,
+      markerSent,
+    }).toEqual({ exitCode: 0, output: "", markerSent: true });
+  }, 60_000);
+
   test("accepts an inherited sink that excludes the same filter", () => {
     const { exitCode, output } = privacy([
-      {
-        tool: "gcloud",
-        pattern: "^logging sinks list --folder=4242",
-        stdout: JSON.stringify([
-          {
-            name: "org-export",
-            destination: "storage.googleapis.com/y",
-            includeChildren: true,
-            exclusions: [{ name: "tokens", filter: exclusionFilter }],
-          },
-        ]),
-      },
+      sinksPage("folders/4242", [
+        {
+          name: "org-export",
+          destination: "storage.googleapis.com/y",
+          includeChildren: true,
+          exclusions: [{ name: "tokens", filter: exclusionFilter }],
+        },
+      ]),
     ]);
     expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
       exitCode: 0,
