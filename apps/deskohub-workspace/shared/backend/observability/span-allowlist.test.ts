@@ -151,19 +151,23 @@ const exportedFields = (spans: readonly ReadableSpan[]) =>
     }))
   );
 
-const containerRegistration = () =>
+/** A registration that exports its spans to PostHog at `posthogHost`. */
+const exportingRegistration = (posthogHost = "https://posthog.invalid") =>
   createWorkspaceOTelRegistration({
-    otlpEndpoint: "http://127.0.0.1:4318",
+    deploymentEnvironment: "preview",
+    posthogHost,
+    posthogProjectToken: "synthetic-project-token",
+    tracesExport: "always",
   });
 
 /**
- * The container registration's processors, with an in-memory exporter in
- * place of its collector export.
+ * The exporting registration's processors, with an in-memory exporter in
+ * place of its PostHog export.
  */
 const registrationProvider = (exporter: SpanExporter) =>
   new BasicTracerProvider({
     spanProcessors: [
-      ...containerRegistration()
+      ...exportingRegistration()
         .spanProcessors.slice(0, -1)
         .filter(
           (processor): processor is SpanProcessor => processor !== "auto"
@@ -274,9 +278,9 @@ describe("Workspace span allowlist", () => {
     }
   });
 
-  test("sends only allowlisted, censored spans to a loopback OTLP collector", async () => {
+  test("sends PostHog only allowlisted spans", async () => {
     const bodies: Uint8Array[] = [];
-    const collector = Bun.serve({
+    const posthog = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       fetch: async (request) => {
@@ -284,9 +288,9 @@ describe("Workspace span allowlist", () => {
         return new Response(null, { status: 200 });
       },
     });
-    const registration = createWorkspaceOTelRegistration({
-      otlpEndpoint: `http://127.0.0.1:${collector.port}`,
-    });
+    const registration = exportingRegistration(
+      `http://127.0.0.1:${posthog.port}`
+    );
     const provider = new BasicTracerProvider({
       spanProcessors: registration.spanProcessors.filter(
         (processor): processor is SpanProcessor => processor !== "auto"
@@ -302,7 +306,7 @@ describe("Workspace span allowlist", () => {
       );
       expect(bodies.length).toBeGreaterThan(0);
       expect(received).toContain(controlRoute);
-      // The collector keeps the validated hosts, database and operation
+      // The export keeps the validated hosts, database and operation
       // names the shared log censorship would mask.
       for (const kept of [
         "api.provider.invalid",
@@ -325,7 +329,7 @@ describe("Workspace span allowlist", () => {
       }
     } finally {
       await provider.shutdown();
-      await collector.stop(true);
+      await posthog.stop(true);
     }
   });
 });

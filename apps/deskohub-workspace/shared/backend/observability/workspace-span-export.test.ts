@@ -14,10 +14,20 @@ import { Predicate } from "effect";
 import { createWorkspaceOTelRegistration } from "./telemetry-sinks";
 import { flushWorkspaceTraces } from "./workspace-telemetry";
 
-// Synthetic markers only; nothing leaves the test's loopback collector.
+// Synthetic markers only; nothing leaves the test's stand-in PostHog host.
 const traceStateMarker = "statemarker";
 const tokenMarker = "tokSynthMarker7Q2xK9vB4nR8mW1zL6pD3";
+const authorizationMarker = "authSynthMarker4V8nQ1wE6rT3yU9";
+const cookieMarker = "cookieSynthMarker2J7mK5pL8sD1fG4";
+const customMarker = "customSynthMarker9B3vN6cX2zA5qW8";
 const addressMarker = testEmailAddress("synthetic-marker-recipient");
+const projectToken = "synthetic-project-token";
+
+interface ReceivedExport {
+  readonly path: string;
+  readonly authorization: string | null;
+  readonly body: string;
+}
 
 interface ExportedAttribute {
   readonly key: string;
@@ -43,14 +53,18 @@ const attributeMap = (attributes: readonly ExportedAttribute[]) =>
     attributes.map(({ key, value }) => [key, Object.values(value)[0]])
   );
 
-describe("the container's span export through registerOTel", () => {
-  test("sends the collector allowlisted spans only, after every processor ran", async () => {
-    const bodies: string[] = [];
-    const collector = Bun.serve({
+describe("the Workspace's PostHog span export through registerOTel", () => {
+  test("sends PostHog allowlisted spans only, after every processor ran", async () => {
+    const received: ReceivedExport[] = [];
+    const posthog = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       fetch: async (request) => {
-        bodies.push(await request.text());
+        received.push({
+          path: new URL(request.url).pathname,
+          authorization: request.headers.get("authorization"),
+          body: await request.text(),
+        });
         return new Response(null, { status: 200 });
       },
     });
@@ -58,9 +72,12 @@ describe("the container's span export through registerOTel", () => {
     try {
       registerOTel({
         ...createWorkspaceOTelRegistration({
+          deploymentEnvironment: "preview",
           serviceVersion: "synthetic-sha",
           deploymentId: "synthetic-deployment",
-          otlpEndpoint: `http://127.0.0.1:${collector.port}`,
+          posthogHost: `http://127.0.0.1:${posthog.port}`,
+          posthogProjectToken: projectToken,
+          tracesExport: "always",
         }),
         // The spans are recorded by hand; no instrumentation patches fetch.
         instrumentations: [],
@@ -83,7 +100,12 @@ describe("the container's span export through registerOTel", () => {
             attributes: {
               "http.method": "GET",
               "http.route": "/api/customers/[customerId]",
-              "http.target": "/api/customers/sample-slug",
+              "http.target": `/api/customers/sample-slug?token=${tokenMarker}`,
+              "http.request.header.authorization": [
+                `Bearer ${authorizationMarker}`,
+              ],
+              "http.request.header.cookie": [`session=${cookieMarker}`],
+              "customer.note": customMarker,
             },
             links: [{ context: callerContext }],
           },
@@ -107,9 +129,25 @@ describe("the container's span export through registerOTel", () => {
       span.end();
       await flushWorkspaceTraces();
 
+      expect(received.length).toBeGreaterThan(0);
+      for (const { path, authorization } of received) {
+        expect(path).toBe("/i/v1/traces");
+        expect(authorization).toBe(`Bearer ${projectToken}`);
+      }
+      const bodies = received.map(({ body }) => body);
       const exported = bodies.join("\n");
-      expect(exported).not.toContain(tokenMarker);
-      expect(exported).not.toContain(addressMarker);
+      for (const marker of [
+        tokenMarker,
+        authorizationMarker,
+        cookieMarker,
+        customMarker,
+        addressMarker,
+      ]) {
+        expect(exported).not.toContain(marker);
+      }
+      for (const key of ["authorization", "cookie", "customer.note"]) {
+        expect(exported).not.toContain(key);
+      }
       expect(exported).not.toContain("sample-slug");
       expect(exported).not.toContain(traceStateMarker);
       expect(exported).toContain("0af7651916cd43dd8448eb211c80319c");
@@ -127,6 +165,10 @@ describe("the container's span export through registerOTel", () => {
       expect(serverSpan?.links?.map(({ spanId }) => spanId)).toEqual([
         callerContext.spanId,
       ]);
+      expect(attributeMap(serverSpan?.attributes ?? [])).toMatchObject({
+        "http.method": "GET",
+        "http.route": "/api/customers/[customerId]",
+      });
       expect(
         Object.keys(attributeMap(serverSpan?.attributes ?? []))
       ).not.toContain("resource.name");
@@ -143,6 +185,7 @@ describe("the container's span export through registerOTel", () => {
         attributeMap(resourceSpans?.resource.attributes ?? [])
       ).toMatchObject({
         "service.name": "deskohub-workspace",
+        "deployment.environment.name": "preview",
         "service.version": "synthetic-sha",
         "deployment.id": "synthetic-deployment",
       });
@@ -161,7 +204,7 @@ describe("the container's span export through registerOTel", () => {
       trace.disable();
       context.disable();
       propagation.disable();
-      await collector.stop(true);
+      await posthog.stop(true);
     }
   });
 });

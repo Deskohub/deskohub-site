@@ -1,5 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { workspaceMinimumLogLevel } from "./telemetry-policy";
+import {
+  isPostHogExportEnabled,
+  workspaceMinimumLogLevel,
+} from "./telemetry-policy";
+
+describe("isPostHogExportEnabled", () => {
+  test("exports production only by default", () => {
+    expect(
+      isPostHogExportEnabled({ deploymentEnvironment: "production" })
+    ).toBe(true);
+    for (const deploymentEnvironment of ["preview", "development", undefined]) {
+      expect(isPostHogExportEnabled({ deploymentEnvironment })).toBe(false);
+    }
+  });
+
+  test("exports any deployment that opts in", () => {
+    for (const deploymentEnvironment of ["preview", "development", undefined]) {
+      expect(
+        isPostHogExportEnabled({ deploymentEnvironment, policy: "always" })
+      ).toBe(true);
+    }
+  });
+});
 
 describe("workspaceMinimumLogLevel", () => {
   test("keeps production at Info", () => {

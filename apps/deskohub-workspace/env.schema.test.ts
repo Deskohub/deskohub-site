@@ -215,22 +215,21 @@ describe("workspace environment schemas", () => {
     ]);
   });
 
-  test("leaves PostHog log export to its default unless a deployment opts in", () => {
-    expect(
-      createWorkspaceEnv(
-        workspaceRuntimeEnv({ POSTHOG_LOGS_EXPORT: undefined })
-      ).POSTHOG_LOGS_EXPORT
-    ).toBeUndefined();
-    for (const logsExport of ["production-only", "always"] as const) {
-      expect(
-        createWorkspaceEnv(
-          workspaceRuntimeEnv({ POSTHOG_LOGS_EXPORT: logsExport })
-        ).POSTHOG_LOGS_EXPORT
-      ).toBe(logsExport);
-    }
-    expect(invalidVariables({ POSTHOG_LOGS_EXPORT: "preview" })).toEqual([
+  test("leaves PostHog log and trace export to their defaults unless a deployment opts in", () => {
+    for (const key of [
       "POSTHOG_LOGS_EXPORT",
-    ]);
+      "POSTHOG_TRACES_EXPORT",
+    ] as const) {
+      expect(
+        createWorkspaceEnv(workspaceRuntimeEnv({ [key]: undefined }))[key]
+      ).toBeUndefined();
+      for (const policy of ["production-only", "always"] as const) {
+        expect(
+          createWorkspaceEnv(workspaceRuntimeEnv({ [key]: policy }))[key]
+        ).toBe(policy);
+      }
+      expect(invalidVariables({ [key]: "preview" })).toEqual([key]);
+    }
   });
 
   test("accepts Effect log level names as the Workspace log level", () => {
@@ -564,37 +563,6 @@ describe("deployment host environment", () => {
     }
   });
 
-  test("accepts only a loopback http:// collector as the OTLP endpoint", () => {
-    for (const endpoint of [
-      "http://127.0.0.1:4318",
-      "http://localhost:4318",
-      "http://[::1]:4318",
-    ]) {
-      expect(
-        invalidVariables({
-          ...containerHost,
-          WORKSPACE_OTLP_ENDPOINT: endpoint,
-        })
-      ).toEqual([]);
-    }
-    for (const endpoint of [
-      "https://127.0.0.1:4318",
-      "http://collector.example:4318",
-      "http://10.0.0.7:4318",
-      "http://127.0.0.1.example:4318",
-      "not a url",
-    ]) {
-      expect(
-        new Set(
-          invalidVariables({
-            ...containerHost,
-            WORKSPACE_OTLP_ENDPOINT: endpoint,
-          })
-        )
-      ).toEqual(new Set(["WORKSPACE_OTLP_ENDPOINT"]));
-    }
-  });
-
   test("never trusts a client-appendable header as the client address", () => {
     expect(
       invalidVariables({
@@ -614,8 +582,7 @@ describe("deployment host environment", () => {
         K_REVISION: "workspace-00007-abc",
         WORKSPACE_SERVICE_ROLE: "web",
         WORKSPACE_LOG_FORMAT: "cloud-logging-json",
-        WORKSPACE_OTLP_ENDPOINT: "http://127.0.0.1:4318",
-        WORKSPACE_TRACE_PROJECT_ID: "synthetic-project",
+        POSTHOG_TRACES_EXPORT: "always",
       })
     ).toEqual([]);
     expect(

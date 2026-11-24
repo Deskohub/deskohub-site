@@ -31,6 +31,7 @@ import {
   createWorkspaceLoggerProvider,
   createWorkspaceOTelRegistration,
   createWorkspaceTracerProvider,
+  exportsPostHogTraces,
   flushLoggerProvider,
 } from "./telemetry-sinks";
 
@@ -106,9 +107,16 @@ const expectSignatureRedacted = (exporter: InMemorySpanExporter) => {
   ).not.toContain(syntheticSignature);
 };
 
+const postHogTraceExport = {
+  posthogHost: "https://posthog.invalid",
+  posthogProjectToken: "synthetic-project-token",
+};
+
 describe("createWorkspaceOTelRegistration", () => {
-  test("keeps Vercel's registration without an OTLP endpoint: the identity, the redactor and the automatic exporters", () => {
+  test("keeps Vercel's registration when spans don't go to PostHog: the identity, the redactor and the automatic exporters", () => {
     const registration = createWorkspaceOTelRegistration({
+      ...postHogTraceExport,
+      deploymentEnvironment: "preview",
       serviceVersion: "synthetic-sha",
       deploymentId: "synthetic-deployment",
     });
@@ -129,8 +137,9 @@ describe("createWorkspaceOTelRegistration", () => {
     expect(registration.spanProcessors[1]).toBe("auto");
   });
 
-  test("exports nothing without an OTLP endpoint when automatic export is off", () => {
+  test("exports nothing when spans don't go to PostHog and automatic export is off", () => {
     const registration = createWorkspaceOTelRegistration({
+      deploymentEnvironment: "production",
       serviceVersion: "synthetic-sha",
       automaticExport: false,
     });
@@ -141,29 +150,81 @@ describe("createWorkspaceOTelRegistration", () => {
     expect(rest).toEqual([]);
   });
 
-  test("exports only through the allowlist and one bounded collector export with an OTLP endpoint", () => {
+  test("exports production spans only through the allowlist and one bounded PostHog export by default", () => {
+    for (const automaticExport of [true, false]) {
+      const registration = createWorkspaceOTelRegistration({
+        ...postHogTraceExport,
+        deploymentEnvironment: "production",
+        serviceVersion: "synthetic-sha",
+        deploymentId: "synthetic-deployment",
+        automaticExport,
+      });
+
+      expect(Object.keys(registration).sort()).toEqual([
+        "attributes",
+        "serviceName",
+        "spanProcessors",
+      ]);
+      expect(registration.attributes).toEqual({
+        "service.namespace": "deskohub",
+        "deployment.environment.name": "production",
+        "service.version": "synthetic-sha",
+        "deployment.id": "synthetic-deployment",
+      });
+      const [redactor, allowlist, exporting, ...rest] =
+        registration.spanProcessors;
+      expect(redactor).toBeInstanceOf(CloudinarySignatureRedactor);
+      expect(allowlist).toBeInstanceOf(SpanAllowlistProcessor);
+      expect(exporting).toBeInstanceOf(BatchSpanProcessor);
+      expect(rest).toEqual([]);
+    }
+  });
+
+  test("exports spans from any deployment that opts in", () => {
     const registration = createWorkspaceOTelRegistration({
-      serviceVersion: "synthetic-sha",
-      deploymentId: "synthetic-deployment",
-      otlpEndpoint: "http://127.0.0.1:4318",
+      ...postHogTraceExport,
+      deploymentEnvironment: "preview",
+      tracesExport: "always",
     });
 
-    expect(Object.keys(registration).sort()).toEqual([
-      "attributes",
-      "serviceName",
-      "spanProcessors",
-    ]);
-    expect(registration.attributes).toEqual({
-      "service.namespace": "deskohub",
-      "service.version": "synthetic-sha",
-      "deployment.id": "synthetic-deployment",
-    });
-    const [redactor, allowlist, exporting, ...rest] =
-      registration.spanProcessors;
-    expect(redactor).toBeInstanceOf(CloudinarySignatureRedactor);
-    expect(allowlist).toBeInstanceOf(SpanAllowlistProcessor);
-    expect(exporting).toBeInstanceOf(BatchSpanProcessor);
-    expect(rest).toEqual([]);
+    expect(registration.spanProcessors.at(-1)).toBeInstanceOf(
+      BatchSpanProcessor
+    );
+  });
+
+  test("requires the ingest host and stage once export is on", () => {
+    expect(() =>
+      createWorkspaceOTelRegistration({
+        posthogProjectToken: postHogTraceExport.posthogProjectToken,
+        deploymentEnvironment: "production",
+      })
+    ).toThrow("POSTHOG_INGEST_HOST");
+    expect(() =>
+      createWorkspaceOTelRegistration({
+        ...postHogTraceExport,
+        tracesExport: "always",
+      })
+    ).toThrow("deployment stage");
+  });
+});
+
+describe("exportsPostHogTraces", () => {
+  test("needs a project token and a deployment the policy includes", () => {
+    expect(
+      exportsPostHogTraces({
+        deploymentEnvironment: "production",
+        posthogProjectToken: postHogTraceExport.posthogProjectToken,
+      })
+    ).toBe(true);
+    expect(exportsPostHogTraces({ deploymentEnvironment: "production" })).toBe(
+      false
+    );
+    expect(
+      exportsPostHogTraces({
+        deploymentEnvironment: "preview",
+        posthogProjectToken: postHogTraceExport.posthogProjectToken,
+      })
+    ).toBe(false);
   });
 });
 
