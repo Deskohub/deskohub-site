@@ -11,7 +11,10 @@ import {
 } from "@/features/account/backend/current-customer-account.test-utils";
 import { CustomerAccountReservationOwnership } from "@/features/account/backend/customer-account-reservation-ownership";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
-import { sealSyntheticPayStateToken } from "@/features/checkout/backend/checkout/signed-pay-state.test-utils";
+import {
+  sealSyntheticPayStateToken,
+  syntheticPayStateOrderId,
+} from "@/features/checkout/backend/checkout/signed-pay-state.test-utils";
 import { QrPaymentRepository } from "@/features/checkout/backend/repositories/qr-payment.repository";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
@@ -136,7 +139,9 @@ const runSubmitReservation = async (options?: {
         Layer.mock(QrPaymentRepository, {
           findPaymentWindow: (reservationId) =>
             Effect.succeed(
-              options?.pinnedAccountKey
+              // The pinned window belongs to the signed reservation only.
+              options?.pinnedAccountKey &&
+                reservationId === syntheticPayStateOrderId
                 ? {
                     orderId: standaloneReservationOrderId(reservationId),
                     accountKey: options.pinnedAccountKey,
