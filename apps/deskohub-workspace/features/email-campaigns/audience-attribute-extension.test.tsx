@@ -164,10 +164,10 @@ describe("a count attribute added as one catalogue entry and its resolver", () =
       )
     );
     const counts = await Effect.runPromise(
-      sourcedResolvers.sourcedEmailCount.count(
-        { params: fromThis.condition.params, inContext: fromThis.inContext },
-        {} as AudienceResolution
-      )
+      sourcedResolvers.sourcedEmailCount.count({
+        params: fromThis.condition.params,
+        inContext: fromThis.inContext,
+      })
     );
     expect([...counts.keys()].map(String)).toEqual([
       `welcome:${evaluatingCampaign}`,

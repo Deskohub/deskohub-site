@@ -132,9 +132,7 @@ export const sourcedCatalogue = defineAudienceAttributeCatalogue({
   sourcedEmailCount,
 });
 
-export const sourcedResolvers: AudienceAttributeResolvers<
-  typeof sourcedCatalogue
-> = {
+export const sourcedResolvers = {
   ...audienceAttributeResolvers,
   sourcedEmailCount: {
     // Counts one email under the campaign kind and fixed campaign, so a
@@ -152,4 +150,4 @@ export const sourcedResolvers: AudienceAttributeResolvers<
       ),
     readsVisits: () => false,
   },
-};
+} satisfies AudienceAttributeResolvers<typeof sourcedCatalogue>;
