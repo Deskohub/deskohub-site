@@ -1,6 +1,6 @@
 import type { SupportedLocale } from "@deskohub/i18n/locale-registry";
 import { isMatchingSecret } from "@deskohub/secret-comparison";
-import { type Duration, Effect, flow, Schema } from "effect";
+import { type Duration, Effect, Schema } from "effect";
 
 export const nexiMinorUnitExponent = 2;
 
@@ -176,10 +176,10 @@ export const normalizeNexiWebhookNotification = (
   },
 });
 
-export const decodeNexiWebhookNotification = flow(
-  decodeUnknownNexiWebhookNotification,
-  Effect.map(normalizeNexiWebhookNotification)
-);
+export const decodeNexiWebhookNotification = (payload: Schema.Json) =>
+  decodeUnknownNexiWebhookNotification(payload).pipe(
+    Effect.map(normalizeNexiWebhookNotification)
+  );
 
 export const deriveNexiWebhookEventIdentity = (
   notification: NexiWebhookNotification
