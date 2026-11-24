@@ -154,7 +154,7 @@ describe("Workspace actions", () => {
     });
   });
 
-  test("returns field errors under a field named _errors", async () => {
+  test("reports an issue outside the form's fields with its path", async () => {
     const { defineWorkspaceAction } = await import("./workspace-action");
     const action = defineWorkspaceAction(
       {
@@ -168,9 +168,29 @@ describe("Workspace actions", () => {
 
     await expect(action({ _errors: { code: 123 } })).resolves.toMatchObject({
       validationErrors: {
-        fieldErrors: { code: [expect.any(String)] },
+        formErrors: [expect.stringMatching(/^code: /)],
+        fieldErrors: {},
       },
     });
+  });
+
+  test("keeps a field named __proto__ through serialization", async () => {
+    const { defineWorkspaceAction } = await import("./workspace-action");
+    const action = defineWorkspaceAction(
+      {
+        operation: "test.proto-field-validation",
+        schema: Schema.toStandardSchemaV1(
+          Schema.Struct({ ["__proto__"]: Schema.String })
+        ),
+      },
+      () => Effect.succeed("unreachable")
+    );
+
+    const result = await action(JSON.parse('{"__proto__": 123}'));
+
+    expect(
+      JSON.parse(JSON.stringify(result?.validationErrors)).fieldErrors
+    ).toEqual({ ["__proto__"]: [expect.any(String)] });
   });
 
   test("does not log validation paths when input logging is disabled", async () => {
