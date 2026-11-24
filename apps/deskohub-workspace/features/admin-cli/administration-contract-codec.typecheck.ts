@@ -55,6 +55,15 @@ void (() => {
     endpoint: HttpApiEndpoint.Constraint
   ): HttpApiEndpoint.Constraint => endpoint;
   const withService = HttpApiGroup.make("withService").add(needsService);
+  const keepGroupName = (
+    group: HttpApiGroup.Constraint & { readonly identifier: "withService" }
+  ) => group;
+  const keepEndpointName = (
+    endpoint: HttpApiEndpoint.Constraint & {
+      readonly identifier: "needsService";
+    }
+  ) => endpoint;
+  const dynamicName: string = "dynamic";
 
   const plainApi = HttpApi.make("plain").add(plain);
   const emptyApi = HttpApi.make("empty").add(HttpApiGroup.make("empty"));
@@ -65,7 +74,32 @@ void (() => {
     HttpApiGroup.make("erasedEndpoint").add(eraseEndpoint(needsService))
   );
 
+  const dynamicGroupApi = HttpApi.make("dynamicGroup").add(
+    HttpApiGroup.make(dynamicName)
+  );
+  const dynamicEndpointApi = HttpApi.make("dynamicEndpoint").add(
+    HttpApiGroup.make("dynamicEndpoint").add(
+      HttpApiEndpoint.get(dynamicName, "/ok")
+    )
+  );
+  const namedErasedGroupApi = HttpApi.make("namedErasedGroup").add(
+    keepGroupName(withService)
+  );
+  const namedErasedEndpointApi = HttpApi.make("namedErasedEndpoint").add(
+    HttpApiGroup.make("namedErasedEndpoint").add(keepEndpointName(needsService))
+  );
+
   type _PlainIsAccepted = Expect<Accepted<typeof plainApi>>;
+  type _DynamicGroupNameIsAccepted = Expect<Accepted<typeof dynamicGroupApi>>;
+  type _DynamicEndpointNameIsAccepted = Expect<
+    Accepted<typeof dynamicEndpointApi>
+  >;
+  type _NamedErasedGroupIsRefused = Expect<
+    Accepted<typeof namedErasedGroupApi> extends false ? true : false
+  >;
+  type _NamedErasedEndpointIsRefused = Expect<
+    Accepted<typeof namedErasedEndpointApi> extends false ? true : false
+  >;
   type _EmptyIsAccepted = Expect<Accepted<typeof emptyApi>>;
   type _ServiceIsRefused = Expect<
     Accepted<typeof serviceApi> extends false ? true : false

@@ -9,36 +9,43 @@ export type ContractServices<Groups extends HttpApiGroup.Constraint> =
   | HttpApiEndpoint.ServerServices<HttpApiGroup.Endpoints<Groups>>
   | HttpApiEndpoint.ClientServices<HttpApiGroup.Endpoints<Groups>>;
 
-/** A group whose identifier was widened to `string`, losing its endpoints' types. */
-type ErasedGroup<Group> = Group extends HttpApiGroup.Constraint
-  ? string extends HttpApiGroup.Identifier<Group>
-    ? Group
-    : never
-  : never;
+/**
+ * A group widened past the structure Effect reads its endpoints from, so its
+ * endpoints' schemas and services are unknown.
+ */
+type UntypedGroup<Group> =
+  Group extends HttpApiGroup.HttpApiGroup<
+    infer _Id,
+    infer _Endpoints,
+    infer _TopLevel
+  >
+    ? never
+    : Group;
 
-/** An endpoint whose identifier was widened to `string`, losing its schemas' types. */
-type ErasedEndpoint<Endpoint> = Endpoint extends HttpApiEndpoint.Constraint
-  ? string extends HttpApiEndpoint.Identifier<Endpoint>
-    ? Endpoint
-    : never
-  : never;
+/**
+ * An endpoint widened past the request structure Effect reads its schemas'
+ * services from, so they are unknown.
+ */
+type UntypedEndpoint<Endpoint> =
+  Endpoint extends HttpApiEndpoint.ConstraintRequest ? never : Endpoint;
 
 /**
  * Accepts only an API whose schemas are typed and need no services. An API
- * with a group or endpoint widened to its constraint, whose services are then
- * unknown, or whose schemas need any service, fails to typecheck. A group
- * with no endpoints is typed, and passes.
+ * with a group or endpoint widened past the structure Effect reads services
+ * from, or whose schemas need any service, fails to typecheck. Names don't
+ * matter: a typed group with no endpoints, or a typed endpoint with a
+ * `string` name, passes.
  */
 export type ServiceFreeContract<Groups extends HttpApiGroup.Constraint> = [
-  ErasedGroup<Groups> | ErasedEndpoint<HttpApiGroup.Endpoints<Groups>>,
+  UntypedGroup<Groups> | UntypedEndpoint<HttpApiGroup.Endpoints<Groups>>,
 ] extends [never]
   ? [ContractServices<Groups>] extends [never]
     ? unknown
     : { readonly contractServices: ContractServices<Groups> }
   : {
       readonly erasedContract:
-        | ErasedGroup<Groups>
-        | ErasedEndpoint<HttpApiGroup.Endpoints<Groups>>;
+        | UntypedGroup<Groups>
+        | UntypedEndpoint<HttpApiGroup.Endpoints<Groups>>;
     };
 
 /**
