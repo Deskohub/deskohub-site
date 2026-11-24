@@ -1074,6 +1074,21 @@ describe("edge readback from the live edge", () => {
     throttle,
     { priority: 2147483647, action: "allow" },
   ];
+  // `security-policies describe --format=json` as gcloud prints it: the
+  // whole policy, `preview: false` omitted as Compute omits it.
+  const policyDescription = (rules: ReadonlyArray<Record<string, unknown>>) =>
+    JSON.stringify({
+      kind: "compute#securityPolicy",
+      id: "4815162342",
+      name: policy,
+      type: "CLOUD_ARMOR",
+      fingerprint: "c2FuZGJveA==",
+      selfLink: policyLink,
+      rules: rules.map((rule) => ({
+        kind: "compute#securityPolicyRule",
+        ...rule,
+      })),
+    });
   const withThrottle = (changes: Record<string, unknown>) =>
     policyRules.map((rule) =>
       rule.priority === 2000 ? { ...throttle, ...changes } : rule
@@ -1112,8 +1127,15 @@ describe("edge readback from the live edge", () => {
     },
     {
       tool: "gcloud",
-      pattern: `^compute security-policies describe ${policy} `,
-      stdout: JSON.stringify({ rules: policyRules }),
+      // gcloud prints a lone projected field bare: `json(rules)` is the
+      // rules array itself, as run 45299832216 read it.
+      pattern: `^compute security-policies describe ${policy} .*--format=json\\(rules\\)$`,
+      stdout: JSON.stringify(policyRules),
+    },
+    {
+      tool: "gcloud",
+      pattern: `^compute security-policies describe ${policy} .*--format=json$`,
+      stdout: policyDescription(policyRules),
     },
     {
       tool: "curl",
@@ -1233,10 +1255,12 @@ describe("edge readback from the live edge", () => {
         pattern: "^compute backend-services describe workspace-sandbox-dynamic",
         exit: 1,
       };
-      const rules = (next: ReadonlyArray<unknown>): FakeRule => ({
+      const rules = (
+        next: ReadonlyArray<Record<string, unknown>>
+      ): FakeRule => ({
         tool: "gcloud",
-        pattern: "^compute security-policies describe",
-        stdout: JSON.stringify({ rules: next }),
+        pattern: "^compute security-policies describe .*--format=json$",
+        stdout: policyDescription(next),
       });
       for (const override of [
         detached,

@@ -734,8 +734,10 @@ verify_edge_security() {
       fail "backend service ${backend} is unreadable; its Cloud Armor policy is unverified"
     expect_equal "${backend} Cloud Armor policy" "${attached##*/}" "$edge_security_policy"
   done
+  # The whole policy: gcloud prints a lone projected field such as
+  # `json(rules)` as the bare value, not an object holding it.
   rules="$(capture '{"rules":[]}' gcloud compute security-policies describe "$edge_security_policy" \
-    --project="$project_id" --format='json(rules)')" ||
+    --project="$project_id" --format=json)" ||
     fail "Cloud Armor policy ${edge_security_policy} is unreadable"
   if $dry_run; then
     echo "  expect the declared SQLi and XSS rules in preview and the auth throttle enforced" >&2
@@ -1303,7 +1305,7 @@ phase_edge_privacy() {
   for attempt in $(seq 1 8); do
     requests="$(capture '[{}]' gcloud logging read \
       "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${web_service}\" AND log_id(\"run.googleapis.com/requests\") AND timestamp>=\"${start}\"" \
-      --project="$project_id" --freshness=1h --limit=1 --format='json(timestamp)')" ||
+      --project="$project_id" --freshness=1h --limit=1 --format='json(logName,timestamp)')" ||
       fail "Cloud Run request logs are unreadable; marker absence unverified"
     [[ "$(jq 'length' <<<"$requests")" != 0 ]] && {
       control=true
