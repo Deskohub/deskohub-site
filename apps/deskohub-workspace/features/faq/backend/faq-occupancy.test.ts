@@ -191,6 +191,8 @@ describe("getFaqOccupancyStats", () => {
       now: "2025-06-15T12:00:00Z",
       reservations: [
         makeReservation({ id: "confirmed" }),
+        makeReservation({ id: "second-confirmed" }),
+        makeReservation({ id: "third-confirmed" }),
         duplicate,
         { ...duplicate },
         makeReservation({ id: "new", status: "NEW" }),

@@ -11,8 +11,12 @@ import {
   selectedEmailCustomerShape as selectedEmailCustomerFields,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Layer, Schema } from "effect";
+import type { AdministrationCustomerActivity } from "@/features/administration/administration.service";
 import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
-import { CustomerValueUnavailable } from "./customer-value-source.service";
+import {
+  CustomerValueSource,
+  CustomerValueUnavailable,
+} from "./customer-value-source.service";
 import { CustomerValues, makeCustomerValues } from "./customer-values.service";
 
 const customerId = Schema.decodeUnknownSync(dotyposCustomerIdSchema)(
@@ -84,6 +88,53 @@ const run = (input: {
   );
 
 describe("CustomerValues", () => {
+  test("reads an activity selection through the default source wiring", async () => {
+    const activity: AdministrationCustomerActivity = {
+      reservations: [],
+      transactions: [],
+      reservationHistoryTruncated: false,
+      transactionHistoryTruncated: false,
+      marketingConsent: null,
+      stats: {
+        reservationCount: 1,
+        favoriteProduct: null,
+        revenue: [{ value: 2500, currency: "CZK", exponent: 2 }],
+        discountSavings: [],
+        favoriteReservationProduct: { kind: "meeting-room" },
+      },
+    };
+    const result = await Effect.flatMap(CustomerValues, (values) =>
+      values.resolve({
+        customerId,
+        definition: definition({
+          kind: "customer",
+          path: ["activity", "stats", "revenue"],
+          fields: [["value"], ["currency"]],
+        }),
+        locale: "en-US",
+      })
+    ).pipe(
+      Effect.provide(
+        CustomerValues.Default.pipe(
+          Layer.provide(
+            Layer.mock(CustomerValueSource, {
+              profile: () =>
+                Effect.fail(
+                  new CustomerValueUnavailable({ source: "profile" })
+                ),
+              activity: () => Effect.succeed(activity),
+            })
+          )
+        )
+      ),
+      Effect.result,
+      Effect.runPromise
+    );
+    expect(result).toMatchObject({
+      _tag: "Success",
+      success: [{ value: 2500, currency: "CZK" }],
+    });
+  });
   test("resolves an explicitly selected sensitive scalar", async () => {
     expect(
       await run({
