@@ -66,17 +66,22 @@ const fakeHost = ({
   readonly tools?: Readonly<Record<string, ToolResult>>;
   readonly link?: "opened" | "refused" | "unreachable";
 } = {}) => {
-  const calls = {
-    tools: [] as Array<ToolCall>,
-    links: [] as Array<string>,
-    closed: 0,
+  const calls: {
+    readonly tools: Array<ToolCall>;
+    readonly links: Array<string>;
+    closed: number;
+  } = { tools: [], links: [], closed: 0 };
+  // The handlers the booking host sets.
+  const handlers: {
+    ontoolinput: ((input: ToolInput) => void) | undefined;
+    ontoolresult: ((result: ToolResult) => void) | undefined;
+    onhostcontextchanged: ((context: McpUiHostContext) => void) | undefined;
+  } = {
+    ontoolinput: undefined,
+    ontoolresult: undefined,
+    onhostcontextchanged: undefined,
   };
-  const app = {
-    ontoolinput: undefined as ((input: ToolInput) => void) | undefined,
-    ontoolresult: undefined as ((result: ToolResult) => void) | undefined,
-    onhostcontextchanged: undefined as
-      | ((context: McpUiHostContext) => void)
-      | undefined,
+  const app = Object.assign(handlers, {
     connect,
     close: () => {
       calls.closed += 1;
@@ -97,7 +102,7 @@ const fakeHost = ({
         ? Promise.reject(new Error("Host unreachable"))
         : Promise.resolve({ isError: link === "refused" });
     },
-  };
+  });
   return { app, calls };
 };
 

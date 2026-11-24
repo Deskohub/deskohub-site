@@ -1,14 +1,16 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Data, Effect, Layer, Option, type Schema } from "effect";
-import type {
-  CustomerAgentClientId,
-  CustomerAgentGrant,
-  CustomerAgentScope,
-} from "@/features/account";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import type { CustomerAgentScope } from "@/features/account";
+import {
+  type CustomerAgentGrant,
+  customerAgentClientIdSchema,
+} from "@/features/account/backend/auth/customer-agent-authorization.service";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import type { prepareAgentPayState as PrepareAgentPayState } from "@/features/reservation/backend/agent-booking";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 
@@ -66,16 +68,14 @@ const { startReservationTool } = await import("./start-reservation.tool");
 const callerServices = inMemoryCustomerAgentCallServices(({ accountId }) => ({
   contact: {
     current: Effect.sync(() =>
-      contact
-        ? ({ accountId, dotyposCustomerId: "customer-1", ...contact } as never)
-        : null
+      contact ? { accountId, ...contact } : null
     ),
   },
 }));
 
 const grantFor = (clientId: string): CustomerAgentGrant => ({
-  accountId: "account-1" as CustomerAccountId,
-  clientId: clientId as CustomerAgentClientId,
+  accountId: customerAccountIdSchema.make("account-1"),
+  clientId: customerAgentClientIdSchema.make(clientId),
   scopes: new Set<CustomerAgentScope>(["reservations:create"]),
 });
 
@@ -171,12 +171,13 @@ describe("start_reservation", () => {
     const [first, repeat, otherSelection, otherClient] = requests.map(
       ({ advertisedPriceToken: _, ...request }) => request
     );
-    expect(repeat).toEqual(first as never);
+    assert(first);
+    expect(repeat).toEqual(first);
     expect(otherSelection?.reservation).not.toEqual(first?.reservation);
     expect(otherClient?.grant.clientId).toBe(
-      "https://other.example/c.json" as CustomerAgentClientId
+      customerAgentClientIdSchema.make("https://other.example/c.json")
     );
-    expect(otherClient?.reservation).toEqual(first?.reservation as never);
+    expect(otherClient?.reservation).toEqual(first.reservation);
   });
 
   test("books a meeting room with early setup at the same price under its own selection", async () => {
@@ -192,11 +193,8 @@ describe("start_reservation", () => {
     const early = await start({ ...meetingRoom, early_setup: true });
 
     expect(requests).toHaveLength(3);
-    const [plainRequest, declinedRequest, earlyRequest] = requests as [
-      (typeof requests)[number],
-      (typeof requests)[number],
-      (typeof requests)[number],
-    ];
+    const [plainRequest, declinedRequest, earlyRequest] = requests;
+    assert(plainRequest && declinedRequest && earlyRequest);
     expect(plainRequest.reservation).not.toHaveProperty("earlySetup");
     // Declining books the same selection, so the same request.
     expect(declinedRequest.reservation).toEqual(plainRequest.reservation);
@@ -205,7 +203,7 @@ describe("start_reservation", () => {
     expect(earlyRequest.reservation).toEqual({
       ...plainRequest.reservation,
       earlySetup: true,
-    } as never);
+    });
     const totals = [plain, declined, early].map((result) =>
       result._tag === "Success" ? result.success.total : undefined
     );
@@ -286,7 +284,7 @@ describe("start_reservation", () => {
   test("maps a pending payment to payment_in_progress", async () => {
     prepared = {
       fail: new AgentBookingPaymentInProgressError({
-        reservationId: "reservation-1" as never,
+        reservationId: workspaceReservationIdSchema.make("reservation-1"),
       }),
     };
 

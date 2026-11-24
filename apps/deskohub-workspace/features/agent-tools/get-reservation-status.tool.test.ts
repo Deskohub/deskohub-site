@@ -3,12 +3,12 @@ import "@/shared/testing/workspace-test-env";
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Option } from "effect";
-import type {
-  CustomerAgentClientId,
-  CustomerAgentGrant,
-  CustomerAgentScope,
+import {
+  type CustomerAgentGrant,
+  type CustomerAgentScope,
+  customerAgentClientIdSchema,
 } from "@/features/account";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import {
   CheckoutStatusService,
   type CheckoutStatusViewModel,
@@ -18,16 +18,74 @@ import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
 import { NoReservationInvitees } from "@/features/reservation-invitees/backend/reservation-invitees.test-utils";
 import { ReviewSandboxMock } from "@/features/review-accounts/backend/review-sandbox.service.mock";
 import { inMemoryCustomerAgentCallServices } from "./agent-tools.test-utils";
 import { getReservationStatusTool } from "./get-reservation-status.tool";
 
-const accountId = "account-1" as CustomerAccountId;
+const accountId = customerAccountIdSchema.make("account-1");
 const linkedCustomerId = "60111";
 
-let stored: Partial<WorkspaceReservation> | null;
+/** A cowork order in the store, booked by `fields`' author for its customer. */
+const storedReservation = (
+  fields: Pick<WorkspaceReservation, "authorAccountId" | "dotyposCustomerId">
+): WorkspaceReservation => {
+  const createdAt = Temporal.Instant.from("2099-06-01T08:00:00Z");
+  return {
+    id: workspaceReservationIdSchema.make("order-1"),
+    passId: null,
+    serviceDate: null,
+    passDayTableId: null,
+    passDayHoldRequestedAt: null,
+    passDayHoldGeneration: null,
+    checkoutSessionKey: "session-key",
+    checkoutAttemptKey: "attempt-key",
+    correlationId: "correlation-id",
+    agentClientId: null,
+    agentSelectionKey: null,
+    reservationPurpose: null,
+    dotyposReservationId: null,
+    reservationState: "confirmed",
+    paymentState: "paid",
+    fulfillmentState: "fulfilled",
+    activePaymentAttemptId: null,
+    activeCustomerEmailDeliveryId: null,
+    activeCustomerEmailDeliveryLocale: null,
+    reservationDetails: {
+      kind: "cowork",
+      entryTier: "open-space",
+      coffee: false,
+    },
+    officeContactAttends: null,
+    locale: "cs-CZ",
+    paymentReturnTarget: null,
+    reservationHoldExpiresAt: null,
+    reservationHoldExpiredAt: null,
+    reservationCreatedAt: createdAt,
+    reservationConfirmedAt: createdAt,
+    reservationCancelledAt: null,
+    cancellationCause: null,
+    cancellationEmailSentAt: null,
+    paidAt: createdAt,
+    fulfilledAt: createdAt,
+    fulfillmentFailedAt: null,
+    failureCode: null,
+    fulfillmentFailureCode: null,
+    createdAt,
+    updatedAt: createdAt,
+    productTier: "open-space",
+    productCoffee: false,
+    productMonitorOption: null,
+    ...fields,
+  };
+};
+
+let stored: WorkspaceReservation | null;
 const getStatus = mock(
   ({
     orderId,
@@ -60,7 +118,7 @@ const getStatus = mock(
 
 const services = Layer.mergeAll(
   Layer.mock(WorkspaceReservationRepository, {
-    findById: () => Effect.succeed(stored as WorkspaceReservation | null),
+    findById: () => Effect.succeed(stored),
   }),
   ReviewSandboxMock({ isOrderOf: () => Effect.succeed(false) }),
   NoReservationInvitees,
@@ -70,7 +128,7 @@ const services = Layer.mergeAll(
       activeAccountId: Effect.succeed(accountId),
       resolve: Effect.succeed({
         accountId,
-        dotyposCustomerId: linkedCustomerId as never,
+        dotyposCustomerId: dotyposCustomerIdSchema.make(linkedCustomerId),
       }),
     },
   }))
@@ -78,7 +136,7 @@ const services = Layer.mergeAll(
 
 const grant: CustomerAgentGrant = {
   accountId,
-  clientId: "https://assistant.example/client.json" as CustomerAgentClientId,
+  clientId: customerAgentClientIdSchema.make("https://assistant.example/client.json"),
   scopes: new Set<CustomerAgentScope>(["reservations:read"]),
 };
 
@@ -93,7 +151,7 @@ const status = (orderId = "order-1") =>
 describe("get_reservation_status", () => {
   beforeEach(() => {
     getStatus.mockClear();
-    stored = { authorAccountId: accountId, dotyposCustomerId: "90000" };
+    stored = storedReservation({ authorAccountId: accountId, dotyposCustomerId: "90000" });
   });
 
   test("reports the status of an order the customer authored, without contact or table details", async () => {
@@ -189,7 +247,7 @@ describe("get_reservation_status", () => {
   });
 
   test("reports an order booked for the customer's linked profile", async () => {
-    stored = { authorAccountId: null, dotyposCustomerId: linkedCustomerId };
+    stored = storedReservation({ authorAccountId: null, dotyposCustomerId: linkedCustomerId });
 
     expect((await status())._tag).toBe("Success");
   });
@@ -212,10 +270,10 @@ describe("get_reservation_status", () => {
   });
 
   test("refuses another customer's order exactly like a missing one", async () => {
-    stored = {
-      authorAccountId: "another-account" as CustomerAccountId,
+    stored = storedReservation({
+      authorAccountId: customerAccountIdSchema.make("another-account"),
       dotyposCustomerId: "90001",
-    };
+    });
     const foreign = await status();
     stored = null;
     const missing = await status("missing-order");

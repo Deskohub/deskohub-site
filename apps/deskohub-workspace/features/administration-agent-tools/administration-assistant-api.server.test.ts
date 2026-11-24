@@ -3,7 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
-  type AdministrationAssistantConnectionIdType,
+  AdministrationAssistantConnectionId,
   type AdministrationChannel,
   CliMutationInProgress,
   CliMutationRequestId,
@@ -13,7 +13,7 @@ import {
 } from "@deskohub/workspace-admin-api";
 import { NodeHttpServer } from "@effect/platform-node";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Effect, Layer, Logger, Option, Schema } from "effect";
+import { Effect, Layer, Logger, Option, Predicate, Schema } from "effect";
 import { HttpRouter } from "effect/http";
 import { StandaloneAccessCodeAdministration } from "@/features/access-codes";
 import type { AgentScope } from "@/features/account/agent-scopes";
@@ -100,8 +100,9 @@ const unreadableClientId = customerAgentClientIdSchema.make(
 );
 const assistantChannel: AdministrationChannel = {
   _tag: "AssistantConnection",
-  connectionId:
-    "01980000-0000-7000-8000-0000000000a7" as AdministrationAssistantConnectionIdType,
+  connectionId: Schema.decodeUnknownSync(AdministrationAssistantConnectionId)(
+    "01980000-0000-7000-8000-0000000000a7"
+  ),
   oauthClientId: clientId,
 };
 
@@ -310,7 +311,7 @@ const restorableReservation = (() => {
  * only `cliBearer`, so an instance that consults it would admit the CLI.
  */
 const makeInstanceServices = ({
-  invoices = Layer.succeed(InvoiceAdministrationService, {} as never),
+  invoices = Layer.mock(InvoiceAdministrationService, {}),
 }: {
   readonly invoices?: Layer.Layer<InvoiceAdministrationService>;
 } = {}) => {
@@ -325,8 +326,7 @@ const makeInstanceServices = ({
     Parameters<ReservationAdministrationService["Service"]["restore"]>[0]
   > = [];
   const layer = Layer.mergeAll(
-    Layer.succeed(CliAuthentication, {
-      ...({} as CliAuthentication["Service"]),
+    Layer.mock(CliAuthentication, {
       authenticateSession: (authorization) =>
         Effect.suspend(() => {
           sessionAuthentications.push(authorization);
@@ -345,7 +345,7 @@ const makeInstanceServices = ({
           return [];
         }),
     }),
-    Layer.succeed(AdministrationRequestLedger, {
+    Layer.mock(AdministrationRequestLedger, {
       applyOnce: () => Effect.die("Unused CLI mutation ledger"),
       applyOnceWithEffects: () =>
         Effect.fail(
@@ -356,7 +356,7 @@ const makeInstanceServices = ({
             ),
           })
         ),
-    } as AdministrationRequestLedger["Service"]),
+    }),
     Layer.succeed(AdministrationActionLog, {
       start: ({ caller }) =>
         Effect.sync(() => {
@@ -365,9 +365,8 @@ const makeInstanceServices = ({
         }),
       finish: () => Effect.void,
     }),
-    Layer.succeed(CliAuthenticationAdmission, {} as never),
-    Layer.succeed(AdministrationService, {
-      ...({} as AdministrationService["Service"]),
+    Layer.mock(CliAuthenticationAdmission, {}),
+    Layer.mock(AdministrationService, {
       loadReservation: (id) =>
         Effect.sync(() => {
           reservationReads.push(id);
@@ -376,11 +375,10 @@ const makeInstanceServices = ({
             : null;
         }),
     }),
-    Layer.succeed(AdministratorRoster, {} as never),
-    Layer.succeed(LegacyAdministratorBackfill, {} as never),
-    Layer.succeed(CampaignOperations, {} as never),
-    Layer.succeed(ReservationAdministrationService, {
-      ...({} as ReservationAdministrationService["Service"]),
+    Layer.mock(AdministratorRoster, {}),
+    Layer.mock(LegacyAdministratorBackfill, {}),
+    Layer.mock(CampaignOperations, {}),
+    Layer.mock(ReservationAdministrationService, {
       restore: (input) =>
         Effect.sync(() => {
           restorations.push(input);
@@ -404,13 +402,13 @@ const makeInstanceServices = ({
           };
         }),
     }),
-    Layer.succeed(ReservationAccessAdministration, {} as never),
-    Layer.succeed(DiscountAdministration, {} as never),
+    Layer.mock(ReservationAccessAdministration, {}),
+    Layer.mock(DiscountAdministration, {}),
     GrantedAdministrator,
     UnusedAdministrationCustomerDirectory,
     UnusedWithdrawalService,
     invoices,
-    Layer.succeed(StandaloneAccessCodeAdministration, {} as never),
+    Layer.mock(StandaloneAccessCodeAdministration, {}),
     NodeHttpServer.layerHttpServices
   );
   return {
@@ -493,8 +491,10 @@ const deleteCode = {
   }),
 };
 
-const errorTagOf = async (response: Response) =>
-  ((await response.json()) as { readonly _tag?: string })._tag;
+const errorTagOf = async (response: Response) => {
+  const body: unknown = await response.json();
+  return Predicate.hasProperty(body, "_tag") ? body._tag : undefined;
+};
 
 describe("AdministratorAssistantAuthenticationLive", () => {
   test("acts as the token's administrator on its assistant connection", async () => {
@@ -669,29 +669,24 @@ describe("administration API instances", () => {
         cli: () => makeCliApiLayer(),
         assistant: () => makeAdministrationAssistantApiLayer(),
       };
-      const webs = Object.fromEntries(
-        order.map((name) => [
-          name,
-          HttpRouter.toWebHandler(build[name]().pipe(Layer.provide(services)), {
-            disableLogger: true,
-            memoMap,
-          }),
-        ])
-      ) as Record<
-        (typeof order)[number],
-        ReturnType<typeof HttpRouter.toWebHandler<never, never, never, never>>
-      >;
+      const webs = order.map((name) => ({
+        name,
+        web: HttpRouter.toWebHandler(
+          build[name]().pipe(Layer.provide(services)),
+          { disableLogger: true, memoMap }
+        ),
+      }));
 
       const statuses: Array<string> = [];
-      for (const name of order) {
+      for (const { name, web } of webs) {
         for (const [bearer, init] of requests) {
-          const response = await send(webs[name].handler, bearer, init);
+          const response = await send(web.handler, bearer, init);
           statuses.push(
             `${name} ${bearer === cliBearer ? "CLI bearer" : "OAuth token"} ${init.path} ${response.status}`
           );
         }
       }
-      await Promise.all(Object.values(webs).map((web) => web.dispose()));
+      await Promise.all(webs.map(({ web }) => web.dispose()));
 
       const expected = {
         cli: [
@@ -729,9 +724,10 @@ describe("administration tools through the assistant API", () => {
   const backfillTool = makeAdministrationAgentTools(
     administrationOperationTools
   ).find(({ name }) => name === "admin_backfill_reservation_product_details");
+  if (backfillTool === undefined) throw new Error("No backfill tool.");
 
   const callBackfill = (handler: Handler, args: Schema.Json) =>
-    backfillTool!
+    backfillTool
       .call(args, Option.some(caller))
       .pipe(
         Effect.provide(
@@ -778,9 +774,10 @@ describe("administration tools through the assistant API", () => {
   const restoreTool = makeAdministrationAgentTools(
     administrationOperationTools
   ).find(({ name }) => name === "admin_restore_reservation");
+  if (restoreTool === undefined) throw new Error("No restore tool.");
 
   const callRestore = (handler: Handler, args: Schema.Json) =>
-    restoreTool!
+    restoreTool
       .call(args, Option.some(caller))
       .pipe(
         Effect.provide(
@@ -938,8 +935,7 @@ describe("invoice cancellation tools through the assistant API", () => {
       readonly operation: string;
       readonly input: unknown;
     }> = [];
-    const invoices = Layer.succeed(InvoiceAdministrationService, {
-      ...({} as InvoiceAdministrationService["Service"]),
+    const invoices = Layer.mock(InvoiceAdministrationService, {
       get: () => Effect.succeed(detail as never),
       cancel: (input) =>
         Effect.sync(() => {
@@ -971,21 +967,21 @@ describe("invoice cancellation tools through the assistant API", () => {
     });
     return { changes, ...serveAssistant({ invoices }) };
   };
-  const call = (handler: Handler, name: string, args: Schema.Json) =>
-    tools
-      .find((tool) => tool.name === name)!
-      .call(args, Option.some(caller))
-      .pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            makeAssistantServices().layer,
-            AdministrationApiClient.Default.pipe(
-              Layer.provide(Layer.succeed(AdministrationApiTransport, handler))
-            )
+  const call = (handler: Handler, name: string, args: Schema.Json) => {
+    const tool = tools.find((candidate) => candidate.name === name);
+    if (tool === undefined) throw new Error(`No tool ${name}.`);
+    return tool.call(args, Option.some(caller)).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          makeAssistantServices().layer,
+          AdministrationApiClient.Default.pipe(
+            Layer.provide(Layer.succeed(AdministrationApiTransport, handler))
           )
-        ),
-        Effect.runPromise
-      );
+        )
+      ),
+      Effect.runPromise
+    );
+  };
 
   test("previews a cancellation and an archive with the invoice's plan, changing nothing", async () => {
     const { callers, changes, handler } = serveInvoices();

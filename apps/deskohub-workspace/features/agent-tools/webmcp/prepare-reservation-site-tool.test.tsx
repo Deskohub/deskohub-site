@@ -292,10 +292,13 @@ function Harness({
 function ReservationPages(props: Parameters<typeof Harness>[0]) {
   const [kind, setKind] = useState<HarnessKind>("cowork");
   useEffect(() => {
-    workspaceRouterPush.mockImplementation(((path: string) => {
+    workspaceRouterPush.mockImplementation((path: string) => {
       const opened = path.match(/\/reservation\/(cowork|meeting-room)\b/)?.[1];
-      if (opened) setTimeout(() => act(() => setKind(opened as HarnessKind)));
-    }) as never);
+      if (opened === "cowork" || opened === "meeting-room") {
+        setTimeout(() => act(() => setKind(opened)));
+      }
+      return undefined;
+    });
   }, []);
   return <Harness key={kind} {...props} kind={kind} />;
 }

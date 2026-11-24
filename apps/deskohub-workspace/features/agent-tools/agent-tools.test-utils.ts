@@ -83,6 +83,17 @@ const agentToolTestTables: readonly DotyposTable[] = [
   }),
 ];
 
+/**
+ * Checks that a tool's result is what `schema` describes, such as its
+ * success result rather than an error result, and narrows it to that.
+ */
+export const agentToolResultOf =
+  <S extends Schema.Constraint>(schema: S) =>
+  <I>(result: I): I & S["Type"] => {
+    Schema.asserts(schema, result);
+    return result;
+  };
+
 /** A Prague date `days` after today, as YYYY-MM-DD. */
 export const workspaceDateFromToday = (days: number) =>
   getCurrentWorkspaceDate().add({ days }).toString();
@@ -183,18 +194,21 @@ export const makeAgentToolTestServices = ({
 } = {}) => {
   const dotyposRequests: string[] = [];
   const snapshotReads: string[] = [];
-  const unreachableDotypos = new Proxy(
-    {},
-    {
-      get: (_target, operation) => () =>
-        Effect.suspend(() => {
-          dotyposRequests.push(String(operation));
-          return Effect.die(
-            new Error(`Agent tools must not call Dotypos ${String(operation)}`)
-          );
-        }),
-    }
-  ) as DotyposService["Service"];
+  // Every Dotypos operation is unimplemented and dies; each one read is
+  // recorded.
+  const unreachableDotypos = Layer.effect(
+    DotyposService,
+    Effect.map(
+      DotyposService.asEffect(),
+      (unimplemented) =>
+        new Proxy(unimplemented, {
+          get: (target, operation, receiver) => {
+            dotyposRequests.push(String(operation));
+            return Reflect.get(target, operation, receiver);
+          },
+        })
+    )
+  ).pipe(Layer.provide(Layer.mock(DotyposService, {})));
   const advisoryInventory = Layer.succeed(AdvisoryAvailabilityInventory, {
     tables: Effect.sync(() => {
       snapshotReads.push("tables");
@@ -218,14 +232,14 @@ export const makeAgentToolTestServices = ({
       Layer.provide(
         Layer.mergeAll(
           advisoryInventory,
-          Layer.succeed(DotyposService, unreachableDotypos),
+          unreachableDotypos,
           Layer.succeed(GoogleCalendarWorkspaceLimitationsService, {
             listLimitations: () => Effect.succeed([]),
           }),
-          Layer.succeed(WorkspaceReservationRepository, {
+          Layer.mock(WorkspaceReservationRepository, {
             selectPendingPassDayCapacity: () => Effect.succeed([]),
             selectExpiredHoldDotyposReservationIds: () => Effect.succeed([]),
-          } as never)
+          })
         )
       )
     ),

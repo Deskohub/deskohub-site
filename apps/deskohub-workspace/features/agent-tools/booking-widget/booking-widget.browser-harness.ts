@@ -6,7 +6,7 @@ import {
   type McpUiTheme,
   PostMessageTransport,
 } from "@modelcontextprotocol/ext-apps/app-bridge";
-import type { Schema } from "effect";
+import { Schema } from "effect";
 
 /** The host context fields the view reads. */
 type BookingHostSettings = {
@@ -49,6 +49,10 @@ declare global {
 const { html, host, opensLinks, toolArguments, toolResult } =
   window.bookingHarness;
 
+const decodeToolArguments = Schema.decodeUnknownSync(
+  Schema.Record(Schema.String, Schema.Json)
+);
+
 // The spec's type lists every style variable, though hosts send a subset.
 const toHostContext = ({
   styleVariables,
@@ -56,7 +60,7 @@ const toHostContext = ({
 }: BookingHostSettings): McpUiHostContext => ({
   ...context,
   ...(styleVariables && {
-    styles: { variables: styleVariables as McpUiStyles },
+    styles: { variables: styleVariables },
   }),
 });
 const frame = document.createElement("iframe");
@@ -74,7 +78,7 @@ if (view) {
     { hostContext: toHostContext(host) }
   );
   bridge.oncalltool = ({ name, arguments: args = {} }) =>
-    window.callBookingTool(name, args as Schema.JsonObject);
+    window.callBookingTool(name, decodeToolArguments(args));
   bridge.onopenlink = async ({ url }) => {
     await window.openBookingLink(url);
     return {};
