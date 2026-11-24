@@ -4,7 +4,7 @@ import {
   isValidElement,
   type ReactNode,
 } from "react";
-import { cn, isClassValue } from "@/shared/utils";
+import { cn, toClassValue } from "@/shared/utils";
 
 /*
  * Shared visual primitive for consent and communication preference rows:
@@ -52,10 +52,7 @@ export function PreferenceRow({
   if (isValidElement<{ readonly className?: unknown }>(control)) {
     const { className: controlClassName } = control.props;
     styledControl = cloneElement(control, {
-      className: cn(
-        "shrink-0",
-        isClassValue(controlClassName) ? controlClassName : undefined
-      ),
+      className: cn("shrink-0", toClassValue(controlClassName)),
     });
   }
   return (

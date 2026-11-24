@@ -22,7 +22,7 @@ export {
   temporalInstantToIsoString,
   temporalInstantToLocalDateTimeString,
 } from "./temporal";
-export { cn, isClassValue } from "./utils";
+export { cn, toClassValue } from "./utils";
 export type { VariableStyle } from "./variable-style";
 export {
   workspaceFormattedAddress,

@@ -1,26 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { cn, isClassValue } from "./utils";
+import { cn, toClassValue } from "./utils";
 
 describe("class values", () => {
-  test("accepts every shape cn joins", () => {
-    for (const value of [
-      "focus-ring",
-      ["focus-ring", ["nested"]],
-      { active: true },
-      0,
-      false,
-      null,
-      undefined,
-    ]) {
-      expect(isClassValue(value)).toBe(true);
-    }
-    expect(cn("shrink-0", ["focus-ring", { active: true }])).toBe(
-      "shrink-0 focus-ring active"
-    );
+  test("keeps every class clsx reads", () => {
+    expect(
+      cn("shrink-0", toClassValue(["focus-ring", ["nested"], { active: true }]))
+    ).toBe("shrink-0 focus-ring nested active");
   });
 
-  test("rejects values cn would drop", () => {
-    expect(isClassValue(() => "focus-ring")).toBe(false);
-    expect(isClassValue(Symbol("focus-ring"))).toBe(false);
+  test("drops only the entries clsx ignores", () => {
+    expect(
+      cn("shrink-0", toClassValue(["focus-ring", () => 0, [Symbol(), "x"]]))
+    ).toBe("shrink-0 focus-ring x");
+    expect(toClassValue(() => "focus-ring")).toBeUndefined();
   });
 });
