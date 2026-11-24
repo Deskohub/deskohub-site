@@ -103,7 +103,8 @@ const presentPath = (root: string, relativePath: string): boolean => {
     lstatSync(join(root, relativePath));
     return true;
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
+    const code =
+      error instanceof Error && "code" in error ? error.code : undefined;
     if (code === "ENOENT" || code === "ENOTDIR") return false;
     throw error;
   }

@@ -123,15 +123,21 @@ const captureClientKey = Symbol.for(
   "@deskohub-workspace/analytics/capture-client"
 );
 
-type CaptureClientHolder = { [captureClientKey]?: PostHog };
+// Only this module writes the slot, so the annotation checks those writes;
+// it trusts, rather than verifies, a value another module instance stored.
+type CaptureClientHolder = typeof globalThis & {
+  [captureClientKey]?: PostHog;
+};
 
-const existingCaptureClient = () =>
-  (globalThis as CaptureClientHolder)[captureClientKey];
+const existingCaptureClient = () => {
+  const holder: CaptureClientHolder = globalThis;
+  return holder[captureClientKey];
+};
 
 const processCaptureClient = () => {
   const { ingestHost, projectToken } = postHogRuntimeConfig;
   if (!projectToken) return undefined;
-  const holder = globalThis as CaptureClientHolder;
+  const holder: CaptureClientHolder = globalThis;
   holder[captureClientKey] ??= createCaptureClient(projectToken, ingestHost);
   return holder[captureClientKey];
 };

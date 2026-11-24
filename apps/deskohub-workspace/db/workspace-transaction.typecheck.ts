@@ -17,9 +17,7 @@ declare const writerWithService: Effect.Effect<
   WorkspaceDatabase | WorkspaceTransaction
 >;
 
-const typecheck = false as boolean;
-
-if (typecheck) {
+void (() => {
   const inside: Effect.Effect<void, DatabaseQueryError, never> =
     database.transaction(writer);
   const nested: Effect.Effect<void, DatabaseQueryError, never> =
@@ -40,4 +38,4 @@ if (typecheck) {
     database.transaction(writerWithService);
 
   void [inside, nested, keepsOtherRequirements, outside, lost];
-}
+});

@@ -113,8 +113,8 @@ export type Instant = typeof instantStringSchema.Type;
 export const instantFromIsoStringSchema = instantStringSchema.pipe(
   Schema.decodeTo(TemporalInstantSchema, {
     decode: SchemaGetter.transform((value) => Temporal.Instant.from(value)),
-    encode: SchemaGetter.transform(
-      (value) => temporalInstantToIsoString(value) as Instant
+    encode: SchemaGetter.transform((value) =>
+      instantStringSchema.make(temporalInstantToIsoString(value))
     ),
   })
 );
