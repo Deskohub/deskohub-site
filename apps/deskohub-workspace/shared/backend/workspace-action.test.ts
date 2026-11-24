@@ -154,6 +154,25 @@ describe("Workspace actions", () => {
     });
   });
 
+  test("returns field errors under a field named _errors", async () => {
+    const { defineWorkspaceAction } = await import("./workspace-action");
+    const action = defineWorkspaceAction(
+      {
+        operation: "test.errors-field-validation",
+        schema: Schema.toStandardSchemaV1(
+          Schema.Struct({ _errors: Schema.Struct({ code: Schema.String }) })
+        ),
+      },
+      () => Effect.succeed("unreachable")
+    );
+
+    await expect(action({ _errors: { code: 123 } })).resolves.toMatchObject({
+      validationErrors: {
+        fieldErrors: { code: [expect.any(String)] },
+      },
+    });
+  });
+
   test("does not log validation paths when input logging is disabled", async () => {
     const { defineWorkspaceAction } = await import("./workspace-action");
     const sensitiveKey = testEmailAddress("person");

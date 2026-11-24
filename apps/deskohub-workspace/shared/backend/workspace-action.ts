@@ -1,14 +1,5 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import {
-  Cause,
-  Data,
-  Duration,
-  Effect,
-  Predicate,
-  Ref,
-  Result,
-  Struct,
-} from "effect";
+import { Cause, Data, Duration, Effect, Predicate, Ref, Result } from "effect";
 import type {
   FlattenedValidationErrors,
   SafeActionResult,
@@ -401,32 +392,33 @@ const handleWorkspaceActionValidationFailure = async <
     );
   }).pipe(runWorkspaceEffect(operation, { boundary: "action" }));
 
+  const fieldIssues = Object.groupBy(
+    issues.filter(({ path }) => path.length > 0),
+    ({ path }) => path[0] ?? ""
+  );
+  const noFieldErrors: WorkspaceActionValidationErrors<S>["fieldErrors"] = {};
+
   return {
     formErrors: issues
       .filter(({ path }) => path.length === 0)
       .map(({ message }) => message),
-    fieldErrors: Struct.map(
-      Struct.omit(validationErrors, ["_errors"]),
-      workspaceActionFieldMessages
+    fieldErrors: Object.assign(
+      noFieldErrors,
+      Object.fromEntries(
+        Object.entries(fieldIssues).map(([field, issuesOfField]) => [
+          field,
+          (issuesOfField ?? []).map(({ message, path }) => {
+            const nestedPath = formatWorkspaceActionValidationPath(
+              path.slice(1),
+              ""
+            );
+            return nestedPath ? `${nestedPath}: ${message}` : message;
+          }),
+        ])
+      )
     ),
   };
 };
-
-/** The messages of one field's errors, each nested one under its path. */
-interface WorkspaceActionFieldMessages extends Struct.Lambda {
-  <A>(fieldErrors: A): string[];
-  readonly "~lambda.out": string[];
-}
-
-const workspaceActionFieldMessages =
-  Struct.lambda<WorkspaceActionFieldMessages>((fieldErrors) =>
-    collectWorkspaceActionValidationIssues(fieldErrors).map(
-      ({ message, path }) => {
-        const nestedPath = formatWorkspaceActionValidationPath(path, "");
-        return nestedPath ? `${nestedPath}: ${message}` : message;
-      }
-    )
-  );
 
 const collectWorkspaceActionValidationIssues = <T>(
   value: T,

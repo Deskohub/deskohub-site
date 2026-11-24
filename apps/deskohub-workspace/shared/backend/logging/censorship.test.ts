@@ -1223,6 +1223,9 @@ describe("createCensoredOtelSpanExporter", () => {
             sessionDuration: 123,
             "app.labels": ["visible", "kept"],
             "app.retryDelays": [1, 2],
+            query:
+              "select * from t where a = /* deskohub:sensitive */ $1 and b = $2",
+            params: [3, 4],
           },
         }),
         Effect.exit,
@@ -1243,6 +1246,7 @@ describe("createCensoredOtelSpanExporter", () => {
       sessionDuration: 123,
       "app.labels": ["visible", "kept"],
       "app.retryDelays": [1, 2],
+      params: CENSORED_LOG_VALUE,
     });
     expect(span?.events[0]?.name).toBe("exception");
     expect(span?.events[0]?.attributes?.["exception.stacktrace"]).toContain(

@@ -6,6 +6,7 @@ import {
   type LoggerProvider,
   SeverityNumber,
 } from "@opentelemetry/api-logs";
+import { isAttributeValue } from "@opentelemetry/core";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
@@ -18,7 +19,6 @@ import {
   Predicate,
   References,
   Result,
-  Schema,
 } from "effect";
 import {
   CENSORED_LOG_VALUE,
@@ -870,26 +870,22 @@ export const createCensoredOtelSpanExporter = (
   shutdown: () => spanExporter.shutdown(),
 });
 
-const OtelAttributeValueSchema = Schema.Union([
-  Schema.String,
-  Schema.Number,
-  Schema.Boolean,
-  Schema.mutable(Schema.Array(Schema.NullishOr(Schema.String))),
-  Schema.mutable(Schema.Array(Schema.NullishOr(Schema.Number))),
-  Schema.mutable(Schema.Array(Schema.NullishOr(Schema.Boolean))),
-]);
-
-const isOtelAttributes = Schema.is(
-  Schema.Record(Schema.String, Schema.UndefinedOr(OtelAttributeValueSchema))
-);
-
 /**
- * `attributes` censored. Censoring keeps their shape; a result no attribute
- * set could hold drops them all rather than export an unchecked value.
+ * `attributes` censored, each checked on its own: a censored value that is no
+ * attribute value, such as a number array with a redacted item, is replaced
+ * by the censored marker, and its valid siblings are kept.
  */
 const censorOtelAttributes = (attributes: Attributes): Attributes => {
   const censored = censorLogValue(attributes);
-  return isOtelAttributes(censored) ? censored : {};
+  if (!Predicate.isObject(censored)) return {};
+  return Object.fromEntries(
+    Object.entries(censored).map(([key, value]) => [
+      key,
+      value === undefined || isAttributeValue(value)
+        ? value
+        : CENSORED_LOG_VALUE,
+    ])
+  );
 };
 
 const censorReadableSpan = (span: ReadableSpan): ReadableSpan => ({
