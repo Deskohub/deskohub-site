@@ -685,6 +685,10 @@ describe("ProfileForm", () => {
       });
 
       expect(firstName.value).toBe("Grace");
+      // Later saves use the update action, but the completion stays reported.
+      expect(
+        view.container.querySelector("#account-profile-feedback p")
+      ).not.toBeNull();
       expect(workspaceRouterRefresh).not.toHaveBeenCalled();
       const link = view.getByRole("link", { name: "Next" });
       const event = new MouseEvent("click", {

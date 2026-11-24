@@ -129,10 +129,6 @@ export function ProfileForm({
     JSON.stringify(form.getValues()) !==
       JSON.stringify(savedBaselineRef.current);
 
-  const action = (
-    isInitialCompletion ? completeCustomerProfile : updateCustomerProfile
-  ) as typeof completeCustomerProfile;
-
   const showReferralCodeUnavailable = () =>
     form.setError(
       "referralCode",
@@ -143,42 +139,54 @@ export function ProfileForm({
       { shouldFocus: true }
     );
 
-  const { execute, hasErrored, isExecuting, result } = useWorkspaceAction(
-    action,
-    {
-      onSuccess: ({ data }) => {
-        if (data?.status === "referral-code-unavailable") {
-          showReferralCodeUnavailable();
-          return;
-        }
-        const submittedValues = submittedValuesRef.current;
-        if (submittedValues !== undefined) {
-          // The saved baseline becomes the values as they were at submit time
-          // while every current value is preserved verbatim: an in-flight edit
-          // that returned a field to its original value must not be overwritten
-          // by the submitted snapshot, and dirty state is recomputed against
-          // the new baseline.
-          savedBaselineRef.current = submittedValues;
-          form.reset(submittedValues, { keepValues: true });
-          setSavedIdentity({
-            firstName: submittedValues.firstName.trim(),
-            lastName: submittedValues.lastName.trim() || null,
-          });
-        }
-        if (isInitialCompletion) {
-          setHasCompletedInitialProfile(true);
-          // Completion creates the Dotypos customer the analytics person links to.
-          refreshAnalyticsDotyposCustomerId();
-        }
-        const hasNoEditsSinceSubmit =
-          submittedValues !== undefined &&
-          JSON.stringify(form.getValues()) === JSON.stringify(submittedValues);
-        if (isComplete && hasNoEditsSinceSubmit) {
-          startRefreshTransition(() => router.refresh());
-        }
-      },
+  const handleSaved = () => {
+    const submittedValues = submittedValuesRef.current;
+    if (submittedValues !== undefined) {
+      // The saved baseline becomes the values as they were at submit time
+      // while every current value is preserved verbatim: an in-flight edit
+      // that returned a field to its original value must not be overwritten
+      // by the submitted snapshot, and dirty state is recomputed against
+      // the new baseline.
+      savedBaselineRef.current = submittedValues;
+      form.reset(submittedValues, { keepValues: true });
+      setSavedIdentity({
+        firstName: submittedValues.firstName.trim(),
+        lastName: submittedValues.lastName.trim() || null,
+      });
     }
-  );
+    if (isInitialCompletion) {
+      setHasCompletedInitialProfile(true);
+      // Completion creates the Dotypos customer the analytics person links to.
+      refreshAnalyticsDotyposCustomerId();
+    }
+    const hasNoEditsSinceSubmit =
+      submittedValues !== undefined &&
+      JSON.stringify(form.getValues()) === JSON.stringify(submittedValues);
+    if (isComplete && hasNoEditsSinceSubmit) {
+      startRefreshTransition(() => router.refresh());
+    }
+  };
+
+  // Each save contract keeps its own typed action, and the form reports the
+  // one it submitted last: a completion's result stays shown after later
+  // saves switch to the update contract.
+  const completion = useWorkspaceAction(completeCustomerProfile, {
+    onSuccess: ({ data }) => {
+      if (data?.status === "referral-code-unavailable") {
+        showReferralCodeUnavailable();
+        return;
+      }
+      handleSaved();
+    },
+  });
+  const update = useWorkspaceAction(updateCustomerProfile, {
+    onSuccess: handleSaved,
+  });
+  const [submittedAction, setSubmittedAction] = useState<
+    "completion" | "update"
+  >("completion");
+  const { hasErrored, isExecuting, result } =
+    submittedAction === "completion" ? completion : update;
 
   useUnsavedChanges({
     enabled: !isRefreshPending,
@@ -216,7 +224,13 @@ export function ProfileForm({
     if (isExecuting || submittingRef.current) return;
     submittedValuesRef.current = form.getValues();
     submittingRef.current = true;
-    execute(input);
+    if (isInitialCompletion) {
+      setSubmittedAction("completion");
+      completion.execute(input);
+    } else {
+      setSubmittedAction("update");
+      update.execute(input);
+    }
   };
 
   const handleInvalid = (errors: FieldErrors<ProfileFormValues>) => {
