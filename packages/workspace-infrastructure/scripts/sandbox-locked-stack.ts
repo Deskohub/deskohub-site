@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -8,6 +7,11 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner";
 import type * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
+import * as Stdio from "effect/Stdio";
+import {
+  exitCodeWithOutputOnStderr,
+  runCommandLine,
+} from "../src/command-line";
 import type { WorkspaceStackConfig } from "../src/config/stack-config";
 import {
   releaseApplyGenerationVariable,
@@ -121,7 +125,8 @@ const lockedStackCommand = (
     },
     extendEnv: true,
     stdin: "ignore",
-    stdout: "inherit",
+    // Forwarded to stderr, as the release command forwards its applies'.
+    stdout: "pipe",
     stderr: "inherit",
   });
 };
@@ -141,11 +146,14 @@ const runLocked = (action: LockedStackAction) =>
       Effect.gen(function* () {
         const { writer, applyInFlight } = yield* HeldReleaseWriter;
         const spawner = yield* ChildProcessSpawner;
+        const stdio = yield* Stdio.Stdio;
         yield* Ref.set(applyInFlight, spec.mutates);
         const exitCode = yield* spawner
           .spawn(lockedStackCommand(config, action, writer.token))
           .pipe(
-            Effect.flatMap((handle) => handle.exitCode),
+            Effect.flatMap((handle) =>
+              exitCodeWithOutputOnStderr(handle, stdio)
+            ),
             Effect.scoped
           );
         if (spec.acceptedExitCodes.some((code) => code === exitCode)) {
@@ -164,15 +172,16 @@ if (import.meta.main) {
     );
     process.exit(64);
   }
-  runLocked(action).pipe(
-    Effect.tap((exitCode) =>
-      Effect.sync(() => {
-        process.exitCode = exitCode;
-      })
-    ),
-    Effect.provide(
-      liveReleaseRuntime.pipe(Layer.provideMerge(BunServices.layer))
-    ),
-    BunRuntime.runMain
+  runCommandLine(
+    runLocked(action).pipe(
+      Effect.tap((exitCode) =>
+        Effect.sync(() => {
+          process.exitCode = exitCode;
+        })
+      ),
+      Effect.provide(
+        liveReleaseRuntime.pipe(Layer.provideMerge(BunServices.layer))
+      )
+    )
   );
 }

@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { withLogsOnStderr } from "../src/command-line";
 import {
   decodeWorkspaceStackConfig,
   SandboxStackConfig,
@@ -146,6 +147,6 @@ if (import.meta.main) {
     disposableQueueSuffix: process.env.SANDBOX_QUEUE_SUFFIX || undefined,
   };
   process.stdout.write(
-    `${await Effect.runPromise(sandboxProofStackConfig(identity))}\n`
+    `${await Effect.runPromise(withLogsOnStderr(sandboxProofStackConfig(identity)))}\n`
   );
 }

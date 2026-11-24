@@ -4,6 +4,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ChildProcess from "effect/process/ChildProcess";
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner";
+import * as Stdio from "effect/Stdio";
+import { exitCodeWithOutputOnStderr } from "../command-line";
 import type { WorkspaceStackConfig } from "../config/stack-config";
 import {
   ReleaseServiceApply,
@@ -59,7 +61,8 @@ export const alchemyStackCommand = (
       },
       extendEnv: true,
       stdin: "ignore",
-      stdout: "inherit",
+      // Forwarded to stderr: the release command's stdout is its result.
+      stdout: "pipe",
       stderr: "inherit",
     }
   );
@@ -76,6 +79,7 @@ export const commandServiceApply = (
     ReleaseServiceApply,
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner;
+      const stdio = yield* Stdio.Stdio;
       return ReleaseServiceApply.of({
         apply: (request) => {
           const failed =
@@ -89,7 +93,7 @@ export const commandServiceApply = (
           return spawner.spawn(command(request)).pipe(
             Effect.mapError((error) => failed("not-started")(error.message)),
             Effect.flatMap((handle) =>
-              handle.exitCode.pipe(
+              exitCodeWithOutputOnStderr(handle, stdio).pipe(
                 Effect.mapError((error) => failed("unknown")(error.message))
               )
             ),

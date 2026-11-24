@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as Schema from "effect/Schema";
+import { tokenRouteExclusionFilter } from "./resources/edge-declarations";
 import {
   type FakeRule,
   type FakeWorld,
@@ -219,6 +220,190 @@ describe("cleanup under the writer lock", () => {
       }
     );
   });
+});
+
+describe("release command output", () => {
+  const v1Digest = `sha256:${"1".repeat(64)}`;
+  // What Alchemy's GCP auth logged before the JSON in run 45279064237.
+  const alchemyLog =
+    "[22:30:23.620] INFO (#12): GCP: using environment variables (GOOGLE_ACCESS_TOKEN, GOOGLE_PROJECT_ID).";
+  const status = (record: unknown, logs: "stdout" | "stderr"): FakeRule => ({
+    tool: "bun",
+    pattern: "^release\\.run\\.ts status",
+    ...(logs === "stdout"
+      ? { stdout: `${alchemyLog}\n${JSON.stringify(record)}` }
+      : { stdout: JSON.stringify(record), stderr: alchemyLog }),
+  });
+  const plan = (summary: string): FakeRule => ({
+    tool: "bun",
+    pattern: "^release\\.run\\.ts plan",
+    stderr: `${alchemyLog}\nPlan: ${summary}`,
+  });
+  const deliverV1 = (rules: ReadonlyArray<FakeRule>) =>
+    withProofFakes({ rules }, (fakes) => {
+      seed(fakes, { "digests.env": `PROBE_V1_DIGEST=${v1Digest}\n` });
+      return runPhase(fakes, "deliver-v1");
+    });
+
+  test("reads a status whose logs went to stderr and a plan printed there", () => {
+    const { exitCode, output } = deliverV1([
+      status(settled(v1Digest), "stderr"),
+      plan("no changes"),
+    ]);
+    expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
+      exitCode: 0,
+      output: "",
+    });
+    expect(
+      deliverV1([status(settled(v1Digest), "stderr"), plan("1 to update")])
+        .exitCode
+    ).toBe(1);
+  });
+
+  test("fails clearly when a log reaches the status JSON on stdout", () => {
+    const { exitCode, output } = deliverV1([
+      status(settled(v1Digest), "stdout"),
+      plan("no changes"),
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain("printed no single JSON record");
+    expect(output).not.toContain("writer lock: expected");
+  });
+
+  test("tears down under the lock even when the status is unreadable", () => {
+    withProofFakes({ rules: [status(settled(), "stdout")] }, (fakes) => {
+      const { exitCode, output } = runPhase(fakes, "stack-destroy");
+      expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
+        exitCode: 0,
+        output: "",
+      });
+      const calls = fakes.calls();
+      expect(calls).toContain("bun scripts/sandbox-locked-stack.ts destroy");
+      expect(calls.some((call) => call.includes("release.run.ts unlock"))).toBe(
+        false
+      );
+    });
+  });
+});
+
+describe("post-destroy inventory", () => {
+  const state = `gs://${stateBucket}`;
+  // `storage ls -r` once the stack is gone: folder headings, the
+  // Alchemy lease and nothing else.
+  const emptiedState = [
+    `${state}/:`,
+    "",
+    `${state}/DeskohubWorkspace/:`,
+    "",
+    `${state}/${stackPrefix}:`,
+    `${state}/${lease}`,
+  ].join("\n");
+  const inventory = (rules: ReadonlyArray<FakeRule>) =>
+    withProofFakes({ rules }, (fakes) =>
+      runPhase(fakes, "post-destroy-inventory")
+    );
+  const listing = (pattern: string, stdout: string): FakeRule => ({
+    tool: "gcloud",
+    pattern,
+    stdout,
+  });
+
+  test("counts folder headings and the lease as no residue", () => {
+    const { exitCode, output } = inventory([
+      listing("^storage ls -r", emptiedState),
+    ]);
+    expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
+      exitCode: 0,
+      output: "",
+    });
+  });
+
+  test("finds leftover state objects, queues and jobs by their bare IDs", () => {
+    for (const leftover of [
+      listing(
+        "^storage ls -r",
+        `${emptiedState}\n${state}/${stackPrefix}WorkspaceWeb.json`
+      ),
+      listing(
+        "^storage ls -r",
+        `${emptiedState}\n${state}/sandbox-proof/run.env`
+      ),
+      // The live release record a failed removal left.
+      listing(
+        "^storage ls -r",
+        `${emptiedState}\n${state}/workspace-release-record.sandbox.json`
+      ),
+      listing(
+        "^tasks queues list",
+        "workspace-paid-fulfillment-r45279064237-1"
+      ),
+      listing("^scheduler jobs list", "workspace-reservation-hold-sweep"),
+      listing("^artifacts repositories list", "workspace"),
+    ]) {
+      const { exitCode, output } = inventory([
+        leftover,
+        listing("^storage ls -r", emptiedState),
+      ]);
+      expect({ leftover, exitCode }).toEqual({ leftover, exitCode: 1 });
+      expect(output).toContain("proof resources remain");
+    }
+  });
+});
+
+describe("cleanup-only after run 45279064237", () => {
+  test("tears down that run's stack with its recorded queues", () => {
+    withProofFakes(
+      {
+        // What run 45279064237 left: its proof run record and a settled
+        // release record with no writer lock.
+        files: { "sandbox-proof/run.env": "QUEUE_SUFFIX=r45279064237-1\n" },
+        status: settled(`sha256:${"2".repeat(64)}`),
+        rules: [
+          {
+            tool: "gcloud",
+            pattern: "^projects describe",
+            stdout: "759037106024",
+          },
+          {
+            tool: "gcloud",
+            pattern: "^storage buckets describe",
+            stdout: "EUROPE-WEST1",
+          },
+          {
+            tool: "gcloud",
+            pattern: "^storage ls -r",
+            stdout: `gs://${stateBucket}/${stackPrefix}:\ngs://${stateBucket}/${lease}`,
+          },
+        ],
+      },
+      (fakes) => {
+        const env = { SANDBOX_PROOF_MODE: "cleanup-only" };
+        const preflight = runPhase(fakes, "preflight", env);
+        expect(preflight.exitCode).toBe(0);
+        const config = readFileSync(
+          join(fakes.proofDir, "stack-config.json"),
+          "utf8"
+        );
+        expect(config).toContain('"disposableQueueSuffix":"r45279064237-1"');
+        const { exitCode, output } = runPhase(fakes, "cleanup-only", env);
+        expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
+          exitCode: 0,
+          output: "",
+        });
+        const calls = fakes.calls();
+        const destroy = calls.indexOf(
+          "bun scripts/sandbox-locked-stack.ts destroy"
+        );
+        const removals = calls.flatMap((call, index) =>
+          /^gcloud storage rm /.test(call) ? [index] : []
+        );
+        expect(destroy).toBeGreaterThan(-1);
+        expect(removals.length).toBe(2);
+        expect(removals.every((index) => index > destroy)).toBe(true);
+        expect(fakes.world().files?.["sandbox-proof/run.env"]).toBeUndefined();
+      }
+    );
+  }, 60_000);
 });
 
 describe("teardown deadline", () => {
@@ -844,22 +1029,23 @@ describe("Alchemy access token", () => {
   });
 });
 
-describe("edge readback from the stack outputs", () => {
-  const outputObject = `${stackPrefix}__stack_output__.json`;
-  const filter =
-    '(resource.type="http_load_balancer" OR (resource.type="cloud_run_revision" AND log_id("run.googleapis.com/requests"))) AND httpRequest.requestUrl=~"^https?://[^/]+(/app/auth/callback)([/?#]|$)"';
+describe("edge readback from the live edge", () => {
+  // Each readback runs the real stack config and edge declaration scripts.
+  const readbackTimeout = 60_000;
   const policy = "workspace-sandbox-edge";
+  const edgeIp = "203.0.113.7";
+  const compute = `https://www.googleapis.com/compute/v1/projects/${projectId}/global`;
   const edgeOutputs = {
-    edgeIpAddress: "203.0.113.7",
+    edgeIpAddress: edgeIp,
     edgeProtocol: "http",
     securityPolicy: policy,
     backendServices: {
       dynamic: "workspace-sandbox-dynamic",
       static: "workspace-sandbox-static",
     },
-    tokenRouteExclusionFilter: filter,
+    tokenRouteExclusionFilter,
   };
-  const policyLink = `https://www.googleapis.com/compute/v1/projects/${projectId}/global/securityPolicies/${policy}`;
+  const policyLink = `${compute}/securityPolicies/${policy}`;
   const waf = (priority: number, set: string) => ({
     priority,
     action: "deny(403)",
@@ -892,10 +1078,33 @@ describe("edge readback from the stack outputs", () => {
     policyRules.map((rule) =>
       rule.priority === 2000 ? { ...throttle, ...changes } : rule
     );
+  const forwardingRule = (changes: Record<string, unknown> = {}): FakeRule => ({
+    tool: "gcloud",
+    pattern: "^compute forwarding-rules describe workspace-sandbox-http ",
+    stdout: JSON.stringify({
+      IPAddress: edgeIp,
+      portRange: "80-80",
+      target: `${compute}/targetHttpProxies/workspace-sandbox-edge-http`,
+      ...changes,
+    }),
+  });
+  // The edge as Compute describes it after deliver-v1.
   const liveEdge = (
     overrides: ReadonlyArray<FakeRule> = []
   ): ReadonlyArray<FakeRule> => [
     ...overrides,
+    {
+      tool: "gcloud",
+      pattern: "^compute addresses describe workspace-sandbox-edge ",
+      stdout: edgeIp,
+    },
+    forwardingRule(),
+    {
+      tool: "gcloud",
+      pattern:
+        "^compute target-http-proxies describe workspace-sandbox-edge-http ",
+      stdout: `${compute}/urlMaps/workspace-sandbox-edge`,
+    },
     {
       tool: "gcloud",
       pattern: "^compute backend-services describe workspace-sandbox-",
@@ -917,151 +1126,159 @@ describe("edge readback from the stack outputs", () => {
       stdout: "text/plain; charset=utf-8",
     },
   ];
-  const readback = (
-    outputs: Record<string, unknown> | null,
-    overrides: ReadonlyArray<FakeRule> = []
-  ) =>
-    withProofFakes(
-      {
-        rules: liveEdge(overrides),
-        files:
-          outputs === null
-            ? {}
-            : // The rest of the stack's outputs persist beside the edge's.
-              {
-                [outputObject]: JSON.stringify({
-                  services: { webServiceId: "workspace-web" },
-                  ...outputs,
-                }),
-              },
-      },
-      (fakes) => {
-        const result = runPhase(fakes, "edge-readback");
-        const read = (name: string) =>
-          existsSync(join(fakes.proofDir, name))
-            ? readFileSync(join(fakes.proofDir, name), "utf8")
-            : null;
-        return {
-          ...result,
-          edgeEnv: read("edge.env"),
-          filter: read("edge-exclusion-filter.txt"),
-          kept: read("edge-outputs.json"),
-          calls: fakes.calls(),
-        };
-      }
-    );
-
-  test("records the edge the locked deploy output and checks v1 through it", () => {
-    const {
-      exitCode,
-      output,
-      edgeEnv,
-      filter: recorded,
-      kept,
-      calls,
-    } = readback(edgeOutputs);
-    expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
-      exitCode: 0,
-      output: "",
+  const readback = (overrides: ReadonlyArray<FakeRule> = []) =>
+    withProofFakes({ rules: liveEdge(overrides) }, (fakes) => {
+      const result = runPhase(fakes, "edge-readback");
+      const read = (name: string) =>
+        existsSync(join(fakes.proofDir, name))
+          ? readFileSync(join(fakes.proofDir, name), "utf8")
+          : null;
+      return {
+        ...result,
+        edgeEnv: read("edge.env"),
+        filter: read("edge-exclusion-filter.txt"),
+        kept: read("edge-outputs.json"),
+        calls: fakes.calls(),
+      };
     });
-    expect(edgeEnv).toBe("EDGE_IP=203.0.113.7\n");
-    // Byte for byte what the privacy phase compares the live exclusion to.
-    expect(recorded).toBe(filter);
-    expect(JSON.parse(kept ?? "null")).toEqual(edgeOutputs);
-    expect(calls).toContain(
-      `gcloud storage cat gs://${stateBucket}/${outputObject}`
-    );
-    // Reading back writes nothing: no deploy, destroy or upload.
-    expect(
-      calls.filter((call) =>
-        /release\.run\.ts (deliver|deploy)|sandbox-locked-stack|storage (cp|rm)/.test(
-          call
-        )
-      )
-    ).toEqual([]);
-  });
 
-  test("fails when the stack declared no edge", () => {
-    const { edgeIpAddress: _, ...withoutIp } = edgeOutputs;
-    for (const outputs of [null, {}, withoutIp]) {
-      const { exitCode, edgeEnv } = readback(outputs);
-      expect({ outputs, exitCode, edgeEnv }).toEqual({
-        outputs,
-        exitCode: 1,
-        edgeEnv: null,
+  test(
+    "reads the declared edge back live and checks v1 through it",
+    () => {
+      const { exitCode, output, edgeEnv, filter, kept, calls } = readback();
+      expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
+        exitCode: 0,
+        output: "",
       });
-    }
-  });
-
-  test("fails on an HTTPS edge or edge names the proof would not inventory", () => {
-    for (const outputs of [
-      { ...edgeOutputs, edgeProtocol: "https" },
-      { ...edgeOutputs, securityPolicy: "other-policy" },
-      {
-        ...edgeOutputs,
-        backendServices: { ...edgeOutputs.backendServices, static: "other" },
-      },
-      { ...edgeOutputs, tokenRouteExclusionFilter: "" },
-    ]) {
-      expect(readback(outputs).exitCode).toBe(1);
-    }
-  });
-
-  test("fails unless both backends enforce the policy as declared", () => {
-    const detached: FakeRule = {
-      tool: "gcloud",
-      pattern: "^compute backend-services describe workspace-sandbox-static",
-      stdout: "",
-    };
-    const unreadable: FakeRule = {
-      tool: "gcloud",
-      pattern: "^compute backend-services describe workspace-sandbox-dynamic",
-      exit: 1,
-    };
-    const rules = (next: ReadonlyArray<unknown>): FakeRule => ({
-      tool: "gcloud",
-      pattern: "^compute security-policies describe",
-      stdout: JSON.stringify({ rules: next }),
-    });
-    for (const override of [
-      detached,
-      unreadable,
-      // A WAF rule enforced instead of previewed.
-      rules(
-        policyRules.map((rule) =>
-          rule.priority === 1010 ? { ...rule, preview: false } : rule
+      expect(edgeEnv).toBe(`EDGE_IP=${edgeIp}\n`);
+      // Byte for byte the declared filter the privacy phase compares the
+      // live exclusion to.
+      expect(filter).toBe(tokenRouteExclusionFilter);
+      expect(JSON.parse(kept ?? "null")).toEqual(edgeOutputs);
+      expect(calls).toContain(
+        `gcloud compute addresses describe workspace-sandbox-edge --project=${projectId} --global --format=value(address)`
+      );
+      // The live state holds no stack outputs object, so none is read; reading
+      // back writes nothing: no deploy, destroy or upload.
+      expect(
+        calls.filter((call) =>
+          /storage cat|release\.run\.ts (deliver|deploy)|sandbox-locked-stack|storage (cp|rm)/.test(
+            call
+          )
         )
-      ),
-      // A WAF rule matching another rule set.
-      rules(
-        policyRules.map((rule) =>
-          rule.priority === 1000 ? waf(1000, "lfi") : rule
-        )
-      ),
-      // The auth throttle only previewed, on another route, at another
-      // limit, or missing.
-      rules(withThrottle({ preview: true })),
-      rules(
-        withThrottle({
-          match: { expr: { expression: "request.path.startsWith('/x/')" } },
-        })
-      ),
-      rules(
-        withThrottle({
-          rateLimitOptions: {
-            ...throttle.rateLimitOptions,
-            rateLimitThreshold: { count: 1000, intervalSec: 60 },
+      ).toEqual([]);
+    },
+    readbackTimeout
+  );
+
+  test(
+    "fails when the declared edge address is missing or holds no IP",
+    () => {
+      for (const address of [{ exit: 1 }, { stdout: "" }]) {
+        const { exitCode, edgeEnv, calls } = readback([
+          {
+            tool: "gcloud",
+            pattern: "^compute addresses describe workspace-sandbox-edge ",
+            ...address,
           },
-        })
-      ),
-      rules(policyRules.filter((rule) => rule.priority !== 2000)),
-    ]) {
-      const { exitCode, calls } = readback(edgeOutputs, [override]);
-      expect({ override, exitCode }).toEqual({ override, exitCode: 1 });
-      // No request is sent through an unverified edge.
-      expect(calls.some((call) => call.startsWith("curl"))).toBe(false);
-    }
-  });
+        ]);
+        expect({ address, exitCode, edgeEnv }).toEqual({
+          address,
+          exitCode: 1,
+          edgeEnv: null,
+        });
+        expect(calls.some((call) => call.startsWith("curl"))).toBe(false);
+      }
+    },
+    readbackTimeout
+  );
+
+  test(
+    "fails unless the HTTP forwarding rule fronts the address through the declared proxy and URL map",
+    () => {
+      for (const override of [
+        forwardingRule({ IPAddress: "198.51.100.99" }),
+        forwardingRule({ portRange: "443-443" }),
+        forwardingRule({ portRange: "80-81" }),
+        forwardingRule({ target: `${compute}/targetHttpProxies/other` }),
+        { ...forwardingRule(), stdout: undefined, exit: 1 },
+        {
+          tool: "gcloud",
+          pattern: "^compute target-http-proxies describe ",
+          stdout: `${compute}/urlMaps/other`,
+        },
+      ]) {
+        const { exitCode, edgeEnv, calls } = readback([override]);
+        expect({ override, exitCode, edgeEnv }).toEqual({
+          override,
+          exitCode: 1,
+          edgeEnv: null,
+        });
+        expect(calls.some((call) => call.startsWith("curl"))).toBe(false);
+      }
+    },
+    readbackTimeout
+  );
+
+  test(
+    "fails unless both backends enforce the policy as declared",
+    () => {
+      const detached: FakeRule = {
+        tool: "gcloud",
+        pattern: "^compute backend-services describe workspace-sandbox-static",
+        stdout: "",
+      };
+      const unreadable: FakeRule = {
+        tool: "gcloud",
+        pattern: "^compute backend-services describe workspace-sandbox-dynamic",
+        exit: 1,
+      };
+      const rules = (next: ReadonlyArray<unknown>): FakeRule => ({
+        tool: "gcloud",
+        pattern: "^compute security-policies describe",
+        stdout: JSON.stringify({ rules: next }),
+      });
+      for (const override of [
+        detached,
+        unreadable,
+        // A WAF rule enforced instead of previewed.
+        rules(
+          policyRules.map((rule) =>
+            rule.priority === 1010 ? { ...rule, preview: false } : rule
+          )
+        ),
+        // A WAF rule matching another rule set.
+        rules(
+          policyRules.map((rule) =>
+            rule.priority === 1000 ? waf(1000, "lfi") : rule
+          )
+        ),
+        // The auth throttle only previewed, on another route, at another
+        // limit, or missing.
+        rules(withThrottle({ preview: true })),
+        rules(
+          withThrottle({
+            match: { expr: { expression: "request.path.startsWith('/x/')" } },
+          })
+        ),
+        rules(
+          withThrottle({
+            rateLimitOptions: {
+              ...throttle.rateLimitOptions,
+              rateLimitThreshold: { count: 1000, intervalSec: 60 },
+            },
+          })
+        ),
+        rules(policyRules.filter((rule) => rule.priority !== 2000)),
+      ]) {
+        const { exitCode, calls } = readback([override]);
+        expect({ override, exitCode }).toEqual({ override, exitCode: 1 });
+        // No request is sent through an unverified edge.
+        expect(calls.some((call) => call.startsWith("curl"))).toBe(false);
+      }
+    },
+    readbackTimeout
+  );
 });
 
 describe("token-route privacy and telemetry", () => {
