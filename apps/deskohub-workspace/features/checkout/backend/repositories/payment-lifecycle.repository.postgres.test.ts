@@ -1837,7 +1837,10 @@ describe.skipIf(!testDatabase)(
               holdExpiresAt: oldCutoff,
               checkedAt,
             });
-            return { outcome, window: yield* qr.findPaymentWindow(orderId) };
+            return {
+              outcome,
+              window: yield* qr.findPaymentWindow(reservation.id),
+            };
           }).pipe(
             Effect.provide(
               ReservationHoldCleanupService.Default.pipe(

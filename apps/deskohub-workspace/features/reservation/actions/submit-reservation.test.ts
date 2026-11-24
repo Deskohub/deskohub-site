@@ -1,4 +1,5 @@
 import "@/shared/polyfills/temporal";
+import { orderIdSchema } from "@/features/order";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
@@ -132,11 +133,13 @@ const runSubmitReservation = async (options?: {
               : undefined,
         }),
         Layer.mock(QrPaymentRepository, {
-          findPaymentWindow: (orderId) =>
+          findPaymentWindow: () =>
             Effect.succeed(
               options?.pinnedAccountKey
                 ? {
-                    orderId,
+                    orderId: orderIdSchema.make(
+                      "0198c1a2-3b4c-7d5e-8f90-1a2b3c4d5e6f"
+                    ),
                     accountKey: options.pinnedAccountKey,
                     expiresAt: Temporal.Now.instant().add({ minutes: 1 }),
                     cardAttemptId: null,

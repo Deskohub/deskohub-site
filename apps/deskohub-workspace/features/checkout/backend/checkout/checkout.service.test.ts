@@ -1,3 +1,4 @@
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { PaymentProvidersFromNexi } from "../payment/payment-providers";
 import "@/shared/polyfills/temporal";
 import { withReservationPaymentHandlers } from "../payment/order-payment-handlers.test-utils";
@@ -872,7 +873,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
               options.coworkPassesEnabled ?? false
             ),
             Layer.mock(QrPaymentRepository, {
-              findPaymentWindow: () =>
+              findPaymentWindow: (reservationId) =>
                 Effect.sync(() =>
                   options.resumePayment ||
                   concurrentCardAdmitted ||
@@ -880,6 +881,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
                   (options.sharedWindow === "under_account_lock" &&
                     options.accountAuthority?.lockProbe?.held)
                     ? {
+                        orderId: standaloneReservationOrderId(reservationId),
                         accountKey: "receiving-account",
                         expiresAt:
                           options.publicPaymentExpiresAt ??

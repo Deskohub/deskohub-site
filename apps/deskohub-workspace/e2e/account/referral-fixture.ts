@@ -142,6 +142,8 @@ const insertReferralOwner = Effect.fn("seedWorkspaceE2EReferralOwner")(
  * group with a timestamp no UUIDv7 reaches for millennia.
  */
 const seededReservationIdPrefix = "e2e5eed0";
+/** The prefix seeded IDs had before they became UUIDs; journaled rows keep it. */
+const legacySeededReservationIdPrefix = "account-referral-history-";
 
 /**
  * Inserts a confirmed booking of the customer's Dotypos reservation, paid when
@@ -435,7 +437,13 @@ const removeReferralFixtureRows = (
           .where(
             and(
               inArray(workspaceReservations.dotyposCustomerId, customerIds),
-              like(workspaceReservations.id, `${seededReservationIdPrefix}%`)
+              or(
+                like(workspaceReservations.id, `${seededReservationIdPrefix}%`),
+                like(
+                  workspaceReservations.id,
+                  `${legacySeededReservationIdPrefix}%`
+                )
+              )
             )
           );
         const seededIds = seeded.map(({ id }) => id);

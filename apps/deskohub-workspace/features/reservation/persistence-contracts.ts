@@ -56,10 +56,12 @@ export type WorkspaceReservationId = Schema.Schema.Type<
 >;
 
 /**
- * The order a standalone reservation is mirrored into. The database mirrors
- * each standalone reservation into a `reservation` order with the same UUID.
- * Unlimited-pass days belong to their pass purchase order and review-sandbox
- * samples have no order, so their IDs find none.
+ * The ID of the order a standalone reservation is mirrored into, read from the
+ * reservation ID's shape: the database mirrors each standalone reservation into
+ * a `reservation` order with the same UUID. Unlimited-pass days and
+ * review-sandbox samples have no order and no UUID, so they find none. A UUID
+ * alone doesn't prove the order exists (a review-account hold has none), so
+ * lookups by the found ID can still find nothing.
  */
 export const findReservationOrderId: (
   reservationId: WorkspaceReservationId

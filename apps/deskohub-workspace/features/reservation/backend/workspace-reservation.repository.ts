@@ -88,10 +88,9 @@ import {
   type ReservationAuditAttempt,
 } from "@/features/reservation/backend/reservation-audit";
 import { withCoworkProductFields } from "@/features/reservation/cowork-reservation-product";
-import {
-  findReservationOrderId,
-  type StoredWorkspaceReservationDetails,
-  type WorkspaceReservationId,
+import type {
+  StoredWorkspaceReservationDetails,
+  WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
 import type { ReservationPurpose } from "@/features/reservation/reservation-purpose";
 import { recordReservationInviteeNotices } from "@/features/reservation-invitees/backend/record-reservation-invitee-notices";
@@ -1361,10 +1360,7 @@ export class WorkspaceReservationRepository extends Context.Service<
                 : input.refund?.targetValue;
             const activeAttempt = cancelled?.activePaymentAttemptId;
             const paidProviderAttempts = and(
-              Option.match(findReservationOrderId(input.id), {
-                onNone: () => sql`false`,
-                onSome: (orderId) => eq(paymentAttempts.orderId, orderId),
-              }),
+              eq(paymentAttempts.workspaceReservationId, input.id),
               ne(paymentAttempts.provider, "internal"),
               eq(paymentAttempts.state, "paid")
             );
@@ -2172,18 +2168,17 @@ export class WorkspaceReservationRepository extends Context.Service<
                   eq(paymentAttempts.refundState, "required"),
                   or(
                     sql`${paymentAttempts.id} = ${restored.activePaymentAttemptId}`,
-                    Option.match(findReservationOrderId(input.id), {
-                      onNone: () => sql`true`,
-                      onSome: (orderId) =>
-                        notExists(
-                          db
-                            .select({ id: reservationPaymentWindows.orderId })
-                            .from(reservationPaymentWindows)
-                            .where(
-                              eq(reservationPaymentWindows.orderId, orderId)
-                            )
-                        ),
-                    })
+                    notExists(
+                      db
+                        .select({ id: reservationPaymentWindows.orderId })
+                        .from(reservationPaymentWindows)
+                        .where(
+                          eq(
+                            reservationPaymentWindows.orderId,
+                            paymentAttempts.orderId
+                          )
+                        )
+                    )
                   )
                 )
               );

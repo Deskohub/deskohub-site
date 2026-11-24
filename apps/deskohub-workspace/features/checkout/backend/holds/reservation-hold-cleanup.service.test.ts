@@ -1,4 +1,5 @@
 import "@/shared/polyfills/temporal";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
@@ -90,9 +91,15 @@ describe("ReservationHoldCleanupService", () => {
               Layer.mergeAll(
                 Layer.mock(ProviderPaymentFinalizationService, finalization),
                 Layer.mock(QrPaymentRepository, {
-                  findPaymentWindow: () =>
+                  findPaymentWindow: (reservationId) =>
                     Effect.succeed(
-                      window === "shared" ? { expiresAt: holdExpiresAt } : null
+                      window === "shared"
+                        ? {
+                            orderId:
+                              standaloneReservationOrderId(reservationId),
+                            expiresAt: holdExpiresAt,
+                          }
+                        : null
                     ),
                   findCardAttempt: () =>
                     Effect.succeed({ id: attemptId, state: "pending" }),

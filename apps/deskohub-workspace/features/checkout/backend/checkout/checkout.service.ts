@@ -659,8 +659,8 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
             message: "The order kind does not support payment.",
           });
         }
-        const orderId = yield* requireReservationOrderId(input.orderId);
-        yield* handler.fulfill(orderId).pipe(
+        yield* requireReservationOrderId(input.orderId).pipe(
+          Effect.flatMap((orderId) => handler.fulfill(orderId)),
           Effect.catch((cause) =>
             Effect.logError("Paid checkout fulfillment retry failed", {
               orderId: input.orderId,
