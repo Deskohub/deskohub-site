@@ -1067,12 +1067,21 @@ describe("edge readback from the live edge", () => {
       rateLimitThreshold: { count: 120, intervalSec: 60 },
     },
   };
+  const defaultRule = {
+    priority: 2147483647,
+    action: "allow",
+    match: { versionedExpr: "SRC_IPS_V1", config: { srcIpRanges: ["*"] } },
+  };
+  const withDefault = (changes: Record<string, unknown>) =>
+    policyRules.map((rule) =>
+      rule.priority === 2147483647 ? { ...defaultRule, ...changes } : rule
+    );
   // As Compute returns the sandbox policy the stack declares.
   const policyRules: ReadonlyArray<Record<string, unknown>> = [
     waf(1000, "sqli"),
     waf(1010, "xss"),
     throttle,
-    { priority: 2147483647, action: "allow" },
+    defaultRule,
   ];
   // `security-policies describe --format=json` as gcloud prints it: the
   // whole policy, `preview: false` omitted as Compute omits it.
@@ -1294,6 +1303,17 @@ describe("edge readback from the live edge", () => {
           })
         ),
         rules(policyRules.filter((rule) => rule.priority !== 2000)),
+        // The default rule denying, previewed, or matching only some sources.
+        rules(withDefault({ action: "deny(403)" })),
+        rules(withDefault({ preview: true })),
+        rules(
+          withDefault({
+            match: {
+              versionedExpr: "SRC_IPS_V1",
+              config: { srcIpRanges: ["198.51.100.0/24"] },
+            },
+          })
+        ),
       ]) {
         const { exitCode, calls } = readback([override]);
         expect({ override, exitCode }).toEqual({ override, exitCode: 1 });
@@ -1379,8 +1399,14 @@ describe("token-route privacy and telemetry", () => {
     },
     {
       tool: "gcloud",
-      pattern: "^logging read .*run\\.googleapis\\.com/requests",
-      stdout: '[{"timestamp":"2026-11-23T10:01:00Z"}]',
+      pattern:
+        "^logging read .*run\\.googleapis\\.com/requests.* --format=json\\(logName,timestamp\\)$",
+      stdout: JSON.stringify([
+        {
+          logName: `projects/${projectId}/logs/run.googleapis.com%2Frequests`,
+          timestamp: "2026-11-23T10:01:00Z",
+        },
+      ]),
     },
     {
       tool: "gcloud",
