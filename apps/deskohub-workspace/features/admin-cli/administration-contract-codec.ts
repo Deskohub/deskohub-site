@@ -10,14 +10,17 @@ export type ContractServices<Groups extends HttpApiGroup.Constraint> =
   | HttpApiEndpoint.ClientServices<HttpApiGroup.Endpoints<Groups>>;
 
 /**
- * Accepts only an API whose schemas need no services: one that needs any
- * fails to typecheck, naming them.
+ * Accepts only an API whose schemas are typed and need no services: one
+ * whose groups were widened, so its endpoints and their services are
+ * unknown, or whose schemas need any service, fails to typecheck.
  */
 export type ServiceFreeContract<Groups extends HttpApiGroup.Constraint> = [
-  ContractServices<Groups>,
+  HttpApiGroup.Endpoints<Groups>,
 ] extends [never]
-  ? unknown
-  : { readonly contractServices: ContractServices<Groups> };
+  ? { readonly contractEndpoints: "typed endpoints" }
+  : [ContractServices<Groups>] extends [never]
+    ? unknown
+    : { readonly contractServices: ContractServices<Groups> };
 
 /**
  * A reflected Administration API schema as the codec it is. Reflection types
