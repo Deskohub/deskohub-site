@@ -168,6 +168,7 @@ describe("Workspace actions", () => {
 
     await expect(action({ _errors: { code: 123 } })).resolves.toMatchObject({
       validationErrors: {
+        formErrors: [],
         fieldErrors: { code: [expect.any(String)] },
       },
     });

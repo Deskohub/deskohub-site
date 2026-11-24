@@ -16,6 +16,8 @@ const standaloneObservabilityKey = Symbol.for(
   "@deskohub-workspace/standalone-observability"
 );
 
+// Only this module writes the slot, so the annotation checks those writes;
+// it trusts, rather than verifies, a value another module instance stored.
 type GlobalWithStandaloneObservability = typeof globalThis & {
   [standaloneObservabilityKey]?: Layer.Layer<never>;
 };

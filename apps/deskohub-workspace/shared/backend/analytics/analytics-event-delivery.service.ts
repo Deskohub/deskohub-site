@@ -123,6 +123,8 @@ const captureClientKey = Symbol.for(
   "@deskohub-workspace/analytics/capture-client"
 );
 
+// Only this module writes the slot, so the annotation checks those writes;
+// it trusts, rather than verifies, a value another module instance stored.
 type CaptureClientHolder = typeof globalThis & {
   [captureClientKey]?: PostHog;
 };

@@ -98,6 +98,8 @@ interface LogDrains {
   queued?: Promise<void>;
 }
 
+// Only this module writes the slot, so the annotation checks those writes;
+// it trusts, rather than verifies, a value another module instance stored.
 type GlobalWithTelemetry = typeof globalThis & {
   [workspaceTelemetryHandle]?: WorkspaceTelemetryHandle;
 };
