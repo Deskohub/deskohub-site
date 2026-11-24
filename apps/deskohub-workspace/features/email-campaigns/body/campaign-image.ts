@@ -1,6 +1,7 @@
 import { fromString, type JSONContent } from "@tiptap/core";
 import Image from "@tiptap/extension-image";
 import { Predicate } from "effect";
+import { htmlAttributeText } from "./campaign-body-attribute-text";
 import type {
   CampaignBodyAttributeValue,
   CampaignBodyNode,
@@ -133,6 +134,9 @@ export const CampaignImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
+      src: { default: null, parseHTML: htmlAttributeText("src") },
+      alt: { default: null, parseHTML: htmlAttributeText("alt") },
+      title: { default: null, parseHTML: htmlAttributeText("title") },
       width: {
         default: null,
         parseHTML: (element) => pastedImageDimension(element, "width"),

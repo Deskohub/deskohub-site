@@ -265,8 +265,11 @@ describe("runCampaignOperation", () => {
     expect(deleteCampaign).not.toHaveBeenCalled();
   });
 
-  test("refuses input without its operation's shape before the handler runs", async () => {
-    const input = { campaignId, retiredField: true };
+  test("refuses a campaign ID that isn't text before the handler runs", async () => {
+    // A client can send any payload; this one arrives with a numeric ID.
+    const input = { campaignId };
+    Object.assign(input, { campaignId: 42 });
+
     const result = await runCampaignOperation({
       operation: "deleteCampaign",
       input,

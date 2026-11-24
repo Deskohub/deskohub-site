@@ -8,6 +8,7 @@ import Link from "@tiptap/extension-link";
 import { BulletList, ListItem, OrderedList } from "@tiptap/extension-list";
 import Paragraph from "@tiptap/extension-paragraph";
 import Text from "@tiptap/extension-text";
+import { htmlAttributeText } from "./campaign-body-attribute-text";
 import { CampaignCtaButton } from "./campaign-cta-button";
 import { CampaignImage } from "./campaign-image";
 import { CampaignPassOffer } from "./campaign-pass-offer";
@@ -36,6 +37,24 @@ const CampaignOrderedList = OrderedList.extend({
   },
 });
 
+/** A link whose pasted text attributes stay text, digits included. */
+const CampaignLink = Link.extend({
+  addAttributes() {
+    const {
+      target = null,
+      rel = null,
+      class: className = null,
+    } = this.options.HTMLAttributes;
+    return {
+      ...this.parent?.(),
+      target: { default: target, parseHTML: htmlAttributeText("target") },
+      rel: { default: rel, parseHTML: htmlAttributeText("rel") },
+      class: { default: className, parseHTML: htmlAttributeText("class") },
+      title: { default: null, parseHTML: htmlAttributeText("title") },
+    };
+  },
+});
+
 /**
  * The campaign body content set. The editor, renderer, validator, and Markdown
  * parser all build on this list, so they agree on one document schema. It
@@ -49,7 +68,7 @@ export const campaignBodyExtensions: Extensions = [
   Heading.configure({ levels: [...campaignHeadingLevels] }),
   Bold,
   Italic,
-  Link.configure({
+  CampaignLink.configure({
     autolink: false,
     defaultProtocol: "https",
     HTMLAttributes: { rel: null, target: null, class: null },

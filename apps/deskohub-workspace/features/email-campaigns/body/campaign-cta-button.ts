@@ -1,4 +1,5 @@
 import { Node } from "@tiptap/core";
+import { htmlAttributeText } from "./campaign-body-attribute-text";
 
 // Markdown spells a button `[[button: Label](URL)]` on its own line. A
 // backslash escapes the next character, line breaks included. Like CommonMark
@@ -45,21 +46,16 @@ export const CampaignCtaButton = Node.create({
 
   addAttributes() {
     return {
-      href: { default: null },
-      label: { default: "" },
+      href: { default: null, parseHTML: htmlAttributeText("href") },
+      label: {
+        default: "",
+        parseHTML: (element) => element.textContent ?? "",
+      },
     };
   },
 
   parseHTML() {
-    return [
-      {
-        tag: "a[data-cta-button]",
-        getAttrs: (element) => ({
-          href: element.getAttribute("href"),
-          label: element.textContent ?? "",
-        }),
-      },
-    ];
+    return [{ tag: "a[data-cta-button]" }];
   },
 
   renderHTML({ node }) {

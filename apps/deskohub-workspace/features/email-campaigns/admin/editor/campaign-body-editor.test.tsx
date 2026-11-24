@@ -216,6 +216,67 @@ test("keeps a pasted image whose width is too long to hold, without a width", as
   });
 });
 
+const longDigits = "9".repeat(400);
+
+test("keeps a pasted image whose alt text is a long run of digits, as text", async () => {
+  const { editor, changes } = await renderEditor();
+
+  act(() => {
+    editor.commands.focus("end");
+    editor.view.pasteHTML(
+      `<p>Pasted intro</p><img src="${cloudinaryImage}" alt="${longDigits}" title="${longDigits}">`
+    );
+  });
+
+  const doc = changes.at(-1);
+  expect(JSON.stringify(doc)).toContain("Pasted intro");
+  expect(doc?.content?.at(-1)).toMatchObject({
+    type: "image",
+    attrs: { src: cloudinaryImage, alt: longDigits, title: longDigits },
+  });
+});
+
+test("keeps a pasted link whose title is a long run of digits, as text", async () => {
+  const { editor, changes } = await renderEditor();
+
+  act(() => {
+    editor.commands.focus("end");
+    editor.view.pasteHTML(
+      `<p><a href="https://deskohub.test/" title="${longDigits}">Pasted link</a></p>`
+    );
+  });
+
+  const link = changes
+    .at(-1)
+    ?.content?.flatMap((node) => node.content ?? [])
+    .find((node) => node.text === "Pasted link")
+    ?.marks?.find((mark) => mark.type === "link");
+  expect(link?.attrs).toMatchObject({ title: longDigits });
+});
+
+test("keeps a pasted pass offer whose texts are runs of digits, as text", async () => {
+  const { editor, changes } = await renderEditor();
+
+  act(() => {
+    editor.commands.focus("end");
+    editor.view.pasteHTML(
+      `<p>Pasted intro</p><div data-pass-offer="unlimited" data-headline="${longDigits}" data-detail="42" headline="7"></div>`
+    );
+  });
+
+  const doc = changes.at(-1);
+  expect(JSON.stringify(doc)).toContain("Pasted intro");
+  expect(doc?.content?.at(-1)).toMatchObject({
+    type: "passOffer",
+    attrs: {
+      product: "unlimited",
+      size: null,
+      headline: longDigits,
+      detail: "42",
+    },
+  });
+});
+
 test("hands the form plain objects a Server Action can receive", async () => {
   const { editor, changes } = await renderEditor();
 
