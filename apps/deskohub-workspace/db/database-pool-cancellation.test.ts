@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import * as Net from "node:net";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { sql as drizzleSql } from "drizzle-orm";
@@ -14,7 +15,7 @@ import {
   Scope,
 } from "effect";
 import { SqlClient } from "effect/sql";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { WorkspaceDatabase } from "./database.service";
@@ -98,7 +99,10 @@ const isCancelRequest = (chunk: Uint8Array) =>
 const observerQuery = <Row extends object>(
   text: string,
   values: ReadonlyArray<unknown> = []
-) => postgresDatabase!.pool.query<Row>(text, [...values]);
+) => {
+  assert(postgresDatabase, "the Postgres test database is configured");
+  return postgresDatabase.pool.query<Row>(text, [...values]);
+};
 
 const activeProbeBackendPids = async (): Promise<number[]> => {
   const result = await observerQuery<{ readonly pid: number }>(
@@ -179,13 +183,18 @@ const probeSessionLeftovers = async () => {
          as "advisoryLocks"`,
     [probeApplicationName]
   );
-  return result.rows[0]!;
+  const [leftovers] = result.rows;
+  assert(leftovers, "the leftover counts query returns one row");
+  return leftovers;
 };
 
 const backendPid = Effect.flatMap(SqlClient.SqlClient, (sql) =>
   Effect.map(
     sql<{ readonly pid: number }>`select pg_backend_pid()::int as pid`,
-    ([row]) => row!.pid
+    ([row]) => {
+      assert(row, "pg_backend_pid() returns one row");
+      return row.pid;
+    }
   )
 );
 
@@ -354,6 +363,7 @@ describe.skipIf(!postgresDatabase)(
           maxConnections: 2,
         });
         const account = `cancellation-${crypto.randomUUID()}`;
+        const accountId = customerAccountIdSchema.make(account);
         // Interrupts after 0 to 9 ms, so across iterations the work stops
         // before, during and after its statements, and a statement may
         // finish within the driver's cancel grace or drain successfully.
@@ -366,11 +376,7 @@ describe.skipIf(!postgresDatabase)(
                   WorkspaceLocks.referralGraph({
                     boundedWait: "5 seconds",
                   }).pipe(
-                    Effect.andThen(
-                      WorkspaceLocks.customerAccount(
-                        account as CustomerAccountId
-                      )
-                    ),
+                    Effect.andThen(WorkspaceLocks.customerAccount(accountId)),
                     Effect.andThen(Effect.sleep("20 millis"))
                   )
                 )
@@ -407,11 +413,9 @@ describe.skipIf(!postgresDatabase)(
       // Drops every CancelRequest, so the interrupted statement runs to its
       // end and the driver cannot know what ran on the session.
       const client = await makeControlledClient((socket) => {
-        const write = socket.write.bind(socket) as (
-          ...args: Array<unknown>
-        ) => boolean;
+        const write = socket.write.bind(socket);
         Object.assign(socket, {
-          write: (...args: Array<unknown>) => {
+          write: (...args: Parameters<typeof write>) => {
             const [chunk] = args;
             if (chunk instanceof Uint8Array && isCancelRequest(chunk)) {
               socket.destroy();

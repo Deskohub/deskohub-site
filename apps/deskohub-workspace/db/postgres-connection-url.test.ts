@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { sql } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
@@ -35,7 +36,8 @@ describe.skipIf(!databaseUrl)("The native pool's TLS mode", () => {
   // The disposable test server speaks no TLS, so a pool that requires it
   // must refuse to connect rather than fall back to plain text.
   test("refuses a server without TLS for sslmode=require", async () => {
-    const url = new URL(databaseUrl!);
+    assert(databaseUrl, "the Postgres test database is configured");
+    const url = new URL(databaseUrl);
     url.searchParams.set("sslmode", "require");
     const pool = await openDatabasePool({
       connectionString: url.toString(),
