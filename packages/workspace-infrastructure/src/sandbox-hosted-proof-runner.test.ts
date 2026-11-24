@@ -308,7 +308,13 @@ describe("read-only inventory", () => {
         rules: [
           sinksPage(
             `projects/${projectId}`,
-            [{ name: "export", destination: "bigquery.googleapis.com/x" }],
+            [
+              {
+                name: "export",
+                destination: "bigquery.googleapis.com/x",
+                filter: "severity>=ERROR",
+              },
+            ],
             { token: "page-2" }
           ),
           sinksPage(
@@ -328,8 +334,8 @@ describe("read-only inventory", () => {
     }).toEqual({
       exitCode: 0,
       sinks: [
-        "_Default\tlogging/_Default",
-        "export\tbigquery.googleapis.com/x",
+        "_Default\tlogging/_Default\t(empty filter)",
+        "export\tbigquery.googleapis.com/x\tseverity>=ERROR",
       ],
     });
   });

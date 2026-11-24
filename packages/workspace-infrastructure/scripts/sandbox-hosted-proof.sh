@@ -686,8 +686,14 @@ phase_readonly_inventory() {
   else
     notice "enabled APIs unverified (denied)"
   fi
-  project_sink_rows ||
+  # Name, destination and the routing filter, `(empty filter)` as gcloud
+  # shows a sink that routes every log.
+  local sinks
+  if sinks="$(log_sinks_json "projects/${project_id}")"; then
+    $dry_run || jq -r '.[] | [.name, .destination, (.filter // "" | if . == "" then "(empty filter)" else . end)] | @tsv' <<<"$sinks"
+  else
     notice "log sinks unverified (denied); inherited folder/organization sinks are not listed"
+  fi
   local exclusions
   if exclusions="$(project_exclusions_json)"; then
     $dry_run || jq -r '.[] | [.name, (.disabled // false), .filter] | @tsv' <<<"$exclusions"
