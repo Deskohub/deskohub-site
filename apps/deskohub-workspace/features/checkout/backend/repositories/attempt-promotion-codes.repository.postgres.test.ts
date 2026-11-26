@@ -23,18 +23,15 @@ import {
 } from "@/features/discounts/persistence-contracts";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import {
-  connectWorkspacePostgresTestDatabase,
-  type WorkspacePostgresTestDatabase,
-} from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { AttemptPromotionCodesRepository } from "./attempt-promotion-codes.repository";
 
-const testDatabase = await connectWorkspacePostgresTestDatabase();
+const postgres = await connectWorkspacePostgresTestDatabase();
 
-describe.skipIf(!testDatabase)(
+describe.skipIf(!postgres)(
   "AttemptPromotionCodesRepository on disposable Postgres",
   () => {
-    const postgres = testDatabase as WorkspacePostgresTestDatabase;
+    if (!postgres) return;
     const reservationIds: WorkspaceReservationId[] = [];
     const discountIds: string[] = [];
 

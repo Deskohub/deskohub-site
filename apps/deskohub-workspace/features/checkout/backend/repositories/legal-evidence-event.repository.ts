@@ -35,6 +35,11 @@ class LegalEvidenceEventInputError extends Data.TaggedError(
 
 type LegalEvidenceEventInput = typeof legalEvidenceEventInputSchema.Encoded;
 
+export const decodeLegalEvidenceEventInput = Schema.decodeUnknownEffect(
+  legalEvidenceEventInputSchema,
+  { onExcessProperty: "error" }
+);
+
 /**
  * A legal evidence event as the customer may see it: which document version
  * they accepted, when, where, and with which acknowledgement. The document
@@ -116,10 +121,7 @@ export class LegalEvidenceEventRepository extends Context.Service<
 
       const record = Effect.fn("legalEvidenceEvents.record")(
         function* (input: LegalEvidenceEventInput) {
-          const parsed = yield* Schema.decodeUnknownEffect(
-            legalEvidenceEventInputSchema,
-            { onExcessProperty: "error" }
-          )(input).pipe(
+          const parsed = yield* decodeLegalEvidenceEventInput(input).pipe(
             Effect.mapError(
               (cause) =>
                 new LegalEvidenceEventInputError({

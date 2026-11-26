@@ -2,7 +2,6 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
 import { accountAnalyticsConsentDecisions } from "@/db/schema";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { AnalyticsConsentDecision } from "@/features/legal/analytics-consent-decision";
@@ -12,7 +11,10 @@ import { WorkspaceReservationRepository } from "@/features/reservation/backend/w
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { recordServerAnalytics } from "@/shared/backend/analytics/server-analytics.service.mock";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   CheckoutAnalytics,
   type ICheckoutAnalytics,
@@ -31,10 +33,7 @@ const captureRun = async (
   operation: (analytics: ICheckoutAnalytics) => Effect.Effect<unknown>
 ) => {
   const recorder = recordServerAnalytics();
-  const database = Layer.succeed(
-    WorkspaceDatabase,
-    WorkspaceDatabase.make(testDatabase!.db)
-  );
+  const database = requireTestDatabase(testDatabase).layer;
   const layer = CheckoutAnalytics.Default.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -59,7 +58,7 @@ const captureRun = async (
 
 /** A reservation authored by a fresh account with a login. */
 const authoredReservation = async () => {
-  const fixtures = workspaceFixtures(testDatabase!.db);
+  const fixtures = workspaceFixtures(requireTestDatabase(testDatabase).db);
   const { accountId } = await Effect.runPromise(
     fixtures.account("lifecycle-person")
   );
@@ -76,14 +75,16 @@ const decide = (
   documentHash = getLegalDocumentVersion("cs-CZ", "privacy-policy")
 ) =>
   Effect.runPromise(
-    testDatabase!.db.insert(accountAnalyticsConsentDecisions).values({
-      accountId,
-      decision,
-      documentHash,
-      locale: "cs-CZ",
-      decidedAt: Temporal.Instant.from(decidedAt),
-      source: "banner",
-    })
+    requireTestDatabase(testDatabase)
+      .db.insert(accountAnalyticsConsentDecisions)
+      .values({
+        accountId,
+        decision,
+        documentHash,
+        locale: "cs-CZ",
+        decidedAt: Temporal.Instant.from(decidedAt),
+        source: "banner",
+      })
   );
 
 describePostgres("Lifecycle events and the author's analytics consent", () => {

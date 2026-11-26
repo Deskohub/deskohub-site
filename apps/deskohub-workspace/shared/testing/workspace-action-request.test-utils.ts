@@ -51,9 +51,9 @@ export interface WorkspaceActionRequest {
 const defaultReferer = "https://deskohub.test/en-US";
 
 const botIdVerdicts = {
-  human: { isHuman: true, isBot: false, isVerifiedBot: false, bypassed: false },
-  bot: { isHuman: false, isBot: true, isVerifiedBot: false, bypassed: false },
-} satisfies Record<"human" | "bot", BotIdVerification>;
+  human: { isHuman: true, isBot: false },
+  bot: { isHuman: false, isBot: true },
+};
 
 /**
  * Stands in for the Next.js request APIs a Server Action reads outside a
@@ -80,7 +80,14 @@ export const mockWorkspaceActionRequest = async (
   const writes: WorkspaceActionCookieWrite[] = [];
   const verdict = botIdVerdicts[options.botId ?? "human"];
   const answerBotId = (): Promise<BotIdVerification> =>
-    Promise.resolve({ ...verdict });
+    Promise.resolve({
+      ...verdict,
+      isVerifiedBot: false,
+      verifiedBotName: undefined,
+      verifiedBotCategory: undefined,
+      bypassed: false,
+      classificationReason: undefined,
+    });
 
   const after = mock((_callback: () => unknown) => undefined);
   const checkBotId = mock(answerBotId);

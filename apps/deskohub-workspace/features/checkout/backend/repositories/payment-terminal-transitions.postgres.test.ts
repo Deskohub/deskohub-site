@@ -10,7 +10,10 @@ import type {
   ReservationState,
 } from "@/db/schema";
 import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { admitReferralNexiPayment } from "./payment-lifecycle.test-utils";
 import { PaymentTerminalTransitions } from "./payment-terminal-transitions";
 
@@ -25,7 +28,7 @@ const runTransitions = <A, E>(
   Effect.flatMap(PaymentTerminalTransitions, operation).pipe(
     Effect.provide(
       PaymentTerminalTransitions.Default.pipe(
-        Layer.provide(testDatabase!.layer)
+        Layer.provide(requireTestDatabase(testDatabase).layer)
       )
     ),
     Effect.result,
@@ -33,7 +36,7 @@ const runTransitions = <A, E>(
   );
 
 const readStates = async (paymentAttemptId: string) => {
-  const { rows } = await testDatabase!.pool.query<{
+  const { rows } = await requireTestDatabase(testDatabase).pool.query<{
     attempt_state: PaymentAttemptState;
     attempt_failure_code: string | null;
     payment_state: PaymentState;
@@ -61,9 +64,10 @@ const readStates = async (paymentAttemptId: string) => {
 describe.skipIf(!testDatabase)(
   "Payment terminal transitions on disposable Postgres",
   () => {
+    if (!testDatabase) return;
     test("ends an unpaid attempt and releases its claim with only the database provided", async () => {
       const { attempt, reservation } = await Effect.runPromise(
-        admitReferralNexiPayment(testDatabase!)
+        admitReferralNexiPayment(testDatabase)
       );
 
       const result = await runTransitions((transitions) =>
@@ -92,7 +96,7 @@ describe.skipIf(!testDatabase)(
 
     test("an exact transition cannot mark an already-failed attempt as fallback eligible", async () => {
       const { attempt, reservation } = await Effect.runPromise(
-        admitReferralNexiPayment(testDatabase!)
+        admitReferralNexiPayment(testDatabase)
       );
       const payment = {
         id: attempt.id,
@@ -126,7 +130,7 @@ describe.skipIf(!testDatabase)(
 
     test("repeats the same terminal state unchanged and refuses another one", async () => {
       const { attempt, reservation } = await Effect.runPromise(
-        admitReferralNexiPayment(testDatabase!)
+        admitReferralNexiPayment(testDatabase)
       );
       const markTerminal = (state: "cancelled" | "expired") =>
         runTransitions((transitions) =>

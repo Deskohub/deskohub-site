@@ -59,7 +59,7 @@ class FioUnavailable extends Data.TaggedError("FioUnavailable")<{
   readonly httpStatus?: number;
 }> {}
 
-class FioRejected extends Data.TaggedError("FioRejected")<{
+export class FioRejected extends Data.TaggedError("FioRejected")<{
   readonly reason:
     | "invalid-request"
     | "invalid-response"
@@ -70,14 +70,11 @@ class FioRejected extends Data.TaggedError("FioRejected")<{
   readonly httpStatus?: number;
 }> {}
 
-class FioHistoryAccessRequired extends Data.TaggedError(
+export class FioHistoryAccessRequired extends Data.TaggedError(
   "FioHistoryAccessRequired"
 ) {}
 
-export type FioReadFailure =
-  | FioUnavailable
-  | FioRejected
-  | FioHistoryAccessRequired;
+type FioReadFailure = FioUnavailable | FioRejected | FioHistoryAccessRequired;
 
 interface FioMovementsService {
   readonly readPeriod: (

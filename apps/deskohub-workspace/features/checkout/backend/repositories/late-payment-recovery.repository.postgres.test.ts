@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
@@ -30,7 +31,10 @@ import {
   promotionCodeIdSchema,
   storedDiscountIdSchema,
 } from "@/features/discounts/persistence-contracts";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
 import { rejectCustomerEventInserts } from "@/shared/backend/customer-events/customer-event-outbox.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
@@ -833,6 +837,7 @@ describe.skipIf(!testDatabase)(
       );
 
       const { reservation } = await readRows(checkout);
+      assert(reservation, "Expected settled reservation");
       const mirror = await readReservationOrderMirror(
         testDatabase.pool,
         checkout.reservationId
@@ -847,7 +852,7 @@ describe.skipIf(!testDatabase)(
         {
           kind: "reservation-booked",
           occurredAt: toStoredInstant(completedAt),
-          dotyposCustomerId: reservation!.dotyposCustomerId,
+          dotyposCustomerId: reservation.dotyposCustomerId,
         },
       ]);
     });
@@ -1094,7 +1099,7 @@ describe.skipIf(!testDatabase)(
       expect(
         await run((repository) =>
           repository.hasNewerActiveReservation(
-            crypto.randomUUID() as WorkspaceReservationId
+            workspaceReservationIdSchema.make(crypto.randomUUID())
           )
         )
       ).toBe(false);
@@ -1106,7 +1111,9 @@ describe.skipIf(!testDatabase)(
           paymentAttemptId: paymentAttemptIdSchema.make(
             `late-attempt-missing-${crypto.randomUUID()}`
           ),
-          workspaceReservationId: crypto.randomUUID() as WorkspaceReservationId,
+          workspaceReservationId: workspaceReservationIdSchema.make(
+            crypto.randomUUID()
+          ),
           providerStatus: "EXECUTED",
           verifiedPaidAt: Temporal.Now.instant(),
         })
@@ -1232,7 +1239,9 @@ describe.skipIf(!testDatabase)(
       const unknownReservation = await runResult((repository) =>
         repository.requireReview({
           ...reviewInput(checkout),
-          workspaceReservationId: crypto.randomUUID() as WorkspaceReservationId,
+          workspaceReservationId: workspaceReservationIdSchema.make(
+            crypto.randomUUID()
+          ),
         })
       );
       const withoutRecovery = await runResult((repository) =>
