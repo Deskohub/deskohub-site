@@ -38,7 +38,10 @@ import {
   type CheckoutStatusCopy,
   getCheckoutStatusCopy,
 } from "./checkout-status-copy";
-import { CheckoutStatusHeadline } from "./checkout-status-headline";
+import {
+  CheckoutStatusAnnouncement,
+  CheckoutStatusHeadline,
+} from "./checkout-status-headline";
 import {
   CheckoutStatusPaymentMethods,
   type ContinueCheckoutPaymentAction,
@@ -366,6 +369,7 @@ export function CheckoutStatusPage({
       presentation={presentation}
       reserveAgainPath={offersNewReservation ? reserveAgainPath : undefined}
     >
+      <CheckoutStatusAnnouncement locale={locale} title={copy.title} />
       {canSwitchPayment && status.status !== "not_found" ? (
         <CheckoutStatusPaymentMethods
           continuePaymentAction={canSwitchPayment.continuePaymentAction}

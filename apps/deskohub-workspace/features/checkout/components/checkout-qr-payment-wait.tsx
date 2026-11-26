@@ -20,7 +20,10 @@ import {
   CheckoutQrPaymentDetails,
 } from "./checkout-qr-payment-details";
 import styles from "./checkout-qr-payment-wait.module.css";
-import { CheckoutStatusHeadline } from "./checkout-status-headline";
+import {
+  CheckoutStatusAnnouncement,
+  CheckoutStatusHeadline,
+} from "./checkout-status-headline";
 
 const SECOND = 1000;
 const FIRST_WAIT = 60 * SECOND;
@@ -74,7 +77,7 @@ export function CheckoutQrPaymentWait({
   const [clock] = useState(() => createWaitClock(startedAt));
   const now = AsyncResult.getOrElse(useAtomValue(clock), Date.now);
   const phase = getWaitPhase(now - startedAt);
-  const { title, warning } = {
+  const { title: titleMessage, warning } = {
     waiting: { title: m.checkoutQrWaitTitle, warning: undefined },
     delayed: {
       title: m.checkoutQrWaitDelayedTitle,
@@ -85,13 +88,15 @@ export function CheckoutQrPaymentWait({
       warning: m.checkoutQrWaitAvoidDoublePayment,
     },
   }[phase];
+  const title = titleMessage({}, { locale });
 
   return (
     <>
+      <CheckoutStatusAnnouncement locale={locale} title={title} />
       <CheckoutStatusHeadline
         copy={{
           Icon: Clock3,
-          title: title({}, { locale }),
+          title,
           tone: "pending",
           lead:
             phase === "support"
@@ -127,7 +132,7 @@ export function CheckoutQrPaymentWait({
         </p>
       )}
       {phase === "support" && (
-        <Button asChild className="mb-4" fullWidth size="lg">
+        <Button asChild className="mb-4" fullWidth size="lg" wrap>
           <Link href={supportHref} prefetch={false}>
             {m.checkoutQrWaitContactSupport({}, { locale })}
           </Link>
@@ -193,13 +198,18 @@ function CheckoutQrWaitCountdown({
   return (
     <div className="mt-10 mb-8 grid place-items-center">
       <div className={styles.ring} data-tone={tone} ref={ring} style={style}>
-        <span
-          aria-label={m.checkoutQrWaitCountdown({ time: digits }, { locale })}
-          className="z-10 text-4xl font-medium tabular-nums"
-          role="timer"
-        >
-          {digits}
-        </span>
+        <div className="z-10 grid justify-items-center gap-1 text-center">
+          <span
+            aria-label={m.checkoutQrWaitCountdown({ time: digits }, { locale })}
+            className="text-4xl font-medium tabular-nums"
+            role="timer"
+          >
+            {digits}
+          </span>
+          <span aria-hidden="true" className="max-w-24 text-xs leading-tight">
+            {m.checkoutQrWaitCountdownLabel({}, { locale })}
+          </span>
+        </div>
       </div>
     </div>
   );

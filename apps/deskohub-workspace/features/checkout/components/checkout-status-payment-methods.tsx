@@ -199,6 +199,7 @@ export function CheckoutStatusPaymentMethods({
             onClick={qrWait ? startWaiting : () => continueWith("qr")}
             size="lg"
             type="button"
+            wrap={hasQrPayment}
           >
             {qrWait
               ? m.checkoutQrPaymentSent({}, { locale })
@@ -211,6 +212,7 @@ export function CheckoutStatusPaymentMethods({
             type="button"
             tone="outline"
             variant="ghost"
+            wrap={hasQrPayment}
           >
             {qrWait
               ? m.checkoutQrSwitchToCardPayment({}, { locale })

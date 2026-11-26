@@ -20,6 +20,20 @@ const statusIconWrapperVariants = cva(
   }
 );
 
+export function CheckoutStatusAnnouncement({
+  locale,
+  title,
+}: {
+  readonly locale: Locale;
+  readonly title: string;
+}) {
+  return (
+    <output className="sr-only" aria-live="polite" aria-atomic>
+      {m.checkoutStatusEyebrow({}, { locale })}: {title}
+    </output>
+  );
+}
+
 export function CheckoutStatusHeadline({
   copy,
   headingRef,
@@ -36,45 +50,40 @@ export function CheckoutStatusHeadline({
   const Icon = copy.Icon;
 
   return (
-    <>
-      <output className="sr-only" aria-live="polite" aria-atomic>
-        {m.checkoutStatusEyebrow({}, { locale })}: {copy.title}
-      </output>
-      <div className="flex flex-col gap-6 sm:flex-row sm:items-start">
-        <div className={statusIconWrapperVariants({ tone: copy.tone })}>
-          <Icon className="h-9 w-9" aria-hidden="true" />
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-burned-orange">
-            {m.checkoutStatusEyebrow({}, { locale })}
-          </p>
-          <h1
-            className="mt-4 text-balance text-4xl leading-none sm:text-5xl"
-            ref={headingRef}
-            tabIndex={headingRef ? -1 : undefined}
-          >
-            {copy.title}
-          </h1>
-          <p
-            className={cn(
-              "mt-5 text-lg leading-8 text-navy-blue/70",
-              showSupportButton &&
-                "after:content-['_↴'] after:text-4xl after:leading-0"
-            )}
-          >
-            {copy.lead}
-          </p>
-          {reviewSandbox && (
-            <p
-              className="mt-4 rounded-2xl border border-navy-blue/10 bg-navy-blue/3 px-4 py-3 text-sm leading-6 text-navy-blue/72"
-              id="checkout-status-review-sandbox"
-            >
-              {m.checkoutStatusReviewSandboxNotice({}, { locale })}
-            </p>
-          )}
-        </div>
+    <div className="flex flex-col gap-6 sm:flex-row sm:items-start">
+      <div className={statusIconWrapperVariants({ tone: copy.tone })}>
+        <Icon className="h-9 w-9" aria-hidden="true" />
       </div>
-    </>
+
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-burned-orange">
+          {m.checkoutStatusEyebrow({}, { locale })}
+        </p>
+        <h1
+          className="mt-4 text-balance text-4xl leading-none sm:text-5xl"
+          ref={headingRef}
+          tabIndex={headingRef ? -1 : undefined}
+        >
+          {copy.title}
+        </h1>
+        <p
+          className={cn(
+            "mt-5 text-lg leading-8 text-navy-blue/70",
+            showSupportButton &&
+              "after:content-['_↴'] after:text-4xl after:leading-0"
+          )}
+        >
+          {copy.lead}
+        </p>
+        {reviewSandbox && (
+          <p
+            className="mt-4 rounded-2xl border border-navy-blue/10 bg-navy-blue/3 px-4 py-3 text-sm leading-6 text-navy-blue/72"
+            id="checkout-status-review-sandbox"
+          >
+            {m.checkoutStatusReviewSandboxNotice({}, { locale })}
+          </p>
+        )}
+      </div>
+    </div>
   );
 }

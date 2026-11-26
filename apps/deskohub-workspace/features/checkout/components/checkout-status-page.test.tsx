@@ -239,6 +239,28 @@ describe("CheckoutStatusPage", () => {
       ),
     });
 
+    const announcement = restored.container.querySelector(
+      "output[aria-live=polite]"
+    );
+    restored.rerender(
+      <CheckoutStatusPage
+        locale="en-US"
+        paymentMethods={paymentMethods}
+        status={baseStatus}
+      />
+    );
+    expect(
+      restored.container.querySelector("output[aria-live=polite]") ===
+        announcement
+    ).toBe(true);
+    expect(announcement?.textContent).toBe(
+      "Payment status: Your reservation is confirmed."
+    );
+    expect(
+      restored.queryByRole("link", { name: "Contact support" })
+    ).toBeNull();
+    expect(restored.queryByText("Show transfer details")).toBeNull();
+
     restored.rerender(
       <CheckoutStatusPage
         locale="en-US"
@@ -253,17 +275,6 @@ describe("CheckoutStatusPage", () => {
     expect(
       restored.getByRole("link", { name: "Send support request" })
     ).toBeTruthy();
-    restored.rerender(
-      <CheckoutStatusPage
-        locale="en-US"
-        paymentMethods={paymentMethods}
-        status={baseStatus}
-      />
-    );
-    expect(
-      restored.queryByRole("link", { name: "Contact support" })
-    ).toBeNull();
-    expect(restored.queryByText("Show transfer details")).toBeNull();
   });
 
   beforeAll(() => {
