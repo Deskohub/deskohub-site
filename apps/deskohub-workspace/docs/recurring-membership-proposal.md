@@ -10,6 +10,8 @@ Optional automatic renewal of Unlimited every 30 Prague calendar days. Self-purc
 
 The associated static prototype demonstrates a synthetic signed-in buyer, selection, separate unchecked payment-series authorization, the Nexi handoff boundary, simulated payment, Account membership management and cancellation. Its client-side state is disposable. Published VOP, payment mandates, tokens, recurring jobs, contracts, account data and provider integrations need a separate approved implementation and release.
 
+The prototype uses a fixed example order date of 26 November 2026. Supported starts run through the verified Thursday withdrawal deadline of 10 December 2026, inclusive. Every supported start requires the early-service request. This keeps the review link usable after the example dates pass. A live implementation must calculate legal deadlines for actual order dates, including applicable weekend and holiday extensions.
+
 ## Decisions requiring approval
 
 - Reuse the existing Unlimited prices for an indefinite agreement renewed in 30-day periods. Confirm this cadence versus calendar-month billing and any additional monthly price disclosure.

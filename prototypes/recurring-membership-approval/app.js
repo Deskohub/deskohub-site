@@ -8,6 +8,9 @@ const copy = {
   en: {
     notice:
       "Approval preview · proposed offer and terms · ordering, payment and cancellation are simulated",
+    scenarioNotice: "Example order date 26 November 2026.",
+    startHint:
+      "This fixed example supports starts from 26 November through 10 December 2026.",
     restart: "Restart demo",
     choose: "Choose",
     details: "Details",
@@ -76,6 +79,8 @@ const copy = {
     secureTitle: "Secure payment with Nexi",
     secureHelp:
       "At launch, Nexi will collect the card details and perform any required authentication. Its approved contract will authorize the stated future renewal charges.",
+    secureHelpOnce:
+      "At launch, Nexi will collect the card details and perform any required authentication for this one-time payment. Your pass covers the single period shown in the summary.",
     secureNotice:
       "Simulation boundary. This preview uses no card, token or payment provider. The button below demonstrates a successful result.",
     simulate: "Simulate successful payment",
@@ -90,6 +95,8 @@ const copy = {
     confirmation: "Proposed confirmation",
     confirmationBody:
       "Your confirmation email will contain the accepted terms, payment authorization, amount, service dates and a direct link to stop renewal.",
+    confirmationBodyOnce:
+      "Your confirmation email will contain the accepted terms, the one-time payment amount and the service dates of your single paid period.",
     cancellationTitle: "Stop automatic renewal?",
     cancellationIntro: (amount) =>
       `This stops the next automatic charge of ${amount} and all following renewals.`,
@@ -113,6 +120,9 @@ const copy = {
   cs: {
     notice:
       "Náhled ke schválení · navrhovaná nabídka a podmínky · objednávka, platba i zrušení jsou simulované",
+    scenarioNotice: "Ukázkové datum objednávky je 26. listopadu 2026.",
+    startHint:
+      "Pevná ukázka umožňuje začátek od 26. listopadu do 10. prosince 2026 včetně.",
     restart: "Restartovat ukázku",
     choose: "Výběr",
     details: "Údaje",
@@ -181,6 +191,8 @@ const copy = {
     secureTitle: "Bezpečná platba přes Nexi",
     secureHelp:
       "Po spuštění zadáš údaje karty u Nexi a provedeš případné požadované ověření. Schválený platební kontrakt umožní uvedené budoucí platby za obnovení.",
+    secureHelpOnce:
+      "Po spuštění zadáš údaje karty u Nexi a provedeš případné požadované ověření této jednorázové platby. Přístup platí na jedno období uvedené v souhrnu.",
     secureNotice:
       "Simulace. Tento náhled nepoužívá kartu, token ani platební bránu. Tlačítko níže ukáže úspěšný výsledek.",
     simulate: "Simulovat úspěšnou platbu",
@@ -195,6 +207,8 @@ const copy = {
     confirmation: "Navrhované potvrzení",
     confirmationBody:
       "Potvrzovací e-mail bude obsahovat přijaté podmínky, souhlas s platbami, částku, období služby a přímý odkaz na zrušení obnovování.",
+    confirmationBodyOnce:
+      "Potvrzovací e-mail bude obsahovat přijaté podmínky, částku jednorázové platby a termíny jediného uhrazeného období.",
     cancellationTitle: "Zrušit automatické obnovování?",
     cancellationIntro: (amount) =>
       `Zrušíš tím příští automatickou platbu ${amount} a všechna další obnovení.`,
@@ -237,6 +251,12 @@ const tiers = [
     price: 8490,
   },
 ];
+// This fixed review scenario has a Thursday withdrawal deadline, with no
+// Czech public holiday on it. Other order dates need the real legal calendar.
+const scenario = {
+  orderedOn: "2026-11-26",
+  withdrawalDeadline: "2026-12-10",
+};
 const state = {
   tier: "desk",
   auto: false,
@@ -273,17 +293,15 @@ const total = () =>
 const end = () => addDays(state.start, 29);
 const next = () => addDays(state.start, 30);
 const reminder = () => addDays(next(), -7);
-const today = () =>
-  new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Prague",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-const early = () => state.start < addDays(today(), 14);
+const supportedStart = () =>
+  /^2026-\d{2}-\d{2}$/.test(state.start) &&
+  state.start >= scenario.orderedOn &&
+  state.start <= scenario.withdrawalDeadline;
+const early = () => state.start <= scenario.withdrawalDeadline;
 
 document.documentElement.lang = language === "cs" ? "cs" : "en";
-document.getElementById("review-notice").textContent = text.notice;
+document.getElementById("review-notice").textContent =
+  `${text.notice}. ${text.scenarioNotice}`;
 document.getElementById("restart").textContent = text.restart;
 document.getElementById("footer").textContent = text.footer;
 const languageButton = document.getElementById("language");
@@ -379,7 +397,8 @@ function renderChoose() {
     }
     <div class="field">
     <label for="start">${text.start}</label>
-    <input id="start" name="start" type="date" required min="${today()}" value="${state.start}">
+    <input id="start" name="start" type="date" required min="${scenario.orderedOn}" max="${scenario.withdrawalDeadline}" value="${state.start}" aria-describedby="start-hint">
+    <span id="start-hint" class="fine">${text.startHint}</span>
     </div>
     <fieldset>
     <legend>${text.duration}</legend>
@@ -412,8 +431,13 @@ function renderChoose() {
     }
     if (input.name === "renewal") state.auto = input.value === "auto";
     if (input.name === "coffee") state.coffee = input.checked;
-    if (input.name === "start" && input.validity.valid)
+    if (input.name === "start") {
+      if (!input.validity.valid) {
+        input.reportValidity();
+        return;
+      }
       state.start = input.value;
+    }
     state.accepted = false;
     const focusId = input.id;
     renderChoose();
@@ -497,7 +521,7 @@ function renderPayment() {
   app.innerHTML = `<h1 tabindex="-1">${text.secureTitle}</h1>
     <div class="layout">
     <section>
-    <p>${text.secureHelp}</p>
+    <p>${state.auto ? text.secureHelp : text.secureHelpOnce}</p>
     <p class="notice">${text.secureNotice}</p>
     <div class="actions">
     <a class="button secondary" href="#checkout">${text.back}</a>
@@ -527,7 +551,7 @@ function renderMembership() {
         : `<p>${text.noNext}</p>`
     }<section class="divider">
     <h2>${text.confirmation}</h2>
-    <p class="fine">${text.confirmationBody}</p>${termsLink()}</section>
+    <p class="fine">${state.auto ? text.confirmationBody : text.confirmationBodyOnce}</p>${termsLink()}</section>
     <section class="divider">
     <h2>${text.withdrawal}</h2>
     <p class="fine">${text.withdrawalHelp}</p>
@@ -608,6 +632,8 @@ function render() {
     terms: renderTerms,
   };
   if (!Object.hasOwn(screens, step)) step = "choose";
+  if (["details", "checkout", "payment"].includes(step) && !supportedStart())
+    step = "choose";
   if (step === "payment" && !state.accepted) step = "checkout";
   if (["membership", "cancel", "cancelled"].includes(step) && !state.started)
     step = "choose";
