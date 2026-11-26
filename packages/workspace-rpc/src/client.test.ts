@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Layer, Option, Redacted } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Redacted, Schema } from "effect";
 import { FetchHttpClient, HttpRouter } from "effect/http";
-import { RpcServer } from "effect/rpc";
+import { RpcMessage, RpcSerialization, RpcServer } from "effect/rpc";
 import {
   BackendUnavailable,
   Caller,
@@ -40,7 +40,7 @@ const callerLayer = Layer.succeed(CallerContext)((effect, { headers }) =>
   )
 );
 
-const handlers = EmailPreferencesRpcs.toLayer({
+const handlers = EmailPreferencesRpcs.of({
   "EmailPreferences.openPreferences": ({ token }) =>
     Effect.gen(function* () {
       expect(yield* Caller).toEqual(caller);
@@ -51,7 +51,9 @@ const handlers = EmailPreferencesRpcs.toLayer({
   "EmailPreferences.unsubscribeOneClick": () => Effect.succeed("withdrawn"),
 });
 
-const makeTestServer = () =>
+const makeTestServer = (
+  testHandlers = EmailPreferencesRpcs.toLayer(handlers)
+) =>
   HttpRouter.toWebHandler(
     RpcServer.layerHttp({
       group: EmailPreferencesRpcs,
@@ -60,7 +62,7 @@ const makeTestServer = () =>
       disableFatalDefects: true,
     }).pipe(
       Layer.provide(
-        Layer.mergeAll(callerLayer, handlers, WorkspaceRpcSerialization)
+        Layer.mergeAll(callerLayer, testHandlers, WorkspaceRpcSerialization)
       )
     )
   );
@@ -203,6 +205,67 @@ describe("Workspace RPC HTTP client", () => {
     expect(failure).toEqual(new BackendUnavailable({ reason: "protocol" }));
   });
 
+  test("maps a schema decode defect in an otherwise valid exit frame", async () => {
+    const serialization = Effect.runSync(
+      RpcSerialization.RpcSerialization.pipe(
+        Effect.provide(WorkspaceRpcSerialization)
+      )
+    );
+    const server = makeTestServer();
+    try {
+      const failure = await runClient(
+        (client) => Effect.flip(client.openPreferences(payload)),
+        async (request) => {
+          const reply = await server.handler(request);
+          const parser = serialization.makeUnsafe();
+          const [frame] = parser.decode(
+            new Uint8Array(await reply.arrayBuffer())
+          );
+          const envelope = Schema.decodeUnknownSync(RpcMessage.EncodedSchema)(
+            frame
+          );
+          if (envelope._tag !== "Exit")
+            throw new Error("Expected an exit frame");
+          const encoded = parser.encode({
+            ...envelope,
+            exit: Uint8Array.of(255),
+          });
+          if (!(encoded instanceof Uint8Array))
+            throw new Error("Expected binary response");
+          return new Response(new Uint8Array(encoded), {
+            headers: { "content-type": rpcContentType },
+          });
+        }
+      );
+      expect(failure).toEqual(new BackendUnavailable({ reason: "protocol" }));
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  test("preserves unexpected RPC defects with an opaque diagnostic", async () => {
+    const server = makeTestServer(
+      EmailPreferencesRpcs.toLayer({
+        ...handlers,
+        "EmailPreferences.openPreferences": () =>
+          Effect.die(new Error("synthetic private backend detail")),
+      })
+    );
+    try {
+      const exit = await runClient(
+        (client) => Effect.exit(client.openPreferences(payload)),
+        (request) => server.handler(request)
+      );
+      if (Exit.isSuccess(exit)) throw new Error("Expected a failed RPC exit");
+      expect(Cause.hasFails(exit.cause)).toBe(false);
+      expect(exit.cause.reasons.find(Cause.isDieReason)?.defect).toMatchObject({
+        message: "Unexpected Workspace RPC defect",
+      });
+    } finally {
+      await server.dispose();
+    }
+  });
+
   test("maps a failed token mint without issuing an HTTP request", async () => {
     const error = new BackendUnavailable({ reason: "authorization" });
     const failure = await runClient(
@@ -213,6 +276,21 @@ describe("Workspace RPC HTTP client", () => {
       Effect.fail(error)
     );
     expect(failure).toBe(error);
+  });
+
+  test("preserves an interrupted call", async () => {
+    const exit = await runClient(
+      (client) => Effect.exit(client.openPreferences(payload)),
+      () => {
+        throw new Error("Unexpected RPC HTTP request");
+      },
+      Effect.interrupt
+    );
+    if (Exit.isSuccess(exit))
+      throw new Error("Expected an interrupted RPC exit");
+    expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+    expect(Cause.hasFails(exit.cause)).toBe(false);
+    expect(Cause.hasDies(exit.cause)).toBe(false);
   });
 
   test("evicts the rejected token and retries the same one-click request once", async () => {
@@ -269,22 +347,22 @@ describe("Workspace RPC HTTP client", () => {
     expect(attempt).toBe(1);
   });
 
-  test("retries one-click after a Google front end denial at most once", async () => {
+  test("evicts both rejected token identities after two one-click 401 responses", async () => {
     const tokens = [
       Redacted.make("synthetic-id-1"),
       Redacted.make("synthetic-id-2"),
     ];
     const evicted: Redacted.Redacted<string>[] = [];
-    let attempt = 0;
+    let minted = 0;
+    let sent = 0;
     const failure = await runClient(
       (client) => Effect.flip(client.unsubscribeOneClick(payload)),
-      () =>
-        new Response("denied", {
-          status: 403,
-          headers: { server: "Google Frontend", "content-type": "text/html" },
-        }),
+      () => {
+        sent++;
+        return new Response("denied", { status: 401 });
+      },
       Effect.sync(() => {
-        const token = tokens[attempt++];
+        const token = tokens[minted++];
         if (!token) throw new Error("Unexpected mint");
         return token;
       }),
@@ -294,11 +372,38 @@ describe("Workspace RPC HTTP client", () => {
         })
     );
     expect(failure).toEqual(
+      new BackendUnavailable({ reason: "http-status", status: 401 })
+    );
+    expect(evicted).toHaveLength(2);
+    expect(evicted[0]).toBe(tokens[0]);
+    expect(evicted[1]).toBe(tokens[1]);
+    expect(minted).toBe(2);
+    expect(sent).toBe(2);
+  });
+
+  test("a Google front end 403 does not evict authorization or replay one-click", async () => {
+    let sent = 0;
+    let evicted = false;
+    const failure = await runClient(
+      (client) => Effect.flip(client.unsubscribeOneClick(payload)),
+      () => {
+        sent++;
+        return new Response("denied", {
+          status: 403,
+          headers: { server: "Google Frontend", "content-type": "text/html" },
+        });
+      },
+      undefined,
+      () =>
+        Effect.sync(() => {
+          evicted = true;
+        })
+    );
+    expect(failure).toEqual(
       new BackendUnavailable({ reason: "http-status", status: 403 })
     );
-    expect(evicted).toHaveLength(1);
-    expect(evicted[0]).toBe(tokens[0]);
-    expect(attempt).toBe(2);
+    expect(sent).toBe(1);
+    expect(evicted).toBe(false);
   });
 
   test("can surface a Google front end denial after issuance without replaying", async () => {

@@ -1,4 +1,12 @@
-import { Context, Effect, Layer, Option, Redacted } from "effect";
+import {
+  Cause,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Redacted,
+  Schema,
+} from "effect";
 import {
   FetchHttpClient,
   HttpClient,
@@ -40,14 +48,6 @@ const contentTypeOf = (response: HttpClientResponse.HttpClientResponse) => {
     ? undefined
     : contentType?.split(";", 1)[0]?.trim().toLowerCase();
 };
-
-const isGoogleFrontendDenial = (
-  response: HttpClientResponse.HttpClientResponse,
-  hasRpcContentType: boolean
-) =>
-  response.status === 403 &&
-  !hasRpcContentType &&
-  response.headers.server?.toLowerCase() === "google frontend";
 
 const discardBody = (response: HttpClientResponse.HttpClientResponse) =>
   HttpClientResponse.toWeb(response).pipe(
@@ -113,35 +113,27 @@ export const layerWorkspaceRpcProtocol = (
             "successfulStatus",
             ({ response }) => response.status >= 200 && response.status < 300
           ),
-          Effect.let(
-            "shouldRetry",
-            ({ hasRpcContentType, response, retryAuthentication }) =>
-              canRetry &&
-              retryAuthentication &&
-              (response.status === 401 ||
-                isGoogleFrontendDenial(response, hasRpcContentType))
-          ),
-          Effect.tap(({ response, shouldRetry, token }) =>
-            Effect.suspend(() => options.invalidateAuthorization(token)).pipe(
-              Effect.when(
-                Effect.succeed(response.status === 401 || shouldRetry)
-              )
-            )
-          ),
           Effect.flatMap(
             ({
               hasRpcContentType,
               response,
-              shouldRetry,
+              retryAuthentication,
               successfulStatus,
+              token,
             }) => {
               if (successfulStatus && hasRpcContentType) {
                 return Effect.succeed(response);
               }
 
+              const unauthorized = response.status === 401;
               return discardBody(response).pipe(
+                Effect.andThen(
+                  Effect.suspend(() =>
+                    options.invalidateAuthorization(token)
+                  ).pipe(Effect.when(Effect.succeed(unauthorized)))
+                ),
                 Effect.flatMap(() =>
-                  shouldRetry
+                  unauthorized && canRetry && retryAuthentication
                     ? send(request, false)
                     : Effect.fail(
                         new HttpClientError.HttpClientError({
@@ -233,9 +225,30 @@ const withBackendFailures = <A, R>(
         error instanceof InvalidCallerHeaders,
       (error) => Effect.fail(mapClientError(error))
     ),
-    Effect.catchDefect(() =>
-      Effect.fail(new BackendUnavailable({ reason: "protocol" }))
-    )
+    Effect.catchCauseIf(Cause.hasDies, (cause) => {
+      if (
+        cause.reasons.every(
+          (reason) =>
+            Cause.isDieReason(reason) && Schema.isSchemaError(reason.defect)
+        )
+      ) {
+        return Effect.fail(new BackendUnavailable({ reason: "protocol" }));
+      }
+
+      // A remote defect can include tokens or other private data. Keep the
+      // defect channel and retain any typed failures and interruptions.
+      return Effect.failCause(
+        Cause.fromReasons(
+          cause.reasons.map((reason) =>
+            Cause.isDieReason(reason)
+              ? Cause.makeDieReason(
+                  new Error("Unexpected Workspace RPC defect")
+                )
+              : reason
+          )
+        )
+      );
+    })
   );
 
 export const makeWorkspaceRpcClient = () =>

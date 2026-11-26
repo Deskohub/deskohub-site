@@ -70,6 +70,13 @@ describe("caller header decoding", () => {
       Headers.remove(headers, correlationIdHeader),
       Headers.set(headers, "x-deskohub-user-agent", userAgent),
       Headers.set(headers, "x-deskohub-user-agent", "b2sA"),
+      Headers.set(headers, "x-deskohub-user-agent", "dGVzdA0KdGVzdA"),
+      Headers.set(
+        headers,
+        "x-deskohub-user-agent",
+        Buffer.from("a".repeat(2049)).toString("base64url")
+      ),
+      Headers.set(headers, "x-deskohub-user-agent", "A".repeat(8196)),
     ]) {
       expect(
         await Effect.runPromise(Effect.flip(decodeCallerHeaders(invalid)))

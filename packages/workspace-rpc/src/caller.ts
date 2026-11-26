@@ -42,9 +42,15 @@ const decodeIpAddress = Schema.decodeUnknownOption(Schema.IpAddressFromString);
 
 // A browser user-agent can contain commas. Its wire value cannot, so a
 // transport header joined with an RPC header fails before it is decoded.
-const UserAgent = Schema.String.check(Schema.isBase64Url()).pipe(
+// Base64url needs up to four characters per UTF-16 code unit of the UA.
+const maxUserAgentLength = 2048;
+const UserAgent = Schema.String.check(
+  Schema.isMaxLength(maxUserAgentLength * 4),
+  Schema.isBase64Url()
+).pipe(
   Schema.decodeTo(Schema.StringFromBase64Url),
   Schema.check(
+    Schema.isMaxLength(maxUserAgentLength),
     Schema.isPattern(/^[^\r\n]+$/),
     Schema.makeFilter((value) => !value.includes("\0"), {
       expected: "no NUL bytes",
