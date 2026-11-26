@@ -74,10 +74,7 @@ export class FioHistoryAccessRequired extends Data.TaggedError(
   "FioHistoryAccessRequired"
 ) {}
 
-type FioReadFailure =
-  | FioUnavailable
-  | FioRejected
-  | FioHistoryAccessRequired;
+type FioReadFailure = FioUnavailable | FioRejected | FioHistoryAccessRequired;
 
 interface FioMovementsService {
   readonly readPeriod: (
