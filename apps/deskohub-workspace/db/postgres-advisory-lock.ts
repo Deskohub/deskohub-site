@@ -4,7 +4,6 @@ import { Effect, Layer } from "effect";
 export {
   type PostgresAdvisoryLockConnections,
   type PostgresAdvisoryLockKey,
-  postgresAdvisoryTransactionLockStatement,
   withPostgresAdvisoryLock,
   withPostgresAdvisoryLocks,
 } from "@deskohub/workspace-backend/db/postgres-advisory-lock";

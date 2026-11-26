@@ -1,5 +1,4 @@
 export {
-  createAllowlistedSpanExporter,
   isAllowedSpanName,
   SpanAllowlistProcessor,
   sanitizeSpanText,

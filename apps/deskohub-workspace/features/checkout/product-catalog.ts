@@ -1,6 +1,5 @@
 export {
   type CoworkCoffeeAddonAvailability,
-  type CoworkWorkstationAddonAvailability,
   getCoworkTierCoffeeAddon,
   getCoworkTierWorkstationAddon,
   getWorkspaceMeetingRoomPriceForDuration,
@@ -16,7 +15,6 @@ export {
   type WorkspaceCoworkProductTier,
   type WorkspaceProductMonitorOption,
   type WorkspaceProductMonitorResolution,
-  type WorkspaceProductMonitorSetup,
   type WorkspaceProductTier,
   workspaceCoworkCurrentTiers,
   workspaceCoworkHistoricalTiers,

@@ -295,4 +295,3 @@ export class CampaignEmailNotConfigured extends Data.TaggedError(
 }> {}
 
 /** An unsubscribe link token is malformed, forged, or names no recipient. */
-export { CampaignUnsubscribeTokenInvalid } from "@deskohub/workspace-domain/features/email-campaigns/campaign-token-errors";

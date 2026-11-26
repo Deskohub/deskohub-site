@@ -1,6 +1,5 @@
 export {
   isPostHogExportEnabled,
-  type PostHogExportPolicy,
   postHogExportPolicySchema,
   workspaceLogFormatSchema,
   workspaceLogLevelSchema,

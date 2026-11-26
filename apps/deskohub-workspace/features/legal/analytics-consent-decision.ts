@@ -1,7 +1,5 @@
-export {
-  type AnalyticsConsentDecision,
-  type AnalyticsConsentDecisionSource,
-  type AnalyticsConsentMirrorSource,
-  analyticsConsentDecisionSources,
-  analyticsConsentDecisions,
+export type {
+  AnalyticsConsentDecision,
+  AnalyticsConsentDecisionSource,
+  AnalyticsConsentMirrorSource,
 } from "@deskohub/workspace-domain/features/legal/analytics-consent-decision";

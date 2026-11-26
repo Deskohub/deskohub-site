@@ -9,5 +9,4 @@ export {
   exportsPostHogTraces,
   flushLoggerProvider,
   type TelemetryIdentity,
-  type WorkspaceOTelRegistrationOptions,
 } from "@deskohub/workspace-telemetry/telemetry-sinks";

@@ -1,17 +1,1 @@
-export {
-  type DiscountCode,
-  type DiscountLabels,
-  type DiscountProductTarget,
-  discountCodeCustomers,
-  discountCodes,
-  discountProductTargets,
-  discounts,
-  type PromotionCode,
-  type PromotionCodeKind,
-  promotionCodeCustomers,
-  promotionCodeKinds,
-  promotionCodes,
-  type StoredDiscount,
-  type Voucher,
-  vouchers,
-} from "@deskohub/workspace-backend/db/schema/discounts";
+export { promotionCodes } from "@deskohub/workspace-backend/db/schema/discounts";

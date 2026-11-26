@@ -5,7 +5,6 @@ export {
   censorLogValue,
   createCensoredOtelLogger,
   createCensoredOtelSpanExporter,
-  createWorkspaceOtelLoggerLive,
   isSensitiveLogKey,
   WorkspaceLoggerLive,
 } from "@deskohub/workspace-telemetry/censorship";

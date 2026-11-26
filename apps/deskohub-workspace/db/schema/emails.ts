@@ -1,12 +1,9 @@
 export {
   type EmailDeliveryOutcome,
   type EmailDiscountIssuanceRow,
-  type EmailIssuanceState,
   type EmailPreparationFailureReason,
-  type EmailPreparationOutcomeReason,
   type EmailPreparationRow,
   type EmailPreparationSkipReason,
-  type EmailPreparationState,
   type EmailPreparationUnavailableReason,
   type EmailRow,
   type EmailVersionRow,
