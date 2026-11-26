@@ -398,15 +398,10 @@ export type CurrentBrowserDocument = (
 
 // Playwright emits framenavigated for History API updates as well as document
 // replacement. Retain the original Document in its browser execution context.
-const matchCurrentDocument = (
-  page: Page,
-  rawUrl: string,
-  readyUrl: string
-): CurrentBrowserDocument => {
+const matchCurrentDocument = (page: Page, rawUrl: string, readyUrl: string) => {
   const mainFrame = page.mainFrame();
   let currentUrl = rawUrl;
   let invalidated = false;
-  let bound = false;
   const invalidate = () => {
     invalidated = true;
     page.off("framenavigated", recordNavigation);
@@ -417,9 +412,8 @@ const matchCurrentDocument = (
     if (frame !== mainFrame) return;
     const nextUrl = frame.url();
     if (
-      !bound ||
-      (nextUrl !== currentUrl &&
-        !(currentUrl === rawUrl && nextUrl === readyUrl))
+      nextUrl !== currentUrl &&
+      !(currentUrl === rawUrl && nextUrl === readyUrl)
     ) {
       invalidate();
       return;
@@ -441,23 +435,31 @@ const matchCurrentDocument = (
   page.on("request", recordRequest);
   page.once("close", invalidate);
   const original = page
-    .evaluateHandle(() => document)
-    .then(
-      async (handle) => {
-        if (!matches()) {
-          await handle.dispose().catch(() => undefined);
+    .evaluateHandle(() => ({ source: document, url: location.href }))
+    .then(async (handle) => {
+      let accepted = false;
+      try {
+        accepted =
+          matches() &&
+          (await handle.evaluate(
+            (observed, expected) =>
+              observed.source === document && observed.url === expected,
+            rawUrl
+          )) &&
+          matches();
+        return accepted ? handle : undefined;
+      } finally {
+        if (!accepted) {
           invalidate();
-          return undefined;
+          await handle.dispose().catch(() => undefined);
         }
-        bound = true;
-        return handle;
-      },
-      () => {
-        invalidate();
-        return undefined;
       }
-    );
-  return async (candidate, timeoutMs) => {
+    })
+    .catch(() => {
+      invalidate();
+      return undefined;
+    });
+  const verify: CurrentBrowserDocument = async (candidate, timeoutMs) => {
     if (candidate !== page || !matches()) return false;
     const timer = new AbortController();
     try {
@@ -473,7 +475,9 @@ const matchCurrentDocument = (
             }
             return (
               ready() &&
-              (await handle.evaluate((observed) => observed === document)) &&
+              (await handle.evaluate(
+                (observed) => observed.source === document
+              )) &&
               ready()
             );
           })
@@ -484,6 +488,7 @@ const matchCurrentDocument = (
       timer.abort();
     }
   };
+  return { verify, cancel: invalidate };
 };
 
 /**
@@ -511,16 +516,27 @@ export const waitForPageUrl = ({
       onDocumentMatch
         ? activeSession.use("read browser URL", async (page) => {
             const rawUrl = page.url();
+            const readyUrl = documentReadyUrl?.(rawUrl) ?? rawUrl;
             const url = redact(rawUrl).trim();
-            if (!url || !matches(url)) return undefined;
-            onDocumentMatch(
-              matchCurrentDocument(
-                page,
-                rawUrl,
-                documentReadyUrl?.(rawUrl) ?? rawUrl
-              )
-            );
-            return url;
+            // Start the first browser snapshot before evaluating a known
+            // bootstrap match. Its expected history event may arrive first.
+            const pending =
+              readyUrl !== rawUrl
+                ? matchCurrentDocument(page, rawUrl, readyUrl)
+                : undefined;
+            try {
+              if (!url || !matches(url)) {
+                pending?.cancel();
+                return undefined;
+              }
+              onDocumentMatch(
+                (pending ?? matchCurrentDocument(page, rawUrl, readyUrl)).verify
+              );
+              return url;
+            } catch (error) {
+              pending?.cancel();
+              throw error;
+            }
           })
         : readPageUrl(activeSession).pipe(
             Effect.map((url) => (url && matches(url) ? url : undefined))

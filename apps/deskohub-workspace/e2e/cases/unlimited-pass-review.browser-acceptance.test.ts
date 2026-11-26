@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { type Browser, chromium } from "@playwright/test";
 import { Effect } from "effect";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
-import { type CurrentBrowserDocument, waitForPageUrl } from "../browser";
+import {
+  type CurrentBrowserDocument,
+  readActivePage,
+  waitForPageUrl,
+} from "../browser";
 import { runBrowserStep } from "../case-runner.browser.test-utils";
 import { nexiReviewReadyUrl } from "../checkout/nexi-review-navigation";
 import { addRedaction, redact } from "../redaction";
@@ -38,8 +42,10 @@ const cardFieldLabels = [
 
 for (const transition of [
   "card",
+  "card-during-match",
   "different-operation",
   "reload",
+  "reload-during-match",
   "return",
 ] as const) {
   test.skipIf(!chromiumAvailable)(
@@ -81,10 +87,30 @@ for (const transition of [
           drive: ({ session }) =>
             Effect.gen(function* () {
               let isHandoffDocument: CurrentBrowserDocument | undefined;
+              let earlyTransition: Promise<unknown> | undefined;
+              const matchingPage = yield* readActivePage(session);
               yield* waitForPageUrl({
                 description: "synthetic Nexi handoff",
                 documentReadyUrl: nexiReviewReadyUrl,
-                matches: (url) => url === initial,
+                matches: (url) => {
+                  if (url !== initial) return false;
+                  if (transition === "card-during-match") {
+                    earlyTransition = matchingPage.evaluate(
+                      (target) => history.replaceState({}, "", target),
+                      ready
+                    );
+                  } else if (transition === "reload-during-match") {
+                    earlyTransition = matchingPage
+                      .reload()
+                      .then(() =>
+                        matchingPage.evaluate(
+                          (target) => history.replaceState({}, "", target),
+                          ready
+                        )
+                      );
+                  }
+                  return true;
+                },
                 onDocumentMatch: (document) => {
                   isHandoffDocument = document;
                 },
@@ -94,7 +120,6 @@ for (const transition of [
               yield* session.use(
                 "capture the synthetic Nexi bootstrap",
                 async (page) => {
-                  await page.evaluate(() => document.body !== null);
                   const handoff = {
                     checkoutPage: page,
                     checkoutPageUrl: `${origin}${checkoutPath}`,
@@ -103,6 +128,12 @@ for (const transition of [
                     provider: "nexi" as const,
                     url: initial,
                   };
+                  if (earlyTransition) {
+                    await earlyTransition;
+                    await review.captureNexi(page, handoff, []);
+                    return;
+                  }
+                  await page.evaluate(() => document.body !== null);
                   const replace = async (url: string) => {
                     await Promise.all([
                       page.waitForEvent("framenavigated", {
@@ -139,7 +170,7 @@ for (const transition of [
         });
         expect(execution.succeeded).toBe(true);
         const files = (await readdir(directory)).sort();
-        if (transition === "card") {
+        if (transition === "card" || transition === "card-during-match") {
           expect(files).toEqual([
             "unlimited-en-US-nexi-handoff-1280.png",
             "unlimited-en-US-nexi-handoff-390.png",
