@@ -97,9 +97,6 @@ test("stops the displayed renewal while keeping paid access and manual renewal",
       { locale }
     )
   );
-  expect(status.textContent).toContain(
-    m.accountUnlimitedAutoRenewalPending({}, { locale })
-  );
   expect(
     view.getByText(m.accountUnlimitedAutoRenewalScope({}, { locale }))
   ).toBeTruthy();

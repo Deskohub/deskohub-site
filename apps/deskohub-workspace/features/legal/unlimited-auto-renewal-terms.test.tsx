@@ -37,8 +37,8 @@ afterEach(() => {
 });
 
 describe.each([
-  ["cs-CZ", "16. Automatické obnovování členství Unlimited (návrh)"],
-  ["en-US", "16. Automatic renewal of Unlimited memberships (draft)"],
+  ["cs-CZ", "16. Automatické obnovování členství Unlimited"],
+  ["en-US", "16. Automatic renewal of Unlimited memberships"],
 ] as const)("Unlimited renewal terms in %s", (locale, heading) => {
   test("serves the same draft in site HTML, in-app HTML and Markdown", () => {
     previewEnabled = true;
@@ -69,14 +69,14 @@ describe.each([
         expect(html).toContain(renderToStaticMarkup(paragraph));
       }
     }
-    expect(markdown.split("\n").slice(-11)).toEqual([
+    expect(markdown.split("\n").slice(-10)).toEqual([
       heading,
       ...(canonicalDraft?.body ?? []).map((line) =>
         line.replace(/\s+/g, " ").trim()
       ),
     ]);
     expect(markdown.match(/^16\.\d+(?= )/gm)).toEqual(
-      Array.from({ length: 10 }, (_, index) => `16.${index + 1}`)
+      Array.from({ length: 9 }, (_, index) => `16.${index + 1}`)
     );
 
     previewEnabled = false;

@@ -39,20 +39,15 @@ export function AccountUnlimitedAutoRenewalControls({
       </h5>
       <div className="space-y-1 text-sm" role="status">
         {pendingRenewal ? (
-          <>
-            <p className="font-semibold">
-              {m.accountUnlimitedAutoRenewalPlan(
-                {
-                  date: pendingRenewal.nextRenewalOn,
-                  amount: pendingRenewal.amount,
-                },
-                { locale }
-              )}
-            </p>
-            <p className="text-slate-600">
-              {m.accountUnlimitedAutoRenewalPending({}, { locale })}
-            </p>
-          </>
+          <p className="font-semibold">
+            {m.accountUnlimitedAutoRenewalPlan(
+              {
+                date: pendingRenewal.nextRenewalOn,
+                amount: pendingRenewal.amount,
+              },
+              { locale }
+            )}
+          </p>
         ) : (
           <p className="font-semibold">
             {m.accountUnlimitedAutoRenewalStopped({}, { locale })}

@@ -319,7 +319,6 @@ export function PassPurchasePay({
               }}
             />
           </p>
-          <p>{m.unlimitedPassCheckoutAutoRenewPreview({}, { locale })}</p>
         </div>
       )}
       {discountCodeEntryEnabled &&

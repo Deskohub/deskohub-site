@@ -340,12 +340,6 @@ export const makeUnlimitedPassAutoRenewalCase = ({
             await expect(
               page.getByText(schedule, { exact: true })
             ).toBeVisible();
-            await expect(
-              page.getByText(
-                m.unlimitedPassCheckoutAutoRenewPreview({}, localized),
-                { exact: true }
-              )
-            ).toBeVisible();
             await expect(consent).toBeVisible();
             await expect(consent).not.toBeChecked();
             const termsName = m
@@ -595,12 +589,6 @@ export const makeUnlimitedPassAutoRenewalCase = ({
               ).toBeVisible();
               await expect(
                 card.getByText(startsOn, { exact: true })
-              ).toBeVisible();
-              await expect(
-                card.getByText(
-                  m.accountUnlimitedAutoRenewalPending({}, localized),
-                  { exact: true }
-                )
               ).toBeVisible();
               await review?.captureWorkspace(page, "account-renewal", [
                 ...buyerText,
