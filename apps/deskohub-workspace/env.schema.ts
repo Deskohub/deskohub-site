@@ -349,6 +349,9 @@ export const workspaceServerEnvSchema = Schema.Struct({
   POSTHOG_PERSON_PRIVACY_API_KEY: optionalNonEmptyStringSchema,
   POSTHOG_PROJECT_ID: toEnvSchema(Schema.optional(PostHogProjectId)),
   PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: optionalStringSchema,
+  UNLIMITED_AUTO_RENEWAL_PREVIEW: toEnvSchema(
+    Schema.optional(Schema.Literals(["true", "false"]))
+  ),
   // Cloud Run's revision name, which identifies a container rollout.
   K_REVISION: optionalNonEmptyStringSchema,
   VERCEL_BRANCH_URL: optionalStringSchema,
