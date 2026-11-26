@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,94 @@ const sandbox = "https://xpaysandbox.nexigroup.com";
 const accountPath = "/cs-CZ/account/passes";
 const checkoutPath = "/cs-CZ/passes/unlimited";
 const hostedPath = "/hpp/nexi/card";
+
+test.skipIf(!chromiumAvailable)(
+  "publishes neither width when a review page navigates away and returns during capture",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
+    const page = await browser.newPage();
+    try {
+      const expectedUrl = `${origin}${checkoutPath}`;
+      const unrelatedUrl = "https://unrelated.example.test/account";
+      await page.route("**/*", (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body:
+            route.request().url() === unrelatedUrl
+              ? "<h1>Unrelated account</h1>"
+              : "<h1>Unlimited</h1>",
+        })
+      );
+      await page.goto(expectedUrl);
+
+      const screenshot = page.screenshot.bind(page);
+      const captureWithNavigation = spyOn(page, "screenshot")
+        .mockImplementationOnce(screenshot)
+        .mockImplementationOnce(async (options) => {
+          await page.goto(unrelatedUrl);
+          const pixels = await screenshot(options);
+          await page.goto(expectedUrl);
+          return pixels;
+        });
+      try {
+        const review = makeUnlimitedPassReviewCapture({
+          accountPath,
+          directory,
+          locale: "cs-CZ",
+          origin,
+          timeout: 1_000,
+        });
+        await review.captureWorkspace(page, "choose-default");
+        expect(captureWithNavigation).toHaveBeenCalledTimes(2);
+        expect(page.url()).toBe(expectedUrl);
+        expect(review.missingShots()).toContain("choose-default");
+        expect(await readdir(directory)).toEqual([]);
+      } finally {
+        captureWithNavigation.mockRestore();
+      }
+    } finally {
+      await page.close();
+      await rm(directory, { force: true, recursive: true });
+    }
+  }
+);
+
+for (const locale of ["en-US", "cs-CZ"] as const) {
+  test.skipIf(!chromiumAvailable)(
+    `captures the nearest canonical terms section in ${locale}`,
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
+      const page = await browser.newPage();
+      try {
+        await page.route("**/*", (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: '<section style="width:360px"><h1>Terms</h1><section style="width:200px"><h2>16. Unlimited</h2><p>Renewal terms</p></section></section>',
+          })
+        );
+        await page.goto(`${origin}/${locale}/terms-and-conditions`);
+        const review = makeUnlimitedPassReviewCapture({
+          accountPath: `/${locale}/account/passes`,
+          directory,
+          locale,
+          origin,
+          timeout: 1_000,
+        });
+        await review.captureWorkspace(page, "terms");
+        expect(review.missingShots()).not.toContain("terms");
+        for (const width of [390, 1280]) {
+          const pixels = await readFile(
+            join(directory, `unlimited-${locale}-terms-${width}.png`)
+          );
+          expect(pixels.readUInt32BE(16)).toBe(200);
+        }
+      } finally {
+        await page.close();
+        await rm(directory, { force: true, recursive: true });
+      }
+    }
+  );
+}
 
 test.skipIf(!chromiumAvailable)(
   "writes review PNGs at both widths only from the expected Workspace and empty sandbox pages",

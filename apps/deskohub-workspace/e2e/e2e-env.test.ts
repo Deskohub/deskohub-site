@@ -102,6 +102,19 @@ describe("Workspace E2E environment", () => {
     expect(
       makeWorkspaceE2EEnvironment(toPlaywrightEnvironment(environment))
     ).toEqual(environment);
+    const screenshotReview = {
+      ...selected,
+      WORKSPACE_E2E_REVIEW_SCREENSHOTS: "true",
+    };
+    expect(
+      unlimitedPassReviewLocale(makeWorkspaceE2EEnvironment(screenshotReview))
+    ).toBe("en-US");
+    expect(() =>
+      makeWorkspaceE2EEnvironment({
+        ...screenshotReview,
+        WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: "cs-CZ",
+      })
+    ).toThrow("requires verified Czech Nexi sandbox controls");
     for (const invalid of [
       { TARGET_SHA: undefined },
       { WORKSPACE_E2E_ALLOCATION_SHARD: undefined },

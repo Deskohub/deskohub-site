@@ -242,6 +242,11 @@ export const makeWorkspaceE2EEnvironment = (
       "Unlimited auto-renewal requires the leased exact-SHA payments flow in manual Nexi mode."
     );
   }
+  if (unlimitedPassReviewLocale(environment) === "cs-CZ") {
+    throw new Error(
+      "Czech Unlimited review requires verified Czech Nexi sandbox controls before checkout can run."
+    );
+  }
   return environment as WorkspaceE2EEnvironment;
 };
 

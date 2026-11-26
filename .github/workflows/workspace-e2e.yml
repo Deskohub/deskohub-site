@@ -50,7 +50,7 @@ on:
         default: false
         type: boolean
       unlimited_review_locale:
-        description: Locale for Unlimited auto-renewal review screenshots (requires both review_screenshots and include_unlimited_pass_auto_renewal)
+        description: Locale for Unlimited review screenshots (both opt-ins required, Czech awaits sandbox control verification)
         type: choice
         default: en-US
         options:

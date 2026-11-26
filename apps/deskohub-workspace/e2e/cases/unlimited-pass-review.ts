@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type Frame, type Locator, type Page } from "@playwright/test";
 import { getLegalDocumentPath } from "@/features/legal/legal-document-path";
 import { unlimitedPassCheckoutPath } from "@/features/passes/routes";
 import { locateSnapshotRef } from "../browser";
@@ -99,34 +99,55 @@ export function makeUnlimitedPassReviewCapture({
       const original = page.viewportSize();
       if (!original)
         throw new Error("Review capture requires a fixed viewport");
-      await mkdir(directory, { recursive: true });
+      const originalUrl = page.url();
+      const mainFrame = page.mainFrame();
+      const images: Array<{
+        readonly filename: string;
+        readonly pixels: Buffer;
+      }> = [];
+      let navigated = false;
+      const recordNavigation = (frame: Frame) => {
+        if (frame === mainFrame) navigated = true;
+      };
+      const verifyDocument = () => {
+        if (navigated || page.url() !== originalUrl)
+          throw new Error("Review document changed during capture");
+      };
+      page.on("framenavigated", recordNavigation);
       try {
         for (const viewport of viewports) {
           await page.setViewportSize(viewport);
           if (!(await options.verify()))
             throw new Error("Unexpected review document");
+          verifyDocument();
           const mask = [...options.mask];
           const screenshot = {
             animations: "disabled",
             mask,
-            path: resolve(
-              directory,
-              `unlimited-${locale}-${shot}-${viewport.width}.png`
-            ),
             scale: "css",
             ...(options.style && { style: options.style }),
             timeout,
             type: "png",
           } as const;
-          if (options.section) await options.section.screenshot(screenshot);
-          else
-            await page.screenshot({
-              ...screenshot,
-              fullPage: shot !== "nexi-handoff",
-            });
+          const pixels = options.section
+            ? await options.section.screenshot(screenshot)
+            : await page.screenshot({
+                ...screenshot,
+                fullPage: shot !== "nexi-handoff",
+              });
+          verifyDocument();
+          images.push({
+            filename: `unlimited-${locale}-${shot}-${viewport.width}.png`,
+            pixels,
+          });
         }
       } finally {
+        page.off("framenavigated", recordNavigation);
         await page.setViewportSize(original);
+      }
+      await mkdir(directory, { recursive: true });
+      for (const { filename, pixels } of images) {
+        await writeFile(resolve(directory, filename), pixels);
       }
       captured.add(shot);
     } catch {
@@ -154,9 +175,9 @@ export function makeUnlimitedPassReviewCapture({
           ...privateText.map((value) => page.getByText(value, { exact: true })),
         ],
         ...(shot === "terms" && {
-          section: page.locator("section").filter({
-            has: page.getByRole("heading", { level: 2, name: /^16\./ }),
-          }),
+          section: page
+            .getByRole("heading", { level: 2, name: /^16\./ })
+            .locator("xpath=ancestor::section[1]"),
         }),
         verify: async () => {
           const url = URL.parse(page.url());
