@@ -2,7 +2,11 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposService,
+  DotyposTableIdSchema,
+} from "@deskohub/dotypos";
 import { Effect, Layer, Schema } from "effect";
 import {
   getWorkspaceMeetingRoomDurationLabel,
@@ -14,21 +18,33 @@ import {
 import { checkoutDetailsSchema } from "@/features/checkout/schemas/checkout-details";
 import { discountIdSchema } from "@/features/discounts/contracts";
 import { type Locale, locales } from "@/features/i18n";
+import { dotyposCreatedReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { formatMoney, moneyWithValue } from "@/shared/money/money";
 import {
   captureLogAnnotationsWithExit,
   expectScalarLogAnnotations,
 } from "@/shared/testing/log-annotations.test-utils";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   createWorkspaceDotyposReservation,
   formatWorkspaceReservationNote,
   noteNamesPaymentOrder,
 } from "./dotypos-reservation.adapter";
 import {
-  type IWorkspaceTableAssignmentService,
   type WorkspaceTableAssignmentReservation,
   WorkspaceTableAssignmentService,
 } from "./workspace-table-assignment.service";
+
+const paymentOrderId = workspaceReservationIdSchema.make("payment-order-id");
+const dotyposCustomerId = DotyposCustomerIdSchema.make("dotypos-customer-id");
+
+const mockReservationCreation = () =>
+  mock<typeof DotyposService.Service.createReservation>((input) =>
+    Effect.succeed(
+      dotyposCreatedReservationFixture("dotypos-reservation-id", input)
+    )
+  );
 
 const checkoutDetails = Schema.decodeUnknownSync(checkoutDetailsSchema)({
   locale: "en-US",
@@ -77,34 +93,30 @@ const makeMeetingRoomCheckoutDetails = (earlySetup: boolean) =>
   });
 
 const createMeetingRoomDotyposInput = async (earlySetup: boolean) => {
-  const reservation = {
-    kind: "meeting-room" as const,
-    duration: { unit: "hour" as const, amount: 1 as const },
-    reservationDate: "2099-06-10",
-    startsAt: "2099-06-10T08:00:00Z",
-    endsAt: "2099-06-10T09:00:00Z",
-    ...(earlySetup && { earlySetup: true }),
-  };
-  const assignTableId = mock(() => Effect.succeed("meeting-room-id"));
-  const createReservation = mock(() =>
-    Effect.succeed({ id: "dotypos-reservation-id" } as never)
+  const details = makeMeetingRoomCheckoutDetails(earlySetup);
+  const assignTableId = mock(() =>
+    Effect.succeed(DotyposTableIdSchema.make("meeting-room-id"))
   );
+  const createReservation = mockReservationCreation();
   const testLayer = Layer.mergeAll(
     Layer.mock(WorkspaceTableAssignmentService, {
       assignTableId,
-    } satisfies IWorkspaceTableAssignmentService),
+    }),
     Layer.mock(DotyposService, { createReservation })
   );
 
   await createWorkspaceDotyposReservation({
-    paymentOrderId: "payment-order-id",
-    dotyposCustomerId: "dotypos-customer-id",
-    checkoutDetails: makeMeetingRoomCheckoutDetails(earlySetup),
-    reservation,
+    paymentOrderId,
+    dotyposCustomerId,
+    checkoutDetails: details,
+    reservation: details.reservation,
     status: "NEW",
   }).pipe(Effect.provide(testLayer), Effect.runPromise);
 
-  return createReservation.mock.calls[0]![0];
+  return requireValue(
+    createReservation.mock.calls[0],
+    "reservation creation call"
+  )[0];
 };
 
 describe("createWorkspaceDotyposReservation", () => {
@@ -115,22 +127,22 @@ describe("createWorkspaceDotyposReservation", () => {
       date: "2099-06-10",
       coffee: false,
     };
-    const assignTableId = mock(() => Effect.succeed("cowork-table-id"));
-    const createReservation = mock(() =>
-      Effect.succeed({ id: "dotypos-reservation-id" } as never)
+    const assignTableId = mock(() =>
+      Effect.succeed(DotyposTableIdSchema.make("cowork-table-id"))
     );
+    const createReservation = mockReservationCreation();
     const testLayer = Layer.mergeAll(
       Layer.mock(WorkspaceTableAssignmentService, {
         assignTableId,
-      } satisfies IWorkspaceTableAssignmentService),
+      }),
       Layer.mock(DotyposService, {
         createReservation,
       })
     );
 
     await createWorkspaceDotyposReservation({
-      paymentOrderId: "payment-order-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      paymentOrderId,
+      dotyposCustomerId,
       checkoutDetails,
       reservation,
       status: "NEW",
@@ -153,14 +165,14 @@ describe("createWorkspaceDotyposReservation", () => {
       coffee: true as const,
       stay: "overnight" as const,
     };
-    const assignTableId = mock(() => Effect.succeed("cowork-table-id"));
-    const createReservation = mock(() =>
-      Effect.succeed({ id: "dotypos-reservation-id" } as never)
+    const assignTableId = mock(() =>
+      Effect.succeed(DotyposTableIdSchema.make("cowork-table-id"))
     );
+    const createReservation = mockReservationCreation();
 
     await createWorkspaceDotyposReservation({
-      paymentOrderId: "payment-order-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      paymentOrderId,
+      dotyposCustomerId,
       checkoutDetails,
       reservation,
       status: "NEW",
@@ -169,7 +181,7 @@ describe("createWorkspaceDotyposReservation", () => {
         Layer.mergeAll(
           Layer.mock(WorkspaceTableAssignmentService, {
             assignTableId,
-          } satisfies IWorkspaceTableAssignmentService),
+          }),
           Layer.mock(DotyposService, { createReservation })
         )
       ),
@@ -189,20 +201,17 @@ describe("createWorkspaceDotyposReservation", () => {
   test("annotates its rows with the created reservation's id and status, never a record", async () => {
     const testLayer = Layer.mergeAll(
       Layer.mock(WorkspaceTableAssignmentService, {
-        assignTableId: () => Effect.succeed("cowork-table-id" as never),
-      } satisfies IWorkspaceTableAssignmentService),
+        assignTableId: () =>
+          Effect.succeed(DotyposTableIdSchema.make("cowork-table-id")),
+      }),
       Layer.mock(DotyposService, {
-        createReservation: () =>
-          Effect.succeed({
-            id: "dotypos-reservation-id",
-            status: "NEW",
-          } as never),
+        createReservation: mockReservationCreation(),
       })
     );
 
     const { rows, exit } = await createWorkspaceDotyposReservation({
-      paymentOrderId: "payment-order-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      paymentOrderId,
+      dotyposCustomerId,
       checkoutDetails,
       reservation: checkoutDetails.reservation,
       status: "NEW",
@@ -288,7 +297,7 @@ const formatNote = (
   reservation: WorkspaceTableAssignmentReservation
 ) =>
   formatWorkspaceReservationNote({
-    paymentOrderId: "payment-order-id",
+    paymentOrderId,
     reservation,
     checkoutDetails: {
       ...checkoutDetails,
@@ -348,7 +357,7 @@ describe("formatWorkspaceReservationNote", () => {
       },
     };
     const note = formatWorkspaceReservationNote({
-      paymentOrderId: "payment-order-id",
+      paymentOrderId,
       reservation: noteReservations.office,
       checkoutDetails: {
         ...checkoutDetails,
@@ -371,17 +380,22 @@ describe("formatWorkspaceReservationNote", () => {
   test("lets late-payment recovery find a note by its payment order", () => {
     const note = formatNote("en-US", noteReservations.office);
 
-    expect(noteNamesPaymentOrder(note, "payment-order-id")).toBe(true);
-    expect(noteNamesPaymentOrder(note, "other-payment-order-id")).toBe(false);
-    expect(noteNamesPaymentOrder(undefined, "payment-order-id")).toBe(false);
-    expect(noteNamesPaymentOrder(null, "payment-order-id")).toBe(false);
+    expect(noteNamesPaymentOrder(note, paymentOrderId)).toBe(true);
+    expect(
+      noteNamesPaymentOrder(
+        note,
+        workspaceReservationIdSchema.make("other-payment-order-id")
+      )
+    ).toBe(false);
+    expect(noteNamesPaymentOrder(undefined, paymentOrderId)).toBe(false);
+    expect(noteNamesPaymentOrder(null, paymentOrderId)).toBe(false);
   });
 
   test("finds notes written before staff notes were Czech", () => {
     expect(
       noteNamesPaymentOrder(
         "Booked online\nPayment order: payment-order-id",
-        "payment-order-id"
+        paymentOrderId
       )
     ).toBe(true);
   });
