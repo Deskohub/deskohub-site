@@ -87,3 +87,26 @@ export const fulfillmentQueryFailure = (query: string, message: string) =>
     params: [],
     cause: Cause.die(new Error(message)),
   });
+
+export const bouncedReservationFixture = (
+  reservation: WorkspaceReservation,
+  failedAt: Temporal.Instant
+): WorkspaceReservation => ({
+  ...reservation,
+  fulfillmentState: "failed",
+  fulfilledAt: null,
+  fulfillmentFailedAt: failedAt,
+  fulfillmentFailureCode: "fulfillment_email_failed",
+  updatedAt: Temporal.Now.instant(),
+});
+
+export const deliveredReservationFixture = (
+  reservation: WorkspaceReservation,
+  fulfilledAt: Temporal.Instant
+): WorkspaceReservation => ({
+  ...reservation,
+  fulfillmentState: "fulfilled",
+  fulfilledAt,
+  fulfillmentFailureCode: null,
+  updatedAt: Temporal.Now.instant(),
+});

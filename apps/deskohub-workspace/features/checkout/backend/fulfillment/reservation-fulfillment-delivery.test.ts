@@ -15,6 +15,10 @@ import { workspaceReservationIdSchema } from "@/features/reservation/persistence
 import { requireValue } from "@/shared/testing/require-value.test-utils";
 import type { IFulfillmentLedger } from "./fulfillment-ledger.repository";
 import type { ReservationAccessDeliveryReport } from "./reservation-fulfillment.service";
+import {
+  bouncedReservationFixture,
+  deliveredReservationFixture,
+} from "./reservation-fulfillment.test-utils";
 
 // Services load after the test environment's module mocks.
 const { DotyposService } = await import("@deskohub/dotypos");
@@ -52,19 +56,18 @@ const awaitingDeliveryReservation = workspaceReservationFixture({
   id: reservationId,
   activePaymentAttemptId: paymentAttemptIdSchema.make("payment-attempt-id"),
   activeCustomerEmailDeliveryId: customerEmailDeliveryId,
-  fulfillmentState: "awaiting_delivery",
-  fulfilledAt: null,
-});
-
-const fulfilledReservation = workspaceReservationFixture({
-  ...awaitingDeliveryReservation,
   dotyposReservationId: DotyposReservationIdSchema.make(
     "dotypos-reservation-id"
   ),
   dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
-  fulfillmentState: "fulfilled",
-  fulfilledAt: reportedAt,
+  fulfillmentState: "awaiting_delivery",
+  fulfilledAt: null,
 });
+
+const fulfilledReservation = deliveredReservationFixture(
+  awaitingDeliveryReservation,
+  reportedAt
+);
 
 const deliveryReport = (
   overrides: Partial<ReservationAccessDeliveryReport> = {}
@@ -222,19 +225,19 @@ describe("ReservationFulfillment.recordDelivery", () => {
   });
 
   test("repairs a failed delivery only for the fulfillment email failure code", async () => {
-    const markFulfilled = mock(() => Effect.succeed(fulfilledReservation));
+    const failedReservation = bouncedReservationFixture(
+      awaitingDeliveryReservation,
+      reportedAt.subtract({ minutes: 1 })
+    );
+    const markFulfilled = mock(() =>
+      Effect.succeed(deliveredReservationFixture(failedReservation, reportedAt))
+    );
 
     const outcome = await Effect.runPromise(
       recordDelivery({
         ledger: {
           findByActiveCustomerEmailDeliveryId: mock(() =>
-            Effect.succeed(
-              workspaceReservationFixture({
-                ...awaitingDeliveryReservation,
-                fulfillmentState: "failed",
-                fulfillmentFailureCode: "fulfillment_email_failed",
-              })
-            )
+            Effect.succeed(failedReservation)
           ),
           markCustomerEmailDeliveryFulfilled: markFulfilled,
           markCustomerEmailDeliveryFailed: mock(() =>
@@ -275,27 +278,19 @@ describe("ReservationFulfillment.recordDelivery", () => {
 
   test("fails a fulfilled delivery when a failure report reaches the ledger", async () => {
     const failedAt = Temporal.Instant.from("2026-01-01T12:10:00.000Z");
+    const delivered = deliveredReservationFixture(
+      awaitingDeliveryReservation,
+      Temporal.Instant.from("2026-01-01T12:00:00.000Z")
+    );
     const markDeliveryFailed = mock(() =>
-      Effect.succeed(
-        workspaceReservationFixture({
-          ...awaitingDeliveryReservation,
-          fulfillmentState: "failed",
-          fulfillmentFailureCode: "fulfillment_email_failed",
-          fulfillmentFailedAt: failedAt,
-        })
-      )
+      Effect.succeed(bouncedReservationFixture(delivered, failedAt))
     );
 
     const outcome = await Effect.runPromise(
       recordDelivery({
         ledger: {
           findByActiveCustomerEmailDeliveryId: mock(() =>
-            Effect.succeed(
-              workspaceReservationFixture({
-                ...fulfilledReservation,
-                fulfilledAt: Temporal.Instant.from("2026-01-01T12:00:00.000Z"),
-              })
-            )
+            Effect.succeed(delivered)
           ),
           markCustomerEmailDeliveryFulfilled: mock(() =>
             Effect.die("should not update delivery")
@@ -390,7 +385,9 @@ describe("ReservationFulfillment.recordDelivery", () => {
 
   test("records a failed delivery with the email failure code at the report time", async () => {
     const markDeliveryFailed = mock(() =>
-      Effect.succeed(awaitingDeliveryReservation)
+      Effect.succeed(
+        bouncedReservationFixture(awaitingDeliveryReservation, reportedAt)
+      )
     );
 
     const outcome = await Effect.runPromise(

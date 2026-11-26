@@ -25,8 +25,10 @@ import {
 } from "@/shared/testing/effect-trace.test-utils";
 import type { ReservationAccessDeliveryReport } from "./reservation-fulfillment.service";
 import {
+  bouncedReservationFixture,
   confirmDotyposReservationFixture,
   customerAccessCodeFixture,
+  deliveredReservationFixture,
   fulfillmentDetailsFixture,
   fulfillmentOrderFixture,
   fulfillmentQueryFailure,
@@ -1260,16 +1262,16 @@ describe("ReservationFulfillment.recordDelivery trace", () => {
   });
 
   test("repairs an email-failed reservation on a delivered report", async () => {
-    const fulfilled = fulfillmentOrderFixture({
-      ...awaitingOrder,
-      fulfillmentState: "fulfilled",
-    });
+    const failedReservation = bouncedReservationFixture(
+      awaitingOrder,
+      deliveryReport.occurredAt.subtract({ minutes: 1 })
+    );
+    const fulfilled = deliveredReservationFixture(
+      failedReservation,
+      deliveryReport.occurredAt
+    );
     const { exit, trace } = await recordDelivery({
-      findByActiveCustomerEmailDeliveryId: succeed({
-        ...awaitingOrder,
-        fulfillmentState: "failed",
-        fulfillmentFailureCode: "fulfillment_email_failed",
-      }),
+      findByActiveCustomerEmailDeliveryId: succeed(failedReservation),
       markCustomerEmailDeliveryFulfilled: succeed(fulfilled),
     });
 
@@ -1327,10 +1329,9 @@ describe("ReservationFulfillment.recordDelivery trace", () => {
     const { exit, trace } = await recordDelivery(
       {
         findByActiveCustomerEmailDeliveryId: succeed(awaitingOrder),
-        markCustomerEmailDeliveryFailed: succeed({
-          ...awaitingOrder,
-          fulfillmentState: "failed",
-        }),
+        markCustomerEmailDeliveryFailed: succeed(
+          bouncedReservationFixture(awaitingOrder, deliveryReport.occurredAt)
+        ),
       },
       { outcome: "failed" }
     );
