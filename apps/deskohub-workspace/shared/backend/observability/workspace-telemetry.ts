@@ -5,12 +5,8 @@ import { env } from "@/env";
 import { resolveDeploymentIdentity } from "@/shared/deployment/deployment-identity";
 import { defaultServiceRole } from "@/shared/deployment/runtime-host";
 import {
-  createCensoredOtelLogger,
-  createWorkspaceOtelLoggerLive,
-  WorkspaceLoggerLive,
-} from "../logging/censorship";
-import {
   type CloudLoggingIdentity,
+  createWorkspaceLoggerLive,
   makeCloudLoggingLogger,
 } from "./cloud-logging";
 import { workspaceMinimumLogLevel } from "./telemetry-policy";
@@ -59,25 +55,6 @@ const workspaceCloudLoggingIdentity = (): CloudLoggingIdentity => {
     revisionSha: identity.revisionSha,
     deploymentId: identity.deploymentId,
   };
-};
-
-/**
- * The loggers of every run, all censoring: the console's logfmt lines, or
- * Cloud Logging structured JSON when `WORKSPACE_LOG_FORMAT` asks for it, plus
- * the PostHog export when `loggerProvider` is on.
- */
-const workspaceLoggerLive = (loggerProvider: LoggerProvider | undefined) => {
-  if (env.WORKSPACE_LOG_FORMAT !== "cloud-logging-json") {
-    return loggerProvider
-      ? createWorkspaceOtelLoggerLive(loggerProvider)
-      : WorkspaceLoggerLive;
-  }
-  const consoleLogger = makeCloudLoggingLogger(workspaceCloudLoggingIdentity());
-  return Logger.layer(
-    loggerProvider
-      ? [consoleLogger, createCensoredOtelLogger(loggerProvider)]
-      : [consoleLogger]
-  );
 };
 
 /**
@@ -146,7 +123,11 @@ export const WorkspaceObservabilityLive: Layer.Layer<never> = Layer.unwrap(
     const loggerProvider = workspaceLoggerProvider();
     return Layer.mergeAll(
       WorkspaceClockLive,
-      workspaceLoggerLive(loggerProvider),
+      createWorkspaceLoggerLive({
+        format: env.WORKSPACE_LOG_FORMAT,
+        identity: workspaceCloudLoggingIdentity(),
+        loggerProvider,
+      }),
       createIdentifiedTracingLive({
         serviceVersion: workspaceDeploymentIdentity().revisionSha,
       }),

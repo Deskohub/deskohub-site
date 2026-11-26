@@ -86,6 +86,7 @@
     "@deskohub/workspace-customer-api": "workspace:*",
     "@deskohub/workspace-domain": "workspace:*",
     "@deskohub/workspace-rpc": "workspace:*",
+    "@deskohub/workspace-telemetry": "workspace:*",
     "@doist/react-interpolate": "^2.2.1",
     "@effect/atom-react": "4.1.4",
     "@effect/opentelemetry": "4.1.4",

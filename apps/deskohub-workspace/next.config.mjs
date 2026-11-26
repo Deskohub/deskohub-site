@@ -140,6 +140,7 @@ const nextConfig = {
     "@deskohub/workspace-customer-api",
     "@deskohub/workspace-domain",
     "@deskohub/workspace-rpc",
+    "@deskohub/workspace-telemetry",
   ],
   async redirects() {
     return [
