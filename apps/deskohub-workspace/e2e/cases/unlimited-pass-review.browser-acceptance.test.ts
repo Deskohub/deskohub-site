@@ -306,9 +306,17 @@ for (const locale of ["en-US", "cs-CZ"] as const) {
   );
 }
 
-for (const [index, entry] of cardFields.entries()) {
+const diagnosticCases = [
+  ...cardFields.map((entry, index) => ({
+    entry,
+    index,
+    matchesBuyer: entry.role === "cardholder_name",
+  })),
+  { entry: cardFields[4], index: 4, matchesBuyer: true },
+];
+for (const { entry, index, matchesBuyer } of diagnosticCases) {
   test.skipIf(!chromiumAvailable)(
-    `reports only fixed diagnostics for a populated Nexi ${entry.role} field`,
+    `reports only fixed diagnostics for a populated Nexi ${entry.role} field${matchesBuyer ? " matching the synthetic buyer" : ""}`,
     async () => {
       const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
       const original = { height: 720, width: 960 };
@@ -372,7 +380,10 @@ for (const [index, entry] of cardFields.entries()) {
             },
             [],
             {
-              email: "synthetic-expected-email",
+              email:
+                role === "cardholder_email" && matchesBuyer
+                  ? value
+                  : "synthetic-expected-email",
               name: "synthetic-private-input-cardholder_name",
             }
           );
@@ -404,7 +415,7 @@ for (const [index, entry] of cardFields.entries()) {
                       },
                 ...((role === "cardholder_name" ||
                   role === "cardholder_email") && {
-                  matchesSyntheticBuyer: role === "cardholder_name",
+                  matchesSyntheticBuyer: matchesBuyer,
                 }),
               },
             ],
@@ -505,6 +516,7 @@ test.skipIf(!chromiumAvailable)(
       await page.goto(url);
       const body = page.locator("body");
       const ariaSnapshot = body.ariaSnapshot.bind(body);
+      let returnedStaleSnapshot = false;
       const remount = spyOn(body, "ariaSnapshot").mockImplementationOnce(
         async (options) => {
           const snapshot = await ariaSnapshot(options);
@@ -522,8 +534,9 @@ test.skipIf(!chromiumAvailable)(
             .evaluate((frame) => frame.replaceWith(frame.cloneNode(true)));
           await page
             .frameLocator('iframe[title="Card number"]')
-            .locator("input")
+            .getByRole("textbox", { name: "Card number" })
             .waitFor({ state: "visible", timeout: 800 });
+          returnedStaleSnapshot = true;
           return snapshot;
         }
       );
@@ -535,6 +548,7 @@ test.skipIf(!chromiumAvailable)(
       try {
         await review.captureNexi(page, redactedHandoff, []);
         expect(remount).toHaveBeenCalled();
+        expect(returnedStaleSnapshot).toBe(true);
       } finally {
         readBody.mockRestore();
         remount.mockRestore();
