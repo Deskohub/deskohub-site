@@ -224,6 +224,67 @@ export class FioAccountPoller extends Context.Service<
         );
       });
 
+      const readAndIngest = Effect.fn("FioAccountPoller.readAndIngest")(
+        function* (job: FioPollJob, read: PollRead) {
+          const { account, readToken } = read.receivingAccount;
+          const response = yield* provider
+            .readPeriod({ account, readToken, from: read.from, to: read.to })
+            .pipe(Effect.result);
+          if (Result.isFailure(response)) {
+            const error = response.failure;
+            if (
+              error._tag === "FioRejected" &&
+              error.reason === "period-too-large"
+            ) {
+              yield* finish(job, read, "oversized");
+              return;
+            }
+            return yield* new FioPollUnavailable({
+              reason: providerFailureReasons[error._tag],
+            });
+          }
+          const movements = response.success;
+          const observedAt = yield* currentInstant;
+          if (
+            movements.some(
+              ({ bookingDate }) =>
+                bookingDate < read.from || bookingDate > read.to
+            )
+          ) {
+            return yield* new FioPollUnavailable({
+              reason: "invalid_period",
+            });
+          }
+
+          // A dispatch failure for one movement must not delay recording
+          // the rest of this response with their original observation time.
+          // Retain coverage until every movement effect has succeeded.
+          const [, [ingestionFailure]] = yield* Effect.partition(
+            movements,
+            (movement) =>
+              settlements.recordMovement({
+                accountKey: job.accountKey,
+                movementId: movement.movementId,
+                bookingDate: Temporal.PlainDate.from(movement.bookingDate),
+                observedAt,
+                amount: movement.amount,
+                constantSymbol: movement.constantSymbol,
+                ...(movement.reference._tag === "VariableSymbol"
+                  ? { variableSymbol: movement.reference.value }
+                  : {
+                      variableSymbol: null,
+                      referenceStatus:
+                        movement.reference._tag === "Absent"
+                          ? ("absent" as const)
+                          : ("invalid" as const),
+                    }),
+              })
+          );
+          if (ingestionFailure) return yield* Effect.fail(ingestionFailure);
+          yield* finish(job, read, "ingested");
+        }
+      );
+
       return {
         consume: Effect.fn("FioAccountPoller.consume")(
           function* (job) {
@@ -239,61 +300,7 @@ export class FioAccountPoller extends Context.Service<
                 : candidate;
             if (read?._tag !== "Read") return;
 
-            const { account, readToken } = read.receivingAccount;
-            const response = yield* provider
-              .readPeriod({ account, readToken, from: read.from, to: read.to })
-              .pipe(Effect.result);
-            if (Result.isFailure(response)) {
-              const error = response.failure;
-              if (
-                error._tag === "FioRejected" &&
-                error.reason === "period-too-large"
-              ) {
-                yield* finish(job, read, "oversized");
-                return;
-              }
-              return yield* new FioPollUnavailable({
-                reason: providerFailureReasons[error._tag],
-              });
-            }
-            const movements = response.success;
-            const observedAt = yield* currentInstant;
-            if (
-              movements.some(
-                ({ bookingDate }) =>
-                  bookingDate < read.from || bookingDate > read.to
-              )
-            ) {
-              return yield* new FioPollUnavailable({
-                reason: "invalid_period",
-              });
-            }
-
-            // A dispatch failure for one movement must not delay recording
-            // the rest of this response with their original observation time.
-            // Retain coverage until every movement effect has succeeded.
-            const [, [ingestionFailure]] = yield* Effect.partition(
-              movements,
-              (movement) =>
-                settlements.recordMovement({
-                  accountKey: job.accountKey,
-                  movementId: movement.movementId,
-                  bookingDate: Temporal.PlainDate.from(movement.bookingDate),
-                  observedAt,
-                  amount: movement.amount,
-                  ...(movement.reference._tag === "VariableSymbol"
-                    ? { variableSymbol: movement.reference.value }
-                    : {
-                        variableSymbol: null,
-                        referenceStatus:
-                          movement.reference._tag === "Absent"
-                            ? ("absent" as const)
-                            : ("invalid" as const),
-                      }),
-                })
-            );
-            if (ingestionFailure) return yield* Effect.fail(ingestionFailure);
-            yield* finish(job, read, "ingested");
+            yield* readAndIngest(job, read);
           },
           Effect.tapError((error) =>
             error._tag === "FioPollUnavailable"
