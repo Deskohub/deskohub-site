@@ -56,13 +56,13 @@ const runProbe = async (posthogPolicies: {
       else process.env[name] = value;
     }
 
-    const traceId = await Effect.runPromise(
+    const spanContext = await Effect.runPromise(
       Effect.gen(function* () {
         const span = yield* Effect.currentSpan;
         yield* Effect.logDebug("Workspace probe").pipe(
           Effect.annotateLogs({ token: tokenMarker, role: "api" })
         );
-        return span.traceId;
+        return { traceId: span.traceId, spanId: span.spanId };
       }).pipe(
         Effect.withSpan(spanName, {
           attributes: {
@@ -76,7 +76,7 @@ const runProbe = async (posthogPolicies: {
     );
 
     return {
-      traceId,
+      ...spanContext,
       received,
       consoleLines: consoleLog.mock.calls.map((args) => args.join(" ")),
     };
@@ -91,7 +91,7 @@ const runProbe = async (posthogPolicies: {
 };
 
 test("drains censored logs and allowlisted traces to the direct PostHog paths", async () => {
-  const { received, traceId, consoleLines } = await runProbe({
+  const { received, traceId, spanId, consoleLines } = await runProbe({
     logs: "always",
     traces: "always",
   });
@@ -102,6 +102,7 @@ test("drains censored logs and allowlisted traces to the direct PostHog paths", 
   expect(JSON.parse(consoleLines[0] ?? "")).toMatchObject({
     event: "workspace_probe",
     trace_id: traceId,
+    span_id: spanId,
     annotations: { token: "[REDACTED]", role: "api" },
     "logging.googleapis.com/labels": {
       environment: "preview",
@@ -123,6 +124,8 @@ test("drains censored logs and allowlisted traces to the direct PostHog paths", 
   const logBody = received.find(({ path }) => path === "/i/v1/logs")?.body;
   expect(logBody).toContain("Workspace probe");
   expect(logBody).toContain("[REDACTED]");
+  expect(logBody).toContain(`"traceId":"${traceId}"`);
+  expect(logBody).toContain(`"spanId":"${spanId}"`);
 
   const traceBody = received.find(({ path }) => path === "/i/v1/traces")?.body;
   expect(traceBody).toContain(spanName);

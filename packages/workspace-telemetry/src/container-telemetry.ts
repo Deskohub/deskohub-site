@@ -1,4 +1,4 @@
-import { Effect, Layer, References, Schema } from "effect";
+import { Effect, Fiber, Layer, References, Schema } from "effect";
 import { createWorkspaceLoggerLive } from "./cloud-logging";
 import { resolveDeploymentIdentity } from "./deployment-identity";
 import {
@@ -54,37 +54,42 @@ export const WorkspaceContainerTelemetryLive: Layer.Layer<never> = Layer.unwrap(
       posthogHost: environment.POSTHOG_INGEST_HOST,
       posthogProjectToken: environment.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN,
     };
+    const loggerSettings = {
+      format: settings.WORKSPACE_LOG_FORMAT ?? "cloud-logging-json",
+      identity: {
+        deploymentStage,
+        serviceRole: environment.WORKSPACE_SERVICE_ROLE || "api",
+        revisionSha,
+        deploymentId,
+      },
+    } as const;
+    const consoleLogger = createWorkspaceLoggerLive({
+      ...loggerSettings,
+      loggerProvider: undefined,
+    });
+    let loggerProvider: ReturnType<typeof createPostHogLoggerProvider>;
+    let tracerProvider:
+      | ReturnType<typeof createContainerTracerProvider>
+      | undefined;
+    yield* Effect.addFinalizer(() =>
+      drainProviders(loggerProvider, tracerProvider).pipe(
+        Effect.provide(consoleLogger)
+      )
+    );
 
-    const loggerProvider = yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        createPostHogLoggerProvider({
-          ...sinkOptions,
-          logsExport: settings.POSTHOG_LOGS_EXPORT,
-        })
-      ),
-      (provider) => (provider ? drainProvider(provider, "log") : Effect.void)
-    );
-    const tracerProvider = yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        createContainerTracerProvider({
-          ...sinkOptions,
-          tracesExport: settings.POSTHOG_TRACES_EXPORT,
-        })
-      ),
-      (provider) => drainProvider(provider, "trace")
-    );
+    loggerProvider = createPostHogLoggerProvider({
+      ...sinkOptions,
+      logsExport: settings.POSTHOG_LOGS_EXPORT,
+    });
+    tracerProvider = createContainerTracerProvider({
+      ...sinkOptions,
+      tracesExport: settings.POSTHOG_TRACES_EXPORT,
+    });
 
     return Layer.mergeAll(
-      createWorkspaceLoggerLive({
-        format: settings.WORKSPACE_LOG_FORMAT ?? "cloud-logging-json",
-        identity: {
-          deploymentStage,
-          serviceRole: environment.WORKSPACE_SERVICE_ROLE || "api",
-          revisionSha,
-          deploymentId,
-        },
-        loggerProvider,
-      }),
+      loggerProvider
+        ? createWorkspaceLoggerLive({ ...loggerSettings, loggerProvider })
+        : consoleLogger,
       createIdentifiedTracingLive(sinkOptions, tracerProvider),
       Layer.succeed(
         References.MinimumLogLevel,
@@ -97,13 +102,40 @@ export const WorkspaceContainerTelemetryLive: Layer.Layer<never> = Layer.unwrap(
   })
 );
 
+interface TelemetryProvider {
+  forceFlush(): Promise<void>;
+  shutdown(): Promise<void>;
+}
+
 const drainProvider = (
-  provider: { forceFlush(): Promise<void>; shutdown(): Promise<void> },
+  provider: TelemetryProvider | undefined,
   signal: "log" | "trace"
 ) =>
-  Effect.tryPromise(() => provider.forceFlush()).pipe(
-    Effect.ensuring(
-      Effect.tryPromise(() => provider.shutdown()).pipe(Effect.ignore)
-    ),
-    Effect.catch(() => Effect.logWarning(`Workspace ${signal} flush failed.`))
+  provider
+    ? Effect.tryPromise(() =>
+        provider.forceFlush().finally(() => provider.shutdown())
+      ).pipe(
+        Effect.catch(() =>
+          Effect.logWarning(`Workspace ${signal} drain failed.`)
+        )
+      )
+    : Effect.void;
+
+/** Leave time for the container's other shutdown work when OTLP is stalled. */
+const drainProviders = (
+  logger: TelemetryProvider | undefined,
+  tracer: TelemetryProvider | undefined
+) =>
+  Effect.all([drainProvider(logger, "log"), drainProvider(tracer, "trace")], {
+    concurrency: "unbounded",
+    discard: true,
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: "4 seconds",
+      orElse: () => Effect.logWarning("Workspace telemetry drain timed out."),
+    }),
+    // The scope is closing uninterruptibly. Run the deadline in a fresh fiber.
+    Effect.interruptible,
+    Effect.forkDetach,
+    Effect.flatMap(Fiber.join)
   );

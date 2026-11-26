@@ -1,5 +1,11 @@
 import { isNativeError } from "node:util/types";
-import type { Attributes } from "@opentelemetry/api";
+import {
+  type Attributes,
+  context,
+  isSpanContextValid,
+  TraceFlags,
+  trace,
+} from "@opentelemetry/api";
 import {
   type AnyValue,
   type AnyValueMap,
@@ -16,9 +22,11 @@ import {
   Effect,
   Logger,
   type LogLevel,
+  Option,
   Predicate,
   References,
   Result,
+  Tracer,
 } from "effect";
 import { getSensitiveDatabaseQueryParameterIndexes } from "./database-query-parameter-classifier";
 import {
@@ -827,6 +835,19 @@ const toOtelBody = <T>(message: T): AnyValue => {
   return message.map(toOtelValue);
 };
 
+const logSpanContext = (options: Logger.Options<unknown>) => {
+  const active = context.active();
+  const ambientSpan = trace.getSpanContext(active);
+  if (ambientSpan && isSpanContextValid(ambientSpan)) return active;
+  const span = Context.getOption(options.fiber.context, Tracer.ParentSpan);
+  if (Option.isNone(span)) return active;
+  return trace.setSpanContext(active, {
+    traceId: span.value.traceId,
+    spanId: span.value.spanId,
+    traceFlags: span.value.sampled ? TraceFlags.SAMPLED : TraceFlags.NONE,
+  });
+};
+
 export const createCensoredOtelLogger = (loggerProvider: LoggerProvider) =>
   Effect.sync(() =>
     Logger.make((rawOptions) => {
@@ -853,6 +874,7 @@ export const createCensoredOtelLogger = (loggerProvider: LoggerProvider) =>
       otelLogger.emit({
         attributes,
         body: toOtelBody(options.message),
+        context: logSpanContext(options),
         observedTimestamp: Date.now(),
         severityNumber,
         severityText,
