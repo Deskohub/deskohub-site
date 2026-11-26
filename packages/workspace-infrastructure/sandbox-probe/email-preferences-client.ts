@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { SandboxEmailPreferencesRpcs } from "@deskohub/workspace-cloud-run/sandbox-probe/email-preferences";
 import {
   CampaignUnsubscribeToken,
   layerCallerContextClient,
@@ -8,7 +9,6 @@ import {
 import { Effect, Layer, Option, Redacted, Result } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import { RpcClient } from "effect/rpc";
-import { SandboxEmailPreferencesRpcs } from "./email-preferences-rpcs";
 import type { ProbeTarget } from "./probe-client";
 
 interface EmailPreferencesProof {

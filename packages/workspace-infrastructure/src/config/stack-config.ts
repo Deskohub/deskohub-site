@@ -1,10 +1,10 @@
+import { WorkspaceServiceRole } from "@deskohub/workspace-cloud-run/service-role";
 import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
-import { WorkspaceServiceRole } from "../contracts/service-role";
 
 /** The default region for every Workspace stack (#1452). */
 export const defaultWorkspaceRegion = "europe-west1";

@@ -1,16 +1,32 @@
 import { createServer } from "node:http";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import * as Effect from "effect/Effect";
-import { FetchHttpClient, type HttpClient, HttpServer } from "effect/http";
-import * as Layer from "effect/Layer";
-import type * as Scope from "effect/Scope";
 import {
   ProbeIdentity,
   ProbeLog,
   type ProbeLogLine,
-  probeServer,
+  probeHandlers,
+  probeServerWith,
   type ServiceRole,
-} from "./probe";
+} from "@deskohub/workspace-cloud-run/sandbox-probe";
+import { SandboxProbeRpcs } from "@deskohub/workspace-cloud-run/sandbox-probe/rpcs";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as Effect from "effect/Effect";
+import { FetchHttpClient, type HttpClient, HttpServer } from "effect/http";
+import * as Layer from "effect/Layer";
+import { RpcSerialization, RpcServer } from "effect/rpc";
+import type * as Scope from "effect/Scope";
+
+const probeServer = probeServerWith(
+  RpcServer.layerHttp({
+    group: SandboxProbeRpcs,
+    path: "/rpc",
+    protocol: "http",
+    disableTracing: true,
+  }).pipe(
+    Layer.provide(
+      Layer.mergeAll(probeHandlers, RpcSerialization.layerSchemaBinary())
+    )
+  )
+);
 
 export const probeVersion = "v2";
 

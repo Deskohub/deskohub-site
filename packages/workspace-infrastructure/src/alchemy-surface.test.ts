@@ -130,6 +130,7 @@ describe("Alchemy beta.87 surface", () => {
   test("pins exact versions and installs exactly them", async () => {
     expect(packageJson.dependencies).toEqual({
       "@alchemy.run/gcp": "2.0.0-beta.87",
+      "@deskohub/workspace-cloud-run": "workspace:*",
       "@deskohub/workspace-rpc": "workspace:*",
       "@effect/platform-bun": "4.1.4",
       "@effect/platform-node": "4.1.4",

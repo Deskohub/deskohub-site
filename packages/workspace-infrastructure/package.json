@@ -3,12 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": {
-    "./sandbox-probe": "./sandbox-probe/probe.ts",
-    "./sandbox-probe/email-preferences": "./sandbox-probe/email-preferences-rpcs.ts",
-    "./sandbox-probe/rpcs": "./sandbox-probe/probe-rpcs.ts",
-    "./service-role": "./src/contracts/service-role.ts"
-  },
   "scripts": {
     "lint": "cd ../.. && biome check packages/workspace-infrastructure",
     "release": "bun release.run.ts",
@@ -17,6 +11,7 @@
   },
   "dependencies": {
     "@alchemy.run/gcp": "2.0.0-beta.87",
+    "@deskohub/workspace-cloud-run": "workspace:*",
     "@deskohub/workspace-rpc": "workspace:*",
     "@effect/platform-bun": "4.1.4",
     "@effect/platform-node": "4.1.4",

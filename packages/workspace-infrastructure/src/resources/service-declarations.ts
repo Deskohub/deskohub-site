@@ -1,4 +1,5 @@
 import type { ServiceProps, TrafficTarget } from "@alchemy.run/gcp/Run";
+import { sha256Hex } from "@deskohub/workspace-cloud-run/sha256";
 import * as Arr from "effect/Array";
 import type * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -16,7 +17,6 @@ import {
   type ReleaseRecord,
   templateRevisionOf,
 } from "../release/release-record";
-import { sha256Hex } from "../sha256";
 import { toGcpDuration } from "./queue-declarations";
 import {
   secretResourceName,

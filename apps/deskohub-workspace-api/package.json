@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@deskohub/workspace-backend": "workspace:*",
-    "@deskohub/workspace-infrastructure": "workspace:*",
+    "@deskohub/workspace-cloud-run": "workspace:*",
     "@deskohub/workspace-rpc": "workspace:*",
     "@deskohub/workspace-telemetry": "workspace:*",
     "@effect/platform-node": "4.1.4",

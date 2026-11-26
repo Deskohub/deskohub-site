@@ -1,7 +1,5 @@
-// The disposable synthetic probe image for the hosted sandbox proof. One image
-// serves every Cloud Run service; WORKSPACE_SERVICE_ROLE picks the routes it
-// mounts. It exports nothing to Cloud Trace and logs a marker only as its
-// SHA-256.
+// The disposable probe's routes and receipts for the hosted sandbox proof.
+// The service role picks the mounted routes. Logs carry only the marker digest.
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
@@ -14,11 +12,10 @@ import {
 } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
-import { RpcSerialization, RpcServer } from "effect/rpc";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { WorkspaceServiceRole } from "../src/contracts/service-role";
-import { sha256Hex } from "../src/sha256";
+import { WorkspaceServiceRole } from "../service-role";
+import { sha256Hex } from "../sha256";
 import { ProbeRejected, SandboxProbeRpcs } from "./probe-rpcs";
 
 export type ServiceRole = WorkspaceServiceRole;
@@ -108,17 +105,6 @@ export const probeHandlers = SandboxProbeRpcs.toLayer(
       "Probe.count": ({ n }) => Stream.range(0, n - 1, 1),
     });
   })
-);
-
-const probeApiRoutes = RpcServer.layerHttp({
-  group: SandboxProbeRpcs,
-  path: "/rpc",
-  protocol: "http",
-  disableTracing: true,
-}).pipe(
-  Layer.provide(
-    Layer.mergeAll(probeHandlers, RpcSerialization.layerSchemaBinary())
-  )
 );
 
 const QueueRequest = Schema.Struct({ queue: Schema.String });
@@ -224,5 +210,3 @@ export const probeServerWith = <E, R>(apiRoutes: Layer.Layer<never, E, R>) =>
       })
     )
   );
-
-export const probeServer = probeServerWith(probeApiRoutes);

@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { sha256Hex } from "@deskohub/workspace-cloud-run/sha256";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -8,7 +9,6 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import type { WorkspaceStackConfig } from "../config/stack-config";
-import { sha256Hex } from "../sha256";
 import {
   requireQuietReleaseServices,
   requireRecordCoversLiveService,

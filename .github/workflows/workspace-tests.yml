@@ -138,6 +138,13 @@ jobs:
       - name: Lint and test the Workspace infrastructure
         run: bun turbo lint test --filter=@deskohub/workspace-infrastructure
 
+      - name: Lint the Workspace API
+        run: bun turbo lint --filter=deskohub-workspace-api
+
+      - name: Smoke test the Workspace API proof image under Node 24
+        timeout-minutes: 5
+        run: bash apps/deskohub-workspace-api/test-image.sh
+
   # A shard task's cache key covers its own inputs, its dependencies' and the
   # $TURBO_ROOT$ files it declares. futureFlags.affectedUsingTaskInputs in
   # turbo.json makes --affected match changed files against exactly those

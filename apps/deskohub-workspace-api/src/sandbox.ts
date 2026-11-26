@@ -13,12 +13,12 @@ import {
   ProbeLog,
   probeHandlers,
   probeServerWith,
-} from "@deskohub/workspace-infrastructure/sandbox-probe";
-import { SandboxEmailPreferencesRpcs } from "@deskohub/workspace-infrastructure/sandbox-probe/email-preferences";
+} from "@deskohub/workspace-cloud-run/sandbox-probe";
+import { SandboxEmailPreferencesRpcs } from "@deskohub/workspace-cloud-run/sandbox-probe/email-preferences";
 import {
   ProbeRejected,
   SandboxProbeRpcs,
-} from "@deskohub/workspace-infrastructure/sandbox-probe/rpcs";
+} from "@deskohub/workspace-cloud-run/sandbox-probe/rpcs";
 import {
   EmailPreferencesRpcs,
   WorkspaceRpcSerialization,
