@@ -4,6 +4,7 @@ import {
 } from "@deskohub/dotypos";
 import { Effect, Layer } from "effect";
 import type { WorkspaceDatabase } from "@/db/database.service";
+import type { WorkspaceReservationRow } from "@/db/schema";
 import type { WorkspaceReservationDetails } from "@/features/reservation/backend/workspace-reservation.service";
 import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
@@ -90,3 +91,27 @@ export const workspaceReservationDetailsFixture = (
     ...overrides,
   };
 };
+
+export const reservationSummaryRowValues = (row: WorkspaceReservationRow) =>
+  [
+    row.id,
+    row.activePaymentAttemptId,
+    row.dotyposCustomerId,
+    row.dotyposReservationId,
+    row.reservationState,
+    row.paymentState,
+    row.fulfillmentState,
+    row.reservationDetails,
+    row.reservationPurpose,
+    row.reservationCreatedAt?.toString() ?? null,
+    row.reservationConfirmedAt?.toString() ?? null,
+    row.reservationCancelledAt?.toString() ?? null,
+    row.cancellationCause,
+    row.reservationHoldExpiredAt?.toString() ?? null,
+    row.paidAt?.toString() ?? null,
+    row.fulfilledAt?.toString() ?? null,
+    row.fulfillmentFailedAt?.toString() ?? null,
+    row.failureCode,
+    row.createdAt.toString(),
+    row.updatedAt.toString(),
+  ] as const;

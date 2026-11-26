@@ -40,7 +40,10 @@ import {
   AdministrationService,
   getAdministrationReservationOverview,
 } from "./administration.service";
-import { stubWorkspaceDatabaseLayer } from "./administration-database.test-utils";
+import {
+  reservationSummaryRowValues,
+  stubWorkspaceDatabaseLayer,
+} from "./administration-database.test-utils";
 import { inactiveCustomerDisplayNames } from "./customer-name";
 import { PaymentAdministrationServiceMock } from "./payment-administration.service.mock";
 import { PostHogReservationHistory } from "./posthog-reservation-history";
@@ -635,10 +638,12 @@ describe("AdministrationService", () => {
 
   test("keeps reservations available when provider date sorting fails", async () => {
     const instant = Temporal.Instant.from("2026-08-10T08:00:00Z");
-    const row = {
-      id: "workspace-reservation",
-      dotyposCustomerId: "dotypos-customer",
-      dotyposReservationId: "dotypos-reservation",
+    const row = workspaceReservationFixture({
+      id: workspaceReservationIdSchema.make("workspace-reservation"),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer"),
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation"
+      ),
       reservationState: "confirmed",
       paymentState: "paid",
       fulfillmentState: "fulfilled",
@@ -653,12 +658,9 @@ describe("AdministrationService", () => {
       fulfillmentFailedAt: null,
       createdAt: instant,
       updatedAt: instant,
-    } as const;
-    const rows = [[{ value: 1 }], [row], []] as const;
-    let selectCall = 0;
-    const database = {
-      select: () => makeQuery(rows[selectCall++] ?? []),
-    };
+    });
+    const database = await makeRecordingWorkspaceDatabase();
+    database.setRows([[[1]], [reservationSummaryRowValues(row)], []]);
 
     const result = await Effect.gen(function* () {
       const administration = yield* AdministrationService;
@@ -671,7 +673,7 @@ describe("AdministrationService", () => {
         testAdministrationLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              stubWorkspaceDatabaseLayer(database),
+              database.layer,
               DotyposServiceMock({
                 getCustomersByIds: (ids) =>
                   Effect.succeed([{ id: "dotypos-customer" }]).pipe(
@@ -719,7 +721,7 @@ describe("AdministrationService", () => {
       Effect.runPromise
     );
 
-    expect(selectCall).toBe(6);
+    expect(database.statements).toHaveLength(6);
     expect(result.dateSortUnavailable).toBe(true);
     expect(result.items).toHaveLength(1);
     expect(result.items[0]?.purpose).toBe("business");
@@ -859,27 +861,37 @@ describe("AdministrationService", () => {
 
   test("enriches a full reservation page with two provider calls", async () => {
     const instant = Temporal.Instant.from("2026-08-10T08:00:00Z");
-    const reservationRows = Array.from({ length: 24 }, (_, index) => ({
-      id: `workspace-reservation-${index}`,
-      dotyposCustomerId: `customer-${index}`,
-      dotyposReservationId: `reservation-${index}`,
-      reservationState: "confirmed",
-      paymentState: "paid",
-      fulfillmentState: "fulfilled",
-      reservationPurpose: null,
-      reservationDetails: { kind: "meeting-room" as const },
-      reservationCreatedAt: instant,
-      reservationConfirmedAt: instant,
-      reservationCancelledAt: null,
-      reservationHoldExpiredAt: null,
-      paidAt: instant,
-      fulfilledAt: instant,
-      fulfillmentFailedAt: null,
-      createdAt: instant,
-      updatedAt: instant,
-    }));
-    const rows = [[{ value: 24 }], reservationRows, [], [], []] as const;
-    let selectCall = 0;
+    const reservationRows = Array.from({ length: 24 }, (_, index) =>
+      workspaceReservationFixture({
+        id: workspaceReservationIdSchema.make(`workspace-reservation-${index}`),
+        dotyposCustomerId: DotyposCustomerIdSchema.make(`customer-${index}`),
+        dotyposReservationId: DotyposReservationIdSchema.make(
+          `reservation-${index}`
+        ),
+        reservationState: "confirmed",
+        paymentState: "paid",
+        fulfillmentState: "fulfilled",
+        reservationPurpose: null,
+        reservationDetails: { kind: "meeting-room" as const },
+        reservationCreatedAt: instant,
+        reservationConfirmedAt: instant,
+        reservationCancelledAt: null,
+        reservationHoldExpiredAt: null,
+        paidAt: instant,
+        fulfilledAt: instant,
+        fulfillmentFailedAt: null,
+        createdAt: instant,
+        updatedAt: instant,
+      })
+    );
+    const database = await makeRecordingWorkspaceDatabase();
+    database.setRows([
+      [[24]],
+      reservationRows.map(reservationSummaryRowValues),
+      [],
+      [],
+      [],
+    ]);
     const reservationCalls: string[][] = [];
     const customerCalls: string[][] = [];
 
@@ -891,9 +903,7 @@ describe("AdministrationService", () => {
         testAdministrationLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              stubWorkspaceDatabaseLayer({
-                select: () => makeQuery(rows[selectCall++] ?? []),
-              }),
+              database.layer,
               DotyposServiceMock({
                 getCustomersByIds: (ids, _readOptions) => {
                   return Effect.sync(() => {
@@ -977,44 +987,45 @@ describe("AdministrationService", () => {
     const reservationRow = (
       id: string,
       reservationDetails: { readonly kind: "meeting-room"; earlySetup?: true }
-    ) => ({
-      id: `workspace-${id}`,
-      dotyposCustomerId: "customer",
-      dotyposReservationId: id,
-      reservationState: "confirmed",
-      paymentState: "paid",
-      fulfillmentState: "fulfilled",
-      reservationPurpose: null,
-      reservationDetails,
-      reservationCreatedAt: instant,
-      reservationConfirmedAt: instant,
-      reservationCancelledAt: null,
-      reservationHoldExpiredAt: null,
-      paidAt: instant,
-      fulfilledAt: instant,
-      fulfillmentFailedAt: null,
-      createdAt: instant,
-      updatedAt: instant,
-    });
-    const rows = [
-      [{ value: 2 }],
+    ) =>
+      workspaceReservationFixture({
+        id: workspaceReservationIdSchema.make(`workspace-${id}`),
+        dotyposCustomerId: DotyposCustomerIdSchema.make("customer"),
+        dotyposReservationId: DotyposReservationIdSchema.make(id),
+        reservationState: "confirmed",
+        paymentState: "paid",
+        fulfillmentState: "fulfilled",
+        reservationPurpose: null,
+        reservationDetails,
+        reservationCreatedAt: instant,
+        reservationConfirmedAt: instant,
+        reservationCancelledAt: null,
+        reservationHoldExpiredAt: null,
+        paidAt: instant,
+        fulfilledAt: instant,
+        fulfillmentFailedAt: null,
+        createdAt: instant,
+        updatedAt: instant,
+      });
+    const database = await makeRecordingWorkspaceDatabase();
+    database.setRows([
+      [[2]],
       [
         reservationRow("early-setup", {
           kind: "meeting-room",
           earlySetup: true,
         }),
         reservationRow("on-time", { kind: "meeting-room" }),
-      ],
+      ].map(reservationSummaryRowValues),
       [],
       [],
       [],
-    ] as const;
+    ]);
     // Dotypos holds the early-setup room from 09:45 for a 10:00 booking.
     const heldStarts = new Map([
       ["early-setup", "2026-08-10T09:45:00.000+02:00"],
       ["on-time", "2026-08-10T10:00:00.000+02:00"],
     ]);
-    let selectCall = 0;
 
     const result = await Effect.gen(function* () {
       const administration = yield* AdministrationService;
@@ -1024,9 +1035,7 @@ describe("AdministrationService", () => {
         testAdministrationLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              stubWorkspaceDatabaseLayer({
-                select: () => makeQuery(rows[selectCall++] ?? []),
-              }),
+              database.layer,
               DotyposServiceMock({
                 getCustomersByIds: (ids, _readOptions) => {
                   return Effect.succeed(ids.map((id) => ({ id }))).pipe(

@@ -14,9 +14,11 @@ import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { Effect, Layer, Option, Result, Schema } from "effect";
 import { ReservationAuthorDirectory } from "@/features/account";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { AdministrationService } from "./administration.service";
+import { reservationSummaryRowValues } from "./administration-database.test-utils";
 import { PaymentAdministrationServiceMock } from "./payment-administration.service.mock";
 import { PostHogReservationHistory } from "./posthog-reservation-history";
 
@@ -25,7 +27,7 @@ type DotyposOverrides = Parameters<typeof DotyposServiceMock>[0];
 const instant = Temporal.Instant.from("2026-08-10T08:00:00Z");
 
 const makeRow = (index: number) =>
-  ({
+  workspaceReservationFixture({
     id: workspaceReservationIdSchema.make(`workspace-reservation-${index}`),
     dotyposCustomerId: DotyposCustomerIdSchema.make(
       `dotypos-customer-${index % 3}`
@@ -48,31 +50,7 @@ const makeRow = (index: number) =>
     failureCode: null,
     createdAt: instant,
     updatedAt: instant,
-  }) as const;
-
-const reservationValues = (row: ReturnType<typeof makeRow>) =>
-  [
-    row.id,
-    null, // activePaymentAttemptId
-    row.dotyposCustomerId,
-    row.dotyposReservationId,
-    row.reservationState,
-    row.paymentState,
-    row.fulfillmentState,
-    row.reservationDetails,
-    row.reservationPurpose,
-    row.reservationCreatedAt.toString(),
-    row.reservationConfirmedAt.toString(),
-    row.reservationCancelledAt,
-    null, // cancellationCause
-    row.reservationHoldExpiredAt,
-    row.paidAt.toString(),
-    row.fulfilledAt.toString(),
-    row.fulfillmentFailedAt,
-    row.failureCode,
-    row.createdAt.toString(),
-    row.updatedAt.toString(),
-  ] as const;
+  });
 
 const makeBooking = (index: number, startDate = "2026-08-20T08:00:00Z") =>
   Schema.decodeSync(DotyposReservationSchema)({
@@ -179,7 +157,7 @@ const runAdministration = async <A, E>(
 
 // Rows, then the payment attempts, late payments, and recoveries of the rows.
 const exportSelects = (rows: readonly ReturnType<typeof makeRow>[]) => [
-  rows.map(reservationValues),
+  rows.map(reservationSummaryRowValues),
   [],
   [],
   [],
