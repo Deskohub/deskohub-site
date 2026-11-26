@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import {
   classifyUnlimitedRecoveryPayment,
   originalUnlimitedRun,
@@ -130,7 +131,7 @@ test("requires the original attempt before any recovery effect and accepts its c
 });
 
 test("replays the exact interrupted tombstone and login removal in order", () => {
-  const recipient = "original-unlimited@deskohub.test";
+  const recipient = testEmailAddress("original-unlimited");
   const customerId = "original-customer";
   const buyer = {
     tombstoned: false,
@@ -154,7 +155,7 @@ test("replays the exact interrupted tombstone and login removal in order", () =>
   for (const unsafeBuyer of [
     { ...buyer, authEmail: null },
     { ...buyer, linkedCustomerId: "different-customer" },
-    { ...interrupted, authEmail: "different@deskohub.test" },
+    { ...interrupted, authEmail: testEmailAddress("different") },
     { ...interrupted, linkedCustomerId: customerId },
   ]) {
     expect(() => verifyUnlimitedRecoveryBuyer(unsafeBuyer)).toThrow(
