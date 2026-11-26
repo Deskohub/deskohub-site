@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { Effect } from "effect";
@@ -12,6 +13,7 @@ import {
 } from "@/features/checkout/checkout-identifiers";
 import type { OrderId } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
@@ -79,6 +81,7 @@ describe.skipIf(!testDatabase)(
       await Effect.runPromise(
         testDatabase.db.insert(paymentAttempts).values({
           id,
+          orderId: standaloneReservationOrderId(input.workspaceReservationId),
           workspaceReservationId: input.workspaceReservationId,
           provider,
           providerOrderId:
@@ -120,11 +123,14 @@ describe.skipIf(!testDatabase)(
         exponent: 2,
         currency: "CZK",
       });
-      expect(byId && isProviderPaymentAttempt(byId)).toBe(true);
+      assert(
+        byId && isProviderPaymentAttempt(byId),
+        "Expected provider payment attempt"
+      );
       expect(byId).not.toHaveProperty("amountValue");
 
       const byOrder = await run((repository) =>
-        repository.findByProviderOrderId("nexi", byId!.providerOrderId!)
+        repository.findByProviderOrderId("nexi", byId.providerOrderId)
       );
       expect(byOrder?.id).toBe(id);
       expect(byOrder?.orderKind).toBe("reservation");
@@ -147,7 +153,8 @@ describe.skipIf(!testDatabase)(
               fulfillmentState: "not_started",
             })
             .returning({ id: orders.id });
-          const orderId = order!.id;
+          assert(order, "Expected inserted pass order");
+          const orderId = order.id;
           purchaseOrderIds.push(orderId);
           yield* testDatabase.db.insert(paymentAttempts).values({
             orderId,
