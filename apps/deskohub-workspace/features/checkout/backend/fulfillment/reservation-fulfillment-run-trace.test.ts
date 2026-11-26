@@ -10,14 +10,28 @@ import {
   DotyposVersionConflict,
 } from "@deskohub/dotypos";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
+import { EmailServiceError } from "@deskohub/email/backend/service";
 import { Cause, type Context, Effect, Exit, Layer, Predicate } from "effect";
 import { env, getAccountingDocumentSnapshotSecret } from "@/env";
 import { ReservationInvoiceService } from "@/features/accounting/backend/reservation-invoice.service";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import type { WorkspaceReservation } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { ReservationAccessIssuanceError } from "@/features/reservation-access";
 import {
   type EffectTrace,
   recordEffectTrace,
   startEffectTrace,
 } from "@/shared/testing/effect-trace.test-utils";
+import type { ReservationAccessDeliveryReport } from "./reservation-fulfillment.service";
+import {
+  confirmDotyposReservationFixture,
+  customerAccessCodeFixture,
+  fulfillmentDetailsFixture,
+  fulfillmentOrderFixture,
+  fulfillmentQueryFailure,
+  fulfillmentReservationId as orderId,
+} from "./reservation-fulfillment.test-utils";
 
 mock.module("server-only", () => ({}));
 
@@ -52,9 +66,8 @@ const {
   FulfillmentLedger,
   WorkspaceReservationDeliveryGenerationSupersededError,
 } = await import("./fulfillment-ledger.repository");
-const { WorkspaceReservationService } = await import(
-  "@/features/reservation/backend/workspace-reservation.service"
-);
+const { WorkspaceReservationService, WorkspaceReservationDetailsError } =
+  await import("@/features/reservation/backend/workspace-reservation.service");
 const { CustomerEmailLocaleService, ReservationAuthorDirectory } = await import(
   "@/features/account"
 );
@@ -65,65 +78,55 @@ const { silentCheckoutAnalytics } = await import(
   "../analytics/checkout-analytics.service.mock"
 );
 
-type Methods = Record<
-  string,
-  (...args: never[]) => Effect.Effect<unknown, unknown>
->;
-
 interface Collaborators {
-  readonly reservations?: Methods;
-  readonly ledger?: Methods;
-  readonly dotypos?: Methods;
-  readonly reservationService?: Methods;
-  readonly accessCodes?: Methods;
-  readonly emails?: Methods;
-  readonly authors?: Methods;
-  readonly invoices?: Methods;
+  readonly reservations?: Partial<
+    typeof WorkspaceReservationRepository.Service
+  >;
+  readonly ledger?: Partial<typeof FulfillmentLedger.Service>;
+  readonly dotypos?: Partial<typeof DotyposService.Service>;
+  readonly reservationService?: Partial<
+    typeof WorkspaceReservationService.Service
+  >;
+  readonly accessCodes?: Partial<
+    typeof WorkspaceCheckoutAccessCodeService.Service
+  >;
+  readonly emails?: Partial<typeof WorkspaceReservationEmailService.Service>;
+  readonly authors?: Partial<typeof ReservationAuthorDirectory.Service>;
+  readonly invoices?: Partial<typeof ReservationInvoiceService.Service>;
 }
 
-const orderId = "reservation-id";
 const staleUpdatedAt = () =>
   Temporal.Now.instant().subtract({
     milliseconds: PAID_FULFILLMENT_PROCESSING_RETRY_AFTER_MS + 1000,
   });
 
-const paidOrder = {
-  id: orderId,
-  activePaymentAttemptId: "payment-attempt-id",
-  paymentState: "paid",
-  fulfillmentState: "not_started",
+const paidOrder = fulfillmentOrderFixture({
+  activePaymentAttemptId: paymentAttemptIdSchema.make("payment-attempt-id"),
   updatedAt: Temporal.Instant.from("2026-07-01T07:00:00.000Z"),
-};
+});
 
-const claimedOrder = {
+const claimedOrder = fulfillmentOrderFixture({
   ...paidOrder,
   fulfillmentState: "processing",
   reservationState: "confirmed",
-  dotyposReservationId: "dotypos-reservation-id",
-  dotyposCustomerId: "dotypos-customer-id",
-  activeCustomerEmailDeliveryId: null,
-  activeCustomerEmailDeliveryLocale: null,
-  authorAccountId: "author-account-id",
-};
+});
 
-const reservationForDelivery = {
-  ...claimedOrder,
+const reservationForDelivery = fulfillmentDetailsFixture(claimedOrder, {
   reservedFrom: Temporal.Instant.from("2026-07-01T08:00:00.000Z"),
   reservedUntil: Temporal.Instant.from("2026-07-01T10:00:00.000Z"),
-  setupFrom: undefined as Temporal.Instant | undefined,
-};
+});
 
 const resendDeliveryId = EmailDeliveryIdSchema.make("resend-delivery-id");
 const consoleDeliveryId = EmailDeliveryIdSchema.make("console-delivery-id");
 
 const succeed =
-  <A>(value: A) =>
+  <const A>(value: A) =>
   () =>
-    Effect.succeed(value as never);
+    Effect.succeed(value);
 const fail =
   <E>(error: E) =>
   () =>
-    Effect.fail(error as never);
+    Effect.fail(error);
 
 /** Collaborators of a run that claims a confirmed order and sends its email. */
 const deliveringCollaborators = (
@@ -146,7 +149,8 @@ const deliveringCollaborators = (
     ...overrides.reservationService,
   },
   accessCodes: {
-    resolveCustomerAccessCode: succeed("access-code"),
+    resolveCustomerAccessCode: (input) =>
+      Effect.succeed(customerAccessCodeFixture(input)),
     ...overrides.accessCodes,
   },
   emails: {
@@ -171,8 +175,10 @@ const traceFulfillment = async (
 ) => {
   vercelEnv = deployment;
   const trace: EffectTrace = startEffectTrace();
-  const record = (service: string, methods: Methods | undefined) =>
-    trace.recordCalls(service, methods ?? {});
+  const record = <Methods extends object>(
+    service: string,
+    methods: Methods | undefined
+  ) => trace.recordCalls(service, methods ?? {});
   const exit = await Effect.gen(function* () {
     const fulfillment = yield* ReservationFulfillment;
     return yield* recordEffectTrace(trace, operation(fulfillment));
@@ -237,7 +243,7 @@ const runFulfillment = (
 ) =>
   traceFulfillment(
     collaborators,
-    (fulfillment) => fulfillment.run(orderId as never),
+    (fulfillment) => fulfillment.run(orderId),
     deployment
   );
 
@@ -255,7 +261,11 @@ const failureCodeOf = (exit: Exit.Exit<unknown, unknown>) => {
 describe("ReservationFulfillment.run trace", () => {
   test("fails to load the order without marking it failed", async () => {
     const { exit, trace } = await runFulfillment({
-      reservations: { findById: fail(new Error("database down")) },
+      reservations: {
+        findById: fail(
+          fulfillmentQueryFailure("select reservations", "database down")
+        ),
+      },
     });
 
     expect(failureCodeOf(exit)).toBe("fulfillment_order_load_failed");
@@ -269,7 +279,7 @@ describe("ReservationFulfillment.run trace", () => {
     `);
   });
 
-  const expectSkipped = async (order: object | null) => {
+  const expectSkipped = async (order: WorkspaceReservation | null) => {
     const { exit, trace } = await runFulfillment({
       reservations: { findById: succeed(order) },
     });
@@ -370,7 +380,11 @@ describe("ReservationFulfillment.run trace", () => {
       reservations: {
         findById: succeed({ ...paidOrder, fulfillmentState: "fulfilled" }),
       },
-      invoices: { issueAfterFulfillment: fail(new Error("invoice down")) },
+      invoices: {
+        issueAfterFulfillment: fail(
+          fulfillmentQueryFailure("select invoices", "invoice down")
+        ),
+      },
     });
 
     expect(failureCodeOf(exit)).toBe("invoice_processing_failed");
@@ -384,7 +398,7 @@ describe("ReservationFulfillment.run trace", () => {
         "Info Paid access fulfillment already completed; retrying invoice processing (reason=already_fulfilled) {activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fulfillPaidOrder",
         "span workspacePaidFulfillment.processReservationInvoice",
         "call invoices.issueAfterFulfillment(reservationId=reservation-id)",
-        "Fatal Reservation invoice processing failed (orderId=reservation-id, cause=<Error>) {activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.processReservationInvoice",
+        "Fatal Reservation invoice processing failed (orderId=reservation-id, cause=<EffectDrizzleQueryError>) {activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.processReservationInvoice",
       ]
     `);
   });
@@ -420,7 +434,11 @@ describe("ReservationFulfillment.run trace", () => {
   test("fails a claim error without marking the order failed", async () => {
     const { exit, trace } = await runFulfillment({
       reservations: { findById: succeed(paidOrder) },
-      ledger: { claimPaidFulfillment: fail(new Error("claim failed")) },
+      ledger: {
+        claimPaidFulfillment: fail(
+          fulfillmentQueryFailure("update reservations", "claim failed")
+        ),
+      },
     });
 
     expect(failureCodeOf(exit)).toBe("fulfillment_claim_failed");
@@ -437,8 +455,8 @@ describe("ReservationFulfillment.run trace", () => {
   });
 
   const expectUnfulfillable = async (
-    claimed: Record<string, string | null | Temporal.Instant>,
-    markFulfillmentFailed: Methods[string]
+    claimed: WorkspaceReservation,
+    markFulfillmentFailed: typeof FulfillmentLedger.Service.markFulfillmentFailed
   ) => {
     const { exit, trace } = await runFulfillment({
       reservations: { findById: succeed(paidOrder) },
@@ -452,7 +470,7 @@ describe("ReservationFulfillment.run trace", () => {
     expect(
       await expectUnfulfillable(
         { ...claimedOrder, dotyposReservationId: null },
-        fail(new Error("marker failed"))
+        fail(fulfillmentQueryFailure("update reservations", "marker failed"))
       )
     ).toMatchInlineSnapshot(`
       [
@@ -469,7 +487,7 @@ describe("ReservationFulfillment.run trace", () => {
         "Info Paid fulfillment failure handling started {activePaymentAttemptId,claimed,dotyposReservationId,failureCode,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fail",
         "Info Paid fulfillment failure marker started {activePaymentAttemptId,claimed,dotyposReservationId,failureCode,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fail",
         "call ledger.markFulfillmentFailed(id=reservation-id, failureCode=dotypos_reservation_unfulfillable, failedAt=<Instant>)",
-        "Error Paid fulfillment failure marker failed (orderId=reservation-id, failureCode=dotypos_reservation_unfulfillable, cause=<Error>) {activePaymentAttemptId,claimed,dotyposReservationId,failureCode,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fail",
+        "Error Paid fulfillment failure marker failed (orderId=reservation-id, failureCode=dotypos_reservation_unfulfillable, cause=<EffectDrizzleQueryError>) {activePaymentAttemptId,claimed,dotyposReservationId,failureCode,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fail",
         "Info Paid fulfillment failure marker completed {activePaymentAttemptId,claimed,dotyposReservationId,failureCode,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fail",
         "Fatal Paid fulfillment failure handling completed {activePaymentAttemptId,cause,claimed,dotyposReservationId,failureCode,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fail",
       ]
@@ -646,7 +664,9 @@ describe("ReservationFulfillment.run trace", () => {
     const { exit, trace } = await runFulfillment({
       reservations: {
         findById: succeed(paidOrder),
-        markReservationConfirmed: fail(new Error("update failed")),
+        markReservationConfirmed: fail(
+          fulfillmentQueryFailure("update reservations", "update failed")
+        ),
       },
       ledger: {
         claimPaidFulfillment: succeed({
@@ -655,7 +675,7 @@ describe("ReservationFulfillment.run trace", () => {
         }),
         markFulfillmentFailed: succeed(undefined),
       },
-      dotypos: { confirmReservation: succeed(undefined) },
+      dotypos: { confirmReservation: confirmDotyposReservationFixture },
     });
 
     expect(failureCodeOf(exit)).toBe("fulfillment_completion_failed");
@@ -674,7 +694,7 @@ describe("ReservationFulfillment.run trace", () => {
         "Info Dotypos paid reservation confirmation succeeded {activePaymentAttemptId,claimed,dotyposReservationId,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fulfillPaidOrder",
         "Info Paid fulfillment reservation confirmed marker started {activePaymentAttemptId,claimed,dotyposReservationId,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fulfillPaidOrder",
         "call reservations.markReservationConfirmed(id=reservation-id, confirmedAt=<Instant>)",
-        "Error Paid fulfillment reservation confirmed marker failed (claimed=<Object>, cause=<Error>) {activePaymentAttemptId,claimed,dotyposReservationId,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fulfillPaidOrder",
+        "Error Paid fulfillment reservation confirmed marker failed (claimed=<Object>, cause=<EffectDrizzleQueryError>) {activePaymentAttemptId,claimed,dotyposReservationId,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fulfillPaidOrder",
         "span workspacePaidFulfillment.fail",
         "Info Paid fulfillment failure handling started {activePaymentAttemptId,claimed,dotyposReservationId,failureCode,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fail",
         "Info Paid fulfillment failure marker started {activePaymentAttemptId,claimed,dotyposReservationId,failureCode,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fail",
@@ -695,8 +715,16 @@ describe("ReservationFulfillment.run trace", () => {
             reservationState: "held",
           }),
         },
-        dotypos: { confirmReservation: succeed(undefined) },
-        reservationService: { getReservation: fail(new Error("read failed")) },
+        dotypos: { confirmReservation: confirmDotyposReservationFixture },
+        reservationService: {
+          getReservation: fail(
+            new WorkspaceReservationDetailsError({
+              reservationId: orderId,
+              errorCode: "dotypos_reservation_load_failed",
+              message: "read failed",
+            })
+          ),
+        },
       })
     );
 
@@ -720,7 +748,7 @@ describe("ReservationFulfillment.run trace", () => {
         "call checkoutAnalytics.reservationCompleted(reservation=<Object>, timestamp=<Instant>)",
         "Info Paid reservation email flow started {activePaymentAttemptId,claimed,dotyposReservationId,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fulfillPaidOrder",
         "call reservationService.getReservation(reservation-id)",
-        "Error Workspace paid reservation email flow failed (workspaceReservationId=reservation-id, dotyposCustomerId=dotypos-customer-id, cause=<Error>) {activePaymentAttemptId,claimed,dotyposReservationId,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fulfillPaidOrder",
+        "Error Workspace paid reservation email flow failed (workspaceReservationId=reservation-id, dotyposCustomerId=dotypos-customer-id, cause=<WorkspaceReservationDetailsError>) {activePaymentAttemptId,claimed,dotyposReservationId,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fulfillPaidOrder",
         "span workspacePaidFulfillment.fail",
         "Info Paid fulfillment failure handling started {activePaymentAttemptId,claimed,dotyposReservationId,failureCode,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fail",
         "Info Paid fulfillment failure marker started {activePaymentAttemptId,claimed,dotyposReservationId,failureCode,fulfillmentState,orderId,paymentState,reservationId,reservationState} in workspacePaidFulfillment.fail",
@@ -732,7 +760,17 @@ describe("ReservationFulfillment.run trace", () => {
   });
 
   test("issues an early-setup room's code from its setup start and fails when issuance fails", async () => {
-    const resolveCustomerAccessCode = mock(fail(new Error("igloo down")));
+    const resolveCustomerAccessCode = mock<
+      typeof WorkspaceCheckoutAccessCodeService.Service.resolveCustomerAccessCode
+    >(
+      fail(
+        new ReservationAccessIssuanceError({
+          reservationId: orderId,
+          outcome: "uncertain",
+          message: "igloo down",
+        })
+      )
+    );
     const setupFrom = Temporal.Instant.from("2026-07-01T07:30:00.000Z");
     const { exit, trace } = await runFulfillment(
       deliveringCollaborators({
@@ -749,7 +787,7 @@ describe("ReservationFulfillment.run trace", () => {
       dotyposReservationId: reservationForDelivery.dotyposReservationId,
       reservedFrom: setupFrom,
       reservedUntil: reservationForDelivery.reservedUntil,
-    } as never);
+    });
     expect(trace).toMatchInlineSnapshot(`
       [
         "span workspacePaidFulfillment.fulfillPaidOrder",
@@ -801,7 +839,9 @@ describe("ReservationFulfillment.run trace", () => {
   });
 
   test("re-sends a recovery delivery in its retained locale without the author and fails when the send fails", async () => {
-    const sendPaidReservationEmails = mock(fail(new Error("send failed")));
+    const sendPaidReservationEmails = mock<
+      typeof WorkspaceReservationEmailService.Service.sendPaidReservationEmails
+    >(fail(new EmailServiceError("send failed")));
     const { exit, trace } = await runFulfillment(
       deliveringCollaborators({
         ledger: {
@@ -822,7 +862,7 @@ describe("ReservationFulfillment.run trace", () => {
         author: null,
         customerEmailIdempotencyKey:
           createCustomerEmailRecoveryIdempotencyKey(resendDeliveryId),
-      }) as never
+      })
     );
     expect(trace).toMatchInlineSnapshot(`
       [
@@ -918,7 +958,7 @@ describe("ReservationFulfillment.run trace", () => {
   });
 
   const awaitProductionDelivery = (
-    markAwaitingCustomerEmailDelivery: Methods[string]
+    markAwaitingCustomerEmailDelivery: typeof FulfillmentLedger.Service.markAwaitingCustomerEmailDelivery
   ) =>
     runFulfillment(
       deliveringCollaborators({
@@ -962,7 +1002,7 @@ describe("ReservationFulfillment.run trace", () => {
       fail(
         new WorkspaceReservationDeliveryGenerationSupersededError({
           operation: "markAwaitingCustomerEmailDelivery",
-          reservationId: orderId as never,
+          reservationId: orderId,
           expectedActiveCustomerEmailDeliveryId: null,
           activeCustomerEmailDeliveryId: resendDeliveryId,
         })
@@ -999,7 +1039,7 @@ describe("ReservationFulfillment.run trace", () => {
 
   test("fails a production fulfillment as incomplete when its accepted delivery can't be recorded", async () => {
     const { exit, trace } = await awaitProductionDelivery(
-      fail(new Error("db"))
+      fail(fulfillmentQueryFailure("update reservations", "db"))
     );
 
     expect(failureCodeOf(exit)).toBe("fulfillment_completion_failed");
@@ -1035,28 +1075,28 @@ describe("ReservationFulfillment.run trace", () => {
   });
 });
 
-const deliveryReport = {
+const deliveryReport: ReservationAccessDeliveryReport = {
   deliveryId: resendDeliveryId,
-  outcome: "delivered" as "delivered" | "failed",
+  outcome: "delivered",
   occurredAt: Temporal.Instant.from("2026-07-01T07:05:00.000Z"),
-  accessEmail: { reservationId: orderId } as
-    | { readonly reservationId: string }
-    | undefined,
+  accessEmail: { reservationId: orderId },
 };
 
-const awaitingOrder = {
+const awaitingOrder = fulfillmentOrderFixture({
   ...claimedOrder,
   fulfillmentState: "awaiting_delivery",
   activeCustomerEmailDeliveryId: resendDeliveryId,
-};
+});
 
 const recordDelivery = (
-  ledger: Methods,
-  report: Partial<typeof deliveryReport> = {},
-  invoices: Methods = { issueAfterFulfillment: succeed(undefined) }
+  ledger: Partial<typeof FulfillmentLedger.Service>,
+  report: Partial<ReservationAccessDeliveryReport> = {},
+  invoices: Partial<typeof ReservationInvoiceService.Service> = {
+    issueAfterFulfillment: succeed(undefined),
+  }
 ) =>
   traceFulfillment({ ledger, invoices }, (fulfillment) =>
-    fulfillment.recordDelivery({ ...deliveryReport, ...report } as never)
+    fulfillment.recordDelivery({ ...deliveryReport, ...report })
   );
 
 const outcomeOf = (exit: Exit.Exit<unknown, unknown>) => {
@@ -1070,7 +1110,9 @@ const outcomeOf = (exit: Exit.Exit<unknown, unknown>) => {
 describe("ReservationFulfillment.recordDelivery trace", () => {
   test("fails a report whose reservation can't be loaded", async () => {
     const { exit, trace } = await recordDelivery({
-      findByActiveCustomerEmailDeliveryId: fail(new Error("db down")),
+      findByActiveCustomerEmailDeliveryId: fail(
+        fulfillmentQueryFailure("reservations", "db down")
+      ),
     });
 
     expect(outcomeOf(exit)).toBe("reservation_load_failed");
@@ -1131,7 +1173,13 @@ describe("ReservationFulfillment.recordDelivery trace", () => {
   test("ignores a delivery tagged with another reservation", async () => {
     const { exit, trace } = await recordDelivery(
       { findByActiveCustomerEmailDeliveryId: succeed(awaitingOrder) },
-      { accessEmail: { reservationId: "other-reservation-id" } }
+      {
+        accessEmail: {
+          reservationId: workspaceReservationIdSchema.make(
+            "other-reservation-id"
+          ),
+        },
+      }
     );
 
     expect(outcomeOf(exit)).toEqual({ ignored: "reservation_mismatch" });
@@ -1174,7 +1222,11 @@ describe("ReservationFulfillment.recordDelivery trace", () => {
         }),
       },
       {},
-      { issueAfterFulfillment: fail(new Error("invoice down")) }
+      {
+        issueAfterFulfillment: fail(
+          fulfillmentQueryFailure("select invoices", "invoice down")
+        ),
+      }
     );
 
     expect(outcomeOf(exit)).toBe("invoice_processing_failed");
@@ -1208,7 +1260,10 @@ describe("ReservationFulfillment.recordDelivery trace", () => {
   });
 
   test("repairs an email-failed reservation on a delivered report", async () => {
-    const fulfilled = { ...awaitingOrder, fulfillmentState: "fulfilled" };
+    const fulfilled = fulfillmentOrderFixture({
+      ...awaitingOrder,
+      fulfillmentState: "fulfilled",
+    });
     const { exit, trace } = await recordDelivery({
       findByActiveCustomerEmailDeliveryId: succeed({
         ...awaitingOrder,
@@ -1253,7 +1308,9 @@ describe("ReservationFulfillment.recordDelivery trace", () => {
   test("asks for a retry when a delivered report can't be recorded", async () => {
     const { exit, trace } = await recordDelivery({
       findByActiveCustomerEmailDeliveryId: succeed(awaitingOrder),
-      markCustomerEmailDeliveryFulfilled: fail(new Error("db down")),
+      markCustomerEmailDeliveryFulfilled: fail(
+        fulfillmentQueryFailure("reservations", "db down")
+      ),
     });
 
     expect(outcomeOf(exit)).toBe("reservation_update_failed");
@@ -1314,7 +1371,9 @@ describe("ReservationFulfillment.recordDelivery trace", () => {
     const { exit, trace } = await recordDelivery(
       {
         findByActiveCustomerEmailDeliveryId: succeed(awaitingOrder),
-        markCustomerEmailDeliveryFailed: fail(new Error("db down")),
+        markCustomerEmailDeliveryFailed: fail(
+          fulfillmentQueryFailure("reservations", "db down")
+        ),
       },
       { outcome: "failed" }
     );

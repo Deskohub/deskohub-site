@@ -25,13 +25,13 @@ import { FioPaymentSettlementRepository } from "@/features/checkout/backend/repo
 import { startReservationAudit } from "@/features/reservation/backend/reservation-audit";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
+import { workspaceReservationDetailsFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
   requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
-import { workspaceReservationDetailsFixture } from "./administration-database.test-utils";
 import {
   ReservationAdministrationService,
   type ReservationCancellationInput,

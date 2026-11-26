@@ -48,6 +48,7 @@ import {
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
 import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
+import { dotyposCustomerFixture } from "@/shared/testing/dotypos-customer.test-utils";
 import {
   fixtureReservationAuthorId,
   workspaceFixtures,
@@ -59,7 +60,6 @@ import {
   type AdministrationReservationExportInput,
   AdministrationService,
 } from "./administration.service";
-import { dotyposCustomerFixture } from "./customer-directory.test-utils";
 import { getAdministrationPaymentStatus } from "./formatters";
 import { PaymentAdministrationServiceMock } from "./payment-administration.service.mock";
 import { PostHogReservationHistory } from "./posthog-reservation-history";

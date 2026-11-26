@@ -1,10 +1,18 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+} from "@deskohub/dotypos";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
-import { Effect, Layer } from "effect";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
+import { Cause, Effect, Layer } from "effect";
 import type { ReservationInvoiceService as ReservationInvoices } from "@/features/accounting/backend/reservation-invoice.service";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import type { IFulfillmentLedger } from "./fulfillment-ledger.repository";
 import type { ReservationAccessDeliveryReport } from "./reservation-fulfillment.service";
 
@@ -40,20 +48,23 @@ const customerEmailDeliveryId = EmailDeliveryIdSchema.make("resend-email-id");
 const reservationId = workspaceReservationIdSchema.make("reservation-id");
 const reportedAt = Temporal.Instant.from("2026-01-01T12:05:00.000Z");
 
-const awaitingDeliveryReservation = {
-  id: "reservation-id",
-  activePaymentAttemptId: "payment-attempt-id",
-  paymentState: "paid",
+const awaitingDeliveryReservation = workspaceReservationFixture({
+  id: reservationId,
+  activePaymentAttemptId: paymentAttemptIdSchema.make("payment-attempt-id"),
+  activeCustomerEmailDeliveryId: customerEmailDeliveryId,
   fulfillmentState: "awaiting_delivery",
-  fulfillmentFailureCode: null,
-};
+  fulfilledAt: null,
+});
 
-const fulfilledReservation = {
+const fulfilledReservation = workspaceReservationFixture({
   ...awaitingDeliveryReservation,
-  dotyposReservationId: "dotypos-reservation-id",
-  dotyposCustomerId: "dotypos-customer-id",
+  dotyposReservationId: DotyposReservationIdSchema.make(
+    "dotypos-reservation-id"
+  ),
+  dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
   fulfillmentState: "fulfilled",
-};
+  fulfilledAt: reportedAt,
+});
 
 const deliveryReport = (
   overrides: Partial<ReservationAccessDeliveryReport> = {}
@@ -112,15 +123,13 @@ describe("ReservationFulfillment.recordDelivery", () => {
   test("completes an awaiting delivery, emits reservation fulfilled and issues the invoice", async () => {
     const analytics = recordCheckoutAnalytics();
     const processInvoice = mock(() => Effect.void);
-    const markFulfilled = mock(() =>
-      Effect.succeed(fulfilledReservation as never)
-    );
+    const markFulfilled = mock(() => Effect.succeed(fulfilledReservation));
     const markDeliveryFailed = mock(() =>
       Effect.die("should not fail fulfillment")
     );
     const ledger = {
       findByActiveCustomerEmailDeliveryId: mock(() =>
-        Effect.succeed(awaitingDeliveryReservation as never)
+        Effect.succeed(awaitingDeliveryReservation)
       ),
       markCustomerEmailDeliveryFulfilled: markFulfilled,
       markCustomerEmailDeliveryFailed: markDeliveryFailed,
@@ -148,7 +157,7 @@ describe("ReservationFulfillment.recordDelivery", () => {
     expect(capturedEvent).toMatchObject({ event: "reservation fulfilled" });
     expect(
       Temporal.Instant.compare(
-        capturedEvent?.timestamp as Temporal.Instant,
+        requireValue(capturedEvent, "captured fulfillment event").timestamp,
         reportedAt
       )
     ).toBe(0);
@@ -158,8 +167,12 @@ describe("ReservationFulfillment.recordDelivery", () => {
   });
 
   test("retries the invoice for an already fulfilled reservation", async () => {
-    const invoiceFailure = new Error("synthetic invoice failure");
-    const processInvoice = mock(() => Effect.fail(invoiceFailure as never));
+    const invoiceFailure = new EffectDrizzleQueryError({
+      query: "select",
+      params: [],
+      cause: Cause.die(new Error("synthetic invoice failure")),
+    });
+    const processInvoice = mock(() => Effect.fail(invoiceFailure));
     const analytics = recordCheckoutAnalytics();
     const markFulfilled = mock(() => Effect.die("should not re-fulfill"));
 
@@ -168,7 +181,7 @@ describe("ReservationFulfillment.recordDelivery", () => {
         recordDelivery({
           ledger: {
             findByActiveCustomerEmailDeliveryId: mock(() =>
-              Effect.succeed(fulfilledReservation as never)
+              Effect.succeed(fulfilledReservation)
             ),
             markCustomerEmailDeliveryFulfilled: markFulfilled,
           },
@@ -197,7 +210,7 @@ describe("ReservationFulfillment.recordDelivery", () => {
       recordDelivery({
         ledger: {
           findByActiveCustomerEmailDeliveryId: mock(() =>
-            Effect.succeed(fulfilledReservation as never)
+            Effect.succeed(fulfilledReservation)
           ),
           ...untouchedDelivery(),
         },
@@ -209,19 +222,19 @@ describe("ReservationFulfillment.recordDelivery", () => {
   });
 
   test("repairs a failed delivery only for the fulfillment email failure code", async () => {
-    const markFulfilled = mock(() =>
-      Effect.succeed(fulfilledReservation as never)
-    );
+    const markFulfilled = mock(() => Effect.succeed(fulfilledReservation));
 
     const outcome = await Effect.runPromise(
       recordDelivery({
         ledger: {
           findByActiveCustomerEmailDeliveryId: mock(() =>
-            Effect.succeed({
-              ...awaitingDeliveryReservation,
-              fulfillmentState: "failed",
-              fulfillmentFailureCode: "fulfillment_email_failed",
-            } as never)
+            Effect.succeed(
+              workspaceReservationFixture({
+                ...awaitingDeliveryReservation,
+                fulfillmentState: "failed",
+                fulfillmentFailureCode: "fulfillment_email_failed",
+              })
+            )
           ),
           markCustomerEmailDeliveryFulfilled: markFulfilled,
           markCustomerEmailDeliveryFailed: mock(() =>
@@ -241,11 +254,13 @@ describe("ReservationFulfillment.recordDelivery", () => {
   test("does not repair a failed delivery with a different failure code", async () => {
     const ledger = {
       findByActiveCustomerEmailDeliveryId: mock(() =>
-        Effect.succeed({
-          ...awaitingDeliveryReservation,
-          fulfillmentState: "failed",
-          fulfillmentFailureCode: "fulfillment_dotypos_failed",
-        } as never)
+        Effect.succeed(
+          workspaceReservationFixture({
+            ...awaitingDeliveryReservation,
+            fulfillmentState: "failed",
+            fulfillmentFailureCode: "fulfillment_dotypos_failed",
+          })
+        )
       ),
       ...untouchedDelivery(),
     };
@@ -261,22 +276,26 @@ describe("ReservationFulfillment.recordDelivery", () => {
   test("fails a fulfilled delivery when a failure report reaches the ledger", async () => {
     const failedAt = Temporal.Instant.from("2026-01-01T12:10:00.000Z");
     const markDeliveryFailed = mock(() =>
-      Effect.succeed({
-        ...awaitingDeliveryReservation,
-        fulfillmentState: "failed",
-        fulfillmentFailureCode: "fulfillment_email_failed",
-        fulfillmentFailedAt: failedAt,
-      } as never)
+      Effect.succeed(
+        workspaceReservationFixture({
+          ...awaitingDeliveryReservation,
+          fulfillmentState: "failed",
+          fulfillmentFailureCode: "fulfillment_email_failed",
+          fulfillmentFailedAt: failedAt,
+        })
+      )
     );
 
     const outcome = await Effect.runPromise(
       recordDelivery({
         ledger: {
           findByActiveCustomerEmailDeliveryId: mock(() =>
-            Effect.succeed({
-              ...fulfilledReservation,
-              fulfilledAt: Temporal.Instant.from("2026-01-01T12:00:00.000Z"),
-            } as never)
+            Effect.succeed(
+              workspaceReservationFixture({
+                ...fulfilledReservation,
+                fulfilledAt: Temporal.Instant.from("2026-01-01T12:00:00.000Z"),
+              })
+            )
           ),
           markCustomerEmailDeliveryFulfilled: mock(() =>
             Effect.die("should not update delivery")
@@ -303,10 +322,12 @@ describe("ReservationFulfillment.recordDelivery", () => {
       recordDelivery({
         ledger: {
           findByActiveCustomerEmailDeliveryId: mock(() =>
-            Effect.succeed({
-              ...fulfilledReservation,
-              fulfilledAt: Temporal.Instant.from("2026-01-01T12:10:00.000Z"),
-            } as never)
+            Effect.succeed(
+              workspaceReservationFixture({
+                ...fulfilledReservation,
+                fulfilledAt: Temporal.Instant.from("2026-01-01T12:10:00.000Z"),
+              })
+            )
           ),
           markCustomerEmailDeliveryFulfilled: mock(() =>
             Effect.die("should not update delivery")
@@ -334,14 +355,16 @@ describe("ReservationFulfillment.recordDelivery", () => {
       recordDelivery({
         ledger: {
           findByActiveCustomerEmailDeliveryId: mock(() =>
-            Effect.succeed({
-              ...awaitingDeliveryReservation,
-              fulfillmentState: "failed",
-              fulfillmentFailureCode: "fulfillment_email_failed",
-              fulfillmentFailedAt: Temporal.Instant.from(
-                "2026-01-01T12:10:00.000Z"
-              ),
-            } as never)
+            Effect.succeed(
+              workspaceReservationFixture({
+                ...awaitingDeliveryReservation,
+                fulfillmentState: "failed",
+                fulfillmentFailureCode: "fulfillment_email_failed",
+                fulfillmentFailedAt: Temporal.Instant.from(
+                  "2026-01-01T12:10:00.000Z"
+                ),
+              })
+            )
           ),
           markCustomerEmailDeliveryFulfilled: markFulfilled,
           markCustomerEmailDeliveryFailed: mock(() =>
@@ -367,14 +390,14 @@ describe("ReservationFulfillment.recordDelivery", () => {
 
   test("records a failed delivery with the email failure code at the report time", async () => {
     const markDeliveryFailed = mock(() =>
-      Effect.succeed(awaitingDeliveryReservation as never)
+      Effect.succeed(awaitingDeliveryReservation)
     );
 
     const outcome = await Effect.runPromise(
       recordDelivery({
         ledger: {
           findByActiveCustomerEmailDeliveryId: mock(() =>
-            Effect.succeed(awaitingDeliveryReservation as never)
+            Effect.succeed(awaitingDeliveryReservation)
           ),
           markCustomerEmailDeliveryFailed: markDeliveryFailed,
         },
@@ -391,9 +414,7 @@ describe("ReservationFulfillment.recordDelivery", () => {
   });
 
   test("asks for a retry when this deployment's access email is reported before its delivery is attached", async () => {
-    const markFulfilled = mock(() =>
-      Effect.succeed(fulfilledReservation as never)
-    );
+    const markFulfilled = mock(() => Effect.succeed(fulfilledReservation));
     const markDeliveryFailed = mock(() =>
       Effect.die("should not update delivery")
     );
@@ -420,7 +441,7 @@ describe("ReservationFulfillment.recordDelivery", () => {
         ledger: {
           ...ledger,
           findByActiveCustomerEmailDeliveryId: mock(() =>
-            Effect.succeed(awaitingDeliveryReservation as never)
+            Effect.succeed(awaitingDeliveryReservation)
           ),
         },
         report: deliveryReport(),
@@ -470,7 +491,7 @@ describe("ReservationFulfillment.recordDelivery", () => {
     async (_, accessEmail, ignored) => {
       const ledger = {
         findByActiveCustomerEmailDeliveryId: mock(() =>
-          Effect.succeed(awaitingDeliveryReservation as never)
+          Effect.succeed(awaitingDeliveryReservation)
         ),
         ...untouchedDelivery(),
       };
@@ -486,14 +507,18 @@ describe("ReservationFulfillment.recordDelivery", () => {
   );
 
   test("fails with a retryable error when the reservation cannot be loaded", async () => {
-    const loadFailure = new Error("synthetic load failure");
+    const loadFailure = new EffectDrizzleQueryError({
+      query: "select",
+      params: [],
+      cause: Cause.die(new Error("synthetic load failure")),
+    });
 
     const error = await Effect.runPromise(
       Effect.flip(
         recordDelivery({
           ledger: {
             findByActiveCustomerEmailDeliveryId: mock(() =>
-              Effect.fail(loadFailure as never)
+              Effect.fail(loadFailure)
             ),
           },
           report: deliveryReport(),
@@ -515,16 +540,20 @@ describe("ReservationFulfillment.recordDelivery", () => {
   ] as const)(
     "fails with a retryable error when a %s report cannot be recorded",
     async (outcome, transition) => {
-      const updateFailure = new Error("synthetic update failure");
+      const updateFailure = new EffectDrizzleQueryError({
+        query: "update",
+        params: [],
+        cause: Cause.die(new Error("synthetic update failure")),
+      });
 
       const error = await Effect.runPromise(
         Effect.flip(
           recordDelivery({
             ledger: {
               findByActiveCustomerEmailDeliveryId: mock(() =>
-                Effect.succeed(awaitingDeliveryReservation as never)
+                Effect.succeed(awaitingDeliveryReservation)
               ),
-              [transition]: mock(() => Effect.fail(updateFailure as never)),
+              [transition]: mock(() => Effect.fail(updateFailure)),
             },
             report: deliveryReport({ outcome }),
           })

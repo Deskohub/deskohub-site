@@ -11,7 +11,7 @@ import type { Locale } from "@/features/i18n";
  * The caller must distinguish it from a reservation that has no saved
  * preference.
  */
-class CustomerEmailLocaleReadError extends Data.TaggedError(
+export class CustomerEmailLocaleReadError extends Data.TaggedError(
   "CustomerEmailLocaleReadError"
 )<{
   readonly code: "customer-email-locale.read";

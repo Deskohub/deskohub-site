@@ -1,11 +1,16 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, mock, test } from "bun:test";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+} from "@deskohub/dotypos";
 import { type EmailDeliveryId, EmailDeliveryIdSchema } from "@deskohub/email";
 import { eq } from "drizzle-orm";
 import { Cause, Effect, Exit, Layer } from "effect";
 import { type FulfillmentState, workspaceReservations } from "@/db/schema";
 import { env, getAccountingDocumentSnapshotSecret } from "@/env";
+import { workspaceReservationDetailsFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
@@ -136,18 +141,28 @@ describe.skipIf(!testDatabase)(
             Layer.mock(ReservationInvoiceService, { issueAfterFulfillment }),
             Layer.mock(WorkspaceReservationService, {
               getReservation: (id) =>
-                Effect.succeed({
-                  id,
-                  dotyposReservationId: "dotypos-reservation-id",
-                  dotyposCustomerId: "dotypos-customer-id",
-                  reservedFrom: paidAt,
-                  reservedUntil: paidAt.add({ hours: 2 }),
-                  locale: "cs-CZ",
-                } as never),
+                Effect.succeed(
+                  workspaceReservationDetailsFixture({
+                    id,
+                    dotyposReservationId: DotyposReservationIdSchema.make(
+                      "dotypos-reservation-id"
+                    ),
+                    dotyposCustomerId: DotyposCustomerIdSchema.make(
+                      "dotypos-customer-id"
+                    ),
+                    reservedFrom: paidAt,
+                    reservedUntil: paidAt.add({ hours: 2 }),
+                    locale: "cs-CZ",
+                  })
+                ),
             }),
             Layer.mock(WorkspaceCheckoutAccessCodeService, {
-              resolveCustomerAccessCode: () =>
-                Effect.succeed("access-code" as never),
+              resolveCustomerAccessCode: ({ reservedFrom, reservedUntil }) =>
+                Effect.succeed({
+                  code: "access-code",
+                  accessStartsAt: reservedFrom,
+                  accessEndsAt: reservedUntil,
+                }),
             }),
             Layer.mock(CustomerEmailLocaleService, {
               byDotyposCustomer: () => Effect.succeed({ kind: "guest" }),

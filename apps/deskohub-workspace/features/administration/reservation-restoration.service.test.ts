@@ -41,7 +41,10 @@ import {
   WorkspaceReservationDetailsError,
   WorkspaceReservationService,
 } from "@/features/reservation/backend/workspace-reservation.service";
-import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import {
+  workspaceReservationDetailsFixture,
+  workspaceReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
   type ReservationAccessGrant,
@@ -50,7 +53,6 @@ import {
 } from "@/features/reservation-access";
 import { reservationAccessGrantIdSchema } from "@/features/reservation-access/reservation-access";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
-import { workspaceReservationDetailsFixture } from "./administration-database.test-utils";
 import type { RestorationRefundAttempt } from "./reservation-restoration-refund";
 
 // getRestorationBooking is a plain function, so the test swaps it per case and

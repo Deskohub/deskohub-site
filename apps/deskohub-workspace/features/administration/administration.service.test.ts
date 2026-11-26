@@ -28,6 +28,7 @@ import { checkoutSessionKeySchema } from "@/features/checkout/checkout-identifie
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { dotyposCustomerFixture } from "@/shared/testing/dotypos-customer.test-utils";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils";
 import {
@@ -39,7 +40,6 @@ import {
   reservationDetailRowValues,
   reservationSummaryRowValues,
 } from "./administration-database.test-utils";
-import { dotyposCustomerFixture } from "./customer-directory.test-utils";
 import { inactiveCustomerDisplayNames } from "./customer-name";
 import { PaymentAdministrationServiceMock } from "./payment-administration.service.mock";
 import { PostHogReservationHistory } from "./posthog-reservation-history";
