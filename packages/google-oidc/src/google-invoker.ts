@@ -5,7 +5,6 @@ import {
   errors as joseErrors,
   jwtVerify,
 } from "jose";
-import { env } from "@/env";
 
 /**
  * A Google service account allowed to call a private worker: the account a
@@ -16,26 +15,6 @@ export interface GoogleInvoker {
   readonly email: string;
   readonly audience: string;
 }
-
-const googleInvoker = (
-  email: string | undefined,
-  audience: string | undefined
-): GoogleInvoker | undefined =>
-  email && audience ? { email, audience } : undefined;
-
-/** The invoker Cloud Tasks queues deliver as; unset until both settings are. */
-export const cloudTasksInvoker = () =>
-  googleInvoker(
-    env.WORKSPACE_TASKS_INVOKER_EMAIL,
-    env.WORKSPACE_TASKS_AUDIENCE
-  );
-
-/** The invoker Cloud Scheduler jobs call as; unset until both settings are. */
-export const cloudSchedulerInvoker = () =>
-  googleInvoker(
-    env.WORKSPACE_SCHEDULER_INVOKER_EMAIL,
-    env.WORKSPACE_SCHEDULER_AUDIENCE
-  );
 
 const googleCertificatesUrl = new URL(
   "https://www.googleapis.com/oauth2/v3/certs"
