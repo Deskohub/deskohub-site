@@ -521,35 +521,53 @@ describe("post-destroy inventory", () => {
     });
   });
 
-  test("fails on a partial Compute listing", () => {
-    const partial: ReadonlyArray<Schema.JsonObject> = [
+  test.each([
+    [
+      "unreachable scopes",
       { items: {}, unreachables: ["regions/europe-west4"] },
+    ],
+    [
+      "an unreachable zone warning",
       {
         items: {
           "zones/europe-west1-b": { warning: { code: "UNREACHABLE" } },
         },
       },
+    ],
+    [
+      "a partial page warning",
       { items: {}, warning: { code: "PARTIAL_SUCCESS" } },
+    ],
+    [
+      "a partial region warning",
       {
         items: {
           "regions/europe-west1": { warning: { code: "PARTIAL_SUCCESS" } },
         },
       },
-      { items: false },
-      { items: {}, warning: null },
-      { items: { global: { warning: null } } },
+    ],
+    ["invalid items", { items: false }],
+    ["a null page warning", { items: {}, warning: null }],
+    ["a null scope warning", { items: { global: { warning: null } } }],
+    [
+      "invalid forwarding rules",
       { items: { global: { forwardingRules: false } } },
+    ],
+    [
+      "invalid unreachable scopes",
       { items: {}, unreachables: "regions/europe-west4" },
-    ];
-    for (const body of partial) {
+    ],
+  ] satisfies ReadonlyArray<readonly [string, Schema.JsonObject]>)(
+    "fails on a partial Compute listing with %s",
+    (_case, body) => {
       const { exitCode, output } = inventory([
         computeList("forwardingRules", body),
         listing("^storage ls -r", emptiedState),
       ]);
-      expect({ body, exitCode }).toEqual({ body, exitCode: 1 });
+      expect(exitCode).toBe(1);
       expect(output).toContain("teardown unverified: forwarding-rules");
     }
-  });
+  );
 
   test("finds a resource on a later Compute page", () => {
     const { exitCode, output } = inventory([
@@ -610,36 +628,64 @@ describe("post-destroy inventory", () => {
     ]);
   });
 
-  test("finds leftover proof resources by their bare IDs", () => {
-    for (const leftover of [
+  test.each([
+    [
+      "stack resource",
       listing(
         "^storage ls -r",
         `${emptiedState}\n${state}/${stackPrefix}WorkspaceWeb.json`
       ),
+    ],
+    [
+      "proof run record",
       listing(
         "^storage ls -r",
         `${emptiedState}\n${state}/sandbox-proof/run.env`
       ),
-      // The live release record a failed removal left.
+    ],
+    // The live release record a failed removal left.
+    [
+      "release record",
       listing(
         "^storage ls -r",
         `${emptiedState}\n${state}/workspace-release-record.sandbox.json`
       ),
+    ],
+    [
+      "task queue",
       listing(
         "^tasks queues list",
         "workspace-paid-fulfillment-r45279064237-1"
       ),
+    ],
+    [
+      "scheduler job",
       listing("^scheduler jobs list", "workspace-reservation-hold-sweep"),
+    ],
+    [
+      "Artifact Registry repository",
       listing("^artifacts repositories list", "workspace"),
+    ],
+    [
+      "Cloud Run revision",
       listing("^run revisions list", "workspace-api-00001-abc"),
-      // No load balancer, NEG, Cloud Armor, certificate or exclusion of
-      // any name, and no project-level invoker grant.
+    ],
+    // No load balancer, NEG, Cloud Armor, certificate or exclusion of
+    // any name, and no project-level invoker grant.
+    [
+      "forwarding rule",
       computeList("forwardingRules", {
         items: { global: { forwardingRules: [{ name: "legacy-http" }] } },
       }),
+    ],
+    [
+      "Cloud Armor policy",
       computeList("securityPolicies", {
         items: { global: { securityPolicies: [{ name: "legacy-armor" }] } },
       }),
+    ],
+    [
+      "sink exclusion",
       sinksPage(`projects/${projectId}`, [
         {
           name: "export",
@@ -647,19 +693,25 @@ describe("post-destroy inventory", () => {
           exclusions: [{ name: "drop-noise", filter: "severity<INFO" }],
         },
       ]),
+    ],
+    [
+      "project invoker grant",
       listing(
         "^projects get-iam-policy .*roles/run\\.invoker",
         "serviceAccount:stray"
       ),
-    ]) {
+    ],
+  ] satisfies ReadonlyArray<readonly [string, FakeRule]>)(
+    "finds a leftover %s by its bare ID",
+    (_case, leftover) => {
       const { exitCode, output } = inventory([
         leftover,
         listing("^storage ls -r", emptiedState),
       ]);
-      expect({ leftover, exitCode }).toEqual({ leftover, exitCode: 1 });
+      expect(exitCode).toBe(1);
       expect(output).toContain("proof resources remain");
     }
-  });
+  );
 });
 
 describe("cleanup-only after run 45279064237", () => {
@@ -1700,7 +1752,7 @@ describe("private access", () => {
     }
   });
 
-  test("fails on a public member, a disabled invoker check or missing invokers", () => {
+  describe("fails on a public member, a disabled invoker check or missing invokers", () => {
     for (const [rule, message] of [
       [
         {
@@ -1825,9 +1877,11 @@ describe("private access", () => {
         "the IAM policy of workspace-api is unreadable",
       ],
     ] as const) {
-      const { exitCode, output } = access([rule]);
-      expect({ message, exitCode }).toEqual({ message, exitCode: 1 });
-      expect(output).toContain(message);
+      test(message, () => {
+        const { exitCode, output } = access([rule]);
+        expect(exitCode).toBe(1);
+        expect(output).toContain(message);
+      });
     }
   });
 });
@@ -2402,7 +2456,7 @@ describe("baseline inventory", () => {
     });
   });
 
-  test("fails on any edge resource, any exclusion or an unreadable class", () => {
+  describe("fails on any edge resource, any exclusion or an unreadable class", () => {
     for (const [rule, message] of [
       [
         computeList("networkEndpointGroups", {
@@ -2452,9 +2506,11 @@ describe("baseline inventory", () => {
         "target-https-proxies is unreadable",
       ],
     ] as const) {
-      const { exitCode, output } = baseline([rule]);
-      expect({ message, exitCode }).toEqual({ message, exitCode: 1 });
-      expect(output).toContain(message);
+      test(message, () => {
+        const { exitCode, output } = baseline([rule]);
+        expect(exitCode).toBe(1);
+        expect(output).toContain(message);
+      });
     }
   });
 });

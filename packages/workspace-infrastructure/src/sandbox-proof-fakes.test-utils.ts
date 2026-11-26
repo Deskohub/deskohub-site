@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Predicate from "effect/Predicate";
-import * as Schema from "effect/Schema";
+import type * as Schema from "effect/Schema";
 import {
   isLockedStackAction,
   lockedStackInvocation,
@@ -546,15 +546,18 @@ const fakeReadyService = (service: string) => {
   };
 };
 
-const ActiveRelease = Schema.Struct({
-  record: Schema.Struct({
-    active: Schema.Struct({ imageDigest: Schema.String }),
-  }),
-});
-const isActiveRelease = Schema.is(ActiveRelease);
 /** The image digest of the release `release status` reports active. */
-const activeDigest = ({ status }: FakeWorld) =>
-  isActiveRelease(status) ? status.record.active.imageDigest : undefined;
+const activeDigest = async ({ status }: FakeWorld) => {
+  // Only revision descriptions need this schema. Each fake CLI call is a
+  // new process, so importing it eagerly slows unrelated commands too.
+  const { is, String: StringSchema, Struct } = await import("effect/Schema");
+  const isActiveRelease = is(
+    Struct({
+      record: Struct({ active: Struct({ imageDigest: StringSchema }) }),
+    })
+  );
+  return isActiveRelease(status) ? status.record.active.imageDigest : undefined;
+};
 
 /** The RPC probe CLI's verdict for the marker file it was handed. */
 const fakeRpcProbe = (args: ReadonlyArray<string>, world: FakeWorld) => {
@@ -690,7 +693,8 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
       args[2] === "describe"
     ) {
       // Every live revision runs the release's active image.
-      print(`${fakeImage}@${activeDigest(world) ?? "sha256:none"}`);
+      const digest = await activeDigest(world);
+      print(`${fakeImage}@${digest ?? "sha256:none"}`);
       return 0;
     }
     if (args[0] === "run" && args[1] === "services" && args[2] === "describe") {
