@@ -519,7 +519,7 @@ describe("sandbox bootstrap script", () => {
     }
   });
 
-  test("revokes the runtime trace-writer grants and lets the deployer read compute, logs and traces", () => {
+  test("revokes runtime trace writers and grants the deployer read and alert access", () => {
     const firstPhase = runBootstrap(...dryRunArgs).stdout.toString();
     const traceRoles =
       /--role roles\/(?:telemetry\.tracesWriter|cloudtrace\.agent)\b/;
@@ -544,7 +544,7 @@ describe("sandbox bootstrap script", () => {
         .every((line) => line.includes(" remove-iam-policy-binding "))
     ).toBe(true);
     expect(firstPhase).not.toMatch(
-      /roles\/(?:logging\.viewer|cloudtrace\.user)\b/
+      /roles\/(?:logging\.(?:viewer|configWriter)|cloudtrace\.user)\b/
     );
 
     const secondPhase = runBootstrap(
@@ -555,14 +555,15 @@ describe("sandbox bootstrap script", () => {
       "roles/compute.viewer",
       "roles/logging.viewer",
       "roles/cloudtrace.user",
+      "roles/logging.configWriter",
+      "roles/monitoring.alertPolicyEditor",
     ]) {
       expect(secondPhase).toContain(
-        `--member serviceAccount:${sandboxServiceAccount("workspace-deployer")} --role ${role} --format=none`
+        `gcloud projects add-iam-policy-binding deskohub-ws-sandbox --condition=None --quiet --member serviceAccount:${sandboxServiceAccount("workspace-deployer")} --role ${role} --format=none`
       );
     }
-    // The deployer manages no load balancer, security policy or log sink.
     expect(secondPhase).not.toMatch(
-      /roles\/(?:compute\.loadBalancerAdmin|compute\.securityAdmin|logging\.configWriter)\b/
+      /roles\/compute\.(?:loadBalancerAdmin|securityAdmin)\b/
     );
   });
 
@@ -570,10 +571,9 @@ describe("sandbox bootstrap script", () => {
     const retiredEdgeRoles = [
       "roles/compute.loadBalancerAdmin",
       "roles/compute.securityAdmin",
-      "roles/logging.configWriter",
     ];
     const keptRoles =
-      "roles/run.admin\nroles/logging.viewer\nroles/cloudtrace.user";
+      "roles/run.admin\nroles/logging.viewer\nroles/cloudtrace.user\nroles/logging.configWriter";
     const revokeArgs = [
       ...liveArgs,
       "--grant-deploy-roles",
@@ -632,12 +632,26 @@ describe("sandbox bootstrap script", () => {
       const { result } = runLiveBootstrap(
         {
           projectNumber: "123456789012",
-          deployerRoles: "roles/logging.viewer",
+          deployerRoles: keptRoles.replace("\nroles/cloudtrace.user", ""),
         },
         ...revokeArgs
       );
       expect(result.exitCode).toBe(1);
       expect(result.stderr.toString()).toContain("roles/cloudtrace.user");
+    });
+
+    test("fails when readback is missing the scheduler alert's logging role", () => {
+      const { result } = runLiveBootstrap(
+        {
+          projectNumber: "123456789012",
+          deployerRoles: keptRoles.replace("\nroles/logging.configWriter", ""),
+        },
+        ...revokeArgs
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain(
+        "the deployer lost roles/logging.configWriter"
+      );
     });
 
     test("never revokes without the deploy-roles phase", () => {
