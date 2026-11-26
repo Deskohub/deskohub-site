@@ -6,6 +6,7 @@ import {
   makeWorkspaceE2EEnvironment,
   nightlyCasesEnabled,
   toPlaywrightEnvironment,
+  unlimitedPassAutoRenewalCaseEnabled,
   workspaceE2EFlowSelection,
 } from "./e2e-env";
 import {
@@ -83,6 +84,35 @@ describe("Workspace E2E environment", () => {
     expect(() =>
       makeTestE2EEnvironment({ WORKSPACE_E2E_NIGHTLY_CASES: "false" })
     ).toThrow();
+  });
+
+  test("requires manual leased exact-SHA Nexi payments for Unlimited renewal", () => {
+    const selected = {
+      ...validE2ERuntimeEnvironment,
+      TARGET_SHA: "a".repeat(40),
+      WORKSPACE_E2E_ALLOCATION_SHARD: "1",
+      WORKSPACE_E2E_EXECUTION_CONTEXT: "manual",
+      WORKSPACE_E2E_FLOWS: "payments",
+      WORKSPACE_E2E_PAYMENT_PROVIDER: "nexi",
+      WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: "true",
+    };
+    const environment = makeWorkspaceE2EEnvironment(selected);
+    expect(unlimitedPassAutoRenewalCaseEnabled(environment)).toBe(true);
+    expect(
+      makeWorkspaceE2EEnvironment(toPlaywrightEnvironment(environment))
+    ).toEqual(environment);
+    for (const invalid of [
+      { TARGET_SHA: undefined },
+      { WORKSPACE_E2E_ALLOCATION_SHARD: undefined },
+      { WORKSPACE_E2E_EXECUTION_CONTEXT: "ci" },
+      { WORKSPACE_E2E_FLOWS: "all" },
+      { WORKSPACE_E2E_NIGHTLY_CASES: "true" },
+      { WORKSPACE_E2E_PAYMENT_PROVIDER: "fallback" },
+    ]) {
+      expect(() =>
+        makeWorkspaceE2EEnvironment({ ...selected, ...invalid })
+      ).toThrow("requires the leased exact-SHA payments flow");
+    }
   });
 
   test("does not expose application-only environment variables", () => {

@@ -37,10 +37,14 @@ export const workspaceE2ENonPaymentCaseIds = [
   "contact-form",
 ] as const;
 
+export const unlimitedPassAutoRenewalCaseId = "unlimited-pass-auto-renewal";
+export const unlimitedPassAutoRenewalRecipientLabel = "unlimited-renewal";
+
 // Cases that pay on the Nexi hosted page, longest median deployed duration
 // first. Only their hosted-payment portion holds the run's hosted-payment
 // permit.
 const workspaceE2EPaidCaseIds = [
+  unlimitedPassAutoRenewalCaseId,
   "checkout-calendar-sale",
   "checkout-referral-someone-else",
   "payment-late-recovery-recreated",

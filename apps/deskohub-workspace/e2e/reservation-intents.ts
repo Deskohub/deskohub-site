@@ -31,6 +31,7 @@ export const recordReservationIntent = Effect.fn("E2E.recordReservationIntent")(
     readonly owner: ReservationIntent["owner"];
     readonly startDate: Date;
     readonly endDate: Date;
+    readonly requestedAt?: string;
   }) {
     const context = yield* Effect.serviceOption(E2ERunContextService);
     // Unit tests without a real run context create no campaign evidence.
@@ -57,6 +58,9 @@ export const recordReservationIntent = Effect.fn("E2E.recordReservationIntent")(
       owner: input.owner,
       startDate: input.startDate.toISOString(),
       endDate: input.endDate.toISOString(),
+      ...(input.requestedAt === undefined
+        ? {}
+        : { requestedAt: input.requestedAt }),
     };
     yield* tryWorkspaceE2EPromise("persist reservation intent", async () => {
       if (!(await readReservationJournal(journal))) {
@@ -89,7 +93,10 @@ export const recordCheckoutIntent = (data: CheckoutData) => {
 
 export const recordReservationResult = (
   recorded: Effect.Success<ReturnType<typeof recordReservationIntent>>,
-  result: Pick<ReservationIntent, "orderId" | "reservationId">
+  result: Pick<
+    ReservationIntent,
+    "orderId" | "reservationId" | "paymentStartedAt" | "paymentFulfilledAt"
+  >
 ) =>
   recorded
     ? tryWorkspaceE2EPromise("persist reservation result", () =>

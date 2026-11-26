@@ -9,6 +9,9 @@ export type ReservationIntent = {
   readonly startDate: string;
   readonly endDate: string;
   readonly orderId?: string;
+  readonly requestedAt?: string;
+  readonly paymentStartedAt?: string;
+  readonly paymentFulfilledAt?: string;
   readonly reservationId?: string;
 };
 

@@ -26,6 +26,7 @@ import { assertSafeDatabaseUrl } from "../runtime";
 import { E2ETelemetryService } from "../services/telemetry";
 import {
   isWorkspaceE2EOfficeCaseId,
+  unlimitedPassAutoRenewalCaseId,
   workspaceE2ECaseIds,
 } from "./case-catalog";
 import {
@@ -164,8 +165,9 @@ test("prepare the workspace checkout run", async ({ browser }) => {
   if (preparationResult) {
     const expectedCaseIds = workspaceE2ECaseIds.filter(
       (caseId) =>
-        preparationResult.preparation.office !== undefined ||
-        !isWorkspaceE2EOfficeCaseId(caseId)
+        caseId !== unlimitedPassAutoRenewalCaseId &&
+        (preparationResult.preparation.office !== undefined ||
+          !isWorkspaceE2EOfficeCaseId(caseId))
     );
     expect(preparationResult.actualCaseIds).toEqual(
       [...expectedCaseIds].toSorted()

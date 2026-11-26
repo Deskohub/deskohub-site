@@ -25,6 +25,11 @@ on:
         required: false
         default: false
         type: boolean
+      include_unlimited_pass_auto_renewal:
+        description: Also test Unlimited auto-renewal on a preview with its draft gate enabled (requires flows=payments and payment_provider=nexi)
+        required: false
+        default: false
+        type: boolean
       payment_provider:
         description: Payment provider mode expected on the preview
         type: choice
@@ -102,7 +107,9 @@ jobs:
           FLOWS_CLI: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/cli.mjs
           GH_TOKEN: ${{ github.token }}
           INCLUDE_NIGHTLY_CASES: ${{ github.event_name == 'workflow_dispatch' && inputs.include_nightly_cases && 'true' || 'false' }}
+          INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL: ${{ github.event_name == 'workflow_dispatch' && inputs.include_unlimited_pass_auto_renewal && 'true' || 'false' }}
           INPUT_FLOWS: ${{ github.event_name == 'workflow_dispatch' && inputs.flows || '' }}
+          INPUT_PAYMENT_PROVIDER: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_provider || '' }}
           # Only workspace-e2e-nightly.yml moves this branch, to a commit of
           # main whose Workspace preview it waits for.
           NIGHTLY_BRANCH: e2e/nightly
@@ -134,6 +141,11 @@ jobs:
           if [[ "$INCLUDE_NIGHTLY_CASES" == "true" &&
             ! ("$EVENT_NAME" == "workflow_dispatch" && "$TARGET_REF" == "$NIGHTLY_BRANCH") ]]; then
             echo "Nightly cases run only against the $NIGHTLY_BRANCH target, never a PR; dispatch without include_nightly_cases" >&2
+            exit 1
+          fi
+          if [[ "$INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL" == "true" &&
+            ("$TARGET_REF" == "$NIGHTLY_BRANCH" || "$INPUT_FLOWS" != "payments" || "$INPUT_PAYMENT_PROVIDER" != "nexi") ]]; then
+            echo 'Unlimited auto-renewal requires a PR preview, flows=payments, and payment_provider=nexi' >&2
             exit 1
           fi
 
@@ -944,6 +956,7 @@ jobs:
           WORKSPACE_E2E_FLOWS: ${{ needs.resolve-target.outputs.flows }}
           # Set only for a validated nightly target that asked for them.
           WORKSPACE_E2E_NIGHTLY_CASES: ${{ needs.resolve-target.outputs.nightly == 'true' && needs.resolve-target.outputs.nightly_cases == 'true' && 'true' || '' }}
+          WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: ${{ github.event_name == 'workflow_dispatch' && inputs.include_unlimited_pass_auto_renewal && 'true' || '' }}
           # Set only for a manual dispatch that asked for review screenshots.
           WORKSPACE_E2E_REVIEW_SCREENSHOTS: ${{ github.event_name == 'workflow_dispatch' && inputs.review_screenshots && 'true' || '' }}
           DATABASE_URL: ${{ steps.preview-database.outputs.pooled_url }}

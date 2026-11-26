@@ -562,10 +562,12 @@ export type HostedPaymentPage = {
 /** Waits for the selected hosted page, leaving its tab active. */
 export const submitPaymentAndWaitForHostedPage = ({
   config,
+  submitPayment = submitCheckoutPayment,
   paymentProvider = initialE2EPaymentProvider(config.paymentProvider),
   session,
 }: {
   config: WorkspaceE2EConfig;
+  submitPayment?: typeof submitCheckoutPayment;
   paymentProvider?: E2EPaymentProvider;
   session: E2EBrowserSession;
 }): Effect.Effect<HostedPaymentPage, WorkspaceE2EError> =>
@@ -581,7 +583,7 @@ export const submitPaymentAndWaitForHostedPage = ({
     addRedaction(
       parseUrl(checkoutPageUrl)?.searchParams.get("payState") ?? undefined
     );
-    const checkoutPage = yield* submitCheckoutPayment(session, timeouts);
+    const checkoutPage = yield* submitPayment(session, timeouts);
 
     const hostedPaymentUrl = yield* waitForPageUrl({
       description: `${paymentProvider} hosted payment page`,
