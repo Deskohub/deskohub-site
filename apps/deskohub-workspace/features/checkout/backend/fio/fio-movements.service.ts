@@ -74,7 +74,7 @@ export class FioHistoryAccessRequired extends Data.TaggedError(
   "FioHistoryAccessRequired"
 ) {}
 
-export type FioReadFailure =
+type FioReadFailure =
   | FioUnavailable
   | FioRejected
   | FioHistoryAccessRequired;
