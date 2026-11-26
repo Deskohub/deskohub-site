@@ -195,17 +195,21 @@ const acceptingAutomations = () =>
       .orderBy(asc(automations.campaignId))
       .pipe(
         Effect.flatMap((rows) =>
-          Effect.forEach(rows, ({ campaignId, acceptingSince }) =>
-            loadAutomationVersionActivations(campaignId).pipe(
-              Effect.map(
-                (versions): AcceptingAutomation => ({
-                  campaignId,
-                  // Filtered on non-null above.
-                  acceptingSince: acceptingSince!,
-                  versions,
-                })
+          Effect.forEach(
+            // Filtered on non-null above.
+            rows.flatMap(({ campaignId, acceptingSince }) =>
+              acceptingSince === null ? [] : [{ campaignId, acceptingSince }]
+            ),
+            ({ campaignId, acceptingSince }) =>
+              loadAutomationVersionActivations(campaignId).pipe(
+                Effect.map(
+                  (versions): AcceptingAutomation => ({
+                    campaignId,
+                    acceptingSince,
+                    versions,
+                  })
+                )
               )
-            )
           )
         )
       )
@@ -261,7 +265,9 @@ const reservationsQualifying = (
     Effect.forEach(
       Map.groupBy(pairs, ({ qualifiers }) => canonicalJson(qualifiers)),
       ([, group]) => {
-        const { qualifiers } = group[0]!;
+        const [first] = group;
+        if (first === undefined) return Effect.succeed([]);
+        const { qualifiers } = first;
         return db
           .select({ id: workspaceReservations.id })
           .from(workspaceReservations)

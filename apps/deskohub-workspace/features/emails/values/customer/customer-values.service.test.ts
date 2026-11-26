@@ -11,11 +11,17 @@ import {
   selectedEmailCustomerShape as selectedEmailCustomerFields,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Layer, Schema } from "effect";
+import type { AdministrationCustomerActivity } from "@/features/administration/administration.service";
+import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
 import {
   CustomerValueSource,
   CustomerValueUnavailable,
 } from "./customer-value-source.service";
-import { CustomerValues } from "./customer-values.service";
+import { CustomerValues, makeCustomerValues } from "./customer-values.service";
+
+const customerId = Schema.decodeUnknownSync(dotyposCustomerIdSchema)(
+  "synthetic-customer"
+);
 
 const definition = (
   source: typeof EmailCustomerSelection.Type
@@ -56,27 +62,25 @@ const run = (input: {
 }) =>
   Effect.flatMap(CustomerValues, (values) =>
     values.resolve({
-      customerId: "synthetic-customer",
+      customerId,
       definition: input.definition,
       locale: "en-US",
     })
   ).pipe(
+    // The loaders hand back whatever data a test needs, contract or not.
     Effect.provide(
-      CustomerValues.Default.pipe(
-        Layer.provide(
-          Layer.mock(CustomerValueSource, {
-            profile: () => {
-              input.called?.();
-              return input.fail
-                ? Effect.fail(
-                    new CustomerValueUnavailable({ source: "profile" })
-                  )
-                : Effect.succeed(input.profile ?? profile);
-            },
-            activity: () =>
-              Effect.succeed(input.activity ?? { marketingConsent: null }),
-          } as never)
-        )
+      Layer.succeed(
+        CustomerValues,
+        makeCustomerValues({
+          profile: () => {
+            input.called?.();
+            return input.fail
+              ? Effect.fail(new CustomerValueUnavailable({ source: "profile" }))
+              : Effect.succeed(input.profile ?? profile);
+          },
+          activity: () =>
+            Effect.succeed(input.activity ?? { marketingConsent: null }),
+        })
       )
     ),
     Effect.result,
@@ -84,6 +88,53 @@ const run = (input: {
   );
 
 describe("CustomerValues", () => {
+  test("reads an activity selection through the default source wiring", async () => {
+    const activity: AdministrationCustomerActivity = {
+      reservations: [],
+      transactions: [],
+      reservationHistoryTruncated: false,
+      transactionHistoryTruncated: false,
+      marketingConsent: null,
+      stats: {
+        reservationCount: 1,
+        favoriteProduct: null,
+        revenue: [{ value: 2500, currency: "CZK", exponent: 2 }],
+        discountSavings: [],
+        favoriteReservationProduct: { kind: "meeting-room" },
+      },
+    };
+    const result = await Effect.flatMap(CustomerValues, (values) =>
+      values.resolve({
+        customerId,
+        definition: definition({
+          kind: "customer",
+          path: ["activity", "stats", "revenue"],
+          fields: [["value"], ["currency"]],
+        }),
+        locale: "en-US",
+      })
+    ).pipe(
+      Effect.provide(
+        CustomerValues.Default.pipe(
+          Layer.provide(
+            Layer.mock(CustomerValueSource, {
+              profile: () =>
+                Effect.fail(
+                  new CustomerValueUnavailable({ source: "profile" })
+                ),
+              activity: () => Effect.succeed(activity),
+            })
+          )
+        )
+      ),
+      Effect.result,
+      Effect.runPromise
+    );
+    expect(result).toMatchObject({
+      _tag: "Success",
+      success: [{ value: 2500, currency: "CZK" }],
+    });
+  });
   test("resolves an explicitly selected sensitive scalar", async () => {
     expect(
       await run({

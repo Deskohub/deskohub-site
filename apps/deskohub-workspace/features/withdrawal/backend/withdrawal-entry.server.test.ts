@@ -2,10 +2,15 @@ import { testEmailAddress } from "@deskohub/test-email";
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer, Option } from "effect";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { orderIdSchema } from "@/features/order";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import type { Money } from "@/shared/money/money";
+import type { WithdrawalQuote } from "../withdrawal-read-model";
+import { contractWithdrawalFixture } from "./contract-withdrawal.test-utils";
 import { WithdrawalRepository } from "./withdrawal.repository";
 import {
   WithdrawalRefusedError,
@@ -58,7 +63,20 @@ mock.module(
   () => ({ CustomerAuthentication: Authentication })
 );
 
-const refund = { value: 40_000, exponent: 2, currency: "CZK" };
+const refund: Money = { value: 40_000, exponent: 2, currency: "CZK" };
+const periodEndsAt = Temporal.Instant.from("2027-01-24T08:00:00Z");
+
+const quote: WithdrawalQuote = {
+  contractId: "reservation-1",
+  contractLabel: "Synthetic reservation",
+  customerName: null,
+  receiptEmail: testEmailAddress("customer"),
+  paidAmount: refund,
+  refundAmount: refund,
+  refundBasis: { kind: "full" },
+  refundTermsKey: "full",
+  periodEndsAt,
+};
 const calls: string[] = [];
 // The recorded withdrawal's refund, `"unreadable"` for a failing ledger.
 let recorded: typeof refund | "unreadable" | undefined;
@@ -70,14 +88,22 @@ Object.assign(WithdrawalRepository, {
       Effect.suspend(() => {
         calls.push(`find ${contract.id}`);
         if (recorded === "unreadable") {
-          return Effect.fail(new Error("ledger unavailable") as never);
+          return Effect.fail(
+            new EffectDrizzleQueryError({
+              query: "select",
+              params: [],
+              cause: new Error("ledger unavailable"),
+            })
+          );
         }
         return Effect.succeed(
           recorded
-            ? Option.some({
-                refundAmount: recorded,
-                accountId: "@test/account-id",
-              } as never)
+            ? Option.some(
+                contractWithdrawalFixture({
+                  accountId: customerAccountIdSchema.make("@test/account-id"),
+                  refundAmount: recorded,
+                })
+              )
             : Option.none()
         );
       }),
@@ -89,13 +115,13 @@ Object.assign(WithdrawalService, {
       Effect.suspend(() => {
         calls.push(`quote ${input.contract.id}`);
         return quotable
-          ? Effect.succeed({} as never)
+          ? Effect.succeed(quote)
           : Effect.fail(new WithdrawalRefusedError({ reason: "period_ended" }));
       }),
   }),
 });
 
-const reservationId = "reservation-1" as WorkspaceReservationId;
+const reservationId = workspaceReservationIdSchema.make("reservation-1");
 const readEntry = async () => {
   const { readReservationWithdrawalEntry } = await import(
     "./withdrawal-entry.server"

@@ -15,7 +15,10 @@ import {
   ReservationVisits,
 } from "@/features/reservation/backend/reservation-visits.service";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
-import type { CustomerEventId } from "@/shared/backend/customer-events/customer-event";
+import {
+  type CustomerEventId,
+  customerEventIdSchema,
+} from "@/shared/backend/customer-events/customer-event";
 import {
   currentInstant,
   temporalInstantToIsoString,
@@ -69,7 +72,7 @@ import {
 import { loadAutomationVersionActivations } from "./automation-version-activations";
 
 const intakeSubjectSchema = Schema.Struct({
-  eventIds: Schema.Array(Schema.String),
+  eventIds: Schema.Array(customerEventIdSchema),
 });
 type IntakeSubject = typeof intakeSubjectSchema.Type;
 
@@ -173,7 +176,7 @@ const recheckVisit = (
 
 const ownedEvents = (
   unitId: AutomationWorkUnitId,
-  eventIds: readonly string[]
+  eventIds: readonly CustomerEventId[]
 ) =>
   Effect.flatMap(WorkspaceTransaction, ({ db }) =>
     db
@@ -181,7 +184,7 @@ const ownedEvents = (
       .from(customerEvents)
       .where(
         and(
-          inArray(customerEvents.id, eventIds as CustomerEventId[]),
+          inArray(customerEvents.id, eventIds),
           eq(customerEvents.automationUnitId, unitId),
           isNull(customerEvents.automationProcessedAt)
         )
@@ -463,15 +466,12 @@ export const makeIntakeHandler = Effect.gen(function* () {
             .map((visit) => [visit.workspaceReservationId, visit] as const)
         );
         return Effect.succeed(
-          new Map(
+          new Map<WorkspaceReservationId, Option.Option<ReservationVisit>>(
             reservations.map((id) => [
               id,
               Option.fromUndefinedOr(visits.get(id)),
             ])
-          ) as ReadonlyMap<
-            WorkspaceReservationId,
-            Option.Option<ReservationVisit>
-          >
+          )
         );
       },
       onNone: () =>
@@ -657,7 +657,7 @@ export const makeIntakeHandler = Effect.gen(function* () {
     commit: (unit, decisions, at) =>
       commitIntakeDecisions({
         unitId: unit.id,
-        eventIds: unit.subject.eventIds as CustomerEventId[],
+        eventIds: unit.subject.eventIds,
         decisions,
         at,
         facts,

@@ -4,7 +4,6 @@ import { getRequestLocale } from "@/features/i18n/server/request-locale";
 import { loadReservationPassLinks } from "@/features/passes/admin/pass-page-data.server";
 import type { ReservationPassLink } from "@/features/passes/admin/pass-reads";
 import { ReservationPassBadge } from "@/features/passes/admin/reservation-pass-badge";
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
 import { formatMoney } from "@/shared/money/money";
 import { restoreAdministrationReservation } from "./actions";
 import { AdministrationLink as Link } from "./admin-link";
@@ -86,9 +85,7 @@ async function ReservationDetailContent({
   const pass = (await loadReservationPassLinks([reservation.id]))?.get(
     reservation.id
   );
-  const fioMovements = loadAdministrationFioMovements(
-    reservationOrderId(reservation.id)
-  );
+  const fioMovements = loadAdministrationFioMovements(reservation.id);
   return (
     <>
       <h1 className="sr-only">

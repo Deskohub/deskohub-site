@@ -106,7 +106,10 @@ describe("ReservationActivityCalendar", () => {
       ].map(({ textContent }) => textContent);
 
       expect(firstDay?.getAttribute("datetime")).toBe(from);
-      expect(cells.indexOf(firstDay as Element)).toBe(leadingDays);
+      if (!firstDay) {
+        throw new Error(`Expected first day cell for ${from}`);
+      }
+      expect(cells.indexOf(firstDay)).toBe(leadingDays);
       for (const [index, cell] of cells.entries()) {
         const date = cell.getAttribute("datetime");
         if (!date) continue;

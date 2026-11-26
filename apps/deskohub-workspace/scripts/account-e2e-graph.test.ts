@@ -1,8 +1,23 @@
 import { describe, expect, test } from "bun:test";
+import { Schema } from "effect";
 import { runCommand } from "./shared/command";
 
-type PlaywrightCheckoutConfig =
-  typeof import("../playwright.e2e.config")["default"];
+/** The parts of the serialized Playwright config these cases assert on. */
+const PlaywrightCheckoutConfig = Schema.Struct({
+  projects: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      use: Schema.optionalKey(
+        Schema.Struct({
+          screenshot: Schema.optionalKey(Schema.Unknown),
+          trace: Schema.optionalKey(Schema.Unknown),
+          video: Schema.optionalKey(Schema.Unknown),
+        })
+      ),
+    })
+  ),
+});
+type PlaywrightCheckoutConfig = typeof PlaywrightCheckoutConfig.Type;
 
 // The real Playwright config is executed (not text-scanned) and its resolved
 // structure is asserted on. It runs in a child process because the config
@@ -29,11 +44,13 @@ const loadPlaywrightConfigStructure =
         `actual Playwright config loader exited with status ${result.exitCode}`
       );
     }
+    let structure: unknown;
     try {
-      return JSON.parse(result.stdout) as PlaywrightCheckoutConfig;
+      structure = JSON.parse(result.stdout);
     } catch {
       throw new Error("actual Playwright config loader emitted invalid JSON");
     }
+    return Schema.decodeUnknownSync(PlaywrightCheckoutConfig)(structure);
   };
 
 let cachedConfigStructure: Promise<PlaywrightCheckoutConfig> | undefined;

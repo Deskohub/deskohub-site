@@ -9,6 +9,7 @@ import {
 } from "bun:test";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { useEffect, useRef } from "react";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -126,9 +127,12 @@ describe("LandingPageLocationMap", () => {
       const map = await activate(view);
 
       fireEvent.click(
-        Array.from(map.querySelectorAll("button")).find(
-          (button) => button.textContent === event
-        ) as HTMLButtonElement
+        elementOf(
+          Array.from(map.querySelectorAll("button")).find(
+            (button) => button.textContent === event
+          ),
+          HTMLButtonElement
+        )
       );
 
       expect(staticMap(view)).toBeNull();

@@ -348,7 +348,16 @@ export class CampaignSendService extends Context.Service<
                       (cause) => new CampaignEmailDeliveryFailed({ cause })
                     )
                   )
-                : input.campaign.content[locale]!;
+                : yield* Effect.fromOption(
+                    Option.fromUndefinedOr(input.campaign.content[locale])
+                  ).pipe(
+                    Effect.mapError(
+                      () =>
+                        new CampaignContentMissing({
+                          campaignId: input.campaign.id,
+                        })
+                    )
+                  );
               return yield* campaignEmailMessage({
                 templateKey: input.campaign.templateKey,
                 locale,

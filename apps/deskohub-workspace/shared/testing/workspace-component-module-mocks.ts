@@ -1,4 +1,6 @@
-import { mock } from "bun:test";
+import { type Mock, mock } from "bun:test";
+import assert from "node:assert/strict";
+import type { useWorkspaceAction } from "@/shared/utils/use-workspace-action";
 
 export const workspaceRouterPush = mock((_href: string) => undefined);
 export const workspaceRouterRefresh = mock(() => undefined);
@@ -20,9 +22,55 @@ const workspaceUseFeatureFlagResult = mock(
 const workspaceUseFeatureFlagVariantKey = mock(
   (_flag: string): unknown => undefined
 );
-export const workspaceUseAction = mock(
-  <Action, Options>(_action: Action, _options: Options) => undefined
-);
+/**
+ * `useWorkspaceAction` as a test double sees it: any action and options, with
+ * an implementation that returns only the hook fields the component reads.
+ * Without an implementation it returns `undefined`, as the default does.
+ */
+type WorkspaceActionHook = (
+  ...args: Parameters<typeof useWorkspaceAction>
+) => Partial<ReturnType<typeof useWorkspaceAction>> | undefined;
+
+export type WorkspaceActionExecute = ReturnType<
+  typeof useWorkspaceAction
+>["execute"];
+export const workspaceUseAction = mock<WorkspaceActionHook>();
+
+export const submittedActionInput = <Input>(
+  calls: readonly (readonly [Input])[]
+): Input => {
+  const lastCall = calls.at(-1);
+  assert(lastCall, "The action was not submitted");
+  return lastCall[0];
+};
+
+export const workspaceActionCallbacks = <Data>(
+  options: Parameters<typeof useWorkspaceAction>[1],
+  execute: Mock<WorkspaceActionExecute>
+) => ({
+  onSuccess: ({ data }: { readonly data: Data }) => {
+    void options.onSuccess?.({
+      data,
+      input: submittedActionInput(execute.mock.calls),
+    });
+  },
+  onError: ({
+    error,
+  }: {
+    readonly error: { readonly serverError?: string };
+  }) => {
+    void options.onError?.({
+      error,
+      input: submittedActionInput(execute.mock.calls),
+    });
+  },
+  onTransportError: () => {
+    options.onTransportError?.({
+      error: new Error("transport"),
+      input: submittedActionInput(execute.mock.calls),
+    });
+  },
+});
 
 const navigation = await import("next/navigation");
 mock.module("next/navigation", () => ({

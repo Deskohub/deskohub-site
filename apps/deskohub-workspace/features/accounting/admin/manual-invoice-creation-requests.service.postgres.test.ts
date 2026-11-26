@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   AdministrationInvoiceCreateInput,
@@ -9,7 +10,10 @@ import {
 import { Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { AccountingSnapshotKeyService } from "../backend/accounting-snapshot-key.service";
 import { getManualInvoiceCreationRequestJson } from "./invoice-administration.service";
 import { ManualInvoiceCreationRequests } from "./manual-invoice-creation-requests.service";
@@ -26,7 +30,7 @@ const getRequests = () =>
           Layer.mergeAll(
             Layer.succeed(
               WorkspaceDatabase,
-              WorkspaceDatabase.make(testDatabase!.db)
+              WorkspaceDatabase.make(requireTestDatabase(testDatabase).db)
             ),
             AccountingSnapshotKeyService.Default
           )
@@ -48,13 +52,17 @@ const syntheticRequestJson = () =>
   JSON.stringify({ request: crypto.randomUUID() });
 
 const readClaimedAtEpoch = async (invoiceId: string) => {
-  const { rows } = await testDatabase!.pool.query<{ epoch: number }>(
+  const { rows } = await requireTestDatabase(testDatabase).pool.query<{
+    epoch: number;
+  }>(
     `select extract(epoch from claimed_at)::float8 as epoch
      from manual_invoice_creation_requests
      where invoice_id = $1`,
     [invoiceId]
   );
-  return rows[0]!.epoch;
+  const first = rows[0];
+  assert(first !== undefined);
+  return first.epoch;
 };
 
 const customerDetails = {
@@ -79,7 +87,7 @@ describe.skipIf(!testDatabase)(
   "ManualInvoiceCreationRequests on disposable Postgres",
   () => {
     afterAll(async () => {
-      await testDatabase!.pool.query(
+      await requireTestDatabase(testDatabase).pool.query(
         "delete from manual_invoice_creation_requests where invoice_id = any($1)",
         [createdInvoiceIds]
       );
@@ -138,7 +146,9 @@ describe.skipIf(!testDatabase)(
       const secondCompletion = await Effect.runPromise(
         Effect.flip(requests.complete(invoiceId))
       );
-      const { rows } = await testDatabase!.pool.query<{ completed: boolean }>(
+      const { rows } = await requireTestDatabase(testDatabase).pool.query<{
+        completed: boolean;
+      }>(
         `select completed_at is not null as completed
          from manual_invoice_creation_requests
          where invoice_id = $1`,
@@ -172,7 +182,7 @@ describe.skipIf(!testDatabase)(
       await Effect.runPromise(
         requests.claim({ invoiceId, normalizedRequestJson })
       );
-      await testDatabase!.pool.query(
+      await requireTestDatabase(testDatabase).pool.query(
         `update manual_invoice_creation_requests
          set claimed_at = claimed_at - interval '2 minutes'
          where invoice_id = $1`,
@@ -215,7 +225,9 @@ describe.skipIf(!testDatabase)(
           }),
         })
       );
-      const { rows } = await testDatabase!.pool.query<{ stored: string }>(
+      const { rows } = await requireTestDatabase(testDatabase).pool.query<{
+        stored: string;
+      }>(
         `select row_to_json(request)::text as stored
          from manual_invoice_creation_requests request
          where invoice_id = $1`,
@@ -224,7 +236,9 @@ describe.skipIf(!testDatabase)(
 
       expect(claim).toEqual({ kind: "claimed" });
       expect(rows).toHaveLength(1);
-      const stored = rows[0]!.stored.toLowerCase();
+      const firstRow = rows[0];
+      assert(firstRow !== undefined);
+      const stored = firstRow.stored.toLowerCase();
       for (const value of [
         customerDetails.email,
         customerDetails.phone,

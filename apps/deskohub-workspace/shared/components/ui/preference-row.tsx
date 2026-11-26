@@ -2,10 +2,9 @@ import {
   type ComponentPropsWithoutRef,
   cloneElement,
   isValidElement,
-  type ReactElement,
   type ReactNode,
 } from "react";
-import { cn } from "@/shared/utils";
+import { cn, toClassValue } from "@/shared/utils";
 
 /*
  * Shared visual primitive for consent and communication preference rows:
@@ -48,10 +47,12 @@ export function PreferenceRow({
   // The control must stay a direct child of the row so callers can target it
   // structurally; inject the shrink guard on the element itself.
   let styledControl = control;
-  if (isValidElement(control)) {
-    const withClassName = control as ReactElement<{ className?: string }>;
-    styledControl = cloneElement(withClassName, {
-      className: cn("shrink-0", withClassName.props.className),
+  // Any element's props may carry a `className` of any type, so this claims
+  // nothing the element doesn't have; every value `cn` takes is kept.
+  if (isValidElement<{ readonly className?: unknown }>(control)) {
+    const { className: controlClassName } = control.props;
+    styledControl = cloneElement(control, {
+      className: cn("shrink-0", toClassValue(controlClassName)),
     });
   }
   return (

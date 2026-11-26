@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { eq, max, min, sql } from "drizzle-orm";
 import {
   bigint,
@@ -97,9 +98,11 @@ describe.skipIf(!suiteDatabase)(
           .orderBy(probe.at)
       );
       expect(rows.map(({ id }) => id)).toEqual(["earlier", "later"]);
-      expect(rows[0]!.at.equals(earlier)).toBe(true);
-      expect(rows[0]!.hiddenAt.equals(earlier)).toBe(true);
-      expect(rows[1]!.at.equals(later)).toBe(true);
+      const [first, second] = rows;
+      assert(first && second, "both probe rows are read");
+      expect(first.at.equals(earlier)).toBe(true);
+      expect(first.hiddenAt.equals(earlier)).toBe(true);
+      expect(second.at.equals(later)).toBe(true);
     });
 
     test("reads min, max and mapWith aggregates of an instant column as instants with their microseconds", async () => {
@@ -112,11 +115,13 @@ describe.skipIf(!suiteDatabase)(
           })
           .from(probe)
       );
-      expect(aggregates!.first?.equals(earlier)).toBe(true);
-      expect(aggregates!.last?.equals(later)).toBe(true);
-      expect(
-        (aggregates!.mapped as Temporal.Instant | null)?.equals(later)
-      ).toBe(true);
+      assert(aggregates, "the aggregate query returns one row");
+      expect(aggregates.first?.equals(earlier)).toBe(true);
+      expect(aggregates.last?.equals(later)).toBe(true);
+      const { mapped } = aggregates;
+      expect(mapped).toBeInstanceOf(Temporal.Instant);
+      assert(mapped instanceof Temporal.Instant);
+      expect(mapped.equals(later)).toBe(true);
     });
 
     test("filters and orders by sub-millisecond instants on the server", async () => {
@@ -130,12 +135,13 @@ describe.skipIf(!suiteDatabase)(
       const [row] = await run(
         db.select().from(probe).where(eq(probe.id, "earlier"))
       );
-      expect(row!.plainAt).toEqual(new Date("2026-09-05T10:00:00.123Z"));
-      expect(row!.day).toBe("2026-09-05");
-      expect(row!.big).toBe(9_007_199_254_740_991);
-      expect(row!.amount).toBe("12.50");
-      expect(row!.payload).toEqual({ nested: [1, "two"] });
-      expect(row!.count).toBe(3);
+      assert(row, "the earlier probe row is read");
+      expect(row.plainAt).toEqual(new Date("2026-09-05T10:00:00.123Z"));
+      expect(row.day).toBe("2026-09-05");
+      expect(row.big).toBe(9_007_199_254_740_991);
+      expect(row.amount).toBe("12.50");
+      expect(row.payload).toEqual({ nested: [1, "two"] });
+      expect(row.count).toBe(3);
     });
 
     test("reads cast raw results as the declared JS values", async () => {

@@ -119,8 +119,10 @@ describe("restoreAdministrationReservation action", () => {
     ],
     ["a missing choice", { reservationId, acknowledgeRefundedPayment: false }],
   ])("rejects %s before the service runs", async (_, input) => {
-    const result = await restoreAdministrationReservation(
-      input as typeof restoration
+    const result: unknown = await Reflect.apply(
+      restoreAdministrationReservation,
+      undefined,
+      [input]
     );
 
     expect(result).toHaveProperty("validationErrors");

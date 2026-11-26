@@ -3,16 +3,18 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
+import { Schema } from "effect";
 import { NextRequest } from "next/server";
 import { proxy } from "@/proxy";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import { referralCodeCookieName } from "./referral-code-cookie";
 
-type Evidence = {
-  readonly cookie: string;
-  readonly framed: boolean;
-  readonly initiallyPrerendered: boolean;
-};
+const evidenceSchema = Schema.Struct({
+  cookie: Schema.String,
+  framed: Schema.Boolean,
+  initiallyPrerendered: Schema.Boolean,
+});
+type Evidence = typeof evidenceSchema.Type;
 
 const chromiumAvailable = await playwrightChromiumAvailable();
 let buildDirectory = "";
@@ -66,7 +68,9 @@ const serveHarness = (startPage: string) => {
         });
       }
       if (url.pathname === "/evidence") {
-        evidence.resolve((await request.json()) as Evidence);
+        evidence.resolve(
+          Schema.decodeUnknownSync(evidenceSchema)(await request.json())
+        );
         return new Response("ok");
       }
       if (url.pathname === "/harness.js") {

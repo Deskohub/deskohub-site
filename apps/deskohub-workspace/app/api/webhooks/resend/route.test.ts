@@ -3,7 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, mock, test } from "bun:test";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { customerMarketingConsents } from "@/db/schema";
 import {
   createWorkspaceEnv,
@@ -63,13 +63,13 @@ const deliveredEventPayload = (input: {
     },
   });
 
-interface ResendWebhookResponseBody {
-  readonly error?: string;
-  readonly code?: string;
-  readonly message?: string;
-  readonly status?: string;
-  readonly reason?: string;
-}
+const resendWebhookResponseBodySchema = Schema.Struct({
+  error: Schema.optionalKey(Schema.String),
+  code: Schema.optionalKey(Schema.String),
+  message: Schema.optionalKey(Schema.String),
+  status: Schema.optionalKey(Schema.String),
+  reason: Schema.optionalKey(Schema.String),
+});
 
 const sendResendWebhook = async (input: {
   readonly payload: string;
@@ -83,7 +83,12 @@ const sendResendWebhook = async (input: {
   const response = await POST(request);
   return {
     response,
-    body: (await response.json()) as ResendWebhookResponseBody,
+    body: Schema.decodeUnknownSync(resendWebhookResponseBodySchema)(
+      await response.json(),
+      {
+        onExcessProperty: "error",
+      }
+    ),
   };
 };
 

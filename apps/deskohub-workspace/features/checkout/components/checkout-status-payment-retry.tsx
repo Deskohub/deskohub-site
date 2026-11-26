@@ -67,9 +67,9 @@ export function CheckoutStatusPaymentRetry({
           // rendered, such as a payment that arrived meanwhile.
           refusedWithFocus.current =
             askedWithFocus.current &&
-            [buttonRef.current, document.body, null].includes(
-              document.activeElement as HTMLButtonElement | null
-            );
+            (document.activeElement === null ||
+              document.activeElement === document.body ||
+              document.activeElement === buttonRef.current);
           setRefusal(data.state);
           router.refresh();
       }

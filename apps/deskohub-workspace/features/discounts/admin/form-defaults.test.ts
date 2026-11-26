@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type {
-  DiscountCodeId,
-  StoredDiscountId,
-  VoucherId,
+import {
+  discountCodeIdSchema,
+  storedDiscountIdSchema,
+  voucherIdSchema,
 } from "@/features/discounts/persistence-contracts";
 import { defaultWorkspaceCurrencyCode } from "@/shared/money/currencies";
 import type {
@@ -16,7 +16,9 @@ import {
   voucherFormDefaults,
 } from "./form-defaults";
 
-const discountId = "019c91dd-c560-7e55-b9d8-c95065efd51d" as StoredDiscountId;
+const discountId = storedDiscountIdSchema.make(
+  "019c91dd-c560-7e55-b9d8-c95065efd51d"
+);
 
 const percentageDiscount: DiscountTableItem = {
   id: discountId,
@@ -27,7 +29,7 @@ const percentageDiscount: DiscountTableItem = {
 };
 
 const code: DiscountCodeTableItem = {
-  id: "019c91dd-c560-7e55-b9d8-c95065efd52d" as DiscountCodeId,
+  id: discountCodeIdSchema.make("019c91dd-c560-7e55-b9d8-c95065efd52d"),
   discountId,
   code: "SUMMER10",
   enabled: false,
@@ -39,13 +41,14 @@ const code: DiscountCodeTableItem = {
   serviceDateUntil: "2026-07-31",
   serviceDates: "Jul 1 – 31, 2026",
   audienceSize: 0,
+  audienceCustomerIds: [],
   reservedUses: 0,
   redeemedUses: 0,
   remainingUses: 0,
 };
 
 const voucher: VoucherTableItem = {
-  id: "019c91dd-c560-7e55-b9d8-c95065efd55d" as VoucherId,
+  id: voucherIdSchema.make("019c91dd-c560-7e55-b9d8-c95065efd55d"),
   code: "GIFT100",
   issuedCredit: { value: 25_000, exponent: 2, currency: "EUR" },
   remainingCredit: { value: 5000, exponent: 2, currency: "EUR" },
@@ -53,6 +56,7 @@ const voucher: VoucherTableItem = {
   validFrom: null,
   validUntil: "2026-08-01T08:00:00Z",
   audienceSize: 0,
+  audienceCustomerIds: [],
   reservedUses: 0,
   redeemedUses: 0,
 };

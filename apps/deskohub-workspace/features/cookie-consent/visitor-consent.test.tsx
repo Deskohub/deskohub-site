@@ -7,6 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { act, cleanup, render } from "@testing-library/react";
 import { hydrateRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
@@ -292,7 +293,8 @@ test("hydrates with markup matching the server render when consent cookies exist
 
       expect(consoleErrors).toEqual([]);
 
-      const toggle = container.querySelector("[data-testid=consent-toggle]")!;
+      const toggle = container.querySelector("[data-testid=consent-toggle]");
+      assert(toggle);
       expect(toggle.getAttribute("aria-checked")).toBe("true");
 
       // Mounting must not write consent; it only reads the cookie.

@@ -2,6 +2,7 @@ import type { FormEvent } from "react";
 import type {
   FieldErrors,
   FieldPath,
+  FieldPathValue,
   FieldValues,
   UseFormReturn,
 } from "react-hook-form";
@@ -70,6 +71,35 @@ type AvailabilityState = {
   readonly unavailableMessage?: string;
 };
 
+/** Visits one form field with a value of that field's type. */
+export type ReservationFormFieldVisitor<Input extends FieldValues> = <
+  Name extends FieldPath<Input>,
+>(
+  name: Name,
+  value: FieldPathValue<Input, Name>
+) => void;
+
+/** One form field with a value of that field's own type. */
+type ReservationFormFieldEntry<Input extends FieldValues> = {
+  readonly [Name in FieldPath<Input>]: {
+    readonly name: Name;
+    readonly value: FieldPathValue<Input, Name>;
+  };
+}[FieldPath<Input>];
+
+/** The fields of a reservation form the checkout reads and writes by name. */
+export type ReservationCheckoutFormFields<Input extends FieldValues> = {
+  /**
+   * The fields of the selection step, checked before the contact step. The
+   * contact-details fields are never among them.
+   */
+  readonly selection: readonly FieldPath<Input>[];
+  /** The repeated email of someone else's contact. */
+  readonly emailConfirmation: FieldPath<Input>;
+  /** The marketing-consent field with the value that gives consent. */
+  readonly marketingConsent: ReservationFormFieldEntry<Input>;
+};
+
 /** What the checkout form's submission reads and drives in one render. */
 type ReservationFormSubmissionContext<
   Input extends FieldValues,
@@ -85,6 +115,7 @@ type ReservationFormSubmissionContext<
   readonly displayedOfficePrice?: CheckoutSummary;
   readonly emailVerification: ReturnType<typeof useCheckoutEmailVerification>;
   readonly entryPackId?: OrderId;
+  readonly fields: ReservationCheckoutFormFields<Input>;
   readonly form: UseFormReturn<Input, unknown, Data>;
   readonly getOfficeSelection?: (data: Data) => CheckoutOfficeSelection;
   readonly getReservation: (data: Data) => ReservationOrderIssuanceData;
@@ -113,12 +144,16 @@ const rejectCheckout = <
   availability,
   booksForSomeoneElse,
   checkout,
+  fields,
   form,
   locale,
 }: ReservationFormSubmissionContext<Input, Data>):
   | ReservationFormSubmission
   | undefined => {
-  if (booksForSomeoneElse && !confirmReservationContactEmail(form, locale)) {
+  if (
+    booksForSomeoneElse &&
+    !confirmReservationContactEmail(form, fields.emailConfirmation, locale)
+  ) {
     checkout.capturePrePaymentOutcome("validation");
     return {
       status: "invalid",
@@ -258,12 +293,15 @@ const rejectInvalidForm = <
     booksForSomeoneElse,
     checkout,
     checkoutStep,
+    fields,
     form,
     locale,
   }: ReservationFormSubmissionContext<Input, Data>,
   errors: FieldErrors<Input>
 ): ReservationFormSubmission => {
-  if (booksForSomeoneElse) confirmReservationContactEmail(form, locale);
+  if (booksForSomeoneElse) {
+    confirmReservationContactEmail(form, fields.emailConfirmation, locale);
+  }
   checkout.capturePrePaymentOutcome("validation");
   const submission: ReservationFormSubmission = {
     status: "invalid",
@@ -315,12 +353,14 @@ export const continueReservationToContact = async <
   availability,
   checkout,
   checkoutStep,
+  fields,
   form,
 }: ReservationFormSubmissionContext<Input, Data>) => {
   checkout.clearSubmissionError();
-  const selectionFieldNames = Object.keys(form.getValues()).filter(
-    (name) => !contactStepFieldNames.has(name)
-  ) as FieldPath<Input>[];
+  const values = form.getValues();
+  const selectionFieldNames = fields.selection.filter(
+    (name) => Object.hasOwn(values, name) && !contactStepFieldNames.has(name)
+  );
   if (!(await form.trigger(selectionFieldNames, { shouldFocus: true }))) {
     checkout.capturePrePaymentOutcome("validation");
     return;

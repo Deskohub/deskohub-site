@@ -1,8 +1,9 @@
-import { afterAll, afterEach, beforeAll, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import { orderIdSchema } from "@/features/order";
+import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -17,12 +18,13 @@ const initialPage: AdminPassPage = {
   hasNextPage: false,
   searchIncomplete: false,
 };
-const fetchBeforeTest = globalThis.fetch;
+let activeFetchStub: ReturnType<typeof stubFetch> | undefined;
 
 beforeAll(() => registerWorkspaceComponentTestEnv());
 afterEach(() => {
   cleanup();
-  globalThis.fetch = fetchBeforeTest;
+  activeFetchStub?.mockRestore();
+  activeFetchStub = undefined;
 });
 afterAll(() => unregisterWorkspaceComponentTestEnv());
 
@@ -52,10 +54,8 @@ test("posts the private query and selected filters, then shows a linked pass", a
       },
     ],
   };
-  const post = mock((_url: string, _request: RequestInit) =>
-    Promise.resolve(Response.json(results))
-  );
-  globalThis.fetch = post as typeof fetch;
+  const post = stubFetch(() => Promise.resolve(Response.json(results)));
+  activeFetchStub = post;
   const view = render(
     <RouteLocaleProvider locale="en-US">
       <AdminPassFilters initialPage={initialPage} locale="en-US" />

@@ -7,8 +7,11 @@ import {
 import {
   type AudienceCountOperatorType,
   audienceAttributeCatalogue,
+  type CampaignEmailSourceType,
+  type DatePeriodType,
 } from "@deskohub/workspace-admin-api";
 import { Option, Result, Schema } from "effect";
+import { newCondition } from "./admin/audiences/audience-filter-editing";
 import {
   type AudienceCandidate,
   type AudienceCondition,
@@ -26,6 +29,7 @@ import {
   countFactRequest,
   dateFactRequest,
   matchesSet,
+  viewAudienceCondition,
 } from "./audience-filter";
 import { evaluateAudienceFilter } from "./backend/audience-evaluation";
 import {
@@ -217,6 +221,28 @@ describe("evaluateAudienceFilter", () => {
     ).toBe("match");
   });
 
+  test("views every catalogued condition by its entry's kind", () => {
+    for (const entry of Object.values(audienceAttributeCatalogue)) {
+      const view = viewAudienceCondition(newCondition(entry.attribute));
+      expect(view.kind).toBe(entry.kind);
+      expect(view.entry).toBe(entry);
+    }
+  });
+
+  test("keeps choice params and the product filter as they are", () => {
+    const product = { family: "cowork", properties: [] } as const;
+    const { fixedParams } = countFactRequest(
+      audienceAttributeCatalogue.reservationCount,
+      {
+        ...reservationsVisitedInMarch,
+        params: { ...reservationsVisitedInMarch.params, product },
+      },
+      context
+    );
+    expect(fixedParams.dateBasis).toBe("visit");
+    expect(fixedParams.product).toEqual(product);
+  });
+
   test("a date in, not in, or without a value", () => {
     const request = dateFactRequest(lastVisitNotRecent, context);
     const visitedLongAgo = dateFacts(request, {
@@ -314,7 +340,12 @@ describe("collectAudienceFactRequests", () => {
     );
 
     // Periods are fixed to their instants in the context.
-    expect(requests.counts).toEqual([
+    expect(
+      requests.counts.map(({ condition, fixedParams }) => ({
+        attribute: condition.attribute,
+        params: fixedParams,
+      }))
+    ).toEqual([
       {
         attribute: "reservationCount",
         params: {
@@ -347,6 +378,50 @@ describe("collectAudienceFactRequests", () => {
       },
       { attribute: "lastVisit", bounds: {}, asOf: now },
     ]);
+  });
+
+  test("shares a request between conditions whose fixed params agree", () => {
+    const replayed = { ...context, replayed: true };
+    const emailsFrom = (period: DatePeriodType) =>
+      ({
+        ...marketingEmailsLastTenDays,
+        params: { purpose: "marketing", period },
+      }) as const satisfies AudienceCondition;
+    // A replay counts emails only up to its moment either way.
+    expect(
+      collectAudienceFactRequests(
+        group("or", [
+          emailsFrom({ _tag: "Since", date: "2026-03-01" }),
+          emailsFrom({ _tag: "Onward", date: "2026-03-01" }),
+        ]),
+        [replayed]
+      ).counts
+    ).toHaveLength(1);
+
+    const campaignId = campaignIdSchema.make("campaign-1");
+    const emailsOf = (campaign?: CampaignEmailSourceType) =>
+      ({
+        ...marketingEmailsLastTenDays,
+        params: {
+          ...marketingEmailsLastTenDays.params,
+          ...(campaign && { campaign }),
+        },
+      }) as const satisfies AudienceCondition;
+    const countsOf = (
+      sources: readonly (CampaignEmailSourceType | undefined)[],
+      evaluating: AudienceEvaluationContext
+    ) =>
+      collectAudienceFactRequests(group("or", sources.map(emailsOf)), [
+        evaluating,
+      ]).counts;
+    expect(
+      countsOf([{ _tag: "This" }, { _tag: "Specific", campaignId }], {
+        ...context,
+        campaignId: Option.some(campaignId),
+      })
+    ).toHaveLength(1);
+    // No campaign of its own (none) isn't any campaign.
+    expect(countsOf([{ _tag: "This" }, undefined], context)).toHaveLength(2);
   });
 
   test("shares a request between contexts only where their bounds agree", () => {
@@ -382,11 +457,9 @@ describe("collectAudienceFactRequests", () => {
       ]
     );
     // Two trigger windows, and one last-ten-days count for every context.
-    expect(requests.counts.map(({ attribute }) => attribute)).toEqual([
-      "reservationCount",
-      "campaignEmailCount",
-      "reservationCount",
-    ]);
+    expect(requests.counts.map(({ condition }) => condition.attribute)).toEqual(
+      ["reservationCount", "campaignEmailCount", "reservationCount"]
+    );
   });
 
   test("fixes a campaign source to the evaluating campaign", () => {
@@ -407,11 +480,11 @@ describe("collectAudienceFactRequests", () => {
       countFactRequest(entry, fromThisCampaign, {
         ...context,
         campaignId: Option.some(campaignId),
-      }).params.campaign
+      }).fixedParams.campaign
     ).toBe(campaignId);
     // Without a campaign of its own, "this campaign" sent nothing.
     expect(
-      countFactRequest(entry, fromThisCampaign, context).params.campaign
+      countFactRequest(entry, fromThisCampaign, context).fixedParams.campaign
     ).toBeNull();
     expect(
       countFactRequest(
@@ -427,7 +500,7 @@ describe("collectAudienceFactRequests", () => {
           },
         },
         context
-      ).params.campaign
+      ).fixedParams.campaign
     ).toBe(campaignIdSchema.make("campaign-2"));
   });
 
@@ -450,25 +523,25 @@ describe("collectAudienceFactRequests", () => {
     const { campaignEmailCount, reservationCount } = audienceAttributeCatalogue;
 
     expect(
-      countFactRequest(campaignEmailCount, emailsSinceMarch, replayed).params
-        .period
+      countFactRequest(campaignEmailCount, emailsSinceMarch, replayed)
+        .fixedParams.period
     ).toEqual({ startsAtOrAfter: march, startsAtOrBefore: now });
     expect(
-      countFactRequest(reservationCount, bookingsSinceMarch, replayed).params
-        .period
+      countFactRequest(reservationCount, bookingsSinceMarch, replayed)
+        .fixedParams.period
     ).toEqual({ startsAtOrAfter: march, startsAtOrBefore: now });
     // The present has no later emails or bookings; visits may lie ahead
     // either way.
     expect(
-      countFactRequest(campaignEmailCount, emailsSinceMarch, context).params
-        .period
+      countFactRequest(campaignEmailCount, emailsSinceMarch, context)
+        .fixedParams.period
     ).toEqual({ startsAtOrAfter: march });
     expect(
-      countFactRequest(reservationCount, bookingsSinceMarch, context).params
-        .period
+      countFactRequest(reservationCount, bookingsSinceMarch, context)
+        .fixedParams.period
     ).toEqual({ startsAtOrAfter: march });
     expect(
-      countFactRequest(reservationCount, visitsSinceMarch, replayed).params
+      countFactRequest(reservationCount, visitsSinceMarch, replayed).fixedParams
         .period
     ).toEqual({ startsAtOrAfter: march });
   });

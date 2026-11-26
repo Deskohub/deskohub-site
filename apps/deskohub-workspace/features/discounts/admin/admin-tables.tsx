@@ -67,7 +67,10 @@ import {
   getCalendarSaleDiscountLabel,
   getCalendarStatusLabel,
 } from "./calendar-sale-display";
-import type { DiscountAdminMutation } from "./contracts";
+import type {
+  DiscountAdminMutation,
+  DiscountAdminMutationRequest,
+} from "./contracts";
 import type { AdminCalendarSale } from "./discount-administration.service";
 import {
   discountCodeFormDefaults,
@@ -440,7 +443,7 @@ export function VoucherEditor({
         buildMutation={(values) =>
           Option.map(
             toVoucherCreditInput(values),
-            (credit): DiscountAdminMutation => ({
+            (credit): DiscountAdminMutationRequest => ({
               kind: "update-voucher",
               voucher: {
                 id: voucher.id,
@@ -768,7 +771,7 @@ export function CreateVoucherForm({
       buildMutation={(values) =>
         Option.map(
           toVoucherCreditInput(values),
-          (credit): DiscountAdminMutation => {
+          (credit): DiscountAdminMutationRequest => {
             const voucher = { ...toVoucherConfigurationInput(values), credit };
             return customer
               ? {
@@ -949,7 +952,7 @@ function MutationForm<Input extends FieldValues, Values = Input>({
   /** None when the values cannot form a mutation the action would accept. */
   readonly buildMutation: (
     values: Values
-  ) => Option.Option<DiscountAdminMutation>;
+  ) => Option.Option<DiscountAdminMutationRequest>;
   readonly children: ReactNode;
   readonly defaultValues: DefaultValues<Input>;
   readonly deleteControl?: ReactNode;

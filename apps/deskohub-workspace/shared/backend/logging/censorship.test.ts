@@ -1,4 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 import { DotyposUnavailable } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
@@ -15,7 +16,15 @@ import {
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Cause, Data, Effect, Logger, References } from "effect";
+import {
+  Cause,
+  Data,
+  Effect,
+  Logger,
+  Option,
+  Predicate,
+  References,
+} from "effect";
 import { SqlError } from "effect/sql";
 import { createTracingLive } from "../observability/telemetry-sinks";
 
@@ -300,14 +309,14 @@ describe("censorLogValue", () => {
       self?: CyclicLogInput;
       readonly token?: string;
     };
-    const input = {
+    const input: CyclicLogInput = {
       name: "cycle",
-      self: undefined as CyclicLogInput | undefined,
       token: "secret-token",
     };
     input.self = input;
 
-    const censored = censorLogValue(input) as typeof input;
+    const censored = censorLogValue(input);
+    assert(Predicate.isObject(censored));
 
     expect(censored).not.toBe(input);
     expect(censored.token).toBe(CENSORED_LOG_VALUE);
@@ -328,9 +337,9 @@ describe("censorLogValue", () => {
       input = { token: "secret-token", next: input };
     }
 
-    let censored = censorLogValue(input) as NestedRecord;
+    let censored: unknown = censorLogValue(input);
     let levels = 1;
-    while (censored.next) {
+    while (Predicate.isObject(censored) && censored.next !== undefined) {
       expect(censored.token).toBe(CENSORED_LOG_VALUE);
       censored = censored.next;
       levels += 1;
@@ -522,7 +531,8 @@ describe("censorLogValue", () => {
     const promise = Promise.resolve("secret");
 
     const input = { thrown: error, aggregate, date, set, custom, promise };
-    const censored = censorLogValue(input) as typeof input;
+    const censored = censorLogValue(input);
+    assert(Predicate.isObject(censored));
 
     expect(censored.thrown).toMatchObject({
       errorType: "Error",
@@ -601,9 +611,9 @@ describe("censorLogValue", () => {
         operation: "acquireConnection",
       }),
     });
-    expect(
-      (censorLogValue(sqlError) as { readonly stack: string }).stack
-    ).toContain("censorship.test.ts");
+    expect(censorLogValue(sqlError)).toMatchObject({
+      stack: expect.stringContaining("censorship.test.ts"),
+    });
 
     const staleMessageError = new Error(multilineMessage);
     const staleStack = staleMessageError.stack;
@@ -761,7 +771,8 @@ describe("censorLogValue", () => {
       [objectKey, "visible"],
     ]);
 
-    const censored = censorLogValue(input) as Map<unknown, unknown>;
+    const censored = censorLogValue(input);
+    assert(censored instanceof Map);
 
     expect(censored).not.toBe(input);
     expect(censored.get("password")).toBe(CENSORED_LOG_VALUE);
@@ -915,11 +926,14 @@ describe("censorLogValue", () => {
       plain: { payStateRef: "opaque-secret", nested: { checkoutToken: "x" } },
     };
 
-    const censored = censorLogValue(input) as {
-      headers: Headers;
-      searchParams: URLSearchParams;
-      plain: { payStateRef: string; nested: { checkoutToken: string } };
-    };
+    const censored = censorLogValue(input);
+    assert(
+      Predicate.isObject(censored) &&
+        censored.headers instanceof Headers &&
+        censored.searchParams instanceof URLSearchParams &&
+        Predicate.isObject(censored.plain) &&
+        Predicate.isObject(censored.plain.nested)
+    );
 
     expect(censored.headers).not.toBe(headers);
     expect(censored.headers.get("authorization")).toBe(CENSORED_LOG_VALUE);
@@ -945,26 +959,61 @@ describe("censorLogValue", () => {
 });
 
 describe("censorLoggerOptions", () => {
+  const withLoggerOptions = <A>(
+    overrides: Partial<Logger.Options<unknown>>,
+    use: (options: Logger.Options<unknown>) => A,
+    annotations?: {
+      readonly request: {
+        readonly headers: { readonly authorization: string };
+      };
+      readonly sessionToken: string;
+    }
+  ): A => {
+    let result: Option.Option<A> = Option.none();
+    const log = annotations
+      ? Effect.logInfo("stub").pipe(Effect.annotateLogs(annotations))
+      : Effect.logInfo("stub");
+    Effect.runSync(
+      log.pipe(
+        Effect.provide(
+          Logger.layer([
+            Logger.make((options) => {
+              result = Option.some(use({ ...options, ...overrides }));
+            }),
+          ])
+        )
+      )
+    );
+    assert(Option.isSome(result), "Expected logger options");
+    return result.value;
+  };
+  const makeLoggerOptions = (
+    overrides: Partial<Logger.Options<unknown>>
+  ): Logger.Options<unknown> =>
+    withLoggerOptions(overrides, (options) => options);
+
   test("redacts message values and annotation values or sensitive annotation keys", () => {
     const annotations = {
       request: { headers: { authorization: "Bearer secret" } },
       sessionToken: "session-secret",
     };
-    const options = {
-      message: { password: "secret", safe: "visible" },
-      logLevel: "Info",
-      cause: Cause.empty,
-      date: new Date(0),
-      fiber: {
-        id: 1,
-        getRef: <T>(ref: T) =>
-          ref === References.CurrentLogAnnotations ? annotations : [],
+    const { censored, censoredAnnotations } = withLoggerOptions(
+      {
+        message: { password: "secret", safe: "visible" },
+        logLevel: "Info",
+        cause: Cause.empty,
+        date: new Date(0),
       },
-    } as Logger.Options<unknown>;
-
-    const censored = censorLoggerOptions(options);
-    const censoredAnnotations = censored.fiber.getRef(
-      References.CurrentLogAnnotations
+      (options) => {
+        const censored = censorLoggerOptions(options);
+        return {
+          censored,
+          censoredAnnotations: censored.fiber.getRef(
+            References.CurrentLogAnnotations
+          ),
+        };
+      },
+      annotations
     );
 
     expect(censored.message).toEqual({
@@ -986,16 +1035,12 @@ describe("censorLoggerOptions", () => {
       params: ["safe-customer-id", privateValue],
       cause: new Error(`driver echoed ${privateValue}`),
     });
-    const options = {
+    const options = makeLoggerOptions({
       message: "query failed",
       logLevel: "Error",
       cause: Cause.fail(error),
       date: new Date(0),
-      fiber: {
-        id: 1,
-        getRef: () => [],
-      },
-    } as Logger.Options<unknown>;
+    });
 
     const serialized = JSON.stringify(censorLoggerOptions(options).cause);
 
@@ -1019,16 +1064,12 @@ describe("censorLoggerOptions", () => {
     const domainError = new Error("accounting storage failed", {
       cause: queryError,
     });
-    const options = {
+    const options = makeLoggerOptions({
       message: "query failed",
       logLevel: "Error",
       cause: Cause.die(domainError),
       date: new Date(0),
-      fiber: {
-        id: 1,
-        getRef: () => [],
-      },
-    } as Logger.Options<unknown>;
+    });
 
     const serialized = JSON.stringify(censorLoggerOptions(options).cause);
 
@@ -1044,16 +1085,12 @@ describe("censorLoggerOptions", () => {
 
   test("censors a defect that is not an error whole", () => {
     const privateValue = "private-defect-payload";
-    const options = {
+    const options = makeLoggerOptions({
       message: "action failed",
       logLevel: "Error",
       cause: Cause.die({ attrs: { title: privateValue } }),
       date: new Date(0),
-      fiber: {
-        id: 1,
-        getRef: () => [],
-      },
-    } as Logger.Options<unknown>;
+    });
 
     const serialized = JSON.stringify(censorLoggerOptions(options).cause);
 
@@ -1221,6 +1258,11 @@ describe("createCensoredOtelSpanExporter", () => {
             email: privateValue,
             "server.address": "private-provider-endpoint",
             sessionDuration: 123,
+            "app.labels": ["visible", "kept"],
+            "app.retryDelays": [1, 2],
+            query:
+              "select * from t where a = /* deskohub:sensitive */ $1 and b = $2",
+            params: [3, 4],
           },
         }),
         Effect.exit,
@@ -1239,6 +1281,9 @@ describe("createCensoredOtelSpanExporter", () => {
       email: CENSORED_LOG_VALUE,
       "server.address": CENSORED_LOG_VALUE,
       sessionDuration: 123,
+      "app.labels": ["visible", "kept"],
+      "app.retryDelays": [1, 2],
+      params: CENSORED_LOG_VALUE,
     });
     expect(span?.events[0]?.name).toBe("exception");
     expect(span?.events[0]?.attributes?.["exception.stacktrace"]).toContain(
@@ -1270,7 +1315,8 @@ describe("censorLogValue structure", () => {
     sparse[0] = shared;
     sparse[2] = shared;
 
-    const censored = censorLogValue(sparse) as unknown[];
+    const censored = censorLogValue(sparse);
+    assert(Array.isArray(censored));
 
     expect(censored).toHaveLength(3);
     expect(1 in censored).toBe(false);
@@ -1287,7 +1333,8 @@ describe("censorLogValue structure", () => {
     ]);
     input.set("self", input);
 
-    const censored = censorLogValue(input) as Map<unknown, unknown>;
+    const censored = censorLogValue(input);
+    assert(censored instanceof Map);
 
     expect(censored.get("token")).toBe(CENSORED_LOG_VALUE);
     expect(censored.get(7)).toEqual({ token: CENSORED_LOG_VALUE });
@@ -1302,7 +1349,14 @@ describe("censorLogValue structure", () => {
     const censored = censorLogValue({
       first: [headers, search],
       second: [headers, search],
-    }) as Record<"first" | "second", readonly [Headers, URLSearchParams]>;
+    });
+    assert(
+      Predicate.isObject(censored) &&
+        Array.isArray(censored.first) &&
+        Array.isArray(censored.second) &&
+        censored.first[0] instanceof Headers &&
+        censored.first[1] instanceof URLSearchParams
+    );
 
     expect(censored.second[0]).toBe(censored.first[0]);
     expect(censored.second[1]).toBe(censored.first[1]);
@@ -1329,10 +1383,9 @@ describe("censorLogValue structure", () => {
   });
 
   test("censors a null-prototype object like a plain one", () => {
-    const input = Object.assign(Object.create(null) as object, {
-      token: "secret",
-      visible: "/pay?secret=1",
-    });
+    const input: Record<string, string> = Object.create(null);
+    input.token = "secret";
+    input.visible = "/pay?secret=1";
 
     expect(censorLogValue(input)).toEqual({
       token: CENSORED_LOG_VALUE,
@@ -1365,7 +1418,12 @@ describe("censorLogValue structure", () => {
     const censored = censorLogValue({
       first: { params },
       second: { params },
-    }) as Record<"first" | "second", { readonly params: unknown }>;
+    });
+    assert(
+      Predicate.isObject(censored) &&
+        Predicate.isObject(censored.first) &&
+        Predicate.isObject(censored.second)
+    );
 
     expect(censored.second.params).toBe(censored.first.params);
   });
@@ -1413,15 +1471,14 @@ describe("censorLogValue structure", () => {
   });
 
   test("censors a shared or cyclic error once", () => {
-    const error = new Error("private") as Error & { self?: unknown };
+    const error = new Error("private");
     error.cause = error;
 
-    const censored = censorLogValue([error, error]) as Array<{
-      readonly cause: unknown;
-    }>;
+    const censored = censorLogValue([error, error]);
+    assert(Array.isArray(censored) && Predicate.isObject(censored[0]));
 
     expect(censored[1]).toBe(censored[0]);
-    expect(censored[0]?.cause).toBe(censored[0]);
+    expect(censored[0].cause).toBe(censored[0]);
   });
 
   test("reads only an error's own data properties", () => {
@@ -1443,12 +1500,13 @@ describe("censorLogValue structure", () => {
     Object.defineProperty(error, "stack", { value: 7 });
 
     const censored = censorLogValue(error);
+    assert(Predicate.isObject(censored));
 
     expect(censored).toEqual({
       errorType: "Error",
       message: CENSORED_LOG_VALUE,
     });
-    expect(Object.keys(censored as object)).toEqual(["errorType", "message"]);
+    expect(Object.keys(censored)).toEqual(["errorType", "message"]);
   });
 
   test("keeps an aggregate error's structured errors only", () => {
@@ -1491,7 +1549,8 @@ describe("censorLogValue structure", () => {
       cause: new Error("private"),
     });
 
-    const censored = censorLogValue([error, error]) as unknown[];
+    const censored = censorLogValue([error, error]);
+    assert(Array.isArray(censored));
 
     expect(censored[1]).toBe(censored[0]);
     expect(censored[0]).toMatchObject({
@@ -1540,8 +1599,10 @@ describe("censorLogValue URL strings", () => {
 });
 
 describe("censorLogValue stack traces", () => {
-  const stackOf = (message: string, stack: string) =>
-    (censorLogValue({ message, stack }) as { readonly stack: unknown }).stack;
+  const stackOf = (message: string, stack: string) => {
+    const censored = censorLogValue({ message, stack });
+    return Predicate.isObject(censored) ? censored.stack : undefined;
+  };
 
   test("keeps frames after an empty message with no message marker", () => {
     expect(stackOf("", "Error\n    at run (/srv/app.js:1:2)")).toBe(

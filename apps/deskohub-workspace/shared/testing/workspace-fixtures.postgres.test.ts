@@ -25,6 +25,7 @@ import {
 import {
   connectWorkspacePostgresTestDatabase,
   holdDatabaseConnection,
+  requireTestDatabase,
   withHeldTransaction,
 } from "./workspace-postgres-test-database.test-utils";
 
@@ -41,14 +42,16 @@ const everyStage = reservationStates.flatMap((reservation) =>
 );
 
 describe.skipIf(!testDatabase)("workspace fixtures", () => {
-  const database = () => testDatabase!.db;
+  const database = () => requireTestDatabase(testDatabase).db;
   const fixtures = () => workspaceFixtures(database());
 
   /** Runs `use` inside a transaction the test begins and then rolls back. */
   const inRolledBackTransaction = async <A, E>(
     use: (db: WorkspaceDatabaseClient) => Effect.Effect<A, E>
   ) => {
-    const connection = await holdDatabaseConnection(testDatabase!);
+    const connection = await holdDatabaseConnection(
+      requireTestDatabase(testDatabase)
+    );
     try {
       await connection.query("begin");
       return await Effect.runPromise(withHeldTransaction(connection, use));

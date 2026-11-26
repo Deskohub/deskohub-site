@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   DotyposCustomerIdSchema,
   DotyposService,
@@ -134,13 +135,17 @@ describe.skipIf(!database)("Unlimited Open Space re-seating", () => {
         'en-US', $4, $5, $6, now(), $7, now(), now(), now()) returning id`,
       [customerId, original.id, buyer, passId, date, source.id, generation]
     );
-    const reservationId = local!.id;
-    const readDay = async () =>
-      (
+    assert(local);
+    const reservationId = local.id;
+    const readDay = async () => {
+      const [row] = (
         await pool.query("select * from workspace_reservations where id = $1", [
           reservationId,
         ])
-      ).rows[0]!;
+      ).rows;
+      assert(row);
+      return row;
+    };
     const moves = async () =>
       (
         await pool.query(
@@ -515,7 +520,9 @@ describe.skipIf(!database)("Unlimited Open Space re-seating", () => {
     ).toBe(true);
     expect(attempts).toBe(0);
     expect((await day.readDay()).dotypos_reservation_id).toBe(day.original.id);
-    expect((await day.moves())[0]!.settled_at).not.toBeNull();
+    const [move] = await day.moves();
+    assert(move);
+    expect(move.settled_at).not.toBeNull();
   });
 
   test("crossing Prague midnight during confirmation keeps the original day", async () => {
@@ -704,7 +711,8 @@ describe.skipIf(!database)("Unlimited Open Space re-seating", () => {
         .select()
         .from(passPurchases)
         .where(eq(passPurchases.id, day.passId));
-      yield* releaseUnlimitedPassDays(purchase!);
+      assert(purchase);
+      yield* releaseUnlimitedPassDays(purchase);
     }).pipe(WorkspaceLockSections.passPurchaseFulfillment(day.passId));
     await Effect.runPromise(release.pipe(Effect.provide(layer)));
     expect((await day.readDay()).reservation_state).toBe("cancelling");
@@ -805,7 +813,9 @@ describe.skipIf(!database)("Unlimited Open Space re-seating", () => {
         Effect.flatMap(PassDayMoves, (worker) => worker.reconcile(2))
       ).pipe(Effect.provide(runtime()))
     );
-    expect((await moves())[0]!.settled_at).toBeNull();
+    const [move] = await moves();
+    assert(move);
+    expect(move.settled_at).toBeNull();
     expect((await getRecord(original.id)).status).toBe("CONFIRMED");
   });
 });

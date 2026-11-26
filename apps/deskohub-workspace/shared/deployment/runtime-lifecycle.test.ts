@@ -240,4 +240,14 @@ describe("installRuntimeShutdown", () => {
     await stopped;
     expect(exits).toEqual([0]);
   });
+
+  test("exits without waiting on a request message that has no response", async () => {
+    const { exits, shutdown } = installForTest();
+    channel("http.server.request.start").publish({
+      request: new EventEmitter(),
+    });
+
+    await shutdown();
+    expect(exits).toEqual([0]);
+  });
 });

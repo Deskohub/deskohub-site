@@ -86,6 +86,11 @@ type ReservationForKind<Kind extends ReservationKind> = Extract<
   { readonly kind: Kind }
 >;
 
+const isReservationForKind = <Kind extends ReservationKind>(
+  reservation: ReservationOrderData,
+  kind: Kind
+): reservation is ReservationForKind<Kind> => reservation.kind === kind;
+
 /** What a page's family decides from, after the request loads. */
 type ReservationPageRequest<Kind extends ReservationKind, PageData> = {
   /** Who reaches the contact-details step. */
@@ -236,16 +241,17 @@ type ReservationPageDefinition<
       readonly verifiedContactReturn: boolean;
     }
   ) => Promise<PageData>;
-} & ([PageData] extends [undefined]
-  ? { readonly loadPageData?: undefined }
-  : {
-      /**
-       * Loads data that depends on neither the customer's account nor the
-       * restored reservation, such as a release gate, alongside them. A
-       * rejection fails the page.
-       */
-      readonly loadPageData: () => Promise<PageData>;
-    });
+  /**
+   * Loads data that depends on neither the customer's account nor the
+   * restored reservation, such as a release gate, alongside them. A
+   * rejection fails the page. A family without such data passes
+   * `withoutPageData`.
+   */
+  readonly loadPageData: () => Promise<PageData>;
+};
+
+/** The page-data loader of a family whose page needs none. */
+export const withoutPageData = async (): Promise<undefined> => undefined;
 
 type LocalizedReservationPageProps = {
   readonly searchParams: Promise<SearchParamsRecord>;
@@ -267,6 +273,9 @@ export const loadRestoredReservation = Effect.fn(
     )
   );
   if (!payState) return undefined;
+  const { reservation } = payState;
+  // The token opens only for this family; another family restores nothing.
+  if (!isReservationForKind(reservation, kind)) return undefined;
 
   const officeSelection =
     payState.reservation.kind === "office"
@@ -308,7 +317,7 @@ export const loadRestoredReservation = Effect.fn(
       Match.orElse(() => undefined)
     ),
     officeSelection,
-    reservation: payState.reservation as ReservationForKind<Kind>,
+    reservation,
     replacementToken: token,
     // Restored requested intent (or the applied code on older tokens) wins
     // over a fresh public discount-code query parameter.
@@ -451,7 +460,7 @@ async function ReservationPageRequestContent<
           runWorkspaceEffect(`reservation.${definition.kind}.load-contact`)
         ),
         loadReservationCheckoutAccount(definition.kind),
-        definition.loadPageData?.(),
+        definition.loadPageData(),
       ]);
 
     const contactMatchesAccount =
@@ -501,7 +510,7 @@ async function ReservationPageRequestContent<
     }
 
     const formPageData = definition.loadFormPageData
-      ? await definition.loadFormPageData(pageData as PageData, {
+      ? await definition.loadFormPageData(pageData, {
           checkoutAccount,
           locale,
           restoredReservation,
@@ -514,8 +523,7 @@ async function ReservationPageRequestContent<
       checkoutContact,
       checkoutOfficeSelection,
       locale,
-      // A definition without a loader has `undefined` page data.
-      pageData: formPageData as PageData,
+      pageData: formPageData,
       restoredReservation,
       searchParams: resolvedSearchParams,
       // A restored checkout keeps its own discount intent, even none.

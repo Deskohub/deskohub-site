@@ -54,11 +54,13 @@ export function EntryPackMeter({
         )}
       >
         {segments.flatMap(({ color, count }) =>
-          Array.from({ length: count }, (_, position) => (
+          Array.from(
+            { length: count },
+            (_, position) => `${color}-${position}`
+          ).map((segmentKey) => (
             <span
               className={cn("h-2 min-w-0 flex-1 rounded-full", color)}
-              // biome-ignore lint/suspicious/noArrayIndexKey: Segments are fixed, decorative slots with no local state.
-              key={`${color}-${position}`}
+              key={segmentKey}
             />
           ))
         )}

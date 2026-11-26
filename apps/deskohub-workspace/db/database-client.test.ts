@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
-import { Cause, Effect, Exit, Layer, Option } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Predicate } from "effect";
 import { SqlError } from "effect/sql";
 import { WorkspaceDatabase } from "./database.service";
 import { databaseClient, databasePostgresLayer } from "./database-client";
@@ -39,10 +39,9 @@ describe("databasePostgresLayer", () => {
         ? failure
         : Option.getOrUndefined(
             Option.filter(
-              Cause.isCause((failure as { readonly cause?: unknown })?.cause)
-                ? Cause.findErrorOption(
-                    (failure as { readonly cause: Cause.Cause<unknown> }).cause
-                  )
+              Predicate.hasProperty(failure, "cause") &&
+                Cause.isCause(failure.cause)
+                ? Cause.findErrorOption(failure.cause)
                 : Option.none(),
               SqlError.isSqlError
             )

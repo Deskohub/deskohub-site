@@ -6,10 +6,11 @@ import {
   type CampaignOperations as CampaignOperationRegistry,
   campaignOperations,
   type OperationInput,
+  OperationInputInvalid,
   type OperationOutput,
 } from "@deskohub/workspace-admin-api";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import { Effect, Match, Schema } from "effect";
+import { Effect, Match, Schema, Struct } from "effect";
 import type {
   FlattenedValidationErrors,
   SafeActionResult,
@@ -24,10 +25,7 @@ import { CampaignOperations } from "../backend/campaign-operations.service";
 import { emailCampaignsActionFailureCopy } from "./campaign-operation-failure";
 import { campaignOperationCapabilities } from "./campaign-operation-query.server";
 
-const campaignOperationNames = Object.keys(campaignOperations) as [
-  CampaignOperationName,
-  ...CampaignOperationName[],
-];
+const campaignOperationNames = Struct.keys(campaignOperations);
 
 /**
  * Which operation to run, with its input as the client sent it. The port
@@ -101,18 +99,43 @@ const administratorRequired: CampaignOperationResult = {
   message: "Administrator authentication is required.",
 };
 
-/** Runs the operation through the port, with its failure as data. */
-const operationResult = ({
+const strictParseOptions = {
+  errors: "all",
+  onExcessProperty: "error",
+} as const;
+
+/**
+ * The input in its operation's encoded shape, which the port takes. Input
+ * without that shape fails here as the port's strict decode would report it;
+ * the port still re-checks the administrator grant and decodes every input
+ * that has the shape, refinements included. Input without the shape so fails
+ * before the grant re-check, outside the port's span: a caller whose grant
+ * was revoked learns only that the shape is wrong.
+ */
+const encodedInput = ({
   operation,
   input,
 }: typeof CampaignOperationRequest.Type) =>
-  CampaignOperations.pipe(
-    Effect.flatMap((operations) =>
-      operations.invoke(
-        operation,
-        input as OperationInput<
-          CampaignOperationRegistry[CampaignOperationName]
-        >
+  Schema.decodeUnknownEffect(
+    Schema.toEncoded(campaignOperations[operation].input)
+  )(input, strictParseOptions).pipe(
+    Effect.mapError(
+      (cause) =>
+        new OperationInputInvalid({
+          code: "input-invalid",
+          message: `The input is invalid: ${cause.message}`,
+        })
+    )
+  );
+
+/** Runs the operation through the port, with its failure as data. */
+const operationResult = (request: typeof CampaignOperationRequest.Type) =>
+  encodedInput(request).pipe(
+    Effect.flatMap((input) =>
+      CampaignOperations.pipe(
+        Effect.flatMap((operations) =>
+          operations.invoke(request.operation, input)
+        )
       )
     ),
     Effect.match({
@@ -124,19 +147,23 @@ const operationResult = ({
     })
   );
 
+/** An operation input about one campaign or one audience, as sent. */
+const isCampaignInput = Schema.is(Schema.Struct({ campaignId: Schema.String }));
+const isAudienceInput = Schema.is(Schema.Struct({ audienceId: Schema.String }));
+
 /** Every page that lists or shows what a campaign mutation can change. */
 const campaignPages = ({
   input,
-}: CampaignOperationRequest): readonly AdministrationPath[] => [
+}: typeof CampaignOperationRequest.Type): readonly AdministrationPath[] => [
   administrationHref("/[locale]/admin/email-campaigns"),
   administrationHref("/[locale]/admin/email-audiences"),
   ...Match.value(input).pipe(
-    Match.when({ campaignId: Match.string }, ({ campaignId }) => [
+    Match.when(isCampaignInput, ({ campaignId }) => [
       administrationHref("/[locale]/admin/email-campaigns/[campaignId]", {
         campaignId,
       }),
     ]),
-    Match.when({ audienceId: Match.string }, ({ audienceId }) => [
+    Match.when(isAudienceInput, ({ audienceId }) => [
       administrationHref("/[locale]/admin/email-audiences/[audienceId]", {
         audienceId,
       }),
@@ -159,8 +186,7 @@ const campaignOperationAction = defineAdministrationAction(
     revalidates: (request, result) =>
       result._tag === "Success" &&
       campaignOperations[request.operation].kind === "mutation"
-        ? // The port decoded the input of an operation that succeeded.
-          campaignPages(request as CampaignOperationRequest)
+        ? campaignPages(request)
         : [],
   },
   operationResult
@@ -172,8 +198,31 @@ const campaignOperationAction = defineAdministrationAction(
  */
 export async function runCampaignOperation<Name extends CampaignOperationName>(
   request: CampaignOperationRequest<Name>
-) {
+): Promise<CampaignOperationActionResult<Name>> {
   "use server";
   const result = await campaignOperationAction(request);
-  return result as CampaignOperationActionResult<Name>;
+  if (result.data === undefined) return result;
+  return { ...result, data: operationResultOf(request.operation, result.data) };
 }
+
+/**
+ * The result typed by its operation. The action answers for every operation
+ * at once, so a success's output is checked against its own operation's
+ * output schema; an output that fails it is a contract bug the client must
+ * not trust, reported as the operation being unavailable.
+ */
+const operationResultOf = <Name extends CampaignOperationName>(
+  operation: Name,
+  result: CampaignOperationResult
+): CampaignOperationResult<Name> => {
+  if (result._tag === "Failure") return result;
+  const { output } = result;
+  return Schema.is(campaignOperations[operation].output)(output)
+    ? { _tag: "Success", output }
+    : {
+        _tag: "Failure",
+        category: "OperationUnavailable",
+        code: "output-invalid",
+        message: "The operation returned an output its schema rejects.",
+      };
+};

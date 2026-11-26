@@ -16,7 +16,7 @@ export type DiscountLabelLocale = (typeof discountLabelLocales)[number];
 export type DiscountLabels = Readonly<Record<DiscountLabelLocale, string>>;
 
 const isDiscountLabelLocale = (locale: Locale): locale is DiscountLabelLocale =>
-  (discountLabelLocales as readonly Locale[]).includes(locale);
+  discountLabelLocales.some((labelLocale) => labelLocale === locale);
 
 /**
  * A discount's label in `locale`: the label written in it, else the first

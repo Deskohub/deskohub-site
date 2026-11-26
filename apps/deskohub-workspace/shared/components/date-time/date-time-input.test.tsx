@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { useState } from "react";
 import "@/shared/polyfills/temporal";
 import { m } from "@/features/i18n";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -54,9 +55,9 @@ const renderInForm = (props: Partial<DateTimeInputProps> = {}) => {
       />
     </form>
   );
-  const form = view.container.querySelector("form") as HTMLFormElement;
-  const dateField = view.getByRole("combobox") as HTMLInputElement;
-  const timeField = view.getByLabelText(timeLabel) as HTMLInputElement;
+  const form = elementOf(view.container.querySelector("form"), HTMLFormElement);
+  const dateField = elementOf(view.getByRole("combobox"), HTMLInputElement);
+  const timeField = elementOf(view.getByLabelText(timeLabel), HTMLInputElement);
   const submitted = () => new FormData(form).getAll("validFrom");
   const typeDate = (text: string) => {
     fireEvent.change(dateField, { target: { value: text } });
@@ -124,14 +125,17 @@ describe("DateTimeInput", () => {
       );
     }
     const view = render(<Controlled />);
-    const timeField = view.getByLabelText(timeLabel) as HTMLInputElement;
+    const timeField = elementOf(
+      view.getByLabelText(timeLabel),
+      HTMLInputElement
+    );
     const output = () => view.container.querySelector("output")?.textContent;
 
     fireEvent.input(timeField, { target: { value: "10:30" } });
     expect(output()).toBe("2099-06-10T10:30");
 
     fireEvent.click(view.getByRole("button", { name: "Restore" }));
-    expect((view.getByRole("combobox") as HTMLInputElement).value).toBe(
+    expect(elementOf(view.getByRole("combobox"), HTMLInputElement).value).toBe(
       "7/1/2099"
     );
     expect(timeField.value).toBe("18:00");
@@ -272,7 +276,7 @@ describe("DateTimeInput", () => {
       expect(
         (field.getAttribute("aria-describedby") ?? "").split(" ")
       ).toContain("owner-message");
-      expect((field as HTMLInputElement).required).toBe(true);
+      expect(elementOf(field, HTMLInputElement).required).toBe(true);
     }
   });
 
@@ -326,12 +330,17 @@ describe("DateTimeInput", () => {
       );
     }
     const view = render(<Controlled />);
-    const dateField = view.getByRole("combobox") as HTMLInputElement;
-    const timeField = view.getByLabelText(timeLabel) as HTMLInputElement;
+    const dateField = elementOf(view.getByRole("combobox"), HTMLInputElement);
+    const timeField = elementOf(
+      view.getByLabelText(timeLabel),
+      HTMLInputElement
+    );
 
     fireEvent.change(dateField, { target: { value: "6/10/2099" } });
     fireEvent.focusOut(dateField);
-    fireEvent.submit(view.container.querySelector("form") as HTMLFormElement);
+    fireEvent.submit(
+      elementOf(view.container.querySelector("form"), HTMLFormElement)
+    );
     expect(onSubmit).not.toHaveBeenCalled();
     expect(timeField.getAttribute("aria-invalid")).toBe("true");
     expect(onPartialDraftChange).toHaveBeenLastCalledWith(true);
@@ -385,7 +394,10 @@ describe("DateTimeInput", () => {
     fireEvent.blur(timeField);
     typeDate("");
 
-    const clearedTime = view.getByLabelText(timeLabel) as HTMLInputElement;
+    const clearedTime = elementOf(
+      view.getByLabelText(timeLabel),
+      HTMLInputElement
+    );
     expect(clearedTime.value).toBe("");
     expect(clearedTime.getAttribute("aria-invalid")).toBe("false");
     fireEvent.submit(form);

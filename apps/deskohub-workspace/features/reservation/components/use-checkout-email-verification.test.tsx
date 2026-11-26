@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import type { SignInEmailResult } from "@/features/account/auth-return";
 import { m } from "@/features/i18n";
+import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { workspaceRouterPush } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
@@ -22,7 +23,13 @@ type ActionOptions = {
 };
 
 const adaEmail = testEmailAddress("ada");
-const contact = { email: adaEmail, name: "Ada Lovelace" };
+const contact = {
+  email: adaEmail,
+  name: "Ada Lovelace",
+  phone: "+420777777777",
+  billing: defaultReservationBillingSelection,
+  marketingConsent: false,
+};
 
 let sealResult: SealResult = { data: { token: "sealed-contact" } };
 const sealCheckoutContact = mock((_contact: Contact) => undefined);
@@ -77,7 +84,7 @@ const en = { locale: "en-US" } as const;
 const verify = async () => {
   const view = renderHook(() => useCheckoutEmailVerification(en));
   await act(async () => {
-    view.result.current.verify(contact as never);
+    view.result.current.verify(contact);
   });
   return view;
 };
@@ -109,10 +116,9 @@ describe("useCheckoutEmailVerification", () => {
       locale: "en-US",
       returnTo: "/en-US/coworking?date=2026-10-25&contact=sealed-contact",
     });
-    expect(workspaceRouterPush.mock.calls[0]).toEqual([
-      "/en-US/auth/verify",
-      { scroll: false },
-    ] as never);
+    expect<readonly unknown[]>(workspaceRouterPush.mock.calls[0] ?? []).toEqual(
+      ["/en-US/auth/verify", { scroll: false }]
+    );
     expect(view.result.current.error).toBeUndefined();
     expect(view.result.current.isVerifying).toBe(false);
   });

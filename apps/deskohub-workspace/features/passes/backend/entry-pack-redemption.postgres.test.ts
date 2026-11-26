@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Schema } from "effect";
@@ -25,11 +26,9 @@ import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { orderIdSchema } from "@/features/order";
 import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/reservation-audit.test-utils";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import {
-  getStoredWorkspaceReservationDetails,
-  reservationOrderId,
-} from "@/features/reservation/persistence-contracts";
-import { reservationOrderIssuanceSchema } from "@/features/reservation/reservation-order";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
+import { getStoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   holdPostgresTransaction,
@@ -37,6 +36,7 @@ import {
 } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
@@ -50,14 +50,14 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     const holder = customerAccountIdSchema.make(crypto.randomUUID());
     const date = Schema.decodeUnknownSync(plainDateStringSchema);
     const decodeReservation = Schema.decodeUnknownSync(
-      reservationOrderIssuanceSchema("CZ")
+      normalizedCoworkReservationOrderSchema
     );
     const now = () => Temporal.Now.instant();
 
     beforeAll(async () => {
-      database = (await createWorkspacePostgresSuiteDatabase(
-        "entry_pack_claims"
-      ))!;
+      database = requireTestDatabase(
+        await createWorkspacePostgresSuiteDatabase("entry_pack_claims")
+      );
       await database.pool.query(
         "insert into customer_accounts (id) values ($1), ($2)",
         [buyer, holder]
@@ -150,7 +150,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           details: getStoredWorkspaceReservationDetails(selection(serviceDate)),
         })
       );
-    const runReservations = (f) =>
+    const runReservations = <A, E>(
+      f: (
+        repository: typeof WorkspaceReservationRepository.Service
+      ) => Effect.Effect<A, E>
+    ) =>
       Effect.runPromise(
         WorkspaceReservationRepository.pipe(
           Effect.flatMap(f),
@@ -158,10 +162,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           Effect.provide(database.layer)
         )
       );
+    type DraftReservation = Awaited<ReturnType<typeof draft>>;
     const claim = (
-      reservation,
-      passId,
-      serviceDate,
+      reservation: DraftReservation,
+      passId: Awaited<ReturnType<typeof seedPack>>,
+      serviceDate: string,
       holderAccountId = holder,
       dotyposReservationId = DotyposReservationIdSchema.make(
         crypto.randomUUID()
@@ -186,26 +191,31 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           Effect.as(true)
         )
       );
-    const status = (reservation) =>
+    const status = (reservation: DraftReservation) =>
       runReservations((repository) =>
         repository.findEntryPackClaim(reservation.id)
       ).then((entry) => entry?.status);
-    const cancelHold = async (reservation) => {
+    const cancelHold = async (reservation: DraftReservation) => {
       const cancellation = await runReservations((repository) =>
         repository.claimCancellation({
           id: reservation.id,
           cause: "hold_expired",
         })
       );
+      assert(cancellation);
       await runReservations((repository) =>
         repository.markCancelled({
           id: reservation.id,
-          claimedAt: cancellation!.updatedAt,
+          claimedAt: cancellation.updatedAt,
           cancelledAt: now(),
         })
       );
     };
-    const runRecovery = (f) =>
+    const runRecovery = <A, E>(
+      f: (
+        repository: typeof LatePaymentRecoveryRepository.Service
+      ) => Effect.Effect<A, E>
+    ) =>
       Effect.runPromise(
         LatePaymentRecoveryRepository.pipe(
           Effect.flatMap(f),
@@ -213,7 +223,14 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           Effect.provide(database.layer)
         )
       );
-    const startVerifiedRecovery = async (reservation, attempt) => {
+    const startVerifiedRecovery = async (
+      reservation: DraftReservation,
+      attempt: {
+        readonly id: Parameters<
+          typeof LatePaymentRecoveryRepository.Service.start
+        >[0]["paymentAttemptId"];
+      }
+    ) => {
       const input = {
         workspaceReservationId: reservation.id,
         paymentAttemptId: attempt.id,
@@ -537,11 +554,12 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           staleCancellingBefore: now().subtract({ minutes: 10 }),
         })
       );
+      assert(cancellation);
       await runReservations((repository) =>
         repository.markAdministrationCancelled({
           audit,
           id: reservation.id,
-          claimedAt: cancellation!.updatedAt,
+          claimedAt: cancellation.updatedAt,
           cancelledAt: now(),
           failureCode: null,
         })
@@ -549,7 +567,15 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await status(reservation)).toBe("released");
     });
 
-    const exercisePayment = async ({ serviceDate, coffee, outcome }) => {
+    const exercisePayment = async ({
+      serviceDate,
+      coffee,
+      outcome,
+    }: {
+      readonly serviceDate: string;
+      readonly coffee: boolean;
+      readonly outcome: "paid" | "failed" | "abandoned" | "pending";
+    }) => {
       const passId = await seedPack();
       const reservation = await draft(serviceDate);
       const dotyposReservationId = DotyposReservationIdSchema.make(
@@ -570,7 +596,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             reservation: selection(serviceDate, coffee),
             entryPack: { passId, tier: "open-space" },
           });
-          const orderId = reservationOrderId(reservation.id);
+          const orderId = standaloneReservationOrderId(reservation.id);
           const payment = {
             orderId,
             amount: prepared.quote.payment.expectedPrice,
@@ -775,10 +801,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const oldClaim = await runReservations((repository) =>
         repository.findEntryPackClaim(older.reservation.id)
       );
+      assert(oldClaim);
       const blocker = await holdPostgresTransaction(
         database.pool,
         "select id from pass_purchases where id = $1 for no key update",
-        [oldClaim!.passId]
+        [oldClaim.passId]
       );
       const recovery = runRecovery((repository) =>
         repository.completeWithReplacement({
@@ -820,9 +847,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           (attached) => attached,
           (failure) => failure
         );
+        assert(waiting);
         await waitForPostgresLockWaiter(database.pool, {
           condition: blockedBy,
-          values: [waiting!.pid],
+          values: [waiting.pid],
           description: "the checkout retry to wait on the late settlement",
         });
       } finally {

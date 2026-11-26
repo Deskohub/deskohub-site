@@ -95,14 +95,15 @@ const makeInvoicePreviews = Effect.gen(function* () {
     yield* deleteExpired;
     const opened = yield* sealed.open({
       reference: { type: "invoicePreviewId", id: input.id },
-      where: and(
-        eq(invoicePreviews.id, input.id),
-        eq(
-          invoicePreviews.administratorAccountId,
-          input.administratorAccountId
-        ),
-        gt(invoicePreviews.expiresAt, sql`now()`)
-      )!,
+      where:
+        and(
+          eq(invoicePreviews.id, input.id),
+          eq(
+            invoicePreviews.administratorAccountId,
+            input.administratorAccountId
+          ),
+          gt(invoicePreviews.expiresAt, sql`now()`)
+        ) ?? sql`false`,
     });
     if (opened === null) return Option.none<OpenedInvoicePreview>();
     return Option.some<OpenedInvoicePreview>({

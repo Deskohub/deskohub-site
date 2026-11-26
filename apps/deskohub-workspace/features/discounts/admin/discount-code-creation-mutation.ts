@@ -3,7 +3,7 @@ import { storedDiscountIdSchema } from "@/features/discounts/persistence-contrac
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import type {
   CreateCustomerDiscountCodeAdminInput,
-  DiscountAdminMutation,
+  DiscountAdminMutationRequest,
 } from "./contracts";
 import {
   toCreateDiscountInput,
@@ -14,7 +14,7 @@ import type { DiscountCodeCreationFormValues } from "./form-schemas";
 const decodeStoredDiscountId = Schema.decodeUnknownSync(storedDiscountIdSchema);
 
 type DiscountCodeCreationMutation = Extract<
-  DiscountAdminMutation,
+  DiscountAdminMutationRequest,
   { readonly kind: "create-code" | "create-customer-code" }
 >;
 

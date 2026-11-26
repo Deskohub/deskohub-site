@@ -11,8 +11,10 @@ import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import {
+  findReservationOrderId,
+  type WorkspaceReservationId,
+} from "@/features/reservation/persistence-contracts";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { CheckoutAnalytics } from "../analytics/checkout-analytics.service";
 import { isReusableAttemptState } from "../checkout/reusable-payment-attempt";
@@ -40,6 +42,16 @@ class ReservationHoldCleanupError extends Data.TaggedError(
       new ReservationHoldCleanupError({ message, cause });
   }
 }
+
+/** A provider payment belongs to the order the reservation is mirrored into. */
+const requireReservationOrderId = (reservationId: WorkspaceReservationId) =>
+  Effect.fromOption(
+    findReservationOrderId(reservationId),
+    () =>
+      new ReservationHoldCleanupError({
+        message: "The reservation has no order of its own.",
+      })
+  );
 
 /** A held order's pending provider payment must be settled before its hold goes. */
 const pendingProviderPayment = (active: WorkspaceReservation | null) =>
@@ -209,7 +221,7 @@ function makeReservationHoldCleanupServiceLayer(
           const expired = yield* paymentLifecycle
             .markTerminal({
               id: paymentAttemptId,
-              orderId: reservationOrderId(orderId),
+              orderId: yield* requireReservationOrderId(orderId),
               state: "expired",
               failureCode: paymentAbandonedAfterProviderCutoffFailureCode,
             })
@@ -265,7 +277,7 @@ function makeReservationHoldCleanupServiceLayer(
         );
         const result = yield* finalization
           .finalizePendingProviderPayment({
-            orderId: reservationOrderId(input.orderId),
+            orderId: yield* requireReservationOrderId(input.orderId),
             paymentAttemptId: input.paymentAttemptId,
             ...(input.checkedAt && {
               abandonmentCheckedAt: input.checkedAt,
@@ -382,7 +394,7 @@ function makeReservationHoldCleanupServiceLayer(
               latest.reservationHoldExpiresAt
             ) {
               const window = yield* qrPayments
-                .findPaymentWindow(reservationOrderId(input.orderId))
+                .findPaymentWindow(input.orderId)
                 .pipe(
                   Effect.mapError(
                     ReservationHoldCleanupError.fromError(
@@ -442,11 +454,10 @@ function makeReservationHoldCleanupServiceLayer(
             "Reservation hold cancellation active reservation loaded"
           );
           const checkedAt = input.checkedAt ?? Temporal.Now.instant();
-          const orderId = reservationOrderId(input.orderId);
           const window =
             qrPayments && active
               ? yield* qrPayments
-                  .findPaymentWindow(orderId)
+                  .findPaymentWindow(input.orderId)
                   .pipe(
                     Effect.mapError(
                       ReservationHoldCleanupError.fromError(
@@ -487,7 +498,7 @@ function makeReservationHoldCleanupServiceLayer(
             const card =
               qrPayments &&
               (yield* qrPayments
-                .findCardAttempt(orderId)
+                .findCardAttempt(input.orderId)
                 .pipe(
                   Effect.mapError(
                     ReservationHoldCleanupError.fromError(
@@ -516,7 +527,10 @@ function makeReservationHoldCleanupServiceLayer(
             }
 
             const expired = yield* paymentLifecycle
-              .expirePublicPaymentWindow({ orderId, checkedAt })
+              .expirePublicPaymentWindow({
+                orderId: window.orderId,
+                checkedAt,
+              })
               .pipe(
                 Effect.mapError(
                   ReservationHoldCleanupError.fromError(

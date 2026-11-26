@@ -15,7 +15,7 @@ export interface McpRequest {
  * the MCP server. The body stays unread for the server.
  */
 export const readMcpRequest = (request: Request): Effect.Effect<McpRequest> =>
-  Effect.tryPromise(() => request.clone().json() as Promise<unknown>).pipe(
+  Effect.tryPromise((): Promise<unknown> => request.clone().json()).pipe(
     Effect.orElseSucceed(() => null),
     Effect.map((body) => ({
       request,

@@ -1,12 +1,14 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { sql } from "drizzle-orm";
 import { Cause, Duration, Effect, Exit } from "effect";
 import { Statement } from "effect/sql";
-import type { CustomerAccountId } from "@/features/account/customer-account";
-import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { orderIdSchema } from "@/features/order";
+import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
@@ -35,10 +37,20 @@ const recordLockStatements: Statement.Transformer = (statement) =>
     }
     return statement;
   });
+/** The connection string of a test pool, which always has one. */
+const connectionStringOf = ({
+  options,
+}: {
+  readonly options: { readonly connectionString?: string | undefined };
+}) => {
+  assert(options.connectionString, "the test pool has a connection string");
+  return options.connectionString;
+};
+
 const recordingPool =
   suiteDatabase &&
   (await openDatabasePool({
-    connectionString: suiteDatabase.pool.options.connectionString!,
+    connectionString: connectionStringOf(suiteDatabase.pool),
     maxConnections: 6,
   }));
 const db =
@@ -86,7 +98,9 @@ describe.skipIf(!suiteDatabase)(
           `select ${text} as free`,
           [...values]
         );
-        return rows[0]!.free;
+        const [result] = rows;
+        assert(result, "the try-lock query returns one row");
+        return result.free;
       } finally {
         other.release();
       }
@@ -107,18 +121,23 @@ describe.skipIf(!suiteDatabase)(
     ];
 
     const accountId = () =>
-      `account-${crypto.randomUUID()}` as CustomerAccountId;
+      customerAccountIdSchema.make(`account-${crypto.randomUUID()}`);
     /** Two account IDs in ascending order. */
     const accountPair = () => {
       const [first, second] = [accountId(), accountId()].sort();
-      return [first!, second!] as const;
+      assert(first && second, "both account IDs are sorted");
+      return [first, second] as const;
     };
 
     const lockTimeout = Effect.map(
       db.execute<{ lock_timeout: string }>(
         sql`select current_setting('lock_timeout') as lock_timeout`
       ),
-      ({ rows }) => rows[0]!.lock_timeout
+      ({ rows }) => {
+        const [setting] = rows;
+        assert(setting, "current_setting returns one row");
+        return setting.lock_timeout;
+      }
     );
 
     describe("every operation locks today's key", () => {
@@ -134,20 +153,22 @@ describe.skipIf(!suiteDatabase)(
         ["referralGraph", WorkspaceLocks.referralGraph(), graphProbe],
         [
           "customerAccount",
-          WorkspaceLocks.customerAccount(`account-${id}` as CustomerAccountId),
+          WorkspaceLocks.customerAccount(
+            customerAccountIdSchema.make(`account-${id}`)
+          ),
           accountProbe(`account-${id}`),
         ],
         [
           "analyticsConsentLedger",
           WorkspaceLocks.analyticsConsentLedger(
-            `account-${id}` as CustomerAccountId
+            customerAccountIdSchema.make(`account-${id}`)
           ),
           pairProbe("analytics-consent-ledger", `account-${id}`),
         ],
         [
           "referralFirstBooking",
           WorkspaceLocks.referralFirstBooking(
-            `customer-${id}` as DotyposCustomerId
+            dotyposCustomerIdSchema.make(`customer-${id}`)
           ),
           pairProbe("referral-first-booking", `customer-${id}`),
         ],
@@ -225,7 +246,7 @@ describe.skipIf(!suiteDatabase)(
       });
 
       test("reservationOrder section", async () => {
-        const orderId = `order-${id}` as WorkspaceReservationId;
+        const orderId = workspaceReservationIdSchema.make(`order-${id}`);
         const probe = pairProbe("reservation-order", orderId);
         const exit = await run(
           WorkspaceLockSections.reservationOrder(orderId)(freeElsewhere(probe))
@@ -235,7 +256,7 @@ describe.skipIf(!suiteDatabase)(
       });
 
       test("capacity dates nest under an order with one permit and release on failure", async () => {
-        const orderId = `capacity-${id}` as WorkspaceReservationId;
+        const orderId = workspaceReservationIdSchema.make(`capacity-${id}`);
         const day = Temporal.PlainDate.from("2099-03-29");
         const followingDay = day.add({ days: 1 });
         const dates = [followingDay, day, followingDay];
@@ -244,7 +265,7 @@ describe.skipIf(!suiteDatabase)(
           .slice(0, 2)
           .map((date) => pairProbe("reservation-capacity", date.toString()));
         const smallPool = await openDatabasePool({
-          connectionString: pool.options.connectionString!,
+          connectionString: connectionStringOf(pool),
           maxConnections: 2,
         });
         try {
@@ -343,7 +364,7 @@ describe.skipIf(!suiteDatabase)(
           Effect.all([
             WorkspaceLocks.customerAccount(account),
             WorkspaceLocks.referralFirstBooking(
-              `customer-${account}` as DotyposCustomerId
+              dotyposCustomerIdSchema.make(`customer-${account}`)
             ),
             WorkspaceLocks.customerAccount(account),
           ])
@@ -487,8 +508,12 @@ describe.skipIf(!suiteDatabase)(
     });
 
     test("the reservationOrder section admits a payment settlement's referral locks without a bounded wait", async () => {
-      const orderId = `order-${crypto.randomUUID()}` as WorkspaceReservationId;
-      const customer = `customer-${crypto.randomUUID()}` as DotyposCustomerId;
+      const orderId = workspaceReservationIdSchema.make(
+        `order-${crypto.randomUUID()}`
+      );
+      const customer = dotyposCustomerIdSchema.make(
+        `customer-${crypto.randomUUID()}`
+      );
       const exit = await run(
         WorkspaceLockSections.reservationOrder(orderId)(
           transaction(
@@ -639,24 +664,52 @@ describe.skipIf(!suiteDatabase)(
 
     describe("sections nest in declaration order", () => {
       type SectionName = keyof typeof WorkspaceLockSections;
+      type Section = <A, E>(
+        effect: Effect.Effect<A, E, WorkspaceDatabaseAdvisoryLock>
+      ) => Effect.Effect<A, unknown, WorkspaceDatabaseAdvisoryLock>;
+      const syntheticKey = (name: SectionName) =>
+        `${name}-${crypto.randomUUID()}`;
+      /** Each section on a fresh synthetic key. */
+      const sectionOnFreshKey = {
+        signInEmail: () =>
+          WorkspaceLockSections.signInEmail(syntheticKey("signInEmail")),
+        reservationOrder: () =>
+          WorkspaceLockSections.reservationOrder(
+            workspaceReservationIdSchema.make(syntheticKey("reservationOrder"))
+          ),
+        unlimitedPassRecovery: () =>
+          WorkspaceLockSections.unlimitedPassRecovery(
+            orderIdSchema.make(crypto.randomUUID())
+          ),
+        customerAccount: () =>
+          WorkspaceLockSections.customerAccount(
+            customerAccountIdSchema.make(syntheticKey("customerAccount"))
+          ),
+        reservationCapacity: () =>
+          WorkspaceLockSections.reservationCapacity([
+            Temporal.PlainDate.from("2099-01-01"),
+          ]),
+        unlimitedGiftCustomer: () =>
+          WorkspaceLockSections.unlimitedGiftCustomer(
+            customerAccountIdSchema.make(syntheticKey("unlimitedGiftCustomer"))
+          ),
+        passPurchaseFulfillment: () =>
+          WorkspaceLockSections.passPurchaseFulfillment(
+            orderIdSchema.make(crypto.randomUUID())
+          ),
+        reservationInviteeNotices: () =>
+          WorkspaceLockSections.reservationInviteeNotices(
+            workspaceReservationIdSchema.make(
+              syntheticKey("reservationInviteeNotices")
+            )
+          ),
+      } satisfies Record<SectionName, () => Section>;
       /** Enters the named section on a fresh synthetic key. */
-      const enter =
-        (name: SectionName) =>
-        <A, E>(effect: Effect.Effect<A, E, WorkspaceDatabaseAdvisoryLock>) => {
-          if (name === "reservationCapacity") {
-            return WorkspaceLockSections.reservationCapacity([
-              Temporal.PlainDate.from("2099-01-01"),
-            ])(effect);
-          }
-          return (
-            WorkspaceLockSections[name] as (
-              key: string
-            ) => (
-              effect: Effect.Effect<A, E, WorkspaceDatabaseAdvisoryLock>
-            ) => Effect.Effect<A, unknown, WorkspaceDatabaseAdvisoryLock>
-          )(`${name}-${crypto.randomUUID()}`)(effect);
-        };
-      const declared = Object.keys(WorkspaceLockSections) as Array<SectionName>;
+      const enter = (name: SectionName): Section => sectionOnFreshKey[name]();
+      const isSectionName = (key: string): key is SectionName =>
+        Object.hasOwn(WorkspaceLockSections, key);
+      // Declaration order, which is the nesting order under test.
+      const declared = Object.keys(WorkspaceLockSections).filter(isSectionName);
 
       for (const [index, outer] of declared.entries()) {
         for (const inner of declared.slice(index + 1)) {

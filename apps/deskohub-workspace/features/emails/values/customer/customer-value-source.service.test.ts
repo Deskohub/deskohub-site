@@ -1,23 +1,46 @@
 import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
-import { DotyposUnavailable } from "@deskohub/dotypos";
+import { DotyposCustomerSchema, DotyposUnavailable } from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { GoogleCalendarService } from "@deskohub/google-calendar";
 import { testEmailAddress } from "@deskohub/test-email";
+import { EmailValueName } from "@deskohub/workspace-admin-api";
 import { Effect, Layer, Option, Schema } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
-import { AdministrationService } from "@/features/administration/administration.service";
+import {
+  type AdministrationCustomerActivity,
+  AdministrationService,
+} from "@/features/administration/administration.service";
 import { AccountRoleGrants } from "@/features/administrators/backend/account-role-grants.service";
 import { CurrentAdministrator } from "@/features/administrators/backend/current-administrator";
+import {
+  adminCodeClaim,
+  adminCustomer,
+  adminCustomerCode,
+  adminCustomerProfile,
+  adminCustomerVoucher,
+  adminVoucherClaim,
+} from "@/features/discounts/admin/customer-admin-fixtures.test-utils";
 import { DiscountAdministration } from "@/features/discounts/admin/discount-administration.service";
+import {
+  type VoucherId,
+  voucherIdSchema,
+} from "@/features/discounts/persistence-contracts";
 import { WorkspaceReservationDetailsMalformedError } from "@/features/reservation/backend/stored-reservation-details.server";
+import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
-import { CalendarResourceConfig } from "@/shared/backend/config/calendar-resource.config";
+import {
+  CalendarResourceConfig,
+  salesCalendarIdSchema,
+  workspaceLimitationsCalendarIdSchema,
+} from "@/shared/backend/config/calendar-resource.config";
+import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { CustomerValueSource } from "./customer-value-source.service";
 import { CustomerValues } from "./customer-values.service";
 
-const customerId = "synthetic-customer";
+const customerId = Schema.decodeUnknownSync(dotyposCustomerIdSchema)(
+  "synthetic-customer"
+);
 const actor = {
   accountId: Schema.decodeUnknownSync(customerAccountIdSchema)(
     "synthetic-administrator"
@@ -25,21 +48,15 @@ const actor = {
   email: testEmailAddress("customer-values-administrator"),
 };
 
-const profile = {
-  customer: {
+const profile = adminCustomerProfile({
+  customer: adminCustomer({
     id: customerId,
     displayName: "Synthetic customer",
     email: testEmailAddress("customer-values"),
     phone: null,
-    discountGroupId: null,
-  },
-  codes: [],
-  claims: [],
-  discountGroups: [],
-  vouchers: [],
-  voucherClaims: [],
-};
-const activity = {
+  }),
+});
+const activity: AdministrationCustomerActivity = {
   reservations: [],
   transactions: [],
   reservationHistoryTruncated: true,
@@ -50,15 +67,15 @@ const activity = {
     favoriteProduct: null,
     revenue: [],
     discountSavings: [],
-    favoriteReservationProduct: { kind: "cowork" },
+    favoriteReservationProduct: { kind: "meeting-room" },
   },
 };
 
 const sourceLayer = (
   input: {
     readonly allowed?: () => boolean;
-    readonly loadProfile?: () => Effect.Effect<unknown, unknown>;
-    readonly loadActivity?: () => Effect.Effect<unknown, unknown>;
+    readonly loadProfile?: DiscountAdministration["Service"]["loadCustomerProfile"];
+    readonly loadActivity?: AdministrationService["Service"]["loadCustomerActivityStrict"];
   } = {}
 ) =>
   CustomerValueSource.Default.pipe(
@@ -70,11 +87,11 @@ const sourceLayer = (
         Layer.mock(DiscountAdministration, {
           loadCustomerProfile:
             input.loadProfile ?? (() => Effect.succeed(profile)),
-        } as never),
+        }),
         Layer.mock(AdministrationService, {
           loadCustomerActivityStrict:
             input.loadActivity ?? (() => Effect.succeed(activity)),
-        } as never)
+        })
       )
     )
   );
@@ -128,14 +145,14 @@ describe("CustomerValueSource", () => {
         Layer.mergeAll(
           Layer.mock(DiscountAdministration, {
             loadCustomerProfile: () => Effect.succeed(profile),
-          } as never),
+          }),
           Layer.mock(AdministrationService, {
             loadCustomerActivityStrict: () => Effect.succeed(activity),
-          } as never)
+          })
         )
       )
     );
-    expect(await runProfile(layer as never, false)).toMatchObject({
+    expect(await runProfile(layer, false)).toMatchObject({
       _tag: "Success",
     });
     // The administrator layer still refuses the same anonymous read.
@@ -157,16 +174,16 @@ describe("CustomerValueSource", () => {
       Layer.mock(AccountRoleGrants, { has: () => Effect.succeed(true) }),
       Layer.mock(DiscountAdministration, {
         loadCustomerProfile: () => Effect.succeed(profile),
-      } as never),
+      }),
       Layer.mock(AdministrationService, {
         loadCustomerActivityStrict: () => Effect.succeed(activity),
-      } as never)
+      })
     );
     const resolve = Effect.flatMap(CustomerValues, (values) =>
       values.resolve({
         customerId,
         definition: {
-          name: "contact",
+          name: Schema.decodeUnknownSync(EmailValueName)("contact"),
           source: { kind: "customer", path: ["profile", "customer", "email"] },
         },
         locale: "en-US",
@@ -199,34 +216,39 @@ describe("CustomerValueSource", () => {
 
   test("reads the real administration profile path with synthetic Dotypos and storage", async () => {
     const calls: string[] = [];
+    const database = await makeRecordingWorkspaceDatabase();
     const discounts = DiscountAdministration.Default.pipe(
       Layer.provide(
         Layer.mergeAll(
-          Layer.succeed(
-            WorkspaceDatabase,
-            WorkspaceDatabase.make({
-              query: {
-                discountCodes: { findMany: () => Effect.succeed([]) },
-                vouchers: { findMany: () => Effect.succeed([]) },
-              },
-            } as never)
-          ),
+          // Every stored code and voucher query answers with no rows.
+          database.layer,
           DotyposServiceMock({
             getCustomer: (id) =>
               Effect.sync(() => {
                 calls.push(id);
-                return Option.some({
-                  id,
-                  firstName: "Synthetic",
-                  email: testEmailAddress("real-customer-value-path"),
-                });
+                return Option.some(
+                  Schema.decodeUnknownSync(DotyposCustomerSchema)({
+                    id,
+                    _cloudId: "synthetic-cloud",
+                    firstName: "Synthetic",
+                    email: testEmailAddress("real-customer-value-path"),
+                    points: "0",
+                    flags: "0",
+                    display: true,
+                    deleted: false,
+                  })
+                );
               }),
             getDiscountGroups: () => Effect.succeed([]),
           }),
           Layer.mock(GoogleCalendarService, {}),
-          Layer.succeed(CalendarResourceConfig, {
-            salesCalendarId: "synthetic-calendar",
-          } as never)
+          Layer.mock(CalendarResourceConfig, {
+            salesCalendarId: salesCalendarIdSchema.make("synthetic-calendar"),
+            workspaceLimitationsCalendarId:
+              workspaceLimitationsCalendarIdSchema.make(
+                "synthetic-limitations-calendar"
+              ),
+          })
         )
       )
     );
@@ -308,9 +330,7 @@ describe("CustomerValueSource", () => {
           Effect.succeed({
             ...profile,
             codes: [
-              {
-                id: "019b0000-0000-7000-8000-000000000001",
-                discountId: "019b0000-0000-7000-8000-000000000002",
+              adminCustomerCode({
                 code: "SYNTHETIC_NONREDEEMABLE",
                 enabled: false,
                 validFrom: at,
@@ -326,8 +346,11 @@ describe("CustomerValueSource", () => {
                 remainingUses: 1,
                 discountLabel: "Synthetic",
                 eligible: true,
-                discountLabels: { "en-US": "Internal-only synthetic label" },
-              },
+                discountLabels: {
+                  "cs-CZ": "Internal-only synthetic label",
+                  "en-US": "Internal-only synthetic label",
+                },
+              }),
             ],
           }),
       })
@@ -352,67 +375,61 @@ describe("CustomerValueSource", () => {
   test("serializes claim and voucher dates whether or not they are set", async () => {
     const at = Temporal.Instant.from("2026-10-01T10:00:00Z");
     const later = Temporal.Instant.from("2026-10-02T10:00:00Z");
-    const claim = (id: string, settledAt: "redeemed" | "released") => ({
-      id,
-      dotyposCustomerId: customerId,
-      state: settledAt,
-      paymentAttemptId: "synthetic-payment-attempt",
-      workspaceReservationId: "synthetic-reservation",
-      appliedAmount: null,
-      reservationExpiresAt: later,
-      reservedAt: at,
-      redeemedAt: settledAt === "redeemed" ? later : null,
-      releasedAt: settledAt === "released" ? later : null,
-      releaseReason: null,
-    });
-    const voucher = (id: string, validFrom: Temporal.Instant | null) => ({
-      id,
-      code: `SYNTHETIC_VOUCHER_${id.slice(-1)}`,
-      enabled: true,
-      validFrom,
-      validUntil: validFrom ? null : later,
-      audienceSize: 1,
-      reservedUses: 0,
-      redeemedUses: 0,
-      releasedUses: 0,
-      createdAt: at,
-      updatedAt: at,
-      issuedCredit: { value: 10_000, exponent: 2, currency: "CZK" },
-      remainingCredit: { value: 10_000, exponent: 2, currency: "CZK" },
-      eligible: true,
-    });
-    const voucherIds = [
-      "019b0000-0000-7000-8000-000000000011",
-      "019b0000-0000-7000-8000-000000000012",
-    ] as const;
+    const settlement = (settledAt: "redeemed" | "released") =>
+      ({
+        dotyposCustomerId: customerId,
+        state: settledAt,
+        reservationExpiresAt: later,
+        reservedAt: at,
+        redeemedAt: settledAt === "redeemed" ? later : null,
+        releasedAt: settledAt === "released" ? later : null,
+        releaseReason: null,
+      }) as const;
+    const firstVoucherId = Schema.decodeUnknownSync(voucherIdSchema)(
+      "019b0000-0000-7000-8000-000000000011"
+    );
+    const secondVoucherId = Schema.decodeUnknownSync(voucherIdSchema)(
+      "019b0000-0000-7000-8000-000000000012"
+    );
+    const voucher = (id: VoucherId, validFrom: Temporal.Instant | null) =>
+      adminCustomerVoucher({
+        id,
+        code: `SYNTHETIC_VOUCHER_${id.slice(-1)}`,
+        enabled: true,
+        validFrom,
+        validUntil: validFrom ? null : later,
+        audienceSize: 1,
+        reservedUses: 0,
+        redeemedUses: 0,
+        releasedUses: 0,
+        createdAt: at,
+        updatedAt: at,
+        issuedCredit: { value: 10_000, exponent: 2, currency: "CZK" },
+        remainingCredit: { value: 10_000, exponent: 2, currency: "CZK" },
+        eligible: true,
+      });
     const result = await runProfile(
       sourceLayer({
         loadProfile: () =>
           Effect.succeed({
             ...profile,
             claims: [
-              {
-                ...claim("synthetic-claim-1", "redeemed"),
-                codeId: "019b0000-0000-7000-8000-000000000001",
-              },
-              {
-                ...claim("synthetic-claim-2", "released"),
-                codeId: "019b0000-0000-7000-8000-000000000001",
-              },
+              adminCodeClaim(settlement("redeemed")),
+              adminCodeClaim(settlement("released")),
             ],
             vouchers: [
-              voucher(voucherIds[0], at),
-              voucher(voucherIds[1], null),
+              voucher(firstVoucherId, at),
+              voucher(secondVoucherId, null),
             ],
             voucherClaims: [
-              {
-                ...claim("synthetic-voucher-claim-1", "redeemed"),
-                voucherId: voucherIds[0],
-              },
-              {
-                ...claim("synthetic-voucher-claim-2", "released"),
-                voucherId: voucherIds[1],
-              },
+              adminVoucherClaim({
+                ...settlement("redeemed"),
+                voucherId: firstVoucherId,
+              }),
+              adminVoucherClaim({
+                ...settlement("released"),
+                voucherId: secondVoucherId,
+              }),
             ],
           }),
       })
@@ -444,9 +461,11 @@ describe("CustomerValueSource", () => {
     const malformed = await runProfile(
       sourceLayer({
         loadProfile: () =>
-          Effect.succeed({
-            ...profile,
-            customer: { ...profile.customer, email: 123 },
+          Effect.sync(() => {
+            const customer = { ...profile.customer };
+            // A malformed source can hand back what the profile type forbids.
+            Reflect.set(customer, "email", 123);
+            return { ...profile, customer };
           }),
       })
     );

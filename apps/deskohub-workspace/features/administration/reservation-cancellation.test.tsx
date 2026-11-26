@@ -17,6 +17,9 @@ import {
 } from "@testing-library/react";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import {
+  submittedActionInput,
+  type WorkspaceActionExecute,
+  workspaceActionCallbacks,
   workspaceRouterRefresh,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -26,24 +29,13 @@ import {
 } from "@/shared/testing/workspace-component-test-env";
 import { m } from "./i18n";
 
-const execute = mock();
+type CancelAction = typeof import("./actions").cancelAdministrationReservation;
+type CancelActionData = Awaited<ReturnType<CancelAction>>["data"];
+const execute = mock<WorkspaceActionExecute>();
 
-interface CancelActionInput {
-  readonly reservationId: string;
-  readonly sendCancellationEmail: boolean;
-}
-
-type ActionOptions = {
-  readonly execute: (input: CancelActionInput) => void;
-  readonly isExecuting: boolean;
-  readonly onSuccess: (args: {
-    readonly data?: { readonly email: "failed" | "not_requested" | "sent" };
-  }) => void;
-  readonly onError: (args: {
-    readonly error: { readonly serverError?: string };
-  }) => void;
-  readonly onTransportError: () => void;
-};
+type ActionOptions = ReturnType<
+  typeof workspaceActionCallbacks<CancelActionData>
+>;
 
 let actionOptions: ActionOptions | undefined;
 
@@ -69,7 +61,7 @@ beforeEach(() => {
 
 const withActionOptions = () => {
   workspaceUseAction.mockImplementation((_action, options) => {
-    actionOptions = options as ActionOptions | undefined;
+    actionOptions = workspaceActionCallbacks(options, execute);
     return { execute, isExecuting: false, result: {} };
   });
 };
@@ -147,7 +139,7 @@ describe("ReservationCancellation", () => {
     await submitDialog(view);
 
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(execute.mock.calls[0][0]).toEqual({
+    expect(submittedActionInput(execute.mock.calls)).toEqual({
       confirmedConsequences: { invoice: false, customerNotice: false },
       reservationId: fixtureReservationId,
       sendCancellationEmail: true,
@@ -166,7 +158,7 @@ describe("ReservationCancellation", () => {
     );
 
     await submitDialog(view);
-    expect(execute.mock.calls[0][0]).toEqual({
+    expect(submittedActionInput(execute.mock.calls)).toEqual({
       confirmedConsequences: { invoice: false, customerNotice: false },
       reservationId: fixtureReservationId,
       sendCancellationEmail: false,
@@ -180,7 +172,9 @@ describe("ReservationCancellation", () => {
 
     await submitDialog(view);
     act(() => {
-      actionOptions?.onSuccess({ data: { email: "failed" } });
+      actionOptions?.onSuccess({
+        data: { outcome: "cancelled", email: "failed", invoice: null },
+      });
     });
 
     expect(
@@ -215,7 +209,9 @@ describe("ReservationCancellation", () => {
     expect(execute).toHaveBeenCalledTimes(1);
 
     act(() => {
-      actionOptions?.onSuccess({ data: { email: "sent" } });
+      actionOptions?.onSuccess({
+        data: { outcome: "cancelled", email: "sent", invoice: null },
+      });
     });
     expect(
       view.getByText("Rezervace byla zrušena a zákazník dostal e-mail.")
@@ -256,7 +252,7 @@ describe("ReservationCancellation", () => {
     );
 
     act(() => {
-      actionOptions?.onSuccess({});
+      actionOptions?.onSuccess({ data: undefined });
     });
     expect(view.getByRole("dialog")).toBeDefined();
     expect(view.queryByRole("status")).toBeNull();
@@ -292,7 +288,7 @@ describe("ReservationCancellation", () => {
       );
 
       await submitDialog(view);
-      expect(execute.mock.calls[0][0]).toMatchObject({
+      expect(submittedActionInput(execute.mock.calls)).toMatchObject({
         confirmedConsequences: {
           invoice: true,
           customerNotice: customerNotice === "owed",
@@ -316,7 +312,7 @@ describe("ReservationCancellation", () => {
     expect(dialog.queryByText(invoiceWarning("2026000007"))).toBeNull();
     expect(dialog.queryByText(noticeWarning)).toBeNull();
     await submitDialog(view);
-    expect(execute.mock.calls[0][0]).toMatchObject({
+    expect(submittedActionInput(execute.mock.calls)).toMatchObject({
       confirmedConsequences: { invoice: false, customerNotice: false },
     });
   });

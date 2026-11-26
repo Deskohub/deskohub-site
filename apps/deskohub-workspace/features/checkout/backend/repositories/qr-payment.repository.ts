@@ -1,14 +1,13 @@
 import { and, eq, gt, inArray, type SQL } from "drizzle-orm";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
   paymentAttempts,
   reservationPaymentWindows,
   workspaceReservations,
 } from "@/db/schema";
-import type { OrderId } from "@/features/order";
 import {
-  reservationOrderId,
+  findReservationOrderId,
   type WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
 import { toPaymentAttempt } from "./payment-attempt.repository";
@@ -46,10 +45,15 @@ export class QrPaymentRepository extends Context.Service<QrPaymentRepository>()(
       });
 
       return {
-        findForReservation: (id: WorkspaceReservationId) =>
-          findQrAttempt(
-            eq(reservationPaymentWindows.orderId, reservationOrderId(id))
-          ),
+        findForReservation: Effect.fnUntraced(function* (
+          id: WorkspaceReservationId
+        ) {
+          const orderId = findReservationOrderId(id);
+          if (Option.isNone(orderId)) return null;
+          return yield* findQrAttempt(
+            eq(reservationPaymentWindows.orderId, orderId.value)
+          );
+        }),
         findByReference: (input: {
           accountKey: string;
           variableSymbol: string;
@@ -60,15 +64,23 @@ export class QrPaymentRepository extends Context.Service<QrPaymentRepository>()(
               eq(paymentAttempts.providerOrderId, input.variableSymbol)
             )
           ),
-        findPaymentWindow: Effect.fnUntraced(function* (orderId: OrderId) {
+        findPaymentWindow: Effect.fnUntraced(function* (
+          id: WorkspaceReservationId
+        ) {
+          const orderId = findReservationOrderId(id);
+          if (Option.isNone(orderId)) return null;
           const [result] = yield* db
             .select()
             .from(reservationPaymentWindows)
-            .where(eq(reservationPaymentWindows.orderId, orderId))
+            .where(eq(reservationPaymentWindows.orderId, orderId.value))
             .limit(1);
           return result ?? null;
         }),
-        findCardAttempt: Effect.fnUntraced(function* (orderId: OrderId) {
+        findCardAttempt: Effect.fnUntraced(function* (
+          id: WorkspaceReservationId
+        ) {
+          const orderId = findReservationOrderId(id);
+          if (Option.isNone(orderId)) return null;
           const [result] = yield* db
             .select({ attempt: paymentAttempts })
             .from(reservationPaymentWindows)
@@ -76,7 +88,7 @@ export class QrPaymentRepository extends Context.Service<QrPaymentRepository>()(
               paymentAttempts,
               eq(reservationPaymentWindows.cardAttemptId, paymentAttempts.id)
             )
-            .where(eq(reservationPaymentWindows.orderId, orderId))
+            .where(eq(reservationPaymentWindows.orderId, orderId.value))
             .limit(1);
           return result ? toPaymentAttempt(result.attempt) : null;
         }),

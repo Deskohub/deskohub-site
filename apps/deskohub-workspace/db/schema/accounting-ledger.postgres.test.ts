@@ -1,7 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, Predicate } from "effect";
 import type { PoolClient } from "pg";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
@@ -46,7 +46,15 @@ describe.skipIf(!testDatabase)(
         await client.query(statement, [...params]);
         return undefined;
       } catch (error) {
-        return error as DatabaseRejection;
+        if (!(error instanceof Error)) throw error;
+        return {
+          message: error.message,
+          code:
+            Predicate.hasProperty(error, "code") &&
+            Predicate.isString(error.code)
+              ? error.code
+              : undefined,
+        };
       } finally {
         await client.query("rollback to savepoint attempt");
       }

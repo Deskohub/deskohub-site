@@ -247,12 +247,12 @@ export const makeWorkspaceE2EAccountPasskeys = ({
       "account_passkey_sign_in_failed",
       "sign in with the passkey button",
       async (page) => {
-        // Presence answers every autofill request the form starts during the
-        // ceremony and signs the customer in without the button, but leaves
-        // one already pending. So the step waits for the form's request, and
-        // the click has to cancel it. The form starts another after a failed
-        // button ceremony, so the authenticator also checks that only the
-        // button's request signed in.
+        // Wait for the form's autofill request so the click proves it cancels
+        // a live conditional request. `answerModalCeremony` keeps presence off
+        // until the button's modal request starts (so a conditional request
+        // still traversing Chromium's dispatch cannot be answered ahead of the
+        // click) and leaves it on afterwards so a re-armed autofill after a
+        // failed button ceremony is still caught.
         const installed = requireAuthenticator();
         await installed.waitForConditionalRequest(uiTransition);
         await installed

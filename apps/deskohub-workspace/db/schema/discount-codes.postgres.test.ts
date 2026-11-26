@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import type { PoolClient } from "pg";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 
@@ -10,7 +11,8 @@ const postgresDatabase = await connectWorkspacePostgresTestDatabase();
 const withDiscount = async (
   scenario: (client: PoolClient) => Promise<void>
 ) => {
-  const client = await postgresDatabase!.pool.connect();
+  assert(postgresDatabase, "The Workspace test Postgres must be configured");
+  const client = await postgresDatabase.pool.connect();
   try {
     await client.query("begin");
     await client.query(

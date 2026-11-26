@@ -71,7 +71,7 @@ const oneStatementAtATime = <A, E, R>(
     // Effect SQL keys a level's end and its `afterCommit` callbacks by this
     // tuple, so the view replaces the connection inside it rather than
     // providing a tuple of its own.
-    const level = open.value as [SqlConnection.Connection, number];
+    const level = open.value;
     const [connection] = level;
     const bounded = boundStatement(statementTimeoutOf(client));
     let running = 0;
@@ -146,7 +146,8 @@ const oneStatementAtATime = <A, E, R>(
           )) satisfies SqlConnection.Connection["executeStream"],
       },
     });
-    level[0] = guarded;
+    // Effect SQL types the tuple readonly; the swap writes its connection slot.
+    Object.assign(level, { 0: guarded });
     return body.pipe(
       // A finalizer, so the view also closes when the fiber is interrupted;
       // interruption skips the `Effect.exit` below. It runs before Effect SQL

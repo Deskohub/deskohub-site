@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import {
   Cause,
@@ -11,7 +12,10 @@ import {
   Stream,
 } from "effect";
 import { SqlClient, type SqlConnection, SqlError } from "effect/sql";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import {
+  type CustomerAccountId,
+  customerAccountIdSchema,
+} from "@/features/account/customer-account";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
@@ -27,6 +31,9 @@ const key: PostgresAdvisoryLockKey = ["test-namespace", "resource-1"];
 
 const toSqlError = (cause: unknown) =>
   new SqlError.SqlError({ reason: new SqlError.UnknownError({ cause }) });
+
+/** The rows of a fake statement, which returns none. */
+const noRows: ReadonlyArray<never> = [];
 
 type FakeQuery = (
   text: string,
@@ -72,7 +79,7 @@ const makeFakeConnections = (options: {
             unfinished = error;
           })
         ),
-        Effect.as([] as ReadonlyArray<never>)
+        Effect.as(noRows)
       );
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
@@ -192,7 +199,8 @@ const makeTransactionPoolingPostgres = (serverSessionCount: number) => {
     (values ?? []).map((value) => String(value)).join("\u0000");
 
   const routeStatementToIdleSession = () => {
-    const session = sessions[nextIdleSession % sessions.length]!;
+    const session = sessions[nextIdleSession % sessions.length];
+    assert(session, "the fake server has a session");
     nextIdleSession += 1;
     return session;
   };
@@ -422,7 +430,7 @@ describe("Postgres advisory lock helper", () => {
       ).pipe(Effect.flip)
     );
 
-    expect((error as { _tag?: string })._tag).toBe("SqlError");
+    expect(SqlError.isSqlError(error)).toBe(true);
     expect(fake.queries).toHaveLength(0);
     expect(fake.released).toHaveLength(0);
   });
@@ -464,7 +472,7 @@ describe("Postgres advisory lock helper", () => {
     expect(fake.queries).toHaveLength(3);
     expect(fake.released).toHaveLength(1);
     expect(fake.released[0]).toBeInstanceOf(Error);
-    expect((fake.released[0] as { _tag?: string })._tag).toBe("SqlError");
+    expect(SqlError.isSqlError(fake.released[0])).toBe(true);
   });
 
   test("keeps the guarded effect's failure when the rollback also fails", async () => {
@@ -756,7 +764,7 @@ describe("Workspace lock sections", () => {
       })
     );
     const day = Temporal.PlainDate.from("2099-01-01");
-    const outer = "account-1" as CustomerAccountId;
+    const outer = customerAccountIdSchema.make("account-1");
     const exit = await Effect.runPromise(
       Effect.gen(function* () {
         const childEntered = yield* Deferred.make<void>();
@@ -795,8 +803,8 @@ describe("Workspace lock sections", () => {
   test("a section holds its key for its effect only, and is not reentrant", async () => {
     const fake = makeLayerPool(4);
     const layer = fake.makeLayer();
-    const first = "account-1" as CustomerAccountId;
-    const second = "account-2" as CustomerAccountId;
+    const first = customerAccountIdSchema.make("account-1");
+    const second = customerAccountIdSchema.make("account-2");
     const enter = <A, E>(
       accountId: CustomerAccountId,
       effect: Effect.Effect<A, E, WorkspaceDatabaseAdvisoryLock>
@@ -856,8 +864,10 @@ describe.skipIf(!postgresDatabase)(
       test(`keeps callbacks usable with a bounded pool of ${max}`, {
         timeout: 120_000,
       }, async () => {
+        const databaseUrl = process.env.WORKSPACE_TEST_DATABASE_URL;
+        assert(databaseUrl, "the Postgres test database is configured");
         const pool = await openDatabasePool({
-          connectionString: process.env.WORKSPACE_TEST_DATABASE_URL!,
+          connectionString: databaseUrl,
           maxConnections: max,
         });
         const layer = WorkspaceDatabaseAdvisoryLock.makeLayer(pool);
@@ -898,8 +908,9 @@ describe.skipIf(!postgresDatabase)(
     }
 
     test("serializes concurrent holders of the same key", async () => {
+      assert(postgresDatabase, "the Postgres test database is configured");
       const pool = Context.get(
-        postgresDatabase!.databasePool.postgres,
+        postgresDatabase.databasePool.postgres,
         SqlClient.SqlClient
       );
       const events: string[] = [];

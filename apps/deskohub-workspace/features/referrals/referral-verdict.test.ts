@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos";
-import type { PromotionCodeId } from "@/features/discounts/persistence-contracts";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import { promotionCodeIdSchema } from "@/features/discounts/persistence-contracts";
 import {
   evaluateReferral,
   type InvitationReferral,
@@ -9,11 +9,11 @@ import {
   type ReferrerByInvitee,
 } from "./referral-verdict";
 
-const customer = (value: string) => value as DotyposCustomerId;
+const customer = (value: string) => DotyposCustomerIdSchema.make(value);
 const invited = customer("invited");
 const referral = (referrer: string): InvitationReferral => ({
   referrerDotyposCustomerId: customer(referrer),
-  promotionCodeId: `code-of-${referrer}` as PromotionCodeId,
+  promotionCodeId: promotionCodeIdSchema.make(`code-of-${referrer}`),
 });
 
 /** Answers each fact the evaluation asks for and records the order asked. */

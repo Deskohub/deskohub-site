@@ -2,11 +2,11 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
-  type CallToolResult,
   Client,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Predicate, Schema } from "effect";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import type { AgentTrafficEvent } from "@/shared/backend/agent-traffic/agent-traffic-events";
 import { CurrentAgentTraffic } from "@/shared/backend/workspace-request-context";
 import {
@@ -36,7 +36,8 @@ const {
   defineAgentTool,
   defineSignedInAgentTool,
 } = await import("./agent-tool");
-const { CustomerAgentAuthorization } = await import("@/features/account");
+const { CustomerAgentAuthorization, customerAgentClientIdSchema } =
+  await import("@/features/account");
 const { AgentToolAdmission } = await import("./agent-tool-admission.service");
 const { answerAgentToolMcpRequest } = await import("./agent-tool-mcp-handler");
 const { readMcpRequest } = await import("./agent-tool-mcp-messages");
@@ -160,7 +161,8 @@ const readEventStreamResult = async (response: Response) => {
     .filter((line) => line.startsWith("data:"))
     .at(-1)
     ?.slice("data:".length);
-  return JSON.parse(data ?? "null")?.result as CallToolResult | undefined;
+  const message: unknown = JSON.parse(data ?? "null");
+  return Predicate.hasProperty(message, "result") ? message.result : undefined;
 };
 
 /** Connects a 2026-era client that sends `origin`, as a browser page would. */
@@ -469,14 +471,16 @@ describe("tools a call's caller may call", () => {
             Layer.succeed(AgentToolAdmission, {
               isCallAllowed: () => Effect.succeed(true),
             }),
-            Layer.succeed(CustomerAgentAuthorization, {
+            Layer.mock(CustomerAgentAuthorization, {
               authorize: () =>
                 Effect.succeed({
-                  accountId: "synthetic-account",
-                  clientId: "https://agent.example/client.json",
+                  accountId: customerAccountIdSchema.make("synthetic-account"),
+                  clientId: customerAgentClientIdSchema.make(
+                    "https://agent.example/client.json"
+                  ),
                   scopes: new Set(scopes),
                 }),
-            } as never)
+            })
           )
         ),
         Effect.provideService(CurrentAgentTraffic, {
@@ -485,7 +489,10 @@ describe("tools a call's caller may call", () => {
         })
       )
     );
-    return (await readEventStreamResult(response))?.structuredContent;
+    const result = await readEventStreamResult(response);
+    return Predicate.hasProperty(result, "structuredContent")
+      ? result.structuredContent
+      : undefined;
   };
 
   test("holds only the public tools without a token", async () => {

@@ -17,6 +17,7 @@ import type {
 import { PayableCheckoutMock } from "@/features/checkout/backend/checkout/payable-checkout.service.mock";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
 import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import type {
   WorkspaceAvailability,
   WorkspaceAvailabilityQuery,
@@ -31,6 +32,7 @@ import {
   loadAvailability,
   preloadAvailability,
 } from "./workspace-availability-loader";
+import { payableReservationFixture } from "./workspace-reservation.test-utils";
 
 const coworkQuery = {
   kind: "cowork",
@@ -85,14 +87,10 @@ const getAvailability = mock<IWorkspaceAvailabilityService["getAvailability"]>(
 const currentHold = (
   overrides: Partial<PayableReservation> = {}
 ): PayableReservation =>
-  ({
-    id: "reservation-id",
-    reservationState: "held",
-    paymentState: "not_started",
-    dotyposReservationId: "dotypos-reservation-1",
-    reservationHoldExpiresAt: Temporal.Instant.from("2099-06-01T10:10:00Z"),
+  payableReservationFixture({
+    id: workspaceReservationIdSchema.make("reservation-id"),
     ...overrides,
-  }) as PayableReservation;
+  });
 
 const confirm = mock(
   (

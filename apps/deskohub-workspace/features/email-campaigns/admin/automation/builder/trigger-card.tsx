@@ -5,6 +5,7 @@ import type {
   ReservationPayment,
   ReservationStay,
 } from "@deskohub/workspace-admin-api";
+import { Struct } from "effect";
 import {
   CalendarCheck,
   CalendarClock,
@@ -482,7 +483,7 @@ function QualifierSelect<Value extends string>({
   readonly invalid?: boolean;
 }) {
   const labelId = useId();
-  const values = Object.keys(options) as Value[];
+  const values = Struct.keys(options);
   return (
     <div className="flex flex-col gap-1.5">
       <span id={labelId} className="font-semibold text-sm">

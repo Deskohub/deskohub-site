@@ -2,20 +2,24 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect } from "effect";
 import {
+  type AdvertisedPriceRequest,
   isOfficeAdvertisedPrice,
   type OfficeAdvertisedPriceRequest,
+  type PreloadedAdvertisedPrice,
 } from "@/features/checkout/advertised-price";
 import { getOfficeCheckoutSummary } from "@/features/checkout/checkout-summary-office";
 import { getWorkspaceOfficeAccessPrice } from "@/features/checkout/product-catalog";
 import { getPublicOfferingsStructuredData } from "@/features/checkout/public-offerings-structured-data";
 import { buildOfficeReservationQuote } from "@/features/checkout/reservation-quote-office";
 import { m } from "@/features/i18n";
+import { advertiseOffice } from "@/features/reservation/advertised-price.test-utils";
 import { recordReservationPagePreloads } from "@/features/reservation/backend/reservation-page-preloads.service.mock";
 import { getOfficeSeatAdvertisedPriceRequests } from "@/features/reservation/office-advertised-price";
 import {
   type NormalizedOfficeReservationOrder,
   normalizedOfficeReservationOrderSchema,
 } from "@/features/reservation/office-reservation";
+import { officeReservationKind } from "@/features/reservation/reservation-kind";
 import { getOfficeAvailabilityQuery } from "@/features/reservation/workspace-availability";
 import { currencyCZK } from "@/shared/money/currencies";
 import {
@@ -36,14 +40,26 @@ mock.module(
 
 const { officeReservationPage } = await import("./office-reservation-page");
 
-// Each request preloads, without a price the structured data could use.
-const loadAdvertisedPrices = mock((requests: ReadonlyArray<unknown>) =>
-  Effect.succeed(requests.map((request) => ({ request })))
+const officeRequestsOf = (
+  requests: ReadonlyArray<AdvertisedPriceRequest>
+): ReadonlyArray<OfficeAdvertisedPriceRequest> =>
+  requests.flatMap(({ reservation, ...request }) =>
+    reservation.kind === officeReservationKind
+      ? [{ ...request, reservation }]
+      : []
+  );
+
+// Each request preloads at the price the server advertises for it.
+const loadAdvertisedPrices = mock(
+  (
+    requests: ReadonlyArray<AdvertisedPriceRequest>
+  ): Effect.Effect<ReadonlyArray<PreloadedAdvertisedPrice>> =>
+    Effect.succeed(
+      officeRequestsOf(requests).map((request) => advertiseOffice(request))
+    )
 );
 const recordEveryPricePreload = () =>
-  recordReservationPagePreloads({
-    advertisedPrices: (requests) => loadAdvertisedPrices(requests) as never,
-  });
+  recordReservationPagePreloads({ advertisedPrices: loadAdvertisedPrices });
 let preloads = recordEveryPricePreload();
 
 type OfficePageRequest = Parameters<
@@ -151,33 +167,31 @@ test("prices the office offer at the amounts shown for the URL selection", async
   // A sale halves every preloaded amount, so catalog prices cannot match.
   loadAdvertisedPrices.mockImplementationOnce((requests) =>
     Effect.succeed(
-      (requests as ReadonlyArray<OfficeAdvertisedPriceRequest>).map(
-        (request) => {
-          const quote = Effect.runSync(
-            buildOfficeReservationQuote(request.reservation.details)
-          );
-          const [item] = quote.items;
-          const saleQuote = {
-            ...quote,
-            items: [
-              {
-                ...item,
-                accessAmount: halve(item.accessAmount),
-                seatAmount: halve(item.seatAmount),
-              },
-            ],
-          } satisfies typeof quote;
-          return {
-            request,
-            advertisedPrice: {
-              kind: "office" as const,
-              quote: saleQuote,
-              summary: getOfficeCheckoutSummary(saleQuote),
-              advertisedPriceToken: "sealed",
+      officeRequestsOf(requests).map((request) => {
+        const quote = Effect.runSync(
+          buildOfficeReservationQuote(request.reservation.details)
+        );
+        const [item] = quote.items;
+        const saleQuote = {
+          ...quote,
+          items: [
+            {
+              ...item,
+              accessAmount: halve(item.accessAmount),
+              seatAmount: halve(item.seatAmount),
             },
-          };
-        }
-      )
+          ],
+        } satisfies typeof quote;
+        return {
+          request,
+          advertisedPrice: {
+            kind: "office" as const,
+            quote: saleQuote,
+            summary: getOfficeCheckoutSummary(saleQuote),
+            advertisedPriceToken: "sealed",
+          },
+        };
+      })
     )
   );
 

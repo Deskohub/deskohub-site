@@ -58,6 +58,25 @@ const signInDocument = `<!doctype html><html lang="en"><body>
   window.armAutofill = () => start("autofill", "conditional");
   window.cancelAutofill = () => pending?.abort();
   window.pressButton = () => start("button", undefined);
+  window.pressButtonWithoutCancellingAutofill = () => {
+    const own = new AbortController();
+    return navigator.credentials
+      .get({
+        signal: own.signal,
+        publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)),
+          rpId: "localhost",
+          allowCredentials: [],
+        },
+      })
+      .then(
+        () => {
+          window.outcomes.push("button signed in");
+          if (opensAccount) location.assign("/account");
+        },
+        (error) => window.outcomes.push("button " + error.name)
+      );
+  };
   window.continueAfterSignIn = () => (opensAccount = true);
   window.failButtonSignIn = () => (refusesButton = true);
 </script>
@@ -211,6 +230,43 @@ test.skipIf(!chromiumAvailable)(
       await authenticator.answerModalCeremony(() =>
         pressButtonUntilAccount(page)
       );
+    });
+  }
+);
+
+test.skipIf(!chromiumAvailable)(
+  "keeps presence off until the modal request starts when autofill arrives before the click",
+  async () => {
+    await withPasskeyPage(async (page, authenticator) => {
+      await page.evaluate("continueAfterSignIn()");
+
+      await authenticator.answerModalCeremony(async () => {
+        // Models a conditional request whose browser-side dispatch reaches the
+        // virtual authenticator after answerModalCeremony has started.
+        await armAutofill(page);
+        await pressButtonUntilAccount(page);
+      });
+
+      expect(new URL(page.url()).pathname).toBe("/account");
+    });
+  }
+);
+
+test.skipIf(!chromiumAvailable)(
+  "rejects a modal ceremony whose button leaves the conditional request pending",
+  async () => {
+    await withPasskeyPage(async (page, authenticator) => {
+      await armAutofill(page);
+      await authenticator.waitForConditionalRequest(5_000);
+
+      expect(
+        await outcomeOf(
+          authenticator.answerModalCeremony(() =>
+            page.evaluate("pressButtonWithoutCancellingAutofill()")
+          )
+        )
+      ).toThrow(ModalCeremonyNotAlone);
+      expect(await readOutcomes(page)).toEqual(["button OperationError"]);
     });
   }
 );

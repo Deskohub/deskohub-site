@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
@@ -8,6 +9,11 @@ import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace
 import { AccountRoleGrants } from "./account-role-grants.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+
+const connectedTestDatabase = () => {
+  assert(testDatabase, "Expected the Postgres test database");
+  return testDatabase;
+};
 
 const runGrants = <A, E>(
   operation: (
@@ -18,13 +24,15 @@ const runGrants = <A, E>(
     AccountRoleGrants.pipe(
       Effect.flatMap(operation),
       Effect.provide(
-        AccountRoleGrants.Default.pipe(Layer.provideMerge(testDatabase!.layer))
+        AccountRoleGrants.Default.pipe(
+          Layer.provideMerge(connectedTestDatabase().layer)
+        )
       )
     )
   );
 
 const insertAccount = ({ review = false } = {}) =>
-  workspaceFixtures(testDatabase!.db)
+  workspaceFixtures(connectedTestDatabase().db)
     .account("role-grant", { review })
     .pipe(
       Effect.map(({ accountId }) => accountId),
@@ -32,10 +40,11 @@ const insertAccount = ({ review = false } = {}) =>
     );
 
 const deleteAccount = async (accountId: string) => {
-  await testDatabase!.pool.query(`delete from auth."user" where id = $1`, [
-    accountId,
-  ]);
-  await testDatabase!.pool.query(
+  await connectedTestDatabase().pool.query(
+    `delete from auth."user" where id = $1`,
+    [accountId]
+  );
+  await connectedTestDatabase().pool.query(
     `delete from customer_accounts where id = $1`,
     [accountId]
   );
@@ -65,7 +74,7 @@ describe.skipIf(!testDatabase)(
       expect(await runGrants((grants) => grants.has({ accountId, role }))).toBe(
         true
       );
-      const stored = await testDatabase!.pool.query(
+      const stored = await connectedTestDatabase().pool.query(
         "select granted_by_account_id from account_role_grants where account_id = $1",
         [accountId]
       );
@@ -103,14 +112,14 @@ describe.skipIf(!testDatabase)(
       expect(await runGrants((grants) => grants.has({ accountId, role }))).toBe(
         true
       );
-      const kept = await testDatabase!.pool.query(
+      const kept = await connectedTestDatabase().pool.query(
         "select granted_by_account_id from account_role_grants where account_id = $1",
         [accountId]
       );
       expect(kept.rows).toEqual([{ granted_by_account_id: null }]);
 
       await deleteAccount(accountId);
-      const remaining = await testDatabase!.pool.query(
+      const remaining = await connectedTestDatabase().pool.query(
         "select 1 from account_role_grants where account_id = $1",
         [accountId]
       );
@@ -160,7 +169,7 @@ describe.skipIf(!testDatabase)(
     test("rejects a role the application doesn't define", async () => {
       const accountId = await insertAccount();
 
-      const insert = testDatabase!.pool.query(
+      const insert = connectedTestDatabase().pool.query(
         "insert into account_role_grants (account_id, role) values ($1, 'owner')",
         [accountId]
       );

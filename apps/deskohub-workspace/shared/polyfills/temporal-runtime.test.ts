@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { relative, resolve } from "node:path";
 import { createContext, runInContext } from "node:vm";
 import { Temporal as PolyfillTemporal } from "@js-temporal/polyfill";
+import { Record } from "effect";
 import ts from "typescript";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { buildTemporalPolyfill } from "./build-temporal-polyfill";
@@ -33,10 +34,7 @@ const withNamespace = <Namespace extends TemporalNamespace>(
   replacement: Partial<(typeof PolyfillTemporal)[Namespace]>
 ): TemporalCandidate => ({
   ...Object.fromEntries(
-    Object.keys(requiredTemporalApis).map((key) => [
-      key,
-      PolyfillTemporal[key as TemporalNamespace],
-    ])
+    Record.keys(requiredTemporalApis).map((key) => [key, PolyfillTemporal[key]])
   ),
   [namespace]: replacement,
 });
@@ -102,6 +100,10 @@ const incompleteTemporals: readonly (readonly [string, TemporalCandidate])[] = [
   [
     "lacks an instance method",
     withInstanceMember("ZonedDateTime", "toPlainDateTime"),
+  ],
+  [
+    "lacks the getter only the daylight saving probe reads",
+    withInstanceMember("ZonedDateTime", "hoursInDay"),
   ],
   [
     "has an undefined instance method",
@@ -413,9 +415,15 @@ describe("isTemporalComplete", () => {
 
   test("checks every class, its implicitly called methods, and each other Temporal API Workspace code uses", () => {
     const { used, unresolvedAccesses } = scanTemporalUses();
+    // The daylight saving probe reads the host's values untyped, so the
+    // scan can't see the getter only it reads.
+    const probeOnlyReads = ["get ZonedDateTime.prototype.hoursInDay"];
 
     expect(unresolvedAccesses).toEqual([]);
-    expect(listTemporalApis(requiredTemporalApis).sort()).toEqual(used.sort());
+    expect(used).not.toContain(probeOnlyReads[0]);
+    expect(listTemporalApis(requiredTemporalApis).sort()).toEqual(
+      [...used, ...probeOnlyReads].sort()
+    );
   }, 180_000);
 });
 

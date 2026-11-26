@@ -26,6 +26,10 @@ import { recordCheckoutAnalytics } from "@/features/checkout/backend/analytics/c
 import { CheckoutPricingService } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import { ReservationHoldCleanupScheduleService } from "@/features/checkout/backend/holds";
 import { WorkspaceTableAssignmentServiceMock } from "@/features/checkout/backend/reservation/workspace-table-assignment.service.mock";
+import {
+  checkoutAttemptIdSchema,
+  checkoutSessionIdSchema,
+} from "@/features/checkout/checkout-identifiers";
 import { getReservationQuoteFingerprint } from "@/features/checkout/reservation-quote-fingerprint";
 import { getMeetingRoomReservationQuote } from "@/features/checkout/reservation-quote-meeting-room";
 import {
@@ -44,7 +48,11 @@ import {
 } from "@/features/reservation/backend/booking-agent";
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { meetingRoomAdvertisedPriceReservationSchema } from "@/features/reservation/meeting-room-reservation";
+import {
+  meetingRoomAdvertisedPriceReservationSchema,
+  normalizedMeetingRoomReservationOrderSchema,
+} from "@/features/reservation/meeting-room-reservation";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
   getReviewPaymentDisabledPath,
   ReviewAccounts,
@@ -54,6 +62,10 @@ import { CurrentVisitorIdentity } from "@/shared/backend/workspace-request-conte
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  instantStringSchema,
+  plainDateStringSchema,
+} from "@/shared/utils/temporal";
 import type { PreparePayStateInput } from "./prepare-pay-state.schema";
 
 mock.module("server-only", () => ({}));
@@ -68,16 +80,18 @@ const rememberedReferralCookie = {} satisfies { value?: string };
 const database = await createWorkspacePostgresSuiteDatabase("review_sandbox");
 afterAll(() => database?.close());
 
-const meetingRoom = (reservationDate: string) => ({
-  kind: "meeting-room" as const,
-  duration: { unit: "hour" as const, amount: 4 as const },
-  reservationDate,
-  startsAt: `${reservationDate}T08:00:00Z`,
-  endsAt: `${reservationDate}T12:00:00Z`,
-  name: "App Review",
-  email: testEmailAddress("app-review"),
-  phone: "+44 20 7946 0123",
-});
+const meetingRoom = (reservationDate: string) =>
+  normalizedMeetingRoomReservationOrderSchema.make({
+    kind: "meeting-room",
+    duration: { unit: "hour", amount: 4 },
+    reservationDate: plainDateStringSchema.make(reservationDate),
+    startsAt: instantStringSchema.make(`${reservationDate}T08:00:00Z`),
+    endsAt: instantStringSchema.make(`${reservationDate}T12:00:00Z`),
+    name: "App Review",
+    email: testEmailAddress("app-review"),
+    phone: "+44 20 7946 0123",
+    billing: { purpose: "personal", invoice: "none" },
+  });
 
 const advertisedPriceToken = async (reservationDate: string) => {
   const { buildAdvertisedPriceState, sealAdvertisedPriceState } = await import(
@@ -118,8 +132,8 @@ const submission = async (
   ids: { readonly session: string; readonly attempt: string }
 ): Promise<PreparePayStateInput> => ({
   locale: "en-US",
-  checkoutSessionId: ids.session as PreparePayStateInput["checkoutSessionId"],
-  checkoutAttemptId: ids.attempt as PreparePayStateInput["checkoutAttemptId"],
+  checkoutSessionId: checkoutSessionIdSchema.make(ids.session),
+  checkoutAttemptId: checkoutAttemptIdSchema.make(ids.attempt),
   advertisedPriceToken: await advertisedPriceToken(reservationDate),
   marketingConsent: true,
   customer: "account",
@@ -262,7 +276,7 @@ describe.skipIf(!database)(
         ReviewSandbox.pipe(
           Effect.flatMap((sandbox) =>
             sandbox.status({
-              orderId: orderId as never,
+              orderId: workspaceReservationIdSchema.make(orderId),
               returnOutcome: "unknown",
             })
           ),

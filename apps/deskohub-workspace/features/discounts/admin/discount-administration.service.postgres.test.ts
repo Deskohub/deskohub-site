@@ -1,6 +1,12 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import {
+  DotyposCloudIdSchema,
+  type DotyposCustomer,
+  type DotyposCustomerId,
+} from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { GoogleCalendarServiceMock } from "@deskohub/google-calendar/backend/service.mock";
 import {
@@ -27,6 +33,23 @@ import type { CreateDiscountAdminInput } from "./contracts";
 import { DiscountAdministration } from "./discount-administration.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+
+const dotyposForExistingCustomers = DotyposServiceMock({
+  // An empty audience batch falls back to individual reads.
+  getCustomersByIds: () =>
+    Effect.succeed(new Map<DotyposCustomerId, DotyposCustomer>()),
+  getCustomer: (id) =>
+    Effect.succeed(
+      Option.some({
+        id,
+        _cloudId: DotyposCloudIdSchema.make("synthetic-cloud"),
+        points: null,
+        flags: "0",
+        display: true,
+        deleted: false,
+      })
+    ),
+});
 
 type UncheckedServiceDates = {
   readonly serviceDateFrom?: string | null;
@@ -232,12 +255,6 @@ describe.skipIf(!testDatabase)(
       const customerId = Schema.decodeUnknownSync(
         AdministrationDotyposCustomerId
       )(`synthetic-dates-${suffix}`);
-      const dotypos = DotyposServiceMock({
-        // Audiences read customers in a batch; an empty batch reads each one on its own.
-        getCustomersByIds: () => Effect.succeed(new Map()),
-        getCustomer: (id) =>
-          Effect.succeed(Option.some({ id, deleted: false })),
-      });
       const configuration = (value: string) => ({
         code: value,
         enabled: true,
@@ -319,7 +336,7 @@ describe.skipIf(!testDatabase)(
             cleared: serviceDates(cleared),
           };
         }),
-        dotypos
+        dotyposForExistingCustomers
       );
 
       expect(outcome).toMatchObject({
@@ -347,8 +364,16 @@ describe.skipIf(!testDatabase)(
         "select discount_codes.id, discount_codes.discount_id from discount_codes join promotion_codes on promotion_codes.id = discount_codes.promotion_code_id where promotion_codes.code = $1",
         [code]
       );
+      assert(stored);
+      const id = AdministrationDiscountCodeUpdateInput.fields.id.make(
+        stored.id
+      );
+      const discountId =
+        AdministrationDiscountCodeUpdateInput.fields.discountId.make(
+          stored.discount_id
+        );
       const configuration = {
-        code,
+        code: AdministrationDiscountCodeUpdateInput.fields.code.make(code),
         enabled: true,
         validFrom: null,
         validUntil: null,
@@ -361,22 +386,22 @@ describe.skipIf(!testDatabase)(
         typeof DiscountAdministration.Service.createCode
       >[0];
       // Skip the contract to prove the service enforces the same rule.
-      const uncheckedUpdate = (dates: UncheckedServiceDates) =>
-        ({
-          id: stored?.id,
-          discountId: stored?.discount_id,
+      const uncheckedUpdate = (dates: UncheckedServiceDates): UpdateInput => ({
+        id,
+        discountId,
+        ...configuration,
+        ...dates,
+      });
+      const uncheckedCreate = (dates: UncheckedServiceDates): CreateInput => ({
+        code: {
           ...configuration,
+          code: AdministrationDiscountCodeUpdateInput.fields.code.make(
+            `SYNTHETIC_UNWRITTEN_${suffix}`
+          ),
           ...dates,
-        }) as UpdateInput;
-      const uncheckedCreate = (dates: UncheckedServiceDates) =>
-        ({
-          code: {
-            ...configuration,
-            code: `SYNTHETIC_UNWRITTEN_${suffix}`,
-            ...dates,
-          },
-          discount: { kind: "existing", discountId: stored?.discount_id },
-        }) as CreateInput;
+        },
+        discount: { kind: "existing", discountId },
+      });
 
       for (const dates of [
         { serviceDateFrom: "2026-07-01" },
@@ -409,7 +434,7 @@ describe.skipIf(!testDatabase)(
         service_date_until: string | null;
       }>(
         "select service_date_from, service_date_until from discount_codes where id = $1",
-        [stored?.id]
+        [id]
       );
       expect(after).toEqual({
         service_date_from: null,
@@ -428,33 +453,17 @@ describe.skipIf(!testDatabase)(
     test("runs every mutation on the Workspace transaction scope", async () => {
       const suffix = uniqueSuffix();
       const label = `Synthetic scope ${suffix}`;
-      const [code, customerCode, voucherCode, customerVoucherCode] = [
-        "CODE",
-        "CUSTOMER_CODE",
-        "VOUCHER",
-        "CUSTOMER_VOUCHER",
-      ].map((kind) => `SYNTHETIC_${kind}_${suffix}`) as [
-        string,
-        string,
-        string,
-        string,
-      ];
+      const code = `SYNTHETIC_CODE_${suffix}`;
+      const customerCode = `SYNTHETIC_CUSTOMER_CODE_${suffix}`;
+      const voucherCode = `SYNTHETIC_VOUCHER_${suffix}`;
+      const customerVoucherCode = `SYNTHETIC_CUSTOMER_VOUCHER_${suffix}`;
       labels.push(label);
       codes.push(code, customerCode, voucherCode, customerVoucherCode);
-      const [first, second] = ["first", "second"].map((name) =>
-        Schema.decodeUnknownSync(AdministrationDotyposCustomerId)(
-          `synthetic-${name}-${suffix}`
-        )
-      ) as [
-        typeof AdministrationDotyposCustomerId.Type,
-        typeof AdministrationDotyposCustomerId.Type,
-      ];
-      const dotypos = DotyposServiceMock({
-        // Audiences read customers in a batch; an empty batch reads each one on its own.
-        getCustomersByIds: () => Effect.succeed(new Map()),
-        getCustomer: (id) =>
-          Effect.succeed(Option.some({ id, deleted: false })),
-      });
+      const decodeCustomerId = Schema.decodeUnknownSync(
+        AdministrationDotyposCustomerId
+      );
+      const first = decodeCustomerId(`synthetic-first-${suffix}`);
+      const second = decodeCustomerId(`synthetic-second-${suffix}`);
       const definition = (basisPoints: number) => ({
         labels: { "cs-CZ": label, "en-US": label },
         adjustment: { kind: "percentage", basisPoints },
@@ -595,7 +604,7 @@ describe.skipIf(!testDatabase)(
             updatedVoucherCredit: updatedVoucher.voucher.issuedCredit.value,
           };
         }),
-        dotypos
+        dotyposForExistingCustomers
       );
 
       expect(outcome).toMatchObject({

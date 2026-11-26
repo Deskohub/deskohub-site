@@ -1,4 +1,3 @@
-import type { DotyposCustomerId } from "@deskohub/dotypos";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Data, Effect, Layer, Option, Result } from "effect";
 import type { SqlError } from "effect/sql";
@@ -88,10 +87,7 @@ export type ReservationViewer = "customer" | "invitee";
 const grants = (
   grant: keyof typeof reservationAccessPolicy,
   permission: ReservationPermission
-) =>
-  (reservationAccessPolicy[grant] as readonly ReservationPermission[]).includes(
-    permission
-  );
+) => reservationAccessPolicy[grant].some((granted) => granted === permission);
 
 export type ReservationAuthorizationInput = {
   readonly accessCookie?: string;
@@ -243,8 +239,7 @@ export class ReservationAuthorizationService extends Context.Service<
         const account = yield* unlessDenied(ownership.resolve);
         return (
           Option.isSome(account) &&
-          account.value.dotyposCustomerId ===
-            (reservation.dotyposCustomerId as DotyposCustomerId)
+          account.value.dotyposCustomerId === reservation.dotyposCustomerId
         );
       });
 

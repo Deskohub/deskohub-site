@@ -6,6 +6,7 @@ import {
   expect,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { cleanup, render, within } from "@testing-library/react";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import {
@@ -59,9 +60,11 @@ describe("CustomerTransactionHistoryTable", () => {
       view.getByRole("table", { name: "Historie transakcí zákazníka" })
     );
     const [paidRow, refundedRow] = transactions.getAllByRole("row").slice(1);
+    assert(paidRow, "Expected paid transaction row");
+    assert(refundedRow, "Expected refunded transaction row");
 
-    expect(within(paidRow!).getByText("Zaplaceno")).toBeDefined();
-    expect(within(refundedRow!).getByText(/^Částečně vráceno /)).toBeDefined();
+    expect(within(paidRow).getByText("Zaplaceno")).toBeDefined();
+    expect(within(refundedRow).getByText(/^Částečně vráceno /)).toBeDefined();
     expect(refundedRow?.textContent).toContain("před vrácením peněz");
     expect(refundedRow?.textContent).toContain("po vrácení peněz");
     expect(transactions.getAllByText("Vyhrazené místo")).toHaveLength(2);

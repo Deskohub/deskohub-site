@@ -450,7 +450,8 @@ describe("automation admin API", () => {
         timeline: [],
       });
 
-      expect(Object.keys(listed!)).toEqual(wireKeys);
+      if (!listed) throw new Error("Expected listed automation run");
+      expect(Object.keys(listed)).toEqual(wireKeys);
       expect(detail).not.toHaveProperty("customerLifecycle");
     }
   );

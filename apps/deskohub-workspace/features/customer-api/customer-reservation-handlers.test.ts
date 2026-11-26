@@ -2,7 +2,8 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Deferred, Effect, Layer, Option } from "effect";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
+import { Deferred, Effect, Layer, Option, Schema } from "effect";
 import type {
   CustomerReservationHistory,
   CustomerReservationSummary,
@@ -50,6 +51,7 @@ import {
 } from "@/features/checkout/backend/checkout/pay-state-checkout-view";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
+import { InviteeEmail } from "@/features/office/office-people";
 import {
   ReservationAccessService,
   type ReservationAccessViewModel,
@@ -60,13 +62,15 @@ import {
   ReservationAuthorizationUnavailableError,
 } from "@/features/reservation/backend/reservation-authorization.service";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
-import {
-  type ContractWithdrawal,
-  WithdrawalRepository,
-} from "@/features/withdrawal/backend/withdrawal.repository";
+import { reservationInviteeIdSchema } from "@/features/reservation-invitees/reservation-invitee";
+import { contractWithdrawalFixture } from "@/features/withdrawal/backend/contract-withdrawal.test-utils";
+import { WithdrawalRepository } from "@/features/withdrawal/backend/withdrawal.repository";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
-import { instantStringSchema, type PlainDate } from "@/shared/utils/temporal";
+import {
+  instantStringSchema,
+  plainDateStringSchema,
+} from "@/shared/utils/temporal";
 import {
   workspaceFormattedAddress,
   workspaceGoogleDirectionsUrl,
@@ -84,6 +88,14 @@ import type { CustomerReservationServiceLayers } from "./customer-reservation-la
 const orderId = workspaceReservationIdSchema.make(
   "019edbcf-5026-7ecc-821b-eda46998eaaa"
 );
+
+/** A failed database read, as the status and payment-page services fail. */
+const queryFailure = (message: string) =>
+  new EffectDrizzleQueryError({
+    query: "select",
+    params: [],
+    cause: new Error(message),
+  });
 
 /**
  * Authorization that lets the session's own account see `orderId`, read
@@ -249,7 +261,7 @@ describe("listReservations", () => {
               bookedSelection: {
                 selection: {
                   family: "cowork",
-                  date: "2099-07-01" as PlainDate,
+                  date: plainDateStringSchema.make("2099-07-01"),
                   tier: "reserved-desk",
                   stay: "overnight",
                 },
@@ -280,13 +292,19 @@ describe("listReservations", () => {
     const api = makeCustomerApiTestServer({ reservations });
 
     const response = await api.handle(customerApiRequest(listReservations));
-    const history = (await response.json()) as {
-      readonly current: readonly {
-        readonly product: unknown;
-        readonly bookedSelection?: { readonly selection: unknown };
-      }[];
-      readonly unavailable: readonly { readonly product: unknown }[];
-    };
+    const history = Schema.decodeUnknownSync(
+      Schema.Struct({
+        current: Schema.Array(
+          Schema.Struct({
+            product: Schema.Unknown,
+            bookedSelection: Schema.optionalKey(
+              Schema.Struct({ selection: Schema.Unknown })
+            ),
+          })
+        ),
+        unavailable: Schema.Array(Schema.Struct({ product: Schema.Unknown })),
+      })
+    )(await response.json());
 
     expect(history.current.map(({ product }) => product)).toEqual([
       { ...reservedDesk, stay: "overnight" },
@@ -333,7 +351,7 @@ describe("listReservations", () => {
               bookedSelection: {
                 selection: {
                   family: "cowork",
-                  date: "2099-07-01" as PlainDate,
+                  date: plainDateStringSchema.make("2099-07-01"),
                   tier: "open-space",
                   coffee: true,
                 },
@@ -351,7 +369,7 @@ describe("listReservations", () => {
               bookedSelection: {
                 selection: {
                   family: "meeting-room",
-                  date: "2099-07-02" as PlainDate,
+                  date: plainDateStringSchema.make("2099-07-02"),
                   startTime: "09:00",
                   duration: "hour:1",
                 },
@@ -546,7 +564,7 @@ describe("getReservationStatus", () => {
     path: `/reservations/${orderId}/status`,
   };
 
-  const fulfilledOrder = {
+  const fulfilledOrder: CheckoutStatusViewModel = {
     orderId,
     returnOutcome: "unknown",
     kind: "meeting-room",
@@ -560,7 +578,7 @@ describe("getReservationStatus", () => {
       reservedUntil: Temporal.Instant.from("2026-06-20T10:00:00Z"),
       setupFrom: Temporal.Instant.from("2026-06-20T08:00:00Z"),
     },
-  } as CheckoutStatusViewModel;
+  };
 
   const statusServices = (
     refreshStatus: CheckoutStatusService["Service"]["refreshStatus"],
@@ -583,10 +601,10 @@ describe("getReservationStatus", () => {
     }),
   });
 
-  const withdrawal = {
+  const withdrawal = contractWithdrawalFixture({
     submittedAt: Temporal.Instant.from("2026-06-19T14:30:00Z"),
     refundAmount: { value: 35_000, exponent: 2, currency: "CZK" },
-  } as ContractWithdrawal;
+  });
 
   testCustomerEndpointGuards(getReservationStatus);
 
@@ -644,7 +662,7 @@ describe("getReservationStatus", () => {
       const email = testEmailAddress("office-status-api-guest");
       const resendAvailableAt = Temporal.Instant.from("2026-06-20T08:00:00Z");
       const refreshStatus = mock(() =>
-        Effect.succeed({
+        Effect.succeed<CheckoutStatusViewModel>({
           orderId,
           returnOutcome: "unknown",
           kind: "office",
@@ -656,8 +674,8 @@ describe("getReservationStatus", () => {
             resendable,
             invitees: [
               {
-                id: "office-guest",
-                email,
+                id: reservationInviteeIdSchema.make("office-guest"),
+                email: InviteeEmail.make(email),
                 invitationSentAt: null,
                 resendAvailableAt: resendable ? resendAvailableAt : undefined,
               },
@@ -667,7 +685,7 @@ describe("getReservationStatus", () => {
             name: "Ada Example",
             email: testEmailAddress("office-status-api-contact"),
           },
-        } as CheckoutStatusViewModel)
+        })
       );
       const api = makeCustomerApiTestServer({
         reservations: statusServices(refreshStatus, {
@@ -712,18 +730,18 @@ describe("getReservationStatus", () => {
 
   test("answers the order's booked selection beside its status", async () => {
     const refreshStatus = mock(() =>
-      Effect.succeed({
+      Effect.succeed<CheckoutStatusViewModel>({
         ...fulfilledOrder,
         bookedSelection: {
           selection: {
             family: "meeting-room",
-            date: "2026-06-20" as PlainDate,
+            date: plainDateStringSchema.make("2026-06-20"),
             startTime: "10:15",
             duration: "hour:1",
           },
           earlySetup: true,
         },
-      } as CheckoutStatusViewModel)
+      })
     );
     const api = makeCustomerApiTestServer({
       reservations: statusServices(refreshStatus),
@@ -748,14 +766,14 @@ describe("getReservationStatus", () => {
   test("answers an order that isn't paid yet with its status alone", async () => {
     const api = makeCustomerApiTestServer({
       reservations: statusServices(() =>
-        Effect.succeed({
+        Effect.succeed<CheckoutStatusViewModel>({
           orderId,
           returnOutcome: "unknown",
           kind: "cowork",
           status: "created",
           paymentStatus: "pending",
           fulfillmentStatus: "not_started",
-        } as CheckoutStatusViewModel)
+        })
       ),
     });
 
@@ -772,14 +790,14 @@ describe("getReservationStatus", () => {
   });
 
   test("marks a pending order whose payment page can be opened again", async () => {
-    const pendingOrder = {
+    const pendingOrder: CheckoutStatusViewModel = {
       orderId,
       returnOutcome: "unknown",
       kind: "cowork",
       status: "pending",
       paymentStatus: "pending",
       fulfillmentStatus: "not_started",
-    } as CheckoutStatusViewModel;
+    };
     const answer = async (state: CheckoutStatusViewModel) => {
       const api = makeCustomerApiTestServer({
         reservations: statusServices(() => Effect.succeed(state)),
@@ -795,7 +813,7 @@ describe("getReservationStatus", () => {
       await answer({
         ...pendingOrder,
         paymentPageReopenable: true,
-      } as CheckoutStatusViewModel)
+      })
     ).toMatchObject({ status: "pending", paymentPageReopenable: true });
     expect(await answer(pendingOrder)).not.toHaveProperty(
       "paymentPageReopenable"
@@ -885,7 +903,7 @@ describe("getReservationStatus", () => {
     const getStatus = mock(() => Effect.succeed(fulfilledOrder));
     const api = makeCustomerApiTestServer({
       reservations: statusServices(
-        () => Effect.fail(new Error("refresh failed") as never),
+        () => Effect.fail(queryFailure("refresh failed")),
         { getStatus }
       ),
     });
@@ -904,8 +922,8 @@ describe("getReservationStatus", () => {
   test("answers unavailable when no status can be read", async () => {
     const api = makeCustomerApiTestServer({
       reservations: statusServices(
-        () => Effect.fail(new Error("refresh failed") as never),
-        { getStatus: () => Effect.fail(new Error("read failed") as never) }
+        () => Effect.fail(queryFailure("refresh failed")),
+        { getStatus: () => Effect.fail(queryFailure("read failed")) }
       ),
     });
 
@@ -1079,7 +1097,7 @@ describe("reopenPaymentPage", () => {
   test("answers unavailable when the order can't be read", async () => {
     const api = makeCustomerApiTestServer({
       reservations: paymentPageServices(() =>
-        Effect.fail(new Error("read failed") as never)
+        Effect.fail(queryFailure("read failed"))
       ),
     });
 

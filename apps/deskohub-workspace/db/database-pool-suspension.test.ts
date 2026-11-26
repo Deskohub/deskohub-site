@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { sql } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { makeDatabaseClient } from "./database-client";
@@ -42,11 +43,15 @@ afterEach(() => {
   restoreVercel = undefined;
 });
 
+const decodeBackendPidRow = Schema.decodeUnknownSync(
+  Schema.Struct({ pid: Schema.Number })
+);
+
 const backendPid = (db: Awaited<ReturnType<typeof clientOver>>["db"]) =>
   Effect.runPromise(
     Effect.map(
       db.execute(sql`select pg_backend_pid()::int as pid`),
-      (result) => (result.rows[0] as { readonly pid: number }).pid
+      (result) => decodeBackendPidRow(result.rows[0]).pid
     )
   );
 
@@ -101,13 +106,15 @@ describe.skipIf(!postgresDatabase)(
       try {
         const db = await Effect.runPromise(makeDatabaseClient(pool));
         const pid = await backendPid(db);
+        assert(postgresDatabase, "the Postgres test database is configured");
+        const observer = postgresDatabase.pool;
         const deadline = Date.now() + 2_000;
         let alive = true;
         while (alive && Date.now() < deadline) {
           await Bun.sleep(50);
           alive =
             (
-              await postgresDatabase!.pool.query(
+              await observer.query(
                 "select 1 from pg_stat_activity where pid = $1",
                 [pid]
               )
@@ -123,7 +130,8 @@ describe.skipIf(!postgresDatabase)(
       const { pool, db } = await clientOver();
       try {
         const terminated = await backendPid(db);
-        await postgresDatabase!.pool.query("select pg_terminate_backend($1)", [
+        assert(postgresDatabase, "the Postgres test database is configured");
+        await postgresDatabase.pool.query("select pg_terminate_backend($1)", [
           terminated,
         ]);
         // As on a resumed instance: the backend is gone before the next run.

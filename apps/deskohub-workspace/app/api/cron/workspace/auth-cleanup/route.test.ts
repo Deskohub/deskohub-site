@@ -18,9 +18,10 @@ interface IFakeCleanup {
   >;
 }
 
-const FakeCleanupService = Context.Service<FakeCleanupService, IFakeCleanup>()(
-  "@test/FakeAuthCleanupService"
-);
+class FakeCleanupService extends Context.Service<
+  FakeCleanupService,
+  IFakeCleanup
+>()("@test/FakeAuthCleanupService") {}
 
 const fakeCleanupLayer = Layer.succeed(FakeCleanupService, {
   deleteExpiredRows: (input) => {
@@ -32,7 +33,7 @@ const fakeCleanupLayer = Layer.succeed(FakeCleanupService, {
       orphanedAccounts: 0,
     });
   },
-}) as Layer.Layer<FakeCleanupService>;
+});
 
 Object.assign(FakeCleanupService, { Live: fakeCleanupLayer });
 
@@ -46,9 +47,7 @@ describe("auth cleanup cron route", () => {
   });
 
   test("sweeps rows expired at the run's time and returns the counts", async () => {
-    const { GET } = (await import("./route")) as {
-      GET: (request: Request) => Promise<Response>;
-    };
+    const { GET } = await import("./route");
     const before = Date.now();
     const response = await GET(
       new Request("https://workspace.test/api/cron/workspace/auth-cleanup", {

@@ -1,4 +1,4 @@
-import { Match, Schema } from "effect";
+import { Array as Arr, Match, Schema } from "effect";
 import { workspaceCoworkCurrentTiers } from "@/features/checkout/product-catalog";
 import type { WorkspaceProductIdentity } from "@/features/checkout/product-identity";
 import {
@@ -62,11 +62,10 @@ export const isReservationProductTarget = (
 > => reservationProductFamilies.some((kind) => target.kind === kind);
 
 /** Family targets, each covering every product of its family. */
-export const workspaceProductTargets = [
-  ...reservationProductTargets,
-  entryPackFamilyTarget,
-  unlimitedFamilyTarget,
-] satisfies readonly WorkspaceProductTarget[];
+export const workspaceProductTargets = Arr.appendAll(
+  reservationProductTargets,
+  [entryPackFamilyTarget, unlimitedFamilyTarget]
+) satisfies readonly WorkspaceProductTarget[];
 
 /** Cowork tier targets, each covering one saleable cowork tier. */
 export const workspaceCoworkTierProductTargets =

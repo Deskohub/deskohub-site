@@ -4,12 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import {
+  administrationInputParseOptions,
+  EmailDraft,
+} from "@deskohub/workspace-admin-api";
+import {
   type Browser,
   chromium,
   expect as expectBrowser,
   type Locator,
   type Page,
 } from "@playwright/test";
+import { Schema } from "effect";
 import { m } from "@/features/administration/i18n";
 import { locales as administrationLocales } from "@/features/administration/i18n/paraglide/runtime.js";
 import type { Locale } from "@/features/i18n";
@@ -151,7 +156,9 @@ const openEditor = async (
   await page.goto(origin);
   await page.locator("#editor-root").evaluate(
     (element, input) => {
-      const dataset = (element as HTMLElement).dataset;
+      if (!(element instanceof HTMLElement))
+        throw new Error("The editor harness root is not an HTML element.");
+      const dataset = element.dataset;
       dataset.draft = JSON.stringify(input.draft);
       if (input.reusable) dataset.reusable = "yes";
     },
@@ -353,11 +360,9 @@ for (const locale of administrationLocales) {
         await page
           .getByRole("button", { name: "Save draft", exact: true })
           .click();
-        const saved = JSON.parse(
-          (await page.getByTestId("saved").textContent()) ?? "{}"
-        );
+        const saved = await readSavedOutput(page);
         expect(saved.invalid).toBeUndefined();
-        expect(saved.saved.translations["cs-CZ"].texts).toEqual(
+        expect(saved.saved?.translations?.["cs-CZ"]?.texts).toEqual(
           fixtureDraft.translations?.["cs-CZ"]?.texts
         );
         expectNoPageErrors(page);
@@ -380,13 +385,24 @@ const headingOf = (language: Locale) => {
   return heading;
 };
 
+/** What the harness's save button last wrote: the saved draft or a refusal. */
+const SavedOutput = Schema.Struct({
+  invalid: Schema.optional(Schema.Boolean),
+  saved: Schema.optional(EmailDraft),
+});
+
+const readSavedOutput = async (page: Page) =>
+  Schema.decodeUnknownSync(
+    SavedOutput,
+    administrationInputParseOptions
+  )(JSON.parse((await page.getByTestId("saved").textContent()) ?? "{}"));
+
 /** The saved draft after pressing the harness's save button. */
 const saveDraft = async (page: Page): Promise<EmailDraftFormValues> => {
   await page.getByRole("button", { name: "Save draft", exact: true }).click();
-  const result = JSON.parse(
-    (await page.getByTestId("saved").textContent()) ?? "{}"
-  );
+  const result = await readSavedOutput(page);
   expect(result.invalid).toBeUndefined();
+  if (!result.saved) throw new Error("The harness saved no draft.");
   return result.saved;
 };
 

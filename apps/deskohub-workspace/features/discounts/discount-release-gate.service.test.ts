@@ -7,15 +7,12 @@ import {
 } from "@deskohub/analytics-posthog/feature-flags/node";
 import { type Context, Effect, Logger, References } from "effect";
 import { WorkspaceFeatureFlagServiceMock } from "@/features/feature-flags/backend/workspace-feature-flag.service.mock";
-import type {
-  PostHogFeatureFlagDefinitions,
-  PostHogFeatureFlagKey,
-} from "@/features/feature-flags/generated/contract";
+import type { PostHogFeatureFlagDefinitions } from "@/features/feature-flags/generated/contract";
 import { runReactServerFixture } from "@/shared/testing/react-server-fixture.test-utils";
 import { countWallClockReads } from "@/shared/testing/workspace-test-clock.test-utils";
 import { DiscountReleaseGateService } from "./discount-release-gate.service";
 
-const flagValues = new Map<PostHogFeatureFlagKey, boolean | undefined>();
+const flagValues = new Map<string, boolean | undefined>();
 type LogAnnotations = Context.Service.Shape<
   typeof References.CurrentLogAnnotations
 >;
@@ -26,9 +23,9 @@ const makeSnapshot = () =>
     getFlagPayload: () => undefined,
     isEnabled: (key) => flagValues.get(key) === true,
     raw: {
-      getFlag: (key) => flagValues.get(key as PostHogFeatureFlagKey),
+      getFlag: (key) => flagValues.get(key),
       getFlagPayload: () => undefined,
-      isEnabled: (key) => flagValues.get(key as PostHogFeatureFlagKey) === true,
+      isEnabled: (key) => flagValues.get(key) === true,
     },
   }) satisfies TypedPostHogFeatureFlagEvaluationSnapshot<PostHogFeatureFlagDefinitions>;
 

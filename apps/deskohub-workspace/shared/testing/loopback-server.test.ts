@@ -45,12 +45,11 @@ const closeHttpServer = (server: ReturnType<typeof createHttpServer>) =>
 
 test("does not accept an unrelated HTTP 200 as owned readiness", async () => {
   const server = await openServer("another fixture");
-  const exitCode = { value: undefined as number | undefined };
 
   try {
     await expect(
       waitForOwnedLoopbackServer({
-        exitCode: () => exitCode.value,
+        exitCode: () => undefined,
         marker: "this fixture",
         pollIntervalMs: 5,
         readyUrl: server.url,

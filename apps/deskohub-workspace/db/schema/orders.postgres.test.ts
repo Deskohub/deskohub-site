@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import type { PoolClient } from "pg";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 
@@ -37,7 +38,8 @@ const insertOrder = (client: PoolClient, row: OrderRow) => {
 
 /** Runs the scenario in a transaction that always rolls back. */
 const withOrders = async (scenario: (client: PoolClient) => Promise<void>) => {
-  const client = await postgresDatabase!.pool.connect();
+  assert(postgresDatabase, "The Workspace test Postgres must be configured");
+  const client = await postgresDatabase.pool.connect();
   try {
     await client.query("begin");
     await scenario(client);
@@ -78,10 +80,11 @@ describe.skipIf(!postgresDatabase)("orders on Postgres", () => {
       const {
         rows: [order],
       } = await insertOrder(client, pendingReservationOrder);
+      assert(order, "insertOrder returned no order");
 
       await expectRejected(
         client,
-        { ...pendingReservationOrder, correlation_id: order!.correlation_id },
+        { ...pendingReservationOrder, correlation_id: order.correlation_id },
         "orders_correlation_id_key"
       );
     });

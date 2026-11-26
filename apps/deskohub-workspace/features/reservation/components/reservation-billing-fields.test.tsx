@@ -6,6 +6,7 @@ import {
   type ReservationBillingSelectionInput,
 } from "@/features/reservation/reservation-billing";
 import { Form } from "@/shared/components/ui/form";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -48,7 +49,7 @@ describe("ReservationBillingFields", () => {
 
     expect(businessUse.getAttribute("data-state")).toBe("unchecked");
     expect(createInvoice.getAttribute("data-state")).toBe("unchecked");
-    expect((createInvoice as HTMLButtonElement).disabled).toBe(false);
+    expect(elementOf(createInvoice, HTMLButtonElement).disabled).toBe(false);
     expect(
       view.getByRole("button", {
         name: "Different EU regulations apply to us as the supplier for business use.",
@@ -57,12 +58,14 @@ describe("ReservationBillingFields", () => {
     expect(view.queryByLabelText("Address")).toBeNull();
 
     fireEvent.click(createInvoice);
-    expect((view.getByLabelText("Address") as HTMLInputElement).required).toBe(
-      true
-    );
     expect(
-      (view.getByRole("combobox", { name: "Country" }) as HTMLSelectElement)
-        .value
+      elementOf(view.getByLabelText("Address"), HTMLInputElement).required
+    ).toBe(true);
+    expect(
+      elementOf(
+        view.getByRole("combobox", { name: "Country" }),
+        HTMLSelectElement
+      ).value
     ).toBe("CZ");
     expect(view.getByRole("option", { name: "Czechia" })).toBeTruthy();
     fireEvent.change(view.getByLabelText("Address"), {
@@ -71,10 +74,11 @@ describe("ReservationBillingFields", () => {
 
     fireEvent.click(businessUse);
     expect(
-      (view.getByLabelText("Legal company name") as HTMLInputElement).required
+      elementOf(view.getByLabelText("Legal company name"), HTMLInputElement)
+        .required
     ).toBe(true);
     expect(createInvoice.getAttribute("data-state")).toBe("checked");
-    expect((createInvoice as HTMLButtonElement).disabled).toBe(true);
+    expect(elementOf(createInvoice, HTMLButtonElement).disabled).toBe(true);
     expect(view.getByTestId("billing-value").textContent).not.toContain(
       "Private street 1"
     );
@@ -105,8 +109,10 @@ describe("ReservationBillingFields", () => {
     type(vatIdLabel, "   ");
     expect(billing().buyer).not.toHaveProperty("vatId");
     expect(
-      (view.getByLabelText(vatIdLabel, { exact: false }) as HTMLInputElement)
-        .required
+      elementOf(
+        view.getByLabelText(vatIdLabel, { exact: false }),
+        HTMLInputElement
+      ).required
     ).toBe(false);
   });
 });

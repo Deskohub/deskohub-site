@@ -1,4 +1,5 @@
 import { afterAll, afterEach, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import { m } from "@/features/i18n";
 import {
@@ -29,12 +30,11 @@ test("sign-in returns to Details with the selected tier and size", () => {
       onSubmit={async () => {}}
     />
   );
-  const link = new URL(
-    view
-      .getByRole("link", { name: m.accountSignInTitle({}, { locale }) })
-      .getAttribute("href")!,
-    "https://deskohub.example"
-  );
+  const href = view
+    .getByRole("link", { name: m.accountSignInTitle({}, { locale }) })
+    .getAttribute("href");
+  assert(href);
+  const link = new URL(href, "https://deskohub.example");
   expect(link.pathname).toBe("/en-US/auth/sign-in");
   expect([...link.searchParams.values()]).toContain(
     "/en-US/passes/entry-pack?tier=open-space&size=5&step=details"

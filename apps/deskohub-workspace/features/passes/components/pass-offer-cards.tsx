@@ -2,7 +2,7 @@ import Interpolate from "@doist/react-interpolate";
 import type { CSSProperties, ReactNode } from "react";
 import workspaceMark from "@/assets/logo/small-bg:dark.svg";
 import { type Locale, m } from "@/features/i18n";
-import { cn } from "@/shared/utils";
+import { cn, type VariableStyle } from "@/shared/utils";
 import {
   entryPackOffers,
   type PassTier,
@@ -55,6 +55,25 @@ const watermarkHalf = {
   mask: markMask,
   WebkitMask: markMask,
 } satisfies CSSProperties;
+
+/** The Entry pack ticket face: its seam, fold shading, and watermark sizes. */
+const entryPackTicketFace: VariableStyle<
+  "old-mark-size" | "mark-size" | "seam-from-mark-start" | "fold"
+> = {
+  "--old-mark-size": "clamp(85px, 37cqi, 152px)",
+  "--mark-size": "calc((21px + .771 * var(--old-mark-size)) / .2725)",
+  "--seam-from-mark-start":
+    "calc(5px + .771 * var(--old-mark-size) + .229 * var(--mark-size))",
+  "--fold": "calc(100% - max(82px, 27%) + 1px)",
+  background:
+    "linear-gradient(90deg, #a43810 0 4px, #fff5e9 4px var(--fold), #fae7d1 var(--fold) 100%)",
+  ...notchMask({
+    fold: "var(--fold)",
+    top: "-1px",
+    bottom: "calc(100% + 1px)",
+    radius: "10px",
+  }),
+};
 
 function PassOfferLink({
   "aria-describedby": describedBy,
@@ -130,24 +149,7 @@ export function EntryPackOfferCard({ href, locale, tier }: PassOfferCardProps) {
           />
           <span
             className="absolute inset-px isolate overflow-clip rounded-[10px]"
-            style={
-              {
-                "--old-mark-size": "clamp(85px, 37cqi, 152px)",
-                "--mark-size":
-                  "calc((21px + .771 * var(--old-mark-size)) / .2725)",
-                "--seam-from-mark-start":
-                  "calc(5px + .771 * var(--old-mark-size) + .229 * var(--mark-size))",
-                "--fold": "calc(100% - max(82px, 27%) + 1px)",
-                background:
-                  "linear-gradient(90deg, #a43810 0 4px, #fff5e9 4px var(--fold), #fae7d1 var(--fold) 100%)",
-                ...notchMask({
-                  fold: "var(--fold)",
-                  top: "-1px",
-                  bottom: "calc(100% + 1px)",
-                  radius: "10px",
-                }),
-              } as CSSProperties
-            }
+            style={entryPackTicketFace}
           >
             <span
               data-watermark="body"
@@ -203,14 +205,16 @@ export function EntryPackOfferCard({ href, locale, tier }: PassOfferCardProps) {
   );
 }
 
-const unlimitedPassColours = {
+const unlimitedPassColours: VariableStyle<
+  "pass-base" | "pass-top" | "pass-glow" | "pass-line"
+> = {
   "--pass-base": "#761730",
   "--pass-top": "#83223a",
   "--pass-glow": "#942941",
   "--pass-line": "#f5c0d050",
   background:
     "radial-gradient(ellipse at 100% 0%, var(--pass-glow) 0%, transparent 58%), linear-gradient(158deg, var(--pass-top) 5%, var(--pass-base) 84%)",
-} as CSSProperties;
+};
 
 /**
  * An Unlimited pass as a Workspace membership credential: issuer line with a

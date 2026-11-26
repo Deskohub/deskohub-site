@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { getTableColumns } from "drizzle-orm";
@@ -97,9 +98,13 @@ const seedWithLaterReservationColumns = async <A>(
 const beforeMigration = async (
   run: (database: ScratchDatabase) => Promise<void>
 ) => {
+  assert(
+    testDatabaseUrl,
+    "WORKSPACE_TEST_DATABASE_URL must name the test Postgres"
+  );
   const earlierMigrations = await linkMigrationsBefore(MIGRATION_DIR);
   const scratch = await createScratchPostgresDatabase(
-    testDatabaseUrl!,
+    testDatabaseUrl,
     "payment_order_mirror"
   );
   const pool = makeDatabasePool({ connectionString: scratch.url, max: 4 });
@@ -182,20 +187,23 @@ const insertOrder = (
     [order.id, order.correlationId]
   );
 
-const correlationIdOf = async (pool: Pool, reservationId: string) =>
-  (
+const correlationIdOf = async (pool: Pool, reservationId: string) => {
+  const [row] = (
     await pool.query<{ readonly correlation_id: string }>(
       "select correlation_id from workspace_reservations where id = $1",
       [reservationId]
     )
-  ).rows[0]!.correlation_id;
+  ).rows;
+  assert(row, "correlationIdOf returned no row");
+  return row.correlation_id;
+};
 
 /** The Postgres error a failed migration statement raised. */
 const migrationFailure = async (migrated: Promise<void>) => {
   try {
     await migrated;
   } catch (error) {
-    return (error as { readonly cause?: unknown }).cause;
+    return error instanceof Error ? error.cause : undefined;
   }
   throw new Error("The migration was expected to fail.");
 };
@@ -358,6 +366,10 @@ describe.skipIf(!testDatabaseUrl)(
       await beforeMigration(async ({ pool, reservation, migrateRemaining }) => {
         const id = await reservation({ stage: { reservation: "draft" } });
         const before = await migrationTrace(pool);
+        assert(
+          before.appliedMigrations !== null,
+          "the migration journal has no row count"
+        );
         const write = await holdPostgresTransaction(
           pool,
           "update workspace_reservations set payment_state = 'pending' where id = $1",
@@ -388,7 +400,7 @@ describe.skipIf(!testDatabaseUrl)(
         expect(await migrationTrace(pool)).toEqual({
           orderColumn: 1,
           appliedMigrations:
-            before.appliedMigrations! +
+            before.appliedMigrations +
             (await countMigrationsFrom(MIGRATION_DIR)),
         });
       });

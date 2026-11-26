@@ -22,7 +22,7 @@ import {
   type SQL,
   sql,
 } from "drizzle-orm";
-import { Effect, Match, Option } from "effect";
+import { Effect, Match, Option, Record as Rec } from "effect";
 import {
   type WorkspaceDatabaseClient,
   WorkspaceTransaction,
@@ -140,7 +140,7 @@ const replayEventCondition = (scope: ReplayEventScope): SQL =>
       onNone: () => undefined,
       onSome: reservationProductCondition,
     })
-  )!;
+  ) ?? sql`false`;
 
 /** Product conditions read the triggering reservation's snapshot. */
 const eventsWithReservations = (db: Pick<WorkspaceDatabaseClient, "select">) =>
@@ -408,10 +408,19 @@ const addedCounts = (written: readonly AutomationPreviewOutcome[]) =>
     sql`, `
   )})`;
 
+/** Every dry-run outcome, none counted yet. */
+const noPreviewCounts = {
+  "would-send": 0,
+  "condition-failed": 0,
+  "not-in-audience": 0,
+  "already-active": 0,
+  withdrawn: 0,
+  skipped: 0,
+  unavailable: 0,
+} satisfies Record<AutomationPreviewOutcome, number>;
+
 /** A dry run's stored counts, with every outcome present. */
 export const previewCounts = (
   counts: AutomationPreviewRow["counts"]
 ): Record<AutomationPreviewOutcome, number> =>
-  Object.fromEntries(
-    automationPreviewOutcomes.map((outcome) => [outcome, counts[outcome] ?? 0])
-  ) as Record<AutomationPreviewOutcome, number>;
+  Rec.map(noPreviewCounts, (none, outcome) => counts[outcome] ?? none);

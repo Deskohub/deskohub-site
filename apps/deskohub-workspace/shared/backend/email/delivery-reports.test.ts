@@ -1,12 +1,14 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, test } from "bun:test";
+import { EmailDeliveryIdSchema } from "@deskohub/email";
 import { Effect, Layer, Option, Schema } from "effect";
 import {
   type DeliveryReport,
   DeliveryReportError,
   type DeliveryReportEvent,
   type DeliveryReportHandler,
+  deliveryReportEmailId,
   deliveryReportHandler,
   deliveryReportHandlerOwningIgnores,
   ingestDeliveryReport,
@@ -120,11 +122,11 @@ describe("ingestDeliveryReport request verification", () => {
 
     expect(noteReports).toEqual([
       {
-        emailId: "email-1",
+        emailId: deliveryReportEmailId(EmailDeliveryIdSchema.make("email-1")),
         event: "email.delivered",
         occurredAt: Temporal.Instant.from("2026-01-01T12:05:00.000Z"),
         metadata: Option.some({ noteId: "note-1" }),
-      } as never,
+      },
     ]);
     expect(receiptReports).toEqual([]);
   });
@@ -405,7 +407,7 @@ describe("handlers owning their ignores", () => {
         event: Option.none(),
         occurredAt: Temporal.Instant.from("2026-01-01T12:05:00.000Z"),
         metadata: Option.some({ noteId: "note-1" }),
-      } as never,
+      },
     ]);
   });
 
@@ -416,10 +418,12 @@ describe("handlers owning their ignores", () => {
       unfiltered.map(({ emailId, event }) => ({ emailId, event }))
     ).toEqual([
       {
-        emailId: Option.some("email-1"),
-        event: Option.some("email.delivered"),
+        emailId: Option.some(
+          deliveryReportEmailId(EmailDeliveryIdSchema.make("email-1"))
+        ),
+        event: Option.some("email.delivered" as const),
       },
-    ] as never);
+    ]);
   });
 
   test("opens the handler's span before ignoring another deployment's report", async () => {

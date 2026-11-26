@@ -5,7 +5,10 @@ import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import {
+  type CustomerAccountId,
+  customerAccountIdSchema,
+} from "@/features/account/customer-account";
 import {
   accountingSnapshotKeyIdSchema,
   workspaceAccountingSupplier,
@@ -92,8 +95,8 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
     } = evidence;
     const validFrom = plainDateStringSchema.make(startDate);
     const validUntil = getUnlimitedPassEndDate(validFrom);
-    const buyer = crypto.randomUUID() as CustomerAccountId;
-    const holder = crypto.randomUUID() as CustomerAccountId;
+    const buyer = customerAccountIdSchema.make(crypto.randomUUID());
+    const holder = customerAccountIdSchema.make(crypto.randomUUID());
     const id = orderIdSchema.make(crypto.randomUUID());
     const attempt = paymentAttemptIdSchema.make(crypto.randomUUID());
     const internal = paid.value === 0;

@@ -17,9 +17,11 @@ const testDatabaseUrl = process.env.WORKSPACE_TEST_DATABASE_URL;
 test.skipIf(!testDatabaseUrl)(
   "Unlimited pass days share one order and ordinary reservation writers still get a mirror",
   async () => {
+    if (!testDatabaseUrl) return;
+
     const earlierMigrations = await linkMigrationsBefore(migration);
     const scratch = await createScratchPostgresDatabase(
-      testDatabaseUrl!,
+      testDatabaseUrl,
       "unlimited_pass_days"
     );
     const pool = makeDatabasePool({ connectionString: scratch.url, max: 1 });

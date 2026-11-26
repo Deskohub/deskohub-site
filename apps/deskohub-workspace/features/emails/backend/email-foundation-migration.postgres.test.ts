@@ -22,10 +22,11 @@ describe.skipIf(!databaseUrl)(
   "email foundation additive migration rehearsal",
   () => {
     test("keeps synthetic legacy rendering, recipient and persisted retry identities unchanged", async () => {
+      if (!databaseUrl) throw new Error("The test database URL is missing.");
       const folder = await linkMigrationsBefore(migration);
       try {
         await withScratchDatabase(
-          databaseUrl!,
+          databaseUrl,
           "email_foundation_migration",
           async (pool) => {
             const connection = drizzle({ client: pool });

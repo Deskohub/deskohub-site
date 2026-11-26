@@ -23,9 +23,10 @@ const fakeBrowser = ({
 }) =>
   Object.assign(new EventTarget(), {
     navigator,
-    document: Object.assign(new EventTarget(), {
-      visibilityState: "visible" as DocumentVisibilityState,
-    }),
+    document: Object.assign<
+      EventTarget,
+      { visibilityState: DocumentVisibilityState }
+    >(new EventTarget(), { visibilityState: "visible" }),
     matchMedia: (query: string) => ({
       matches: query === "(display-mode: standalone)" && displayModeStandalone,
     }),

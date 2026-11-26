@@ -15,6 +15,7 @@ import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/
 import { type OrderId, orderIdSchema } from "@/features/order";
 import {
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
@@ -32,9 +33,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     let database: WorkspacePostgresSuiteDatabase;
 
     beforeAll(async () => {
-      database = (await createWorkspacePostgresSuiteDatabase(
-        "entry_pack_status"
-      ))!;
+      database = requireTestDatabase(
+        await createWorkspacePostgresSuiteDatabase("entry_pack_status")
+      );
       await database.pool.query(
         "insert into customer_accounts (id) values ($1), ($2)",
         [buyer, holder]

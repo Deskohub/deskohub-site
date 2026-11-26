@@ -7,7 +7,7 @@ import {
   DotyposTableIdSchema,
 } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import {
   type AccountingDocumentSnapshot,
   makeAccountingDocumentSnapshot,
@@ -21,7 +21,10 @@ import { getReservationQuoteFingerprint } from "@/features/checkout/reservation-
 import { getMeetingRoomReservationQuote } from "@/features/checkout/reservation-quote-meeting-room";
 import { buildOfficeReservationQuote } from "@/features/checkout/reservation-quote-office";
 import type { ReservationRecord } from "@/features/reservation/backend/reservation-record";
-import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
+import {
+  getCoworkReservationInterval,
+  normalizedCoworkReservationOrderSchema,
+} from "@/features/reservation/cowork-reservation";
 import { normalizedMeetingRoomReservationOrderSchema } from "@/features/reservation/meeting-room-reservation";
 import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/office-reservation";
 import {
@@ -64,17 +67,19 @@ const coworkOrder = { entryTier: "open-space", coffee: true } as const;
 const coworkDate = "2099-01-01";
 const coworkSnapshot = snapshotOf({
   kind: "cowork",
-  reservation: {
-    kind: "cowork",
-    ...coworkOrder,
-    date: coworkDate,
-    name: "Ada Lovelace",
-    email: syntheticEmail,
-    phone: "+420 700 000 000",
-    billing,
-  },
+  reservation: Schema.decodeUnknownSync(normalizedCoworkReservationOrderSchema)(
+    {
+      kind: "cowork",
+      ...coworkOrder,
+      date: coworkDate,
+      name: "Ada Lovelace",
+      email: syntheticEmail,
+      phone: "+420 700 000 000",
+      billing,
+    }
+  ),
   quote: buildCoworkReservationQuote(coworkOrder),
-} as PreparedCustomerQuote);
+});
 const coworkInterval = getCoworkReservationInterval("open-space", coworkDate);
 
 const meetingRoomOrder = (earlySetup: boolean) =>
@@ -127,7 +132,7 @@ type Kind = {
   readonly record: ReservationRecord;
 };
 
-const kinds: readonly Kind[] = [
+const kinds = [
   {
     label: "cowork",
     details: { kind: "cowork", ...coworkOrder },
@@ -186,7 +191,7 @@ const kinds: readonly Kind[] = [
       seats: "3",
     },
   },
-];
+] as const satisfies readonly Kind[];
 
 const run = (input: {
   readonly details: StoredWorkspaceReservationDetails;
@@ -319,7 +324,6 @@ describe("getRestorationBooking", () => {
 
   test("refuses unreadable record bounds", async () => {
     const [cowork] = kinds;
-    if (!cowork) throw new Error("cowork kind missing");
 
     const result = await run({
       details: cowork.details,
@@ -331,7 +335,6 @@ describe("getRestorationBooking", () => {
 
   test("refuses as unreadable when the snapshot can't be loaded", async () => {
     const [cowork] = kinds;
-    if (!cowork) throw new Error("cowork kind missing");
 
     const result = await run({
       details: cowork.details,
@@ -354,7 +357,6 @@ describe("getRestorationBooking", () => {
 
   test("refuses a snapshot of another reservation kind as unreadable", async () => {
     const [cowork] = kinds;
-    if (!cowork) throw new Error("cowork kind missing");
 
     const result = await run({
       details: cowork.details,
@@ -368,7 +370,6 @@ describe("getRestorationBooking", () => {
   test("uses the no-snapshot policy for a reservation without a paid attempt", async () => {
     const findSnapshot = mock(() => Effect.succeed(coworkSnapshot));
     const [cowork] = kinds;
-    if (!cowork) throw new Error("cowork kind missing");
 
     const result = await run({
       details: cowork.details,
@@ -424,13 +425,13 @@ describe("getRestorationBooking", () => {
       [
         "an office booking of other seats",
         { kind: "office", seats: 3, dayCount: 2 },
-        { ...kinds[3]?.record, seats: "2" },
+        { ...kinds[3].record, seats: "2" },
       ],
       [
         "an office span of another day count",
         { kind: "office", seats: 3, dayCount: 2 },
         {
-          ...kinds[3]?.record,
+          ...kinds[3].record,
           endDate: "2099-06-22T22:00:00Z",
         },
       ],
@@ -438,15 +439,15 @@ describe("getRestorationBooking", () => {
         "an office span that isn't whole days",
         { kind: "office", seats: 3 },
         {
-          ...kinds[3]?.record,
+          ...kinds[3].record,
           endDate: "2099-06-21T16:00:00Z",
         },
       ],
     ] as const) {
       test(`refuses ${label}`, async () => {
         const result = await run({
-          details: details as StoredWorkspaceReservationDetails,
-          record: record as ReservationRecord,
+          details,
+          record,
         });
 
         expect(result.error?._tag).toBe("RestorationBookingChanged");
@@ -455,7 +456,6 @@ describe("getRestorationBooking", () => {
 
     test("takes an office's seats and days from the record when its details predate them", async () => {
       const office = kinds[3];
-      if (!office) throw new Error("office kind missing");
 
       const result = await run({
         details: { kind: "office" },

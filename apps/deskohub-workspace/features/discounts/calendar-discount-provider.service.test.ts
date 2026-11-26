@@ -274,7 +274,13 @@ describe("CalendarDiscountProvider", () => {
       ],
     ]);
     const loadById = mock<IDiscountDefinitionRepository["loadById"]>(
-      ({ discountId }) => Effect.succeed(definitions.get(discountId)!)
+      ({ discountId }) => {
+        const found = definitions.get(discountId);
+        if (!found) {
+          throw new Error(`Missing test discount definition ${discountId}`);
+        }
+        return Effect.succeed(found);
+      }
     );
 
     const result = await runWithProvider(
@@ -402,7 +408,13 @@ describe("CalendarDiscountProvider", () => {
         };
       }),
       listEvents,
-      ({ discountId }) => Effect.succeed(definitions.get(discountId)!)
+      ({ discountId }) => {
+        const found = definitions.get(discountId);
+        if (!found) {
+          throw new Error(`Missing test discount definition ${discountId}`);
+        }
+        return Effect.succeed(found);
+      }
     );
 
     expect(labels).toEqual({

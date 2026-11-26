@@ -90,6 +90,20 @@ describe("POST /api/webhooks/nexi", () => {
     expect(notifications).toEqual([{ event: "payment.charge.created.v2" }]);
   });
 
+  test("processes a notification whose ignored field overflows a number", async () => {
+    const response = await notify(
+      '{"event":"payment.charge.created.v2","extension":1e400}'
+    );
+
+    expect(response.status).toBe(200);
+    expect(notifications).toEqual([
+      {
+        event: "payment.charge.created.v2",
+        extension: Number.POSITIVE_INFINITY,
+      },
+    ]);
+  });
+
   test("rejects a body that is not JSON without processing it", async () => {
     const response = await notify("not json");
 

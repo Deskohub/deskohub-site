@@ -9,6 +9,7 @@ import {
   test,
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { Schema } from "effect";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -22,6 +23,9 @@ import {
 const infoAddress = testEmailAddress("info");
 
 const CONTAINER_ID = "GTM-TEST123";
+const isTagManagerStart = Schema.is(
+  Schema.Struct({ event: Schema.Literal("gtm.js") })
+);
 
 type IdleCallback = () => void;
 let idleCallbacks: { callback: IdleCallback; timeout?: number }[] = [];
@@ -126,11 +130,7 @@ describe("scheduleTagManagerLoad", () => {
       runIdleCallbacks();
       window.dispatchEvent(new Event("pointerdown"));
       expect(tagManagerScripts()).toHaveLength(1);
-      expect(
-        window.dataLayer?.filter(
-          (entry) => (entry as { event?: string }).event === "gtm.js"
-        )
-      ).toHaveLength(1);
+      expect(window.dataLayer?.filter(isTagManagerStart)).toHaveLength(1);
       cancel();
     }
   );
@@ -200,12 +200,16 @@ describe("scheduleTagManagerLoad", () => {
     const originalRequestIdleCallback = window.requestIdleCallback;
     // @ts-expect-error Safari does not implement requestIdleCallback.
     window.requestIdleCallback = undefined;
-    const timers: { callback: () => void; delay?: number }[] = [];
+    const timers: { callback: TimerHandler; delay?: number }[] = [];
     const originalSetTimeout = window.setTimeout;
-    window.setTimeout = ((callback: () => void, delay?: number) => {
-      timers.push({ callback, delay });
-      return timers.length;
-    }) as typeof window.setTimeout;
+    Object.defineProperty(window, "setTimeout", {
+      configurable: true,
+      writable: true,
+      value: (callback: TimerHandler, delay?: number) => {
+        timers.push({ callback, delay });
+        return timers.length;
+      },
+    });
 
     try {
       const cancel = scheduleTagManagerLoad(CONTAINER_ID);
@@ -214,7 +218,12 @@ describe("scheduleTagManagerLoad", () => {
       ]);
       expect(TAG_MANAGER_FALLBACK_IDLE_DELAY_MS).toBeGreaterThan(0);
       expect(tagManagerScripts()).toHaveLength(0);
-      for (const { callback } of timers) callback();
+      for (const { callback } of timers) {
+        if (!(callback instanceof Function)) {
+          throw new Error("Expected a timer callback function");
+        }
+        callback();
+      }
       expect(tagManagerScripts()).toHaveLength(1);
       cancel();
     } finally {

@@ -23,7 +23,12 @@ const toHost = (url: string): string => {
   return withoutProtocol.replace(/\/+.*$/, "").toLowerCase();
 };
 
-const plainHostResult = (host: string): BetterAuthAllowedHostsResult => {
+/** A single host's check, whose valid result is exactly that host. */
+type PlainHostResult =
+  | { readonly kind: "valid"; readonly hosts: readonly [string] }
+  | Extract<BetterAuthAllowedHostsResult, { readonly kind: "invalid" }>;
+
+const plainHostResult = (host: string): PlainHostResult => {
   if (host.includes("*") || host.includes("?")) {
     return {
       kind: "invalid",
@@ -70,7 +75,7 @@ export const resolveBetterAuthAllowedHosts = (
   for (const url of candidateUrls) {
     const result = plainHostResult(toHost(url));
     if (result.kind === "invalid") return result;
-    const host = result.hosts[0]!;
+    const [host] = result.hosts;
     if (!hosts.includes(host)) hosts.push(host);
   }
 

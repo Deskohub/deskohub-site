@@ -1,7 +1,12 @@
 import "@/shared/polyfills/temporal";
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import assert from "node:assert/strict";
+import {
+  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
+import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { eq, sql } from "drizzle-orm";
 import { Cause, Effect, Exit, Layer, Logger, Predicate } from "effect";
 import {
@@ -19,11 +24,7 @@ import {
 } from "@/db/schema";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { AppliedDiscount } from "@/features/discounts/contracts";
-import {
-  canonicalPromotionCodeSchema,
-  type DiscountApplicationId,
-  type PromotionCodeId,
-} from "@/features/discounts/persistence-contracts";
+import { canonicalPromotionCodeSchema } from "@/features/discounts/persistence-contracts";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { WithdrawalRepository } from "@/features/withdrawal/backend/withdrawal.repository";
@@ -33,9 +34,11 @@ import {
   holdPostgresTransaction,
   waitForAdvisoryLockWaiter,
 } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { makeReferralInvitationCandidate } from "./referral-benefits";
-import type { ReferralInvitationClaim } from "./referral-invitation-claim-benefits";
 import { ReferralInvitationLedger } from "./referral-invitation-ledger";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
@@ -45,9 +48,9 @@ const locale = "en-US" as const;
 const subtotal = 35_000;
 const czk = (value: number): Money => ({ value, exponent: 2, currency: "CZK" });
 const newCustomer = () =>
-  (
-    Math.floor(Math.random() * 900_000_000) + 100_000_000
-  ).toString() as DotyposCustomerId;
+  DotyposCustomerIdSchema.make(
+    (Math.floor(Math.random() * 900_000_000) + 100_000_000).toString()
+  );
 const now = () => Temporal.Now.instant();
 const inAnHour = () => now().add({ hours: 1 });
 
@@ -75,7 +78,10 @@ const inTransaction = <A, E>(
       return yield* transaction(effect);
     }).pipe(
       Effect.provide(
-        Layer.merge(testDatabase!.layer, Logger.layer([capturingLogger]))
+        Layer.merge(
+          requireTestDatabase(testDatabase).layer,
+          Logger.layer([capturingLogger])
+        )
       ),
       Effect.result
     )
@@ -83,7 +89,7 @@ const inTransaction = <A, E>(
 
 /** A referrer's referral code, which attributions and claims reference. */
 const createReferralCode = async (referrer = newCustomer()) => {
-  const db = testDatabase!.db;
+  const db = requireTestDatabase(testDatabase).db;
   const [promotion] = await Effect.runPromise(
     db
       .insert(promotionCodes)
@@ -96,20 +102,21 @@ const createReferralCode = async (referrer = newCustomer()) => {
       })
       .returning({ id: promotionCodes.id })
   );
+  assert(promotion, "Expected inserted promotion code row");
   await Effect.runPromise(
     db.insert(referralCodes).values({
-      promotionCodeId: promotion!.id,
+      promotionCodeId: promotion.id,
       referrerDotyposCustomerId: referrer,
     })
   );
-  return { referrer, promotionCodeId: promotion!.id as PromotionCodeId };
+  return { referrer, promotionCodeId: promotion.id };
 };
 
 type ReferralCode = Awaited<ReturnType<typeof createReferralCode>>;
 
 const attribute = (invited: DotyposCustomerId, code: ReferralCode) =>
   Effect.runPromise(
-    testDatabase!.db.insert(referralAttributions).values({
+    requireTestDatabase(testDatabase).db.insert(referralAttributions).values({
       invitedDotyposCustomerId: invited,
       referrerDotyposCustomerId: code.referrer,
       promotionCodeId: code.promotionCodeId,
@@ -130,9 +137,13 @@ const invitationOffer = (
       promotionCodeId: code.promotionCodeId,
     },
   });
+  assert(
+    candidate.claim?.kind === "referral_invitation",
+    "Expected referral invitation claim"
+  );
   const amount = (subtotal * 15) / 100;
   return {
-    claim: candidate.claim as ReferralInvitationClaim,
+    claim: candidate.claim,
     application: {
       discount: candidate.discount,
       subtotalBefore: czk(subtotal),
@@ -149,7 +160,7 @@ const createAttempt = async (
   customer: DotyposCustomerId,
   application: AppliedDiscount
 ) => {
-  const db = testDatabase!.db;
+  const db = requireTestDatabase(testDatabase).db;
   const reservation = await Effect.runPromise(
     workspaceFixtures(db).reservation({
       stage: { reservation: "held" },
@@ -162,7 +173,7 @@ const createAttempt = async (
       .values({
         workspaceReservationId: reservation.id,
         provider: "nexi",
-        providerOrderId: `order-${crypto.randomUUID()}` as never,
+        providerOrderId: NexiOrderIdSchema.make(`order-${crypto.randomUUID()}`),
         state: "created",
         amountValue: application.subtotalAfter.value,
         amountExponent: 2,
@@ -170,11 +181,12 @@ const createAttempt = async (
       })
       .returning({ id: paymentAttempts.id })
   );
+  assert(attempt, "Expected inserted payment attempt row");
   const [persisted] = await Effect.runPromise(
     db
       .insert(discountApplications)
       .values({
-        paymentAttemptId: attempt!.id,
+        paymentAttemptId: attempt.id,
         workspaceReservationId: reservation.id,
         sequence: 0,
         publicDiscountId: application.discount.id,
@@ -194,10 +206,11 @@ const createAttempt = async (
       })
       .returning({ id: discountApplications.id })
   );
+  assert(persisted, "Expected inserted discount application row");
   return {
-    workspaceReservationId: reservation.id as WorkspaceReservationId,
-    paymentAttemptId: attempt!.id as PaymentAttemptId,
-    applicationId: persisted!.id as DiscountApplicationId,
+    workspaceReservationId: reservation.id,
+    paymentAttemptId: attempt.id,
+    applicationId: persisted.id,
   };
 };
 
@@ -209,7 +222,7 @@ const createOtherBooking = (
   payment: "paid" | "pending"
 ) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).reservation({
+    workspaceFixtures(requireTestDatabase(testDatabase).db).reservation({
       stage:
         payment === "paid"
           ? { reservation: "confirmed", payment: "paid" }
@@ -227,7 +240,7 @@ const createWithdrawnBooking = async (
   customer: DotyposCustomerId,
   input: { readonly refund: "full" | "partial"; readonly cancelled: boolean }
 ) => {
-  const db = testDatabase!.db;
+  const db = requireTestDatabase(testDatabase).db;
   const reservation = await createOtherBooking(customer, "paid");
   const paid = czk(subtotal);
   const submittedAt = now();
@@ -257,7 +270,7 @@ const createWithdrawnBooking = async (
       });
     }).pipe(
       Effect.provide(WithdrawalRepository.Default),
-      Effect.provide(testDatabase!.layer)
+      Effect.provide(requireTestDatabase(testDatabase).layer)
     )
   );
   if (input.cancelled) {
@@ -303,7 +316,7 @@ const admitNew = async (
 
 const claimRows = async (paymentAttemptId: PaymentAttemptId) =>
   (
-    await testDatabase!.pool.query(
+    await requireTestDatabase(testDatabase).pool.query(
       "select state, referrer_dotypos_customer_id as referrer, promotion_code_id as code, release_reason, redeemed_at is not null as redeemed, released_at is not null as released from referral_invitation_claims where payment_attempt_id = $1",
       [paymentAttemptId]
     )
@@ -311,7 +324,7 @@ const claimRows = async (paymentAttemptId: PaymentAttemptId) =>
 
 const attributionRows = async (invited: DotyposCustomerId) =>
   (
-    await testDatabase!.pool.query(
+    await requireTestDatabase(testDatabase).pool.query(
       "select referrer_dotypos_customer_id as referrer, promotion_code_id as code from referral_attributions where invited_dotypos_customer_id = $1",
       [invited]
     )
@@ -369,14 +382,14 @@ const claimConflict = (operation: "reserve" | "redeem" | "release") => ({
 /** Holds the referral graph lock on another connection until `release`. */
 const holdGraphLock = () =>
   holdPostgresTransaction(
-    testDatabase!.pool,
+    requireTestDatabase(testDatabase).pool,
     "select pg_advisory_xact_lock(hashtext($1), hashtext($2))",
     ["referral-attribution", "graph"]
   );
 
 const holdFirstBookingLock = (customer: DotyposCustomerId) =>
   holdPostgresTransaction(
-    testDatabase!.pool,
+    requireTestDatabase(testDatabase).pool,
     "select pg_advisory_xact_lock(hashtext($1), hashtext($2))",
     ["referral-first-booking", customer]
   );
@@ -384,10 +397,11 @@ const holdFirstBookingLock = (customer: DotyposCustomerId) =>
 /** Whether another connection could take the lock right now. */
 const isLockFree = async (key: readonly [string, string]) =>
   (
-    await testDatabase!.pool.query<{ readonly free: boolean }>(
-      "select pg_try_advisory_xact_lock(hashtext($1), hashtext($2)) as free",
-      [...key]
-    )
+    await requireTestDatabase(testDatabase).pool.query<{
+      readonly free: boolean;
+    }>("select pg_try_advisory_xact_lock(hashtext($1), hashtext($2)) as free", [
+      ...key,
+    ])
   ).rows[0]?.free;
 
 describe.skipIf(!testDatabase)(
@@ -404,10 +418,10 @@ describe.skipIf(!testDatabase)(
             records: { claimOf: attempt.paymentAttemptId },
           })
         );
-        await waitForAdvisoryLockWaiter(testDatabase!.pool, [
-          "referral-attribution",
-          "graph",
-        ]);
+        await waitForAdvisoryLockWaiter(
+          requireTestDatabase(testDatabase).pool,
+          ["referral-attribution", "graph"]
+        );
         expect(await isLockFree(["referral-first-booking", invited])).toBe(
           true
         );
@@ -421,10 +435,10 @@ describe.skipIf(!testDatabase)(
             records: { claimOf: attempt.paymentAttemptId },
           })
         );
-        await waitForAdvisoryLockWaiter(testDatabase!.pool, [
-          "referral-first-booking",
-          invited,
-        ]);
+        await waitForAdvisoryLockWaiter(
+          requireTestDatabase(testDatabase).pool,
+          ["referral-first-booking", invited]
+        );
         expect(await isLockFree(["referral-attribution", "graph"])).toBe(false);
         await firstBooking.commit();
         expect(await waitingOnFirstBooking).toMatchObject({ _tag: "Success" });
@@ -473,7 +487,7 @@ describe.skipIf(!testDatabase)(
                     records: { admittedInvitation: true },
                   })
                 );
-              }).pipe(Effect.provide(testDatabase!.layer))
+              }).pipe(Effect.provide(requireTestDatabase(testDatabase).layer))
             )
           );
           const failure = Exit.isFailure(timedOut)
@@ -796,13 +810,15 @@ describe.skipIf(!testDatabase)(
         const offer = invitationOffer(invited, await createReferralCode());
         const attempt = await createAttempt(invited, offer.application);
         await Effect.runPromise(
-          testDatabase!.db.insert(referralInvitationClaims).values({
-            invitedDotyposCustomerId: invited,
-            applicationId: attempt.applicationId,
-            paymentAttemptId: attempt.paymentAttemptId,
-            state: "reserved",
-            reservationExpiresAt: inAnHour(),
-          })
+          requireTestDatabase(testDatabase)
+            .db.insert(referralInvitationClaims)
+            .values({
+              invitedDotyposCustomerId: invited,
+              applicationId: attempt.applicationId,
+              paymentAttemptId: attempt.paymentAttemptId,
+              state: "reserved",
+              reservationExpiresAt: inAnHour(),
+            })
         );
         expect(await ensureFirstPaid(invited, attempt)).toMatchObject(
           claimConflict("redeem")
@@ -954,8 +970,8 @@ describe.skipIf(!testDatabase)(
       /** Makes the attempt its reservation's pending payment. */
       const startPayment = (attempt: Attempt) =>
         Effect.runPromise(
-          testDatabase!.db
-            .update(workspaceReservations)
+          requireTestDatabase(testDatabase)
+            .db.update(workspaceReservations)
             .set({
               paymentState: "pending",
               activePaymentAttemptId: attempt.paymentAttemptId,
@@ -978,7 +994,7 @@ describe.skipIf(!testDatabase)(
             });
           }).pipe(
             Effect.provide(WorkspaceReservationRepository.Default),
-            Effect.provide(testDatabase!.layer)
+            Effect.provide(requireTestDatabase(testDatabase).layer)
           )
         );
 

@@ -860,7 +860,13 @@ describe("ReservationAccessService", () => {
         readonly provisioningStartedAt: Temporal.Instant | null;
       }
     ) => {
-      const markUncertain = mock(() => Effect.void);
+      const markUncertain = mock(
+        (
+          _input: Parameters<
+            (typeof ReservationAccessRepository.Service)["markUncertain"]
+          >[0]
+        ) => Effect.void
+      );
       const claim = mock(() => Effect.die("grant must not be claimed"));
       const issueHourlyAlgoPin = mock(() =>
         Effect.die("Igloohome must not be called")
@@ -892,9 +898,7 @@ describe("ReservationAccessService", () => {
       expect(issueHourlyAlgoPin).not.toHaveBeenCalled();
       return {
         outcome: Result.isFailure(result) ? result.failure.outcome : undefined,
-        markedUncertain: markUncertain.mock.calls.map(
-          (call) => (call as unknown[])[0]
-        ),
+        markedUncertain: markUncertain.mock.calls.map(([input]) => input),
       };
     };
 

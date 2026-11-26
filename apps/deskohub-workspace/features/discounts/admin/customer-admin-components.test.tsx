@@ -8,6 +8,8 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { m } from "@/features/administration/i18n";
 import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 import {
@@ -76,13 +78,14 @@ const reachable: AudienceCustomer = {
   customer: adminCustomer(),
 };
 const unlisted: AudienceCustomer = {
-  customerId: "unlisted-customer" as AudienceCustomer["customerId"],
+  customerId: DotyposCustomerIdSchema.make("unlisted-customer"),
   customer: null,
 };
+const silentCustomerId = DotyposCustomerIdSchema.make("silent-customer");
 const withoutContact: AudienceCustomer = {
-  customerId: "silent-customer" as AudienceCustomer["customerId"],
+  customerId: silentCustomerId,
   customer: adminCustomer({
-    id: "silent-customer" as AudienceCustomer["customerId"],
+    id: silentCustomerId,
     displayName: "Silent Customer",
     email: null,
     phone: null,
@@ -201,11 +204,8 @@ describe("customer administration pages", () => {
 
       const rows = audience.getAllByRole("listitem");
       expect(rows).toHaveLength(3);
-      const [reachableRow, unlistedRow, silentRow] = rows as [
-        HTMLElement,
-        HTMLElement,
-        HTMLElement,
-      ];
+      const [reachableRow, unlistedRow, silentRow] = rows;
+      assert(reachableRow && unlistedRow && silentRow, "Expected three rows");
       expect(
         within(reachableRow)
           .getByRole("link", { name: "Test Customer" })
@@ -342,10 +342,8 @@ describe("customer administration pages", () => {
         )
       ).toBeDefined();
 
-      const [, silentRow] = audience.getAllByRole("listitem") as [
-        HTMLElement,
-        HTMLElement,
-      ];
+      const [, silentRow] = audience.getAllByRole("listitem");
+      assert(silentRow, "Expected silent customer row");
       fireEvent.click(
         within(silentRow).getByRole("button", {
           name: m.discountsRemove({}, { locale }),

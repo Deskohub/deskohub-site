@@ -3,7 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import {
   testCustomerSession,
   testLinkedAccount,
@@ -286,9 +286,13 @@ describe("listInvoices", () => {
     expect(response.status).toBe(200);
     const meetingRoom = getInvoicedReservation(meetingRoomDocument);
     const office = getInvoicedReservation(officeDocument);
-    const { invoices } = (await response.json()) as {
-      invoices: { reservation?: unknown }[];
-    };
+    const { invoices } = Schema.decodeUnknownSync(
+      Schema.Struct({
+        invoices: Schema.Array(
+          Schema.Struct({ reservation: Schema.optionalKey(Schema.Unknown) })
+        ),
+      })
+    )(await response.json());
     expect(invoices.map((invoice) => invoice.reservation)).toEqual([
       {
         productName: getWorkspaceMeetingRoomProductTitle("cs-CZ"),

@@ -104,7 +104,8 @@ const vercelApiGet = async (
       `Vercel API ${pathWithQuery} failed with ${response.status}`
     );
   }
-  return response.json() as unknown;
+  const body: unknown = await response.json();
+  return body;
 };
 
 const vercelApiQuery = (params: Record<string, string | undefined>) => {

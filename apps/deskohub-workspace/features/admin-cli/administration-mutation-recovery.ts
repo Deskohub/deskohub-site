@@ -1,5 +1,4 @@
 import {
-  type AdministrationOperationError,
   type AdministrationStandaloneAccessCodeCreationOutcomeType,
   AdministrationStandaloneAccessCodeResult,
   type AdministrationStandaloneAccessCodeResultType,
@@ -10,6 +9,7 @@ import {
   CliStandaloneAccessCodeCleanupRequired,
   CliStandaloneAccessCodeReconciled,
 } from "@deskohub/workspace-admin-api";
+import { Predicate } from "effect";
 import { standaloneAccessCodeAttemptStaleAfterMilliseconds } from "@/features/access-codes";
 import type { ReservationAccessAdministrationError } from "@/features/administration/reservation-access-administration.service";
 import { reservationAccessProvisioningStaleAfterMilliseconds } from "@/features/reservation-access";
@@ -25,9 +25,11 @@ import {
  * and keeps the claim, which never resumes. The result must be recorded.
  */
 export const discountMutationRecovery = RecoveryPolicy.noResume({
-  releasesOn: (failure: AdministrationOperationError) =>
-    failure._tag === "OperationNotFound" ||
-    failure._tag === "OperationConflict",
+  // Checked by tag, so the policy fits a ledger entry's generic failure.
+  releasesOn: Predicate.or(
+    Predicate.isTagged("OperationNotFound"),
+    Predicate.isTagged("OperationConflict")
+  ),
   completion: "required",
 });
 

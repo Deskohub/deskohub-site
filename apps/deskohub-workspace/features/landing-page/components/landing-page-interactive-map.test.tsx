@@ -7,6 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { Activity, StrictMode, useState } from "react";
 import {
@@ -26,7 +27,6 @@ type FakeOptions = object;
 type FakeMediaQueryList = {
   readonly addEventListenerCallCount: number;
   readonly dispatchChange: () => void;
-  readonly matches: boolean;
   readonly removeEventListenerCallCount: number;
 };
 
@@ -171,39 +171,38 @@ const makePoint = (x: number, y: number): Point => ({
   y,
 });
 
-const makeMediaQuery = (): FakeMediaQueryList => {
-  let addEventListenerCallCount = 0;
-  let removeEventListenerCallCount = 0;
-  const listeners = new Set<() => void>();
-  const mediaQuery = {
-    addEventListenerCallCount,
+const makeMediaQuery = (query: string): MediaQueryList => {
+  const mediaQuery = originalMatchMedia(query);
+  const listeners = new Set<EventListenerOrEventListenerObject>();
+  const record = {
+    addEventListenerCallCount: 0,
     dispatchChange: () => {
-      for (const listener of listeners) listener();
+      const event = new Event("change");
+      for (const listener of listeners) {
+        if ("handleEvent" in listener) listener.handleEvent(event);
+        else listener(event);
+      }
     },
-    matches: false,
-    removeEventListenerCallCount,
+    removeEventListenerCallCount: 0,
   };
 
-  Object.assign(mediaQuery, {
-    addEventListener: (
-      _type: string,
-      listener: EventListenerOrEventListenerObject
-    ) => {
-      addEventListenerCallCount += 1;
-      mediaQuery.addEventListenerCallCount = addEventListenerCallCount;
-      listeners.add(listener as () => void);
-    },
-    removeEventListener: (
-      _type: string,
-      listener: EventListenerOrEventListenerObject
-    ) => {
-      removeEventListenerCallCount += 1;
-      mediaQuery.removeEventListenerCallCount = removeEventListenerCallCount;
-      listeners.delete(listener as () => void);
-    },
-  });
+  Object.defineProperty(mediaQuery, "matches", { value: false });
+  mediaQuery.addEventListener = (
+    _type: string,
+    listener: EventListenerOrEventListenerObject | null
+  ) => {
+    record.addEventListenerCallCount += 1;
+    if (listener) listeners.add(listener);
+  };
+  mediaQuery.removeEventListener = (
+    _type: string,
+    listener: EventListenerOrEventListenerObject | null
+  ) => {
+    record.removeEventListenerCallCount += 1;
+    if (listener) listeners.delete(listener);
+  };
 
-  mediaQueries.push(mediaQuery);
+  mediaQueries.push(record);
   return mediaQuery;
 };
 
@@ -246,7 +245,7 @@ describe("LandingPageInteractiveMap", () => {
     const { LandingPageInteractiveMap } = await import(
       "./landing-page-interactive-map"
     );
-    window.matchMedia = (() => makeMediaQuery()) as typeof window.matchMedia;
+    window.matchMedia = makeMediaQuery;
     const mounts: HTMLElement[] = [];
     let tileLoads = 0;
 
@@ -259,17 +258,20 @@ describe("LandingPageInteractiveMap", () => {
       />
     );
     const [tiles] = tileLayers;
+    const [map] = mapInstances;
+    assert(tiles);
+    assert(map);
 
-    expect(mounts).toEqual([mapInstances[0]!.container]);
+    expect(mounts).toEqual([map.container]);
     act(() => {
-      tiles!.emit("loading");
-      tiles!.emit("tileerror");
-      tiles!.emit("load");
+      tiles.emit("loading");
+      tiles.emit("tileerror");
+      tiles.emit("load");
     });
     expect(tileLoads).toBe(0);
     act(() => {
-      tiles!.emit("loading");
-      tiles!.emit("load");
+      tiles.emit("loading");
+      tiles.emit("load");
     });
     expect(tileLoads).toBe(1);
   });
@@ -278,7 +280,7 @@ describe("LandingPageInteractiveMap", () => {
     const { LandingPageInteractiveMap } = await import(
       "./landing-page-interactive-map"
     );
-    window.matchMedia = (() => makeMediaQuery()) as typeof window.matchMedia;
+    window.matchMedia = makeMediaQuery;
     let moves = 0;
 
     render(
@@ -289,9 +291,11 @@ describe("LandingPageInteractiveMap", () => {
       />
     );
 
+    const [map] = mapInstances;
+    assert(map);
     expect(moves).toBe(0);
     act(() => {
-      mapInstances[0]!.emit("movestart");
+      map.emit("movestart");
     });
     expect(moves).toBe(1);
   });
@@ -300,7 +304,7 @@ describe("LandingPageInteractiveMap", () => {
     const { LandingPageInteractiveMap } = await import(
       "./landing-page-interactive-map"
     );
-    window.matchMedia = (() => makeMediaQuery()) as typeof window.matchMedia;
+    window.matchMedia = makeMediaQuery;
 
     function ActivityHarness() {
       const [mode, setMode] = useState<"hidden" | "visible">("visible");

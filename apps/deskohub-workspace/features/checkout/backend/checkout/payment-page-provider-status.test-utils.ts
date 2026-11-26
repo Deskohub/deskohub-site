@@ -1,6 +1,7 @@
 import { mock } from "bun:test";
 import { type Duration, Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { QrPaymentRepository } from "../repositories/qr-payment.repository";
 import {
   type PaymentPageProviderObservation,
@@ -9,11 +10,11 @@ import {
 
 export const testReservationPaymentWindow = (expiresAt?: Temporal.Instant) =>
   Layer.mock(QrPaymentRepository, {
-    findPaymentWindow: (orderId) =>
+    findPaymentWindow: (reservationId) =>
       Effect.succeed(
         expiresAt
           ? {
-              orderId,
+              orderId: standaloneReservationOrderId(reservationId),
               accountKey: "synthetic-account",
               expiresAt,
               cardAttemptId: null,

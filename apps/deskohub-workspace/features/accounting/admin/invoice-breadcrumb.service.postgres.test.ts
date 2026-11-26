@@ -1,13 +1,19 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { AdministrationInvoiceId } from "@deskohub/workspace-admin-api";
 import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { invoiceArchives, invoiceCancellations, invoices } from "@/db/schema";
+import { accountingSnapshotKeyIdSchema } from "@/features/accounting/accounting-document-snapshot";
+import { invoiceNumberSchema } from "@/features/accounting/invoice";
+import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
 import {
   connectWorkspacePostgresTestDatabase,
   holdDatabaseConnection,
+  requireTestDatabase,
   withHeldTransaction,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { InvoiceBreadcrumbService } from "./invoice-breadcrumb.service";
@@ -21,7 +27,9 @@ describe.skipIf(!testDatabase)(
       const invoiceNumber = `synthetic-breadcrumb-${crypto.randomUUID()}`;
       // Invoices are never deleted, so the row stays in a transaction that
       // rolls back.
-      const connection = await holdDatabaseConnection(testDatabase!);
+      const connection = await holdDatabaseConnection(
+        requireTestDatabase(testDatabase)
+      );
       try {
         await connection.query("begin");
         const labels = await Effect.runPromise(
@@ -31,39 +39,42 @@ describe.skipIf(!testDatabase)(
                 db
                   .insert(invoices)
                   .values({
-                    dotyposCustomerId: "synthetic-customer",
-                    invoiceNumber: number,
+                    dotyposCustomerId:
+                      DotyposCustomerIdSchema.make("synthetic-customer"),
+                    invoiceNumber: invoiceNumberSchema.make(number),
                     numberingYear: 2026,
                     // Far beyond any sequence another suite issues.
                     numberingSequence:
                       1_000_000_000 + Math.floor(Math.random() * 1e9),
-                    keyId: "SYNTHETIC_KEY",
+                    keyId: accountingSnapshotKeyIdSchema.make("SYNTHETIC_KEY"),
                     encryptedDocument: Buffer.from("synthetic"),
                     issuedAt: Temporal.Instant.from("2026-06-01T12:00:00Z"),
-                  } as never)
+                  })
                   .returning({ id: invoices.id });
               const [stored] = yield* insertInvoice(invoiceNumber);
               const [hidden] = yield* insertInvoice(`${invoiceNumber}-hidden`);
+              assert(stored !== undefined && hidden !== undefined);
+              const hiddenInvoiceId = invoiceIdSchema.make(hidden.id);
               yield* db.insert(invoiceCancellations).values({
-                invoiceId: hidden!.id,
+                invoiceId: hiddenInvoiceId,
                 cancelledAt: Temporal.Instant.from("2026-06-02T12:00:00Z"),
                 cause: "invoice_cancellation",
                 actorAccountEmail: "synthetic administrator",
                 source: "admin-ui",
-              } as never);
+              });
               yield* db.insert(invoiceArchives).values({
-                invoiceId: hidden!.id,
+                invoiceId: hiddenInvoiceId,
                 archivedAt: Temporal.Instant.from("2026-06-03T12:00:00Z"),
                 actorAccountEmail: "synthetic administrator",
                 source: "admin-ui",
-              } as never);
+              });
               const breadcrumb = yield* InvoiceBreadcrumbService;
               return {
                 stored: yield* breadcrumb.getInvoiceNumber(
-                  AdministrationInvoiceId.make(stored!.id)
+                  AdministrationInvoiceId.make(stored.id)
                 ),
                 hidden: yield* breadcrumb.getInvoiceNumber(
-                  AdministrationInvoiceId.make(hidden!.id)
+                  AdministrationInvoiceId.make(hidden.id)
                 ),
                 unknown: yield* breadcrumb.getInvoiceNumber(
                   AdministrationInvoiceId.make(crypto.randomUUID())

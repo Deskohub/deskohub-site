@@ -16,6 +16,8 @@ const standaloneObservabilityKey = Symbol.for(
   "@deskohub-workspace/standalone-observability"
 );
 
+// Only this module writes the slot, so the annotation checks those writes;
+// it trusts, rather than verifies, a value another module instance stored.
 type GlobalWithStandaloneObservability = typeof globalThis & {
   [standaloneObservabilityKey]?: Layer.Layer<never>;
 };
@@ -24,18 +26,18 @@ type GlobalWithStandaloneObservability = typeof globalThis & {
 export const setStandaloneWorkspaceObservability = (
   layer: Layer.Layer<never>
 ): void => {
-  (globalThis as GlobalWithStandaloneObservability)[
-    standaloneObservabilityKey
-  ] = layer;
+  const processGlobals: GlobalWithStandaloneObservability = globalThis;
+  processGlobals[standaloneObservabilityKey] = layer;
 };
 
 const StandaloneObservabilityLive: Layer.Layer<never> = Layer.unwrap(
-  Effect.sync(
-    () =>
-      (globalThis as GlobalWithStandaloneObservability)[
-        standaloneObservabilityKey
-      ] ?? Layer.merge(WorkspaceLoggerLive, WorkspaceClockLive)
-  )
+  Effect.sync(() => {
+    const processGlobals: GlobalWithStandaloneObservability = globalThis;
+    return (
+      processGlobals[standaloneObservabilityKey] ??
+      Layer.merge(WorkspaceLoggerLive, WorkspaceClockLive)
+    );
+  })
 );
 
 const runtime = NextEffect.make({ layer: StandaloneObservabilityLive });

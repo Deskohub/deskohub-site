@@ -8,8 +8,12 @@ import {
   type LegalEvidenceEventId,
   paymentSubmitLegalEvidenceSource,
 } from "@/features/checkout/legal-evidence";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
-import { LegalEvidenceEventRepository } from "./legal-evidence-event.repository";
+import {
+  decodeLegalEvidenceEventInput,
+  LegalEvidenceEventRepository,
+} from "./legal-evidence-event.repository";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
@@ -101,14 +105,44 @@ describe.skipIf(!testDatabase)(
       expect(await readAcknowledgements(terms.id)).toEqual({});
     });
 
-    test("rejects acknowledgements outside the early-performance consent fact", async () => {
+    test("rejects a false early-performance acknowledgement in the repository decoder", async () => {
+      const failure = await Effect.runPromise(
+        Effect.flip(
+          decodeLegalEvidenceEventInput({
+            evidence: {
+              ...makeEvidence("termsAndConditions"),
+              acknowledgements: { earlyPerformanceConsent: false },
+            },
+          })
+        )
+      );
+      expect(failure.message).toContain("earlyPerformanceConsent");
+    });
+
+    test("rejects additional acknowledgements before recording evidence", async () => {
+      const evidence = {
+        ...makeEvidence("termsAndConditions"),
+        acknowledgements: {
+          earlyPerformanceConsent: true,
+          unrecognizedAcknowledgement: true,
+        },
+      } as const;
+
+      const failure = await run((repository) =>
+        Effect.flip(repository.record({ evidence }))
+      );
+
+      expect(failure).toMatchObject({ _tag: "LegalEvidenceEventInputError" });
+    });
+
+    test("rejects evidence for a reservation without an order of its own", async () => {
       const failure = await run((repository) =>
         Effect.flip(
           repository.record({
-            evidence: {
-              ...makeEvidence("termsAndConditions"),
-              acknowledgements: { earlyPerformanceConsent: false } as never,
-            },
+            workspaceReservationId: workspaceReservationIdSchema.make(
+              "review-sample-0123456789abcdefghijkl"
+            ),
+            evidence: makeEvidence("termsAndConditions"),
           })
         )
       );

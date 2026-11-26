@@ -1,24 +1,37 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService, DotyposVersionConflict } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposService,
+  DotyposVersionConflict,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Schema } from "effect";
 import {
   type AccountingDocumentSnapshot,
   accountingDocumentSnapshotSchema,
 } from "@/features/accounting/accounting-document-snapshot";
+import { liveInvoiceStanding } from "@/features/accounting/admin/invoice-administration.service.test-utils";
+import { companyRegistrationIdSchema } from "@/features/accounting/billing-identity";
+import { correctiveDocumentNumberSchema } from "@/features/accounting/corrective-document";
 import { makeCoworkInvoiceDocument } from "@/features/accounting/invoice.test-utils";
+import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { createReservationAccessToken } from "@/features/reservation/backend/reservation-access-token";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import type { ReservationAccessToken } from "@/features/reservation/reservation-access-token";
 import {
   recordEffectTrace,
   startEffectTrace,
 } from "@/shared/testing/effect-trace.test-utils";
 import { AccountingDocumentSnapshots } from "./accounting-document-snapshots";
-import { InvoiceRepository } from "./invoice.repository";
+import {
+  InvoiceRepository,
+  type ReservationInvoice,
+} from "./invoice.repository";
 import { ReservationInvoiceService } from "./reservation-invoice.service";
 
 mock.module("server-only", () => ({}));
@@ -367,7 +380,7 @@ describe("reservation invoice processing", () => {
           buyer: {
             kind: "business",
             legalName: "Synthetic Company s.r.o.",
-            companyId: "12345678",
+            companyId: companyRegistrationIdSchema.make("12345678"),
             address: personalAddress,
           },
         },
@@ -529,20 +542,21 @@ describe("reservation invoice processing", () => {
       "belongs to another reservation",
       (source: AccountingDocumentSnapshot) => ({
         ...source,
-        workspaceReservationId: "other-reservation",
+        workspaceReservationId:
+          workspaceReservationIdSchema.make("other-reservation"),
       }),
     ],
     [
       "belongs to another customer",
-      (source: AccountingDocumentSnapshot) => ({
+      (source: AccountingDocumentSnapshot): AccountingDocumentSnapshot => ({
         ...source,
-        dotyposCustomerId: "other-customer",
+        dotyposCustomerId: DotyposCustomerIdSchema.make("other-customer"),
       }),
     ],
   ] as const)("is unavailable when the snapshot %s", async (_, snapshotOf) => {
     const source = makeSource({ purpose: "personal", invoice: "none" });
     const harness = makeHarness(source, {
-      snapshot: snapshotOf(source) as AccountingDocumentSnapshot | null,
+      snapshot: snapshotOf(source),
     });
 
     const state = await runPostOrderState(
@@ -617,8 +631,9 @@ describe("reservation invoice processing", () => {
     const cancelledInvoice = {
       cancellation: {
         cancelledAt: Temporal.Instant.from("2026-08-14T09:00:00Z"),
-        cause: "reservation_cancellation",
-        correctiveDocumentNumber: "WS-OD-2026-000001",
+        cause: "reservation_cancellation" as const,
+        correctiveDocumentNumber:
+          correctiveDocumentNumberSchema.make("WS-OD-2026-000001"),
       },
     };
     const requestedSource = () =>
@@ -729,12 +744,34 @@ describe("reservation invoice processing", () => {
   });
 });
 
+const missingReservationId = workspaceReservationIdSchema.make(
+  "missing-reservation"
+);
+
+const reservationInvoiceFixture = (
+  overrides: Partial<ReservationInvoice> = {}
+): ReservationInvoice => {
+  const document = makeCoworkInvoiceDocument("en-US");
+  return {
+    id: invoiceIdSchema.make("01980000-0000-7000-8000-000000000001"),
+    workspaceReservationId: document.workspaceReservationId,
+    paymentAttemptId,
+    dotyposCustomerId: document.dotyposCustomerId,
+    invoiceNumber: document.invoiceNumber,
+    issuedAt: Temporal.Instant.from(document.issuedAt),
+    document,
+    ...liveInvoiceStanding,
+    ...overrides,
+  };
+};
+
 const issueAfterFulfillment = Effect.fnUntraced(function* (
   harness: ReturnType<typeof makeHarness>
 ) {
   const service = yield* ReservationInvoiceService;
   yield* service.issueAfterFulfillment({
-    reservationId: harness.source?.workspaceReservationId as never,
+    reservationId:
+      harness.source?.workspaceReservationId ?? missingReservationId,
   });
 });
 
@@ -778,7 +815,7 @@ const runPostOrderState = (
     Effect.gen(function* () {
       const service = yield* ReservationInvoiceService;
       return yield* service.getPostOrderState({
-        orderId: harness.source?.workspaceReservationId as never,
+        orderId: harness.source?.workspaceReservationId ?? missingReservationId,
         locale: "en-US",
         accessToken,
       });
@@ -794,7 +831,7 @@ const runPostOrderCreate = (
     Effect.gen(function* () {
       const service = yield* ReservationInvoiceService;
       return yield* service.createPostOrderInvoice({
-        orderId: harness.source?.workspaceReservationId as never,
+        orderId: harness.source?.workspaceReservationId ?? missingReservationId,
         locale: "en-US",
         accessToken,
         address: personalAddress,
@@ -811,7 +848,7 @@ const runPostOrderResend = (
     Effect.gen(function* () {
       const service = yield* ReservationInvoiceService;
       yield* service.resendPostOrderInvoice({
-        orderId: harness.source?.workspaceReservationId as never,
+        orderId: harness.source?.workspaceReservationId ?? missingReservationId,
         locale: "en-US",
         accessToken,
       });
@@ -847,19 +884,21 @@ const makeHarness = (
   options: {
     readonly billingFailure?: DotyposVersionConflict;
     readonly reconcileBillingFailure?: DotyposVersionConflict;
-    readonly existingInvoice?: object;
+    readonly existingInvoice?: Partial<ReservationInvoice>;
     /** The reservation's latest invoice, cancelled or not. */
-    readonly latestInvoice?: object;
-    readonly issuedInvoice?: object;
+    readonly latestInvoice?: Partial<ReservationInvoice>;
+    readonly issuedInvoice?: Partial<ReservationInvoice>;
     readonly issueChanged?: boolean;
     readonly deliveryFailure?: InstanceType<typeof InvoiceEmailDeliveryError>;
-    readonly reservation?: object | null;
+    readonly reservation?:
+      | Parameters<typeof workspaceReservationFixture>[0]
+      | null;
     readonly snapshot?: AccountingDocumentSnapshot | null;
   } = {}
 ) => {
   const issue = mock(() =>
     Effect.succeed({
-      invoice: (options.issuedInvoice ?? {}) as never,
+      invoice: reservationInvoiceFixture(options.issuedInvoice),
       changed: options.issueChanged ?? true,
     })
   );
@@ -880,7 +919,7 @@ const makeHarness = (
   const findReservation = mock(() =>
     Effect.succeed(
       source && options.reservation !== null
-        ? ({
+        ? workspaceReservationFixture({
             id: source.workspaceReservationId,
             locale: source.locale,
             paymentState: "paid",
@@ -891,7 +930,7 @@ const makeHarness = (
             reservationPurpose: source.billing?.purpose ?? null,
             dotyposCustomerId: source.dotyposCustomerId,
             ...options.reservation,
-          } as never)
+          })
         : null
     )
   );
@@ -902,14 +941,14 @@ const makeHarness = (
   const findSnapshot = mock(() =>
     Effect.succeed(options.snapshot === undefined ? source : options.snapshot)
   );
-  const findInvoice = mock(() =>
-    Effect.succeed((options.existingInvoice ?? null) as never)
-  );
-  const findLatestInvoice = mock(() =>
-    Effect.succeed(
-      (options.latestInvoice ?? options.existingInvoice ?? null) as never
-    )
-  );
+  const existingInvoice = options.existingInvoice
+    ? reservationInvoiceFixture(options.existingInvoice)
+    : null;
+  const latestInvoice = options.latestInvoice
+    ? reservationInvoiceFixture(options.latestInvoice)
+    : existingInvoice;
+  const findInvoice = mock(() => Effect.succeed(existingInvoice));
+  const findLatestInvoice = mock(() => Effect.succeed(latestInvoice));
 
   return {
     accountingSnapshots: {

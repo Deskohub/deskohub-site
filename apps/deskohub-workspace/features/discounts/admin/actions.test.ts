@@ -1,9 +1,20 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { Effect, Fiber, Layer, Predicate } from "effect";
+import {
+  DotyposCustomerIdSchema,
+  DotyposDiscountGroupIdSchema,
+  DotyposUnavailable,
+} from "@deskohub/dotypos";
+import { Effect, Fiber, Layer } from "effect";
 import { administrationHref } from "@/features/administration/administration-href";
 import { mockAdministrationActionRequest } from "@/shared/testing/workspace-action-request.test-utils";
+import {
+  discountCodeIdSchema,
+  storedDiscountIdSchema,
+  voucherIdSchema,
+} from "../persistence-contracts";
+import type { DiscountAdminMissingResource } from "./discount-administration-errors";
 
 const revalidatedPaths: string[] = [];
 // The mutation and every tag invalidation and `after` callback, each with
@@ -52,27 +63,13 @@ const { calendarDiscountSourceTag } = await import(
   "../calendar-discount-source.server"
 );
 
-type Administration = DiscountAdministration["Service"];
+type Administration = (typeof DiscountAdministration)["Service"];
 
-let administration: Partial<
-  Record<keyof Administration, () => Effect.Effect<unknown, unknown>>
-> = {};
+let administration: Partial<Administration> = {};
 const calls: string[] = [];
-
-// Answers only the calls a test sets; any other call is a test failure.
 const originalLive = DiscountAdministration.Live;
-DiscountAdministration.Live = Layer.succeed(
-  DiscountAdministration,
-  new Proxy({} as Administration, {
-    get: (_, method) => {
-      if (!Predicate.isString(method)) return undefined;
-      calls.push(method);
-      return (
-        administration[method as keyof Administration] ??
-        (() => Effect.die(`unexpected ${method}`))
-      );
-    },
-  })
+DiscountAdministration.Live = Layer.suspend(() =>
+  Layer.mock(DiscountAdministration, administration)
 );
 
 // The access gate checks the grant; an operation port re-reads it.
@@ -100,6 +97,15 @@ const customerCode = {
   },
 } as const;
 
+const createCustomerCode: Administration["createCustomerCode"] = () => {
+  calls.push("createCustomerCode");
+  return recordMutation(
+    Effect.succeed(
+      discountCodeIdSchema.make("019c91dd-c560-7e55-b9d8-c95065efd51f")
+    )
+  );
+};
+
 const recordMutation = <A, E>(mutation: Effect.Effect<A, E>) =>
   Effect.andThen(
     Effect.sync(() => timeline.push(`${fiberState()}:mutate`)),
@@ -121,10 +127,7 @@ beforeEach(() => {
 
 describe("mutateDiscountAdmin", () => {
   test("revalidates the customer page a customer code was created for", async () => {
-    administration = {
-      createCustomerCode: () =>
-        recordMutation(Effect.succeed("019c91dd-c560-7e55-b9d8-c95065efd51f")),
-    };
+    administration = { createCustomerCode };
 
     const result = await mutateDiscountAdmin(customerCode);
 
@@ -158,7 +161,10 @@ describe("mutateDiscountAdmin", () => {
 
   test("words a failed mutation for the operator and revalidates nothing", async () => {
     const missing = new DiscountAdminNotFoundError({
-      resource: { kind: "Dotypos customer", id: "customer-id" as never },
+      resource: {
+        kind: "Dotypos customer",
+        id: DotyposCustomerIdSchema.make("customer-id"),
+      },
       message: "missing",
     });
     administration = {
@@ -179,6 +185,7 @@ describe("mutateDiscountAdmin", () => {
 
   test("refuses an account without the grant before any mutation", async () => {
     access.set("not-administrator");
+    administration = { createCustomerCode };
 
     const result = await mutateDiscountAdmin(customerCode);
 
@@ -201,41 +208,69 @@ describe("mutateDiscountAdmin", () => {
   test.each([
     ...(
       [
-        ["discount", m.discountsErrorDiscountMissing],
-        ["discount code", m.discountsErrorCodeMissing],
-        ["voucher", m.discountsErrorVoucherMissing],
-        ["Dotypos customer", m.discountsErrorDotyposCustomerMissing],
-        ["Dotypos discount group", m.discountsErrorDotyposDiscountGroupMissing],
         [
-          "code audience membership",
+          {
+            kind: "discount",
+            id: storedDiscountIdSchema.make(
+              "019c91dd-c560-7e55-b9d8-c95065efd51d"
+            ),
+          },
+          m.discountsErrorDiscountMissing,
+        ],
+        [
+          {
+            kind: "discount code",
+            id: discountCodeIdSchema.make("resource-id"),
+          },
+          m.discountsErrorCodeMissing,
+        ],
+        [
+          { kind: "voucher", id: voucherIdSchema.make("resource-id") },
+          m.discountsErrorVoucherMissing,
+        ],
+        [
+          {
+            kind: "Dotypos customer",
+            id: DotyposCustomerIdSchema.make("resource-id"),
+          },
+          m.discountsErrorDotyposCustomerMissing,
+        ],
+        [
+          {
+            kind: "Dotypos discount group",
+            id: DotyposDiscountGroupIdSchema.make("resource-id"),
+          },
+          m.discountsErrorDotyposDiscountGroupMissing,
+        ],
+        [
+          {
+            kind: "code audience membership",
+            id: DotyposCustomerIdSchema.make("resource-id"),
+          },
           m.discountsErrorCodeAudienceMembershipMissing,
         ],
         [
-          "voucher audience membership",
+          {
+            kind: "voucher audience membership",
+            id: DotyposCustomerIdSchema.make("resource-id"),
+          },
           m.discountsErrorVoucherAudienceMembershipMissing,
         ],
-      ] as const
+      ] as const satisfies readonly (readonly [
+        DiscountAdminMissingResource,
+        (
+          inputs: Record<string, never>,
+          options?: { locale?: "en-US" | "cs-CZ" }
+        ) => string,
+      ])[]
     ).map(
-      ([kind, copy]) =>
+      ([resource, copy]) =>
         [
-          `a missing ${kind}`,
+          `a missing ${resource.kind}`,
           new DiscountAdminNotFoundError({
-            resource: { kind, id: "resource-id" } as never,
+            resource,
             message: "missing",
           }),
-          copy,
-        ] as const
-    ),
-    ...(
-      [
-        ["discount-code", m.discountsErrorCodeFinalCustomer],
-        ["voucher", m.discountsErrorVoucherFinalCustomer],
-      ] as const
-    ).map(
-      ([promotionKind, copy]) =>
-        [
-          `the last ${promotionKind} audience customer`,
-          new DiscountAdminAudienceError({ promotionKind, message: "last" }),
           copy,
         ] as const
     ),
@@ -263,18 +298,15 @@ describe("mutateDiscountAdmin", () => {
     ] as const,
     [
       "an unavailable dependency",
-      { _tag: "DotyposReadFailure", message: "Dotypos didn't answer." },
+      new DotyposUnavailable({ operation: "getCustomer", reason: "timeout" }),
       m.discountsErrorSaveFailed,
     ] as const,
   ])("words %s with its own copy", async (_, failure, copy) => {
     administration = {
-      deleteDiscount: () => Effect.fail(failure),
+      createCustomerCode: () => Effect.fail(failure),
     };
 
-    const result = await mutateDiscountAdmin({
-      kind: "delete-discount",
-      id: "019c91dd-c560-7e55-b9d8-c95065efd51d",
-    });
+    const result = await mutateDiscountAdmin(customerCode);
 
     expect(result).toEqual({
       serverError: copy({}, { locale: "en-US" }),
@@ -283,6 +315,43 @@ describe("mutateDiscountAdmin", () => {
       `outside:revalidate:${calendarDiscountSourceTag}`
     );
   });
+
+  test.each([
+    [
+      "discount-code",
+      { kind: "remove-code-customer", codeId: "synthetic-code" },
+      m.discountsErrorCodeFinalCustomer,
+    ],
+    [
+      "voucher",
+      { kind: "remove-voucher-customer", voucherId: "synthetic-voucher" },
+      m.discountsErrorVoucherFinalCustomer,
+    ],
+  ] as const)(
+    "words the final %s audience removal refusal",
+    async (promotionKind, removal, copy) => {
+      const refused = () =>
+        Effect.fail(
+          new DiscountAdminAudienceError({ promotionKind, message: "last" })
+        );
+      administration = {
+        removeCodeCustomer: refused,
+        removeVoucherCustomer: refused,
+      };
+
+      expect(
+        await mutateDiscountAdmin({
+          ...removal,
+          customerId: customerCode.customerId,
+        })
+      ).toEqual({
+        serverError: copy({}, { locale: "en-US" }),
+      });
+      expect(timeline).not.toContain(
+        `outside:revalidate:${calendarDiscountSourceTag}`
+      );
+    }
+  );
 
   test("answers a defect with the unexpected-failure copy", async () => {
     administration = {

@@ -13,6 +13,7 @@ import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { formatMoney } from "@/shared/money/money";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   workspaceRouterRefresh,
   workspaceUseAction,
@@ -67,7 +68,7 @@ mock.module("@/features/account/withdrawal-actions", () => ({
 
 registerWorkspaceComponentTestEnv();
 // The library hook behind useWorkspaceAction drives the dialog's states.
-workspaceUseAction.mockImplementation(useAction as never);
+workspaceUseAction.mockImplementation(useAction);
 // @testing-library/react and the dialog load after the happy-dom registration.
 const { act, cleanup, fireEvent, render } = await import(
   "@testing-library/react"
@@ -147,9 +148,12 @@ describe("ReservationWithdrawalLink", () => {
 
     await act(async () => {
       fireEvent.click(
-        view.getAllByRole("button", {
-          name: m.withdrawalClose({}, { locale }),
-        })[0] as HTMLElement
+        elementOf(
+          view.getAllByRole("button", {
+            name: m.withdrawalClose({}, { locale }),
+          })[0],
+          HTMLElement
+        )
       );
     });
 

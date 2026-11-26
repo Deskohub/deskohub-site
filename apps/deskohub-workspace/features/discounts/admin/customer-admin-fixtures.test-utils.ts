@@ -1,4 +1,14 @@
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import {
+  discountCodeClaimIdSchema,
+  discountCodeIdSchema,
+  storedDiscountIdSchema,
+  voucherClaimIdSchema,
+  voucherIdSchema,
+} from "../persistence-contracts";
 import type { AdminCustomerProfile } from "./discount-administration.service";
 
 type CustomerCode = AdminCustomerProfile["codes"][number];
@@ -7,12 +17,13 @@ type CodeClaim = AdminCustomerProfile["claims"][number];
 type VoucherClaim = AdminCustomerProfile["voucherClaims"][number];
 
 const instant = (value: string) => Temporal.Instant.from(value);
+const defaultCustomerId = DotyposCustomerIdSchema.make("dotypos-customer");
 
 /** A reachable, named Dotypos customer without a discount group. */
 export const adminCustomer = (
   overrides: Partial<AdminCustomerProfile["customer"]> = {}
 ): AdminCustomerProfile["customer"] => ({
-  id: "dotypos-customer" as AdminCustomerProfile["customer"]["id"],
+  id: defaultCustomerId,
   displayName: "Test Customer",
   hasName: true,
   lifecycle: "active",
@@ -26,9 +37,10 @@ export const adminCustomer = (
 export const adminCustomerCode = (
   overrides: Partial<CustomerCode> = {}
 ): CustomerCode => ({
-  id: "019c91dd-c560-7e55-b9d8-c95065efd52d" as CustomerCode["id"],
-  discountId:
-    "019c91dd-c560-7e55-b9d8-c95065efd51d" as CustomerCode["discountId"],
+  id: discountCodeIdSchema.make("019c91dd-c560-7e55-b9d8-c95065efd52d"),
+  discountId: storedDiscountIdSchema.make(
+    "019c91dd-c560-7e55-b9d8-c95065efd51d"
+  ),
   code: "SUMMER10",
   enabled: true,
   validFrom: instant("2026-08-01T08:00:00Z"),
@@ -38,9 +50,7 @@ export const adminCustomerCode = (
   serviceDateFrom: null,
   serviceDateUntil: null,
   audienceSize: 1,
-  audienceCustomerIds: [
-    "dotypos-customer" as CustomerCode["audienceCustomerIds"][number],
-  ],
+  audienceCustomerIds: [defaultCustomerId],
   reservedUses: 1,
   redeemedUses: 3,
   releasedUses: 1,
@@ -58,7 +68,7 @@ export const adminCustomerCode = (
 export const adminCustomerVoucher = (
   overrides: Partial<CustomerVoucher> = {}
 ): CustomerVoucher => ({
-  id: "019c91dd-c560-7e55-b9d8-c95065efd55d" as CustomerVoucher["id"],
+  id: voucherIdSchema.make("019c91dd-c560-7e55-b9d8-c95065efd55d"),
   issuedCredit: { value: 10_000, exponent: 2, currency: "CZK" },
   remainingCredit: { value: 6500, exponent: 2, currency: "CZK" },
   code: "GIFT100",
@@ -77,11 +87,12 @@ export const adminCustomerVoucher = (
 });
 
 const claimBase = {
-  dotyposCustomerId: "dotypos-customer" as CodeClaim["dotyposCustomerId"],
+  dotyposCustomerId: defaultCustomerId,
   state: "reserved",
-  paymentAttemptId: "payment-attempt" as CodeClaim["paymentAttemptId"],
-  workspaceReservationId:
-    "workspace-reservation" as CodeClaim["workspaceReservationId"],
+  paymentAttemptId: paymentAttemptIdSchema.make("payment-attempt"),
+  workspaceReservationId: workspaceReservationIdSchema.make(
+    "workspace-reservation"
+  ),
   appliedAmount: { value: 7500, exponent: 2, currency: "CZK" },
   reservationExpiresAt: instant("2026-08-10T09:00:00Z"),
   reservedAt: instant("2026-08-10T08:00:00Z"),
@@ -95,7 +106,7 @@ export const adminCodeClaim = (
   overrides: Partial<CodeClaim> = {}
 ): CodeClaim => ({
   ...claimBase,
-  id: "code-claim" as CodeClaim["id"],
+  id: discountCodeClaimIdSchema.make("code-claim"),
   codeId: adminCustomerCode().id,
   ...overrides,
 });
@@ -105,7 +116,7 @@ export const adminVoucherClaim = (
   overrides: Partial<VoucherClaim> = {}
 ): VoucherClaim => ({
   ...claimBase,
-  id: "voucher-claim" as VoucherClaim["id"],
+  id: voucherClaimIdSchema.make("voucher-claim"),
   voucherId: adminCustomerVoucher().id,
   ...overrides,
 });

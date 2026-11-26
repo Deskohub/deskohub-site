@@ -2,7 +2,7 @@ import type { SQL } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import type { SelectResultFields } from "drizzle-orm/query-builders/select.types";
-import { Data, Effect, Schema } from "effect";
+import { Data, Effect, Option, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import type { AccountingSnapshotKeyId } from "@/features/accounting/accounting-document-snapshot";
 import type { InvoicePreviewId } from "@/features/accounting/admin/invoice-preview-id";
@@ -91,15 +91,7 @@ interface SealedAccountingJson<A, Plaintext> {
   >;
 }
 
-/**
- * Stores values of one kind as versionless JSON that PostgreSQL `pgcrypto`
- * encrypts. Keys and plaintext reach the database only as sensitive
- * parameters, and the encrypting and decrypting statements run untraced.
- */
-export const sealedAccountingJson = <
-  A,
-  const Plaintext extends Record<string, PgColumn>,
->(record: {
+interface SealedAccountingRecord<A> {
   /** Names the record in error messages, such as "Invoice". */
   readonly label: string;
   readonly table: PgTable;
@@ -110,16 +102,65 @@ export const sealedAccountingJson = <
     };
   };
   readonly ciphertext: PgColumn;
-  /** Columns read beside the ciphertext, in this order. */
-  readonly plaintext: Plaintext;
   /** The JSON form of a value; `JSON.stringify` writes it as stored. */
   readonly encode: (value: A) => unknown;
   /** Decodes stored JSON strictly: an unknown property is invalid. */
   readonly schema: Schema.Decoder<A>;
-}) =>
+}
+
+/**
+ * Stores values of one kind as versionless JSON that PostgreSQL `pgcrypto`
+ * encrypts. Keys and plaintext reach the database only as sensitive
+ * parameters, and the encrypting and decrypting statements run untraced.
+ */
+export function sealedAccountingJson<
+  A,
+  const Plaintext extends Record<string, PgColumn>,
+>(
+  record: SealedAccountingRecord<A> & {
+    /** Columns read beside the ciphertext, in this order. */
+    readonly plaintext: Plaintext;
+  }
+): ReturnType<
+  typeof makeSealedAccountingJson<A, Plaintext, SelectResultFields<Plaintext>>
+>;
+export function sealedAccountingJson<
+  A,
+  const Plaintext extends Record<string, PgColumn>,
+>(record: SealedAccountingRecord<A> & { readonly plaintext: Plaintext }) {
+  // Drizzle leaves a nested selection without columns out of the row.
+  if (Object.keys(record.plaintext).length === 0) {
+    return makeSealedAccountingJson(record, {}, () => Option.some({}));
+  }
+  return makeSealedAccountingJson<A, Plaintext, SelectResultFields<Plaintext>>(
+    record,
+    record.plaintext,
+    (selected) =>
+      selected === undefined ? Option.none() : Option.some(selected)
+  );
+}
+
+/**
+ * Opens records through `readPlaintext`, which receives `undefined` when the
+ * row holds no plaintext selection.
+ */
+const makeSealedAccountingJson = <
+  A,
+  const Plaintext extends Record<string, PgColumn>,
+  P,
+>(
+  record: SealedAccountingRecord<A>,
+  plaintext: Plaintext,
+  readPlaintext: (
+    selected: SelectResultFields<Plaintext> | undefined
+  ) => Option.Option<P>
+) =>
   Effect.gen(function* () {
     const { db } = yield* WorkspaceDatabase;
     const keys = yield* AccountingSnapshotKeyService;
+    const decodeJson = Schema.decodeUnknownEffect(
+      Schema.fromJsonString(Schema.Unknown)
+    );
     const decode = Schema.decodeUnknownEffect(record.schema, {
       onExcessProperty: "error",
     });
@@ -213,7 +254,7 @@ export const sealedAccountingJson = <
       // in order, then the decrypted JSON.
       const [row] = yield* db
         .select({
-          plaintext: record.plaintext,
+          plaintext,
           sealedJson: openSealedColumnText(record.ciphertext, key.secret),
         })
         .from(record.table)
@@ -242,25 +283,31 @@ export const sealedAccountingJson = <
         );
       }
 
-      const encoded = yield* Effect.try({
-        try: () => JSON.parse(row.sealedJson) as unknown,
-        catch: () => unavailable(input.reference, "parse", "JSON is invalid."),
-      });
+      const encoded = yield* decodeJson(row.sealedJson).pipe(
+        Effect.mapError(() =>
+          unavailable(input.reference, "parse", "JSON is invalid.")
+        )
+      );
       const value = yield* decode(encoded).pipe(
         Effect.mapError(() =>
           unavailable(input.reference, "parse", "schema is invalid.")
         )
       );
 
+      const opened = readPlaintext(row.plaintext);
+      if (Option.isNone(opened)) {
+        return yield* unavailable(
+          input.reference,
+          "parse",
+          "plaintext columns are missing."
+        );
+      }
+
       return {
         value,
-        // Drizzle leaves a nested selection without columns out of the row.
-        plaintext: (row.plaintext ?? {}) as SelectResultFields<Plaintext>,
-      } satisfies OpenedAccountingRecord<A, SelectResultFields<Plaintext>>;
+        plaintext: opened.value,
+      } satisfies OpenedAccountingRecord<A, P>;
     });
 
-    return { sealer, open } satisfies SealedAccountingJson<
-      A,
-      SelectResultFields<Plaintext>
-    >;
+    return { sealer, open } satisfies SealedAccountingJson<A, P>;
   });

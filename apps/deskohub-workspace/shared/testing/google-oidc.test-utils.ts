@@ -1,5 +1,6 @@
 import { mock, spyOn } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { Predicate } from "effect";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import type { env } from "@/env";
 import type { GoogleInvoker } from "@/shared/backend/google-cloud/google-oidc";
@@ -100,14 +101,19 @@ export const serveGoogleSigningKeys = async (
   } satisfies Record<GoogleCertificatesState, () => Promise<Response>>;
   let state = initial;
   const realFetch = globalThis.fetch;
-  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(((
-    input: Parameters<typeof fetch>[0],
-    init?: Parameters<typeof fetch>[1]
-  ) =>
-    String(input instanceof Request ? input.url : input) ===
-    googleCertificatesUrl
-      ? certificateResponses[state]()
-      : realFetch(input, init)) as typeof fetch);
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+    Object.assign(
+      (
+        input: Parameters<typeof fetch>[0],
+        init?: Parameters<typeof fetch>[1]
+      ) =>
+        String(input instanceof Request ? input.url : input) ===
+        googleCertificatesUrl
+          ? certificateResponses[state]()
+          : realFetch(input, init),
+      { preconnect: realFetch.preconnect }
+    )
+  );
 
   /**
    * A Google ID token for `invoker`. `signedBy: "foreign"` signs with a key
@@ -119,15 +125,14 @@ export const serveGoogleSigningKeys = async (
     signedBy: "google" | "foreign" = "google"
   ) => {
     const issuedAt = nowSeconds() + (claims.issuedAt ?? -10);
+    const audience = claims.aud ?? invoker.audience;
     return new SignJWT({
       email: claims.email ?? invoker.email,
       email_verified: claims.email_verified ?? true,
     })
       .setProtectedHeader({ alg: "RS256", kid: keyId, typ: "JWT" })
       .setIssuer(claims.iss ?? "https://accounts.google.com")
-      .setAudience(
-        (claims.aud as string | string[] | undefined) ?? invoker.audience
-      )
+      .setAudience(Predicate.isString(audience) ? audience : [...audience])
       .setIssuedAt(issuedAt)
       .setExpirationTime(nowSeconds() + (claims.expiresIn ?? 3590))
       .sign(signedBy === "google" ? google.privateKey : foreign.privateKey);

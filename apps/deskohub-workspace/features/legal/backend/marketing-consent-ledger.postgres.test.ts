@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import {
   type DotyposCustomerId,
@@ -32,10 +33,18 @@ import {
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
+const connectedTestDatabase = () => {
+  assert(testDatabase, "Expected the Postgres test database");
+  return testDatabase;
+};
+
 const makeLedgerLayer = () =>
   MarketingConsentLedger.Default.pipe(
     Layer.provide(
-      Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(testDatabase!.db))
+      Layer.succeed(
+        WorkspaceDatabase,
+        WorkspaceDatabase.make(connectedTestDatabase().db)
+      )
     )
   );
 
@@ -108,8 +117,8 @@ const withdraw = (
 
 const readStored = (customerId: DotyposCustomerId) =>
   Effect.runPromise(
-    testDatabase!.db
-      .select()
+    connectedTestDatabase()
+      .db.select()
       .from(customerMarketingConsents)
       .where(eq(customerMarketingConsents.dotyposCustomerId, customerId))
   ).then(([row]) => row ?? null);
@@ -471,8 +480,8 @@ describe.skipIf(!testDatabase)(
       );
 
       const rows = await Effect.runPromise(
-        testDatabase!.db
-          .select({
+        connectedTestDatabase()
+          .db.select({
             dotyposCustomerId: customerMarketingConsents.dotyposCustomerId,
             state: marketingConsentState(
               customerMarketingConsents.dotyposCustomerId
@@ -495,7 +504,7 @@ describe.skipIf(!testDatabase)(
 
     test("the database rejects an unknown grant source", async () => {
       await expect(
-        testDatabase!.pool.query(
+        connectedTestDatabase().pool.query(
           `insert into customer_marketing_consents
              (dotypos_customer_id, document_hash, locale, granted_at, grant_source)
            values ($1, 'document', 'en-US', now(), 'webmcp')`,
@@ -511,13 +520,14 @@ const GRANT_SOURCE_MIGRATION_DIR =
 const testDatabaseUrl = process.env.WORKSPACE_TEST_DATABASE_URL;
 
 describe.skipIf(!testDatabaseUrl)("grant source migration", () => {
+  if (!testDatabaseUrl) return;
   test("leaves grants recorded before it with an unknown source", async () => {
     const earlierMigrations = await linkMigrationsBefore(
       GRANT_SOURCE_MIGRATION_DIR
     );
     try {
       await withScratchDatabase(
-        testDatabaseUrl!,
+        testDatabaseUrl,
         "marketing_consent_grant_source_migration",
         async (pool) => {
           await migrate(drizzle({ client: pool }), {

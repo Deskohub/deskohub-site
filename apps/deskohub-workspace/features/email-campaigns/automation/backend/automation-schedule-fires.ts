@@ -35,7 +35,6 @@ export const fireChunkSubjectSchema = Schema.Struct({
   fireAt: instantFromIsoStringSchema,
   customerIds: Schema.Array(Schema.String),
 });
-export type FireChunkSubject = typeof fireChunkSubjectSchema.Type;
 
 /** The receipt key of one customer entering one fire (§1.2.7). */
 export const scheduleDedupKey = (

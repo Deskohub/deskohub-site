@@ -15,17 +15,17 @@ interface IFakePaymentRefunds {
   >;
 }
 
-const FakePaymentRefundService = Context.Service<
+class FakePaymentRefundService extends Context.Service<
   FakePaymentRefundService,
   IFakePaymentRefunds
->()("@test/FakePaymentRefundService");
+>()("@test/FakePaymentRefundService") {}
 
 const fakePaymentRefundLayer = Layer.succeed(FakePaymentRefundService, {
   reconcileRefunds: (input) => {
     reconcileCalls.push(input);
     return Effect.succeed({ checked: 3, recorded: 1, failed: 0 });
   },
-}) as Layer.Layer<FakePaymentRefundService>;
+});
 
 Object.assign(FakePaymentRefundService, {
   Default: fakePaymentRefundLayer,
@@ -43,10 +43,7 @@ mock.module(
 
 const requestUrl = "https://workspace.test/api/cron/workspace/payment-refunds";
 
-const loadRoute = async () =>
-  (await import("./route")) as {
-    GET: (request: Request) => Promise<Response>;
-  };
+const loadRoute = () => import("./route");
 
 describe("payment refund reconciliation cron route", () => {
   beforeEach(() => {

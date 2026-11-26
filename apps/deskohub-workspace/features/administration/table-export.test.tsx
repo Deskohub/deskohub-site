@@ -16,6 +16,7 @@ import {
 } from "@testing-library/react";
 import { useState } from "react";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
+import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -25,9 +26,9 @@ import type { AdministrationListExportFailure } from "./table-export";
 
 const exportPath = "/admin/reservations/export?status=complete";
 const csvText = `${String.fromCodePoint(0xfe_ff)}Reservation ID\r\nr-1\r\n`;
-const originalFetch = globalThis.fetch;
 const originalCreateObjectURL = URL.createObjectURL;
 let originalClick: HTMLAnchorElement["click"];
+let fetchSpy: ReturnType<typeof stubFetch> | undefined;
 
 let requests: string[] = [];
 let respond: () => Promise<Response> = async () => new Response();
@@ -42,10 +43,10 @@ beforeAll(() => {
 beforeEach(() => {
   requests = [];
   downloads = [];
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  fetchSpy = stubFetch(async (input) => {
     requests.push(String(input));
     return respond();
-  }) as typeof fetch;
+  });
   URL.createObjectURL = (blob: Blob) => {
     const url = `blob:test-${blobs.size}`;
     blobs.set(url, blob);
@@ -62,7 +63,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  globalThis.fetch = originalFetch;
+  fetchSpy?.mockRestore();
+  fetchSpy = undefined;
   HTMLAnchorElement.prototype.click = originalClick;
   URL.createObjectURL = originalCreateObjectURL;
 });

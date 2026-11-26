@@ -99,7 +99,7 @@ export class PromotionCodeRepository extends Context.Service<
           }
           return Option.some(
             yield* decodePromotionConfiguration({
-              row: { ...row, kind: row.kind as "discount" | "voucher" },
+              row: { ...row, kind: row.kind },
             })
           );
         }

@@ -10,7 +10,7 @@ import {
   WithdrawalService,
 } from "@/features/withdrawal/backend/withdrawal.service";
 import { WithdrawalReleaseGate } from "@/features/withdrawal/backend/withdrawal-release-gate";
-import type { WithdrawalId } from "@/features/withdrawal/withdrawal-identifiers";
+import { withdrawalIdSchema } from "@/features/withdrawal/withdrawal-identifiers";
 import type {
   WithdrawalQuote,
   WithdrawalReceipt,
@@ -45,7 +45,7 @@ const quote: WithdrawalQuote = {
   periodEndsAt: Temporal.Instant.from("2027-01-16T23:00:00Z"),
 };
 const receipt: WithdrawalReceipt = {
-  withdrawalId: "withdrawal-1" as WithdrawalId,
+  withdrawalId: withdrawalIdSchema.make("withdrawal-1"),
   submittedAt: Temporal.Instant.from("2027-01-10T08:00:00Z"),
   refundAmount: { ...paid, value: 200_000 },
   receiptEmail: testEmailAddress("customer"),

@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { Effect } from "effect";
 import type { AdministratorAccountActor } from "@/features/administrators/account-role";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
@@ -14,7 +15,8 @@ const insertSessionOwnedBy = async (
   approvedBy: string | null,
   account?: AdministratorAccountActor
 ) => {
-  const client = await postgresDatabase!.pool.connect();
+  assert(postgresDatabase, "The Workspace test Postgres must be configured");
+  const client = await postgresDatabase.pool.connect();
   try {
     await client.query("begin");
     await client.query(
@@ -37,7 +39,8 @@ const insertAuthenticationRequest = async (input: {
   readonly approvedByAccountEmail?: string | null;
   readonly grantExpiresAt?: Date | null;
 }) => {
-  const client = await postgresDatabase!.pool.connect();
+  assert(postgresDatabase, "The Workspace test Postgres must be configured");
+  const client = await postgresDatabase.pool.connect();
   try {
     await client.query("begin");
     await client.query(
@@ -64,9 +67,11 @@ const insertAuthenticationRequest = async (input: {
 };
 
 describe.skipIf(!postgresDatabase)("cli session ownership on Postgres", () => {
+  if (!postgresDatabase) return;
+
   afterAll(async () => {
     await Effect.runPromise(
-      workspaceFixtures(postgresDatabase!.db).deleteAccounts(testAccounts)
+      workspaceFixtures(postgresDatabase.db).deleteAccounts(testAccounts)
     );
   });
 
@@ -85,7 +90,7 @@ describe.skipIf(!postgresDatabase)("cli session ownership on Postgres", () => {
 
   test("accepts a session with only the account approver", async () => {
     const account = await Effect.runPromise(
-      workspaceFixtures(postgresDatabase!.db).account("cli-session-approver")
+      workspaceFixtures(postgresDatabase.db).account("cli-session-approver")
     );
     testAccounts.push(account);
 
@@ -104,7 +109,7 @@ describe.skipIf(!postgresDatabase)("cli session ownership on Postgres", () => {
 
   test("enforces authentication request approver constraints", async () => {
     const account = await Effect.runPromise(
-      workspaceFixtures(postgresDatabase!.db).account(
+      workspaceFixtures(postgresDatabase.db).account(
         "cli-authentication-approver"
       )
     );

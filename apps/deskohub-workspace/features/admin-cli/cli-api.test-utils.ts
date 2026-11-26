@@ -14,9 +14,11 @@ import {
 import { Effect, Layer } from "effect";
 import { HttpClientRequest } from "effect/http";
 import { HttpApiMiddleware } from "effect/http-api";
+import { WorkspaceDatabase } from "@/db/database.service";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { AccountRoleGrants } from "@/features/administrators/backend/account-role-grants.service";
 import { WithdrawalService } from "@/features/withdrawal/backend/withdrawal.service";
+import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { AdministrationActionLog } from "./administration-action-log.service";
 import { AdministrationRequestLedger } from "./administration-request-ledger.service";
 
@@ -69,14 +71,23 @@ export const GrantedAdministrator = Layer.mock(AccountRoleGrants, {
   has: () => Effect.succeed(true),
 });
 
-/** Every mutation is new; Postgres suites cover replays. */
-export const ClaimEveryCliMutation = Layer.succeed(
-  AdministrationRequestLedger,
-  {
-    applyOnce: ({ apply }) => apply,
-    applyOnceWithEffects: ({ apply }) => apply,
-  } as AdministrationRequestLedger["Service"]
+const InMemoryLedgerDatabase = Layer.unwrap(
+  Effect.promise(() => makeRecordingWorkspaceDatabase()).pipe(
+    Effect.map((database) => database.layer)
+  )
 );
+
+/** Every mutation is new; Postgres suites cover replays. */
+export const ClaimEveryCliMutation = Layer.effect(
+  AdministrationRequestLedger,
+  Effect.gen(function* () {
+    const { transaction } = yield* WorkspaceDatabase;
+    return {
+      applyOnce: ({ apply }) => transaction(apply),
+      applyOnceWithEffects: ({ apply }) => apply,
+    };
+  })
+).pipe(Layer.provide(InMemoryLedgerDatabase));
 
 /** Records the handler's ledger request while applying its first attempt. */
 export const recordingRequestLedger = (
@@ -94,31 +105,31 @@ export const recordingRequestLedger = (
   const firstAttempt = <A, E, R>(
     apply: Effect.Effect<A, E, R>
   ): Effect.Effect<A, E | CliMutationInProgress | CliMutationRejected, R> =>
-    refusal
-      ? (Effect.fail(refusal) as Effect.Effect<
-          A,
-          E | CliMutationInProgress | CliMutationRejected,
-          R
-        >)
-      : apply;
+    refusal ? Effect.fail(refusal) : apply;
   return {
-    layer: Layer.succeed(AdministrationRequestLedger, {
-      applyOnce: (request) =>
-        Effect.flatMap(CurrentAdministrationCaller, ({ channel }) =>
-          Effect.sync(() => {
-            requests.push({ ...request, channel });
-          }).pipe(Effect.andThen(request.apply))
-        ),
-      applyOnceWithEffects: (request) =>
-        Effect.flatMap(CurrentAdministrationCaller, ({ channel }) =>
-          Effect.flatMap(
-            Effect.sync(() => {
-              requests.push({ ...request, channel });
-            }),
-            () => firstAttempt(request.apply)
-          )
-        ),
-    } as AdministrationRequestLedger["Service"]),
+    layer: Layer.effect(
+      AdministrationRequestLedger,
+      Effect.gen(function* () {
+        const { transaction } = yield* WorkspaceDatabase;
+        return {
+          applyOnce: (request) =>
+            Effect.flatMap(CurrentAdministrationCaller, ({ channel }) =>
+              Effect.sync(() => {
+                requests.push({ ...request, channel });
+              }).pipe(Effect.andThen(transaction(request.apply)))
+            ),
+          applyOnceWithEffects: (request) =>
+            Effect.flatMap(CurrentAdministrationCaller, ({ channel }) =>
+              Effect.flatMap(
+                Effect.sync(() => {
+                  requests.push({ ...request, channel });
+                }),
+                () => firstAttempt(request.apply)
+              )
+            ),
+        };
+      })
+    ).pipe(Layer.provide(InMemoryLedgerDatabase)),
     requests,
   };
 };

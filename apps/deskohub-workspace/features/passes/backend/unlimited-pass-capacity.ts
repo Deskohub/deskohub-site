@@ -1,5 +1,5 @@
 import type { DotyposTableId } from "@deskohub/dotypos";
-import { Data, Effect } from "effect";
+import { Array as Arr, Data, Effect } from "effect";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import {
   decodeTableCandidates,
@@ -80,14 +80,14 @@ const getCapacityQuery = (
     : { entryTier: selection.tier };
 
 const loadUnlimitedInventory = Effect.fn("loadUnlimitedInventory")(function* (
-  dates: readonly Temporal.PlainDate[],
+  dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>,
   now: Temporal.Instant,
   supersedeOrderId?: OrderId
 ) {
   const inventory = yield* makeProviderInventory;
   const workspaceReservations = yield* WorkspaceReservationRepository;
-  const first = dates[0]!;
-  const last = dates.at(-1)!;
+  const first = Arr.headNonEmpty(dates);
+  const last = Arr.lastNonEmpty(dates);
   // Read intents before the provider list so a concurrent attach cannot
   // disappear between a stale provider list and a later local-state read.
   const intents = yield* workspaceReservations.selectPendingPassDayCapacity({
@@ -197,10 +197,16 @@ type CapacityInventory = Effect.Success<
 >;
 type CapacityDay = CapacityInventory["days"][number];
 
-const getCommonDesks = (days: readonly CapacityDay[]) =>
-  days[0]!.freeTables.filter(({ id }) =>
-    days.every(({ freeTables }) => freeTables.some((table) => table.id === id))
-  );
+const getCommonDesks = (days: readonly CapacityDay[]) => {
+  const [firstDay] = days;
+  return firstDay === undefined
+    ? []
+    : firstDay.freeTables.filter(({ id }) =>
+        days.every(({ freeTables }) =>
+          freeTables.some((table) => table.id === id)
+        )
+      );
+};
 
 type UnlimitedStartRange = {
   readonly startsOn: Temporal.PlainDate;
@@ -249,7 +255,7 @@ export const getBookableUnlimitedStarts = Effect.fn(
   }
 ) {
   const { dayCount, dates } = yield* getStartRangeDates(input);
-  if (!dayCount) return [];
+  if (!dayCount || !Arr.isReadonlyArrayNonEmpty(dates)) return [];
   const now = Temporal.Now.instant();
   const inventory = yield* loadUnlimitedInventory(
     dates,
@@ -271,9 +277,10 @@ export const getBookableUnlimitedStartMatrix = Effect.fn(
 )(function* (input: UnlimitedStartRange) {
   const { dates, dayCount } = yield* getStartRangeDates(input);
   const now = Temporal.Now.instant();
-  const inventory = dayCount
-    ? yield* loadUnlimitedInventory(dates, now, input.supersedeOrderId)
-    : undefined;
+  const inventory =
+    dayCount && Arr.isReadonlyArrayNonEmpty(dates)
+      ? yield* loadUnlimitedInventory(dates, now, input.supersedeOrderId)
+      : undefined;
   const read = (selection: UnlimitedPassCapacitySelection) =>
     inventory
       ? evaluateUnlimitedCapacity(selection, dates, now, inventory).pipe(
@@ -308,6 +315,12 @@ const allocateUnlimitedPass = Effect.fn("allocateUnlimitedPass")(function* (
   dates: readonly Temporal.PlainDate[],
   preferredDeskId?: DotyposTableId
 ) {
+  if (!Arr.isReadonlyArrayNonEmpty(dates)) {
+    return yield* new UnlimitedPassCapacityUnavailable({
+      blockingDates: dates,
+      reason: "day-unavailable",
+    });
+  }
   const now = Temporal.Now.instant();
   const inventory = yield* loadUnlimitedInventory(dates, now);
   const { tables, days } = yield* evaluateUnlimitedCapacity(
@@ -339,7 +352,13 @@ const allocateUnlimitedPass = Effect.fn("allocateUnlimitedPass")(function* (
           occupancy
         );
         // Capacity was checked above, using the same seats and occupancy.
-        return { serviceDate, interval, tableId: table!.id };
+        if (table === undefined) {
+          return yield* new UnlimitedPassCapacityUnavailable({
+            blockingDates: [serviceDate],
+            reason: "day-unavailable",
+          });
+        }
+        return { serviceDate, interval, tableId: table.id };
       })
     );
     return {
@@ -358,13 +377,22 @@ const allocateUnlimitedPass = Effect.fn("allocateUnlimitedPass")(function* (
 
   const preferredDesk = commonDesks.find(({ id }) => id === preferredDeskId);
   // Fall back to the day-booking ranking when the previous desk cannot cover the period.
+  const [firstDay] = days;
   const desk =
     preferredDesk ??
-    (yield* selectWorkspaceTableFromCandidates(
-      commonDesks,
-      tables,
-      days[0]!.occupancy
-    ))!;
+    (firstDay === undefined
+      ? undefined
+      : yield* selectWorkspaceTableFromCandidates(
+          commonDesks,
+          tables,
+          firstDay.occupancy
+        ));
+  if (desk === undefined) {
+    return yield* new UnlimitedPassCapacityUnavailable({
+      blockingDates: dates,
+      reason: "no-common-desk",
+    });
+  }
   return {
     pinnedDesk: { id: desk.id, name: desk.name },
     days: days.map(({ serviceDate, interval }) => ({

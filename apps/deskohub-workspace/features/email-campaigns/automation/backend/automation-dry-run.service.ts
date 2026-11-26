@@ -552,7 +552,13 @@ export class AutomationDryRun extends Context.Service<
                 completedAt: planned.chunks.length === 0 ? input.now : null,
               })
               .returning()
-              .pipe(Effect.map(([row]) => row!))
+              .pipe(
+                Effect.flatMap(([row]) =>
+                  row === undefined
+                    ? Effect.die("Dry run insert returned no row.")
+                    : Effect.succeed(row)
+                )
+              )
           ),
           Effect.tap(({ planned, preview }) =>
             planAutomationUnits(

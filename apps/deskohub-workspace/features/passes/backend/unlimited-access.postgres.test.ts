@@ -8,6 +8,7 @@ import {
   expect,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { DotyposRejected, DotyposService } from "@deskohub/dotypos";
 import {
   AlgoPinSchema,
@@ -42,6 +43,7 @@ import { ReservationAccessService } from "@/features/reservation-access";
 import { ReservationAccessRepository } from "@/features/reservation-access/backend/reservation-access.repository";
 import {
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
@@ -69,9 +71,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     let database: WorkspacePostgresSuiteDatabase;
 
     beforeAll(async () => {
-      database = (await createWorkspacePostgresSuiteDatabase(
-        "unlimited_access"
-      ))!;
+      database = requireTestDatabase(
+        await createWorkspacePostgresSuiteDatabase("unlimited_access")
+      );
     });
 
     beforeEach(async () => {
@@ -262,7 +264,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           });
           const token = new URL(url).searchParams.get(
             unlimitedAccessTokenQueryParam
-          )!;
+          );
+          assert(token);
           const cookie = yield* exchangeUnlimitedAccessToken({
             token,
             orderId,

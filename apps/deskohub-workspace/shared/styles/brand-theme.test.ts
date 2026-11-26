@@ -25,7 +25,8 @@ describe("brand theme", () => {
       compiled,
       (node) =>
         node.type === "rule" &&
-        (node as postcss.Rule).selector === ":root" &&
+        "selector" in node &&
+        node.selector === ":root" &&
         node.parent?.type === "root"
     );
 

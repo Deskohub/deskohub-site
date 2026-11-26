@@ -15,7 +15,10 @@ import {
 } from "@/features/accounting/invoice-cancellation";
 import type { InvoiceId } from "@/features/accounting/manual-invoice";
 import type { AdministrationActor } from "@/features/administrators/administration-source";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
 import { AccountingStorage } from "./accounting-storage";
 import { type Invoice, InvoiceRepository } from "./invoice.repository";
 import {
@@ -155,7 +158,11 @@ export class InvoiceCancellationService extends Context.Service<
             .status([invoice.id])
             .pipe(Effect.mapError(persistenceFailed(invoice.id)));
           const reservationId =
-            invoice.workspaceReservationId as WorkspaceReservationId | null;
+            invoice.workspaceReservationId === null
+              ? null
+              : workspaceReservationIdSchema.make(
+                  invoice.workspaceReservationId
+                );
           const reservationState = reservationId
             ? yield* readReservationState(invoice.id, reservationId)
             : null;

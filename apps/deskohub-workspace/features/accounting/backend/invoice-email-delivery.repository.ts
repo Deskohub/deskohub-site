@@ -353,30 +353,9 @@ export class InvoiceEmailDeliveryRepository extends Context.Service<
             );
             return new Map(
               invoiceIds.map((invoiceId) => {
-                const deliveries = deliveriesByInvoice.get(invoiceId) ?? [];
-                const statusOf = (
-                  audience: InvoiceEmailDeliveryAudience
-                ): InvoiceDeliveryStatus =>
-                  deliveries.find((delivery) => delivery.audience === audience)
-                    ?.state ?? "missing";
-                const customer = statusOf("customer");
-                const internal = statusOf("internal");
-                const summary: InvoiceDeliverySummary = {
-                  customer,
-                  internal,
-                  needsAttention:
-                    deliveries.some(({ stale }) => stale) ||
-                    [customer, internal].some(
-                      (status) => status === "missing" || status === "failed"
-                    ),
-                  sentTo: invoiceEmailDeliveryAudiences.filter((audience) =>
-                    deliveries.some(
-                      (delivery) =>
-                        delivery.audience === audience &&
-                        delivery.acceptedAt !== null
-                    )
-                  ),
-                };
+                const summary = summarizeInvoiceDeliveries(
+                  deliveriesByInvoice.get(invoiceId) ?? []
+                );
                 return [invoiceId, summary] as const;
               })
             );
@@ -388,6 +367,43 @@ export class InvoiceEmailDeliveryRepository extends Context.Service<
 
   static Live = this.Default.pipe(Layer.provide(WorkspaceDatabase.Default));
 }
+
+/** Summarizes one invoice's delivery rows, read with their claim staleness. */
+const summarizeInvoiceDeliveries = (
+  deliveries: readonly {
+    readonly audience: InvoiceEmailDeliveryAudience;
+    readonly state: InvoiceEmailDeliveryState;
+    readonly acceptedAt: Temporal.Instant | null;
+    readonly stale: boolean;
+  }[]
+): InvoiceDeliverySummary => {
+  const statusOf = (
+    audience: InvoiceEmailDeliveryAudience
+  ): InvoiceDeliveryStatus =>
+    deliveries.find((delivery) => delivery.audience === audience)?.state ??
+    "missing";
+  const customer = statusOf("customer");
+  const internal = statusOf("internal");
+  return {
+    customer,
+    internal,
+    needsAttention:
+      deliveries.some(({ stale }) => stale) ||
+      [customer, internal].some(
+        (status) => status === "missing" || status === "failed"
+      ),
+    sentTo: invoiceEmailDeliveryAudiences.filter((audience) =>
+      deliveries.some(
+        (delivery) =>
+          delivery.audience === audience && delivery.acceptedAt !== null
+      )
+    ),
+  };
+};
+
+/** The delivery summary of an invoice with no delivery yet. */
+export const noInvoiceDeliveries: InvoiceDeliverySummary =
+  summarizeInvoiceDeliveries([]);
 
 /** Matches a processing invoice delivery whose claim outlived its lease. */
 const isStaleProcessing = (): SQL =>

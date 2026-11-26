@@ -265,6 +265,62 @@ describe("runCampaignOperation", () => {
     expect(deleteCampaign).not.toHaveBeenCalled();
   });
 
+  test("refuses a campaign ID that isn't text before the handler runs", async () => {
+    // A client can send any payload; this one arrives with a numeric ID.
+    const input = { campaignId };
+    Object.assign(input, { campaignId: 42 });
+
+    const result = await runCampaignOperation({
+      operation: "deleteCampaign",
+      input,
+    });
+
+    expect(result?.data).toMatchObject({
+      _tag: "Failure",
+      category: "OperationInputInvalid",
+      code: "input-invalid",
+    });
+    expect(deleteCampaign).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  test("refuses input without its operation's shape before checking a revoked grant", async () => {
+    holdsGrant = false;
+    const input = { campaignId, retiredField: true };
+
+    const result = await runCampaignOperation({
+      operation: "deleteCampaign",
+      input,
+    });
+
+    expect(result?.data).toMatchObject({
+      _tag: "Failure",
+      category: "OperationInputInvalid",
+      code: "input-invalid",
+    });
+    expect(deleteCampaign).not.toHaveBeenCalled();
+  });
+
+  test("reports an output its operation's schema rejects as unavailable", async () => {
+    archiveAudience.mockImplementationOnce(() =>
+      Effect.succeed({
+        ...archivedAudience,
+        filter: { ...archivedAudience.filter, operator: "xor" },
+      })
+    );
+
+    const result = await runCampaignOperation({
+      operation: "archiveCampaignAudience",
+      input: { audienceId },
+    });
+
+    expect(result?.data).toMatchObject({
+      _tag: "Failure",
+      category: "OperationUnavailable",
+      code: "output-invalid",
+    });
+  });
+
   test("rejects an operation the registry doesn't know", async () => {
     const result = await runCampaignOperation({
       operation: "dropAllCampaigns" as never,

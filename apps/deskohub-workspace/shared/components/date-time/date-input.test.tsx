@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { useState } from "react";
 import "@/shared/polyfills/temporal";
 import { m } from "@/features/i18n";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -60,7 +61,7 @@ const renderPicker = (props: Parameters<typeof ControlledPicker>[0] = {}) => {
   const view = render(
     <ControlledPicker onBlur={onBlur} onValue={onValue} {...props} />
   );
-  const input = view.getByRole("combobox") as HTMLInputElement;
+  const input = elementOf(view.getByRole("combobox"), HTMLInputElement);
   const hiddenInput = () =>
     view.container.querySelector<HTMLInputElement>('input[name="date"]')?.value;
   const typeDate = (text: string) => {
@@ -116,9 +117,12 @@ describe("DateInput typed date", () => {
         />
       </>
     );
-    const input = view.getByRole("combobox", {
-      name: "Office reservation start date",
-    }) as HTMLInputElement;
+    const input = elementOf(
+      view.getByRole("combobox", {
+        name: "Office reservation start date",
+      }),
+      HTMLInputElement
+    );
 
     expect(input.hasAttribute("aria-label")).toBe(false);
     expect(input.required).toBe(true);
@@ -128,7 +132,7 @@ describe("DateInput typed date", () => {
     const view = render(
       <DateInput label="Reservation date" locale="en-US" value="2099-06-10" />
     );
-    const input = view.getByRole("combobox") as HTMLInputElement;
+    const input = elementOf(view.getByRole("combobox"), HTMLInputElement);
 
     expect(input.value).toBe("6/10/2099");
     expect(view.getByText("June 10, 2099")).not.toBeNull();
@@ -518,8 +522,11 @@ describe("DateInput in a form", () => {
         <button type="submit">Save</button>
       </form>
     );
-    const form = view.container.querySelector("form") as HTMLFormElement;
-    const input = view.getByRole("combobox") as HTMLInputElement;
+    const form = elementOf(
+      view.container.querySelector("form"),
+      HTMLFormElement
+    );
+    const input = elementOf(view.getByRole("combobox"), HTMLInputElement);
     const submitted = () => new FormData(form).getAll("date");
     return { form, input, onSubmit, submitted, view };
   };
@@ -572,10 +579,11 @@ describe("DateInput in a form", () => {
 
     expect(input.disabled).toBe(true);
     expect(
-      (
+      elementOf(
         view.getByRole("button", {
           name: calendarButtonLabel,
-        }) as HTMLButtonElement
+        }),
+        HTMLButtonElement
       ).disabled
     ).toBe(true);
     expect(submitted()).toEqual([]);
@@ -628,7 +636,10 @@ describe("DateInput in a form", () => {
         </fieldset>
       </form>
     );
-    const form = view.container.querySelector("form") as HTMLFormElement;
+    const form = elementOf(
+      view.container.querySelector("form"),
+      HTMLFormElement
+    );
 
     fireEvent.change(view.getByRole("combobox"), {
       target: { value: "next friday" },

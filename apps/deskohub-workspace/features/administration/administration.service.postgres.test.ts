@@ -4,6 +4,8 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
+  DotyposBranchIdSchema,
+  DotyposCloudIdSchema,
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
@@ -41,11 +43,11 @@ import {
 import { discountIdSchema } from "@/features/discounts/contracts";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import {
-  reservationOrderId,
   type StoredWorkspaceReservationDetails,
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import {
   fixtureReservationAuthorId,
   workspaceFixtures,
@@ -57,6 +59,7 @@ import {
   type AdministrationReservationExportInput,
   AdministrationService,
 } from "./administration.service";
+import { dotyposCustomerFixture } from "./customer-directory.test-utils";
 import { getAdministrationPaymentStatus } from "./formatters";
 import { PaymentAdministrationServiceMock } from "./payment-administration.service.mock";
 import { PostHogReservationHistory } from "./posthog-reservation-history";
@@ -1110,7 +1113,7 @@ describe.skipIf(!testDatabase)(
           Effect.gen(function* () {
             const { db } = testDatabase;
             for (const reservationId of [fioOnly, mixed]) {
-              const orderId = reservationOrderId(reservationId);
+              const orderId = standaloneReservationOrderId(reservationId);
               const paymentAttemptId = paymentAttemptIdSchema.make(
                 `fio-${reservationId}`
               );
@@ -1145,7 +1148,7 @@ describe.skipIf(!testDatabase)(
               });
             }
 
-            const fioOrderId = reservationOrderId(fioOnly);
+            const fioOrderId = standaloneReservationOrderId(fioOnly);
             const duplicateMovementId = `duplicate-${fioOnly}`;
             yield* db.insert(fioPaymentSettlements).values({
               orderId: fioOrderId,
@@ -1165,7 +1168,11 @@ describe.skipIf(!testDatabase)(
               kind: "refund_required",
             });
             expect(pending.map(({ orderId }) => orderId).sort()).toEqual(
-              [fioOrderId, fioOrderId, reservationOrderId(mixed)].sort()
+              [
+                fioOrderId,
+                fioOrderId,
+                standaloneReservationOrderId(mixed),
+              ].sort()
             );
             for (const rows of [
               pending,
@@ -1596,10 +1603,12 @@ describe.skipIf(!testDatabase)(
       );
 
       const [restorableDetail, replacedDetail] = await Promise.all(
-        [
-          [restorable, "restorable"],
-          [replaced, "replaced"],
-        ].map(([reservationId, label]) =>
+        (
+          [
+            [restorable, "restorable"],
+            [replaced, "replaced"],
+          ] as const
+        ).map(([reservationId, label]) =>
           run(
             (administration) =>
               administration.loadReservation(
@@ -1609,10 +1618,10 @@ describe.skipIf(!testDatabase)(
               getReservation: () =>
                 Effect.succeed(
                   Option.some({
-                    customer: null,
+                    customer: dotyposCustomerFixture(makeCustomerId(label)),
                     reservation: {
-                      _branchId: "branch",
-                      _cloudId: "cloud",
+                      _branchId: DotyposBranchIdSchema.make("branch"),
+                      _cloudId: DotyposCloudIdSchema.make("cloud"),
                       _customerId: makeCustomerId(label),
                       id: bookingId(label),
                       startDate: "2099-08-10T08:00:00Z",
@@ -1620,7 +1629,7 @@ describe.skipIf(!testDatabase)(
                       seats: "1",
                       status: "CANCELLED",
                     },
-                  } as never)
+                  })
                 ),
             }
           )
@@ -2019,11 +2028,14 @@ describe.skipIf(!testDatabase)(
       };
 
       beforeAll(async () => {
-        for (const product of Object.keys(products) as Product[]) {
-          ids.set(
-            await insert(customerId, product, products[product]),
-            product
-          );
+        for (const [product, details] of [
+          ["openSpace", products.openSpace],
+          ["reservedDesk", products.reservedDesk],
+          ["retiredProfi", products.retiredProfi],
+          ["meetingRoom", products.meetingRoom],
+          ["office", products.office],
+        ] as const) {
+          ids.set(await insert(customerId, product, details), product);
         }
         await insert(favoriteOfficeCustomerId, "office-a", products.office);
         await insert(favoriteOfficeCustomerId, "office-b", products.office);
@@ -2031,7 +2043,7 @@ describe.skipIf(!testDatabase)(
       });
 
       const productsOf = (items: readonly { readonly id: string }[]) =>
-        items.map(({ id }) => ids.get(id as WorkspaceReservationId));
+        items.map(({ id }) => ids.get(workspaceReservationIdSchema.make(id)));
 
       test("filters reservations by their product family", async () => {
         const listed = await Promise.all(

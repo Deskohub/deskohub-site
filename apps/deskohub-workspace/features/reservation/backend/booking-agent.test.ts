@@ -1,16 +1,20 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
-import type {
-  CustomerAgentClientId,
-  CustomerAgentGrant,
-  CustomerAgentScope,
+import {
+  type CustomerAgentGrant,
+  type CustomerAgentScope,
+  customerAgentClientIdSchema,
 } from "@/features/account";
-import type { CustomerAccountId } from "@/features/account/customer-account";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
 import { instantStringSchema } from "@/shared/utils/temporal";
 import {
   type AgentSelectionKey,
+  agentSelectionKeySchema,
   deriveAgentCheckoutAttemptId,
   deriveAgentCheckoutIdentifiers,
 } from "./booking-agent";
@@ -43,8 +47,8 @@ const grant = ({
   readonly clientId?: string;
   readonly scopes?: ReadonlyArray<CustomerAgentScope>;
 } = {}): CustomerAgentGrant => ({
-  accountId: accountId as CustomerAccountId,
-  clientId: clientId as CustomerAgentClientId,
+  accountId: customerAccountIdSchema.make(accountId),
+  clientId: customerAgentClientIdSchema.make(clientId),
   scopes: new Set(scopes),
 });
 
@@ -226,15 +230,15 @@ describe("agent checkout identifiers", () => {
       },
     },
   ] as const)("derives the pinned identifiers for $name", (vector) => {
-    expect(identifiersFor(vector.grant, vector.reservation)).toEqual(
-      vector.expected as never
+    expect<unknown>(identifiersFor(vector.grant, vector.reservation)).toEqual(
+      vector.expected
     );
   });
 
   test("derives the request's first attempt without a previous reservation", () => {
-    expect(attemptAfter(baseSelection as AgentSelectionKey)).toBe(
-      baseFirstAttempt as never
-    );
+    expect<string>(
+      attemptAfter(agentSelectionKeySchema.make(baseSelection))
+    ).toBe(baseFirstAttempt);
   });
 
   test.each([
@@ -249,12 +253,12 @@ describe("agent checkout identifiers", () => {
   ])(
     "derives the pinned attempt after reservation $previous",
     ({ previous, expected }) => {
-      expect(
+      expect<string>(
         attemptAfter(
-          baseSelection as AgentSelectionKey,
-          previous as WorkspaceReservationId
+          agentSelectionKeySchema.make(baseSelection),
+          workspaceReservationIdSchema.make(previous)
         )
-      ).toBe(expected as never);
+      ).toBe(expected);
     }
   );
 });

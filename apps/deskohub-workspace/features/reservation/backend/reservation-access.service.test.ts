@@ -5,8 +5,8 @@ import { describe, expect, mock, test } from "bun:test";
 import { type DotyposReservation, DotyposService } from "@deskohub/dotypos";
 import { Effect, Layer, Option } from "effect";
 import {
+  type IWorkspaceCheckoutAccessCodeService,
   WorkspaceCheckoutAccessCodeService,
-  type WorkspaceCheckoutAccessCodeService as WorkspaceCheckoutAccessCodeServiceType,
 } from "@/features/checkout/backend/reservation/access-code.service";
 import type { Locale } from "@/features/i18n";
 import {
@@ -108,7 +108,7 @@ type HarnessOptions = {
     typeof makeProviderReservation
   > | null;
   readonly providerFails?: boolean;
-  readonly resolver?: WorkspaceCheckoutAccessCodeServiceType["resolveCustomerAccessCode"];
+  readonly resolver?: IWorkspaceCheckoutAccessCodeService["resolveCustomerAccessCode"];
   /**
    * Asks with this live provider record through `getAccessWithLiveRecord`
    * instead of letting `getAccess` read Dotypos.
@@ -155,7 +155,7 @@ const runAccess = async (options: HarnessOptions = {}) => {
   const resolveCustomerAccessCode = mock(
     options.resolver ?? (() => Effect.succeed(resolvedAccess))
   );
-  const accessCodes: WorkspaceCheckoutAccessCodeServiceType = {
+  const accessCodes: IWorkspaceCheckoutAccessCodeService = {
     resolveCustomerAccessCode,
   };
 
@@ -351,16 +351,24 @@ describe("ReservationAccessService", () => {
 
   test("fails closed when code resolution fails or returns an empty value", async () => {
     const accessToken = await createAccessToken();
-    const resolvers = [
-      () => Effect.fail(new Error("resolver unavailable")),
+    const resolvers: ReadonlyArray<
+      IWorkspaceCheckoutAccessCodeService["resolveCustomerAccessCode"]
+    > = [
+      () =>
+        Effect.fail(
+          new ReservationAccessIssuanceError({
+            reservationId: orderId,
+            outcome: "uncertain",
+            message: "resolver unavailable",
+          })
+        ),
       () => Effect.succeed({ ...resolvedAccess, code: "" }),
     ];
 
     for (const resolver of resolvers) {
       const result = await runAccess({
         accessToken,
-        resolver:
-          resolver as WorkspaceCheckoutAccessCodeServiceType["resolveCustomerAccessCode"],
+        resolver,
       });
 
       expect(result.access).toEqual({

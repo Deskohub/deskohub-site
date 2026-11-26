@@ -1,8 +1,9 @@
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { FioPollWake } from "../fio/fio-poll-wake.service";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { PostHogFeatureFlagEvaluationError } from "@deskohub/analytics-posthog/feature-flags/node";
 import {
   type DotyposCustomerId,
@@ -53,6 +54,10 @@ import {
   type IPaymentLifecycleRepository,
   PaymentLifecycleRepository,
 } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
+import {
+  paymentAttemptIdSchema,
+  storedWebhookEventIdSchema,
+} from "@/features/checkout/checkout-identifiers";
 import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
 import { calculateDiscounts } from "@/features/discounts/calculator";
@@ -88,6 +93,7 @@ import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { Money } from "@/shared/money/money";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
@@ -98,15 +104,18 @@ import {
 import {
   connectWorkspacePostgresTestDatabase,
   readReservationOrderMirror,
+  requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 
+import {
+  paymentLifecycleCustomerId,
+  paymentLifecycleReservationOrder,
+} from "./payment-lifecycle.test-utils";
+
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const requireDatabase = () => requireTestDatabase(testDatabase);
 const product = { kind: "cowork", tier: "basic" } as const;
 const uniqueId = () => crypto.randomUUID();
-const customerId = () =>
-  (
-    Math.floor(Math.random() * 900_000_000) + 100_000_000
-  ).toString() as DotyposCustomerId;
 
 type Reservation = typeof workspaceReservations.$inferSelect;
 type Admission = {
@@ -142,7 +151,7 @@ const withheldReferralFlags = [
 ] as const;
 
 const makeRepository = async (
-  databaseLayer = testDatabase!.layer
+  databaseLayer = requireDatabase().layer
 ): Promise<IPaymentLifecycleRepository> =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -170,7 +179,7 @@ const inAccountGuard = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     customerAccountIdSchema.make(`account-${uniqueId()}`)
   )(effect).pipe(
     Effect.provide(
-      WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase!.databasePool)
+      WorkspaceDatabaseAdvisoryLock.makeLayer(requireDatabase().databasePool)
     )
   );
 
@@ -183,9 +192,9 @@ const makeReferralService = async (input?: {
   };
   readonly listReservations?: () => Effect.Effect<readonly never[]>;
 }) => {
-  const databaseLayer = input?.databaseLayer ?? testDatabase!.layer;
+  const databaseLayer = input?.databaseLayer ?? requireDatabase().layer;
   const lockLayer = WorkspaceDatabaseAdvisoryLock.makeLayer(
-    input?.pool ?? testDatabase!.databasePool
+    input?.pool ?? requireDatabase().databasePool
   );
   const accountLinksLayer = CustomerAccountLinkRepository.Default.pipe(
     Layer.provide(databaseLayer)
@@ -221,7 +230,7 @@ const makeReferralService = async (input?: {
               Layer.mock(DotyposService, {
                 listReservations:
                   input?.listReservations ?? (() => Effect.succeed([])),
-              } as Partial<DotyposService["Service"]>)
+              })
             )
           )
         )
@@ -237,95 +246,96 @@ const makeLateRecoveryRepository = async () =>
     }).pipe(
       Effect.provide(
         LatePaymentRecoveryRepository.Default.pipe(
-          Layer.provide(testDatabase!.layer)
+          Layer.provide(requireDatabase().layer)
         )
       )
     )
   );
 
 const createInvitedCustomer = async (withAttribution = true) => {
-  const invitedDotyposCustomerId = customerId();
-  const referrerDotyposCustomerId = customerId();
+  const invitedDotyposCustomerId = paymentLifecycleCustomerId();
+  const referrerDotyposCustomerId = paymentLifecycleCustomerId();
   const code = canonicalPromotionCodeSchema.make(
     `RFL${crypto.randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase()}`
   );
   const [promotion] = await Effect.runPromise(
-    testDatabase!.db
-      .insert(promotionCodes)
+    requireDatabase()
+      .db.insert(promotionCodes)
       .values({ kind: "referral", code, enabled: true })
       .returning({ id: promotionCodes.id })
   );
+  assert(promotion, "Expected inserted promotion row");
   await Effect.runPromise(
-    testDatabase!.db.insert(referralCodes).values({
-      promotionCodeId: promotion!.id,
+    requireDatabase().db.insert(referralCodes).values({
+      promotionCodeId: promotion.id,
       referrerDotyposCustomerId,
     })
   );
   const acceptAttribution = () =>
     Effect.runPromise(
-      testDatabase!.db.insert(referralAttributions).values({
+      requireDatabase().db.insert(referralAttributions).values({
         invitedDotyposCustomerId,
         referrerDotyposCustomerId,
-        promotionCodeId: promotion!.id,
+        promotionCodeId: promotion.id,
       })
     );
   if (withAttribution) await acceptAttribution();
 
   const cleanup = async () => {
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "delete from referral_invitation_claims where invited_dotypos_customer_id = $1",
       [invitedDotyposCustomerId]
     );
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "delete from discount_code_redemptions where dotypos_customer_id = $1",
       [invitedDotyposCustomerId]
     );
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "delete from voucher_redemptions where dotypos_customer_id = $1",
       [invitedDotyposCustomerId]
     );
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "update payment_attempts set state = 'failed', refund_state = 'not_required', failure_code = 'referral_test_cleanup' where provider <> 'internal' and workspace_reservation_id in (select id from workspace_reservations where dotypos_customer_id = $1)",
       [invitedDotyposCustomerId]
     );
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "delete from accounting_document_snapshots where workspace_reservation_id in (select id from workspace_reservations where dotypos_customer_id = $1) and payment_attempt_id in (select id from payment_attempts where provider <> 'internal')",
       [invitedDotyposCustomerId]
     );
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "delete from late_payment_recoveries where workspace_reservation_id in (select id from workspace_reservations where dotypos_customer_id = $1)",
       [invitedDotyposCustomerId]
     );
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "delete from discount_applications where workspace_reservation_id in (select id from workspace_reservations where dotypos_customer_id = $1)",
       [invitedDotyposCustomerId]
     );
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "delete from payment_attempts where provider <> 'internal' and workspace_reservation_id in (select id from workspace_reservations where dotypos_customer_id = $1)",
       [invitedDotyposCustomerId]
     );
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "delete from workspace_reservations reservation where dotypos_customer_id = $1 and not exists (select 1 from payment_attempts where workspace_reservation_id = reservation.id and provider = 'internal')",
       [invitedDotyposCustomerId]
     );
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "delete from referral_attributions where invited_dotypos_customer_id = $1",
       [invitedDotyposCustomerId]
     );
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "delete from referral_codes where promotion_code_id = $1",
-      [promotion!.id]
+      [promotion.id]
     );
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "delete from promotion_codes where id = $1",
-      [promotion!.id]
+      [promotion.id]
     );
   };
 
   return {
     invitedDotyposCustomerId,
     referrerDotyposCustomerId,
-    promotionCodeId: promotion!.id,
+    promotionCodeId: promotion.id,
     code,
     acceptAttribution,
     cleanup,
@@ -336,7 +346,7 @@ const createHeldReservation = (
   dotyposCustomerId: DotyposCustomerId
 ): Promise<Reservation> =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).reservation({
+    workspaceFixtures(requireDatabase().db).reservation({
       stage: { reservation: "held" },
       customer: dotyposCustomerId,
     })
@@ -354,56 +364,61 @@ const createOrdinaryDiscountCode = async (
     "cs-CZ": "Uložená kampaň",
   };
   const [promotion] = await Effect.runPromise(
-    testDatabase!.db
-      .insert(promotionCodes)
+    requireDatabase()
+      .db.insert(promotionCodes)
       .values({ kind: "discount", code, enabled: true })
       .returning({ id: promotionCodes.id })
   );
+  assert(promotion, "Expected inserted promotion row");
   const [storedDiscount] = await Effect.runPromise(
-    testDatabase!.db
-      .insert(discounts)
+    requireDatabase()
+      .db.insert(discounts)
       .values({ labels, percentageBasisPoints: basisPoints })
       .returning({ id: discounts.id })
   );
+  assert(storedDiscount, "Expected inserted storedDiscount row");
   await Effect.runPromise(
-    testDatabase!.db.insert(discountProductTargets).values({
-      discountId: storedDiscount!.id,
-      // The family target, which covers every cowork tier.
-      productTarget: getWorkspaceProductTargetsCovering(product)[0],
-    })
+    requireDatabase()
+      .db.insert(discountProductTargets)
+      .values({
+        discountId: storedDiscount.id,
+        // The family target, which covers every cowork tier.
+        productTarget: getWorkspaceProductTargetsCovering(product)[0],
+      })
   );
   const [codeRow] = await Effect.runPromise(
-    testDatabase!.db
-      .insert(discountCodes)
+    requireDatabase()
+      .db.insert(discountCodes)
       .values({
         code,
         enabled: true,
-        promotionCodeId: promotion!.id,
-        discountId: storedDiscount!.id,
+        promotionCodeId: promotion.id,
+        discountId: storedDiscount.id,
         maxUses: 5,
         maxUsesPerCustomer: 1,
       })
       .returning({ id: discountCodes.id })
   );
+  assert(codeRow, "Expected inserted codeRow row");
 
   const candidate: DiscountCandidate = {
     discount: {
-      id: storedDiscount!.id,
+      id: storedDiscount.id,
       label: labels["en-US"],
       adjustment: { kind: "percentage", basisPoints },
     },
     provenance: {
       providerNamespace: "database-discount-code",
-      providerReference: codeRow!.id,
+      providerReference: codeRow.id,
       details: {
-        discountCodeId: codeRow!.id,
-        storedDiscountId: storedDiscount!.id,
+        discountCodeId: codeRow.id,
+        storedDiscountId: storedDiscount.id,
       },
     },
     claim: {
       kind: "discount_code",
-      codeId: codeRow!.id,
-      storedDiscountId: storedDiscount!.id,
+      codeId: codeRow.id,
+      storedDiscountId: storedDiscount.id,
       dotyposCustomerId,
       product,
     },
@@ -412,17 +427,18 @@ const createOrdinaryDiscountCode = async (
   return {
     candidate,
     cleanup: async () => {
-      await testDatabase!.pool.query(
+      await requireDatabase().pool.query(
         "delete from promotion_codes where id = $1",
-        [promotion!.id]
+        [promotion.id]
       );
-      await testDatabase!.pool.query(
+      await requireDatabase().pool.query(
         "delete from discount_product_targets where discount_id = $1",
-        [storedDiscount!.id]
+        [storedDiscount.id]
       );
-      await testDatabase!.pool.query("delete from discounts where id = $1", [
-        storedDiscount!.id,
-      ]);
+      await requireDatabase().pool.query(
+        "delete from discounts where id = $1",
+        [storedDiscount.id]
+      );
     },
   };
 };
@@ -435,40 +451,42 @@ const createVoucher = async (
     `V${uniqueId().replaceAll("-", "").slice(0, 12).toUpperCase()}`
   );
   const [promotion] = await Effect.runPromise(
-    testDatabase!.db
-      .insert(promotionCodes)
+    requireDatabase()
+      .db.insert(promotionCodes)
       .values({ kind: "voucher", code, enabled: true })
       .returning({ id: promotionCodes.id })
   );
+  assert(promotion, "Expected inserted promotion row");
   const [voucher] = await Effect.runPromise(
-    testDatabase!.db
-      .insert(vouchers)
+    requireDatabase()
+      .db.insert(vouchers)
       .values({
-        promotionCodeId: promotion!.id,
+        promotionCodeId: promotion.id,
         issuedAmountValue: amount,
         issuedAmountExponent: 2,
         issuedAmountCurrency: "CZK",
       })
       .returning({ id: vouchers.id })
   );
+  assert(voucher, "Expected inserted voucher row");
   const availableAmount = { value: amount, exponent: 2, currency: "CZK" };
   const candidate: DiscountCandidate = {
     discount: {
       id: deriveOpaqueDiscountId({
         providerNamespace: "database-voucher",
-        providerReference: voucher!.id,
+        providerReference: voucher.id,
       }),
       label: m.checkoutVoucherLabel({}, { locale: "en-US" }),
       adjustment: { kind: "fixed", amount: availableAmount },
     },
     provenance: {
       providerNamespace: "database-voucher",
-      providerReference: voucher!.id,
-      details: { voucherId: voucher!.id },
+      providerReference: voucher.id,
+      details: { voucherId: voucher.id },
     },
     claim: {
       kind: "voucher",
-      voucherId: voucher!.id,
+      voucherId: voucher.id,
       availableAmount,
       dotyposCustomerId,
     },
@@ -477,9 +495,9 @@ const createVoucher = async (
   return {
     candidate,
     cleanup: async () => {
-      await testDatabase!.pool.query(
+      await requireDatabase().pool.query(
         "delete from promotion_codes where id = $1",
-        [promotion!.id]
+        [promotion.id]
       );
     },
   };
@@ -491,27 +509,22 @@ const makeSnapshot = (
   discountQuote?: DiscountQuote
 ) => {
   const prepared = {
-    kind: "cowork" as const,
-    reservation: {
-      kind: "cowork" as const,
-      entryTier: "basic" as const,
-      coffee: false,
-      date: "2099-01-01",
-      name: "Synthetic Customer",
-      email: testEmailAddress("synthetic"),
-      phone: "+420 700 000 000",
-    },
+    kind: "cowork",
+    reservation: paymentLifecycleReservationOrder,
     quote: Effect.runSync(
       buildCoworkReservationQuote(
         { kind: "cowork", entryTier: "basic", coffee: false },
         discountQuote ? { discountQuote } : {}
       )
     ),
-  } as PreparedCustomerQuote;
+  } satisfies PreparedCustomerQuote;
 
   return makeAccountingDocumentSnapshot({
     workspaceReservationId: reservation.id,
-    dotyposReservationId: reservation.dotyposReservationId!,
+    dotyposReservationId: requireValue(
+      reservation.dotyposReservationId,
+      "provider reservation ID"
+    ),
     dotyposCustomerId,
     locale: "en-US",
     prepared,
@@ -640,8 +653,8 @@ const admit = (
 ) =>
   repository.createPendingProviderAttempt({
     provider: "nexi",
-    orderId: reservationOrderId(reservation.id),
-    providerOrderId: `order-${uniqueId()}` as never,
+    orderId: standaloneReservationOrderId(reservation.id),
+    providerOrderId: NexiOrderIdSchema.make(`order-${uniqueId()}`),
     amount: input.admission.amount,
     commitment: input.admission.commitment,
     locale: input.locale,
@@ -651,15 +664,16 @@ const admit = (
 describe.skipIf(!testDatabase)(
   "PaymentLifecycleRepository admission after a late payment on disposable Postgres",
   () => {
+    if (!testDatabase) return;
     test("a QR settlement can win after card started the public payment window", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
         customer
       );
-      const orderId = reservationOrderId(reservation.id);
+      const orderId = standaloneReservationOrderId(reservation.id);
       const accountKey = "synthetic-fio-account";
       const card = await Effect.runPromise(
         repository.createPendingProviderAttempt({
@@ -712,13 +726,13 @@ describe.skipIf(!testDatabase)(
 
     test("a concurrent verified card settlement and QR credit produce one winner", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
         customer
       );
-      const orderId = reservationOrderId(reservation.id);
+      const orderId = standaloneReservationOrderId(reservation.id);
       const accountKey = "synthetic-fio-account";
       const qr = await Effect.runPromise(
         repository
@@ -775,13 +789,13 @@ describe.skipIf(!testDatabase)(
 
     test("records required Nexi refund for a verified card after forced cancellation", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
         customer
       );
-      const orderId = reservationOrderId(reservation.id);
+      const orderId = standaloneReservationOrderId(reservation.id);
       const accountKey = "synthetic-fio-account";
       const qr = await Effect.runPromise(
         repository
@@ -820,7 +834,7 @@ describe.skipIf(!testDatabase)(
         }).pipe(
           Effect.provide(
             WorkspaceReservationRepository.Default.pipe(
-              Layer.provide(testDatabase!.layer)
+              Layer.provide(testDatabase.layer)
             )
           )
         )
@@ -843,13 +857,13 @@ describe.skipIf(!testDatabase)(
 
     test("settles an admitted card retry outside its order’s earlier shared window", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
         customer
       );
-      const orderId = reservationOrderId(reservation.id);
+      const orderId = standaloneReservationOrderId(reservation.id);
       const old = await Effect.runPromise(
         repository.createPendingProviderAttempt({
           ...admission,
@@ -871,7 +885,7 @@ describe.skipIf(!testDatabase)(
         )
       ).toBe(true);
       await Effect.runPromise(
-        testDatabase!.db
+        testDatabase.db
           .update(workspaceReservations)
           .set({
             activePaymentAttemptId: null,
@@ -907,13 +921,13 @@ describe.skipIf(!testDatabase)(
 
     test("expires a QR-first window and admits only one durable late receipt for recovery", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
         customer
       );
-      const orderId = reservationOrderId(reservation.id);
+      const orderId = standaloneReservationOrderId(reservation.id);
       const qr = await Effect.runPromise(
         repository
           .createPendingQrAttempt({
@@ -970,13 +984,13 @@ describe.skipIf(!testDatabase)(
 
     test("keeps a card settlement verified at cutoff in durable recovery", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
         customer
       );
-      const orderId = reservationOrderId(reservation.id);
+      const orderId = standaloneReservationOrderId(reservation.id);
       const card = await Effect.runPromise(
         repository.createPendingProviderAttempt({
           ...admission,
@@ -1072,9 +1086,9 @@ describe.skipIf(!testDatabase)(
 
         const lifecycle = await makeRepository();
         const recoveries = await makeLateRecoveryRepository();
-        const customer = customerId();
+        const customer = paymentLifecycleCustomerId();
         const reservation = await createHeldReservation(customer);
-        const orderId = reservationOrderId(reservation.id);
+        const orderId = standaloneReservationOrderId(reservation.id);
         const conflictingCardOperation =
           booking === "open with a different card operation in recovery";
         const existingCardRecovery =
@@ -1174,7 +1188,7 @@ describe.skipIf(!testDatabase)(
         }
         if (booking === "superseded") {
           await Effect.runPromise(
-            testDatabase!.db
+            testDatabase.db
               .update(workspaceReservations)
               .set({
                 reservationState: "cancelled",
@@ -1197,7 +1211,7 @@ describe.skipIf(!testDatabase)(
         const enqueuePaid = mock(() => Effect.void);
         const fulfill = mock(() => Effect.void);
         const paymentCompleted = mock(() => Effect.void);
-        const databaseLayer = testDatabase!.layer;
+        const databaseLayer = testDatabase.layer;
         const dependencies = Layer.mergeAll(
           PaymentAttemptRepository.Default.pipe(Layer.provide(databaseLayer)),
           PaymentRefundRepository.Default.pipe(Layer.provide(databaseLayer)),
@@ -1434,7 +1448,7 @@ describe.skipIf(!testDatabase)(
             });
             expect(
               await Effect.runPromise(
-                testDatabase!.db
+                testDatabase.db
                   .select({
                     paymentAttemptId: voucherRedemptions.paymentAttemptId,
                     state: voucherRedemptions.state,
@@ -1531,12 +1545,12 @@ describe.skipIf(!testDatabase)(
             expect(enqueue).toHaveBeenCalledTimes(0);
           }
         } finally {
-          await testDatabase!.pool.query(
+          await testDatabase.pool.query(
             "delete from webhook_events where payment_attempt_id = $1",
             [card.id]
           );
           if (voucher) {
-            await testDatabase!.pool.query(
+            await testDatabase.pool.query(
               "delete from voucher_redemptions where voucher_id = $1",
               [voucher.candidate.provenance.providerReference]
             );
@@ -1548,13 +1562,13 @@ describe.skipIf(!testDatabase)(
 
     test("returns refund work for a late QR credit to a reservation superseded by another checkout", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
         customer
       );
-      const orderId = reservationOrderId(reservation.id);
+      const orderId = standaloneReservationOrderId(reservation.id);
       const qr = await Effect.runPromise(
         repository
           .createPendingQrAttempt({
@@ -1571,7 +1585,7 @@ describe.skipIf(!testDatabase)(
         repository.expirePublicPaymentWindow({ orderId, checkedAt: expiredAt })
       );
       await Effect.runPromise(
-        testDatabase!.db
+        testDatabase.db
           .update(workspaceReservations)
           .set({
             reservationState: "cancelled",
@@ -1595,7 +1609,7 @@ describe.skipIf(!testDatabase)(
 
     test("releases voucher credit when an exact late QR receipt reaches recovery before hold cleanup", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const voucher = await createVoucher(customer);
       try {
         const reservation = await createHeldReservation(customer);
@@ -1605,7 +1619,7 @@ describe.skipIf(!testDatabase)(
           candidate: voucher.candidate,
           firstServiceDate: "2099-01-01",
         });
-        const orderId = reservationOrderId(reservation.id);
+        const orderId = standaloneReservationOrderId(reservation.id);
         const qr = await Effect.runPromise(
           repository
             .createPendingQrAttempt({
@@ -1645,7 +1659,7 @@ describe.skipIf(!testDatabase)(
           state: "created",
         });
       } finally {
-        await testDatabase!.pool.query(
+        await testDatabase.pool.query(
           "delete from voucher_redemptions where voucher_id = $1",
           [voucher.candidate.provenance.providerReference]
         );
@@ -1656,13 +1670,13 @@ describe.skipIf(!testDatabase)(
     test("refund-only work for a losing card leaves an eligible late QR credit recoverable", async () => {
       const lifecycle = await makeRepository();
       const recoveries = await makeLateRecoveryRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
         customer
       );
-      const orderId = reservationOrderId(reservation.id);
+      const orderId = standaloneReservationOrderId(reservation.id);
       const accountKey = "synthetic-fio-account";
       const qr = await Effect.runPromise(
         lifecycle
@@ -1765,16 +1779,16 @@ describe.skipIf(!testDatabase)(
         await import("../payment/provider-payment-finalization.service");
       const { QrPaymentRepository } = await import("./qr-payment.repository");
       const lifecycle = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
-      const orderId = reservationOrderId(reservation.id);
+      const orderId = standaloneReservationOrderId(reservation.id);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
         customer
       );
       const oldCutoff = Temporal.Now.instant().add({ minutes: 1 });
       await Effect.runPromise(
-        testDatabase!.db
+        testDatabase.db
           .update(workspaceReservations)
           .set({ reservationHoldExpiresAt: oldCutoff })
           .where(eq(workspaceReservations.id, reservation.id))
@@ -1808,15 +1822,15 @@ describe.skipIf(!testDatabase)(
       ).pipe(
         Layer.provide(
           WorkspaceReservationRepository.Default.pipe(
-            Layer.provide(testDatabase!.layer)
+            Layer.provide(testDatabase.layer)
           )
         )
       );
       const cancelReservation = mock(() => Effect.void);
       const dependencies = Layer.mergeAll(
         racingReservations,
-        QrPaymentRepository.Default.pipe(Layer.provide(testDatabase!.layer)),
-        WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase!.databasePool),
+        QrPaymentRepository.Default.pipe(Layer.provide(testDatabase.layer)),
+        WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase.databasePool),
         Layer.succeed(PaymentLifecycleRepository, lifecycle),
         Layer.mock(ProviderPaymentFinalizationService, {}),
         Layer.mock(CheckoutAnalytics, {
@@ -1837,7 +1851,10 @@ describe.skipIf(!testDatabase)(
               holdExpiresAt: oldCutoff,
               checkedAt,
             });
-            return { outcome, window: yield* qr.findPaymentWindow(orderId) };
+            return {
+              outcome,
+              window: yield* qr.findPaymentWindow(reservation.id),
+            };
           }).pipe(
             Effect.provide(
               ReservationHoldCleanupService.Default.pipe(
@@ -1850,27 +1867,28 @@ describe.skipIf(!testDatabase)(
 
       const first = await runCleanup(oldCutoff.add({ seconds: 1 }));
       expect(first.outcome).toBeInstanceOf(ProviderPaymentDeferral);
+      const firstWindow = requireValue(first.window, "payment window");
       expect(
         first.outcome instanceof ProviderPaymentDeferral &&
-          first.outcome.abandonmentCutoff.equals(first.window!.expiresAt)
+          first.outcome.abandonmentCutoff.equals(firstWindow.expiresAt)
       ).toBe(true);
       expect(interleavedAdmission).toBe(true);
       expect(cancelReservation).toHaveBeenCalledTimes(0);
 
-      const next = await runCleanup(first.window!.expiresAt);
+      const next = await runCleanup(firstWindow.expiresAt);
       expect(next.outcome).toBe("cancelled");
       expect(cancelReservation).toHaveBeenCalledTimes(1);
     });
 
     test("admits only one successor of the exact marked Nexi attempt", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(dotyposCustomerId);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
         dotyposCustomerId
       );
-      const orderId = reservationOrderId(reservation.id);
+      const orderId = standaloneReservationOrderId(reservation.id);
       const payment = {
         orderId,
         amount: admission.amount,
@@ -1905,7 +1923,7 @@ describe.skipIf(!testDatabase)(
           }).pipe(
             Effect.provide(
               WorkspaceReservationRepository.Default.pipe(
-                Layer.provide(testDatabase!.layer)
+                Layer.provide(testDatabase.layer)
               )
             )
           )
@@ -1935,7 +1953,10 @@ describe.skipIf(!testDatabase)(
       expect(
         contenders.filter((result) => result._tag === "Failure")
       ).toHaveLength(1);
-      const successor = contenders.find((result) => result._tag === "Success")!;
+      const successor = requireValue(
+        contenders.find((result) => result._tag === "Success"),
+        "successful successor admission"
+      );
       await Effect.runPromise(
         repository.markTerminal({
           id: successor.success.id,
@@ -1953,7 +1974,7 @@ describe.skipIf(!testDatabase)(
       });
 
       const attempts = await Effect.runPromise(
-        testDatabase!.db
+        testDatabase.db
           .select()
           .from(paymentAttempts)
           .where(eq(paymentAttempts.orderId, orderId))
@@ -1969,13 +1990,16 @@ describe.skipIf(!testDatabase)(
 
     test("admits no new payment for an order whose earlier attempt settled late, and still admits one without", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const recovering = await createHeldReservation(dotyposCustomerId);
       const ordinary = await createHeldReservation(dotyposCustomerId);
-      const earlierAttemptId = `attempt-${uniqueId()}` as never;
+      const earlierAttemptId = paymentAttemptIdSchema.make(
+        `attempt-${uniqueId()}`
+      );
       await Effect.runPromise(
-        testDatabase!.db.insert(paymentAttempts).values({
+        testDatabase.db.insert(paymentAttempts).values({
           id: earlierAttemptId,
+          orderId: standaloneReservationOrderId(recovering.id),
           workspaceReservationId: recovering.id,
           provider: "nexi",
           providerOrderId: NexiOrderIdSchema.make(`order-${uniqueId()}`),
@@ -1987,7 +2011,7 @@ describe.skipIf(!testDatabase)(
         })
       );
       await Effect.runPromise(
-        testDatabase!.db.insert(latePaymentRecoveries).values({
+        testDatabase.db.insert(latePaymentRecoveries).values({
           paymentAttemptId: earlierAttemptId,
           workspaceReservationId: recovering.id,
           state: "pending",
@@ -2018,7 +2042,7 @@ describe.skipIf(!testDatabase)(
       expect(refused._tag).toBe("Failure");
       expect(admitted.state).toBe("created");
       const [unchanged] = await Effect.runPromise(
-        testDatabase!.db
+        testDatabase.db
           .select({
             activePaymentAttemptId:
               workspaceReservations.activePaymentAttemptId,
@@ -2038,6 +2062,7 @@ describe.skipIf(!testDatabase)(
 describe.skipIf(!testDatabase)(
   "PaymentLifecycleRepository first-use admission on disposable Postgres",
   () => {
+    if (!testDatabase) return;
     test("serializes an ordinary first attempt and a referral attempt in either order", async () => {
       const repository = await makeRepository();
 
@@ -2168,7 +2193,7 @@ describe.skipIf(!testDatabase)(
         const attempt = await Effect.runPromise(
           admit(repository, reservation, tiny)
         );
-        const claims = await testDatabase!.pool.query(
+        const claims = await testDatabase.pool.query(
           "select id from referral_invitation_claims where payment_attempt_id = $1",
           [attempt.id]
         );
@@ -2177,7 +2202,7 @@ describe.skipIf(!testDatabase)(
         const paid = await Effect.runPromise(
           repository.markPaid({
             id: attempt.id,
-            orderId: reservationOrderId(reservation.id),
+            orderId: standaloneReservationOrderId(reservation.id),
             paidAt: Temporal.Now.instant(),
           })
         );
@@ -2201,7 +2226,7 @@ describe.skipIf(!testDatabase)(
         try {
           if (alreadyPaid) {
             await Effect.runPromise(
-              workspaceFixtures(testDatabase!.db).reservation({
+              workspaceFixtures(testDatabase.db).reservation({
                 stage: { reservation: "confirmed", payment: "paid" },
                 customer: fixture.invitedDotyposCustomerId,
               })
@@ -2258,11 +2283,11 @@ describe.skipIf(!testDatabase)(
           const attempt = await Effect.runPromise(
             admit(repository, reservation, referral)
           );
-          const invitation = await testDatabase!.pool.query(
+          const invitation = await testDatabase.pool.query(
             "select state from referral_invitation_claims where payment_attempt_id = $1",
             [attempt.id]
           );
-          const ordinary = await testDatabase!.pool.query(
+          const ordinary = await testDatabase.pool.query(
             kind === "discount-code"
               ? "select state from discount_code_redemptions where payment_attempt_id = $1"
               : "select state from voucher_redemptions where payment_attempt_id = $1",
@@ -2313,7 +2338,7 @@ describe.skipIf(!testDatabase)(
 
         const internal = await Effect.runPromise(
           repository.completeInternalPayment({
-            orderId: reservationOrderId(reservation.id),
+            orderId: standaloneReservationOrderId(reservation.id),
             amount: fullyCovered.admission.amount,
             commitment: fullyCovered.admission.commitment,
             locale: fullyCovered.locale,
@@ -2325,11 +2350,11 @@ describe.skipIf(!testDatabase)(
         expect(internal.attempt.state).toBe("paid");
         expect(internal.attempt.amount.value).toBe(0);
 
-        const invitationClaims = await testDatabase!.pool.query(
+        const invitationClaims = await testDatabase.pool.query(
           "select state from referral_invitation_claims where payment_attempt_id = $1",
           [internal.attempt.id]
         );
-        const voucherClaims = await testDatabase!.pool.query(
+        const voucherClaims = await testDatabase.pool.query(
           "select state from voucher_redemptions where payment_attempt_id = $1",
           [internal.attempt.id]
         );
@@ -2363,7 +2388,7 @@ describe.skipIf(!testDatabase)(
         const paidRepeat = await Effect.runPromise(
           repository.markPaid({
             id: ordinaryRepeat.id,
-            orderId: reservationOrderId(laterReservation.id),
+            orderId: standaloneReservationOrderId(laterReservation.id),
             paidAt: Temporal.Now.instant(),
           })
         );
@@ -2394,12 +2419,12 @@ describe.skipIf(!testDatabase)(
           await Effect.runPromise(
             repository.markTerminal({
               id: oldAttempt.id,
-              orderId: reservationOrderId(oldReservation.id),
+              orderId: standaloneReservationOrderId(oldReservation.id),
               state,
               failureCode: "synthetic_terminal",
             })
           );
-          const released = await testDatabase!.pool.query(
+          const released = await testDatabase.pool.query(
             "select state from referral_invitation_claims where payment_attempt_id = $1",
             [oldAttempt.id]
           );
@@ -2417,7 +2442,7 @@ describe.skipIf(!testDatabase)(
           const retryAttempt = await Effect.runPromise(
             admit(repository, retryReservation, retry)
           );
-          const reserved = await testDatabase!.pool.query(
+          const reserved = await testDatabase.pool.query(
             "select state from referral_invitation_claims where payment_attempt_id = $1",
             [retryAttempt.id]
           );
@@ -2425,7 +2450,7 @@ describe.skipIf(!testDatabase)(
           await Effect.runPromise(
             repository.markTerminal({
               id: retryAttempt.id,
-              orderId: reservationOrderId(retryReservation.id),
+              orderId: standaloneReservationOrderId(retryReservation.id),
               state: "failed",
               failureCode: "synthetic_retry_cleanup",
             })
@@ -2456,7 +2481,7 @@ describe.skipIf(!testDatabase)(
         await Effect.runPromise(
           repository.markTerminal({
             id: oldAttempt.id,
-            orderId: reservationOrderId(oldReservation.id),
+            orderId: standaloneReservationOrderId(oldReservation.id),
             state: "failed",
             failureCode: "synthetic_first_failure",
           })
@@ -2478,7 +2503,9 @@ describe.skipIf(!testDatabase)(
           lateRecoveries.start({
             paymentAttemptId: oldAttempt.id,
             workspaceReservationId: oldReservation.id,
-            webhookEventId: `webhook-${uniqueId()}` as never,
+            webhookEventId: storedWebhookEventIdSchema.make(
+              `webhook-${uniqueId()}`
+            ),
             verifiedPaidAt: Temporal.Now.instant(),
           })
         );
@@ -2512,7 +2539,7 @@ describe.skipIf(!testDatabase)(
             completedAt: Temporal.Now.instant(),
           })
         );
-        const refund = await testDatabase!.pool.query(
+        const refund = await testDatabase.pool.query(
           "select refund_state from payment_attempts where id = $1",
           [oldAttempt.id]
         );
@@ -2521,7 +2548,7 @@ describe.skipIf(!testDatabase)(
         await Effect.runPromise(
           repository.markTerminal({
             id: retryAttempt.id,
-            orderId: reservationOrderId(retryReservation.id),
+            orderId: standaloneReservationOrderId(retryReservation.id),
             state: "failed",
             failureCode: "synthetic_retry_cleanup",
           })
@@ -2549,7 +2576,7 @@ describe.skipIf(!testDatabase)(
         await Effect.runPromise(
           repository.markTerminal({
             id: oldAttempt.id,
-            orderId: reservationOrderId(oldReservation.id),
+            orderId: standaloneReservationOrderId(oldReservation.id),
             state: "failed",
             failureCode: "synthetic_provider_failure",
           })
@@ -2573,7 +2600,9 @@ describe.skipIf(!testDatabase)(
           lateRecoveries.start({
             paymentAttemptId: oldAttempt.id,
             workspaceReservationId: oldReservation.id,
-            webhookEventId: `webhook-${uniqueId()}` as never,
+            webhookEventId: storedWebhookEventIdSchema.make(
+              `webhook-${uniqueId()}`
+            ),
             verifiedPaidAt: Temporal.Now.instant(),
           })
         );
@@ -2611,7 +2640,7 @@ describe.skipIf(!testDatabase)(
         await Effect.runPromise(
           repository.markPaid({
             id: referralAttempt.id,
-            orderId: reservationOrderId(referralReservation.id),
+            orderId: standaloneReservationOrderId(referralReservation.id),
             paidAt: Temporal.Now.instant(),
           })
         );
@@ -2634,11 +2663,11 @@ describe.skipIf(!testDatabase)(
 );
 
 const createReferralCode = async (
-  referrerDotyposCustomerId: DotyposCustomerId = customerId()
+  referrerDotyposCustomerId: DotyposCustomerId = paymentLifecycleCustomerId()
 ) => {
   const [promotion] = await Effect.runPromise(
-    testDatabase!.db
-      .insert(promotionCodes)
+    requireDatabase()
+      .db.insert(promotionCodes)
       .values({
         kind: "referral",
         code: canonicalPromotionCodeSchema.make(
@@ -2648,35 +2677,36 @@ const createReferralCode = async (
       })
       .returning({ id: promotionCodes.id })
   );
+  assert(promotion, "Expected inserted promotion row");
   await Effect.runPromise(
-    testDatabase!.db.insert(referralCodes).values({
-      promotionCodeId: promotion!.id,
+    requireDatabase().db.insert(referralCodes).values({
+      promotionCodeId: promotion.id,
       referrerDotyposCustomerId,
     })
   );
   return {
     referrerDotyposCustomerId,
-    promotionCodeId: promotion!.id,
+    promotionCodeId: promotion.id,
     attribute: (invitedDotyposCustomerId: DotyposCustomerId) =>
       Effect.runPromise(
-        testDatabase!.db.insert(referralAttributions).values({
+        requireDatabase().db.insert(referralAttributions).values({
           invitedDotyposCustomerId,
           referrerDotyposCustomerId,
-          promotionCodeId: promotion!.id,
+          promotionCodeId: promotion.id,
         })
       ),
     cleanup: async () => {
-      await testDatabase!.pool.query(
+      await requireDatabase().pool.query(
         "delete from referral_attributions where promotion_code_id = $1",
-        [promotion!.id]
+        [promotion.id]
       );
-      await testDatabase!.pool.query(
+      await requireDatabase().pool.query(
         "delete from referral_codes where promotion_code_id = $1",
-        [promotion!.id]
+        [promotion.id]
       );
-      await testDatabase!.pool.query(
+      await requireDatabase().pool.query(
         "delete from promotion_codes where id = $1",
-        [promotion!.id]
+        [promotion.id]
       );
     },
   };
@@ -2684,7 +2714,7 @@ const createReferralCode = async (
 
 const readAttributions = async (invitedDotyposCustomerId: DotyposCustomerId) =>
   (
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "select referrer_dotypos_customer_id as referrer, promotion_code_id as code from referral_attributions where invited_dotypos_customer_id = $1",
       [invitedDotyposCustomerId]
     )
@@ -2692,7 +2722,7 @@ const readAttributions = async (invitedDotyposCustomerId: DotyposCustomerId) =>
 
 const readClaim = async (paymentAttemptId: string) =>
   (
-    await testDatabase!.pool.query(
+    await requireDatabase().pool.query(
       "select state, referrer_dotypos_customer_id as referrer, promotion_code_id as code from referral_invitation_claims where payment_attempt_id = $1",
       [paymentAttemptId]
     )
@@ -2723,6 +2753,7 @@ const admitCheckoutReferral = async (
 describe.skipIf(!testDatabase)(
   "Checkout referral attribution at payment on disposable Postgres",
   () => {
+    if (!testDatabase) return;
     test("reserves a checkout referral without attribution and records the attribution when paid", async () => {
       const repository = await makeRepository();
       const fixture = await createInvitedCustomer(false);
@@ -2745,14 +2776,14 @@ describe.skipIf(!testDatabase)(
         const paid = await Effect.runPromise(
           repository.markPaid({
             id: attempt.id,
-            orderId: reservationOrderId(reservation.id),
+            orderId: standaloneReservationOrderId(reservation.id),
             paidAt: Temporal.Now.instant(),
           })
         );
 
         expect(paid.changed).toBe(true);
         const mirror = await readReservationOrderMirror(
-          testDatabase!.pool,
+          testDatabase.pool,
           reservation.id
         );
         expect(mirror.order).toEqual(mirror.expected);
@@ -2819,13 +2850,13 @@ describe.skipIf(!testDatabase)(
         await Effect.runPromise(
           repository.markPaid({
             id: attempt.id,
-            orderId: reservationOrderId(reservation.id),
+            orderId: standaloneReservationOrderId(reservation.id),
             paidAt: Temporal.Now.instant(),
           })
         );
 
         const applications = await Effect.runPromise(
-          testDatabase!.db
+          testDatabase.db
             .select({
               id: discountApplications.id,
               sequence: discountApplications.sequence,
@@ -2872,14 +2903,14 @@ describe.skipIf(!testDatabase)(
         expect(invitation?.staffLabel).toBeNull();
         expect(attempt.amount.value).toBe(23_800);
         const [claim] = (
-          await testDatabase!.pool.query(
+          await testDatabase.pool.query(
             "select state, application_id from referral_invitation_claims where payment_attempt_id = $1",
             [attempt.id]
           )
         ).rows;
         expect(claim).toEqual({
           state: "redeemed",
-          application_id: invitation!.id,
+          application_id: requireValue(invitation, "invitation application").id,
         });
         expect(
           await readAttributions(fixture.invitedDotyposCustomerId)
@@ -2892,7 +2923,7 @@ describe.skipIf(!testDatabase)(
 
         // Once the guest signs in, the Referrals screen counts the invitation.
         await Effect.runPromise(
-          workspaceFixtures(testDatabase!.db).account("referral-guest", {
+          workspaceFixtures(testDatabase.db).account("referral-guest", {
             id: inviteeAccountId,
             verified: false,
             linkedCustomer: fixture.invitedDotyposCustomerId,
@@ -2914,21 +2945,20 @@ describe.skipIf(!testDatabase)(
         ]);
       } finally {
         await fixture.cleanup();
-        const issued = await testDatabase!.pool.query<{
+        const issued = await testDatabase.pool.query<{
           readonly id: string;
         }>(
           "delete from referral_codes where referrer_dotypos_customer_id = $1 returning promotion_code_id as id",
           [fixture.invitedDotyposCustomerId]
         );
-        await testDatabase!.pool.query(
+        await testDatabase.pool.query(
           "delete from promotion_codes where id = any($1)",
           [issued.rows.map(({ id }) => id)]
         );
-        await testDatabase!.pool.query(
-          'delete from auth."user" where id = $1',
-          [inviteeAccountId]
-        );
-        await testDatabase!.pool.query(
+        await testDatabase.pool.query('delete from auth."user" where id = $1', [
+          inviteeAccountId,
+        ]);
+        await testDatabase.pool.query(
           "delete from customer_accounts where id = $1",
           [inviteeAccountId]
         );
@@ -2947,14 +2977,14 @@ describe.skipIf(!testDatabase)(
           await Effect.runPromise(
             repository.markTerminal({
               id: attempt.id,
-              orderId: reservationOrderId(reservation.id),
+              orderId: standaloneReservationOrderId(reservation.id),
               state,
               failureCode: "synthetic_terminal",
             })
           );
 
           const mirror = await readReservationOrderMirror(
-            testDatabase!.pool,
+            testDatabase.pool,
             reservation.id
           );
           expect(mirror.order).toEqual(mirror.expected);
@@ -3012,14 +3042,18 @@ describe.skipIf(!testDatabase)(
           )
         );
         const outcomes = await Promise.all(
-          contenders.map((contender, index) =>
-            Effect.runPromise(
+          contenders.map((contender, index) => {
+            const reservation = requireValue(
+              reservations[index],
+              "contender reservation"
+            );
+            return Effect.runPromise(
               Effect.result(
                 admit(
                   repository,
-                  reservations[index]!,
+                  reservation,
                   makeReferralAdmission({
-                    reservation: reservations[index]!,
+                    reservation,
                     invitedDotyposCustomerId: fixture.invitedDotyposCustomerId,
                     referrerDotyposCustomerId:
                       contender.referrerDotyposCustomerId,
@@ -3027,8 +3061,8 @@ describe.skipIf(!testDatabase)(
                   })
                 )
               )
-            )
-          )
+            );
+          })
         );
 
         const winner = outcomes.findIndex(({ _tag }) => _tag === "Success");
@@ -3040,12 +3074,20 @@ describe.skipIf(!testDatabase)(
           failure: { _tag: "DiscountClaimError", reason: "claim_conflict" },
         });
 
-        const admitted = outcomes[winner]!;
+        const admitted = requireValue(outcomes[winner], "winning admission");
         if (admitted._tag !== "Success") throw new Error("No admission won");
+        const winnerReservation = requireValue(
+          reservations[winner],
+          "winning reservation"
+        );
+        const winnerContender = requireValue(
+          contenders[winner],
+          "winning contender"
+        );
         await Effect.runPromise(
           repository.markPaid({
             id: admitted.success.id,
-            orderId: reservationOrderId(reservations[winner]!.id),
+            orderId: standaloneReservationOrderId(winnerReservation.id),
             paidAt: Temporal.Now.instant(),
           })
         );
@@ -3053,8 +3095,8 @@ describe.skipIf(!testDatabase)(
           await readAttributions(fixture.invitedDotyposCustomerId)
         ).toEqual([
           {
-            referrer: contenders[winner]!.referrerDotyposCustomerId,
-            code: contenders[winner]!.promotionCodeId,
+            referrer: winnerContender.referrerDotyposCustomerId,
+            code: winnerContender.promotionCodeId,
           },
         ]);
       } finally {
@@ -3106,7 +3148,7 @@ describe.skipIf(!testDatabase)(
         await Effect.runPromise(
           repository.markTerminal({
             id: attempt.id,
-            orderId: reservationOrderId(reservation.id),
+            orderId: standaloneReservationOrderId(reservation.id),
             state: "failed",
             failureCode: "synthetic_provider_failure",
           })
@@ -3115,7 +3157,9 @@ describe.skipIf(!testDatabase)(
           lateRecoveries.start({
             paymentAttemptId: attempt.id,
             workspaceReservationId: reservation.id,
-            webhookEventId: `webhook-${uniqueId()}` as never,
+            webhookEventId: storedWebhookEventIdSchema.make(
+              `webhook-${uniqueId()}`
+            ),
             verifiedPaidAt: Temporal.Now.instant(),
           })
         );
@@ -3171,7 +3215,7 @@ describe.skipIf(!testDatabase)(
           const paid = await Effect.runPromise(
             repository.markPaid({
               id: attempt.id,
-              orderId: reservationOrderId(reservation.id),
+              orderId: standaloneReservationOrderId(reservation.id),
               paidAt: Temporal.Now.instant(),
             })
           );
@@ -3218,7 +3262,7 @@ describe.skipIf(!testDatabase)(
 
         const internal = await Effect.runPromise(
           repository.completeInternalPayment({
-            orderId: reservationOrderId(reservation.id),
+            orderId: standaloneReservationOrderId(reservation.id),
             amount: fullyCovered.admission.amount,
             commitment: fullyCovered.admission.commitment,
             locale: fullyCovered.locale,
@@ -3228,7 +3272,7 @@ describe.skipIf(!testDatabase)(
 
         expect(internal.attempt.state).toBe("paid");
         const mirror = await readReservationOrderMirror(
-          testDatabase!.pool,
+          testDatabase.pool,
           reservation.id
         );
         expect(mirror.order).toEqual(mirror.expected);
@@ -3254,7 +3298,7 @@ describe.skipIf(!testDatabase)(
     test("takes the referral graph lock before the invitee's first-booking lock when payment records an attribution", async () => {
       const repository = await makeRepository();
       const fixture = await createInvitedCustomer(false);
-      const graphHolder = await testDatabase!.pool.connect();
+      const graphHolder = await testDatabase.pool.connect();
       try {
         const { reservation, attempt } = await admitCheckoutReferral(
           repository,
@@ -3269,7 +3313,7 @@ describe.skipIf(!testDatabase)(
         const payment = Effect.runPromise(
           repository.markPaid({
             id: attempt.id,
-            orderId: reservationOrderId(reservation.id),
+            orderId: standaloneReservationOrderId(reservation.id),
             paidAt: Temporal.Now.instant(),
           })
         ).finally(() => {
@@ -3278,7 +3322,7 @@ describe.skipIf(!testDatabase)(
         await new Promise((resolve) => setTimeout(resolve, 300));
 
         // Still waiting on the graph lock, so it cannot hold first-booking.
-        const firstBooking = await testDatabase!.pool.query<{
+        const firstBooking = await testDatabase.pool.query<{
           readonly locked: boolean;
         }>(
           "select pg_try_advisory_xact_lock(hashtext('referral-first-booking'), hashtext($1)) as locked",
@@ -3308,7 +3352,7 @@ describe.skipIf(!testDatabase)(
       test(`fails a zero-payable internal payment ${checkout} cleanly after the bounded graph-lock wait, then lets it retry`, async () => {
         const repository = await makeRepository();
         const fixture = await createInvitedCustomer(false);
-        const graphHolder = await testDatabase!.pool.connect();
+        const graphHolder = await testDatabase.pool.connect();
         let voucher: Awaited<ReturnType<typeof createVoucher>> | undefined;
         try {
           const reservation = await createHeldReservation(
@@ -3329,7 +3373,7 @@ describe.skipIf(!testDatabase)(
           });
           const completeInternalPayment = () => {
             const payment = repository.completeInternalPayment({
-              orderId: reservationOrderId(reservation.id),
+              orderId: standaloneReservationOrderId(reservation.id),
               amount: fullyCovered.admission.amount,
               commitment: fullyCovered.admission.commitment,
               locale: fullyCovered.locale,
@@ -3339,37 +3383,37 @@ describe.skipIf(!testDatabase)(
           };
           const readPaymentRows = async () => ({
             reservation: (
-              await testDatabase!.pool.query(
+              await testDatabase.pool.query(
                 "select payment_state, active_payment_attempt_id, paid_at from workspace_reservations where id = $1",
                 [reservation.id]
               )
             ).rows,
             attempts: (
-              await testDatabase!.pool.query(
+              await testDatabase.pool.query(
                 "select state from payment_attempts where workspace_reservation_id = $1",
                 [reservation.id]
               )
             ).rows,
             snapshots: (
-              await testDatabase!.pool.query(
+              await testDatabase.pool.query(
                 "select payment_attempt_id from accounting_document_snapshots where workspace_reservation_id = $1",
                 [reservation.id]
               )
             ).rows,
             applications: (
-              await testDatabase!.pool.query(
+              await testDatabase.pool.query(
                 "select public_discount_id from discount_applications where workspace_reservation_id = $1",
                 [reservation.id]
               )
             ).rows,
             invitationClaims: (
-              await testDatabase!.pool.query(
+              await testDatabase.pool.query(
                 "select state from referral_invitation_claims where invited_dotypos_customer_id = $1",
                 [fixture.invitedDotyposCustomerId]
               )
             ).rows,
             voucherClaims: (
-              await testDatabase!.pool.query(
+              await testDatabase.pool.query(
                 "select state from voucher_redemptions where dotypos_customer_id = $1",
                 [fixture.invitedDotyposCustomerId]
               )
@@ -3478,7 +3522,7 @@ describe.skipIf(!testDatabase)(
                 Effect.gen(function* () {
                   yield* db.execute(sql`set local lock_timeout = '7s'`);
                   const transition = yield* repository.completeInternalPayment({
-                    orderId: reservationOrderId(reservation.id),
+                    orderId: standaloneReservationOrderId(reservation.id),
                     amount: fullyCovered.admission.amount,
                     commitment: fullyCovered.admission.commitment,
                     locale: fullyCovered.locale,
@@ -3492,7 +3536,7 @@ describe.skipIf(!testDatabase)(
                   return [transition, rows[0]?.lock_timeout] as const;
                 })
               );
-            }).pipe(Effect.provide(testDatabase!.layer))
+            }).pipe(Effect.provide(testDatabase.layer))
           )
         );
 
@@ -3518,8 +3562,9 @@ describe.skipIf(!testDatabase)(
 describe.skipIf(!testDatabase)(
   "Checkout referral payments after the referral program was withheld",
   () => {
+    if (!testDatabase) return;
     const holdGraphLock = async () => {
-      const holder = await testDatabase!.pool.connect();
+      const holder = await testDatabase.pool.connect();
       await holder.query("begin");
       await holder.query(
         "select pg_advisory_xact_lock(hashtext('referral-attribution'), hashtext('graph'))"
@@ -3550,13 +3595,13 @@ describe.skipIf(!testDatabase)(
             repository
               .markPaid({
                 id: attempt.id,
-                orderId: reservationOrderId(reservation.id),
+                orderId: standaloneReservationOrderId(reservation.id),
                 paidAt: Temporal.Now.instant(),
               })
               .pipe(Effect.provide(flagLayer))
           );
           // The admitted referral is honored: payment waits for the graph.
-          await waitForAdvisoryLockWaiter(testDatabase!.pool, [
+          await waitForAdvisoryLockWaiter(testDatabase.pool, [
             "referral-attribution",
             "graph",
           ]);
@@ -3602,7 +3647,7 @@ describe.skipIf(!testDatabase)(
         const internal = await Effect.runPromise(
           repository
             .completeInternalPayment({
-              orderId: reservationOrderId(reservation.id),
+              orderId: standaloneReservationOrderId(reservation.id),
               amount: fullyCovered.admission.amount,
               commitment: fullyCovered.admission.commitment,
               locale: fullyCovered.locale,
@@ -3641,7 +3686,7 @@ describe.skipIf(!testDatabase)(
         await Effect.runPromise(
           repository.markTerminal({
             id: attempt.id,
-            orderId: reservationOrderId(reservation.id),
+            orderId: standaloneReservationOrderId(reservation.id),
             state: "failed",
             failureCode: "synthetic_provider_failure",
           })
@@ -3650,7 +3695,9 @@ describe.skipIf(!testDatabase)(
           lateRecoveries.start({
             paymentAttemptId: attempt.id,
             workspaceReservationId: reservation.id,
-            webhookEventId: `webhook-${uniqueId()}` as never,
+            webhookEventId: storedWebhookEventIdSchema.make(
+              `webhook-${uniqueId()}`
+            ),
             verifiedPaidAt: Temporal.Now.instant(),
           })
         );
@@ -3705,7 +3752,7 @@ describe.skipIf(!testDatabase)(
           repository
             .markPaid({
               id: attempt.id,
-              orderId: reservationOrderId(reservation.id),
+              orderId: standaloneReservationOrderId(reservation.id),
               paidAt: Temporal.Now.instant(),
             })
             .pipe(Effect.provide(referralFeatureFlag(false)))
@@ -3726,6 +3773,7 @@ describe.skipIf(!testDatabase)(
 describe.skipIf(!testDatabase)(
   "Referral acceptance with admission waiters in a bounded pool",
   () => {
+    if (!testDatabase) return;
     for (const max of [2, 10] as const) {
       test(`completes acceptance while ${max - 1} referral admissions wait on its lock in a pool of ${max}`, {
         timeout: 30_000,
@@ -3739,24 +3787,25 @@ describe.skipIf(!testDatabase)(
         );
         const applicationName = `referral-pool-${max}-${uniqueId().slice(0, 8)}`;
         const pool = await openDatabasePool({
-          connectionString: process.env.WORKSPACE_TEST_DATABASE_URL!,
+          connectionString: requireValue(
+            process.env.WORKSPACE_TEST_DATABASE_URL,
+            "Postgres test database URL"
+          ),
           connectTimeout: "1500 millis",
           applicationName,
           maxConnections: max,
         });
-        let releaseHistory!: () => void;
-        let notifyHistoryStarted!: () => void;
-        const historyGate = new Promise<void>((resolve) => {
-          releaseHistory = resolve;
-        });
-        const historyStarted = new Promise<void>((resolve) => {
-          notifyHistoryStarted = resolve;
-        });
+        const { promise: historyGate, resolve: releaseHistory } =
+          Promise.withResolvers<void>();
+        const { promise: historyStarted, resolve: notifyHistoryStarted } =
+          Promise.withResolvers<void>();
         let acceptancePromise: Promise<unknown> | undefined;
-        const admissionPromises: Promise<unknown>[] = [];
+        const admissionPromises: Promise<{
+          readonly _tag: "Success" | "Failure";
+        }>[] = [];
 
         try {
-          const accounts = workspaceFixtures(testDatabase!.db);
+          const accounts = workspaceFixtures(testDatabase.db);
           await Effect.runPromise(
             Effect.all([
               accounts.account("referral-pool-invitee", {
@@ -3836,7 +3885,7 @@ describe.skipIf(!testDatabase)(
           const deadline = Date.now() + 5_000;
           let blockedWaiters = 0;
           while (Date.now() < deadline && blockedWaiters < waiterCount) {
-            const activity = await testDatabase!.pool.query<{
+            const activity = await testDatabase.pool.query<{
               readonly count: number;
             }>(
               `select count(*)::int as count
@@ -3877,11 +3926,11 @@ describe.skipIf(!testDatabase)(
           }
           await Promise.allSettled(admissionPromises);
           await fixture.cleanup();
-          await testDatabase!.pool.query(
+          await testDatabase.pool.query(
             'delete from auth."user" where id = any($1)',
             [[inviteeAccountId, referrerAccountId]]
           );
-          await testDatabase!.pool.query(
+          await testDatabase.pool.query(
             "delete from customer_accounts where id = any($1)",
             [[inviteeAccountId, referrerAccountId]]
           );
@@ -4026,7 +4075,7 @@ describe.skipIf(!testDatabase)(
       runResult((repository) =>
         repository.createPendingProviderAttempt({
           provider: "nexi",
-          orderId: reservationOrderId(input.reservationId),
+          orderId: standaloneReservationOrderId(input.reservationId),
           providerOrderId: NexiOrderIdSchema.make(`order-${input.id}`),
           amount: input.snapshot.quote.payment.expectedPrice,
           commitment: input.commitment,
@@ -4218,10 +4267,10 @@ describe.skipIf(!testDatabase)(
       expect(result._tag).toBe("Success");
       const rows = await readRows(reservation.reservationId);
       expect(rows.attempts).toHaveLength(1);
-      const attemptId = rows.attempts[0]?.id;
-      expect(rows.attempts[0]?.state).toBe("created");
-      expect(rows.snapshots).toEqual([{ paymentAttemptId: attemptId }]);
-      expect(rows.reservation?.activePaymentAttemptId).toBe(attemptId);
+      const attempt = requireValue(rows.attempts[0], "created payment attempt");
+      expect(attempt.state).toBe("created");
+      expect(rows.snapshots).toEqual([{ paymentAttemptId: attempt.id }]);
+      expect(rows.reservation?.activePaymentAttemptId).toBe(attempt.id);
       expect(rows.reservation?.paymentState).toBe("pending");
     });
 
@@ -4468,7 +4517,7 @@ const setCodeServiceDates = (
   serviceDateFrom: string | null,
   serviceDateUntil: string | null
 ) =>
-  testDatabase!.pool.query(
+  requireDatabase().pool.query(
     "update discount_codes set service_date_from = $2, service_date_until = $3 where id = $1",
     [codeId, serviceDateFrom, serviceDateUntil]
   );
@@ -4483,7 +4532,7 @@ const admitWithAllowlistUnreadable = async (
   admission: ReturnType<typeof makeCodeAdmission>
 ) => {
   const allowlist = await holdPostgresTransaction(
-    testDatabase!.pool,
+    requireDatabase().pool,
     "lock table promotion_code_customers in access exclusive mode",
     []
   );
@@ -4493,7 +4542,7 @@ const admitWithAllowlistUnreadable = async (
   try {
     const readAllowlist = await Promise.race([
       result.then(() => false),
-      waitForPostgresLockWaiter(testDatabase!.pool, {
+      waitForPostgresLockWaiter(requireDatabase().pool, {
         condition: "relation = 'promotion_code_customers'::regclass",
         description: "an allowlist read",
       }).then(
@@ -4517,12 +4566,13 @@ const getCandidateCodeId = (candidate: DiscountCandidate) => {
 describe.skipIf(!testDatabase)(
   "PaymentLifecycleRepository discount-code service dates on disposable Postgres",
   () => {
+    if (!testDatabase) return;
     // makeSnapshot books the cowork reservation for 2099-01-01.
     const reservationStartDate = "2099-01-01";
 
     test("admits a code whose current service dates cover the reservation start date", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const promotion = await createOrdinaryDiscountCode(dotyposCustomerId);
       try {
         await setCodeServiceDates(
@@ -4543,14 +4593,14 @@ describe.skipIf(!testDatabase)(
             })
           )
         );
-        const redemptions = await testDatabase!.pool.query(
+        const redemptions = await testDatabase.pool.query(
           "select state from discount_code_redemptions where payment_attempt_id = $1",
           [attempt.id]
         );
 
         expect(redemptions.rows).toEqual([{ state: "reserved" }]);
       } finally {
-        await testDatabase!.pool.query(
+        await testDatabase.pool.query(
           "delete from discount_code_redemptions where code_id = $1",
           [getCandidateCodeId(promotion.candidate)]
         );
@@ -4560,7 +4610,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses a code whose service dates changed after it was affirmed", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const promotion = await createOrdinaryDiscountCode(dotyposCustomerId);
       try {
         const reservation = await createHeldReservation(dotyposCustomerId);
@@ -4579,7 +4629,7 @@ describe.skipIf(!testDatabase)(
         const result = await Effect.runPromise(
           Effect.result(admit(repository, reservation, admission))
         );
-        const attempts = await testDatabase!.pool.query(
+        const attempts = await testDatabase.pool.query(
           "select id from payment_attempts where workspace_reservation_id = $1",
           [reservation.id]
         );
@@ -4599,7 +4649,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses a code outside its service dates before reading the allowlist", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const promotion = await createOrdinaryDiscountCode(dotyposCustomerId);
       try {
         const reservation = await createHeldReservation(dotyposCustomerId);
@@ -4636,7 +4686,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses an expired voucher before reading the allowlist", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const voucher = await createVoucher(dotyposCustomerId);
       try {
         const reservation = await createHeldReservation(dotyposCustomerId);
@@ -4646,7 +4696,7 @@ describe.skipIf(!testDatabase)(
           candidate: voucher.candidate,
           firstServiceDate: reservationStartDate,
         });
-        await testDatabase!.pool.query(
+        await testDatabase.pool.query(
           "update promotion_codes set valid_until = now() - interval '1 hour' where id = (select promotion_code_id from vouchers where id = $1)",
           [voucher.candidate.provenance.providerReference]
         );
@@ -4669,7 +4719,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses a fully discounting code whose service dates changed before an internal payment", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const promotion = await createOrdinaryDiscountCode(
         dotyposCustomerId,
         10_000
@@ -4692,7 +4742,7 @@ describe.skipIf(!testDatabase)(
         const result = await Effect.runPromise(
           Effect.result(
             repository.completeInternalPayment({
-              orderId: reservationOrderId(reservation.id),
+              orderId: standaloneReservationOrderId(reservation.id),
               amount: admission.admission.amount,
               commitment: admission.admission.commitment,
               locale: admission.locale,
@@ -4700,20 +4750,20 @@ describe.skipIf(!testDatabase)(
             })
           )
         );
-        const attempts = await testDatabase!.pool.query(
+        const attempts = await testDatabase.pool.query(
           "select id from payment_attempts where workspace_reservation_id = $1",
           [reservation.id]
         );
-        const applications = await testDatabase!.pool.query(
+        const applications = await testDatabase.pool.query(
           "select id from discount_applications where workspace_reservation_id = $1",
           [reservation.id]
         );
-        const claims = await testDatabase!.pool.query(
+        const claims = await testDatabase.pool.query(
           "select id from discount_code_redemptions where code_id = $1",
           [getCandidateCodeId(promotion.candidate)]
         );
         const [reservationRow] = await Effect.runPromise(
-          testDatabase!.db
+          testDatabase.db
             .select({ paymentState: workspaceReservations.paymentState })
             .from(workspaceReservations)
             .where(eq(workspaceReservations.id, reservation.id))
@@ -4737,7 +4787,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses a commitment affirmed for another reservation start date", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const promotion = await createOrdinaryDiscountCode(dotyposCustomerId);
       try {
         const reservation = await createHeldReservation(dotyposCustomerId);

@@ -55,6 +55,85 @@ const sortKeySchema = Schema.NullOr(
 );
 type SortKey = typeof sortKeySchema.Type;
 
+/** Loads one customer detail; `resolve` decodes what it returns before reading it. */
+type CustomerDetailLoader = (input: {
+  readonly customerId: DotyposCustomerId;
+}) => Effect.Effect<unknown, CustomerValueFailure>;
+
+/** The loader for each customer detail a value's path can start at. */
+export type CustomerDetailLoaders = Readonly<
+  Record<keyof AdministrationCustomerDetail, CustomerDetailLoader>
+>;
+
+/** Resolves customer values from `loaders`, treating their data as untrusted. */
+export const makeCustomerValues = (
+  loaders: CustomerDetailLoaders
+): ICustomerValues => {
+  const sources: Readonly<Record<string, CustomerDetailLoader>> = loaders;
+  return {
+    resolve: Effect.fn("CustomerValues.resolve")(
+      (input: CustomerValueInput) => {
+        const selection: Effect.Effect<
+          EmailCustomerField,
+          EmailCustomerSelectionInvalid
+        > = validateEmailCustomerSelection(input.definition.source);
+        return selection.pipe(
+          Effect.tap(() => validateDefinitionHistory(input.definition)),
+          Effect.andThen(() =>
+            Effect.succeed(sources[input.definition.source.path[0] ?? ""]).pipe(
+              Effect.filterOrFail(
+                (load): load is NonNullable<typeof load> => load !== undefined,
+                () =>
+                  new CustomerValueRejected({
+                    reason: "incompatible-shape",
+                  })
+              ),
+              Effect.flatMap((load) => load({ customerId: input.customerId }))
+            )
+          ),
+          Effect.flatMap((customer) =>
+            Schema.decodeUnknownEffect(Schema.Json)(customer).pipe(
+              Effect.mapError(
+                () => new CustomerValueRejected({ reason: "invalid-data" })
+              )
+            )
+          ),
+          Effect.map((customer) =>
+            valueAtPath(customer, input.definition.source.path.slice(1))
+          ),
+          Effect.filterOrFail(
+            (value): value is Schema.Json =>
+              value !== null && value !== undefined,
+            () => new CustomerValueMissing({ reason: "field-absent" })
+          ),
+          Effect.flatMap((value) =>
+            selectCustomerValue(value, input.definition.source)
+          ),
+          Effect.flatMap((value) =>
+            EmailValueSnapshot.members[0].makeEffect({ value }).pipe(
+              Effect.flatMap(
+                Schema.decodeUnknownEffect(
+                  emailValueSnapshotForDefinition(
+                    input.definition,
+                    input.locale
+                  )
+                )
+              ),
+              Effect.mapError(
+                () =>
+                  new CustomerValueRejected({
+                    reason: "incompatible-shape",
+                  })
+              ),
+              Effect.as(value)
+            )
+          )
+        );
+      }
+    ),
+  } satisfies ICustomerValues;
+};
+
 export class CustomerValues extends Context.Service<
   CustomerValues,
   ICustomerValues
@@ -63,89 +142,10 @@ export class CustomerValues extends Context.Service<
     this,
     Effect.gen(function* () {
       const source = yield* CustomerValueSource;
-      const sources: Readonly<
-        Record<
-          string,
-          (input: {
-            readonly customerId: DotyposCustomerId;
-          }) => Effect.Effect<unknown, CustomerValueFailure>
-        >
-      > = {
+      return makeCustomerValues({
         profile: source.profile,
         activity: source.activity,
-      } satisfies Record<
-        keyof AdministrationCustomerDetail,
-        (input: {
-          readonly customerId: DotyposCustomerId;
-        }) => Effect.Effect<unknown, CustomerValueFailure>
-      >;
-      return {
-        resolve: Effect.fn("CustomerValues.resolve")(
-          (input: CustomerValueInput) => {
-            const selection: Effect.Effect<
-              EmailCustomerField,
-              EmailCustomerSelectionInvalid
-            > = validateEmailCustomerSelection(input.definition.source);
-            return selection.pipe(
-              Effect.tap(() => validateDefinitionHistory(input.definition)),
-              Effect.andThen(() =>
-                Effect.succeed(
-                  sources[input.definition.source.path[0] ?? ""]
-                ).pipe(
-                  Effect.filterOrFail(
-                    (load): load is NonNullable<typeof load> =>
-                      load !== undefined,
-                    () =>
-                      new CustomerValueRejected({
-                        reason: "incompatible-shape",
-                      })
-                  ),
-                  Effect.flatMap((load) =>
-                    load({ customerId: input.customerId })
-                  )
-                )
-              ),
-              Effect.flatMap((customer) =>
-                Schema.decodeUnknownEffect(Schema.Json)(customer).pipe(
-                  Effect.mapError(
-                    () => new CustomerValueRejected({ reason: "invalid-data" })
-                  )
-                )
-              ),
-              Effect.map((customer) =>
-                valueAtPath(customer, input.definition.source.path.slice(1))
-              ),
-              Effect.filterOrFail(
-                (value): value is Schema.Json =>
-                  value !== null && value !== undefined,
-                () => new CustomerValueMissing({ reason: "field-absent" })
-              ),
-              Effect.flatMap((value) =>
-                selectCustomerValue(value, input.definition.source)
-              ),
-              Effect.flatMap((value) =>
-                EmailValueSnapshot.members[0].makeEffect({ value }).pipe(
-                  Effect.flatMap(
-                    Schema.decodeUnknownEffect(
-                      emailValueSnapshotForDefinition(
-                        input.definition,
-                        input.locale
-                      )
-                    )
-                  ),
-                  Effect.mapError(
-                    () =>
-                      new CustomerValueRejected({
-                        reason: "incompatible-shape",
-                      })
-                  ),
-                  Effect.as(value)
-                )
-              )
-            );
-          }
-        ),
-      } satisfies ICustomerValues;
+      });
     })
   );
 

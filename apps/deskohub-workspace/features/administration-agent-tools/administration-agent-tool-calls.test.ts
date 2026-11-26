@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   AdministrationOperationBehavior,
@@ -14,7 +15,7 @@ import {
 } from "@deskohub/workspace-admin-api";
 import { NodeHttpServer } from "@effect/platform-node";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Data, Effect, Layer, Option, Schema } from "effect";
 import { FetchHttpClient, HttpRouter } from "effect/http";
 import {
   HttpApi,
@@ -23,6 +24,7 @@ import {
   HttpApiGroup,
   HttpApiSchema,
 } from "effect/http-api";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { AdministratorAgentAuthorization } from "@/features/administrators/backend/administrator-agent-authorization.service";
 import { AgentToolReply } from "@/features/agent-tools/agent-tool";
 import type { CustomerAgentCaller } from "@/features/agent-tools/customer-agent-caller";
@@ -233,7 +235,7 @@ const tools = makeAdministrationAgentTools(
 const caller: CustomerAgentCaller = {
   accessToken: "synthetic-agent-token",
   grant: {
-    accountId: "synthetic-account" as CustomerAgentCaller["grant"]["accountId"],
+    accountId: customerAccountIdSchema.make("synthetic-account"),
     clientId: "https://agent.example/client.json",
     scopes: new Set(["administration"]),
   },
@@ -244,6 +246,15 @@ const caller: CustomerAgentCaller = {
  * tools were listed, or impossible to check.
  */
 let grant: "live" | "ended" | "unavailable" = "live";
+
+type AdministratorAgentRefusal = Effect.Error<
+  ReturnType<AdministratorAgentAuthorization["Service"]["authorize"]>
+>;
+
+/** The refusal the administrator authorization fails with. */
+class SyntheticAdministratorAgentRefusal extends Data.TaggedError(
+  "AdministratorAgentAuthorizationError"
+)<{ readonly reason: AdministratorAgentRefusal["reason"] }> {}
 let grantChecks: Array<string> = [];
 
 const administratorAuthorization = Layer.succeed(
@@ -256,11 +267,12 @@ const administratorAuthorization = Layer.succeed(
           ? Effect.succeed({
               accountId: caller.grant.accountId,
               email: testEmailAddress("administration-tool-caller"),
-            } as never)
-          : Effect.fail({
-              _tag: "AdministratorAgentAuthorizationError",
-              reason: grant === "ended" ? "not-administrator" : "unavailable",
-            } as never);
+            })
+          : Effect.fail(
+              new SyntheticAdministratorAgentRefusal({
+                reason: grant === "ended" ? "not-administrator" : "unavailable",
+              })
+            );
       }),
   }
 );
@@ -337,22 +349,24 @@ describe("administration agent tool calls", () => {
     });
     const reply = resultOf(result._tag === "Success" && result.success);
     const tool = tools.find(({ name }) => name === "admin_issue_code");
+    assert(tool);
 
     expect(reply).toEqual({ outcome: "created", code: "synthetic" });
     expect(
       new AjvJsonSchemaValidator().getValidator(
-        tool!.output["~standard"].jsonSchema.input({ target: "draft-2020-12" })
+        tool.output["~standard"].jsonSchema.input({ target: "draft-2020-12" })
       )(reply)
     ).toMatchObject({ valid: true });
   });
 
   test("send concurrent calls through one client, each with its own caller's token", async () => {
     const tool = tools.find(({ name }) => name === "admin_get_reservation");
+    assert(tool);
     const tokens = ["token-a", "token-b", "token-c", "token-d"];
 
     await Effect.all(
       tokens.map((token) =>
-        tool!.call(
+        tool.call(
           { reservationId: token },
           Option.some({ ...caller, accessToken: token })
         )
@@ -374,6 +388,7 @@ describe("administration agent tool calls", () => {
 
   test("keep every request in process when the fetch client was built elsewhere first", async () => {
     const tool = tools.find(({ name }) => name === "admin_cancel_reservation");
+    assert(tool);
 
     const result = await Effect.scoped(
       Effect.gen(function* () {
@@ -389,7 +404,7 @@ describe("administration agent tool calls", () => {
           memoMap,
           scope
         );
-        return yield* tool!
+        return yield* tool
           .call({ reservationId: "r-1", sendEmail: true }, Option.some(caller))
           .pipe(
             Effect.provideContext(built),
@@ -650,7 +665,8 @@ describe("administration agent tool calls", () => {
     const tool = tools.find(
       (candidate) => candidate.name === "admin_get_reservation"
     );
-    const result = await tool!
+    assert(tool);
+    const result = await tool
       .call({ reservationId: "r-1" })
       .pipe(Effect.provide(toolServices), Effect.result, Effect.runPromise);
 

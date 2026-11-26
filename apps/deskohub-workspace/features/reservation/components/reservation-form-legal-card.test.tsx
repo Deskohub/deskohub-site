@@ -31,6 +31,7 @@ import viVnCatalog from "@/features/i18n/messages/vi-VN.json" with {
   type: "json",
 };
 import { Form } from "@/shared/components/ui/form";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -115,9 +116,10 @@ describe("reservation form legal cards", () => {
       expect(cards[0]?.querySelector('[role="checkbox"]')).toBeNull();
       expect(cards[1]?.querySelector('[role="checkbox"]')).toBe(checkboxes[0]);
 
-      const privacyIcon = view.container.querySelector(
-        "svg[aria-hidden='true']"
-      ) as SVGElement;
+      const privacyIcon = elementOf(
+        view.container.querySelector("svg[aria-hidden='true']"),
+        SVGElement
+      );
       expect(privacyIcon).not.toBeNull();
       expect(privacyIcon.getAttribute("role")).not.toBe("checkbox");
       expect(privacyIcon.getAttribute("aria-hidden")).toBe("true");
