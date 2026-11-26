@@ -16,12 +16,12 @@ import { encodeCallerHeaders } from "./src/caller";
 const baseline: Readonly<Record<string, string>> = recorded;
 
 const requestId = "17";
-const headers = [
-  ["x-deskohub-correlation-id", "72823c14-d2de-4a19-94ec-8b70ad590242"],
-  ["x-deskohub-locale", "cs-CZ"],
-  ["x-deskohub-client-address", "192.0.2.20"],
-  ["x-deskohub-user-agent", "Deskohub Wire Fixture/1.0"],
-] as const;
+const baselineHeaders = {
+  "x-deskohub-correlation-id": "72823c14-d2de-4a19-94ec-8b70ad590242",
+  "x-deskohub-locale": "cs-CZ",
+  "x-deskohub-client-address": "192.0.2.20",
+  "x-deskohub-user-agent": "Deskohub Wire Fixture/1.0",
+} as const;
 const caller = {
   correlationId: "72823c14-d2de-4a19-94ec-8b70ad590242",
   locale: "cs-CZ",
@@ -100,7 +100,7 @@ const getSamples = Effect.gen(function* () {
           Schema.decodeUnknownSync(CallerHeaders)(
             Headers.fromInput(message.headers)
           )
-        ).toEqual(Object.fromEntries(headers));
+        ).toEqual(baselineHeaders);
         return {
           ...message,
           payload: decode(rpc.payloadSchema)(message.payload),
@@ -144,7 +144,7 @@ const getSamples = Effect.gen(function* () {
       _tag: "Request" as const,
       id: requestId,
       tag,
-      headers,
+      headers: Object.entries(baselineHeaders),
       payload: request,
     };
     add(
