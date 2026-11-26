@@ -451,11 +451,15 @@ describe("workspace E2E workflow", () => {
         step.if === "failure()" &&
         step.uses?.startsWith("actions/upload-artifact@")
     );
-    const paths = String(failureUpload?.with?.path).split("\n");
+    const exclusions = String(failureUpload?.with?.path)
+      .split("\n")
+      .filter((path) => path.startsWith("!"))
+      .map((path) => new Bun.Glob(path.slice(1)));
     for (const directory of ["account-journals", "cleanup-journals"]) {
-      expect(paths).toContain(
-        `!apps/deskohub-workspace/e2e-artifacts/checkout/${directory}/${unlimitedPassAutoRenewalCaseId}.json`
-      );
+      const journal = `apps/deskohub-workspace/e2e-artifacts/checkout/${directory}/${unlimitedPassAutoRenewalCaseId}.json`;
+      for (const path of [journal, `${journal}.123.synthetic-id.tmp`]) {
+        expect(exclusions.some((glob) => glob.match(path))).toBe(true);
+      }
     }
   });
 
