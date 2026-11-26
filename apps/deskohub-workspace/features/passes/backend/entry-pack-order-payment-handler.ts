@@ -78,8 +78,8 @@ import {
 import {
   matchesUnlimitedAutoRenewalAuthorization,
   readUnlimitedAutoRenewalDisclosure,
-  recordUnlimitedAutoRenewalAuthorization,
 } from "./unlimited-auto-renewal";
+import { recordUnlimitedAutoRenewalAuthorization } from "./unlimited-auto-renewal-ledger";
 import {
   confirmUnlimitedPassDays,
   readPayableUnlimitedHolds,

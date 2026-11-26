@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "b39a938d-6593-48c4-bd77-1fbfae375414",
+  "id": "56b4fc63-585e-4e46-b461-1f8c79809b46",
   "prevIds": [
     "134b76fd-0055-40f0-8575-ed0bc0386291"
   ],
@@ -11000,6 +11000,19 @@
       "table": "unlimited_auto_renewal_authorizations"
     },
     {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "prepaid_successor_order_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "unlimited_auto_renewal_authorizations"
+    },
+    {
       "type": "uuid",
       "typeSchema": null,
       "notNull": true,
@@ -20511,6 +20524,23 @@
     {
       "nameExplicit": false,
       "columns": [
+        "prepaid_successor_order_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "orders",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "unlimited_auto_renewal_authorizations_G3d6tc2EZ5MT_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "unlimited_auto_renewal_authorizations"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
         "reservation_id"
       ],
       "schemaTo": "public",
@@ -23406,7 +23436,7 @@
       "table": "pass_purchases"
     },
     {
-      "value": "not \"auto_renew\" or (\"product\" = 'unlimited' and \"renews_pass_id\" is null)",
+      "value": "not \"auto_renew\" or \"product\" = 'unlimited'",
       "name": "pass_purchases_auto_renew_check",
       "entityType": "checks",
       "schema": "public",
@@ -23912,6 +23942,13 @@
     {
       "value": "\"terms_hash\" ~ '^[0-9a-f]{64}$' and \"quote_fingerprint\" ~ '^[0-9a-f]{64}$'",
       "name": "unlimited_auto_renewal_evidence_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "unlimited_auto_renewal_authorizations"
+    },
+    {
+      "value": "\"cancelled_at\" is null or \"prepaid_successor_order_id\" is null",
+      "name": "unlimited_auto_renewal_stop_check",
       "entityType": "checks",
       "schema": "public",
       "table": "unlimited_auto_renewal_authorizations"

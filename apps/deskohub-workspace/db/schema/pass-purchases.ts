@@ -88,7 +88,7 @@ export const passPurchases = pgTable(
     ),
     check(
       "pass_purchases_auto_renew_check",
-      sql`not ${t.autoRenew} or (${t.product} = 'unlimited' and ${t.renewsPassId} is null)`
+      sql`not ${t.autoRenew} or ${t.product} = 'unlimited'`
     ),
     check(
       "pass_purchases_product_check",

@@ -255,8 +255,7 @@ async function UnlimitedPassPageContent({
   if (query.renew !== undefined && !Schema.is(orderIdSchema)(query.renew))
     notFound();
   const requestedRenewal = query.renew;
-  const offersAutoRenewal =
-    offersUnlimitedAutoRenewal(locale) && !handoffToken && !requestedRenewal;
+  const offersAutoRenewal = offersUnlimitedAutoRenewal(locale) && !handoffToken;
   const requestedAutoRenew = offersAutoRenewal && query.autoRenew === "true";
   const orderId = order?.kind === "edit" ? undefined : order?.orderId;
   const isPaymentStep = order?.kind === "resume" && query.step === "pay";
@@ -283,7 +282,7 @@ async function UnlimitedPassPageContent({
       );
     }
     if (renewsPassId && !order && query.tier === undefined)
-      return getUnlimitedRenewalPath(targetLocale, renewsPassId);
+      return getUnlimitedRenewalPath(targetLocale, renewsPassId, autoRenew);
     return getUnlimitedPassChoosePath(
       targetLocale,
       selection ?? options,
@@ -402,8 +401,7 @@ async function UnlimitedPassPageContent({
       }
     : undefined;
   const initialPayment = draft?.kind === "pay" ? draft.payment : undefined;
-  const autoRenewAvailable =
-    offersAutoRenewal && !renewsPassId && !draft?.holderEmail;
+  const autoRenewAvailable = offersAutoRenewal && !draft?.holderEmail;
   const initialAutoRenew =
     autoRenewAvailable &&
     (resumesDraft && draft ? draft.autoRenew === true : requestedAutoRenew);

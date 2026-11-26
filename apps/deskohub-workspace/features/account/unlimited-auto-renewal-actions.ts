@@ -10,7 +10,7 @@ import { m } from "@/features/i18n";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import { CoworkPassesReleaseGateRequest } from "@/features/passes/backend/cowork-passes-release-gate.server";
-import { cancelUnlimitedAutoRenewal } from "@/features/passes/backend/unlimited-auto-renewal";
+import { cancelUnlimitedAutoRenewal } from "@/features/passes/backend/unlimited-auto-renewal-management";
 import { isUnlimitedAutoRenewalPreviewEnabled } from "@/features/passes/backend/unlimited-auto-renewal-preview.server";
 import { defineWorkspaceAction } from "@/shared/backend/workspace-action";
 

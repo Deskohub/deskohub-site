@@ -97,12 +97,12 @@ import {
   reconcilePassPurchases,
   reconcileUnlimitedPassReleases,
 } from "./pass-purchase-reconciliation";
+import { readUnlimitedAutoRenewalDisclosure } from "./unlimited-auto-renewal";
+import { recordUnlimitedAutoRenewalAuthorization } from "./unlimited-auto-renewal-ledger";
 import {
   cancelUnlimitedAutoRenewal,
   listUnlimitedAutoRenewals,
-  readUnlimitedAutoRenewalDisclosure,
-  recordUnlimitedAutoRenewalAuthorization,
-} from "./unlimited-auto-renewal";
+} from "./unlimited-auto-renewal-management";
 import {
   confirmUnlimitedPassDays,
   createUnlimitedPassHolds,
@@ -146,18 +146,27 @@ const recordPurchase = (
   now: Temporal.Instant,
   startDaysAhead = 10,
   tier: "reserved-desk" | "open-space" = "reserved-desk",
-  autoRenew?: true
+  autoRenew?: true,
+  previous?: Pick<
+    typeof passPurchases.$inferSelect,
+    "id" | "buyerAccountId" | "validUntil"
+  >
 ) =>
   Effect.gen(function* () {
     const { db, transaction } = yield* WorkspaceDatabase;
-    const accountId = customerAccountIdSchema.make(crypto.randomUUID());
-    yield* db.insert(customerAccounts).values({ id: accountId });
-    const start = getCurrentWorkspaceDate(now).add({ days: startDaysAhead });
+    const accountId =
+      previous?.buyerAccountId ??
+      customerAccountIdSchema.make(crypto.randomUUID());
+    if (!previous) yield* db.insert(customerAccounts).values({ id: accountId });
+    const start = previous
+      ? Temporal.PlainDate.from(previous.validUntil)
+      : getCurrentWorkspaceDate(now).add({ days: startDaysAhead });
     return yield* transaction(
       recordUnlimitedPassOrder({
         orderId: orderIdSchema.make(crypto.randomUUID()),
         locale: "en-US",
         ...(autoRenew && { autoRenew }),
+        ...(previous && { renewsPassId: previous.id }),
         buyer: { accountId, customerId },
         holder: { accountId, customerId },
         createdAt: now,
@@ -726,6 +735,115 @@ it("binds Unlimited renewal consent to the paid attempt and lets only the owner 
           )
         ).toBe(true);
       }).pipe(Effect.provide(servicesFor(provider.service)))
+    );
+  } finally {
+    renewalPreviewEnabled.mockReturnValue(false);
+  }
+});
+
+it("only a fully activated prepaid renewal stops an earlier plan for the same date", async () => {
+  const now = Temporal.Instant.from("2031-01-08T12:00:00Z");
+  renewalPreviewEnabled.mockReturnValue(true);
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(now.epochMilliseconds);
+        const { db, transaction } = yield* WorkspaceDatabase;
+        const source = yield* recordPurchase(now, 5, "reserved-desk", true);
+        yield* db.insert(authUser).values({
+          id: source.buyerAccountId,
+          email: testEmailAddress("manual-renewal-buyer"),
+          name: "Synthetic Renewal Buyer",
+          emailVerified: true,
+        });
+        const paid = (purchase: typeof source) =>
+          Effect.gen(function* () {
+            const disclosure = readUnlimitedAutoRenewalDisclosure(purchase);
+            if (!disclosure) throw new Error("Missing renewal disclosure");
+            const attemptId = yield* recordAttempt(purchase.id, "paid", now);
+            const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
+              purchase.quote
+            );
+            yield* transaction(
+              recordUnlimitedAutoRenewalAuthorization(
+                attemptId,
+                purchase.holderVersion,
+                disclosure,
+                getPassPurchasePriceFingerprint(quote),
+                now
+              )
+            );
+            yield* db
+              .update(orders)
+              .set({
+                paymentState: "paid",
+                activePaymentAttemptId: attemptId,
+                paidAt: now,
+              })
+              .where(eq(orders.id, purchase.id));
+            yield* settlePassPurchase(purchase.id);
+            return attemptId;
+          });
+
+        yield* createUnlimitedPassHolds(source);
+        const firstAttempt = yield* paid(source);
+        yield* confirmUnlimitedPassDays(source);
+        expect(
+          (yield* settlePassPurchase(source.id, firstAttempt))?.status
+        ).toBe("active");
+        const currentPlans = listUnlimitedAutoRenewals(source.buyerAccountId);
+        expect((yield* currentPlans).get(source.id)?.status).toBe("pending");
+
+        const successor = yield* recordPurchase(
+          now,
+          0,
+          "reserved-desk",
+          true,
+          source
+        );
+        expect(successor).toMatchObject({
+          autoRenew: true,
+          renewsPassId: source.id,
+          validFrom: source.validUntil,
+        });
+        yield* createUnlimitedPassHolds(successor);
+        expect((yield* currentPlans).get(source.id)?.status).toBe("pending");
+        const secondAttempt = yield* paid(successor);
+        expect((yield* currentPlans).get(source.id)?.status).toBe("pending");
+        expect((yield* currentPlans).has(successor.id)).toBe(false);
+
+        yield* confirmUnlimitedPassDays(successor);
+        expect(
+          (yield* settlePassPurchase(successor.id, secondAttempt))?.status
+        ).toBe("active");
+        expect(
+          yield* settlePassPurchase(successor.id, secondAttempt)
+        ).toBeUndefined();
+        const plans = yield* currentPlans;
+        expect(plans.get(source.id)?.status).toBe("cancelled");
+        expect(plans.get(successor.id)).toEqual({
+          status: "pending",
+          nextRenewalOn: successor.validUntil,
+          amount: price,
+        });
+        const [stopped] = yield* db
+          .select()
+          .from(unlimitedAutoRenewalAuthorizations)
+          .where(
+            eq(
+              unlimitedAutoRenewalAuthorizations.paymentAttemptId,
+              firstAttempt
+            )
+          );
+        expect(stopped).toMatchObject({
+          prepaidSuccessorOrderId: successor.id,
+          cancelledAt: null,
+        });
+      }).pipe(
+        Effect.provide(
+          Layer.merge(servicesFor(provider.service), TestClock.layer())
+        )
+      )
     );
   } finally {
     renewalPreviewEnabled.mockReturnValue(false);

@@ -287,13 +287,12 @@ test("auto renewal needs an opted-in preview and a locale with renewal terms", a
   });
 });
 
-test("resumed drafts use their stored choice and handoffs and manual renewals suppress auto renewal", async () => {
+test("resumed drafts use their stored choice and handoffs suppress auto renewal", async () => {
   autoRenewPreviewEnabled = true;
   submittedOrderCommitted = true;
   const withAutoRenew = { ...selectionQuery, autoRenew: "true" };
   for (const query of [
     { ...withAutoRenew, handoff: "opaque" },
-    { ...withAutoRenew, renew: renewalSource },
     { ...withAutoRenew, submittedOrder },
   ]) {
     const content = await renderContent(query);
@@ -308,6 +307,28 @@ test("resumed drafts use their stored choice and handoffs and manual renewals su
   storedAutoRenew = true;
   const recurring = await renderContent({ ...selectionQuery, submittedOrder });
   expect(recurring.props.children.props.initialAutoRenew).toBe(true);
+});
+
+test("a manual renewal keeps its start date and defaults to prepaid with optional auto renewal", async () => {
+  autoRenewPreviewEnabled = true;
+  const oneTime = await renderContent({ renew: renewalSource });
+  expect(oneTime.props.children.props).toMatchObject({
+    renewsPassId: renewalSource,
+    initialStartDate: renewalSelection.startDate,
+    autoRenewAvailable: true,
+    initialAutoRenew: false,
+  });
+
+  const selected = await renderContent({
+    ...selectionQuery,
+    renew: renewalSource,
+    autoRenew: "true",
+  });
+  expect(selected.props.children.props).toMatchObject({
+    renewsPassId: renewalSource,
+    initialStartDate: renewalSelection.startDate,
+    initialAutoRenew: true,
+  });
 });
 
 test("a renewal rejects invalid, repeated, or ineligible source IDs", async () => {

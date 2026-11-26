@@ -193,8 +193,7 @@ export function UnlimitedPassCheckout({
   const [renewalSelected, setRenewalSelected] = useState(
     initialAutoRenew === true
   );
-  const canChooseAutoRenew =
-    autoRenewAvailable === true && !renewsPassId && !handoff;
+  const canChooseAutoRenew = autoRenewAvailable === true && !handoff;
   const autoRenew = canChooseAutoRenew && renewalSelected;
   const detailRevision = useRef(0);
   useEffect(

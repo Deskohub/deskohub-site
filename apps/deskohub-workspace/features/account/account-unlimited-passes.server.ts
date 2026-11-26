@@ -8,7 +8,7 @@ import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
 import { recoverEntryPackGiftClaims } from "@/features/passes/backend/entry-pack-gift";
 import { listHeldUnlimitedPasses } from "@/features/passes/backend/held-unlimited-passes";
-import { listUnlimitedAutoRenewals } from "@/features/passes/backend/unlimited-auto-renewal";
+import { listUnlimitedAutoRenewals } from "@/features/passes/backend/unlimited-auto-renewal-management";
 import { isUnlimitedAutoRenewalPreviewEnabled } from "@/features/passes/backend/unlimited-auto-renewal-preview.server";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import {

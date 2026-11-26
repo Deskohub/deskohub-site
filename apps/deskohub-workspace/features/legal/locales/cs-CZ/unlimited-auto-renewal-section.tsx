@@ -24,7 +24,7 @@ export const unlimitedAutoRenewalSection: LegalSection = {
       Poskytovatel nezahájí žádnou další platbu za obnovení a přístup trvá do
       konce zaplaceného období.
     </>,
-    "16.8 Poskytovatel před platbou zajistí kapacitu na celé další období. Pokud sjednanou službu nebo konkrétní místo Reserved Desk nemůže poskytnout, vyžádá si souhlas s vhodnou alternativou nebo obnovování ukončí bez platby za nové období. Jiná cena, změna pravidelného doplňku nebo podstatná změna služby vyžadují nový souhlas Klienta před platbou.",
+    "16.8 Poskytovatel před platbou zajistí kapacitu na celé další období. Pokud sjednanou službu nebo konkrétní místo Reserved Desk nemůže poskytnout, vyžádá si souhlas s vhodnou alternativou nebo obnovování ukončí bez platby za nové období. Jiná cena, změna pravidelného doplňku nebo podstatná změna služby vyžadují nový souhlas Klienta před platbou. Pokud si Klient předplatí členství, které pokrývá plánovaný den obnovy, původní obnovování se zastaví. Automatické obnovování nového členství vyžaduje nový souhlas při nákupu.",
     "16.9 Pokud se platba za obnovení nezdaří, Poskytovatel Klienta vyrozumí a nabídne mu novou objednávku. Neúspěšnou platbu nebude automaticky opakovat. Bez úhrady dalšího období přístup skončí s koncem zaplaceného období.",
     "16.10 Zrušení obnovování ukončí budoucí platby. Právo Spotřebitele odstoupit od smlouvy se posuzuje samostatně podle článku 9 a platných právních předpisů. Pokud se na smlouvu právo na odstoupení vztahuje, zahájení služby před uplynutím lhůty pro odstoupení vyžaduje samostatnou výslovnou žádost. Při odstoupení po zahájení služby lze požadovat poměrnou úhradu za již poskytnutou službu, jsou-li splněny zákonné podmínky.",
   ],

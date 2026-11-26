@@ -126,7 +126,7 @@ export function getUnlimitedPassChoosePath(
   const query = new URLSearchParams({
     tier: options.tier,
     ...(renewsPassId && { renew: renewsPassId }),
-    ...(!renewsPassId && autoRenew && { autoRenew: "true" }),
+    ...(autoRenew && { autoRenew: "true" }),
     ...(startDate !== undefined && { startDate }),
     ...(order?.kind === "resume" && { order: order.orderId }),
     ...(order?.kind === "replace" && { supersedeOrder: order.orderId }),

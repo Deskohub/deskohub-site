@@ -65,9 +65,12 @@ Object.assign(WorkspaceDatabase, {
 const cancel = mock((_accountId: CustomerAccountId, _orderId: OrderId) =>
   Effect.succeed("cancelled" as const)
 );
-mock.module("@/features/passes/backend/unlimited-auto-renewal", () => ({
-  cancelUnlimitedAutoRenewal: cancel,
-}));
+mock.module(
+  "@/features/passes/backend/unlimited-auto-renewal-management",
+  () => ({
+    cancelUnlimitedAutoRenewal: cancel,
+  })
+);
 
 const { cancelAccountUnlimitedAutoRenewal } = await import(
   "./unlimited-auto-renewal-actions"

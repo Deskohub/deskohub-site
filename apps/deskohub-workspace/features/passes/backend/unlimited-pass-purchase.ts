@@ -275,9 +275,7 @@ export const beginUnlimitedPassPurchase = Effect.fn(
     Effect.gen(function* () {
       if (
         input.autoRenew &&
-        (!offersUnlimitedAutoRenewal(input.locale) ||
-          giftEmail ||
-          input.renewsPassId)
+        (!offersUnlimitedAutoRenewal(input.locale) || giftEmail)
       ) {
         return yield* new EntryPackPurchaseError({ reason: "unavailable" });
       }
