@@ -69,3 +69,5 @@ The reservation-preparation UI action (`e2e/checkout/payment.ts`) may retry once
 ## Review screenshots
 
 Review screenshots are PR-review artifacts, not test evidence. General account captures run only when `WORKSPACE_E2E_REVIEW_SCREENSHOTS=true`, decoded once by `reviewScreenshotsEnabled` in `e2e/e2e-env.ts`; the campaign composer has its own `WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS=true` opt-in, so manual campaign evidence does not enable unrelated account captures. The administration captures include both Overview locales and a customer calendar rendered for a run-scoped synthetic Dotypos profile; the profile is expired in `finally`, and customer links are masked in Overview captures. CI uploads `e2e-artifacts/account-review/*.png` as `workspace-account-review-<run>-<attempt>`.
+
+The Unlimited Nexi review observes the top-level handoff and verifies that exact sandbox document and its empty hosted fields at both widths before card entry. It reports missing captures after the payment journey with fixed reason codes. Inspect those codes before repeating a paid run. The report omits browser exceptions, URL values, and card-field contents.

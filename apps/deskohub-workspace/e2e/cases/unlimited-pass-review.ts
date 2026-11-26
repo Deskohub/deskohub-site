@@ -1,6 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { expect, type Frame, type Locator, type Page } from "@playwright/test";
+import { setTimeout as delay } from "node:timers/promises";
+import type { Frame, Locator, Page } from "@playwright/test";
 import { getLegalDocumentPath } from "@/features/legal/legal-document-path";
 import { unlimitedPassCheckoutPath } from "@/features/passes/routes";
 import { locateSnapshotRef } from "../browser";
@@ -10,7 +11,9 @@ import {
 } from "../checkout/nexi-hosted-page";
 import type { HostedPaymentPage } from "../checkout/payment";
 import type { unlimitedPassReviewLocale } from "../e2e-env";
+import { redact } from "../redaction";
 import { workspaceDir } from "../runtime";
+import { workspaceE2EPollIntervalMs } from "../timeouts";
 
 type ReviewLocale = NonNullable<ReturnType<typeof unlimitedPassReviewLocale>>;
 
@@ -29,6 +32,26 @@ const workspaceShots = [
 ] as const;
 type WorkspaceShot = (typeof workspaceShots)[number];
 type ReviewShot = WorkspaceShot | "nexi-handoff";
+type CardFieldProblem =
+  | "snapshot-unavailable"
+  | "card-field-missing"
+  | "card-field-unreadable"
+  | "card-field-populated";
+type CaptureProblem =
+  | CardFieldProblem
+  | "viewport-unavailable"
+  | "viewport-change-failed"
+  | "viewport-restore-failed"
+  | "untracked-document"
+  | "unexpected-document"
+  | "document-navigated"
+  | "screenshot-failed"
+  | "write-failed";
+
+type ReviewImage = {
+  readonly filename: string;
+  readonly pixels: Buffer;
+};
 
 const viewports = [
   { height: 844, width: 390 },
@@ -43,15 +66,23 @@ const requiredCardFields = [
 const optionalCardFields = ["cardholder_name", "cardholder_email"] as const;
 const sandboxOrigin = "https://xpaysandbox.nexigroup.com";
 
-async function hasEmptyCardFields(page: Page, timeout: number) {
-  const snapshot = parseNexiSnapshot(
-    await page.locator("body").ariaSnapshot({ mode: "ai", timeout })
-  );
+async function inspectCardFields(
+  page: Page,
+  deadline: number
+): Promise<CardFieldProblem | undefined> {
+  const snapshotTimeout = deadline - performance.now();
+  if (snapshotTimeout <= 0) return "snapshot-unavailable";
+  const body = await page
+    .locator("body")
+    .ariaSnapshot({ mode: "ai", timeout: snapshotTimeout })
+    .catch(() => undefined);
+  if (!body) return "snapshot-unavailable";
+  const snapshot = parseNexiSnapshot(body);
   for (const field of [...requiredCardFields, ...optionalCardFields]) {
     const target = findNexiCardField(snapshot, field);
     if (!target) {
       if (field === "cardholder_name" || field === "cardholder_email") continue;
-      return false;
+      return "card-field-missing";
     }
     const input = (
       target.frameRef
@@ -61,9 +92,50 @@ async function hasEmptyCardFields(page: Page, timeout: number) {
             .locator("input")
         : locateSnapshotRef(page, target.ref)
     ).filter({ visible: true });
-    if ((await input.inputValue({ timeout })) !== "") return false;
+    const timeout = deadline - performance.now();
+    if (timeout <= 0) return "card-field-unreadable";
+    const value = await input.inputValue({ timeout }).catch(() => undefined);
+    if (value === undefined) return "card-field-unreadable";
+    if (value !== "") return "card-field-populated";
   }
-  return true;
+}
+
+async function waitForEmptyCardFields(page: Page, timeout: number) {
+  const deadline = performance.now() + timeout;
+  while (true) {
+    const problem = await inspectCardFields(page, deadline);
+    if (!problem || problem === "card-field-populated") return problem;
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return problem;
+    await delay(Math.min(remaining, workspaceE2EPollIntervalMs.browser));
+    if (performance.now() >= deadline) return problem;
+  }
+}
+
+async function writeReviewImages(
+  directory: string,
+  images: readonly ReviewImage[]
+) {
+  await mkdir(directory, { recursive: true });
+  const staging = await mkdtemp(resolve(directory, ".unlimited-review-"));
+  const published: string[] = [];
+  try {
+    for (const { filename, pixels } of images) {
+      await writeFile(resolve(staging, filename), pixels);
+    }
+    for (const { filename } of images) {
+      const destination = resolve(directory, filename);
+      await link(resolve(staging, filename), destination);
+      published.push(destination);
+    }
+  } catch (cause) {
+    await Promise.allSettled(
+      published.map((path) => rm(path, { force: true }))
+    );
+    throw cause;
+  } finally {
+    await rm(staging, { force: true, recursive: true });
+  }
 }
 
 export function makeUnlimitedPassReviewCapture({
@@ -79,7 +151,7 @@ export function makeUnlimitedPassReviewCapture({
   readonly origin: string;
   readonly timeout: number;
 }) {
-  const captured = new Set<ReviewShot>();
+  const results = new Map<ReviewShot, CaptureProblem | "captured">();
   const checkoutPath = `/${locale}${unlimitedPassCheckoutPath}`;
   const termsPath = getLegalDocumentPath(locale, "terms-and-conditions");
 
@@ -89,37 +161,41 @@ export function makeUnlimitedPassReviewCapture({
     page: Page,
     shot: ReviewShot,
     options: {
-      readonly verify: () => Promise<boolean>;
+      readonly verify: () => Promise<CaptureProblem | undefined>;
       readonly mask: readonly Locator[];
       readonly section?: Locator;
       readonly style?: string;
     }
   ) {
+    if (results.get(shot) === "captured") return;
+    let phase: CaptureProblem = "viewport-unavailable";
     try {
       const original = page.viewportSize();
-      if (!original)
-        throw new Error("Review capture requires a fixed viewport");
+      if (!original) return;
       const originalUrl = page.url();
       const mainFrame = page.mainFrame();
-      const images: Array<{
-        readonly filename: string;
-        readonly pixels: Buffer;
-      }> = [];
+      const images: ReviewImage[] = [];
       let navigated = false;
+      let restored = false;
       const recordNavigation = (frame: Frame) => {
         if (frame === mainFrame) navigated = true;
       };
-      const verifyDocument = () => {
-        if (navigated || page.url() !== originalUrl)
-          throw new Error("Review document changed during capture");
-      };
+      const documentChanged = () => navigated || page.url() !== originalUrl;
       page.on("framenavigated", recordNavigation);
       try {
         for (const viewport of viewports) {
+          phase = "viewport-change-failed";
           await page.setViewportSize(viewport);
-          if (!(await options.verify()))
-            throw new Error("Unexpected review document");
-          verifyDocument();
+          phase = "unexpected-document";
+          const problem = await options.verify();
+          if (documentChanged()) {
+            phase = "document-navigated";
+            return;
+          }
+          if (problem) {
+            phase = problem;
+            return;
+          }
           const mask = [...options.mask];
           const screenshot = {
             animations: "disabled",
@@ -129,13 +205,17 @@ export function makeUnlimitedPassReviewCapture({
             timeout,
             type: "png",
           } as const;
+          phase = "screenshot-failed";
           const pixels = options.section
             ? await options.section.screenshot(screenshot)
             : await page.screenshot({
                 ...screenshot,
                 fullPage: shot !== "nexi-handoff",
               });
-          verifyDocument();
+          if (documentChanged()) {
+            phase = "document-navigated";
+            return;
+          }
           images.push({
             filename: `unlimited-${locale}-${shot}-${viewport.width}.png`,
             pixels,
@@ -143,15 +223,22 @@ export function makeUnlimitedPassReviewCapture({
         }
       } finally {
         page.off("framenavigated", recordNavigation);
-        await page.setViewportSize(original);
+        try {
+          await page.setViewportSize(original);
+          restored = true;
+        } catch {
+          if (images.length === viewports.length)
+            phase = "viewport-restore-failed";
+        }
       }
-      await mkdir(directory, { recursive: true });
-      for (const { filename, pixels } of images) {
-        await writeFile(resolve(directory, filename), pixels);
-      }
-      captured.add(shot);
+      if (!restored) return;
+      phase = "write-failed";
+      await writeReviewImages(directory, images);
+      results.set(shot, "captured");
     } catch {
-      // The final review step reports missing stages without browser details.
+      // Playwright and filesystem errors can contain private values.
+    } finally {
+      if (results.get(shot) !== "captured") results.set(shot, phase);
     }
   }
 
@@ -181,7 +268,8 @@ export function makeUnlimitedPassReviewCapture({
         }),
         verify: async () => {
           const url = URL.parse(page.url());
-          return url?.origin === origin && url.pathname === path;
+          if (url?.origin !== origin || url.pathname !== path)
+            return "unexpected-document";
         },
       });
     },
@@ -189,8 +277,11 @@ export function makeUnlimitedPassReviewCapture({
       page: Page,
       hosted: HostedPaymentPage,
       privateText: readonly string[]
-    ) =>
-      capture(page, "nexi-handoff", {
+    ) => {
+      // Share the existing two-width inspection budget. The first view may
+      // spend most of it waiting for Nexi to render its hosted fields.
+      let inspectionBudget = viewports.length * timeout;
+      return capture(page, "nexi-handoff", {
         mask: [
           page.locator("[data-ph-mask]"),
           ...privateText.map((value) => page.getByText(value, { exact: true })),
@@ -201,22 +292,29 @@ export function makeUnlimitedPassReviewCapture({
           "input:not([type=submit], [type=button], [type=checkbox], [type=radio]), textarea { color: transparent !important; caret-color: transparent !important; }",
         verify: async () => {
           const url = URL.parse(page.url());
+          const handoffUrl = hosted.nexiNavigation?.documentUrl;
+          if (!handoffUrl) return "untracked-document";
           if (
             page !== hosted.page ||
             hosted.provider !== "nexi" ||
             url?.origin !== sandboxOrigin ||
-            url.href !== hosted.url
+            url.href !== handoffUrl ||
+            redact(handoffUrl).trim() !== hosted.url
           )
-            return false;
-          await expect
-            .poll(() => hasEmptyCardFields(page, timeout), { timeout })
-            .toBe(true);
-          return page.url() === hosted.url;
+            return "unexpected-document";
+          const started = performance.now();
+          const problem = await waitForEmptyCardFields(page, inspectionBudget);
+          inspectionBudget -= performance.now() - started;
+          return problem;
         },
-      }),
+      });
+    },
     missingShots: () =>
-      [...workspaceShots, "nexi-handoff" as const].filter(
-        (shot) => !captured.has(shot)
-      ),
+      [...workspaceShots, "nexi-handoff" as const].flatMap((shot) => {
+        const result = results.get(shot);
+        return result === "captured"
+          ? []
+          : [{ shot, problem: result ?? "not-attempted" }];
+      }),
   };
 }

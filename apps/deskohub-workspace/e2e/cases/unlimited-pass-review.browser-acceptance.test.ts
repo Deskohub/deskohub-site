@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Browser, chromium } from "@playwright/test";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
+import { addRedaction, redact } from "../redaction";
 import { makeUnlimitedPassReviewCapture } from "./unlimited-pass-review";
 
 const chromiumAvailable = await playwrightChromiumAvailable();
@@ -23,6 +24,13 @@ const sandbox = "https://xpaysandbox.nexigroup.com";
 const accountPath = "/cs-CZ/account/passes";
 const checkoutPath = "/cs-CZ/passes/unlimited";
 const hostedPath = "/hpp/nexi/card";
+const cardFieldLabels = [
+  "Card number",
+  "Expiration date",
+  "CVV",
+  "First Name",
+  "Email",
+];
 
 test.skipIf(!chromiumAvailable)(
   "publishes neither width when a review page navigates away and returns during capture",
@@ -63,7 +71,10 @@ test.skipIf(!chromiumAvailable)(
         await review.captureWorkspace(page, "choose-default");
         expect(captureWithNavigation).toHaveBeenCalledTimes(2);
         expect(page.url()).toBe(expectedUrl);
-        expect(review.missingShots()).toContain("choose-default");
+        expect(review.missingShots()).toContainEqual({
+          shot: "choose-default",
+          problem: "document-navigated",
+        });
         expect(await readdir(directory)).toEqual([]);
       } finally {
         captureWithNavigation.mockRestore();
@@ -97,7 +108,9 @@ for (const locale of ["en-US", "cs-CZ"] as const) {
           timeout: 1_000,
         });
         await review.captureWorkspace(page, "terms");
-        expect(review.missingShots()).not.toContain("terms");
+        expect(review.missingShots().some(({ shot }) => shot === "terms")).toBe(
+          false
+        );
         for (const width of [390, 1280]) {
           const pixels = await readFile(
             join(directory, `unlimited-${locale}-terms-${width}.png`)
@@ -113,18 +126,35 @@ for (const locale of ["en-US", "cs-CZ"] as const) {
 }
 
 test.skipIf(!chromiumAvailable)(
-  "writes review PNGs at both widths only from the expected Workspace and empty sandbox pages",
+  "captures the same sandbox handoff with empty hosted iframes at both widths",
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
     const original = { height: 720, width: 960 };
-    const page = await browser.newPage({ viewport: original });
+    const context = await browser.newContext({ viewport: original });
     try {
-      await page.route("**/*", (route) => {
+      const checkoutPage = await context.newPage();
+      const page = await context.newPage();
+      await context.route("**/*", (route) => {
         const url = new URL(route.request().url());
         if (url.origin === sandbox && url.pathname === hostedPath) {
           return route.fulfill({
             contentType: "text/html",
-            body: '<input aria-label="Card number"><input aria-label="Expiration date"><input aria-label="CVV"><input aria-label="Cardholder name">',
+            body: cardFieldLabels
+              .map(
+                (label, index) =>
+                  `<iframe title="${label}" src="/hosted-field/${index}"></iframe>`
+              )
+              .join(""),
+          });
+        }
+        if (
+          url.origin === sandbox &&
+          url.pathname.startsWith("/hosted-field/")
+        ) {
+          const label = cardFieldLabels[Number(url.pathname.split("/").at(-1))];
+          return route.fulfill({
+            contentType: "text/html",
+            body: `<input aria-label="${label}">`,
           });
         }
         return route.fulfill({
@@ -140,33 +170,60 @@ test.skipIf(!chromiumAvailable)(
         origin,
         timeout: 1_000,
       });
-      await page.goto(`${origin}${checkoutPath}`);
-      await review.captureWorkspace(page, "choose-default");
-      await review.captureWorkspace(page, "account-renewal");
-      expect(review.missingShots()).toContain("account-renewal");
+      await checkoutPage.goto(`${origin}${checkoutPath}`);
+      await review.captureWorkspace(checkoutPage, "choose-default");
+      await review.captureWorkspace(checkoutPage, "account-renewal");
+      expect(review.missingShots()).toContainEqual({
+        shot: "account-renewal",
+        problem: "unexpected-document",
+      });
 
-      const url = `${sandbox}${hostedPath}`;
+      const syntheticPayment = "synthetic-handoff-review-order-id";
+      const url = `${sandbox}${hostedPath}?orderId=${syntheticPayment}`;
       const handoff = {
-        checkoutPage: page,
+        checkoutPage,
         checkoutPageUrl: `${origin}${checkoutPath}?step=pay`,
+        nexiNavigation: { documentUrl: url, requestUrls: new Set([url]) },
         page,
         provider: "nexi" as const,
         url,
       };
       await page.goto(url);
-      await page
-        .getByRole("textbox", { name: "Cardholder name" })
-        .fill("synthetic nonempty value");
+      const name = page
+        .frameLocator('iframe[title="First Name"]')
+        .getByRole("textbox", { name: "First Name" });
+      await name.fill("synthetic nonempty value");
       await review.captureNexi(page, handoff, []);
-      expect(review.missingShots()).toContain("nexi-handoff");
+      expect(review.missingShots()).toContainEqual({
+        shot: "nexi-handoff",
+        problem: "card-field-populated",
+      });
       expect((await readdir(directory)).sort()).toEqual([
         "unlimited-cs-CZ-choose-default-1280.png",
         "unlimited-cs-CZ-choose-default-390.png",
       ]);
 
-      await page.getByRole("textbox", { name: "Cardholder name" }).clear();
-      await review.captureNexi(page, handoff, []);
-      expect(review.missingShots()).not.toContain("nexi-handoff");
+      addRedaction(syntheticPayment);
+      const redactedHandoff = {
+        ...handoff,
+        url: redact(url),
+      };
+      const differentPayment = "synthetic-different-review-order-id";
+      addRedaction(differentPayment);
+      const differentUrl = `${sandbox}${hostedPath}?orderId=${differentPayment}`;
+      expect(redact(differentUrl)).toBe(redactedHandoff.url);
+      await page.goto(differentUrl);
+      await review.captureNexi(page, redactedHandoff, []);
+      expect(review.missingShots()).toContainEqual({
+        shot: "nexi-handoff",
+        problem: "unexpected-document",
+      });
+
+      await page.goto(url);
+      await review.captureNexi(page, redactedHandoff, []);
+      expect(
+        review.missingShots().some(({ shot }) => shot === "nexi-handoff")
+      ).toBe(false);
       expect(page.viewportSize()).toEqual(original);
       for (const width of [390, 1280]) {
         for (const shot of ["choose-default", "nexi-handoff"]) {
@@ -177,6 +234,55 @@ test.skipIf(!chromiumAvailable)(
           expect(pixels.readUInt32BE(16)).toBe(width);
         }
       }
+    } finally {
+      await context.close();
+      await rm(directory, { force: true, recursive: true });
+    }
+  }
+);
+
+test.skipIf(!chromiumAvailable)(
+  "reports fixed capture errors and rolls back a partial screenshot pair",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
+    const page = await browser.newPage();
+    try {
+      await page.route("**/*", (route) =>
+        route.fulfill({ contentType: "text/html", body: "<h1>Unlimited</h1>" })
+      );
+      await page.goto(`${origin}${checkoutPath}`);
+      const review = makeUnlimitedPassReviewCapture({
+        accountPath,
+        directory,
+        locale: "cs-CZ",
+        origin,
+        timeout: 1_000,
+      });
+      const screenshot = spyOn(page, "screenshot").mockRejectedValueOnce(
+        new Error("synthetic private screenshot error")
+      );
+      try {
+        await review.captureWorkspace(page, "choose-default");
+        expect(review.missingShots()).toContainEqual({
+          shot: "choose-default",
+          problem: "screenshot-failed",
+        });
+        expect(await readdir(directory)).toEqual([]);
+      } finally {
+        screenshot.mockRestore();
+      }
+
+      const desktop = "unlimited-cs-CZ-choose-default-1280.png";
+      await writeFile(join(directory, desktop), "untouched fixture");
+      await review.captureWorkspace(page, "choose-default");
+      expect(review.missingShots()).toContainEqual({
+        shot: "choose-default",
+        problem: "write-failed",
+      });
+      expect(await readdir(directory)).toEqual([desktop]);
+      expect(await readFile(join(directory, desktop), "utf8")).toBe(
+        "untouched fixture"
+      );
     } finally {
       await page.close();
       await rm(directory, { force: true, recursive: true });

@@ -24,6 +24,7 @@ import { resolveWorkspaceE2ESessionSigningSecret } from "../account/seeded-sessi
 import type { WorkspaceE2EDateAllocation } from "../allocation";
 import { openPage, waitForPageUrl, waitForReactHandler } from "../browser";
 import { getWorkspaceE2EDateInterval } from "../capacity";
+import { observeNexiHostedNavigation } from "../checkout/nexi-hosted-page-ownership";
 import { completeNexiHostedPayment } from "../checkout/nexi-hosted-payment";
 import { submitPaymentAndWaitForHostedPage } from "../checkout/payment";
 import { getConfig, getDatasourceConfig } from "../config";
@@ -358,8 +359,8 @@ export const makeUnlimitedPassAutoRenewalCase = ({
               orderId,
               paymentStartedAt,
             }).pipe(
-              Effect.andThen(
-                submitPaymentAndWaitForHostedPage({
+              Effect.andThen(() => {
+                const launch = submitPaymentAndWaitForHostedPage({
                   config,
                   session,
                   submitPayment: (activeSession) =>
@@ -372,8 +373,11 @@ export const makeUnlimitedPassAutoRenewalCase = ({
                         return page;
                       }
                     ),
-                })
-              )
+                });
+                return review
+                  ? observeNexiHostedNavigation(session, launch)
+                  : launch;
+              })
             ),
             id: "open-unlimited-nexi-payment",
             timeoutMs: timeouts.providerTransition,
@@ -586,7 +590,9 @@ export const makeUnlimitedPassAutoRenewalCase = ({
             const missingShots = review.missingShots();
             if (missingShots.length) {
               return yield* workspaceE2EError(
-                `Incomplete Unlimited review screenshots: ${missingShots.join(", ")}`
+                `Incomplete Unlimited review screenshots: ${missingShots
+                  .map(({ shot, problem }) => `${shot} (${problem})`)
+                  .join(", ")}`
               );
             }
           }),
