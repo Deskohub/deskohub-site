@@ -171,7 +171,7 @@ jobs:
           GOOGLE_ACCESS_TOKEN: ${{ steps.alchemy-auth.outputs.access_token }}
         run: bash "$SANDBOX_PROOF_RUNNER" foundation
 
-      - name: Build and push the RPC probe images
+      - name: Build and push the Workspace API proof images
         if: inputs.mode == 'hosted-proof'
         timeout-minutes: 20
         env:
@@ -210,7 +210,7 @@ jobs:
           id_token_audience: ${{ steps.deliver-v1.outputs.api_url }}
           create_credentials_file: false
 
-      - name: Call workspace-api over RPC as the deployer
+      - name: Prove Workspace API RPC and synthetic email preferences
         if: inputs.mode == 'hosted-proof'
         timeout-minutes: 10
         env:

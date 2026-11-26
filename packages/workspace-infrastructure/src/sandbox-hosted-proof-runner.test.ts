@@ -1925,7 +1925,7 @@ describe("RPC probe", () => {
     );
     expect(call).toMatch(
       new RegExp(
-        `^bun scripts/sandbox-rpc-probe\\.ts --url ${apiUrl} --id-token-file \\S+/api-id-token --marker-file \\S+/marker --traceparent 00-[0-9a-f]{32}-[0-9a-f]{16}-01 --expect-version v1$`
+        `^bun scripts/sandbox-rpc-probe\\.ts --url ${apiUrl} --id-token-file \\S+/api-id-token --marker-file \\S+/marker --traceparent 00-[0-9a-f]{32}-[0-9a-f]{16}-01 --expect-version v1 --email-preferences$`
       )
     );
     const traceparent = call?.match(/00-([0-9a-f]{32})-/)?.[1];
@@ -1964,6 +1964,7 @@ describe("RPC probe", () => {
       [{ markerMatches: false }, "markerSha256 does not match"],
       [{ failDecoded: null }, "Probe.fail decoded as null"],
       [{ countChunks: [0, 1] }, "Probe.count yielded 2 chunks"],
+      [{ emailPreferences: null }, "email preferences proof incomplete"],
       [{ version: "v2" }, "version v2"],
       [{ failures: ["count stream ended early"] }, "count stream ended early"],
     ] as const) {

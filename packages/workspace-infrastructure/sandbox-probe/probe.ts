@@ -17,15 +17,11 @@ import * as Match from "effect/Match";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { WorkspaceServiceRole } from "../src/contracts/service-role";
 import { sha256Hex } from "../src/sha256";
 import { ProbeRejected, SandboxProbeRpcs } from "./probe-rpcs";
 
-export const ServiceRole = Schema.Literals([
-  "api",
-  "tasks-worker",
-  "scheduler-worker",
-]);
-export type ServiceRole = typeof ServiceRole.Type;
+export type ServiceRole = WorkspaceServiceRole;
 
 /** Which service this probe instance plays and the build it reports. */
 export class ProbeIdentity extends Context.Service<
@@ -34,7 +30,10 @@ export class ProbeIdentity extends Context.Service<
 >()("sandbox-probe/ProbeIdentity") {
   static readonly Default = Layer.effect(ProbeIdentity)(
     Effect.gen(function* () {
-      const role = yield* Config.schema(ServiceRole, "WORKSPACE_SERVICE_ROLE");
+      const role = yield* Config.schema(
+        WorkspaceServiceRole,
+        "WORKSPACE_SERVICE_ROLE"
+      );
       const version = yield* Config.String("PROBE_BUILD_VERSION").pipe(
         Config.withDefault("dev")
       );
@@ -111,7 +110,7 @@ export const probeHandlers = SandboxProbeRpcs.toLayer(
   })
 );
 
-const apiRoutes = RpcServer.layerHttp({
+const probeApiRoutes = RpcServer.layerHttp({
   group: SandboxProbeRpcs,
   path: "/rpc",
   protocol: "http",
@@ -173,29 +172,30 @@ const scheduleRoutes = Effect.gen(function* () {
   );
 });
 
-const probeRoutes = Layer.unwrap(
-  Effect.gen(function* () {
-    const identity = yield* ProbeIdentity;
-    const healthBody = HttpServerResponse.json({
-      status: "ok",
-      version: identity.version,
-      role: identity.role,
-    });
-    // /healthz is the Cloud Run startup probe. Cloud Run reserves some paths
-    // ending in "z" on the public run.app URL, so outside callers use /health.
-    const health = Layer.mergeAll(
-      HttpRouter.add("GET", "/healthz", healthBody),
-      HttpRouter.add("GET", "/health", healthBody)
-    );
-    const roleRoutes = yield* Match.value(identity.role).pipe(
-      Match.when("api", () => Effect.succeed(apiRoutes)),
-      Match.when("tasks-worker", () => taskRoutes),
-      Match.when("scheduler-worker", () => scheduleRoutes),
-      Match.exhaustive
-    );
-    return Layer.mergeAll(health, roleRoutes);
-  })
-);
+const probeRoutesWith = <E, R>(apiRoutes: Layer.Layer<never, E, R>) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const identity = yield* ProbeIdentity;
+      const healthBody = HttpServerResponse.json({
+        status: "ok",
+        version: identity.version,
+        role: identity.role,
+      });
+      // /healthz is the Cloud Run startup probe. Cloud Run reserves some paths
+      // ending in "z" on the public run.app URL, so outside callers use /health.
+      const health = Layer.mergeAll(
+        HttpRouter.add("GET", "/healthz", healthBody),
+        HttpRouter.add("GET", "/health", healthBody)
+      );
+      const roleRoutes = Match.value(identity.role).pipe(
+        Match.when("api", () => apiRoutes),
+        Match.when("tasks-worker", () => Layer.unwrap(taskRoutes)),
+        Match.when("scheduler-worker", () => Layer.unwrap(scheduleRoutes)),
+        Match.exhaustive
+      );
+      return Layer.mergeAll(health, roleRoutes);
+    })
+  );
 
 const listening = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -215,11 +215,14 @@ const listening = Layer.effectDiscard(
 
 /** The probe's HTTP app; provide an `HttpServer`, `ProbeIdentity` and `ProbeLog`. */
 // Announced only once the routes serve, so a reader of the line can call them.
-export const probeServer = listening.pipe(
-  Layer.provide(
-    HttpRouter.serve(probeRoutes, {
-      disableLogger: true,
-      disableListenLog: true,
-    })
-  )
-);
+export const probeServerWith = <E, R>(apiRoutes: Layer.Layer<never, E, R>) =>
+  listening.pipe(
+    Layer.provide(
+      HttpRouter.serve(probeRoutesWith(apiRoutes), {
+        disableLogger: true,
+        disableListenLog: true,
+      })
+    )
+  );
+
+export const probeServer = probeServerWith(probeApiRoutes);

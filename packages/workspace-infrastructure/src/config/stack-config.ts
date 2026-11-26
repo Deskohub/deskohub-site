@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
+import { WorkspaceServiceRole } from "../contracts/service-role";
 
 /** The default region for every Workspace stack (#1452). */
 export const defaultWorkspaceRegion = "europe-west1";
@@ -68,11 +69,7 @@ export type ServiceAccountEmail = typeof ServiceAccountEmail.Type;
  * A Secret Manager reference. It names a secret and pins one numeric
  * version; the value itself never enters configuration or Alchemy state.
  */
-export const WorkspaceWorkload = Schema.Literals([
-  "api",
-  "tasks-worker",
-  "scheduler-worker",
-]).annotate({
+export const WorkspaceWorkload = WorkspaceServiceRole.annotate({
   identifier: "WorkspaceWorkload",
   description: "One of the three Cloud Run services built from the image.",
 });

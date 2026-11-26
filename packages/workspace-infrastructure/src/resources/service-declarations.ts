@@ -114,6 +114,9 @@ const containers = (
     ports: [{ containerPort: workspaceContainerPort }],
     env: [
       { name: "WORKSPACE_SERVICE_ROLE", value: workload },
+      ...(config.stage === "sandbox"
+        ? [{ name: "WORKSPACE_DEPLOYMENT_STAGE", value: config.stage }]
+        : []),
       ...invokerEnvironment(config, workload),
       ...secretEnvironment(config, workload),
     ],
