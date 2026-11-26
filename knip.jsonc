@@ -35,7 +35,6 @@
         "scripts/account-sticky/browser-entry.tsx",
         "scripts/shared/command.*-fixture.{ts,mjs}",
         "e2e/coordination/hosted-payment-permit.holder-fixture.ts",
-        "e2e/playwright-checkout/unlimited-pass-cleanup.ts",
         "shared/backend/workspace-location-map.render-fixture.ts",
         "e2e/agent-evals/harness.stub-fixture.ts",
         // Bundled by path from the booking view's index.html.
