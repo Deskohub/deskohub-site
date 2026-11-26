@@ -86,29 +86,73 @@ const serviceResourceName = (
 ) =>
   `projects/${config.projectId}/locations/${config.region}/services/${workloadServiceIds[workload]}`;
 
-/** Each invoker may call only its own private worker. */
-export const workerInvokerGrants = (
+export interface ServiceInvokerGrant {
+  readonly id: string;
+  readonly workload: WorkspaceWorkload;
+  readonly props: MemberProps;
+}
+
+/**
+ * Who may invoke each service, and nothing else: Cloud Tasks and Cloud
+ * Scheduler each reach only their own worker, the frontend reaches only the
+ * API, and in the sandbox the deployer reaches the API for the hosted
+ * proof's authenticated RPC probe. No service grants `allUsers` or
+ * `allAuthenticatedUsers`.
+ */
+export const serviceInvokerGrants = (
   config: WorkspaceStackConfig
-): ReadonlyArray<{ readonly id: string; readonly props: MemberProps }> => [
-  {
-    id: "TasksWorkerInvoker",
+): ReadonlyArray<ServiceInvokerGrant> => {
+  const invoker = (
+    id: string,
+    workload: WorkspaceWorkload,
+    serviceAccount: string
+  ): ServiceInvokerGrant => ({
+    id,
+    workload,
     props: {
       kind: "run.service",
-      name: serviceResourceName(config, "tasks-worker"),
+      name: serviceResourceName(config, workload),
       role: "roles/run.invoker",
-      member: `serviceAccount:${config.serviceAccounts.tasksInvoker}`,
+      member: `serviceAccount:${serviceAccount}`,
     },
+  });
+  return [
+    invoker(
+      "TasksWorkerInvoker",
+      "tasks-worker",
+      config.serviceAccounts.tasksInvoker
+    ),
+    invoker(
+      "SchedulerWorkerInvoker",
+      "scheduler-worker",
+      config.serviceAccounts.schedulerInvoker
+    ),
+    invoker(
+      "FrontendApiInvoker",
+      "api",
+      config.serviceAccounts.frontendInvoker
+    ),
+    ...(config.stage === "sandbox"
+      ? [invoker("DeployerApiInvoker", "api", config.serviceAccounts.deployer)]
+      : []),
+  ];
+};
+
+/**
+ * The API reads published mobile update assets to serve them; it never
+ * writes the bucket.
+ */
+export const mobileUpdatesApiReadGrant = (
+  config: WorkspaceStackConfig
+): { readonly id: string; readonly props: MemberProps } => ({
+  id: "MobileUpdatesApiRead",
+  props: {
+    kind: "storage.bucket",
+    name: config.mobileUpdatesBucket,
+    role: "roles/storage.objectViewer",
+    member: `serviceAccount:${config.serviceAccounts.apiRuntime}`,
   },
-  {
-    id: "SchedulerWorkerInvoker",
-    props: {
-      kind: "run.service",
-      name: serviceResourceName(config, "scheduler-worker"),
-      role: "roles/run.invoker",
-      member: `serviceAccount:${config.serviceAccounts.schedulerInvoker}`,
-    },
-  },
-];
+});
 
 /**
  * One accessor grant per secret and consuming workload. The secrets
@@ -134,8 +178,8 @@ export const secretAccessorGrants = (
     }))
   );
 
-const workerServiceFilter = (config: WorkspaceStackConfig) =>
-  `resource.labels.service_name = one_of("${workloadServiceIds.web}", "${workloadServiceIds["tasks-worker"]}", "${workloadServiceIds["scheduler-worker"]}")` +
+const workloadServiceFilter = (config: WorkspaceStackConfig) =>
+  `resource.labels.service_name = one_of("${workloadServiceIds.api}", "${workloadServiceIds["tasks-worker"]}", "${workloadServiceIds["scheduler-worker"]}")` +
   ` AND resource.labels.location = "${config.region}"`;
 
 /** Alert definitions for the migrated workloads (#1456, #1453). */
@@ -191,7 +235,7 @@ export const alertPolicyDeclarations = (
           {
             displayName: "5xx responses above 1 per second for 10 minutes",
             conditionThreshold: {
-              filter: `resource.type = "cloud_run_revision" AND metric.type = "run.googleapis.com/request_count" AND metric.labels.response_code_class = "5xx" AND ${workerServiceFilter(config)}`,
+              filter: `resource.type = "cloud_run_revision" AND metric.type = "run.googleapis.com/request_count" AND metric.labels.response_code_class = "5xx" AND ${workloadServiceFilter(config)}`,
               aggregations: [
                 {
                   alignmentPeriod: "60s",

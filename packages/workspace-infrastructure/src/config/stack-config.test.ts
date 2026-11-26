@@ -8,7 +8,6 @@ import {
   configuredWorkspaceStack,
   decodeWorkspaceStackConfig,
   GcpRegion,
-  ImageDigest,
   serializeWorkspaceStackConfig,
   type WorkspaceStackConfig,
   WorkspaceStackConfigInvalid,
@@ -149,15 +148,15 @@ describe("workspace stack configuration", () => {
       serviceAccounts: {
         ...sandboxConfigInput.serviceAccounts,
         // A service account identifier in another project, not a mailbox.
-        webRuntime: [
-          "workspace-web",
+        apiRuntime: [
+          "workspace-api",
           "deskohub-ws-production.iam.gserviceaccount.com",
         ].join("@"),
       },
     });
     expect(foreign).toMatchObject({
       reason: "identity",
-      paths: ["serviceAccounts.webRuntime"],
+      paths: ["serviceAccounts.apiRuntime"],
     });
     const shared = decodeFailure({
       ...sandboxConfigInput,
@@ -189,39 +188,15 @@ describe("workspace stack configuration", () => {
     ).toEqual(sandboxConfig);
   });
 
-  test("takes an optional collector image pinned by digest only", () => {
-    const collectorDigest = `sha256:${"c".repeat(64)}`;
-    expect(sandboxConfig).not.toHaveProperty("telemetryCollectorImage");
-    expect(serializeWorkspaceStackConfig(sandboxConfig)).not.toContain(
-      "telemetryCollectorImage"
+  test("rejects the retired edge and collector sidecar keys", () => {
+    const error = decodeFailure({
+      ...sandboxConfigInput,
+      edge: { domains: [], enableHttps: false },
+      telemetryCollectorImage: `sha256:${"a".repeat(64)}`,
+    });
+    expect(error.reason).toBe("schema");
+    expect(error.paths).toEqual(
+      expect.arrayContaining(["edge", "telemetryCollectorImage"])
     );
-    const withCollector = Effect.runSync(
-      decodeWorkspaceStackConfig({
-        ...sandboxConfigInput,
-        telemetryCollectorImage: collectorDigest,
-      })
-    );
-    expect(withCollector.telemetryCollectorImage).toBe(
-      ImageDigest.make(collectorDigest)
-    );
-    expect(
-      Effect.runSync(
-        decodeWorkspaceStackConfig(
-          JSON.parse(serializeWorkspaceStackConfig(withCollector))
-        )
-      )
-    ).toEqual(withCollector);
-    for (const rejected of [
-      "otelcol-google:0.165.1",
-      `europe-west1-docker.pkg.dev/p/workspace/collector@${collectorDigest}`,
-      "sha256:abc",
-    ]) {
-      expect(
-        decodeFailure({
-          ...sandboxConfigInput,
-          telemetryCollectorImage: rejected,
-        }).paths
-      ).toEqual(["telemetryCollectorImage"]);
-    }
   });
 });

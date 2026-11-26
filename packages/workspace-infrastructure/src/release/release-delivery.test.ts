@@ -15,16 +15,15 @@ import {
   type WorkspaceWorkload,
 } from "../config/stack-config";
 import {
-  plainHttpProofConfig,
+  hostedProofConfig,
   previewConfig,
   sandboxConfig,
 } from "../config/stack-config.test-utils";
 import type { ObservedService } from "../readback";
-import { declareWorkspaceEdge } from "../resources/edge-declarations";
 import {
+  apiServiceProps,
+  apiTemplateSpecFingerprint,
   templateSpecAnnotation,
-  webServiceProps,
-  webTemplateSpecFingerprint,
 } from "../resources/service-declarations";
 import { workloadUrl } from "../resources/workload-names";
 import { evaluate } from "../stack-evaluation.test-utils";
@@ -62,6 +61,7 @@ import {
 } from "./release-record-store";
 import {
   unlockReleaseWriter,
+  withReleaseWriter,
   writerDigestOf,
   writerFingerprint,
 } from "./release-writer";
@@ -118,14 +118,14 @@ interface CloudRunFaults {
   unsettledWorkerReads?: number;
   /** Services report a rollout in progress. */
   reconciling?: boolean;
-  /** The live web template's revision is not ready. */
+  /** The live API template's revision is not ready. */
   failedTemplate?: boolean;
   /** The stack config the apply declares from, after a config change. */
   config?: WorkspaceStackConfig;
 }
 
 /**
- * A Cloud Run project that applies the web service exactly as the release
+ * A Cloud Run project that applies the API service exactly as the release
  * record declares it, read under the apply's generation fence.
  */
 const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
@@ -136,18 +136,18 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
     const revisions = new Map<string, ImageDigest>();
     /** The spec fingerprint each revision was created with. */
     const revisionSpecs = new Map<string, string | undefined>();
-    let web: ObservedService | null = null;
+    let api: ObservedService | null = null;
     let visible: ObservedService | null = null;
     let lagReads = 0;
     let workerDigest: ImageDigest | null = null;
     let missingWorkerReads = 0;
     let unsettledWorkerReads = 0;
-    /** Every web template the applies declared: name and spec fingerprint. */
+    /** Every API template the applies declared: name and spec fingerprint. */
     const declaredTemplates: Array<{
       readonly revision: string | undefined;
       readonly specFingerprint: string | undefined;
     }> = [];
-    /** The web template each plan previewed, in order. */
+    /** The API template each plan previewed, in order. */
     const plannedTemplates: Array<string | undefined> = [];
     /** Every stack run's declared record and clock, in order. */
     const stackRuns: Array<{
@@ -218,12 +218,12 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
           });
           if (request.action === "plan") {
             plannedTemplates.push(
-              webServiceProps(config, declaring, yield* DateTime.now)?.template
+              apiServiceProps(config, declaring, yield* DateTime.now)?.template
                 ?.revision
             );
             return;
           }
-          const props = webServiceProps(config, declaring, yield* DateTime.now);
+          const props = apiServiceProps(config, declaring, yield* DateTime.now);
           if (props === undefined) {
             return;
           }
@@ -236,7 +236,7 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
           if (
             revision !== undefined &&
             revisionSpecs.has(revision) &&
-            (web?.templateRevision !== revision ||
+            (api?.templateRevision !== revision ||
               revisionSpecs.get(revision) !== specFingerprint)
           ) {
             return yield* failed(`revision ${revision} already exists`);
@@ -274,10 +274,10 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
                 percent: splitPercent(index, entry.percent),
               }))
             : declared;
-          web = {
-            workload: "web",
-            uri: undefined,
-            urls: [],
+          api = {
+            workload: "api",
+            uri: workloadUrl(sandboxConfig, "api"),
+            urls: [workloadUrl(sandboxConfig, "api")],
             ingress: props.ingress,
             invokerIamDisabled: props.invokerIamDisabled === true,
             terminalConditionState: "CONDITION_SUCCEEDED",
@@ -305,7 +305,7 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
     });
 
     const worker = (
-      workload: Exclude<WorkspaceWorkload, "web">,
+      workload: Exclude<WorkspaceWorkload, "api">,
       imageDigest: ImageDigest
     ): ObservedService => ({
       workload,
@@ -313,8 +313,8 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
       urls: [workloadUrl(sandboxConfig, workload)],
       ingress:
         workload === "tasks-worker"
-          ? (options.tasksWorkerIngress ?? "INGRESS_TRAFFIC_INTERNAL_ONLY")
-          : "INGRESS_TRAFFIC_INTERNAL_ONLY",
+          ? (options.tasksWorkerIngress ?? "INGRESS_TRAFFIC_ALL")
+          : "INGRESS_TRAFFIC_ALL",
       invokerIamDisabled: false,
       terminalConditionState: "CONDITION_SUCCEEDED",
       reconciling: faults.reconciling === true,
@@ -326,7 +326,7 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
     const readback = ReleaseServiceReadback.of({
       service: (workload) =>
         Effect.sync(() => {
-          if (workload !== "web") {
+          if (workload !== "api") {
             if (missingWorkerReads > 0) {
               missingWorkerReads -= 1;
               return null;
@@ -349,11 +349,11 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
             lagReads -= 1;
             return visible;
           }
-          visible = web;
-          return web === null
+          visible = api;
+          return api === null
             ? null
             : {
-                ...web,
+                ...api,
                 reconciling: faults.reconciling === true,
                 templateReady: faults.failedTemplate !== true,
               };
@@ -374,14 +374,14 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
         ),
     });
 
-    /** Someone outside the release flow rolls out another web template. */
+    /** Someone outside the release flow rolls out another API template. */
     const rollOutExternally = () => {
-      const revision = "workspace-web-external-00001";
+      const revision = "workspace-api-external-00001";
       revisions.set(revision, digestA);
       revisionSpecs.set(revision, "external");
-      if (web !== null) {
-        web = {
-          ...web,
+      if (api !== null) {
+        api = {
+          ...api,
           templateRevision: revision,
           templateImageDigest: digestA,
           templateSpecFingerprint: "external",
@@ -457,7 +457,7 @@ describe("fenced release delivery", () => {
     expect(result.serving).toMatchObject({
       releaseId: "r1-aaaaaaa",
       imageDigest: digestA,
-      revision: "workspace-web-r1-aaaaaaa",
+      revision: "workspace-api-r1-aaaaaaa",
     });
     // Stage, promote and settle each advanced the record once.
     expect(result.serving.generation).toBe(3);
@@ -561,7 +561,7 @@ describe("fenced release delivery", () => {
     expect(result.back).toMatchObject({
       releaseId: "r1-aaaaaaa",
       imageDigest: digestA,
-      revision: "workspace-web-r1-aaaaaaa",
+      revision: "workspace-api-r1-aaaaaaa",
     });
     expect(result.record.previous?.releaseId).toBe(
       ReleaseId.make("r4-bbbbbbb")
@@ -831,7 +831,7 @@ describe("fenced release delivery", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const { store, provide } = yield* setup({
-          tasksWorkerIngress: "INGRESS_TRAFFIC_ALL",
+          tasksWorkerIngress: "INGRESS_TRAFFIC_INTERNAL_ONLY",
         });
         const exit = yield* provide(
           deliverRelease(
@@ -849,7 +849,7 @@ describe("fenced release delivery", () => {
         {
           workload: "tasks-worker",
           field: "ingress",
-          observed: "INGRESS_TRAFFIC_ALL",
+          observed: "INGRESS_TRAFFIC_INTERNAL_ONLY",
         },
       ],
     });
@@ -882,9 +882,76 @@ describe("fenced release delivery", () => {
     );
     expect(errorOf(result.exit)).toMatchObject({
       _tag: "ReleaseRecordLost",
-      liveWorkloads: ["web", "tasks-worker", "scheduler-worker"],
+      liveWorkloads: ["api", "tasks-worker", "scheduler-worker"],
     });
     expect(result.record).toEqual(emptyReleaseRecord);
+  });
+
+  test("a record from before the API rename is refused except by a teardown", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, stackRuns, provide } = yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        // The record still names the old web service's revisions.
+        const live = yield* store.read;
+        const { active, materialized } = live.record;
+        if (active === null || materialized === null) {
+          return yield* Effect.die(
+            new Error("the first release did not serve")
+          );
+        }
+        const renamed = (revision: string) =>
+          revision.replace(/^workspace-api-/, "workspace-web-");
+        const preRename = {
+          ...live.record,
+          active: { ...active, revision: renamed(active.revision) },
+          materialized: {
+            ...materialized,
+            revision: renamed(materialized.revision),
+          },
+        };
+        yield* store.write(preRename, live.version);
+        const runsBefore = stackRuns.length;
+        const exit = yield* provide(deliver(shaB, digestB).pipe(Effect.exit));
+        const deploy = yield* provide(
+          withReleaseWriter(
+            sandboxConfig,
+            "deploy"
+          )(Effect.void).pipe(Effect.exit)
+        );
+        const record = (yield* store.read).record;
+        // Only the teardown may take the lock over it, so the stack drains.
+        const teardown = yield* provide(
+          withReleaseWriter(
+            sandboxConfig,
+            "destroy"
+          )(Effect.succeed("torn down")).pipe(Effect.exit)
+        );
+        return {
+          exit,
+          deploy,
+          teardown,
+          preRename,
+          record,
+          newRuns: stackRuns.length - runsBefore,
+          lockAfterTeardown: (yield* store.read).record.writer,
+        };
+      })
+    );
+    expect(errorOf(result.deploy)).toMatchObject({
+      _tag: "ReleaseRecordNamesOtherService",
+    });
+    expect(result.teardown).toEqual(Exit.succeed("torn down"));
+    expect(result.lockAfterTeardown).toBeNull();
+    expect(errorOf(result.exit)).toMatchObject({
+      _tag: "ReleaseRecordNamesOtherService",
+      revisions: expect.arrayContaining([
+        expect.stringMatching(/^workspace-web-/),
+      ]),
+    });
+    // No candidate was staged and no stack run was attempted.
+    expect(result.record).toEqual(result.preRename);
+    expect(result.newRuns).toBe(0);
   });
 });
 
@@ -975,7 +1042,7 @@ describe("restore after a failed candidate", () => {
         failed,
         restored,
         record,
-        web: webServiceProps(sandboxConfig, record, yield* DateTime.now),
+        api: apiServiceProps(sandboxConfig, record, yield* DateTime.now),
       };
     });
 
@@ -988,11 +1055,11 @@ describe("restore after a failed candidate", () => {
     expect(result.record.candidate).toBeNull();
     // Cloud Run already runs the candidate's template: it stays declared.
     expect(result.record.materialized?.revision).toBe(
-      "workspace-web-r7-ccccccc"
+      "workspace-api-r7-ccccccc"
     );
-    expect(result.web?.template?.revision).toBe("workspace-web-r7-ccccccc");
-    expect(result.web?.traffic?.map((entry) => entry.revision)).not.toContain(
-      "workspace-web-r7-ccccccc"
+    expect(result.api?.template?.revision).toBe("workspace-api-r7-ccccccc");
+    expect(result.api?.traffic?.map((entry) => entry.revision)).not.toContain(
+      "workspace-api-r7-ccccccc"
     );
   });
 
@@ -1003,11 +1070,11 @@ describe("restore after a failed candidate", () => {
     });
     expect(result.record.candidate).toBeNull();
     expect(result.record.materialized?.revision).toBe(
-      "workspace-web-r4-bbbbbbb"
+      "workspace-api-r4-bbbbbbb"
     );
-    expect(result.web?.template?.revision).toBe("workspace-web-r4-bbbbbbb");
-    expect(result.web?.traffic?.map((entry) => entry.revision)).not.toContain(
-      "workspace-web-r7-ccccccc"
+    expect(result.api?.template?.revision).toBe("workspace-api-r4-bbbbbbb");
+    expect(result.api?.traffic?.map((entry) => entry.revision)).not.toContain(
+      "workspace-api-r7-ccccccc"
     );
   });
 });
@@ -1041,7 +1108,7 @@ describe("lost release record", () => {
                       workload,
                       uri: undefined,
                       urls: [],
-                      ingress: "INGRESS_TRAFFIC_INTERNAL_ONLY",
+                      ingress: "INGRESS_TRAFFIC_ALL",
                       invokerIamDisabled: false,
                       terminalConditionState: "CONDITION_SUCCEEDED",
                       reconciling: false,
@@ -1226,7 +1293,7 @@ describe("release writer lock", () => {
       previous: result.inDoubt.previous,
       compatible: result.inDoubt.compatible,
       // r4's candidate template landed before its promotion failed.
-      materialized: { revision: "workspace-web-r4-bbbbbbb" },
+      materialized: { revision: "workspace-api-r4-bbbbbbb" },
     });
   });
 
@@ -1434,7 +1501,7 @@ describe("recovery from a failed apply", () => {
   });
 });
 
-describe("declared web template", () => {
+describe("declared API template", () => {
   const restoreFirst = (expectedGeneration: number) =>
     restoreRelease(
       sandboxConfig,
@@ -1454,10 +1521,10 @@ describe("declared web template", () => {
         return { served, record: (yield* store.read).record };
       })
     );
-    expect(result.served.revision).toBe("workspace-web-r1-aaaaaaa");
+    expect(result.served.revision).toBe("workspace-api-r1-aaaaaaa");
     expect(result.record.materialized).toMatchObject({
       releaseId: "r1-aaaaaaa",
-      template: { revision: "workspace-web-r1-aaaaaaa-t7" },
+      template: { revision: "workspace-api-r1-aaaaaaa-t7" },
     });
   });
 
@@ -1490,7 +1557,7 @@ describe("declared web template", () => {
       })
     );
     expect(result.pending.materialized?.template?.revision).toBe(
-      "workspace-web-r1-aaaaaaa-t7"
+      "workspace-api-r1-aaaaaaa-t7"
     );
     // The fake interrupts every apply of generation 7, so recovery re-applies
     // the same declaration; its template keeps the persisted name.
@@ -1503,7 +1570,7 @@ describe("declared web template", () => {
       ...sandboxConfig,
       capacity: {
         ...sandboxConfig.capacity,
-        webMaxInstances: sandboxConfig.capacity.webMaxInstances + 1,
+        apiMaxInstances: sandboxConfig.capacity.apiMaxInstances + 1,
       },
     };
     const result = await Effect.runPromise(
@@ -1518,7 +1585,7 @@ describe("declared web template", () => {
       })
     );
     expect(result.first.materialized?.template?.revision).toBe(
-      `workspace-web-r1-aaaaaaa-t${result.first.generation}`
+      `workspace-api-r1-aaaaaaa-t${result.first.generation}`
     );
     expect(result.second.materialized).toEqual(result.first.materialized);
     expect(result.second.generation).toBe(result.first.generation);
@@ -1529,7 +1596,7 @@ describe("declared web template", () => {
       ...sandboxConfig,
       capacity: {
         ...sandboxConfig.capacity,
-        webMaxInstances: sandboxConfig.capacity.webMaxInstances + 1,
+        apiMaxInstances: sandboxConfig.capacity.apiMaxInstances + 1,
       },
     };
     const result = await Effect.runPromise(
@@ -1538,7 +1605,7 @@ describe("declared web template", () => {
           yield* setup();
         yield* provide(deliver(shaA, digestA));
         yield* provide(deliver(shaB, digestB));
-        // The restore's web template lands, but its workers never show up.
+        // The restore's API template lands, but its workers never show up.
         faults.failedTemplate = true;
         faults.missingWorkerReads = 100;
         yield* provide(
@@ -1578,12 +1645,12 @@ describe("declared web template", () => {
     expect(result.landed.pendingApply?.operation).toBe("restore");
     expect(errorOf(result.refused)).toMatchObject({
       _tag: "ReleaseTemplateSpecChanged",
-      revision: "workspace-web-r1-aaaaaaa-t7",
+      revision: "workspace-api-r1-aaaaaaa-t7",
     });
     expect(result.newApplies).toBe(0);
     expect(result.served.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
     expect(result.record.materialized?.template?.revision).not.toBe(
-      "workspace-web-r1-aaaaaaa-t7"
+      "workspace-api-r1-aaaaaaa-t7"
     );
     // Cloud Run never saw one revision name declared from two specs.
     const specsByName = new Map<string | undefined, Set<string | undefined>>();
@@ -1603,7 +1670,7 @@ describe("declared web template", () => {
       ...sandboxConfig,
       capacity: {
         ...sandboxConfig.capacity,
-        webMaxInstances: sandboxConfig.capacity.webMaxInstances + 1,
+        apiMaxInstances: sandboxConfig.capacity.apiMaxInstances + 1,
       },
     };
     const result = await Effect.runPromise(
@@ -1654,11 +1721,11 @@ describe("declared web template", () => {
     // The outcome was known, so the lock was released.
     expect(result.pending.writer).toBeNull();
     expect(result.pending.materialized?.template?.revision).toBe(
-      "workspace-web-r1-aaaaaaa-t7"
+      "workspace-api-r1-aaaaaaa-t7"
     );
     expect(errorOf(result.refused)).toMatchObject({
       _tag: "ReleaseTemplateSpecChanged",
-      revision: "workspace-web-r1-aaaaaaa-t7",
+      revision: "workspace-api-r1-aaaaaaa-t7",
     });
     expect(result.newApplies).toBe(0);
     expect(result.stillPending.pendingApply).toEqual(
@@ -1667,9 +1734,9 @@ describe("declared web template", () => {
     expect(result.served.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
     expect(
       result.declaredTemplates.map(({ revision }) => revision)
-    ).not.toContain("workspace-web-r1-aaaaaaa-t7");
+    ).not.toContain("workspace-api-r1-aaaaaaa-t7");
     expect(result.record.materialized?.template?.specFingerprint).toBe(
-      webTemplateSpecFingerprint(changed, digestA)
+      apiTemplateSpecFingerprint(changed, digestA)
     );
   });
 
@@ -1678,7 +1745,7 @@ describe("declared web template", () => {
       ...sandboxConfig,
       capacity: {
         ...sandboxConfig.capacity,
-        webMaxInstances: sandboxConfig.capacity.webMaxInstances + 1,
+        apiMaxInstances: sandboxConfig.capacity.apiMaxInstances + 1,
       },
     };
     const result = await Effect.runPromise(
@@ -1727,7 +1794,7 @@ describe("declared web template", () => {
         };
       })
     );
-    const minted = "workspace-web-r1-aaaaaaa-t7";
+    const minted = "workspace-api-r1-aaaaaaa-t7";
     expect(result.disagreeing.materialized?.template?.revision).toBe(minted);
     expect(errorOf(result.recovered)).toMatchObject({
       _tag: "ReleaseTemplateSpecChanged",
@@ -1740,12 +1807,12 @@ describe("declared web template", () => {
       result.declaredTemplates.filter(({ revision }) => revision === minted)
     ).toHaveLength(1);
   });
-  /** The web max-instances change of the reviewer's capacity change. */
+  /** The api max-instances change of the reviewer's capacity change. */
   const capacityChanged: WorkspaceStackConfig = {
     ...sandboxConfig,
     capacity: {
       ...sandboxConfig.capacity,
-      webMaxInstances: sandboxConfig.capacity.webMaxInstances + 1,
+      apiMaxInstances: sandboxConfig.capacity.apiMaxInstances + 1,
     },
   };
 
@@ -1806,10 +1873,10 @@ describe("declared web template", () => {
     expect(errorOf(result.failed)).toMatchObject({
       _tag: "CandidateNotVerified",
     });
-    expect(result.minted?.revision).toMatch(/^workspace-web-r4-bbbbbbb-t\d+$/);
+    expect(result.minted?.revision).toMatch(/^workspace-api-r4-bbbbbbb-t\d+$/);
     expect(result.restored._tag).toBe("Success");
     expect(result.record.materialized?.template?.revision).toBe(
-      `workspace-web-r4-bbbbbbb-t${result.record.generation - 1}`
+      `workspace-api-r4-bbbbbbb-t${result.record.generation - 1}`
     );
     expect(
       result.declaredTemplates.filter(
@@ -1847,17 +1914,17 @@ describe("declared web template", () => {
     expect(errorOf(result.failed)).toMatchObject({
       _tag: "CandidateNotVerified",
     });
-    expect(result.staged?.revision).toBe("workspace-web-r7-ccccccc");
+    expect(result.staged?.revision).toBe("workspace-api-r7-ccccccc");
     expect(result.deployed._tag).toBe("Success");
     expect(result.record.candidate).toBeNull();
     // Only the candidate's own verification apply declared its name.
     expect(
       result.declaredTemplates.filter(
-        (entry) => entry.revision === "workspace-web-r7-ccccccc"
+        (entry) => entry.revision === "workspace-api-r7-ccccccc"
       )
     ).toHaveLength(1);
     expect(result.declaredTemplates.at(-1)?.revision).toBe(
-      `workspace-web-r4-bbbbbbb-t${result.record.generation}`
+      `workspace-api-r4-bbbbbbb-t${result.record.generation}`
     );
   });
 
@@ -1884,11 +1951,11 @@ describe("declared web template", () => {
       })
     );
     expect(result.pending.pendingApply?.target.revision).toBe(
-      "workspace-web-r4-bbbbbbb"
+      "workspace-api-r4-bbbbbbb"
     );
     expect(errorOf(result.recovered)).toMatchObject({
       _tag: "ReleaseTemplateSpecChanged",
-      revision: "workspace-web-r4-bbbbbbb",
+      revision: "workspace-api-r4-bbbbbbb",
       liveSpecFingerprint: null,
     });
     expect(result.applied).toBe(0);
@@ -1923,16 +1990,16 @@ describe("declared web template", () => {
       _tag: "ReleaseServiceApplyFailed",
       outcome: "not-started",
     });
-    expect(result.staged.candidate?.revision).toBe("workspace-web-r4-bbbbbbb");
+    expect(result.staged.candidate?.revision).toBe("workspace-api-r4-bbbbbbb");
     expect(result.staged.writer).toBeNull();
     expect(result.deployed._tag).toBe("Success");
     expect(result.record.candidate).toBeNull();
-    expect(result.plannedTemplates).toEqual(["workspace-web-r1-aaaaaaa"]);
+    expect(result.plannedTemplates).toEqual(["workspace-api-r1-aaaaaaa"]);
     expect(
       result.declaredTemplates.map((entry) => entry.revision)
-    ).not.toContain("workspace-web-r4-bbbbbbb");
+    ).not.toContain("workspace-api-r4-bbbbbbb");
     expect(result.declaredTemplates.at(-1)?.revision).toBe(
-      "workspace-web-r1-aaaaaaa"
+      "workspace-api-r1-aaaaaaa"
     );
   });
 
@@ -1955,7 +2022,7 @@ describe("declared web template", () => {
         };
       })
     );
-    expect(result.deployed).toMatch(/^workspace-web-r1-aaaaaaa-t\d+$/);
+    expect(result.deployed).toMatch(/^workspace-api-r1-aaaaaaa-t\d+$/);
     expect(result.plannedTemplates).toEqual([result.deployed]);
     // The plan persisted nothing.
     expect({ ...result.afterPlan, writer: null }).toEqual({
@@ -1992,25 +2059,10 @@ interface StackRun {
  * record, with output references (resolved only at apply) as placeholders.
  */
 const declaredStackProps = async ({ declaring, now }: StackRun) => {
-  const { edge } = plainHttpProofConfig;
-  if (edge === undefined) {
-    throw new Error("the proof config declares no edge");
-  }
   const { exit, resources } = await evaluate(
     Effect.gen(function* () {
-      yield* declareWorkspaceFoundation(plainHttpProofConfig);
-      const services = yield* declareWorkspaceServices(
-        plainHttpProofConfig,
-        declaring,
-        now
-      );
-      if (services !== undefined) {
-        yield* declareWorkspaceEdge(
-          plainHttpProofConfig,
-          edge,
-          services.webServiceId
-        );
-      }
+      yield* declareWorkspaceFoundation(hostedProofConfig);
+      yield* declareWorkspaceServices(hostedProofConfig, declaring, now);
     })
   );
   expect(exit._tag).toBe("Success");
@@ -2034,8 +2086,8 @@ describe("release plan after a release command", () => {
         const { store, stackRuns, faults, provide } = yield* setup({
           interruptApplyOf: new Set([7]),
         });
-        // The stack declares the hosted proof's config, edge included.
-        faults.config = plainHttpProofConfig;
+        // The stack declares the hosted proof's config.
+        faults.config = hostedProofConfig;
         const checkpoints: Array<{
           readonly step: string;
           readonly deploy: StackRun;
@@ -2045,7 +2097,7 @@ describe("release plan after a release command", () => {
         const planAfter = (step: string) =>
           Effect.gen(function* () {
             const deploy = stackRuns.findLast((run) => run.action === "deploy");
-            yield* provide(runStack(plainHttpProofConfig, "plan"));
+            yield* provide(runStack(hostedProofConfig, "plan"));
             const plan = stackRuns.at(-1);
             if (deploy === undefined || plan?.action !== "plan") {
               return yield* Effect.die(new Error(`no stack runs for ${step}`));
@@ -2054,7 +2106,7 @@ describe("release plan after a release command", () => {
           });
         const deliver = (sha: GitSha, imageDigest: ImageDigest) =>
           provide(
-            deliverRelease(plainHttpProofConfig, { sha, imageDigest }, policy)
+            deliverRelease(hostedProofConfig, { sha, imageDigest }, policy)
           );
 
         const first = yield* deliver(shaA, digestA);
@@ -2071,13 +2123,13 @@ describe("release plan after a release command", () => {
         const { writer } = (yield* store.read).record;
         yield* provide(
           unlockReleaseWriter(
-            plainHttpProofConfig,
+            hostedProofConfig,
             writer === null ? "" : writerFingerprint(writer.holderDigest)
           )
         );
-        expect(
-          yield* provide(recoverRelease(plainHttpProofConfig, policy))
-        ).toBe(null);
+        expect(yield* provide(recoverRelease(hostedProofConfig, policy))).toBe(
+          null
+        );
         yield* deliver(shaC, digestC);
         yield* planAfter("recovery deliver v3");
         // Two older releases are now tagged, in a different record order
@@ -2087,7 +2139,7 @@ describe("release plan after a release command", () => {
         const { record } = yield* store.read;
         yield* provide(
           restoreRelease(
-            plainHttpProofConfig,
+            hostedProofConfig,
             {
               releaseId: first.releaseId,
               expectedGeneration: record.generation,
@@ -2098,7 +2150,7 @@ describe("release plan after a release command", () => {
         yield* planAfter("restore v1");
 
         // What `release deploy` runs after the state snapshot is restored.
-        yield* provide(runStack(plainHttpProofConfig, "deploy"));
+        yield* provide(runStack(hostedProofConfig, "deploy"));
         yield* planAfter("plain deploy");
         return checkpoints;
       })
@@ -2112,19 +2164,19 @@ describe("release plan after a release command", () => {
       "plain deploy",
     ]);
     for (const { step, deploy, plan } of checkpoints) {
-      const applied = webServiceProps(
-        plainHttpProofConfig,
+      const applied = apiServiceProps(
+        hostedProofConfig,
         deploy.declaring,
         deploy.now
       );
-      const planned = webServiceProps(
-        plainHttpProofConfig,
+      const planned = apiServiceProps(
+        hostedProofConfig,
         plan.declaring,
         plan.now
       );
       expect({ step, planned }).toEqual({ step, planned: applied });
       if (applied === undefined || planned === undefined) {
-        throw new Error(`${step} declared no web service`);
+        throw new Error(`${step} declared no API service`);
       }
       // Alchemy's own comparison for a provider diff that defers to props.
       expect({ step, changed: havePropsChanged(applied, planned) }).toEqual({
@@ -2132,15 +2184,14 @@ describe("release plan after a release command", () => {
         changed: false,
       });
       const deployedStack = await declaredStackProps(deploy);
-      // The hosted proof's whole stack, its edge included.
+      // The hosted proof's whole stack: three private services, no edge.
       expect(Object.keys(deployedStack)).toEqual(
         expect.arrayContaining([
-          "WorkspaceWeb",
+          "WorkspaceApi",
           "WorkspaceTasksWorker",
           "WorkspaceSchedulerWorker",
-          "EdgeWebEndpointGroup",
-          "EdgeUrlMap",
-          "EdgeHttpForwardingRule",
+          "FrontendApiInvoker",
+          "DeployerApiInvoker",
         ])
       );
       expect({ step, stack: await declaredStackProps(plan) }).toEqual({

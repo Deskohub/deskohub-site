@@ -1,4 +1,5 @@
 import type { JobProps } from "@alchemy.run/gcp/CloudScheduler";
+import * as Duration from "effect/Duration";
 import type { WorkspaceStackConfig } from "../config/stack-config";
 import {
   type ScheduleContract,
@@ -33,3 +34,28 @@ export const scheduleJobProps = (
   },
   paused: false,
 });
+
+/**
+ * The hosted proof's own scheduler job (sandbox only, once the run has a
+ * disposable suffix). It stays paused, so it fires only when the proof runs
+ * it by hand, and it calls a proof-only path no Workspace schedule serves.
+ */
+export const sandboxProofScheduleJobs = (
+  config: WorkspaceStackConfig
+): ReadonlyArray<{ readonly id: string; readonly props: JobProps }> =>
+  config.stage === "sandbox" && config.disposableQueueSuffix !== undefined
+    ? [
+        {
+          id: "ScheduleWorkspaceProofTick",
+          props: {
+            ...scheduleJobProps(config, {
+              jobId: `workspace-proof-tick-${config.disposableQueueSuffix}`,
+              handlerPath: "/api/cron/workspace/proof-tick",
+              schedule: "0 0 1 1 *",
+              attemptDeadline: Duration.seconds(60),
+            }),
+            paused: true,
+          },
+        },
+      ]
+    : [];

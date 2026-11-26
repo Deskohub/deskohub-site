@@ -64,7 +64,7 @@ export const DeclaredTemplate = Schema.Struct({
 export type DeclaredTemplate = typeof DeclaredTemplate.Type;
 
 /**
- * The deployment whose image the web template runs. Without `template`, the
+ * The deployment whose image the API template runs. Without `template`, the
  * template is declared under the deployment's own revision name.
  */
 export const MaterializedDeployment = Schema.Struct({
@@ -73,7 +73,7 @@ export const MaterializedDeployment = Schema.Struct({
 }).annotate({ identifier: "MaterializedDeployment" });
 export type MaterializedDeployment = typeof MaterializedDeployment.Type;
 
-/** The revision name the web template is declared under. */
+/** The revision name the API template is declared under. */
 export const templateRevisionOf = (deployment: MaterializedDeployment) =>
   deployment.template?.revision ?? deployment.revision;
 
@@ -111,6 +111,8 @@ export const ReleaseOperation = Schema.Literals([
   "recover",
   "deploy",
   "plan",
+  // Tears the whole stack down; it declares nothing from the record.
+  "destroy",
 ]);
 export type ReleaseOperation = typeof ReleaseOperation.Type;
 
@@ -162,7 +164,7 @@ export const ReleaseRecord = Schema.Struct({
   active: Schema.NullOr(VerifiedDeployment),
   previous: Schema.NullOr(VerifiedDeployment),
   /**
-   * The one staged release. Once a release is active, the web service
+   * The one staged release. Once a release is active, the API service
    * materializes the candidate as a zero-traffic revision for verification.
    */
   candidate: Schema.NullOr(ReleaseDeployment),

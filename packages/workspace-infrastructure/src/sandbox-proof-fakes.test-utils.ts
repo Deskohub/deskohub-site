@@ -89,6 +89,15 @@ export interface FakeWorld {
   readonly repositoryDescription?: string;
   /** The fake clock's start, in epoch seconds; defaults to the real clock. */
   readonly now?: number;
+  /**
+   * When set, `bun scripts/sandbox-rpc-probe.ts` prints a passing verdict
+   * for the marker file it is given, with these fields laid over it.
+   */
+  readonly rpcVerdict?: Schema.JsonObject;
+  /** The fake RPC probe also prints the raw marker in its failures. */
+  readonly rpcPrintsMarker?: boolean;
+  /** The fake RPC probe's exit status. */
+  readonly rpcExit?: number;
 }
 
 /**
@@ -253,6 +262,9 @@ const isFakeWorld = (
     tokenLifetimes: isOptional(isRecordOf(Predicate.isNumber)),
     tokeninfoDelay: optionalNumber,
     now: optionalNumber,
+    rpcVerdict: isOptional(isJsonObject),
+    rpcPrintsMarker: optionalBoolean,
+    rpcExit: optionalNumber,
   });
 
 const readWorld = (path: string): FakeWorld => {
@@ -271,6 +283,8 @@ const writeWorld = (path: string, world: FakeWorld) => {
 export interface ProofFakes {
   readonly env: Record<string, string>;
   readonly proofDir: string;
+  /** The runner's private directory: the marker and ID token file. */
+  readonly privateDir: string;
   readonly world: () => FakeWorld;
   readonly calls: () => ReadonlyArray<string>;
 }
@@ -283,6 +297,7 @@ export const withProofFakes = <A>(
   const dir = mkdtempSync(join(tmpdir(), "sandbox-proof-fakes-"));
   const bin = join(dir, "bin");
   const proofDir = join(dir, "proof");
+  const privateDir = join(dir, "private");
   const worldFile = join(dir, "world.json");
   const callsLog = join(dir, "calls.log");
   const clockFile = join(dir, "clock");
@@ -305,11 +320,13 @@ export const withProofFakes = <A>(
       env: {
         PATH: `${bin}:${process.env.PATH ?? ""}`,
         SANDBOX_PROOF_DIR: proofDir,
+        SANDBOX_PROOF_PRIVATE_DIR: privateDir,
         FAKE_WORLD: worldFile,
         FAKE_CALLS: callsLog,
         FAKE_CLOCK: clockFile,
       },
       proofDir,
+      privateDir,
       world: () => readWorld(worldFile),
       calls: () =>
         existsSync(callsLog)
@@ -469,7 +486,7 @@ const interruptedDeliver = async (
     await Bun.sleep(10);
   }
   const generations = { ...(world.serviceGenerations ?? {}) };
-  generations["workspace-web"] = (generations["workspace-web"] ?? 1) + 1;
+  generations["workspace-api"] = (generations["workspace-api"] ?? 1) + 1;
   save({
     ...world,
     serviceGenerations: generations,
@@ -490,6 +507,79 @@ const interruptedDeliver = async (
 };
 
 /** Move the fake clock on, as a slow call would. */
+const fakeImage =
+  "europe-west1-docker.pkg.dev/deskohub-workspace-sandbox/workspace/workspace";
+
+/** The run.app URL the fake reports for a Cloud Run service. */
+export const fakeServiceUrl = (service: string) =>
+  `https://${service}-759037106024.europe-west1.run.app`;
+
+/** The hash-based run.app URL Cloud Run may report as a service's primary URL. */
+export const fakeHashUrl = (service: string) =>
+  `https://${service}-a1b2c3d4e5-ew.a.run.app`;
+
+/**
+ * A Ready service sending all its traffic to one live revision, with the
+ * hash-based URL as its primary URL and the deterministic one an alias.
+ */
+const fakeReadyService = (service: string) => {
+  const ingress = "all";
+  return {
+    metadata: {
+      name: service,
+      generation: 2,
+      annotations: {
+        "run.googleapis.com/ingress": ingress,
+        "run.googleapis.com/ingress-status": ingress,
+        "run.googleapis.com/urls": JSON.stringify([
+          fakeHashUrl(service),
+          fakeServiceUrl(service),
+        ]),
+      },
+    },
+    status: {
+      observedGeneration: 2,
+      url: fakeHashUrl(service),
+      conditions: [{ type: "Ready", status: "True" }],
+      traffic: [{ revisionName: `${service}-live`, percent: 100 }],
+    },
+  };
+};
+
+/** The image digest of the release `release status` reports active. */
+const activeDigest = async ({ status }: FakeWorld) => {
+  // Only revision descriptions need this schema. Each fake CLI call is a
+  // new process, so importing it eagerly slows unrelated commands too.
+  const { is, String: StringSchema, Struct } = await import("effect/Schema");
+  const isActiveRelease = is(
+    Struct({
+      record: Struct({ active: Struct({ imageDigest: StringSchema }) }),
+    })
+  );
+  return isActiveRelease(status) ? status.record.active.imageDigest : undefined;
+};
+
+/** The RPC probe CLI's verdict for the marker file it was handed. */
+const fakeRpcProbe = (args: ReadonlyArray<string>, world: FakeWorld) => {
+  const markerFile = args[args.indexOf("--marker-file") + 1] ?? "";
+  const marker = readFileSync(markerFile, "utf8");
+  print(
+    JSON.stringify({
+      ok: true,
+      version: args[args.indexOf("--expect-version") + 1] ?? null,
+      status: 200,
+      contentType: "application/vnd.effect.rpc+schema-binary",
+      markerSha256: createHash("sha256").update(marker).digest("hex"),
+      markerMatches: true,
+      failDecoded: "ProbeRejected",
+      countChunks: [0, 1, 2],
+      failures: world.rpcPrintsMarker === true ? [marker] : [],
+      ...world.rpcVerdict,
+    })
+  );
+  return world.rpcExit ?? 0;
+};
+
 const advanceClock = (seconds: number) => {
   if (seconds === 0) return;
   const clock = process.env.FAKE_CLOCK ?? "";
@@ -506,12 +596,8 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     world = next;
     writeWorld(worldFile, next);
   };
-  // The package's own config and edge declarations run for real.
-  if (
-    tool === "bun" &&
-    (args[0] === "scripts/sandbox-stack-config.ts" ||
-      args[0] === "scripts/sandbox-edge-declaration.ts")
-  ) {
+  // The package's own stack config runs for real.
+  if (tool === "bun" && args[0] === "scripts/sandbox-stack-config.ts") {
     return Bun.spawnSync([realBun, ...args], {
       stdio: ["inherit", "inherit", "inherit"],
     }).exitCode;
@@ -564,6 +650,13 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     }
     return rule.exit ?? 0;
   }
+  if (
+    tool === "bun" &&
+    args[0] === "scripts/sandbox-rpc-probe.ts" &&
+    world.rpcVerdict !== undefined
+  ) {
+    return fakeRpcProbe(args, world);
+  }
   if (tool === "bun" && args[0] === "release.run.ts") {
     if (args[1] === "status") {
       print(JSON.stringify(world.status ?? {}));
@@ -594,7 +687,22 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
       print("fake-access-token");
       return 0;
     }
+    if (
+      args[0] === "run" &&
+      args[1] === "revisions" &&
+      args[2] === "describe"
+    ) {
+      // Every live revision runs the release's active image.
+      const digest = await activeDigest(world);
+      print(`${fakeImage}@${digest ?? "sha256:none"}`);
+      return 0;
+    }
     if (args[0] === "run" && args[1] === "services" && args[2] === "describe") {
+      const service = args[3] ?? "";
+      if (flag(args, "--format") === "json") {
+        print(JSON.stringify(fakeReadyService(service)));
+        return 0;
+      }
       if (world.serviceReadsFailAfterDeliver && world.deliverStarted) {
         save({
           ...world,
