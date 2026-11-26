@@ -741,114 +741,141 @@ it("binds Unlimited renewal consent to the paid attempt and lets only the owner 
   }
 });
 
-it("only a fully activated prepaid renewal stops an earlier plan for the same date", async () => {
-  const now = Temporal.Instant.from("2031-01-08T12:00:00Z");
-  renewalPreviewEnabled.mockReturnValue(true);
-  try {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* TestClock.setTime(now.epochMilliseconds);
-        const { db, transaction } = yield* WorkspaceDatabase;
-        const source = yield* recordPurchase(now, 5, "reserved-desk", true);
-        yield* db.insert(authUser).values({
-          id: source.buyerAccountId,
-          email: testEmailAddress("manual-renewal-buyer"),
-          name: "Synthetic Renewal Buyer",
-          emailVerified: true,
-        });
-        const paid = (purchase: typeof source) =>
-          Effect.gen(function* () {
-            const disclosure = readUnlimitedAutoRenewalDisclosure(purchase);
-            if (!disclosure) throw new Error("Missing renewal disclosure");
-            const attemptId = yield* recordAttempt(purchase.id, "paid", now);
-            const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
-              purchase.quote
-            );
-            yield* transaction(
-              recordUnlimitedAutoRenewalAuthorization(
-                attemptId,
-                purchase.holderVersion,
-                disclosure,
-                getPassPurchasePriceFingerprint(quote),
-                now
+it.each([
+  ["paid", "2031-01-08T12:00:00Z", false],
+  ["partially refunded", "2031-05-08T12:00:00Z", true],
+] as const)(
+  "checks a %s renewal intent when a prepaid successor activates",
+  async (_label, currentTime, refunded) => {
+    const now = Temporal.Instant.from(currentTime);
+    renewalPreviewEnabled.mockReturnValue(true);
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(now.epochMilliseconds);
+          const { db, transaction } = yield* WorkspaceDatabase;
+          const source = yield* recordPurchase(now, 5, "reserved-desk", true);
+          yield* db.insert(authUser).values({
+            id: source.buyerAccountId,
+            email: testEmailAddress(
+              refunded
+                ? "manual-renewal-refunded-buyer"
+                : "manual-renewal-buyer"
+            ),
+            name: "Synthetic Renewal Buyer",
+            emailVerified: true,
+          });
+          const paid = (purchase: typeof source) =>
+            Effect.gen(function* () {
+              const disclosure = readUnlimitedAutoRenewalDisclosure(purchase);
+              if (!disclosure) throw new Error("Missing renewal disclosure");
+              const attemptId = yield* recordAttempt(purchase.id, "paid", now);
+              const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
+                purchase.quote
+              );
+              yield* transaction(
+                recordUnlimitedAutoRenewalAuthorization(
+                  attemptId,
+                  purchase.holderVersion,
+                  disclosure,
+                  getPassPurchasePriceFingerprint(quote),
+                  now
+                )
+              );
+              yield* db
+                .update(orders)
+                .set({
+                  paymentState: "paid",
+                  activePaymentAttemptId: attemptId,
+                  paidAt: now,
+                })
+                .where(eq(orders.id, purchase.id));
+              yield* settlePassPurchase(purchase.id);
+              return attemptId;
+            });
+
+          yield* createUnlimitedPassHolds(source);
+          const firstAttempt = yield* paid(source);
+          yield* confirmUnlimitedPassDays(source);
+          expect(
+            (yield* settlePassPurchase(source.id, firstAttempt))?.status
+          ).toBe("active");
+          const currentPlans = listUnlimitedAutoRenewals(source.buyerAccountId);
+          expect((yield* currentPlans).get(source.id)?.status).toBe("pending");
+          if (refunded) {
+            yield* db
+              .update(paymentAttempts)
+              .set({
+                refundState: "refunded",
+                refundedAmountValue: price.value / 2,
+                refundedAt: now,
+              })
+              .where(eq(paymentAttempts.id, firstAttempt));
+          }
+          const previousStatus = refunded ? undefined : "pending";
+
+          const successor = yield* recordPurchase(
+            now,
+            0,
+            "reserved-desk",
+            true,
+            source
+          );
+          expect(successor).toMatchObject({
+            autoRenew: true,
+            renewsPassId: source.id,
+            validFrom: source.validUntil,
+          });
+          yield* createUnlimitedPassHolds(successor);
+          expect((yield* currentPlans).get(source.id)?.status).toBe(
+            previousStatus
+          );
+          const secondAttempt = yield* paid(successor);
+          expect((yield* currentPlans).get(source.id)?.status).toBe(
+            previousStatus
+          );
+          expect((yield* currentPlans).has(successor.id)).toBe(false);
+
+          yield* confirmUnlimitedPassDays(successor);
+          expect(
+            (yield* settlePassPurchase(successor.id, secondAttempt))?.status
+          ).toBe("active");
+          expect(
+            yield* settlePassPurchase(successor.id, secondAttempt)
+          ).toBeUndefined();
+          const plans = yield* currentPlans;
+          expect(plans.get(source.id)?.status).toBe(
+            refunded ? undefined : "cancelled"
+          );
+          expect(plans.get(successor.id)).toEqual({
+            status: "pending",
+            nextRenewalOn: successor.validUntil,
+            amount: price,
+          });
+          const [stopped] = yield* db
+            .select()
+            .from(unlimitedAutoRenewalAuthorizations)
+            .where(
+              eq(
+                unlimitedAutoRenewalAuthorizations.paymentAttemptId,
+                firstAttempt
               )
             );
-            yield* db
-              .update(orders)
-              .set({
-                paymentState: "paid",
-                activePaymentAttemptId: attemptId,
-                paidAt: now,
-              })
-              .where(eq(orders.id, purchase.id));
-            yield* settlePassPurchase(purchase.id);
-            return attemptId;
+          expect(stopped).toMatchObject({
+            prepaidSuccessorOrderId: refunded ? null : successor.id,
+            cancelledAt: null,
           });
-
-        yield* createUnlimitedPassHolds(source);
-        const firstAttempt = yield* paid(source);
-        yield* confirmUnlimitedPassDays(source);
-        expect(
-          (yield* settlePassPurchase(source.id, firstAttempt))?.status
-        ).toBe("active");
-        const currentPlans = listUnlimitedAutoRenewals(source.buyerAccountId);
-        expect((yield* currentPlans).get(source.id)?.status).toBe("pending");
-
-        const successor = yield* recordPurchase(
-          now,
-          0,
-          "reserved-desk",
-          true,
-          source
-        );
-        expect(successor).toMatchObject({
-          autoRenew: true,
-          renewsPassId: source.id,
-          validFrom: source.validUntil,
-        });
-        yield* createUnlimitedPassHolds(successor);
-        expect((yield* currentPlans).get(source.id)?.status).toBe("pending");
-        const secondAttempt = yield* paid(successor);
-        expect((yield* currentPlans).get(source.id)?.status).toBe("pending");
-        expect((yield* currentPlans).has(successor.id)).toBe(false);
-
-        yield* confirmUnlimitedPassDays(successor);
-        expect(
-          (yield* settlePassPurchase(successor.id, secondAttempt))?.status
-        ).toBe("active");
-        expect(
-          yield* settlePassPurchase(successor.id, secondAttempt)
-        ).toBeUndefined();
-        const plans = yield* currentPlans;
-        expect(plans.get(source.id)?.status).toBe("cancelled");
-        expect(plans.get(successor.id)).toEqual({
-          status: "pending",
-          nextRenewalOn: successor.validUntil,
-          amount: price,
-        });
-        const [stopped] = yield* db
-          .select()
-          .from(unlimitedAutoRenewalAuthorizations)
-          .where(
-            eq(
-              unlimitedAutoRenewalAuthorizations.paymentAttemptId,
-              firstAttempt
-            )
-          );
-        expect(stopped).toMatchObject({
-          prepaidSuccessorOrderId: successor.id,
-          cancelledAt: null,
-        });
-      }).pipe(
-        Effect.provide(
-          Layer.merge(servicesFor(provider.service), TestClock.layer())
+        }).pipe(
+          Effect.provide(
+            Layer.merge(servicesFor(provider.service), TestClock.layer())
+          )
         )
-      )
-    );
-  } finally {
-    renewalPreviewEnabled.mockReturnValue(false);
+      );
+    } finally {
+      renewalPreviewEnabled.mockReturnValue(false);
+    }
   }
-});
+);
 
 it("recovers a verified capture after an interrupted read of replacement holds", async () => {
   const now = Temporal.Now.instant().round({ smallestUnit: "millisecond" });

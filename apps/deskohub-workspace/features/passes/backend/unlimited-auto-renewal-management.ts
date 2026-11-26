@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
@@ -14,7 +14,10 @@ import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { OrderId } from "@/features/order";
 import type { Money } from "@/shared/money/money";
 import { currentInstant, type PlainDate } from "@/shared/utils/temporal";
-import { unlimitedRenewalIntentOpen } from "./unlimited-auto-renewal-ledger";
+import {
+  eligibleUnlimitedRenewalSource,
+  unlimitedRenewalIntentOpen,
+} from "./unlimited-auto-renewal-ledger";
 
 type UnlimitedAutoRenewal = {
   readonly status: "pending" | "cancelled";
@@ -53,17 +56,9 @@ const ownedUnlimitedAutoRenewals = Effect.fnUntraced(function* (
     )
     .where(
       and(
-        eq(passPurchases.product, "unlimited"),
         orderId === undefined ? undefined : eq(passPurchases.id, orderId),
-        eq(passPurchases.autoRenew, true),
-        eq(passPurchases.buyerAccountId, accountId),
         eq(passPurchases.holderAccountId, accountId),
-        eq(passPurchases.holderVersion, authorizations.holderVersion),
-        inArray(passPurchases.status, ["active", "expired"]),
-        eq(orders.kind, "pass-purchase"),
-        eq(orders.paymentState, "paid"),
-        eq(paymentAttempts.state, "paid"),
-        eq(paymentAttempts.refundState, "not_required")
+        eligibleUnlimitedRenewalSource
       )
     );
 });

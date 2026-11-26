@@ -7,6 +7,7 @@ import {
   unlimitedAutoRenewalAuthorizations as authorizations,
   orders,
   passPurchases,
+  paymentAttempts,
 } from "@/db/schema";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { UnlimitedAutoRenewalDisclosure } from "../unlimited-auto-renewal";
@@ -15,6 +16,18 @@ import type { UnlimitedAutoRenewalDisclosure } from "../unlimited-auto-renewal";
 export const unlimitedRenewalIntentOpen = and(
   isNull(authorizations.cancelledAt),
   isNull(authorizations.prepaidSuccessorOrderId)
+);
+
+export const eligibleUnlimitedRenewalSource = and(
+  eq(passPurchases.product, "unlimited"),
+  eq(passPurchases.autoRenew, true),
+  eq(passPurchases.buyerAccountId, passPurchases.holderAccountId),
+  eq(passPurchases.holderVersion, authorizations.holderVersion),
+  inArray(passPurchases.status, ["active", "expired"]),
+  eq(orders.kind, "pass-purchase"),
+  eq(orders.paymentState, "paid"),
+  eq(paymentAttempts.state, "paid"),
+  eq(paymentAttempts.refundState, "not_required")
 );
 
 export const recordUnlimitedAutoRenewalAuthorization = Effect.fn(
@@ -57,14 +70,18 @@ export const recordPrepaidRenewalCoverage = Effect.fn(
     .select({ id: orders.id })
     .from(orders)
     .innerJoin(passPurchases, eq(passPurchases.id, orders.id))
+    .innerJoin(
+      paymentAttempts,
+      and(
+        eq(paymentAttempts.orderId, orders.id),
+        eq(paymentAttempts.id, orders.activePaymentAttemptId)
+      )
+    )
     .where(
       and(
-        eq(orders.activePaymentAttemptId, authorizations.paymentAttemptId),
-        eq(orders.paymentState, "paid"),
-        eq(passPurchases.buyerAccountId, purchase.buyerAccountId),
+        eq(paymentAttempts.id, authorizations.paymentAttemptId),
         eq(passPurchases.holderAccountId, purchase.holderAccountId),
-        eq(passPurchases.holderVersion, authorizations.holderVersion),
-        inArray(passPurchases.status, ["active", "expired"])
+        eligibleUnlimitedRenewalSource
       )
     );
   yield* db
