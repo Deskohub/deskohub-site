@@ -176,6 +176,7 @@
         "@deskohub/workspace-admin-api#test",
         "@deskohub/workspace-backend#test",
         "@deskohub/workspace-customer-api#test",
+        "@deskohub/workspace-domain#test",
         "@deskohub/workspace-rpc#test",
         "@deskohub/workspace-telemetry#test",
         "osm#test"
