@@ -130,6 +130,11 @@ mock.module("@/features/passes/entry-pack-gift-actions", () => ({
   resendEntryPackInvitation: () => Promise.resolve("unavailable"),
 }));
 
+mock.module("@/features/account/unlimited-auto-renewal-actions", () => ({
+  cancelAccountUnlimitedAutoRenewal: () =>
+    Promise.resolve({ data: { status: "unavailable" } }),
+}));
+
 mock.module(
   "@/features/withdrawal/components/reservation-withdrawal-link",
   () => ({ ReservationWithdrawalLink: () => null })

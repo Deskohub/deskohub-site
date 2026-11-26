@@ -254,6 +254,57 @@ const workflowDispatchContext = (
 };
 
 describe("workspace E2E workflow", () => {
+  test("considers only the typed manual draft Preview input", () => {
+    expect(workflowDispatchInputs?.allow_draft_preview).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const expression = String(
+      stepByName("Resolve eligible PR and immutable preview").env
+        ?.ALLOW_DRAFT_PREVIEW ?? ""
+    );
+    const manual = workflowDispatchContext({ allow_draft_preview: true });
+    const stringFalse = new Map(manual.values);
+    stringFalse.set(
+      "inputs.allow_draft_preview",
+      workflowExpressionString("false")
+    );
+    const automation = repositoryDispatchContext();
+    const automationValues = new Map(automation.values);
+    automationValues.set(
+      "inputs.allow_draft_preview",
+      workflowExpressionBoolean(true)
+    );
+
+    expect(evaluateWorkflowValue(expression, manual)).toBe("true");
+    for (const context of [
+      workflowDispatchContext({}),
+      workflowDispatchContext({ allow_draft_preview: false }),
+      { ...manual, values: stringFalse },
+      { ...automation, values: automationValues },
+    ]) {
+      expect(evaluateWorkflowValue(expression, context)).toBe("false");
+    }
+  });
+
+  test("runs draft Preview evidence without writing merge-gate statuses", () => {
+    const draftEvidence =
+      "needs.resolve-target.outputs.draft_preview != 'true'";
+    expect(testJob?.if).not.toContain("draft_preview");
+    expect(testJob?.concurrency?.group).toContain(
+      "outputs.draft_preview == 'true' && '-draft-preview'"
+    );
+    for (const name of [
+      "Publish allocation status",
+      "Publish pending commit status",
+    ]) {
+      expect(stepByName(name).if).toContain(draftEvidence);
+    }
+    for (const job of ["publish-final-status", "publish-status-without-run"]) {
+      expect(doc.jobs[job]?.if).toContain(draftEvidence);
+    }
+  });
+
   test.each([
     ["repository_dispatch", undefined, undefined, "nexi"],
     ["repository_dispatch", undefined, "mock", "mock"],
@@ -522,6 +573,7 @@ describe("workspace E2E workflow", () => {
     expect(environment).toContain("WORKSPACE_E2E_BETTER_AUTH_SECRETS");
     expect(environment).toContain("WORKSPACE_E2E_FLOWS");
     expect(environment).toContain("WORKSPACE_E2E_REVIEW_SCREENSHOTS");
+    expect(environment).toContain("WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE");
     expect(environment).toContain("WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS");
     expect(environment).not.toContain("WORKSPACE_E2E_RESEND_API_KEY");
   });
@@ -533,6 +585,39 @@ describe("workspace E2E workflow", () => {
         default: false,
         type: "boolean",
       });
+    }
+  });
+
+  test("sends the locale only for a manual Unlimited screenshot run", () => {
+    expect(workflowDispatchInputs?.unlimited_review_locale).toMatchObject({
+      default: "en-US",
+      options: ["en-US", "cs-CZ"],
+      type: "choice",
+    });
+    const expression = String(
+      stepByName("Run checkout E2E").env
+        ?.WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE ?? ""
+    );
+    const optIn = workflowDispatchContext({
+      include_unlimited_pass_auto_renewal: true,
+      review_screenshots: true,
+    });
+    expect(evaluateWorkflowValue(expression, optIn)).toBe("en-US");
+    const czech = new Map(optIn.values);
+    czech.set(
+      "inputs.unlimited_review_locale",
+      workflowExpressionString("cs-CZ")
+    );
+    expect(evaluateWorkflowValue(expression, { ...optIn, values: czech })).toBe(
+      "cs-CZ"
+    );
+    for (const context of [
+      repositoryDispatchContext(),
+      workflowDispatchContext({}),
+      workflowDispatchContext({ review_screenshots: true }),
+      workflowDispatchContext({ include_unlimited_pass_auto_renewal: true }),
+    ]) {
+      expect(evaluateWorkflowValue(expression, context)).toBe("");
     }
   });
 

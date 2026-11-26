@@ -7,6 +7,7 @@ import {
   nightlyCasesEnabled,
   toPlaywrightEnvironment,
   unlimitedPassAutoRenewalCaseEnabled,
+  unlimitedPassReviewLocale,
   workspaceE2EFlowSelection,
 } from "./e2e-env";
 import {
@@ -113,6 +114,42 @@ describe("Workspace E2E environment", () => {
         makeWorkspaceE2EEnvironment({ ...selected, ...invalid })
       ).toThrow("requires the leased exact-SHA payments flow");
     }
+  });
+
+  test("forwards only a supported locale for opted-in Unlimited review", () => {
+    const review = { WORKSPACE_E2E_REVIEW_SCREENSHOTS: "true" };
+    const unlimited = { WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: "true" };
+    const czech = { WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: "cs-CZ" };
+    expect(
+      unlimitedPassReviewLocale(makeTestE2EEnvironment({ ...review, ...czech }))
+    ).toBeUndefined();
+    expect(
+      unlimitedPassReviewLocale(
+        makeTestE2EEnvironment({ ...unlimited, ...czech })
+      )
+    ).toBeUndefined();
+    expect(
+      unlimitedPassReviewLocale(
+        makeTestE2EEnvironment({ ...review, ...unlimited })
+      )
+    ).toBe("en-US");
+    const environment = makeTestE2EEnvironment({
+      ...review,
+      ...unlimited,
+      ...czech,
+    });
+    expect(
+      unlimitedPassReviewLocale(
+        makeE2EEnvironment(toPlaywrightEnvironment(environment))
+      )
+    ).toBe("cs-CZ");
+    expect(() =>
+      makeTestE2EEnvironment({
+        ...review,
+        ...unlimited,
+        WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: "de-DE",
+      })
+    ).toThrow("Invalid workspace E2E environment variables.");
   });
 
   test("does not expose application-only environment variables", () => {

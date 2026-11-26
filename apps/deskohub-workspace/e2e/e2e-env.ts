@@ -131,6 +131,9 @@ const e2eEnvironmentSchema = Schema.Struct({
   WORKSPACE_E2E_FLOWS: optionalFlowsInput,
   WORKSPACE_E2E_NIGHTLY_CASES: optionalOptIn,
   WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: optionalOptIn,
+  WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: toEnvironmentSchema(
+    Schema.optional(Schema.Literals(["en-US", "cs-CZ"]))
+  ),
   WORKSPACE_E2E_PR_NUMBER: optionalPositiveInteger,
   WORKSPACE_E2E_REVIEW_SCREENSHOTS: optionalOptIn,
   WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS: optionalOptIn,
@@ -200,6 +203,8 @@ export const makeE2EEnvironment = (
         runtimeEnvironment.WORKSPACE_E2E_NIGHTLY_CASES,
       WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL:
         runtimeEnvironment.WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL,
+      WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE:
+        runtimeEnvironment.WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE,
       WORKSPACE_E2E_PR_NUMBER: runtimeEnvironment.WORKSPACE_E2E_PR_NUMBER,
       WORKSPACE_E2E_REVIEW_SCREENSHOTS:
         runtimeEnvironment.WORKSPACE_E2E_REVIEW_SCREENSHOTS,
@@ -311,6 +316,12 @@ export const unlimitedPassAutoRenewalCaseEnabled = (
 export const reviewScreenshotsEnabled = (
   environment: Pick<E2EEnvironment, "WORKSPACE_E2E_REVIEW_SCREENSHOTS">
 ): boolean => environment.WORKSPACE_E2E_REVIEW_SCREENSHOTS === "true";
+
+export const unlimitedPassReviewLocale = (environment: E2EEnvironment) =>
+  unlimitedPassAutoRenewalCaseEnabled(environment) &&
+  reviewScreenshotsEnabled(environment)
+    ? (environment.WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE ?? "en-US")
+    : undefined;
 
 /**
  * Nightly cases are too slow for the per-PR gate, so a run includes them

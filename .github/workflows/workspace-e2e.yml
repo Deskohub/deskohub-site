@@ -5,6 +5,11 @@ on:
     types: [vercel.deployment.failed, vercel.deployment.skipped, vercel.deployment.success]
   workflow_dispatch:
     inputs:
+      allow_draft_preview:
+        description: Allow an internal draft PR Preview for manual evidence without publishing commit statuses
+        required: false
+        default: false
+        type: boolean
       cleanup_stale_e2e_reservations:
         description: Cancel strictly identified stale E2E reservations before validation
         required: false
@@ -44,6 +49,13 @@ on:
         required: false
         default: false
         type: boolean
+      unlimited_review_locale:
+        description: Locale for Unlimited auto-renewal review screenshots (requires both review_screenshots and include_unlimited_pass_auto_renewal)
+        type: choice
+        default: en-US
+        options:
+          - en-US
+          - cs-CZ
       sha:
         description: Exact commit SHA to test
         required: true
@@ -77,6 +89,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       deployment: ${{ steps.target.outputs.deployment }}
+      draft_preview: ${{ steps.target.outputs.draft_preview }}
       eligible: ${{ steps.target.outputs.eligible }}
       flows: ${{ steps.target.outputs.flows }}
       head_ref: ${{ steps.target.outputs.head_ref }}
@@ -103,6 +116,8 @@ jobs:
       - name: Resolve eligible PR and immutable preview
         id: target
         env:
+          ALLOW_DRAFT_PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_draft_preview || 'false' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_NAME: ${{ github.event_name }}
           FLOWS_CLI: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/cli.mjs
           GH_TOKEN: ${{ github.token }}
@@ -135,6 +150,21 @@ jobs:
             echo "Target ref is not a valid branch name" >&2
             exit 1
           fi
+          allow_draft_preview=false
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "${ALLOW_DRAFT_PREVIEW:-false}" == "true" ]]; then
+            if [[ "$TARGET_REF" == "$NIGHTLY_BRANCH" ]]; then
+              echo 'Draft Preview evidence requires an internal PR target' >&2
+              exit 1
+            fi
+            # If the dispatch uses a branch workflow, bind its definition
+            # and local actions to the same reviewed commit as the Preview.
+            if [[ "${GITHUB_REF:-}" != "refs/heads/${DEFAULT_BRANCH:-}" &&
+              ("${GITHUB_REF:-}" != "refs/heads/$TARGET_REF" || "${GITHUB_WORKFLOW_SHA:-}" != "$TARGET_SHA") ]]; then
+              echo 'Draft Preview evidence requires the default-branch workflow or the exact target branch workflow' >&2
+              exit 1
+            fi
+            allow_draft_preview=true
+          fi
           # Nightly cases test main only (D38). A dispatch that asks for them
           # against any other target fails before it resolves a PR, so it
           # leaves that PR's required status alone.
@@ -143,7 +173,7 @@ jobs:
             echo "Nightly cases run only against the $NIGHTLY_BRANCH target, never a PR; dispatch without include_nightly_cases" >&2
             exit 1
           fi
-          if [[ "$INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL" == "true" &&
+          if [[ "${INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL:-false}" == "true" &&
             ("$TARGET_REF" == "$NIGHTLY_BRANCH" || "$INPUT_FLOWS" != "payments" || "$INPUT_PAYMENT_PROVIDER" != "nexi") ]]; then
             echo 'Unlimited auto-renewal requires a PR preview, flows=payments, and payment_provider=nexi' >&2
             exit 1
@@ -155,12 +185,13 @@ jobs:
           pulls="$(jq -c '.items' <<<"$pulls_result")"
           filter_eligible_pulls() {
             jq \
+              --argjson allow_draft "$allow_draft_preview" \
               --arg repo "$GITHUB_REPOSITORY" \
               --arg ref "$TARGET_REF" \
               --arg sha "$TARGET_SHA" \
               '[.[] | select(
                 .state == "open" and
-                .draft == false and
+                (.draft == false or ($allow_draft and .draft == true)) and
                 .head.repo.full_name == $repo and
                 .head.ref == $ref and
                 .head.sha == $sha and
@@ -170,6 +201,11 @@ jobs:
           }
           eligible_pulls="$(filter_eligible_pulls <<<"$pulls")"
           eligible_count="$(jq 'length' <<<"$eligible_pulls")"
+          # A run admitted while draft stays evidence-only if the PR is
+          # marked ready before it finishes.
+          if jq -e 'any(.[]; .draft == true)' <<<"$eligible_pulls" >/dev/null; then
+            echo 'draft_preview=true' >> "$GITHUB_OUTPUT"
+          fi
           fail() {
             echo "$1" >&2
             echo "resolution_error=$2" >> "$GITHUB_OUTPUT"
@@ -241,9 +277,12 @@ jobs:
                   -f head="$owner:$TARGET_REF")"
                 fallback_ok="$(jq -r '.ok' <<<"$fallback_result")"
                 fallback_pulls="$(jq -c '.items' <<<"$fallback_result")"
-                fallback_eligible_count="$(filter_eligible_pulls <<<"$fallback_pulls" 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
-                if [[ "$fallback_eligible_count" != "0" ]]; then
+                fallback_eligible_pulls="$(filter_eligible_pulls <<<"$fallback_pulls" 2>/dev/null || echo '[]')"
+                if jq -e 'length > 0' <<<"$fallback_eligible_pulls" >/dev/null; then
                   verified_head=true
+                  if jq -e 'any(.[]; .draft == true)' <<<"$fallback_eligible_pulls" >/dev/null; then
+                    echo 'draft_preview=true' >> "$GITHUB_OUTPUT"
+                  fi
                 elif [[ "$fallback_ok" == "true" ]]; then
                   echo "No eligible open internal PR matches the exact deployment SHA"
                   echo "eligible=false" >> "$GITHUB_OUTPUT"
@@ -397,6 +436,7 @@ jobs:
         id: status-without-run
         if: >-
           !cancelled() && steps.target.outputs.eligible == 'true' &&
+          steps.target.outputs.draft_preview != 'true' &&
           steps.target.outputs.nightly != 'true' &&
           (steps.target.outcome != 'success' ||
            steps.target.outputs.deployment != 'success' ||
@@ -615,7 +655,7 @@ jobs:
     # migration until the release step. A newer head's run waits for the
     # older run to release it, or for its attempt to complete.
     concurrency:
-      group: workspace-e2e-pr-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
+      group: workspace-e2e-pr-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}${{ needs.resolve-target.outputs.draft_preview == 'true' && '-draft-preview' || '' }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 50
@@ -744,7 +784,7 @@ jobs:
           exit 1
 
       - name: Publish allocation status
-        if: needs.resolve-target.outputs.nightly != 'true'
+        if: needs.resolve-target.outputs.nightly != 'true' && needs.resolve-target.outputs.draft_preview != 'true'
         env:
           ALLOCATION_SHARD: ${{ steps.lease.outputs.shard }}
           GH_TOKEN: ${{ github.token }}
@@ -762,7 +802,7 @@ jobs:
             >/dev/null
 
       - name: Publish pending commit status
-        if: needs.resolve-target.outputs.nightly != 'true'
+        if: needs.resolve-target.outputs.nightly != 'true' && needs.resolve-target.outputs.draft_preview != 'true'
         env:
           FLOWS: ${{ needs.resolve-target.outputs.flows }}
           FLOWS_CLI: .workspace-e2e-coordinator/.github/actions/workspace-e2e-flows/cli.mjs
@@ -959,6 +999,7 @@ jobs:
           WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: ${{ github.event_name == 'workflow_dispatch' && inputs.include_unlimited_pass_auto_renewal && 'true' || '' }}
           # Set only for a manual dispatch that asked for review screenshots.
           WORKSPACE_E2E_REVIEW_SCREENSHOTS: ${{ github.event_name == 'workflow_dispatch' && inputs.review_screenshots && 'true' || '' }}
+          WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: ${{ github.event_name == 'workflow_dispatch' && inputs.review_screenshots && inputs.include_unlimited_pass_auto_renewal && inputs.unlimited_review_locale || '' }}
           DATABASE_URL: ${{ steps.preview-database.outputs.pooled_url }}
           WORKSPACE_E2E_DATABASE_URL_UNPOOLED: ${{ steps.preview-database.outputs.direct_url }}
           WORKSPACE_E2E_DATABASE_ALLOWLIST: ${{ steps.preview-database.outputs.direct_url }}
@@ -1135,7 +1176,7 @@ jobs:
 
   publish-final-status:
     needs: [resolve-target, fill-bun-package-cache, test-e2e]
-    if: always() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true' && needs.resolve-target.outputs.nightly != 'true'
+    if: always() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true' && needs.resolve-target.outputs.nightly != 'true' && needs.resolve-target.outputs.draft_preview != 'true'
     concurrency:
       group: workspace-e2e-status-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
       cancel-in-progress: false
@@ -1182,6 +1223,7 @@ jobs:
     needs: resolve-target
     if: >-
       !cancelled() && needs.resolve-target.outputs.eligible == 'true' &&
+      needs.resolve-target.outputs.draft_preview != 'true' &&
       needs.resolve-target.outputs.nightly != 'true' &&
       (needs.resolve-target.result != 'success' ||
        needs.resolve-target.outputs.deployment != 'success' ||

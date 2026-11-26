@@ -2,13 +2,16 @@ import { expect, type Page } from "@playwright/test";
 import { Effect } from "effect";
 import { getAccountSectionPath } from "@/features/account/routes";
 import { m } from "@/features/i18n";
+import { getLegalDocumentPath } from "@/features/legal/legal-document-path";
 import {
   getUnlimitedPassPrice,
   unlimitedPassDays,
 } from "@/features/passes/pass-offer";
 import { formatPassDate } from "@/features/passes/pass-offer.i18n";
+import { withPassPurchaseAddons } from "@/features/passes/pass-purchase-quote";
 import { getUnlimitedPassChoosePath } from "@/features/passes/unlimited-pass-checkout";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
+import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { formatMoney } from "@/shared/money/money";
 import {
   formatPlainDate,
@@ -25,7 +28,10 @@ import { completeNexiHostedPayment } from "../checkout/nexi-hosted-payment";
 import { submitPaymentAndWaitForHostedPage } from "../checkout/payment";
 import { getConfig, getDatasourceConfig } from "../config";
 import { WorkspaceE2EHostedPaymentPermitService } from "../coordination/hosted-payment-permit.service";
-import type { WorkspaceE2EEnvironment } from "../e2e-env";
+import {
+  unlimitedPassReviewLocale,
+  type WorkspaceE2EEnvironment,
+} from "../e2e-env";
 import { workspaceE2EError } from "../errors";
 import {
   unlimitedPassAutoRenewalCaseId,
@@ -39,29 +45,9 @@ import {
 import type { WorkspaceE2ERunId } from "../run-identifiers";
 import type { WorkspaceE2ECase, WorkspaceE2ECaseContext } from "../types";
 import { isExpectedCheckoutStatusUrl } from "../urls";
+import { makeUnlimitedPassReviewCapture } from "./unlimited-pass-review";
 
-const locale = "en-US";
-const localized = { locale } as const;
 const tier = "open-space";
-
-const renewalConsent = (page: Page) =>
-  page.getByRole("checkbox", {
-    name: m.unlimitedPassCheckoutAutoRenewConsent({}, localized),
-    exact: true,
-  });
-
-const orderAndPay = (page: Page) =>
-  page.getByRole("button", {
-    name: m.checkoutPayOrderAndPayButton({}, localized),
-  });
-
-const renewalCard = (page: Page) =>
-  page.getByRole("article").filter({
-    has: page.getByRole("heading", {
-      name: m.accountUnlimitedAutoRenewalTitle({}, localized),
-      exact: true,
-    }),
-  });
 
 export const getUnlimitedPassE2EStart = (
   allocation: WorkspaceE2EDateAllocation,
@@ -87,6 +73,34 @@ export const makeUnlimitedPassAutoRenewalCase = ({
 }): WorkspaceE2ECase => {
   const config = getConfig(environment);
   const { timeouts } = config;
+  const reviewLocale = unlimitedPassReviewLocale(environment);
+  const locale = reviewLocale ?? "en-US";
+  const localized = { locale } as const;
+  const accountPath = getAccountSectionPath(locale, "passes");
+  const renewalConsent = (page: Page) =>
+    page.getByRole("checkbox", {
+      name: m.unlimitedPassCheckoutAutoRenewConsent({}, localized),
+      exact: true,
+    });
+  const orderAndPay = (page: Page) =>
+    page.getByRole("button", {
+      name: m.checkoutPayOrderAndPayButton({}, localized),
+    });
+  const renewalCard = (page: Page) =>
+    page.getByRole("article").filter({
+      has: page.getByRole("heading", {
+        name: m.accountUnlimitedAutoRenewalTitle({}, localized),
+        exact: true,
+      }),
+    });
+  const purchaseModes = (page: Page) => ({
+    autoRenew: page.getByRole("radio", {
+      name: m.unlimitedPassCheckoutAutoRenew({}, localized),
+    }),
+    oneTime: page.getByRole("radio", {
+      name: m.unlimitedPassCheckoutOneTime({}, localized),
+    }),
+  });
   const identities = makeWorkspaceE2ECaseIdentities({
     baseUrl: config.baseUrl,
     datasourceConfig: getDatasourceConfig(environment),
@@ -95,18 +109,19 @@ export const makeUnlimitedPassAutoRenewalCase = ({
     runId,
     secret: resolveWorkspaceE2ESessionSigningSecret(environment),
   });
-  const start = getUnlimitedPassE2EStart(allocation);
+  const today = getCurrentWorkspaceDate();
+  const start = getUnlimitedPassE2EStart(allocation, today);
   const startDate = plainDateStringSchema.make(start.toString());
   const lastDay = start.add({ days: unlimitedPassDays - 1 });
   const renewalDate = start.add({ days: unlimitedPassDays });
   const amount = formatMoney(
-    getUnlimitedPassPrice({ kind: "unlimited", tier }),
+    withPassPurchaseAddons(
+      getUnlimitedPassPrice({ kind: "unlimited", tier }),
+      reviewLocale !== undefined
+    ),
     locale
   );
-  const accountUrl = new URL(
-    getAccountSectionPath(locale, "passes"),
-    config.baseUrl
-  ).href;
+  const accountUrl = new URL(accountPath, config.baseUrl).href;
   const period = formatPlainDateRange({ start, end: lastDay, locale });
   const startsOn = m.unlimitedAccessStarts(
     { date: formatPlainDate({ date: start, locale }) },
@@ -133,6 +148,25 @@ export const makeUnlimitedPassAutoRenewalCase = ({
           "Unlimited pass auto-renewal requires exact Nexi mode"
         );
       }
+      if (
+        reviewLocale &&
+        Temporal.PlainDate.compare(
+          renewalDate,
+          getWorkspaceAvailabilityRange(today.toString()).to
+        ) > 0
+      ) {
+        return yield* workspaceE2EError(
+          "Cannot capture manual Renew with this allocated period. The pass would end beyond the Workspace booking horizon."
+        );
+      }
+      const review =
+        reviewLocale &&
+        makeUnlimitedPassReviewCapture({
+          accountPath,
+          locale: reviewLocale,
+          origin: config.baseUrl,
+          timeout: timeouts.pageDiagnosticsRead,
+        });
       const account = yield* runStep({
         execute: identities.seedLinkedAccount(
           unlimitedPassAutoRenewalRecipientLabel
@@ -142,6 +176,7 @@ export const makeUnlimitedPassAutoRenewalCase = ({
       });
       addRedaction(account.accountId);
       addRedaction(account.customerId, true);
+      const buyerText = [account.name, account.email, account.phone];
       const session = yield* runStep({
         execute: identities
           .signIn(account, { openSession })
@@ -165,16 +200,26 @@ export const makeUnlimitedPassAutoRenewalCase = ({
           yield* session.use(
             "choose automatic Unlimited renewal",
             async (page) => {
-              const oneTime = page.getByRole("radio", {
-                name: m.unlimitedPassCheckoutOneTime({}, localized),
-              });
-              const autoRenew = page.getByRole("radio", {
-                name: m.unlimitedPassCheckoutAutoRenew({}, localized),
-              });
+              const { autoRenew, oneTime } = purchaseModes(page);
               await expect(oneTime).toBeChecked({
                 timeout: timeouts.browserAction,
               });
               await expect(autoRenew).not.toBeChecked();
+              if (review) {
+                await review.captureWorkspace(
+                  page,
+                  "choose-default",
+                  buyerText
+                );
+                const coffee = page.getByRole("switch", {
+                  name: m.unlimitedPassCheckoutCoffee(
+                    { days: formatCount(unlimitedPassDays, locale) },
+                    localized
+                  ),
+                });
+                await coffee.click({ timeout: timeouts.browserAction });
+                await expect(coffee).toHaveAttribute("aria-checked", "true");
+              }
               await autoRenew
                 .filter({ visible: true })
                 .check({ timeout: timeouts.browserAction });
@@ -184,6 +229,7 @@ export const makeUnlimitedPassAutoRenewalCase = ({
               await expect(next).toBeEnabled({
                 timeout: timeouts.providerTransition,
               });
+              await review?.captureWorkspace(page, "choose-renewal", buyerText);
               await next.click({ timeout: timeouts.browserAction });
             }
           );
@@ -202,6 +248,11 @@ export const makeUnlimitedPassAutoRenewalCase = ({
               timeoutMs: timeouts.uiTransition,
             }
           );
+          if (review) {
+            yield* session.use("capture Unlimited buyer details", (page) =>
+              review.captureWorkspace(page, "details", buyerText)
+            );
+          }
           const intent = yield* recordReservationIntent({
             owner: { customerId: account.customerId },
             requestedAt: new Date().toISOString(),
@@ -261,15 +312,36 @@ export const makeUnlimitedPassAutoRenewalCase = ({
             ).toBeVisible();
             await expect(consent).toBeVisible();
             await expect(consent).not.toBeChecked();
+            const termsName = m
+              .checkoutPayConsent({}, localized)
+              .split("<terms>")[0]
+              ?.trim();
             await page
-              .getByRole("checkbox", { name: /^I agree to the / })
+              .getByRole("checkbox", { name: termsName })
               .filter({ visible: true })
               .check({ timeout: timeouts.browserAction });
+            const earlyStart = page
+              .getByRole("checkbox", {
+                name: m.unlimitedPassEarlyStartConsent({}, localized),
+                exact: true,
+              })
+              .filter({ visible: true });
+            if (await earlyStart.count()) {
+              await earlyStart.check({ timeout: timeouts.browserAction });
+            }
             await expect(pay).toBeDisabled();
+            await review?.captureWorkspace(page, "pay-unchecked", [
+              ...buyerText,
+              orderId,
+            ]);
             await consent
               .filter({ visible: true })
               .check({ timeout: timeouts.browserAction });
             await expect(pay).toBeEnabled();
+            await review?.captureWorkspace(page, "pay-accepted", [
+              ...buyerText,
+              orderId,
+            ]);
           }
         ),
         id: "give-unlimited-renewal-consent",
@@ -307,12 +379,22 @@ export const makeUnlimitedPassAutoRenewalCase = ({
             timeoutMs: timeouts.providerTransition,
           });
           yield* runStep({
-            execute: completeNexiHostedPayment({
-              challengeOutcome: "authenticated",
-              data: account,
-              hostedPaymentPage,
-              session,
-              timeouts,
+            execute: Effect.gen(function* () {
+              if (review) {
+                yield* session.use("capture empty Nexi handoff", (page) =>
+                  review.captureNexi(page, hostedPaymentPage, [
+                    ...buyerText,
+                    orderId,
+                  ])
+                );
+              }
+              yield* completeNexiHostedPayment({
+                challengeOutcome: "authenticated",
+                data: account,
+                hostedPaymentPage,
+                session,
+                timeouts,
+              });
             }),
             id: "approve-first-unlimited-payment",
             timeoutMs: timeouts.hostedPayment,
@@ -343,6 +425,12 @@ export const makeUnlimitedPassAutoRenewalCase = ({
                   name: m.unlimitedPassStatusPaidTitle({}, localized),
                 })
               ).toBeVisible({ timeout: timeouts.providerTransition });
+              await review?.captureWorkspace(
+                page,
+                "paid-status",
+                [...buyerText, orderId],
+                orderId
+              );
             }
           );
         }),
@@ -374,6 +462,10 @@ export const makeUnlimitedPassAutoRenewalCase = ({
                   { exact: true }
                 )
               ).toBeVisible();
+              await review?.captureWorkspace(page, "account-renewal", [
+                ...buyerText,
+                orderId,
+              ]);
             }
           );
           yield* recordReservationResult(intent, {
@@ -407,6 +499,10 @@ export const makeUnlimitedPassAutoRenewalCase = ({
                   { exact: true }
                 )
               ).toBeVisible({ timeout: timeouts.uiTransition });
+              await review?.captureWorkspace(page, "account-stop-confirmed", [
+                ...buyerText,
+                orderId,
+              ]);
             }
           );
           yield* openPage(session, config, accountUrl, {
@@ -436,12 +532,68 @@ export const makeUnlimitedPassAutoRenewalCase = ({
                   name: m.accountUnlimitedAutoRenewalCancel({}, localized),
                 })
               ).toHaveCount(0);
+              await review?.captureWorkspace(
+                page,
+                "account-stopped-after-reload",
+                [...buyerText, orderId]
+              );
             }
           );
         }),
         id: "stop-renewal-and-preserve-paid-period",
         timeoutMs: timeouts.checkoutStart,
       });
+
+      if (review) {
+        yield* runStep({
+          execute: Effect.gen(function* () {
+            yield* session.use(
+              "open the existing manual Renew link",
+              async (page) => {
+                const renew = renewalCard(page).getByRole("link", {
+                  name: m.unlimitedPassRenew({}, localized),
+                });
+                if (!(await renew.isVisible())) return;
+                await renew.click({ timeout: timeouts.browserAction });
+                const { autoRenew, oneTime } = purchaseModes(page);
+                await expect(oneTime).toBeChecked({
+                  timeout: timeouts.browserAction,
+                });
+                await expect(autoRenew).not.toBeChecked();
+                const selectedDay = page
+                  .locator(`[data-day="${renewalDate}"][data-selected="true"]`)
+                  .filter({ visible: true });
+                await expect(selectedDay).toBeVisible();
+                await review.captureWorkspace(page, "manual-renew", [
+                  ...buyerText,
+                  orderId,
+                ]);
+              }
+            );
+            yield* openPage(
+              session,
+              config,
+              new URL(
+                getLegalDocumentPath(locale, "terms-and-conditions"),
+                config.baseUrl
+              ).href,
+              { timeoutMs: timeouts.browserAction }
+            );
+            yield* session.use(
+              "capture canonical Unlimited renewal terms",
+              (page) => review.captureWorkspace(page, "terms")
+            );
+            const missingShots = review.missingShots();
+            if (missingShots.length) {
+              return yield* workspaceE2EError(
+                `Incomplete Unlimited review screenshots: ${missingShots.join(", ")}`
+              );
+            }
+          }),
+          id: "capture-unlimited-renewal-review",
+          timeoutMs: timeouts.reviewScreenshotCapture,
+        });
+      }
     }),
   };
 };
