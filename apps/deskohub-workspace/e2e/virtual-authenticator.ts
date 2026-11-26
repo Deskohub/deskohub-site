@@ -58,10 +58,14 @@ export type PageVirtualAuthenticator = VirtualAuthenticator & {
   readonly waitForConditionalRequest: (timeout: number) => Promise<void>;
   /**
    * Like `answerCeremony`, for a ceremony the customer starts with a button:
-   * fails unless the only sign-in request answered meanwhile, across
-   * navigations, is that modal one. With presence on, a conditional request
-   * the page arms after a failed button ceremony would also be answered and
-   * sign the customer in, hiding the failure.
+   * keeps simulated presence off until the page starts a modal sign-in
+   * request (after any aborted conditional request has settled in Chromium),
+   * then keeps presence on until `ceremony` finishes and fails unless the
+   * only sign-in request answered meanwhile, across navigations, is that
+   * modal one. Delaying presence until the modal request avoids racing a
+   * conditional request that is still traversing Chromium's browser-side
+   * dispatch, while leaving presence on afterwards still catches a
+   * conditional request the page arms after a failed button ceremony.
    */
   readonly answerModalCeremony: <A>(ceremony: () => Promise<A>) => Promise<A>;
 };
@@ -76,52 +80,103 @@ type WebAuthnSignInRequestOutcome = {
 
 const conditionalRequestCountKey = "deskohub.e2e.conditionalWebAuthnRequests";
 const signInRequestBinding = "__deskohubE2EWebAuthnSignInRequestSettled";
+const modalSignInPrepareBinding = "__deskohubE2EWebAuthnModalSignInPrepare";
 
 /**
  * Runs in every new document: counts pending conditional WebAuthn requests,
- * reports how each sign-in request settles, and passes every request on
- * unchanged. Serialized into the page, so it references no module scope.
+ * reports how each sign-in request settles, and before a modal request waits
+ * for any aborted conditional request to finish cancelling in Chromium and
+ * asks the host to enable simulated presence when `answerModalCeremony` is
+ * active. Serialized into the page, so it references no module scope.
  */
 const watchSignInRequests = ({
   countKey,
   binding,
+  prepareBinding,
 }: {
   readonly countKey: string;
   readonly binding: string;
+  readonly prepareBinding: string;
 }) => {
   const count = Symbol.for(countKey);
   Reflect.set(globalThis, count, 0);
+  const pendingConditionals = new Set<{
+    readonly signal: AbortSignal | undefined;
+    readonly settled: Promise<void>;
+  }>();
   const get = CredentialsContainer.prototype.get;
   CredentialsContainer.prototype.get = function (options) {
     const conditional = options?.mediation === "conditional";
-    const request = get.call(this, options);
-    if (options?.publicKey !== undefined) {
-      if (conditional) {
-        Reflect.set(
-          globalThis,
-          count,
-          Number(Reflect.get(globalThis, count)) + 1
-        );
-      }
-      const report = (answered: boolean) => {
+    const publicKey = options?.publicKey !== undefined;
+    const invoke = () => {
+      const request = get.call(this, options);
+      if (publicKey) {
+        let conditionalEntry:
+          | {
+              readonly signal: AbortSignal | undefined;
+              readonly settled: Promise<void>;
+            }
+          | undefined;
+        let markSettled: (() => void) | undefined;
         if (conditional) {
           Reflect.set(
             globalThis,
             count,
-            Number(Reflect.get(globalThis, count)) - 1
+            Number(Reflect.get(globalThis, count)) + 1
           );
+          const settled = new Promise<void>((resolve) => {
+            markSettled = resolve;
+          });
+          conditionalEntry = {
+            signal: options?.signal,
+            settled,
+          };
+          pendingConditionals.add(conditionalEntry);
         }
-        const settled = Reflect.get(globalThis, binding);
-        if (typeof settled === "function") {
-          void settled({ conditional, answered });
-        }
-      };
-      request.then(
-        (credential) => report(credential !== null),
-        () => report(false)
-      );
+        const report = (answered: boolean) => {
+          if (conditional) {
+            Reflect.set(
+              globalThis,
+              count,
+              Number(Reflect.get(globalThis, count)) - 1
+            );
+            if (conditionalEntry !== undefined) {
+              pendingConditionals.delete(conditionalEntry);
+            }
+            markSettled?.();
+          }
+          const settled = Reflect.get(globalThis, binding);
+          if (typeof settled === "function") {
+            void settled({ conditional, answered });
+          }
+        };
+        request.then(
+          (credential) => report(credential !== null),
+          () => report(false)
+        );
+      }
+      return request;
+    };
+    if (!publicKey || conditional) {
+      return invoke();
     }
-    return request;
+    const prepare = async () => {
+      const aborted = [...pendingConditionals].filter(
+        (entry) => entry.signal?.aborted === true
+      );
+      if (aborted.length > 0) {
+        await Promise.all(aborted.map((entry) => entry.settled));
+      }
+      if (options?.signal?.aborted) return;
+      const prepareModal = Reflect.get(globalThis, prepareBinding);
+      if (typeof prepareModal === "function") {
+        await prepareModal();
+      }
+    };
+    return prepare().then(
+      () => invoke(),
+      () => invoke()
+    );
   };
 };
 
@@ -150,16 +205,23 @@ const requireOnlyModalSignInAnswered = (
   }
 };
 
-/** Each page's sign-in request outcomes, recorded from its first watch. */
-const watchedPages = new WeakMap<Page, WebAuthnSignInRequestOutcome[]>();
+type WatchedPageState = {
+  readonly outcomes: WebAuthnSignInRequestOutcome[];
+  beforeModalSignIn: (() => Promise<void>) | undefined;
+};
+
+/** Each page's sign-in request state, recorded from its first watch. */
+const watchedPages = new WeakMap<Page, WatchedPageState>();
 
 const watchPage = async (page: Page) => {
   const recorded = watchedPages.get(page);
   if (recorded !== undefined) return recorded;
-  const outcomes: WebAuthnSignInRequestOutcome[] = [];
-  watchedPages.set(page, outcomes);
-  // Page-lifetime (Playwright cannot remove init scripts or bindings), and
-  // strictly observational.
+  const state: WatchedPageState = {
+    outcomes: [],
+    beforeModalSignIn: undefined,
+  };
+  watchedPages.set(page, state);
+  // Page-lifetime (Playwright cannot remove init scripts or bindings).
   await page.exposeFunction(signInRequestBinding, (outcome: unknown) => {
     if (
       typeof outcome === "object" &&
@@ -167,17 +229,21 @@ const watchPage = async (page: Page) => {
       "conditional" in outcome &&
       "answered" in outcome
     ) {
-      outcomes.push({
+      state.outcomes.push({
         conditional: outcome.conditional === true,
         answered: outcome.answered === true,
       });
     }
   });
+  await page.exposeFunction(modalSignInPrepareBinding, async () => {
+    await state.beforeModalSignIn?.();
+  });
   await page.addInitScript(watchSignInRequests, {
     countKey: conditionalRequestCountKey,
     binding: signInRequestBinding,
+    prepareBinding: modalSignInPrepareBinding,
   });
-  return outcomes;
+  return state;
 };
 
 /**
@@ -198,13 +264,14 @@ export const holdsVirtualAuthenticator = (page: Page) =>
 export const addVirtualAuthenticator = async (
   page: Page
 ): Promise<PageVirtualAuthenticator> => {
-  const outcomes = await watchPage(page);
-  const authenticator = await attachVirtualAuthenticator(
+  const state = await watchPage(page);
+  const authenticator = await attachVirtualAuthenticatorControl(
     await page.context().newCDPSession(page)
   );
   authenticatorPages.add(page);
   return {
-    ...authenticator,
+    answerCeremony: authenticator.answerCeremony,
+    readCredentials: authenticator.readCredentials,
     remove: async () => {
       try {
         await authenticator.remove();
@@ -220,17 +287,37 @@ export const addVirtualAuthenticator = async (
       );
     },
     answerModalCeremony: async (ceremony) => {
-      const start = outcomes.length;
-      const result = await authenticator.answerCeremony(ceremony);
-      requireOnlyModalSignInAnswered(outcomes.slice(start));
-      return result;
+      const start = state.outcomes.length;
+      let enablingPresence: Promise<void> | undefined;
+      const enablePresence = () => {
+        enablingPresence ??= authenticator.setPresence(true);
+        return enablingPresence;
+      };
+      state.beforeModalSignIn = enablePresence;
+      try {
+        const result = await ceremony();
+        requireOnlyModalSignInAnswered(state.outcomes.slice(start));
+        return result;
+      } finally {
+        if (state.beforeModalSignIn === enablePresence) {
+          state.beforeModalSignIn = undefined;
+        }
+        if (enablingPresence !== undefined) {
+          await enablingPresence.catch(() => undefined);
+          await authenticator.setPresence(false);
+        }
+      }
     },
   };
 };
 
-export const attachVirtualAuthenticator = async (
+const attachVirtualAuthenticatorControl = async (
   session: VirtualAuthenticatorSession
-): Promise<VirtualAuthenticator> => {
+): Promise<
+  VirtualAuthenticator & {
+    readonly setPresence: (enabled: boolean) => Promise<void>;
+  }
+> => {
   let authenticatorId: string;
   try {
     await session.send("WebAuthn.enable", { enableUI: false });
@@ -243,14 +330,16 @@ export const attachVirtualAuthenticator = async (
     throw cause;
   }
 
-  const setPresence = (enabled: boolean) =>
-    session.send("WebAuthn.setAutomaticPresenceSimulation", {
+  const setPresence = async (enabled: boolean) => {
+    await session.send("WebAuthn.setAutomaticPresenceSimulation", {
       authenticatorId,
       enabled,
     });
+  };
 
   let removal: Promise<void> | undefined;
   return {
+    setPresence,
     answerCeremony: async (ceremony) => {
       await setPresence(true);
       try {
@@ -282,4 +371,12 @@ export const attachVirtualAuthenticator = async (
       return removal;
     },
   };
+};
+
+export const attachVirtualAuthenticator = async (
+  session: VirtualAuthenticatorSession
+): Promise<VirtualAuthenticator> => {
+  const { answerCeremony, readCredentials, remove } =
+    await attachVirtualAuthenticatorControl(session);
+  return { answerCeremony, readCredentials, remove };
 };
