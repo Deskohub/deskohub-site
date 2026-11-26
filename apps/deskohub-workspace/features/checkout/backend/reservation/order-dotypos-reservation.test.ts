@@ -1,8 +1,18 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
-import { Effect, Layer } from "effect";
+import {
+  DotyposCustomerIdSchema,
+  type DotyposReservation,
+  DotyposReservationIdSchema,
+  DotyposService,
+  DotyposTableIdSchema,
+} from "@deskohub/dotypos";
+import { Effect, Layer, Schema } from "effect";
+import {
+  coworkAccountingDocumentSnapshotSchema,
+  meetingRoomAccountingDocumentSnapshotSchema,
+} from "@/features/accounting/accounting-document-snapshot";
 import {
   makeCoworkInvoiceDocument,
   makeMeetingRoomInvoiceDocument,
@@ -12,6 +22,11 @@ import {
   WorkspaceTableUnavailableError,
 } from "@/features/reservation/backend/workspace-availability.service";
 import type { WorkspaceReservation } from "@/features/reservation/backend/workspace-reservation.repository";
+import {
+  dotyposCreatedReservationFixture,
+  dotyposHoldFixture,
+  workspaceReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
   findOrderCoworkStay,
@@ -26,22 +41,28 @@ import {
 } from "./workspace-table-assignment.service";
 
 const orderId = workspaceReservationIdSchema.make("reservation-id");
-const order: WorkspaceReservation = {
+const order = workspaceReservationFixture({
   id: orderId,
-  dotyposCustomerId: "dotypos-customer-id",
+  dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
   reservationDetails: { kind: "cowork", entryTier: "basic", coffee: true },
-} as never;
+});
 
-const reservedDeskOrder: WorkspaceReservation = {
+const reservedDeskOrder = workspaceReservationFixture({
   ...order,
   reservationDetails: {
     kind: "cowork",
     entryTier: "reserved-desk",
     coffee: true,
   },
-} as never;
+});
 
-const coworkSnapshot = makeCoworkInvoiceDocument("en-US") as never;
+const coworkSnapshot = Schema.decodeUnknownSync(
+  coworkAccountingDocumentSnapshotSchema
+)(makeCoworkInvoiceDocument("en-US"));
+
+type Dotypos = typeof DotyposService.Service;
+type Availability = typeof WorkspaceAvailabilityService.Service;
+type Assignment = typeof WorkspaceTableAssignmentService.Service;
 
 const recreated = (() => {
   const rebuilt = rebuildAcceptedReservation(order, coworkSnapshot, undefined);
@@ -51,41 +72,45 @@ const recreated = (() => {
 
 const makeHarness = (
   options: {
-    readonly ensureAvailable?: () => Effect.Effect<void, unknown>;
-    readonly assignTableId?: () => Effect.Effect<unknown, unknown>;
-    readonly overlapping?: readonly unknown[];
+    readonly ensureAvailable?: Availability["ensureAvailable"];
+    readonly assignTableId?: Assignment["assignTableId"];
+    readonly overlapping?: readonly DotyposReservation[];
   } = {}
 ) => {
   const events: string[] = [];
   const spies = {
-    ensureAvailable: mock(() => {
+    ensureAvailable: mock<Availability["ensureAvailable"]>((...args) => {
       events.push("ensureAvailable");
-      return options.ensureAvailable?.() ?? Effect.void;
+      return options.ensureAvailable?.(...args) ?? Effect.void;
     }),
-    assignTableId: mock(() => {
+    assignTableId: mock<Assignment["assignTableId"]>((...args) => {
       events.push("assignTableId");
-      return options.assignTableId?.() ?? Effect.succeed("table-id");
+      return (
+        options.assignTableId?.(...args) ??
+        Effect.succeed(DotyposTableIdSchema.make("table-id"))
+      );
     }),
-    createReservation: mock((input: { readonly status: string }) => {
+    createReservation: mock<Dotypos["createReservation"]>((input) => {
       events.push(`createReservation:${input.status}`);
-      return Effect.succeed({ id: "created-id" } as never);
+      return Effect.succeed(
+        dotyposCreatedReservationFixture("created-id", input)
+      );
     }),
-    listActiveReservationsOverlapping: mock(
-      (_input: { readonly startDate: Date; readonly endDate: Date }) =>
-        Effect.succeed((options.overlapping ?? []) as never)
-    ),
+    listActiveReservationsOverlapping: mock<
+      Dotypos["listActiveReservationsOverlapping"]
+    >(() => Effect.succeed(options.overlapping ?? [])),
   };
   const layer = Layer.mergeAll(
     Layer.mock(DotyposService, {
-      createReservation: spies.createReservation as never,
+      createReservation: spies.createReservation,
       listActiveReservationsOverlapping:
-        spies.listActiveReservationsOverlapping as never,
+        spies.listActiveReservationsOverlapping,
     }),
     Layer.mock(WorkspaceAvailabilityService, {
-      ensureAvailable: spies.ensureAvailable as never,
+      ensureAvailable: spies.ensureAvailable,
     }),
     Layer.mock(WorkspaceTableAssignmentService, {
-      assignTableId: spies.assignTableId as never,
+      assignTableId: spies.assignTableId,
     })
   );
   const run = <A, E>(
@@ -103,7 +128,7 @@ const makeHarness = (
 const resumeOrCreate = (
   harness: ReturnType<typeof makeHarness>,
   input: {
-    readonly found: readonly unknown[];
+    readonly found: readonly DotyposReservation[];
     readonly status: "NEW" | "CONFIRMED";
     readonly recreated?: RecreatedReservation;
   }
@@ -112,7 +137,7 @@ const resumeOrCreate = (
     resumeOrCreateOrderDotyposReservation({
       order,
       recreated: input.recreated ?? recreated,
-      found: input.found as never,
+      found: input.found,
       status: input.status,
     })
   );
@@ -122,8 +147,7 @@ describe("rebuildAcceptedReservation", () => {
     expect(recreated.reservation).toMatchObject({
       kind: "cowork",
       entryTier: "basic",
-      date: (coworkSnapshot as { reservation: { date: string } }).reservation
-        .date,
+      date: coworkSnapshot.reservation.date,
     });
     expect(recreated.checkoutDetails).toMatchObject({
       reservation: recreated.reservation,
@@ -135,7 +159,9 @@ describe("rebuildAcceptedReservation", () => {
     expect(
       rebuildAcceptedReservation(
         order,
-        makeMeetingRoomInvoiceDocument("en-US") as never,
+        Schema.decodeUnknownSync(meetingRoomAccountingDocumentSnapshotSchema)(
+          makeMeetingRoomInvoiceDocument("en-US")
+        ),
         undefined
       )
     ).toBeNull();
@@ -161,7 +187,9 @@ describe("rebuildAcceptedReservation", () => {
 });
 
 describe("findOrderCoworkStay", () => {
-  const dotyposReservationId = "dotypos-reservation-id" as never;
+  const dotyposReservationId = DotyposReservationIdSchema.make(
+    "dotypos-reservation-id"
+  );
   const findStay = (
     input: {
       readonly order?: WorkspaceReservation;
@@ -171,9 +199,9 @@ describe("findOrderCoworkStay", () => {
       };
     } = {}
   ) => {
-    const getReservationWithoutCustomer = mock(() =>
-      Effect.succeed({ ...input.bounds, seats: "1" })
-    );
+    const getReservationWithoutCustomer = mock<
+      Dotypos["getReservationWithoutCustomer"]
+    >((id) => Effect.succeed({ ...dotyposHoldFixture(id), ...input.bounds }));
     return {
       getReservationWithoutCustomer,
       stay: Effect.runPromise(
@@ -181,9 +209,11 @@ describe("findOrderCoworkStay", () => {
           order: input.order ?? reservedDeskOrder,
           dotyposReservationId,
         }).pipe(
-          Effect.provideService(DotyposService, {
-            getReservationWithoutCustomer,
-          } as never)
+          Effect.provide(
+            Layer.mock(DotyposService, {
+              getReservationWithoutCustomer,
+            })
+          )
         )
       ),
     };
@@ -228,21 +258,26 @@ describe("findOrderCoworkStay", () => {
 
 describe("findOrderDotyposReservations", () => {
   test("keeps the overlapping active reservations whose note names the order", async () => {
-    const harness = makeHarness({
-      overlapping: [
-        {
-          id: "order-hold",
-          status: "NEW",
-          note: "Payment order: reservation-id",
-        },
-        { id: "other-hold", status: "NEW", note: "Payment order: other-id" },
-        { id: "walk-in", status: "CONFIRMED" },
-      ],
-    });
     const interval = {
       startsAt: "2099-01-01T08:00:00Z",
       endsAt: "2099-01-01T16:00:00Z",
     };
+    const bounds = { startDate: interval.startsAt, endDate: interval.endsAt };
+    const harness = makeHarness({
+      overlapping: [
+        {
+          ...dotyposHoldFixture("order-hold"),
+          ...bounds,
+          note: "Payment order: reservation-id",
+        },
+        {
+          ...dotyposHoldFixture("other-hold"),
+          ...bounds,
+          note: "Payment order: other-id",
+        },
+        { ...dotyposHoldFixture("walk-in"), ...bounds, status: "CONFIRMED" },
+      ],
+    });
 
     const result = await harness.run(
       findOrderDotyposReservations({ orderId, interval })
@@ -268,7 +303,9 @@ describe("resumeOrCreateOrderDotyposReservation", () => {
       const harness = makeHarness();
 
       const result = await resumeOrCreate(harness, {
-        found: [{ id: "existing-id", status: existingStatus }],
+        found: [
+          { ...dotyposHoldFixture("existing-id"), status: existingStatus },
+        ],
         status: "NEW",
       });
 

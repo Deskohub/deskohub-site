@@ -1,5 +1,7 @@
 import {
+  type CreateDotyposReservationInput,
   DotyposCustomerIdSchema,
+  type DotyposReservation,
   DotyposReservationIdSchema,
   DotyposReservationSchema,
 } from "@deskohub/dotypos";
@@ -107,3 +109,17 @@ export const dotyposHoldFixture = (id: string) =>
     seats: "1",
     status: "NEW",
   });
+
+export const dotyposCreatedReservationFixture = (
+  id: string,
+  input: CreateDotyposReservationInput
+): DotyposReservation => ({
+  ...dotyposHoldFixture(id),
+  _customerId: input.customerId,
+  _tableId: input.tableId,
+  startDate: input.startDate.toISOString(),
+  endDate: input.endDate.toISOString(),
+  seats: String(input.seats),
+  status: input.status,
+  note: input.note,
+});
