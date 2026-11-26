@@ -72,6 +72,25 @@ describe("selectAvailableUpdate", () => {
       selectAvailableUpdate([forgedAsset], "linux-x64-baseline")
     ).toBeUndefined();
   });
+
+  test("accepts release and asset URLs after the organization transfer", () => {
+    const target = "linux-x64-baseline";
+    const published = release("1.2.0", target);
+    const movedUrl = (url: URL) =>
+      new URL(url.href.replace("/totalolage/", "/Deskohub/"));
+    const movedRelease = {
+      ...published,
+      html_url: movedUrl(published.html_url),
+      assets: published.assets.map((asset) => ({
+        ...asset,
+        browser_download_url: movedUrl(asset.browser_download_url),
+      })),
+    };
+
+    expect(selectAvailableUpdate([movedRelease], target)?.assetUrl).toBe(
+      "https://github.com/Deskohub/deskohub-site/releases/download/dhw-v1.2.0/dhw-linux-x64-baseline"
+    );
+  });
 });
 
 describe("selectAvailableUpdate release filtering", () => {
