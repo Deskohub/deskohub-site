@@ -37,7 +37,7 @@ const fakeGoogle = (
       HttpClientResponse.fromWeb(request, response)
     );
   });
-  const layer = GoogleIdToken.layer.pipe(
+  const layer = GoogleIdToken.Default.pipe(
     Layer.provide(Layer.succeed(HttpClient.HttpClient, client))
   );
   return { calls, layer };
@@ -129,6 +129,51 @@ test("concurrent misses share a mint even if the first caller disconnects", asyn
   expect(google.calls).toHaveLength(2);
 });
 
+test("shares a sanitized subject-token failure and lets a later caller mint", async () => {
+  const google = fakeGoogle();
+  const started = Promise.withResolvers<void>();
+  const subject = Promise.withResolvers<string>();
+  let followerReads = 0;
+  await Effect.gen(function* () {
+    const tokens = yield* GoogleIdToken;
+    const first = yield* Effect.flip(
+      tokens.get({
+        ...input,
+        getSubjectToken: () => {
+          started.resolve();
+          return subject.promise;
+        },
+      })
+    ).pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Effect.promise(() => started.promise);
+    const follower = yield* Effect.flip(
+      tokens.get({
+        ...input,
+        getSubjectToken: () => {
+          followerReads += 1;
+          return Promise.resolve(subjectToken);
+        },
+      })
+    ).pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Effect.sync(() => subject.reject(new Error(subjectToken)));
+    const unavailable = yield* Fiber.join(first);
+    expect(yield* Fiber.join(follower)).toBe(unavailable);
+    expect(unavailable).toMatchObject({
+      _tag: "GoogleIdTokenMintError",
+      phase: "subject-token",
+      reason: "subject-token-unavailable",
+    });
+    expect(String(unavailable)).not.toContain(subjectToken);
+    expect(JSON.stringify(unavailable)).not.toContain(subjectToken);
+    expect(followerReads).toBe(0);
+    expect(google.calls).toHaveLength(0);
+    expect(Redacted.value(yield* tokens.get(input))).toEndWith(
+      ".fake-signature"
+    );
+  }).pipe(Effect.provide(google.layer), Effect.runPromise);
+  expect(google.calls).toHaveLength(2);
+});
+
 test("refreshes below the five-minute skew and isolates each account and audience", async () => {
   let mint = 0;
   const google = fakeGoogle(undefined, () =>
@@ -210,6 +255,51 @@ test("bounds retry of transient failures and clears a failed mint", async () => 
   expect(google.calls).toHaveLength(5);
 });
 
+test.each(["sts", "iam"] as const)(
+  "retries an interrupted %s response body",
+  async (phase) => {
+    const interrupted = () =>
+      new Response(
+        new ReadableStream({
+          start: (body) => body.error(new Error("Synthetic disconnect")),
+        })
+      );
+    let failed = false;
+    const answer = (endpoint: typeof phase, success: () => Response) =>
+      Effect.sync(() => {
+        if (endpoint === phase && !failed) {
+          failed = true;
+          return interrupted();
+        }
+        return success();
+      });
+    const google = fakeGoogle(
+      () => answer("sts", stsSuccess),
+      () => answer("iam", iamSuccess)
+    );
+    await Effect.gen(function* () {
+      const tokens = yield* GoogleIdToken;
+      expect(Redacted.value(yield* tokens.get(input))).toEndWith(
+        ".fake-signature"
+      );
+    }).pipe(Effect.provide(google.layer), Effect.runPromise);
+    expect(google.calls).toHaveLength(phase === "sts" ? 3 : 4);
+  }
+);
+
+test("rejects malformed JSON without retry", async () => {
+  const google = fakeGoogle(() => Effect.sync(() => new Response("{broken")));
+  await Effect.gen(function* () {
+    const tokens = yield* GoogleIdToken;
+    expect(yield* Effect.flip(tokens.get(input))).toMatchObject({
+      _tag: "GoogleIdTokenMintError",
+      phase: "sts",
+      reason: "invalid-response",
+    });
+  }).pipe(Effect.provide(google.layer), Effect.runPromise);
+  expect(google.calls).toHaveLength(1);
+});
+
 test.each([
   { status: 403, phase: "sts", reason: "http-status" },
   { status: 200, phase: "sts", reason: "invalid-response" },
@@ -266,7 +356,7 @@ test("times out and aborts each stalled Google request", async () => {
     signals.push(signal);
     return Effect.never;
   });
-  const layer = GoogleIdToken.layer.pipe(
+  const layer = GoogleIdToken.Default.pipe(
     Layer.provide(Layer.succeed(HttpClient.HttpClient, client))
   );
   await Effect.gen(function* () {

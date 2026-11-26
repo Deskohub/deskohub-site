@@ -58,7 +58,7 @@ export class GoogleIdToken extends Context.Service<
   GoogleIdTokenService
 >()("@deskohub/google-oidc/GoogleIdToken") {
   /** Share one layer per deployment identity to reuse tokens across requests. */
-  static readonly layer = Layer.effect(
+  static readonly Default = Layer.effect(
     GoogleIdToken,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
@@ -154,23 +154,27 @@ export class GoogleIdTokenMintError extends Data.TaggedError(
   readonly status?: number;
 }> {}
 
-const stsResponse = Schema.Struct({
-  access_token: Schema.NonEmptyString.check(
-    Schema.isPattern(/^[a-z0-9._~+/-]+=*$/i)
-  ),
-});
-const iamResponse = Schema.Struct({ token: Schema.NonEmptyString });
+const stsResponse = Schema.fromJsonString(
+  Schema.Struct({
+    access_token: Schema.NonEmptyString.check(
+      Schema.isPattern(/^[a-z0-9._~+/-]+=*$/i)
+    ),
+  })
+);
+const iamResponse = Schema.fromJsonString(
+  Schema.Struct({ token: Schema.NonEmptyString })
+);
 const tokenClaims = Schema.Struct({ exp: Schema.Int });
 
-const mintToken = Effect.fnUntraced(function* (
+const mintToken = (
   client: HttpClient.HttpClient,
   request: FederatedTokenRequest
-) {
+) => {
   const unavailable = new GoogleIdTokenMintError({
     phase: "subject-token",
     reason: "subject-token-unavailable",
   });
-  const subjectToken = yield* Effect.tryPromise({
+  return Effect.tryPromise({
     try: () => request.getSubjectToken(),
     catch: () => unavailable,
   }).pipe(
@@ -181,56 +185,65 @@ const mintToken = Effect.fnUntraced(function* (
     Effect.filterOrFail(
       (token) => token.length > 0,
       () => unavailable
+    ),
+    Effect.flatMap((subjectToken) =>
+      exchangeToken(client, request, subjectToken).pipe(
+        Effect.retry({
+          schedule: Schedule.exponential("100 millis"),
+          times: 2,
+          while: (error) =>
+            error.reason === "transport" ||
+            error.reason === "timeout" ||
+            (error.status !== undefined && transientStatuses.has(error.status)),
+        })
+      )
     )
   );
-
-  return yield* exchangeToken(client, request, subjectToken).pipe(
-    Effect.retry({
-      schedule: Schedule.exponential("100 millis"),
-      times: 2,
-      while: (error) =>
-        error.reason === "transport" ||
-        error.reason === "timeout" ||
-        (error.status !== undefined && transientStatuses.has(error.status)),
-    })
-  );
-});
+};
 
 const transientStatuses = new Set([408, 429, 500, 502, 503, 504]);
 
-const exchangeToken = Effect.fnUntraced(function* (
+const exchangeToken = (
   client: HttpClient.HttpClient,
-  { workloadIdentityProvider, serviceAccount, audience }: FederatedTokenRequest,
+  request: FederatedTokenRequest,
   subjectToken: string
-) {
-  const { access_token: accessToken } = yield* readGoogleResponse(
-    client,
-    "sts",
-    HttpClientRequest.post("https://sts.googleapis.com/v1/token").pipe(
-      HttpClientRequest.bodyUrlParams({
-        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
-        audience: workloadIdentityProvider,
-        scope: "https://www.googleapis.com/auth/cloud-platform",
-        requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
-        subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
-        subject_token: subjectToken,
-      })
+) =>
+  Effect.succeed(request).pipe(
+    Effect.bind("federated", ({ workloadIdentityProvider }) =>
+      readGoogleResponse(
+        client,
+        "sts",
+        HttpClientRequest.post("https://sts.googleapis.com/v1/token").pipe(
+          HttpClientRequest.bodyUrlParams({
+            grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+            audience: workloadIdentityProvider,
+            scope: "https://www.googleapis.com/auth/cloud-platform",
+            requested_token_type:
+              "urn:ietf:params:oauth:token-type:access_token",
+            subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
+            subject_token: subjectToken,
+          })
+        ),
+        stsResponse
+      )
     ),
-    stsResponse
+    Effect.bind("issued", ({ serviceAccount, audience, federated }) =>
+      readGoogleResponse(
+        client,
+        "iam",
+        HttpClientRequest.post(
+          `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(serviceAccount)}:generateIdToken`
+        ).pipe(
+          HttpClientRequest.bearerToken(federated.access_token),
+          HttpClientRequest.bodyJsonUnsafe({ audience, includeEmail: true })
+        ),
+        iamResponse
+      )
+    ),
+    Effect.flatMap(({ issued }) => decodeIssuedToken(issued.token))
   );
 
-  const { token } = yield* readGoogleResponse(
-    client,
-    "iam",
-    HttpClientRequest.post(
-      `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(serviceAccount)}:generateIdToken`
-    ).pipe(
-      HttpClientRequest.bearerToken(accessToken),
-      HttpClientRequest.bodyJsonUnsafe({ audience, includeEmail: true })
-    ),
-    iamResponse
-  );
-
+const decodeIssuedToken = Effect.fnUntraced(function* (token: string) {
   const invalid = new GoogleIdTokenMintError({
     phase: "iam",
     reason: "invalid-response",
@@ -260,15 +273,13 @@ const readGoogleResponse = Effect.fnUntraced(
     client: HttpClient.HttpClient,
     phase: "sts" | "iam",
     request: HttpClientRequest.HttpClientRequest,
-    schema: Schema.Decoder<A>
+    schema: Schema.Codec<A, string>
   ) {
+    const transportFailure = () =>
+      new GoogleIdTokenMintError({ phase, reason: "transport" });
     const response = yield* HttpClient.withScope(client)
       .execute(request)
-      .pipe(
-        Effect.mapError(
-          () => new GoogleIdTokenMintError({ phase, reason: "transport" })
-        )
-      );
+      .pipe(Effect.mapError(transportFailure));
     if (response.status < 200 || response.status >= 300) {
       return yield* new GoogleIdTokenMintError({
         phase,
@@ -276,10 +287,15 @@ const readGoogleResponse = Effect.fnUntraced(
         status: response.status,
       });
     }
-    return yield* response.json.pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(schema)),
-      Effect.mapError(
-        () => new GoogleIdTokenMintError({ phase, reason: "invalid-response" })
+    return yield* response.text.pipe(
+      Effect.mapError(transportFailure),
+      Effect.flatMap((text) =>
+        Schema.decodeEffect(schema)(text).pipe(
+          Effect.mapError(
+            () =>
+              new GoogleIdTokenMintError({ phase, reason: "invalid-response" })
+          )
+        )
       )
     );
   },
