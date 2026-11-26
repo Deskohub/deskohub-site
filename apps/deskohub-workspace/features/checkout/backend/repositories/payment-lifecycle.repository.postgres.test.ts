@@ -91,7 +91,6 @@ import { getReferralBenefitIds } from "@/features/referrals/referral-benefits";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/reservation-audit.test-utils";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { Money } from "@/shared/money/money";
 import { requireValue } from "@/shared/testing/require-value.test-utils";
@@ -108,14 +107,15 @@ import {
   requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 
+import {
+  paymentLifecycleCustomerId,
+  paymentLifecycleReservationOrder,
+} from "./payment-lifecycle.test-utils";
+
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 const requireDatabase = () => requireTestDatabase(testDatabase);
 const product = { kind: "cowork", tier: "basic" } as const;
 const uniqueId = () => crypto.randomUUID();
-const customerId = () =>
-  DotyposCustomerIdSchema.make(
-    (Math.floor(Math.random() * 900_000_000) + 100_000_000).toString()
-  );
 
 type Reservation = typeof workspaceReservations.$inferSelect;
 type Admission = {
@@ -253,8 +253,8 @@ const makeLateRecoveryRepository = async () =>
   );
 
 const createInvitedCustomer = async (withAttribution = true) => {
-  const invitedDotyposCustomerId = customerId();
-  const referrerDotyposCustomerId = customerId();
+  const invitedDotyposCustomerId = paymentLifecycleCustomerId();
+  const referrerDotyposCustomerId = paymentLifecycleCustomerId();
   const code = canonicalPromotionCodeSchema.make(
     `RFL${crypto.randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase()}`
   );
@@ -510,17 +510,7 @@ const makeSnapshot = (
 ) => {
   const prepared = {
     kind: "cowork",
-    reservation: Schema.decodeUnknownSync(
-      normalizedCoworkReservationOrderSchema
-    )({
-      kind: "cowork",
-      entryTier: "basic",
-      coffee: false,
-      date: "2099-01-01",
-      name: "Synthetic Customer",
-      email: testEmailAddress("synthetic"),
-      phone: "+420 700 000 000",
-    }),
+    reservation: paymentLifecycleReservationOrder,
     quote: Effect.runSync(
       buildCoworkReservationQuote(
         { kind: "cowork", entryTier: "basic", coffee: false },
@@ -677,7 +667,7 @@ describe.skipIf(!testDatabase)(
     if (!testDatabase) return;
     test("a QR settlement can win after card started the public payment window", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
@@ -736,7 +726,7 @@ describe.skipIf(!testDatabase)(
 
     test("a concurrent verified card settlement and QR credit produce one winner", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
@@ -799,7 +789,7 @@ describe.skipIf(!testDatabase)(
 
     test("records required Nexi refund for a verified card after forced cancellation", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
@@ -867,7 +857,7 @@ describe.skipIf(!testDatabase)(
 
     test("settles an admitted card retry outside its order’s earlier shared window", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
@@ -931,7 +921,7 @@ describe.skipIf(!testDatabase)(
 
     test("expires a QR-first window and admits only one durable late receipt for recovery", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
@@ -994,7 +984,7 @@ describe.skipIf(!testDatabase)(
 
     test("keeps a card settlement verified at cutoff in durable recovery", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
@@ -1096,7 +1086,7 @@ describe.skipIf(!testDatabase)(
 
         const lifecycle = await makeRepository();
         const recoveries = await makeLateRecoveryRepository();
-        const customer = customerId();
+        const customer = paymentLifecycleCustomerId();
         const reservation = await createHeldReservation(customer);
         const orderId = standaloneReservationOrderId(reservation.id);
         const conflictingCardOperation =
@@ -1572,7 +1562,7 @@ describe.skipIf(!testDatabase)(
 
     test("returns refund work for a late QR credit to a reservation superseded by another checkout", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
@@ -1619,7 +1609,7 @@ describe.skipIf(!testDatabase)(
 
     test("releases voucher credit when an exact late QR receipt reaches recovery before hold cleanup", async () => {
       const repository = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const voucher = await createVoucher(customer);
       try {
         const reservation = await createHeldReservation(customer);
@@ -1680,7 +1670,7 @@ describe.skipIf(!testDatabase)(
     test("refund-only work for a losing card leaves an eligible late QR credit recoverable", async () => {
       const lifecycle = await makeRepository();
       const recoveries = await makeLateRecoveryRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
@@ -1789,7 +1779,7 @@ describe.skipIf(!testDatabase)(
         await import("../payment/provider-payment-finalization.service");
       const { QrPaymentRepository } = await import("./qr-payment.repository");
       const lifecycle = await makeRepository();
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(customer);
       const orderId = standaloneReservationOrderId(reservation.id);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
@@ -1892,7 +1882,7 @@ describe.skipIf(!testDatabase)(
 
     test("admits only one successor of the exact marked Nexi attempt", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const reservation = await createHeldReservation(dotyposCustomerId);
       const { admission, locale, snapshot } = makeOrdinaryAdmission(
         reservation,
@@ -2000,7 +1990,7 @@ describe.skipIf(!testDatabase)(
 
     test("admits no new payment for an order whose earlier attempt settled late, and still admits one without", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const recovering = await createHeldReservation(dotyposCustomerId);
       const ordinary = await createHeldReservation(dotyposCustomerId);
       const earlierAttemptId = paymentAttemptIdSchema.make(
@@ -2673,7 +2663,7 @@ describe.skipIf(!testDatabase)(
 );
 
 const createReferralCode = async (
-  referrerDotyposCustomerId: DotyposCustomerId = customerId()
+  referrerDotyposCustomerId: DotyposCustomerId = paymentLifecycleCustomerId()
 ) => {
   const [promotion] = await Effect.runPromise(
     requireDatabase()
@@ -4582,7 +4572,7 @@ describe.skipIf(!testDatabase)(
 
     test("admits a code whose current service dates cover the reservation start date", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const promotion = await createOrdinaryDiscountCode(dotyposCustomerId);
       try {
         await setCodeServiceDates(
@@ -4620,7 +4610,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses a code whose service dates changed after it was affirmed", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const promotion = await createOrdinaryDiscountCode(dotyposCustomerId);
       try {
         const reservation = await createHeldReservation(dotyposCustomerId);
@@ -4659,7 +4649,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses a code outside its service dates before reading the allowlist", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const promotion = await createOrdinaryDiscountCode(dotyposCustomerId);
       try {
         const reservation = await createHeldReservation(dotyposCustomerId);
@@ -4696,7 +4686,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses an expired voucher before reading the allowlist", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const voucher = await createVoucher(dotyposCustomerId);
       try {
         const reservation = await createHeldReservation(dotyposCustomerId);
@@ -4729,7 +4719,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses a fully discounting code whose service dates changed before an internal payment", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const promotion = await createOrdinaryDiscountCode(
         dotyposCustomerId,
         10_000
@@ -4797,7 +4787,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses a commitment affirmed for another reservation start date", async () => {
       const repository = await makeRepository();
-      const dotyposCustomerId = customerId();
+      const dotyposCustomerId = paymentLifecycleCustomerId();
       const promotion = await createOrdinaryDiscountCode(dotyposCustomerId);
       try {
         const reservation = await createHeldReservation(dotyposCustomerId);

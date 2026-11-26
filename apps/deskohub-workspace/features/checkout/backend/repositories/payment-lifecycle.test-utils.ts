@@ -1,6 +1,10 @@
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import {
+  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
+import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import {
   promotionCodes,
   referralCodes,
@@ -9,7 +13,6 @@ import {
 import { makeAccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
 import { testAccountingStorage } from "@/features/accounting/backend/accounting-storage.test-utils";
-import type { PreparedCustomerQuote } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
 import { calculateDiscounts } from "@/features/discounts/calculator";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
@@ -21,7 +24,9 @@ import type { DiscountCandidate } from "@/features/discounts/provider";
 import { type Locale, m } from "@/features/i18n";
 import { referralInvitationDiscountBasisPoints } from "@/features/referrals/program";
 import { getReferralBenefitIds } from "@/features/referrals/referral-benefits";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import type { WorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
@@ -36,6 +41,21 @@ const reservationDetails = {
   coffee: false,
 } as const;
 const locale: Locale = "en-US";
+
+export const paymentLifecycleReservationOrder = Schema.decodeUnknownSync(
+  normalizedCoworkReservationOrderSchema
+)({
+  ...reservationDetails,
+  date: "2099-01-01",
+  name: "Synthetic Customer",
+  email: testEmailAddress("synthetic"),
+  phone: "+420 700 000 000",
+});
+
+export const paymentLifecycleCustomerId = () =>
+  DotyposCustomerIdSchema.make(
+    (Math.floor(Math.random() * 900_000_000) + 100_000_000).toString()
+  );
 
 const makeInvitationCandidate = (referral: {
   readonly invitedDotyposCustomerId: DotyposCustomerId;
@@ -86,8 +106,10 @@ export const admitPendingNexiPayment = (
   }
 ) =>
   Effect.gen(function* () {
-    const dotyposCustomerId =
-      reservation.dotyposCustomerId as DotyposCustomerId;
+    const dotyposCustomerId = requireValue(
+      reservation.dotyposCustomerId,
+      "provider customer ID"
+    );
     const baseQuote = yield* buildCoworkReservationQuote(reservationDetails);
     const calculation = referral
       ? yield* calculateDiscounts({
@@ -107,25 +129,22 @@ export const admitPendingNexiPayment = (
     );
     const snapshot = makeAccountingDocumentSnapshot({
       workspaceReservationId: reservation.id,
-      dotyposReservationId: reservation.dotyposReservationId!,
+      dotyposReservationId: requireValue(
+        reservation.dotyposReservationId,
+        "provider reservation ID"
+      ),
       dotyposCustomerId,
       locale,
       prepared: {
         kind: "cowork",
-        reservation: {
-          ...reservationDetails,
-          date: "2099-01-01",
-          name: "Synthetic Customer",
-          email: testEmailAddress("synthetic"),
-          phone: "+420 700 000 000",
-        },
+        reservation: paymentLifecycleReservationOrder,
         quote,
-      } as PreparedCustomerQuote,
+      },
     });
     return yield* repository.createPendingProviderAttempt({
       provider: "nexi",
       orderId: standaloneReservationOrderId(reservation.id),
-      providerOrderId: `order-${crypto.randomUUID()}` as never,
+      providerOrderId: NexiOrderIdSchema.make(`order-${crypto.randomUUID()}`),
       amount: snapshot.quote.payment.expectedPrice,
       commitment: makeDiscountCommitment({
         product,
@@ -137,11 +156,6 @@ export const admitPendingNexiPayment = (
     });
   });
 
-const syntheticDotyposCustomerId = () =>
-  (
-    Math.floor(Math.random() * 900_000_000) + 100_000_000
-  ).toString() as DotyposCustomerId;
-
 /**
  * A held reservation of a new invited customer whose unpaid Nexi attempt
  * reserved a referral invitation claim, admitted through the real lifecycle
@@ -151,8 +165,8 @@ export const admitReferralNexiPayment = (
   database: Pick<WorkspacePostgresTestDatabase, "db" | "layer">
 ) =>
   Effect.gen(function* () {
-    const invitedDotyposCustomerId = syntheticDotyposCustomerId();
-    const referrerDotyposCustomerId = syntheticDotyposCustomerId();
+    const invitedDotyposCustomerId = paymentLifecycleCustomerId();
+    const referrerDotyposCustomerId = paymentLifecycleCustomerId();
     const [promotion] = yield* database.db
       .insert(promotionCodes)
       .values({
@@ -163,8 +177,12 @@ export const admitReferralNexiPayment = (
         enabled: true,
       })
       .returning({ id: promotionCodes.id });
+    const promotionCodeId = requireValue(
+      promotion,
+      "inserted promotion row"
+    ).id;
     yield* database.db.insert(referralCodes).values({
-      promotionCodeId: promotion!.id,
+      promotionCodeId,
       referrerDotyposCustomerId,
     });
     const reservation = yield* workspaceFixtures(database.db).reservation({
@@ -174,7 +192,7 @@ export const admitReferralNexiPayment = (
     const attempt = yield* PaymentLifecycleRepository.use((repository) =>
       admitPendingNexiPayment(repository, reservation, {
         referrerDotyposCustomerId,
-        promotionCodeId: promotion!.id,
+        promotionCodeId,
       })
     ).pipe(
       Effect.provide(

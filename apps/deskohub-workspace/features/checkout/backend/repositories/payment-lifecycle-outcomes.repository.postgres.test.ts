@@ -2,8 +2,9 @@ import { standaloneReservationOrderId } from "@/features/reservation/reservation
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import type { DotyposCustomerId } from "@deskohub/dotypos";
-import { testEmailAddress } from "@deskohub/test-email";
+import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { Effect, Layer, Schema } from "effect";
 import type { WorkspaceReservationRow } from "@/db/schema";
 import {
@@ -22,7 +23,6 @@ import {
   AccountingSnapshotKeyService,
 } from "@/features/accounting/backend/accounting-snapshot-key.service";
 import { testAccountingStorage } from "@/features/accounting/backend/accounting-storage.test-utils";
-import type { PreparedCustomerQuote } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
 import { calculateDiscounts } from "@/features/discounts/calculator";
@@ -32,12 +32,15 @@ import { deriveOpaqueDiscountId } from "@/features/discounts/opaque-discount-id"
 import {
   canonicalPromotionCodeSchema,
   promotionCodeIdSchema,
+  storedDiscountIdSchema,
 } from "@/features/discounts/persistence-contracts";
 import { getWorkspaceProductTargetsCovering } from "@/features/discounts/product-target";
 import type { DiscountCandidate } from "@/features/discounts/provider";
 import { type Locale, m } from "@/features/i18n";
 import { getReferralBenefitIds } from "@/features/referrals/referral-benefits";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import type { Money } from "@/shared/money/money";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { LatePaymentRecoveryRepository } from "./late-payment-recovery.repository";
@@ -46,15 +49,16 @@ import {
   PaymentLifecycleRepository,
 } from "./payment-lifecycle.repository";
 
+import {
+  paymentLifecycleCustomerId,
+  paymentLifecycleReservationOrder,
+} from "./payment-lifecycle.test-utils";
+
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 const product = { kind: "cowork", tier: "basic" } as const;
 const locale: Locale = "en-US";
 const uniqueSuffix = () =>
   crypto.randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase();
-const customerId = () =>
-  (
-    Math.floor(Math.random() * 900_000_000) + 100_000_000
-  ).toString() as DotyposCustomerId;
 const czk = (value: number): Money => ({ value, exponent: 2, currency: "CZK" });
 
 describe.skipIf(!testDatabase)(
@@ -245,7 +249,7 @@ describe.skipIf(!testDatabase)(
     };
 
     const newCustomer = () => {
-      const customer = customerId();
+      const customer = paymentLifecycleCustomerId();
       customers.push(customer);
       return customer;
     };
@@ -270,14 +274,15 @@ describe.skipIf(!testDatabase)(
           .values({
             kind,
             code: canonicalPromotionCodeSchema.make(
-              `${kind[0]!.toUpperCase()}${uniqueSuffix()}`
+              `${kind.slice(0, 1).toUpperCase()}${uniqueSuffix()}`
             ),
             enabled: true,
           })
           .returning({ id: promotionCodes.id })
       );
-      promotionIds.push(promotion!.id);
-      return promotion!.id;
+      assert(promotion, "Expected inserted promotion row");
+      promotionIds.push(promotion.id);
+      return promotion.id;
     };
 
     /** A stored 10% cowork discount code claimed by `customer`. */
@@ -296,10 +301,11 @@ describe.skipIf(!testDatabase)(
           .values({ labels, percentageBasisPoints: 1_000 })
           .returning({ id: discounts.id })
       );
-      discountIds.push(storedDiscount!.id);
+      assert(storedDiscount, "Expected inserted storedDiscount row");
+      discountIds.push(storedDiscount.id);
       await Effect.runPromise(
         testDatabase.db.insert(discountProductTargets).values({
-          discountId: storedDiscount!.id,
+          discountId: storedDiscount.id,
           productTarget: getWorkspaceProductTargetsCovering(product)[0],
         })
       );
@@ -310,35 +316,36 @@ describe.skipIf(!testDatabase)(
             code: canonicalPromotionCodeSchema.make(`D${uniqueSuffix()}`),
             enabled: true,
             promotionCodeId: promotionId,
-            discountId: storedDiscount!.id,
+            discountId: storedDiscount.id,
             maxUses: limits.maxUses ?? null,
             maxUsesPerCustomer: limits.maxUsesPerCustomer ?? null,
           })
           .returning({ id: discountCodes.id })
       );
-      const candidate: DiscountCandidate = {
+      assert(code, "Expected inserted code row");
+      const candidate = {
         discount: {
-          id: storedDiscount!.id,
+          id: storedDiscount.id,
           label: labels["en-US"],
           adjustment: { kind: "percentage", basisPoints: 1_000 },
         },
         provenance: {
           providerNamespace: "database-discount-code",
-          providerReference: code!.id,
+          providerReference: code.id,
           details: {
-            discountCodeId: code!.id,
-            storedDiscountId: storedDiscount!.id,
+            discountCodeId: code.id,
+            storedDiscountId: storedDiscount.id,
           },
         },
         claim: {
           kind: "discount_code",
-          codeId: code!.id,
-          storedDiscountId: storedDiscount!.id,
+          codeId: code.id,
+          storedDiscountId: storedDiscount.id,
           dotyposCustomerId: customer,
           product,
         },
-      };
-      return { candidate, codeId: code!.id, promotionId };
+      } satisfies DiscountCandidate;
+      return { candidate, codeId: code.id, promotionId };
     };
 
     /** Voucher credit `amount` claimed by `customer`, offered as `available`. */
@@ -358,28 +365,29 @@ describe.skipIf(!testDatabase)(
           })
           .returning({ id: vouchers.id })
       );
+      assert(voucher, "Expected inserted voucher row");
       const offer = (available: number): DiscountCandidate => ({
         discount: {
           id: deriveOpaqueDiscountId({
             providerNamespace: "database-voucher",
-            providerReference: voucher!.id,
+            providerReference: voucher.id,
           }),
           label: m.checkoutVoucherLabel({}, { locale }),
           adjustment: { kind: "fixed", amount: czk(available) },
         },
         provenance: {
           providerNamespace: "database-voucher",
-          providerReference: voucher!.id,
-          details: { voucherId: voucher!.id },
+          providerReference: voucher.id,
+          details: { voucherId: voucher.id },
         },
         claim: {
           kind: "voucher",
-          voucherId: voucher!.id,
+          voucherId: voucher.id,
           availableAmount: czk(available),
           dotyposCustomerId: customer,
         },
       });
-      return { offer, voucherId: voucher!.id, promotionId };
+      return { offer, voucherId: voucher.id, promotionId };
     };
 
     /** A referral code and, unless withheld, the invitee's attribution. */
@@ -470,22 +478,20 @@ describe.skipIf(!testDatabase)(
       );
       const accountingSnapshot = makeAccountingDocumentSnapshot({
         workspaceReservationId: reservation.id,
-        dotyposReservationId: reservation.dotyposReservationId!,
-        dotyposCustomerId: reservation.dotyposCustomerId as DotyposCustomerId,
+        dotyposReservationId: requireValue(
+          reservation.dotyposReservationId,
+          "provider reservation ID"
+        ),
+        dotyposCustomerId: requireValue(
+          reservation.dotyposCustomerId,
+          "provider customer ID"
+        ),
         locale,
         prepared: {
           kind: "cowork",
-          reservation: {
-            kind: "cowork",
-            entryTier: "basic",
-            coffee: false,
-            date: "2099-01-01",
-            name: "Synthetic Customer",
-            email: testEmailAddress("synthetic"),
-            phone: "+420 700 000 000",
-          },
+          reservation: paymentLifecycleReservationOrder,
           quote,
-        } as PreparedCustomerQuote,
+        },
       });
       return {
         orderId: standaloneReservationOrderId(reservation.id),
@@ -508,7 +514,9 @@ describe.skipIf(!testDatabase)(
         repository.createPendingProviderAttempt({
           provider: "nexi",
           ...admission(reservation, candidates),
-          providerOrderId: `order-${crypto.randomUUID()}` as never,
+          providerOrderId: NexiOrderIdSchema.make(
+            `order-${crypto.randomUUID()}`
+          ),
         })
       );
 
@@ -620,8 +628,8 @@ describe.skipIf(!testDatabase)(
 
         const othersCode = {
           ...code.candidate,
-          claim: { ...code.candidate.claim!, dotyposCustomerId: other },
-        } as DiscountCandidate;
+          claim: { ...code.candidate.claim, dotyposCustomerId: other },
+        } satisfies DiscountCandidate;
         const otherReservation = await heldReservation(other);
         await succeed(admit(otherReservation, [othersCode]));
         const third = newCustomer();
@@ -630,8 +638,8 @@ describe.skipIf(!testDatabase)(
           await admit(thirdReservation, [
             {
               ...code.candidate,
-              claim: { ...code.candidate.claim!, dotyposCustomerId: third },
-            } as DiscountCandidate,
+              claim: { ...code.candidate.claim, dotyposCustomerId: third },
+            } satisfies DiscountCandidate,
           ])
         ).toMatchObject(claimError("usage_limit_reached"));
         expect(
@@ -688,10 +696,10 @@ describe.skipIf(!testDatabase)(
         const otherBenefit = {
           ...code.candidate,
           claim: {
-            ...code.candidate.claim!,
-            storedDiscountId: crypto.randomUUID(),
+            ...code.candidate.claim,
+            storedDiscountId: storedDiscountIdSchema.make(crypto.randomUUID()),
           },
-        } as DiscountCandidate;
+        } satisfies DiscountCandidate;
 
         expect(await admit(reservation, [otherBenefit])).toMatchObject(
           claimError("unknown_code")
@@ -711,10 +719,10 @@ describe.skipIf(!testDatabase)(
         const excludedCandidate = {
           ...allowedCode.candidate,
           claim: {
-            ...allowedCode.candidate.claim!,
+            ...allowedCode.candidate.claim,
             dotyposCustomerId: excluded,
           },
-        } as DiscountCandidate;
+        } satisfies DiscountCandidate;
 
         const admitted = await succeed(
           admit(await heldReservation(allowed), [allowedCode.candidate])
@@ -813,14 +821,16 @@ describe.skipIf(!testDatabase)(
     describe("without an active snapshot key", () => {
       test("refuses a Nexi attempt and leaves no attempt or snapshot", async () => {
         const reservation = await heldReservation(newCustomer());
-        const providerOrderId = `order-${crypto.randomUUID()}`;
+        const providerOrderId = NexiOrderIdSchema.make(
+          `order-${crypto.randomUUID()}`
+        );
 
         expect(
           await keylessLifecycle((repository) =>
             repository.createPendingProviderAttempt({
               provider: "nexi",
               ...admission(reservation),
-              providerOrderId: providerOrderId as never,
+              providerOrderId,
             })
           )
         ).toMatchObject(
@@ -883,13 +893,13 @@ describe.skipIf(!testDatabase)(
           changed: false,
           attempt: { id: first.attempt.id, state: "paid" },
         });
+        const [stored] = await sql(
+          "select paid_at::text as paid_at from workspace_reservations where id = $1",
+          [reservation.id]
+        );
+        assert(stored, "Expected stored reservation payment time");
         expect(again.timestamp.toString()).toBe(
-          (
-            await sql(
-              "select paid_at::text as paid_at from workspace_reservations where id = $1",
-              [reservation.id]
-            )
-          ).map(({ paid_at }) => Temporal.Instant.from(paid_at).toString())[0]!
+          Temporal.Instant.from(stored.paid_at).toString()
         );
       });
 
@@ -919,9 +929,13 @@ describe.skipIf(!testDatabase)(
         expect(
           await lifecycle((repository) =>
             repository.completeInternalPayment(
-              admission({ ...reservation, id: crypto.randomUUID() as never }, [
-                fullUnclaimedDiscount,
-              ])
+              admission(
+                {
+                  ...reservation,
+                  id: workspaceReservationIdSchema.make(crypto.randomUUID()),
+                },
+                [fullUnclaimedDiscount]
+              )
             )
           )
         ).toMatchObject(stateError("completeInternalPayment"));
@@ -1000,7 +1014,7 @@ describe.skipIf(!testDatabase)(
             repository.markPaid({
               id: failed.id,
               orderId: standaloneReservationOrderId(
-                crypto.randomUUID() as never
+                workspaceReservationIdSchema.make(crypto.randomUUID())
               ),
               paidAt: Temporal.Now.instant(),
             })
