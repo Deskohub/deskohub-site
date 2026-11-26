@@ -183,7 +183,8 @@ test.skipIf(!chromiumAvailable)(
       const handoff = {
         checkoutPage,
         checkoutPageUrl: `${origin}${checkoutPath}?step=pay`,
-        nexiNavigation: { documentUrl: url, requestUrls: new Set([url]) },
+        isHandoffDocument: (candidate: typeof page) =>
+          candidate === page && candidate.url() === url,
         page,
         provider: "nexi" as const,
         url,
@@ -220,7 +221,33 @@ test.skipIf(!chromiumAvailable)(
       });
 
       await page.goto(url);
-      await review.captureNexi(page, redactedHandoff, []);
+      const body = page.locator("body");
+      const ariaSnapshot = body.ariaSnapshot.bind(body);
+      const remount = spyOn(body, "ariaSnapshot").mockImplementationOnce(
+        async (options) => {
+          const snapshot = await ariaSnapshot(options);
+          await page
+            .locator('iframe[title="Card number"]')
+            .evaluate((frame) => frame.replaceWith(frame.cloneNode(true)));
+          await page
+            .frameLocator('iframe[title="Card number"]')
+            .locator("input")
+            .waitFor({ state: "visible", timeout: 800 });
+          return snapshot;
+        }
+      );
+      const locator = page.locator.bind(page);
+      const readBody = spyOn(page, "locator").mockImplementation(
+        (selector, options) =>
+          selector === "body" ? body : locator(selector, options)
+      );
+      try {
+        await review.captureNexi(page, redactedHandoff, []);
+        expect(remount).toHaveBeenCalled();
+      } finally {
+        readBody.mockRestore();
+        remount.mockRestore();
+      }
       expect(
         review.missingShots().some(({ shot }) => shot === "nexi-handoff")
       ).toBe(false);

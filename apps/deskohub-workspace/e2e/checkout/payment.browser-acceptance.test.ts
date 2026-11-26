@@ -1236,7 +1236,65 @@ test.skipIf(!chromiumAvailable)(
     expect(result.value?.checkoutPageUrl).toBe(payUrlFor(scenario));
     expect(result.value?.url).toContain("/hpp/nexi/");
     expect(result.value?.page).toBeTruthy();
+    expect(result.value?.isHandoffDocument).toBeUndefined();
     expect(state.paymentHandlers).toEqual(["pay"]);
+  }
+);
+
+test.skipIf(!chromiumAvailable)(
+  "binds review to the original popup before returning to checkout status",
+  async () => {
+    const scenario = "hosted-popup-review-original";
+    const replacement = "hosted-popup-review-replacement";
+    resetScenario(scenario);
+    resetScenario(replacement);
+    addRedaction(scenario);
+    addRedaction(replacement);
+    const result = await runBrowserStep({
+      browser: requireBrowser(),
+      prepare: showPayPage(scenario),
+      drive: ({ session }) =>
+        Effect.gen(function* () {
+          const checkoutPage = yield* readActivePage(session);
+          const hosted = yield* submitPaymentAndWaitForHostedPage({
+            config: hostedCrossingConfig("nexi"),
+            observeHandoffDocument: true,
+            session: {
+              ...session,
+              activate: (page) =>
+                Effect.gen(function* () {
+                  if (page === checkoutPage) {
+                    const popup = yield* readActivePage(session);
+                    const originalUrl = popup.url();
+                    const replacementUrl = new URL(originalUrl);
+                    expect(replacementUrl.searchParams.get("scenario")).toBe(
+                      scenario
+                    );
+                    replacementUrl.searchParams.set("scenario", replacement);
+                    expect(redact(replacementUrl.href)).toBe(
+                      redact(originalUrl)
+                    );
+                    yield* Effect.promise(() =>
+                      popup.goto(replacementUrl.href)
+                    );
+                  }
+                  yield* session.activate(page);
+                }),
+            },
+          });
+          return {
+            replacementHosted:
+              new URL(hosted.page.url()).searchParams.get("scenario") ===
+              replacement,
+            isHandoffDocument: hosted.isHandoffDocument?.(hosted.page),
+          };
+        }),
+    });
+    expectSucceeded(result);
+    expect(result.value).toEqual({
+      replacementHosted: true,
+      isHandoffDocument: false,
+    });
   }
 );
 
@@ -1277,6 +1335,34 @@ test.skipIf(!chromiumAvailable)(
     expect(result.value?.url).toContain("/hpp/nexi/");
     expect(result.value?.page).toBeTruthy();
     expect(state.paymentHandlers).toEqual(["pay"]);
+  }
+);
+
+test.skipIf(!chromiumAvailable)(
+  "invalidates the review match on a reload at the same hosted URL",
+  async () => {
+    const scenario = "hosted-same-tab";
+    resetScenario(scenario);
+    const result = await runBrowserStep({
+      browser: requireBrowser(),
+      prepare: showPayPage(scenario),
+      drive: ({ session }) =>
+        Effect.gen(function* () {
+          const hosted = yield* submitPaymentAndWaitForHostedPage({
+            config: hostedCrossingConfig("nexi"),
+            observeHandoffDocument: true,
+            session,
+          });
+          expect(hosted.isHandoffDocument?.(hosted.page)).toBe(true);
+          const before = hosted.page.url();
+          yield* session.use("reload synthetic hosted document", (page) =>
+            page.reload()
+          );
+          expect(hosted.page.url()).toBe(before);
+          expect(hosted.isHandoffDocument?.(hosted.page)).toBe(false);
+        }),
+    });
+    expectSucceeded(result);
   }
 );
 

@@ -8,6 +8,7 @@ import {
   toPlaywrightEnvironment,
   unlimitedPassAutoRenewalCaseEnabled,
   unlimitedPassReviewLocale,
+  unlimitedPassWorkspaceReviewOnly,
   workspaceE2EFlowSelection,
 } from "./e2e-env";
 import {
@@ -109,12 +110,27 @@ describe("Workspace E2E environment", () => {
     expect(
       unlimitedPassReviewLocale(makeWorkspaceE2EEnvironment(screenshotReview))
     ).toBe("en-US");
-    expect(() =>
-      makeWorkspaceE2EEnvironment({
-        ...screenshotReview,
-        WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: "cs-CZ",
-      })
-    ).toThrow("requires verified Czech Nexi sandbox controls");
+    const czech = {
+      ...screenshotReview,
+      WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: "cs-CZ",
+    };
+    expect(
+      unlimitedPassWorkspaceReviewOnly(makeWorkspaceE2EEnvironment(czech))
+    ).toBe(true);
+    expect(
+      unlimitedPassWorkspaceReviewOnly(
+        makeInstantNavigationFlowEnvironment(czech)
+      )
+    ).toBe(true);
+    expect(unlimitedPassWorkspaceReviewOnly(environment)).toBe(false);
+    expect(
+      unlimitedPassWorkspaceReviewOnly(
+        makeWorkspaceE2EEnvironment({
+          ...czech,
+          WORKSPACE_E2E_REVIEW_SCREENSHOTS: undefined,
+        })
+      )
+    ).toBe(false);
     for (const invalid of [
       { TARGET_SHA: undefined },
       { WORKSPACE_E2E_ALLOCATION_SHARD: undefined },

@@ -11,7 +11,6 @@ import {
 } from "../checkout/nexi-hosted-page";
 import type { HostedPaymentPage } from "../checkout/payment";
 import type { unlimitedPassReviewLocale } from "../e2e-env";
-import { redact } from "../redaction";
 import { workspaceDir } from "../runtime";
 import { workspaceE2EPollIntervalMs } from "../timeouts";
 
@@ -92,7 +91,10 @@ async function inspectCardFields(
             .locator("input")
         : locateSnapshotRef(page, target.ref)
     ).filter({ visible: true });
-    const timeout = deadline - performance.now();
+    const timeout = Math.min(
+      deadline - performance.now(),
+      workspaceE2EPollIntervalMs.browser
+    );
     if (timeout <= 0) return "card-field-unreadable";
     const value = await input.inputValue({ timeout }).catch(() => undefined);
     if (value === undefined) return "card-field-unreadable";
@@ -103,11 +105,14 @@ async function inspectCardFields(
 async function waitForEmptyCardFields(page: Page, timeout: number) {
   const deadline = performance.now() + timeout;
   while (true) {
+    const nextRead = performance.now() + workspaceE2EPollIntervalMs.browser;
     const problem = await inspectCardFields(page, deadline);
     if (!problem || problem === "card-field-populated") return problem;
-    const remaining = deadline - performance.now();
+    const now = performance.now();
+    const remaining = deadline - now;
     if (remaining <= 0) return problem;
-    await delay(Math.min(remaining, workspaceE2EPollIntervalMs.browser));
+    const wait = Math.min(remaining, nextRead - now);
+    if (wait > 0) await delay(wait);
     if (performance.now() >= deadline) return problem;
   }
 }
@@ -292,14 +297,12 @@ export function makeUnlimitedPassReviewCapture({
           "input:not([type=submit], [type=button], [type=checkbox], [type=radio]), textarea { color: transparent !important; caret-color: transparent !important; }",
         verify: async () => {
           const url = URL.parse(page.url());
-          const handoffUrl = hosted.nexiNavigation?.documentUrl;
-          if (!handoffUrl) return "untracked-document";
+          if (!hosted.isHandoffDocument) return "untracked-document";
           if (
             page !== hosted.page ||
             hosted.provider !== "nexi" ||
             url?.origin !== sandboxOrigin ||
-            url.href !== handoffUrl ||
-            redact(handoffUrl).trim() !== hosted.url
+            !hosted.isHandoffDocument(page)
           )
             return "unexpected-document";
           const started = performance.now();
@@ -309,8 +312,10 @@ export function makeUnlimitedPassReviewCapture({
         },
       });
     },
-    missingShots: () =>
-      [...workspaceShots, "nexi-handoff" as const].flatMap((shot) => {
+    missingShots: (
+      required: readonly ReviewShot[] = [...workspaceShots, "nexi-handoff"]
+    ) =>
+      required.flatMap((shot) => {
         const result = results.get(shot);
         return result === "captured"
           ? []

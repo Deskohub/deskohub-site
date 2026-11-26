@@ -352,6 +352,42 @@ describe("Workspace E2E target resolution", () => {
     expect(calls).toContainEqual(expect.stringContaining(`sha=${targetSha}`));
   });
 
+  test("admits Czech Workspace review only as evidence on an opted-in draft", async () => {
+    const czech = { ...manualDraft, INPUT_UNLIMITED_REVIEW_LOCALE: "cs-CZ" };
+    const accepted = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [draft],
+      czech
+    );
+    expect(accepted.result.exitCode).toBe(0);
+    expect(accepted.outputs).toMatchObject({
+      draft_preview: "true",
+      eligible: "true",
+      run_e2e: "true",
+    });
+    const ready = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [pullRequest],
+      czech
+    );
+    expect(ready.outputs.eligible).toBe("false");
+    expect(ready.outputs.run_e2e).toBeUndefined();
+    const withoutOptIn = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [draft],
+      {
+        ...czech,
+        ALLOW_DRAFT_PREVIEW: "false",
+      }
+    );
+    expect(withoutOptIn.result.exitCode).toBe(1);
+    expect(withoutOptIn.outputs.eligible).toBeUndefined();
+    expect(withoutOptIn.calls).toEqual([]);
+  });
+
   test.each([
     { EVENT_NAME: "workflow_dispatch" },
     { ALLOW_DRAFT_PREVIEW: "false", EVENT_NAME: "workflow_dispatch" },

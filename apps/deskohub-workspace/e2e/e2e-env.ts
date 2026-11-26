@@ -242,11 +242,6 @@ export const makeWorkspaceE2EEnvironment = (
       "Unlimited auto-renewal requires the leased exact-SHA payments flow in manual Nexi mode."
     );
   }
-  if (unlimitedPassReviewLocale(environment) === "cs-CZ") {
-    throw new Error(
-      "Czech Unlimited review requires verified Czech Nexi sandbox controls before checkout can run."
-    );
-  }
   return environment as WorkspaceE2EEnvironment;
 };
 
@@ -296,12 +291,19 @@ export const makeInstantNavigationFlowEnvironment = (
     },
     runtimeEnv: {
       WORKSPACE_E2E_FLOWS: runtimeEnvironment.WORKSPACE_E2E_FLOWS,
+      WORKSPACE_E2E_REVIEW_SCREENSHOTS:
+        runtimeEnvironment.WORKSPACE_E2E_REVIEW_SCREENSHOTS,
       WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL:
         runtimeEnvironment.WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL,
+      WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE:
+        runtimeEnvironment.WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE,
     },
     server: {
       WORKSPACE_E2E_FLOWS: optionalFlowsInput,
+      WORKSPACE_E2E_REVIEW_SCREENSHOTS: optionalOptIn,
       WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: optionalOptIn,
+      WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE:
+        e2eEnvironmentSchema.fields.WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE,
     },
   });
 
@@ -322,11 +324,24 @@ export const reviewScreenshotsEnabled = (
   environment: Pick<E2EEnvironment, "WORKSPACE_E2E_REVIEW_SCREENSHOTS">
 ): boolean => environment.WORKSPACE_E2E_REVIEW_SCREENSHOTS === "true";
 
-export const unlimitedPassReviewLocale = (environment: E2EEnvironment) =>
+type UnlimitedPassReviewEnvironment = Pick<
+  E2EEnvironment,
+  | "WORKSPACE_E2E_REVIEW_SCREENSHOTS"
+  | "WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL"
+  | "WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE"
+>;
+
+export const unlimitedPassReviewLocale = (
+  environment: UnlimitedPassReviewEnvironment
+) =>
   unlimitedPassAutoRenewalCaseEnabled(environment) &&
   reviewScreenshotsEnabled(environment)
     ? (environment.WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE ?? "en-US")
     : undefined;
+
+export const unlimitedPassWorkspaceReviewOnly = (
+  environment: UnlimitedPassReviewEnvironment
+) => unlimitedPassReviewLocale(environment) === "cs-CZ";
 
 /**
  * Nightly cases are too slow for the per-PR gate, so a run includes them

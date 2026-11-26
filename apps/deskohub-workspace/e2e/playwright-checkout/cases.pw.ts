@@ -1,6 +1,7 @@
 import {
   makeInstantNavigationFlowEnvironment,
   unlimitedPassAutoRenewalCaseEnabled,
+  unlimitedPassWorkspaceReviewOnly,
   workspaceE2EFlowSelection,
 } from "../e2e-env";
 import { isWorkspaceE2ECaseSelected } from "../flows";
@@ -17,6 +18,8 @@ const selectedCasePoolOrder = workspaceE2ECasePoolOrder.filter((caseId) =>
   isWorkspaceE2ECaseSelected(caseId, flowSelection, {
     includeUnlimitedPassAutoRenewal:
       unlimitedPassAutoRenewalCaseEnabled(environment),
+    unlimitedPassWorkspaceReviewOnly:
+      unlimitedPassWorkspaceReviewOnly(environment),
   })
 );
 

@@ -22,15 +22,20 @@ import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { makeWorkspaceE2ECaseIdentities } from "../account/case-identities";
 import { resolveWorkspaceE2ESessionSigningSecret } from "../account/seeded-session";
 import type { WorkspaceE2EDateAllocation } from "../allocation";
-import { openPage, waitForPageUrl, waitForReactHandler } from "../browser";
+import {
+  openPage,
+  readPageUrl,
+  waitForPageUrl,
+  waitForReactHandler,
+} from "../browser";
 import { getWorkspaceE2EDateInterval } from "../capacity";
-import { observeNexiHostedNavigation } from "../checkout/nexi-hosted-page-ownership";
 import { completeNexiHostedPayment } from "../checkout/nexi-hosted-payment";
 import { submitPaymentAndWaitForHostedPage } from "../checkout/payment";
 import { getConfig, getDatasourceConfig } from "../config";
 import { WorkspaceE2EHostedPaymentPermitService } from "../coordination/hosted-payment-permit.service";
 import {
   unlimitedPassReviewLocale,
+  unlimitedPassWorkspaceReviewOnly,
   type WorkspaceE2EEnvironment,
 } from "../e2e-env";
 import { workspaceE2EError } from "../errors";
@@ -46,6 +51,7 @@ import {
 import type { WorkspaceE2ERunId } from "../run-identifiers";
 import type { WorkspaceE2ECase, WorkspaceE2ECaseContext } from "../types";
 import { isExpectedCheckoutStatusUrl } from "../urls";
+import { switchLocale } from "./locale";
 import { makeUnlimitedPassReviewCapture } from "./unlimited-pass-review";
 
 const tier = "open-space";
@@ -75,6 +81,7 @@ export const makeUnlimitedPassAutoRenewalCase = ({
   const config = getConfig(environment);
   const { timeouts } = config;
   const reviewLocale = unlimitedPassReviewLocale(environment);
+  const workspaceOnly = unlimitedPassWorkspaceReviewOnly(environment);
   const locale = reviewLocale ?? "en-US";
   const localized = { locale } as const;
   const accountPath = getAccountSectionPath(locale, "passes");
@@ -87,10 +94,10 @@ export const makeUnlimitedPassAutoRenewalCase = ({
     page.getByRole("button", {
       name: m.checkoutPayOrderAndPayButton({}, localized),
     });
-  const renewalCard = (page: Page) =>
+  const renewalCard = (page: Page, cardLocale = locale) =>
     page.getByRole("article").filter({
       has: page.getByRole("heading", {
-        name: m.accountUnlimitedAutoRenewalTitle({}, localized),
+        name: m.accountUnlimitedAutoRenewalTitle({}, { locale: cardLocale }),
         exact: true,
       }),
     });
@@ -151,6 +158,7 @@ export const makeUnlimitedPassAutoRenewalCase = ({
       }
       if (
         reviewLocale &&
+        !workspaceOnly &&
         Temporal.PlainDate.compare(
           renewalDate,
           getWorkspaceAvailabilityRange(today.toString()).to
@@ -185,6 +193,24 @@ export const makeUnlimitedPassAutoRenewalCase = ({
         id: "sign-in-unlimited-pass-buyer",
         timeoutMs: timeouts.datasource,
       });
+      const captureTerms = (
+        capture: ReturnType<typeof makeUnlimitedPassReviewCapture>
+      ) =>
+        openPage(
+          session,
+          config,
+          new URL(
+            getLegalDocumentPath(locale, "terms-and-conditions"),
+            config.baseUrl
+          ).href,
+          { timeoutMs: timeouts.browserAction }
+        ).pipe(
+          Effect.andThen(
+            session.use("capture canonical Unlimited renewal terms", (page) =>
+              capture.captureWorkspace(page, "terms")
+            )
+          )
+        );
       const continueName = m.checkoutContinueButton({}, localized);
       const chooseUrl = new URL(
         getUnlimitedPassChoosePath(locale, { tier, coffee: false }, startDate),
@@ -195,6 +221,15 @@ export const makeUnlimitedPassAutoRenewalCase = ({
           yield* openPage(session, config, chooseUrl, {
             timeoutMs: timeouts.browserAction,
           });
+          if (workspaceOnly) {
+            const activeUrl = yield* readPageUrl(session);
+            if (
+              URL.parse(activeUrl ?? "")?.pathname !==
+              new URL(chooseUrl).pathname
+            ) {
+              yield* switchLocale(session, locale, timeouts);
+            }
+          }
           yield* waitForReactHandler(session, "main form", "onSubmit", {
             timeoutMs: timeouts.uiTransition,
           });
@@ -349,6 +384,38 @@ export const makeUnlimitedPassAutoRenewalCase = ({
         timeoutMs: timeouts.uiTransition,
       });
 
+      if (workspaceOnly) {
+        if (!review) {
+          return yield* workspaceE2EError(
+            "Czech Unlimited Workspace review requires screenshot capture"
+          );
+        }
+        yield* runStep({
+          execute: Effect.gen(function* () {
+            yield* captureTerms(review);
+            const missing = review.missingShots([
+              "choose-default",
+              "choose-renewal",
+              "details",
+              "pay-unchecked",
+              "pay-accepted",
+              "terms",
+            ]);
+            if (missing.length) {
+              return yield* workspaceE2EError(
+                `Incomplete Czech Unlimited Workspace screenshots: ${missing
+                  .map(({ shot, problem }) => `${shot} (${problem})`)
+                  .join(", ")}`
+              );
+            }
+          }),
+          id: "capture-czech-unlimited-workspace-review",
+          timeoutMs: timeouts.reviewScreenshotCapture,
+        });
+        // The journal owns the held period. This review never activates Pay.
+        return;
+      }
+
       const permit = yield* WorkspaceE2EHostedPaymentPermitService;
       const paymentStartedAt = yield* permit.withPermit(
         "Unlimited first hosted payment",
@@ -359,9 +426,10 @@ export const makeUnlimitedPassAutoRenewalCase = ({
               orderId,
               paymentStartedAt,
             }).pipe(
-              Effect.andThen(() => {
-                const launch = submitPaymentAndWaitForHostedPage({
+              Effect.andThen(
+                submitPaymentAndWaitForHostedPage({
                   config,
+                  observeHandoffDocument: !!review,
                   session,
                   submitPayment: (activeSession) =>
                     activeSession.use(
@@ -373,11 +441,8 @@ export const makeUnlimitedPassAutoRenewalCase = ({
                         return page;
                       }
                     ),
-                });
-                return review
-                  ? observeNexiHostedNavigation(session, launch)
-                  : launch;
-              })
+                })
+              )
             ),
             id: "open-unlimited-nexi-payment",
             timeoutMs: timeouts.providerTransition,
@@ -442,6 +507,77 @@ export const makeUnlimitedPassAutoRenewalCase = ({
         timeoutMs: timeouts.hostedPayment,
       });
 
+      const czechAccountPath = getAccountSectionPath("cs-CZ", "passes");
+      const czechReview =
+        reviewLocale === "en-US" &&
+        makeUnlimitedPassReviewCapture({
+          accountPath: czechAccountPath,
+          locale: "cs-CZ",
+          origin: config.baseUrl,
+          timeout: timeouts.pageDiagnosticsRead,
+        });
+      const captureCzechAccount = Effect.fn("E2E.captureCzechUnlimitedAccount")(
+        function* (
+          capture: ReturnType<typeof makeUnlimitedPassReviewCapture>,
+          shot: "account-renewal" | "account-stopped-after-reload"
+        ) {
+          const czech = { locale: "cs-CZ" } as const;
+          yield* switchLocale(session, czech.locale, timeouts).pipe(
+            Effect.andThen(
+              session.use(
+                "verify and capture Czech Unlimited Account",
+                async (page) => {
+                  await page.waitForURL(
+                    (url) => url.pathname === czechAccountPath,
+                    {
+                      timeout: timeouts.browserNavigation,
+                    }
+                  );
+                  const card = renewalCard(page, czech.locale);
+                  const czechPeriod = formatPlainDateRange({
+                    start,
+                    end: lastDay,
+                    ...czech,
+                  });
+                  await expect(
+                    card.getByText(czechPeriod, { exact: true })
+                  ).toBeVisible();
+                  if (shot === "account-renewal") {
+                    await expect(
+                      card.getByRole("button", {
+                        name: m.accountUnlimitedAutoRenewalCancel({}, czech),
+                        exact: true,
+                      })
+                    ).toBeVisible();
+                  } else {
+                    await expect(
+                      card.getByText(
+                        m.accountUnlimitedAutoRenewalStopped({}, czech),
+                        {
+                          exact: true,
+                        }
+                      )
+                    ).toBeVisible();
+                  }
+                  await capture.captureWorkspace(page, shot, [
+                    ...buyerText,
+                    orderId,
+                  ]);
+                }
+              )
+            ),
+            Effect.ignore
+          );
+          const activeUrl = yield* readPageUrl(session);
+          if (URL.parse(activeUrl ?? "")?.pathname.startsWith("/cs-CZ/")) {
+            yield* switchLocale(session, "en-US", timeouts);
+          }
+          yield* openPage(session, config, accountUrl, {
+            timeoutMs: timeouts.browserAction,
+          });
+        }
+      );
+
       yield* runStep({
         execute: Effect.gen(function* () {
           yield* openPage(session, config, accountUrl, {
@@ -481,6 +617,14 @@ export const makeUnlimitedPassAutoRenewalCase = ({
         id: "read-unlimited-renewal-in-account",
         timeoutMs: timeouts.hostedPayment,
       });
+
+      if (czechReview) {
+        yield* runStep({
+          execute: captureCzechAccount(czechReview, "account-renewal"),
+          id: "capture-czech-unlimited-account-renewal",
+          timeoutMs: timeouts.checkoutStart,
+        });
+      }
 
       yield* runStep({
         execute: Effect.gen(function* () {
@@ -548,6 +692,17 @@ export const makeUnlimitedPassAutoRenewalCase = ({
         timeoutMs: timeouts.checkoutStart,
       });
 
+      if (czechReview) {
+        yield* runStep({
+          execute: captureCzechAccount(
+            czechReview,
+            "account-stopped-after-reload"
+          ),
+          id: "capture-czech-unlimited-account-stopped",
+          timeoutMs: timeouts.checkoutStart,
+        });
+      }
+
       if (review) {
         yield* runStep({
           execute: Effect.gen(function* () {
@@ -574,24 +729,27 @@ export const makeUnlimitedPassAutoRenewalCase = ({
                 ]);
               }
             );
-            yield* openPage(
-              session,
-              config,
-              new URL(
-                getLegalDocumentPath(locale, "terms-and-conditions"),
-                config.baseUrl
-              ).href,
-              { timeoutMs: timeouts.browserAction }
-            );
-            yield* session.use(
-              "capture canonical Unlimited renewal terms",
-              (page) => review.captureWorkspace(page, "terms")
-            );
-            const missingShots = review.missingShots();
+            yield* captureTerms(review);
+            const missingShots = [
+              ...review
+                .missingShots()
+                .map((missing) => ({ ...missing, locale })),
+              ...(czechReview
+                ? czechReview
+                    .missingShots([
+                      "account-renewal",
+                      "account-stopped-after-reload",
+                    ])
+                    .map((missing) => ({ ...missing, locale: "cs-CZ" }))
+                : []),
+            ];
             if (missingShots.length) {
               return yield* workspaceE2EError(
                 `Incomplete Unlimited review screenshots: ${missingShots
-                  .map(({ shot, problem }) => `${shot} (${problem})`)
+                  .map(
+                    ({ locale, shot, problem }) =>
+                      `${locale}/${shot} (${problem})`
+                  )
                   .join(", ")}`
               );
             }

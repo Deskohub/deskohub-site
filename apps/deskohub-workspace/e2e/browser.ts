@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Frame, Locator, Page } from "@playwright/test";
 import { Effect } from "effect";
 import type {
   E2EBrowserSession,
@@ -23,31 +23,26 @@ export const normalizeBrowserText = (text: string) =>
   text.replaceAll(/\s+/g, " ").trim();
 
 /**
- * Polls `readUrl` until `matches` accepts the URL. A wait that fails or runs
+ * Polls until the reader finds a matching URL. A wait that fails or runs
  * out fails as a plain error, not a timeout, carrying the page diagnostics.
  */
 const pollForUrl = (
-  readUrl: Effect.Effect<string | undefined, WorkspaceE2EError>,
+  readMatch: Effect.Effect<string | undefined, WorkspaceE2EError>,
   {
     description,
-    matches,
     readDiagnostics,
     timeoutMs,
   }: {
     readonly description: string;
-    readonly matches: (url: string) => boolean;
     readonly readDiagnostics: Effect.Effect<string, WorkspaceE2EError>;
     readonly timeoutMs: number;
   }
 ): Effect.Effect<string, WorkspaceE2EError> =>
-  pollUntil(
-    readUrl.pipe(Effect.map((url) => (url && matches(url) ? url : undefined))),
-    {
-      intervalMs: workspaceE2EPollIntervalMs.browser,
-      label: description,
-      timeoutMs,
-    }
-  ).pipe(
+  pollUntil(readMatch, {
+    intervalMs: workspaceE2EPollIntervalMs.browser,
+    label: description,
+    timeoutMs,
+  }).pipe(
     Effect.tap(() => Effect.sync(() => log(`Reached ${description}`))),
     Effect.catch((error) =>
       readDiagnostics.pipe(
@@ -395,28 +390,63 @@ export const readPageUrl = (
       Effect.orElseSucceed(() => undefined)
     );
 
+// Raw URLs stay in the returned predicate. Even a reload at the same URL
+// invalidates the observed document.
+const matchCurrentDocument = (page: Page, rawUrl: string) => {
+  const mainFrame = page.mainFrame();
+  let navigated = false;
+  const stopWatching = () => {
+    page.off("framenavigated", recordNavigation);
+    page.off("close", stopWatching);
+  };
+  const recordNavigation = (frame: Frame) => {
+    if (frame !== mainFrame) return;
+    navigated = true;
+    stopWatching();
+  };
+  page.on("framenavigated", recordNavigation);
+  page.once("close", stopWatching);
+  return (candidate: Page) =>
+    candidate === page &&
+    !navigated &&
+    !page.isClosed() &&
+    page.url() === rawUrl;
+};
+
 /**
  * Polls the active page's URL until `matches` accepts it. A wait that runs
  * out fails as a plain error, not a timeout, carrying the page diagnostics.
+ * Opt-in capture callers can bind that exact document at the matching read.
  */
 export const waitForPageUrl = ({
   description,
   matches,
+  onDocumentMatch,
   session,
   timeoutMs,
 }: {
   readonly description: string;
   readonly matches: (url: string) => boolean;
+  readonly onDocumentMatch?: (isCurrent: (page: Page) => boolean) => void;
   readonly session: PolledBrowserSession;
   readonly timeoutMs: number;
 }): Effect.Effect<string, WorkspaceE2EError> =>
   pollForUrl(
-    readPolledSession(session, readPageUrl).pipe(
-      Effect.orElseSucceed(() => undefined)
-    ),
+    readPolledSession(session, (activeSession) =>
+      onDocumentMatch
+        ? activeSession.use("read browser URL", async (page) => {
+            const rawUrl = page.url();
+            const url = redact(rawUrl).trim();
+            if (!url || !matches(url)) return undefined;
+            onDocumentMatch(matchCurrentDocument(page, rawUrl));
+            return url;
+          })
+        : readPageUrl(activeSession).pipe(
+            Effect.map((url) => (url && matches(url) ? url : undefined))
+          )
+    ).pipe(Effect.orElseSucceed(() => undefined)),
     {
       description,
-      matches,
       readDiagnostics: readPolledSession(
         session,
         readBrowserPageDiagnostics

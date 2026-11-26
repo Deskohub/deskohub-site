@@ -56,6 +56,18 @@ describe("Workspace E2E flow catalog", () => {
     ).toBe(false);
   });
 
+  test("excludes every other payment case from the Czech Workspace review", () => {
+    const payments = resolveWorkspaceE2EFlowSelection("payments");
+    expect(
+      workspaceE2ECaseIds.filter((caseId) =>
+        isWorkspaceE2ECaseSelected(caseId, payments, {
+          includeUnlimitedPassAutoRenewal: true,
+          unlimitedPassWorkspaceReviewOnly: true,
+        })
+      )
+    ).toEqual([unlimitedPassAutoRenewalCaseId]);
+  });
+
   test("matches the workflow flow catalog in order and short codes", () => {
     expect([...workspaceE2EFlowIds]).toEqual([...workspaceE2EWorkflowFlowIds]);
     const shortCodes = Object.values(workspaceE2EFlowShortCodes);

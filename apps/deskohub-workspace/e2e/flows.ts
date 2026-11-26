@@ -212,8 +212,13 @@ export const isWorkspaceE2EFlowSelected = (
 export const isWorkspaceE2ECaseSelected = (
   caseId: WorkspaceE2ECaseId,
   selection: WorkspaceE2EFlowSelection,
-  options: { readonly includeUnlimitedPassAutoRenewal?: boolean } = {}
+  options: {
+    readonly includeUnlimitedPassAutoRenewal?: boolean;
+    readonly unlimitedPassWorkspaceReviewOnly?: boolean;
+  } = {}
 ): boolean =>
+  (!options.unlimitedPassWorkspaceReviewOnly ||
+    caseId === unlimitedPassAutoRenewalCaseId) &&
   (caseId !== unlimitedPassAutoRenewalCaseId ||
     options.includeUnlimitedPassAutoRenewal === true) &&
   isWorkspaceE2EFlowSelected(workspaceE2ECaseFlowById[caseId], selection);

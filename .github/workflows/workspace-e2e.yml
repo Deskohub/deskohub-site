@@ -50,7 +50,7 @@ on:
         default: false
         type: boolean
       unlimited_review_locale:
-        description: Locale for Unlimited review screenshots (both opt-ins required, Czech awaits sandbox control verification)
+        description: Unlimited review evidence (English with Nexi, Czech Workspace checkout only on a draft PR)
         type: choice
         default: en-US
         options:
@@ -125,6 +125,7 @@ jobs:
           INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL: ${{ github.event_name == 'workflow_dispatch' && inputs.include_unlimited_pass_auto_renewal && 'true' || 'false' }}
           INPUT_FLOWS: ${{ github.event_name == 'workflow_dispatch' && inputs.flows || '' }}
           INPUT_PAYMENT_PROVIDER: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_provider || '' }}
+          INPUT_UNLIMITED_REVIEW_LOCALE: ${{ github.event_name == 'workflow_dispatch' && inputs.review_screenshots && inputs.include_unlimited_pass_auto_renewal && inputs.unlimited_review_locale || '' }}
           # Only workspace-e2e-nightly.yml moves this branch, to a commit of
           # main whose Workspace preview it waits for.
           NIGHTLY_BRANCH: e2e/nightly
@@ -165,6 +166,14 @@ jobs:
             fi
             allow_draft_preview=true
           fi
+          require_draft_preview=false
+          if [[ "${INPUT_UNLIMITED_REVIEW_LOCALE:-}" == "cs-CZ" ]]; then
+            if [[ "$allow_draft_preview" != "true" ]]; then
+              echo 'Czech Unlimited Workspace review requires allow_draft_preview' >&2
+              exit 1
+            fi
+            require_draft_preview=true
+          fi
           # Nightly cases test main only (D38). A dispatch that asks for them
           # against any other target fails before it resolves a PR, so it
           # leaves that PR's required status alone.
@@ -186,12 +195,13 @@ jobs:
           filter_eligible_pulls() {
             jq \
               --argjson allow_draft "$allow_draft_preview" \
+              --argjson require_draft "$require_draft_preview" \
               --arg repo "$GITHUB_REPOSITORY" \
               --arg ref "$TARGET_REF" \
               --arg sha "$TARGET_SHA" \
               '[.[] | select(
                 .state == "open" and
-                (.draft == false or ($allow_draft and .draft == true)) and
+                ((($require_draft | not) and .draft == false) or ($allow_draft and .draft == true)) and
                 .head.repo.full_name == $repo and
                 .head.ref == $ref and
                 .head.sha == $sha and

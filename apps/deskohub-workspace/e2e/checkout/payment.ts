@@ -553,6 +553,7 @@ const formatReservationStartDiagnostics = (
 export type HostedPaymentPage = {
   readonly checkoutPage: Page;
   readonly checkoutPageUrl: string;
+  readonly isHandoffDocument?: (page: Page) => boolean;
   readonly nexiNavigation?: NexiHostedNavigation;
   readonly page: Page;
   readonly provider: E2EPaymentProvider;
@@ -561,12 +562,14 @@ export type HostedPaymentPage = {
 
 /** Waits for the selected hosted page, leaving its tab active. */
 export const submitPaymentAndWaitForHostedPage = ({
+  observeHandoffDocument = false,
   config,
   submitPayment = submitCheckoutPayment,
   paymentProvider = initialE2EPaymentProvider(config.paymentProvider),
   session,
 }: {
   config: WorkspaceE2EConfig;
+  observeHandoffDocument?: boolean;
   submitPayment?: typeof submitCheckoutPayment;
   paymentProvider?: E2EPaymentProvider;
   session: E2EBrowserSession;
@@ -585,12 +588,18 @@ export const submitPaymentAndWaitForHostedPage = ({
     );
     const checkoutPage = yield* submitPayment(session, timeouts);
 
+    let isHandoffDocument: HostedPaymentPage["isHandoffDocument"];
     const hostedPaymentUrl = yield* waitForPageUrl({
       description: `${paymentProvider} hosted payment page`,
       matches: (url) =>
         paymentProvider === "mock"
           ? readMockHostedPaymentUrl(url, [config.baseUrl]) !== undefined
           : url.includes("nexigroup.com") || url.includes("/hpp/nexi/"),
+      ...(observeHandoffDocument && {
+        onDocumentMatch: (isCurrent) => {
+          isHandoffDocument = isCurrent;
+        },
+      }),
       session,
       timeoutMs: timeouts.providerTransition,
     });
@@ -614,6 +623,7 @@ export const submitPaymentAndWaitForHostedPage = ({
     return {
       checkoutPage,
       checkoutPageUrl,
+      ...(isHandoffDocument && { isHandoffDocument }),
       page: hostedPage,
       provider: paymentProvider,
       url: hostedPaymentUrl,

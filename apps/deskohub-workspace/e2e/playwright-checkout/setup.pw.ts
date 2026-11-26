@@ -14,6 +14,7 @@ import {
 import {
   makeWorkspaceE2EEnvironment,
   nightlyCasesEnabled,
+  unlimitedPassWorkspaceReviewOnly,
   workspaceE2EFlowSelection,
 } from "../e2e-env";
 import { needsWorkspaceE2ECheckoutPreparation } from "../flows";
@@ -66,10 +67,11 @@ test("prepare the workspace checkout run", async ({ browser }) => {
   );
 
   const flowSelection = workspaceE2EFlowSelection(environment);
-  const prepareCheckoutCases = needsWorkspaceE2ECheckoutPreparation(
-    flowSelection,
-    { includeNightlyCases: nightlyCasesEnabled(environment) }
-  );
+  const prepareCheckoutCases =
+    !unlimitedPassWorkspaceReviewOnly(environment) &&
+    needsWorkspaceE2ECheckoutPreparation(flowSelection, {
+      includeNightlyCases: nightlyCasesEnabled(environment),
+    });
 
   const preparationResult = await withWorkspaceE2ERuntime(
     environment,
