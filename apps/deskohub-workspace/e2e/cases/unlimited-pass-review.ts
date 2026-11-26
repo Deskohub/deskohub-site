@@ -9,9 +9,10 @@ import {
   findNexiCardField,
   parseNexiSnapshot,
 } from "../checkout/nexi-hosted-page";
+import { observeNexiReviewNavigation } from "../checkout/nexi-review-navigation";
 import type { HostedPaymentPage } from "../checkout/payment";
 import type { unlimitedPassReviewLocale } from "../e2e-env";
-import { workspaceDir } from "../runtime";
+import { log, workspaceDir } from "../runtime";
 import { workspaceE2EPollIntervalMs } from "../timeouts";
 
 type ReviewLocale = NonNullable<ReturnType<typeof unlimitedPassReviewLocale>>;
@@ -291,7 +292,7 @@ export function makeUnlimitedPassReviewCapture({
         },
       });
     },
-    captureNexi: (
+    captureNexi: async (
       page: Page,
       hosted: HostedPaymentPage,
       privateText: readonly string[]
@@ -302,32 +303,53 @@ export function makeUnlimitedPassReviewCapture({
       const { isHandoffDocument } = hosted;
       const verifyDocument = () =>
         isHandoffDocument?.(page, timeout) ?? Promise.resolve(false);
-      return capture(page, "nexi-handoff", {
-        mask: [
-          page.locator("[data-ph-mask]"),
-          ...privateText.map((value) => page.getByText(value, { exact: true })),
-        ],
-        // Preserve the empty field outlines even if the provider changes the
-        // form between the live value check and the screenshot.
-        style:
-          "input:not([type=submit], [type=button], [type=checkbox], [type=radio]), textarea { color: transparent !important; caret-color: transparent !important; }",
-        verifyDocument,
-        verify: async () => {
-          const url = URL.parse(page.url());
-          if (!isHandoffDocument) return "untracked-document";
-          if (
-            page !== hosted.page ||
-            hosted.provider !== "nexi" ||
-            url?.origin !== sandboxOrigin ||
-            !(await verifyDocument())
-          )
-            return "unexpected-document";
-          const started = performance.now();
-          const problem = await waitForEmptyCardFields(page, inspectionBudget);
-          inspectionBudget -= performance.now() - started;
-          return problem;
-        },
-      });
+      const observation =
+        page === hosted.page &&
+        hosted.provider === "nexi" &&
+        URL.parse(page.url())?.origin === sandboxOrigin
+          ? observeNexiReviewNavigation(page)
+          : undefined;
+      try {
+        await capture(page, "nexi-handoff", {
+          mask: [
+            page.locator("[data-ph-mask]"),
+            ...privateText.map((value) =>
+              page.getByText(value, { exact: true })
+            ),
+          ],
+          // Preserve the empty field outlines even if the provider changes the
+          // form between the live value check and the screenshot.
+          style:
+            "input:not([type=submit], [type=button], [type=checkbox], [type=radio]), textarea { color: transparent !important; caret-color: transparent !important; }",
+          verifyDocument,
+          verify: async () => {
+            const url = URL.parse(page.url());
+            if (!isHandoffDocument) return "untracked-document";
+            if (
+              page !== hosted.page ||
+              hosted.provider !== "nexi" ||
+              url?.origin !== sandboxOrigin ||
+              !(await verifyDocument())
+            )
+              return "unexpected-document";
+            const started = performance.now();
+            const problem = await waitForEmptyCardFields(
+              page,
+              inspectionBudget
+            );
+            inspectionBudget -= performance.now() - started;
+            return problem;
+          },
+        });
+      } finally {
+        const lifecycle = observation?.finish();
+        const result = results.get("nexi-handoff");
+        if (lifecycle && result && result !== "captured") {
+          log(
+            `NEXI REVIEW DOCUMENT ${JSON.stringify({ result, ...lifecycle })}`
+          );
+        }
+      }
     },
     missingShots: (
       required: readonly ReviewShot[] = [...workspaceShots, "nexi-handoff"]
