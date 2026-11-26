@@ -167,6 +167,7 @@ export {
   type StandaloneAccessCodeAttemptEventRow,
   standaloneAccessCodeAttemptEvents,
 } from "./standalone-access-code-attempt-events";
+export { unlimitedAutoRenewalAuthorizations } from "./unlimited-auto-renewal-authorizations";
 export { unlimitedPassDayMoves } from "./unlimited-pass-day-moves";
 export { unlimitedPassSupersessions } from "./unlimited-pass-supersessions";
 export {

@@ -51,6 +51,7 @@ import {
   getUnlimitedPassPrice,
 } from "../pass-offer";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
+import type { UnlimitedAutoRenewalDisclosure } from "../unlimited-auto-renewal";
 import {
   type UnlimitedPassSelection,
   unlimitedPassRequiresEarlyStart,
@@ -66,6 +67,10 @@ import {
   requirePassPurchasesEnabled,
 } from "./entry-pack-purchase";
 import { hasUnlimitedPassFirstDayEnded } from "./entry-pack-settlement";
+import {
+  offersUnlimitedAutoRenewal,
+  readUnlimitedAutoRenewalDisclosure,
+} from "./unlimited-auto-renewal";
 import { withUnlimitedPassCapacity } from "./unlimited-pass-capacity";
 import {
   attemptUnlimitedPassHolds,
@@ -207,6 +212,7 @@ type UnlimitedPassPurchaseInput = {
   readonly locale: Locale;
   readonly selection: UnlimitedPassSelection;
   readonly renewsPassId?: OrderId;
+  readonly autoRenew?: true;
   readonly holderEmail?: string;
   readonly recipientName?: string;
   readonly buyerProfile?: CustomerProfileSave;
@@ -267,6 +273,14 @@ export const beginUnlimitedPassPurchase = Effect.fn(
   const retiredPredecessorOrderIds: OrderId[] = [];
   const outcome = yield* Effect.result(
     Effect.gen(function* () {
+      if (
+        input.autoRenew &&
+        (!offersUnlimitedAutoRenewal(input.locale) ||
+          giftEmail ||
+          input.renewsPassId)
+      ) {
+        return yield* new EntryPackPurchaseError({ reason: "unavailable" });
+      }
       if (input.continueFromHandoff && priorOrderIds.size > 0) {
         yield* accounts.withActiveAccount(
           session.accountId,
@@ -381,6 +395,7 @@ const continueUnlimitedPassPurchase = Effect.fn(
         if (
           existing.purchase.holderAccountId !== holderId ||
           existing.purchase.renewsPassId !== (input.renewsPassId ?? null) ||
+          existing.purchase.autoRenew !== (input.autoRenew === true) ||
           !selection ||
           !sameSelection(selection, input.selection)
         ) {
@@ -510,6 +525,7 @@ const continueUnlimitedPassPurchase = Effect.fn(
                 createdAt: now,
                 selection,
                 ...(renewsPassId && { renewsPassId }),
+                ...(input.autoRenew && { autoRenew: input.autoRenew }),
                 quote: {
                   ...quote,
                   selection: referralCode ? { referralCode } : {},
@@ -655,12 +671,14 @@ const readUnlimitedPassBuyerDraft = Effect.fn("readUnlimitedPassBuyerDraft")(
 
 export const getUnlimitedPassPaymentDisclosure = (
   locale: Locale,
-  earlyStartRequired: boolean
+  earlyStartRequired: boolean,
+  renewal?: UnlimitedAutoRenewalDisclosure
 ) => ({
   documents: getPaymentSubmitLegalDocuments(locale),
   ...(earlyStartRequired && {
     earlyStartRequest: m.unlimitedPassEarlyStartConsent({}, { locale }),
   }),
+  ...(renewal && { renewal }),
 });
 
 export const loadUnlimitedCheckoutContinuation = Effect.fn(
@@ -675,6 +693,8 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
       draft;
     const status = { kind: "status" as const, locale: purchase.locale };
     if (!selection) return status;
+    const renewal = readUnlimitedAutoRenewalDisclosure(purchase);
+    if (purchase.autoRenew && !renewal) return status;
     const priorPaymentAttemptId = order.activePaymentAttemptId;
     const now = yield* currentInstant;
     const payable =
@@ -686,6 +706,7 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
       selection,
       holderEmail,
       renewsPassId: purchase.renewsPassId,
+      ...(purchase.autoRenew && { autoRenew: true as const }),
     };
     if (
       mode === "submitted" &&
@@ -737,7 +758,8 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
           unlimitedPassRequiresEarlyStart(
             purchase.validFrom,
             getCurrentWorkspaceDate(now)
-          )
+          ),
+          renewal
         ),
         ...(priorPaymentAttemptId && { priorPaymentAttemptId }),
         validFrom: purchase.validFrom,

@@ -86,10 +86,8 @@ import {
 } from "./customer-pass-purchase";
 import { CustomerPasses } from "./customer-passes.service";
 import { readOwnedPassPurchaseStatusPath } from "./entry-pack-order";
-import {
-  getPassPurchasePriceFingerprint,
-  repriceEntryPackPurchase,
-} from "./entry-pack-purchase";
+import { repriceEntryPackPurchase } from "./entry-pack-purchase";
+import { getPassPurchasePriceFingerprint } from "./entry-pack-quote";
 import { settlePassPurchase } from "./entry-pack-settlement";
 import { readPassCheckoutHandoff } from "./pass-checkout-handoff";
 import { unlimitedConfirmationDeliveryReports } from "./pass-confirmation-delivery";

@@ -76,10 +76,10 @@ import { unlimitedPassDays } from "../pass-offer";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
 import {
-  getPassPurchasePriceFingerprint,
   payForEntryPack,
   repriceEntryPackPurchase,
 } from "./entry-pack-purchase";
+import { getPassPurchasePriceFingerprint } from "./entry-pack-quote";
 import {
   canConfirmUnlimitedPass,
   settlePassPurchase,

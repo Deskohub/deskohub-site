@@ -3,7 +3,7 @@ import "server-only";
 import { DotyposService } from "@deskohub/dotypos";
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
 import { and, eq, inArray, isNotNull, lte, ne, sql } from "drizzle-orm";
-import { Context, Data, Effect, Option, Result } from "effect";
+import { Context, Data, Effect, Option, Result, Schema } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
@@ -58,11 +58,16 @@ import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { moneyEquals } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
 import { getEntryPackEndDate, isEntryPackQuoteExpired } from "../pass-offer";
-import { withPassPurchaseAddons } from "../pass-purchase-quote";
+import {
+  passPurchaseQuoteCodec,
+  withPassPurchaseAddons,
+} from "../pass-purchase-quote";
+import type { UnlimitedAutoRenewalDisclosure } from "../unlimited-auto-renewal";
 import { getUnlimitedPassEndDate } from "../unlimited-pass";
 import { recordConfirmationInvitationState } from "./entry-pack-gift";
 import { deliverPendingEntryPackInvitation } from "./entry-pack-gift-delivery";
 import { sendEntryPackPurchaseEmail } from "./entry-pack-purchase-email";
+import { getPassPurchasePriceFingerprint } from "./entry-pack-quote";
 import {
   canConfirmUnlimitedPass,
   hasUnlimitedPassFirstDayEnded,
@@ -70,6 +75,11 @@ import {
   requireFullPassRefund,
   settlePassPurchase,
 } from "./entry-pack-settlement";
+import {
+  matchesUnlimitedAutoRenewalAuthorization,
+  readUnlimitedAutoRenewalDisclosure,
+  recordUnlimitedAutoRenewalAuthorization,
+} from "./unlimited-auto-renewal";
 import {
   confirmUnlimitedPassDays,
   readPayableUnlimitedHolds,
@@ -86,6 +96,10 @@ export type EntryPackPaymentAdmissionDetails = {
   readonly recordConsent: Effect.Effect<void, PaymentLifecycleRepositoryError>;
   readonly commitment: DiscountCommitment;
   readonly snapshot: PassPurchaseAccountingSnapshot;
+  readonly renewal?: {
+    readonly disclosure: UnlimitedAutoRenewalDisclosure;
+    readonly quoteFingerprint: string;
+  };
 };
 
 const approvalOperation =
@@ -299,6 +313,37 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
     )
       return yield* staleApproval(order.id);
 
+    const renewal = input.details.renewal;
+    if (pack.autoRenew !== Boolean(renewal)) {
+      return yield* paymentError(
+        order.id,
+        "The renewal authorization is missing or unexpected."
+      );
+    }
+    if (renewal) {
+      const disclosure = readUnlimitedAutoRenewalDisclosure(pack);
+      const storedQuote = Schema.decodeUnknownOption(passPurchaseQuoteCodec)(
+        pack.quote
+      );
+      if (
+        !disclosure ||
+        pack.buyerAccountId !== pack.holderAccountId ||
+        providerAdmission?.provider !== "nexi" ||
+        !matchesUnlimitedAutoRenewalAuthorization(
+          renewal.disclosure,
+          disclosure
+        ) ||
+        Option.isNone(storedQuote) ||
+        getPassPurchasePriceFingerprint(storedQuote.value) !==
+          renewal.quoteFingerprint
+      ) {
+        return yield* paymentError(
+          order.id,
+          "The renewal authorization no longer matches the purchase."
+        );
+      }
+    }
+
     if (order.activePaymentAttemptId) {
       const [prior] = yield* readAttempt(
         order.id,
@@ -354,6 +399,15 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       amount: input.amount,
       ...(providerAdmission ?? { provider: "internal", paidAt: now }),
     });
+    if (renewal) {
+      yield* recordUnlimitedAutoRenewalAuthorization(
+        attempt.id,
+        pack.holderVersion,
+        renewal.disclosure,
+        renewal.quoteFingerprint,
+        now
+      );
+    }
     yield* snapshots.recordPassPurchase({
       snapshot: input.details.snapshot,
       paymentAttemptId: attempt.id,

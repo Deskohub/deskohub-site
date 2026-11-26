@@ -128,12 +128,12 @@ import {
   beginEntryPackPurchase,
   displayPassPurchasePrice,
   getEntryPackPaymentDisclosure,
-  getPassPurchasePriceFingerprint,
   payForEntryPack,
   readEntryPackCheckoutPayment,
   readEntryPackPaymentRetry,
   repriceEntryPackPurchase,
 } from "./entry-pack-purchase";
+import { getPassPurchasePriceFingerprint } from "./entry-pack-quote";
 import { loadEntryPackRedemption } from "./entry-pack-redemption";
 import { settlePassPurchase } from "./entry-pack-settlement";
 import { loadEntryPackStatus } from "./entry-pack-status";

@@ -1,6 +1,5 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
@@ -63,6 +62,10 @@ import {
   passPurchaseQuoteCodec,
   withPassPurchaseAddons,
 } from "../pass-purchase-quote";
+import type {
+  UnlimitedAutoRenewalAuthorization,
+  UnlimitedAutoRenewalDisclosure,
+} from "../unlimited-auto-renewal";
 import { unlimitedPassRequiresEarlyStart } from "../unlimited-pass";
 import {
   findOwnedEntryPackOrder,
@@ -72,11 +75,18 @@ import {
   isStaleEntryPackPaymentApproval,
   isUnlimitedPassFirstDayAdmissionExpired,
 } from "./entry-pack-order-payment-handler";
-import { quoteEntryPack } from "./entry-pack-quote";
+import {
+  getPassPurchasePriceFingerprint,
+  quoteEntryPack,
+} from "./entry-pack-quote";
 import {
   hasPassQuoteExpired,
   hasUnlimitedPassFirstDayEnded,
 } from "./entry-pack-settlement";
+import {
+  matchesUnlimitedAutoRenewalAuthorization,
+  readUnlimitedAutoRenewalDisclosure,
+} from "./unlimited-auto-renewal";
 import { reconfirmUnlimitedPassHolds } from "./unlimited-pass-holds";
 
 export class EntryPackPurchaseError extends Data.TaggedError(
@@ -96,27 +106,13 @@ export class EntryPackPurchaseError extends Data.TaggedError(
   readonly locale?: Locale;
   readonly earlyStartRequired?: boolean;
   readonly orderId?: OrderId;
+  readonly renewal?: UnlimitedAutoRenewalDisclosure;
 }> {}
 
 const decodeBilling = Schema.decodeEffect(reservationBillingSelectionSchema, {
   onExcessProperty: "error",
 });
 const billingMatches = Schema.toEquivalence(reservationBillingSelectionSchema);
-
-/** The terms of a price the buyer has seen, independent of labels and timers. */
-export const getPassPurchasePriceFingerprint = (quote: PassPurchaseQuote) =>
-  createHash("sha256")
-    .update(
-      JSON.stringify([
-        quote.discountableSubtotal,
-        quote.discountedSubtotal,
-        quote.discounts.map(({ discount, amount }) => [discount.id, amount]),
-        quote.selection?.submittedCode,
-        quote.selection?.referralCode,
-        ...(quote.unlimitedCoffee ? [true] : []),
-      ])
-    )
-    .digest("hex");
 
 export const displayPassPurchasePrice = (
   quote: PassPurchaseQuote
@@ -659,7 +655,8 @@ const prepareEntryPackPaymentConsent = Effect.fn(
   locale: Locale,
   orderId: OrderId,
   productKind: PassPurchase["product"],
-  earlyStartRequired: boolean
+  earlyStartRequired: boolean,
+  renewal?: UnlimitedAutoRenewalDisclosure
 ) {
   if (!input.accepted) {
     return yield* new EntryPackPurchaseError({ reason: "consent-required" });
@@ -673,6 +670,7 @@ const prepareEntryPackPaymentConsent = Effect.fn(
       reason: "terms-changed",
       locale: locale,
       ...(productKind === "unlimited" && { earlyStartRequired }),
+      ...(renewal && { renewal }),
     });
   }
 
@@ -705,6 +703,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
     readonly referralCode?: CanonicalPromotionCode;
     readonly billing?: ReservationBillingSelection;
     readonly displayedPriceFingerprint?: string;
+    readonly renewalAuthorization?: UnlimitedAutoRenewalAuthorization;
     readonly returnTarget?: PaymentReturnTarget;
   }
 ) {
@@ -779,6 +778,19 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       if (stalePrice) {
         return { status: "pricing_changed" as const, quote: accepted };
       }
+      const renewal = readUnlimitedAutoRenewalDisclosure(purchase);
+      if (
+        (purchase.autoRenew &&
+          (!renewal ||
+            purchase.buyerAccountId !== purchase.holderAccountId ||
+            withPassPurchaseAddons(
+              accepted.discountedSubtotal,
+              purchase.unlimitedCoffee
+            ).value <= 0)) ||
+        (!purchase.autoRenew && input.renewalAuthorization)
+      ) {
+        return yield* new EntryPackPurchaseError({ reason: "unavailable" });
+      }
       const snapshots = yield* AccountingDocumentSnapshots;
       const frozen = order.activePaymentAttemptId
         ? yield* snapshots.findPassPurchase(order.activePaymentAttemptId)
@@ -793,6 +805,27 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         return yield* new EntryPackPurchaseError({ reason: "billing-changed" });
       }
       const now = yield* currentInstant;
+      const earlyStartRequired =
+        productKind === "unlimited" &&
+        unlimitedPassRequiresEarlyStart(
+          purchase.validFrom,
+          getCurrentWorkspaceDate(now)
+        );
+      if (
+        renewal &&
+        (input.displayedPriceFingerprint !== acceptedFingerprint ||
+          !matchesUnlimitedAutoRenewalAuthorization(
+            input.renewalAuthorization,
+            renewal
+          ))
+      ) {
+        return yield* new EntryPackPurchaseError({
+          reason: "terms-changed",
+          locale: purchase.locale,
+          earlyStartRequired,
+          renewal,
+        });
+      }
       if (hasPassQuoteExpired(now, purchase)) {
         return yield* new EntryPackPurchaseError({
           reason:
@@ -928,16 +961,19 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         details: {
           approvedAfterAttemptId,
           commitment,
+          ...(renewal && {
+            renewal: {
+              disclosure: renewal,
+              quoteFingerprint: acceptedFingerprint,
+            },
+          }),
           recordConsent: yield* prepareEntryPackPaymentConsent(
             input,
             purchase.locale,
             order.id,
             productKind,
-            productKind === "unlimited" &&
-              unlimitedPassRequiresEarlyStart(
-                purchase.validFrom,
-                getCurrentWorkspaceDate(now)
-              )
+            earlyStartRequired,
+            renewal
           ),
           snapshot: {
             orderId: order.id,
