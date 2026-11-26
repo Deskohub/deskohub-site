@@ -15,6 +15,7 @@ import {
 } from "@/shared/components/date-time/canonical-value";
 import { Button } from "@/shared/components/ui/button";
 import { Calendar } from "@/shared/components/ui/calendar";
+import { ChoiceCard } from "@/shared/components/ui/choice-card";
 import { Switch } from "@/shared/components/ui/switch";
 import { formatMoney } from "@/shared/money/money";
 import { cn } from "@/shared/utils";
@@ -60,6 +61,8 @@ export function UnlimitedPassChoose({
   startDate,
   fixedStartDate,
   availability,
+  autoRenew,
+  onAutoRenewChange,
   onOptionsChange,
   onMonthChange,
   onStartDateChange,
@@ -75,6 +78,8 @@ export function UnlimitedPassChoose({
   readonly startDate?: PlainDate;
   readonly fixedStartDate?: PlainDate;
   readonly availability: UnlimitedPassAvailability;
+  readonly autoRenew?: boolean;
+  readonly onAutoRenewChange?: (autoRenew: boolean) => void;
   readonly onOptionsChange: (
     options: UnlimitedPassOptions,
     date?: PlainDate
@@ -87,6 +92,7 @@ export function UnlimitedPassChoose({
   const days = formatCount(unlimitedPassDays, locale);
   const calendarId = useId();
   const coffeeId = useId();
+  const purchaseModeId = useId();
   const firstDay = Temporal.PlainDate.from(today);
   const lastDay = Temporal.PlainDate.from(lastStartDate);
   const starts =
@@ -137,6 +143,38 @@ export function UnlimitedPassChoose({
             </>
           )}
         />
+        {onAutoRenewChange && (
+          <fieldset aria-describedby={purchaseModeId}>
+            <legend className="mb-1 font-semibold text-sm uppercase tracking-widest text-navy-blue/75">
+              {m.unlimitedPassCheckoutPurchaseMode({}, { locale })}
+            </legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <ChoiceCard align="center">
+                <input
+                  type="radio"
+                  name="purchaseMode"
+                  className="size-4 accent-burned-orange"
+                  checked={!autoRenew}
+                  onChange={() => onAutoRenewChange(false)}
+                />
+                {m.unlimitedPassCheckoutOneTime({}, { locale })}
+              </ChoiceCard>
+              <ChoiceCard align="center">
+                <input
+                  type="radio"
+                  name="purchaseMode"
+                  className="size-4 accent-burned-orange"
+                  checked={autoRenew === true}
+                  onChange={() => onAutoRenewChange(true)}
+                />
+                {m.unlimitedPassCheckoutAutoRenew({}, { locale })}
+              </ChoiceCard>
+            </div>
+            <p id={purchaseModeId} className="mt-2 text-sm text-navy-blue/75">
+              {m.unlimitedPassCheckoutAutoRenewSelfOnly({}, { locale })}
+            </p>
+          </fieldset>
+        )}
         <div
           className={cn(
             "grid items-start gap-4",

@@ -11,6 +11,9 @@ let submittedGift = true;
 let commitAfterContinuationRead = false;
 let submittedStatusOnly = false;
 let pendingRenewal = false;
+let autoRenewPreviewEnabled = false;
+let storedAutoRenew = false;
+let locale: Locale = "cs-CZ";
 const ownedOrder = "5413f44e-80ef-430e-9663-ddd7242a2ed0";
 const submittedOrder = "5413f44e-80ef-430e-9663-ddd7242a2ed1";
 const renewalSource = "5413f44e-80ef-430e-9663-ddd7242a2ed2";
@@ -29,6 +32,9 @@ beforeEach(() => {
   commitAfterContinuationRead = false;
   submittedStatusOnly = false;
   pendingRenewal = false;
+  autoRenewPreviewEnabled = false;
+  storedAutoRenew = false;
+  locale = "cs-CZ";
 });
 
 mock.module(
@@ -37,8 +43,14 @@ mock.module(
     isCoworkPassesPageOpenAfterConnection: async () => enabled,
   })
 );
+mock.module(
+  "@/features/passes/backend/unlimited-auto-renewal-preview.server",
+  () => ({
+    isUnlimitedAutoRenewalPreviewEnabled: () => autoRenewPreviewEnabled,
+  })
+);
 mock.module("@/features/i18n/server/request-locale", () => ({
-  runWithRequestLocale: (run: (locale: Locale) => unknown) => run("cs-CZ"),
+  runWithRequestLocale: (run: (locale: Locale) => unknown) => run(locale),
 }));
 mock.module("@/features/passes/backend/pass-purchase-buyer", () => ({
   readPassPurchaseBuyer: () =>
@@ -82,6 +94,7 @@ mock.module("@/features/passes/backend/unlimited-pass-purchase", () => ({
         locale: "cs-CZ",
         selection: { tier: "reserved-desk", startDate: "2026-12-01" },
         renewsPassId: pendingRenewal ? renewalSource : null,
+        ...(storedAutoRenew && { autoRenew: true }),
         holderEmail:
           orderId === submittedOrder && !submittedGift
             ? undefined
@@ -246,6 +259,55 @@ test("a renewal preselects the holder's prior configuration and authoritative ex
     tier: "reserved-desk",
     startDate: renewalSelection.startDate,
   });
+});
+
+test("auto renewal needs an opted-in preview and a locale with renewal terms", async () => {
+  const query = { ...selectionQuery, autoRenew: "true" };
+  const gateClosed = await renderContent(query);
+  expect(gateClosed.props.children.props).toMatchObject({
+    autoRenewAvailable: false,
+    initialAutoRenew: false,
+  });
+  autoRenewPreviewEnabled = true;
+  const oneTime = await renderContent(selectionQuery);
+  expect(oneTime.props.children.props).toMatchObject({
+    autoRenewAvailable: true,
+    initialAutoRenew: false,
+  });
+  const selected = await renderContent(query);
+  expect(selected.props.children.props).toMatchObject({
+    autoRenewAvailable: true,
+    initialAutoRenew: true,
+  });
+  locale = "de-DE";
+  const unsupported = await renderContent(query);
+  expect(unsupported.props.children.props).toMatchObject({
+    autoRenewAvailable: false,
+    initialAutoRenew: false,
+  });
+});
+
+test("resumed drafts use their stored choice and handoffs and manual renewals suppress auto renewal", async () => {
+  autoRenewPreviewEnabled = true;
+  submittedOrderCommitted = true;
+  const withAutoRenew = { ...selectionQuery, autoRenew: "true" };
+  for (const query of [
+    { ...withAutoRenew, handoff: "opaque" },
+    { ...withAutoRenew, renew: renewalSource },
+    { ...withAutoRenew, submittedOrder },
+  ]) {
+    const content = await renderContent(query);
+    expect(content.props.children.props).toMatchObject({
+      autoRenewAvailable: false,
+      initialAutoRenew: false,
+    });
+  }
+  submittedGift = false;
+  const oneTime = await renderContent({ ...withAutoRenew, submittedOrder });
+  expect(oneTime.props.children.props.initialAutoRenew).toBe(false);
+  storedAutoRenew = true;
+  const recurring = await renderContent({ ...selectionQuery, submittedOrder });
+  expect(recurring.props.children.props.initialAutoRenew).toBe(true);
 });
 
 test("a renewal rejects invalid, repeated, or ineligible source IDs", async () => {

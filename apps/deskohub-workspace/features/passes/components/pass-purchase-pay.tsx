@@ -1,4 +1,7 @@
+import Interpolate from "@doist/react-interpolate";
+import Link from "next/link";
 import { type Ref, useId, useState } from "react";
+import { getAccountSectionPath } from "@/features/account/routes";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import {
   CheckoutPayCard,
@@ -18,21 +21,29 @@ import type { OrderId } from "@/features/order";
 import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { Button } from "@/shared/components/ui/button";
+import { Checkbox } from "@/shared/components/ui/checkbox";
+import { ChoiceCard } from "@/shared/components/ui/choice-card";
 import { Input } from "@/shared/components/ui/input";
+import { textLink } from "@/shared/components/ui/text-link";
 import { formatMoney } from "@/shared/money/money";
+import { formatCount } from "@/shared/utils/number";
 import { useWorkspaceAction } from "@/shared/utils/use-workspace-action";
 import type { EntryPackCheckoutPrice } from "../entry-pack-checkout";
 import type {
   payEntryPackCheckout,
   repriceEntryPackCheckout,
 } from "../entry-pack-checkout-actions";
+import { unlimitedPassDays } from "../pass-offer";
 import { formatPassDate } from "../pass-offer.i18n";
+import type { UnlimitedAutoRenewalDisclosure } from "../unlimited-auto-renewal";
 
 export type PassPurchasePayState = {
   readonly price: EntryPackCheckoutPrice;
+  readonly autoRenew?: true;
   readonly disclosure: {
     readonly documents: readonly PaymentSubmitLegalDocument[];
     readonly earlyStartRequest?: string;
+    readonly renewal?: UnlimitedAutoRenewalDisclosure;
   };
   readonly validFrom: string;
   readonly lastUsableDate: string;
@@ -82,17 +93,34 @@ export function PassPurchasePay({
   const [price, setPrice] = useState(state.price);
   const [disclosure, setDisclosure] = useState(state.disclosure);
   const [checked, setChecked] = useState(false);
+  const [earlyStartChecked, setEarlyStartChecked] = useState(false);
+  const [renewalChecked, setRenewalChecked] = useState(false);
+  const renewal = state.autoRenew ? disclosure.renewal : undefined;
+  const consentComplete =
+    checked &&
+    (!renewal ||
+      (renewalChecked && (!disclosure.earlyStartRequest || earlyStartChecked)));
   const { appliedDiscountCode } = price;
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string>();
   const [expired, setExpired] = useState(false);
+  const quoteUnavailable = expired || (state.autoRenew === true && !renewal);
+  const renewalRequiresPayment =
+    state.autoRenew === true && price.total.value <= 0;
   const consentId = useId();
+  const earlyStartConsentId = useId();
+  const renewalConsentId = useId();
   const codeId = useId();
   const input = { locale, orderId };
   const showError = () => setError(m.actionFailedUnexpectedly({}, { locale }));
   const signIn = () => window.location.assign(signInPath);
   const goToStatus = () =>
     window.location.replace(`/${locale}${reservationStatusPath}/${orderId}`);
+  const clearConsent = () => {
+    setChecked(false);
+    setEarlyStartChecked(false);
+    setRenewalChecked(false);
+  };
 
   function handlePurchaseFailure(reason: string) {
     if (reason === "billing-changed" || reason === "payment-in-progress") {
@@ -115,10 +143,10 @@ export function PassPurchasePay({
       if (data.status === "ready") {
         setPrice(data.price);
         setDraft("");
-        setChecked(false);
+        clearConsent();
       } else if (data.status === "pricing_changed") {
         setPrice(data.price);
-        setChecked(false);
+        clearConsent();
         setError(m.checkoutPayPricingChangedLead({}, { locale }));
       } else if (data.status === "code_unavailable") {
         setError(m.checkoutDiscountCodeUnavailable({}, { locale }));
@@ -126,7 +154,7 @@ export function PassPurchasePay({
         signIn();
       } else if (data.status === "terms_changed") {
         setDisclosure(data.disclosure);
-        setChecked(false);
+        clearConsent();
         setError(m.entryPackCheckoutTermsChanged({}, { locale }));
       } else if (data.status === "purchase_error") {
         handlePurchaseFailure(data.reason);
@@ -144,13 +172,13 @@ export function PassPurchasePay({
         window.location.replace(data.statusUrl);
       } else if (data.status === "pricing_changed") {
         setPrice(data.price);
-        setChecked(false);
+        clearConsent();
         setError(m.checkoutPayPricingChangedLead({}, { locale }));
       } else if (data.status === "signed_out") {
         signIn();
       } else if (data.status === "terms_changed") {
         setDisclosure(data.disclosure);
-        setChecked(false);
+        clearConsent();
         setError(m.entryPackCheckoutTermsChanged({}, { locale }));
       } else if (data.status === "purchase_error") {
         handlePurchaseFailure(data.reason);
@@ -160,6 +188,7 @@ export function PassPurchasePay({
   const busy = reprice.isPending || pay.isPending;
   const updateCode = (code?: string) => {
     setError(undefined);
+    setRenewalChecked(false);
     reprice.execute({
       ...input,
       displayedPriceFingerprint: price.fingerprint,
@@ -167,15 +196,27 @@ export function PassPurchasePay({
     });
   };
   const submitPayment = () => {
-    if (!checked || busy || expired) return;
+    if (!consentComplete || busy || quoteUnavailable || renewalRequiresPayment)
+      return;
     setError(undefined);
+    setRenewalChecked(false);
     onRequestPayment();
     pay.execute({
       ...input,
       accepted: checked,
       ...(product === "unlimited" && {
-        unlimitedEarlyStartAccepted: Boolean(disclosure.earlyStartRequest),
+        unlimitedEarlyStartAccepted:
+          Boolean(disclosure.earlyStartRequest) &&
+          (!renewal || earlyStartChecked),
       }),
+      ...(renewal &&
+        renewalChecked && {
+          renewalAuthorization: {
+            amount: renewal.amount,
+            nextRenewalOn: renewal.nextRenewalOn,
+            termsHash: renewal.termsHash,
+          },
+        }),
       acceptedDocuments: disclosure.documents.map(({ key, hash }) => ({
         key,
         hash,
@@ -240,6 +281,47 @@ export function PassPurchasePay({
           />
         </CheckoutSummarySection>
       </CheckoutSummarySections>
+      {renewal && (
+        <div className="space-y-2 rounded-2xl border border-navy-blue/10 bg-white p-4 text-sm leading-6 text-navy-blue/75">
+          <p className="font-semibold text-navy-blue">
+            {m.unlimitedPassCheckoutAutoRenewSchedule(
+              {
+                amount: formatMoney(renewal.amount, locale),
+                date: formatPassDate(renewal.nextRenewalOn, locale),
+                days: formatCount(unlimitedPassDays, locale),
+              },
+              { locale }
+            )}
+          </p>
+          <p>
+            <Interpolate
+              string={m.unlimitedPassCheckoutAutoRenewReminder({}, { locale })}
+              mapping={{
+                account: (label) => (
+                  <Link
+                    href={getAccountSectionPath(locale, "passes")}
+                    className={textLink({ tone: "inherit" })}
+                  >
+                    {label}
+                  </Link>
+                ),
+                terms: (label) => (
+                  <Link
+                    href={renewal.termsPath}
+                    prefetch={false}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={textLink({ tone: "inherit" })}
+                  >
+                    {label}
+                  </Link>
+                ),
+              }}
+            />
+          </p>
+          <p>{m.unlimitedPassCheckoutAutoRenewPreview({}, { locale })}</p>
+        </div>
+      )}
       {discountCodeEntryEnabled &&
         (appliedDiscountCode ? (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-aquamarine-green/40 bg-aquamarine-green/15 p-3 text-sm">
@@ -250,7 +332,7 @@ export function PassPurchasePay({
               )}
             </span>
             <Button
-              disabled={busy || expired}
+              disabled={busy || quoteUnavailable}
               variant="link"
               type="button"
               onClick={() => updateCode()}
@@ -263,7 +345,7 @@ export function PassPurchasePay({
             className="space-y-2"
             onSubmit={(event) => {
               event.preventDefault();
-              if (draft.trim() && !busy && !expired) updateCode(draft);
+              if (draft.trim() && !busy && !quoteUnavailable) updateCode(draft);
             }}
           >
             <label htmlFor={codeId} className="font-semibold text-sm">
@@ -272,7 +354,7 @@ export function PassPurchasePay({
             <div className="flex flex-wrap gap-2">
               <Input
                 id={codeId}
-                disabled={busy || expired}
+                disabled={busy || quoteUnavailable}
                 className="min-w-40 flex-1"
                 autoComplete="off"
                 maxLength={160}
@@ -280,7 +362,7 @@ export function PassPurchasePay({
                 onChange={(event) => setDraft(event.currentTarget.value)}
               />
               <Button
-                disabled={!draft.trim() || busy || expired}
+                disabled={!draft.trim() || busy || quoteUnavailable}
                 variant="secondary"
                 type="submit"
               >
@@ -295,26 +377,60 @@ export function PassPurchasePay({
           role="alert"
           className="empty:sr-only text-sm font-semibold text-burned-orange"
         >
-          {error}
+          {error ??
+            (renewalRequiresPayment &&
+              m.unlimitedPassCheckoutAutoRenewRequiresPayment({}, { locale }))}
         </p>
         <CheckoutPayConsent
           checked={checked}
-          disabled={busy || expired}
-          {...(disclosure.earlyStartRequest !== undefined && {
-            earlyStartRequest: disclosure.earlyStartRequest,
-          })}
+          disabled={busy || quoteUnavailable}
+          {...(!renewal &&
+            disclosure.earlyStartRequest !== undefined && {
+              earlyStartRequest: disclosure.earlyStartRequest,
+            })}
           id={consentId}
           locale={locale}
           onCheckedChange={setChecked}
           variant="pay"
         />
-        {expired ? (
-          <Button type="button" onClick={onExpire}>
+        {renewal && disclosure.earlyStartRequest && (
+          <ChoiceCard htmlFor={earlyStartConsentId}>
+            <Checkbox
+              id={earlyStartConsentId}
+              className="mt-1"
+              checked={earlyStartChecked}
+              disabled={busy || quoteUnavailable}
+              onCheckedChange={(value) => setEarlyStartChecked(value === true)}
+            />
+            <span className="text-sm leading-6 text-navy-blue/66">
+              {disclosure.earlyStartRequest}
+            </span>
+          </ChoiceCard>
+        )}
+        {renewal && (
+          <ChoiceCard htmlFor={renewalConsentId}>
+            <Checkbox
+              id={renewalConsentId}
+              className="mt-1"
+              checked={renewalChecked}
+              disabled={busy || quoteUnavailable}
+              onCheckedChange={(value) => setRenewalChecked(value === true)}
+            />
+            <span className="text-sm leading-6 text-navy-blue/66">
+              {m.unlimitedPassCheckoutAutoRenewConsent({}, { locale })}
+            </span>
+          </ChoiceCard>
+        )}
+        {quoteUnavailable ? (
+          <Button
+            type="button"
+            onClick={returnExpiredQuoteToStatus ? goToStatus : onExpire}
+          >
             {m.entryPackCheckoutRefreshQuote({}, { locale })}
           </Button>
         ) : (
           <CheckoutPaySubmitButton
-            disabled={!checked || busy}
+            disabled={!consentComplete || busy || renewalRequiresPayment}
             locale={locale}
             onClick={submitPayment}
             pending={pay.isPending}

@@ -98,6 +98,253 @@ const readyCheckout = {
   },
 } as const;
 
+const renewalAuthorization = {
+  amount: currencyCZK(399000),
+  nextRenewalOn: plainDateStringSchema.make("2026-12-01"),
+  termsHash: "b".repeat(64),
+};
+const renewalDisclosure = {
+  ...renewalAuthorization,
+  termsPath: "/en-US/terms-and-conditions#unlimited-auto-renewal",
+};
+
+test("auto renewal carries the choice through Details and requires each applicable Pay consent", async () => {
+  const requests: unknown[] = [];
+  const payments: unknown[] = [];
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        autoRenewAvailable
+        beginCheckout={async (input) => {
+          requests.push(input);
+          return {
+            data: {
+              ...readyCheckout,
+              autoRenew: true,
+              disclosure: {
+                documents: [],
+                earlyStartRequest: earlyStart,
+                renewal: renewalDisclosure,
+              },
+            },
+          };
+        }}
+        payCheckout={async (input) => {
+          payments.push(input);
+          return {};
+        }}
+      />
+    </QueryProvider>
+  );
+  const oneTime = view.getByRole<HTMLInputElement>("radio", {
+    name: m.unlimitedPassCheckoutOneTime({}, { locale }),
+  });
+  const autoRenew = view.getByRole<HTMLInputElement>("radio", {
+    name: m.unlimitedPassCheckoutAutoRenew({}, { locale }),
+  });
+  expect(oneTime.checked).toBe(true);
+  fireEvent.click(autoRenew);
+  expect(checkoutUrl().searchParams.get("autoRenew")).toBe("true");
+  fireEvent.click(oneTime);
+  expect(checkoutUrl().searchParams.has("autoRenew")).toBe(false);
+  fireEvent.click(autoRenew);
+  const proceed = view.getByRole<HTMLButtonElement>("button", {
+    name: /continue/i,
+  });
+  await waitFor(() => expect(proceed.disabled).toBe(false));
+  fireEvent.click(proceed);
+  expect(checkoutUrl().searchParams.get("step")).toBe("details");
+  expect(checkoutUrl().searchParams.get("autoRenew")).toBe("true");
+  expect(
+    view.queryByRole("checkbox", {
+      name: m.entryPackCheckoutGift({}, { locale }),
+    })
+  ).toBeNull();
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  const pay = await view.findByRole<HTMLButtonElement>("button", {
+    name: /pay/i,
+  });
+  expect(requests[0]).toMatchObject({ autoRenew: true, buyerEmail });
+  expect(requests[0]).not.toHaveProperty("holderEmail");
+  expect(view.getByText(/first renewal on Dec 1, 2026/i).textContent).toContain(
+    "3,990"
+  );
+  expect(
+    view.getByRole("link", { name: "auto-renewal terms" }).getAttribute("href")
+  ).toBe(renewalDisclosure.termsPath);
+  expect(
+    view.getByRole("link", { name: /Account.*Passes/ }).getAttribute("href")
+  ).toBe("/en-US/account/passes");
+  const ordinary = view.getByRole("checkbox", { name: /general terms/i });
+  const start = view.getByRole("checkbox", { name: earlyStart });
+  const recurring = view.getByRole("checkbox", {
+    name: m.unlimitedPassCheckoutAutoRenewConsent({}, { locale }),
+  });
+  expect(recurring.getAttribute("aria-checked")).toBe("false");
+  fireEvent.click(ordinary);
+  fireEvent.click(recurring);
+  expect(pay.disabled).toBe(true);
+  fireEvent.click(start);
+  expect(pay.disabled).toBe(false);
+
+  fireEvent.click(
+    view.getByRole("button", {
+      name: `${m.unlimitedPassCheckoutHolder({}, { locale })} ${m.checkoutOrderStepCompleted({}, { locale })}`,
+    })
+  );
+  expect(checkoutUrl().searchParams.get("autoRenew")).toBe("true");
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  const nextPay = await view.findByRole<HTMLButtonElement>("button", {
+    name: /pay/i,
+  });
+  const freshRecurring = view.getByRole("checkbox", {
+    name: m.unlimitedPassCheckoutAutoRenewConsent({}, { locale }),
+  });
+  expect(freshRecurring.getAttribute("aria-checked")).toBe("false");
+  fireEvent.click(view.getByRole("checkbox", { name: /general terms/i }));
+  fireEvent.click(view.getByRole("checkbox", { name: earlyStart }));
+  expect(nextPay.disabled).toBe(true);
+  fireEvent.click(freshRecurring);
+  fireEvent.click(nextPay);
+  await waitFor(() =>
+    expect(payments).toEqual([
+      expect.objectContaining({
+        accepted: true,
+        unlimitedEarlyStartAccepted: true,
+        displayedPriceFingerprint: readyCheckout.price.fingerprint,
+        renewalAuthorization,
+      }),
+    ])
+  );
+  expect(freshRecurring.getAttribute("aria-checked")).toBe("false");
+});
+
+test("Pay refreshes the renewal disclosure and requires fresh consent after repricing and a payment retry", async () => {
+  const discountPrice = { ...readyCheckout.price, fingerprint: "c".repeat(64) };
+  const updatedRenewal = {
+    ...renewalDisclosure,
+    termsHash: "d".repeat(64),
+    amount: currencyCZK(410000),
+  };
+  const paymentRequests: unknown[] = [];
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        discountCodeEntryEnabled
+        initialPayment={{
+          orderId: orderIdSchema.make(crypto.randomUUID()),
+          selection: { ...base.initialOptions, startDate: openSpaceStart },
+          state: {
+            ...readyCheckout,
+            autoRenew: true,
+            disclosure: { documents: [], renewal: renewalDisclosure },
+            billing: { purpose: "personal", invoice: "none" },
+          },
+        }}
+        repriceCheckout={async () => ({
+          data: { status: "ready", price: discountPrice },
+        })}
+        payCheckout={async (input) => {
+          paymentRequests.push(input);
+          return {
+            data: {
+              status: "terms_changed",
+              disclosure: {
+                documents: [],
+                ...(paymentRequests.length === 1 && {
+                  renewal: updatedRenewal,
+                }),
+              },
+            },
+          };
+        }}
+      />
+    </QueryProvider>
+  );
+  const ordinary = view.getByRole("checkbox", { name: /general terms/i });
+  const recurring = view.getByRole("checkbox", {
+    name: m.unlimitedPassCheckoutAutoRenewConsent({}, { locale }),
+  });
+  const pay = view.getByRole<HTMLButtonElement>("button", { name: /pay/i });
+  fireEvent.click(ordinary);
+  fireEvent.click(recurring);
+  expect(pay.disabled).toBe(false);
+  const code = view.getByRole<HTMLInputElement>("textbox", {
+    name: m.checkoutDiscountCodeLabel({}, { locale }),
+  });
+  fireEvent.change(code, { target: { value: "DISCOUNT" } });
+  fireEvent.click(
+    view.getByRole("button", {
+      name: m.checkoutDiscountCodeApply({}, { locale }),
+    })
+  );
+  await waitFor(() => expect(code.value).toBe(""));
+  expect(recurring.getAttribute("aria-checked")).toBe("false");
+  expect(pay.disabled).toBe(true);
+  fireEvent.click(ordinary);
+  fireEvent.click(recurring);
+  fireEvent.click(pay);
+  await view.findByText(m.entryPackCheckoutTermsChanged({}, { locale }));
+  expect(view.getByText(/first renewal on Dec 1, 2026/i).textContent).toContain(
+    "4,100"
+  );
+  expect(recurring.getAttribute("aria-checked")).toBe("false");
+  expect(pay.disabled).toBe(true);
+  fireEvent.click(ordinary);
+  fireEvent.click(recurring);
+  fireEvent.click(pay);
+  await waitFor(() => expect(paymentRequests).toHaveLength(2));
+  expect(paymentRequests[1]).toMatchObject({
+    displayedPriceFingerprint: discountPrice.fingerprint,
+    renewalAuthorization: {
+      amount: updatedRenewal.amount,
+      nextRenewalOn: updatedRenewal.nextRenewalOn,
+      termsHash: updatedRenewal.termsHash,
+    },
+  });
+  await view.findByRole("button", {
+    name: m.entryPackCheckoutRefreshQuote({}, { locale }),
+  });
+  expect(view.queryByRole("button", { name: /pay/i })).toBeNull();
+});
+
+test("automatic renewal requires a payment for the first period", () => {
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialPayment={{
+          orderId: orderIdSchema.make(crypto.randomUUID()),
+          selection: { ...base.initialOptions, startDate: openSpaceStart },
+          state: {
+            ...readyCheckout,
+            autoRenew: true,
+            price: { ...readyCheckout.price, total: currencyCZK(0) },
+            disclosure: { documents: [], renewal: renewalDisclosure },
+            billing: { purpose: "personal", invoice: "none" },
+          },
+        }}
+      />
+    </QueryProvider>
+  );
+  fireEvent.click(view.getByRole("checkbox", { name: /general terms/i }));
+  fireEvent.click(
+    view.getByRole("checkbox", {
+      name: m.unlimitedPassCheckoutAutoRenewConsent({}, { locale }),
+    })
+  );
+  expect(
+    view.getByRole<HTMLButtonElement>("button", {
+      name: /order and pay/i,
+    }).disabled
+  ).toBe(true);
+  expect(view.getByRole("alert").textContent).toContain(
+    m.unlimitedPassCheckoutAutoRenewRequiresPayment({}, { locale })
+  );
+});
+
 test("Continue uses the selected tier's full-window starts and discards irrelevant add-ons", async () => {
   const view = render(
     <QueryProvider>
@@ -154,6 +401,7 @@ test("renewal fixes the start date and carries the source through self-purchase"
     <QueryProvider>
       <UnlimitedPassCheckout
         {...base}
+        autoRenewAvailable
         renewsPassId={renewsPassId}
         initialOptions={{ tier: "open-space", coffee: true }}
         getAvailability={async () => ({
@@ -176,6 +424,11 @@ test("renewal fixes the start date and carries the source through self-purchase"
     name: /continue/i,
   });
   await waitFor(() => expect(continueButton.disabled).toBe(false));
+  expect(
+    view.queryByRole("radio", {
+      name: m.unlimitedPassCheckoutAutoRenew({}, { locale }),
+    })
+  ).toBeNull();
   expect(
     view
       .getByRole("switch", { name: /coffee for 30 days/i })
@@ -206,6 +459,7 @@ test("renewal fixes the start date and carries the source through self-purchase"
     },
   });
   expect(requests[0]).not.toHaveProperty("holderEmail");
+  expect(requests[0]).not.toHaveProperty("autoRenew");
 });
 
 test("gift Details preserves the buyer and billing, and Pay renders one combined consent", async () => {

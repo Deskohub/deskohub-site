@@ -67,6 +67,8 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
   readonly initialOptions: UnlimitedPassOptions;
   readonly initialStartDate?: PlainDate;
   readonly initialDetails?: UnlimitedPassSelection;
+  readonly autoRenewAvailable?: boolean;
+  readonly initialAutoRenew?: boolean;
   readonly renewsPassId?: OrderId;
   readonly initialBounds: Pick<
     UnlimitedPassAvailabilityData,
@@ -95,6 +97,7 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
     locale: Locale;
     selection: UnlimitedPassSelection;
     renewsPassId?: OrderId;
+    autoRenew?: true;
     supersedeOrderId?: OrderId;
     supersedeOrderIds?: readonly OrderId[];
     buyerEmail: string;
@@ -134,6 +137,8 @@ export function UnlimitedPassCheckout({
   initialOptions,
   initialStartDate,
   initialDetails,
+  autoRenewAvailable,
+  initialAutoRenew,
   renewsPassId,
   initialBounds,
   draft,
@@ -175,7 +180,7 @@ export function UnlimitedPassCheckout({
   });
   const [paymentRequested, setPaymentRequested] = useState(false);
   const [details, setDetails] = useState<DetailsSchema["Encoded"] | undefined>(
-    !renewsPassId && draft?.holderEmail
+    !renewsPassId && !initialAutoRenew && draft?.holderEmail
       ? {
           holderEmail: draft.holderEmail,
           billing: defaultReservationBillingSelection,
@@ -185,6 +190,12 @@ export function UnlimitedPassCheckout({
   const [error, setError] = useState<string>();
   const [order, setOrder] = useState<UnlimitedPassOrderLink | undefined>(draft);
   const [handoff, setHandoff] = useState(initialHandoff);
+  const [renewalSelected, setRenewalSelected] = useState(
+    initialAutoRenew === true
+  );
+  const canChooseAutoRenew =
+    autoRenewAvailable === true && !renewsPassId && !handoff;
+  const autoRenew = canChooseAutoRenew && renewalSelected;
   const detailRevision = useRef(0);
   useEffect(
     () => () => {
@@ -281,14 +292,16 @@ export function UnlimitedPassCheckout({
     options: UnlimitedPassOptions,
     date: PlainDate | undefined,
     order: UnlimitedPassOrderLink | undefined,
-    token?: string
+    token?: string,
+    renew = autoRenew
   ) => {
     const path = getUnlimitedPassChoosePath(
       locale,
       options,
       date,
       token ? undefined : order,
-      renewsPassId
+      renewsPassId,
+      !token && renew
     );
     return token ? withPassCheckoutHandoff(path, token) : path;
   };
@@ -302,7 +315,8 @@ export function UnlimitedPassCheckout({
       locale,
       selection,
       token ? undefined : order,
-      renewsPassId
+      renewsPassId,
+      !token && autoRenew
     );
     return token ? withPassCheckoutHandoff(path, token) : path;
   };
@@ -320,7 +334,8 @@ export function UnlimitedPassCheckout({
 
   const updateSelection = (
     nextOptions: UnlimitedPassOptions,
-    nextDate?: PlainDate
+    nextDate?: PlainDate,
+    renew = autoRenew
   ) => {
     if (predecessorOrderIds.length > unlimitedCheckoutPredecessorLimit) {
       setError(m.actionFailedUnexpectedly({}, { locale }));
@@ -330,12 +345,17 @@ export function UnlimitedPassCheckout({
     setOrder(editedOrder);
     setError(undefined);
     setOptions(nextOptions);
+    if (renew && details?.holderEmail !== undefined) {
+      const { holderEmail: _holderEmail, ...selfPurchaseDetails } = details;
+      setDetails(selfPurchaseDetails);
+    }
+    setRenewalSelected(renew);
     const date = fixedStartDate ?? nextDate;
     setStartDate(date);
     window.history.replaceState(
       null,
       "",
-      choosePath(nextOptions, date, editedOrder, handoff?.token)
+      choosePath(nextOptions, date, editedOrder, handoff?.token, renew)
     );
   };
 
@@ -362,9 +382,10 @@ export function UnlimitedPassCheckout({
     setError(undefined);
     const { recipientName, ...draftDetails } = values;
     setDetails(draftDetails);
-    const enteredHolder = renewsPassId
-      ? undefined
-      : draftDetails.holderEmail?.toLowerCase();
+    const enteredHolder =
+      renewsPassId || autoRenew
+        ? undefined
+        : draftDetails.holderEmail?.toLowerCase();
     const holderEmail =
       enteredHolder === buyer.email.toLowerCase() ? undefined : enteredHolder;
     let submission: SubmittedOrder;
@@ -418,6 +439,7 @@ export function UnlimitedPassCheckout({
           locale,
           selection,
           ...(renewsPassId && { renewsPassId }),
+          ...(autoRenew && !activeHandoff && { autoRenew: true }),
           ...(supersedeOrderId && { supersedeOrderId }),
           ...(attempt.predecessorOrderIds.length > 0 && {
             supersedeOrderIds: attempt.predecessorOrderIds,
@@ -634,6 +656,12 @@ export function UnlimitedPassCheckout({
             startDate={startDate}
             fixedStartDate={fixedStartDate}
             availability={calendarAvailability}
+            autoRenew={autoRenew}
+            onAutoRenewChange={
+              canChooseAutoRenew
+                ? (renew) => updateSelection(options, startDate, renew)
+                : undefined
+            }
             onOptionsChange={updateSelection}
             onMonthChange={setCalendarMonth}
             onStartDateChange={(next) => updateSelection(options, next)}
@@ -651,6 +679,7 @@ export function UnlimitedPassCheckout({
           draftRef={detailsDraft}
           order={order}
           renewsPassId={renewsPassId}
+          autoRenew={autoRenew}
           error={error}
           onChangeSelection={goToChoose}
           onSubmit={submitDetails}
@@ -658,6 +687,7 @@ export function UnlimitedPassCheckout({
       )}
       {step.kind === "pay" && (
         <PassPurchasePay
+          key={step.orderId}
           locale={locale}
           orderId={step.orderId}
           state={step.state}
@@ -675,12 +705,7 @@ export function UnlimitedPassCheckout({
             locale,
             step.retry
               ? getUnlimitedPassPayPath(locale, step.orderId)
-              : getUnlimitedPassDetailsPath(
-                  locale,
-                  step.selection,
-                  order,
-                  renewsPassId
-                )
+              : detailsPath(step.selection, order)
           )}
           headingRef={heading}
           onRequestPayment={() => setPaymentRequested(true)}
