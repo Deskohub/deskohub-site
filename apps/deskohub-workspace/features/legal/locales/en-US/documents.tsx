@@ -57,7 +57,7 @@ const termsAndConditionsSections: LegalSection[] = [
     heading: "4. Conclusion of the Contract",
     body: [
       "4.1 Service information on the website is an invitation to place an order. Before submitting the order, the Client reviews the selected Service, time, scope, final price, and contact or billing details and actively accepts these GTC and the House Rules.",
-      '4.2 By selecting the "Order and pay" button, the Client submits a binding order with an obligation to pay the stated final price. The contract is concluded when the Provider sends confirmation after successful payment or, for an order with a zero final price, confirmation that the order has been completed. The confirmation contains the agreed Booking details and a secure link to its status and access information.',
+      '4.2 By selecting the "Order and pay" button, the Client submits a binding order with an obligation to pay the stated final price. The contract is concluded upon delivery of the Provider\'s confirmation after successful payment or, for an order with a zero final price, upon delivery of confirmation that the order has been completed. The confirmation contains the agreed Booking details and a secure link to its status and access information.',
       "4.3 Until the contract is concluded, capacity is held only temporarily. The Provider may reject an order in particular because of unavailability, an obvious pricing error, suspected fraud, or failure to meet the Booking conditions; any payment received will then be refunded without undue delay.",
       "4.4 Requests for coffee, a particular workstation, monitor, equipment, or other extras are subject to availability and are binding only if stated in the confirmation.",
       "4.5 A contract for an individually arranged event space is concluded when the Client accepts the Provider's specific offer.",
@@ -127,10 +127,11 @@ const termsAndConditionsSections: LegalSection[] = [
         . The deadline is met if the notice is sent before it expires.
         Withdrawal can also be submitted online with the “Withdraw from
         contract” function on the Booking in the customer account on the website
-        or in the app, confirmed with the “Confirm withdrawal” button. The
-        Provider confirms receipt of the withdrawal by email to the account’s
-        address without undue delay, including the content of the statement and
-        the date and time it was sent.
+        or in the app, or on the pass order status page, confirmed with the
+        “Confirm withdrawal” button. The Provider confirms receipt of the
+        withdrawal by email to the account’s address without undue delay,
+        including the content of the statement and the date and time it was
+        sent.
       </>,
       "9.4 Following a valid withdrawal, the Provider will reimburse payments received without undue delay and no later than 14 days, using the same payment method unless the parties agree otherwise without additional cost to the Consumer.",
       "9.5 Model notice: “I hereby give notice that I withdraw from my contract for the following Service: [description and Booking number], ordered on [date]. Consumer name: [complete]. Consumer address: [complete]. Date: [complete]. Signature only if submitted on paper.” Use of the model is optional.",
