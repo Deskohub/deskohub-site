@@ -62,7 +62,12 @@ const testJobCompleted = {
   },
 };
 
-const renderGroup = (pr: string, sha: string, runId: string) =>
+const renderGroup = (
+  pr: string,
+  sha: string,
+  runId: string,
+  draftPreview: "" | "true" = ""
+) =>
   String(testJob?.concurrency?.group).replaceAll(
     /\$\{\{[^}]*\}\}/g,
     (expression) =>
@@ -74,6 +79,10 @@ const renderGroup = (pr: string, sha: string, runId: string) =>
             workflowExpressionString(pr),
           ],
           ["needs.resolve-target.outputs.sha", workflowExpressionString(sha)],
+          [
+            "needs.resolve-target.outputs.draft_preview",
+            workflowExpressionString(draftPreview),
+          ],
           ["github.run_id", workflowExpressionString(runId)],
         ]),
       })
@@ -153,6 +162,14 @@ describe("Workspace E2E run superseded before its test job", () => {
     // Run A entering test-e2e after run B can't cancel B, whatever the order.
     expect(group).not.toBe(renderGroup(prNumber, shaB, "100"));
     expect(group).not.toBe(renderGroup("8", shaA, "100"));
+  });
+
+  test("keeps draft preview runs in their own concurrency group", () => {
+    const draftGroup = renderGroup(prNumber, shaA, "100", "true");
+    expect(draftGroup).toBe(renderGroup(prNumber, shaA, "101", "true"));
+    expect(draftGroup).not.toBe(renderGroup(prNumber, shaB, "100", "true"));
+    expect(draftGroup).not.toBe(renderGroup("8", shaA, "100", "true"));
+    expect(draftGroup).not.toBe(renderGroup(prNumber, shaA, "100"));
   });
 
   test("stops run A at the start of its test job before it touches shared state", async () => {

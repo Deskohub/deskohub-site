@@ -79,6 +79,11 @@ mock.module("@/features/account/actions", () => ({
   updateCustomerProfile,
 }));
 
+mock.module("@/features/account/unlimited-auto-renewal-actions", () => ({
+  cancelAccountUnlimitedAutoRenewal: () =>
+    Promise.resolve({ data: { status: "unavailable" } }),
+}));
+
 mock.module("@/features/account/avatar-actions", () => ({
   removeCustomerAvatar: () => Promise.resolve({ data: { status: "removed" } }),
   uploadCustomerAvatar: () =>
