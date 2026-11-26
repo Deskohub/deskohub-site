@@ -1087,7 +1087,7 @@ jobs:
           fi
           if [[ -n "$WORKSPACE_E2E_RECOVER_UNLIMITED_RUN" ]]; then
             bun turbo i18n:compile --filter=deskohub-workspace
-            bun --cwd apps/deskohub-workspace e2e/playwright-checkout/unlimited-pass-cleanup.ts
+            bun --cwd apps/deskohub-workspace --no-orphans --no-env-file --conditions=react-server e2e/playwright-checkout/unlimited-pass-cleanup.ts
           else
             bun turbo test:e2e --filter=deskohub-workspace
           fi

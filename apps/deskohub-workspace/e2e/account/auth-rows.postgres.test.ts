@@ -3,12 +3,15 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
+import { WorkspaceDatabase } from "@/db/database.service";
 import { customerAccounts } from "@/db/schema";
 import { authUser } from "@/db/schema/auth";
+import { CustomerAccountRepository } from "@/features/account/backend/customer-account.repository";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { E2EDatabase } from "../integrations/database.service";
+import { verifyUnlimitedRecoveryBuyer } from "../playwright-checkout/unlimited-pass-recovery-evidence";
 import { removeSyntheticAuthUser } from "./auth-rows";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
@@ -78,6 +81,43 @@ describe.skipIf(!testDatabase)(
 
       await removeAccount(accountId);
 
+      expect(await readDeletedAt(accountId)).toBe(firstDeletedAt);
+    });
+
+    test("resumes an original buyer tombstoned before its login was removed", async () => {
+      const accountId = `agent-eval-${crypto.randomUUID()}`;
+      await insertAuthUser(accountId);
+      const { db } = testDatabase!;
+      const [login] = await Effect.runPromise(
+        db.select().from(authUser).where(eq(authUser.id, accountId))
+      );
+      if (!login) throw new Error("Synthetic buyer login missing");
+
+      await CustomerAccountRepository.use((accounts) =>
+        accounts.tombstone(
+          customerAccountIdSchema.make(accountId),
+          Temporal.Now.instant()
+        )
+      ).pipe(
+        Effect.provide(CustomerAccountRepository.Default),
+        Effect.provideService(WorkspaceDatabase, WorkspaceDatabase.make(db)),
+        Effect.runPromise
+      );
+      const firstDeletedAt = await readDeletedAt(accountId);
+      expect(firstDeletedAt).toBeString();
+      expect(await authUserExists(accountId)).toBe(true);
+
+      const buyer = verifyUnlimitedRecoveryBuyer({
+        authEmail: login.email,
+        customerId: "original-provider-profile",
+        linkedCustomerId: null,
+        recipient: login.email,
+        tombstoned: true,
+      });
+      expect(buyer.expireProfile).toBe(false);
+      expect(buyer.removeLogin).toBe(true);
+      if (buyer.removeLogin) await removeAccount(accountId);
+      expect(await authUserExists(accountId)).toBe(false);
       expect(await readDeletedAt(accountId)).toBe(firstDeletedAt);
     });
   }

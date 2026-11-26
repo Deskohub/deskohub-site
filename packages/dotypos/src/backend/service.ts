@@ -748,28 +748,32 @@ const matchesReservationBooking = (
   expectedNoteLine.trim().length > 0 &&
   reservation.note?.split("\n").includes(expectedNoteLine) === true;
 
-/** A conditional status change may act only on its booking and marker. */
+/** A conditional status change checks its booking, marker, and any required source status. */
 export const verifyReservationStatusTransition = (
   reservation: DotyposReservation,
   booking: DotyposReservationBooking,
   {
     status,
     expectedNoteLine,
+    expectedCurrentStatus,
     reservationId,
   }: Pick<
     SetMatchingDotyposReservationStatusInput,
-    "status" | "expectedNoteLine" | "reservationId"
+    "status" | "expectedNoteLine" | "expectedCurrentStatus" | "reservationId"
   >
 ): Effect.Effect<Option.Option<DotyposReservation>, DotyposVersionConflict> => {
-  if (
+  const alreadyCancelled =
     reservation.id === reservationId &&
     reservation.status === "CANCELLED" &&
-    status === "CANCELLED"
-  ) {
+    status === "CANCELLED";
+  if (alreadyCancelled && expectedCurrentStatus === undefined) {
     return Effect.succeedSome(reservation);
   }
   if (
-    reservation.status === "CANCELLED" ||
+    (!alreadyCancelled &&
+      (reservation.status === "CANCELLED" ||
+        (expectedCurrentStatus !== undefined &&
+          reservation.status !== expectedCurrentStatus))) ||
     !matchesReservationBooking(reservation, {
       reservationId,
       expectedBooking: booking,

@@ -70,26 +70,21 @@ export function verifyOriginalUnlimitedRun(
 const isExplicitZero = (value: unknown) =>
   typeof value === "string" && /^0+(?:\.0+)?$/.test(value);
 
-export function classifyUnlimitedRecoveryPayment(input: {
-  readonly paymentState: string;
-  readonly purchaseState: string;
-  readonly activeAttemptId: string | null;
-  readonly attempts: readonly {
+export function classifyUnlimitedRecoveryPayment<
+  Attempt extends {
     readonly id: string;
     readonly provider: string;
     readonly state: string;
     readonly failureCode: string | null;
     readonly lastProviderStatus: string | null;
-  }[];
+  },
+>(input: {
+  readonly paymentState: string;
+  readonly purchaseState: string;
+  readonly activeAttemptId: string | null;
+  readonly attempts: readonly Attempt[];
 }) {
   const [attempt] = input.attempts;
-  if (
-    input.attempts.length === 0 &&
-    input.activeAttemptId === null &&
-    ["not_started", "expired"].includes(input.paymentState) &&
-    ["pending_payment", "void"].includes(input.purchaseState)
-  )
-    return "unattempted" as const;
   requireRecovery(
     input.attempts.length === 1 &&
       attempt?.provider === "nexi" &&
@@ -101,7 +96,7 @@ export function classifyUnlimitedRecoveryPayment(input: {
     input.purchaseState === "pending_payment" &&
     attempt.state === "pending"
   )
-    return "pending" as const;
+    return { state: "pending" as const, attempt };
   requireRecovery(
     input.paymentState === "cancelled" &&
       input.purchaseState === "void" &&
@@ -110,7 +105,28 @@ export function classifyUnlimitedRecoveryPayment(input: {
       attempt.lastProviderStatus === "CANCELED",
     "Recovery payment state was not provider-cancelled"
   );
-  return "cancelled" as const;
+  return { state: "cancelled" as const, attempt };
+}
+
+export function verifyUnlimitedRecoveryBuyer(input: {
+  readonly tombstoned: boolean;
+  readonly linkedCustomerId: string | null;
+  readonly authEmail: string | null;
+  readonly customerId: string;
+  readonly recipient: string;
+}) {
+  requireRecovery(
+    input.tombstoned
+      ? input.linkedCustomerId === null &&
+          (input.authEmail === null || input.authEmail === input.recipient)
+      : input.linkedCustomerId === input.customerId &&
+          input.authEmail === input.recipient,
+    "Recovery buyer identity did not match"
+  );
+  return {
+    removeLogin: input.authEmail !== null,
+    expireProfile: !input.tombstoned,
+  };
 }
 
 export function verifyCancelledUnlimitedNexiOrder(

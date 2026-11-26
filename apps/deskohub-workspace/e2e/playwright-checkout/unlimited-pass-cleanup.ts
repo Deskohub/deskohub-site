@@ -82,6 +82,7 @@ import {
   readCancelledUnlimitedNexiAttempt,
   requireRecovery,
   UnlimitedRecoveryEvidenceRejected,
+  verifyUnlimitedRecoveryBuyer,
 } from "./unlimited-pass-recovery-evidence";
 
 const readOwnedPurchase = Effect.fnUntraced(function* (
@@ -260,16 +261,20 @@ const releaseOwnedPassDays = Effect.fnUntraced(function* (
       // transition checks the current provider booking by ID before writing.
       const cancel =
         reservationId &&
-        (record
-          ? record.status !== "CANCELLED"
-          : !isUnlimitedPassDayReleased(row))
+        (unpaidRecovery ||
+          (record
+            ? record.status !== "CANCELLED"
+            : !isUnlimitedPassDayReleased(row)))
           ? setUnlimitedPassDayHoldStatus(
               reservationId,
               booking,
-              "CANCELLED"
+              "CANCELLED",
+              unpaidRecovery ? "NEW" : undefined
             ).pipe(
               Effect.catchTag("DotyposRejected", (error) =>
-                error.reason === "not-found" ? Effect.void : Effect.fail(error)
+                !unpaidRecovery && error.reason === "not-found"
+                  ? Effect.void
+                  : Effect.fail(error)
               )
             )
           : Effect.void;
@@ -296,6 +301,28 @@ const releaseOwnedPassDays = Effect.fnUntraced(function* (
         timeoutMs: config.timeouts.datasource,
       }
     );
+  }
+  if (unpaidRecovery) {
+    const confirmed = planUnlimitedPassDayRelease({
+      intent,
+      orderId: purchase.id,
+      records: yield* lookup,
+      rows,
+    });
+    if (
+      settled.length !== days.length ||
+      !confirmed.every(
+        (day, index) =>
+          day.record?.status === "CANCELLED" &&
+          day.reservationId === days[index]?.reservationId
+      )
+    ) {
+      return yield* Effect.fail(
+        new UnlimitedPassCleanupBlocked(
+          "Recovered holds did not converge to exact owned cancellations"
+        )
+      );
+    }
   }
   const now = yield* currentInstant;
   yield* Effect.forEach(
@@ -548,15 +575,18 @@ const recoverOriginalUnlimitedPass = Effect.fn("recoverOriginalUnlimitedPass")(
       .limit(2);
     const [candidate] = candidates;
     requireRecovery(
-      candidates.length === 1 &&
-        candidate?.order.dotyposCustomerId &&
-        (candidate.account.deletedAt
-          ? candidate.authEmail === null
-          : candidate.authEmail === recipient),
+      candidates.length === 1 && candidate?.order.dotyposCustomerId,
       "Recovery could not match a single original synthetic buyer and order"
     );
     const { account, order, purchase } = candidate;
     const customerId = candidate.order.dotyposCustomerId;
+    verifyUnlimitedRecoveryBuyer({
+      tombstoned: account.deletedAt !== null,
+      linkedCustomerId: account.dotyposCustomerId,
+      authEmail: candidate.authEmail,
+      customerId,
+      recipient,
+    });
     const profile = yield* accounts.readCustomerProfile(customerId);
     requireRecovery(
       Option.isSome(profile) &&
@@ -589,6 +619,17 @@ const recoverOriginalUnlimitedPass = Effect.fn("recoverOriginalUnlimitedPass")(
     yield* Effect.gen(function* () {
       const owned = yield* readOwnedPurchase(intent);
       requireRecovery(owned, "Recovery purchase ownership did not match");
+      const attempts = yield* db
+        .select()
+        .from(paymentAttempts)
+        .where(eq(paymentAttempts.orderId, purchase.id))
+        .limit(2);
+      const { attempt, state } = classifyUnlimitedRecoveryPayment({
+        paymentState: owned.paymentState,
+        purchaseState: owned.status,
+        activeAttemptId: owned.paymentAttemptId,
+        attempts,
+      });
       const rows = yield* readUnlimitedPassDays(purchase.id);
       const providerHolds = yield* listUnlimitedPassDayHolds({
         passId: purchase.id,
@@ -606,50 +647,32 @@ const recoverOriginalUnlimitedPass = Effect.fn("recoverOriginalUnlimitedPass")(
         planned.every(isProvenUnpaidDay),
         "Recovery did not confirm every unpaid owned provider hold"
       );
-      const attempts = yield* db
-        .select()
-        .from(paymentAttempts)
-        .where(eq(paymentAttempts.orderId, purchase.id))
-        .limit(2);
-      const [attempt] = attempts;
-      const recovery = classifyUnlimitedRecoveryPayment({
-        paymentState: owned.paymentState,
-        purchaseState: owned.status,
-        activeAttemptId: owned.paymentAttemptId,
-        attempts,
+      const readCancellation = Effect.tryPromise({
+        try: () =>
+          readCancelledUnlimitedNexiAttempt({
+            providerOrderId: attempt.providerOrderId ?? "",
+            amount: attempt.amountValue,
+            vercelToken,
+          }),
+        catch: () =>
+          new UnlimitedPassCleanupBlocked(
+            "Exact cancelled zero-money Nexi evidence was unavailable"
+          ),
       });
-      const readCancellation =
-        attempt &&
-        Effect.tryPromise({
-          try: () =>
-            readCancelledUnlimitedNexiAttempt({
-              providerOrderId: attempt.providerOrderId ?? "",
-              amount: attempt.amountValue,
-              vercelToken,
-            }),
-          catch: () =>
-            new UnlimitedPassCleanupBlocked(
-              "Exact cancelled zero-money Nexi evidence was unavailable"
-            ),
-        });
-      if (attempt) {
-        const handoff = URL.parse(attempt.providerRedirectUrl ?? "");
+      const handoff = URL.parse(attempt.providerRedirectUrl ?? "");
+      requireRecovery(
+        attempt.createdAt.epochMilliseconds >=
+          Date.parse(originalUnlimitedRun.startedAt) &&
+          attempt.createdAt.epochMilliseconds <=
+            Date.parse(originalUnlimitedRun.completedAt) &&
+          handoff?.origin === "https://xpaysandbox.nexigroup.com" &&
+          handoff.pathname.startsWith("/hpp/"),
+        "Recovery attempt was not created in the original run"
+      );
+      const operationId = yield* readCancellation;
+      if (state === "cancelled") {
         requireRecovery(
-          attempt.createdAt.epochMilliseconds >=
-            Date.parse(originalUnlimitedRun.startedAt) &&
-            attempt.createdAt.epochMilliseconds <=
-              Date.parse(originalUnlimitedRun.completedAt) &&
-            handoff?.origin === "https://xpaysandbox.nexigroup.com" &&
-            handoff.pathname.startsWith("/hpp/"),
-          "Recovery attempt was not created in the original run"
-        );
-      }
-      const operationId = readCancellation
-        ? yield* readCancellation
-        : undefined;
-      if (recovery === "cancelled") {
-        requireRecovery(
-          attempt?.lastProviderOperationId === operationId,
+          attempt.lastProviderOperationId === operationId,
           "Stored terminal attempt did not match Nexi"
         );
       }
@@ -664,7 +687,7 @@ const recoverOriginalUnlimitedPass = Effect.fn("recoverOriginalUnlimitedPass")(
               originalRun: originalUnlimitedRun.id,
               orderId: purchase.id,
               customerAccountId: account.id,
-              attemptId: attempt?.id,
+              attemptId: attempt.id,
               providerOperationId: operationId,
             }),
             { mode: 0o600 }
@@ -675,7 +698,7 @@ const recoverOriginalUnlimitedPass = Effect.fn("recoverOriginalUnlimitedPass")(
             "Private recovery ownership receipt could not be saved"
           ),
       });
-      if (recovery === "pending") {
+      if (state === "pending") {
         requireRecovery(
           !account.deletedAt,
           "Pending recovery buyer has no active account"
@@ -730,24 +753,49 @@ const recoverOriginalUnlimitedPass = Effect.fn("recoverOriginalUnlimitedPass")(
           attempts: currentAttempts,
         });
         requireRecovery(
-          attempt
-            ? terminal === "cancelled" &&
-                currentAttempts[0]?.id === attempt.id &&
-                currentAttempts[0].lastProviderOperationId === operationId
-            : terminal === "unattempted",
+          terminal.state === "cancelled" &&
+            terminal.attempt.id === attempt.id &&
+            terminal.attempt.providerOrderId === attempt.providerOrderId &&
+            terminal.attempt.amountValue === attempt.amountValue &&
+            terminal.attempt.lastProviderOperationId === operationId,
           "Application did not verify the exact terminal payment"
         );
-        if (readCancellation) {
-          requireRecovery(
-            (yield* readCancellation) === operationId,
-            "The verified Nexi operation changed before release"
-          );
-        }
+        const readBuyerState = Effect.gen(function* () {
+          const [buyer] = yield* db
+            .select({
+              deletedAt: customerAccounts.deletedAt,
+              linkedCustomerId: customerAccounts.dotyposCustomerId,
+              authEmail: authUser.email,
+            })
+            .from(customerAccounts)
+            .leftJoin(authUser, eq(authUser.id, customerAccounts.id))
+            .where(eq(customerAccounts.id, account.id));
+          requireRecovery(buyer, "Recovery buyer could not be read");
+          return verifyUnlimitedRecoveryBuyer({
+            tombstoned: buyer.deletedAt !== null,
+            linkedCustomerId: buyer.linkedCustomerId,
+            authEmail: buyer.authEmail,
+            customerId,
+            recipient,
+          });
+        });
+        const buyer = yield* readBuyerState;
+        requireRecovery(
+          buyer.expireProfile || account.deletedAt,
+          "Recovery buyer changed after provider profile verification"
+        );
+        requireRecovery(
+          (yield* readCancellation) === operationId,
+          "The verified Nexi operation changed before release"
+        );
         yield* releaseOwnedPassDays(current, intent, config, true);
-        if (!account.deletedAt) {
-          yield* accounts.expireProfile(customerId);
-          yield* accounts.removeAuthUser(account.id);
-        }
+        if (buyer.expireProfile) yield* accounts.expireProfile(customerId);
+        if (buyer.removeLogin) yield* accounts.removeAuthUser(account.id);
+        const settledBuyer = yield* readBuyerState;
+        requireRecovery(
+          !settledBuyer.expireProfile && !settledBuyer.removeLogin,
+          "Recovery buyer cleanup could not be verified"
+        );
       }).pipe(
         holdCustomerAccountAndPassPurchase(account.id, owned.id),
         WorkspaceLockSections.unlimitedPassRecovery(owned.id)

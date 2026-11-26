@@ -2,6 +2,7 @@ import {
   type DotyposCustomerId,
   type DotyposReservation,
   type DotyposReservationId,
+  type DotyposReservationStatus,
   DotyposService,
 } from "@deskohub/dotypos";
 import { Effect, Option } from "effect";
@@ -63,10 +64,11 @@ export const setUnlimitedPassDayHoldStatus = Effect.fn(
 )(function* (
   reservationId: DotyposReservationId,
   { customerId, day, generation, passId }: PassDayHold,
-  status: "CONFIRMED" | "CANCELLED"
+  status: "CONFIRMED" | "CANCELLED",
+  expectedCurrentStatus?: DotyposReservationStatus
 ) {
   const dotypos = yield* DotyposService;
-  return yield* dotypos.setReservationStatusIfMatches({
+  const transition = {
     reservationId,
     status,
     expectedBooking: {
@@ -81,7 +83,12 @@ export const setUnlimitedPassDayHoldStatus = Effect.fn(
       ),
     },
     expectedNoteLine: formatPassDayMarker(passId, day.serviceDate, generation),
-  });
+  };
+  return yield* dotypos.setReservationStatusIfMatches(
+    expectedCurrentStatus === undefined
+      ? transition
+      : { ...transition, expectedCurrentStatus }
+  );
 });
 
 /** Lists the pass's marked records, including cancelled holds for settlement. */

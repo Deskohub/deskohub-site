@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { Schema } from "effect";
+import { runCommand } from "./shared/command";
 import { findStepByName, parseWorkflow } from "./shared/workflow-contract";
 import {
   createWorkflowStepRunner,
@@ -28,6 +29,24 @@ const publishStep = findStepByName(
   workflow,
   "Publish status without an E2E run"
 );
+
+test("recovery uses the workflow's server-only launcher with no ambient connection", async () => {
+  const command = findStepByName(workflow, "Run checkout E2E")
+    .run?.split("\n")
+    .map((line) => line.trim())
+    .find((line) =>
+      line.endsWith("e2e/playwright-checkout/unlimited-pass-cleanup.ts")
+    );
+  if (!command) throw new Error("Unlimited recovery launcher is missing");
+  const result = await runCommand(["bash", "-c", command], {
+    cwd: resolve(import.meta.dir, "../../.."),
+    env: { PATH: process.env.PATH, NODE_ENV: "test" },
+    timeoutMs: 15_000,
+  });
+  expect(result.exitCode).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toBe("Unlimited pass cleanup could not start\n");
+}, 20_000);
 
 const prNumber = 7;
 const sha = (digit: string) => digit.repeat(40);

@@ -3170,6 +3170,62 @@ describe("DotyposService marked reservation transitions", () => {
       etags: ['"version-1"'],
     },
     {
+      label: "cancels a matching NEW version when required",
+      requireNew: true,
+      reads: ["new"],
+      patches: ["success"],
+      expected: "Success",
+      etags: ['"version-1"'],
+    },
+    {
+      label: "refuses a confirmed hold when NEW is required",
+      requireNew: true,
+      reads: ["owned"],
+      patches: [],
+      expected: "DotyposVersionConflict",
+      etags: [],
+    },
+    {
+      label: "refuses a hold confirmed between the NEW read and the PATCH",
+      requireNew: true,
+      reads: ["new"],
+      patches: [412],
+      expected: "DotyposVersionConflict",
+      etags: ['"version-1"'],
+    },
+    {
+      label: "does not write the confirmed version after a replay conflict",
+      requireNew: true,
+      reads: ["new", "owned"],
+      patches: ["transport", 412],
+      expected: "DotyposUncertain",
+      etags: ['"version-1"', '"version-1"'],
+    },
+    {
+      label: "settles a lost response by reading the matching cancelled hold",
+      requireNew: true,
+      reads: ["new", "cancelled"],
+      patches: ["transport", 412],
+      expected: "Success",
+      etags: ['"version-1"', '"version-1"'],
+    },
+    {
+      label: "settles an already cancelled owned hold without another write",
+      requireNew: true,
+      reads: ["cancelled"],
+      patches: [],
+      expected: "Success",
+      etags: [],
+    },
+    {
+      label: "refuses an already cancelled hold with a different marker",
+      requireNew: true,
+      reads: ["cancelled-changed-note"],
+      patches: [],
+      expected: "DotyposVersionConflict",
+      etags: [],
+    },
+    {
       label: "reports a changed ETag",
       reads: ["owned"],
       patches: [412],
@@ -3233,7 +3289,7 @@ describe("DotyposService marked reservation transitions", () => {
       expected: "DotyposUncertain",
       etags: ['"version-1"', '"version-1"'],
     },
-  ])("$label", async ({ reads, patches, expected, etags }) => {
+  ])("$label", async ({ reads, patches, expected, etags, requireNew }) => {
     let readsSeen = 0;
     const headers: Array<string | null> = [];
     const fetchMock = mockDotyposFetch(async (request) => {
@@ -3242,6 +3298,7 @@ describe("DotyposService marked reservation transitions", () => {
       if (request.method === "GET") {
         const state = reads[readsSeen++];
         expect(state).toBeDefined();
+        const priorStatus = state === "new" ? "NEW" : "CONFIRMED";
         return Response.json(
           reservation({
             ...(state === "changed-id" && { id: "different-reservation" }),
@@ -3253,10 +3310,13 @@ describe("DotyposService marked reservation transitions", () => {
                 ? dotyposTableId("other-table")
                 : booking.tableId,
             note:
-              state === "changed-note"
+              state === "changed-note" || state === "cancelled-changed-note"
                 ? "Unrelated note"
                 : `Another line\n${noteLine}`,
-            status: state === "cancelled" ? "CANCELLED" : "CONFIRMED",
+            status:
+              state === "cancelled" || state === "cancelled-changed-note"
+                ? "CANCELLED"
+                : priorStatus,
           }),
           state === "no-etag"
             ? undefined
@@ -3279,14 +3339,19 @@ describe("DotyposService marked reservation transitions", () => {
         })
       );
     });
+    const transition = {
+      reservationId: dotyposReservationId("reservation-id"),
+      expectedBooking: booking,
+      expectedNoteLine: noteLine,
+      status: "CANCELLED",
+    } as const;
     const result = await runWithServiceRetryingInstantly(
       Effect.flatMap(DotyposService, (dotypos) =>
-        dotypos.setReservationStatusIfMatches({
-          reservationId: dotyposReservationId("reservation-id"),
-          expectedBooking: booking,
-          expectedNoteLine: noteLine,
-          status: "CANCELLED",
-        })
+        dotypos.setReservationStatusIfMatches(
+          requireNew
+            ? { ...transition, expectedCurrentStatus: "NEW" }
+            : transition
+        )
       ).pipe(Effect.result),
       fetchMock
     );

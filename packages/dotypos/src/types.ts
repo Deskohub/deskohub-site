@@ -202,6 +202,8 @@ export interface CreateDotyposReservationInput
 export interface SetMatchingDotyposReservationStatusInput {
   readonly reservationId: DotyposReservationId;
   readonly status: "CONFIRMED" | "CANCELLED";
+  /** Requires this status on the version used for PATCH. An owned cancellation may already be settled. */
+  readonly expectedCurrentStatus?: DotyposReservationStatus;
   readonly expectedBooking: DotyposReservationBooking;
   readonly expectedNoteLine: string;
 }

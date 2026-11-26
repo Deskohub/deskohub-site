@@ -4,6 +4,7 @@ import {
   originalUnlimitedRun,
   verifyCancelledUnlimitedNexiOrder,
   verifyOriginalUnlimitedRun,
+  verifyUnlimitedRecoveryBuyer,
 } from "./unlimited-pass-recovery-evidence";
 
 const orderId = "DFIXTURE";
@@ -65,7 +66,7 @@ test("binds a cancelled zero-money authorization to the exact sandbox order", ()
   ).toThrow();
 });
 
-test("separates unattempted holds and the idempotent provider-verified terminal state", () => {
+test("requires the original attempt before any recovery effect and accepts its cancelled replay", () => {
   const pending = {
     paymentState: "pending",
     purchaseState: "pending_payment",
@@ -80,15 +81,18 @@ test("separates unattempted holds and the idempotent provider-verified terminal 
       },
     ],
   };
-  expect(classifyUnlimitedRecoveryPayment(pending)).toBe("pending");
-  expect(
+  expect(classifyUnlimitedRecoveryPayment(pending)).toEqual({
+    state: "pending",
+    attempt: pending.attempts[0],
+  });
+  expect(() =>
     classifyUnlimitedRecoveryPayment({
       paymentState: "not_started",
       purchaseState: "pending_payment",
       activeAttemptId: null,
       attempts: [],
     })
-  ).toBe("unattempted");
+  ).toThrow("Recovery attempt ownership is ambiguous");
   const terminal = {
     ...pending,
     paymentState: "cancelled",
@@ -104,8 +108,10 @@ test("separates unattempted holds and the idempotent provider-verified terminal 
       },
     ],
   };
-  expect(classifyUnlimitedRecoveryPayment(terminal)).toBe("cancelled");
-  expect(classifyUnlimitedRecoveryPayment(terminal)).toBe("cancelled");
+  expect(classifyUnlimitedRecoveryPayment(terminal)).toEqual({
+    state: "cancelled",
+    attempt: terminal.attempts[0],
+  });
   for (const unsafe of [
     { ...pending, paymentState: "paid" },
     { ...terminal, activeAttemptId: "different" },
@@ -120,6 +126,40 @@ test("separates unattempted holds and the idempotent provider-verified terminal 
     },
   ]) {
     expect(() => classifyUnlimitedRecoveryPayment(unsafe)).toThrow();
+  }
+});
+
+test("replays the exact interrupted tombstone and login removal in order", () => {
+  const recipient = "original-unlimited@deskohub.test";
+  const customerId = "original-customer";
+  const buyer = {
+    tombstoned: false,
+    authEmail: recipient,
+    linkedCustomerId: customerId,
+    customerId,
+    recipient,
+  };
+  expect(verifyUnlimitedRecoveryBuyer(buyer)).toEqual({
+    expireProfile: true,
+    removeLogin: true,
+  });
+  const interrupted = { ...buyer, tombstoned: true, linkedCustomerId: null };
+  expect(verifyUnlimitedRecoveryBuyer(interrupted)).toEqual({
+    expireProfile: false,
+    removeLogin: true,
+  });
+  expect(
+    verifyUnlimitedRecoveryBuyer({ ...interrupted, authEmail: null })
+  ).toEqual({ expireProfile: false, removeLogin: false });
+  for (const unsafeBuyer of [
+    { ...buyer, authEmail: null },
+    { ...buyer, linkedCustomerId: "different-customer" },
+    { ...interrupted, authEmail: "different@deskohub.test" },
+    { ...interrupted, linkedCustomerId: customerId },
+  ]) {
+    expect(() => verifyUnlimitedRecoveryBuyer(unsafeBuyer)).toThrow(
+      "Recovery buyer identity did not match"
+    );
   }
 });
 
