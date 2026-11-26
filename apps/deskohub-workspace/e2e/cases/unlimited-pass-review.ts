@@ -1,7 +1,7 @@
 import { link, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { Frame, Locator, Page } from "@playwright/test";
+import type { Frame, JSHandle, Locator, Page } from "@playwright/test";
 import { getLegalDocumentPath } from "@/features/legal/legal-document-path";
 import { unlimitedPassCheckoutPath } from "@/features/passes/routes";
 import type { NexiCardField } from "../checkout/nexi-hosted-page";
@@ -56,6 +56,7 @@ type CaptureProblem =
   | "untracked-document"
   | "unexpected-document"
   | "document-navigated"
+  | "card-controls-changed"
   | "identity-mask-changed"
   | "identity-mask-not-rendered"
   | "screenshot-failed"
@@ -67,9 +68,20 @@ type ReviewImage = {
 };
 type IdentityMasks = readonly [Locator, Locator];
 type MaskRectangle = NonNullable<Awaited<ReturnType<Locator["boundingBox"]>>>;
+type CardInputBinding = JSHandle<
+  | {
+      readonly remainsEmpty: (candidate: Element) => boolean;
+      readonly disconnect: () => void;
+    }
+  | undefined
+>;
 type CaptureVerification =
   | CaptureProblem
-  | { readonly identityMasks: IdentityMasks }
+  | {
+      readonly cardInputs: readonly Locator[];
+      readonly identityMasks: IdentityMasks;
+      readonly frameRevision: number;
+    }
   | undefined;
 
 const viewports = [
@@ -187,22 +199,99 @@ async function inspectCardFields(
 async function waitForEmptyCardFields(
   page: Page,
   timeout: number,
-  identityMasks: IdentityMasks
+  identityMasks: IdentityMasks,
+  frameRevision: () => number
 ) {
   const deadline = performance.now() + timeout;
   while (true) {
     const nextRead = performance.now() + workspaceE2EPollIntervalMs.browser;
+    const revision = frameRevision();
     const inspection = await inspectCardFields(page, deadline, identityMasks);
-    if (!inspection.problem || inspection.problem === "card-field-populated") {
-      return inspection;
+    if (inspection.problem === "card-field-populated") return { inspection };
+    if (!inspection.problem && revision === frameRevision()) {
+      return { inspection, revision };
     }
     const now = performance.now();
     const remaining = deadline - now;
-    if (remaining <= 0) return inspection;
+    if (remaining <= 0) return { inspection };
     const wait = Math.min(remaining, nextRead - now);
     if (wait > 0) await delay(wait);
-    if (performance.now() >= deadline) return inspection;
+    if (performance.now() >= deadline) return { inspection };
   }
+}
+
+async function bindCardInput(
+  input: Locator,
+  timeout: number
+): Promise<CardInputBinding | undefined> {
+  const pending = input
+    .evaluateHandle((element) => {
+      if (!(element instanceof HTMLInputElement)) return;
+      const removedInput = (records: readonly MutationRecord[]) =>
+        records.some((record) =>
+          Array.from(record.removedNodes).some((node) => node.contains(element))
+        );
+      let removed = false;
+      const observer = new MutationObserver((records) => {
+        removed ||= removedInput(records);
+      });
+      observer.observe(element.ownerDocument, {
+        childList: true,
+        subtree: true,
+      });
+      return {
+        disconnect: () => observer.disconnect(),
+        remainsEmpty: (candidate: Element) =>
+          candidate === element &&
+          element.isConnected &&
+          !(removed || removedInput(observer.takeRecords())) &&
+          element.value === "",
+      };
+    })
+    .catch(() => undefined);
+  const binding = await Promise.race([
+    pending,
+    delay(timeout, undefined, { ref: false }),
+  ]);
+  if (!binding) void pending.then((late) => releaseCardInput(late, timeout));
+  return binding;
+}
+
+async function cardInputsRemainEmpty(
+  inputs: readonly Locator[],
+  bindings: readonly (CardInputBinding | undefined)[],
+  timeout: number
+) {
+  const checks = await Promise.all(
+    inputs.map((input, index) => {
+      const binding = bindings[index];
+      return (
+        binding &&
+        input
+          .evaluate(
+            (element, guard) => guard?.remainsEmpty(element) === true,
+            binding,
+            { timeout }
+          )
+          .catch(() => false)
+      );
+    })
+  );
+  return checks.every((passed) => passed === true);
+}
+
+async function releaseCardInput(
+  binding: CardInputBinding | undefined,
+  timeout: number
+) {
+  if (!binding) return;
+  const release = async () => {
+    await binding
+      .evaluate((guard) => guard?.disconnect())
+      .catch(() => undefined);
+    await binding.dispose().catch(() => undefined);
+  };
+  await Promise.race([release(), delay(timeout, undefined, { ref: false })]);
 }
 
 async function identityMaskRectangles(
@@ -237,22 +326,24 @@ async function identityMasksRendered(
 ): Promise<boolean> {
   const { default: sharp } = await import("sharp");
   const { data, info } = await sharp(pixels)
-    .removeAlpha()
+    .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
+  if (info.channels !== 4) return false;
   return boxes.every((box) => {
     const left = Math.max(0, Math.ceil(box.x));
     const top = Math.max(0, Math.ceil(box.y));
     const right = Math.min(info.width, Math.floor(box.x + box.width));
     const bottom = Math.min(info.height, Math.floor(box.y + box.height));
-    // A frame completely outside this viewport contributes no pixels.
+    if (left >= right || top >= bottom) return false;
     for (let y = top; y < bottom; y++) {
       for (let x = left; x < right; x++) {
         const index = (y * info.width + x) * info.channels;
         if (
           data[index] !== 255 ||
           data[index + 1] !== 0 ||
-          data[index + 2] !== 255
+          data[index + 2] !== 255 ||
+          data[index + 3] !== 255
         ) {
           return false;
         }
@@ -311,7 +402,9 @@ export function makeUnlimitedPassReviewCapture({
     page: Page,
     shot: ReviewShot,
     options: {
-      readonly verify: () => Promise<CaptureVerification>;
+      readonly verify: (
+        frameRevision: () => number
+      ) => Promise<CaptureVerification>;
       readonly mask: readonly Locator[];
       readonly section?: Locator;
       readonly style?: string;
@@ -328,12 +421,11 @@ export function makeUnlimitedPassReviewCapture({
       const images: ReviewImage[] = [];
       let navigated = false;
       let restored = false;
-      let identityMasksBound = false;
-      let identityFramesChanged = false;
+      let frameRevision = 0;
+      let boundFrameRevision: number | undefined;
+      let cardBindings: readonly (CardInputBinding | undefined)[] | undefined;
       const recordFrameChange = (frame: Frame) => {
-        if (identityMasksBound && frame !== mainFrame) {
-          identityFramesChanged = true;
-        }
+        if (frame !== mainFrame) frameRevision++;
       };
       const recordNavigation = (frame: Frame) => {
         recordFrameChange(frame);
@@ -358,7 +450,7 @@ export function makeUnlimitedPassReviewCapture({
           phase = "viewport-change-failed";
           await page.setViewportSize(viewport);
           phase = "unexpected-document";
-          const verification = await options.verify();
+          const verification = await options.verify(() => frameRevision);
           if (navigationObserved()) {
             phase = "document-navigated";
             return;
@@ -378,17 +470,37 @@ export function makeUnlimitedPassReviewCapture({
             timeout,
             workspaceE2EPollIntervalMs.browser
           );
-          if (identityMasks) {
-            identityMasksBound = true;
+          if (verification) {
+            boundFrameRevision ??= verification.frameRevision;
             phase = "identity-mask-changed";
-            if (identityFramesChanged) return;
+            if (
+              frameRevision !== boundFrameRevision ||
+              frameRevision !== verification.frameRevision
+            )
+              return;
+            cardBindings ??= await Promise.all(
+              verification.cardInputs.map((input) =>
+                bindCardInput(input, maskTimeout)
+              )
+            );
+            phase = "card-controls-changed";
+            if (
+              !(await cardInputsRemainEmpty(
+                verification.cardInputs,
+                cardBindings,
+                maskTimeout
+              ))
+            )
+              return;
             phase = "identity-mask-unavailable";
             identityBoxes = await identityMaskRectangles(
-              identityMasks,
+              verification.identityMasks,
               maskTimeout
             );
             if (!identityBoxes) return;
-            mask.push(...identityMasks);
+            mask.push(...verification.identityMasks);
+            phase = "identity-mask-changed";
+            if (frameRevision !== boundFrameRevision) return;
           }
           const screenshot = {
             animations: "disabled",
@@ -410,16 +522,25 @@ export function makeUnlimitedPassReviewCapture({
             phase = "document-navigated";
             return;
           }
-          if (identityMasks && identityBoxes) {
+          if (verification && identityBoxes && cardBindings) {
             phase = "identity-mask-changed";
             const after = await identityMaskRectangles(
-              identityMasks,
+              verification.identityMasks,
               maskTimeout
             );
             if (
               !after ||
-              identityFramesChanged ||
+              frameRevision !== boundFrameRevision ||
               !sameMaskRectangles(identityBoxes, after)
+            )
+              return;
+            phase = "card-controls-changed";
+            if (
+              !(await cardInputsRemainEmpty(
+                verification.cardInputs,
+                cardBindings,
+                maskTimeout
+              ))
             )
               return;
             phase = "identity-mask-not-rendered";
@@ -429,7 +550,7 @@ export function makeUnlimitedPassReviewCapture({
               return;
             }
             phase = "identity-mask-changed";
-            if (identityFramesChanged) return;
+            if (frameRevision !== boundFrameRevision) return;
           }
           images.push({
             filename: `unlimited-${locale}-${shot}-${viewport.width}.png`,
@@ -441,6 +562,16 @@ export function makeUnlimitedPassReviewCapture({
         if (shot === "nexi-handoff") {
           page.off("frameattached", recordFrameChange);
           page.off("framedetached", recordFrameChange);
+        }
+        if (cardBindings) {
+          await Promise.all(
+            cardBindings.map((binding) =>
+              releaseCardInput(
+                binding,
+                Math.min(timeout, workspaceE2EPollIntervalMs.browser)
+              )
+            )
+          );
         }
         try {
           await page.setViewportSize(original);
@@ -506,6 +637,9 @@ export function makeUnlimitedPassReviewCapture({
         nexiFieldFrame(page, "cardholder_name"),
         nexiFieldFrame(page, "cardholder_email"),
       ];
+      const cardInputs = requiredCardFields.map((role) =>
+        nexiFrameInput(nexiFieldFrame(page, role))
+      );
       const { isHandoffDocument } = hosted;
       const verifyDocument = () =>
         isHandoffDocument?.(page, timeout) ?? Promise.resolve(false);
@@ -537,18 +671,22 @@ export function makeUnlimitedPassReviewCapture({
           // Preserve the empty field outlines even if the provider changes the
           // form between the live value check and the screenshot.
           style:
-            "input:not([type=submit], [type=button], [type=checkbox], [type=radio]), textarea { color: transparent !important; caret-color: transparent !important; }",
+            "input:not([type=submit], [type=button], [type=checkbox], [type=radio]), textarea { color: transparent !important; -webkit-text-fill-color: transparent !important; caret-color: transparent !important; text-shadow: none !important; }",
           verifyDocument,
-          verify: async () => {
+          verify: async (frameRevision) => {
             if (!(await verifyDocument())) return "unexpected-document";
             const started = performance.now();
-            fieldInspection = await waitForEmptyCardFields(
+            const { inspection, revision } = await waitForEmptyCardFields(
               page,
               inspectionBudget,
-              identityMasks
+              identityMasks,
+              frameRevision
             );
+            fieldInspection = inspection;
             inspectionBudget -= performance.now() - started;
-            return fieldInspection.problem ?? { identityMasks };
+            if (inspection.problem) return inspection.problem;
+            if (revision === undefined) return "identity-mask-changed";
+            return { cardInputs, identityMasks, frameRevision: revision };
           },
         });
       } finally {

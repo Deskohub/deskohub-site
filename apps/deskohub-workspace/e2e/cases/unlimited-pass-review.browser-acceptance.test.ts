@@ -554,14 +554,19 @@ test.skipIf(!chromiumAvailable)(
   }
 );
 
-for (const { failure, problem } of [
-  { failure: "missing", problem: "identity-mask-unavailable" },
-  { failure: "unpainted", problem: "identity-mask-not-rendered" },
-  { failure: "remounted", problem: "identity-mask-changed" },
-  { failure: "navigated", problem: "document-navigated" },
+for (const [failure, problem, captures] of [
+  ["missing identity frame", "identity-mask-unavailable", 0],
+  ["offscreen unpainted identity frame", "identity-mask-not-rendered", 2],
+  ["onscreen unpainted identity frame", "identity-mask-not-rendered", 2],
+  ["transparent identity mask", "identity-mask-not-rendered", 2],
+  ["remounted identity frame", "identity-mask-changed", 2],
+  ["identity frame remounted before binding", "identity-mask-changed", 0],
+  ["populated core control replacement", "card-controls-changed", 2],
+  ["reinserted core control", "card-controls-changed", 2],
+  ["main page navigation", "document-navigated", 2],
 ] as const) {
   test.skipIf(!chromiumAvailable)(
-    `publishes neither Nexi width when an identity mask is ${failure}`,
+    `publishes neither Nexi width after ${failure}`,
     async () => {
       const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
       const original = { height: 720, width: 960 };
@@ -572,35 +577,81 @@ for (const { failure, problem } of [
         const url = `${sandbox}${hostedPath}?orderId=synthetic-mask-failure`;
         await page.goto(url);
         const emailFrame = page.locator('iframe[title="CARDHOLDER_EMAIL"]');
-        if (failure === "missing") {
+        const remountEmail = async () => {
+          await Promise.all([
+            page.waitForEvent("framedetached", { timeout: 1_000 }),
+            emailFrame.evaluate((node) =>
+              node.replaceWith(node.cloneNode(true))
+            ),
+          ]);
+          await emailFrame
+            .contentFrame()
+            .getByRole("textbox", { name: "Email" })
+            .waitFor({ state: "visible", timeout: 1_000 });
+        };
+        if (failure === "missing identity frame") {
           await emailFrame.evaluate((node) => node.remove());
+        } else if (failure === "offscreen unpainted identity frame") {
+          await page.addStyleTag({
+            content:
+              '@media (min-width: 1280px) { iframe[title="CARDHOLDER_EMAIL"] { margin-top: 1200px; } }',
+          });
         }
         const screenshot = page.screenshot.bind(page);
         const injected = spyOn(page, "screenshot").mockImplementation(
           async (options) => {
             if (page.viewportSize()?.width !== 1280) return screenshot(options);
-            if (failure === "unpainted") {
+            if (
+              failure === "onscreen unpainted identity frame" ||
+              failure === "offscreen unpainted identity frame"
+            ) {
               return screenshot({
                 ...options,
                 mask: options?.mask?.slice(0, -1),
               });
             }
-            if (failure === "remounted") {
-              const pixels = await screenshot(options);
-              await Promise.all([
-                page.waitForEvent("framedetached", { timeout: 1_000 }),
-                emailFrame.evaluate((node) =>
-                  node.replaceWith(node.cloneNode(true))
-                ),
-              ]);
-              await emailFrame
-                .contentFrame()
-                .getByRole("textbox", { name: "Email" })
-                .waitFor({ state: "visible", timeout: 1_000 });
-              return pixels;
+            if (
+              failure === "populated core control replacement" ||
+              failure === "reinserted core control"
+            ) {
+              await page
+                .frameLocator('iframe[title="CARD_NUMBER"]')
+                .getByRole("textbox", { name: "Card number" })
+                .evaluate((node, reinsert) => {
+                  const replacement = node.cloneNode(true);
+                  if (!(replacement instanceof HTMLInputElement)) {
+                    throw new Error("Expected core card input");
+                  }
+                  replacement.value = "synthetic-unexpected-card-value";
+                  node.replaceWith(replacement);
+                  if (reinsert) replacement.replaceWith(node);
+                }, failure === "reinserted core control");
             }
-            if (failure === "navigated") {
-              const pixels = await screenshot(options);
+            const pixels = await screenshot(options);
+            if (failure === "transparent identity mask") {
+              const box = await emailFrame.boundingBox();
+              if (!box) throw new Error("Hosted identity frame is missing");
+              const { data, info } = await sharp(pixels)
+                .ensureAlpha()
+                .raw()
+                .toBuffer({ resolveWithObject: true });
+              const x = Math.floor(box.x + box.width / 2);
+              const y = Math.floor(box.y + box.height / 2);
+              data[(y * info.width + x) * info.channels + 3] = 0;
+              return sharp(data, {
+                raw: {
+                  width: info.width,
+                  height: info.height,
+                  channels: info.channels,
+                },
+              })
+                .png()
+                .toBuffer();
+            }
+            if (failure === "remounted identity frame") {
+              await remountEmail();
+            }
+            if (failure === "main page navigation") {
               await Promise.all([
                 page.waitForEvent("framenavigated", {
                   predicate: (frame) => frame === page.mainFrame(),
@@ -610,9 +661,8 @@ for (const { failure, problem } of [
                   history.replaceState({}, "", "/hpp/nexi/other-card")
                 ),
               ]);
-              return pixels;
             }
-            return screenshot(options);
+            return pixels;
           }
         );
         try {
@@ -623,13 +673,22 @@ for (const { failure, problem } of [
             origin,
             timeout: 1_000,
           });
+          let documentChecks = 0;
           await review.captureNexi(
             page,
             {
               checkoutPage: page,
               checkoutPageUrl: `${origin}${checkoutPath}?step=pay`,
-              isHandoffDocument: async (candidate) =>
-                candidate === page && candidate.url() === url,
+              isHandoffDocument: async (candidate) => {
+                documentChecks++;
+                if (
+                  failure === "identity frame remounted before binding" &&
+                  documentChecks === 3
+                ) {
+                  await remountEmail();
+                }
+                return candidate === page && candidate.url() === url;
+              },
               page,
               provider: "nexi",
               url,
@@ -639,7 +698,7 @@ for (const { failure, problem } of [
           expect(review.missingShots(["nexi-handoff"])).toEqual([
             { shot: "nexi-handoff", problem },
           ]);
-          expect(injected).toHaveBeenCalledTimes(failure === "missing" ? 0 : 2);
+          expect(injected).toHaveBeenCalledTimes(captures);
           expect(await readdir(directory)).toEqual([]);
           expect(page.viewportSize()).toEqual(original);
         } finally {
