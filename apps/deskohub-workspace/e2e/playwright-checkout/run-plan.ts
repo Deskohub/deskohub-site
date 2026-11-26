@@ -66,8 +66,10 @@ export const readWorkspaceE2ECaseJournals = async (
   const journals = await Promise.all(
     caseIds.map(async (caseId) => {
       try {
-        return parseCleanupJournal(
-          await readFile(resolve(journalRoot, `${caseId}.json`), "utf8")
+        return parseWorkspaceE2ECaseJournal(
+          JSON.parse(
+            await readFile(resolve(journalRoot, `${caseId}.json`), "utf8")
+          )
         );
       } catch (cause) {
         if (
@@ -113,10 +115,9 @@ const parseRunPlan = (serialized: string): WorkspaceE2ERunPlan => {
   return value as WorkspaceE2ERunPlan;
 };
 
-const parseCleanupJournal = (
-  serialized: string
+export const parseWorkspaceE2ECaseJournal = (
+  value: unknown
 ): WorkspaceE2ECleanupJournal => {
-  const value: unknown = JSON.parse(serialized);
   if (
     !isRecord(value) ||
     value.version !== formatVersion ||

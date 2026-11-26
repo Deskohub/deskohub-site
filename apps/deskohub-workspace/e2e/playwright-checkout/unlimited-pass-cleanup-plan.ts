@@ -20,6 +20,7 @@ import { getWorkspaceE2EDateInterval } from "../capacity";
 import type { WorkspaceE2ERunId } from "../run-identifiers";
 import { parseReservationIntents } from "../soak-ownership";
 import { unlimitedPassAutoRenewalCaseId } from "./case-catalog";
+import { parseWorkspaceE2ECaseJournal } from "./run-plan";
 
 export class UnlimitedPassCleanupBlocked extends Data.TaggedError(
   "UnlimitedPassCleanupBlocked"
@@ -37,14 +38,26 @@ const invalidJournal = () =>
 export const readUnlimitedPassCleanupIntent = ({
   account,
   runId,
-  value,
+  journal,
 }: {
   readonly account: WorkspaceE2EAccountLaneReconciliation | undefined;
   readonly runId: WorkspaceE2ERunId;
-  readonly value: unknown;
+  readonly journal: Readonly<Record<string, unknown>> | undefined;
 }) => {
+  if (journal === undefined) {
+    if (account) throw invalidJournal();
+    return undefined;
+  }
+  const envelope = parseWorkspaceE2ECaseJournal(journal);
+  if (
+    envelope.caseId !== unlimitedPassAutoRenewalCaseId ||
+    envelope.checkoutStates.length !== 0 ||
+    !Number.isFinite(Date.parse(envelope.startedAt))
+  ) {
+    throw invalidJournal();
+  }
   const [intent, extra] = parseReservationIntents(
-    value === undefined ? [] : value,
+    journal.reservationIntents,
     { runId },
     [unlimitedPassAutoRenewalCaseId]
   );

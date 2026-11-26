@@ -49,12 +49,8 @@ const readUnlimitedPassCleanupJournals = async () => {
     const account = await readWorkspaceE2EAccountJournal(
       unlimitedPassAutoRenewalJournalOwner.ownerId
     );
-    const intents = (await readReservationJournal(journalPath))
-      ?.reservationIntents;
-    return (
-      account !== undefined ||
-      (intents !== undefined && (!Array.isArray(intents) || intents.length > 0))
-    );
+    const reservation = await readReservationJournal(journalPath);
+    return account !== undefined || reservation !== undefined;
   } catch {
     throw new Error("Unlimited pass cleanup could not read its journals");
   }

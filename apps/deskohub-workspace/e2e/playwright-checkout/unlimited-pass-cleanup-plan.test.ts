@@ -99,12 +99,19 @@ const intent = {
   runId,
   startDate: cleanupInterval.startDate.toISOString(),
 };
+const emptyJournal = {
+  caseId: unlimitedPassAutoRenewalCaseId,
+  checkoutStates: [],
+  reservationIntents: [],
+  startedAt: requestedAt.toString(),
+  version: 2,
+};
 
 test("reads the exact synthetic customer and full Prague calendar before either ID is captured", () => {
   const parsed = readUnlimitedPassCleanupIntent({
     account,
     runId,
-    value: [intent],
+    journal: { ...emptyJournal, reservationIntents: [intent] },
   });
   expect(parsed?.customerId).toBe(customerId);
   expect(parsed?.orderId).toBeUndefined();
@@ -118,19 +125,50 @@ test("rejects journal data from a foreign owner or a partial window", () => {
     readUnlimitedPassCleanupIntent({
       account,
       runId,
-      value: [{ ...intent, owner: { customerId: "other-customer" } }],
+      journal: {
+        ...emptyJournal,
+        reservationIntents: [
+          { ...intent, owner: { customerId: "other-customer" } },
+        ],
+      },
     })
   ).toThrow();
   expect(() =>
     readUnlimitedPassCleanupIntent({
       account,
       runId,
-      value: [{ ...intent, endDate: "2026-04-17T22:00:00.000Z" }],
+      journal: {
+        ...emptyJournal,
+        reservationIntents: [
+          { ...intent, endDate: "2026-04-17T22:00:00.000Z" },
+        ],
+      },
     })
   ).toThrow();
   expect(() =>
-    readUnlimitedPassCleanupIntent({ account, runId, value: [intent, intent] })
+    readUnlimitedPassCleanupIntent({
+      account,
+      runId,
+      journal: { ...emptyJournal, reservationIntents: [intent, intent] },
+    })
   ).toThrow();
+});
+
+test("only a valid empty Unlimited case journal proves an existing account never submitted", () => {
+  expect(
+    readUnlimitedPassCleanupIntent({ account, runId, journal: emptyJournal })
+  ).toBeUndefined();
+  for (const journal of [
+    undefined,
+    { ...emptyJournal, caseId: "locale-switch" },
+    { ...emptyJournal, checkoutStates: [{ data: {} }] },
+    { ...emptyJournal, reservationIntents: undefined },
+    { ...emptyJournal, version: 1 },
+  ]) {
+    expect(() =>
+      readUnlimitedPassCleanupIntent({ account, runId, journal })
+    ).toThrow();
+  }
 });
 
 test("recovers a hold from the exact generation and booking without a captured provider ID", () => {

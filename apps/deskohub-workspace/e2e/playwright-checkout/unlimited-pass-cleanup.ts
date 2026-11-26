@@ -328,7 +328,7 @@ const reconcileUnlimitedPass = Effect.fnUntraced(function* (
       readUnlimitedPassCleanupIntent({
         account,
         runId,
-        value: journal?.reservationIntents,
+        journal,
       }),
     catch: () =>
       new UnlimitedPassCleanupBlocked(
