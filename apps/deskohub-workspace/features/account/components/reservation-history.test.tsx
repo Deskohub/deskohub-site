@@ -214,7 +214,11 @@ describe("ReservationHistory", () => {
     });
     expect(cardDoorCodeLink.getAttribute("href")).toBe(pass.accessPath);
     expect(cardDoorCodeLink.hasAttribute("data-client-navigation")).toBe(false);
-    expect(view.queryByRole("link", { name: "Renew pass" })).toBeNull();
+    expect(
+      view.queryByRole("link", {
+        name: m.unlimitedPassRenew({}, { locale: "en-US" }),
+      })
+    ).toBeNull();
 
     const renewalPath = `/en-US/passes/unlimited?renew=${pass.orderId}`;
     view.rerender(
@@ -226,7 +230,11 @@ describe("ReservationHistory", () => {
       </UnsavedChangesProvider>
     );
     expect(
-      view.getByRole("link", { name: "Renew pass" }).getAttribute("href")
+      view
+        .getByRole("link", {
+          name: m.unlimitedPassRenew({}, { locale: "en-US" }),
+        })
+        .getAttribute("href")
     ).toBe(renewalPath);
   });
 

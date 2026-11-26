@@ -43,9 +43,7 @@ const termsAndConditionsSections = (
       includesUnlimitedAutoRenewal
         ? "2.1 Client means the natural or legal person who orders or uses the Provider’s Services."
         : "2.1 Client means a natural or legal person who uses the Provider's services.",
-      includesUnlimitedAutoRenewal
-        ? "2.2 Consumer means a natural person who contracts or otherwise deals with the Provider outside their business or independent professional activity."
-        : "2.2 Consumer means a Client acting outside the scope of their business activity.",
+      "2.2 Consumer means a natural person who contracts or otherwise deals with the Provider outside their business or independent professional activity.",
       "2.3 Premises means the coworking spaces, meeting room, private office, and event spaces operated by the Provider.",
       "2.4 Services means time-limited use of the selected Premises and the related services stated in the order.",
       "2.5 Tariff means the specific scope of coworking services and the conditions for their use according to the Provider's current Price List.",
@@ -105,8 +103,8 @@ const termsAndConditionsSections = (
     heading: "7. Access and Use of Services",
     body: [
       includesUnlimitedAutoRenewal
-        ? "7.1 The confirmation email contains a secure link to the Booking access page. Once the Provider issues a PIN for a confirmed Booking, the page shows the current code and its validity period. An Unlimited membership holder can find the current PIN in their Account during the paid membership period. Membership PINs change regularly. Open Space is available each day from 00:00 to 17:00 Prague time and Reserved Desk is available around the clock."
-        : "7.1 The confirmation email contains a secure link to the Booking access page. Once a Booking is paid, confirmed locally and by live verification, and an Access PIN Code has been issued, the protected page displays that PIN together with the exact programmed validity bounds of the code. Acceptance of the code is determined solely by the lock system's programmed AlgoPIN bounds; the application does not impose its own display clock. The PIN is not included directly in the confirmation email.",
+        ? "7.1 The confirmation email contains a secure link to the Booking access page. Once the Provider issues a PIN for a confirmed Booking, the page shows the current code and its validity period. An Unlimited membership holder can find the current PIN in their Account during the paid membership period. Membership PINs change daily. Open Space is available each day from 00:00 to 17:00 Prague time and Reserved Desk is available around the clock."
+        : "7.1 The confirmation email contains a secure link to the Booking access page. Once the Provider issues a PIN for a confirmed Booking, the page shows the current code and its validity period. The PIN is not included in the confirmation email.",
       includesUnlimitedAutoRenewal
         ? "7.2 The Provider may change the access PIN. The Client must use the current code displayed on the Booking access page or in their Account, as applicable. The Client may enter and use the Premises only within the time and scope of the confirmed Booking or paid Pass."
         : "7.2 The Provider may change the Access PIN Code; the Client must use the code currently displayed on the Booking access page. Displaying the PIN does not extend the confirmed use of the Premises and creates no right to enter outside the confirmed time or into other premises. The Premises may be used only during the confirmed Booking time.",
@@ -190,9 +188,7 @@ const termsAndConditionsSections = (
   {
     heading: "12. Defects and Complaints",
     body: [
-      includesUnlimitedAutoRenewal
-        ? "12.1 The Client must report a Service defect without undue delay so that it can be remedied and provide contact details, the order number, a description of the defect, and the requested resolution."
-        : "12.1 The Client must report a Service defect without undue delay so that it can be remedied and provide at least contact details, the Booking number, a description of the defect, and the requested resolution.",
+      "12.1 The Client must report a Service defect without undue delay so that it can be remedied and provide at least contact details, the Booking number or order number as applicable, a description of the defect, and the requested resolution.",
       <>
         12.2 A complaint may be made at the establishment, at the Provider's
         address, or by email to{" "}

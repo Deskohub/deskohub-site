@@ -108,7 +108,6 @@ test("presents the buyer's order separately from passes they can use", async () 
   expect(markup).not.toContain("/reservation/access/");
   expect(markup).not.toContain("Day 1 of 30");
   expect(markup).not.toContain("You don’t have any passes yet.");
-  expect(markup).toContain('href="mailto:workspace@deskohub.cz"');
 });
 
 test("renders a held Unlimited pass with its assigned desk and purchase date", async () => {
@@ -194,6 +193,7 @@ test("shows a lookup failure when Entry Packs loaded empty and Unlimited did not
     "Your Unlimited memberships are temporarily unavailable."
   );
   expect(markup).not.toContain("You don’t have any passes yet.");
+  expect(markup).toContain('href="mailto:workspace@deskohub.cz"');
 });
 
 test("shows generic gift attribution when there is no buyer name", async () => {

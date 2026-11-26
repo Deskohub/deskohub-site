@@ -741,7 +741,7 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
     );
     fireEvent.click(view.getByRole("button", { name: /continue/i }));
     const alert = await view.findByText(
-      "Your pass can’t cover Nov 2, 2026 in the renewal period."
+      "Your membership can’t cover Nov 2, 2026 in the renewal period."
     );
     expect(alert.getAttribute("role")).toBe("alert");
     const { searchParams } = checkoutUrl();
@@ -797,7 +797,9 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
     );
     fireEvent.click(view.getByRole("button", { name: /continue/i }));
     await waitFor(() =>
-      expect(view.getByText(/pass can’t cover Nov 2, 2026/i)).toBeDefined()
+      expect(
+        view.getByText(/membership can’t cover Nov 2, 2026/i)
+      ).toBeDefined()
     );
     expect(requests).toEqual([
       expect.objectContaining({
@@ -1719,7 +1721,7 @@ test("Refresh quote at the predecessor limit clears a voided draft and lets the 
   );
   cutoffReached = true;
   fireEvent.click(view.getByRole("button", { name: /continue/i }));
-  await view.findByText(/pass can’t cover Nov 1, 2026/i);
+  await view.findByText(/membership can’t cover Nov 1, 2026/i);
   expect(beginCheckout).toHaveBeenLastCalledWith(
     expect.objectContaining({ orderId, supersedeOrderIds: predecessorOrderIds })
   );

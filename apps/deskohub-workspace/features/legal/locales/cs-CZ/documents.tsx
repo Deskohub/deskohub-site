@@ -40,9 +40,7 @@ const termsAndConditionsSections = (
       includesUnlimitedAutoRenewal
         ? "2.1 Klientem se rozumí fyzická nebo právnická osoba, která si objednává nebo využívá Služby Poskytovatele."
         : "2.1 Klientem se rozumí fyzická nebo právnická osoba, která využívá služby Poskytovatele.",
-      includesUnlimitedAutoRenewal
-        ? "2.2 Spotřebitelem se rozumí fyzická osoba, která mimo rámec své podnikatelské činnosti nebo mimo rámec samostatného výkonu svého povolání uzavírá smlouvu s Poskytovatelem nebo s ním jinak jedná."
-        : "2.2 Spotřebitelem se rozumí Klient, který jedná mimo rámec své podnikatelské činnosti.",
+      "2.2 Spotřebitelem se rozumí fyzická osoba, která mimo rámec své podnikatelské činnosti nebo mimo rámec samostatného výkonu svého povolání uzavírá smlouvu s Poskytovatelem nebo s ním jinak jedná.",
       "2.3 Prostory jsou coworkingové prostory, zasedací místnost, soukromá kancelář a eventové prostory provozované Poskytovatelem.",
       "2.4 Službami se rozumí časově omezené umožnění užívání zvolených Prostor a související služby uvedené v objednávce.",
       "2.5 Tarifem se rozumí konkrétní rozsah coworkingových služeb a podmínek jejich čerpání dle aktuálního Ceníku Poskytovatele.",
@@ -104,8 +102,8 @@ const termsAndConditionsSections = (
     heading: "7. Přístup a užívání služeb",
     body: [
       includesUnlimitedAutoRenewal
-        ? "7.1 Potvrzovací e-mail obsahuje bezpečný odkaz na přístupovou stránku Rezervace. Jakmile Poskytovatel vydá PIN k potvrzené Rezervaci, stránka zobrazí aktuální kód a dobu jeho platnosti. Držitel členství Unlimited najde v zaplaceném období aktuální PIN ve svém účtu. Přístupový PIN k členství se pravidelně mění. Sdílené místo (Open Space) je dostupné denně od 00:00 do 17:00 pražského času a vyhrazené místo (Reserved Desk) nepřetržitě."
-        : "7.1 Potvrzovací email obsahuje bezpečný odkaz na přístupovou stránku Rezervace. Jakmile je Rezervace zaplacená, potvrzená a živě ověřená a má vystaven přístupový PIN kód, zobrazuje chráněná stránka tento PIN společně s přesně naprogramovanými hranicemi platnosti kódu. Přijímání kódu zamykacím systémem určuje výhradně naprogramované hranice AlgoPINu; aplikace nesdílejí vlastní hodiny. PIN není obsažen přímo v potvrzovacím emailu.",
+        ? "7.1 Potvrzovací e-mail obsahuje bezpečný odkaz na přístupovou stránku Rezervace. Jakmile Poskytovatel vydá PIN k potvrzené Rezervaci, stránka zobrazí aktuální kód a dobu jeho platnosti. Držitel členství Unlimited najde v zaplaceném období aktuální PIN ve svém účtu. Přístupový PIN k členství se mění každý den. Sdílené místo (Open Space) je dostupné denně od 00:00 do 17:00 pražského času a vyhrazené místo (Reserved Desk) nepřetržitě."
+        : "7.1 Potvrzovací e-mail obsahuje bezpečný odkaz na přístupovou stránku Rezervace. Jakmile Poskytovatel vydá PIN k potvrzené Rezervaci, stránka zobrazí aktuální kód a dobu jeho platnosti. PIN není obsažen v potvrzovacím e-mailu.",
       includesUnlimitedAutoRenewal
         ? "7.2 Poskytovatel může přístupový PIN změnit. Klient použije aktuální kód zobrazený na přístupové stránce Rezervace nebo ve svém účtu podle objednané Služby. Klient smí vstoupit do Prostor a užívat je pouze v době a rozsahu potvrzené Rezervace nebo zaplaceného Balíčku."
         : "7.2 Poskytovatel může přístupový PIN změnit; Klient použije kód aktuálně zobrazený na přístupové stránce Rezervace. Zobrazení PIN kódu neprodlužuje potvrzenou dobu užívání Prostor a nezakládá právo na přístup mimo tuto dobu nebo do jiných prostor. Používání Prostor je možné pouze v potvrzené době Rezervace.",
@@ -189,9 +187,7 @@ const termsAndConditionsSections = (
   {
     heading: "12. Vady a reklamace",
     body: [
-      includesUnlimitedAutoRenewal
-        ? "12.1 Klient oznámí vadu Služby bez zbytečného odkladu, aby ji bylo možné napravit, a uvede své kontaktní údaje, číslo objednávky, popis vady a požadovaný způsob vyřízení."
-        : "12.1 Klient oznámí vadu Služby bez zbytečného odkladu, aby ji bylo možné napravit, a uvede alespoň své kontaktní údaje, číslo Rezervace, popis vady a požadovaný způsob vyřízení.",
+      "12.1 Klient oznámí vadu Služby bez zbytečného odkladu, aby ji bylo možné napravit, a uvede alespoň své kontaktní údaje, číslo Rezervace nebo objednávky podle druhu Služby, popis vady a požadovaný způsob vyřízení.",
       <>
         12.2 Reklamaci lze uplatnit v provozovně, na adrese Poskytovatele nebo
         e-mailem na{" "}

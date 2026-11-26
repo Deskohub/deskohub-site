@@ -496,13 +496,14 @@ for (const { tier, closesDuring, daysAhead } of [
 }
 
 it("binds Unlimited renewal consent to the paid attempt and lets only the owner stop it", async () => {
-  const now = Temporal.Now.instant();
+  const now = Temporal.Instant.from("2033-02-01T12:00:00Z");
   const databaseForRenewal = requireTestDatabase(database);
   let providerSessions = 0;
   renewalPreviewEnabled.mockReturnValue(true);
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
+        yield* TestClock.setTime(now.epochMilliseconds);
         const { db, transaction } = yield* WorkspaceDatabase;
         const purchase = yield* recordPurchase(now, 10, "reserved-desk", true);
         const accountId = purchase.buyerAccountId;
@@ -762,7 +763,11 @@ it("binds Unlimited renewal consent to the paid attempt and lets only the owner 
             ({ reservationState }) => reservationState === "confirmed"
           )
         ).toBe(true);
-      }).pipe(Effect.provide(servicesFor(provider.service)))
+      }).pipe(
+        Effect.provide(
+          Layer.merge(servicesFor(provider.service), TestClock.layer())
+        )
+      )
     );
   } finally {
     renewalPreviewEnabled.mockReturnValue(false);
