@@ -1,5 +1,4 @@
-import type { Locale } from "@/features/i18n";
-import { OvernightStayReleaseGate } from "@/features/reservation/backend/overnight-stay-release-gate";
+import assert from "node:assert/strict";
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
@@ -7,17 +6,24 @@ import {
   afterEach,
   describe,
   expect,
+  type Mock,
   mock,
   setSystemTime,
   test,
 } from "bun:test";
 import {
-  type DotyposCustomerId,
+  DotyposBranchIdSchema,
+  DotyposCloudIdSchema,
+  DotyposCustomerIdSchema,
+  type DotyposReservation,
+  DotyposReservationIdSchema,
   DotyposService,
+  DotyposTableIdSchema,
   DotyposUnavailable,
 } from "@deskohub/dotypos";
 import { EmailRecipientDomainServiceMock } from "@deskohub/email/backend/recipient-domain.service.mock";
 import { testEmailAddress } from "@deskohub/test-email";
+import { ReferralCode } from "@deskohub/workspace-customer-api/referral-code";
 import { eq } from "drizzle-orm";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import {
@@ -32,10 +38,8 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
-import {
-  customerMarketingConsents,
-  type WorkspaceReservationRow,
-} from "@/db/schema";
+import { customerMarketingConsents } from "@/db/schema";
+import { customerAgentClientIdSchema } from "@/features/account";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import {
   type CurrentLinkedAccount,
@@ -56,6 +60,13 @@ import {
   customerQuotePricingFrom,
 } from "@/features/checkout/backend/checkout/checkout-pricing.service.mock";
 import { WorkspaceTableAssignmentServiceMock } from "@/features/checkout/backend/reservation/workspace-table-assignment.service.mock";
+import {
+  checkoutAttemptIdSchema,
+  checkoutAttemptKeySchema,
+  checkoutSessionIdSchema,
+  checkoutSessionKeySchema,
+  paymentAttemptIdSchema,
+} from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import { getOfficeEditPriceSummary } from "@/features/checkout/checkout-summary-office";
 import { getWorkspaceMeetingRoomPriceForDuration } from "@/features/checkout/product-catalog";
@@ -81,13 +92,15 @@ import {
   PromotionCodeUnavailableError,
 } from "@/features/discounts/errors";
 import { WorkspaceFeatureFlagServiceMock } from "@/features/feature-flags/backend/workspace-feature-flag.service.mock";
-import type { AnalyticsConsentMirrorRecord } from "@/features/legal/backend/analytics-consent-ledger";
+import type { Locale } from "@/features/i18n";
+import type { AnalyticsConsentLedger } from "@/features/legal/backend/analytics-consent-ledger";
 import type {
   IMarketingConsentLedger,
   MarketingConsentLedger as MarketingConsentLedgerService,
 } from "@/features/legal/backend/marketing-consent-ledger";
 import { getLegalDocumentVersion } from "@/features/legal/document-version";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { orderIdSchema } from "@/features/order";
 import { ReferralError } from "@/features/referrals/contracts";
 import type { ReferralService } from "@/features/referrals/referral.service";
 import {
@@ -97,15 +110,35 @@ import {
 import { getReferralBenefitIds } from "@/features/referrals/referral-benefits";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
+import { agentSelectionKeySchema } from "@/features/reservation/backend/booking-agent";
+import { OvernightStayReleaseGate } from "@/features/reservation/backend/overnight-stay-release-gate";
 import type { IWorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
-import type { CreateWorkspaceReservationDraftInput } from "@/features/reservation/backend/workspace-reservation.repository";
-import { meetingRoomAdvertisedPriceReservationSchema } from "@/features/reservation/meeting-room-reservation";
+import type {
+  CreateWorkspaceReservationDraftInput,
+  WorkspaceReservation,
+  WorkspaceReservationRepository,
+} from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import {
+  normalizedOpenSpaceCoworkReservationOrderSchema,
+  normalizedReservedDeskCoworkReservationOrderSchema,
+} from "@/features/reservation/cowork-reservation";
+import {
+  meetingRoomAdvertisedPriceReservationSchema,
+  normalizedMeetingRoomReservationOrderSchema,
+} from "@/features/reservation/meeting-room-reservation";
+import {
+  normalizedOfficeReservationOrderSchema,
   type OfficeReservationOrderInput,
   officeAdvertisedPriceReservationSchema,
 } from "@/features/reservation/office-reservation";
-import type { ReservationBillingSelectionInput } from "@/features/reservation/reservation-billing";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import {
+  type ReservationBillingSelectionInput,
+  reservationBillingSelectionSchema,
+} from "@/features/reservation/reservation-billing";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
+import { ReviewSandbox } from "@/features/review-accounts";
 import { NoReviewAccounts } from "@/features/review-accounts/backend/review-accounts.repository.mock";
 import { getSlowestSuccessfulCalendarLoad } from "@/shared/backend/config/google-calendar.config.test-utils";
 import { customerAgentNames } from "@/shared/bot-protection/customer-agents";
@@ -116,10 +149,18 @@ import {
   type LogRowAnnotations,
 } from "@/shared/testing/log-annotations.test-utils";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { makeTestDatabaseClient } from "@/shared/testing/workspace-recording-database.test-utils";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
-import type { PreparePayStateInput } from "./prepare-pay-state.schema";
+import { instantStringSchema } from "@/shared/utils/temporal";
+import {
+  type PreparePayStateInput,
+  preparePayStateInputSchema,
+} from "./prepare-pay-state.schema";
 
 const testEmailAddressForAda = testEmailAddress("ada");
 const testEmailAddressForGrace = testEmailAddress("grace");
@@ -217,6 +258,7 @@ const meetingRoomReservationInput = {
   name: "Ada Lovelace",
   email: testEmailAddressForAda,
   phone: "+420 777 777 777",
+  billing: reservation.billing,
 };
 
 /**
@@ -414,10 +456,14 @@ const advertisementVerdict = (
   affirmation: AdvertisementAffirmationCall,
   discountQuote = affirmAdvertisementQuote(makeAdvertisementQuote())
 ) => {
+  const { advertisement, reservation } = affirmation;
+  if (advertisement.kind !== "cowork" || reservation.kind !== "cowork") {
+    throw new Error("The cowork pricing fixture requires a cowork submission");
+  }
   const priced = {
-    kind: affirmation.reservation.kind,
-    reservation: affirmation.reservation,
-    advertisedQuote: affirmation.advertisement.quote,
+    kind: reservation.kind,
+    reservation,
+    advertisedQuote: advertisement.quote,
     discountQuote,
     requestedDiscountCode: affirmation.advertisement.requestedDiscountCode,
   };
@@ -432,53 +478,108 @@ const advertisementVerdict = (
 };
 
 /** The account the activity fixture signs in, and so the author it resumes. */
-const signedInAccountId = "5b6f31d0-2c1a-4f0e-9a3d-6c7b8e2f1a01";
+const signedInAccountId = customerAccountIdSchema.make(
+  "5b6f31d0-2c1a-4f0e-9a3d-6c7b8e2f1a01"
+);
+
+const dotyposReservationFixture = (id: string): DotyposReservation => ({
+  id: DotyposReservationIdSchema.make(id),
+  _branchId: DotyposBranchIdSchema.make("branch"),
+  _cloudId: DotyposCloudIdSchema.make("cloud"),
+  _customerId: DotyposCustomerIdSchema.make("customer"),
+  _tableId: DotyposTableIdSchema.make("table-id"),
+  startDate: "2099-07-01T07:00:00.000Z",
+  endDate: "2099-07-01T16:00:00.000Z",
+  seats: "1",
+  status: "NEW",
+});
+
+const unusedBookingDependencies = async () => {
+  const { WorkspaceAvailabilityService } = await import(
+    "@/features/reservation/backend/workspace-availability.service"
+  );
+  const { ReservationHolds } = await import(
+    "@/features/reservation/backend/reservation-holds.service"
+  );
+  const { WorkspaceReservationRepository } = await import(
+    "@/features/reservation/backend/workspace-reservation.repository"
+  );
+  const { ReservationHoldCleanupScheduleService } = await import(
+    "@/features/checkout/backend/holds"
+  );
+  const { MarketingConsentLedger } = await import(
+    "@/features/legal/backend/marketing-consent-ledger"
+  );
+  const { AnalyticsConsentLedger } = await import(
+    "@/features/legal/backend/analytics-consent-ledger"
+  );
+  const { OfficeReleaseGate } = await import(
+    "@/features/office/backend/office-release-gate"
+  );
+  const { recordCheckoutAnalytics } = await import(
+    "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
+  );
+  return Layer.mergeAll(
+    TestSealedStateKeys,
+    OfficeReleaseGate.fromDecision(true),
+    OvernightStayReleaseGate.fromDecision(true),
+    ReferralReleaseGate.fromDecision(true),
+    Layer.mock(ReviewSandbox, {}),
+    EmailRecipientDomainServiceMock({
+      check: () => Effect.succeed("accepts_mail" as const),
+    }),
+    Layer.mock(CustomerAccountContactService, {}),
+    Layer.mock(CurrentCustomerAccount, {}),
+    Layer.mock(WorkspaceAvailabilityService, {}),
+    Layer.mock(ReservationHolds, {}),
+    Layer.mock(WorkspaceReservationRepository, {}),
+    Layer.mock(MarketingConsentLedger, {}),
+    Layer.mock(AnalyticsConsentLedger, {}),
+    Layer.mock(ReservationHoldCleanupScheduleService, {}),
+    WorkspaceTableAssignmentServiceMock({}),
+    recordCheckoutAnalytics().layer,
+    Layer.mock(DotyposService, {}),
+    Layer.effect(
+      WorkspaceDatabase,
+      makeTestDatabaseClient(Effect.die("Unexpected database read")).pipe(
+        Effect.map(WorkspaceDatabase.make)
+      )
+    )
+  );
+};
 
 const makeReusableReservation = (
-  overrides: Partial<WorkspaceReservationRow> = {}
-): WorkspaceReservationRow =>
-  ({
-    id: "existing-reservation-id",
+  overrides: Partial<WorkspaceReservation> = {}
+): WorkspaceReservation =>
+  workspaceReservationFixture({
+    id: workspaceReservationIdSchema.make("existing-reservation-id"),
     authorAccountId: signedInAccountId,
-    checkoutSessionKey: "session-key",
-    checkoutAttemptKey: "attempt-key",
-    correlationId: "correlation-id",
-    dotyposCustomerId: "customer-id",
-    dotyposReservationId: "dotypos-reservation-id",
-    agentClientId: null,
+    checkoutSessionKey: checkoutSessionKeySchema.make("session-key"),
+    checkoutAttemptKey: checkoutAttemptKeySchema.make("attempt-key"),
+    dotyposCustomerId: DotyposCustomerIdSchema.make("customer-id"),
+    dotyposReservationId: DotyposReservationIdSchema.make(
+      "dotypos-reservation-id"
+    ),
     reservationState: "held",
     paymentState: "not_started",
     fulfillmentState: "not_started",
-    activePaymentAttemptId: null,
     productTier: "basic",
-    productCoffee: false,
-    productMonitorOption: null,
-    reservationDetails: {
-      kind: "cowork",
-      entryTier: "open-space",
-      coffee: false,
-    },
     locale: "en-US",
     reservationHoldExpiresAt: reusableHoldExpiresAt,
-    reservationHoldExpiredAt: null,
     reservationCreatedAt: Temporal.Instant.from("2026-07-01T09:55:00.000Z"),
     reservationConfirmedAt: null,
-    reservationCancelledAt: null,
     paidAt: null,
     fulfilledAt: null,
-    fulfillmentFailedAt: null,
-    failureCode: null,
-    fulfillmentFailureCode: null,
     createdAt: Temporal.Instant.from("2026-07-01T09:55:00.000Z"),
     updatedAt: Temporal.Instant.from("2026-07-01T09:55:00.000Z"),
     ...overrides,
-  }) as WorkspaceReservationRow;
+  });
 
 /**
  * Hold acquisition that reuses `reservation`, the attempt's live hold, in the
  * submitted session, for booking cases that only need that outcome.
  */
-const reuseHold = (reservation: WorkspaceReservationRow) =>
+const reuseHold = (reservation: WorkspaceReservation) =>
   mock((request: { readonly checkout: { readonly sessionId: string } }) =>
     Effect.succeed({
       kind: "reused" as const,
@@ -507,6 +608,32 @@ const accountAuthorityFixture = async (
  * Prepares Pay as the reservation form's Server Action does: BotID first,
  * then the shared booking operation, with the form's public messages.
  */
+const decodeNormalizedReservation = Schema.decodeUnknownSync(
+  Schema.Union([
+    normalizedOpenSpaceCoworkReservationOrderSchema,
+    normalizedReservedDeskCoworkReservationOrderSchema,
+    normalizedMeetingRoomReservationOrderSchema,
+    normalizedOfficeReservationOrderSchema,
+  ])
+);
+type FormSubmissionFixture = typeof preparePayStateInputSchema.Encoded;
+
+const decodePreparedFormFixture = Schema.decodeUnknownSync(
+  Schema.toType(preparePayStateInputSchema)
+);
+
+const decodeReservationFixture = (
+  order: FormSubmissionFixture["reservation"]
+) =>
+  decodeNormalizedReservation({
+    ...order,
+    ...(order.billing !== undefined && {
+      billing: Schema.decodeSync(reservationBillingSelectionSchema)(
+        order.billing
+      ),
+    }),
+  });
+
 const loadReservationFormPreparation = async (
   options: { readonly holds?: "provided" } = {}
 ) => {
@@ -514,21 +641,25 @@ const loadReservationFormPreparation = async (
     await import(
       "@/features/reservation/backend/reservation-booking.test-utils"
     );
-  const prepareWorkspacePayState =
-    options.holds === "provided"
-      ? prepareOverProvidedHolds
-      : prepareOverProvidedServices;
   const { toReservationFormError, verifyReservationFormHuman } = await import(
     "./prepare-pay-state-form"
   );
-  return (input: PreparePayStateInput) =>
-    verifyReservationFormHuman(input.locale).pipe(
+  return (fixture: FormSubmissionFixture) => {
+    const input = decodePreparedFormFixture({
+      ...fixture,
+      reservation: decodeReservationFixture(fixture.reservation),
+    });
+    const booking = Effect.gen(function* () {
+      return options.holds === "provided"
+        ? yield* prepareOverProvidedHolds(input)
+        : yield* prepareOverProvidedServices(input);
+    });
+    return verifyReservationFormHuman(input.locale).pipe(
       Effect.andThen(
-        prepareWorkspacePayState(input).pipe(
-          Effect.mapError(toReservationFormError(input))
-        )
+        booking.pipe(Effect.mapError(toReservationFormError(input)))
       )
     );
+  };
 };
 
 const runReusableReservationScenario = async (input: {
@@ -564,9 +695,15 @@ const runReusableReservationScenario = async (input: {
   readonly marketingConsentLedger?: Layer.Layer<MarketingConsentLedgerService>;
   /** The `Cookie` header of the booking request; none by default. */
   readonly requestCookie?: string;
-  readonly mirrorAnalyticsConsent?: ReturnType<typeof mock>;
-  readonly affirmAdvertisement?: ReturnType<typeof mock>;
-  readonly quoteForCustomer?: ReturnType<typeof mock>;
+  readonly mirrorAnalyticsConsent?: Mock<
+    (typeof AnalyticsConsentLedger)["Service"]["mirror"]
+  >;
+  readonly affirmAdvertisement?: Mock<
+    ICheckoutPricingService["affirmAdvertisement"]
+  >;
+  readonly quoteForCustomer?: Mock<
+    Parameters<typeof customerQuotePricingFrom>[0]
+  >;
   readonly ensureAvailable?: ReturnType<typeof mock>;
   readonly recordMarketingConsent?: ReturnType<typeof mock>;
   readonly findOrCreateCustomer?: ReturnType<typeof mock>;
@@ -583,16 +720,26 @@ const runReusableReservationScenario = async (input: {
   readonly account?: Effect.Effect<ContactAccount, CustomerAccountAccessError>;
   /** The standing booking peeks at; by default the one `account` reports. */
   readonly standing?: CurrentCustomerAccount["Service"]["peek"];
-  readonly linkedContact?: ReturnType<typeof mock>;
-  readonly completeProfile?: ReturnType<typeof mock>;
+  readonly linkedContact?: Mock<
+    CustomerAccountContactService["Service"]["linkedContact"]
+  >;
+  readonly completeProfile?: Mock<
+    CustomerAccountContactService["Service"]["completeProfile"]
+  >;
   readonly linkedAccount?: Effect.Effect<
     CurrentLinkedAccount | null,
     CustomerAccountAccessError
   >;
   readonly rememberedReferralCode?: string;
-  readonly evaluateCheckoutReferral?: ReturnType<typeof mock>;
-  readonly findAvailableCode?: ReturnType<typeof mock>;
-  readonly hasSettledReferral?: ReturnType<typeof mock>;
+  readonly evaluateCheckoutReferral?: Mock<
+    ReferralService["Service"]["evaluateCheckoutReferral"]
+  >;
+  readonly findAvailableCode?: Mock<
+    ReferralService["Service"]["findAvailableCode"]
+  >;
+  readonly hasSettledReferral?: Mock<
+    ReferralService["Service"]["hasSettledReferral"]
+  >;
   /** Replaces the mocked referral operations above. */
   readonly referralService?: Layer.Layer<ReferralService>;
   readonly checkContactEmailDomain?: ReturnType<typeof mock>;
@@ -622,9 +769,6 @@ const runReusableReservationScenario = async (input: {
     await import(
       "@/features/reservation/backend/reservation-booking.test-utils"
     );
-  const prepareWorkspacePayState = holdsProvided
-    ? prepareOverProvidedHolds
-    : prepareOverProvidedServices;
   const { ReservationHolds } = await import(
     "@/features/reservation/backend/reservation-holds.service"
   );
@@ -657,7 +801,11 @@ const runReusableReservationScenario = async (input: {
   );
 
   const enqueueCleanup = mock(() => Effect.void);
-  const updateReservationDetails = mock(() => Effect.void);
+  const updateReservationDetails = mock<
+    WorkspaceReservationRepository["Service"]["updateReservationDetails"]
+  >(({ id, reservationDetails }) =>
+    Effect.succeed(makeReusableReservation({ id, reservationDetails }))
+  );
   const recordMarketingConsent =
     input.recordMarketingConsent ?? mock(() => Effect.void);
   const withdrawActiveMarketingConsent = mock(() => Effect.succeed(false));
@@ -681,7 +829,9 @@ const runReusableReservationScenario = async (input: {
   const cancelReservation = input.cancelReservation ?? mock(() => Effect.void);
   const createReservation =
     input.createReservation ??
-    mock(() => Effect.succeed({ id: "new-dotypos-reservation-id" } as never));
+    mock(() =>
+      Effect.succeed(dotyposReservationFixture("new-dotypos-reservation-id"))
+    );
   const getReservationStatus =
     input.getReservationStatus ?? mock(() => Effect.succeed("NEW" as const));
   const markCancelled = input.markCancelled ?? mock(() => Effect.void);
@@ -713,17 +863,17 @@ const runReusableReservationScenario = async (input: {
   // Without an account fixture, the session's account follows its linked
   // account: linked, or signed out.
   const readAccount = mock(
-    () =>
+    (): Effect.Effect<ContactAccount, CustomerAccountAccessError> =>
       input.account ??
       readLinkedAccount().pipe(
-        Effect.map((linked) =>
-          linked
-            ? ({
-                status: "linked",
-                email: testEmailAddressForAda,
-                ...linked,
-              } as never)
-            : ({ status: "signed-out" } as never)
+        Effect.map(
+          (linked): ContactAccount =>
+            linked
+              ? {
+                  status: "linked",
+                  ...linked,
+                }
+              : { status: "signed-out" }
         )
       )
   );
@@ -732,24 +882,33 @@ const runReusableReservationScenario = async (input: {
     () =>
       input.standing ?? readAccount().pipe(Effect.map(standingOfContactAccount))
   );
-  const linkedContact =
+  const linkedContact: Mock<
+    CustomerAccountContactService["Service"]["linkedContact"]
+  > =
     input.linkedContact ??
     mock(() => Effect.die("a linked contact must not be read"));
-  const completeProfile =
+  const completeProfile: Mock<
+    CustomerAccountContactService["Service"]["completeProfile"]
+  > =
     input.completeProfile ??
     mock(() => Effect.die("no profile may be created"));
-  const evaluateCheckoutReferral =
+  const evaluateCheckoutReferral: Mock<
+    ReferralService["Service"]["evaluateCheckoutReferral"]
+  > =
     input.evaluateCheckoutReferral ??
     mock(() => Effect.die("a referral must not be evaluated"));
-  const findAvailableCode =
+  const findAvailableCode: Mock<
+    ReferralService["Service"]["findAvailableCode"]
+  > =
     input.findAvailableCode ??
     mock(() => Effect.die("a referral code must not be looked up"));
-  const hasSettledReferral =
-    input.hasSettledReferral ?? mock(() => Effect.succeed(false));
+  const hasSettledReferral: Mock<
+    ReferralService["Service"]["hasSettledReferral"]
+  > = input.hasSettledReferral ?? mock(() => Effect.succeed(false));
   const rememberedReferralCookie = { value: input.rememberedReferralCode };
   const contacts = Layer.mock(CustomerAccountContactService, {
-    linkedContact: linkedContact as never,
-    completeProfile: completeProfile as never,
+    linkedContact,
+    completeProfile,
   });
   const currentAccount = Layer.mock(CurrentCustomerAccount, {
     peek: Effect.suspend(() => peekStanding()),
@@ -757,14 +916,17 @@ const runReusableReservationScenario = async (input: {
   const referrals =
     input.referralService ??
     ReferralServiceMock({
-      evaluateCheckoutReferral: evaluateCheckoutReferral as never,
-      findAvailableCode: findAvailableCode as never,
-      hasSettledReferral: hasSettledReferral as never,
+      evaluateCheckoutReferral,
+      findAvailableCode,
+      hasSettledReferral,
     });
   const testLayer = Layer.mergeAll(
     TestSealedStateKeys,
     accountAuthority.layer,
     OfficeReleaseGate.fromDecision(true),
+    OvernightStayReleaseGate.fromDecision(true),
+    ReferralReleaseGate.fromDecision(true),
+    Layer.mock(ReviewSandbox, {}),
     contacts,
     currentAccount,
     referrals,
@@ -778,8 +940,8 @@ const runReusableReservationScenario = async (input: {
       )
     ),
     CheckoutPricingServiceMock({
-      affirmAdvertisement: affirmAdvertisement as never,
-      ...customerQuotePricingFrom(quoteForCustomer as never),
+      affirmAdvertisement,
+      ...customerQuotePricingFrom(quoteForCustomer),
     }),
     EmailRecipientDomainServiceMock({ check: checkContactEmailDomain }),
     Layer.mock(WorkspaceAvailabilityService, {
@@ -787,8 +949,7 @@ const runReusableReservationScenario = async (input: {
       ensureAvailable,
     } satisfies IWorkspaceAvailabilityService),
     Layer.mock(ReservationHolds, {
-      holdForAttempt:
-        input.holdForAttempt ?? mock(() => Effect.die("unused") as never),
+      holdForAttempt: input.holdForAttempt ?? mock(() => Effect.die("unused")),
     }),
     Layer.mock(WorkspaceReservationRepository, {
       findByAttemptKeys:
@@ -821,7 +982,7 @@ const runReusableReservationScenario = async (input: {
     Layer.mock(AnalyticsConsentLedger, { mirror: mirrorAnalyticsConsent }),
     Layer.mock(ReservationHoldCleanupScheduleService, {
       enqueueCleanup,
-    } as never),
+    }),
     WorkspaceTableAssignmentServiceMock({
       assignTableId: mock(() => Effect.succeed("table-id")),
     }),
@@ -836,8 +997,12 @@ const runReusableReservationScenario = async (input: {
 
   const submission = {
     locale: input.locale ?? "en-US",
-    checkoutSessionId: input.checkoutSessionId ?? "session-id",
-    checkoutAttemptId: input.checkoutAttemptId ?? "attempt-id",
+    checkoutSessionId: checkoutSessionIdSchema.make(
+      input.checkoutSessionId ?? "session-id"
+    ),
+    checkoutAttemptId: checkoutAttemptIdSchema.make(
+      input.checkoutAttemptId ?? "attempt-id"
+    ),
     advertisedPriceToken:
       input.advertisedPriceToken ??
       (await buildAdvertisedPriceToken(
@@ -849,25 +1014,48 @@ const runReusableReservationScenario = async (input: {
         input.reservation?.kind === "cowork" ? input.reservation : reservation
       )),
     reservation: input.reservation ?? reservation,
-    people: input.people,
-    displayedOfficePrice: input.displayedOfficePrice,
-    marketingConsent: input.marketingConsent,
-    marketingConsentSource: input.marketingConsentSource,
-    customer: input.customer,
-  } as PreparePayStateInput;
-  const { bookingAgent } = input;
-  const callerPreparation = () => {
-    if (bookingAgent) {
-      return prepareWorkspacePayState(submission).pipe(
-        Effect.provideService(BookingAgent, bookingAgent as never)
-      );
-    }
-    if (input.serverCaller) return prepareWorkspacePayState(submission);
-    return prepareFromReservationForm(submission).pipe(
-      Effect.provide(BotProtectionServiceMock({ verifyHuman }))
-    );
+    ...(input.people !== undefined && { people: input.people }),
+    ...(input.displayedOfficePrice !== undefined && {
+      displayedOfficePrice: input.displayedOfficePrice,
+    }),
+    ...(input.marketingConsent !== undefined && {
+      marketingConsent: input.marketingConsent,
+    }),
+    ...(input.marketingConsentSource !== undefined && {
+      marketingConsentSource: input.marketingConsentSource,
+    }),
+    ...(input.customer !== undefined && { customer: input.customer }),
   };
-  const bookingPreparation = callerPreparation().pipe(
+  const { bookingAgent } = input;
+  const callerPreparation = Effect.gen(function* () {
+    if (bookingAgent || input.serverCaller) {
+      const bookingInput = {
+        ...submission,
+        reservation: decodeReservationFixture(submission.reservation),
+      };
+      const booking = Effect.gen(function* () {
+        return holdsProvided
+          ? yield* prepareOverProvidedHolds(bookingInput)
+          : yield* prepareOverProvidedServices(bookingInput);
+      });
+      if (bookingAgent) {
+        return yield* Effect.provideService(booking, BookingAgent, {
+          clientId: customerAgentClientIdSchema.make(bookingAgent.clientId),
+          selectionKey: agentSelectionKeySchema.make(bookingAgent.selectionKey),
+        });
+      }
+      return yield* booking;
+    }
+    const { marketingConsentSource, ...formSubmission } = submission;
+    if (marketingConsentSource === "customer_app") {
+      throw new Error("The customer app booking must use its server caller");
+    }
+    return yield* prepareFromReservationForm({
+      ...formSubmission,
+      ...(marketingConsentSource !== undefined && { marketingConsentSource }),
+    }).pipe(Effect.provide(BotProtectionServiceMock({ verifyHuman })));
+  });
+  const bookingPreparation = callerPreparation.pipe(
     input.requestCookie === undefined
       ? (preparation) => preparation
       : Effect.provideService(
@@ -896,13 +1084,16 @@ const runReusableReservationScenario = async (input: {
       )
     : Effect.map(preparation, (result) => ({
         result,
-        logAnnotations: [] as readonly LogRowAnnotations[],
+        logAnnotations: [] satisfies readonly LogRowAnnotations[],
       }))
   ).pipe(Effect.runPromise);
 
+  const error: unknown = result._tag === "Failure" ? result.failure : undefined;
+  const booking = result._tag === "Success" ? result.success : undefined;
+  assert(!booking || !("reviewSandbox" in booking), "Expected a live booking");
   return {
-    result: result._tag === "Success" ? result.success : undefined,
-    error: result._tag === "Failure" ? (result.failure as unknown) : undefined,
+    result: booking,
+    error,
     logAnnotations,
     guardEvents: accountAuthority.events,
     enqueueCleanup,
@@ -942,16 +1133,10 @@ const runReusableReservationScenario = async (input: {
 };
 
 const runMeetingRoomNewHoldScenario = async (
-  meetingRoomReservation = {
-    kind: "meeting-room" as const,
-    duration: { unit: "hour" as const, amount: 4 as const },
-    reservationDate: "2099-06-10",
-    startsAt: "2099-06-10T08:00:00Z",
-    endsAt: "2099-06-10T12:00:00Z",
-    name: "Ada Lovelace",
-    email: testEmailAddressForAda,
-    phone: "+420 777 777 777",
-  },
+  meetingRoomReservation: Extract<
+    FormSubmissionFixture["reservation"],
+    { readonly kind: "meeting-room" }
+  > = meetingRoomReservationInput,
   advertisedMetadata: {
     readonly requestedDiscountCode?: string;
   } = {},
@@ -1004,20 +1189,24 @@ const runMeetingRoomNewHoldScenario = async (
       : Effect.void
   );
   const createDraft = mock((input) =>
-    Effect.succeed({
-      id: "meeting-room-reservation-id",
-      authorAccountId: input.authorAccountId,
-      checkoutSessionKey: input.checkoutSessionKey,
-      checkoutAttemptKey: input.checkoutAttemptKey,
-      reservationState: "draft",
-      reservationDetails: input.reservationDetails,
-    } as never)
+    Effect.succeed(
+      makeReusableReservation({
+        id: workspaceReservationIdSchema.make("meeting-room-reservation-id"),
+        authorAccountId: input.authorAccountId,
+        checkoutSessionKey: input.checkoutSessionKey,
+        checkoutAttemptKey: input.checkoutAttemptKey,
+        reservationState: "draft",
+        reservationDetails: input.reservationDetails,
+      })
+    )
   );
   const assignTableId = mock(() =>
     afterDotypos(Effect.succeed("meeting-room-table-id"))
   );
   const createReservation = mock(() =>
-    afterDotypos(Effect.succeed({ id: "dotypos-meeting-room-id" } as never))
+    afterDotypos(
+      Effect.succeed(dotyposReservationFixture("dotypos-meeting-room-id"))
+    )
   );
   const attachHold = mock(() => Effect.void);
   const enqueueCleanup = mock(() => Effect.void);
@@ -1041,7 +1230,7 @@ const runMeetingRoomNewHoldScenario = async (
     Effect.sleep(timing?.calendar ?? 0).pipe(Effect.as(affirmedAdvertisement))
   );
   const applyCustomerDiscount = mock(() =>
-    Effect.succeed(affirmedAdvertisement)
+    Effect.succeed({ ...affirmedAdvertisement, advertisedPriceChanged: false })
   );
   const discoverAdvertisedDiscounts = mock(
     ({ discountableSubtotal, product }) =>
@@ -1109,7 +1298,7 @@ const runMeetingRoomNewHoldScenario = async (
     WorkspaceTableAssignmentServiceMock({ assignTableId }),
     Layer.mock(ReservationHoldCleanupScheduleService, {
       enqueueCleanup,
-    } as never),
+    }),
     Layer.mock(DotyposService, {
       findOrCreateCustomer: mock(() =>
         afterDotypos(Effect.succeed({ id: "customer-id" }))
@@ -1139,6 +1328,7 @@ const runMeetingRoomNewHoldScenario = async (
       )
     : undefined;
   const result = timing ? undefined : await Effect.runPromise(submission);
+  assert(!result || !("reviewSandbox" in result), "Expected a live booking");
 
   return {
     exit,
@@ -1153,6 +1343,13 @@ const runMeetingRoomNewHoldScenario = async (
     affirmAdvertisement,
     applyCustomerDiscount,
   };
+};
+
+const requireHeldBooking = (
+  booking: Awaited<ReturnType<typeof runReusableReservationScenario>>["result"]
+) => {
+  assert(booking && "orderId" in booking, "Expected a held reservation");
+  return booking;
 };
 
 describe("prepareWorkspacePayState", () => {
@@ -1216,8 +1413,8 @@ describe("prepareWorkspacePayState", () => {
       requestedDiscountCode: "CAMPAIGN10",
     });
 
-    expect(scenario.result.status).toBe("ready");
-    if (scenario.result.status !== "ready") {
+    expect(scenario.result?.status).toBe("ready");
+    if (scenario.result?.status !== "ready") {
       throw new Error("Expected a ready result");
     }
     const token = new URL(
@@ -1258,25 +1455,27 @@ describe("prepareWorkspacePayState", () => {
         email: testEmailAddressForAda,
         phone: "+420 777 777 777",
       },
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          accountAuthorityLayer,
-          inertRememberedReferral(),
-          BotProtectionServiceMock({ verifyHuman }),
-          CheckoutPricingServiceMock({}),
-          recordCheckoutAnalytics().layer,
-          OfficeReleaseGate.Default.pipe(
-            Layer.provide(
-              WorkspaceFeatureFlagServiceMock({
-                isEnabled: mock(() => Effect.succeed(false)),
-              })
-            )
-          ),
-          OvernightStayReleaseGate.fromDecision(false)
+    })
+      .pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            accountAuthorityLayer,
+            inertRememberedReferral(),
+            BotProtectionServiceMock({ verifyHuman }),
+            CheckoutPricingServiceMock({}),
+            recordCheckoutAnalytics().layer,
+            OfficeReleaseGate.Default.pipe(
+              Layer.provide(
+                WorkspaceFeatureFlagServiceMock({
+                  isEnabled: mock(() => Effect.succeed(false)),
+                })
+              )
+            ),
+            OvernightStayReleaseGate.fromDecision(false)
+          )
         )
       )
-    ) as Effect.Effect<never, unknown, never>;
+      .pipe(Effect.provide(await unusedBookingDependencies()));
 
     const error = await Effect.runPromise(Effect.flip(effect));
 
@@ -1291,7 +1490,6 @@ describe("prepareWorkspacePayState", () => {
     "checks the existing overnight gate for a funded Reserved Desk submission",
     async () => {
       const prepareFromReservationForm = await loadReservationFormPreparation();
-      const { orderIdSchema } = await import("@/features/order");
       const { recordCheckoutAnalytics } = await import(
         "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
       );
@@ -1300,7 +1498,7 @@ describe("prepareWorkspacePayState", () => {
       );
       const accountId = customerAccountIdSchema.make(crypto.randomUUID());
       const passId = orderIdSchema.make(crypto.randomUUID());
-      const { db, pool } = testDatabase!;
+      const { db, pool } = requireTestDatabase(testDatabase);
       await pool.query("insert into customer_accounts (id) values ($1)", [
         accountId,
       ]);
@@ -1330,23 +1528,27 @@ describe("prepareWorkspacePayState", () => {
             ...reservation,
             date: "2099-06-30",
             entryTier: "reserved-desk",
+            coffee: true,
+            monitorOption: "2x27-qhd",
             stay: "overnight",
           },
-        }).pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              accountAuthorityLayer,
-              BotProtectionServiceMock({
-                verifyHuman: mock(() => Effect.void),
-              }),
-              CheckoutPricingServiceMock({}),
-              inertRememberedReferral(),
-              recordCheckoutAnalytics().layer,
-              OvernightStayReleaseGate.fromDecision(false),
-              Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(db))
+        })
+          .pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                accountAuthorityLayer,
+                BotProtectionServiceMock({
+                  verifyHuman: mock(() => Effect.void),
+                }),
+                CheckoutPricingServiceMock({}),
+                inertRememberedReferral(),
+                recordCheckoutAnalytics().layer,
+                OvernightStayReleaseGate.fromDecision(false),
+                Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(db))
+              )
             )
           )
-        ) as Effect.Effect<never, unknown, never>;
+          .pipe(Effect.provide(await unusedBookingDependencies()));
         expect(await Effect.runPromise(Effect.flip(effect))).toMatchObject({
           _tag: "PublicSafeActionError",
           cause: { _tag: "OvernightStayUnavailableError" },
@@ -1428,8 +1630,8 @@ describe("prepareWorkspacePayState", () => {
     );
     expect(scenario.enqueueCleanup).toHaveBeenCalledTimes(1);
 
-    expect(scenario.result.status).toBe("ready");
-    if (scenario.result.status !== "ready") {
+    expect(scenario.result?.status).toBe("ready");
+    if (scenario.result?.status !== "ready") {
       throw new Error("Expected a ready result");
     }
     const token = new URL(
@@ -1481,10 +1683,11 @@ describe("prepareWorkspacePayState", () => {
       name: "Ada Lovelace",
       email: testEmailAddressForAda,
       phone: "+420 777 777 777",
+      billing: reservation.billing,
     };
     const scenario = await runMeetingRoomNewHoldScenario(wholeDayReservation);
 
-    expect(scenario.result.status).toBe("ready");
+    expect(scenario.result?.status).toBe("ready");
     expect(scenario.affirmAdvertisement).toHaveBeenCalled();
     expect(scenario.createReservation).toHaveBeenCalled();
   });
@@ -1525,8 +1728,8 @@ describe("prepareWorkspacePayState", () => {
         eventOrder.push("hold");
         return {
           kind: "created" as const,
-          reservationId: "reservation-id",
-          checkoutSessionId: "hold-session-id",
+          reservationId: workspaceReservationIdSchema.make("reservation-id"),
+          checkoutSessionId: checkoutSessionIdSchema.make("hold-session-id"),
           reservationHoldExpiresAt: createdHoldExpiresAt,
         };
       })
@@ -1557,14 +1760,14 @@ describe("prepareWorkspacePayState", () => {
       accountAuthorityLayer,
       inertRememberedReferral(),
       CheckoutPricingServiceMock({
-        affirmAdvertisement: affirmAdvertisement as never,
+        affirmAdvertisement,
         ...customerQuotePricingFrom(quoteForCustomer),
       }),
       BotProtectionServiceMock({ verifyHuman }),
       EmailRecipientDomainServiceMock({
         check: () => Effect.succeed("accepts_mail" as const),
       }),
-      Layer.mock(ReservationHolds, { holdForAttempt: holdForAttempt as never }),
+      Layer.mock(ReservationHolds, { holdForAttempt }),
       Layer.mock(MarketingConsentLedger, {
         record: recordMarketingConsent,
         status: mock(() => Effect.succeed("absent")),
@@ -1704,8 +1907,13 @@ describe("prepareWorkspacePayState", () => {
       displayedOfficePrice,
       holdForAttempt,
       affirmAdvertisement: mock(
-        ({ reservation }: AdvertisementAffirmationCall) =>
-          Effect.succeed({
+        ({ reservation }: AdvertisementAffirmationCall) => {
+          if (reservation.kind !== "office") {
+            throw new Error(
+              "The office pricing fixture requires an office submission"
+            );
+          }
+          return Effect.succeed({
             status: "affirmed" as const,
             priced: {
               kind: "office",
@@ -1725,7 +1933,8 @@ describe("prepareWorkspacePayState", () => {
                 })
               ),
             },
-          })
+          });
+        }
       ),
       quoteForCustomer: mock(() => Effect.succeed(quote)),
     });
@@ -1917,7 +2126,7 @@ describe("prepareWorkspacePayState", () => {
       marketingConsent: true,
     });
 
-    expect(result.result.status).toBe("ready");
+    expect(result.result?.status).toBe("ready");
     expect(result.recordMarketingConsent).toHaveBeenCalledWith({
       customerId: "customer-id",
       locale: "en-US",
@@ -1942,7 +2151,7 @@ describe("prepareWorkspacePayState", () => {
 
       expect(result.result?.status).toBe("ready");
       const [mirrored] = result.mirrorAnalyticsConsent.mock.calls.map(
-        ([record]) => record as AnalyticsConsentMirrorRecord
+        ([record]) => record
       );
       expect(result.mirrorAnalyticsConsent).toHaveBeenCalledTimes(1);
       expect(mirrored).toMatchObject({
@@ -2003,7 +2212,7 @@ describe("prepareWorkspacePayState", () => {
       marketingConsentSource: "site_tool",
     });
 
-    expect(result.result.status).toBe("ready");
+    expect(result.result?.status).toBe("ready");
     expect(result.recordMarketingConsent).toHaveBeenCalledTimes(1);
     expect(result.recordMarketingConsent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2023,7 +2232,7 @@ describe("prepareWorkspacePayState", () => {
       serverCaller: true,
     });
 
-    expect(result.result.status).toBe("ready");
+    expect(result.result?.status).toBe("ready");
     expect(result.verifyHuman).not.toHaveBeenCalled();
     expect(result.recordMarketingConsent).toHaveBeenCalledTimes(1);
     expect(result.recordMarketingConsent).toHaveBeenCalledWith(
@@ -2037,7 +2246,7 @@ describe("prepareWorkspacePayState", () => {
   });
 
   describe("phone region of the submission's locale", () => {
-    const submissionIn = (locale: Locale, phone: string) => ({
+    const submissionIn = (locale: string, phone: string) => ({
       locale,
       checkoutSessionId: "session-id",
       checkoutAttemptId: "attempt-id",
@@ -2111,7 +2320,7 @@ describe("prepareWorkspacePayState", () => {
       );
 
       const result = await preparePayStateSchema["~standard"].validate(
-        submissionIn("fr-FR" as Locale, "+420 777 123 456")
+        submissionIn("fr-FR", "+420 777 123 456")
       );
 
       expect(result.issues).toBeDefined();
@@ -2132,7 +2341,7 @@ describe("prepareWorkspacePayState", () => {
           reservation: { ...reservation, phone: "0151 23456789" },
         });
 
-        expect(result.result.status).toBe("ready");
+        expect(result.result?.status).toBe("ready");
         expect(result.findOrCreateCustomer).toHaveBeenCalledWith(
           expect.objectContaining({ phone: "+4915123456789" }),
           { lookupFields: ["email"] }
@@ -2172,7 +2381,7 @@ describe("prepareWorkspacePayState", () => {
         marketingConsent,
       });
 
-      expect(result.result.status).toBe("ready");
+      expect(result.result?.status).toBe("ready");
       expect(result.recordMarketingConsent).not.toHaveBeenCalled();
       expect(result.withdrawActiveMarketingConsent).not.toHaveBeenCalled();
     }
@@ -2257,7 +2466,7 @@ describe("prepareWorkspacePayState", () => {
         };
       }
     ) => {
-      const { db } = testDatabase!;
+      const { db } = requireTestDatabase(testDatabase);
       const { MarketingConsentLedger } = await import(
         "@/features/legal/backend/marketing-consent-ledger"
       );
@@ -2581,15 +2790,17 @@ describe("prepareWorkspacePayState", () => {
   });
 
   describe("booking as the signed-in account", () => {
-    const accountId = "5b6f31d0-2c1a-4f0e-9a3d-6c7b8e2f1a01";
-    const accountDotyposCustomerId = "60111";
-    const linkedAccountState = () =>
+    const accountId = customerAccountIdSchema.make(
+      "5b6f31d0-2c1a-4f0e-9a3d-6c7b8e2f1a01"
+    );
+    const accountDotyposCustomerId = DotyposCustomerIdSchema.make("60111");
+    const linkedAccountState = (): Effect.Effect<ContactAccount> =>
       Effect.succeed({
-        status: "linked",
+        status: "linked" as const,
         accountId,
         dotyposCustomerId: accountDotyposCustomerId,
-        email: testEmailAddressForGrace,
-      } as never);
+        email: reservationCustomerEmailSchema.make(testEmailAddressForGrace),
+      });
     const accountContact = (
       overrides: {
         readonly dotyposCustomerId?: string;
@@ -2598,12 +2809,15 @@ describe("prepareWorkspacePayState", () => {
     ) =>
       Effect.succeed({
         accountId,
-        dotyposCustomerId: accountDotyposCustomerId,
+        dotyposCustomerId:
+          overrides.dotyposCustomerId !== undefined
+            ? DotyposCustomerIdSchema.make(overrides.dotyposCustomerId)
+            : accountDotyposCustomerId,
         name: "Grace Hopper",
-        email: testEmailAddressForGrace,
-        phone: "+420 602 123 456",
-        ...overrides,
-      } as never);
+        email: reservationCustomerEmailSchema.make(testEmailAddressForGrace),
+        phone:
+          overrides.phone !== undefined ? overrides.phone : "+420 602 123 456",
+      });
     /** An account booking for the signed-in account's linked profile. */
     const linkedAccountBooking = () => ({
       customer: "account" as const,
@@ -2629,12 +2843,12 @@ describe("prepareWorkspacePayState", () => {
     // An account without a profile saves the contact and billing it books
     // with as its first profile, creating its Dotypos customer.
     const createdCustomerId = "60222";
-    const unlinkedAccountState = () =>
+    const unlinkedAccountState = (): Effect.Effect<ContactAccount> =>
       Effect.succeed({
-        status: "unlinked",
+        status: "unlinked" as const,
         accountId,
-        email: testEmailAddressForGrace,
-      } as never);
+        email: reservationCustomerEmailSchema.make(testEmailAddressForGrace),
+      });
     const profileCompletion = () =>
       mock(() => accountContact({ dotyposCustomerId: createdCustomerId }));
     const billingAddress = {
@@ -2654,9 +2868,9 @@ describe("prepareWorkspacePayState", () => {
         ...linkedAccountBooking(),
         bookingAgent,
       });
-      const agentHold = (overrides: Partial<WorkspaceReservationRow> = {}) =>
+      const agentHold = (overrides: Partial<WorkspaceReservation> = {}) =>
         makeReusableReservation({
-          authorAccountId: accountId as never,
+          authorAccountId: accountId,
           agentClientId: bookingAgent.clientId,
           ...overrides,
         });
@@ -2709,7 +2923,7 @@ describe("prepareWorkspacePayState", () => {
         id: string,
         input: CreateWorkspaceReservationDraftInput,
         bookedAt: Temporal.Instant,
-        overrides: Partial<WorkspaceReservationRow> = {}
+        overrides: Partial<WorkspaceReservation> = {}
       ) =>
         agentHold({
           id,
@@ -2718,7 +2932,7 @@ describe("prepareWorkspacePayState", () => {
           correlationId: `${id}-correlation`,
           dotyposCustomerId: input.dotyposCustomerId,
           dotyposReservationId: "dotypos-reservation-id",
-          authorAccountId: accountId as never,
+          authorAccountId: accountId,
           agentClientId: bookingAgent.clientId,
           agentSelectionKey: input.agentSelectionKey,
           reservationDetails: input.reservationDetails,
@@ -2732,7 +2946,7 @@ describe("prepareWorkspacePayState", () => {
         const bookedAt = Temporal.Instant.from("2026-10-20T12:09:59Z");
         const createDraft = makeAgentDraft("agent-live-hold-id");
         const createReservation = mock(() =>
-          Effect.succeed({ id: "dotypos-live-hold-id" } as never)
+          Effect.succeed(dotyposReservationFixture("dotypos-live-hold-id"))
         );
         const cancelReservation = mock(() => Effect.void);
         const claimSupersessionCancellation = mock(() => Effect.succeed(null));
@@ -2749,9 +2963,10 @@ describe("prepareWorkspacePayState", () => {
           "2026-10-20T12:19:59Z"
         );
         expect(draftInput?.agentSelectionKey).toBe(bookingAgent.selectionKey);
+        assert(draftInput);
         const held = makeAgentHoldFromDraft(
           "agent-live-hold-id",
-          draftInput!,
+          draftInput,
           bookedAt
         );
         return {
@@ -2782,11 +2997,15 @@ describe("prepareWorkspacePayState", () => {
           claimSupersessionCancellation: initial.claimSupersessionCancellation,
         });
 
-        expect(retry.result?.orderId).toBe(initial.first.result?.orderId);
-        expect(retry.result?.redirectUrl).toBe(
-          initial.first.result?.redirectUrl
+        expect(requireHeldBooking(retry.result).orderId).toBe(
+          requireHeldBooking(initial.first.result).orderId
         );
-        expect(retry.result?.expiresAt).toBe(initial.first.result?.expiresAt);
+        expect(requireHeldBooking(retry.result).redirectUrl).toBe(
+          requireHeldBooking(initial.first.result).redirectUrl
+        );
+        expect(requireHeldBooking(retry.result).expiresAt).toBe(
+          requireHeldBooking(initial.first.result).expiresAt
+        );
         expect(initial.createReservation).toHaveBeenCalledTimes(1);
         expect(initial.cancelReservation).not.toHaveBeenCalled();
         expect(initial.createDraft).toHaveBeenCalledTimes(1);
@@ -2859,7 +3078,9 @@ describe("prepareWorkspacePayState", () => {
           );
 
           expect(findById).toHaveBeenCalledWith(initial.held.id);
-          expect(retry.result?.orderId).toBe(initial.held.id);
+          expect(requireHeldBooking(retry.result).orderId).toBe(
+            initial.held.id
+          );
           expect(initial.createReservation).toHaveBeenCalledTimes(1);
           expect(initial.createDraft).toHaveBeenCalledTimes(1);
           expect(initial.claimSupersessionCancellation).not.toHaveBeenCalled();
@@ -2871,8 +3092,12 @@ describe("prepareWorkspacePayState", () => {
           Temporal.Instant.from("2026-10-20T12:10:01Z")
         );
 
-        expect(initial.first.result?.orderId).toBe("agent-live-hold-id");
-        expect(retry.result?.orderId).toBe("agent-live-hold-id");
+        expect(requireHeldBooking(initial.first.result).orderId).toBe(
+          workspaceReservationIdSchema.make("agent-live-hold-id")
+        );
+        expect(requireHeldBooking(retry.result).orderId).toBe(
+          workspaceReservationIdSchema.make("agent-live-hold-id")
+        );
       });
 
       test("signs the stored deadline into both links of a reused agent hold", async () => {
@@ -2891,12 +3116,14 @@ describe("prepareWorkspacePayState", () => {
 
         // The deadline stored when the hold was created, not ten minutes
         // after the retry.
-        expect(signedHoldExpiresAt(initial.first.result?.payStateToken)).toBe(
-          "2026-10-20T12:19:59.000Z"
-        );
-        expect(signedHoldExpiresAt(retry.result?.payStateToken)).toBe(
-          "2026-10-20T12:19:59.000Z"
-        );
+        expect(
+          signedHoldExpiresAt(
+            requireHeldBooking(initial.first.result).payStateToken
+          )
+        ).toBe(instantStringSchema.make("2026-10-20T12:19:59.000Z"));
+        expect(
+          signedHoldExpiresAt(requireHeldBooking(retry.result).payStateToken)
+        ).toBe(instantStringSchema.make("2026-10-20T12:19:59.000Z"));
       });
 
       test("returns a byte-identical Pay URL for a same-time identical retry", async () => {
@@ -2904,8 +3131,8 @@ describe("prepareWorkspacePayState", () => {
           Temporal.Instant.from("2026-10-20T12:09:59Z")
         );
 
-        expect(retry.result?.redirectUrl).toBe(
-          initial.first.result?.redirectUrl
+        expect(requireHeldBooking(retry.result).redirectUrl).toBe(
+          requireHeldBooking(initial.first.result).redirectUrl
         );
       });
 
@@ -2914,7 +3141,9 @@ describe("prepareWorkspacePayState", () => {
         const pending = agentHold({
           ...initial.held,
           paymentState: "pending",
-          activePaymentAttemptId: "pending-payment-attempt-id" as never,
+          activePaymentAttemptId: paymentAttemptIdSchema.make(
+            "pending-payment-attempt-id"
+          ),
         });
         const claimHoldCreation = mock(() =>
           Effect.die("a pending retry must not claim hold creation")
@@ -2939,11 +3168,15 @@ describe("prepareWorkspacePayState", () => {
           }
         );
 
-        expect(retry.result?.orderId).toBe(initial.first.result?.orderId);
-        expect(retry.result?.redirectUrl).toBe(
-          initial.first.result?.redirectUrl
+        expect(requireHeldBooking(retry.result).orderId).toBe(
+          requireHeldBooking(initial.first.result).orderId
         );
-        expect(retry.result?.expiresAt).toBe(initial.first.result?.expiresAt);
+        expect(requireHeldBooking(retry.result).redirectUrl).toBe(
+          requireHeldBooking(initial.first.result).redirectUrl
+        );
+        expect(requireHeldBooking(retry.result).expiresAt).toBe(
+          requireHeldBooking(initial.first.result).expiresAt
+        );
         expect(initial.createReservation).toHaveBeenCalledTimes(1);
         expect(initial.cancelReservation).not.toHaveBeenCalled();
         expect(initial.createDraft).toHaveBeenCalledTimes(1);
@@ -2959,10 +3192,14 @@ describe("prepareWorkspacePayState", () => {
           ),
           reservationCreatedAt: Temporal.Instant.from("2026-10-20T12:09:59Z"),
           paymentState: "pending",
-          activePaymentAttemptId: "pending-payment-attempt-id" as never,
+          activePaymentAttemptId: paymentAttemptIdSchema.make(
+            "pending-payment-attempt-id"
+          ),
         });
         const createReservation = mock(() =>
-          Effect.succeed({ id: "unexpected-dotypos-hold-id" } as never)
+          Effect.succeed(
+            dotyposReservationFixture("unexpected-dotypos-hold-id")
+          )
         );
         const cancelReservation = mock(() => Effect.void);
         const scenario = await runAgentAt(
@@ -2988,8 +3225,11 @@ describe("prepareWorkspacePayState", () => {
       test("refuses an identical request whose live hold sits in a rotated session after the profile changed", async () => {
         const rotatedHold = agentHold({
           id: "rotated-agent-hold-id",
-          checkoutSessionKey: "rotated-session-key" as never,
-          checkoutAttemptKey: "stale-attempt-key" as never,
+          checkoutSessionKey: checkoutSessionKeySchema.make(
+            "rotated-session-key"
+          ),
+          checkoutAttemptKey:
+            checkoutAttemptKeySchema.make("stale-attempt-key"),
           reservationHoldExpiresAt: Temporal.Instant.from(
             "2026-10-20T12:19:59Z"
           ),
@@ -2999,7 +3239,9 @@ describe("prepareWorkspacePayState", () => {
           dotyposReservationId: "rotated-dotypos-reservation-id",
         });
         const createReservation = mock(() =>
-          Effect.succeed({ id: "unexpected-dotypos-hold-id" } as never)
+          Effect.succeed(
+            dotyposReservationFixture("unexpected-dotypos-hold-id")
+          )
         );
         const cancelReservation = mock(() => Effect.void);
         const claimSupersessionCancellation = mock(() =>
@@ -3029,9 +3271,13 @@ describe("prepareWorkspacePayState", () => {
 
       test("starts a new hold for an identical request after the hold expired", async () => {
         const initial = await makeInitialAgentHold();
-        const replacementId = "agent-after-expiry-hold-id";
+        const replacementId = workspaceReservationIdSchema.make(
+          "agent-after-expiry-hold-id"
+        );
         const createReservation = mock(() =>
-          Effect.succeed({ id: "dotypos-after-expiry-hold-id" } as never)
+          Effect.succeed(
+            dotyposReservationFixture("dotypos-after-expiry-hold-id")
+          )
         );
         const cancelReservation = mock(() => Effect.void);
         const claimSupersessionCancellation = mock(() =>
@@ -3077,8 +3323,10 @@ describe("prepareWorkspacePayState", () => {
           completeSupersessionAndCreateDraft.mock.calls[0]?.[0].replacement
             .checkoutAttemptKey;
 
-        expect(scenario.result?.orderId).toBe(replacementId);
-        expect(scenario.result?.orderId).not.toBe(initial.held.id);
+        expect(requireHeldBooking(scenario.result).orderId).toBe(replacementId);
+        expect(requireHeldBooking(scenario.result).orderId).not.toBe(
+          initial.held.id
+        );
         expect(createReservation).toHaveBeenCalledTimes(1);
         expect(replacementAttemptKey).not.toBe(initial.held.checkoutAttemptKey);
       });
@@ -3093,7 +3341,8 @@ describe("prepareWorkspacePayState", () => {
               Effect.succeed(
                 makeReusableReservation({
                   id: "someone-elses-hold-id",
-                  authorAccountId: "another-account" as never,
+                  authorAccountId:
+                    customerAccountIdSchema.make("another-account"),
                 })
               )
             )
@@ -3116,7 +3365,9 @@ describe("prepareWorkspacePayState", () => {
         });
         const rotatedHold = agentHold({
           id: "rotated-agent-hold-id",
-          checkoutSessionKey: "rotated-session-key" as never,
+          checkoutSessionKey: checkoutSessionKeySchema.make(
+            "rotated-session-key"
+          ),
           dotyposReservationId: "rotated-dotypos-reservation-id",
         });
         // The paid booking stays the agent session's reservation, so a new
@@ -3150,7 +3401,9 @@ describe("prepareWorkspacePayState", () => {
           const bookedAt = Temporal.Instant.from("2026-10-20T12:09:59Z");
           const createDraft = makeAgentDraft("rotated-live-hold-id");
           const createReservation = mock(() =>
-            Effect.succeed({ id: "dotypos-rotated-live-hold-id" } as never)
+            Effect.succeed(
+              dotyposReservationFixture("dotypos-rotated-live-hold-id")
+            )
           );
           const firstAgentSession = paidAgentSession();
           const first = await runAgentAt(bookedAt, {
@@ -3159,9 +3412,11 @@ describe("prepareWorkspacePayState", () => {
             createDraft,
             createReservation,
           });
+          const firstDraftCall = createDraft.mock.calls[0]?.[0];
+          assert(firstDraftCall);
           const held = makeAgentHoldFromDraft(
             "rotated-live-hold-id",
-            createDraft.mock.calls[0]![0],
+            firstDraftCall,
             bookedAt
           );
           const claimSupersessionCancellation = mock(() =>
@@ -3192,8 +3447,12 @@ describe("prepareWorkspacePayState", () => {
           expect(held.checkoutSessionKey).not.toBe(
             firstAgentSession.mock.calls[0]?.[0]
           );
-          expect(retry.result?.orderId).toBe("rotated-live-hold-id");
-          expect(retry.result?.redirectUrl).toBe(first.result?.redirectUrl);
+          expect(requireHeldBooking(retry.result).orderId).toBe(
+            workspaceReservationIdSchema.make("rotated-live-hold-id")
+          );
+          expect(requireHeldBooking(retry.result).redirectUrl).toBe(
+            requireHeldBooking(first.result).redirectUrl
+          );
           expect(claimSupersessionCancellation).not.toHaveBeenCalled();
           expect(cancelReservation).not.toHaveBeenCalled();
           expect(createDraft).toHaveBeenCalledTimes(1);
@@ -3225,7 +3484,9 @@ describe("prepareWorkspacePayState", () => {
           }
         );
 
-        expect(scenario.result?.orderId).toBe("replacement-agent-hold-id");
+        expect(requireHeldBooking(scenario.result).orderId).toBe(
+          workspaceReservationIdSchema.make("replacement-agent-hold-id")
+        );
         expect(claimSupersessionCancellation).toHaveBeenCalledTimes(1);
         expect(scenario.cancelReservation).toHaveBeenCalledTimes(1);
         expect(scenario.markCancelled).not.toHaveBeenCalled();
@@ -3520,7 +3781,7 @@ describe("prepareWorkspacePayState", () => {
     test.each([
       [
         "the session ends before the account is read",
-        () => ({ account: Effect.succeed({ status: "signed-out" } as never) }),
+        () => ({ account: Effect.succeed({ status: "signed-out" as const }) }),
       ],
       [
         "the linked profile has no name to book with",
@@ -3674,7 +3935,7 @@ describe("prepareWorkspacePayState", () => {
             reviewMarker: "unreadable",
             account: {
               accountId: accountSession.accountId,
-              dotyposCustomerId: accountDotyposCustomerId as DotyposCustomerId,
+              dotyposCustomerId: accountDotyposCustomerId,
             },
             autoLinked: false,
           }),
@@ -3696,8 +3957,8 @@ describe("prepareWorkspacePayState", () => {
         Effect.succeed({
           accountId,
           dotyposCustomerId: accountDotyposCustomerId,
-          email: testEmailAddressForGrace,
-        } as never);
+          email: reservationCustomerEmailSchema.make(testEmailAddressForGrace),
+        });
       const signedStateOf = async (
         result: { readonly redirectUrl?: string } | object | undefined
       ) => {
@@ -3733,7 +3994,7 @@ describe("prepareWorkspacePayState", () => {
                 lockProbe.held ? "evaluate:locked" : "evaluate:unlocked"
               );
               return kind === "eligible"
-                ? { kind, code: "RFL12345" }
+                ? { kind, code: ReferralCode.make("RFL12345") }
                 : { kind };
             })
           );
@@ -3788,8 +4049,9 @@ describe("prepareWorkspacePayState", () => {
               ...applied,
               discount: {
                 ...applied.discount,
-                id: getReferralBenefitIds(dotyposCustomerId as never)
-                  .invitation,
+                id: getReferralBenefitIds(
+                  DotyposCustomerIdSchema.make(dotyposCustomerId)
+                ).invitation,
               },
             })),
           })
@@ -3805,16 +4067,21 @@ describe("prepareWorkspacePayState", () => {
         linkedAccount: linkedAccount(),
         rememberedReferralCode,
         evaluateCheckoutReferral: mock(() =>
-          Effect.succeed({ kind: "eligible" as const, code: "RFL12345" })
+          Effect.succeed({
+            kind: "eligible" as const,
+            code: ReferralCode.make("RFL12345"),
+          })
         ),
         quoteForCustomer: mock(() => Effect.succeed(quote)),
       });
-      const markerOf = (result: object | undefined) =>
-        referralAppliedOf(
-          result && "redirectUrl" in result
-            ? (result.redirectUrl as string)
-            : undefined
-        );
+      const markerOf = (result: object | undefined) => {
+        const decoded = Schema.decodeUnknownOption(
+          Schema.Struct({ redirectUrl: Schema.String })
+        )(result);
+        return Option.isSome(decoded)
+          ? referralAppliedOf(decoded.value.redirectUrl)
+          : null;
+      };
 
       test("reports the referral applied when the carried referral prices the booked customer's invitation", async () => {
         const scenario = await runReusableReservationScenario(
@@ -3876,7 +4143,10 @@ describe("prepareWorkspacePayState", () => {
         const evaluateCheckoutReferral = mock(() =>
           Effect.sync(() => {
             order.push("evaluate");
-            return { kind: "eligible" as const, code: "RFL12345" };
+            return {
+              kind: "eligible" as const,
+              code: ReferralCode.make("RFL12345"),
+            };
           })
         );
         const scenario = await runReusableReservationScenario({
@@ -3971,7 +4241,9 @@ describe("prepareWorkspacePayState", () => {
       };
 
       test("prefills a usable code for a contact booking without accepting it", async () => {
-        const findAvailableCode = mock(() => Effect.succeed("RFL12345"));
+        const findAvailableCode = mock(() =>
+          Effect.succeed(ReferralCode.make("RFL12345"))
+        );
         const scenario = await runReusableReservationScenario({
           findByAttemptKeys: mock(() => Effect.succeed(null)),
           createDraft: createFreshDraft(),
@@ -4017,7 +4289,9 @@ describe("prepareWorkspacePayState", () => {
             "CAMPAIGN10"
           ),
           rememberedReferralCode: "RFL12345",
-          findAvailableCode: mock(() => Effect.succeed("RFL12345")),
+          findAvailableCode: mock(() =>
+            Effect.succeed(ReferralCode.make("RFL12345"))
+          ),
         });
 
         expect(scenario.result?.status).toBe("ready");
@@ -4062,11 +4336,14 @@ describe("prepareWorkspacePayState", () => {
                 reads++ === 0
                   ? unlinked
                   : Effect.succeed({
-                      status: "linked",
+                      status: "linked" as const,
                       accountId,
-                      dotyposCustomerId: createdCustomerId,
-                      email: testEmailAddressForGrace,
-                    } as never)
+                      dotyposCustomerId:
+                        DotyposCustomerIdSchema.make(createdCustomerId),
+                      email: reservationCustomerEmailSchema.make(
+                        testEmailAddressForGrace
+                      ),
+                    })
               ),
               completeProfile: profileCompletion(),
             };
@@ -4142,7 +4419,9 @@ describe("prepareWorkspacePayState", () => {
             createDraft: createFreshDraft(),
             linkedAccount: linkedAccount(),
             rememberedReferralCode: "RFL12345",
-            findAvailableCode: mock(() => Effect.succeed("RFL12345")),
+            findAvailableCode: mock(() =>
+              Effect.succeed(ReferralCode.make("RFL12345"))
+            ),
             hasSettledReferral: mock(settled),
           });
 
@@ -4281,19 +4560,25 @@ describe("prepareWorkspacePayState", () => {
         ),
         customer: "account",
         account: Effect.succeed({
-          status: "linked",
-          accountId: "5b6f31d0-2c1a-4f0e-9a3d-6c7b8e2f1a01",
-          dotyposCustomerId: "60111",
-          email: testEmailAddress("grace"),
-        } as never),
+          status: "linked" as const,
+          accountId: customerAccountIdSchema.make(
+            "5b6f31d0-2c1a-4f0e-9a3d-6c7b8e2f1a01"
+          ),
+          dotyposCustomerId: DotyposCustomerIdSchema.make("60111"),
+          email: reservationCustomerEmailSchema.make(testEmailAddress("grace")),
+        }),
         linkedContact: mock(() =>
           Effect.succeed({
-            accountId: "5b6f31d0-2c1a-4f0e-9a3d-6c7b8e2f1a01",
-            dotyposCustomerId: "60111",
+            accountId: customerAccountIdSchema.make(
+              "5b6f31d0-2c1a-4f0e-9a3d-6c7b8e2f1a01"
+            ),
+            dotyposCustomerId: DotyposCustomerIdSchema.make("60111"),
             name: "Grace Hopper",
-            email: testEmailAddress("grace"),
+            email: reservationCustomerEmailSchema.make(
+              testEmailAddress("grace")
+            ),
             phone: "+420 602 123 456",
-          } as never)
+          })
         ),
         checkContactEmailDomain,
       });
@@ -4318,7 +4603,7 @@ describe("prepareWorkspacePayState", () => {
       ),
     });
 
-    expect(result.result.status).toBe("ready");
+    expect(result.result?.status).toBe("ready");
     expect(result.claimHoldCreation).not.toHaveBeenCalled();
     expect(result.findById).not.toHaveBeenCalled();
     expect(result.enqueueCleanup).not.toHaveBeenCalled();
@@ -4353,7 +4638,7 @@ describe("prepareWorkspacePayState", () => {
       ),
     });
 
-    expect(result.result.status).toBe("ready");
+    expect(result.result?.status).toBe("ready");
     expect(attemptLookupCount).toBe(2);
     expect(result.cancelReservation).not.toHaveBeenCalled();
     expect(result.createDraft).not.toHaveBeenCalled();
@@ -4364,7 +4649,7 @@ describe("prepareWorkspacePayState", () => {
     const storedSessionKey = "original:stored-session-key";
     const previousReservation = makeReusableReservation({
       id: "previous-reservation-id",
-      checkoutSessionKey: storedSessionKey as never,
+      checkoutSessionKey: checkoutSessionKeySchema.make(storedSessionKey),
       dotyposReservationId: "previous-dotypos-reservation-id",
     });
     const findStoredCheckoutSessionKey = mock(() =>
@@ -4393,7 +4678,7 @@ describe("prepareWorkspacePayState", () => {
       ),
     });
 
-    expect(result.result.status).toBe("ready");
+    expect(result.result?.status).toBe("ready");
     expect(findStoredCheckoutSessionKey).toHaveBeenCalledWith(
       expect.arrayContaining([expect.stringMatching(/^test:[a-f0-9]{64}$/)])
     );
@@ -4429,7 +4714,7 @@ describe("prepareWorkspacePayState", () => {
       ),
     });
 
-    expect(result.result.status).toBe("ready");
+    expect(result.result?.status).toBe("ready");
     expect(findCurrentByCheckoutSessionKey).toHaveBeenCalledWith(
       storedSessionKey
     );
@@ -4451,7 +4736,7 @@ describe("prepareWorkspacePayState", () => {
       ),
     });
 
-    expect(result.result.status).toBe("ready");
+    expect(result.result?.status).toBe("ready");
     expect(result.createDraft).toHaveBeenCalledWith(
       expect.objectContaining({
         checkoutSessionKey: expect.stringMatching(storedLookupKeyPattern),
@@ -4548,21 +4833,23 @@ describe("prepareWorkspacePayState", () => {
       checkoutAttemptId: "attempt-id",
       advertisedPriceToken: await row.token(),
       reservation: row.reservation,
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          accountAuthorityLayer,
-          inertRememberedReferral(),
-          BotProtectionServiceMock({ verifyHuman: () => Effect.void }),
-          // The snapshot is checked before any discount is affirmed.
-          CheckoutPricingService.Default.pipe(
-            Layer.provide(DiscountServiceMock({}))
-          ),
-          recordCheckoutAnalytics().layer,
-          TestSealedStateKeys
+    })
+      .pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            accountAuthorityLayer,
+            inertRememberedReferral(),
+            BotProtectionServiceMock({ verifyHuman: () => Effect.void }),
+            // The snapshot is checked before any discount is affirmed.
+            CheckoutPricingService.Default.pipe(
+              Layer.provide(DiscountServiceMock({}))
+            ),
+            recordCheckoutAnalytics().layer,
+            TestSealedStateKeys
+          )
         )
       )
-    ) as Effect.Effect<never, unknown, never>;
+      .pipe(Effect.provide(await unusedBookingDependencies()));
 
     const error = await Effect.runPromise(Effect.flip(effect));
 
@@ -4594,7 +4881,7 @@ describe("prepareWorkspacePayState", () => {
       status: "pricing_changed",
       affectedProductKeys: ["product:cowork:open-space"],
     });
-    if (result.result.status !== "pricing_changed") {
+    if (result.result?.status !== "pricing_changed") {
       throw new Error("Expected pricing_changed result");
     }
     const token = new URL(
@@ -4621,8 +4908,8 @@ describe("prepareWorkspacePayState", () => {
       ),
     });
 
-    expect(result.result.status).toBe("ready");
-    if (result.result.status !== "ready") {
+    expect(result.result?.status).toBe("ready");
+    if (result.result?.status !== "ready") {
       throw new Error("Expected ready result");
     }
     const token = new URL(
@@ -4665,16 +4952,18 @@ describe("prepareWorkspacePayState", () => {
         checkoutAttemptId: "attempt-id",
         advertisedPriceToken: "invalid-but-bot-rejects-first",
         reservation,
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            accountAuthorityLayer,
-            inertRememberedReferral(),
-            BotProtectionServiceMock({ verifyHuman }),
-            CheckoutPricingServiceMock({})
+      })
+        .pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              accountAuthorityLayer,
+              inertRememberedReferral(),
+              BotProtectionServiceMock({ verifyHuman }),
+              CheckoutPricingServiceMock({})
+            )
           )
         )
-      ) as Effect.Effect<never, unknown, never>;
+        .pipe(Effect.provide(await unusedBookingDependencies()));
 
       const error = await Effect.runPromise(Effect.flip(effect));
 

@@ -193,7 +193,7 @@ describe("getReservationServiceSchedule", () => {
   test("reads a cowork day from its booked start", () => {
     expect(
       getReservationServiceSchedule(
-        { kind: "cowork", tier: "open-space" } as never,
+        { kind: "cowork", entryTier: "open-space", coffee: false },
         prague("2027-01-10T12:00"),
         prague("2027-01-11T12:00")
       )
