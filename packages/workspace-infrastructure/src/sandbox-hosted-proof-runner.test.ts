@@ -2428,15 +2428,32 @@ describe("telemetry privacy", () => {
     });
 
   test("passes once both controls are found and the marker is nowhere", () => {
-    const { exitCode, output, marker, calls } = privacy();
-    expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
-      exitCode: 0,
-      output: "",
-    });
-    expect(calls).toContain(
-      `gcloud logging read "${marker}" OR textPayload:"${marker}" OR jsonPayload:"${marker}" OR httpRequest.requestUrl:"${marker}" --project=${projectId} --freshness=7200s --limit=20 --format=json(logName,timestamp)`
-    );
-    expect(markerLeaks(output, marker)).toEqual([]);
+    for (const requestUrl of [`${apiUrl}/rpc`, `${apiUrl}/rpc/`]) {
+      const { exitCode, output, marker, calls } = privacy(() => [
+        {
+          ...requestLog,
+          stdout: JSON.stringify([
+            {
+              trace: `projects/${projectId}/traces/${traceId}`,
+              httpRequest: { requestUrl },
+            },
+          ]),
+        },
+      ]);
+      expect({
+        requestUrl,
+        exitCode,
+        output: exitCode === 0 ? "" : output,
+      }).toEqual({
+        requestUrl,
+        exitCode: 0,
+        output: "",
+      });
+      expect(calls).toContain(
+        `gcloud logging read "${marker}" OR textPayload:"${marker}" OR jsonPayload:"${marker}" OR httpRequest.requestUrl:"${marker}" --project=${projectId} --freshness=7200s --limit=20 --format=json(logName,timestamp)`
+      );
+      expect(markerLeaks(output, marker)).toEqual([]);
+    }
   });
 
   test("fails closed when the trace control is absent or unreadable", () => {
@@ -2457,6 +2474,24 @@ describe("telemetry privacy", () => {
         {
           trace: `projects/${projectId}/traces/${traceId}`,
           httpRequest: { requestUrl: `${apiUrl}/healthz` },
+        },
+      ]),
+      JSON.stringify([
+        {
+          trace: `projects/${projectId}/traces/${traceId}`,
+          httpRequest: { requestUrl: `${apiUrl}/rpc/extra` },
+        },
+      ]),
+      JSON.stringify([
+        {
+          trace: `projects/${projectId}/traces/${traceId}`,
+          httpRequest: { requestUrl: `${apiUrl}/rpc//` },
+        },
+      ]),
+      JSON.stringify([
+        {
+          trace: `projects/${projectId}/traces/${traceId}`,
+          httpRequest: { requestUrl: `${apiUrl}/rpc2` },
         },
       ]),
     ]) {

@@ -1623,9 +1623,10 @@ phase_telemetry_privacy() {
       "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${api_service}\" AND log_id(\"run.googleapis.com/requests\") AND httpRequest.requestMethod=\"POST\" AND trace=\"projects/${project_id}/traces/${trace_id}\"" \
       --project="$project_id" --freshness="${freshness}s" --limit=5 --format='json(trace,httpRequest.requestUrl)')" ||
       fail "Cloud Run request logs are unreadable; marker absence unverified"
+    # Effect's HTTP RPC protocol joins prependUrl(rpcUrl) with "", producing /rpc/.
     if jq -e --arg id "$trace_id" 'type == "array" and any(.[];
         ((.trace // "") | endswith("/traces/" + $id))
-        and ((.httpRequest.requestUrl // "") | test("^https?://[^/?#]+/rpc([?#].*)?$")))' \
+        and ((.httpRequest.requestUrl // "") | test("^https?://[^/?#]+/rpc/?([?#].*)?$")))' \
       >/dev/null 2>&1 <<<"$requests"; then
       control=true
       break

@@ -124,6 +124,8 @@ describe("sandbox RPC probe verdict", () => {
       );
       expect(verdict).toMatchObject({ ok: false, version: null, status: 403 });
       expect(seen.length).toBeGreaterThan(1);
+      expect(seen.map(({ path }) => path)).toContain("/health");
+      expect(seen.map(({ path }) => path)).toContain("/rpc/");
       expect(
         seen.every(
           ({ authorization, trace }) =>
