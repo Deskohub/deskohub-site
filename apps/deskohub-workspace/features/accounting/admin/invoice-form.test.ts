@@ -7,6 +7,7 @@ import {
   spyOn,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import {
   getLocaleDefinition,
   supportedLocales,
@@ -14,6 +15,7 @@ import {
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   AdministrationInvoiceCreateInput,
+  AdministrationInvoiceId,
   administrationInputParseOptions,
 } from "@deskohub/workspace-admin-api";
 import { Schema } from "effect";
@@ -23,7 +25,11 @@ import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import { getLocalizedPagePath } from "@/features/i18n/routing";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
+  submittedActionInput,
+  type WorkspaceActionExecute,
+  workspaceActionCallbacks,
   workspaceRouterPush,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -111,7 +117,7 @@ const formValues = ({
 });
 
 const validateFormSchema = (
-  values: InvoiceFormOutput,
+  values: Omit<InvoiceFormOutput, "locale"> & { readonly locale: string },
   locale: Locale = "en-US"
 ) =>
   Schema.toStandardSchemaV1(createInvoiceFormSchema(locale))[
@@ -261,11 +267,12 @@ const fillInput = (
   value: string,
   index?: number
 ) => {
-  const input = (
+  const input = elementOf(
     index === undefined
       ? view.getByLabelText(label)
-      : view.getAllByLabelText(label)[index]
-  ) as HTMLInputElement;
+      : view.getAllByLabelText(label)[index],
+    HTMLInputElement
+  );
   fireEvent.input(input, { target: { value } });
   return input;
 };
@@ -300,9 +307,9 @@ const mockPreviewAction = () => {
   const preview = mock();
   workspaceUseAction.mockImplementation((action) => {
     if (action === invoiceActions.previewAdministrationInvoice) {
-      return { execute: preview, isExecuting: false } as never;
+      return { execute: preview, isExecuting: false };
     }
-    return { execute: mock(), isExecuting: false } as never;
+    return { execute: mock(), isExecuting: false };
   });
   return preview;
 };
@@ -318,9 +325,11 @@ const flush = () =>
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
+const invoiceIdPayloadSchema = Schema.Struct({ invoiceId: Schema.String });
+
 const invoiceIdOf = (call: unknown[] | undefined) => {
   if (!call) throw new Error("Expected an action call");
-  return (call[0] as { invoiceId: string }).invoiceId;
+  return Schema.decodeUnknownSync(invoiceIdPayloadSchema)(call[0]).invoiceId;
 };
 
 test("carries edited fields into the review payload", async () => {
@@ -420,7 +429,7 @@ test("shows validation feedback and skips the preview for an invalid invoice", a
 test("keeps a typed decimal comma as the decimal point", () => {
   mockPreviewAction();
   const view = renderInvoiceCreationForm({ locale: "cs-CZ" });
-  const price = view.getByLabelText("Cena") as HTMLInputElement;
+  const price = elementOf(view.getByLabelText("Cena"), HTMLInputElement);
   for (const typed of ["1", "12", "125", "1250", "1250,"]) {
     fireEvent.input(price, { target: { value: typed } });
   }
@@ -445,9 +454,10 @@ test("offers every Workspace language for the invoice, named in itself", () => {
 });
 
 test("refuses an invoice language Workspace does not serve", async () => {
-  const result = await validateFormSchema(
-    formValues({ locale: "zz-ZZ" as Locale })
-  );
+  const result = await validateFormSchema({
+    ...formValues(),
+    locale: "zz-ZZ",
+  });
   expect("issues" in result && JSON.stringify(result.issues)).toContain(
     "locale"
   );
@@ -507,8 +517,8 @@ test("reuses the draft id for an unchanged retry and rotates it after a change",
 });
 
 test("retries creation with the same id for an unchanged invoice and a new id after a change", async () => {
-  const preview = mock();
-  const create = mock();
+  const preview = mock<WorkspaceActionExecute>();
+  const create = mock<WorkspaceActionExecute>();
   let previewOnSuccess:
     | ((result: { data: { dataUrl: string } }) => void)
     | undefined;
@@ -516,19 +526,25 @@ test("retries creation with the same id for an unchanged invoice and a new id af
     | ((result: { error: { serverError: string } }) => void)
     | undefined;
   workspaceUseAction.mockImplementation((action, options) => {
-    const actionOptions = options as {
-      readonly onSuccess?: typeof previewOnSuccess;
-      readonly onError?: typeof createOnError;
-    };
     if (action === invoiceActions.previewAdministrationInvoice) {
-      previewOnSuccess = actionOptions.onSuccess;
-      return { execute: preview, isExecuting: false } as never;
+      previewOnSuccess = (result) => {
+        void options.onSuccess?.({
+          ...result,
+          input: submittedActionInput(preview.mock.calls),
+        });
+      };
+      return { execute: preview, isExecuting: false };
     }
     if (action === invoiceActions.createAdministrationInvoice) {
-      createOnError = actionOptions.onError;
-      return { execute: create, isExecuting: false } as never;
+      createOnError = (result) => {
+        void options.onError?.({
+          ...result,
+          input: submittedActionInput(create.mock.calls),
+        });
+      };
+      return { execute: create, isExecuting: false };
     }
-    return { execute: mock(), isExecuting: false } as never;
+    return { execute: mock(), isExecuting: false };
   });
   const view = renderInvoiceCreationForm();
   fillValidPersonInvoice(view);
@@ -567,23 +583,25 @@ test("retries creation with the same id for an unchanged invoice and a new id af
 });
 
 test("leaves an unedited suggested variable symbol to the server", async () => {
-  const preview = mock();
-  const create = mock();
+  const preview = mock<WorkspaceActionExecute>();
+  const create = mock<WorkspaceActionExecute>();
   let previewOnSuccess:
     | ((result: { data: { dataUrl: string } }) => void)
     | undefined;
   workspaceUseAction.mockImplementation((action, options) => {
-    const actionOptions = options as {
-      readonly onSuccess?: typeof previewOnSuccess;
-    };
     if (action === invoiceActions.previewAdministrationInvoice) {
-      previewOnSuccess = actionOptions.onSuccess;
-      return { execute: preview, isExecuting: false } as never;
+      previewOnSuccess = (result) => {
+        void options.onSuccess?.({
+          ...result,
+          input: submittedActionInput(preview.mock.calls),
+        });
+      };
+      return { execute: preview, isExecuting: false };
     }
     if (action === invoiceActions.createAdministrationInvoice) {
-      return { execute: create, isExecuting: false } as never;
+      return { execute: create, isExecuting: false };
     }
-    return { execute: mock(), isExecuting: false } as never;
+    return { execute: mock(), isExecuting: false };
   });
   const view = renderInvoiceCreationForm();
   fillValidPersonInvoice(view);
@@ -609,8 +627,8 @@ test("leaves an unedited suggested variable symbol to the server", async () => {
 });
 
 test("keeps the draft id when a whitespace-only edit produces the same payload", async () => {
-  const preview = mock();
-  const create = mock();
+  const preview = mock<WorkspaceActionExecute>();
+  const create = mock<WorkspaceActionExecute>();
   let previewOnSuccess:
     | ((result: { data: { dataUrl: string } }) => void)
     | undefined;
@@ -618,19 +636,25 @@ test("keeps the draft id when a whitespace-only edit produces the same payload",
     | ((result: { error: { serverError: string } }) => void)
     | undefined;
   workspaceUseAction.mockImplementation((action, options) => {
-    const actionOptions = options as {
-      readonly onSuccess?: typeof previewOnSuccess;
-      readonly onError?: typeof createOnError;
-    };
     if (action === invoiceActions.previewAdministrationInvoice) {
-      previewOnSuccess = actionOptions.onSuccess;
-      return { execute: preview, isExecuting: false } as never;
+      previewOnSuccess = (result) => {
+        void options.onSuccess?.({
+          ...result,
+          input: submittedActionInput(preview.mock.calls),
+        });
+      };
+      return { execute: preview, isExecuting: false };
     }
     if (action === invoiceActions.createAdministrationInvoice) {
-      createOnError = actionOptions.onError;
-      return { execute: create, isExecuting: false } as never;
+      createOnError = (result) => {
+        void options.onError?.({
+          ...result,
+          input: submittedActionInput(create.mock.calls),
+        });
+      };
+      return { execute: create, isExecuting: false };
     }
-    return { execute: mock(), isExecuting: false } as never;
+    return { execute: mock(), isExecuting: false };
   });
   const view = renderInvoiceCreationForm();
   fillValidPersonInvoice(view);
@@ -672,9 +696,9 @@ test("keeps the draft id when a whitespace-only edit produces the same payload",
 });
 
 const expectLabelsToMatchInputs = (view: InvoiceFormView) => {
-  const labels = [
-    ...view.container.querySelectorAll("label[for]"),
-  ] as HTMLLabelElement[];
+  const labels = [...view.container.querySelectorAll("label[for]")].map(
+    (label) => elementOf(label, HTMLLabelElement)
+  );
   expect(labels.length).toBeGreaterThan(0);
   for (const label of labels) {
     const input = view.container.querySelector(`#${CSS.escape(label.htmlFor)}`);
@@ -693,9 +717,10 @@ const expectLabelsToMatchInputs = (view: InvoiceFormView) => {
 };
 
 test("associates every label with its rendered input", () => {
-  workspaceUseAction.mockImplementation(
-    () => ({ execute: mock(), isExecuting: false }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute: mock(),
+    isExecuting: false,
+  }));
   const view = renderInvoiceCreationForm();
   expectLabelsToMatchInputs(view);
 
@@ -759,7 +784,7 @@ test("submits the typed invoice dates as calendar dates", async () => {
   typeDate(view, "Service date", "2026-08-20");
   typeDate(view, "Due date", "2026-09-15");
 
-  const form = view.container.querySelector("form")!;
+  const form = elementOf(view.container.querySelector("form"), HTMLFormElement);
   const data = new FormData(form);
   expect([data.get("serviceDate"), data.get("dueDate")]).toEqual([
     "2026-08-20",
@@ -783,7 +808,7 @@ test("submits the typed paid-on date once already paid is selected", async () =>
   fireEvent.click(view.getByRole("checkbox", { name: "Already paid" }));
   typeDate(view, "Paid on", "2026-08-25");
 
-  const form = view.container.querySelector("form")!;
+  const form = elementOf(view.container.querySelector("form"), HTMLFormElement);
   expect(new FormData(form).get("paidOn")).toBe("2026-08-25");
   submitInvoiceForm(view);
   await waitFor(() =>
@@ -830,15 +855,25 @@ test("keeps typed text that is no date out of the review", async () => {
 });
 
 const priceInputOf = (view: InvoiceFormView) =>
-  view.getByLabelText("Price") as HTMLInputElement;
+  elementOf(view.getByLabelText("Price"), HTMLInputElement);
+
+const previewPayloadSchema = Schema.Struct({
+  lines: Schema.Array(
+    Schema.Struct({
+      description: Schema.String,
+      price: Schema.String,
+    })
+  ),
+});
 
 const previewPayloadOf = (
   preview: ReturnType<typeof mockPreviewAction>,
   callIndex: number
-) =>
-  preview.mock.calls[callIndex]![0] as {
-    readonly lines: { readonly price: string }[];
-  };
+) => {
+  const call = preview.mock.calls[callIndex];
+  assert(call !== undefined, `Expected preview call at index ${callIndex}`);
+  return Schema.decodeUnknownSync(previewPayloadSchema)(call[0]);
+};
 
 test("accepts a browser-typed price and keeps a rejected one out of the payload", async () => {
   const preview = mockPreviewAction();
@@ -913,21 +948,20 @@ const en = { locale: "en-US" } as const;
 
 type InvoiceActionName = keyof typeof invoiceActions;
 
-type CapturedInvoiceAction = {
-  readonly execute: ReturnType<typeof mock>;
-  options: {
-    readonly onSuccess?: (result: { readonly data?: unknown }) => void;
-    readonly onError?: (result: {
-      readonly error: { readonly serverError?: string };
-    }) => void;
-    readonly onTransportError?: () => void;
-  };
-};
+type InvoiceActionData<Name extends InvoiceActionName> = Awaited<
+  ReturnType<typeof import("./actions")[Name]>
+>["data"];
 
-const captureInvoiceAction = (): CapturedInvoiceAction => ({
-  execute: mock(),
-  options: {},
-});
+const captureInvoiceAction = <Data>(): {
+  readonly execute: ReturnType<typeof mock<WorkspaceActionExecute>>;
+  options: Partial<ReturnType<typeof workspaceActionCallbacks<Data>>>;
+} => ({ execute: mock<WorkspaceActionExecute>(), options: {} });
+
+const invoiceActionNames = [
+  "createAdministrationInvoice",
+  "previewAdministrationInvoice",
+  "searchAdministrationInvoiceCustomers",
+] as const;
 
 // Wires every invoice action to its own execute mock and keeps the callbacks
 // the form registered, so a test can settle an action the way the server would.
@@ -937,20 +971,28 @@ const captureInvoiceActions = ({
   readonly executing?: readonly InvoiceActionName[];
 } = {}) => {
   const captured = {
-    createAdministrationInvoice: captureInvoiceAction(),
-    previewAdministrationInvoice: captureInvoiceAction(),
-    searchAdministrationInvoiceCustomers: captureInvoiceAction(),
+    createAdministrationInvoice:
+      captureInvoiceAction<InvoiceActionData<"createAdministrationInvoice">>(),
+    previewAdministrationInvoice:
+      captureInvoiceAction<InvoiceActionData<"previewAdministrationInvoice">>(),
+    searchAdministrationInvoiceCustomers:
+      captureInvoiceAction<
+        InvoiceActionData<"searchAdministrationInvoiceCustomers">
+      >(),
   };
   workspaceUseAction.mockImplementation((action, options) => {
-    const name = (Object.keys(invoiceActions) as InvoiceActionName[]).find(
+    const name = invoiceActionNames.find(
       (key) => invoiceActions[key] === action
     );
     if (!name) throw new Error("Unexpected invoice action");
-    captured[name].options = options as CapturedInvoiceAction["options"];
+    captured[name].options = workspaceActionCallbacks<unknown>(
+      options,
+      captured[name].execute
+    );
     return {
       execute: captured[name].execute,
       isExecuting: executing.includes(name),
-    } as never;
+    };
   });
   return captured;
 };
@@ -999,13 +1041,16 @@ const sparsePersonCustomer: InvoiceAdministrationCustomer = {
 };
 
 const inputValue = (view: InvoiceFormView, label: string) =>
-  (view.getByLabelText(label) as HTMLInputElement).value;
+  elementOf(view.getByLabelText(label), HTMLInputElement).value;
 
 const searchCustomers = (view: InvoiceFormView, query: string) => {
-  const input = view.getByLabelText(m.accountingInvoiceFormSearchLabel({}, en));
+  const input = elementOf(
+    view.getByLabelText(m.accountingInvoiceFormSearchLabel({}, en)),
+    HTMLInputElement
+  );
   fireEvent.input(input, { target: { value: query } });
   fireEvent.keyDown(input, { key: "Enter" });
-  return input as HTMLInputElement;
+  return input;
 };
 
 test("searches customers by the trimmed query only once it has two characters", () => {
@@ -1063,11 +1108,11 @@ test("prefills a selected business customer and keeps the query after changing i
     view.getByText(m.accountingInvoiceFormCustomerNoEmail({}, en))
   ).toBeTruthy();
 
-  fireEvent.click(
-    view.getAllByRole("button", {
-      name: m.accountingInvoiceFormSelectCustomer({}, en),
-    })[0]!
-  );
+  const [selectCustomerButton] = view.getAllByRole("button", {
+    name: m.accountingInvoiceFormSelectCustomer({}, en),
+  });
+  assert(selectCustomerButton !== undefined);
+  fireEvent.click(selectCustomerButton);
 
   expect(
     view.getByText(getInvoiceCustomerName(businessCustomer, "en-US"))
@@ -1076,10 +1121,9 @@ test("prefills a selected business customer and keeps the query after changing i
     view.queryByLabelText(m.accountingInvoiceFormSearchLabel({}, en))
   ).toBeNull();
   expect(
-    (
-      view.getByLabelText(
-        m.accountingInvoiceFormCustomerType({}, en)
-      ) as HTMLSelectElement
+    elementOf(
+      view.getByLabelText(m.accountingInvoiceFormCustomerType({}, en)),
+      HTMLSelectElement
     ).value
   ).toBe("business");
   expect(
@@ -1240,7 +1284,13 @@ test("opens the created invoice and reports creation and preview failures", asyn
 
   act(() => create.options.onSuccess?.({ data: undefined }));
   expect(workspaceRouterPush).not.toHaveBeenCalled();
-  act(() => create.options.onSuccess?.({ data: { invoiceId } }));
+  act(() =>
+    create.options.onSuccess?.({
+      data: {
+        invoiceId: AdministrationInvoiceId.make(invoiceId),
+      },
+    })
+  );
   expect(workspaceRouterPush).toHaveBeenCalledWith(
     getLocalizedPagePath("en-US", "/[locale]/admin/invoices/[invoiceId]", {
       invoiceId,

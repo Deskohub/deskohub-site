@@ -1,4 +1,5 @@
 import { Effect, Layer } from "effect";
+import { formatInvoiceNumber } from "@/features/accounting/invoice";
 import type { InvoiceCancellationRecord } from "@/features/accounting/invoice-cancellation";
 import type { InvoiceId } from "@/features/accounting/manual-invoice";
 import { ReservationAdministrationService } from "@/features/administration/reservation-administration.service";
@@ -24,7 +25,7 @@ export const liveInvoiceCancellationFakes = Layer.mergeAll(
       Effect.succeed({
         invoice: {
           id,
-          invoiceNumber: "WS-FV-2026-000001" as never,
+          invoiceNumber: formatInvoiceNumber({ year: 2026, sequence: 1 }),
           reservationId: null,
           cancelled: false,
         },

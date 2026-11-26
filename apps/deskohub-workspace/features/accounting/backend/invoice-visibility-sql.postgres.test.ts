@@ -1,12 +1,16 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { and, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { invoices } from "@/db/schema";
 import { customerInvoiceVisibility } from "@/features/accounting/invoice-visibility";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { InvoiceRepository } from "./invoice.repository";
 import { InvoiceArchiveRepository } from "./invoice-archive.repository";
 import { makeInvoiceCancellationTestKit } from "./invoice-cancellation.test-utils";
@@ -18,8 +22,21 @@ const testDatabase =
   await createWorkspacePostgresSuiteDatabase("invoice_visibility");
 afterAll(() => testDatabase?.close());
 // The kit only touches the database when a test calls it.
-const { cancel, issueManualInvoice, makeActor, run } =
-  makeInvoiceCancellationTestKit(testDatabase!);
+const kit = testDatabase ? makeInvoiceCancellationTestKit(testDatabase) : null;
+const requireKit = () => requireTestDatabase(kit);
+const cancel: ReturnType<typeof makeInvoiceCancellationTestKit>["cancel"] = (
+  input
+) => requireKit().cancel(input);
+const issueManualInvoice: ReturnType<
+  typeof makeInvoiceCancellationTestKit
+>["issueManualInvoice"] = (...args) => requireKit().issueManualInvoice(...args);
+const makeActor: ReturnType<
+  typeof makeInvoiceCancellationTestKit
+>["makeActor"] = (label) => requireKit().makeActor(label);
+const run: ReturnType<typeof makeInvoiceCancellationTestKit>["run"] = (
+  effect,
+  keys
+) => requireKit().run(effect, keys);
 
 describe.skipIf(!testDatabase)("invoice visibility SQL twin", () => {
   test("selects exactly the invoices the TypeScript rule lists to the customer", async () => {
@@ -55,7 +72,10 @@ describe.skipIf(!testDatabase)("invoice visibility SQL twin", () => {
     );
 
     expect(
-      standings.map((invoice) => customerInvoiceVisibility(invoice!))
+      standings.map((invoice) => {
+        assert(invoice !== null);
+        return customerInvoiceVisibility(invoice);
+      })
     ).toEqual(["listed", "listed_cancelled", "listed_cancelled"]);
     expect(new Set(listedBySql.map(({ id }) => id))).toEqual(
       new Set(listedByRule)

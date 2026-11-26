@@ -37,7 +37,7 @@ import {
 import {
   connectWorkspacePostgresTestDatabase,
   holdDatabaseConnection,
-  type WorkspacePostgresTestDatabase,
+  requireTestDatabase,
   withHeldTransaction,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
@@ -51,7 +51,7 @@ const postgresDatabase = await connectWorkspacePostgresTestDatabase();
 describe.skipIf(!postgresDatabase)(
   "WorkspaceReservationRepository checkout lookup across key rotation on Postgres",
   () => {
-    const postgres = postgresDatabase as WorkspacePostgresTestDatabase;
+    const postgres = requireTestDatabase(postgresDatabase);
     let reservations: IWorkspaceReservationRepository;
     const fixtureReservationIds: WorkspaceReservationId[] = [];
 

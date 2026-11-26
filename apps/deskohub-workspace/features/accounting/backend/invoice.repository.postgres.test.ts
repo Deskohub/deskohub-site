@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
   DotyposCustomerIdSchema,
@@ -44,10 +45,11 @@ import {
   buildCoworkReservationQuote,
   type CoworkReservationQuoteOrder,
 } from "@/features/checkout/checkout-quote.test-utils";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
-  type WorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { temporalInstantToIsoString } from "@/shared/utils/temporal";
 import { recordAccountingDocumentSnapshot } from "./accounting-document-snapshots.test-utils";
@@ -80,18 +82,20 @@ const coworkOrder = {
   entryTier: "open-space",
   coffee: true,
 } satisfies CoworkReservationQuoteOrder;
-const prepared = {
+const prepared: PreparedCustomerQuote = {
   kind: "cowork",
-  reservation: {
-    kind: "cowork",
-    ...coworkOrder,
-    date: "2099-01-01",
-    name: "Synthetic Invoice Customer",
-    email: testEmailAddress("invoice-integration"),
-    phone: "+420 700 000 000",
-  },
+  reservation: Schema.decodeUnknownSync(normalizedCoworkReservationOrderSchema)(
+    {
+      kind: "cowork",
+      ...coworkOrder,
+      date: "2099-01-01",
+      name: "Synthetic Invoice Customer",
+      email: testEmailAddress("invoice-integration"),
+      phone: "+420 700 000 000",
+    }
+  ),
   quote: buildCoworkReservationQuote(coworkOrder),
-} as PreparedCustomerQuote;
+};
 const personalInvoiceBuyer = {
   kind: "person",
   legalName: "Synthetic Invoice Customer",
@@ -133,7 +137,7 @@ const runRepository = <A, E>(
   keys: IAccountingSnapshotKeyService = makeKeyService()
 ): Promise<A> => {
   const repositoryLayer = testAccountingStorage(
-    testDatabase!.layer,
+    requireTestDatabase(testDatabase).layer,
     Layer.succeed(
       AccountingSnapshotKeyService,
       AccountingSnapshotKeyService.of(keys)
@@ -157,7 +161,7 @@ const insertSourceSnapshot = (input: {
   recordAccountingDocumentSnapshot(input).pipe(
     Effect.provide(
       testAccountingStorage(
-        testDatabase!.layer,
+        requireTestDatabase(testDatabase).layer,
         Layer.succeed(
           AccountingSnapshotKeyService,
           AccountingSnapshotKeyService.of(makeKeyService())
@@ -244,7 +248,7 @@ const createPaidFixture = async (
           return reservation.id;
         })
       )
-    ).pipe(Effect.provide(testDatabase!.layer))
+    ).pipe(Effect.provide(requireTestDatabase(testDatabase).layer))
   );
 
   return {
@@ -288,15 +292,13 @@ const createAdditionalFailedAttempt = async (fixture: PaidFixture) => {
           yield* insertSourceSnapshot({ paymentAttemptId, snapshot: source });
         })
       )
-    ).pipe(Effect.provide(testDatabase!.layer))
+    ).pipe(Effect.provide(requireTestDatabase(testDatabase).layer))
   );
 
   return paymentAttemptId;
 };
 
-class RolledBackFixture extends Data.TaggedError("RolledBackFixture")<{
-  readonly value: unknown;
-}> {}
+class RolledBackFixture extends Data.TaggedError("RolledBackFixture") {}
 
 // Runs the operation in a transaction that always rolls back, so the invoices
 // and counter changes it makes never reach the shared database.
@@ -306,23 +308,29 @@ const runRepositoryRolledBack = <A, E>(
     database: Pick<WorkspaceDatabase["Service"], "db">
   ) => Effect.Effect<A, E>,
   keys?: IAccountingSnapshotKeyService
-) =>
-  runRepository(
+) => {
+  let captured: { readonly value: A } | undefined;
+  return runRepository(
     (repository) =>
       Effect.flatMap(WorkspaceDatabase, ({ db, transaction }) =>
         transaction(
           operation(repository, { db }).pipe(
-            Effect.flatMap((value) => new RolledBackFixture({ value }))
+            Effect.flatMap((value) => {
+              captured = { value };
+              return new RolledBackFixture();
+            })
           )
         )
       ).pipe(
-        Effect.provide(testDatabase!.layer),
-        Effect.catchTag("RolledBackFixture", ({ value }) =>
-          Effect.succeed(value as A)
-        )
+        Effect.provide(requireTestDatabase(testDatabase).layer),
+        Effect.catchTag("RolledBackFixture", () => {
+          assert(captured !== undefined);
+          return Effect.succeed(captured.value);
+        })
       ),
     keys
   );
+};
 
 const makeManualInvoiceInput = (actor: string) =>
   Schema.decodeUnknownSync(manualInvoiceInputSchema)({
@@ -354,8 +362,8 @@ const getFixtureFulfillmentState = ({
 // issuances each test performs.
 const readCounters = () =>
   Effect.runPromise(
-    testDatabase!.db
-      .select()
+    requireTestDatabase(testDatabase)
+      .db.select()
       .from(invoiceNumberCounters)
       .orderBy(asc(invoiceNumberCounters.numberingYear))
   ).then(
@@ -368,7 +376,7 @@ const sequenceOf = (invoiceNumber: InvoiceNumber) =>
 describe.skipIf(!testDatabase)(
   "InvoiceRepository on disposable Postgres",
   () => {
-    const postgres = testDatabase as WorkspacePostgresSuiteDatabase;
+    const getPostgres = () => requireTestDatabase(testDatabase);
 
     test("issues one encrypted, immutable invoice for concurrent requests", async () => {
       const fixture = await createPaidFixture();
@@ -395,14 +403,17 @@ describe.skipIf(!testDatabase)(
         new Set(results.map(({ invoice }) => invoice.invoiceNumber)).size
       ).toBe(1);
       expect(results.filter(({ changed }) => changed)).toHaveLength(1);
-      const issued = results[0]!.invoice;
+      const firstResult = results[0];
+      assert(firstResult !== undefined);
+      const issued = firstResult.invoice;
       expect(issued.document.buyer).toEqual(buyer);
       expect("schemaVersion" in issued.document).toBe(false);
-      expect(issued.document.fulfilledAt).toBeTruthy();
+      assert(issued.document.fulfilledAt !== undefined);
+      assert(fixture.fulfilledAt !== null);
       expect(
         Temporal.Instant.compare(
-          Temporal.Instant.from(issued.document.fulfilledAt!),
-          fixture.fulfilledAt!
+          Temporal.Instant.from(issued.document.fulfilledAt),
+          fixture.fulfilledAt
         )
       ).toBe(0);
       const numberingYear = getInvoiceNumberingYear(issued.issuedAt);
@@ -412,13 +423,14 @@ describe.skipIf(!testDatabase)(
       );
 
       const [stored] = await Effect.runPromise(
-        postgres.db
-          .select({ encryptedDocument: invoices.encryptedDocument })
+        getPostgres()
+          .db.select({ encryptedDocument: invoices.encryptedDocument })
           .from(invoices)
           .where(eq(invoices.id, issued.id))
       );
+      assert(stored !== undefined);
       expect(
-        stored!.encryptedDocument.includes(Buffer.from(buyer.legalName))
+        stored.encryptedDocument.includes(Buffer.from(buyer.legalName))
       ).toBe(false);
 
       const retry = await issue(fixture.paymentAttemptId, {
@@ -435,13 +447,15 @@ describe.skipIf(!testDatabase)(
         message: "issued invoices are immutable",
       };
       await expect(
-        postgres.pool.query(
+        getPostgres().pool.query(
           "update invoices set invoice_number = 'WS-FV-2099-999999' where id = $1",
           [issued.id]
         )
       ).rejects.toMatchObject(immutable);
       await expect(
-        postgres.pool.query("delete from invoices where id = $1", [issued.id])
+        getPostgres().pool.query("delete from invoices where id = $1", [
+          issued.id,
+        ])
       ).rejects.toMatchObject(immutable);
     });
 
@@ -455,8 +469,10 @@ describe.skipIf(!testDatabase)(
         fixtures.map(({ paymentAttemptId }) => issue(paymentAttemptId))
       );
 
+      const firstResult = results[0];
+      assert(firstResult !== undefined);
       const numberingYear = getInvoiceNumberingYear(
-        results[0]!.invoice.issuedAt
+        firstResult.invoice.issuedAt
       );
       const before = countersBefore.get(numberingYear) ?? 0;
       expect(
@@ -502,7 +518,7 @@ describe.skipIf(!testDatabase)(
             .update(workspaceReservations)
             .set({ activePaymentAttemptId: laterAttemptId })
             .where(eq(workspaceReservations.id, fixture.reservationId))
-        ).pipe(Effect.provide(testDatabase!.layer))
+        ).pipe(Effect.provide(requireTestDatabase(testDatabase).layer))
       );
 
       const found = await runRepository((repository) =>
@@ -565,7 +581,7 @@ describe.skipIf(!testDatabase)(
 
     test("issues one manual invoice for concurrent requests with the same id", async () => {
       const issuer = await Effect.runPromise(
-        workspaceFixtures(postgres.db).account("invoice-repository-issuer")
+        workspaceFixtures(getPostgres().db).account("invoice-repository-issuer")
       );
       const input = Schema.decodeUnknownSync(manualInvoiceInputSchema)({
         invoiceId: randomUUID(),
@@ -596,7 +612,9 @@ describe.skipIf(!testDatabase)(
         new Set(results.map(({ invoice }) => invoice.invoiceNumber)).size
       ).toBe(1);
       expect(results.filter(({ changed }) => changed)).toHaveLength(1);
-      expect(results[0]!.invoice.document).toMatchObject({
+      const firstManualResult = results[0];
+      assert(firstManualResult !== undefined);
+      expect(firstManualResult.invoice.document).toMatchObject({
         provenance: { source: "admin-ui", actor: issuer.email },
       });
       const expectedActor = [
@@ -608,8 +626,8 @@ describe.skipIf(!testDatabase)(
       ];
       const readActors = () =>
         Effect.runPromise(
-          postgres.db
-            .select()
+          getPostgres()
+            .db.select()
             .from(manualInvoiceActors)
             .where(eq(manualInvoiceActors.invoiceId, input.invoiceId))
         );
@@ -621,8 +639,10 @@ describe.skipIf(!testDatabase)(
       expect(retry.changed).toBe(false);
       expect(await readActors()).toEqual(expectedActor);
 
+      const firstResult = results[0];
+      assert(firstResult !== undefined);
       const numberingYear = getInvoiceNumberingYear(
-        results[0]!.invoice.issuedAt
+        firstResult.invoice.issuedAt
       );
       expect((await readCounters()).get(numberingYear)).toBe(
         (before.get(numberingYear) ?? 0) + 1
@@ -653,11 +673,11 @@ describe.skipIf(!testDatabase)(
       );
 
       expect(error).toBeDefined();
-      const invoiceRows = await postgres.pool.query(
+      const invoiceRows = await getPostgres().pool.query(
         "select id from invoices where id = $1",
         [invoiceId]
       );
-      const actorRows = await postgres.pool.query(
+      const actorRows = await getPostgres().pool.query(
         "select invoice_id from manual_invoice_actors where invoice_id = $1",
         [invoiceId]
       );
@@ -690,7 +710,7 @@ describe.skipIf(!testDatabase)(
 
     test("lists who issued each manual invoice, and through what", async () => {
       const issuer = await Effect.runPromise(
-        workspaceFixtures(postgres.db).account("invoice-provenance-issuer")
+        workspaceFixtures(getPostgres().db).account("invoice-provenance-issuer")
       );
       const input = makeManualInvoiceInput(issuer.email);
       const reservationFixture = await createPaidFixture();
@@ -722,7 +742,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses to read an invoice whose metadata does not match its document", async () => {
       const issuer = await Effect.runPromise(
-        workspaceFixtures(postgres.db).account("invoice-mismatch-issuer")
+        workspaceFixtures(getPostgres().db).account("invoice-mismatch-issuer")
       );
       const input = makeManualInvoiceInput(issuer.email);
       const copiedInvoiceId = randomUUID();
@@ -777,11 +797,14 @@ describe.skipIf(!testDatabase)(
 
     test("rolls the number back when the invoice insert fails", async () => {
       const fixture = await createPaidFixture();
+      const unvalidatedKeyIdSchema = Schema.String.pipe(
+        Schema.brand("AccountingSnapshotKeyId")
+      );
       const invalidActiveKey: AccountingSnapshotKey = {
         ...testKey,
         // Deliberately bypass the application brand to prove the database failure
         // rolls the number allocation back in the same transaction.
-        id: "INVALID-ID" as AccountingSnapshotKey["id"],
+        id: unvalidatedKeyIdSchema.make("INVALID-ID"),
       };
       const before = await readCounters();
 
@@ -812,7 +835,9 @@ describe.skipIf(!testDatabase)(
         keys?: IAccountingSnapshotKeyService
       ) => {
         const issuer = await Effect.runPromise(
-          workspaceFixtures(postgres.db).account("invoice-repository-issuer")
+          workspaceFixtures(getPostgres().db).account(
+            "invoice-repository-issuer"
+          )
         );
         const { invoice } = await runRepository(
           (repository) =>
@@ -925,11 +950,12 @@ describe.skipIf(!testDatabase)(
 );
 
 const cancelIssuedInvoice = async (invoiceId: InvoiceId) => {
+  const database = requireTestDatabase(testDatabase);
   const administrator = await Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("invoice-repository-canceller")
+    workspaceFixtures(database.db).account("invoice-repository-canceller")
   );
   const baseLayer = Layer.merge(
-    testDatabase!.layer,
+    database.layer,
     Layer.succeed(
       AccountingSnapshotKeyService,
       AccountingSnapshotKeyService.of(makeKeyService())
@@ -959,7 +985,7 @@ const cancelIssuedInvoice = async (invoiceId: InvoiceId) => {
 };
 
 const setReservationState = (fixture: PaidFixture, state: string) =>
-  testDatabase!.pool.query(
+  requireTestDatabase(testDatabase).pool.query(
     "update workspace_reservations set reservation_state = $2 where id = $1",
     [fixture.reservationId, state]
   );
@@ -970,8 +996,8 @@ const insertRawInvoice = (
   fixture: PaidFixture,
   replacesInvoiceId: string | null
 ) =>
-  testDatabase!.pool
-    .query(
+  requireTestDatabase(testDatabase)
+    .pool.query(
       `insert into invoices
          (workspace_reservation_id, payment_attempt_id, dotypos_customer_id,
           invoice_number, numbering_year, numbering_sequence, key_id,
@@ -1137,24 +1163,26 @@ describe.skipIf(!testDatabase)(
       // A replacement whose issue time precedes its predecessor's, as a
       // clock step back would leave it, is cancelled in turn.
       expect(await insertRawInvoice(fixture, original.invoice.id)).toBeNull();
+      const database = requireTestDatabase(testDatabase);
       const [skewed] = (
-        await testDatabase!.pool.query<{ id: string }>(
+        await database.pool.query<{ id: string }>(
           "select id from invoices where replaces_invoice_id = $1",
           [original.invoice.id]
         )
       ).rows;
-      await testDatabase!.pool.query(
+      assert(skewed !== undefined);
+      await database.pool.query(
         `insert into invoice_cancellations
            (invoice_id, cancelled_at, cause, actor_account_email, source)
          values ($1, now(), 'reservation_cancellation', 'synthetic administrator', 'admin-ui')`,
-        [skewed!.id]
+        [skewed.id]
       );
 
       const replacement = await issue(fixture.paymentAttemptId);
 
       expect(replacement).toMatchObject({
         changed: true,
-        invoice: { replacesInvoiceId: skewed!.id },
+        invoice: { replacesInvoiceId: skewed.id },
       });
       const latest = await runRepository((repository) =>
         Effect.all([
@@ -1236,7 +1264,7 @@ describe.skipIf(!testDatabase)(
         const fixture = await createPaidFixture();
         const original = await issue(fixture.paymentAttemptId);
         await cancelIssuedInvoice(original.invoice.id);
-        let replacementId: string | undefined;
+        let replacementId: InvoiceId | undefined;
 
         const read = await runRepository(
           find(fixture),
@@ -1245,7 +1273,8 @@ describe.skipIf(!testDatabase)(
           })
         );
 
-        expect(read?.id).toBe(replacementId!);
+        assert(replacementId !== undefined);
+        expect(read?.id).toBe(replacementId);
         expect(read?.replacesInvoiceId).toBe(original.invoice.id);
       }
     );

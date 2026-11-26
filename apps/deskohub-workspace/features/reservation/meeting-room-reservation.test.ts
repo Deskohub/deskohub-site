@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import assert from "node:assert/strict";
 import { Effect, Result, Schema } from "effect";
 import "@/shared/polyfills/temporal";
 import { testEmailAddress } from "@deskohub/test-email";
@@ -169,9 +170,10 @@ describe("meetingRoomReservationSchema", () => {
       earlySetup: false,
       marketingConsent: false,
     });
+    assert(defaults);
     expect(
       getMeetingRoomReservationOrder({
-        ...defaults!,
+        ...defaults,
         marketingConsent: true,
       })
     ).toEqual(reservation);

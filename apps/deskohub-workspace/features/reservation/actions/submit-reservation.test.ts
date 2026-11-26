@@ -2,7 +2,8 @@ import "@/shared/polyfills/temporal";
 import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import "@/shared/testing/workspace-test-env";
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, type Mock, mock, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Effect, Layer } from "effect";
 import { testLinkedAccount } from "@/features/account/backend/account-operations.test-utils";
 import {
@@ -16,12 +17,12 @@ import {
   syntheticPayStateOrderId,
 } from "@/features/checkout/backend/checkout/signed-pay-state.test-utils";
 import { QrPaymentRepository } from "@/features/checkout/backend/repositories/qr-payment.repository";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import type { ReferralService } from "@/features/referrals/referral.service";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
-import {
-  type WorkspaceReservation,
-  WorkspaceReservationRepository,
-} from "@/features/reservation/backend/workspace-reservation.repository";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { customerAgentNames } from "@/shared/bot-protection/customer-agents";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 
@@ -49,7 +50,9 @@ const runSubmitReservation = async (options?: {
   readonly alreadyPaid?: boolean;
   readonly invalidPayState?: boolean;
   readonly bookerCustomerId?: string;
-  readonly hasSettledReferral?: ReturnType<typeof mock>;
+  readonly hasSettledReferral?: Mock<
+    (typeof ReferralService)["Service"]["hasSettledReferral"]
+  >;
 }) => {
   const { CheckoutService } = await import(
     "@/features/checkout/backend/checkout"
@@ -89,12 +92,14 @@ const runSubmitReservation = async (options?: {
           ...testPeekedStandings.linked,
           account: {
             ...testLinkedAccount,
-            dotyposCustomerId: options.bookerCustomerId as never,
+            dotyposCustomerId: DotyposCustomerIdSchema.make(
+              options.bookerCustomerId
+            ),
           },
         }
   );
   const referrals = ReferralServiceMock({
-    hasSettledReferral: hasSettledReferral as never,
+    hasSettledReferral,
   });
   const payStateToken =
     options?.method && !options.invalidPayState
@@ -161,15 +166,17 @@ const runSubmitReservation = async (options?: {
         }),
         Layer.mock(WorkspaceReservationRepository, {
           findById: (id) =>
-            Effect.succeed({
-              id,
-              authorAccountId: testLinkedAccount.accountId,
-              reservationState: options?.alreadyPaid ? "confirmed" : "held",
-              paymentState: options?.alreadyPaid ? "paid" : unpaidState,
-              activePaymentAttemptId: options?.legacyActivePayment
-                ? "legacy-card-attempt"
-                : null,
-            } as WorkspaceReservation),
+            Effect.succeed(
+              workspaceReservationFixture({
+                id,
+                authorAccountId: testLinkedAccount.accountId,
+                reservationState: options?.alreadyPaid ? "confirmed" : "held",
+                paymentState: options?.alreadyPaid ? "paid" : unpaidState,
+                activePaymentAttemptId: options?.legacyActivePayment
+                  ? paymentAttemptIdSchema.make("legacy-card-attempt")
+                  : null,
+              })
+            ),
         }),
         TestSealedStateKeys,
         referrals,

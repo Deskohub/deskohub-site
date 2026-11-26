@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
+  DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -11,6 +13,7 @@ import { orderIdSchema } from "@/features/order";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
@@ -19,6 +22,21 @@ import {
   readAdminPass,
   readReservationPassLinks,
 } from "./pass-reads";
+
+const fixtureDotyposCustomer = (fields: {
+  readonly id: DotyposCustomerId;
+  readonly firstName: string;
+  readonly lastName?: string;
+  readonly email?: string;
+  readonly deleted?: boolean;
+}): DotyposCustomer => ({
+  _cloudId: DotyposCloudIdSchema.make("1"),
+  points: null,
+  flags: "0",
+  display: true,
+  deleted: false,
+  ...fields,
+});
 
 describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
   "Administration pass projections on disposable PostgreSQL",
@@ -59,9 +77,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
 
     beforeAll(async () => {
-      database = (await createWorkspacePostgresSuiteDatabase(
-        "admin_pass_reads"
-      ))!;
+      database = requireTestDatabase(
+        await createWorkspacePostgresSuiteDatabase("admin_pass_reads")
+      );
       const { pool } = database;
       await pool.query(
         "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2), ($3, $4), ($5, null)",
@@ -126,7 +144,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
          returning id`,
         [holderAccount, holderId]
       );
-      packReservationId = workspaceReservationIdSchema.make(pack.rows[0]!.id);
+      const [packRow] = pack.rows;
+      assert(packRow);
+      packReservationId = workspaceReservationIdSchema.make(packRow.id);
       await pool.query(
         `insert into pass_entry_claims (reservation_id, pass_id, date, status)
          values ($1, $2, '2024-06-20', 'consumed')`,
@@ -144,7 +164,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
          returning id`,
         [holderId, buyerAccount, unlimitedId, reservedDate]
       );
-      dayReservationId = workspaceReservationIdSchema.make(day.rows[0]!.id);
+      const [dayRow] = day.rows;
+      assert(dayRow);
+      dayReservationId = workspaceReservationIdSchema.make(dayRow.id);
       await pool.query(
         `insert into reservation_access_grants
           (workspace_reservation_id, device_id, state, reservation_starts_at,
@@ -223,18 +245,19 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
       const match = fixtureCustomers.find(
         ({ customer }) => customer === "eligible-pass-customer-51"
-      )!;
+      );
+      assert(match);
       const contacts = new Map(
         fixtureCustomers.map(({ customer }) => {
           const id = DotyposCustomerIdSchema.make(customer);
           return [
             id,
-            {
+            fixtureDotyposCustomer({
               id,
               firstName: customer === match.customer ? "Target" : "Unrelated",
               lastName: "Customer",
               deleted: false,
-            } as DotyposCustomer,
+            }),
           ] as const;
         })
       );
@@ -331,21 +354,21 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const profiles = new Map<DotyposCustomerId, DotyposCustomer>([
         [
           buyerId,
-          {
+          fixtureDotyposCustomer({
             id: buyerId,
             firstName: "Eligible Buyer",
             email: testEmailAddress("different-directory-email"),
             deleted: false,
-          } as DotyposCustomer,
+          }),
         ],
         [
           holderId,
-          {
+          fixtureDotyposCustomer({
             id: holderId,
             firstName: "Pending Deletion Holder",
             email: holderEmail,
             deleted: false,
-          } as DotyposCustomer,
+          }),
         ],
       ]);
       const directory = Layer.mock(AdministrationCustomerDirectory, {

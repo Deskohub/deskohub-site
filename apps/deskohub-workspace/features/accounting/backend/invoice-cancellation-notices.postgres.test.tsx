@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   EmailDeliveryIdSchema,
   type EmailMessage,
@@ -11,11 +12,14 @@ import {
   EmailServiceError,
   EmailServiceTag,
 } from "@deskohub/email/backend/service";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import type { InvoiceEmailDeliveryAudience } from "@/features/accounting/invoice-email-delivery";
 import type { InvoiceId } from "@/features/accounting/manual-invoice";
 import { workspaceDefaultFromAddress } from "@/shared/backend/config/email.config";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { AccountingDocumentSnapshots } from "./accounting-document-snapshots";
 import { InvoiceCancellationRepository } from "./invoice-cancellation.repository";
 import { makeInvoiceCancellationTestKit } from "./invoice-cancellation.test-utils";
@@ -34,8 +38,25 @@ const testDatabase = await createWorkspacePostgresSuiteDatabase(
 );
 afterAll(() => testDatabase?.close());
 // The kit only touches the database when a test calls it.
-const kit = makeInvoiceCancellationTestKit(testDatabase!);
-const { cancel, issueManualInvoice, makeActor, query, run } = kit;
+const kit = testDatabase ? makeInvoiceCancellationTestKit(testDatabase) : null;
+const requireKit = () => requireTestDatabase(kit);
+const cancel: ReturnType<typeof makeInvoiceCancellationTestKit>["cancel"] = (
+  input
+) => requireKit().cancel(input);
+const issueManualInvoice: ReturnType<
+  typeof makeInvoiceCancellationTestKit
+>["issueManualInvoice"] = (...args) => requireKit().issueManualInvoice(...args);
+const makeActor: ReturnType<
+  typeof makeInvoiceCancellationTestKit
+>["makeActor"] = (label) => requireKit().makeActor(label);
+const query: ReturnType<typeof makeInvoiceCancellationTestKit>["query"] = (
+  text,
+  values
+) => requireKit().query(text, values);
+const run: ReturnType<typeof makeInvoiceCancellationTestKit>["run"] = (
+  effect,
+  keys
+) => requireKit().run(effect, keys);
 
 const emailConfig: EmailProviderConfig = {
   provider: "console",
@@ -87,9 +108,9 @@ const makeMailbox = () => {
 };
 
 // Manual invoices carry their recipient, so the snapshot reader stays unused.
-const unusedSnapshots = Layer.succeed(AccountingDocumentSnapshots, {
+const unusedSnapshots = Layer.mock(AccountingDocumentSnapshots, {
   find: () => Effect.die("manual invoices have no source snapshot"),
-} as never);
+});
 
 const noticesLayer = (mailbox: ReturnType<typeof makeMailbox>) =>
   InvoiceCancellationNotices.Default.pipe(
@@ -168,8 +189,12 @@ const readNotices = (invoiceId: InvoiceId) =>
     [invoiceId]
   );
 
-const audienceOf = (message: EmailMessage) =>
-  (message.metadata as { audience: InvoiceEmailDeliveryAudience }).audience;
+const noticeMetadataSchema = Schema.Struct({
+  audience: Schema.Literals(["customer", "internal"]),
+});
+
+const audienceOf = (message: EmailMessage): InvoiceEmailDeliveryAudience =>
+  Schema.decodeUnknownSync(noticeMetadataSchema)(message.metadata).audience;
 
 describe.skipIf(!testDatabase)(
   "InvoiceCancellationNotices on disposable Postgres",
@@ -198,16 +223,15 @@ describe.skipIf(!testDatabase)(
       });
       expect(mailbox.notices().map(audienceOf)).toEqual(["internal"]);
       const [notice] = mailbox.notices();
-      const [attachment] = notice!.attachments ?? [];
-      expect(attachment?.filename).toBe(
+      assert(notice !== undefined);
+      const [attachment] = notice.attachments ?? [];
+      assert(attachment !== undefined);
+      expect(attachment.filename).toBe(
         `${recording.record.correctiveDocumentNumber}.pdf`
       );
-      expect(
-        Buffer.from(attachment!.content as Buffer)
-          .subarray(0, 5)
-          .toString()
-      ).toBe("%PDF-");
-      expect(notice!.idempotencyKey).toBe(
+      assert(Buffer.isBuffer(attachment.content));
+      expect(attachment.content.subarray(0, 5).toString()).toBe("%PDF-");
+      expect(notice.idempotencyKey).toBe(
         `workspace-invoice-cancellation-internal-${invoice.id}`
       );
       expect(await readNotices(invoice.id)).toMatchObject([
@@ -272,9 +296,10 @@ describe.skipIf(!testDatabase)(
 
       mailbox.failWhen(() => false);
       const retry = await claimNotice(invoice.id, "internal");
+      assert(retry !== null);
       const retried = await deliverNotices(mailbox, {
         invoiceId: invoice.id,
-        claims: [retry!],
+        claims: [retry],
       });
       const replay = await run(cancel({ invoiceId: invoice.id, actor }));
       const replayed = await deliverNotices(mailbox, {

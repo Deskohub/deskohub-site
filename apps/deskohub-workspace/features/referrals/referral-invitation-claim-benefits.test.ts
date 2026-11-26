@@ -1,7 +1,7 @@
 import "@/shared/polyfills/temporal";
 
 import { describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Schema } from "effect";
 import {
   type AppliedDiscount,
@@ -16,8 +16,8 @@ import {
 } from "./referral-invitation-claim-benefits";
 
 const czk = (value: number) => ({ value, exponent: 2, currency: "CZK" });
-const invited = "100000001" as DotyposCustomerId;
-const referrer = "100000002" as DotyposCustomerId;
+const invited = DotyposCustomerIdSchema.make("100000001");
+const referrer = DotyposCustomerIdSchema.make("100000002");
 const promotionCodeId = promotionCodeIdSchema.make("promotion-1");
 
 const applied = (

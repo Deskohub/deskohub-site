@@ -9,7 +9,10 @@ import {
 } from "@/features/accounting/backend/accounting-snapshot-key.service";
 import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { invoicePreviewIdSchema } from "./invoice-preview-id";
 import { InvoicePreviews } from "./invoice-previews.service";
 
@@ -29,7 +32,7 @@ const run = <A, E>(effect: Effect.Effect<A, E, InvoicePreviews>) =>
         InvoicePreviews.Default.pipe(
           Layer.provide(
             Layer.merge(
-              testDatabase!.layer,
+              requireTestDatabase(testDatabase).layer,
               Layer.succeed(
                 AccountingSnapshotKeyService,
                 AccountingSnapshotKeyService.of({
@@ -45,7 +48,9 @@ const run = <A, E>(effect: Effect.Effect<A, E, InvoicePreviews>) =>
   );
 
 const administrator = (label: string) =>
-  Effect.runPromise(workspaceFixtures(testDatabase!.db).account(label));
+  Effect.runPromise(
+    workspaceFixtures(requireTestDatabase(testDatabase).db).account(label)
+  );
 
 const document = new TextEncoder().encode("%PDF-1.7 synthetic preview");
 
@@ -76,7 +81,7 @@ const open = (
   );
 
 const query = async (text: string, values: readonly unknown[] = []) =>
-  (await testDatabase!.pool.query(text, [...values])).rows;
+  (await requireTestDatabase(testDatabase).pool.query(text, [...values])).rows;
 
 describe.skipIf(!testDatabase)("InvoicePreviews on disposable Postgres", () => {
   test("opens a kept preview for the administrator who asked for it until it expires", async () => {

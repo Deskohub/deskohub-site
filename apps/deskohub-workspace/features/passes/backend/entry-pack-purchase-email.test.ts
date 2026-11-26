@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   EmailConfigTag,
   EmailDeliveryIdSchema,
@@ -100,25 +101,27 @@ test("emails the holder capability for a self-purchase and buyer status for a gi
       )
     );
     expect(messages).toHaveLength(1);
-    return messages[0]!;
+    const [message] = messages;
+    assert(message);
+    return message;
   };
 
   const self = await renderConfirmation(buyerAccountId);
   const accessPath = `/en-US/reservation/access/${id}`;
-  const hrefs = [...(self.html ?? "").matchAll(/href="([^"]+)"/g)].map(
-    (match) => match[1]!
+  const hrefs = [...(self.html ?? "").matchAll(/href="([^"]+)"/g)].flatMap(
+    (match) => (match[1] ? [match[1]] : [])
   );
   const href = hrefs.find((candidate) => candidate.includes(accessPath));
-  expect(href).toBeDefined();
-  const url = new URL(href!.replaceAll("&amp;", "&"));
+  assert(href);
+  const url = new URL(href.replaceAll("&amp;", "&"));
   expect(url.pathname).toBe(accessPath);
   const token = url.searchParams.get(unlimitedAccessTokenQueryParam);
-  expect(token).toBeTruthy();
+  assert(token);
   let now = paidAt.epochMilliseconds;
   const clock = { now: () => now };
   const cookie = await Effect.runPromise(
     exchangeUnlimitedAccessToken(
-      { token: token!, orderId: id, locale: purchase.locale },
+      { token, orderId: id, locale: purchase.locale },
       clock
     )
   );
@@ -135,7 +138,7 @@ test("emails the holder capability for a self-purchase and buyer status for a gi
 
   const retry = await renderConfirmation(buyerAccountId);
   expect(retry.idempotencyKey).toBe(self.idempotencyKey);
-  expect(retry.html?.includes(href!)).toBe(true);
+  expect(retry.html?.includes(href)).toBe(true);
   const gift = await renderConfirmation(giftHolder);
   expect(gift.html).toContain(`/en-US/reservation/status/${id}`);
   expect(gift.html).not.toContain(accessPath);

@@ -183,11 +183,13 @@ function UnlimitedAccessCode({
           aria-hidden="true"
           className="flex flex-wrap justify-center gap-[clamp(0.25rem,1.2vw,0.6rem)]"
         >
-          {Array.from(access.code).map((character, index) => (
+          {Array.from(access.code, (character, position) => ({
+            character,
+            slot: `${position}-${character}`,
+          })).map(({ character, slot }) => (
             <span
               className="grid h-[clamp(3.5rem,15vw,5.25rem)] w-[clamp(1.6rem,7.4vw,3.5rem)] place-items-center rounded-xl bg-navy-blue/5 font-mono text-[clamp(1.35rem,6vw,2.4rem)] font-medium tabular-nums"
-              // biome-ignore lint/suspicious/noArrayIndexKey: PIN digits are positional.
-              key={index}
+              key={slot}
             >
               {character}
             </span>

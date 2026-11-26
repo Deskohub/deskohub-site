@@ -1,7 +1,11 @@
 import "@/shared/polyfills/temporal";
 
 import { describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import assert from "node:assert/strict";
+import {
+  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
 import { Deferred, Effect } from "effect";
 import {
   WorkspaceDatabase,
@@ -21,12 +25,16 @@ import { m } from "@/features/i18n";
 import type { Money } from "@/shared/money/money";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type { AppliedDiscount } from "./contracts";
 import { deriveOpaqueDiscountId } from "./opaque-discount-id";
 import {
   canonicalPromotionCodeSchema,
   type DiscountApplicationId,
+  discountApplicationIdSchema,
 } from "./persistence-contracts";
 import { getWorkspaceProductTargetsCovering } from "./product-target";
 import { type PromotionClaim, PromotionClaims } from "./promotion-claims";
@@ -41,9 +49,9 @@ const czk = (value: number): Money => ({ value, exponent: 2, currency: "CZK" });
 const uniqueSuffix = () =>
   crypto.randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase();
 const newCustomer = () =>
-  (
-    Math.floor(Math.random() * 900_000_000) + 100_000_000
-  ).toString() as DotyposCustomerId;
+  DotyposCustomerIdSchema.make(
+    (Math.floor(Math.random() * 900_000_000) + 100_000_000).toString()
+  );
 
 /** Runs `effect` in its own Workspace transaction on the test database. */
 const inTransaction = <A, E>(
@@ -53,13 +61,16 @@ const inTransaction = <A, E>(
     Effect.gen(function* () {
       const { transaction } = yield* WorkspaceDatabase;
       return yield* transaction(effect);
-    }).pipe(Effect.provide(testDatabase!.layer), Effect.result)
+    }).pipe(
+      Effect.provide(requireTestDatabase(testDatabase).layer),
+      Effect.result
+    )
   );
 
 const insertPromotion = async (kind: "discount" | "voucher") => {
   const [promotion] = await Effect.runPromise(
-    testDatabase!.db
-      .insert(promotionCodes)
+    requireTestDatabase(testDatabase)
+      .db.insert(promotionCodes)
       .values({
         kind,
         code: canonicalPromotionCodeSchema.make(`PC${uniqueSuffix()}`),
@@ -67,11 +78,12 @@ const insertPromotion = async (kind: "discount" | "voucher") => {
       })
       .returning({ id: promotionCodes.id })
   );
-  return promotion!.id;
+  assert(promotion, "Expected inserted promotion");
+  return promotion.id;
 };
 
 const createDiscountCode = async (maxUses: number | null) => {
-  const db = testDatabase!.db;
+  const db = requireTestDatabase(testDatabase).db;
   const promotionCodeId = await insertPromotion("discount");
   const [storedDiscount] = await Effect.runPromise(
     db
@@ -79,9 +91,10 @@ const createDiscountCode = async (maxUses: number | null) => {
       .values({ labels, percentageBasisPoints: 1_000 })
       .returning({ id: discounts.id })
   );
+  assert(storedDiscount, "Expected inserted stored discount");
   await Effect.runPromise(
     db.insert(discountProductTargets).values({
-      discountId: storedDiscount!.id,
+      discountId: storedDiscount.id,
       productTarget: getWorkspaceProductTargetsCovering(product)[0],
     })
   );
@@ -92,22 +105,23 @@ const createDiscountCode = async (maxUses: number | null) => {
         code: canonicalPromotionCodeSchema.make(`DC${uniqueSuffix()}`),
         enabled: true,
         promotionCodeId,
-        discountId: storedDiscount!.id,
+        discountId: storedDiscount.id,
         maxUses,
         maxUsesPerCustomer: null,
       })
       .returning({ id: discountCodes.id })
   );
+  assert(code, "Expected inserted discount code");
   const claim = (customer: DotyposCustomerId): PromotionClaim => ({
     kind: "discount_code",
-    codeId: code!.id,
-    storedDiscountId: storedDiscount!.id,
+    codeId: code.id,
+    storedDiscountId: storedDiscount.id,
     dotyposCustomerId: customer,
     product,
   });
   const application: AppliedDiscount = {
     discount: {
-      id: storedDiscount!.id,
+      id: storedDiscount.id,
       label: labels[locale],
       adjustment: { kind: "percentage", basisPoints: 1_000 },
     },
@@ -115,14 +129,14 @@ const createDiscountCode = async (maxUses: number | null) => {
     amount: czk(subtotal / 10),
     subtotalAfter: czk(subtotal - subtotal / 10),
   };
-  return { claim, application, codeId: code!.id };
+  return { claim, application, codeId: code.id };
 };
 
 const createVoucher = async (issued: number) => {
   const promotionCodeId = await insertPromotion("voucher");
   const [voucher] = await Effect.runPromise(
-    testDatabase!.db
-      .insert(vouchers)
+    requireTestDatabase(testDatabase)
+      .db.insert(vouchers)
       .values({
         promotionCodeId,
         issuedAmountValue: issued,
@@ -131,6 +145,7 @@ const createVoucher = async (issued: number) => {
       })
       .returning({ id: vouchers.id })
   );
+  assert(voucher, "Expected inserted voucher");
   /** The claim and application that take `amount` of `available` credit. */
   const offer = (
     customer: DotyposCustomerId,
@@ -139,7 +154,7 @@ const createVoucher = async (issued: number) => {
   ) => ({
     claim: {
       kind: "voucher",
-      voucherId: voucher!.id,
+      voucherId: voucher.id,
       availableAmount: czk(available),
       dotyposCustomerId: customer,
     } satisfies PromotionClaim,
@@ -147,7 +162,7 @@ const createVoucher = async (issued: number) => {
       discount: {
         id: deriveOpaqueDiscountId({
           providerNamespace: "database-voucher",
-          providerReference: voucher!.id,
+          providerReference: voucher.id,
         }),
         label: m.checkoutVoucherLabel({}, { locale }),
         adjustment: { kind: "fixed", amount: czk(available) },
@@ -157,7 +172,7 @@ const createVoucher = async (issued: number) => {
       subtotalAfter: czk(subtotal - amount),
     } satisfies AppliedDiscount,
   });
-  return { offer, voucherId: voucher!.id };
+  return { offer, voucherId: voucher.id };
 };
 
 /** A held reservation's new payment attempt with the application persisted. */
@@ -165,7 +180,7 @@ const createAttempt = async (
   customer: DotyposCustomerId,
   application: AppliedDiscount
 ) => {
-  const db = testDatabase!.db;
+  const db = requireTestDatabase(testDatabase).db;
   const reservation = await Effect.runPromise(
     workspaceFixtures(db).reservation({
       stage: { reservation: "held" },
@@ -178,7 +193,7 @@ const createAttempt = async (
       .values({
         workspaceReservationId: reservation.id,
         provider: "nexi",
-        providerOrderId: `order-${crypto.randomUUID()}` as never,
+        providerOrderId: `order-${crypto.randomUUID()}`,
         state: "created",
         amountValue: application.subtotalAfter.value,
         amountExponent: 2,
@@ -186,11 +201,12 @@ const createAttempt = async (
       })
       .returning({ id: paymentAttempts.id })
   );
+  assert(attempt, "Expected inserted payment attempt");
   const [persisted] = await Effect.runPromise(
     db
       .insert(discountApplications)
       .values({
-        paymentAttemptId: attempt!.id,
+        paymentAttemptId: attempt.id,
         workspaceReservationId: reservation.id,
         sequence: 0,
         publicDiscountId: application.discount.id,
@@ -210,9 +226,10 @@ const createAttempt = async (
       })
       .returning({ id: discountApplications.id })
   );
+  assert(persisted, "Expected inserted discount application");
   return {
-    paymentAttemptId: attempt!.id,
-    applicationId: persisted!.id as DiscountApplicationId,
+    paymentAttemptId: attempt.id,
+    applicationId: discountApplicationIdSchema.make(persisted.id),
   };
 };
 
@@ -252,7 +269,7 @@ const admitNew = async (offer: {
 
 const claimRows = async (paymentAttemptId: PaymentAttemptId) =>
   (
-    await testDatabase!.pool.query(
+    await requireTestDatabase(testDatabase).pool.query(
       `select 'code' as ledger, state, release_reason, reserved_at is not null as reserved, redeemed_at is not null as redeemed, released_at is not null as released from discount_code_redemptions where payment_attempt_id = $1
        union all
        select 'voucher', state, release_reason, reserved_at is not null, redeemed_at is not null, released_at is not null from voucher_redemptions where payment_attempt_id = $1`,
@@ -559,7 +576,7 @@ describe.skipIf(!testDatabase)("PromotionClaims on disposable Postgres", () => {
     const waiting = inTransaction(
       PromotionClaims.admit(admission(waiter, waiterAttempt))
     );
-    await waitForPostgresLockWaiter(testDatabase!.pool, {
+    await waitForPostgresLockWaiter(requireTestDatabase(testDatabase).pool, {
       condition: "locktype = 'transactionid'",
       description: "the second admission waiting on the code row",
     });

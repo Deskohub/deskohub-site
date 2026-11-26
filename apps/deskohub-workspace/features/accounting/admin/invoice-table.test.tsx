@@ -6,8 +6,10 @@ import {
 } from "@deskohub/workspace-admin-api";
 import { cleanup, render, within } from "@testing-library/react";
 import type { InvoiceNoticeSummary } from "@/features/accounting/invoice-cancellation";
+import { administrationHref } from "@/features/administration/administration-href";
 import { m } from "@/features/administration/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
@@ -55,33 +57,42 @@ const invoice: InvoiceAdministrationTableRow = {
   replacedByInvoiceId: null,
 };
 
+const cancelledInvoiceId = AdministrationInvoiceId.make(
+  "018f47d2-8f7c-7c5e-9f9a-6ef21f90cb22"
+);
+
+const cancelledInvoiceCancellation = {
+  cancelledAt: "2026-08-20T10:00:00Z",
+  cause: "invoice_cancellation",
+  source: "admin-ui",
+  actor: testEmailAddress("invoice-table-operator"),
+  correctiveDocumentNumber: "WS-OD-2026-000001",
+  correctiveDocumentIssuedAt: "2026-08-20T10:00:00Z",
+  correctiveDocumentPdfUrl: administrationHref(
+    "/[locale]/admin/invoices/[invoiceId]/corrective-document",
+    { invoiceId: cancelledInvoiceId }
+  ),
+  notices: {
+    customer: "accepted",
+    internal: "accepted",
+    needsAttention: false,
+  },
+} as const;
+
 const cancelledInvoice: InvoiceAdministrationTableRow = {
   ...invoice,
-  id: AdministrationInvoiceId.make("018f47d2-8f7c-7c5e-9f9a-6ef21f90cb22"),
+  id: cancelledInvoiceId,
   invoiceNumber: "2026000002",
   delivery: { customer: "accepted", internal: "accepted" },
   needsAttention: false,
-  cancellation: {
-    cancelledAt: "2026-08-20T10:00:00Z",
-    cause: "invoice_cancellation",
-    source: "admin-ui",
-    actor: testEmailAddress("invoice-table-operator"),
-    correctiveDocumentNumber: "WS-OD-2026-000001",
-    correctiveDocumentIssuedAt: "2026-08-20T10:00:00Z",
-    correctiveDocumentPdfUrl:
-      "/admin/invoices/018f47d2-8f7c-7c5e-9f9a-6ef21f90cb22/corrective-document" as never,
-    notices: {
-      customer: "accepted",
-      internal: "accepted",
-      needsAttention: false,
-    },
-  },
+  cancellation: cancelledInvoiceCancellation,
 };
 
 test("renders the invoice table in Czech on a Czech route", () => {
-  workspaceUseAction.mockImplementation(
-    () => ({ execute: mock(), isExecuting: false }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute: mock(),
+    isExecuting: false,
+  }));
   const view = render(
     <RouteLocaleProvider locale="cs-CZ">
       <InvoiceAdministrationTable items={[invoice]} query={{}} />
@@ -102,9 +113,10 @@ test("renders the invoice table in Czech on a Czech route", () => {
 });
 
 test("shows the issuer above the avenue when an invoice records an actor", () => {
-  workspaceUseAction.mockImplementation(
-    () => ({ execute: mock(), isExecuting: false }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute: mock(),
+    isExecuting: false,
+  }));
   const actor = testEmailAddress("invoice-issuer");
   const view = render(
     <RouteLocaleProvider locale="en-US">
@@ -134,9 +146,10 @@ test("shows the issuer above the avenue when an invoice records an actor", () =>
 });
 
 test("marks only cancelled rows, which offer hiding instead of cancelling", () => {
-  workspaceUseAction.mockImplementation(
-    () => ({ execute: mock(), isExecuting: false }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute: mock(),
+    isExecuting: false,
+  }));
   const locale = "en-US";
   const view = render(
     <RouteLocaleProvider locale={locale}>
@@ -149,9 +162,10 @@ test("marks only cancelled rows, which offer hiding instead of cancelling", () =
   const table = within(view.getByRole("table"));
   const rowOf = (invoiceNumber: string) =>
     within(
-      table
-        .getByRole("link", { name: invoiceNumber })
-        .closest("tr") as HTMLElement
+      elementOf(
+        table.getByRole("link", { name: invoiceNumber }).closest("tr"),
+        HTMLElement
+      )
     );
   const badge = m.accountingInvoiceCancelledBadge({}, { locale });
   const cancel = (invoiceNumber: string) =>
@@ -186,9 +200,10 @@ test("marks only cancelled rows, which offer hiding instead of cancelling", () =
 });
 
 test("shows an invoice whose document cannot be read without its document's fields or actions, except hiding once cancelled", () => {
-  workspaceUseAction.mockImplementation(
-    () => ({ execute: mock(), isExecuting: false }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute: mock(),
+    isExecuting: false,
+  }));
   const locale = "en-US";
   const unreadable: InvoiceAdministrationTableRow = {
     documentUnavailable: true,
@@ -217,7 +232,10 @@ test("shows an invoice whose document cannot be read without its document's fiel
   );
   const table = within(view.getByRole("table"));
   const rowOf = (invoiceNumber: string) =>
-    table.getByText(invoiceNumber, { exact: true }).closest("tr")!;
+    elementOf(
+      table.getByText(invoiceNumber, { exact: true }).closest("tr"),
+      HTMLTableRowElement
+    );
   const marker = '[data-slot="invoice-document-unavailable"]';
   const badge = m.accountingInvoiceCancelledBadge({}, { locale });
 
@@ -246,9 +264,10 @@ test("shows an invoice whose document cannot be read without its document's fiel
 });
 
 test("reports a cancelled invoice's delivery from its cancellation notices, not its original email", () => {
-  workspaceUseAction.mockImplementation(
-    () => ({ execute: mock(), isExecuting: false }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute: mock(),
+    isExecuting: false,
+  }));
   const locale = "en-US";
   const cancelledWith = (
     suffix: string,
@@ -262,7 +281,7 @@ test("reports a cancelled invoice's delivery from its cancellation notices, not 
     invoiceNumber: `20260000${suffix}`,
     delivery,
     needsAttention: notices.needsAttention,
-    cancellation: { ...cancelledInvoice.cancellation!, notices },
+    cancellation: { ...cancelledInvoiceCancellation, notices },
   });
   // The customer's invoice email failed, so no customer notice is owed.
   const noticesSent = cancelledWith(
@@ -297,11 +316,14 @@ test("reports a cancelled invoice's delivery from its cancellation notices, not 
       )
     );
   const deliveryOf = (row: InvoiceAdministrationTableRow) =>
-    (
+    elementOf(
       within(table)
         .getByRole("link", { name: row.invoiceNumber })
-        .closest("tr") as HTMLTableRowElement
-    ).cells[deliveryColumn]!.textContent?.trim();
+        .closest("tr"),
+      HTMLTableRowElement
+    )
+      .cells.item(deliveryColumn)
+      ?.textContent?.trim();
 
   expect(deliveryColumn).toBeGreaterThan(-1);
   expect(deliveryOf(noticesSent)).toBe(

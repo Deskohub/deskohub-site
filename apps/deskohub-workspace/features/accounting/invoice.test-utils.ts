@@ -15,6 +15,7 @@ import { getReservationQuoteFingerprint } from "@/features/checkout/reservation-
 import { getMeetingRoomReservationQuote } from "@/features/checkout/reservation-quote-meeting-room";
 import { buildOfficeReservationQuote } from "@/features/checkout/reservation-quote-office";
 import type { Locale } from "@/features/i18n";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { normalizedMeetingRoomReservationOrderSchema } from "@/features/reservation/meeting-room-reservation";
 import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/office-reservation";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
@@ -31,9 +32,11 @@ import {
   formatInvoiceNumber,
   type InvoiceBuyer,
   type InvoiceDocument,
+  isLineItemInvoiceDocument,
   type ManualInvoiceDocument,
   makeInvoiceDocument,
   makeManualInvoiceDocument,
+  type ReservationInvoiceDocument,
 } from "./invoice";
 import {
   type ManualInvoicePayment,
@@ -71,14 +74,16 @@ const personalAddress = {
 export const makeCoworkInvoiceDocument = (
   locale: Locale,
   options: { readonly businessBuyer?: boolean } = {}
-): InvoiceDocument => {
+): ReservationInvoiceDocument => {
   const order = {
     entryTier: "open-space",
     coffee: true,
   } satisfies CoworkReservationQuoteOrder;
-  const prepared = {
+  const prepared: PreparedCustomerQuote = {
     kind: "cowork",
-    reservation: {
+    reservation: Schema.decodeUnknownSync(
+      normalizedCoworkReservationOrderSchema
+    )({
       kind: "cowork",
       ...order,
       date: "2099-01-01",
@@ -92,9 +97,9 @@ export const makeCoworkInvoiceDocument = (
             invoice: "requested",
             address: personalAddress,
           },
-    },
+    }),
     quote: buildCoworkReservationQuote(order),
-  } as PreparedCustomerQuote;
+  };
 
   return issueTestInvoice({
     locale,
@@ -200,7 +205,7 @@ const issueTestInvoice = (input: {
   readonly prepared: PreparedCustomerQuote;
   readonly sequence: number;
   readonly buyer?: InvoiceBuyer;
-}): InvoiceDocument => {
+}): ReservationInvoiceDocument => {
   const source = makeAccountingDocumentSnapshot({
     workspaceReservationId: workspaceReservationIdSchema.make(
       `reservation-${input.sequence}`
@@ -222,7 +227,7 @@ const issueTestInvoice = (input: {
       address: personalAddress,
     } satisfies InvoiceBuyer);
 
-  return makeInvoiceDocument({
+  const document = makeInvoiceDocument({
     source,
     buyer,
     paymentAttemptId: `payment-attempt-${input.sequence}`,
@@ -234,4 +239,8 @@ const issueTestInvoice = (input: {
     fulfilledAt,
     paidAt,
   });
+  if (isLineItemInvoiceDocument(document)) {
+    throw new Error("Expected a reservation invoice document");
+  }
+  return document;
 };

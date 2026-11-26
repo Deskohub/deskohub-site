@@ -264,16 +264,18 @@ describe("discount calculator", () => {
       discountGroupId: "private-group-id",
       codeId: "private-code-id-on-discount",
     } as const;
+    const productWithRuntimeField = {
+      ...product,
+      source: "private-product-source",
+    } as const;
+    const subtotalWithRuntimeField = {
+      ...money(1000),
+      source: "private-subtotal-source",
+    } as const;
     const result = Effect.runSync(
       calculateDiscounts({
-        product: {
-          ...product,
-          source: "private-product-source",
-        } as WorkspaceProductIdentity,
-        discountableSubtotal: {
-          ...money(1000),
-          source: "private-subtotal-source",
-        } as Money,
+        product: productWithRuntimeField,
+        discountableSubtotal: subtotalWithRuntimeField,
         candidates: [
           candidate(discountWithRuntimeProviderFields, {
             provenance: {

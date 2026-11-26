@@ -280,9 +280,12 @@ describe("ReservationAccessRoute", () => {
     const { errors } = await renderRoute(passOrderId);
 
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toBeInstanceOf(RedirectSignal);
+    const [redirectError] = errors;
+    if (!(redirectError instanceof RedirectSignal)) {
+      throw new Error("Expected RedirectSignal");
+    }
     const redirectPath = new URL(
-      (errors[0] as Error).message,
+      redirectError.message,
       "https://example.invalid"
     );
     expect(redirectPath.pathname).toEqual("/en-US/auth/sign-in");

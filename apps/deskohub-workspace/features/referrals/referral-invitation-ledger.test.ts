@@ -6,16 +6,18 @@ import {
   WorkspaceDatabase,
   type WorkspaceTransaction,
 } from "@/db/database.service";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { ReferralInvitationLedger } from "./referral-invitation-ledger";
 
 /** Runs a claim redemption in a transaction on the recording database. */
 const redeemOnRecording = async (
-  rows: (readonly unknown[])[],
+  rows: readonly (readonly (readonly unknown[])[])[],
   redeem: () => Effect.Effect<void, unknown, WorkspaceTransaction>
 ) => {
   const recording = await makeRecordingWorkspaceDatabase();
-  recording.setRows(rows);
+  recording.setRows(rows.map((resultSet) => [...resultSet]));
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const { transaction } = yield* WorkspaceDatabase;
@@ -32,17 +34,18 @@ describe("ReferralInvitationLedger.redeem", () => {
     for (const [previousPayment, otherActiveClaim] of [
       [[["reservation-2"]], []],
       [[], [["claim-2"]]],
-    ]) {
+    ] as const) {
       const { result, statements } = await redeemOnRecording(
         [
           [["customer-1", "customer-2", "promotion-1", "released"]],
-          previousPayment!,
-          otherActiveClaim!,
+          previousPayment,
+          otherActiveClaim,
         ],
         () =>
           ReferralInvitationLedger.redeem({
-            paymentAttemptId: "attempt-1" as never,
-            workspaceReservationId: "reservation-1" as never,
+            paymentAttemptId: paymentAttemptIdSchema.make("attempt-1"),
+            workspaceReservationId:
+              workspaceReservationIdSchema.make("reservation-1"),
             redeemedAt,
             readmitReleased: true,
           })

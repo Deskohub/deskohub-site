@@ -10,6 +10,7 @@ import {
 } from "@/shared/testing/rendered-representations.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   withStatementTimeout,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type {
@@ -36,8 +37,8 @@ afterAll(async () => {
 });
 // The kit only touches the database when a test calls it.
 const { cancel, issueManualInvoice, makeActor, run } =
-  makeInvoiceCancellationTestKit(testDatabase!);
-const timingOut = makeInvoiceCancellationTestKit(timingOutDatabase!);
+  makeInvoiceCancellationTestKit(testDatabase);
+const timingOut = makeInvoiceCancellationTestKit(timingOutDatabase);
 
 const readableKey: AccountingSnapshotKey = {
   id: accountingSnapshotKeyIdSchema.make("K209901"),
@@ -150,7 +151,7 @@ describe.skipIf(!testDatabase)("listing invoices that cannot be opened", () => {
     // Only the decrypting statement reads this column: the key lookup before
     // it and the standing a degraded row is read from still succeed.
     const renameCustomerColumn = (from: string, to: string) =>
-      testDatabase!.pool.query(
+      requireTestDatabase(testDatabase).pool.query(
         `alter table invoices rename column ${from} to ${to}`
       );
     await renameCustomerColumn("dotypos_customer_id", "dotypos_customer_gone");
@@ -182,7 +183,7 @@ describe.skipIf(!testDatabase)("listing invoices that cannot be opened", () => {
       read: (invoices: InvoiceRepository["Service"]) => Effect.Effect<A, E>
     ) => {
       const locking = lockingAfterKeyLookup({
-        pool: testDatabase!.pool,
+        pool: requireTestDatabase(testDatabase).pool,
         table: "invoices",
         keys: readingKeys,
       });

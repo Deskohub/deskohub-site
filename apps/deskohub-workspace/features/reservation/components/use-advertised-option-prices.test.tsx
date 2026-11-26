@@ -171,11 +171,15 @@ test("drops the selected option's price once reloading it fails, and retries it"
 
   getAdvertisedPrices.mockImplementation((batch) =>
     Promise.resolve({
-      data: batch.map((request) =>
-        advertiseMeetingRoom(request as MeetingRoomAdvertisedPriceRequest, {
-          token: "retried",
-        })
-      ),
+      data: batch.map((request) => {
+        if (request.reservation.kind !== "meeting-room") {
+          throw new Error("Expected meeting-room request");
+        }
+        return advertiseMeetingRoom(
+          { ...request, reservation: request.reservation },
+          { token: "retried" }
+        );
+      }),
     })
   );
   fireEvent.click(view.getByRole("button", { name: "Retry" }));

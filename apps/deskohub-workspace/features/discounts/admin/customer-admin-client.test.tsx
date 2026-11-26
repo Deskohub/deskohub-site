@@ -8,14 +8,18 @@ import {
   mock,
   test,
 } from "bun:test";
+import {
+  DotyposCustomerIdSchema,
+  DotyposDiscountGroupIdSchema,
+} from "@deskohub/dotypos";
 import type { ReactNode } from "react";
 import { m } from "@/features/administration/i18n";
 import { formatDiscountAdjustment } from "@/features/checkout/format-discount-adjustment";
-import type {
-  DiscountCodeId,
-  VoucherId,
+import {
+  discountCodeIdSchema,
+  voucherIdSchema,
 } from "@/features/discounts/persistence-contracts";
-import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
@@ -62,7 +66,7 @@ type ActionCallbacks = {
 // Each test mounts one component, so the latest hook options per action are
 // the ones its callbacks report to.
 type WorkspaceAction = typeof mutateDiscountAdmin;
-const actionCallbacks = new Map<WorkspaceAction, ActionCallbacks>();
+const actionCallbacks = new Map<unknown, ActionCallbacks>();
 const execute = mock();
 let isExecuting = false;
 
@@ -84,8 +88,10 @@ const renderInLocale = async (node: ReactNode) => {
   );
 };
 
-const customerId = "dotypos-customer" as DotyposCustomerId;
-const codeId = "019c91dd-c560-7e55-b9d8-c95065efd52d" as DiscountCodeId;
+const customerId = DotyposCustomerIdSchema.make("dotypos-customer");
+const codeId = discountCodeIdSchema.make(
+  "019c91dd-c560-7e55-b9d8-c95065efd52d"
+);
 
 describe("customer administration client controls", () => {
   beforeAll(() => {
@@ -99,10 +105,20 @@ describe("customer administration client controls", () => {
     actionCallbacks.clear();
     workspaceUseAction.mockReset();
     workspaceUseAction.mockImplementation((action, options) => {
-      actionCallbacks.set(
-        action as WorkspaceAction,
-        options as ActionCallbacks
-      );
+      actionCallbacks.set(action, {
+        onSuccess: (result) => {
+          options.onSuccess?.({ data: result.data, input: undefined });
+        },
+        onError: (result) => {
+          options.onError?.({ error: result.error, input: undefined });
+        },
+        onTransportError: () => {
+          options.onTransportError?.({
+            error: new Error("transport"),
+            input: undefined,
+          });
+        },
+      });
       return { execute, isExecuting, result: {} };
     });
   });
@@ -200,9 +216,12 @@ describe("customer administration client controls", () => {
       const view = await renderInLocale(
         <AddCodeCustomerForm codeId={codeId} />
       );
-      const input = view.getByRole("textbox", {
-        name: m.discountsDotyposCustomerIdLabel({}, { locale }),
-      }) as HTMLInputElement;
+      const input = elementOf(
+        view.getByRole("textbox", {
+          name: m.discountsDotyposCustomerIdLabel({}, { locale }),
+        }),
+        HTMLInputElement
+      );
       fireEvent.change(input, { target: { value: ` ${customerId} ` } });
       fireEvent.click(
         view.getByRole("button", {
@@ -229,7 +248,9 @@ describe("customer administration client controls", () => {
       const { AddVoucherCustomerForm } = await import(
         "./customer-admin-client"
       );
-      const voucherId = "019c91dd-c560-7e55-b9d8-c95065efd55d" as VoucherId;
+      const voucherId = voucherIdSchema.make(
+        "019c91dd-c560-7e55-b9d8-c95065efd55d"
+      );
       const view = await renderInLocale(
         <AddVoucherCustomerForm voucherId={voucherId} />
       );
@@ -293,19 +314,30 @@ describe("customer administration client controls", () => {
         "./customer-admin-client"
       );
       const groups = [
-        { id: "group-a", name: "Regulars", basisPoints: 1000 },
-        { id: "group-b", name: "Friends", basisPoints: 2500 },
+        {
+          id: DotyposDiscountGroupIdSchema.make("group-a"),
+          name: "Regulars",
+          basisPoints: 1000,
+        },
+        {
+          id: DotyposDiscountGroupIdSchema.make("group-b"),
+          name: "Friends",
+          basisPoints: 2500,
+        },
       ] as const;
       const view = await renderInLocale(
         <CustomerDiscountGroupForm
           currentGroupId={null}
           customerId={customerId}
-          discountGroups={groups as never}
+          discountGroups={groups}
         />
       );
-      const select = view.getByRole("combobox", {
-        name: m.discountsCustomerDiscountGroupTitle({}, { locale }),
-      }) as HTMLSelectElement;
+      const select = elementOf(
+        view.getByRole("combobox", {
+          name: m.discountsCustomerDiscountGroupTitle({}, { locale }),
+        }),
+        HTMLSelectElement
+      );
       expect(
         within(select).getByRole("option", {
           name: `Friends (${formatDiscountAdjustment({ kind: "percentage", basisPoints: 2500 }, locale)})`,

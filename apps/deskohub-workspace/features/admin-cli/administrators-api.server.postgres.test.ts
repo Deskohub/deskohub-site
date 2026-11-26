@@ -32,7 +32,7 @@ import {
 } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   connectWorkspacePostgresTestDatabase,
-  type WorkspacePostgresTestDatabase,
+  requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { AdminCliAdministratorsApiHandlers } from "./administrators-api.server";
 import {
@@ -54,7 +54,8 @@ type AdministratorsClient = Effect.Success<typeof administratorsClient>;
 describe.skipIf(!postgresDatabase)(
   "administrators admin API on Postgres",
   () => {
-    const postgres = postgresDatabase as WorkspacePostgresTestDatabase;
+    if (!postgresDatabase) return;
+    const postgres = requireTestDatabase(postgresDatabase);
     const fixtureAccounts: AdministratorAccountActor[] = [];
     const fixtureSessionIds: CliSessionId[] = [];
     const fixtureRequestIds: CliAuthenticationRequestId[] = [];

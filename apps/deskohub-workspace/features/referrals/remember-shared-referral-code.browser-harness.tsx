@@ -4,8 +4,7 @@ import { RememberSharedReferralCode } from "./remember-shared-referral-code";
 // Mounts the real component and reports what the shown page remembers: on a
 // page Chrome prerendered, once it is activated.
 const initiallyPrerendered =
-  (document as Document & { readonly prerendering?: boolean }).prerendering ===
-  true;
+  "prerendering" in document && document.prerendering === true;
 const framed = window.self !== window.top;
 const report = () => {
   // Leave the component's own activation handler time to run first.

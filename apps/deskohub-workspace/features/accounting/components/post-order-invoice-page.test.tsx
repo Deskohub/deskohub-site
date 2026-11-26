@@ -8,8 +8,14 @@ import {
   test,
 } from "bun:test";
 import { m } from "@/features/i18n";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { reservationAccessTokenSchema } from "@/features/reservation/reservation-access-token";
-import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
+import {
+  type WorkspaceActionExecute,
+  workspaceActionCallbacks,
+  workspaceUseAction,
+} from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -28,24 +34,23 @@ const { act, cleanup, fireEvent, render } = await import(
 const { PostOrderInvoicePage } = await import("./post-order-invoice-page");
 const accessToken = reservationAccessTokenSchema.make("signed-capability");
 const locale = "en-US";
-const orderId = "reservation-id" as never;
+const orderId = workspaceReservationIdSchema.make("reservation-id");
 
-type ActionCallbacks = {
-  readonly onSuccess: (result: { data?: unknown }) => void;
-  readonly onError: (result: {
-    error: { serverError?: string | undefined };
-  }) => void;
-  readonly onTransportError: () => void;
-};
+type InvoiceAction =
+  typeof import("@/features/accounting/actions/manage-post-order-invoice").managePostOrderInvoice;
+type InvoiceResult = Awaited<ReturnType<InvoiceAction>>["data"];
+type ActionCallbacks = ReturnType<
+  typeof workspaceActionCallbacks<InvoiceResult>
+>;
 
 // Captures the page's action callbacks and lets a test choose whether the
 // action is running.
 const captureAction = ({ isExecuting = false } = {}) => {
-  const execute = mock();
+  const execute = mock<WorkspaceActionExecute>();
   let callbacks: ActionCallbacks | undefined;
   workspaceUseAction.mockImplementation((_action, options) => {
-    callbacks = options as ActionCallbacks;
-    return { execute, isExecuting } as never;
+    callbacks = workspaceActionCallbacks(options, execute);
+    return { execute, isExecuting };
   });
   const settle = (run: (callbacks: ActionCallbacks) => void) =>
     act(() => {
@@ -82,10 +87,11 @@ describe("PostOrderInvoicePage", () => {
     );
 
     expect(
-      (
+      elementOf(
         view.getByLabelText(
           m.reservationBillingAddressLine1Label({}, { locale })
-        ) as HTMLInputElement
+        ),
+        HTMLInputElement
       ).value
     ).toBe("");
     expect(view.queryByLabelText("Legal company name")).toBeNull();
@@ -133,6 +139,14 @@ describe("PostOrderInvoicePage", () => {
     });
   };
 
+  const resend = (view: ReturnType<typeof render>) => {
+    fireEvent.click(
+      view.getByRole("button", {
+        name: m.postOrderInvoiceResendButton({}, { locale }),
+      })
+    );
+  };
+
   test("creates the invoice for the entered address with the reservation access", async () => {
     const { execute, settle } = captureAction();
     const view = render(
@@ -143,15 +157,16 @@ describe("PostOrderInvoicePage", () => {
         orderId={orderId}
       />
     );
+    fillAddress(view);
+    await submitAddress(view);
     settle(({ onTransportError }) => onTransportError());
     expect(view.container.querySelector("output")?.textContent).toBe(
       m.postOrderInvoiceActionError({}, { locale })
     );
-    fillAddress(view);
     await submitAddress(view);
 
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(execute.mock.calls[0]?.[0]).toEqual({
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[1]?.[0]).toEqual({
       locale,
       orderId,
       accessToken,
@@ -196,7 +211,44 @@ describe("PostOrderInvoicePage", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  test("shows the created invoice and offers a resend only when delivery failed", () => {
+  test.each([false, true])(
+    "shows the created invoice and offers a resend only on failed delivery (delivered %s)",
+    async (delivered) => {
+      const { settle } = captureAction();
+      const view = render(
+        <PostOrderInvoicePage
+          accessToken={accessToken}
+          initialState="create"
+          locale={locale}
+          orderId={orderId}
+        />
+      );
+
+      fillAddress(view);
+      await submitAddress(view);
+      settle(({ onSuccess }) =>
+        onSuccess({ data: { status: "created", delivered } })
+      );
+      expect(stateOf(view.container)).toBe("created");
+      expect(view.container.querySelector("form")).toBeNull();
+      expect(
+        view.getByText(
+          delivered
+            ? m.postOrderInvoiceCreatedLead({}, { locale })
+            : m.postOrderInvoiceCreatedDeliveryFailedLead({}, { locale })
+        )
+      ).toBeTruthy();
+      expect(
+        Boolean(
+          view.queryByRole("button", {
+            name: m.postOrderInvoiceResendButton({}, { locale }),
+          })
+        )
+      ).toBe(!delivered);
+    }
+  );
+
+  test("switches to the issued invoice when one already exists", async () => {
     const { settle } = captureAction();
     const view = render(
       <PostOrderInvoicePage
@@ -207,45 +259,12 @@ describe("PostOrderInvoicePage", () => {
       />
     );
 
-    settle(({ onSuccess }) =>
-      onSuccess({ data: { status: "created", delivered: false } })
-    );
-    expect(stateOf(view.container)).toBe("created");
-    expect(view.container.querySelector("form")).toBeNull();
-    expect(
-      view.getByText(
-        m.postOrderInvoiceCreatedDeliveryFailedLead({}, { locale })
-      )
-    ).toBeTruthy();
-    expect(
-      view.getByRole("button", {
-        name: m.postOrderInvoiceResendButton({}, { locale }),
-      })
-    ).toBeTruthy();
-
-    settle(({ onSuccess }) =>
-      onSuccess({ data: { status: "created", delivered: true } })
-    );
-    expect(
-      view.getByText(m.postOrderInvoiceCreatedLead({}, { locale }))
-    ).toBeTruthy();
-    expect(view.queryByRole("button")).toBeNull();
-  });
-
-  test("switches to the issued invoice when one already exists", () => {
-    const { settle } = captureAction();
-    const view = render(
-      <PostOrderInvoicePage
-        accessToken={accessToken}
-        initialState="create"
-        locale={locale}
-        orderId={orderId}
-      />
-    );
-
+    fillAddress(view);
+    await submitAddress(view);
     settle(({ onSuccess }) => onSuccess({ data: undefined }));
     expect(stateOf(view.container)).toBe("create");
 
+    await submitAddress(view);
     settle(({ onSuccess }) =>
       onSuccess({ data: { status: "already-issued", delivered: true } })
     );
@@ -271,16 +290,13 @@ describe("PostOrderInvoicePage", () => {
       />
     );
 
+    resend(view);
     settle(({ onError }) => onError({ error: { serverError: "Server says" } }));
     expect(view.container.querySelector("output")?.textContent).toBe(
       "Server says"
     );
 
-    fireEvent.click(
-      view.getByRole("button", {
-        name: m.postOrderInvoiceResendButton({}, { locale }),
-      })
-    );
+    resend(view);
     expect(execute).toHaveBeenCalledWith({
       locale,
       orderId,
@@ -312,6 +328,7 @@ describe("PostOrderInvoicePage", () => {
         m.postOrderInvoiceCreatedDeliveryFailedLead({}, { locale })
       )
     ).toBeTruthy();
+    resend(view);
     settle(({ onSuccess }) => onSuccess({ data: { status: "resent" } }));
 
     expect(
@@ -335,9 +352,12 @@ describe("PostOrderInvoicePage", () => {
         orderId={orderId}
       />
     );
-    const creating = createView.getByRole("button", {
-      name: m.postOrderInvoiceCreatingButton({}, { locale }),
-    }) as HTMLButtonElement;
+    const creating = elementOf(
+      createView.getByRole("button", {
+        name: m.postOrderInvoiceCreatingButton({}, { locale }),
+      }),
+      HTMLButtonElement
+    );
     expect(creating.disabled).toBe(true);
     cleanup();
 
@@ -349,9 +369,12 @@ describe("PostOrderInvoicePage", () => {
         orderId={orderId}
       />
     );
-    const resending = resendView.getByRole("button", {
-      name: m.postOrderInvoiceResendingButton({}, { locale }),
-    }) as HTMLButtonElement;
+    const resending = elementOf(
+      resendView.getByRole("button", {
+        name: m.postOrderInvoiceResendingButton({}, { locale }),
+      }),
+      HTMLButtonElement
+    );
     expect(resending.disabled).toBe(true);
   });
 
