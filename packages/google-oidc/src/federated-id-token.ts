@@ -18,11 +18,11 @@ import { decodeJwt } from "jose";
 interface TokenTarget {
   readonly serviceAccount: string;
   readonly audience: string;
+  /** The provider's full STS audience, starting with //iam.googleapis.com/. */
+  readonly workloadIdentityProvider: string;
 }
 
 interface FederatedTokenRequest extends TokenTarget {
-  /** The provider's full STS audience, starting with //iam.googleapis.com/. */
-  readonly workloadIdentityProvider: string;
   /** Loads the external credential from the request that starts the mint. */
   readonly getSubjectToken: () => Promise<string>;
 }
@@ -50,8 +50,12 @@ interface PendingMint {
 
 const refreshSkewMillis = 5 * 60 * 1000;
 
-const tokenKey = ({ serviceAccount, audience }: TokenTarget) =>
-  JSON.stringify([serviceAccount, audience]);
+const tokenKey = ({
+  serviceAccount,
+  audience,
+  workloadIdentityProvider,
+}: TokenTarget) =>
+  JSON.stringify([serviceAccount, audience, workloadIdentityProvider]);
 
 export class GoogleIdToken extends Context.Service<
   GoogleIdToken,
@@ -187,16 +191,7 @@ const mintToken = (
       () => unavailable
     ),
     Effect.flatMap((subjectToken) =>
-      exchangeToken(client, request, subjectToken).pipe(
-        Effect.retry({
-          schedule: Schedule.exponential("100 millis"),
-          times: 2,
-          while: (error) =>
-            error.reason === "transport" ||
-            error.reason === "timeout" ||
-            (error.status !== undefined && transientStatuses.has(error.status)),
-        })
-      )
+      exchangeToken(client, request, subjectToken)
     )
   );
 };
@@ -205,43 +200,76 @@ const transientStatuses = new Set([408, 429, 500, 502, 503, 504]);
 
 const exchangeToken = (
   client: HttpClient.HttpClient,
-  request: FederatedTokenRequest,
+  target: TokenTarget,
   subjectToken: string
 ) =>
-  Effect.succeed(request).pipe(
-    Effect.bind("federated", ({ workloadIdentityProvider }) =>
-      readGoogleResponse(
-        client,
-        "sts",
-        HttpClientRequest.post("https://sts.googleapis.com/v1/token").pipe(
-          HttpClientRequest.bodyUrlParams({
-            grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
-            audience: workloadIdentityProvider,
-            scope: "https://www.googleapis.com/auth/cloud-platform",
-            requested_token_type:
-              "urn:ietf:params:oauth:token-type:access_token",
-            subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
-            subject_token: subjectToken,
-          })
-        ),
-        stsResponse
+  Effect.suspend(() => {
+    // Local to this mint. An IAM retry can reuse a successful STS exchange.
+    let accessToken: string | undefined;
+    const fetchAccessToken = exchangeSubjectToken(
+      client,
+      target.workloadIdentityProvider,
+      subjectToken
+    ).pipe(
+      Effect.tap((token) =>
+        Effect.sync(() => {
+          accessToken = token;
+        })
       )
+    );
+    return Effect.suspend(() =>
+      accessToken === undefined ? fetchAccessToken : Effect.succeed(accessToken)
+    ).pipe(
+      Effect.flatMap((token) => generateIdToken(client, target, token)),
+      Effect.flatMap(decodeIssuedToken),
+      Effect.retry({
+        schedule: Schedule.exponential("100 millis").pipe(Schedule.jittered),
+        times: 2,
+        while: (error) =>
+          error.reason === "transport" ||
+          error.reason === "timeout" ||
+          (error.status !== undefined && transientStatuses.has(error.status)),
+      })
+    );
+  });
+
+const exchangeSubjectToken = (
+  client: HttpClient.HttpClient,
+  workloadIdentityProvider: string,
+  subjectToken: string
+) =>
+  readGoogleResponse(
+    client,
+    "sts",
+    HttpClientRequest.post("https://sts.googleapis.com/v1/token").pipe(
+      HttpClientRequest.bodyUrlParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+        audience: workloadIdentityProvider,
+        scope: "https://www.googleapis.com/auth/cloud-platform",
+        requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
+        subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
+        subject_token: subjectToken,
+      })
     ),
-    Effect.bind("issued", ({ serviceAccount, audience, federated }) =>
-      readGoogleResponse(
-        client,
-        "iam",
-        HttpClientRequest.post(
-          `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(serviceAccount)}:generateIdToken`
-        ).pipe(
-          HttpClientRequest.bearerToken(federated.access_token),
-          HttpClientRequest.bodyJsonUnsafe({ audience, includeEmail: true })
-        ),
-        iamResponse
-      )
+    stsResponse
+  ).pipe(Effect.map(({ access_token }) => access_token));
+
+const generateIdToken = (
+  client: HttpClient.HttpClient,
+  { serviceAccount, audience }: TokenTarget,
+  accessToken: string
+) =>
+  readGoogleResponse(
+    client,
+    "iam",
+    HttpClientRequest.post(
+      `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(serviceAccount)}:generateIdToken`
+    ).pipe(
+      HttpClientRequest.bearerToken(accessToken),
+      HttpClientRequest.bodyJsonUnsafe({ audience, includeEmail: true })
     ),
-    Effect.flatMap(({ issued }) => decodeIssuedToken(issued.token))
-  );
+    iamResponse
+  ).pipe(Effect.map(({ token }) => token));
 
 const decodeIssuedToken = Effect.fnUntraced(function* (token: string) {
   const invalid = new GoogleIdTokenMintError({

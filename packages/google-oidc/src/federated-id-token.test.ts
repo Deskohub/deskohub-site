@@ -222,6 +222,24 @@ test("evicts only the credential rejected by Cloud Run", async () => {
   expect(google.calls).toHaveLength(4);
 });
 
+test("isolates tokens for different workload identity providers", async () => {
+  const google = fakeGoogle();
+  const otherProvider = {
+    ...input,
+    workloadIdentityProvider: `${workloadIdentityProvider}-other`,
+  };
+  await Effect.gen(function* () {
+    const tokens = yield* GoogleIdToken;
+    const original = yield* tokens.get(input);
+    const other = yield* tokens.get(otherProvider);
+    expect(other).not.toBe(original);
+    yield* tokens.evict(otherProvider, original);
+    expect(yield* tokens.get(input)).toBe(original);
+    expect(yield* tokens.get(otherProvider)).toBe(other);
+  }).pipe(Effect.provide(google.layer), Effect.runPromise);
+  expect(google.calls).toHaveLength(4);
+});
+
 test("bounds retry of transient failures and clears a failed mint", async () => {
   let attempts = 0;
   let subjectReads = 0;
@@ -283,9 +301,36 @@ test.each(["sts", "iam"] as const)(
         ".fake-signature"
       );
     }).pipe(Effect.provide(google.layer), Effect.runPromise);
-    expect(google.calls).toHaveLength(phase === "sts" ? 3 : 4);
+    expect(google.calls).toHaveLength(3);
   }
 );
+
+test("shares a single retry budget across STS and IAM attempts", async () => {
+  let stsAttempts = 0;
+  let iamAttempts = 0;
+  const google = fakeGoogle(
+    () =>
+      Effect.sync(() =>
+        ++stsAttempts === 1 ? new Response(null, { status: 503 }) : stsSuccess()
+      ),
+    () =>
+      Effect.sync(() => {
+        iamAttempts += 1;
+        return new Response(null, { status: 503 });
+      })
+  );
+  await Effect.gen(function* () {
+    const tokens = yield* GoogleIdToken;
+    expect(yield* Effect.flip(tokens.get(input))).toMatchObject({
+      _tag: "GoogleIdTokenMintError",
+      phase: "iam",
+      reason: "http-status",
+      status: 503,
+    });
+  }).pipe(Effect.provide(google.layer), Effect.runPromise);
+  expect(stsAttempts).toBe(2);
+  expect(iamAttempts).toBe(2);
+});
 
 test("rejects malformed JSON without retry", async () => {
   const google = fakeGoogle(() => Effect.sync(() => new Response("{broken")));
