@@ -147,7 +147,7 @@ describe("invoice presentation", () => {
       exponent: 2,
       currency: "CZK" as const,
     });
-    const document = {
+    const document: InvoiceDocument = {
       ...original,
       quote: {
         ...original.quote,
@@ -168,7 +168,7 @@ describe("invoice presentation", () => {
           ],
         },
       },
-    } as InvoiceDocument;
+    };
 
     const presentation = getInvoicePresentation(document);
 

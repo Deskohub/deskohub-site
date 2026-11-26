@@ -1,5 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import {
+  DotyposCloudIdSchema,
+  type DotyposCustomer,
+  DotyposCustomerIdSchema,
+  DotyposService,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   AdministrationDotyposCustomerId,
@@ -10,7 +15,11 @@ import {
 import { Effect, Layer, Logger, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
-import type { EntryPackInvoiceDocument } from "@/features/accounting/invoice";
+import {
+  type EntryPackInvoiceDocument,
+  formatInvoiceNumber,
+  invoiceNumberSchema,
+} from "@/features/accounting/invoice";
 import {
   makeCoworkInvoiceDocument,
   makeTestManualInvoiceDocument,
@@ -18,6 +27,8 @@ import {
 import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
 import { ReservationAdministrationService } from "@/features/administration/reservation-administration.service";
 import { orderIdSchema } from "@/features/order";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { instantStringSchema } from "@/shared/utils/temporal";
 import {
   type Invoice,
   InvoiceRepository,
@@ -35,6 +46,7 @@ import {
   InvoiceEmailDeliveryService,
 } from "../backend/invoice-email-delivery.service";
 import {
+  correctiveDocumentNumberSchema,
   formatCorrectiveDocumentNumber,
   makeCorrectiveDocument,
 } from "../corrective-document";
@@ -107,7 +119,7 @@ describe("InvoiceAdministrationService", () => {
     const document = {
       ...makeCoworkInvoiceDocument("en-US"),
       // Late evening UTC is already the next calendar day in Prague.
-      fulfilledAt: "2026-08-10T22:30:00Z" as never,
+      fulfilledAt: instantStringSchema.make("2026-08-10T22:30:00Z"),
     };
     const invoice = {
       id: invoiceIdSchema.make("01980000-0000-7000-8000-000000000009"),
@@ -203,6 +215,15 @@ describe("InvoiceAdministrationService", () => {
     expect(result[2]).toMatchObject({ source: "pass-purchase" });
   });
 
+  const dotyposCustomer = (
+    id: string,
+    fields: Partial<Omit<DotyposCustomer, "id" | "_cloudId">> = {}
+  ): DotyposCustomer => ({
+    id: DotyposCustomerIdSchema.make(id),
+    _cloudId: DotyposCloudIdSchema.make("cloud-1"),
+    ...fields,
+  });
+
   test("signals a searched customer without a name or email", async () => {
     const email = testEmailAddress("unnamed-search");
     const layer = InvoiceAdministrationService.Default.pipe(
@@ -211,9 +232,11 @@ describe("InvoiceAdministrationService", () => {
           Layer.mock(DotyposService, {
             searchCustomers: () =>
               Effect.succeed([
-                { id: "dotypos-customer-unnamed" },
-                { id: "dotypos-customer-email", email: ` ${email} ` },
-              ] as never),
+                dotyposCustomer("dotypos-customer-unnamed"),
+                dotyposCustomer("dotypos-customer-email", {
+                  email: ` ${email} `,
+                }),
+              ]),
           }),
           Layer.mock(InvoiceRepository, {}),
           Layer.mock(InvoiceEmailDeliveryRepository, {}),
@@ -245,8 +268,7 @@ describe("InvoiceAdministrationService", () => {
           Layer.mock(DotyposService, {
             searchCustomers: () =>
               Effect.succeed([
-                {
-                  id: "dotypos-customer-business",
+                dotyposCustomer("dotypos-customer-business", {
                   companyName: " Synthetic s.r.o. ",
                   companyId: " 12345678 ",
                   vatId: " CZ12345678 ",
@@ -258,18 +280,17 @@ describe("InvoiceAdministrationService", () => {
                   city: " Prague ",
                   zip: " 100 00 ",
                   country: " sk ",
-                },
-                {
-                  id: "dotypos-customer-person",
+                }),
+                dotyposCustomer("dotypos-customer-person", {
                   firstName: "Grace",
                   lastName: "Hopper",
                   email: personEmail,
                   phone: "  ",
                   addressLine2: " ",
                   vatId: "CZ0",
-                },
-                { id: "dotypos-customer-deleted", deleted: true },
-              ] as never),
+                }),
+                dotyposCustomer("dotypos-customer-deleted", { deleted: true }),
+              ]),
           }),
           Layer.mock(InvoiceRepository, {}),
           Layer.mock(InvoiceEmailDeliveryRepository, {}),
@@ -397,7 +418,9 @@ describe("InvoiceAdministrationService", () => {
       const { run } = retryWith(
         {
           ...invoice,
-          workspaceReservationId: "workspace-reservation" as never,
+          workspaceReservationId: workspaceReservationIdSchema.make(
+            "workspace-reservation"
+          ),
         },
         { status: "delivered", changed: true }
       );
@@ -636,8 +659,11 @@ describe("InvoiceAdministrationService cancellation", () => {
   ) => ({
     invoice: {
       id: invoiceId,
-      invoiceNumber: "WS-FV-2026-000009" as never,
-      reservationId: reservation === "none" ? null : (reservationId as never),
+      invoiceNumber: formatInvoiceNumber({ year: 2026, sequence: 9 }),
+      reservationId:
+        reservation === "none"
+          ? null
+          : workspaceReservationIdSchema.make(reservationId),
       cancelled,
     },
     customerNotice: "owed" as const,
@@ -869,7 +895,9 @@ describe("InvoiceAdministrationService cancellation", () => {
       cancellation: {
         cancelledAt: record.cancelledAt,
         cause: record.cause,
-        correctiveDocumentNumber: record.correctiveDocumentNumber as never,
+        correctiveDocumentNumber: correctiveDocumentNumberSchema.make(
+          record.correctiveDocumentNumber
+        ),
       },
       archivedAt: Temporal.Instant.from("2026-11-15T11:00:00Z"),
     } satisfies Invoice;
@@ -930,7 +958,7 @@ describe("InvoiceAdministrationService cancellation", () => {
       standing: Partial<UnreadableInvoice> = {}
     ): UnreadableInvoice => ({
       id: invoiceIdSchema.make(id),
-      invoiceNumber: `WS-FV-2026-${id.slice(-6)}` as never,
+      invoiceNumber: invoiceNumberSchema.make(`WS-FV-2026-${id.slice(-6)}`),
       issuedAt: Temporal.Instant.from(issuedAt),
       cancellation: null,
       archivedAt: null,
@@ -945,7 +973,9 @@ describe("InvoiceAdministrationService cancellation", () => {
         cancellation: {
           cancelledAt: record.cancelledAt,
           cause: record.cause,
-          correctiveDocumentNumber: record.correctiveDocumentNumber as never,
+          correctiveDocumentNumber: correctiveDocumentNumberSchema.make(
+            record.correctiveDocumentNumber
+          ),
         },
       }
     );
@@ -1013,7 +1043,9 @@ describe("InvoiceAdministrationService cancellation", () => {
       cancellation: {
         cancelledAt: record.cancelledAt,
         cause: record.cause,
-        correctiveDocumentNumber: record.correctiveDocumentNumber as never,
+        correctiveDocumentNumber: correctiveDocumentNumberSchema.make(
+          record.correctiveDocumentNumber
+        ),
       },
       archivedAt: null,
       replacesInvoiceId: null,
@@ -1070,7 +1102,9 @@ describe("InvoiceAdministrationService cancellation", () => {
       cancellation: {
         cancelledAt: record.cancelledAt,
         cause: record.cause,
-        correctiveDocumentNumber: record.correctiveDocumentNumber as never,
+        correctiveDocumentNumber: correctiveDocumentNumberSchema.make(
+          record.correctiveDocumentNumber
+        ),
       },
       archivedAt: Temporal.Instant.from("2026-11-15T11:00:00Z"),
     } satisfies Invoice;

@@ -8,14 +8,21 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Profiler, StrictMode, useEffect, useRef, useState } from "react";
 import { loadFixtureReservations } from "@/features/administration/fixtures";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import {
+  storedDiscountIdSchema,
+  voucherIdSchema,
+} from "../persistence-contracts";
 import type { VoucherTableItem } from "./admin-tables";
 import type { DiscountAdminMutation } from "./contracts";
 import type {
@@ -95,11 +102,30 @@ type CapturedWorkspaceAction = {
   };
 };
 
+const closestForm = (element: Element) =>
+  elementOf(element.closest("form"), HTMLFormElement);
+
 // Every discount mutation runs through one action, so a form's hook is found
 // by the kinds of mutation it executes. A form that has not executed one yet is
 // found as the only mounted mutation hook.
 const captureWorkspaceActions = () => {
   type LatestOptions = { current: CapturedWorkspaceAction["options"] };
+  const toCapturedOptions = (
+    options: Parameters<typeof workspaceUseAction>[1]
+  ): CapturedWorkspaceAction["options"] => ({
+    onSuccess: (result) => {
+      options.onSuccess?.({ data: result.data, input: undefined });
+    },
+    onError: (result) => {
+      options.onError?.({ error: result.error, input: undefined });
+    },
+    onTransportError: () => {
+      options.onTransportError?.({
+        error: new Error("transport"),
+        input: undefined,
+      });
+    },
+  });
   const mounted = new Set<LatestOptions>();
   const executions: {
     readonly mutation: DiscountAdminMutation;
@@ -111,8 +137,8 @@ const captureWorkspaceActions = () => {
   }[] = [];
   workspaceUseAction.mockImplementation(
     function useCapturedWorkspaceAction(action, options) {
-      const latestOptions = useRef(options as LatestOptions["current"]);
-      latestOptions.current = options as LatestOptions["current"];
+      const latestOptions = useRef(toCapturedOptions(options));
+      latestOptions.current = toCapturedOptions(options);
       const isMutation = action === mutateDiscountAdmin;
       useEffect(() => {
         if (!isMutation) return;
@@ -165,9 +191,12 @@ const codeDateFields = async (codeForm: HTMLElement) => {
   const { m } = await import("@/features/administration/i18n");
   const locale = { locale: "en-US" } as const;
   const combobox = (name: string) =>
-    within(codeForm).getByRole("combobox", { name }) as HTMLInputElement;
+    elementOf(
+      within(codeForm).getByRole("combobox", { name }),
+      HTMLInputElement
+    );
   const time = (name: string) =>
-    within(codeForm).getByLabelText(name) as HTMLInputElement;
+    elementOf(within(codeForm).getByLabelText(name), HTMLInputElement);
   return {
     validFrom: combobox(m.discountsValidFromLabel({}, locale)),
     validFromTime: time(m.discountsValidFromTimeLabel({}, locale)),
@@ -213,9 +242,9 @@ const dashboard: DiscountAdminDashboard = {
       serviceDateUntil: "2026-07-31",
       audienceSize: 2,
       audienceCustomerIds: [
-        "dotypos-customer",
-        "other-customer",
-      ] as DiscountAdminDashboard["codes"][number]["audienceCustomerIds"],
+        DotyposCustomerIdSchema.make("dotypos-customer"),
+        DotyposCustomerIdSchema.make("other-customer"),
+      ],
       reservedUses: 1,
       redeemedUses: 3,
       releasedUses: 1,
@@ -354,7 +383,7 @@ describe("discount administration pages", () => {
 
   describe("vouchers collection", () => {
     const voucher: DiscountAdminDashboard["vouchers"][number] = {
-      id: "019c91dd-c560-7e55-b9d8-c95065efd56d" as VoucherTableItem["id"],
+      id: voucherIdSchema.make("019c91dd-c560-7e55-b9d8-c95065efd56d"),
       code: "GIFT100",
       issuedCredit: { value: 10_000, exponent: 2, currency: "CZK" },
       remainingCredit: { value: 5000, exponent: 2, currency: "CZK" },
@@ -372,8 +401,10 @@ describe("discount administration pages", () => {
     const validityInputs = (container: HTMLElement) =>
       ["validFrom", "validUntil"].map(
         (name) =>
-          (container.querySelector(`input[name="${name}"]`) as HTMLInputElement)
-            .value
+          elementOf(
+            container.querySelector(`input[name="${name}"]`),
+            HTMLInputElement
+          ).value
       );
 
     test("shows the empty state instead of a table without vouchers", async () => {
@@ -399,7 +430,9 @@ describe("discount administration pages", () => {
               voucher,
               {
                 ...voucher,
-                id: "019c91dd-c560-7e55-b9d8-c95065efd57d" as VoucherTableItem["id"],
+                id: voucherIdSchema.make(
+                  "019c91dd-c560-7e55-b9d8-c95065efd57d"
+                ),
                 code: "OPEN200",
                 validFrom: null,
                 validUntil: null,
@@ -517,8 +550,9 @@ describe("discount administration pages", () => {
         ...discount,
         labels: { "cs-CZ": "letní sleva", "en-US": "summer discount" },
       };
-      const unlistedDiscountId =
-        "019c91dd-c560-7e55-b9d8-c95065efd59d" as typeof discount.id;
+      const unlistedDiscountId = storedDiscountIdSchema.make(
+        "019c91dd-c560-7e55-b9d8-c95065efd59d"
+      );
       const view = render(
         <SalesAdministrationCollection
           dashboard={{
@@ -1314,7 +1348,7 @@ describe("discount administration pages", () => {
       target: { value: "gift250" },
     });
     fireEvent.submit(
-      view.getByRole("button", { name: "Create voucher" }).closest("form")!
+      closestForm(view.getByRole("button", { name: "Create voucher" }))
     );
 
     const action = captured("create-customer-voucher");
@@ -1459,15 +1493,18 @@ describe("discount administration pages", () => {
     const save = view.getByRole("button", { name: "Save discount" });
     expect(save).toHaveProperty("disabled", true);
     fireEvent.input(
-      view.container.querySelector(
-        "#labelEn-019c91dd-c560-7e55-b9d8-c95065efd51d"
-      ) as HTMLInputElement,
+      elementOf(
+        view.container.querySelector(
+          "#labelEn-019c91dd-c560-7e55-b9d8-c95065efd51d"
+        ),
+        HTMLInputElement
+      ),
       { target: { value: "Updated summer discount" } }
     );
     expect(save).toHaveProperty("disabled", false);
 
     const { execute, options } = captured("update-discount");
-    fireEvent.submit(save.closest("form")!);
+    fireEvent.submit(closestForm(save));
     await waitFor(() =>
       expect(execute).toHaveBeenCalledWith({
         kind: "update-discount",
@@ -1484,9 +1521,12 @@ describe("discount administration pages", () => {
     );
 
     act(() => options.onSuccess({ data: { notice: "Discount saved." } }));
-    const labelEn = view.container.querySelector(
-      "#labelEn-019c91dd-c560-7e55-b9d8-c95065efd51d"
-    ) as HTMLInputElement;
+    const labelEn = elementOf(
+      view.container.querySelector(
+        "#labelEn-019c91dd-c560-7e55-b9d8-c95065efd51d"
+      ),
+      HTMLInputElement
+    );
     await waitFor(() => {
       expect(labelEn.value).toBe("Updated summer discount");
       expect(save).toHaveProperty("disabled", true);
@@ -1500,7 +1540,7 @@ describe("discount administration pages", () => {
     });
     expect(view.queryByRole("status")).toBeNull();
     expect(save).toHaveProperty("disabled", false);
-    fireEvent.submit(save.closest("form")!);
+    fireEvent.submit(closestForm(save));
     await waitFor(() =>
       expect(execute).toHaveBeenLastCalledWith({
         kind: "update-discount",
@@ -1526,15 +1566,18 @@ describe("discount administration pages", () => {
     fireEvent.click(view.getByRole("button", { name: "Edit SUMMER10" }));
 
     const labelEn = () =>
-      view.container.querySelector(
-        "#labelEn-019c91dd-c560-7e55-b9d8-c95065efd51d"
-      ) as HTMLInputElement;
+      elementOf(
+        view.container.querySelector(
+          "#labelEn-019c91dd-c560-7e55-b9d8-c95065efd51d"
+        ),
+        HTMLInputElement
+      );
     const saveButton = () =>
       view.getByRole("button", { name: "Save discount" });
 
     // Submit value A.
     fireEvent.input(labelEn(), { target: { value: "Submitted label" } });
-    fireEvent.submit(saveButton().closest("form")!);
+    fireEvent.submit(closestForm(saveButton()));
     const { execute, options } = captured("update-discount");
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
 
@@ -1551,7 +1594,7 @@ describe("discount administration pages", () => {
     expect(view.getByRole("status").textContent).toContain("Discount saved.");
 
     // The follow-up save submits B on top of the saved snapshot A.
-    fireEvent.submit(saveButton().closest("form")!);
+    fireEvent.submit(closestForm(saveButton()));
     await waitFor(() =>
       expect(execute).toHaveBeenLastCalledWith({
         kind: "update-discount",
@@ -1577,15 +1620,18 @@ describe("discount administration pages", () => {
     fireEvent.click(view.getByRole("button", { name: "Edit SUMMER10" }));
 
     const labelEn = () =>
-      view.container.querySelector(
-        "#labelEn-019c91dd-c560-7e55-b9d8-c95065efd51d"
-      ) as HTMLInputElement;
+      elementOf(
+        view.container.querySelector(
+          "#labelEn-019c91dd-c560-7e55-b9d8-c95065efd51d"
+        ),
+        HTMLInputElement
+      );
     const saveButton = () =>
       view.getByRole("button", { name: "Save discount" });
 
     // Submit value A.
     fireEvent.input(labelEn(), { target: { value: "Submitted label" } });
-    fireEvent.submit(saveButton().closest("form")!);
+    fireEvent.submit(closestForm(saveButton()));
     const { execute, options } = captured("update-discount");
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
 
@@ -1602,7 +1648,7 @@ describe("discount administration pages", () => {
     });
 
     // The follow-up save submits O, not the saved snapshot A.
-    fireEvent.submit(saveButton().closest("form")!);
+    fireEvent.submit(closestForm(saveButton()));
     await waitFor(() =>
       expect(execute).toHaveBeenLastCalledWith({
         kind: "update-discount",
@@ -1627,17 +1673,17 @@ describe("discount administration pages", () => {
     );
     fireEvent.click(view.getByRole("button", { name: "Edit SUMMER10" }));
 
-    const discountForm = view
-      .getByRole("button", { name: "Save discount" })
-      .closest("form")!;
+    const discountForm = closestForm(
+      view.getByRole("button", { name: "Save discount" })
+    );
     const meetingRoom = within(discountForm)
       .getAllByRole("checkbox")
       .find(
         (checkbox) =>
           checkbox.closest("label")?.textContent?.trim() === "Meeting room"
       );
-    expect(meetingRoom).toBeDefined();
-    fireEvent.click(meetingRoom!);
+    assert(meetingRoom, "Expected Meeting room checkbox");
+    fireEvent.click(meetingRoom);
     fireEvent.submit(discountForm);
     const { execute: discountExecute } = captured("update-discount");
     await waitFor(() =>
@@ -1655,11 +1701,14 @@ describe("discount administration pages", () => {
       })
     );
 
-    const codeForm = view
-      .getByRole("button", { name: "Save code" })
-      .closest("form")!;
+    const codeForm = closestForm(
+      view.getByRole("button", { name: "Save code" })
+    );
     fireEvent.input(
-      codeForm.querySelector("#code-019c91dd-c560-7e55-b9d8-c95065efd52d")!,
+      elementOf(
+        codeForm.querySelector("#code-019c91dd-c560-7e55-b9d8-c95065efd52d"),
+        HTMLInputElement
+      ),
       { target: { value: "summer11" } }
     );
     fireEvent.submit(codeForm);
@@ -1688,9 +1737,9 @@ describe("discount administration pages", () => {
       <CodesAdministrationCollection locale="en-US" dashboard={dashboard} />
     );
     fireEvent.click(view.getByRole("button", { name: "Edit SUMMER10" }));
-    const codeForm = view
-      .getByRole("button", { name: "Save code" })
-      .closest("form")!;
+    const codeForm = closestForm(
+      view.getByRole("button", { name: "Save code" })
+    );
     const fields = await codeDateFields(codeForm);
     expect(fields.serviceDateFrom.value).not.toBe("");
     for (const field of [fields.serviceDateFrom, fields.serviceDateUntil]) {
@@ -1718,9 +1767,9 @@ describe("discount administration pages", () => {
       <CodesAdministrationCollection locale="en-US" dashboard={dashboard} />
     );
     fireEvent.click(view.getByRole("button", { name: "Edit SUMMER10" }));
-    const codeForm = view
-      .getByRole("button", { name: "Save code" })
-      .closest("form")!;
+    const codeForm = closestForm(
+      view.getByRole("button", { name: "Save code" })
+    );
     const fields = await codeDateFields(codeForm);
 
     // Summer time (UTC+2) and winter time (UTC+1) on either side of the change.
@@ -1753,9 +1802,9 @@ describe("discount administration pages", () => {
       <CodesAdministrationCollection locale="en-US" dashboard={dashboard} />
     );
     fireEvent.click(view.getByRole("button", { name: "Edit SUMMER10" }));
-    const codeForm = view
-      .getByRole("button", { name: "Save code" })
-      .closest("form")!;
+    const codeForm = closestForm(
+      view.getByRole("button", { name: "Save code" })
+    );
     const fields = await codeDateFields(codeForm);
     const { execute } = captured("update-code");
 
@@ -1789,9 +1838,9 @@ describe("discount administration pages", () => {
       <CodesAdministrationCollection locale="en-US" dashboard={dashboard} />
     );
     fireEvent.click(view.getByRole("button", { name: "Edit SUMMER10" }));
-    const codeForm = view
-      .getByRole("button", { name: "Save code" })
-      .closest("form")!;
+    const codeForm = closestForm(
+      view.getByRole("button", { name: "Save code" })
+    );
     const fields = await codeDateFields(codeForm);
     const { execute } = captured("update-code");
 
@@ -1824,9 +1873,12 @@ describe("discount administration pages", () => {
       </StrictMode>
     );
     const labelEn = () =>
-      view.getByRole("textbox", {
-        name: "English (en-US)",
-      }) as HTMLInputElement;
+      elementOf(
+        view.getByRole("textbox", {
+          name: "English (en-US)",
+        }),
+        HTMLInputElement
+      );
     const { execute, options } = captured("create-discount");
 
     act(() =>
@@ -1842,7 +1894,7 @@ describe("discount administration pages", () => {
       target: { value: "Jarní sleva" },
     });
     fireEvent.click(view.getByRole("checkbox", { name: "Meeting room" }));
-    fireEvent.submit(labelEn().closest("form")!);
+    fireEvent.submit(closestForm(labelEn()));
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
 
     act(() =>
@@ -1877,7 +1929,7 @@ describe("discount administration pages", () => {
     });
 
     const voucher: VoucherTableItem = {
-      id: "019c91dd-c560-7e55-b9d8-c95065efd58d" as VoucherTableItem["id"],
+      id: voucherIdSchema.make("019c91dd-c560-7e55-b9d8-c95065efd58d"),
       code: "GIFT100",
       issuedCredit: { value: 10_000, exponent: 2, currency: "CZK" },
       remainingCredit: { value: 10_000, exponent: 2, currency: "CZK" },
@@ -1982,7 +2034,7 @@ describe("discount administration pages", () => {
     const view = render(
       <VoucherEditor
         voucher={{
-          id: voucherId as VoucherTableItem["id"],
+          id: voucherIdSchema.make(voucherId),
           code: "GIFT100",
           issuedCredit: { value: 10_000, exponent: 2, currency: "ZZZ" },
           remainingCredit: { value: 10_000, exponent: 2, currency: "ZZZ" },
@@ -2000,7 +2052,7 @@ describe("discount administration pages", () => {
     const codeField = view.getByRole("textbox", { name: "Code" });
 
     fireEvent.input(codeField, { target: { value: "gift101" } });
-    fireEvent.submit(codeField.closest("form")!);
+    fireEvent.submit(closestForm(codeField));
     const rejection = (await view.findByRole("alert")).textContent;
     expect(execute).not.toHaveBeenCalled();
     fireEvent.input(codeField, { target: { value: "gift102" } });
@@ -2044,9 +2096,9 @@ describe("discount administration pages", () => {
     });
     const { CreateDiscountForm } = await import("./admin-tables");
     const view = render(<CreateDiscountForm />);
-    const form = view
-      .getByRole("button", { name: "Create discount" })
-      .closest("form")!;
+    const form = closestForm(
+      view.getByRole("button", { name: "Create discount" })
+    );
 
     fireEvent.input(view.getByRole("textbox", { name: "English (en-US)" }), {
       target: { value: "Desk week" },
@@ -2106,11 +2158,14 @@ describe("discount administration pages", () => {
     );
 
     fireEvent.click(view.getByRole("button", { name: "Edit SUMMER10" }));
-    const panel = view
-      .getByRole("heading", {
-        name: m.discountsColumnAudience({}, { locale: "en-US" }),
-      })
-      .closest("section")!;
+    const panel = elementOf(
+      view
+        .getByRole("heading", {
+          name: m.discountsColumnAudience({}, { locale: "en-US" }),
+        })
+        .closest("section"),
+      HTMLElement
+    );
     expect(
       within(panel).getByRole("searchbox", {
         name: m.administrationCustomerSearchLabel({}, { locale: "en-US" }),
@@ -2147,14 +2202,17 @@ describe("discount administration pages", () => {
       />
     );
 
-    const row = view.getByRole("link", { name: "SUMMER10" }).closest("tr")!;
+    const row = elementOf(
+      view.getByRole("link", { name: "SUMMER10" }).closest("tr"),
+      HTMLTableRowElement
+    );
     expect(
       within(row).getByText("Open Space only, Private office")
     ).toBeDefined();
     fireEvent.click(view.getByRole("button", { name: "Edit SUMMER10" }));
-    const discountForm = view
-      .getByRole("button", { name: "Save discount" })
-      .closest("form")!;
+    const discountForm = closestForm(
+      view.getByRole("button", { name: "Save discount" })
+    );
     expect(
       within(discountForm)
         .getAllByRole("checkbox", { checked: true })
@@ -2196,9 +2254,7 @@ describe("discount administration pages", () => {
         discountGroups={[{ id: "group-1", name: "Gold", basisPoints: 1000 }]}
       />
     );
-    const form = view
-      .getByRole("button", { name: "Save group" })
-      .closest("form")!;
+    const form = closestForm(view.getByRole("button", { name: "Save group" }));
     const select = view.getByLabelText("Discount group");
 
     fireEvent.change(select, { target: { value: "group-1" } });
@@ -2278,8 +2334,8 @@ describe("discount administration pages", () => {
         (checkbox) =>
           checkbox.closest("label")?.textContent?.trim() === "All cowork tiers"
       );
-    expect(cowork).toBeDefined();
-    fireEvent.click(cowork!);
+    assert(cowork, "Expected All cowork tiers checkbox");
+    fireEvent.click(cowork);
     fireEvent.submit(form);
     await waitFor(() =>
       expect(execute).toHaveBeenCalledWith({
@@ -2306,9 +2362,9 @@ describe("discount administration pages", () => {
     });
     const { CreateDiscountForm } = await import("./admin-tables");
     const view = render(<CreateDiscountForm />);
-    const form = view
-      .getByRole("button", { name: "Create discount" })
-      .closest("form")!;
+    const form = closestForm(
+      view.getByRole("button", { name: "Create discount" })
+    );
 
     fireEvent.input(view.getByRole("textbox", { name: "English (en-US)" }), {
       target: { value: "Fixed promo" },

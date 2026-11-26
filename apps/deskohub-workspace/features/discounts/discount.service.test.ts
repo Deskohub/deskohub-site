@@ -1,7 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 import { describe, expect, mock, test } from "bun:test";
 import { PostHogFeatureFlagEvaluationError } from "@deskohub/analytics-posthog/feature-flags/node";
-import { DotyposUnavailable } from "@deskohub/dotypos";
+import { DotyposCustomerIdSchema, DotyposUnavailable } from "@deskohub/dotypos";
 import {
   type Context,
   Deferred,
@@ -1228,7 +1228,7 @@ describe("DiscountService", () => {
 
   test("applies invitation after ordinary discounts and sizes referrer money from the remaining subtotal", async () => {
     const invitedCustomerId = paymentInput.dotyposCustomerId;
-    const referrerCustomerId = "referrer-1" as typeof invitedCustomerId;
+    const referrerCustomerId = DotyposCustomerIdSchema.make("referrer-1");
     const promotionCodeId = promotionCodeIdSchema.make("referral-promotion");
     const invitation: DiscountCandidate = {
       discount: {
@@ -1326,7 +1326,7 @@ describe("DiscountService", () => {
       claim: {
         kind: "referral_invitation",
         invitedDotyposCustomerId: invitedCustomerId,
-        referrerDotyposCustomerId: "referrer-1" as typeof invitedCustomerId,
+        referrerDotyposCustomerId: DotyposCustomerIdSchema.make("referrer-1"),
         promotionCodeId,
       },
     };
@@ -1456,7 +1456,7 @@ describe("DiscountService", () => {
 
   test("applies referral benefits before voucher credit and keeps the voucher claim", async () => {
     const invitedCustomerId = paymentInput.dotyposCustomerId;
-    const referrerCustomerId = "referrer-1" as typeof invitedCustomerId;
+    const referrerCustomerId = DotyposCustomerIdSchema.make("referrer-1");
     const referralPromotionCodeId = promotionCodeIdSchema.make(
       "referral-before-voucher"
     );
@@ -1710,7 +1710,7 @@ describe("DiscountService", () => {
       claim: {
         kind: "referral_invitation",
         invitedDotyposCustomerId: invitedCustomerId,
-        referrerDotyposCustomerId: "referrer-1" as typeof invitedCustomerId,
+        referrerDotyposCustomerId: DotyposCustomerIdSchema.make("referrer-1"),
         promotionCodeId,
       },
     };

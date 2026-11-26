@@ -7,7 +7,7 @@ import { getShareableReservationUrl } from "@/features/reservation/backend/share
 import type { MeetingRoomReservationDurationKey } from "@/features/reservation/meeting-room-reservation-duration";
 import { meetingRoomSelectionLink } from "@/features/reservation/meeting-room-selection-link";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
-import type { PlainDate } from "@/shared/utils/temporal";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { AdvisoryAvailabilityInventory } from "./availability-inventory";
 import {
   type BookingSelectionInput,
@@ -26,8 +26,8 @@ const pragueInstant = (local: string) =>
 // 15:20 in Prague, so some hourly bookings that began earlier today are
 // still open; checkout and reservation links keep a selection until it ends.
 const now = pragueInstant("2099-07-30T15:20");
-const today = "2099-07-30" as PlainDate;
-const tomorrow = "2099-07-31" as PlainDate;
+const today = plainDateStringSchema.make("2099-07-30");
+const tomorrow = plainDateStringSchema.make("2099-07-31");
 const latest = "2100-01-30";
 
 /**
@@ -202,7 +202,7 @@ describe("resolveBookingQuoteSelection", () => {
     const selection = await quote({
       family: "office",
       date: tomorrow,
-      endDate: "2099-08-01" as PlainDate,
+      endDate: plainDateStringSchema.make("2099-08-01"),
     });
 
     expect(selection.reservationSelection).toEqual({
@@ -245,7 +245,7 @@ describe("resolveBookingQuoteSelection", () => {
       selection: {
         family: "cowork",
         date: tomorrow,
-        endDate: "2099-08-01" as PlainDate,
+        endDate: plainDateStringSchema.make("2099-08-01"),
         tier: "open-space",
       },
       field: "endDate",
@@ -284,7 +284,7 @@ describe("resolveBookingQuoteSelection", () => {
       name: "an office range that ends before it starts",
       selection: {
         family: "office",
-        date: "2099-08-01" as PlainDate,
+        date: plainDateStringSchema.make("2099-08-01"),
         endDate: tomorrow,
       },
       field: "endDate",
@@ -317,7 +317,7 @@ describe("resolveBookingQuoteSelection", () => {
     expect(
       await rejectQuote({
         family: "cowork",
-        date: "2100-01-31" as PlainDate,
+        date: plainDateStringSchema.make("2100-01-31"),
         tier: "open-space",
       })
     ).toEqual({ kind: "date-out-of-range", earliest: today, latest });
@@ -326,7 +326,7 @@ describe("resolveBookingQuoteSelection", () => {
   test("rejects an office start in the past with the office horizon", async () => {
     const rejection = await rejectQuote({
       family: "office",
-      date: "2099-07-29" as PlainDate,
+      date: plainDateStringSchema.make("2099-07-29"),
     });
 
     expect(rejection).toMatchObject({
@@ -579,7 +579,7 @@ describe("getRebookingSelection", () => {
       {
         family: "office",
         date: tomorrow,
-        endDate: "2099-08-02" as PlainDate,
+        endDate: plainDateStringSchema.make("2099-08-02"),
         seats: 3,
       },
       { family: "office", date: tomorrow, seats: 1 },

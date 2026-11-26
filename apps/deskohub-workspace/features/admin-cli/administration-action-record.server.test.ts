@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   AdministrationActionRecord,
-  type AdministrationAssistantConnectionIdType,
+  AdministrationAssistantConnectionId,
   AdministrationAuthentication,
   type AdministrationChannel,
   CliMutationRejected,
@@ -55,8 +55,9 @@ const sessionChannel: AdministrationChannel = {
 };
 const assistantChannel: AdministrationChannel = {
   _tag: "AssistantConnection",
-  connectionId:
-    "01980000-0000-7000-8000-0000000000d2" as AdministrationAssistantConnectionIdType,
+  connectionId: AdministrationAssistantConnectionId.make(
+    "01980000-0000-7000-8000-0000000000d2"
+  ),
   oauthClientId: "https://assistant.example/client.json",
 };
 const sessionPath = `/sessions/${sessionChannel.sessionId}`;
@@ -144,37 +145,22 @@ const serve = ({
       Layer.provide(
         Layer.mergeAll(
           actionLog,
-          Layer.succeed(CliAuthentication, {
-            ...({} as CliAuthentication["Service"]),
-            ...authentication,
-          }),
-          Layer.succeed(AdministrationRequestLedger, {
-            ...({} as AdministrationRequestLedger["Service"]),
-            ...idempotency,
-          }),
-          Layer.succeed(InvoiceAdministrationService, {
-            ...({} as InvoiceAdministrationService["Service"]),
-            ...invoices,
-          }),
-          Layer.succeed(StandaloneAccessCodeAdministration, {
-            ...({} as StandaloneAccessCodeAdministration["Service"]),
-            ...standalone,
-          }),
-          Layer.succeed(CliAuthenticationAdmission, {} as never),
-          Layer.succeed(AdministrationService, {} as never),
-          Layer.succeed(ReservationAdministrationService, {} as never),
-          Layer.succeed(ReservationProductDetailsBackfill, {
-            ...({} as ReservationProductDetailsBackfill["Service"]),
-            ...backfill,
-          }),
-          Layer.succeed(AdministratorRoster, {} as never),
-          Layer.succeed(LegacyAdministratorBackfill, {} as never),
-          Layer.succeed(ReservationAccessAdministration, {} as never),
-          Layer.succeed(DiscountAdministration, {} as never),
+          Layer.mock(CliAuthentication, authentication),
+          Layer.mock(AdministrationRequestLedger, idempotency),
+          Layer.mock(InvoiceAdministrationService, invoices),
+          Layer.mock(StandaloneAccessCodeAdministration, standalone),
+          Layer.mock(CliAuthenticationAdmission, {}),
+          Layer.mock(AdministrationService, {}),
+          Layer.mock(ReservationAdministrationService, {}),
+          Layer.mock(ReservationProductDetailsBackfill, backfill),
+          Layer.mock(AdministratorRoster, {}),
+          Layer.mock(LegacyAdministratorBackfill, {}),
+          Layer.mock(ReservationAccessAdministration, {}),
+          Layer.mock(DiscountAdministration, {}),
           GrantedAdministrator,
           UnusedAdministrationCustomerDirectory,
           Layer.mock(WithdrawalService, withdrawals),
-          Layer.succeed(CampaignOperations, {} as never),
+          Layer.mock(CampaignOperations, {}),
           NodeHttpServer.layerHttpServices
         )
       )
@@ -650,9 +636,7 @@ describe("administration action record", () => {
       operation: Effect.Effect<HttpServerResponse.HttpServerResponse>
     ) =>
       AdministrationActionRecord.pipe(
-        Effect.flatMap((record) =>
-          record(operation, renameSessionEndpoint as never)
-        ),
+        Effect.flatMap((record) => record(operation, renameSessionEndpoint)),
         Effect.provideService(CurrentAdministrationCaller, {
           actor: cliSessionAdministrator,
           channel: sessionChannel,

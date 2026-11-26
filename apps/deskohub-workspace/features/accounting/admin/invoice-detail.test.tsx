@@ -8,6 +8,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   workspaceRouterRefresh,
   workspaceUseAction,
@@ -70,10 +71,23 @@ describe("InvoiceDetailActions", () => {
     workspaceRouterRefresh.mockClear();
     workspaceUseAction.mockImplementation((action, options) => {
       if (action !== retryAdministrationInvoice) {
-        return { execute: mock(), isExecuting: false } as never;
+        return { execute: mock(), isExecuting: false };
       }
-      retryOptions = options as RetryActionOptions;
-      return { execute, isExecuting } as never;
+      retryOptions = {
+        onSuccess: () => {
+          options.onSuccess?.({ data: undefined, input: undefined });
+        },
+        onError: (result) => {
+          options.onError?.({ ...result, input: undefined });
+        },
+        onTransportError: () => {
+          options.onTransportError?.({
+            error: new Error("transport"),
+            input: undefined,
+          });
+        },
+      };
+      return { execute, isExecuting };
     });
   });
   afterEach(() => cleanup());
@@ -113,9 +127,12 @@ describe("InvoiceDetailActions", () => {
     isExecuting = true;
     const view = renderActions(true);
 
-    const button = view.getByRole("button", {
-      name: m.accountingInvoiceRetryingDelivery({}, { locale }),
-    }) as HTMLButtonElement;
+    const button = elementOf(
+      view.getByRole("button", {
+        name: m.accountingInvoiceRetryingDelivery({}, { locale }),
+      }),
+      HTMLButtonElement
+    );
     expect(button.disabled).toBe(true);
   });
 

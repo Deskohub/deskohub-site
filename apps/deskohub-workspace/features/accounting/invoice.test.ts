@@ -9,6 +9,7 @@ import {
   type CoworkReservationQuoteOrder,
 } from "@/features/checkout/checkout-quote.test-utils";
 import { buildOfficeReservationQuote } from "@/features/checkout/reservation-quote-office";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/office-reservation";
 import { makeAccountingDocumentSnapshot } from "./accounting-document-snapshot";
 import {
@@ -25,18 +26,20 @@ const coworkOrder = {
   coffee: true,
 } satisfies CoworkReservationQuoteOrder;
 
-const prepared = {
+const prepared: PreparedCustomerQuote = {
   kind: "cowork",
-  reservation: {
-    kind: "cowork",
-    ...coworkOrder,
-    date: "2099-01-01",
-    name: "Original Buyer",
-    email: testEmailAddress("synthetic"),
-    phone: "+420 700 000 000",
-  },
+  reservation: Schema.decodeUnknownSync(normalizedCoworkReservationOrderSchema)(
+    {
+      kind: "cowork",
+      ...coworkOrder,
+      date: "2099-01-01",
+      name: "Original Buyer",
+      email: testEmailAddress("synthetic"),
+      phone: "+420 700 000 000",
+    }
+  ),
   quote: buildCoworkReservationQuote(coworkOrder),
-} as PreparedCustomerQuote;
+};
 
 const source = makeAccountingDocumentSnapshot({
   workspaceReservationId: "reservation-id",
@@ -230,15 +233,17 @@ describe("invoice", () => {
       )
     ).rejects.toBeDefined();
     expect(() =>
-      makeInvoiceDocument({
-        source,
-        buyer: nameOnlyBuyer as never,
-        paymentAttemptId: "payment-attempt-id",
-        invoiceNumber: formatInvoiceNumber({ year: 2026, sequence: 1 }),
-        issuedAt,
-        fulfilledAt,
-        paidAt,
-      })
+      Reflect.apply(makeInvoiceDocument, undefined, [
+        {
+          source,
+          buyer: nameOnlyBuyer,
+          paymentAttemptId: "payment-attempt-id",
+          invoiceNumber: formatInvoiceNumber({ year: 2026, sequence: 1 }),
+          issuedAt,
+          fulfilledAt,
+          paidAt,
+        },
+      ])
     ).toThrow();
     await expect(
       Effect.runPromise(

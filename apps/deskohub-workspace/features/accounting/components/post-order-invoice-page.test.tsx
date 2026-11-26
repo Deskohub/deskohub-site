@@ -8,7 +8,9 @@ import {
   test,
 } from "bun:test";
 import { m } from "@/features/i18n";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { reservationAccessTokenSchema } from "@/features/reservation/reservation-access-token";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
@@ -28,7 +30,7 @@ const { act, cleanup, fireEvent, render } = await import(
 const { PostOrderInvoicePage } = await import("./post-order-invoice-page");
 const accessToken = reservationAccessTokenSchema.make("signed-capability");
 const locale = "en-US";
-const orderId = "reservation-id" as never;
+const orderId = workspaceReservationIdSchema.make("reservation-id");
 
 type ActionCallbacks = {
   readonly onSuccess: (result: { data?: unknown }) => void;
@@ -44,8 +46,21 @@ const captureAction = ({ isExecuting = false } = {}) => {
   const execute = mock();
   let callbacks: ActionCallbacks | undefined;
   workspaceUseAction.mockImplementation((_action, options) => {
-    callbacks = options as ActionCallbacks;
-    return { execute, isExecuting } as never;
+    callbacks = {
+      onSuccess: (result) => {
+        options.onSuccess?.({ ...result, input: undefined });
+      },
+      onError: (result) => {
+        options.onError?.({ ...result, input: undefined });
+      },
+      onTransportError: () => {
+        options.onTransportError?.({
+          error: new Error("transport"),
+          input: undefined,
+        });
+      },
+    };
+    return { execute, isExecuting };
   });
   const settle = (run: (callbacks: ActionCallbacks) => void) =>
     act(() => {
@@ -82,10 +97,11 @@ describe("PostOrderInvoicePage", () => {
     );
 
     expect(
-      (
+      elementOf(
         view.getByLabelText(
           m.reservationBillingAddressLine1Label({}, { locale })
-        ) as HTMLInputElement
+        ),
+        HTMLInputElement
       ).value
     ).toBe("");
     expect(view.queryByLabelText("Legal company name")).toBeNull();
@@ -335,9 +351,12 @@ describe("PostOrderInvoicePage", () => {
         orderId={orderId}
       />
     );
-    const creating = createView.getByRole("button", {
-      name: m.postOrderInvoiceCreatingButton({}, { locale }),
-    }) as HTMLButtonElement;
+    const creating = elementOf(
+      createView.getByRole("button", {
+        name: m.postOrderInvoiceCreatingButton({}, { locale }),
+      }),
+      HTMLButtonElement
+    );
     expect(creating.disabled).toBe(true);
     cleanup();
 
@@ -349,9 +368,12 @@ describe("PostOrderInvoicePage", () => {
         orderId={orderId}
       />
     );
-    const resending = resendView.getByRole("button", {
-      name: m.postOrderInvoiceResendingButton({}, { locale }),
-    }) as HTMLButtonElement;
+    const resending = elementOf(
+      resendView.getByRole("button", {
+        name: m.postOrderInvoiceResendingButton({}, { locale }),
+      }),
+      HTMLButtonElement
+    );
     expect(resending.disabled).toBe(true);
   });
 

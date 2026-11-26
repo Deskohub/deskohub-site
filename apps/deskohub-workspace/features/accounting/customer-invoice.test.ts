@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { serializeCsv } from "@/shared/utils/csv";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
@@ -201,8 +202,9 @@ describe("customer invoice CSV", () => {
   test("writes a header and one record per invoice", () => {
     const [header, ...rows] = records("en-US");
 
+    assert(header !== undefined);
     expect(header).toHaveLength(7);
-    expect(header!.every((cell) => cell.length > 0)).toBe(true);
+    expect(header.every((cell) => cell.length > 0)).toBe(true);
     expect(rows).toEqual(
       summaries.map((summary) => [
         summary.invoiceNumber,
@@ -224,10 +226,13 @@ describe("customer invoice CSV", () => {
     const czech = records("cs-CZ");
 
     expect(czech[0]).not.toEqual(english[0]);
-    expect(czech[1]!.at(-2)).toBe(
+    const czechOverdue = czech[1];
+    const czechCancelled = czech[3];
+    assert(czechOverdue !== undefined && czechCancelled !== undefined);
+    expect(czechOverdue.at(-2)).toBe(
       getCustomerInvoiceStatusLabel("overdue", "cs-CZ")
     );
-    expect(czech[3]!.slice(-2)).toEqual([
+    expect(czechCancelled.slice(-2)).toEqual([
       getCustomerInvoiceStatusLabel("cancelled", "cs-CZ"),
       correctiveDocumentNumber,
     ]);

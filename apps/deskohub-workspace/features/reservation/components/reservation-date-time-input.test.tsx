@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { useForm } from "react-hook-form";
 import "@/shared/polyfills/temporal";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -85,9 +86,10 @@ const renderStart = ({ value = "", ...props }: StartProps = {}) => {
   }
 
   const view = render(<StartForm />);
-  const form = view.container.querySelector("form") as HTMLFormElement;
-  const dateField = view.getByRole("combobox") as HTMLInputElement;
-  const timeField = view.queryByLabelText(timeLabel) as HTMLInputElement | null;
+  const form = elementOf(view.container.querySelector("form"), HTMLFormElement);
+  const dateField = elementOf(view.getByRole("combobox"), HTMLInputElement);
+  const timeNode = view.queryByLabelText(timeLabel);
+  const timeField = timeNode ? elementOf(timeNode, HTMLInputElement) : null;
   const typeDate = (text: string) => {
     fireEvent.change(dateField, { target: { value: text } });
     fireEvent.focusOut(dateField);

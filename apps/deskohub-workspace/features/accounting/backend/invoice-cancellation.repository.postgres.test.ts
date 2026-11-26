@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
 import { Data, Effect, Exit, Option } from "effect";
@@ -18,7 +19,7 @@ import {
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
-  type WorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   withStatementTimeout,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type {
@@ -46,16 +47,36 @@ afterAll(async () => {
 });
 
 // The kit only touches the database when a test calls it.
-const {
-  acceptInvoiceEmail,
-  cancel,
-  issueManualInvoice,
-  makeActor,
-  pauseBeforeActiveKey,
-  query,
-  run,
-} = makeInvoiceCancellationTestKit(testDatabase!);
-const timingOut = makeInvoiceCancellationTestKit(timingOutDatabase!);
+const kit = testDatabase ? makeInvoiceCancellationTestKit(testDatabase) : null;
+const timingOutKit = timingOutDatabase
+  ? makeInvoiceCancellationTestKit(timingOutDatabase)
+  : null;
+const requireKit = () => requireTestDatabase(kit);
+const requireTimingOut = () => requireTestDatabase(timingOutKit);
+const acceptInvoiceEmail: ReturnType<
+  typeof makeInvoiceCancellationTestKit
+>["acceptInvoiceEmail"] = (invoiceId, audience) =>
+  requireKit().acceptInvoiceEmail(invoiceId, audience);
+const cancel: ReturnType<typeof makeInvoiceCancellationTestKit>["cancel"] = (
+  input
+) => requireKit().cancel(input);
+const issueManualInvoice: ReturnType<
+  typeof makeInvoiceCancellationTestKit
+>["issueManualInvoice"] = (...args) => requireKit().issueManualInvoice(...args);
+const makeActor: ReturnType<
+  typeof makeInvoiceCancellationTestKit
+>["makeActor"] = (label) => requireKit().makeActor(label);
+const pauseBeforeActiveKey: ReturnType<
+  typeof makeInvoiceCancellationTestKit
+>["pauseBeforeActiveKey"] = (hook) => requireKit().pauseBeforeActiveKey(hook);
+const query: ReturnType<typeof makeInvoiceCancellationTestKit>["query"] = (
+  text,
+  values
+) => requireKit().query(text, values);
+const run: ReturnType<typeof makeInvoiceCancellationTestKit>["run"] = (
+  effect,
+  keys
+) => requireKit().run(effect, keys);
 
 const sealingKey: AccountingSnapshotKey = {
   id: accountingSnapshotKeyIdSchema.make("K209903"),
@@ -91,7 +112,7 @@ class RolledBack extends Data.TaggedError("RolledBack")<{
 describe.skipIf(!testDatabase)(
   "InvoiceCancellationRepository on disposable Postgres",
   () => {
-    const postgres = testDatabase as WorkspacePostgresSuiteDatabase;
+    const getPostgres = () => requireTestDatabase(testDatabase);
 
     test("cancels an invoice once with one corrective document and leaves the invoice untouched", async () => {
       const actor = await makeActor("cancellation-once");
@@ -133,7 +154,8 @@ describe.skipIf(!testDatabase)(
       const [after] = await query("select * from invoices where id = $1", [
         invoice.id,
       ]);
-      expect(after).toEqual(before!);
+      assert(before !== undefined);
+      expect(after).toEqual(before);
       const reread = await run(
         Effect.flatMap(InvoiceRepository, (invoices) =>
           invoices.findById(invoice.id)
@@ -245,12 +267,14 @@ describe.skipIf(!testDatabase)(
 
       // The decrypting statement waits on a lock until it times out.
       const locking = lockingAfterKeyLookup({
-        pool: testDatabase!.pool,
+        pool: getPostgres().pool,
         table: "corrective_documents",
         keys: sealingKeys,
       });
       const timedOut = failureOf(
-        await loadWith(timingOut, locking.keys).finally(locking.release)
+        await loadWith(requireTimingOut(), locking.keys).finally(
+          locking.release
+        )
       );
 
       for (const [error, sqlState] of [
@@ -328,8 +352,9 @@ describe.skipIf(!testDatabase)(
             Number(next.record.correctiveDocumentNumber.slice(6, 10))
         )
       );
+      assert(year !== undefined);
       expect(next.record.correctiveDocumentNumber).toBe(
-        `WS-OD-${year!.numbering_year}-${year!.last_sequence
+        `WS-OD-${year.numbering_year}-${year.last_sequence
           .toString()
           .padStart(6, "0")}`
       );
@@ -425,10 +450,11 @@ describe.skipIf(!testDatabase)(
               providerDeliveryId: EmailDeliveryIdSchema.make("superseded"),
               acceptedAt: Temporal.Now.instant(),
             });
+            assert(retry !== null);
             yield* cancellations.markNoticeAccepted({
               invoiceId: invoice.id,
               audience: "internal",
-              attemptNumber: retry!.attemptNumber,
+              attemptNumber: retry.attemptNumber,
               providerDeliveryId: EmailDeliveryIdSchema.make("notice-sent"),
               acceptedAt: Temporal.Now.instant(),
             });
@@ -492,13 +518,13 @@ describe.skipIf(!testDatabase)(
         );
 
       const beforeAcceptance = await claimCustomerNotice(invoice.id);
+      assert(inFlight !== null && inFlight !== "cancelled");
       await run(
         Effect.flatMap(InvoiceEmailDeliveryRepository, (deliveries) =>
           deliveries.markAccepted({
             invoiceId: invoice.id,
             audience: "customer",
-            attemptNumber: (inFlight as { attemptNumber: number })
-              .attemptNumber,
+            attemptNumber: inFlight.attemptNumber,
             providerDeliveryId: EmailDeliveryIdSchema.make("late-original"),
             acceptedAt: Temporal.Now.instant(),
           })
@@ -553,13 +579,13 @@ describe.skipIf(!testDatabase)(
         cancel({ invoiceId: invoice.id, actor, confirmedCustomerNotice: true })
       );
       await recordPaused;
+      assert(inFlight !== null && inFlight !== "cancelled");
       await run(
         Effect.flatMap(InvoiceEmailDeliveryRepository, (deliveries) =>
           deliveries.markAccepted({
             invoiceId: invoice.id,
             audience: "customer",
-            attemptNumber: (inFlight as { attemptNumber: number })
-              .attemptNumber,
+            attemptNumber: inFlight.attemptNumber,
             providerDeliveryId: EmailDeliveryIdSchema.make("racing-original"),
             acceptedAt: Temporal.Now.instant(),
           })
@@ -573,7 +599,7 @@ describe.skipIf(!testDatabase)(
           })
         )
       );
-      await waitForPostgresLockWaiter(testDatabase!.pool, {
+      await waitForPostgresLockWaiter(getPostgres().pool, {
         condition: "locktype = 'transactionid'",
         description: "the late notice claim waiting for the cancellation",
       });
@@ -601,13 +627,13 @@ describe.skipIf(!testDatabase)(
       );
       // The original email is accepted after the cancellation, and its late
       // notice claim never ran.
+      assert(inFlight !== null && inFlight !== "cancelled");
       await run(
         Effect.flatMap(InvoiceEmailDeliveryRepository, (deliveries) =>
           deliveries.markAccepted({
             invoiceId: invoice.id,
             audience: "customer",
-            attemptNumber: (inFlight as { attemptNumber: number })
-              .attemptNumber,
+            attemptNumber: inFlight.attemptNumber,
             providerDeliveryId: EmailDeliveryIdSchema.make("late-unclaimed"),
             acceptedAt: Temporal.Now.instant(),
           })
@@ -672,7 +698,7 @@ describe.skipIf(!testDatabase)(
       const invoice = await issueManualInvoice(actor);
       await run(cancel({ invoiceId: invoice.id, actor }));
 
-      await postgres.pool.query('delete from auth."user" where id = $1', [
+      await getPostgres().pool.query('delete from auth."user" where id = $1', [
         actor.administrator.accountId,
       ]);
 
@@ -696,10 +722,12 @@ describe.skipIf(!testDatabase)(
         "update corrective_documents set issued_at = issued_at where cancelled_invoice_id = $1",
         "delete from corrective_documents where cancelled_invoice_id = $1",
       ]) {
-        const failure = await postgres.pool.query(statement, [invoice.id]).then(
-          () => null,
-          (error: { readonly code?: string }) => error.code
-        );
+        const failure = await getPostgres()
+          .pool.query(statement, [invoice.id])
+          .then(
+            () => null,
+            (error: { readonly code?: string }) => error.code
+          );
         expect(failure).toBe("55000");
       }
     });

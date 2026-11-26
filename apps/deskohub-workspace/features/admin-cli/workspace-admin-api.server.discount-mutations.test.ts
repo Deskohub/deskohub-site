@@ -3,6 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   AdministrationDiscountCodeId,
+  AdministrationDiscountCodeUpdateInput,
   type AdministrationDiscountMutationResult,
   AdministrationStoredDiscountId,
   AdministrationVoucherId,
@@ -16,7 +17,8 @@ import {
   WorkspaceAdminApi,
 } from "@deskohub/workspace-admin-api";
 import { NodeHttpServer } from "@effect/platform-node";
-import { Data, Effect, Layer, Schema } from "effect";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
+import { Effect, Layer, Schema } from "effect";
 import { HttpApiTest } from "effect/http-api";
 
 // Every calendar discount cache invalidation and `after` callback.
@@ -97,13 +99,13 @@ const {
 
 /** The administration API's other services, which these tests never reach. */
 const UnusedAdministrationServices = Layer.mergeAll(
-  Layer.succeed(InvoiceAdministrationService, {} as never),
-  Layer.succeed(StandaloneAccessCodeAdministration, {} as never),
-  Layer.succeed(ReservationAdministrationService, {} as never),
-  Layer.succeed(ReservationProductDetailsBackfill, {} as never),
-  Layer.succeed(ReservationAccessAdministration, {} as never),
-  Layer.succeed(AdministrationService, {} as never),
-  Layer.succeed(CliAuthentication, {} as never),
+  Layer.mock(InvoiceAdministrationService, {}),
+  Layer.mock(StandaloneAccessCodeAdministration, {}),
+  Layer.mock(ReservationAdministrationService, {}),
+  Layer.mock(ReservationProductDetailsBackfill, {}),
+  Layer.mock(ReservationAccessAdministration, {}),
+  Layer.mock(AdministrationService, {}),
+  Layer.mock(CliAuthentication, {}),
   // The in-memory client can't send the `dhw` version.
   Layer.succeed(CliClientCompatibility, (httpEffect) => httpEffect)
 );
@@ -124,11 +126,6 @@ const codeId = Schema.decodeUnknownSync(AdministrationDiscountCodeId)(
 );
 const customerId = "dotypos-customer-4217";
 const unavailableMessage = "The administration API is temporarily unavailable.";
-
-/** A dependency failure the mutation can't recover from on its own. */
-class DependencyOutage extends Data.TaggedError("DependencyOutage")<{
-  readonly message: string;
-}> {}
 
 /**
  * A ledger that applies every request as the real one applies a new claim:
@@ -156,7 +153,7 @@ const settlingRequestLedger = (
             ),
             Effect.tap(() => mutation.afterSettled ?? Effect.void)
           ),
-  } as (typeof AdministrationRequestLedger)["Service"]);
+  });
   return { layer, releases, failures };
 };
 
@@ -169,10 +166,12 @@ const replayingRequestLedger = (stored: AdministrationDiscountMutationResult) =>
   Layer.succeed(AdministrationRequestLedger, {
     applyOnce: () => Effect.die("Discount mutations have external effects."),
     applyOnceWithEffects: (mutation) =>
-      Effect.sync(() => mutation.stored.replay(stored as never)).pipe(
-        Effect.tap(() => mutation.afterSettled ?? Effect.void)
-      ),
-  } as (typeof AdministrationRequestLedger)["Service"]);
+      Effect.sync(() =>
+        mutation.stored.replay(
+          Schema.decodeUnknownSync(mutation.stored.schema)(stored)
+        )
+      ).pipe(Effect.tap(() => mutation.afterSettled ?? Effect.void)),
+  });
 
 const mutateDiscounts = (
   mutation: Parameters<
@@ -201,12 +200,7 @@ const mutateDiscounts = (
       )
     ),
     Effect.provide(ledger),
-    Effect.provide(
-      Layer.succeed(DiscountAdministration, {
-        ...({} as DiscountAdministrationService),
-        ...discounts,
-      })
-    ),
+    Effect.provide(Layer.mock(DiscountAdministration, discounts)),
     Effect.provide(UnusedAdministrationCustomerDirectory),
     Effect.provide(UnusedAdministrationServices),
     // The administration operation port re-reads the caller's grant.
@@ -223,14 +217,9 @@ const administrationClient = HttpApiTest.groups(WorkspaceAdminApi, [
   "administration",
 ]).pipe(Effect.map((client) => client.administration));
 
-/** A discount deletion that fails with the given domain or dependency error. */
-const failingDelete = (
-  failure:
-    | Effect.Error<ReturnType<DiscountAdministrationService["deleteDiscount"]>>
-    | DependencyOutage
-) => ({
-  deleteDiscount: () => Effect.fail(failure as never),
-});
+type DiscountMutationInput = Parameters<
+  Effect.Success<typeof administrationClient>["mutateDiscounts"]
+>[0]["payload"]["mutation"];
 
 beforeEach(() => {
   refreshes.length = 0;
@@ -239,13 +228,33 @@ beforeEach(() => {
 });
 
 describe("discount mutation failures over the administration API", () => {
-  test.each([
+  const failureCases: ReadonlyArray<
+    readonly [
+      string,
+      DiscountMutationInput,
+      Partial<DiscountAdministrationService>,
+      (
+        | typeof CliResourceNotFound
+        | typeof CliMutationRejected
+        | typeof CliServiceUnavailable
+      ),
+      string,
+      boolean,
+      string,
+    ]
+  > = [
     [
       "a missing resource",
-      new DiscountAdminNotFoundError({
-        resource: { kind: "discount", id: discountId },
-        message: "The discount doesn't exist.",
-      }),
+      { kind: "delete-discount", id: discountId },
+      {
+        deleteDiscount: () =>
+          Effect.fail(
+            new DiscountAdminNotFoundError({
+              resource: { kind: "discount", id: discountId },
+              message: "The discount doesn't exist.",
+            })
+          ),
+      },
       CliResourceNotFound,
       "The discount doesn't exist.",
       true,
@@ -253,10 +262,16 @@ describe("discount mutation failures over the administration API", () => {
     ],
     [
       "the last audience customer",
-      new DiscountAdminAudienceError({
-        promotionKind: "voucher",
-        message: "Removing the last customer broadens the voucher.",
-      }),
+      { kind: "remove-voucher-customer", voucherId, customerId },
+      {
+        removeVoucherCustomer: () =>
+          Effect.fail(
+            new DiscountAdminAudienceError({
+              promotionKind: "voucher",
+              message: "Removing the last customer broadens the voucher.",
+            })
+          ),
+      },
       CliMutationRejected,
       "Removing the last customer broadens the voucher.",
       true,
@@ -264,10 +279,16 @@ describe("discount mutation failures over the administration API", () => {
     ],
     [
       "a conflict",
-      new DiscountAdminConflictError({
-        reason: "discount-referenced",
-        message: "This discount is still referenced.",
-      }),
+      { kind: "delete-discount", id: discountId },
+      {
+        deleteDiscount: () =>
+          Effect.fail(
+            new DiscountAdminConflictError({
+              reason: "discount-referenced",
+              message: "This discount is still referenced.",
+            })
+          ),
+      },
       CliMutationRejected,
       "This discount is still referenced.",
       true,
@@ -275,9 +296,28 @@ describe("discount mutation failures over the administration API", () => {
     ],
     [
       "refused service dates",
-      new DiscountAdminServiceDatesError({
-        message: "serviceDateUntil must not be before serviceDateFrom",
-      }),
+      {
+        kind: "update-code",
+        code: Schema.decodeUnknownSync(AdministrationDiscountCodeUpdateInput)({
+          id: codeId,
+          discountId,
+          code: "SUMMER10",
+          enabled: true,
+          validFrom: null,
+          validUntil: null,
+          maxUses: null,
+          serviceDateFrom: "2026-06-01",
+          serviceDateUntil: "2026-06-10",
+        }),
+      },
+      {
+        updateCode: () =>
+          Effect.fail(
+            new DiscountAdminServiceDatesError({
+              message: "serviceDateUntil must not be before serviceDateFrom",
+            })
+          ),
+      },
       CliMutationRejected,
       "serviceDateUntil must not be before serviceDateFrom",
       true,
@@ -285,21 +325,33 @@ describe("discount mutation failures over the administration API", () => {
     ],
     [
       "an unavailable dependency",
-      new DependencyOutage({ message: "Dotypos didn't answer." }),
+      { kind: "delete-discount", id: discountId },
+      {
+        deleteDiscount: () =>
+          Effect.fail(
+            new EffectDrizzleQueryError({
+              query: "delete from discounts",
+              params: [],
+              cause: new Error("Dotypos didn't answer."),
+            })
+          ),
+      },
       CliServiceUnavailable,
       unavailableMessage,
       false,
       "service-unavailable",
     ],
-  ] as const)(
+  ];
+
+  test.each(failureCases)(
     "answers %s with its CLI error, stable code and claim release",
-    async (_, failure, errorClass, message, released, code) => {
+    async (_, mutation, discounts, errorClass, message, released, code) => {
       const ledger = settlingRequestLedger();
 
-      const result = await mutateDiscounts(
-        { kind: "delete-discount", id: discountId },
-        { discounts: failingDelete(failure), ledger: ledger.layer }
-      );
+      const result = await mutateDiscounts(mutation, {
+        discounts,
+        ledger: ledger.layer,
+      });
 
       expect(result._tag).toBe("Failure");
       const error = result._tag === "Failure" ? result.failure : undefined;
@@ -393,12 +445,15 @@ describe("discount mutation calendar refresh over the administration API", () =>
     const result = await mutateDiscounts(
       { kind: "delete-discount", id: discountId },
       {
-        discounts: failingDelete(
-          new DiscountAdminConflictError({
-            reason: "discount-referenced",
-            message: "This discount is still referenced.",
-          })
-        ),
+        discounts: {
+          deleteDiscount: () =>
+            Effect.fail(
+              new DiscountAdminConflictError({
+                reason: "discount-referenced",
+                message: "This discount is still referenced.",
+              })
+            ),
+        },
       }
     );
 

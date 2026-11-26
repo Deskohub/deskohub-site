@@ -36,7 +36,10 @@ const normalize = (
 ) => {
   const failures: CalendarSaleConfigurationError[] = [];
   const logger = Logger.make((options) => {
-    for (const part of options.message as readonly unknown[]) {
+    const parts = Array.isArray(options.message)
+      ? options.message
+      : [options.message];
+    for (const part of parts) {
       if (
         Predicate.hasProperty(part, "cause") &&
         part.cause instanceof CalendarSaleConfigurationError

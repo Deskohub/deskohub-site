@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DotyposCloudIdSchema,
   type Customer as DotyposCustomer,
   type DotyposCustomerId,
+  DotyposCustomerIdSchema,
   DotyposService,
   DotyposUnavailable,
 } from "@deskohub/dotypos";
@@ -9,11 +11,15 @@ import { GoogleCalendarService } from "@deskohub/google-calendar";
 import { testEmailAddress } from "@deskohub/test-email";
 import { AdministrationCustomerSearchResult } from "@deskohub/workspace-admin-api";
 import { Effect, Layer, Option, Schema } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
+import type { WorkspaceDatabase } from "@/db/database.service";
 import { AdministrationCustomerDirectory } from "@/features/administration/customer-directory.service";
 import { inactiveCustomerDisplayNames } from "@/features/administration/customer-name";
-import { CalendarResourceConfig } from "@/shared/backend/config/calendar-resource.config";
-import type { DiscountCodeId } from "../persistence-contracts";
+import {
+  CalendarResourceConfig,
+  salesCalendarIdSchema,
+} from "@/shared/backend/config/calendar-resource.config";
+import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
+import { discountCodeIdSchema } from "../persistence-contracts";
 import {
   getAdminDiscountCodeUsage,
   makeDiscountAdministrationReads,
@@ -51,16 +57,28 @@ describe("discount administration read models", () => {
   });
 });
 
+const customerDefaults = {
+  _cloudId: DotyposCloudIdSchema.make("cloud-synthetic"),
+  points: null,
+  flags: "0",
+  display: true,
+  deleted: false,
+};
+
 describe("discount administration customers", () => {
-  const unnamed = { id: "dotypos-customer" } as DotyposCustomer;
+  const unnamed: DotyposCustomer = {
+    ...customerDefaults,
+    id: DotyposCustomerIdSchema.make("dotypos-customer"),
+  };
   const now = new Date("2026-11-17T12:00:00Z");
-  const former = {
-    id: "dotypos-customer",
+  const former: DotyposCustomer = {
+    ...customerDefaults,
+    id: DotyposCustomerIdSchema.make("dotypos-customer"),
     firstName: "Synthetic",
     lastName: "Former",
     email: testEmailAddress("discount-former"),
     phone: "+420 123 456 789",
-  } as DotyposCustomer;
+  };
 
   test("signals a customer without a name or contact detail", () => {
     expect(toAdminDotyposCustomer(unnamed, now)).toMatchObject({
@@ -128,60 +146,101 @@ const readsLayer = (
     dotypos,
     Layer.mock(GoogleCalendarService, {}),
     Layer.mock(CalendarResourceConfig, {
-      salesCalendarId: "sales-calendar" as never,
+      salesCalendarId: salesCalendarIdSchema.make("sales-calendar"),
     })
   );
 
 describe("discount administration audiences", () => {
   test("lists audience customers in audience order when the batch read fails", async () => {
+    const codeId = discountCodeIdSchema.make("code");
+    const promotionCodeId = "promotion";
+    const discountId = "discount";
+    const timestamp = "2026-11-17T12:00:00Z";
     const audience = ["failing", "deleted", "expired", "active", "missing"].map(
       (id) => ({
-        dotyposCustomerId: id as DotyposCustomerId,
+        promotionCodeId,
+        dotyposCustomerId: DotyposCustomerIdSchema.make(id),
       })
     );
-    const customers = new Map(
-      [
-        { id: "active", firstName: "Jana" },
-        { id: "deleted", firstName: "Petr", deleted: true },
-        { id: "expired", firstName: "Eva", expireDate: "2020-01-01T00:00:00Z" },
-      ].map((customer) => [customer.id, customer as DotyposCustomer])
+    const customers = new Map<DotyposCustomerId, DotyposCustomer>(
+      (
+        [
+          {
+            ...customerDefaults,
+            id: DotyposCustomerIdSchema.make("active"),
+            firstName: "Jana",
+          },
+          {
+            ...customerDefaults,
+            id: DotyposCustomerIdSchema.make("deleted"),
+            firstName: "Petr",
+            deleted: true,
+          },
+          {
+            ...customerDefaults,
+            id: DotyposCustomerIdSchema.make("expired"),
+            firstName: "Eva",
+            expireDate: "2020-01-01T00:00:00Z",
+          },
+        ] satisfies DotyposCustomer[]
+      ).map((customer) => [customer.id, customer])
     );
     const unavailable = new DotyposUnavailable({
       operation: "getCustomer",
       reason: "server",
     });
-    const row = {
-      id: "code",
-      discountId: "discount",
+    const promotion = {
+      id: promotionCodeId,
+      kind: "discount",
+      code: "SYNTHETIC",
+      enabled: true,
+      validFrom: null,
+      validUntil: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      customers: audience,
+    };
+    const discount = {
+      id: discountId,
+      labels: { "en-US": "Synthetic", "cs-CZ": "Syntetická sleva" },
+      percentageBasisPoints: 1000,
+      fixedAmountValue: null,
+      fixedAmountExponent: null,
+      fixedAmountCurrency: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const recording = await makeRecordingWorkspaceDatabase();
+    // The relational query reads discount code columns followed by its JSON relations.
+    const discountCode = {
+      id: codeId,
+      code: promotion.code,
+      enabled: promotion.enabled,
+      validFrom: null,
+      validUntil: null,
+      promotionCodeId,
+      promotionKind: promotion.kind,
+      discountId,
       maxUses: null,
       maxUsesPerCustomer: null,
       serviceDateFrom: null,
       serviceDateUntil: null,
-      promotion: {
-        code: "SYNTHETIC",
-        enabled: true,
-        validFrom: null,
-        validUntil: null,
-        customers: audience,
-      },
-      discount: { labels: { "en-US": "Synthetic" } },
-      redemptions: [],
+      createdAt: timestamp,
+      updatedAt: timestamp,
     };
+    recording.setRows([
+      [[...Object.values(discountCode), promotion, discount, []]],
+    ]);
 
     const detail = await Effect.gen(function* () {
       const reads = yield* makeDiscountAdministrationReads;
-      return yield* reads.loadCodeDetail({ codeId: "code" as DiscountCodeId });
+      return yield* reads.loadCodeDetail({
+        codeId,
+      });
     }).pipe(
       Effect.provide(
         readsLayer(
-          Layer.succeed(
-            WorkspaceDatabase,
-            WorkspaceDatabase.make({
-              query: {
-                discountCodes: { findFirst: () => Effect.succeed(row) },
-              },
-            } as never)
-          ),
+          recording.layer,
           Layer.mock(DotyposService, {
             getCustomersByIds: () => Effect.fail(unavailable),
             getCustomer: (id) =>
@@ -210,14 +269,14 @@ describe("discount administration audiences", () => {
       detail.customers.map(({ customerId, customer }) => [customerId, customer])
     );
     for (const lifecycle of ["deleted", "expired"] as const)
-      expect(shown.get(lifecycle as DotyposCustomerId)).toMatchObject({
+      expect(shown.get(DotyposCustomerIdSchema.make(lifecycle))).toMatchObject({
         displayName: inactiveCustomerDisplayNames[lifecycle],
         hasName: false,
         lifecycle,
         email: null,
         phone: null,
       });
-    expect(shown.get("active" as DotyposCustomerId)).toMatchObject({
+    expect(shown.get(DotyposCustomerIdSchema.make("active"))).toMatchObject({
       displayName: "Jana",
       lifecycle: "active",
     });

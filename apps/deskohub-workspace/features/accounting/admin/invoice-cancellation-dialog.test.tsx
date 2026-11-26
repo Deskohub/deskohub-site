@@ -8,7 +8,10 @@ import {
   mock,
   test,
 } from "bun:test";
-import { AdministrationInvoiceId } from "@deskohub/workspace-admin-api";
+import {
+  AdministrationInvoiceId,
+  AdministrationWorkspaceReservationId,
+} from "@deskohub/workspace-admin-api";
 import {
   act,
   cleanup,
@@ -60,12 +63,20 @@ beforeEach(() => {
   workspaceRouterRefresh.mockClear();
   workspaceUseAction.mockReset();
   workspaceUseAction.mockImplementation((action, options) => {
+    const callbacks: Callbacks = {
+      onSuccess: (args) => {
+        options.onSuccess?.({ ...args, input: undefined });
+      },
+      onError: (args) => {
+        options.onError?.({ ...args, input: undefined });
+      },
+    };
     if (action === previewAction) {
-      previewCallbacks = options as Callbacks;
-      return { execute: executePreview, isExecuting: false } as never;
+      previewCallbacks = callbacks;
+      return { execute: executePreview, isExecuting: false };
     }
-    cancelCallbacks = options as Callbacks;
-    return { execute: executeCancel, isExecuting: false } as never;
+    cancelCallbacks = callbacks;
+    return { execute: executeCancel, isExecuting: false };
   });
 });
 
@@ -91,7 +102,7 @@ const livePreview = ({
   customerNotice: sent ? "owed" : "not_owed",
   reservation: reservation
     ? {
-        reservationId: reservationId as never,
+        reservationId: AdministrationWorkspaceReservationId.make(reservationId),
         label: "Open space, 30 Sept 2026",
       }
     : null,

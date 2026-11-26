@@ -2,6 +2,7 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
 import {
+  DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -25,7 +26,10 @@ import {
   workspaceFixtures,
 } from "@/shared/testing/workspace-fixtures.test-utils";
 import { waitForAdvisoryLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type Invoice,
   InvoiceRepository,
@@ -101,15 +105,25 @@ const deliveryLedger = (
       ),
   });
 
+const dotyposCustomer = (
+  id: string,
+  fields: Partial<Omit<DotyposCustomer, "id" | "_cloudId">> = {}
+): DotyposCustomer => ({
+  id: DotyposCustomerIdSchema.make(id),
+  _cloudId: DotyposCloudIdSchema.make("cloud-1"),
+  ...fields,
+});
+
 test.skipIf(!testDatabase)(
   "enriches the admin invoice list using the recorded issuer's linked profile",
   async () => {
-    const fixtures = workspaceFixtures(testDatabase!.db);
+    const database = requireTestDatabase(testDatabase);
+    const fixtures = workspaceFixtures(database.db);
     const profileId = syntheticDotyposCustomerId();
     const administrator = await Effect.runPromise(
       fixtures.account("invoice-list-issuer", { linkedCustomer: profileId })
     );
-    const kit = makeInvoiceCancellationTestKit(testDatabase!);
+    const kit = makeInvoiceCancellationTestKit(database);
     const invoice = await kit.issueManualInvoice({
       source: "admin-ui",
       administrator,
@@ -135,7 +149,7 @@ test.skipIf(!testDatabase)(
     const layer = InvoiceAdministrationService.Default.pipe(
       Layer.provide(
         Layer.mergeAll(
-          testDatabase!.layer,
+          database.layer,
           repository,
           Layer.mock(DotyposService, { getCustomersByIds }),
           deliveryLedger(),
@@ -175,12 +189,10 @@ describe.skipIf(!testDatabase)(
     test("serializes a stale identical claim before creating a Dotypos customer", async () => {
       const document = makeTestManualInvoiceDocument("cs-CZ", "1000");
       let completed = false;
-      let stored: Invoice | null = null;
+      let stored: ManualInvoiceIssuance["invoice"] | null = null;
       const createCustomer = mock(() =>
         Effect.sleep("10 millis").pipe(
-          Effect.as({
-            id: DotyposCustomerIdSchema.make("dotypos-customer-manual"),
-          } as never)
+          Effect.as(dotyposCustomer("dotypos-customer-manual"))
         )
       );
       const issueManual = mock(
@@ -201,7 +213,10 @@ describe.skipIf(!testDatabase)(
               document,
               ...liveInvoiceStanding,
             };
-            return { invoice: stored, changed } as ManualInvoiceIssuance;
+            return {
+              invoice: stored,
+              changed,
+            } satisfies ManualInvoiceIssuance;
           })
       );
       const layer = InvoiceAdministrationService.Default.pipe(
@@ -235,9 +250,9 @@ describe.skipIf(!testDatabase)(
                 Effect.sync(() => {
                   completed = true;
                 }),
-            } as never),
+            }),
             liveInvoiceCancellationFakes,
-            testDatabase!.layer
+            requireTestDatabase(testDatabase).layer
           )
         )
       );
@@ -267,15 +282,13 @@ describe.skipIf(!testDatabase)(
     test("serializes new customer resolution by email across invoice ids", async () => {
       const document = makeTestManualInvoiceDocument("cs-CZ", "1000");
       const stored = new Map<string, Invoice>();
-      let customer: { readonly id: DotyposCustomerIdSchema.Type } | null = null;
+      let customer: DotyposCustomer | null = null;
       const createCustomer = mock(() =>
         Effect.sleep("10 millis").pipe(
           Effect.andThen(
             Effect.sync(() => {
-              customer = {
-                id: DotyposCustomerIdSchema.make("dotypos-customer-manual"),
-              };
-              return customer as never;
+              customer = dotyposCustomer("dotypos-customer-manual");
+              return customer;
             })
           )
         )
@@ -302,13 +315,16 @@ describe.skipIf(!testDatabase)(
                 Effect.succeed(
                   customer
                     ? FindCustomerResult.Matched({
-                        customer: customer as never,
-                        matches: [customer as never],
+                        customer,
+                        matches: [customer],
                       })
                     : FindCustomerResult.NotFound({ matches: [] })
                 ),
               createCustomer,
-              updateCustomerDetails: () => Effect.succeed(customer as never),
+              updateCustomerDetails: () =>
+                Effect.succeed(
+                  customer ?? dotyposCustomer("dotypos-customer-manual")
+                ),
             }),
             Layer.mock(InvoiceRepository, {
               findById: (invoiceId) =>
@@ -348,9 +364,9 @@ describe.skipIf(!testDatabase)(
             Layer.mock(ManualInvoiceCreationRequests, {
               claim: () => Effect.succeed({ kind: "claimed" } as const),
               complete: () => Effect.void,
-            } as never),
+            }),
             liveInvoiceCancellationFakes,
-            testDatabase!.layer
+            requireTestDatabase(testDatabase).layer
           )
         )
       );
@@ -377,6 +393,7 @@ describe.skipIf(!testDatabase)(
         invoiceNumber: document.invoiceNumber,
         issuedAt: Temporal.Instant.from(document.issuedAt),
         document,
+        ...liveInvoiceStanding,
       });
       const existingCustomerInput = Schema.decodeUnknownSync(
         AdministrationInvoiceCreateInput,
@@ -405,19 +422,19 @@ describe.skipIf(!testDatabase)(
               Effect.succeed({
                 invoice: storedInvoice(invoiceInput.dotyposCustomerId),
                 changed: stored === null,
-              } as ManualInvoiceIssuance)
+              } satisfies ManualInvoiceIssuance)
           ),
           complete: mock(() => Effect.void),
           getCustomer: mock(() =>
             Effect.succeed(
-              Option.some({ id: "dotypos-customer-selected" } as never)
+              Option.some(dotyposCustomer("dotypos-customer-selected"))
             )
           ),
           updateCustomerDetails: mock(() =>
-            Effect.succeed({ id: "dotypos-customer-selected" } as never)
+            Effect.succeed(dotyposCustomer("dotypos-customer-selected"))
           ),
           createCustomer: mock(() =>
-            Effect.succeed({ id: "dotypos-customer-created" } as never)
+            Effect.succeed(dotyposCustomer("dotypos-customer-created"))
           ),
         };
         const layer = InvoiceAdministrationService.Default.pipe(
@@ -445,9 +462,9 @@ describe.skipIf(!testDatabase)(
               Layer.mock(ManualInvoiceCreationRequests, {
                 claim: () => Effect.succeed({ kind: claim } as const),
                 complete: calls.complete,
-              } as never),
+              }),
               liveInvoiceCancellationFakes,
-              testDatabase!.layer
+              requireTestDatabase(testDatabase).layer
             )
           )
         );
@@ -635,20 +652,20 @@ describe.skipIf(!testDatabase)(
           details: input.customer.details,
         },
       });
-      const deletedCustomer = {
-        id: "dotypos-customer-deleted",
+      const deletedCustomer = dotyposCustomer("dotypos-customer-deleted", {
         email,
         deleted: true,
-      } as never;
-      const expiredCustomer = {
-        id: "dotypos-customer-expired",
+      });
+      const expiredCustomer = dotyposCustomer("dotypos-customer-expired", {
         email,
         expireDate: expired,
-      } as never;
-      const activeCustomer = { id: "dotypos-customer-active", email } as never;
+      });
+      const activeCustomer = dotyposCustomer("dotypos-customer-active", {
+        email,
+      });
 
       const lifecycleLayer = (dotyposCustomers: {
-        readonly selected?: Option.Option<never>;
+        readonly selected?: Option.Option<DotyposCustomer>;
         readonly found?: FindCustomerResult;
       }) => {
         const document = makeTestManualInvoiceDocument("cs-CZ", "1000");
@@ -671,13 +688,13 @@ describe.skipIf(!testDatabase)(
                   ...liveInvoiceStanding,
                 },
                 changed: true,
-              } as ManualInvoiceIssuance)
+              } satisfies ManualInvoiceIssuance)
           ),
           updateCustomerDetails: mock((customerId: string) =>
-            Effect.succeed({ id: customerId } as never)
+            Effect.succeed(dotyposCustomer(customerId))
           ),
           createCustomer: mock(() =>
-            Effect.succeed({ id: "dotypos-customer-created" } as never)
+            Effect.succeed(dotyposCustomer("dotypos-customer-created"))
           ),
         };
         const layer = InvoiceAdministrationService.Default.pipe(
@@ -709,9 +726,9 @@ describe.skipIf(!testDatabase)(
               Layer.mock(ManualInvoiceCreationRequests, {
                 claim: () => Effect.succeed({ kind: "claimed" } as const),
                 complete: () => Effect.void,
-              } as never),
+              }),
               liveInvoiceCancellationFakes,
-              testDatabase!.layer
+              requireTestDatabase(testDatabase).layer
             )
           )
         );
@@ -755,11 +772,12 @@ describe.skipIf(!testDatabase)(
 
       test("updates a selected customer whose expiry is still ahead", async () => {
         const { calls, createWith } = lifecycleLayer({
-          selected: Option.some({
-            id: "dotypos-customer-selected",
-            email,
-            expireDate: "2999-01-01T00:00:00Z",
-          } as never),
+          selected: Option.some(
+            dotyposCustomer("dotypos-customer-selected", {
+              email,
+              expireDate: "2999-01-01T00:00:00Z",
+            })
+          ),
         });
 
         expect((await createWith(selectedInput))._tag).toBe("Success");
@@ -822,7 +840,7 @@ describe.skipIf(!testDatabase)(
           found: FindCustomerResult.Ambiguous({
             matches: [
               activeCustomer,
-              { id: "dotypos-customer-other", email } as never,
+              dotyposCustomer("dotypos-customer-other", { email }),
             ],
           }),
         });
@@ -887,7 +905,7 @@ describe.skipIf(!testDatabase)(
             )
           );
           yield* Effect.promise(() =>
-            waitForAdvisoryLockWaiter(testDatabase!.pool, [
+            waitForAdvisoryLockWaiter(requireTestDatabase(testDatabase).pool, [
               "manual-invoice-creation",
               invoiceId,
             ])
@@ -900,7 +918,7 @@ describe.skipIf(!testDatabase)(
           yield* Deferred.succeed(release, undefined);
           yield* Fiber.join(holder);
           yield* Fiber.join(contender);
-        }).pipe(Effect.provide(testDatabase!.layer))
+        }).pipe(Effect.provide(requireTestDatabase(testDatabase).layer))
       );
 
       expect(events).toEqual(["other invoice", "holder", "contender"]);
@@ -925,7 +943,7 @@ describe.skipIf(!testDatabase)(
       );
 
       const exit = await Effect.runPromiseExit(
-        nested.pipe(Effect.provide(testDatabase!.layer))
+        nested.pipe(Effect.provide(requireTestDatabase(testDatabase).layer))
       );
 
       expect(exit._tag).toBe("Success");

@@ -16,6 +16,7 @@ import {
   Option,
   References,
   Result,
+  Schema,
   Tracer,
 } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
@@ -42,11 +43,15 @@ import {
   buildCoworkReservationQuote,
   type CoworkReservationQuoteOrder,
 } from "@/features/checkout/checkout-quote.test-utils";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { censorDatabaseQueryParams } from "@/shared/backend/logging/censorship";
 import { isUndecryptableSealedColumn } from "@/shared/backend/sealed-column";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { CENSORED_LOG_VALUE } from "@/shared/utils/log-classification";
 import { sealedAccountingDocumentSnapshots } from "./accounting-document-snapshots";
@@ -98,18 +103,20 @@ const coworkOrder = {
   entryTier: "open-space",
   coffee: true,
 } satisfies CoworkReservationQuoteOrder;
-const prepared = {
+const prepared: PreparedCustomerQuote = {
   kind: "cowork",
-  reservation: {
-    kind: "cowork",
-    ...coworkOrder,
-    date: "2099-01-01",
-    name: plaintextSentinel,
-    email: testEmailAddress("sealed-accounting-json"),
-    phone: "+420 700 000 000",
-  },
+  reservation: Schema.decodeUnknownSync(normalizedCoworkReservationOrderSchema)(
+    {
+      kind: "cowork",
+      ...coworkOrder,
+      date: "2099-01-01",
+      name: plaintextSentinel,
+      email: testEmailAddress("sealed-accounting-json"),
+      phone: "+420 700 000 000",
+    }
+  ),
   quote: buildCoworkReservationQuote(coworkOrder),
-} as PreparedCustomerQuote;
+};
 
 const snapshotReference = (
   id: PaymentAttemptId
@@ -269,7 +276,7 @@ describe("sealed accounting JSON statements", () => {
 });
 
 describe.skipIf(!testDatabase)("sealed accounting JSON in PostgreSQL", () => {
-  const postgres = testDatabase!;
+  const getPostgres = () => requireTestDatabase(testDatabase);
   const run = <A, E>(
     effect: Effect.Effect<
       A,
@@ -277,7 +284,7 @@ describe.skipIf(!testDatabase)("sealed accounting JSON in PostgreSQL", () => {
       WorkspaceDatabase | AccountingSnapshotKeyService
     >,
     keys?: IAccountingSnapshotKeyService
-  ) => Effect.runPromise(withKeys(effect, postgres.layer, keys));
+  ) => Effect.runPromise(withKeys(effect, getPostgres().layer, keys));
 
   const createAttempt = async () => {
     const paymentAttemptId = paymentAttemptIdSchema.make(randomUUID());
@@ -288,7 +295,7 @@ describe.skipIf(!testDatabase)("sealed accounting JSON in PostgreSQL", () => {
       `sealed-accounting-reservation-${randomUUID()}`
     );
     const reservation = await Effect.runPromise(
-      workspaceFixtures(postgres.db).reservation({
+      workspaceFixtures(getPostgres().db).reservation({
         stage: { reservation: "held", payment: "pending" },
         customer: dotyposCustomerId,
         overrides: { dotyposReservationId },
@@ -302,18 +309,20 @@ describe.skipIf(!testDatabase)("sealed accounting JSON in PostgreSQL", () => {
       prepared,
     });
     await Effect.runPromise(
-      postgres.db.insert(paymentAttempts).values({
-        id: paymentAttemptId,
-        workspaceReservationId: reservation.id,
-        provider: "nexi",
-        providerOrderId: NexiOrderIdSchema.make(
-          `synthetic-order-${randomUUID()}`
-        ),
-        state: "pending",
-        amountValue: snapshot.quote.payment.expectedPrice.value,
-        amountExponent: snapshot.quote.payment.expectedPrice.exponent,
-        currency: snapshot.quote.payment.expectedPrice.currency,
-      })
+      getPostgres()
+        .db.insert(paymentAttempts)
+        .values({
+          id: paymentAttemptId,
+          workspaceReservationId: reservation.id,
+          provider: "nexi",
+          providerOrderId: NexiOrderIdSchema.make(
+            `synthetic-order-${randomUUID()}`
+          ),
+          state: "pending",
+          amountValue: snapshot.quote.payment.expectedPrice.value,
+          amountExponent: snapshot.quote.payment.expectedPrice.exponent,
+          currency: snapshot.quote.payment.expectedPrice.currency,
+        })
     );
     return { paymentAttemptId, reservationId: reservation.id, snapshot };
   };
@@ -333,8 +342,8 @@ describe.skipIf(!testDatabase)("sealed accounting JSON in PostgreSQL", () => {
   // Decrypts with the test key in SQL, outside the codec.
   const readStoredSnapshotJson = (paymentAttemptId: PaymentAttemptId) =>
     Effect.runPromise(
-      postgres.db
-        .select({
+      getPostgres()
+        .db.select({
           json: sql<string>`pgp_sym_decrypt(${accountingDocumentSnapshots.encryptedSnapshot}, ${keySecret})`,
         })
         .from(accountingDocumentSnapshots)
@@ -347,12 +356,14 @@ describe.skipIf(!testDatabase)("sealed accounting JSON in PostgreSQL", () => {
   const plantSnapshotJson = async (json: string) => {
     const attempt = await createAttempt();
     await Effect.runPromise(
-      postgres.db.insert(accountingDocumentSnapshots).values({
-        paymentAttemptId: attempt.paymentAttemptId,
-        workspaceReservationId: attempt.reservationId,
-        keyId: testKey.id,
-        encryptedSnapshot: sql`pgp_sym_encrypt(${json}, ${keySecret}, ${pgcryptoOptions})`,
-      })
+      getPostgres()
+        .db.insert(accountingDocumentSnapshots)
+        .values({
+          paymentAttemptId: attempt.paymentAttemptId,
+          workspaceReservationId: attempt.reservationId,
+          keyId: testKey.id,
+          encryptedSnapshot: sql`pgp_sym_encrypt(${json}, ${keySecret}, ${pgcryptoOptions})`,
+        })
     );
     return attempt.paymentAttemptId;
   };
@@ -422,8 +433,8 @@ describe.skipIf(!testDatabase)("sealed accounting JSON in PostgreSQL", () => {
       },
     });
     const [stored] = await Effect.runPromise(
-      postgres.db
-        .select({
+      getPostgres()
+        .db.select({
           json: sql<string>`pgp_sym_decrypt(${invoices.encryptedDocument}, ${keySecret})`,
         })
         .from(invoices)
@@ -640,8 +651,8 @@ describe.skipIf(!testDatabase)("sealed accounting JSON in PostgreSQL", () => {
   test("tells a record pgcrypto cannot decrypt from a failure of the database", async () => {
     const attempt = await createSealedSnapshot();
     const decryptWith = (secret: string) =>
-      postgres.db
-        .select({
+      getPostgres()
+        .db.select({
           json: sql<string>`pgp_sym_decrypt(${accountingDocumentSnapshots.encryptedSnapshot}, ${secret})`,
         })
         .from(accountingDocumentSnapshots)

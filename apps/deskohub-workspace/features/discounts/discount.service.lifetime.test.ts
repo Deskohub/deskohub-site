@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Effect, Exit, Layer } from "effect";
 import { ReferralServiceWithoutData } from "@/features/referrals/referral.service.mock";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
@@ -34,7 +35,7 @@ const quoteInRequest = (
         lastServiceDate: "2026-07-20",
         bookedAt: Temporal.Instant.from("2026-07-20T10:00:00Z"),
         locale: "en-US",
-        dotyposCustomerId: "customer-lifetime" as never,
+        dotyposCustomerId: DotyposCustomerIdSchema.make("customer-lifetime"),
       })
     ),
     Effect.provide(

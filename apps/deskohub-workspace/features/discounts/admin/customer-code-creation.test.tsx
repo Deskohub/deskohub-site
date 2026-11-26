@@ -8,6 +8,11 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
+import {
+  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
 import type { ReactNode } from "react";
 import {
   administrationHref,
@@ -15,8 +20,8 @@ import {
 } from "@/features/administration/administration-href";
 import { m } from "@/features/administration/i18n";
 import { discountLabelFor } from "@/features/discounts/discount-label";
+import { storedDiscountIdSchema } from "@/features/discounts/persistence-contracts";
 import type { Locale } from "@/features/i18n";
-import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
@@ -81,10 +86,10 @@ const report = (run: (actionCallbacks: ActionCallbacks) => void) =>
     run(callbacks);
   });
 
-const customerId = "dotypos-customer" as DotyposCustomerId;
+const customerId = DotyposCustomerIdSchema.make("dotypos-customer");
 const discounts: readonly Pick<AdminDiscount, "id" | "labels">[] = [
   {
-    id: "019c91dd-c560-7e55-b9d8-c95065efd51d" as AdminDiscount["id"],
+    id: storedDiscountIdSchema.make("019c91dd-c560-7e55-b9d8-c95065efd51d"),
     labels: { "cs-CZ": "Letní sleva", "en-US": "Summer discount" },
   },
 ];
@@ -134,7 +139,20 @@ describe("discount code creation form", () => {
     callbacks = undefined;
     workspaceUseAction.mockReset();
     workspaceUseAction.mockImplementation((_action, options) => {
-      callbacks = options as ActionCallbacks;
+      callbacks = {
+        onSuccess: (result) => {
+          options.onSuccess?.({ data: result.data, input: undefined });
+        },
+        onError: (result) => {
+          options.onError?.({ error: result.error, input: undefined });
+        },
+        onTransportError: () => {
+          options.onTransportError?.({
+            error: new Error("transport"),
+            input: undefined,
+          });
+        },
+      };
       return { execute, isExecuting, result: {} };
     });
   });
@@ -250,10 +268,11 @@ describe("discount code creation form", () => {
         routeLocale
       );
       const [discount] = discounts;
+      assert(discount, "Expected discount fixture");
 
       expect(
         view.getByRole("option", {
-          name: discountLabelFor(discount!.labels, routeLocale),
+          name: discountLabelFor(discount.labels, routeLocale),
         })
       ).toBeDefined();
       cleanup();

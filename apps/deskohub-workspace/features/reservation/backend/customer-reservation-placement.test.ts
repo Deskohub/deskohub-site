@@ -18,18 +18,20 @@ const reservedDesk: StoredWorkspaceReservationDetails = {
 
 const makeTable = (
   overrides: Partial<Omit<DotyposTable, "id">> & { readonly id?: string } = {}
-): DotyposTable =>
-  ({
+): DotyposTable => {
+  const { id = "assigned-table", ...rest } = overrides;
+  return {
     _cloudId: "cloud",
-    id: "assigned-table",
+    id: DotyposTableIdSchema.make(id),
     name: "12",
     display: true,
     enabled: true,
     locationName: "Main room",
     seats: "1",
     tags: ["cowork:reserved-desk"],
-    ...overrides,
-  }) as DotyposTable;
+    ...rest,
+  };
+};
 
 const assignedTo = (tableId: string) => ({
   _tableId: DotyposTableIdSchema.make(tableId),

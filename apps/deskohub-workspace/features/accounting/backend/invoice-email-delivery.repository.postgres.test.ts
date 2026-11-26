@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Effect, Layer } from "effect";
@@ -10,7 +11,10 @@ import {
   wasInvoiceSentTo,
 } from "@/features/accounting/invoice-email-delivery";
 import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type IInvoiceEmailDeliveryRepository,
   InvoiceEmailDeliveryRepository,
@@ -33,7 +37,7 @@ const runRepository = <A>(
           Layer.provide(
             Layer.succeed(
               WorkspaceDatabase,
-              WorkspaceDatabase.make(testDatabase!.db)
+              WorkspaceDatabase.make(requireTestDatabase(testDatabase).db)
             )
           )
         )
@@ -45,7 +49,9 @@ const runRepository = <A>(
 // document is opaque to delivery claims.
 const insertInvoice = async () => {
   const sequence = 100_000 + Math.floor(Math.random() * 2_000_000_000);
-  const result = await testDatabase!.pool.query<{ id: string }>(
+  const result = await requireTestDatabase(testDatabase).pool.query<{
+    id: string;
+  }>(
     `insert into invoices
        (dotypos_customer_id, invoice_number, numbering_year, numbering_sequence,
         key_id, encrypted_document, issued_at)
@@ -53,14 +59,16 @@ const insertInvoice = async () => {
      returning id`,
     [`WS-FV-TEST-${crypto.randomUUID()}`, sequence]
   );
-  return invoiceIdSchema.make(result.rows[0]!.id);
+  const firstRow = result.rows[0];
+  assert(firstRow !== undefined);
+  return invoiceIdSchema.make(firstRow.id);
 };
 
 const readDelivery = async (
   invoiceId: string,
   audience: InvoiceEmailDeliveryAudience
 ) => {
-  const result = await testDatabase!.pool.query<{
+  const result = await requireTestDatabase(testDatabase).pool.query<{
     state: string;
     attempt_count: number;
   }>(
@@ -77,7 +85,7 @@ const ageDelivery = async (
   audience: InvoiceEmailDeliveryAudience,
   seconds: number
 ) => {
-  await testDatabase!.pool.query(
+  await requireTestDatabase(testDatabase).pool.query(
     `update invoice_email_deliveries
      set updated_at = updated_at - make_interval(secs => $3)
      where invoice_id = $1 and audience = $2`,
@@ -197,7 +205,7 @@ describe.skipIf(!testDatabase)(
         internal: { attemptNumber: 1 },
         internalRetry: { attemptNumber: 2 },
       });
-      const rows = await testDatabase!.pool.query<{
+      const rows = await requireTestDatabase(testDatabase).pool.query<{
         audience: InvoiceEmailDeliveryAudience;
         state: string;
         attempt_count: number;
@@ -418,10 +426,11 @@ describe.skipIf(!testDatabase)(
             acceptedAt,
           });
           const resend = yield* repository.claimResend({ invoiceId });
+          assert(resend !== null && resend !== "cancelled");
           yield* repository.markFailed({
             invoiceId,
             audience: "customer",
-            attemptNumber: resend!.attemptNumber,
+            attemptNumber: resend.attemptNumber,
             failureCode: "email_send_failed",
           });
           const afterFailure = yield* repository.status([invoiceId]);
@@ -447,10 +456,9 @@ describe.skipIf(!testDatabase)(
         customer: "processing",
         sentTo: ["customer"],
       });
-      expect(wasInvoiceSentTo(summaries.whileRetrying!, "customer")).toBe(true);
-      expect(wasInvoiceSentTo(summaries.whileRetrying!, "internal")).toBe(
-        false
-      );
+      assert(summaries.whileRetrying !== undefined);
+      expect(wasInvoiceSentTo(summaries.whileRetrying, "customer")).toBe(true);
+      expect(wasInvoiceSentTo(summaries.whileRetrying, "internal")).toBe(false);
     });
 
     test("records an acceptance that arrives after another attempt took over", async () => {

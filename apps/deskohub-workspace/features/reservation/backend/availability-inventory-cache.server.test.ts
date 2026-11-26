@@ -61,10 +61,10 @@ const nextCache = recordNextCache();
 
 mock.module("next/cache", () => nextCache.module);
 mock.module("@/shared/backend/config/dotypos.config", () => ({
-  WorkspaceDotyposLayer: Layer.succeed(DotyposService, {
+  WorkspaceDotyposLayer: Layer.mock(DotyposService, {
     getTables,
     listActiveReservationsOverlapping,
-  } as never),
+  }),
 }));
 mock.module("./google-calendar-workspace-limitations.service", () => ({
   ...limitationsModule,

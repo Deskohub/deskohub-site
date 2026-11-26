@@ -2,7 +2,8 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer, Predicate } from "effect";
+import { Effect, Layer } from "effect";
+import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
 import { administrationHref } from "@/features/administration/administration-href";
 import { m } from "@/features/administration/i18n";
 import { mockAdministrationActionRequest } from "@/shared/testing/workspace-action-request.test-utils";
@@ -52,48 +53,37 @@ const { getInvoiceCancellationErrorMessage } = await import(
 );
 
 type Calls = Array<{ readonly method: string; readonly args: unknown[] }>;
-type Fakes = Record<
-  string,
-  (...args: never[]) => Effect.Effect<unknown, unknown>
->;
+type InvoiceService = Effect.Success<typeof InvoiceAdministrationService>;
+type ReservationService = Effect.Success<typeof AdministrationService>;
 
 const calls: Calls = [];
-let invoices: Fakes = {};
-let reservations: Fakes = {};
+let invoices: Partial<InvoiceService> = {};
+let reservations: Partial<ReservationService> = {};
 
-// Answers only the calls a test sets; any other call is a test failure.
-const fakeLayer = <I, S>(
-  tag: Parameters<typeof Layer.succeed<I, S>>[0],
-  fakes: () => Fakes
-) =>
-  Layer.succeed(
-    tag,
-    new Proxy({} as S, {
-      get: (_, method) => {
-        if (!Predicate.isString(method)) return undefined;
-        return (...args: unknown[]) => {
-          calls.push({ method, args });
-          const fake = fakes()[method];
-          return fake
-            ? (fake as (...args: unknown[]) => Effect.Effect<unknown, unknown>)(
-                ...args
-              )
-            : Effect.die(`unexpected ${method}`);
-        };
-      },
-    })
-  );
+const recordCall =
+  <Args extends readonly unknown[], A, E>(
+    method: string,
+    handler: ((...args: Args) => Effect.Effect<A, E>) | undefined
+  ) =>
+  (...args: Args): Effect.Effect<A, E> => {
+    calls.push({ method, args: [...args] });
+    return handler ? handler(...args) : Effect.die(`unexpected ${method}`);
+  };
 
 const originalInvoicesLive = InvoiceAdministrationService.Live;
 const originalAdministrationLive = AdministrationService.Live;
-InvoiceAdministrationService.Live = fakeLayer(
-  InvoiceAdministrationService,
-  () => invoices
-) as never;
-AdministrationService.Live = fakeLayer(
-  AdministrationService,
-  () => reservations
-) as never;
+InvoiceAdministrationService.Live = Layer.mock(InvoiceAdministrationService, {
+  get: (...args) => recordCall("get", invoices.get)(...args),
+  cancel: (...args) => recordCall("cancel", invoices.cancel)(...args),
+  archive: (...args) => recordCall("archive", invoices.archive)(...args),
+  retry: (...args) => recordCall("retry", invoices.retry)(...args),
+  create: (...args) => recordCall("create", invoices.create)(...args),
+  preview: (...args) => recordCall("preview", invoices.preview)(...args),
+});
+AdministrationService.Live = Layer.mock(AdministrationService, {
+  loadReservation: (...args) =>
+    recordCall("loadReservation", reservations.loadReservation)(...args),
+});
 
 // Imported after the fakes, since the actions take the layers on load.
 const {
@@ -314,11 +304,8 @@ describe("cancelAdministrationInvoice", () => {
   });
 
   test("refuses unknown fields before calling the service", async () => {
-    const result = await cancelAdministrationInvoice({
-      invoiceId,
-      confirmedCustomerNotice: true,
-      force: true,
-    } as never);
+    const input = { invoiceId, confirmedCustomerNotice: true, force: true };
+    const result = await cancelAdministrationInvoice(input);
 
     expect(result.validationErrors).toBeDefined();
     expect(calls).toHaveLength(0);
@@ -421,7 +408,7 @@ describe("archiveAdministrationInvoice", () => {
         Effect.fail(
           new InvoiceArchiveError({
             code: "not_cancelled",
-            invoiceId: invoiceId as never,
+            invoiceId: invoiceIdSchema.make(invoiceId),
             message: "English",
           })
         ),

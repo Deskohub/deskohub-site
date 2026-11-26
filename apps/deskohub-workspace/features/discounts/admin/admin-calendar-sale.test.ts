@@ -1,23 +1,33 @@
+import "@/shared/polyfills/temporal";
+
 import { describe, expect, test } from "bun:test";
 import {
   GoogleCalendarEventIdSchema,
   GoogleCalendarICalUidSchema,
 } from "@deskohub/google-calendar";
-import type { StoredDiscountId } from "../persistence-contracts";
+import { storedDiscountIdSchema } from "../persistence-contracts";
 import { toAdminCalendarSale } from "./admin-calendar-sale";
 import { untitledCalendarEventTitle } from "./calendar-sale-title";
 import type { AdminDiscount } from "./discount-administration.service";
 
 const calendarUrl = "https://calendar.google.com/";
-const discountId = "019c91dd-c560-7e55-b9d8-c95065efd51d" as StoredDiscountId;
-const otherDiscountId =
-  "019c91dd-c560-7e55-b9d8-c95065efd52d" as StoredDiscountId;
-const discounts = [
+const discountId = storedDiscountIdSchema.make(
+  "019c91dd-c560-7e55-b9d8-c95065efd51d"
+);
+const otherDiscountId = storedDiscountIdSchema.make(
+  "019c91dd-c560-7e55-b9d8-c95065efd52d"
+);
+const discounts: readonly AdminDiscount[] = [
   {
     id: discountId,
     labels: { "cs-CZ": "Letní sleva", "en-US": "Summer discount" },
+    adjustment: { kind: "percentage", basisPoints: 1000 },
+    products: [{ kind: "cowork" }],
+    codeCount: 0,
+    createdAt: Temporal.Instant.from("2026-07-01T08:00:00Z"),
+    updatedAt: Temporal.Instant.from("2026-07-01T08:00:00Z"),
   },
-] as readonly AdminDiscount[];
+];
 
 const association = (description: string | undefined) =>
   toAdminCalendarSale({ calendarUrl, discounts, event: { description } })

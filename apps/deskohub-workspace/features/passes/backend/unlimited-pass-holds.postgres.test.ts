@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   DotyposCustomerIdSchema,
   DotyposCustomerSchema,
@@ -65,6 +66,7 @@ import { fixtureReservationAuthorId } from "@/shared/testing/workspace-fixtures.
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
@@ -256,7 +258,7 @@ it("serializes overlapping entitlement purchases for the same holder", async () 
         Effect.result(record(start.add({ days: 1 }))),
       ],
       { concurrency: 2 }
-    ).pipe(Effect.provide(database!.layer))
+    ).pipe(Effect.provide(requireTestDatabase(database).layer))
   );
   expect(results.filter(Result.isSuccess)).toHaveLength(1);
   expect(
@@ -265,7 +267,7 @@ it("serializes overlapping entitlement purchases for the same holder", async () 
 });
 
 it("serializes an overlapping regular gift and renewal bought by different accounts for the same holder", async () => {
-  const testDatabase = database!;
+  const testDatabase = requireTestDatabase(database);
   await Effect.runPromise(
     Effect.gen(function* () {
       const { source, buyer, holder, now } = yield* recordRenewableGift();
@@ -333,12 +335,12 @@ it("offers a gifted Unlimited renewal only to its current holder after claim", a
         tier: "reserved-desk",
         startDate: source.validUntil,
       });
-    }).pipe(Effect.provide(database!.layer))
+    }).pipe(Effect.provide(requireTestDatabase(database).layer))
   );
 });
 
 it("rejects late renewal recovery after a regular order takes the holder's window", async () => {
-  const testDatabase = database!;
+  const testDatabase = requireTestDatabase(database);
   const competingTableId = DotyposTableIdSchema.make("43");
   const tables = [tableId, competingTableId].map((id) =>
     Schema.decodeUnknownSync(DotyposTableSchema)({
@@ -450,14 +452,14 @@ it("records the earliest verified buyer delivery for the winning attempt only", 
       expect(recorded?.deliveredAt?.equals(paidAt.add({ minutes: 4 }))).toBe(
         true
       );
-    }).pipe(Effect.provide(database!.layer))
+    }).pipe(Effect.provide(requireTestDatabase(database).layer))
   );
 });
 
 it("reacquires all provider holds on the original rows after terminal payment", async () => {
-  const testDatabase = (await createWorkspacePostgresSuiteDatabase(
-    "unlimited_recovery"
-  ))!;
+  const testDatabase = requireTestDatabase(
+    await createWorkspacePostgresSuiteDatabase("unlimited_recovery")
+  );
   const table = Schema.decodeUnknownSync(DotyposTableSchema)({
     id: tableId,
     _cloudId: "1",
@@ -526,16 +528,17 @@ it("releases a definitively rejected POST and retains an interrupted POST", asyn
     operation: "createReservation",
     reason: "invalid-request",
   });
-  const layer = database!.layer;
+  const layer = requireTestDatabase(database).layer;
 
   await Effect.runPromise(
     Effect.gen(function* () {
       const purchase = yield* record(start);
       const [first, second] = yield* readUnlimitedPassDays(purchase.id);
+      assert(first && second);
       const createReservation: typeof provider.service.createReservation = (
         input
       ) =>
-        input.note?.includes(`/${first!.serviceDate}/`)
+        input.note?.includes(`/${first.serviceDate}/`)
           ? Effect.fail(rejected)
           : provider.service.createReservation(input);
       const failed = yield* Effect.result(
@@ -549,13 +552,13 @@ it("releases a definitively rejected POST and retains an interrupted POST", asyn
       expect(failed).toEqual(Result.fail(rejected));
       const [released, held] = yield* readUnlimitedPassDays(purchase.id);
       expect(released).toMatchObject({
-        id: first!.id,
+        id: first.id,
         failureCode: rejectedPassDayHoldCode,
         reservationState: "hold_expired",
         dotyposReservationId: null,
         passDayHoldGeneration: expect.any(String),
       });
-      expect(held).toMatchObject({ id: second!.id, reservationState: "held" });
+      expect(held).toMatchObject({ id: second.id, reservationState: "held" });
       yield* releaseUnlimitedPassDays(purchase);
       expect(
         (yield* readUnlimitedPassDays(purchase.id))[0]?.reservationState
@@ -604,7 +607,8 @@ it("keeps a timed-out replacement claimed while only the cancelled original is v
       const purchase = yield* record(start);
       yield* createUnlimitedPassHolds(purchase);
       const original = yield* readUnlimitedPassDays(purchase.id);
-      const first = original[0]!;
+      const [first] = original;
+      assert(first);
 
       // One day represents a hold created by the previous deployment.
       const { db, transaction } = yield* WorkspaceDatabase;
@@ -612,9 +616,11 @@ it("keeps a timed-out replacement claimed while only the cancelled original is v
         .update(workspaceReservations)
         .set({ passDayHoldGeneration: null })
         .where(eq(workspaceReservations.id, first.id));
+      assert(first.dotyposReservationId);
       const originalRecord = provider.reservations.get(
-        first.dotyposReservationId!
-      )!;
+        first.dotyposReservationId
+      );
+      assert(originalRecord);
       provider.reservations.set(originalRecord.id, {
         ...originalRecord,
         note: formatPassDayMarker(purchase.id, start, null),
@@ -651,7 +657,8 @@ it("keeps a timed-out replacement claimed while only the cancelled original is v
               .pipe(Effect.orDie);
             expect(journaled?.passDayHoldRequestedAt).toBeDefined();
             expect(journaled?.passDayHoldRequestedAt).not.toBeNull();
-            expect(input.note).toContain(journaled!.passDayHoldGeneration!);
+            assert(journaled?.passDayHoldGeneration);
+            expect(input.note).toContain(journaled.passDayHoldGeneration);
             const created = yield* provider.service.createReservation(input);
             hidden = created.id;
             return yield* new DotyposUncertain({
@@ -675,9 +682,11 @@ it("keeps a timed-out replacement claimed while only the cancelled original is v
         Result.fail(expect.objectContaining({ _tag: "DotyposUncertain" }))
       );
       const [pending] = yield* readUnlimitedPassDays(purchase.id);
-      const replacementId = hidden!;
+      assert(hidden);
+      assert(pending?.passDayHoldGeneration);
+      const replacementId = hidden;
       expect(provider.reservations.get(replacementId)?.note).toContain(
-        pending!.passDayHoldGeneration!
+        pending.passDayHoldGeneration
       );
       expect(provider.reservations.get(originalRecord.id)?.status).toBe(
         "CANCELLED"
@@ -690,7 +699,7 @@ it("keeps a timed-out replacement claimed while only the cancelled original is v
         id: first.id,
         reservationState: "creating_hold",
         dotyposReservationId: null,
-        passDayHoldGeneration: pending!.passDayHoldGeneration,
+        passDayHoldGeneration: pending.passDayHoldGeneration,
       });
 
       hidden = undefined;
@@ -728,7 +737,11 @@ it("keeps a timed-out replacement claimed while only the cancelled original is v
       expect(provider.reservations.get(replacementId)?.status).toBe(
         "CANCELLED"
       );
-    }).pipe(Effect.provide(Layer.mergeAll(database!.layer, provider.layer)))
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(requireTestDatabase(database).layer, provider.layer)
+      )
+    )
   );
 });
 
@@ -801,11 +814,14 @@ for (const firstObservation of [
             operation: "getTables",
             reason: "server",
           });
+          assert(original);
+          const originalReservation = provider.reservations.get(original);
+          assert(originalReservation);
           const assignment = Effect.flatMap(
             WorkspaceTableAssignmentService,
             (service) =>
               service.getAssignedTableAvailability({
-                reservation: provider.reservations.get(original!)!,
+                reservation: originalReservation,
                 kind: "cowork",
               })
           ).pipe(
@@ -835,11 +851,14 @@ for (const firstObservation of [
           yield* Deferred.succeed(finishRecording, undefined);
           expect(yield* Fiber.join(fiber)).toEqual(Result.fail(tableError));
         } else if (firstObservation === "missing assignment table") {
+          assert(original);
+          const originalReservation = provider.reservations.get(original);
+          assert(originalReservation);
           const unavailable = yield* Effect.flatMap(
             WorkspaceTableAssignmentService,
             (assignment) =>
               assignment.getAssignedTableAvailability({
-                reservation: provider.reservations.get(original!)!,
+                reservation: originalReservation,
                 kind: "cowork",
               })
           ).pipe(Effect.provide(WorkspaceTableAssignmentService.Default));
@@ -875,8 +894,10 @@ for (const firstObservation of [
           dotyposReservationId: null,
           failureCode: ambiguousPassDayHoldCode,
         });
-        const genuine = original!;
-        const copied = copy!;
+        assert(original);
+        assert(copy);
+        const genuine = original;
+        const copied = copy;
         omitOriginal = true;
         yield* releaseUnlimitedPassDays(purchase);
         const retry = yield* Effect.result(createUnlimitedPassHolds(purchase));
@@ -891,9 +912,9 @@ for (const firstObservation of [
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            database!.layer,
+            requireTestDatabase(database).layer,
             WorkspaceReservationRepository.Default.pipe(
-              Layer.provide(database!.layer)
+              Layer.provide(requireTestDatabase(database).layer)
             ),
             Layer.mock(GoogleCalendarWorkspaceLimitationsService, {
               listLimitations: () => Effect.succeed([]),
@@ -918,7 +939,7 @@ function unlimitedDraftLayer(
     deletionRequested: false,
   };
   return Layer.mergeAll(
-    database!.layer,
+    requireTestDatabase(database).layer,
     Layer.mock(CurrentCustomerAccount, {
       requireActive: Effect.succeed(session),
     }),
@@ -934,7 +955,9 @@ function unlimitedDraftLayer(
     Layer.mock(WorkspaceFeatureFlagService, {
       isEnabled: () => Effect.succeed(true),
     }),
-    WorkspaceDatabaseAdvisoryLock.makeLayer(database!.databasePool),
+    WorkspaceDatabaseAdvisoryLock.makeLayer(
+      requireTestDatabase(database).databasePool
+    ),
     Layer.mock(WorkspaceReservationRepository, {}),
     Layer.mock(GoogleCalendarWorkspaceLimitationsService, {}),
     Layer.succeed(DotyposService, dotypos)
@@ -1211,9 +1234,9 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
       const details = new URL(start.checkoutPath, "https://deskohub.test");
       expect(details.pathname).toBe("/en-US/passes/unlimited");
       expect(details.searchParams.get("step")).toBe("details");
-      const handoff = readPassCheckoutHandoff(
-        details.searchParams.get("handoff")!
-      );
+      const handoffToken = details.searchParams.get("handoff");
+      assert(handoffToken);
+      const handoff = readPassCheckoutHandoff(handoffToken);
       const anotherBuyer = Layer.mock(CurrentCustomerAccount, {
         requireActive: Effect.succeed({
           ...testSessionProfile,
@@ -1247,9 +1270,10 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
         })
         .from(passPurchases)
         .where(eq(passPurchases.id, orderId));
-      expect(purchase?.holderAccountId).toBe(holderAccountId);
+      assert(purchase);
+      expect(purchase.holderAccountId).toBe(holderAccountId);
       const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
-        purchase!.quote
+        purchase.quote
       );
       expect(quote.selection?.referralCode).toBe(referralCode);
       const [retired] = yield* db
@@ -1626,7 +1650,7 @@ function unlimitedNewDraftLayer(
     email,
     deletionRequested: false,
   };
-  const testDatabase = database!;
+  const testDatabase = requireTestDatabase(database);
   return Layer.mergeAll(
     testDatabase.layer,
     Layer.succeed(DotyposService, dotypos),
@@ -1682,7 +1706,9 @@ function unlimitedNewDraftLayer(
 it("starts a renewal at the source's exclusive end and rejects a replay with a changed source", async () => {
   const provider = makeUnlimitedDraftProvider();
   const { source, holder } = await Effect.runPromise(
-    recordRenewableGift().pipe(Effect.provide(database!.layer))
+    recordRenewableGift().pipe(
+      Effect.provide(requireTestDatabase(database).layer)
+    )
   );
   const layer = unlimitedNewDraftLayer(
     holder,
@@ -2006,6 +2032,7 @@ it("rejects a Continue replay when an attached day's deadline passed", async () 
       const purchase = yield* record(start);
       yield* createUnlimitedPassHolds(purchase);
       const [first] = yield* readUnlimitedPassDays(purchase.id);
+      assert(first);
       const { db } = yield* WorkspaceDatabase;
       yield* db
         .update(workspaceReservations)
@@ -2014,19 +2041,19 @@ it("rejects a Continue replay when an attached day's deadline passed", async () 
             seconds: 1,
           }),
         })
-        .where(eq(workspaceReservations.id, first!.id));
+        .where(eq(workspaceReservations.id, first.id));
       const replay = yield* Effect.result(createUnlimitedPassHolds(purchase));
       expect(replay).toEqual(
         Result.fail(
           expect.objectContaining({
             reason: "expired",
-            blockingDates: [first!.serviceDate],
+            blockingDates: [first.serviceDate],
           })
         )
       );
       expect(provider.reservations.size).toBe(unlimitedPassDays);
     }).pipe(
-      Effect.provide(database!.layer),
+      Effect.provide(requireTestDatabase(database).layer),
       Effect.provideService(DotyposService, provider.service)
     )
   );
@@ -2041,7 +2068,9 @@ it("replays expired service dates after losing the Continue response", async () 
       const purchase = yield* record(start, accountId, accountId);
       yield* createUnlimitedPassHolds(purchase);
       const days = yield* readUnlimitedPassDays(purchase.id);
-      const expired = [days[0]!, days[2]!];
+      const [firstDay, , thirdDay] = days;
+      assert(firstDay && thirdDay);
+      const expired = [firstDay, thirdDay];
       const { db } = yield* WorkspaceDatabase;
       for (const day of expired) {
         yield* db
@@ -2073,8 +2102,9 @@ it("replays expired service dates after losing the Continue response", async () 
         .where(eq(passPurchases.id, purchase.id));
       const decodeQuote = Schema.decodeSync(passPurchaseQuoteCodec);
       const acceptedQuote = decodeQuote(purchase.quote);
-      expect(voided?.status).toBe("void");
-      expect(decodeQuote(voided!.quote)).toEqual(acceptedQuote);
+      assert(voided);
+      expect(voided.status).toBe("void");
+      expect(decodeQuote(voided.quote)).toEqual(acceptedQuote);
       const staleReprice = repriceEntryPackPurchase({
         orderId: purchase.id,
         productKind: "unlimited",
@@ -2149,7 +2179,8 @@ it.each([
               Temporal.Instant.compare(day.reservationHoldExpiresAt, cutoff) > 0
           )
         ).toBe(true);
-        expect(Temporal.Instant.compare(purchase.holdsExpireAt!, cutoff)).toBe(
+        assert(purchase.holdsExpireAt);
+        expect(Temporal.Instant.compare(purchase.holdsExpireAt, cutoff)).toBe(
           1
         );
         const { db } = yield* WorkspaceDatabase;
@@ -2293,6 +2324,8 @@ it("replays expiry and change dates without replacing an ambiguous generation", 
         Result.fail(expect.objectContaining({ _tag: "DotyposUncertain" }))
       );
       const [expired, changed] = yield* readUnlimitedPassDays(purchase.id);
+      assert(expired && changed);
+      assert(changed.dotyposReservationId);
       const { db } = yield* WorkspaceDatabase;
       yield* db
         .update(workspaceReservations)
@@ -2301,12 +2334,12 @@ it("replays expiry and change dates without replacing an ambiguous generation", 
             seconds: 1,
           }),
         })
-        .where(eq(workspaceReservations.id, expired!.id));
-      yield* provider.service.cancelReservation(changed!.dotyposReservationId!);
+        .where(eq(workspaceReservations.id, expired.id));
+      yield* provider.service.cancelReservation(changed.dotyposReservationId);
       yield* db
         .update(workspaceReservations)
         .set({ reservationState: "cancelled" })
-        .where(eq(workspaceReservations.id, changed!.id));
+        .where(eq(workspaceReservations.id, changed.id));
       const begin = beginUnlimitedPassPurchase({
         orderId: purchase.id,
         locale: "en-US",
@@ -2315,7 +2348,7 @@ it("replays expiry and change dates without replacing an ambiguous generation", 
       const expected = Result.fail(
         expect.objectContaining({
           _tag: "UnlimitedPassDraftVoided",
-          blockingDates: [expired!.serviceDate, changed!.serviceDate],
+          blockingDates: [expired.serviceDate, changed.serviceDate],
         })
       );
       expect(yield* Effect.result(begin)).toEqual(expected);
@@ -2325,8 +2358,8 @@ it("replays expiry and change dates without replacing an ambiguous generation", 
         reservationState: "creating_hold",
         failureCode: ambiguousPassDayHoldCode,
         dotyposReservationId: null,
-        passDayHoldGeneration: expired!.passDayHoldGeneration,
-        passDayHoldRequestedAt: expired!.passDayHoldRequestedAt,
+        passDayHoldGeneration: expired.passDayHoldGeneration,
+        passDayHoldRequestedAt: expired.passDayHoldRequestedAt,
       });
       expect(
         [...provider.reservations.values()].map((day) => day.status).sort()
@@ -2406,12 +2439,13 @@ it("keeps the first uncertain hold retryable when its sibling has expired", asyn
       const [first, expired, rejected] = yield* readUnlimitedPassDays(
         purchase.id
       );
+      assert(first && expired && rejected);
       const { db } = yield* WorkspaceDatabase;
       const deadline = Temporal.Now.instant().subtract({ seconds: 1 });
       yield* db
         .update(workspaceReservations)
         .set({ reservationHoldExpiresAt: deadline })
-        .where(eq(workspaceReservations.id, expired!.id));
+        .where(eq(workspaceReservations.id, expired.id));
       const begin = beginUnlimitedPassPurchase({
         orderId: purchase.id,
         locale: "en-US",
@@ -2433,7 +2467,7 @@ it("keeps the first uncertain hold retryable when its sibling has expired", asyn
           failureCode: ambiguousPassDayHoldCode,
           reservationHoldExpiresAt: deadline,
         })
-        .where(eq(workspaceReservations.id, first!.id));
+        .where(eq(workspaceReservations.id, first.id));
       expect(yield* Effect.result(begin)).toEqual(
         Result.fail(expect.objectContaining({ reason: "unfinished" }))
       );
@@ -2445,14 +2479,14 @@ it("keeps the first uncertain hold retryable when its sibling has expired", asyn
           failureCode: rejectedPassDayHoldCode,
           reservationState: "hold_expired",
         })
-        .where(eq(workspaceReservations.id, rejected!.id));
+        .where(eq(workspaceReservations.id, rejected.id));
       const expected = Result.fail(
         expect.objectContaining({
           _tag: "UnlimitedPassDraftVoided",
           blockingDates: [
-            first!.serviceDate,
-            expired!.serviceDate,
-            rejected!.serviceDate,
+            first.serviceDate,
+            expired.serviceDate,
+            rejected.serviceDate,
           ],
         })
       );
@@ -2492,9 +2526,10 @@ it("replays reconciled void drafts expired before payment and fences expired att
       expect(rejected).toEqual(
         Result.fail(expect.objectContaining({ _tag: "DotyposRejected" }))
       );
+      assert(purchase.holdsExpireAt);
       yield* reconcileUnlimitedPassReleases({
         limit: 1,
-        now: purchase.holdsExpireAt!,
+        now: purchase.holdsExpireAt,
       });
       const { db } = yield* WorkspaceDatabase;
       const [reconciled] = yield* db
@@ -2684,7 +2719,7 @@ it("adopts an ambiguous POST, reconfirms all days, then retains today on release
         days.slice(1).every((row) => row.reservationState === "cancelled")
       ).toBe(true);
     }).pipe(
-      Effect.provide(database!.layer),
+      Effect.provide(requireTestDatabase(database).layer),
       Effect.provideService(DotyposService, {
         ...provider.service,
         createReservation,
@@ -2815,7 +2850,10 @@ it("records each pass day's booking and booked cancellation as the reconciler wo
       expect(yield* readPassDayEvents(purchase.id)).toEqual(written);
     }).pipe(
       Effect.provide(
-        Layer.provideMerge(CustomerEventReconciler.Default, database!.layer)
+        Layer.provideMerge(
+          CustomerEventReconciler.Default,
+          requireTestDatabase(database).layer
+        )
       ),
       Effect.provideService(DotyposService, provider.service)
     )
@@ -2830,7 +2868,7 @@ it("commits a pass day's booking or cancellation only with its event", async () 
       const days = yield* readUnlimitedPassDays(purchase.id);
       const rejectBooked = yield* Effect.promise(() =>
         rejectCustomerEventInserts(
-          database!.pool,
+          requireTestDatabase(database).pool,
           `new.kind = 'reservation-booked'`
         )
       );
@@ -2853,7 +2891,7 @@ it("commits a pass day's booking or cancellation only with its event", async () 
 
       const rejectCancelled = yield* Effect.promise(() =>
         rejectCustomerEventInserts(
-          database!.pool,
+          requireTestDatabase(database).pool,
           `new.kind = 'reservation-cancelled'`
         )
       );
@@ -2896,7 +2934,7 @@ it("commits a pass day's booking or cancellation only with its event", async () 
       );
       expect(days.map(({ id }) => id)).toEqual(released.map(({ id }) => id));
     }).pipe(
-      Effect.provide(database!.layer),
+      Effect.provide(requireTestDatabase(database).layer),
       Effect.provideService(DotyposService, provider.service)
     )
   );
@@ -2936,7 +2974,7 @@ it("records no event for an unbooked release or a superseded confirmation", asyn
                   Effect.tap(() =>
                     id === superseded?.dotyposReservationId
                       ? Effect.promise(() =>
-                          database!.pool.query(
+                          requireTestDatabase(database).pool.query(
                             "update workspace_reservations set reservation_state = 'cancelling' where id = $1",
                             [superseded.id]
                           )
@@ -2965,7 +3003,10 @@ it("records no event for an unbooked release or a superseded confirmation", asyn
       });
     }).pipe(
       Effect.provide(
-        Layer.provideMerge(CustomerEventReconciler.Default, database!.layer)
+        Layer.provideMerge(
+          CustomerEventReconciler.Default,
+          requireTestDatabase(database).layer
+        )
       ),
       Effect.provideService(DotyposService, provider.service)
     )

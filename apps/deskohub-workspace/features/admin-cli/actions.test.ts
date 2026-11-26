@@ -16,7 +16,7 @@ import {
 } from "@deskohub/workspace-admin-api";
 import { NodeCrypto } from "@effect/platform-node";
 import { eq, inArray } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { cliAuthenticationRequests, cliSessions } from "@/db/schema";
 import { cliAuthenticationRequestIdSchema } from "@/features/admin-cli/cli-identifiers";
 import type { AdministratorAccountActor } from "@/features/administrators/account-role";
@@ -24,7 +24,7 @@ import { mockAdministrationActionRequest } from "@/shared/testing/workspace-acti
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   connectWorkspacePostgresTestDatabase,
-  type WorkspacePostgresTestDatabase,
+  requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 
 const { access } = await mockAdministrationActionRequest({
@@ -61,13 +61,16 @@ const invokeRedirect = async (invoke: () => Promise<unknown>) => {
     (cause: unknown) => cause
   );
   expect(cause).toHaveProperty("digest");
-  return cause as { readonly digest: string };
+  return Schema.decodeUnknownSync(Schema.Struct({ digest: Schema.String }))(
+    cause
+  );
 };
 
 describe.skipIf(!postgresDatabase)(
   "admin CLI actions act as the signed-in administrator account",
   () => {
-    const postgres = postgresDatabase as WorkspacePostgresTestDatabase;
+    if (!postgresDatabase) return;
+    const postgres = requireTestDatabase(postgresDatabase);
     const fixtureSessionIds: CliSessionId[] = [];
     const fixtureRequestIds: CliAuthenticationRequestId[] = [];
     let admin: AdministratorAccountActor;

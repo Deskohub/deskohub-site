@@ -35,7 +35,7 @@ import { AccountRoleGrants } from "@/features/administrators/backend/account-rol
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   connectWorkspacePostgresTestDatabase,
-  type WorkspacePostgresTestDatabase,
+  requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { CliAuthentication } from "./cli-authentication.service";
 import { type CliSessionLifetime, cliSessionLifetimeSchema } from "./contracts";
@@ -53,7 +53,8 @@ const newSecret = () =>
 describe.skipIf(!postgresDatabase)(
   "CliAuthentication administrator accounts on Postgres",
   () => {
-    const postgres = postgresDatabase as WorkspacePostgresTestDatabase;
+    if (!postgresDatabase) return;
+    const postgres = requireTestDatabase(postgresDatabase);
     let authentication: CliAuthentication["Service"];
     let grants: AccountRoleGrants["Service"];
     let alice: AdministratorAccountActor;

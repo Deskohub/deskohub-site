@@ -5,16 +5,21 @@ import { DotyposService } from "@deskohub/dotypos";
 import { GoogleCalendarService } from "@deskohub/google-calendar";
 import { Effect, Layer } from "effect";
 import type { WorkspaceProductTarget } from "@/features/discounts/product-target";
-import { CalendarResourceConfig } from "@/shared/backend/config/calendar-resource.config";
+import {
+  CalendarResourceConfig,
+  salesCalendarIdSchema,
+} from "@/shared/backend/config/calendar-resource.config";
 import {
   makeRecordingWorkspaceDatabase,
   type RecordingWorkspaceDatabase,
 } from "@/shared/testing/workspace-recording-database.test-utils";
-import type { StoredDiscountId } from "../persistence-contracts";
+import { storedDiscountIdSchema } from "../persistence-contracts";
 import type { CreateDiscountAdminInput } from "./contracts";
 import { DiscountAdministration } from "./discount-administration.service";
 
-const discountId = "01980000-0000-7000-8000-000000000001" as StoredDiscountId;
+const discountId = storedDiscountIdSchema.make(
+  "01980000-0000-7000-8000-000000000001"
+);
 
 const definition = (
   products: CreateDiscountAdminInput["products"]
@@ -41,7 +46,7 @@ const runAdministration = <A, E>(
             Layer.mock(GoogleCalendarService, {}),
             Layer.mock(DotyposService, {}),
             Layer.mock(CalendarResourceConfig, {
-              salesCalendarId: "sales-calendar" as never,
+              salesCalendarId: salesCalendarIdSchema.make("sales-calendar"),
             })
           )
         )

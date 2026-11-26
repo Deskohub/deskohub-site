@@ -1,8 +1,8 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
-import { Effect, Layer } from "effect";
+import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
+import { Effect } from "effect";
 import { listDiscountGroups } from "./discount-groups";
 
 describe("listDiscountGroups", () => {
@@ -15,9 +15,9 @@ describe("listDiscountGroups", () => {
         { name: "No ID", deleted: false },
         { id: "4", name: "Deleted", deleted: true },
       ]);
-    const dotypos = Layer.succeed(DotyposService, {
+    const dotypos = DotyposServiceMock({
       getDiscountGroups,
-    } as never);
+    });
 
     const result = await Effect.runPromise(
       listDiscountGroups.pipe(Effect.provide(dotypos))

@@ -13,7 +13,10 @@ import type {
 } from "@deskohub/dotypos/generated";
 import { GoogleCalendarService } from "@deskohub/google-calendar";
 import { Effect, Layer, Option } from "effect";
-import { CalendarResourceConfig } from "@/shared/backend/config/calendar-resource.config";
+import {
+  CalendarResourceConfig,
+  salesCalendarIdSchema,
+} from "@/shared/backend/config/calendar-resource.config";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { DiscountAdministration } from "./discount-administration.service";
 
@@ -34,7 +37,7 @@ const setDiscountGroup = async (input: {
   const recording = await makeRecordingWorkspaceDatabase();
   const getDiscountGroups = mock(() => Effect.succeed(input.groups ?? []));
   const setCustomerDiscountGroup = mock(() =>
-    Effect.succeed({ id: customerId } as DotyposCustomer)
+    Effect.succeed({ id: customerId } satisfies DotyposCustomer)
   );
   const result = await Effect.gen(function* () {
     const administration = yield* DiscountAdministration;
@@ -56,13 +59,13 @@ const setDiscountGroup = async (input: {
                     id,
                     deleted: false,
                     ...input.customer,
-                  } as DotyposCustomer)
+                  } satisfies DotyposCustomer)
                 ),
               getDiscountGroups,
               setCustomerDiscountGroup,
             }),
             Layer.mock(CalendarResourceConfig, {
-              salesCalendarId: "sales-calendar" as never,
+              salesCalendarId: salesCalendarIdSchema.make("sales-calendar"),
             })
           )
         )

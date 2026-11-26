@@ -2,6 +2,7 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   EmailDeliveryIdSchema,
   type EmailMessage,
@@ -16,7 +17,6 @@ import {
 } from "@deskohub/email/backend/service";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Schema } from "effect";
-import type { InvoiceDeliveryEmailProps } from "@/emails/invoice-delivery";
 import {
   type AccountingDocumentSnapshot,
   accountingDocumentSnapshotSchema,
@@ -31,12 +31,12 @@ import type { InvoiceEmailDeliveryAudience } from "@/features/accounting/invoice
 import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
 import { workspaceDefaultFromAddress } from "@/shared/backend/config/email.config";
 import * as emailRendering from "@/shared/backend/email/render-react-email";
+import { requireElement } from "@/shared/testing/route-element.test-utils";
 import { AccountingDocumentSnapshots } from "./accounting-document-snapshots";
 import {
   type IInvoiceRepository,
   type Invoice,
   InvoiceRepository,
-  type ReservationInvoice,
 } from "./invoice.repository";
 import {
   type IInvoiceCancellationNotices,
@@ -70,9 +70,7 @@ const renderStubEmail = (
 ): ReturnType<typeof emailRendering.renderWorkspaceEmail> =>
   Effect.succeed({ html: "stub email", text: "stub email" });
 const renderedInvoiceEmails = () =>
-  renderWorkspaceEmail.mock.calls.map(
-    ([email]) => email.props as InvoiceDeliveryEmailProps
-  );
+  renderWorkspaceEmail.mock.calls.map(([email]) => requireElement(email).props);
 const renderInvoicePdf = mock(renderStubInvoicePdf);
 const renderWorkspaceEmail = mock(renderStubEmail);
 mock.module("./invoice-pdf", () => ({
@@ -203,9 +201,9 @@ describe("invoice email delivery", () => {
     });
     const customerPdf = sentMessages[0]?.attachments?.[0]?.content;
     const internalPdf = sentMessages[1]?.attachments?.[0]?.content;
-    expect(Buffer.isBuffer(customerPdf)).toBe(true);
+    assert(Buffer.isBuffer(customerPdf));
     expect(customerPdf).toEqual(internalPdf);
-    expect((customerPdf as Buffer).subarray(0, 4).toString()).toBe("%PDF");
+    expect(customerPdf.subarray(0, 4).toString()).toBe("%PDF");
     expect(harness.markAccepted).toHaveBeenCalledTimes(2);
     expect(harness.markFailed).not.toHaveBeenCalled();
     expect(renderInvoicePdf).toHaveBeenCalledTimes(1);
@@ -618,8 +616,16 @@ const makeHarness = (options: {
     findById: mock(() => Effect.succeed(selectedInvoice)),
     findLatestByPaymentAttemptId: mock(() =>
       Effect.succeed(
-        selectedInvoice && !isManualInvoiceDocument(selectedInvoice.document)
-          ? (selectedInvoice as ReservationInvoice)
+        selectedInvoice &&
+          !isManualInvoiceDocument(selectedInvoice.document) &&
+          selectedInvoice.workspaceReservationId !== null &&
+          selectedInvoice.paymentAttemptId !== null
+          ? {
+              ...selectedInvoice,
+              workspaceReservationId: selectedInvoice.workspaceReservationId,
+              paymentAttemptId: selectedInvoice.paymentAttemptId,
+              document: selectedInvoice.document,
+            }
           : null
       )
     ),

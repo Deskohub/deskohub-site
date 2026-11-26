@@ -1,3 +1,4 @@
+import "@/shared/polyfills/temporal";
 import {
   afterAll,
   afterEach,
@@ -10,11 +11,11 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import {
-  type AdvertisedPrice,
   type AdvertisedPriceRequest,
   advertisedPriceRequestBatchSize,
   type PreloadedAdvertisedPrice,
 } from "@/features/checkout/advertised-price";
+import { advertiseMeetingRoom } from "@/features/reservation/advertised-price.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -97,10 +98,18 @@ test("keeps a successful advertised-price batch independent from a failed siblin
     batch.length > 1
       ? Promise.resolve({ serverError: "advertised price batch failed" })
       : Promise.resolve({
-          data: batch.map((request) => ({
-            request,
-            advertisedPrice: {} as AdvertisedPrice,
-          })),
+          data: batch.map((request) => {
+            if (request.reservation.kind !== "meeting-room") {
+              throw new Error("Expected meeting-room request");
+            }
+            return {
+              request,
+              advertisedPrice: advertiseMeetingRoom({
+                ...request,
+                reservation: request.reservation,
+              }).advertisedPrice,
+            };
+          }),
         })
   );
   const queryClient = new QueryClient({
@@ -124,10 +133,7 @@ test("keeps a successful advertised-price batch independent from a failed siblin
 });
 
 test("keeps fresh page-loaded prices through the initial mount", async () => {
-  const preloaded = requests.map((request) => ({
-    request,
-    advertisedPrice: {} as AdvertisedPrice,
-  }));
+  const preloaded = requests.map((request) => advertiseMeetingRoom(request));
   const PreloadedHarness = () =>
     useAdvertisedPrices(requests, preloaded).map((result, index) => (
       <output

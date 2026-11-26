@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import "@/shared/testing/workspace-test-env";
 import { describe, expect, mock, test } from "bun:test";
 import { Deferred, Effect, Fiber, Layer, Option, Queue } from "effect";
@@ -112,8 +113,9 @@ describe("preloadPageAdvertisedPrices", () => {
         ? Effect.die(new Error("defect"))
         : Effect.succeed({ advertisedPriceToken: "ready" });
 
+    assert(ready && dying);
     const preloaded = await Effect.runPromise(
-      preloadPageAdvertisedPrices([ready!, dying!])
+      preloadPageAdvertisedPrices([ready, dying])
     ).finally(() => {
       buildPrice = undefined;
     });
@@ -128,8 +130,9 @@ describe("preloadPageAdvertisedPrices", () => {
       Effect.fail(new Error("pricing configuration unavailable"))
     );
 
+    assert(ready);
     const preloaded = await Effect.runPromise(
-      preloadPageAdvertisedPrices([ready!])
+      preloadPageAdvertisedPrices([ready])
     ).finally(() => {
       pricingLive = undefined;
     });

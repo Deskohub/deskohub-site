@@ -71,16 +71,16 @@ const checkAvailability = async (
     Layer.provide(AdvisoryAvailabilityInventory.Provider),
     Layer.provide(
       Layer.mergeAll(
-        Layer.succeed(DotyposService, dotyposService as never),
-        Layer.succeed(GoogleCalendarWorkspaceLimitationsService, {
+        Layer.mock(DotyposService, dotyposService),
+        Layer.mock(GoogleCalendarWorkspaceLimitationsService, {
           listLimitations: mock(() => Effect.succeed([])),
-        } as never),
-        Layer.succeed(WorkspaceReservationRepository, {
+        }),
+        Layer.mock(WorkspaceReservationRepository, {
           selectPendingPassDayCapacity: () => Effect.succeed([]),
           selectExpiredHoldDotyposReservationIds: mock(() =>
             Effect.succeed([])
           ),
-        } as never)
+        })
       )
     )
   );

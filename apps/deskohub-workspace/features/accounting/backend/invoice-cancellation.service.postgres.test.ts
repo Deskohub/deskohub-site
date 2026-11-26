@@ -1,5 +1,6 @@
 import "@/shared/testing/workspace-test-env";
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
 import { Effect, Layer } from "effect";
@@ -31,7 +32,7 @@ const testDatabase = await createWorkspacePostgresSuiteDatabase(
 );
 afterAll(() => testDatabase?.close());
 
-const kit = makeInvoiceCancellationTestKit(testDatabase!);
+const kit = makeInvoiceCancellationTestKit(testDatabase);
 
 type Delivered = {
   invoiceId: InvoiceId;
@@ -82,7 +83,8 @@ const makeService = (
               });
             }
             const record = yield* ledger.find(invoiceId).pipe(Effect.orDie);
-            return { changed: true, notices: record!.notices };
+            assert(record !== null);
+            return { changed: true, notices: record.notices };
           }).pipe(
             Effect.catchTag("EffectDrizzleQueryError", (cause) =>
               Effect.die(cause)
@@ -143,7 +145,7 @@ const readCancellationCount = async (invoiceId: InvoiceId) =>
         "select count(*) from invoice_cancellations where invoice_id = $1",
         [invoiceId]
       )
-    )[0]!.count
+    )[0]?.count ?? 0
   );
 
 const setReservationState = (reservationId: string, state: string) =>
@@ -238,8 +240,10 @@ describe.skipIf(!testDatabase)(
       expect(stale.code).toBe("confirmation_stale");
       expect(confirmed.outcome).toBe("cancelled");
       expect(delivered).toHaveLength(1);
+      const firstDelivered = delivered[0];
+      assert(firstDelivered !== undefined);
       expect(
-        delivered[0]!.claims.map(({ audience }) => audience).toSorted()
+        firstDelivered.claims.map(({ audience }) => audience).toSorted()
       ).toEqual(["customer", "internal"]);
     });
 

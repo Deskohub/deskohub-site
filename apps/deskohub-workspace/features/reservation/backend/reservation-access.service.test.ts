@@ -351,16 +351,24 @@ describe("ReservationAccessService", () => {
 
   test("fails closed when code resolution fails or returns an empty value", async () => {
     const accessToken = await createAccessToken();
-    const resolvers = [
-      () => Effect.fail(new Error("resolver unavailable")),
+    const resolvers: ReadonlyArray<
+      WorkspaceCheckoutAccessCodeServiceType["resolveCustomerAccessCode"]
+    > = [
+      () =>
+        Effect.fail(
+          new ReservationAccessIssuanceError({
+            reservationId: orderId,
+            outcome: "failed",
+            message: "resolver unavailable",
+          })
+        ),
       () => Effect.succeed({ ...resolvedAccess, code: "" }),
     ];
 
     for (const resolver of resolvers) {
       const result = await runAccess({
         accessToken,
-        resolver:
-          resolver as WorkspaceCheckoutAccessCodeServiceType["resolveCustomerAccessCode"],
+        resolver,
       });
 
       expect(result.access).toEqual({

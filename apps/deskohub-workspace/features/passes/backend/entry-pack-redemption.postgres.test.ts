@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Schema } from "effect";
@@ -35,6 +36,7 @@ import {
 } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
@@ -53,9 +55,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     const now = () => Temporal.Now.instant();
 
     beforeAll(async () => {
-      database = (await createWorkspacePostgresSuiteDatabase(
-        "entry_pack_claims"
-      ))!;
+      database = requireTestDatabase(
+        await createWorkspacePostgresSuiteDatabase("entry_pack_claims")
+      );
       await database.pool.query(
         "insert into customer_accounts (id) values ($1), ($2)",
         [buyer, holder]
@@ -195,10 +197,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           cause: "hold_expired",
         })
       );
+      assert(cancellation);
       await runReservations((repository) =>
         repository.markCancelled({
           id: reservation.id,
-          claimedAt: cancellation!.updatedAt,
+          claimedAt: cancellation.updatedAt,
           cancelledAt: now(),
         })
       );
@@ -535,11 +538,12 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           staleCancellingBefore: now().subtract({ minutes: 10 }),
         })
       );
+      assert(cancellation);
       await runReservations((repository) =>
         repository.markAdministrationCancelled({
           audit,
           id: reservation.id,
-          claimedAt: cancellation!.updatedAt,
+          claimedAt: cancellation.updatedAt,
           cancelledAt: now(),
           failureCode: null,
         })
@@ -773,10 +777,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const oldClaim = await runReservations((repository) =>
         repository.findEntryPackClaim(older.reservation.id)
       );
+      assert(oldClaim);
       const blocker = await holdPostgresTransaction(
         database.pool,
         "select id from pass_purchases where id = $1 for no key update",
-        [oldClaim!.passId]
+        [oldClaim.passId]
       );
       const recovery = runRecovery((repository) =>
         repository.completeWithReplacement({
@@ -818,9 +823,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           (attached) => attached,
           (failure) => failure
         );
+        assert(waiting);
         await waitForPostgresLockWaiter(database.pool, {
           condition: blockedBy,
-          values: [waiting!.pid],
+          values: [waiting.pid],
           description: "the checkout retry to wait on the late settlement",
         });
       } finally {

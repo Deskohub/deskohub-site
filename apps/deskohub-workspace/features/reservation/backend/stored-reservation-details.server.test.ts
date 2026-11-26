@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { Cause, Effect, Exit, Option } from "effect";
 import type { WorkspaceReservationRow } from "@/db/schema";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
@@ -71,10 +72,13 @@ describe("StoredReservationDetails", () => {
       await Effect.runPromise(StoredReservationDetails.decodeRows(rows))
     ).toEqual(rows);
 
+    const [firstRow, secondRow] = rows;
+    const [firstMalformed] = malformed;
+    assert(firstRow && secondRow && firstMalformed !== undefined);
     const failure = await Effect.runPromise(
       StoredReservationDetails.decodeRows([
-        rows[0]!,
-        { ...rows[1]!, reservationDetails: malformed[0]! },
+        firstRow,
+        { ...secondRow, reservationDetails: firstMalformed },
       ]).pipe(Effect.flip)
     );
     expect(failure.reservationId).toBe(otherId);

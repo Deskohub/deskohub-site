@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import "@/shared/testing/workspace-test-env";
 
@@ -52,7 +53,7 @@ const nextCache = recordNextCache();
 
 mock.module("next/cache", () => nextCache.module);
 mock.module("@/shared/backend/config/dotypos.config", () => ({
-  WorkspaceDotyposLayer: Layer.succeed(DotyposService, {
+  WorkspaceDotyposLayer: Layer.mock(DotyposService, {
     getReservationWithoutCustomer,
     listReservations,
     getReservationsByIds: (ids, options) =>
@@ -63,7 +64,7 @@ mock.module("@/shared/backend/config/dotypos.config", () => ({
           }).service.getReservationsByIds(ids)
         )
       ),
-  } as never),
+  }),
 }));
 
 const {
@@ -118,9 +119,11 @@ describe("shared reservation records", () => {
     listReservations.mockImplementation((options) =>
       Effect.succeed([{ ...reservation, id: options.ids?.[0] }])
     );
+    const [firstId] = ids;
+    assert(firstId);
     const records = await Effect.runPromise(
       Effect.flatMap(ReservationRecords, (shared) =>
-        shared.listByIds([...ids].reverse().concat(ids[0]!))
+        shared.listByIds([...ids].reverse().concat(firstId))
       ).pipe(Effect.provide(SharedReservationRecordsLive))
     );
 

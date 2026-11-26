@@ -1,11 +1,19 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
-import { DotyposRejected, DotyposService } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposCustomerSchema,
+  DotyposRejected,
+  DotyposReservationIdSchema,
+  DotyposReservationSchema,
+  DotyposService,
+  DotyposTableSchema,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   AdministrationActorEmail,
-  type AdministrationAssistantConnectionId,
+  AdministrationAssistantConnectionId,
   AdministrationAuthentication,
   type AdministrationChannel,
   AdministrationDiscountCodeUpdateInput,
@@ -73,9 +81,15 @@ import { InvoiceCancellationService } from "@/features/accounting/backend/invoic
 import { ReservationInvoiceService } from "@/features/accounting/backend/reservation-invoice.service";
 import { InvoiceArchiveError } from "@/features/accounting/invoice-archive";
 import { InvoiceCancellationError } from "@/features/accounting/invoice-cancellation";
-import type { InvoiceId } from "@/features/accounting/manual-invoice";
-import { ManualInvoiceValidationError } from "@/features/accounting/manual-invoice";
-import { AdministrationService } from "@/features/administration/administration.service";
+import {
+  invoiceIdSchema,
+  ManualInvoiceValidationError,
+} from "@/features/accounting/manual-invoice";
+import {
+  type AdministrationOverview,
+  type AdministrationOverviewSource,
+  AdministrationService,
+} from "@/features/administration/administration.service";
 import { AdministrationCustomerDirectory } from "@/features/administration/customer-directory.service";
 import { UnusedAdministrationCustomerDirectory } from "@/features/administration/customer-directory.test-utils";
 import {
@@ -86,6 +100,7 @@ import {
   ReservationAdministrationError,
   ReservationAdministrationService,
 } from "@/features/administration/reservation-administration.service";
+import { getAdministrationOverviewDateRanges } from "@/features/administration/reservation-date-range";
 import {
   AdministratorRoster,
   LegacyAdministratorBackfill,
@@ -114,8 +129,10 @@ import {
   type ReservationProductDetailsBackfillBatch,
 } from "@/features/reservation/backend/reservation-product-details-backfill.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { ReservationAccessService } from "@/features/reservation-access";
+import { reservationAccessGrantIdSchema } from "@/features/reservation-access/reservation-access";
 import { toWorkspaceWebHandler } from "@/shared/backend/workspace-effect";
 import { makeMeetingPoint } from "@/shared/testing/overlapping-requests.test-utils";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
@@ -153,13 +170,11 @@ const cliAdministrator: AdministratorAccountActor = {
   email: testEmailAddress("cli-administrator"),
 };
 // Every session in these tests acts as `cliAdministrator`.
-const SessionAdministratorAuthentication = Layer.succeed(CliAuthentication, {
-  ...({} as CliAuthentication["Service"]),
+const SessionAdministratorAuthentication = Layer.mock(CliAuthentication, {
   sessionAdministrator: () => Effect.succeed(cliAdministrator),
 });
 // The bearer authenticates, but its session has no approving administrator.
-const UnresolvableSessionAuthentication = Layer.succeed(CliAuthentication, {
-  ...({} as CliAuthentication["Service"]),
+const UnresolvableSessionAuthentication = Layer.mock(CliAuthentication, {
   authenticateSession: () =>
     Effect.succeed({ ...session, id: CliSessionId.make(session.id) }),
   sessionAdministrator: () =>
@@ -167,29 +182,23 @@ const UnresolvableSessionAuthentication = Layer.succeed(CliAuthentication, {
       new CliSessionUnauthorized({ message: "No approving administrator." })
     ),
 });
-const UnusedAdministrationService = Layer.succeed(
-  AdministrationService,
-  {} as AdministrationService["Service"]
-);
-const UnusedReservationAdministration = Layer.succeed(
+const UnusedAdministrationService = Layer.mock(AdministrationService, {});
+const UnusedReservationAdministration = Layer.mock(
   ReservationAdministrationService,
-  {} as ReservationAdministrationService["Service"]
+  {}
 );
 const UnusedReservationProductDetailsBackfill = Layer.succeed(
   ReservationProductDetailsBackfill,
   { runBatch: () => Effect.die("not expected") }
 );
-const UnusedReservationAccessAdministration = Layer.succeed(
+const UnusedReservationAccessAdministration = Layer.mock(
   ReservationAccessAdministration,
-  {} as ReservationAccessAdministration["Service"]
+  {}
 );
-const UnusedDiscountAdministration = Layer.succeed(
-  DiscountAdministration,
-  {} as DiscountAdministration["Service"]
-);
-const UnusedInvoiceAdministration = Layer.succeed(
+const UnusedDiscountAdministration = Layer.mock(DiscountAdministration, {});
+const UnusedInvoiceAdministration = Layer.mock(
   InvoiceAdministrationService,
-  {} as InvoiceAdministrationService["Service"]
+  {}
 );
 const UnusedStandaloneAccessCodeAdministration = Layer.succeed(
   StandaloneAccessCodeAdministration,
@@ -250,8 +259,9 @@ const actorAuthorizedCliRequest = (channel = sessionChannel) =>
 const ActorAuthorizedCliRequest = actorAuthorizedCliRequest();
 const assistantChannel: AdministrationChannel = {
   _tag: "AssistantConnection",
-  connectionId:
-    "01980000-0000-7000-8000-0000000000d2" as AdministrationAssistantConnectionId,
+  connectionId: AdministrationAssistantConnectionId.make(
+    "01980000-0000-7000-8000-0000000000d2"
+  ),
   oauthClientId: "https://assistant.example/client.json",
 };
 /**
@@ -389,10 +399,18 @@ describe("Workspace Admin API", () => {
   });
 
   test("returns refund attention and customer metrics in the overview", async () => {
-    const source = {};
+    const currentDate = Temporal.PlainDate.from("2026-06-15");
+    const ranges = getAdministrationOverviewDateRanges(currentDate);
+    const source: AdministrationOverviewSource = {
+      currentDate,
+      ranges,
+      reservations: { kind: "unavailable" },
+      rows: [],
+    };
     const sourceInputs: unknown[] = [];
-    const customerId = AdministrationDotyposCustomerId.make("1001");
-    const overview = {
+    const customerId = DotyposCustomerIdSchema.make("1001");
+    const overview: AdministrationOverview = {
+      ranges,
       today: { completed: 1, unavailable: false, value: 2 },
       upcoming: { completed: 0, unavailable: false, value: 3 },
       lastSevenDays: { completed: 4, unavailable: false, value: 5 },
@@ -417,12 +435,11 @@ describe("Workspace Admin API", () => {
         value: 1,
       },
     };
-    const administration = Layer.succeed(AdministrationService, {
-      ...({} as AdministrationService["Service"]),
-      loadOverviewSource: () => Effect.succeed(source as never),
+    const administration = Layer.mock(AdministrationService, {
+      loadOverviewSource: () => Effect.succeed(source),
       loadOverview: (input) => {
         sourceInputs.push(input);
-        return Effect.succeed(overview as never);
+        return Effect.succeed(overview);
       },
       countReservationsNeedingRefund: () => Effect.succeed(4),
     });
@@ -432,9 +449,10 @@ describe("Workspace Admin API", () => {
       { administration }
     );
 
+    const { ranges: _ranges, ...expectedOverview } = overview;
     expect(sourceInputs).toEqual([source]);
     expect(result).toMatchObject({
-      ...overview,
+      ...expectedOverview,
       refundAttention: { unavailable: false, value: 4 },
     });
   });
@@ -451,8 +469,7 @@ describe("Workspace Admin API", () => {
       to: "2026-10-22",
       dates: null,
     };
-    const administration = Layer.succeed(AdministrationService, {
-      ...({} as AdministrationService["Service"]),
+    const administration = Layer.mock(AdministrationService, {
       loadCustomerReservationActivity: (customerId) => {
         requests.push(customerId);
         return Effect.succeed(requests.length === 1 ? withDates : unavailable);
@@ -494,8 +511,7 @@ describe("Workspace Admin API", () => {
       dates: null,
     };
     let calls = 0;
-    const administration = Layer.succeed(AdministrationService, {
-      ...({} as AdministrationService["Service"]),
+    const administration = Layer.mock(AdministrationService, {
       loadReservationActivity: () => {
         calls += 1;
         return Effect.succeed(calls === 1 ? withDates : unavailable);
@@ -527,21 +543,29 @@ describe("Workspace Admin API", () => {
           searchCustomers: (query) => {
             queries.push(query);
             return Effect.succeed([
-              {
+              Schema.decodeUnknownSync(DotyposCustomerSchema)({
                 id: "deleted-customer",
+                _cloudId: "cloud",
                 firstName: "Synthetic",
+                points: null,
+                flags: "0",
+                display: true,
                 deleted: true,
-              },
-              {
+              }),
+              Schema.decodeUnknownSync(DotyposCustomerSchema)({
                 id: "company-customer",
+                _cloudId: "cloud",
                 companyName: " Synthetic Company ",
                 firstName: "Synthetic",
                 email: ` ${testEmailAddress("customer-search")} `,
                 phone: " +420 000 000 000 ",
                 _discountGroupId: "discount-group",
+                points: null,
+                flags: "0",
+                display: true,
                 deleted: false,
-              },
-            ] as never);
+              }),
+            ]);
           },
         })
       )
@@ -608,8 +632,7 @@ describe("Workspace Admin API", () => {
       })
     );
     const services = Layer.mergeAll(
-      Layer.succeed(CliAuthentication, {
-        ...({} as CliAuthentication["Service"]),
+      Layer.mock(CliAuthentication, {
         listSessions: (owner) =>
           Effect.sync(() => {
             sessionOwners.push(owner);
@@ -617,11 +640,11 @@ describe("Workspace Admin API", () => {
           }),
       }),
       ledger.layer,
-      Layer.succeed(CliAuthenticationAdmission, {} as never),
-      Layer.succeed(AdministrationService, {} as never),
-      Layer.succeed(AdministratorRoster, {} as never),
-      Layer.succeed(LegacyAdministratorBackfill, {} as never),
-      Layer.succeed(CampaignOperations, {} as never),
+      Layer.mock(CliAuthenticationAdmission, {}),
+      Layer.mock(AdministrationService, {}),
+      Layer.mock(AdministratorRoster, {}),
+      Layer.mock(LegacyAdministratorBackfill, {}),
+      Layer.mock(CampaignOperations, {}),
       UnusedReservationAdministration,
       UnusedReservationProductDetailsBackfill,
       UnusedWithdrawalService,
@@ -665,22 +688,19 @@ describe("Workspace Admin API", () => {
       sessionOwners.length = 0;
       ledger.requests.length = 0;
       const memoMap = Layer.makeMemoMapUnsafe();
-      const handlers = Object.fromEntries(
-        instances.map((instance) => [
-          instance,
-          HttpRouter.toWebHandler(
-            makeWorkspaceAdminApiLayer({
-              authentication: authenticationOf(instance),
-              sessionAuthentication: CliBearerAuthenticationLive,
-              clientCompatibility: CliClientCompatibilityLive,
-            }).pipe(Layer.provide(services)),
-            { disableLogger: true, memoMap }
-          ),
-        ])
-      ) as Record<
-        Instance,
-        ReturnType<typeof HttpRouter.toWebHandler<never, never, never, never>>
-      >;
+      const makeHandler = (instance: Instance) =>
+        HttpRouter.toWebHandler(
+          makeWorkspaceAdminApiLayer({
+            authentication: authenticationOf(instance),
+            sessionAuthentication: CliBearerAuthenticationLive,
+            clientCompatibility: CliClientCompatibilityLive,
+          }).pipe(Layer.provide(services)),
+          { disableLogger: true, memoMap }
+        );
+      const handlers = {
+        first: makeHandler("first"),
+        second: makeHandler("second"),
+      };
 
       const statuses: Array<[string, number, string | null]> = [];
       for (const instance of [...order, order[0]]) {
@@ -764,7 +784,7 @@ describe("Workspace Admin API", () => {
       Effect.provide(UnusedDiscountAdministration),
       Effect.provide(UnusedAdministrationCustomerDirectory),
       Effect.provide(SessionAdministratorAuthentication),
-      Effect.provide(Layer.succeed(AdministrationService, {} as never)),
+      Effect.provide(Layer.mock(AdministrationService, {})),
       Effect.provide(UnusedReservationAccessAdministration),
       Effect.provide(CliClientCompatibilityLive),
       Effect.provide(UnrecordedAdministrationActions),
@@ -824,8 +844,7 @@ describe("Workspace Admin API", () => {
 
   test("lists discount groups and maps a failed service to unavailable", async () => {
     const calls: string[] = [];
-    const discounts = Layer.succeed(DiscountAdministration, {
-      ...({} as DiscountAdministration["Service"]),
+    const discounts = Layer.mock(DiscountAdministration, {
       listDiscountGroups: () => {
         calls.push("list");
         return calls.length === 1
@@ -872,8 +891,7 @@ describe("Workspace Admin API", () => {
         logRecords.push({ level: logLevel, text: JSON.stringify(message) });
       }
     );
-    const failingAdministration = Layer.succeed(AdministrationService, {
-      ...({} as AdministrationService["Service"]),
+    const failingAdministration = Layer.mock(AdministrationService, {
       listReservations: () =>
         Effect.fail(
           new EffectDrizzleQueryError({
@@ -932,8 +950,7 @@ describe("Workspace Admin API", () => {
       defaultDueDate: "2026-11-05",
       suggestedVariableSymbol: "26000001",
     };
-    const invoices = Layer.succeed(InvoiceAdministrationService, {
-      ...({} as InvoiceAdministrationService["Service"]),
+    const invoices = Layer.mock(InvoiceAdministrationService, {
       getCreationDefaults: () => Effect.succeed(defaults),
     });
 
@@ -948,8 +965,7 @@ describe("Workspace Admin API", () => {
   test("previews an invoice with CLI administrator provenance", async () => {
     const pdf = new Uint8Array([37, 80, 68, 70]);
     const previews: unknown[] = [];
-    const invoices = Layer.succeed(InvoiceAdministrationService, {
-      ...({} as InvoiceAdministrationService["Service"]),
+    const invoices = Layer.mock(InvoiceAdministrationService, {
       preview: (input, provenance) => {
         previews.push({ input, provenance });
         return Effect.succeed(pdf);
@@ -972,8 +988,7 @@ describe("Workspace Admin API", () => {
 
   test("previews an invoice from an assistant with the assistant's provenance", async () => {
     const provenances: unknown[] = [];
-    const invoices = Layer.succeed(InvoiceAdministrationService, {
-      ...({} as InvoiceAdministrationService["Service"]),
+    const invoices = Layer.mock(InvoiceAdministrationService, {
       preview: (_, provenance) => {
         provenances.push(provenance);
         return Effect.succeed(new Uint8Array([37, 80, 68, 70]));
@@ -997,8 +1012,7 @@ describe("Workspace Admin API", () => {
     "records invoice creation from %s with its channel's provenance",
     async (_, channel, source) => {
       const creations: unknown[] = [];
-      const invoices = Layer.succeed(InvoiceAdministrationService, {
-        ...({} as InvoiceAdministrationService["Service"]),
+      const invoices = Layer.mock(InvoiceAdministrationService, {
         create: (input, provenance) => {
           creations.push(provenance);
           return Effect.succeed({
@@ -1020,8 +1034,7 @@ describe("Workspace Admin API", () => {
   );
 
   test("maps invoice preview validation failures to a rejected mutation", async () => {
-    const invoices = Layer.succeed(InvoiceAdministrationService, {
-      ...({} as InvoiceAdministrationService["Service"]),
+    const invoices = Layer.mock(InvoiceAdministrationService, {
       preview: () =>
         Effect.fail(
           new ManualInvoiceValidationError({
@@ -1043,8 +1056,7 @@ describe("Workspace Admin API", () => {
 
   test("maps an in-progress invoice claim for retry without changing provenance", async () => {
     const creations: unknown[] = [];
-    const invoiceAdministration = Layer.succeed(InvoiceAdministrationService, {
-      ...({} as InvoiceAdministrationService["Service"]),
+    const invoiceAdministration = Layer.mock(InvoiceAdministrationService, {
       create: (input, provenance) => {
         creations.push({ input, provenance });
         return creations.length === 1
@@ -1141,8 +1153,7 @@ describe("Workspace Admin API", () => {
     );
     let starts = 0;
     let admissionChecks = 0;
-    const authentication = Layer.succeed(CliAuthentication, {
-      ...({} as CliAuthentication["Service"]),
+    const authentication = Layer.mock(CliAuthentication, {
       start: () =>
         Effect.sync(() => {
           starts += 1;
@@ -1202,7 +1213,7 @@ describe("Workspace Admin API", () => {
       "01980000-0000-7000-8000-000000000021"
     );
     const grant = {
-      id: "access-1" as ReservationAccessGrant["id"],
+      id: reservationAccessGrantIdSchema.make("access-1"),
       reservationId: "reservation-1",
       provider: "igloohome",
       credentialType: "algopin-hourly",
@@ -1272,12 +1283,7 @@ describe("Workspace Admin API", () => {
       Effect.provide(UnusedDiscountAdministration),
       Effect.provide(UnusedAdministrationCustomerDirectory),
       Effect.provide(SessionAdministratorAuthentication),
-      Effect.provide(
-        Layer.succeed(
-          AdministrationService,
-          {} as AdministrationService["Service"]
-        )
-      ),
+      Effect.provide(Layer.mock(AdministrationService, {})),
       Effect.provide(reservationAccess),
       Effect.provide(CliClientCompatibilityLive),
       Effect.provide(UnrecordedAdministrationActions),
@@ -1330,8 +1336,7 @@ describe("Workspace Admin API", () => {
       Effect.sync(() => {
         calls.push([name, input]);
       });
-    const authentication = Layer.succeed(CliAuthentication, {
-      ...({} as CliAuthentication["Service"]),
+    const authentication = Layer.mock(CliAuthentication, {
       sessionAdministrator: () => Effect.succeed(cliAdministrator),
       listSessions: (owner) =>
         record("listSessions", owner).pipe(
@@ -1399,12 +1404,7 @@ describe("Workspace Admin API", () => {
       Effect.provide(GrantedAdministrator),
       Effect.provide(ActorAuthorizedCliRequest),
       Effect.provide(authentication),
-      Effect.provide(
-        Layer.succeed(
-          AdministrationService,
-          {} as AdministrationService["Service"]
-        )
-      ),
+      Effect.provide(Layer.mock(AdministrationService, {})),
       Effect.provide(UnusedReservationAdministration),
       Effect.provide(UnusedReservationProductDetailsBackfill),
       Effect.provide(UnusedReservationAccessAdministration),
@@ -1472,8 +1472,7 @@ describe("Workspace Admin API", () => {
 
   test("fails session control closed without touching the service when the session's administrator can't be resolved", async () => {
     let serviceCalls = 0;
-    const authentication = Layer.succeed(CliAuthentication, {
-      ...({} as CliAuthentication["Service"]),
+    const authentication = Layer.mock(CliAuthentication, {
       authenticateSession: () =>
         Effect.succeed({ ...session, id: CliSessionId.make(session.id) }),
       sessionAdministrator: () =>
@@ -1528,12 +1527,7 @@ describe("Workspace Admin API", () => {
         )
       ),
       Effect.provide(authentication),
-      Effect.provide(
-        Layer.succeed(
-          AdministrationService,
-          {} as AdministrationService["Service"]
-        )
-      ),
+      Effect.provide(Layer.mock(AdministrationService, {})),
       Effect.provide(UnusedReservationAdministration),
       Effect.provide(UnusedReservationProductDetailsBackfill),
       Effect.provide(UnusedReservationAccessAdministration),
@@ -1566,8 +1560,7 @@ describe("Workspace Admin API", () => {
     const ledger = recordingRequestLedger();
     const domainInputs: Array<{ readonly id: AdministrationStoredDiscountId }> =
       [];
-    const discounts = Layer.succeed(DiscountAdministration, {
-      ...({} as DiscountAdministration["Service"]),
+    const discounts = Layer.mock(DiscountAdministration, {
       deleteDiscount: (input) =>
         Effect.sync(() => domainInputs.push(input)).pipe(
           Effect.andThen(
@@ -1599,12 +1592,7 @@ describe("Workspace Admin API", () => {
       Effect.provide(discounts),
       Effect.provide(UnusedAdministrationCustomerDirectory),
       Effect.provide(SessionAdministratorAuthentication),
-      Effect.provide(
-        Layer.succeed(
-          AdministrationService,
-          {} as AdministrationService["Service"]
-        )
-      ),
+      Effect.provide(Layer.mock(AdministrationService, {})),
       Effect.provide(UnusedReservationAccessAdministration),
       Effect.provide(CliClientCompatibilityLive),
       Effect.provide(UnrecordedAdministrationActions),
@@ -1628,8 +1616,7 @@ describe("Workspace Admin API", () => {
       "01980000-0000-7000-8000-000000000011"
     );
     const updates: unknown[] = [];
-    const discounts = Layer.succeed(DiscountAdministration, {
-      ...({} as DiscountAdministration["Service"]),
+    const discounts = Layer.mock(DiscountAdministration, {
       updateCode: (input) =>
         Effect.sync(() => updates.push(input)).pipe(
           Effect.andThen(
@@ -1703,8 +1690,7 @@ describe("invoice cancellation and archive endpoints", () => {
   const invoicesWith = (
     service: Partial<InvoiceAdministrationService["Service"]>
   ) =>
-    Layer.succeed(InvoiceAdministrationService, {
-      ...({} as InvoiceAdministrationService["Service"]),
+    Layer.mock(InvoiceAdministrationService, {
       ...service,
     });
 
@@ -1784,11 +1770,11 @@ describe("invoice cancellation and archive endpoints", () => {
   test("cancels an invoice as the caller with the confirmations sent", async () => {
     const cancellations: unknown[] = [];
     const result = {
-      invoiceId,
+      invoiceId: invoiceIdSchema.make(invoiceId),
       outcome: "cancelled",
       cancellation,
       reservation: {
-        reservationId: AdministrationWorkspaceReservationId.make(
+        reservationId: workspaceReservationIdSchema.make(
           "01980000-0000-7000-8000-0000000000a2"
         ),
         outcome: "cancelled",
@@ -1798,7 +1784,7 @@ describe("invoice cancellation and archive endpoints", () => {
     const invoices = invoicesWith({
       cancel: (input) => {
         cancellations.push(input);
-        return Effect.succeed(result as never);
+        return Effect.succeed(result);
       },
     });
     const reservation = {
@@ -1865,7 +1851,11 @@ describe("invoice cancellation and archive endpoints", () => {
     ];
     let attempt = 0;
     const invoices = invoicesWith({
-      cancel: () => Effect.fail(failures[attempt++] as never),
+      cancel: () => {
+        const failure = failures[attempt++];
+        if (!failure) throw new Error("Unexpected invoice cancel attempt");
+        return Effect.fail(failure);
+      },
     });
 
     const errors = await callAdministrationApi(
@@ -1916,7 +1906,7 @@ describe("invoice cancellation and archive endpoints", () => {
       Effect.fail(
         new InvoiceArchiveError({
           code: "not_cancelled",
-          invoiceId: invoiceId as never,
+          invoiceId: invoiceIdSchema.make(invoiceId),
           message: "Only a cancelled invoice can be archived.",
         })
       ),
@@ -1925,7 +1915,9 @@ describe("invoice cancellation and archive endpoints", () => {
     const invoices = invoicesWith({
       archive: (input) => {
         archives.push(input);
-        return outcomes[archives.length - 1] as never;
+        const outcome = outcomes[archives.length - 1];
+        if (!outcome) throw new Error("Unexpected invoice archive attempt");
+        return outcome;
       },
     });
 
@@ -1974,7 +1966,9 @@ describe("invoice cancellation and archive endpoints", () => {
     const invoices = invoicesWith({
       getCorrectiveDocumentPdf: (id, scope) => {
         reads.push({ id, scope });
-        return outcomes[reads.length - 1] as never;
+        const outcome = outcomes[reads.length - 1];
+        if (!outcome) throw new Error("Unexpected corrective document read");
+        return outcome;
       },
     });
     const download = (client: AdministrationClient) =>
@@ -2043,6 +2037,7 @@ describe("customer and reservation administration endpoints", () => {
       stats: {
         reservationCount: 0,
         favoriteProduct: null,
+        favoriteReservationProduct: null,
         revenue: [],
         discountSavings: [],
       },
@@ -2085,12 +2080,10 @@ describe("customer and reservation administration endpoints", () => {
         }),
       ],
     });
-    const administration = Layer.succeed(AdministrationService, {
-      ...({} as AdministrationService["Service"]),
-      loadCustomerActivity: () => Effect.succeed(activity as never),
+    const administration = Layer.mock(AdministrationService, {
+      loadCustomerActivity: () => Effect.succeed(activity),
     });
-    const discounts = Layer.succeed(DiscountAdministration, {
-      ...({} as DiscountAdministration["Service"]),
+    const discounts = Layer.mock(DiscountAdministration, {
       loadCustomerProfile: (input) => {
         profileRequests.push(input);
         return Effect.succeed(profile);
@@ -2102,8 +2095,13 @@ describe("customer and reservation administration endpoints", () => {
       { administration, discounts }
     );
 
+    const { favoriteReservationProduct: _favorite, ...expectedStats } =
+      activity.stats;
     expect(profileRequests).toEqual([{ customerId }]);
-    expect(result.activity).toEqual(activity);
+    expect(result.activity).toEqual({
+      ...activity,
+      stats: expectedStats,
+    });
     const datedRange = {
       validFrom: "2026-08-01T08:00:00Z",
       validUntil: "2026-09-01T08:00:00Z",
@@ -2160,8 +2158,7 @@ describe("customer and reservation administration endpoints", () => {
       { code: "cancellation_failed", reason: "reservation_unavailable" },
     ] as const;
     const cancellations: unknown[] = [];
-    const reservations = Layer.succeed(ReservationAdministrationService, {
-      ...({} as ReservationAdministrationService["Service"]),
+    const reservations = Layer.mock(ReservationAdministrationService, {
       cancel: (input) => {
         const failure = failures[cancellations.length];
         cancellations.push(input);
@@ -2216,11 +2213,10 @@ describe("customer and reservation administration endpoints", () => {
     const restorations: unknown[] = [];
     const replacement = {
       outcome: "issued",
-      invoiceId: "0b6f3c7e-2f4a-4c1e-9d55-6a1f2e3b4c5d" as InvoiceId,
+      invoiceId: invoiceIdSchema.make("0b6f3c7e-2f4a-4c1e-9d55-6a1f2e3b4c5d"),
       invoiceNumber: "WS-2026-000002",
     } as const;
-    const reservations = Layer.succeed(ReservationAdministrationService, {
-      ...({} as ReservationAdministrationService["Service"]),
+    const reservations = Layer.mock(ReservationAdministrationService, {
       restore: (input) =>
         Effect.sync(() => {
           restorations.push(input);
@@ -2297,8 +2293,7 @@ describe("customer and reservation administration endpoints", () => {
       }),
     ];
     const restorations: unknown[] = [];
-    const reservations = Layer.succeed(ReservationAdministrationService, {
-      ...({} as ReservationAdministrationService["Service"]),
+    const reservations = Layer.mock(ReservationAdministrationService, {
       restore: (input) => {
         const failure = failures[restorations.length];
         restorations.push(input);
@@ -2389,11 +2384,11 @@ describe("customer and reservation administration endpoints", () => {
     const emails: Array<{ readonly id: string; readonly tableMap: boolean }> =
       [];
     const stored = (id: string) =>
-      ({
-        id,
+      workspaceReservationFixture({
+        id: workspaceReservationIdSchema.make(id),
         activePaymentAttemptId: null,
-        dotyposCustomerId: "customer-id",
-        dotyposReservationId: `dotypos-${id}`,
+        dotyposCustomerId: DotyposCustomerIdSchema.make("customer-id"),
+        dotyposReservationId: DotyposReservationIdSchema.make(`dotypos-${id}`),
         failureCode: null,
         fulfillmentState: "fulfilled",
         locale: "cs-CZ",
@@ -2406,7 +2401,7 @@ describe("customer and reservation administration endpoints", () => {
         },
         reservationState: "confirmed",
         updatedAt: Temporal.Now.instant(),
-      }) as never;
+      });
     const shared = Layer.mergeAll(
       recordingDatabase.layer,
       Layer.mock(InvoiceCancellationService, {
@@ -2420,28 +2415,35 @@ describe("customer and reservation administration endpoints", () => {
           getReservation: (id) =>
             Effect.succeed(
               Option.some({
-                reservation: {
-                  id,
-                  _branchId: "branch",
-                  _cloudId: "cloud",
-                  _customerId: "customer-id",
-                  _tableId: "table-id",
-                  startDate: "2026-06-15T22:00:00.000Z",
-                  endDate: "2026-06-16T22:00:00.000Z",
-                  seats: "1",
-                  status: "CONFIRMED",
-                },
-                customer: {
+                reservation: Schema.decodeUnknownSync(DotyposReservationSchema)(
+                  {
+                    id,
+                    _branchId: "branch",
+                    _cloudId: "cloud",
+                    _customerId: "customer-id",
+                    _tableId: "table-id",
+                    startDate: "2026-06-15T22:00:00.000Z",
+                    endDate: "2026-06-16T22:00:00.000Z",
+                    seats: "1",
+                    status: "CONFIRMED",
+                  }
+                ),
+                customer: Schema.decodeUnknownSync(DotyposCustomerSchema)({
+                  id: "customer-id",
                   _cloudId: "cloud",
                   email: testEmailAddress("customer"),
                   firstName: "Synthetic",
                   lastName: "Customer",
-                },
-              }) as never
+                  points: null,
+                  flags: "0",
+                  display: true,
+                  deleted: false,
+                }),
+              })
             ),
           getTables: () =>
             Effect.succeed([
-              {
+              Schema.decodeUnknownSync(DotyposTableSchema)({
                 _cloudId: "cloud",
                 id: "table-id",
                 name: "12",
@@ -2450,8 +2452,8 @@ describe("customer and reservation administration endpoints", () => {
                 locationName: "Main room",
                 seats: "1",
                 tags: ["tier:profi"],
-              },
-            ] as never),
+              }),
+            ]),
         })
       ),
       counted(
@@ -2498,12 +2500,12 @@ describe("customer and reservation administration endpoints", () => {
             ReservationAdministrationService.perOperationOver(shared),
             ClaimEveryCliMutation,
             DiscardedAdministrationActionLog,
-            Layer.succeed(CliAuthentication, {} as never),
-            Layer.succeed(CliAuthenticationAdmission, {} as never),
+            Layer.mock(CliAuthentication, {}),
+            Layer.mock(CliAuthenticationAdmission, {}),
             UnusedAdministrationService,
-            Layer.succeed(AdministratorRoster, {} as never),
-            Layer.succeed(LegacyAdministratorBackfill, {} as never),
-            Layer.succeed(CampaignOperations, {} as never),
+            Layer.mock(AdministratorRoster, {}),
+            Layer.mock(LegacyAdministratorBackfill, {}),
+            Layer.mock(CampaignOperations, {}),
             UnusedReservationProductDetailsBackfill,
             UnusedWithdrawalService,
             UnusedReservationAccessAdministration,
@@ -2688,12 +2690,7 @@ describe("standalone access-code CLI endpoint", () => {
       Effect.provide(UnusedDiscountAdministration),
       Effect.provide(UnusedAdministrationCustomerDirectory),
       Effect.provide(authentication),
-      Effect.provide(
-        Layer.succeed(
-          AdministrationService,
-          {} as AdministrationService["Service"]
-        )
-      ),
+      Effect.provide(Layer.mock(AdministrationService, {})),
       Effect.provide(UnusedReservationAccessAdministration),
       Effect.provide(CliClientCompatibilityLive),
       Effect.provide(UnrecordedAdministrationActions),
@@ -2786,11 +2783,12 @@ describe("standalone access-code CLI endpoint", () => {
           return createdOutcome;
         }),
     });
-    const idempotency = Layer.succeed(AdministrationRequestLedger, {
-      applyOnce: ({ apply }) => apply,
+    const idempotency = Layer.mock(AdministrationRequestLedger, {
       applyOnceWithEffects: ({ stored }) =>
-        Effect.succeed(stored.replay(storedResult as never)),
-    } as AdministrationRequestLedger["Service"]);
+        Effect.succeed(
+          stored.replay(Schema.decodeUnknownSync(stored.schema)(storedResult))
+        ),
+    });
 
     const replayed = await runAdministration(
       ActorAuthorizedCliRequest,
@@ -2964,9 +2962,8 @@ describe("standalone access-code CLI endpoint", () => {
       applyOnceWithEffects: () =>
         Effect.sync(() => {
           calls += 1;
-          return createdOutcome;
-        }),
-    } as AdministrationRequestLedger["Service"]);
+        }).pipe(Effect.andThen(Effect.die("Ledger should not be reached"))),
+    });
 
     const error = await runAdministration(
       CliSessionAdministrationAuthenticationLive,
