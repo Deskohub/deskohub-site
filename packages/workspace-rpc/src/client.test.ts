@@ -29,7 +29,9 @@ const caller = {
   correlationId: "72823c14-d2de-4a19-94ec-8b70ad590242",
   locale: "cs-CZ",
   clientAddress: Option.some("192.0.2.60"),
-  userAgent: Option.some("Deskohub Fixture/1.0"),
+  userAgent: Option.some(
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+  ),
 } satisfies typeof Caller.Service;
 
 const callerLayer = Layer.succeed(CallerContext)((effect, { headers }) =>
@@ -267,7 +269,7 @@ describe("Workspace RPC HTTP client", () => {
     expect(attempt).toBe(1);
   });
 
-  test("retries a Google front end IAM denial at most once", async () => {
+  test("retries one-click after a Google front end denial at most once", async () => {
     const tokens = [
       Redacted.make("synthetic-id-1"),
       Redacted.make("synthetic-id-2"),
@@ -275,7 +277,7 @@ describe("Workspace RPC HTTP client", () => {
     const evicted: Redacted.Redacted<string>[] = [];
     let attempt = 0;
     const failure = await runClient(
-      (client) => Effect.flip(client.openPreferences(payload)),
+      (client) => Effect.flip(client.unsubscribeOneClick(payload)),
       () =>
         new Response("denied", {
           status: 403,
@@ -297,5 +299,88 @@ describe("Workspace RPC HTTP client", () => {
     expect(evicted).toHaveLength(1);
     expect(evicted[0]).toBe(tokens[0]);
     expect(attempt).toBe(2);
+  });
+
+  test("can surface a Google front end denial after issuance without replaying", async () => {
+    const server = makeTestServer();
+    let dispatches = 0;
+    try {
+      const failure = await runClient(
+        (client) => Effect.flip(client.openPreferences(payload)),
+        async (request) => {
+          const reply = await server.handler(request);
+          await reply.arrayBuffer();
+          expect(reply.status).toBe(200);
+          dispatches++;
+          return new Response("denied", {
+            status: 403,
+            headers: { server: "Google Frontend", "content-type": "text/html" },
+          });
+        }
+      );
+      expect(failure).toEqual(
+        new BackendUnavailable({ reason: "http-status", status: 403 })
+      );
+      expect(dispatches).toBe(1);
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  test("a broken response leaves another logical client's pending call intact", async () => {
+    const server = makeTestServer();
+    const goodRequestArrived = Promise.withResolvers<void>();
+    const releaseGoodResponse = Promise.withResolvers<void>();
+    let calls = 0;
+    const fetchStub = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init);
+        if (calls++ === 0) {
+          goodRequestArrived.resolve();
+          await releaseGoodResponse.promise;
+          return server.handler(request);
+        }
+        return new Response("bad frame", {
+          headers: { "content-type": rpcContentType },
+        });
+      },
+      { preconnect: () => {} }
+    );
+    const protocol = layerWorkspaceRpcProtocol({
+      url: "https://workspace.invalid/",
+      authorization: Effect.succeed(Redacted.make("synthetic-id-token")),
+      invalidateAuthorization: () => Effect.void,
+    }).pipe(Layer.provide(FetchHttpClient.layer));
+    try {
+      const [success, failure] = await Effect.runPromise(
+        Effect.gen(function* () {
+          const first = yield* makeWorkspaceRpcClient();
+          const second = yield* makeWorkspaceRpcClient();
+          return yield* Effect.all(
+            [
+              first.openPreferences(payload),
+              Effect.promise(() => goodRequestArrived.promise).pipe(
+                Effect.andThen(Effect.flip(second.openPreferences(payload))),
+                Effect.ensuring(
+                  Effect.sync(() => releaseGoodResponse.resolve())
+                )
+              ),
+            ],
+            { concurrency: "unbounded" }
+          );
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            Layer.mergeAll(protocol, layerCallerContextClient(caller))
+          ),
+          Effect.provideService(FetchHttpClient.Fetch, fetchStub)
+        )
+      );
+      expect(success).toEqual(grant);
+      expect(failure).toEqual(new BackendUnavailable({ reason: "protocol" }));
+    } finally {
+      releaseGoodResponse.resolve();
+      await server.dispose();
+    }
   });
 });

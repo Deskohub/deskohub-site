@@ -29,8 +29,8 @@ interface WorkspaceRpcProtocolOptions {
   ) => Effect.Effect<void>;
 }
 
-const RetryUnauthorized = Context.Reference<boolean>(
-  "@deskohub/workspace-rpc/RetryUnauthorized",
+const RetryAuthentication = Context.Reference<boolean>(
+  "@deskohub/workspace-rpc/RetryAuthentication",
   { defaultValue: () => false }
 );
 
@@ -41,11 +41,11 @@ const contentTypeOf = (response: HttpClientResponse.HttpClientResponse) => {
     : contentType?.split(";", 1)[0]?.trim().toLowerCase();
 };
 
-const isIamRejection = (
+const isGoogleFrontendDenial = (
   response: HttpClientResponse.HttpClientResponse,
   hasRpcContentType: boolean
 ) =>
-  (response.status === 401 || response.status === 403) &&
+  response.status === 403 &&
   !hasRpcContentType &&
   response.headers.server?.toLowerCase() === "google frontend";
 
@@ -68,71 +68,100 @@ export const layerWorkspaceRpcProtocol = (
       const http = yield* HttpClient.HttpClient;
       const { contentType } = yield* RpcSerialization.RpcSerialization;
 
-      const send = Effect.fnUntraced(function* (
+      const send = (
         request: HttpClientRequest.HttpClientRequest,
         canRetry: boolean
-      ): Effect.fn.Return<
+      ): Effect.Effect<
         HttpClientResponse.HttpClientResponse,
         HttpClientError.HttpClientError
-      > {
-        const token = yield* options.authorization.pipe(
-          Effect.mapError(
-            (cause) =>
-              new HttpClientError.HttpClientError({
-                reason: new HttpClientError.TransportError({ request, cause }),
-              })
+      > =>
+        Effect.Do.pipe(
+          Effect.bind("token", () =>
+            options.authorization.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new HttpClientError.HttpClientError({
+                    reason: new HttpClientError.TransportError({
+                      request,
+                      cause,
+                    }),
+                  })
+              )
+            )
+          ),
+          Effect.bind("fetchOptions", () =>
+            Effect.serviceOption(FetchHttpClient.RequestInit)
+          ),
+          Effect.bind("response", ({ fetchOptions, token }) =>
+            http
+              .execute(
+                HttpClientRequest.bearerToken(request, Redacted.value(token))
+              )
+              .pipe(
+                Effect.provideService(FetchHttpClient.RequestInit, {
+                  ...Option.getOrUndefined(fetchOptions),
+                  redirect: "manual",
+                })
+              )
+          ),
+          Effect.bind("retryAuthentication", () => RetryAuthentication),
+          Effect.let(
+            "hasRpcContentType",
+            ({ response }) => contentTypeOf(response) === contentType
+          ),
+          Effect.let(
+            "successfulStatus",
+            ({ response }) => response.status >= 200 && response.status < 300
+          ),
+          Effect.let(
+            "shouldRetry",
+            ({ hasRpcContentType, response, retryAuthentication }) =>
+              canRetry &&
+              retryAuthentication &&
+              (response.status === 401 ||
+                isGoogleFrontendDenial(response, hasRpcContentType))
+          ),
+          Effect.tap(({ response, shouldRetry, token }) =>
+            Effect.suspend(() => options.invalidateAuthorization(token)).pipe(
+              Effect.when(
+                Effect.succeed(response.status === 401 || shouldRetry)
+              )
+            )
+          ),
+          Effect.flatMap(
+            ({
+              hasRpcContentType,
+              response,
+              shouldRetry,
+              successfulStatus,
+            }) => {
+              if (successfulStatus && hasRpcContentType) {
+                return Effect.succeed(response);
+              }
+
+              return discardBody(response).pipe(
+                Effect.flatMap(() =>
+                  shouldRetry
+                    ? send(request, false)
+                    : Effect.fail(
+                        new HttpClientError.HttpClientError({
+                          reason: new HttpClientError.StatusCodeError({
+                            request,
+                            response,
+                            cause: new BackendUnavailable({
+                              reason: successfulStatus
+                                ? "content-type"
+                                : "http-status",
+                              status: response.status,
+                            }),
+                          }),
+                        })
+                      )
+                )
+              );
+            }
           )
         );
-        const fetchOptions = yield* Effect.serviceOption(
-          FetchHttpClient.RequestInit
-        );
-        const response = yield* http
-          .execute(
-            HttpClientRequest.bearerToken(request, Redacted.value(token))
-          )
-          .pipe(
-            Effect.provideService(FetchHttpClient.RequestInit, {
-              ...Option.getOrUndefined(fetchOptions),
-              redirect: "manual",
-            })
-          );
-        const hasRpcContentType = contentTypeOf(response) === contentType;
-        const iamRejection = isIamRejection(response, hasRpcContentType);
-        const unauthorized = response.status === 401;
-        const retryUnauthorized = yield* RetryUnauthorized;
-        const shouldRetry =
-          canRetry && (iamRejection || (unauthorized && retryUnauthorized));
-
-        if (unauthorized || (iamRejection && shouldRetry)) {
-          yield* options.invalidateAuthorization(token);
-        }
-        if (
-          response.status >= 200 &&
-          response.status < 300 &&
-          hasRpcContentType
-        ) {
-          return response;
-        }
-
-        yield* discardBody(response);
-        if (shouldRetry) {
-          return yield* send(request, false);
-        }
-
-        return yield* new HttpClientError.HttpClientError({
-          reason: new HttpClientError.StatusCodeError({
-            request,
-            response,
-            cause: new BackendUnavailable({
-              reason:
-                response.status >= 200 && response.status < 300
-                  ? "content-type"
-                  : "http-status",
-              status: response.status,
-            }),
-          }),
-        });
-      });
 
       const client = HttpClient.makeWith<
         never,
@@ -149,6 +178,8 @@ export const layerWorkspaceRpcProtocol = (
         )
       );
       const protocol = yield* RpcClient.makeProtocolHttp(client);
+      // Opening preferences issues a fresh token on each dispatch. Only the
+      // idempotent one-click operation may replay after an HTTP auth failure.
       return {
         ...protocol,
         send: (clientId, request, transferables) =>
@@ -156,7 +187,7 @@ export const layerWorkspaceRpcProtocol = (
             .send(clientId, request, transferables)
             .pipe(
               Effect.provideService(
-                RetryUnauthorized,
+                RetryAuthentication,
                 request._tag === "Request" &&
                   request.tag === unsubscribeOneClick
               )

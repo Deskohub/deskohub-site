@@ -40,6 +40,18 @@ const userAgentHeader = "x-deskohub-user-agent";
 
 const decodeIpAddress = Schema.decodeUnknownOption(Schema.IpAddressFromString);
 
+// A browser user-agent can contain commas. Its wire value cannot, so a
+// transport header joined with an RPC header fails before it is decoded.
+const UserAgent = Schema.String.check(Schema.isBase64Url()).pipe(
+  Schema.decodeTo(Schema.StringFromBase64Url),
+  Schema.check(
+    Schema.isPattern(/^[^\r\n]+$/),
+    Schema.makeFilter((value) => !value.includes("\0"), {
+      expected: "no NUL bytes",
+    })
+  )
+);
+
 export const CallerHeaders = Schema.Struct({
   [correlationIdHeader]: CorrelationId,
   [localeHeader]: Schema.Literals(supportedLocales),
@@ -50,14 +62,7 @@ export const CallerHeaders = Schema.Struct({
       })
     )
   ),
-  [userAgentHeader]: Schema.optionalKey(
-    Schema.String.check(
-      Schema.isPattern(/^[^,\r\n]+$/),
-      Schema.makeFilter((value) => !value.includes("\0"), {
-        expected: "no NUL bytes",
-      })
-    )
-  ),
+  [userAgentHeader]: Schema.optionalKey(UserAgent),
 });
 
 const decodeHeaders = Schema.decodeUnknownEffect(CallerHeaders);

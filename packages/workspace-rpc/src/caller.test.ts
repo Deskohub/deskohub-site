@@ -5,6 +5,8 @@ import { decodeCallerHeaders, InvalidCallerHeaders } from "./caller";
 import { correlationIdHeader } from "./correlation";
 
 const correlationId = "72823c14-d2de-4a19-94ec-8b70ad590242";
+const userAgent = "Mozilla/5.0 (KHTML, like Gecko)";
+const wireUserAgent = Buffer.from(userAgent).toString("base64url");
 const headers = Headers.fromInput({
   [correlationIdHeader]: correlationId,
   "x-deskohub-locale": "cs-CZ",
@@ -18,7 +20,7 @@ describe("caller header decoding", () => {
           headers,
           Headers.fromInput({
             "x-deskohub-client-address": "2001:db8::42",
-            "x-deskohub-user-agent": "Deskohub Fixture/1.0",
+            "x-deskohub-user-agent": wireUserAgent,
             "x-forwarded-for": "192.0.2.60",
             "user-agent": "transport-agent",
           })
@@ -30,7 +32,7 @@ describe("caller header decoding", () => {
       correlationId,
       locale: "cs-CZ",
       clientAddress: Option.some("2001:db8::42"),
-      userAgent: Option.some("Deskohub Fixture/1.0"),
+      userAgent: Option.some(userAgent),
     });
     expect(await Effect.runPromise(decodeCallerHeaders(headers))).toEqual({
       correlationId,
@@ -44,7 +46,7 @@ describe("caller header decoding", () => {
     [correlationIdHeader, correlationId],
     ["x-deskohub-locale", "cs-CZ"],
     ["x-deskohub-client-address", "192.0.2.60"],
-    ["x-deskohub-user-agent", "Deskohub Fixture/1.0"],
+    ["x-deskohub-user-agent", wireUserAgent],
   ]) {
     if (!name || !value) throw new Error("Invalid test headers");
     test(`rejects a repeated ${name} merged by Effect`, async () => {
@@ -60,12 +62,14 @@ describe("caller header decoding", () => {
     });
   }
 
-  test("rejects invalid forwarding addresses, UUIDs and locales", async () => {
+  test("rejects malformed caller header values", async () => {
     for (const invalid of [
       Headers.set(headers, "x-deskohub-client-address", "192.0.2.1:81"),
       Headers.set(headers, correlationIdHeader, "caller"),
       Headers.set(headers, "x-deskohub-locale", "xx-XX"),
       Headers.remove(headers, correlationIdHeader),
+      Headers.set(headers, "x-deskohub-user-agent", userAgent),
+      Headers.set(headers, "x-deskohub-user-agent", "b2sA"),
     ]) {
       expect(
         await Effect.runPromise(Effect.flip(decodeCallerHeaders(invalid)))

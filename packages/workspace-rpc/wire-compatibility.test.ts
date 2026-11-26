@@ -20,7 +20,7 @@ const baselineHeaders = {
   "x-deskohub-correlation-id": "72823c14-d2de-4a19-94ec-8b70ad590242",
   "x-deskohub-locale": "cs-CZ",
   "x-deskohub-client-address": "192.0.2.20",
-  "x-deskohub-user-agent": "Deskohub Wire Fixture/1.0",
+  "x-deskohub-user-agent": "RGVza29odWIgV2lyZSBGaXh0dXJlLzEuMA",
 } as const;
 const caller = {
   correlationId: "72823c14-d2de-4a19-94ec-8b70ad590242",
@@ -100,7 +100,10 @@ const getSamples = Effect.gen(function* () {
           Schema.decodeUnknownSync(CallerHeaders)(
             Headers.fromInput(message.headers)
           )
-        ).toEqual(baselineHeaders);
+        ).toEqual({
+          ...baselineHeaders,
+          "x-deskohub-user-agent": Option.getOrThrow(caller.userAgent),
+        });
         return {
           ...message,
           payload: decode(rpc.payloadSchema)(message.payload),
