@@ -7,6 +7,10 @@ import {
 } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Schema } from "effect";
+import {
+  companyRegistrationIdSchema,
+  vatRegistrationIdSchema,
+} from "@/features/accounting/billing-identity";
 import type { PreparedCustomerQuote } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import {
   buildCoworkReservationQuote,
@@ -57,9 +61,11 @@ const prepared: PreparedCustomerQuote = {
 
 const makeSnapshot = () =>
   makeAccountingDocumentSnapshot({
-    workspaceReservationId: "reservation-id",
-    dotyposReservationId: "dotypos-reservation-id",
-    dotyposCustomerId: "dotypos-customer-id",
+    workspaceReservationId: workspaceReservationIdSchema.make("reservation-id"),
+    dotyposReservationId: DotyposReservationIdSchema.make(
+      "dotypos-reservation-id"
+    ),
+    dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
     locale: "en-US",
     prepared,
   });
@@ -92,7 +98,7 @@ describe("accounting document snapshot", () => {
       locale: "en-US",
       supplier: {
         legalName: "Desktechub s.r.o.",
-        companyId: "24531596",
+        companyId: companyRegistrationIdSchema.make("24531596"),
         vatStatus: "not-vat-payer",
       },
       buyer: {
@@ -120,9 +126,13 @@ describe("accounting document snapshot", () => {
 
   test("freezes office reservation and accepted quote facts", async () => {
     const snapshot = makeAccountingDocumentSnapshot({
-      workspaceReservationId: "office-reservation-id",
-      dotyposReservationId: "dotypos-office-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      workspaceReservationId: workspaceReservationIdSchema.make(
+        "office-reservation-id"
+      ),
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-office-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       locale: "en-US",
       prepared: officePrepared,
     });
@@ -165,9 +175,12 @@ describe("accounting document snapshot", () => {
       getMeetingRoomReservationQuote(baseMeetingRoomReservation)
     );
     const baseMeetingRoomSnapshot = makeAccountingDocumentSnapshot({
-      workspaceReservationId: "reservation-id",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      workspaceReservationId:
+        workspaceReservationIdSchema.make("reservation-id"),
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       locale: "en-US",
       prepared: {
         kind: "meeting-room",
@@ -200,9 +213,12 @@ describe("accounting document snapshot", () => {
       "2099-06-20T23:00:00Z"
     );
     const officeSnapshot = makeAccountingDocumentSnapshot({
-      workspaceReservationId: "reservation-id",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      workspaceReservationId:
+        workspaceReservationIdSchema.make("reservation-id"),
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       locale: "en-US",
       prepared: officePrepared,
     });
@@ -227,8 +243,8 @@ describe("accounting document snapshot", () => {
     const buyer = {
       kind: "business" as const,
       legalName: "Analytical Engines s.r.o.",
-      companyId: "12345678",
-      vatId: "CZ12345678",
+      companyId: companyRegistrationIdSchema.make("12345678"),
+      vatId: vatRegistrationIdSchema.make("CZ12345678"),
       address: {
         line1: "Počernická 1",
         city: "Praha",
