@@ -15,7 +15,6 @@ import {
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
   DotyposService,
-  DotyposTableIdSchema,
   DotyposUnavailable,
 } from "@deskohub/dotypos";
 import { EmailRecipientDomainServiceMock } from "@deskohub/email/backend/recipient-domain.service.mock";

@@ -6,7 +6,6 @@ import "@/shared/testing/workspace-test-env";
 import { afterEach, describe, expect, type Mock, mock, test } from "bun:test";
 import { PostHogDistinctId } from "@deskohub/analytics-posthog/identifiers";
 import {
-  DotyposCustomerIdSchema,
   type DotyposReservationId,
   DotyposReservationIdSchema,
   type DotyposReservationStatus,
@@ -68,7 +67,6 @@ import {
   requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
-import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { workspaceReservationIdSchema } from "../persistence-contracts";
 import { AdvisoryAvailabilityInventory } from "./availability-inventory";
 import { agentSelectionKeySchema, type BookingAgent } from "./booking-agent";
