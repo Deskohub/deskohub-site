@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { DotyposCustomer } from "@deskohub/dotypos";
+import {
+  type DotyposCustomer,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
+import { dotyposCustomerFixture } from "./customer-directory.test-utils";
 import {
   describeAdministrationCustomer,
   nameAdministrationCustomer,
@@ -14,7 +18,7 @@ const email = testEmailAddress("customer-identity");
 const phone = "+420000000001";
 
 const customer = (fields: Partial<DotyposCustomer>): DotyposCustomer =>
-  ({ id: "customer-1", deleted: false, ...fields }) as DotyposCustomer;
+  dotyposCustomerFixture(DotyposCustomerIdSchema.make("customer-1"), fields);
 
 const now = new Date("2026-11-17T12:00:00Z");
 const past = "2026-11-17T11:59:59Z";

@@ -75,7 +75,7 @@ describe("AdministrationReservationDetail", () => {
     workspaceUseAction.mockReturnValue({
       execute: mock(),
       isExecuting: false,
-    } as never);
+    });
   });
   afterAll(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));

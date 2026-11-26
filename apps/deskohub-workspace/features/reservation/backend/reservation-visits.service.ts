@@ -7,7 +7,7 @@ import {
   DotyposService,
   dotyposIdReadRequests,
 } from "@deskohub/dotypos";
-import { and, count, inArray, isNotNull, type SQL } from "drizzle-orm";
+import { and, count, inArray, isNotNull, type SQL, sql } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { workspaceReservations } from "@/db/schema";
@@ -361,10 +361,11 @@ type CountedReservationLink = {
  * Booked through Workspace and linked to a Dotypos reservation (D31.6): the
  * reservations `bookings` counts and `ofCustomers` reads.
  */
-export const countedReservationCondition = and(
-  bookedReservationCondition,
-  isNotNull(workspaceReservations.dotyposReservationId)
-)!;
+export const countedReservationCondition =
+  and(
+    bookedReservationCondition,
+    isNotNull(workspaceReservations.dotyposReservationId)
+  ) ?? sql`false`;
 
 const visitStatuses = {
   NEW: "active",

@@ -66,6 +66,16 @@ import {
   sealOfficePeople,
 } from "./reservation-invitees.service";
 
+/** What the simulated providers do with the next delivery attempt. */
+type SimulatedDelivery = {
+  outage: boolean;
+  loseProcessBeforeDispatch: boolean;
+  loseProcessAfterAcceptance: boolean;
+  bookerName: string;
+  simulateExpiredProviderKey: boolean;
+  providerStatus: WorkspaceReservationDetails["providerStatus"];
+};
+
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
 const ringOld = syntheticSealedStateKeyRing(["invitee-old", 7]);
@@ -480,14 +490,13 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
         )
       ).then((found) => Option.getOrThrow(found).invitationSendCount);
 
-    const delivery = {
+    const delivery: SimulatedDelivery = {
       outage: false,
       loseProcessBeforeDispatch: false,
       loseProcessAfterAcceptance: false,
       bookerName: "Alex",
       simulateExpiredProviderKey: false,
-      providerStatus:
-        "CONFIRMED" as WorkspaceReservationDetails["providerStatus"],
+      providerStatus: "CONFIRMED",
     };
     const providerDelivery = new Map<string, string>();
     const attempts: Array<{ noticeId: string; kind: string; access?: string }> =

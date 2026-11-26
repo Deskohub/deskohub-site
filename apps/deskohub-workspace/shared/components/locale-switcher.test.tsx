@@ -8,6 +8,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import {
   act,
   cleanup,
@@ -220,7 +221,8 @@ describe("LanguageMenu", () => {
       displayOrder.map((locale) => languageNames[locale])
     );
     for (const [index, item] of items.entries()) {
-      const locale = displayOrder[index] as Locale;
+      const locale = displayOrder[index];
+      assert(locale !== undefined);
       expect(item.querySelector("[lang]")?.getAttribute("lang")).toBe(locale);
       if (locale === "cs-CZ") {
         expect(item.getAttribute("aria-current")).toBe("true");

@@ -162,7 +162,10 @@ const findClippedDateText = async (
   const clipped: string[] = [];
   for (const field of fields) {
     const result = await field.evaluate((element, shownText) => {
-      const input = element as HTMLInputElement;
+      if (!(element instanceof HTMLInputElement)) {
+        throw new Error("Expected HTMLInputElement.");
+      }
+      const input = element;
       const style = getComputedStyle(input);
       const context = document.createElement("canvas").getContext("2d");
       if (!context) throw new Error("No 2D canvas context.");

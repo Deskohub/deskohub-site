@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Data, Effect } from "effect";
+import { Data, Effect, Predicate } from "effect";
 import { type CacheLifeProfiles, cacheLife, cacheTag } from "next/cache";
 import {
   runWorkspaceEffect,
@@ -97,10 +97,29 @@ interface SharedRead<A> {
   readonly share: SnapshotShare;
 }
 
-// `next/cache` declares one overload per profile, which no union of
-// profiles matches; its implementation takes any of them.
+// `next/cache` declares one `cacheLife` overload per profile, so each profile
+// gets its own call; a profile added to `next.config.mjs` fails to compile
+// here until it is listed.
+const profileLifetimes = {
+  default: () => cacheLife("default"),
+  seconds: () => cacheLife("seconds"),
+  minutes: () => cacheLife("minutes"),
+  hours: () => cacheLife("hours"),
+  days: () => cacheLife("days"),
+  weeks: () => cacheLife("weeks"),
+  max: () => cacheLife("max"),
+  advertisedPricingSources: () => cacheLife("advertisedPricingSources"),
+  publicContent: () => cacheLife("publicContent"),
+  availabilityTables: () => cacheLife("availabilityTables"),
+  availabilityCalendar: () => cacheLife("availabilityCalendar"),
+  availabilityReservations: () => cacheLife("availabilityReservations"),
+  reservationRecords: () => cacheLife("reservationRecords"),
+} satisfies { readonly [Profile in keyof CacheLifeProfiles]: () => void };
+
 const setLifetime = (lifetime: SharedSnapshotLifetime) =>
-  (cacheLife as (lifetime: SharedSnapshotLifetime) => void)(lifetime);
+  Predicate.isString(lifetime)
+    ? profileLifetimes[lifetime]()
+    : cacheLife(lifetime);
 
 /** A `"use cache"` snapshot loader rejected instead of returning its value. */
 export class SharedSnapshotLoadFailure extends Data.TaggedError(

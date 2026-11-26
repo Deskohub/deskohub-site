@@ -2,6 +2,7 @@ import { afterAll, afterEach, expect, mock, test } from "bun:test";
 import { cleanup, render, within } from "@testing-library/react";
 import { nativeApp } from "@/features/account/backend/auth/native-app";
 import type { AndroidRelease } from "@/features/mobile-releases/backend/latest-android-release.server";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -61,7 +62,9 @@ const expectCertificateAndSteps = (page: RenderedPage) => {
   );
   const steps = page.container.querySelector("ol");
   expect(steps).not.toBeNull();
-  expect(within(steps as HTMLElement).getAllByRole("listitem")).toHaveLength(3);
+  expect(
+    within(elementOf(steps, HTMLElement)).getAllByRole("listitem")
+  ).toHaveLength(3);
 };
 
 test("offers the latest release's APK and the Obtainium import", () => {
@@ -75,7 +78,7 @@ test("offers the latest release's APK and the Obtainium import", () => {
 
   const [obtainiumLink] = linksTo(page, obtainiumImportUrl);
   expect(obtainiumLink).toBeDefined();
-  const badge = within(obtainiumLink as HTMLElement).getByRole("img");
+  const badge = within(elementOf(obtainiumLink, HTMLElement)).getByRole("img");
   expect(badge.getAttribute("alt")).not.toBe("");
 
   expect(page.getByText(release.versionName)).toBeDefined();

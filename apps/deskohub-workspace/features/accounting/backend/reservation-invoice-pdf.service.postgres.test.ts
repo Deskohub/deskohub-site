@@ -8,7 +8,7 @@ import {
 } from "@deskohub/dotypos";
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { paymentAttempts } from "@/db/schema";
 import {
@@ -27,10 +27,14 @@ import {
 } from "@/features/checkout/checkout-quote.test-utils";
 import { ReservationAuthorizationService } from "@/features/reservation/backend/reservation-authorization.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { extractPdfText } from "@/shared/testing/pdf-text.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type { AccountingDocumentSnapshots } from "./accounting-document-snapshots";
 import { recordAccountingDocumentSnapshot } from "./accounting-document-snapshots.test-utils";
 import {
@@ -53,18 +57,20 @@ const coworkOrder = {
   entryTier: "open-space",
   coffee: true,
 } satisfies CoworkReservationQuoteOrder;
-const prepared = {
+const prepared: PreparedCustomerQuote = {
   kind: "cowork",
-  reservation: {
-    kind: "cowork",
-    ...coworkOrder,
-    date: "2099-01-01",
-    name: "Synthetic Order Customer",
-    email: testEmailAddress("reservation-invoice-pdf"),
-    phone: "+420 700 000 000",
-  },
+  reservation: Schema.decodeUnknownSync(normalizedCoworkReservationOrderSchema)(
+    {
+      kind: "cowork",
+      ...coworkOrder,
+      date: "2099-01-01",
+      name: "Synthetic Order Customer",
+      email: testEmailAddress("reservation-invoice-pdf"),
+      phone: "+420 700 000 000",
+    }
+  ),
   quote: buildCoworkReservationQuote(coworkOrder),
-} as PreparedCustomerQuote;
+};
 const testKey: AccountingSnapshotKey = {
   id: accountingSnapshotKeyIdSchema.make("K202611"),
   secret: "synthetic reservation invoice secret!",
@@ -97,7 +103,7 @@ describe.skipIf(!postgres)(
       >
     ) => {
       const storage = Layer.merge(
-        postgres!.layer,
+        requireTestDatabase(postgres).layer,
         Layer.succeed(
           AccountingSnapshotKeyService,
           AccountingSnapshotKeyService.of({

@@ -24,16 +24,16 @@ interface IFakePlanner {
 
 let planRuns = 0;
 
-const FakePlanner = Context.Service<FakePlanner, IFakePlanner>()(
+class FakePlanner extends Context.Service<FakePlanner, IFakePlanner>()(
   "@test/FakeAutomationPlanner"
-);
+) {}
 
 const fakePlannerLayer = Layer.succeed(FakePlanner, {
   plan: Effect.suspend(() => {
     planRuns += 1;
     return Effect.succeed(planSummary);
   }),
-}) as Layer.Layer<FakePlanner>;
+});
 
 Object.assign(FakePlanner, { Live: fakePlannerLayer });
 
@@ -43,9 +43,7 @@ mock.module(
 );
 
 const callCron = async (headers: HeadersInit) => {
-  const { GET } = (await import("./route")) as {
-    GET: (request: Request) => Promise<Response>;
-  };
+  const { GET } = await import("./route");
   return GET(new Request(cronUrl, { headers }));
 };
 

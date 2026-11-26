@@ -43,7 +43,10 @@ const deployment = (answers: ReadonlyArray<() => Response>) => {
             assetOrigin: Option.none(),
           },
         }),
-        Layer.succeed(FetchHttpClient.Fetch, fetch as typeof globalThis.fetch)
+        Layer.succeed(
+          FetchHttpClient.Fetch,
+          Object.assign(fetch, { preconnect: globalThis.fetch.preconnect })
+        )
       )
     )
   );

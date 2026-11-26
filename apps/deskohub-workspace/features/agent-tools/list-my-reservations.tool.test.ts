@@ -4,20 +4,21 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Option } from "effect";
 import {
-  type CustomerAgentClientId,
   type CustomerAgentGrant,
   type CustomerAgentScope,
   type CustomerReservationHistory,
   CustomerReservationHistoryService,
+  customerAgentClientIdSchema,
 } from "@/features/account";
 import { testCustomerSession } from "@/features/account/backend/account-operations.test-utils";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { inMemoryCustomerAgentCallServices } from "./agent-tools.test-utils";
 import { listMyReservationsTool } from "./list-my-reservations.tool";
 
-const accountId = "account-1" as CustomerAccountId;
+const accountId = customerAccountIdSchema.make("account-1");
 let linked: { readonly dotyposCustomerId: string } | null;
 
 let history: CustomerReservationHistory;
@@ -25,7 +26,9 @@ const load = mock(() => Effect.sync(() => history));
 
 const grant: CustomerAgentGrant = {
   accountId,
-  clientId: "https://assistant.example/client.json" as CustomerAgentClientId,
+  clientId: customerAgentClientIdSchema.make(
+    "https://assistant.example/client.json"
+  ),
   scopes: new Set<CustomerAgentScope>(["reservations:read"]),
 };
 
@@ -83,7 +86,8 @@ describe("list_my_reservations", () => {
         current: [
           {
             id: "order-1",
-            workspaceReservationId: "order-1" as never,
+            workspaceReservationId:
+              workspaceReservationIdSchema.make("order-1"),
             product: { kind: "cowork", tier: "open-space" },
             startsAt: "2099-07-01T06:00:00Z",
             endsAt: "2099-07-01T22:00:00Z",
@@ -168,7 +172,8 @@ describe("list_my_reservations", () => {
         current: [
           {
             id: "order-1",
-            workspaceReservationId: "order-1" as never,
+            workspaceReservationId:
+              workspaceReservationIdSchema.make("order-1"),
             product: { kind: "cowork", tier: "reserved-desk" },
             startsAt: "2099-07-01T10:00:00Z",
             endsAt: "2099-07-02T10:00:00Z",

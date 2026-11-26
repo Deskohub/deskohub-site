@@ -12,10 +12,7 @@ import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
-import {
-  reservationOrderId,
-  type WorkspaceReservationId,
-} from "@/features/reservation/persistence-contracts";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { currentInstant } from "@/shared/utils/temporal";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
 import {
@@ -158,9 +155,7 @@ const implementation = Effect.gen(function* () {
       }
       // A shared window replaces the legacy reopening path even after expiry
       // or after the public QR release gate closes.
-      if (
-        yield* qrPayments.findPaymentWindow(reservationOrderId(reservation.id))
-      ) {
+      if (yield* qrPayments.findPaymentWindow(reservation.id)) {
         return closed("window_elapsed");
       }
 

@@ -232,13 +232,15 @@ export const loadStayTiers = (
 export const stayTierCondition = (stay: ReservationStay): SQL => {
   const tiers =
     stay === "overnight" ? [overnightCoworkStayTier] : workspaceCoworkTiers;
-  return and(
-    sql`${StoredReservationDetails.kind} = 'cowork'`,
-    sql`${StoredReservationDetails.property("cowork", "tier")} in (${sql.join(
-      tiers.map((tier) => sql`${tier}`),
-      sql`, `
-    )})`
-  )!;
+  return (
+    and(
+      sql`${StoredReservationDetails.kind} = 'cowork'`,
+      sql`${StoredReservationDetails.property("cowork", "tier")} in (${sql.join(
+        tiers.map((tier) => sql`${tier}`),
+        sql`, `
+      )})`
+    ) ?? sql`false`
+  );
 };
 
 /**

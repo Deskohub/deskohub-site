@@ -2,12 +2,13 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import { DotyposReservationIdSchema, DotyposService } from "@deskohub/dotypos";
 import { Effect, Fiber, Layer, Option } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceCheckoutAccessCodeService } from "@/features/checkout/backend/reservation/access-code.service";
 import { ReservationAuthorizationService } from "@/features/reservation/backend/reservation-authorization.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 
 mock.module("server-only", () => ({}));
@@ -46,12 +47,16 @@ test("renders the unavailable state within 8 seconds when Dotypos hangs", async 
         }),
         Layer.mock(WorkspaceReservationRepository, {
           findById: () =>
-            Effect.succeed({
-              id: orderId,
-              paymentState: "paid",
-              reservationState: "confirmed",
-              dotyposReservationId: "provider-reservation-id",
-            } as never),
+            Effect.succeed(
+              workspaceReservationFixture({
+                id: orderId,
+                paymentState: "paid",
+                reservationState: "confirmed",
+                dotyposReservationId: DotyposReservationIdSchema.make(
+                  "provider-reservation-id"
+                ),
+              })
+            ),
         }),
         Layer.mock(DotyposService, { getReservation }),
         Layer.mock(WorkspaceCheckoutAccessCodeService, {

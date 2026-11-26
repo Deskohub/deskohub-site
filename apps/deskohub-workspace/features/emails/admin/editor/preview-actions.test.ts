@@ -102,8 +102,10 @@ describe("previewEmailDraft", () => {
   });
 
   test("rejects a draft with an unknown key as invalid input", async () => {
+    // A spread keeps the extra key that a fresh literal's check would refuse.
+    const draftWithUnknownKey = { ...draft, unexpected: true };
     const result = await previewEmailDraft({
-      draft: { ...draft, unexpected: true } as typeof draft,
+      draft: draftWithUnknownKey,
       locale: "en-US",
     });
 
@@ -112,8 +114,11 @@ describe("previewEmailDraft", () => {
   });
 
   test("reports every problem in a draft", async () => {
+    const invalidDraft = { ...draft, unexpected: true };
+    // A client can send a template key that the draft type refuses.
+    Reflect.set(invalidDraft, "templateKey", "unknown");
     const result = await previewEmailDraft({
-      draft: { ...draft, templateKey: "unknown", unexpected: true } as never,
+      draft: invalidDraft,
       locale: "en-US",
     });
 
@@ -122,24 +127,24 @@ describe("previewEmailDraft", () => {
   });
 
   test("ignores an unknown key beside the draft", async () => {
-    const result = await previewEmailDraft({
-      draft,
-      locale: "en-US",
-      unexpected: true,
-    } as Parameters<typeof previewEmailDraft>[0]);
+    const input = { draft, locale: "en-US", unexpected: true } as const;
+    const result = await previewEmailDraft(input);
 
     expect(result?.validationErrors).toBeUndefined();
     expect(result?.data?.subject).toBe("Hello [displayName]");
   });
 
   test("ignores an unknown key in a prepared value", async () => {
+    const firstName = {
+      _tag: "Resolved",
+      value: "Jana",
+      unexpected: true,
+    } as const;
     const result = await previewEmailDraft({
       draft,
       locale: "en-US",
-      values: {
-        first_name: { _tag: "Resolved", value: "Jana", unexpected: true },
-      },
-    } as Parameters<typeof previewEmailDraft>[0]);
+      values: { first_name: firstName },
+    });
 
     expect(result?.validationErrors).toBeUndefined();
     expect(result?.data?.subject).toBe("Hello Jana");

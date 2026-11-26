@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { brandThemeVariables } from "@deskohub/brand-tokens";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { m } from "@/features/i18n";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -86,13 +87,16 @@ test("localizes Czech copy and formats the average with one decimal", () => {
       name: m.faqPageTitle({}, { locale: "cs-CZ" }),
     })
   ).toBeTruthy();
-  const busyness = view
-    .getByRole("heading", {
-      level: 3,
-      name: m.faqQuestionBusyness({}, { locale: "cs-CZ" }),
-    })
-    .closest("details") as HTMLDetailsElement;
-  fireEvent.click(busyness.querySelector("summary")!);
+  const busyness = elementOf(
+    view
+      .getByRole("heading", {
+        level: 3,
+        name: m.faqQuestionBusyness({}, { locale: "cs-CZ" }),
+      })
+      .closest("details"),
+    HTMLDetailsElement
+  );
+  fireEvent.click(elementOf(busyness.querySelector("summary"), HTMLElement));
   expect(busyness.open).toBe(true);
   expect(
     view.getByText(
@@ -136,13 +140,16 @@ function colorContrastRatio(foreground: string, background: string) {
 }
 
 function relativeLuminance(hex: string) {
-  const [red, green, blue] = hex
-    .slice(1)
-    .match(/.{2}/g)!
+  const channels = hex.slice(1).match(/.{2}/g);
+  if (!channels) throw new Error(`Expected a hex color, received ${hex}`);
+  const [red, green, blue] = channels
     .map((channel) => Number.parseInt(channel, 16) / 255)
     .map((channel) =>
       channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
     );
 
-  return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
+  if (red === undefined || green === undefined || blue === undefined) {
+    throw new Error(`Expected three color channels in ${hex}`);
+  }
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }

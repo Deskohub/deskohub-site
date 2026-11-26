@@ -9,7 +9,7 @@ import {
   deleteCampaigns,
   seedCampaignSend,
 } from "@/features/email-campaigns/backend/email-campaigns.test-utils";
-import type { CampaignSendId } from "@/features/email-campaigns/campaign-identifiers";
+import { campaignSendIdSchema } from "@/features/email-campaigns/campaign-identifiers";
 import { signCampaignUnsubscribeToken } from "@/features/email-campaigns/campaign-unsubscribe-token";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { GET, POST } from "./route";
@@ -121,12 +121,12 @@ describe.skipIf(!testDatabase)(
       for (const candidate of [
         `${token.split(".")[0]}.${"A".repeat(43)}`,
         signCampaignUnsubscribeToken(Buffer.alloc(32, 7), {
-          sendId: "unknown" as CampaignSendId,
+          sendId: campaignSendIdSchema.make("unknown"),
           dotyposCustomerId,
         }),
         await Effect.runPromise(
           signCampaignUnsubscribeToken(signingKeys, {
-            sendId: "unknown" as CampaignSendId,
+            sendId: campaignSendIdSchema.make("unknown"),
             dotyposCustomerId,
           })
         ),

@@ -6,7 +6,7 @@ import {
 import { EmailDeliveryIdSchema } from "@deskohub/email";
 import { testEmailAddress } from "@deskohub/test-email";
 import { inArray, sql } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Predicate } from "effect";
 import {
   WorkspaceDatabase,
   type WorkspaceDatabaseClient,
@@ -321,7 +321,11 @@ const rowFixtures = (db: WorkspaceDatabaseClient) => {
     /** Inserts a reservation at the stage and returns the stored row. */
     reservation: (input: ReservationFixtureInput) =>
       insertReservations([input]).pipe(
-        Effect.map(([reservation]) => reservation!)
+        Effect.flatMap(([reservation]) =>
+          reservation === undefined
+            ? Effect.die(new Error("The reservation insert returned no row"))
+            : Effect.succeed(reservation)
+        )
       ),
 
     /**
@@ -413,6 +417,15 @@ export function workspaceFixtures(
     ...rowFixtures(db),
     // Only the first overload exposes `account`, so `db` is a root client
     // wherever a type-checked caller reaches it.
-    account: accountFixture(db as RootDatabaseClient),
+    account: (...args) => {
+      if (!isRootDatabaseClient(db)) {
+        throw new Error("Account fixtures need a root database client");
+      }
+      return accountFixture(db)(...args);
+    },
   };
 }
+
+const isRootDatabaseClient = (
+  db: WorkspaceDatabaseClient
+): db is RootDatabaseClient => Predicate.hasProperty(db, "$client");

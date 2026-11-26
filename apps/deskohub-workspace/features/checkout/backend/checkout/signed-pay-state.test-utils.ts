@@ -17,8 +17,9 @@ import {
   sealPayState,
 } from "./pay-state";
 
-export const syntheticPayStateOrderId =
-  workspaceReservationIdSchema.make("reservation-id");
+export const syntheticPayStateOrderId = workspaceReservationIdSchema.make(
+  "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5"
+);
 
 /** The attempt a synthetic order-bound state retries. */
 const syntheticRetriedAttemptId = "retried-attempt-id";

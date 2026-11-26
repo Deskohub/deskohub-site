@@ -378,13 +378,16 @@ export class CampaignService extends Context.Service<
             status: "draft",
           })
           .returning();
+        if (!campaign) {
+          return yield* Effect.die("Campaign copy insert returned no row.");
+        }
         if (source.delivery === "automated") {
           yield* db.insert(emailCampaignAutomations).values({
-            campaignId: campaign!.id,
+            campaignId: campaign.id,
             flow: Option.getOrNull(flow),
           });
         }
-        return campaign!;
+        return campaign;
       });
 
       /** Copies the source as it stands once its working copy is locked. */
@@ -498,12 +501,15 @@ export class CampaignService extends Context.Service<
           .insert(emailCampaigns)
           .values({ ...input, ...selection, status: "draft" })
           .returning();
+        if (!campaign) {
+          return yield* Effect.die("Campaign insert returned no row.");
+        }
         if (input.delivery === "automated") {
           yield* db
             .insert(emailCampaignAutomations)
-            .values({ campaignId: campaign!.id, flow: null });
+            .values({ campaignId: campaign.id, flow: null });
         }
-        return campaign!;
+        return campaign;
       });
 
       /** Writes an edit if the campaign is still editable once locked. */

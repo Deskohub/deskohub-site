@@ -243,6 +243,13 @@ export const sanitizeSpanText = (text: string) =>
 
 const hostPattern = /^[a-z0-9.-]{1,253}$/i;
 
+/** A number or boolean array attribute, which carries no text to sanitize. */
+const isStringFreeArray = (
+  value: Exclude<AttributeValue, string | number | boolean>
+): value is
+  | Array<null | undefined | number>
+  | Array<null | undefined | boolean> => !value.some(Predicate.isString);
+
 const sanitizeAttributeValue = (
   key: string,
   value: AttributeValue
@@ -258,12 +265,10 @@ const sanitizeAttributeValue = (
       : undefined;
   }
   if (Predicate.isString(value)) return sanitizeSpanText(value);
-  if (Array.isArray(value)) {
-    return value.map((item) =>
-      Predicate.isString(item) ? sanitizeSpanText(item) : item
-    ) as AttributeValue;
-  }
-  return value;
+  if (!Array.isArray(value) || isStringFreeArray(value)) return value;
+  return value.map((item) =>
+    Predicate.isString(item) ? sanitizeSpanText(item) : item
+  );
 };
 
 /** Applies the allowlist to `attributes` in place. */
@@ -322,7 +327,9 @@ const allowedSpanName = (name: string, attributes: Attributes) => {
   return (
     candidates.find(
       (candidate): candidate is string =>
-        Boolean(candidate) && isAllowedSpanName(candidate as string)
+        Predicate.isString(candidate) &&
+        candidate !== "" &&
+        isAllowedSpanName(candidate)
     ) ?? "span"
   );
 };
@@ -333,12 +340,11 @@ const allowedSpanName = (name: string, attributes: Attributes) => {
  */
 const sanitizeEventsInPlace = (span: Span) => {
   for (const event of span.events) {
-    const mutableEvent = event as { name: string; attributes?: Attributes };
-    if (!isAllowedSpanName(mutableEvent.name)) mutableEvent.name = "event";
-    if (mutableEvent.attributes) {
-      delete mutableEvent.attributes["exception.message"];
-      delete mutableEvent.attributes["exception.stacktrace"];
-      sanitizeAttributesInPlace(mutableEvent.attributes);
+    if (!isAllowedSpanName(event.name)) event.name = "event";
+    if (event.attributes) {
+      delete event.attributes["exception.message"];
+      delete event.attributes["exception.stacktrace"];
+      sanitizeAttributesInPlace(event.attributes);
     }
   }
 };
@@ -351,7 +357,7 @@ const sanitizeLinksInPlace = (span: Span) => {
 
 /** The status keeps its code; its message is exception text. */
 const sanitizeStatusInPlace = (span: Span) => {
-  const status = span.status as SpanStatus;
+  const status: SpanStatus = span.status;
   if (status.message !== undefined) delete status.message;
 };
 

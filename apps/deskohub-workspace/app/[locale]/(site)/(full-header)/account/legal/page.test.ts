@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { createElement, type ReactElement, Suspense } from "react";
+import {
+  renderComponentElement,
+  requireElement,
+} from "@/shared/testing/route-element.test-utils";
 
 type TestMarketingPreferences = {
   readonly context?: string;
@@ -22,7 +26,7 @@ const AccountContentLoading = mock(() => null);
 const PublicAccountLegal = (props: PublicAccountLegalProps) =>
   createElement("public-account-legal", props);
 const marketingPreferences = {
-  value: { status: "unavailable" } as TestMarketingPreferences,
+  value: { status: "unavailable" } satisfies TestMarketingPreferences,
 };
 const callOrder: string[] = [];
 
@@ -85,20 +89,17 @@ describe("public account legal route boundary", () => {
 
   test("checks request connection before preference data", async () => {
     const { default: PublicAccountLegalPage } = await import("./page");
-    const route = PublicAccountLegalPage() as ReactElement<{
+    const route = requireElement<{
       readonly children: ReactElement<{ readonly locale: "en-US" }>;
       readonly fallback: ReactElement;
-    }>;
+    }>(PublicAccountLegalPage());
 
     expect(route.type).toBe(Suspense);
     expect(route.props.fallback).toBeTruthy();
     expect(callOrder).toEqual([]);
 
     const content = route.props.children;
-    const Content = content.type as (props: {
-      readonly locale: "en-US";
-    }) => Promise<ReactElement<PublicAccountLegalProps>>;
-    await Content(content.props);
+    await renderComponentElement(content);
 
     expect(callOrder).toEqual([
       "connection",
@@ -117,15 +118,14 @@ describe("public account legal route boundary", () => {
     async (available) => {
       accountDataExportAvailability.value = available;
       const { default: PublicAccountLegalPage } = await import("./page");
-      const route = PublicAccountLegalPage() as ReactElement<{
+      const route = requireElement<{
         readonly children: ReactElement<{ readonly locale: "en-US" }>;
-      }>;
+      }>(PublicAccountLegalPage());
       const content = route.props.children;
-      const Content = content.type as (props: {
-        readonly locale: "en-US";
-      }) => Promise<ReactElement<PublicAccountLegalProps>>;
 
-      const rendered = await Content(content.props);
+      const rendered = requireElement<PublicAccountLegalProps>(
+        await renderComponentElement(content)
+      );
 
       expect(rendered.props.accountDataExportAvailable).toBe(available);
     }

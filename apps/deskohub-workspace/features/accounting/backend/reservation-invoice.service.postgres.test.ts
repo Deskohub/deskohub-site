@@ -12,7 +12,7 @@ import {
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
 import { asc, eq } from "drizzle-orm";
-import { Deferred, Effect, Layer, Ref } from "effect";
+import { Deferred, Effect, Layer, Ref, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { invoiceNumberCounters, invoices, paymentAttempts } from "@/db/schema";
 import {
@@ -31,10 +31,14 @@ import {
 } from "@/features/checkout/checkout-quote.test-utils";
 import { createReservationAccessToken } from "@/features/reservation/backend/reservation-access-token";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { temporalInstantToIsoString } from "@/shared/utils/temporal";
 import { recordAccountingDocumentSnapshot } from "./accounting-document-snapshots.test-utils";
 import { AccountingSnapshotKeyService } from "./accounting-snapshot-key.service";
@@ -108,9 +112,11 @@ const createFulfilledReservation = async (
   const dotyposReservationId = DotyposReservationIdSchema.make(
     `synthetic-reservation-${randomUUID()}`
   );
-  const prepared = {
+  const prepared: PreparedCustomerQuote = {
     kind: "cowork",
-    reservation: {
+    reservation: Schema.decodeUnknownSync(
+      normalizedCoworkReservationOrderSchema
+    )({
       kind: "cowork",
       ...coworkOrder,
       date: "2099-01-01",
@@ -118,9 +124,9 @@ const createFulfilledReservation = async (
       email: testEmailAddress("reservation-invoice-service"),
       phone: "+420 700 000 000",
       billing,
-    },
+    }),
     quote: buildCoworkReservationQuote(coworkOrder),
-  } as PreparedCustomerQuote;
+  };
   const at = Temporal.Instant.from(
     temporalInstantToIsoString(Temporal.Now.instant())
   );
@@ -167,13 +173,16 @@ const createFulfilledReservation = async (
             snapshot,
           }).pipe(
             Effect.provide(
-              testAccountingStorage(testDatabase!.layer, keysLayer)
+              testAccountingStorage(
+                requireTestDatabase(testDatabase).layer,
+                keysLayer
+              )
             )
           );
           return reservation.id;
         })
       )
-    ).pipe(Effect.provide(testDatabase!.layer))
+    ).pipe(Effect.provide(requireTestDatabase(testDatabase).layer))
   );
 
   return { reservationId, paymentAttemptId, dotyposCustomerId };
@@ -215,9 +224,12 @@ const runService = <A, E>(
         ReservationInvoiceService.Default.pipe(
           Layer.provide(
             Layer.mergeAll(
-              testAccountingStorage(testDatabase!.layer, keysLayer),
+              testAccountingStorage(
+                requireTestDatabase(testDatabase).layer,
+                keysLayer
+              ),
               WorkspaceReservationRepository.Default.pipe(
-                Layer.provide(testDatabase!.layer)
+                Layer.provide(requireTestDatabase(testDatabase).layer)
               ),
               Layer.mock(DotyposService, {
                 updateCustomerBillingDetails:
@@ -242,16 +254,16 @@ const makeDelivery = () => ({
 
 const readInvoices = (reservationId: WorkspaceReservationId) =>
   Effect.runPromise(
-    testDatabase!.db
-      .select({ invoiceNumber: invoices.invoiceNumber })
+    requireTestDatabase(testDatabase)
+      .db.select({ invoiceNumber: invoices.invoiceNumber })
       .from(invoices)
       .where(eq(invoices.workspaceReservationId, reservationId))
   );
 
 const readCounters = () =>
   Effect.runPromise(
-    testDatabase!.db
-      .select()
+    requireTestDatabase(testDatabase)
+      .db.select()
       .from(invoiceNumberCounters)
       .orderBy(asc(invoiceNumberCounters.numberingYear))
   ).then((rows) => rows.reduce((total, row) => total + row.lastSequence, 0));
@@ -263,7 +275,12 @@ const readIssuedBuyer = (paymentAttemptId: string) =>
         repository.findLiveByPaymentAttemptId(paymentAttemptId)
       ),
       Effect.map((invoice) => invoice?.document.buyer),
-      Effect.provide(testAccountingStorage(testDatabase!.layer, keysLayer))
+      Effect.provide(
+        testAccountingStorage(
+          requireTestDatabase(testDatabase).layer,
+          keysLayer
+        )
+      )
     )
   );
 

@@ -8,6 +8,7 @@ import {
   disclosedCredentials,
   WorkspaceAdminApi,
 } from "@deskohub/workspace-admin-api";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import {
   Context,
   Effect,
@@ -25,6 +26,10 @@ import {
   type HttpApiGroup,
 } from "effect/http-api";
 import type { CustomerAccountId } from "@/features/account/customer-account";
+import {
+  administrationContractCodec,
+  type ServiceFreeContract,
+} from "@/features/admin-cli/administration-contract-codec";
 import { AdministratorAgentAuthorization } from "@/features/administrators/backend/administrator-agent-authorization.service";
 import {
   type AgentTool,
@@ -162,7 +167,7 @@ const decodePart = (
   value: Schema.Json,
   fieldOf: (path: string | undefined) => string | undefined
 ) =>
-  Schema.decodeUnknownEffect(schema as Schema.Decoder<unknown>)(value, {
+  Schema.decodeUnknownEffect(administrationContractCodec(schema))(value, {
     onExcessProperty: "error",
     errors: "first",
   }).pipe(
@@ -239,7 +244,7 @@ const successOf = (
 };
 
 const isBinary = (success: Schema.Top) =>
-  Schema.is(Schema.toType(success) as Schema.Schema<unknown>)(new Uint8Array());
+  Schema.is(Schema.toType(success))(new Uint8Array());
 
 /**
  * Refuses an operation whose success or errors can carry a credential the
@@ -273,7 +278,8 @@ const guardCredentials = ({
 
 /** Whether the schema's JSON is always an object. */
 /** A schema whose JSON is an object, as tool results are. */
-type JsonObjectSchema = Schema.Codec<Schema.JsonObject, Schema.JsonObject>;
+type ToolResult = StandardSchemaV1.InferOutput<AgentTool<never>["output"]>;
+type JsonObjectSchema = Schema.Codec<ToolResult, ToolResult>;
 
 const encodesToObject = (ast: SchemaAST.AST): boolean => {
   const encoded = SchemaAST.toEncoded(ast);
@@ -308,11 +314,14 @@ const successResultSchema = ({
         "The document, attached to the result as an embedded resource, and linked as a resource link when it has a downloadUrl.",
     });
   }
-  const json = Schema.toCodecJson(success as Schema.Codec<unknown>);
-  // `encodesToObject` decided whether the JSON is an object; wrapped, it is.
-  return (
-    wrapsResult ? Schema.Struct({ items: json }) : json
-  ) as JsonObjectSchema;
+  const json = Schema.toCodecJson(administrationContractCodec(success));
+  if (wrapsResult) return Schema.Struct({ items: json });
+  // A trust boundary: `encodesToObject` decided that this success's JSON is
+  // an object, which only its AST shows. It assumes agent tool success codecs
+  // decode objects to objects; no current endpoint decodes one to anything
+  // else. MCP publishes the decoded side, so the schema stays the success's
+  // own JSON codec.
+  return Schema.make<JsonObjectSchema>(json.ast);
 };
 
 const outputSchema = ({
@@ -684,7 +693,7 @@ export const deriveAdministrationOperationTools = <
   Id extends string,
   Groups extends HttpApiGroup.Constraint,
 >(
-  api: HttpApi.HttpApi<Id, Groups>
+  api: HttpApi.HttpApi<Id, Groups> & ServiceFreeContract<Groups>
 ): ReadonlyArray<AdministrationOperationTool> => {
   const tools: Array<AdministrationOperationTool> = [];
   HttpApi.reflect(api, {
@@ -702,7 +711,7 @@ export const deriveAdministrationOperationTools = <
 
 const toJson = <Value>(schema: Schema.Top, value: Value) =>
   Schema.encodeUnknownEffect(
-    Schema.toCodecJson(schema as Schema.Codec<unknown>)
+    Schema.toCodecJson(administrationContractCodec(schema))
   )(value);
 
 const decodeJsonObject = Schema.decodeUnknownEffect(
@@ -717,7 +726,7 @@ const encodeOperationError = <OperationError>(
   Option.firstSomeOf(
     tool.errors.map((schema) =>
       Schema.encodeUnknownOption(
-        Schema.toCodecJson(schema as Schema.Codec<unknown>)
+        Schema.toCodecJson(administrationContractCodec(schema))
       )(error).pipe(Option.flatMap(decodeAdministrationError))
     )
   );

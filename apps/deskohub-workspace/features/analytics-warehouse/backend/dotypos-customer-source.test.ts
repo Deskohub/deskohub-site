@@ -68,9 +68,13 @@ type CustomerOverrides = {
     | undefined;
 };
 
-type ExportedRow = {
-  readonly [Field in (typeof exportedFields)[number]]: unknown;
-};
+/** A page of the export, keeping every field a row carries. */
+const ExportedPageSchema = Schema.Struct({
+  results: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
+  next_cursor: Schema.NullOr(Schema.String),
+});
+
+type ExportedRow = (typeof ExportedPageSchema.Type)["results"][number];
 
 const customer = (overrides: CustomerOverrides = {}): DotyposCustomer =>
   Schema.decodeUnknownSync(DotyposCustomerSchema)(
@@ -187,10 +191,7 @@ const singlePage = (
 ): Effect.Effect<CustomerChanges> => Effect.succeed({ customers, hasMore });
 
 const readPage = async (response: Response) =>
-  (await response.json()) as {
-    readonly results: readonly ExportedRow[];
-    readonly next_cursor: string | null;
-  };
+  Schema.decodeUnknownSync(ExportedPageSchema)(await response.json());
 
 const timestampOf = Schema.decodeSync(DotyposTimestampFromString);
 
@@ -743,9 +744,7 @@ describe("Dotypos customer source", () => {
     });
 
     expect(first.response.status).toBe(200);
-    expect(idsOf([...firstPage.results] as DotyposCustomer[])).toEqual(
-      idsFromOne(99)
-    );
+    expect(firstPage.results.map(({ id }) => `${id}`)).toEqual(idsFromOne(99));
     expect(firstPage.next_cursor).toBe(
       `at.${micros(firstVersion)}.${firstCreated + BigInt(100)}`
     );

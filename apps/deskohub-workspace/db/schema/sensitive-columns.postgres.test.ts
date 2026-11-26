@@ -12,9 +12,14 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
-import { EmailValueName } from "@deskohub/workspace-admin-api";
+import {
+  AdministrationLegacyUsername,
+  CliSessionId,
+  EmailValueName,
+} from "@deskohub/workspace-admin-api";
 import {
   and,
   eq,
@@ -27,6 +32,10 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { Cause, Effect, Exit, Predicate, Schema } from "effect";
 import type { PoolClient } from "pg";
 import type { WorkspaceDatabaseClient } from "@/db/database.service";
+import { accountingSnapshotKeyIdSchema } from "@/features/accounting/accounting-document-snapshot";
+import { invoiceNumberSchema } from "@/features/accounting/invoice";
+import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
+import { promotionCodeIdSchema } from "@/features/discounts/persistence-contracts";
 import { seedCampaignSend } from "@/features/email-campaigns/backend/email-campaigns.test-utils";
 import { orderIdSchema } from "@/features/order";
 import { getEntryPackValidity } from "@/features/passes/pass-offer";
@@ -93,6 +102,9 @@ import { schemaColumns } from "./schema-columns.test-utils";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
+/** A `count(*)::int as count` row. */
+const StoredCount = Schema.Struct({ count: Schema.Number });
+
 const sensitiveColumns = schemaColumns.filter(({ sensitive }) => sensitive);
 
 /** Turns a unique seed into a value the column's constraints accept. */
@@ -157,10 +169,10 @@ const now = () => Temporal.Now.instant();
 const inAnHour = () => now().add({ hours: 1 });
 
 const cliSessionRow = () => ({
-  id: crypto.randomUUID(),
+  id: CliSessionId.make(crypto.randomUUID()),
   clientName: "Synthetic CLI",
   cliVersion: "1.0.0",
-  buildTarget: "development",
+  buildTarget: "development" as const,
 });
 
 const oauthClient = (db: WorkspaceDatabaseClient) => {
@@ -189,17 +201,22 @@ const syntheticInvoice = (db: WorkspaceDatabaseClient) =>
   db
     .insert(invoices)
     .values({
-      dotyposCustomerId: "synthetic-customer",
-      invoiceNumber: syntheticId("invoice"),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("synthetic-customer"),
+      invoiceNumber: invoiceNumberSchema.make(syntheticId("invoice")),
       numberingYear: 2026,
       // Far beyond any sequence another suite issues.
       numberingSequence: 1_000_000_000 + Math.floor(Math.random() * 1e9),
-      keyId: "SYNTHETIC_KEY",
+      keyId: accountingSnapshotKeyIdSchema.make("SYNTHETIC_KEY"),
       encryptedDocument: Buffer.from("synthetic"),
       issuedAt: Temporal.Instant.from("2026-06-01T12:00:00Z"),
-    } as never)
+    })
     .returning({ id: invoices.id })
-    .pipe(Effect.map(([invoice]) => invoice!.id));
+    .pipe(
+      Effect.map(([invoice]) => {
+        assert(invoice, "the invoice insert returned no row");
+        return invoice.id;
+      })
+    );
 
 const emailValueRow = (db: WorkspaceDatabaseClient) =>
   Effect.gen(function* () {
@@ -208,10 +225,11 @@ const emailValueRow = (db: WorkspaceDatabaseClient) =>
       .insert(emails)
       .values({ title: "Synthetic email" })
       .returning({ id: emails.id });
+    assert(email, "the email insert returned no row");
     const [version] = yield* db
       .insert(emailVersions)
       .values({
-        emailId: email!.id,
+        emailId: email.id,
         versionNumber: 1,
         requiredValueNames: [valueName],
         document: {
@@ -223,6 +241,7 @@ const emailValueRow = (db: WorkspaceDatabaseClient) =>
         },
       })
       .returning({ id: emailVersions.id });
+    assert(version, "the email version insert returned no row");
     const dotyposCustomerId = DotyposCustomerIdSchema.make(
       syntheticId("customer")
     );
@@ -234,29 +253,42 @@ const emailValueRow = (db: WorkspaceDatabaseClient) =>
     );
     yield* db
       .update(emailCampaignSends)
-      .set({ frozenEmailVersionId: version!.id })
+      .set({ frozenEmailVersionId: version.id })
       .where(eq(emailCampaignSends.id, sendId));
     const [preparation] = yield* db
       .insert(emailPreparations)
       .values({
         sendId,
         dotyposCustomerId,
-        emailVersionId: version!.id,
+        emailVersionId: version.id,
         locale: "cs-CZ",
       })
       .returning({ id: emailPreparations.id });
-    return { preparationId: preparation!.id, valueName };
+    assert(preparation, "the email preparation insert returned no row");
+    return { preparationId: preparation.id, valueName };
   });
+
+/** An email discount issuance in its reserved state, without its sensitive columns. */
+const emailDiscountIssuanceReservation = (db: WorkspaceDatabaseClient) =>
+  emailValueRow(db).pipe(
+    Effect.map((row) => ({
+      ...row,
+      recoveryIdentity: `email:${row.preparationId}:${row.valueName}`,
+    }))
+  );
 
 const rowFixtures = new Map([
   rowFixture(administrationActions, {
     row: (db) =>
       Effect.gen(function* () {
-        const session = { ...cliSessionRow(), approvedBy: "synthetic-admin" };
+        const session = {
+          ...cliSessionRow(),
+          approvedBy: AdministrationLegacyUsername.make("synthetic-admin"),
+        };
         yield* db.insert(cliSessions).values({
           ...session,
           tokenHash: base64UrlDigest(session.id),
-        } as never);
+        });
         return {
           id: crypto.randomUUID(),
           operation: "synthetic.operation",
@@ -330,18 +362,23 @@ const rowFixtures = new Map([
             percentageBasisPoints: 1000,
           })
           .returning({ id: discounts.id });
-        const promotionCodeId = syntheticId("promotion");
+        assert(discount, "the discount insert returned no row");
+        const promotionCodeId = promotionCodeIdSchema.make(
+          syntheticId("promotion")
+        );
         yield* db.insert(promotionCodes).values({
           id: promotionCodeId,
           kind: "discount",
-          code: promotionCode(promotionCodeId),
+          code: canonicalPromotionCodeSchema.make(
+            promotionCode(promotionCodeId)
+          ),
           enabled: true,
-        } as never);
+        });
         return {
           id: syntheticId("discount-code"),
           enabled: true,
           promotionCodeId,
-          discountId: discount!.id,
+          discountId: discount.id,
         };
       }),
   }),
@@ -356,8 +393,9 @@ const rowFixtures = new Map([
             templateKey: "workspace",
           })
           .returning({ id: emailCampaigns.id });
+        assert(campaign, "the campaign insert returned no row");
         return {
-          campaignId: campaign!.id,
+          campaignId: campaign.id,
           contentHash: "synthetic-content",
           issuedAt: now(),
           expiresAt: inAnHour(),
@@ -382,15 +420,7 @@ const rowFixtures = new Map([
     values: { value: syntheticJson },
     row: emailValueRow,
   }),
-  rowFixture(emailDiscountIssuances, {
-    row: (db) =>
-      emailValueRow(db).pipe(
-        Effect.map((row) => ({
-          ...row,
-          recoveryIdentity: `email:${row.preparationId}:${row.valueName}`,
-        }))
-      ),
-  }),
+  rowFixture(emailDiscountIssuances, { row: emailDiscountIssuanceReservation }),
   rowFixture(invoiceCancellations, {
     row: (db) =>
       Effect.gen(function* () {
@@ -719,7 +749,10 @@ const serializeSensitiveValue = (value: string | Temporal.Instant) =>
     : value.toString({ smallestUnit: "microsecond" });
 
 const testIssuanceSensitiveColumn = async (index: number) => {
-  const { column, key } = sensitiveColumns[index]!;
+  assert(testDatabase, "The Workspace test Postgres must be configured");
+  const sensitiveColumn = sensitiveColumns[index];
+  assert(sensitiveColumn, `no sensitive column at ${index}`);
+  const { column, key } = sensitiveColumn;
   if (key !== "parameters" && key !== "code" && key !== "expiresAt") {
     throw new Error(`Add issuance logging coverage for ${key}`);
   }
@@ -744,21 +777,27 @@ const testIssuanceSensitiveColumn = async (index: number) => {
     key === "parameters"
       ? { parameters: value.parameters }
       : { code: value.code, expiresAt: value.expiresAt };
-  const connection = await holdDatabaseConnection(testDatabase!);
+  const connection = await holdDatabaseConnection(testDatabase);
   try {
     await connection.query("begin");
     const storedCount = (value: string | Temporal.Instant) =>
       Effect.promise(() =>
-        connection.query<{ count: number }>(
+        connection.query(
           `select count(*)::int as count from email_discount_issuances where "${column.name}" = $1`,
-          [serializeSensitiveValue(value)]
+          [serializeSensitiveValue(value)],
+          StoredCount
         )
-      ).pipe(Effect.map(({ rows }) => rows[0]!.count));
+      ).pipe(
+        Effect.map(({ rows: [row] }) => {
+          assert(row, "the count query returned no row");
+          return row.count;
+        })
+      );
     const { logs, exit } = await Effect.runPromise(
       withHeldTransaction(connection, (db) =>
         Effect.gen(function* () {
           const reservation = {
-            ...(yield* rowFixtures.get(emailDiscountIssuances)!.row(db)),
+            ...(yield* emailDiscountIssuanceReservation(db)),
             parameters: inserted.parameters,
           };
           return yield* captureDatabaseQueryLogsWithExit(
@@ -770,12 +809,10 @@ const testIssuanceSensitiveColumn = async (index: number) => {
                   ...reservation,
                   code: inserted.code,
                   expiresAt: inserted.expiresAt,
-                } as never),
+                }),
                 "invalid email issuance reservation"
               );
-              yield* db
-                .insert(emailDiscountIssuances)
-                .values(reservation as never);
+              yield* db.insert(emailDiscountIssuances).values(reservation);
               yield* db
                 .update(emailDiscountIssuances)
                 .set({ state: "issuing" })
@@ -807,7 +844,7 @@ const testIssuanceSensitiveColumn = async (index: number) => {
                 connection,
                 db
                   .insert(emailDiscountIssuances)
-                  .values(reservation as never)
+                  .values(reservation)
                   .onConflictDoUpdate({
                     target: primaryKey(emailDiscountIssuances),
                     set: changes(conflictSet),
@@ -869,6 +906,8 @@ const testIssuanceSensitiveColumn = async (index: number) => {
 };
 
 describe.skipIf(!testDatabase)("sensitive columns on Postgres", () => {
+  if (!testDatabase) return;
+
   test("has a row fixture for every table with a sensitive column", () => {
     const uncovered = sensitiveColumns
       .filter(({ table }) => !rowFixtures.has(table))
@@ -880,12 +919,15 @@ describe.skipIf(!testDatabase)("sensitive columns on Postgres", () => {
   test.each(sensitiveColumns.map(({ id }, index) => [id, index] as const))(
     "censors %s in writes and predicates, preserving permitted values",
     async (_, index) => {
-      const { table, key, column } = sensitiveColumns[index]!;
+      const sensitiveColumn = sensitiveColumns[index];
+      assert(sensitiveColumn, `no sensitive column at ${index}`);
+      const { table, key, column } = sensitiveColumn;
       if (table === emailDiscountIssuances) {
         await testIssuanceSensitiveColumn(index);
         return;
       }
-      const fixture = rowFixtures.get(table)!;
+      const fixture = rowFixtures.get(table);
+      assert(fixture, `${sensitiveColumn.id} has no row fixture`);
       const syntheticValue = (columnKey: string, step: string) =>
         (fixture.values.get(columnKey) ?? syntheticText)(
           `${runId}-${index}-${columnKey}-${step}`
@@ -902,13 +944,18 @@ describe.skipIf(!testDatabase)("sensitive columns on Postgres", () => {
       const { schema = "public", name } = getTableConfig(table);
       const storedCountQuery = `select count(*)::int as count from "${schema}"."${name}" where "${column.name}" = $1`;
 
-      const connection = await holdDatabaseConnection(testDatabase!);
+      const connection = await holdDatabaseConnection(testDatabase);
       try {
         await connection.query("begin");
         const storedCount = (value: string) =>
           Effect.promise(() =>
-            connection.query<{ count: number }>(storedCountQuery, [value])
-          ).pipe(Effect.map(({ rows }) => rows[0]!.count));
+            connection.query(storedCountQuery, [value], StoredCount)
+          ).pipe(
+            Effect.map(({ rows: [row] }) => {
+              assert(row, "the count query returned no row");
+              return row.count;
+            })
+          );
 
         const { logs, exit } = await Effect.runPromise(
           withHeldTransaction(connection, (db) =>
@@ -919,21 +966,19 @@ describe.skipIf(!testDatabase)("sensitive columns on Postgres", () => {
               };
               return yield* captureDatabaseQueryLogsWithExit(
                 Effect.gen(function* () {
-                  yield* db
-                    .insert(table)
-                    .values({ ...row, [key]: inserted } as never);
+                  yield* db.insert(table).values({ ...row, [key]: inserted });
                   expect(yield* storedCount(inserted)).toBe(1);
 
                   const update = db
                     .update(table)
-                    .set({ [key]: updated } as never)
+                    .set({ [key]: updated })
                     .where(eq(column, inserted));
                   const conflict = db
                     .insert(table)
-                    .values({ ...row, [key]: updated } as never)
+                    .values({ ...row, [key]: updated })
                     .onConflictDoUpdate({
                       target: primaryKey(table),
-                      set: { [key]: conflictSet } as never,
+                      set: { [key]: conflictSet },
                     });
                   if (fixture.immutable) {
                     yield* expectWriteRefused(

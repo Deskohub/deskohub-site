@@ -1,30 +1,23 @@
 import "@/shared/testing/workspace-test-env";
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import { Effect, Layer, Option, Schema } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
-import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
-import type {
-  CustomerAgentCaller,
-  CustomerAgentClientId,
-  CustomerAgentScope,
+import {
+  type CustomerAgentCaller,
+  type CustomerAgentScope,
+  customerAgentClientIdSchema,
 } from "@/features/account";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import { testCustomerSession } from "@/features/account/backend/account-operations.test-utils";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { connectUnreachableWorkspaceDatabase } from "@/shared/testing/unreachable-workspace-database.test-utils";
 
 // The token-backed account services open the database when built; the
 // signed-in tool below reads only the customer's authentication.
+const unreachableDatabase = await connectUnreachableWorkspaceDatabase();
+afterAll(() => unreachableDatabase.pool.close());
 mock.module("@/db/database-provider.server", () => ({
-  workspaceDatabaseLayer: Layer.succeed(
-    WorkspaceDatabase,
-    WorkspaceDatabase.make({} as never)
-  ),
-  workspaceDatabaseAdvisoryLockLayer: Layer.succeed(
-    WorkspaceDatabaseAdvisoryLock,
-    WorkspaceDatabaseAdvisoryLock.make({
-      client: {} as never,
-      maxConnections: 4,
-    })
-  ),
+  workspaceDatabaseLayer: unreachableDatabase.database,
+  workspaceDatabaseAdvisoryLockLayer: unreachableDatabase.advisoryLock,
   authDatabasePool: {},
 }));
 
@@ -63,14 +56,14 @@ describe("defineAgentTool", () => {
   });
 
   test("runs the tool with decoded arguments", async () => {
-    await expect(Effect.runPromise(tool!.call({ seats: 2 }))).resolves.toEqual({
+    await expect(Effect.runPromise(tool.call({ seats: 2 }))).resolves.toEqual({
       seats: 2,
     });
   });
 
   test("names the first invalid argument", async () => {
     const error = await Effect.runPromise(
-      Effect.flip(tool!.call({ seats: "two" }))
+      Effect.flip(tool.call({ seats: "two" }))
     );
 
     expect(error.details).toEqual({ code: "invalid_input", field: "seats" });
@@ -78,7 +71,7 @@ describe("defineAgentTool", () => {
 
   test("reports an unexpected defect as the tool's unavailable code", async () => {
     const error = await Effect.runPromise(
-      Effect.flip(tool!.call({ seats: -1 }))
+      Effect.flip(tool.call({ seats: -1 }))
     );
 
     expect(error.details).toEqual({ code: "quote_unavailable" });
@@ -86,13 +79,13 @@ describe("defineAgentTool", () => {
 
   test("describes its input and output as JSON Schema", () => {
     expect(
-      tool!.input["~standard"].jsonSchema.input({ target: "draft-2020-12" })
+      tool.input["~standard"].jsonSchema.input({ target: "draft-2020-12" })
     ).toMatchObject({
       type: "object",
       properties: { seats: { type: "integer" } },
       required: ["seats"],
     });
-    expect(tool!.output["~standard"].validate({ seats: 1 })).toEqual({
+    expect(tool.output["~standard"].validate({ seats: 1 })).toEqual({
       value: { seats: 1 },
     });
   });
@@ -102,14 +95,14 @@ describe("defineAgentTool", () => {
       error: { code: "rate_limited", message: "Too many requests." },
     };
 
-    expect(tool!.output["~standard"].validate(errorResult)).toEqual({
+    expect(tool.output["~standard"].validate(errorResult)).toEqual({
       value: errorResult,
     });
     expect(
-      tool!.output["~standard"].validate({ error: { code: "rate_limited" } })
+      tool.output["~standard"].validate({ error: { code: "rate_limited" } })
     ).toMatchObject({ issues: expect.any(Array) });
     expect(
-      tool!.output["~standard"].jsonSchema.output({ target: "draft-2020-12" })
+      tool.output["~standard"].jsonSchema.output({ target: "draft-2020-12" })
     ).toMatchObject({ anyOf: [{ type: "object" }, { type: "object" }] });
   });
 });
@@ -158,9 +151,10 @@ describe("defineSignedInAgentTool", () => {
 
   const caller: CustomerAgentCaller = {
     grant: {
-      accountId: "grant-account" as CustomerAccountId,
-      clientId:
-        "https://assistant.example/client.json" as CustomerAgentClientId,
+      accountId: customerAccountIdSchema.make("grant-account"),
+      clientId: customerAgentClientIdSchema.make(
+        "https://assistant.example/client.json"
+      ),
       scopes: new Set<CustomerAgentScope>(["reservations:read"]),
     },
     accessToken: "agent-token",
@@ -173,9 +167,9 @@ describe("defineSignedInAgentTool", () => {
       Effect.sync(() => {
         verifiedTokens.push(accessToken);
         return {
-          accountId: "token-account" as CustomerAccountId,
-          deletionRequested: false,
-        } as never;
+          ...testCustomerSession,
+          accountId: customerAccountIdSchema.make("token-account"),
+        };
       }),
   });
 
@@ -198,9 +192,9 @@ describe("defineSignedInAgentTool", () => {
     const inMemory = inMemoryCustomerAgentCallServices(() => ({
       authentication: {
         currentUser: Effect.succeed({
-          accountId: "in-memory-account",
-          deletionRequested: false,
-        } as never),
+          ...testCustomerSession,
+          accountId: customerAccountIdSchema.make("in-memory-account"),
+        }),
       },
     }));
 

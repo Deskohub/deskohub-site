@@ -2,7 +2,10 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { Effect } from "effect";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { InvoiceRepository } from "./invoice.repository";
 import { InvoiceArchiveRepository } from "./invoice-archive.repository";
 import { makeInvoiceCancellationTestKit } from "./invoice-cancellation.test-utils";
@@ -13,8 +16,25 @@ const testDatabase =
   await createWorkspacePostgresSuiteDatabase("invoice_archive");
 afterAll(() => testDatabase?.close());
 // The kit only touches the database when a test calls it.
-const { cancel, issueManualInvoice, makeActor, query, run } =
-  makeInvoiceCancellationTestKit(testDatabase!);
+const kit = testDatabase ? makeInvoiceCancellationTestKit(testDatabase) : null;
+const requireKit = () => requireTestDatabase(kit);
+const cancel: ReturnType<typeof makeInvoiceCancellationTestKit>["cancel"] = (
+  input
+) => requireKit().cancel(input);
+const issueManualInvoice: ReturnType<
+  typeof makeInvoiceCancellationTestKit
+>["issueManualInvoice"] = (...args) => requireKit().issueManualInvoice(...args);
+const makeActor: ReturnType<
+  typeof makeInvoiceCancellationTestKit
+>["makeActor"] = (label) => requireKit().makeActor(label);
+const query: ReturnType<typeof makeInvoiceCancellationTestKit>["query"] = (
+  text,
+  values
+) => requireKit().query(text, values);
+const run: ReturnType<typeof makeInvoiceCancellationTestKit>["run"] = (
+  effect,
+  keys
+) => requireKit().run(effect, keys);
 
 describe.skipIf(!testDatabase)(
   "InvoiceArchiveRepository on disposable Postgres",
@@ -71,8 +91,8 @@ describe.skipIf(!testDatabase)(
         invoiceId: invoice.id,
       });
 
-      const failure = await testDatabase!.pool
-        .query(
+      const failure = await requireTestDatabase(testDatabase)
+        .pool.query(
           `insert into invoice_archives
              (invoice_id, archived_at, actor_account_email, source)
            values ($1, now(), 'synthetic administrator', 'admin-ui')`,
@@ -101,9 +121,10 @@ describe.skipIf(!testDatabase)(
         )
       );
 
-      await testDatabase!.pool.query('delete from auth."user" where id = $1', [
-        actor.administrator.accountId,
-      ]);
+      await requireTestDatabase(testDatabase).pool.query(
+        'delete from auth."user" where id = $1',
+        [actor.administrator.accountId]
+      );
 
       const archive = await run(
         Effect.flatMap(InvoiceArchiveRepository, (archives) =>

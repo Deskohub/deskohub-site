@@ -4,7 +4,7 @@ import { Option } from "effect";
 import { CheckCircle2 } from "lucide-react";
 import { getClientEnv } from "@/client-env";
 import { m } from "@/features/administration/i18n";
-import { m as customerMessages, type Locale } from "@/features/i18n";
+import { m as customerMessages, isLocale, type Locale } from "@/features/i18n";
 import { Badge } from "@/shared/components/ui/badge";
 import {
   FormControl,
@@ -113,7 +113,9 @@ export function CampaignContentTabs({
   const { editable, required, shown, hiddenWithContent, englishMissing } = view;
   return (
     <Tabs
-      onValueChange={(value) => onLocaleChange(value as Locale)}
+      onValueChange={(value) => {
+        if (isLocale(value)) onLocaleChange(value);
+      }}
       value={shown}
     >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">

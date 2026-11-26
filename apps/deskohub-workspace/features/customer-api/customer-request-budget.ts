@@ -296,16 +296,19 @@ export const spendCustomerRequestBudgets = Effect.fn(
   );
 });
 
+/** The classification by name, for an endpoint the request names at runtime. */
+const budgetClassesByName = new Map(
+  Object.entries(customerRequestBudgetClasses).map(([group, endpoints]) => [
+    group,
+    new Map(Object.entries(endpoints)),
+  ])
+);
+
 const budgetClassOf = (
   group: string,
   endpoint: string
 ): CustomerRequestBudgetClass =>
-  (
-    customerRequestBudgetClasses as Record<
-      string,
-      Record<string, CustomerRequestBudgetClass> | undefined
-    >
-  )[group]?.[endpoint] ?? "dotypos-mutation";
+  budgetClassesByName.get(group)?.get(endpoint) ?? "dotypos-mutation";
 
 const digest = (...parts: ReadonlyArray<string>) =>
   budgetKeyDigest("deskohub-workspace/customer-api-budget", ...parts);

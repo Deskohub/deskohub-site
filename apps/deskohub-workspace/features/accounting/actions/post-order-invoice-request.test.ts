@@ -3,6 +3,8 @@ import "@/shared/polyfills/temporal";
 import { expect, mock, test } from "bun:test";
 import { Effect, Layer } from "effect";
 import { ReservationInvoiceService } from "@/features/accounting/backend/reservation-invoice.service";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { reservationAccessTokenSchema } from "@/features/reservation/reservation-access-token";
 import { BotDetectedError } from "@/shared/backend/bot-protection/bot-protection.service";
 import { BotProtectionServiceMock } from "@/shared/backend/bot-protection/bot-protection.service.mock";
 import { customerAgentNames } from "@/shared/bot-protection/customer-agents";
@@ -10,10 +12,10 @@ import { processPostOrderInvoiceRequest } from "./post-order-invoice-request";
 
 const request = {
   locale: "en-US",
-  orderId: "SYNTHETIC-ORDER-ID",
-  accessToken: "synthetic-access-token",
+  orderId: workspaceReservationIdSchema.make("SYNTHETIC-ORDER-ID"),
+  accessToken: reservationAccessTokenSchema.make("synthetic-access-token"),
   operation: "resend",
-} as never;
+} as const;
 
 const runRequest = (
   verifyHuman: () => Effect.Effect<void, BotDetectedError>

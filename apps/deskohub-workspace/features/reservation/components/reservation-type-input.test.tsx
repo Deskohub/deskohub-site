@@ -8,6 +8,7 @@ import {
   test,
 } from "bun:test";
 import { cleanup, fireEvent, render } from "@testing-library/react";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -40,6 +41,7 @@ describe("ReservationTypeInput", () => {
         onChange={onChange}
         presentation="illustrated"
         value="open-space"
+        values={["open-space", "reserved-desk", "workstation"]}
       >
         <ReservationTypeOption
           price="CZK 290 / day"
@@ -59,15 +61,18 @@ describe("ReservationTypeInput", () => {
         />
       </ReservationTypeInput>
     );
-    const openSpace = view.container.querySelector(
-      "#cowork-tier-open-space"
-    ) as HTMLInputElement;
-    const reservedDesk = view.container.querySelector(
-      "#cowork-tier-reserved-desk"
-    ) as HTMLInputElement;
-    const workstation = view.container.querySelector(
-      "#cowork-tier-workstation"
-    ) as HTMLInputElement;
+    const openSpace = elementOf(
+      view.container.querySelector("#cowork-tier-open-space"),
+      HTMLInputElement
+    );
+    const reservedDesk = elementOf(
+      view.container.querySelector("#cowork-tier-reserved-desk"),
+      HTMLInputElement
+    );
+    const workstation = elementOf(
+      view.container.querySelector("#cowork-tier-workstation"),
+      HTMLInputElement
+    );
 
     const radioGroup = view.getByRole("radiogroup");
     expect(radioGroup.getAttribute("data-reservation-type-presentation")).toBe(
@@ -85,12 +90,39 @@ describe("ReservationTypeInput", () => {
     expect(onChange).toHaveBeenCalledWith("reserved-desk");
   });
 
+  test("ignores a change to a value the input doesn't offer", () => {
+    const onChange = mock(() => undefined);
+    const view = render(
+      <ReservationTypeInput
+        idPrefix="cowork-tier"
+        onChange={onChange}
+        value="open-space"
+        values={["open-space"]}
+      >
+        <ReservationTypeOption
+          price="CZK 290 / day"
+          title="Open Space"
+          value="open-space"
+        />
+        <ReservationTypeOption
+          price="CZK 390 / day"
+          title="Reserved Desk"
+          value="reserved-desk"
+        />
+      </ReservationTypeInput>
+    );
+
+    fireEvent.click(view.getByRole("radio", { name: /Reserved Desk/ }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   test("shows an option's illustration only in the illustrated presentation", () => {
     const options = (presentation?: "illustrated") => (
       <ReservationTypeInput
         onChange={() => undefined}
         presentation={presentation}
         value="open-space"
+        values={["open-space"]}
       >
         <ReservationTypeOption
           illustration={<svg data-testid="desk" />}

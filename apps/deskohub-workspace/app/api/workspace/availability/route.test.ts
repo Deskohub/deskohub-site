@@ -52,10 +52,7 @@ mock.module(
 const requestUrl =
   "https://workspace.test/api/workspace/availability?kind=cowork";
 
-const loadRoute = async () =>
-  (await import("./route")) as {
-    GET: (request: Request) => Promise<Response>;
-  };
+const loadRoute = () => import("./route");
 
 describe("workspace availability route", () => {
   beforeEach(() => {

@@ -36,7 +36,7 @@ export const agentScopes = [
 export type AgentScope = (typeof agentScopes)[number];
 
 export const isAgentScope = (scope: string): scope is AgentScope =>
-  (agentScopes as ReadonlyArray<string>).includes(scope);
+  agentScopes.some((agentScope) => agentScope === scope);
 
 /**
  * Lets an agent refresh its access without the customer present. Without

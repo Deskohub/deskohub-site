@@ -346,10 +346,9 @@ export class ReservationInvitees extends Context.Service<
         );
         const byKey = Arr.groupBy(sealed, (row) => row.keyId);
         const opened = new Map<ReservationInviteeId, InviteeEmail>();
-        for (const [keyId, keyRows] of Object.entries(byKey)) {
-          const key = yield* Effect.fromOption(
-            keys.getById(keyId as ReservationInviteeKeyId)
-          ).pipe(
+        for (const keyRows of Object.values(byKey)) {
+          const { keyId } = Arr.headNonEmpty(keyRows);
+          const key = yield* Effect.fromOption(keys.getById(keyId)).pipe(
             Effect.mapError(
               () =>
                 new ReservationInviteeStorageError({

@@ -5,6 +5,7 @@ import {
   type CheckoutSessionId,
   checkoutSessionIdSchema,
 } from "@/features/checkout/checkout-identifiers";
+import { advertiseMeetingRoom } from "@/features/reservation/advertised-price.test-utils";
 import { recordReservationPagePreloads } from "@/features/reservation/backend/reservation-page-preloads.service.mock";
 import { getMeetingRoomDurationAdvertisedPriceRequests } from "@/features/reservation/meeting-room-advertised-price";
 import {
@@ -12,6 +13,7 @@ import {
   normalizedMeetingRoomReservationOrderSchema,
 } from "@/features/reservation/meeting-room-reservation";
 import { meetingRoomReservationDurations } from "@/features/reservation/meeting-room-reservation-duration";
+import { meetingRoomReservationKind } from "@/features/reservation/reservation-kind";
 
 const adaEmail = testEmailAddress("ada");
 const overrideEmail = testEmailAddress("override");
@@ -40,11 +42,17 @@ const { meetingRoomReservationPage } = await import(
   "./meeting-room-reservation-page"
 );
 
-// Each request preloads, without a price the structured data could use.
+// Each request preloads at the price the server advertises for it.
 const recordEveryPricePreload = () =>
   recordReservationPagePreloads({
     advertisedPrices: (requests) =>
-      Effect.succeed(requests.map((request) => ({ request })) as never),
+      Effect.succeed(
+        requests.flatMap(({ reservation, ...request }) =>
+          reservation.kind === meetingRoomReservationKind
+            ? [advertiseMeetingRoom({ ...request, reservation })]
+            : []
+        )
+      ),
   });
 let preloads = recordEveryPricePreload();
 

@@ -107,6 +107,8 @@ interface LogDrains {
   queued?: Promise<void>;
 }
 
+// Only this module writes the slot, so the annotation checks those writes;
+// it trusts, rather than verifies, a value another module instance stored.
 type GlobalWithTelemetry = typeof globalThis & {
   [workspaceTelemetryHandle]?: WorkspaceTelemetryHandle;
 };
@@ -119,7 +121,7 @@ type GlobalWithTelemetry = typeof globalThis & {
  * or environment; the runtime then can't build its observability.
  */
 export const workspaceLoggerProvider = () => {
-  const processGlobals = globalThis as GlobalWithTelemetry;
+  const processGlobals: GlobalWithTelemetry = globalThis;
   processGlobals[workspaceTelemetryHandle] ??= {
     loggerProvider: createPostHogLoggerProvider({
       deploymentEnvironment: env.VERCEL_ENV,
@@ -213,7 +215,8 @@ const drainLogs = (
  */
 export const flushWorkspaceLogs: Effect.Effect<void> = Effect.suspend(() => {
   const loggerProvider = workspaceLoggerProvider();
-  const handle = (globalThis as GlobalWithTelemetry)[workspaceTelemetryHandle];
+  const processGlobals: GlobalWithTelemetry = globalThis;
+  const handle = processGlobals[workspaceTelemetryHandle];
   return flushLoggerProvider(
     loggerProvider &&
       handle && {

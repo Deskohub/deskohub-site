@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { evaluateReferralAttribution } from "./attribution";
 
-const customer = (value: string) => value as DotyposCustomerId;
+const customer = (value: string) => DotyposCustomerIdSchema.make(value);
 
 describe("referral attribution rules", () => {
   test("accepts a first attribution and treats the same referrer as idempotent", () => {

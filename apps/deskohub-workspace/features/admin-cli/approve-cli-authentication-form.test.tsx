@@ -8,6 +8,7 @@ import {
   test,
 } from "bun:test";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -51,23 +52,26 @@ const renderComponent = async (value: string | undefined = code) => {
 
 const submitForm = async (view: ReturnType<typeof render>) => {
   await act(async () => {
-    fireEvent.submit(view.container.querySelector("form")!);
+    fireEvent.submit(
+      elementOf(view.container.querySelector("form"), HTMLFormElement)
+    );
     await Promise.resolve();
   });
 };
 
 test("validates the hidden code and submits it with the default session lifetime", async () => {
   const view = await renderComponent();
-  const hiddenInput = view.container.querySelector(
-    'input[type="hidden"]'
-  ) as HTMLInputElement;
+  const hiddenInput = elementOf(
+    view.container.querySelector('input[type="hidden"]'),
+    HTMLInputElement
+  );
   expect(hiddenInput.value).toBe(code);
 
   await submitForm(view);
 
   expect(approveCliAuthenticationAction).toHaveBeenCalledTimes(1);
-  const formData = approveCliAuthenticationAction.mock
-    .calls[0]?.[0] as FormData;
+  const formData = approveCliAuthenticationAction.mock.calls[0]?.[0];
+  if (!formData) throw new Error("Expected approveCliAuthentication FormData");
   expect([...formData.entries()]).toEqual([
     ["code", code],
     ["lifetimeAmount", "30"],
@@ -77,7 +81,7 @@ test("validates the hidden code and submits it with the default session lifetime
 
 test("submits only the never-expire choice while the duration is disabled", async () => {
   const view = await renderComponent();
-  const amount = view.getByLabelText("Duration") as HTMLInputElement;
+  const amount = elementOf(view.getByLabelText("Duration"), HTMLInputElement);
 
   fireEvent.input(amount, { target: { value: "0" } });
   await act(async () => {
@@ -91,8 +95,8 @@ test("submits only the never-expire choice while the duration is disabled", asyn
   await submitForm(view);
 
   expect(approveCliAuthenticationAction).toHaveBeenCalledTimes(1);
-  const formData = approveCliAuthenticationAction.mock
-    .calls[0]?.[0] as FormData;
+  const formData = approveCliAuthenticationAction.mock.calls[0]?.[0];
+  if (!formData) throw new Error("Expected approveCliAuthentication FormData");
   expect([...formData.entries()]).toEqual([
     ["code", code],
     ["neverExpire", "on"],

@@ -136,24 +136,25 @@ describe("payment tables", () => {
     const [operation, attempt, undated] = within(table)
       .getAllByRole("row")
       .slice(1);
+    if (!operation || !attempt || !undated) {
+      throw new Error("Expected three order rows");
+    }
     expect(
-      within(operation as HTMLElement)
+      within(operation)
         .getByRole("link", { name: "DPAYTABLEOPERATION" })
         .getAttribute("href")
     ).toBe("/en-US/admin/orders/DPAYTABLEOPERATION");
     expect(
-      within(operation as HTMLElement).getByText(
+      within(operation).getByText(
         formatProviderDateTime(lastOperationTime, locale)
       )
     ).toBeDefined();
     expect(
-      within(attempt as HTMLElement).getByText(
+      within(attempt).getByText(
         formatProviderDateTime(link.attemptCreatedAt, locale)
       )
     ).toBeDefined();
-    const undatedOrderCell = within(undated as HTMLElement).getAllByRole(
-      "cell"
-    )[0];
+    const undatedOrderCell = within(undated).getAllByRole("cell")[0];
     expect(undatedOrderCell?.querySelector("p")).toBeNull();
     expect(undatedOrderCell?.textContent).toBe("DPAYTABLEUNDATED");
   });
@@ -242,7 +243,10 @@ describe("payment tables", () => {
       name: m.administrationOperationTableLabel({}, { locale }),
     });
     const [reported, unreported] = within(table).getAllByRole("row").slice(1);
-    const reportedRow = within(reported as HTMLElement);
+    if (!reported || !unreported) {
+      throw new Error("Expected two operation rows");
+    }
+    const reportedRow = within(reported);
     expect(
       reportedRow
         .getByRole("link", { name: "synthetic-operation" })
@@ -271,7 +275,7 @@ describe("payment tables", () => {
     ).toBe(`/en-US/admin/reservations/${reservationId}`);
 
     const notReported = m.administrationOperationNotReported({}, { locale });
-    const unreportedCells = within(unreported as HTMLElement)
+    const unreportedCells = within(unreported)
       .getAllByRole("cell")
       .map((cell) => cell.textContent);
     expect(unreportedCells).toEqual([
@@ -283,9 +287,7 @@ describe("payment tables", () => {
       m.administrationPaymentNotReported({}, { locale }),
       m.administrationOperationReservationNotLinked({}, { locale }),
     ]);
-    expect(within(unreported as HTMLElement).queryAllByRole("link")).toEqual(
-      []
-    );
+    expect(within(unreported).queryAllByRole("link")).toEqual([]);
   });
 
   test("keys an operation by its id, else by its order, time and position", () => {

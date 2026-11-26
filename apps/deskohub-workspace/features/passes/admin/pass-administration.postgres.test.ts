@@ -26,6 +26,7 @@ import { ReservationAccessService } from "@/features/reservation-access";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
@@ -47,9 +48,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     const date = plainDateStringSchema.make;
 
     beforeEach(async () => {
-      database = (await createWorkspacePostgresSuiteDatabase(
-        "pass_administration"
-      ))!;
+      database = requireTestDatabase(
+        await createWorkspacePostgresSuiteDatabase("pass_administration")
+      );
       await database.pool.query(
         "insert into customer_accounts (id, dotypos_customer_id) values ($1, '4141'), ($2, '4142'), ($3, '4143')",
         [actor.accountId, holder, recipient]

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import assert from "node:assert/strict";
 
 const lifecycleKey = Symbol.for("@deskohub-workspace/runtime-lifecycle");
 
@@ -11,7 +12,11 @@ interface RegisteredHooks {
 
 test("closes both database pools last when a container shuts down", async () => {
   await import("./database-provider.server");
-  const { hooks } = Reflect.get(globalThis, lifecycleKey) as RegisteredHooks;
+  const holder: typeof globalThis & { [lifecycleKey]?: RegisteredHooks } =
+    globalThis;
+  const lifecycle = holder[lifecycleKey];
+  assert(lifecycle, "the runtime lifecycle registered shutdown hooks");
+  const { hooks } = lifecycle;
 
   expect(hooks.get("database.auth-pool")?.stage).toBe("close");
   const workspacePool = hooks.get("database.workspace-pool");

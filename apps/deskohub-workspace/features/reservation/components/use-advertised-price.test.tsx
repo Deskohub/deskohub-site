@@ -1,3 +1,4 @@
+import "@/shared/polyfills/temporal";
 import {
   afterAll,
   afterEach,
@@ -10,15 +11,17 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import {
-  type AdvertisedPrice,
   type AdvertisedPriceRequest,
   advertisedPriceRequestBatchSize,
   type PreloadedAdvertisedPrice,
 } from "@/features/checkout/advertised-price";
+import { advertiseMeetingRoom } from "@/features/reservation/advertised-price.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 
 type AdvertisedPriceActionResult = {
   readonly data?: readonly PreloadedAdvertisedPrice[];
@@ -37,17 +40,23 @@ mock.module("@/features/reservation/actions/get-advertised-price", () => ({
 
 const { useAdvertisedPrices } = await import("./use-advertised-price");
 
-const requests = Array.from({ length: 17 }, (_, index) => ({
-  locale: "en-US",
-  reservation: {
-    kind: "meeting-room",
-    details: {
+const requests = Array.from({ length: 17 }, (_, index) => {
+  const reservationDate = plainDateStringSchema.make(
+    `2099-07-${String(index + 1).padStart(2, "0")}`
+  );
+  return {
+    locale: "en-US",
+    reservation: {
       kind: "meeting-room",
-      duration: { amount: 1, unit: "hour" },
-      reservationDate: `2099-07-${String(index + 1).padStart(2, "0")}`,
+      details: {
+        kind: "meeting-room",
+        duration: { amount: 1, unit: "hour" },
+        reservationDate,
+        lastServiceDate: reservationDate,
+      },
     },
-  },
-})) satisfies ReadonlyArray<AdvertisedPriceRequest>;
+  } satisfies AdvertisedPriceRequest;
+});
 
 const BatchHarness = () => {
   const results = useAdvertisedPrices(requests);
@@ -97,10 +106,18 @@ test("keeps a successful advertised-price batch independent from a failed siblin
     batch.length > 1
       ? Promise.resolve({ serverError: "advertised price batch failed" })
       : Promise.resolve({
-          data: batch.map((request) => ({
-            request,
-            advertisedPrice: {} as AdvertisedPrice,
-          })),
+          data: batch.map((request) => {
+            if (request.reservation.kind !== "meeting-room") {
+              throw new Error("Expected meeting-room request");
+            }
+            return {
+              request,
+              advertisedPrice: advertiseMeetingRoom({
+                ...request,
+                reservation: request.reservation,
+              }).advertisedPrice,
+            };
+          }),
         })
   );
   const queryClient = new QueryClient({
@@ -124,10 +141,7 @@ test("keeps a successful advertised-price batch independent from a failed siblin
 });
 
 test("keeps fresh page-loaded prices through the initial mount", async () => {
-  const preloaded = requests.map((request) => ({
-    request,
-    advertisedPrice: {} as AdvertisedPrice,
-  }));
+  const preloaded = requests.map((request) => advertiseMeetingRoom(request));
   const PreloadedHarness = () =>
     useAdvertisedPrices(requests, preloaded).map((result, index) => (
       <output

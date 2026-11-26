@@ -1,9 +1,11 @@
 import {
   type CallToolResult,
   createMcpHandler,
-  type ListToolsResult,
+  isSpecType,
   McpServer,
   originValidationResponse,
+  ProtocolError,
+  ProtocolErrorCode,
   type StandardSchemaWithJSON,
 } from "@modelcontextprotocol/server";
 import type { StandardJSONSchemaV1 } from "@standard-schema/spec";
@@ -405,21 +407,41 @@ const makeAgentToolMcpServer = <R>({
   return server;
 };
 
+const parseJson = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Unknown)
+);
+
+/** A value as JSON carries it: undefined members dropped, non-finite numbers null. */
+const toWireJson = <Value>(value: Value) => parseJson(JSON.stringify(value));
+
 /**
  * Lists each tool's `securitySchemes` beside its definition as well as in
  * its `_meta`, where ChatGPT reads it: the SDK's `tools/list` keeps only
  * the definition fields it knows, so the listing is wrapped. The SDK keeps
  * the stored handler protected; a route test pins both protocol eras.
  */
+/**
+ * The SDK's lookup of a stored request handler. It is protected, and
+ * TypeScript lets only element access reach a protected member.
+ */
+const storedRequestHandlerLookup = "_getRequestHandler";
+
 const listSecuritySchemes = (server: McpServer) => {
-  // biome-ignore lint/complexity/useLiteralKeys: the SDK declares _getRequestHandler protected; only bracket access reaches it.
-  const listTools = server.server["_getRequestHandler"]("tools/list");
+  const listTools = server.server[storedRequestHandlerLookup]("tools/list");
   if (listTools === undefined) return;
   server.server.setRequestHandler("tools/list", async (request, context) => {
-    const listed = (await listTools(
-      { jsonrpc: "2.0", id: 0, ...request },
-      context
-    )) as ListToolsResult;
+    // The stored handler is typed for any method. Its listing is checked as
+    // the wire carries it, so a listing the wire would send still passes.
+    const listed = toWireJson(
+      await listTools({ jsonrpc: "2.0", id: 0, ...request }, context)
+    );
+    // A non-object outputSchema is spec-invalid and now fails the listing.
+    if (!isSpecType.ListToolsResult(listed)) {
+      throw new ProtocolError(
+        ProtocolErrorCode.InternalError,
+        "The tool listing isn't a tools/list result."
+      );
+    }
     return {
       ...listed,
       tools: listed.tools.map((tool) => ({

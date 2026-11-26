@@ -2,9 +2,11 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { Duration } from "effect";
 import { payStateTokenQueryParam } from "@/features/checkout/backend/checkout/pay-state";
 import type { ApplyDiscountCodeInput } from "@/features/checkout/backend/checkout/pay-state-discount-code-input";
+import { isLocale } from "@/features/i18n";
 import type { WorkspaceActionOptions } from "@/shared/backend/workspace-action";
 import type { ApplyDiscountCodeActionResult } from "./apply-discount-code";
 
@@ -58,20 +60,28 @@ const runForm = async (
 
   let redirectError: unknown;
   try {
-    await applyDiscountCodeForm(
-      // Server Action arguments are untrusted; tests may tamper with them.
-      (input.locale ?? "en-US") as Parameters<typeof applyDiscountCodeForm>[0],
-      input.payStateToken,
-      formData
-    );
+    const locale = input.locale ?? "en-US";
+    if (isLocale(locale)) {
+      await applyDiscountCodeForm(locale, input.payStateToken, formData);
+    } else {
+      // A malformed request still reaches the real Server Action boundary.
+      await Reflect.apply(applyDiscountCodeForm, undefined, [
+        locale,
+        input.payStateToken,
+        formData,
+      ]);
+    }
   } catch (error) {
     redirectError = error;
   }
 
-  expect(redirectError).toBeInstanceOf(Error);
-  expect((redirectError as Error).message).toBe("NEXT_REDIRECT");
+  assert(redirectError instanceof Error, "Expected the redirect signal");
+  expect(redirectError.message).toBe("NEXT_REDIRECT");
   expect(redirectMock).toHaveBeenCalledTimes(1);
-  return redirectMock.mock.calls[0]?.[0] as string;
+  const [call] = redirectMock.mock.calls;
+  assert(call, "Expected the redirect call");
+  const [url] = call;
+  return url;
 };
 
 describe("applyDiscountCodeForm", () => {

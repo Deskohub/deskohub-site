@@ -28,12 +28,14 @@ function InvoicePaymentStatusBadge({
   return (
     <StatusBadge
       tone={
-        {
-          paid: "positive",
-          issued: "neutral",
-          due: "attention",
-          overdue: "attention",
-        }[status] as "positive" | "neutral" | "attention"
+        (
+          {
+            paid: "positive",
+            issued: "neutral",
+            due: "attention",
+            overdue: "attention",
+          } as const
+        )[status]
       }
     >
       {{
@@ -191,12 +193,14 @@ export function InvoiceCancellationActions({
             <dd className="mt-2">
               <StatusBadge
                 tone={
-                  {
-                    accepted: "positive",
-                    failed: "attention",
-                    not_owed: "neutral",
-                    processing: "neutral",
-                  }[notices[audience]] as "positive" | "attention" | "neutral"
+                  (
+                    {
+                      accepted: "positive",
+                      failed: "attention",
+                      not_owed: "neutral",
+                      processing: "neutral",
+                    } as const
+                  )[notices[audience]]
                 }
               >
                 {{
@@ -262,12 +266,14 @@ export function InvoiceDeliverySummary({
           <dd className="mt-2">
             <StatusBadge
               tone={
-                {
-                  accepted: "positive",
-                  failed: "attention",
-                  missing: "neutral",
-                  processing: "neutral",
-                }[delivery[audience]] as "positive" | "attention" | "neutral"
+                (
+                  {
+                    accepted: "positive",
+                    failed: "attention",
+                    missing: "neutral",
+                    processing: "neutral",
+                  } as const
+                )[delivery[audience]]
               }
             >
               {{

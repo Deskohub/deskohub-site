@@ -5,7 +5,6 @@ import { WorkspaceDatabase } from "@/db/database.service";
 import { CustomerAccountReservationOwnership } from "@/features/account/backend/customer-account-reservation-ownership";
 import { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { currentPreciseInstant } from "@/shared/utils/temporal";
 import type { FioReceivingAccountDisplay } from "../fio/fio-accounts.service";
@@ -59,9 +58,7 @@ export const readPublicPayStatePayment = Effect.fn(
     return undefined;
 
   const payments = yield* QrPaymentRepository;
-  const window = yield* payments.findPaymentWindow(
-    reservationOrderId(state.orderId)
-  );
+  const window = yield* payments.findPaymentWindow(state.orderId);
   if (window) {
     const now = yield* currentPreciseInstant;
     if (

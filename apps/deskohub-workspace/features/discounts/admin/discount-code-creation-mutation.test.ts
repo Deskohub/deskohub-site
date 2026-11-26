@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Option } from "effect";
-import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import { defaultWorkspaceCurrencyCode } from "@/shared/money/currencies";
 import { toDiscountCodeCreationMutation } from "./discount-code-creation-mutation";
 import type { DiscountCodeCreationFormValues } from "./form-schemas";
 
 const discountId = "019c91dd-c560-7e55-b9d8-c95065efd51d";
-const customerId = "dotypos-customer" as DotyposCustomerId;
+const customerId = DotyposCustomerIdSchema.make("dotypos-customer");
 
 const formValues = (
   overrides: Partial<DiscountCodeCreationFormValues> = {}

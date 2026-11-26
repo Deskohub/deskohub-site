@@ -13,7 +13,7 @@ import {
   sql,
 } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { retryDatabaseRead } from "@/db/retry-database-read";
 import {
@@ -30,7 +30,10 @@ import {
   type WorkspaceReservation,
   type WorkspaceReservationStateError,
 } from "@/features/reservation/backend/workspace-reservation.repository";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
 
 export interface PaidFulfillmentProgress
   extends Pick<
@@ -42,6 +45,10 @@ export interface PaidFulfillmentProgress
 }
 
 export const fulfillmentEmailFailureCode = "fulfillment_email_failed";
+
+const decodeWorkspaceReservationIds = Schema.decodeUnknownEffect(
+  Schema.Array(workspaceReservationIdSchema)
+);
 
 /**
  * A delivery recording or retention arrived for an email idempotency
@@ -553,7 +560,10 @@ export class FulfillmentLedger extends Context.Service<
               )
               .limit(input.limit)
               .pipe(retryDatabaseRead);
-            return rows.map(({ id }) => id as WorkspaceReservationId);
+            // Stored IDs are reservation IDs; one that is not is a defect.
+            return yield* decodeWorkspaceReservationIds(
+              rows.map(({ id }) => id)
+            ).pipe(Effect.orDie);
           },
           (effect, input) => effect.pipe(Effect.annotateLogs(input))
         ),

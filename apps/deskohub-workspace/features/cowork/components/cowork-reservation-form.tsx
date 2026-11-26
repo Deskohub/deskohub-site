@@ -46,6 +46,7 @@ import { getEntryPackLastUsableDate } from "@/features/passes/pass-offer";
 import { getCoworkPassPurchaseDraft } from "@/features/passes/pass-purchase-draft";
 import { ReservationAdvertisedPrice } from "@/features/reservation/components/reservation-advertised-price";
 import { ReservationCheckoutForm } from "@/features/reservation/components/reservation-checkout-form";
+import type { ReservationEmailConfirmationValues } from "@/features/reservation/components/reservation-customer-fields";
 import { ReservationFormDateInput } from "@/features/reservation/components/reservation-date-input";
 import {
   ReservationCustomerFieldsFallback,
@@ -207,7 +208,11 @@ export function CoworkReservationForm({
     (initialReservation
       ? getCoworkReservationDefaultValues(initialReservation)
       : coworkSelectionLink.read(searchParams, { locale }));
-  const form = useForm<CoworkReservationInput, unknown, CoworkReservationData>({
+  const form = useForm<
+    CoworkReservationInput & ReservationEmailConfirmationValues,
+    unknown,
+    CoworkReservationData
+  >({
     resolver: effectSchemaResolver(
       coworkReservationSchema(defaultPhoneRegion(locale))
     ),
@@ -388,10 +393,21 @@ export function CoworkReservationForm({
         router.refresh();
       }}
       selectionSummary={getCoworkReservationSelectionSummary(selection, locale)}
+      fields={{
+        selection: coworkSelectionLink.params,
+        emailConfirmation: "emailConfirmation",
+        marketingConsent: { name: "marketingConsent", value: true },
+      }}
       selection={{
         kind: coworkSelectionLink.kind,
-        fromSearchParams: (searchParams) =>
-          coworkSelectionLink.readSelection(searchParams, { locale }),
+        fromSearchParams: (searchParams, visit) => {
+          for (const { name, value } of coworkSelectionLink.readFieldValues(
+            searchParams,
+            { locale }
+          )) {
+            visit(name, value);
+          }
+        },
       }}
     >
       <div aria-live="polite" className="empty:absolute">
@@ -457,6 +473,7 @@ export function CoworkReservationForm({
                 }}
                 presentation="illustrated"
                 value={field.value}
+                values={tierOptions.map((option) => option.value)}
               >
                 {tierOptions.map((option) => {
                   const artworkSource = {

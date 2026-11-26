@@ -7,6 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { NexiOperationIdSchema, NexiOrderIdSchema } from "@deskohub/nexi";
 import { within } from "@testing-library/react";
 import { prerender } from "react-dom/static";
@@ -162,10 +163,11 @@ const unreported = new Set<string>([
 describe("OrderAdministrationDetail", () => {
   beforeAll(() => {
     registerWorkspaceComponentTestEnv();
-    workspaceUseAction.mockReturnValue({
+    // The detail's refund control reads an idle action.
+    workspaceUseAction.mockImplementation(() => ({
       execute: mock(),
       isExecuting: false,
-    } as never);
+    }));
   });
   afterEach(() => {
     order = fullOrder;
@@ -173,6 +175,7 @@ describe("OrderAdministrationDetail", () => {
     loadFioMovements.mockClear();
   });
   afterAll(async () => {
+    workspaceUseAction.mockReset();
     await new Promise((resolve) => setTimeout(resolve, 0));
     await unregisterWorkspaceComponentTestEnv();
   });
@@ -184,9 +187,12 @@ describe("OrderAdministrationDetail", () => {
 
     expect(view.getByRole("heading", { level: 1 }).textContent).toBe(orderId);
     expect(orderFacts).toHaveLength(6);
-    expect(orderFacts.filter(({ value }) => unreported.has(value!))).toEqual(
-      []
-    );
+    expect(
+      orderFacts.filter(
+        ({ value }) =>
+          value !== undefined && value !== null && unreported.has(value)
+      )
+    ).toEqual([]);
     expect(orderFacts.map(({ label }) => label)).toContain(
       m.administrationOrderFactCreatedEstimated({}, { locale })
     );
@@ -213,9 +219,11 @@ describe("OrderAdministrationDetail", () => {
   });
 
   test("labels an exactly recorded creation time without the estimate", async () => {
+    const link = fullOrder.link;
+    assert(link);
     order = {
       ...fullOrder,
-      link: { ...fullOrder.link!, providerOrderCreatedAtEstimated: false },
+      link: { ...link, providerOrderCreatedAtEstimated: false },
     };
     const labels = facts(await prerenderOrderDetail()).map(
       ({ label }) => label
@@ -244,7 +252,10 @@ describe("OrderAdministrationDetail", () => {
     ).toBeDefined();
     // Amount, authorized, captured, last operation, and last activity.
     expect(
-      orderFacts.filter(({ value }) => unreported.has(value!))
+      orderFacts.filter(
+        ({ value }) =>
+          value !== undefined && value !== null && unreported.has(value)
+      )
     ).toHaveLength(5);
     expect(orderFacts.map(({ value }) => value)).toContain(
       m.administrationOrderNotRecorded({}, { locale })
@@ -274,7 +285,8 @@ describe("OrderAdministrationDetail", () => {
   });
 
   test("shows Fio evidence and a manual refund control on a local order without looking it up in Nexi", async () => {
-    const fioOrderId = fioPendingRefund.orderId!;
+    const fioOrderId = fioPendingRefund.orderId;
+    assert(fioOrderId);
     const container = await prerenderOrderDetail(fioOrderId);
     const view = within(container);
     expect(view.getByText("9012345001")).toBeTruthy();
@@ -282,8 +294,12 @@ describe("OrderAdministrationDetail", () => {
     expect(view.getByText(/80,000,000,000,000\.01$/)).toBeTruthy();
     expect(view.getByText("Currency differs from the quote")).toBeTruthy();
     expect(view.getAllByText("Manual refund required")).toHaveLength(2);
-    const partial = within(view.getByText("9012345001").closest("li")!);
-    const duplicate = within(view.getByText("9012345004").closest("li")!);
+    const partialItem = view.getByText("9012345001").closest("li");
+    const duplicateItem = view.getByText("9012345004").closest("li");
+    assert(partialItem);
+    assert(duplicateItem);
+    const partial = within(partialItem);
+    const duplicate = within(duplicateItem);
     expect(
       partial.getByText("Amount to refund").nextElementSibling?.textContent
     ).toMatch(/45\.67$/);

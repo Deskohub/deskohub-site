@@ -60,7 +60,7 @@ describe.skipIf(!testDatabase)(
         testDatabase.db
           .select()
           .from(webhookEvents)
-          .where(eq(webhookEvents.eventId, eventId as never))
+          .where(eq(webhookEvents.eventId, eventId))
       );
       return event;
     };

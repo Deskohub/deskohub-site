@@ -124,7 +124,7 @@ const makePayStateToken = async (input?: {
         locale: input?.locale ?? "en-US",
         reservation,
         quote: input?.submittedCode ? codeQuote : clearedQuote,
-        orderId: "reservation-id",
+        orderId: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
         bookedAt: payStateBookedAt,
         holdExpiresAt: payStateHoldExpiresAt,
         checkoutSessionId,
@@ -197,7 +197,7 @@ const prepareClear = (input: ClearInput) => {
           null)
         : (input.activePaymentAttemptId ?? null);
     return Effect.succeed({
-      id: "reservation-id",
+      id: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
       dotyposCustomerId: "customer-id",
       reservationHoldExpiresAt: storedHoldExpiresAt,
       activePaymentAttemptId,
@@ -357,7 +357,7 @@ describe("clearDiscountCodeFromPayState", () => {
         })
       );
       expect(fresh).toMatchObject({
-        orderId: "reservation-id",
+        orderId: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
         bookedAt: payStateBookedAt,
         checkoutSessionId,
         quote: clearedQuote,

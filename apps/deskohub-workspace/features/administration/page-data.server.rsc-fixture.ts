@@ -5,10 +5,11 @@ import "@/shared/testing/workspace-test-env";
 import "@/shared/testing/flight-request-storage";
 
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import type {
-  DotyposCustomer,
-  DotyposCustomerId,
-  DotyposReadFailure,
+import {
+  DotyposCloudIdSchema,
+  type DotyposCustomer,
+  DotyposCustomerIdSchema,
+  type DotyposReadFailure,
 } from "@deskohub/dotypos";
 import { Effect, Layer, Option } from "effect";
 import React, { Suspense } from "react";
@@ -120,13 +121,17 @@ const { AdministrationCustomerDirectory } = await import(
   "./customer-directory.service"
 );
 const originalDirectoryLive = AdministrationCustomerDirectory.Live;
-const customerId = "customer-synthetic" as DotyposCustomerId;
-const namedCustomer = {
+const customerId = DotyposCustomerIdSchema.make("customer-synthetic");
+const namedCustomer: DotyposCustomer = {
   id: customerId,
+  _cloudId: DotyposCloudIdSchema.make("cloud-synthetic"),
   firstName: "Synthetic",
   lastName: "Customer",
+  points: null,
+  flags: "0",
+  display: true,
   deleted: false,
-} as DotyposCustomer;
+};
 let customerReads = 0;
 let readCustomer: () => Effect.Effect<
   Option.Option<DotyposCustomer>,

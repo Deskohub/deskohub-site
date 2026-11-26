@@ -1,6 +1,7 @@
 import { Node } from "@tiptap/core";
 import { Predicate } from "effect";
 import type { EntryPackSize, PassProduct } from "@/features/passes/pass-offer";
+import { htmlAttributeText } from "./campaign-body-attribute-text";
 import type { CampaignBodyAttributeValue } from "./campaign-body-document";
 
 /** The pass products a campaign card can offer, by their catalog kind. */
@@ -66,28 +67,27 @@ export const CampaignPassOffer = Node.create({
 
   addAttributes() {
     return {
-      product: { default: null },
-      size: { default: null },
-      headline: { default: null },
-      detail: { default: null },
+      product: {
+        default: null,
+        parseHTML: htmlAttributeText("data-pass-offer"),
+      },
+      size: {
+        default: null,
+        parseHTML: (element) => {
+          const size = Number(element.getAttribute("data-size"));
+          return isCampaignPassOfferSize(size) ? size : null;
+        },
+      },
+      headline: {
+        default: null,
+        parseHTML: htmlAttributeText("data-headline"),
+      },
+      detail: { default: null, parseHTML: htmlAttributeText("data-detail") },
     };
   },
 
   parseHTML() {
-    return [
-      {
-        tag: "div[data-pass-offer]",
-        getAttrs: (element) => {
-          const size = Number(element.getAttribute("data-size"));
-          return {
-            product: element.getAttribute("data-pass-offer"),
-            size: isCampaignPassOfferSize(size) ? size : null,
-            headline: element.getAttribute("data-headline"),
-            detail: element.getAttribute("data-detail"),
-          };
-        },
-      },
-    ];
+    return [{ tag: "div[data-pass-offer]" }];
   },
 
   renderHTML({ node }) {

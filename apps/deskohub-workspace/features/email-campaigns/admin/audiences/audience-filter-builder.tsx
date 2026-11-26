@@ -4,7 +4,6 @@ import type {
   AudienceAttribute,
   AudienceFilterGroupOf,
   AudienceFilterOf,
-  AutomationConditionLeaf,
 } from "@deskohub/workspace-admin-api";
 import { Match } from "effect";
 import { ChevronDown, ListPlus, Plus, X } from "lucide-react";
@@ -62,6 +61,9 @@ import {
   type AudienceFilterGroup,
   type AudienceFilterLeaf,
   appendFilter,
+  editedCountCondition,
+  editedDateCondition,
+  holdsOnlyConditions,
   newCondition,
   newNestedGroup,
   newSavedAudienceMembership,
@@ -115,9 +117,9 @@ type HeldFilter =
     }
   | {
       readonly holder: "automation-condition";
-      readonly value: AudienceFilterGroupOf<AutomationConditionLeaf>;
+      readonly value: AudienceFilterGroupOf<AudienceFilterLeaf>;
       readonly onChange: (
-        value: AudienceFilterGroupOf<AutomationConditionLeaf>
+        value: AudienceFilterGroupOf<AudienceFilterLeaf>
       ) => void;
       /** The saved audiences a membership leaf picks from. */
       readonly savedAudiences?: readonly AudienceValueOption[];
@@ -146,9 +148,12 @@ export function AudienceFilterBuilder({
   return (
     <GroupEditor
       group={held.value}
-      // The menus offer only leaves the holder can hold, so a saved
-      // audience's edits stay saved-audience filters.
-      onChange={held.onChange as (group: Group) => void}
+      onChange={(group) => {
+        if (held.holder === "automation-condition") held.onChange(group);
+        // The menus offer only leaves the holder can hold, so a saved
+        // audience's edits stay saved-audience filters.
+        else if (holdsOnlyConditions(group)) held.onChange(group);
+      }}
       depth={0}
       path={path}
       context={{ errorAt, lookups, holder, savedAudiences }}
@@ -440,7 +445,10 @@ function AttributeConditionControls({
             entry={entry}
             wording={wording}
             value={count}
-            onChange={onChange}
+            onChange={(edited) => {
+              const next = editedCountCondition(count.attribute, edited);
+              if (next) onChange(next);
+            }}
             errorAt={errorAt}
             lookups={context.lookups}
             holder={context.holder}
@@ -452,7 +460,10 @@ function AttributeConditionControls({
             entry={entry}
             wording={wording}
             value={date}
-            onChange={onChange}
+            onChange={(edited) => {
+              const next = editedDateCondition(date.attribute, edited);
+              if (next) onChange(next);
+            }}
             errorAt={errorAt}
             holder={context.holder}
           />

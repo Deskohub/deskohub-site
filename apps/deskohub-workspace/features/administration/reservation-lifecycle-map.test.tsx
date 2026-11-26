@@ -7,6 +7,7 @@ import {
   test,
 } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -34,7 +35,7 @@ const reachedBadges = (container: HTMLElement) =>
 const currentCard = (container: HTMLElement) => {
   const cards = container.querySelectorAll('[aria-current="step"]');
   expect(cards).toHaveLength(1);
-  return cards[0] as HTMLElement;
+  return elementOf(cards[0], HTMLElement);
 };
 
 describe("ReservationLifecycleMap", () => {

@@ -1,9 +1,11 @@
-import type {
-  AudienceAttribute,
-  AudienceCountCondition,
-  CampaignEmailSourceType,
+import {
+  type AudienceAttribute,
+  type AudienceCountCondition,
+  CampaignEmailSource as CampaignEmailSourceSchema,
+  type CampaignEmailSourceType,
+  DatePeriod as DatePeriodSchema,
 } from "@deskohub/workspace-admin-api";
-import { Effect, Match } from "effect";
+import { Effect, Match, Schema } from "effect";
 import {
   type AudienceFilter,
   audienceConditionsOf,
@@ -14,6 +16,9 @@ import type { DatePeriod } from "./date-period";
 import { AudienceFilterContextInvalid } from "./errors";
 
 type CampaignEmailSource = CampaignEmailSourceType;
+
+const isDatePeriod = Schema.is(DatePeriodSchema);
+const isCampaignEmailSource = Schema.is(CampaignEmailSourceSchema);
 
 /** The attributes, period kinds, and campaign sources a filter tree uses. */
 export type AudienceFilterUsage = {
@@ -49,8 +54,8 @@ const countConditionUsage = (
       param.part === part && params[name] !== undefined ? [params[name]] : []
     );
   return {
-    periods: valuesOf("period") as DatePeriod[],
-    campaignSources: valuesOf("campaign") as CampaignEmailSource[],
+    periods: valuesOf("period").filter(isDatePeriod),
+    campaignSources: valuesOf("campaign").filter(isCampaignEmailSource),
   };
 };
 

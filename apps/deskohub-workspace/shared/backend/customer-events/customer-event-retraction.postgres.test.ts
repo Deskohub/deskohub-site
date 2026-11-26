@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { Effect, Schema } from "effect";
 import {
@@ -56,14 +57,15 @@ describe.skipIf(!testDatabase)(
           },
         ])
       );
-      const id = reservation!.id;
+      assert(reservation !== undefined, "Expected inserted reservation");
+      const id = reservation.id;
       reservationIds.push(id);
       for (const occurredAt of cancellations) {
         await runInTransaction(
           recordCustomerEvent({
             kind: "reservation-cancelled",
             occurredAt,
-            dotyposCustomerId: reservation!.dotyposCustomerId,
+            dotyposCustomerId: reservation.dotyposCustomerId,
             workspaceReservationId: id,
           })
         );

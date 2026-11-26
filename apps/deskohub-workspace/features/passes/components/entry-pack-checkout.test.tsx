@@ -1,10 +1,12 @@
 import { afterAll, afterEach, expect, mock, spyOn, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { m } from "@/features/i18n";
 import { getPaymentSubmitLegalDocuments } from "@/features/legal/payment-submit-evidence";
 import { orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -91,8 +93,10 @@ test("an earlier Details response cannot open Pay after the buyer changes packs"
     view.queryByRole("heading", { name: m.checkoutPayTitle({}, { locale }) })
   ).toBeNull();
   expect(
-    (view.getByRole("radio", { name: /10 entries/i }) as HTMLInputElement)
-      .checked
+    elementOf(
+      view.getByRole("radio", { name: /10 entries/i }),
+      HTMLInputElement
+    ).checked
   ).toBe(true);
 });
 
@@ -114,10 +118,12 @@ test("sign-in after selecting a new pack drops the previous draft order", () => 
       .getByRole("link", {
         name: m.accountSignInTitle({}, { locale }),
       })
-      .getAttribute("href")!;
+      .getAttribute("href");
+    assert(href);
     const returnTo = new URL(href, "https://deskohub.example").searchParams.get(
       "returnTo"
-    )!;
+    );
+    assert(returnTo);
     return new URL(returnTo, "https://deskohub.example").searchParams;
   };
   expect(signInReturn().get("order")).toBe(orderId);

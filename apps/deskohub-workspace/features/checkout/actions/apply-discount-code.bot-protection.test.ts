@@ -79,7 +79,8 @@ describe("applyDiscountCodeForm", () => {
         verifiedBotName: customerAgentNames[0],
         verifiedBotCategory: "ai_assistant",
         bypassed: false,
-      } as never)
+        classificationReason: undefined,
+      })
     );
 
     const url = await submitCode();

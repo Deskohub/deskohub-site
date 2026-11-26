@@ -2,6 +2,7 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { expect, spyOn, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   DotyposCustomerIdSchema,
   type DotyposReservation,
@@ -89,18 +90,18 @@ const capacityLayer = (input: {
 }) => {
   const lock = makeRecordingAdvisoryLock();
   const services = Layer.mergeAll(
-    Layer.succeed(DotyposService, {
+    Layer.mock(DotyposService, {
       getTables: () => Effect.succeed(input.tables),
       listActiveReservationsOverlapping: () =>
         Effect.sync(() => {
           input.onInventoryRead?.();
           return input.providerBookings ?? [];
         }),
-    } as DotyposService["Service"]),
-    Layer.succeed(WorkspaceReservationRepository, {
+    }),
+    Layer.mock(WorkspaceReservationRepository, {
       selectExpiredHoldDotyposReservationIds: () => Effect.succeed([]),
       selectPendingPassDayCapacity: () => Effect.succeed(input.intents ?? []),
-    } as WorkspaceReservationRepository["Service"]),
+    }),
     Layer.succeed(GoogleCalendarWorkspaceLimitationsService, {
       listLimitations: () => Effect.succeed([]),
     }),
@@ -166,7 +167,9 @@ test("Open Space changes tables by date and keeps the local DST interval", async
     otherOpenTable.id,
     openTable.id,
   ]);
-  const { startsAt, endsAt } = plan.days[0]!.interval;
+  const [firstDay] = plan.days;
+  assert(firstDay);
+  const { startsAt, endsAt } = firstDay.interval;
   expect(Temporal.Instant.from(endsAt).since(startsAt).total("hours")).toBe(16);
   expect(entered).toEqual(
     plan.days.map(({ serviceDate }) => [
@@ -280,7 +283,9 @@ test("the workstation pins an exact monitor setup", async () => {
   ).pipe(Effect.provide(services), Effect.runPromise);
   expect(plan.pinnedDesk).toEqual({ id: exact.id, name: exact.name });
   expect(plan.days.every(({ tableId }) => tableId === exact.id)).toBe(true);
-  const { startsAt, endsAt } = plan.days[0]!.interval;
+  const [firstDay] = plan.days;
+  assert(firstDay);
+  const { startsAt, endsAt } = firstDay.interval;
   expect(Temporal.Instant.from(endsAt).since(startsAt).total("hours")).toBe(23);
 });
 
@@ -306,17 +311,19 @@ test("ordinary assignment counts a durable intent and deduplicates its visible p
     day,
     generation,
   }).pipe(
-    Effect.provideService(DotyposService, {
-      createReservation: ({ note }) =>
-        Effect.succeed({
-          ...providerBooking("15", openTable, startDate),
-          startDate: interval.startsAt,
-          endDate: interval.endsAt,
-          seats: "1",
-          status: "NEW",
-          note,
-        }),
-    } as DotyposService["Service"]),
+    Effect.provide(
+      Layer.mock(DotyposService, {
+        createReservation: ({ note }) =>
+          Effect.succeed({
+            ...providerBooking("15", openTable, startDate),
+            startDate: interval.startsAt,
+            endDate: interval.endsAt,
+            seats: "1",
+            status: "NEW",
+            note,
+          }),
+      })
+    ),
     Effect.runPromise
   );
   expect(hasUnlimitedPassDayMarker(record, passId, startDate, generation)).toBe(
@@ -451,10 +458,12 @@ test("ordinary assignment counts a durable intent and deduplicates its visible p
     customerId,
     startDate,
   }).pipe(
-    Effect.provideService(DotyposService, {
-      listReservations: () =>
-        Effect.succeed([record, cancelled, { ...other, note: "unrelated" }]),
-    } as DotyposService["Service"]),
+    Effect.provide(
+      Layer.mock(DotyposService, {
+        listReservations: () =>
+          Effect.succeed([record, cancelled, { ...other, note: "unrelated" }]),
+      })
+    ),
     Effect.runPromise
   );
   expect(listed).toEqual([record, cancelled]);

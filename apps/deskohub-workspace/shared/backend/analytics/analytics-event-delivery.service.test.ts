@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import type {
+import {
   PostHogDistinctId,
   PostHogEventId,
 } from "@deskohub/analytics-posthog/identifiers";
@@ -52,11 +52,11 @@ const captureClientKey = Symbol.for(
 );
 
 const message = {
-  distinctId: "synthetic-visitor" as PostHogDistinctId,
+  distinctId: PostHogDistinctId.make("synthetic-visitor"),
   event: "synthetic event",
   properties: { source: "test" },
   timestamp: Temporal.Instant.from("2026-06-01T10:00:00Z"),
-  uuid: "00000000-0000-4000-8000-000000000001" as PostHogEventId,
+  uuid: PostHogEventId.make("00000000-0000-4000-8000-000000000001"),
 };
 
 const sendThroughDefaultDelivery = () =>

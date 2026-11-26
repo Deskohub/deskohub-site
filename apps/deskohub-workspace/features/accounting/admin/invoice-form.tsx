@@ -3,6 +3,7 @@
 import { effectSchemaResolver } from "@deskohub/effect-schema-resolver";
 import {
   getLocaleDefinition,
+  isSupportedLocale,
   supportedLocales,
 } from "@deskohub/i18n/locale-registry";
 import { BigDecimal, Option, Schema } from "effect";
@@ -728,9 +729,12 @@ function InvoiceCustomerFields({
               <FormControl>
                 <select
                   className={selectClassName}
-                  onChange={(event) =>
-                    field.onChange(event.target.value as "person" | "business")
-                  }
+                  onChange={(event) => {
+                    const { value } = event.target;
+                    if (value === "person" || value === "business") {
+                      field.onChange(value);
+                    }
+                  }}
                   value={field.value}
                 >
                   <option value="person">
@@ -1113,11 +1117,10 @@ function InvoiceDetailsSection({
               <FormControl>
                 <select
                   className={selectClassName}
-                  onChange={(event) =>
-                    field.onChange(
-                      event.target.value as InvoiceFormOutput["locale"]
-                    )
-                  }
+                  onChange={(event) => {
+                    const { value } = event.target;
+                    if (isSupportedLocale(value)) field.onChange(value);
+                  }}
                   value={field.value}
                 >
                   {supportedLocales.map((option) => (
@@ -1357,10 +1360,8 @@ function InvoicePriceInput({
   useEffect(() => {
     const input = inputRef.current;
     if (!input) return;
-    const handleNativeChange = (event: Event) => {
-      const price = normalizeInvoicePriceInput(
-        (event.currentTarget as HTMLInputElement).value
-      );
+    const handleNativeChange = () => {
+      const price = normalizeInvoicePriceInput(input.value);
       if (!isInvoicePriceInput(price, exponent)) {
         // Rejected input never reaches form state, so restore the DOM to the
         // accepted value instead of letting it drift.

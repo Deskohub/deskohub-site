@@ -60,10 +60,10 @@ const isScalarReference = (
   );
 
 const isUrlReference = (
-  definition: EmailValueDefinition,
+  definition: EmailValueDefinition | undefined,
   path: readonly string[] | undefined
 ) =>
-  definition.source.kind === "trigger" &&
+  definition?.source.kind === "trigger" &&
   isEmailTriggerUrlField(emailTriggerFieldAt(definition.source.trigger, path));
 
 /** The finished parts of a text; unfinished or broken value references drop. */
@@ -179,8 +179,7 @@ const previewComponent = (
   const { href, hrefValue, ...unlinked } = base;
   const validHrefValue =
     hrefValue?.name &&
-    definitions.get(hrefValue.name) &&
-    isUrlReference(definitions.get(hrefValue.name)!, hrefValue.field)
+    isUrlReference(definitions.get(hrefValue.name), hrefValue.field)
       ? hrefValue
       : undefined;
   const candidate = Match.value(component._tag).pipe(

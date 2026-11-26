@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   DotyposCustomerIdSchema,
   DotyposService,
@@ -97,6 +98,7 @@ import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId as accountId } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
@@ -207,7 +209,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     );
 
     test("customer Continue retains the same draft and initializes the owner's website Pay", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const orderId = orderIdSchema.make(crypto.randomUUID());
       const product = {
         kind: "entry-pack",
@@ -291,9 +293,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
       expect(details.pathname).toBe("/en-US/passes/entry-pack");
       expect(details.searchParams.get("step")).toBe("details");
+      const handoff = details.searchParams.get("handoff");
+      assert(handoff);
       expect(
         await Effect.runPromise(
-          readPassCheckoutHandoff(details.searchParams.get("handoff")!).pipe(
+          readPassCheckoutHandoff(handoff).pipe(
             Effect.provide(Layer.merge(services, SealedStateKeys.Default))
           )
         )
@@ -305,7 +309,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("only the active buyer can resolve an Entry pack order's locale", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const orderId = orderIdSchema.make(crypto.randomUUID());
       await Effect.runPromise(
         beginEntryPackPurchase({
@@ -362,17 +366,19 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           .values({ kind: "voucher", code, enabled: true })
           .returning()
       );
+      assert(promotion);
       const [voucher] = await Effect.runPromise(
         db.db
           .insert(vouchers)
           .values({
-            promotionCodeId: promotion!.id,
+            promotionCodeId: promotion.id,
             issuedAmountValue: voucherValue,
             issuedAmountExponent: 2,
             issuedAmountCurrency: "CZK",
           })
           .returning()
       );
+      assert(voucher);
       const amount = currencyCZK(voucherValue);
       let discountAvailable = true;
       let replacementProviderReference: string | undefined;
@@ -381,19 +387,19 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         discount: {
           id: deriveOpaqueDiscountId({
             providerNamespace: "database-voucher",
-            providerReference: voucher!.id,
+            providerReference: voucher.id,
           }),
           label: m.checkoutVoucherLabel({}, { locale: "en-US" }),
           adjustment: { kind: "fixed", amount },
         },
         provenance: {
           providerNamespace: "database-voucher",
-          providerReference: voucher!.id,
-          details: { voucherId: voucher!.id },
+          providerReference: voucher.id,
+          details: { voucherId: voucher.id },
         },
         claim: {
           kind: "voucher",
-          voucherId: voucher!.id,
+          voucherId: voucher.id,
           availableAmount: amount,
           dotyposCustomerId,
         },
@@ -594,11 +600,15 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         }),
         Layer.mock(DiscountService, {
           applyDiscountCode: ({ baseQuote }) =>
-            Effect.succeed({
-              quote: baseQuote,
-              application: baseQuote.discounts.find(
+            Effect.sync(() => {
+              const application = baseQuote.discounts.find(
                 ({ discount }) => discount.id === candidate.discount.id
-              )!,
+              );
+              assert(application);
+              return {
+                quote: baseQuote,
+                application,
+              };
             }),
           quote: (input) =>
             calculateDiscounts({
@@ -999,9 +1009,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           const path = new URL(destination, "https://example.invalid");
           expect(path.pathname).toBe("/en-US/passes/entry-pack");
           expect(path.searchParams.get("step")).toBe("pay");
-          const retryOrderId = orderIdSchema.make(
-            path.searchParams.get("order")!
-          );
+          const orderParam = path.searchParams.get("order");
+          assert(orderParam);
+          const retryOrderId = orderIdSchema.make(orderParam);
           expect(retryOrderId).toBe(orderId);
           return Effect.runPromise(
             readEntryPackPaymentRetry(retryOrderId).pipe(
@@ -1098,7 +1108,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     } satisfies ReservationBillingSelection;
 
     test("saves current pricing before the first attempt and requires the buyer to see it", async () => {
-      const payment = await integration(database!, 2_000);
+      const payment = await integration(requireTestDatabase(database), 2_000);
       payment.removeDiscount();
 
       const refreshed = await payment.pay();
@@ -1139,7 +1149,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         },
       } satisfies DiscountCandidate;
       const payment = await integration(
-        database!,
+        requireTestDatabase(database),
         2_000,
         undefined,
         undefined,
@@ -1187,7 +1197,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
 
     test("keeps the first attempt's pricing and billing after an ended payment", async () => {
       const payment = await integration(
-        database!,
+        requireTestDatabase(database),
         2_000,
         undefined,
         requestedInvoice
@@ -1211,7 +1221,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("a same-price code change invalidates stale Remove and Pay, including hosted retries", async () => {
-      const payment = await integration(database!, 2_000);
+      const payment = await integration(requireTestDatabase(database), 2_000);
       const otherCode = canonicalPromotionCodeSchema.make("OTHER-CODE");
       const updated = await payment.reprice(
         payment.initialFingerprint,
@@ -1256,7 +1266,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("status resumes the original gift, verifies the prior charge and keeps billing while collecting fresh consent", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const holderEmail = testEmailAddress("retry-gift-holder");
       const payment = await integration(
         db,
@@ -1269,7 +1279,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await payment.pay()).toMatchObject({ status: "hosted" });
       await payment.notify("failure");
       payment.confirmProviderOrderEnded();
-      const oldProviderOrder = payment.providerOrders[0]!;
+      const [oldProviderOrder] = payment.providerOrders;
+      assert(oldProviderOrder);
       payment.verifiedOrders.length = 0;
       const ended = await payment.status();
       expect(ended.status).toBe("failed");
@@ -1307,8 +1318,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         [payment.orderId]
       );
       expect(attempts.rows).toHaveLength(2);
-      const first = await payment.readAccounting(attempts.rows[0]!.id);
-      const second = await payment.readAccounting(attempts.rows[1]!.id);
+      const [firstAttempt, secondAttempt] = attempts.rows;
+      assert(firstAttempt && secondAttempt);
+      const first = await payment.readAccounting(firstAttempt.id);
+      const second = await payment.readAccounting(secondAttempt.id);
       expect(first.snapshot?.buyer).toBeDefined();
       expect(second.snapshot?.buyer).toEqual(first.snapshot?.buyer);
       expect(second.snapshot?.billing).toEqual(first.snapshot?.billing);
@@ -1333,7 +1346,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("an inconclusive terminal payment stays on private status and a late capture settles the original pack", async () => {
-      const payment = await integration(database!, 2_000);
+      const payment = await integration(requireTestDatabase(database), 2_000);
       await payment.pay();
       await payment.notify("failure");
       const checking = await payment.status();
@@ -1361,7 +1374,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("an ended attempt cannot reserve a different promotion with the same code and price", async () => {
-      const payment = await integration(database!, 2_000);
+      const payment = await integration(requireTestDatabase(database), 2_000);
       expect(await payment.pay()).toMatchObject({ status: "hosted" });
       await payment.notify("failure");
       payment.confirmProviderOrderEnded();
@@ -1374,13 +1387,15 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("reconciliation rotates past an inconclusive Nexi order at batch size one", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const first = await integration(db, 2_000);
       const next = await integration(db, 2_000);
       const now = Temporal.Now.instant();
       await first.pay(now);
       await next.pay(now.add({ seconds: 1 }));
-      next.makeOrderInconclusive(first.providerOrders[0]!);
+      const [firstProviderOrder] = first.providerOrders;
+      assert(firstProviderOrder);
+      next.makeOrderInconclusive(firstProviderOrder);
       next.abandonProviderOrder();
       const read = (orderId: string) =>
         db.pool
@@ -1414,7 +1429,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("reconciliation rotates past a failing confirmation at batch size one", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const first = await integration(db, 115_000);
       const next = await integration(db, 115_000);
       const now = Temporal.Now.instant();
@@ -1455,7 +1470,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
 
     test("only the Pay screen for the current ended attempt can admit and record consent", async () => {
       const payment = await integration(
-        database!,
+        requireTestDatabase(database),
         2_000,
         undefined,
         requestedInvoice
@@ -1504,7 +1519,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("the customer API starts an owned purchase and requires consent before the native payment handoff", async () => {
-      const purchase = await integration(database!, 20_000);
+      const purchase = await integration(requireTestDatabase(database), 20_000);
       const api = purchase.customerApi();
       const orderId = purchase.orderId;
       const started = await api.handle(
@@ -1628,7 +1643,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("Unlimited replacement reopens the buyer's payment when Pay wins the race", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const payment = await integration(db, 2_000);
       const dotypos = makeInMemoryDotypos({
         tables: [
@@ -1840,7 +1855,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("customer Pay verifies the buyer, current consent and price before opening Nexi", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const purchase = await integration(db, 20_000);
       const originalHandoff = await Effect.runPromise(
         purchase.customerHandoff()
@@ -1912,7 +1927,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await Effect.runPromise(purchase.replayCustomerStart())).toEqual(
         expectedStatus
       );
-      const { resultUrl, cancelUrl } = purchase.providerReturns[0]!;
+      const [firstReturn] = purchase.providerReturns;
+      assert(firstReturn);
+      const { resultUrl, cancelUrl } = firstReturn;
       const reservations = Layer.mock(WorkspaceReservationRepository, {
         findPaymentReturnTarget: () => Effect.succeed(undefined),
       });
@@ -1979,7 +1996,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("retries only the failed internal invoice copy after confirming the purchase", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const payment = await integration(
         db,
         115_000,
@@ -2038,7 +2055,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     test.each([2_000, 115_000])(
       "requires a fresh quote on the exclusive Prague end date for voucher value %i",
       async (voucherValue) => {
-        const db = database!;
+        const db = requireTestDatabase(database);
         const payment = await integration(
           db,
           voucherValue,
@@ -2074,7 +2091,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     );
 
     test("an Unlimited draft loses its resume link when the first service day ends before its hold", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const cutoff = Temporal.Instant.from("2030-01-15T16:00:00Z");
       const purchase = await integration(
         db,
@@ -2118,7 +2135,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     test.each([2_000, 115_000])(
       "refuses locked admission when Prague midnight crosses after Pay for voucher value %i",
       async (voucherValue) => {
-        const db = database!;
+        const db = requireTestDatabase(database);
         const payment = await integration(
           db,
           voucherValue,
@@ -2141,7 +2158,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     );
 
     test("admits buyer voucher, releases it on terminal failure and redeems it on verified late capture", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const payment = await integration(db, 2_000);
       expect(await payment.pay()).toMatchObject({ status: "hosted" });
       expect(await payment.pay()).toMatchObject({ status: "pending" });
@@ -2191,7 +2208,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     test.each([2_000, 115_000])(
       "retries confirmation through reconciliation with frozen buyer accounting for voucher value %i",
       async (voucherValue) => {
-        const db = database!;
+        const db = requireTestDatabase(database);
         const internal = voucherValue === 115_000;
         const address = {
           line1: "Synthetic 8",
@@ -2254,7 +2271,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           [payment.orderId]
         );
         expect(accountingRows.rows).toHaveLength(1);
-        const row = accountingRows.rows[0]!;
+        const [row] = accountingRows.rows;
+        assert(row);
         expect(payment.invoiceDeliveries).toEqual(new Set([row.invoice_id]));
         const { snapshot, invoice } = await payment.readAccounting(
           row.attempt_id,
@@ -2287,7 +2305,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     test.each([false, true])(
       "reconciles abandoned Nexi holds and releases claims (attached page %p)",
       async (attached) => {
-        const db = database!;
+        const db = requireTestDatabase(database);
         const payment = await integration(db, 2_000);
         if (attached) {
           expect(await payment.pay()).toMatchObject({ status: "hosted" });
@@ -2339,7 +2357,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     );
 
     test("records a superseded capture for refund without replacing the current attempt", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const payment = await integration(db, 2_000);
       await payment.pay();
       await payment.notify("failure");
@@ -2368,7 +2386,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("uses an internal paid attempt for a fully covered pack", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const payment = await integration(db, 115_000);
       expect(await payment.pay()).toMatchObject({ status: "paid" });
       expect(await payment.pay()).toMatchObject({ status: "paid" });
@@ -2387,7 +2405,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("records the earliest verified buyer confirmation delivery for the current paid Entry pack attempt", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const payment = await integration(db, 2_000);
       const readPurchase = () =>
         Effect.runPromise(
@@ -2401,16 +2419,21 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               .innerJoin(orders, eq(orders.id, passPurchases.id))
               .where(eq(passPurchases.id, payment.orderId))
           ).pipe(
-            Effect.map(([purchase]) => purchase!),
+            Effect.map(([purchase]) => {
+              assert(purchase);
+              return purchase;
+            }),
             Effect.provide(db.layer)
           )
         );
       await payment.pay();
-      const staleAttempt = (await readPurchase()).attemptId!;
+      const staleAttempt = (await readPurchase()).attemptId;
+      assert(staleAttempt);
       await payment.notify("failure");
       payment.confirmProviderOrderEnded();
       await payment.pay(undefined, await payment.retryApproval());
-      const currentAttempt = (await readPurchase()).attemptId!;
+      const currentAttempt = (await readPurchase()).attemptId;
+      assert(currentAttempt);
       expect(currentAttempt).not.toBe(staleAttempt);
 
       const tags = {
@@ -2499,7 +2522,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("fulfills simultaneous gifts when the pool has one lock permit", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const recipients = [
         "concurrent-gift-first",
         "concurrent-gift-second",
@@ -2527,7 +2550,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     test.each([2_000, 115_000])(
       "issues a holder-only gift after paid settlement with voucher value %i",
       async (voucherValue) => {
-        const db = database!;
+        const db = requireTestDatabase(database);
         const internal = voucherValue === 115_000;
         const holderEmail = testEmailAddress(
           internal ? "internal-gift-recipient" : "provider-gift-recipient"
@@ -2633,7 +2656,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           invitation: internal ? "sent" : "pending",
           claimed: false,
         });
-        const first = payment.invitations[0]!;
+        const [first] = payment.invitations;
+        assert(first);
         expect(first.to).toEqual({ email: holderEmail });
         expect(first.sensitiveContent).toBe(true);
         expect(first.html?.includes("Claim your pass")).toBe(true);
@@ -2689,7 +2713,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             first.idempotencyKey
           );
         }
-        const currentSecret = extractContext(payment.invitations.at(-1)!);
+        const latestInvitation = payment.invitations.at(-1);
+        assert(latestInvitation);
+        const currentSecret = extractContext(latestInvitation);
         await db.pool.query(
           'update auth."user" set email_verified = true where id = $1',
           [holderAccountId]
@@ -2736,7 +2762,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     );
 
     test("keeps a replacement invitation queued until its own holder is locked", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const payment = await integration(
         db,
         115_000,
@@ -2805,7 +2831,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("allows the paid buyer confirmation when holder deletion blocks the invitation", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const payment = await integration(
         db,
         115_000,
@@ -2824,7 +2850,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("preserves bookability of a paid gift from before gift activation tracking", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const payment = await integration(
         db,
         115_000,
@@ -2864,7 +2890,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("does not replay an uncertain invitation with changed content", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const payment = await integration(
         db,
         115_000,
@@ -2895,7 +2921,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("creates one pending order with an empty entry and evidence ledger", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const orderId = orderIdSchema.make(crypto.randomUUID());
       const holderEmail = testEmailAddress("pass-holder");
       const begin = beginEntryPackPurchase({
@@ -2953,7 +2979,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("admission records the current terms and early-start consent", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const payment = await integration(db, 2_000);
       await expect(
         payment.pay(undefined, { accepted: false })
@@ -2991,7 +3017,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("reuses one unverified holder across concurrent purchases with the same login email", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const holderEmail = testEmailAddress("shared-pack-holder");
       const begin = (email: string) =>
         Effect.runPromise(
@@ -3015,7 +3041,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("voids unpaid packs and activates verified late payments just once", async () => {
-      const db = database!;
+      const db = requireTestDatabase(database);
       const orderId = orderIdSchema.make(crypto.randomUUID());
       const purchase = await Effect.runPromise(
         beginEntryPackPurchase({

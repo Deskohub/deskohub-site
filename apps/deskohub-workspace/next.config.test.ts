@@ -240,10 +240,9 @@ const importConfigWith = async (
   };
   assign(variables);
   try {
-    const { default: config } = await import(
-      `./next.config.mjs?stage=${cacheKey}`
-    );
-    return config as typeof nextConfig;
+    const { default: config }: { readonly default: typeof nextConfig } =
+      await import(`./next.config.mjs?stage=${cacheKey}`);
+    return config;
   } finally {
     assign(before);
   }

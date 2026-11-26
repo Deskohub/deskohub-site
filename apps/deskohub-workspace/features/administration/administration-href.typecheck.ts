@@ -4,9 +4,7 @@ import {
   localizeAdministrationHref,
 } from "./administration-href";
 
-const typecheck = false as boolean;
-
-if (typecheck) {
+void (() => {
   const invoice: AdministrationHref = administrationHref(
     "/[locale]/admin/invoices/[invoiceId]",
     { invoiceId: "invoice" }
@@ -22,4 +20,4 @@ if (typecheck) {
 
   // @ts-expect-error Other admin-prefixed paths aren't administration hrefs.
   localizeAdministrationHref("/administrators", "cs-CZ");
-}
+});

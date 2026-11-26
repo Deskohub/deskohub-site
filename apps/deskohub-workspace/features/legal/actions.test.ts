@@ -117,25 +117,27 @@ describe("marketing Server Action edges", () => {
   });
 
   test("accepts only the hydration and banner-save occasions for device analytics consent", async () => {
+    // Each arrives as untyped JSON, the way a client sends it.
     for (const invalid of [
-      { occasion: "sign_in" },
-      { occasion: "hydration", decision: "grant" },
-      {},
+      '{ "occasion": "sign_in" }',
+      '{ "occasion": "hydration", "decision": "grant" }',
+      "{}",
     ]) {
       expect(
-        await recordDeviceAnalyticsConsent(invalid as never)
+        await recordDeviceAnalyticsConsent(JSON.parse(invalid))
       ).toHaveProperty("validationErrors");
     }
   });
 
   test("accepts only a boolean analytics preference", async () => {
+    // Each arrives as untyped JSON, the way a client sends it.
     for (const invalid of [
-      { granted: "true" },
-      { granted: true, accountId: "browser-account" },
-      {},
+      '{ "granted": "true" }',
+      '{ "granted": true, "accountId": "browser-account" }',
+      "{}",
     ]) {
       expect(
-        await saveAccountAnalyticsPreference(invalid as never)
+        await saveAccountAnalyticsPreference(JSON.parse(invalid))
       ).toHaveProperty("validationErrors");
     }
   });

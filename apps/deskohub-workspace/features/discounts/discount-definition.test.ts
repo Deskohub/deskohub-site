@@ -16,9 +16,6 @@ const labels = {
   "cs-CZ": " Letní sleva ",
 } as const;
 
-const untrustedLabels = <T>(value: T): DiscountDefinitionRow["labels"] =>
-  value as DiscountDefinitionRow["labels"];
-
 const percentageRow = (
   overrides: Partial<DiscountDefinitionRow> = {}
 ): DiscountDefinitionRow => ({
@@ -87,26 +84,26 @@ describe("stored discount definitions", () => {
     [
       "missing locale label",
       percentageRow({
-        labels: untrustedLabels({ "en-US": "Summer sale" }),
+        labels: { "en-US": "Summer sale" },
       }),
     ],
     [
       "blank locale label",
       percentageRow({
-        labels: untrustedLabels({
+        labels: {
           "en-US": "Summer sale",
           "cs-CZ": " ",
-        }),
+        },
       }),
     ],
     [
       "unknown locale label",
       percentageRow({
-        labels: untrustedLabels({
+        labels: {
           "en-US": "Summer sale",
           "cs-CZ": "Letní sleva",
           "en-UK": "Misspelled locale",
-        }),
+        },
       }),
     ],
     [

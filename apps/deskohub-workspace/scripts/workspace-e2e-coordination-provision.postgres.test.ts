@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as PgClient from "@effect/sql-pg/PgClient";
-import { Data, Effect, Exit, Redacted } from "effect";
+import { Data, Effect, Exit, Redacted, Struct } from "effect";
 import { normalizePostgresConnectionUrl } from "@/db/postgres-connection-url";
 import { coordinationMigrationStatements } from "@/e2e/coordination/coordination-migrations.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
@@ -199,8 +199,9 @@ describe.skipIf(!postgresDatabase)(
           yield* prepareCoordinationDatabase;
           yield* provisionWorkspaceE2ECoordination;
           const allowed: Partial<Record<RoleProbe, boolean>> = {};
-          for (const [probe, [role, statement]] of Object.entries(roleProbes)) {
-            allowed[probe as RoleProbe] = yield* roleMayRun(role, statement);
+          for (const probe of Struct.keys(roleProbes)) {
+            const [role, statement] = roleProbes[probe];
+            allowed[probe] = yield* roleMayRun(role, statement);
           }
           // Table and sequence grants are checked directly as well: schema
           // access alone would otherwise mask a stale grant from reads.

@@ -1,13 +1,8 @@
 import { type EmailDeliveryId, EmailDeliveryIdSchema } from "@deskohub/email";
 import { decodeStandardSchema } from "@deskohub/standard-schema";
-import { Data, Effect, Option, Schema, SchemaGetter } from "effect";
+import { Data, Effect, Option, Schema } from "effect";
 import { Resend } from "resend";
-import {
-  type Instant,
-  instantStringSchema,
-  TemporalInstantSchema,
-  temporalInstantToIsoString,
-} from "@/shared/utils/temporal";
+import { instantFromIsoStringSchema } from "@/shared/utils/temporal";
 import {
   type EmailKind,
   emailCategoryTag,
@@ -42,19 +37,10 @@ export const deliveryReportEventId = (value: string): ResendWebhookEventId =>
 export const deliveryReportEmailId = (id: EmailDeliveryId): ResendEmailId =>
   ResendEmailIdSchema.make(id);
 
-const ResendWebhookCreatedAtSchema = instantStringSchema
-  .pipe(
-    Schema.decodeTo(TemporalInstantSchema, {
-      decode: SchemaGetter.transform((value) => Temporal.Instant.from(value)),
-      encode: SchemaGetter.transform(
-        (instant) => temporalInstantToIsoString(instant) as Instant
-      ),
-    })
-  )
-  .annotate({
-    identifier: "ResendWebhookCreatedAt",
-    description: "ISO-8601 time at which Resend created the webhook event.",
-  });
+const ResendWebhookCreatedAtSchema = instantFromIsoStringSchema.annotate({
+  identifier: "ResendWebhookCreatedAt",
+  description: "ISO-8601 time at which Resend created the webhook event.",
+});
 
 const ResendWebhookHeadersSchema = Schema.Struct({
   id: ResendWebhookEventIdSchema,
@@ -71,7 +57,7 @@ const ResendTagSchema = Schema.Struct({
   name: Schema.String,
   value: Schema.String,
 });
-type ResendTag = Schema.Schema.Type<typeof ResendTagSchema>;
+const isResendTagList = Schema.is(Schema.Array(ResendTagSchema));
 
 const ResendTagsSchema = Schema.Union([
   Schema.Array(ResendTagSchema),
@@ -91,10 +77,8 @@ type ResendTags = (typeof ResendWebhookEventSchema.Type)["data"]["tags"];
 
 const tagMap = (tags: ResendTags): ReadonlyMap<string, string> => {
   if (!tags) return new Map();
-  if (Array.isArray(tags)) {
-    return new Map(
-      (tags as readonly ResendTag[]).map((tag) => [tag.name, tag.value])
-    );
+  if (isResendTagList(tags)) {
+    return new Map(tags.map((tag) => [tag.name, tag.value]));
   }
   return new Map(Object.entries(tags));
 };
@@ -221,7 +205,7 @@ const withEventId =
 const consumedBy =
   <Event extends DeliveryReportEvent>(events: readonly Event[]) =>
   (event: string): event is Event =>
-    (events as readonly string[]).includes(event);
+    events.some((consumed) => consumed === event);
 
 /**
  * The handler of `kind`'s delivery reports for `events`. The ingress ignores

@@ -117,7 +117,10 @@ import {
   type InvoiceCancellationPlan,
   InvoiceCancellationService,
 } from "../backend/invoice-cancellation.service";
-import { InvoiceEmailDeliveryRepository } from "../backend/invoice-email-delivery.repository";
+import {
+  InvoiceEmailDeliveryRepository,
+  noInvoiceDeliveries,
+} from "../backend/invoice-email-delivery.repository";
 import { InvoiceEmailDeliveryService } from "../backend/invoice-email-delivery.service";
 import { renderInvoicePdf, renderInvoicePdfFile } from "../backend/invoice-pdf";
 import {
@@ -421,7 +424,7 @@ const makeInvoiceAdministrationService = Effect.gen(function* () {
         stored.map((invoice) =>
           toListItem(
             invoice,
-            statuses.get(invoice.id)!,
+            statuses.get(invoice.id) ?? noInvoiceDeliveries,
             cancellations.get(invoice.id) ?? null,
             today
           )
@@ -545,7 +548,7 @@ const makeInvoiceAdministrationService = Effect.gen(function* () {
       : yield* cancellation.plan(stored.id);
     return toDetail(
       stored,
-      statuses.get(stored.id)!,
+      statuses.get(stored.id) ?? noInvoiceDeliveries,
       record,
       plan && {
         customerNotice: plan.customerNotice,
@@ -559,7 +562,7 @@ const makeInvoiceAdministrationService = Effect.gen(function* () {
     "InvoiceAdministrationService.needsAttention"
   )(function* (invoiceId: InvoiceId) {
     const statuses = yield* deliveryLedger.status([invoiceId]);
-    return statuses.get(invoiceId)!.needsAttention;
+    return (statuses.get(invoiceId) ?? noInvoiceDeliveries).needsAttention;
   });
 
   const getPdf = Effect.fn("InvoiceAdministrationService.getPdf")(function* (

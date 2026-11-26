@@ -40,9 +40,9 @@ const hasWeakSecretValue = (value: string): boolean => {
 };
 
 const parseSecretEntry = (entry: string): BetterAuthSecretEntry | undefined => {
-  const match = secretEntryPattern.exec(entry.trim());
-  if (!match) return undefined;
-  return { version: Number(match[1]), value: match[2]!.trim() };
+  const [, version, value] = secretEntryPattern.exec(entry.trim()) ?? [];
+  if (version === undefined || value === undefined) return undefined;
+  return { version: Number(version), value: value.trim() };
 };
 
 /**
@@ -90,8 +90,12 @@ export const parseBetterAuthSecrets = (
     }
   }
 
-  return {
-    kind: "valid",
-    secrets: [entries[0]!, ...entries.slice(1)],
-  };
+  const [first, ...rest] = entries;
+  if (first === undefined) {
+    return {
+      kind: "invalid",
+      message: "BETTER_AUTH_SECRETS is not configured.",
+    };
+  }
+  return { kind: "valid", secrets: [first, ...rest] };
 };

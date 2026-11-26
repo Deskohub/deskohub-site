@@ -11,62 +11,26 @@ import lightBgPlain from "@/assets/logo/plain-bg:light.svg";
 import darkBgSmall from "@/assets/logo/small-bg:dark.svg";
 import lightBgSmall from "@/assets/logo/small-bg:light.svg";
 
-const logo = [
-  {
-    color: "dark" as const,
-    variant: "color" as const,
-    image: darkBgColor,
+const logos = {
+  dark: {
+    color: darkBgColor,
+    cutout: darkBgCutout,
+    fancy: darkBgFancy,
+    plain: darkBgPlain,
+    small: darkBgSmall,
   },
-  {
-    color: "dark" as const,
-    variant: "cutout" as const,
-    image: darkBgCutout,
+  light: {
+    color: lightBgColor,
+    cutout: lightBgCutout,
+    fancy: lightBgFancy,
+    plain: lightBgPlain,
+    small: lightBgSmall,
   },
-  {
-    color: "dark" as const,
-    variant: "fancy" as const,
-    image: darkBgFancy,
-  },
-  {
-    color: "dark" as const,
-    variant: "plain" as const,
-    image: darkBgPlain,
-  },
-  {
-    color: "dark" as const,
-    variant: "small" as const,
-    image: darkBgSmall,
-  },
-  {
-    color: "light" as const,
-    variant: "color" as const,
-    image: lightBgColor,
-  },
-  {
-    color: "light" as const,
-    variant: "cutout" as const,
-    image: lightBgCutout,
-  },
-  {
-    color: "light" as const,
-    variant: "fancy" as const,
-    image: lightBgFancy,
-  },
-  {
-    color: "light" as const,
-    variant: "plain" as const,
-    image: lightBgPlain,
-  },
-  {
-    color: "light" as const,
-    variant: "small" as const,
-    image: lightBgSmall,
-  },
-];
+};
 
 export type LogoStyling = {
-  color: (typeof logo)[number]["color"];
-  variant: (typeof logo)[number]["variant"];
+  color: keyof typeof logos;
+  variant: keyof (typeof logos)[keyof typeof logos];
 };
 
 export default function Logo({
@@ -80,10 +44,10 @@ export default function Logo({
   alt?: string;
 } & Omit<ComponentProps<typeof Image>, "src" | "alt">) {
   const {
-    image: { src, width: imageWidth, height: imageHeight },
-  } = logo.find(
-    (l) => l.color === styling.color && l.variant === styling.variant
-  )!;
+    src,
+    width: imageWidth,
+    height: imageHeight,
+  } = logos[styling.color][styling.variant];
 
   const aspectRatio = imageWidth / imageHeight;
 

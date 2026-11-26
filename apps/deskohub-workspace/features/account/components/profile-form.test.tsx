@@ -685,6 +685,10 @@ describe("ProfileForm", () => {
       });
 
       expect(firstName.value).toBe("Grace");
+      // Later saves use the update action, but the completion stays reported.
+      expect(
+        view.container.querySelector("#account-profile-feedback p")
+      ).not.toBeNull();
       expect(workspaceRouterRefresh).not.toHaveBeenCalled();
       const link = view.getByRole("link", { name: "Next" });
       const event = new MouseEvent("click", {
@@ -699,12 +703,29 @@ describe("ProfileForm", () => {
         "You have unsaved profile changes. Leave this page?"
       );
 
+      const pendingUpdate = Promise.withResolvers<ActionResult>();
+      updateCustomerProfile.mockImplementationOnce(() => pendingUpdate.promise);
       await act(async () => {
         fireEvent.submit(form);
       });
 
       expect(completeCustomerProfile).toHaveBeenCalledTimes(1);
       expect(updateCustomerProfile).toHaveBeenCalledTimes(1);
+      // The completion stays reported until the update settles, while the
+      // pending update holds the submit button.
+      expect(
+        view.container.querySelector("#account-profile-feedback p")
+      ).not.toBeNull();
+      expect(
+        view.container.querySelector<HTMLButtonElement>("button[type='submit']")
+          ?.disabled
+      ).toBe(true);
+
+      await act(async () => {
+        pendingUpdate.resolve({ data: { status: "updated" } });
+        await pendingUpdate.promise;
+      });
+
       expect(workspaceRouterRefresh).toHaveBeenCalledTimes(1);
     } finally {
       window.confirm = originalConfirm;

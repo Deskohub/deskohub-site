@@ -1,10 +1,15 @@
+import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { DotyposCustomerIdSchema, DotyposUnavailable } from "@deskohub/dotypos";
 import { Effect, Layer, Predicate } from "effect";
 import { mockAdministratorAccess } from "@/features/administrators/server/administrator-access.test-utils";
-import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
-import type { DiscountCodeId, VoucherId } from "../persistence-contracts";
+import {
+  discountCodeIdSchema,
+  voucherIdSchema,
+} from "../persistence-contracts";
+import { adminCustomerCode } from "./customer-admin-fixtures.test-utils";
 
 const access = mockAdministratorAccess("discount-administration-pages");
 
@@ -19,37 +24,24 @@ const { DiscountAdministration, DiscountAdminNotFoundError } = await import(
 );
 const pages = await import("./page-data.server");
 
-type Administration = DiscountAdministration["Service"];
+type Administration = (typeof DiscountAdministration)["Service"];
 
-let administration: Partial<
-  Record<keyof Administration, () => Effect.Effect<unknown, unknown>>
-> = {};
+let administration: Partial<Administration> = {};
 const calls: string[] = [];
-
-// Answers only the reads a test sets; any other read is a test failure.
 const originalLive = DiscountAdministration.Live;
-DiscountAdministration.Live = Layer.succeed(
-  DiscountAdministration,
-  new Proxy({} as Administration, {
-    get: (_, method) => {
-      if (!Predicate.isString(method)) return undefined;
-      calls.push(method);
-      return (
-        administration[method as keyof Administration] ??
-        (() => Effect.die(`unexpected ${method}`))
-      );
-    },
-  })
+DiscountAdministration.Live = Layer.suspend(() =>
+  Layer.mock(DiscountAdministration, administration)
 );
 
-const codeId = "019c91dd-c560-7e55-b9d8-c95065efd51d" as DiscountCodeId;
-const voucherId = "019c91dd-c560-7e55-b9d8-c95065efd51e" as VoucherId;
-const customerId = "customer-id" as DotyposCustomerId;
+const codeId = discountCodeIdSchema.make(
+  "019c91dd-c560-7e55-b9d8-c95065efd51d"
+);
+const voucherId = voucherIdSchema.make("019c91dd-c560-7e55-b9d8-c95065efd51e");
+const customerId = DotyposCustomerIdSchema.make("customer-id");
 const missingCustomer = new DiscountAdminNotFoundError({
   resource: { kind: "Dotypos customer", id: customerId },
   message: "missing",
 });
-const missingRecord = () => Effect.fail(missingCustomer);
 const searchParams = () =>
   Promise.resolve({ notice: "Saved", status: "success" });
 
@@ -104,25 +96,47 @@ describe("discount administration record pages", () => {
   test.each(recordPages)(
     "answers a missing record with the ordinary 404 ($read)",
     async ({ load, read }) => {
-      administration = { [read]: missingRecord };
+      administration = {
+        [read]: () => {
+          calls.push(read);
+          return Effect.fail(missingCustomer);
+        },
+      };
 
-      expect(await pageOutcome(load)).toEqual({ kind: "not-found" });
+      expect(await pageOutcome(async () => await load())).toEqual({
+        kind: "not-found",
+      });
       expect(calls).toEqual([read]);
     }
   );
 
   test.each(recordPages)(
     "reads nothing for an account without the grant ($read)",
-    async ({ load }) => {
+    async ({ load, read }) => {
       access.set("not-administrator");
+      administration = {
+        [read]: () => {
+          calls.push(read);
+          return Effect.fail(missingCustomer);
+        },
+      };
 
-      expect(await pageOutcome(load)).toEqual({ kind: "not-found" });
+      expect(await pageOutcome(async () => await load())).toEqual({
+        kind: "not-found",
+      });
       expect(calls).toEqual([]);
     }
   );
 
   test("shows a record beside the page's notice", async () => {
-    const detail = { code: { id: codeId } };
+    const code = adminCustomerCode({ id: codeId });
+    const detail = {
+      code,
+      discountLabel: code.discountLabel,
+      discountLabels: code.discountLabels,
+      customers: [],
+      claims: [],
+    };
     administration = { loadCodeDetail: () => Effect.succeed(detail) };
 
     expect(
@@ -140,7 +154,12 @@ describe("discount administration pages that never 404", () => {
   test("shows the customer page without discount sections it can't read", async () => {
     administration = {
       loadCustomerDiscountSections: () =>
-        Effect.fail(new Error("Dotypos unavailable")),
+        Effect.fail(
+          new DotyposUnavailable({
+            operation: "getCustomer",
+            reason: "timeout",
+          })
+        ),
     };
     expect(
       await pages.loadDiscountCustomerSections(customerId, searchParams())

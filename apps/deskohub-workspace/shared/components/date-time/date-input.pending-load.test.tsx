@@ -24,8 +24,7 @@ let calendarLoad: Promise<CalendarModule> = Promise.resolve(calendarModule);
 
 mock.module("@/shared/utils/preloadable-module", () => ({
   ...actualPreloadableModule,
-  createPreloadableModule: <Module,>() =>
-    createPreloadableModule(() => calendarLoad as Promise<Module>),
+  createPreloadableModule: () => createPreloadableModule(() => calendarLoad),
   usePreloadWhenIdle: () => undefined,
 }));
 

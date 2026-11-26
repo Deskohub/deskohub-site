@@ -67,7 +67,18 @@ const dryRunArgs = [
   "EUR",
   "--teardown-date",
   "2026-12-31",
+  "--vercel-team-slug",
+  "example-team",
+  "--vercel-project",
+  "example-frontend",
+  "--vercel-owner-id",
+  "team_example1001",
+  "--vercel-project-id",
+  "prj_example2002",
 ];
+
+const vercelPool =
+  "projects/123456789012/locations/global/workloadIdentityPools/workspace-vercel";
 
 describe("sandbox smoke workflow", () => {
   test("runs only on manual dispatch", () => {
@@ -159,10 +170,17 @@ const runLiveBootstrap = (
     /** `key=value;key=value`, as gcloud prints the project's labels. */
     labels?: string;
     labelsLookupFails?: boolean;
-    /** Quota refusals before `workspace-web` is created. */
+    /** Quota refusals before `workspace-api` is created. */
     serviceAccountQuotaFailures?: number;
     /** `workspace-deployer` creation races another run that created it. */
     deployerAlreadyExists?: boolean;
+    /** Provider names gcloud lists for the Vercel pool. */
+    vercelProviders?: string;
+    vercelJwksJson?: string;
+    /** gcloud's error for every retired-binding removal, if any. */
+    removeBindingError?: string;
+    /** The deployer's project roles, one per line, as policy readback prints them. */
+    deployerRoles?: string;
   },
   ...args: ReadonlyArray<string>
 ) => {
@@ -188,14 +206,23 @@ case "$*" in
       echo "ERROR: (gcloud.iam.service-accounts.create) Resource in projects is the subject of a conflict: Service account workspace-deployer already exists within project" >&2
       exit 1
     fi ;;
-  *"service-accounts create workspace-web "*)
+  *"service-accounts create workspace-api "*)
     count=$(cat "${quotaCounter}" 2>/dev/null || echo 0)
     if [ "$count" -lt "\${STUB_SA_QUOTA_FAILURES:-0}" ]; then
       echo $((count + 1)) > "${quotaCounter}"
       echo "ERROR: (gcloud.iam.service-accounts.create) RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'Service Account Creation Requests'" >&2
       exit 1
     fi ;;
+  *"projects remove-iam-policy-binding"*)
+    if [ -n "$STUB_REMOVE_ERROR" ]; then
+      echo "$STUB_REMOVE_ERROR" >&2
+      exit 1
+    fi ;;
+  *"projects get-iam-policy"*) printf '%s\n' "$STUB_DEPLOYER_ROLES" ;;
+  *"providers list"*"workspace-vercel"*) printf '%s\n' "$STUB_VERCEL_PROVIDERS" ;;
   *"providers list"*) echo "projects/$STUB_PROJECT_NUMBER/locations/global/workloadIdentityPools/workspace-sandbox-github/providers/deskohub-workspace" ;;
+  *"workspace-vercel"*"value(oidc.issuerUri)"*) echo https://oidc.vercel.com/example-team ;;
+  *"workspace-vercel"*"value(oidc.jwksJson)"*) echo "$STUB_VERCEL_JWKS" ;;
   *"value(oidc.issuerUri)"*) echo https://token.actions.githubusercontent.com ;;
   *"value(oidc.jwksJson)"*) [ -n "$STUB_JWKS_FAILS" ] && exit 1; echo "$STUB_JWKS" ;;
   *"value(location,location_type)"*) printf '%s\n' "$STUB_BUCKET_LOCATION" ;;
@@ -231,6 +258,11 @@ echo "$*" >> "${sleepLog}"
       STUB_LABELS_FAILS: answers.labelsLookupFails ? "1" : "",
       STUB_SA_QUOTA_FAILURES: String(answers.serviceAccountQuotaFailures ?? 0),
       STUB_DEPLOYER_EXISTS: answers.deployerAlreadyExists ? "1" : "",
+      STUB_VERCEL_PROVIDERS:
+        answers.vercelProviders ?? `${vercelPool}/providers/vercel`,
+      STUB_VERCEL_JWKS: answers.vercelJwksJson ?? "",
+      STUB_REMOVE_ERROR: answers.removeBindingError ?? "",
+      STUB_DEPLOYER_ROLES: answers.deployerRoles ?? "",
     },
   });
   const lines = (path: string) =>
@@ -298,8 +330,84 @@ describe("sandbox bootstrap script", () => {
     );
   });
 
-  test("refuses a state bucket outside the stage's region before changing it", () => {
-    for (const bucketLocation of ["EUROPE-WEST3\tregion", "EU\tmulti-region"]) {
+  const frontendGrant = (calls: ReadonlyArray<string>) =>
+    calls.some(
+      (call) =>
+        call.startsWith(
+          "iam service-accounts add-iam-policy-binding workspace-frontend-preview@"
+        ) && call.includes("workloadIdentityUser")
+    );
+
+  test("grants the frontend preview identity once the Vercel provider is trusted", () => {
+    const { result, calls } = runLiveBootstrap(
+      { projectNumber: "123456789012" },
+      ...liveArgs
+    );
+    expect(result.exitCode).toBe(0);
+    expect(frontendGrant(calls)).toBe(true);
+  });
+
+  test.each([
+    {
+      answers: {
+        vercelProviders: `${vercelPool}/providers/vercel\n${vercelPool}/providers/other`,
+      },
+      message: "must contain only provider vercel",
+    },
+    {
+      answers: { vercelJwksJson: '{"keys":[]}' },
+      message: "uploaded signing keys",
+    },
+  ])(
+    "withholds the frontend preview identity when the Vercel provider is not trusted: $message",
+    ({ answers, message }) => {
+      const { result, calls } = runLiveBootstrap(
+        { projectNumber: "123456789012", ...answers },
+        ...liveArgs
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain(message);
+      expect(frontendGrant(calls)).toBe(false);
+    }
+  );
+
+  test("treats an already removed trace-writer grant as removed", () => {
+    const { result, calls } = runLiveBootstrap(
+      {
+        projectNumber: "123456789012",
+        removeBindingError:
+          "ERROR: Policy binding with the specified principal, role, and condition not found!",
+      },
+      ...liveArgs
+    );
+    expect(result.exitCode).toBe(0);
+    expect(
+      calls.filter((call) =>
+        call.startsWith("projects remove-iam-policy-binding")
+      )
+    ).toHaveLength(6);
+    expect(result.stdout.toString()).toContain("already absent; continuing");
+  });
+
+  test.each([
+    "ERROR: PERMISSION_DENIED",
+    "ERROR: (gcloud.projects.remove-iam-policy-binding) NOT_FOUND: Requested entity was not found.",
+  ])(
+    "stops when removing a trace-writer grant fails otherwise: %s",
+    (removeBindingError) => {
+      const { result } = runLiveBootstrap(
+        { projectNumber: "123456789012", removeBindingError },
+        ...liveArgs
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain(removeBindingError);
+      expect(result.stdout.toString()).not.toContain("already absent");
+    }
+  );
+
+  test.each(["EUROPE-WEST3\tregion", "EU\tmulti-region"])(
+    "refuses a state bucket outside the stage's region before changing it: %s",
+    (bucketLocation) => {
       const { result, calls } = runLiveBootstrap(
         { projectNumber: "123456789012", bucketLocation },
         ...liveArgs
@@ -310,7 +418,7 @@ describe("sandbox bootstrap script", () => {
         calls.some((call) => call.startsWith("storage buckets update"))
       ).toBe(false);
     }
-  });
+  );
 
   test("merges the spend and teardown labels with the project's other labels", () => {
     const { result, calls, curlCalls, curlStdin } = runLiveBootstrap(
@@ -362,7 +470,7 @@ describe("sandbox bootstrap script", () => {
     expect(result.exitCode).toBe(0);
     expect(
       calls.filter((call) =>
-        call.startsWith("iam service-accounts create workspace-web ")
+        call.startsWith("iam service-accounts create workspace-api ")
       )
     ).toHaveLength(3);
     expect(sleeps).toEqual(["15", "30"]);
@@ -379,7 +487,7 @@ describe("sandbox bootstrap script", () => {
     expect(result.stderr.toString()).toContain("RESOURCE_EXHAUSTED");
     expect(
       calls.filter((call) =>
-        call.startsWith("iam service-accounts create workspace-web ")
+        call.startsWith("iam service-accounts create workspace-api ")
       )
     ).toHaveLength(6);
     expect(sleeps).toEqual(["15", "30", "60", "60", "60"]);
@@ -390,7 +498,7 @@ describe("sandbox bootstrap script", () => {
     ).toBe(false);
   });
 
-  test("prints the label update without a token and enables the trace APIs", () => {
+  test("prints the label update without a token and enables the trace and federation APIs", () => {
     const output = runBootstrap(...dryRunArgs).stdout.toString();
     expect(output).not.toContain("projects update");
     expect(output).toContain(
@@ -399,13 +507,22 @@ describe("sandbox bootstrap script", () => {
     expect(output).toContain(
       'workspace-sandbox-max-spend\\":\\"200-eur\\"\\,\\"workspace-sandbox-teardown\\":\\"2026-12-31'
     );
-    expect(output).toMatch(
-      /gcloud services enable [^\n]* cloudtrace\.googleapis\.com [^\n]* telemetry\.googleapis\.com\n/
-    );
+    const enabled = output.match(/gcloud services enable ([^\n]*)\n/)?.[1];
+    for (const api of [
+      "cloudtrace.googleapis.com",
+      "cloudscheduler.googleapis.com",
+      "compute.googleapis.com",
+      "sts.googleapis.com",
+      "iamcredentials.googleapis.com",
+    ]) {
+      expect(enabled?.split(" ")).toContain(api);
+    }
   });
 
-  test("lets the runtime accounts write traces and the deployer read logs and traces", () => {
+  test("revokes the runtime trace-writer grants and lets the deployer read compute, logs and traces", () => {
     const firstPhase = runBootstrap(...dryRunArgs).stdout.toString();
+    const traceRoles =
+      /--role roles\/(?:telemetry\.tracesWriter|cloudtrace\.agent)\b/;
     for (const account of [
       "workspace-web",
       "workspace-tasks-worker",
@@ -416,22 +533,16 @@ describe("sandbox bootstrap script", () => {
         "roles/cloudtrace.agent",
       ]) {
         expect(firstPhase).toContain(
-          `gcloud projects add-iam-policy-binding deskohub-ws-sandbox --condition=None --quiet --member serviceAccount:${sandboxServiceAccount(account)} --role ${role} --format=none`
+          `gcloud projects remove-iam-policy-binding deskohub-ws-sandbox --condition=None --quiet --member serviceAccount:${sandboxServiceAccount(account)} --role ${role} --format=none`
         );
       }
     }
-    const traceGrantees = [
-      ...firstPhase.matchAll(
-        /--member serviceAccount:([\w-]+)@[^ ]+ --role roles\/(?:telemetry|cloudtrace)\./g
-      ),
-    ].map((match) => match[1]);
-    expect(new Set(traceGrantees)).toEqual(
-      new Set([
-        "workspace-web",
-        "workspace-tasks-worker",
-        "workspace-scheduler-worker",
-      ])
-    );
+    expect(
+      firstPhase
+        .split("\n")
+        .filter((line) => traceRoles.test(line))
+        .every((line) => line.includes(" remove-iam-policy-binding "))
+    ).toBe(true);
     expect(firstPhase).not.toMatch(
       /roles\/(?:logging\.viewer|cloudtrace\.user)\b/
     );
@@ -440,11 +551,207 @@ describe("sandbox bootstrap script", () => {
       ...dryRunArgs,
       "--grant-deploy-roles"
     ).stdout.toString();
-    for (const role of ["roles/logging.viewer", "roles/cloudtrace.user"]) {
+    for (const role of [
+      "roles/compute.viewer",
+      "roles/logging.viewer",
+      "roles/cloudtrace.user",
+    ]) {
       expect(secondPhase).toContain(
         `--member serviceAccount:${sandboxServiceAccount("workspace-deployer")} --role ${role} --format=none`
       );
     }
+    // The deployer manages no load balancer, security policy or log sink.
+    expect(secondPhase).not.toMatch(
+      /roles\/(?:compute\.loadBalancerAdmin|compute\.securityAdmin|logging\.configWriter)\b/
+    );
+  });
+
+  describe("revoking the retired deployer edge roles", () => {
+    const retiredEdgeRoles = [
+      "roles/compute.loadBalancerAdmin",
+      "roles/compute.securityAdmin",
+      "roles/logging.configWriter",
+    ];
+    const keptRoles =
+      "roles/run.admin\nroles/logging.viewer\nroles/cloudtrace.user";
+    const revokeArgs = [
+      ...liveArgs,
+      "--grant-deploy-roles",
+      "--revoke-retired-edge-roles",
+    ];
+    const edgeRemovals = (calls: ReadonlyArray<string>) =>
+      calls.filter(
+        (call) =>
+          call.startsWith("projects remove-iam-policy-binding") &&
+          call.includes(sandboxServiceAccount("workspace-deployer"))
+      );
+
+    test("removes the bindings an earlier bootstrap granted and reads the policy back", () => {
+      const { result, calls } = runLiveBootstrap(
+        { projectNumber: "123456789012", deployerRoles: keptRoles },
+        ...revokeArgs
+      );
+      expect(result.exitCode).toBe(0);
+      expect(edgeRemovals(calls)).toEqual(
+        retiredEdgeRoles.map(
+          (role) =>
+            `projects remove-iam-policy-binding deskohub-ws-sandbox --condition=None --quiet --member serviceAccount:${sandboxServiceAccount("workspace-deployer")} --role ${role} --format=none`
+        )
+      );
+      expect(
+        calls.some((call) => call.startsWith("projects get-iam-policy"))
+      ).toBe(true);
+    });
+
+    test("converges when the bindings are already gone", () => {
+      const { result } = runLiveBootstrap(
+        {
+          projectNumber: "123456789012",
+          deployerRoles: keptRoles,
+          removeBindingError:
+            "ERROR: Policy binding with the specified principal, role, and condition not found!",
+        },
+        ...revokeArgs
+      );
+      expect(result.exitCode).toBe(0);
+    });
+
+    test("fails when readback still shows a retired role", () => {
+      const { result } = runLiveBootstrap(
+        {
+          projectNumber: "123456789012",
+          deployerRoles: `${keptRoles}\nroles/compute.securityAdmin`,
+        },
+        ...revokeArgs
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("roles/compute.securityAdmin");
+    });
+
+    test("fails when the deployer lost trace read access", () => {
+      const { result } = runLiveBootstrap(
+        {
+          projectNumber: "123456789012",
+          deployerRoles: "roles/logging.viewer",
+        },
+        ...revokeArgs
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("roles/cloudtrace.user");
+    });
+
+    test("never revokes without the deploy-roles phase", () => {
+      const { result, calls } = runLiveBootstrap(
+        { projectNumber: "123456789012", deployerRoles: keptRoles },
+        ...liveArgs,
+        "--revoke-retired-edge-roles"
+      );
+      expect(result.exitCode).toBe(1);
+      expect(edgeRemovals(calls)).toEqual([]);
+    });
+  });
+
+  test("gives the API runtime the retired web runtime's task and deploy access", () => {
+    const secondPhase = runBootstrap(
+      ...dryRunArgs,
+      "--grant-deploy-roles"
+    ).stdout.toString();
+    const api = sandboxServiceAccount("workspace-api");
+    expect(secondPhase).toContain(
+      `gcloud projects add-iam-policy-binding deskohub-ws-sandbox --condition=None --quiet --member serviceAccount:${api} --role roles/cloudtasks.enqueuer --format=none`
+    );
+    expect(secondPhase).toContain(
+      `gcloud iam service-accounts add-iam-policy-binding ${sandboxServiceAccount("workspace-tasks-invoker")} --project deskohub-ws-sandbox --member serviceAccount:${api} --role roles/iam.serviceAccountUser --format=none`
+    );
+    expect(secondPhase).toContain(
+      `gcloud iam service-accounts add-iam-policy-binding ${api} --project deskohub-ws-sandbox --member serviceAccount:${sandboxServiceAccount("workspace-deployer")} --role roles/iam.serviceAccountUser --format=none`
+    );
+    // workspace-web appears only where its old trace grants are revoked.
+    expect(
+      secondPhase
+        .split("\n")
+        .filter((line) => line.includes("workspace-web"))
+        .every((line) => line.includes(" remove-iam-policy-binding "))
+    ).toBe(true);
+  });
+
+  test("trusts Vercel only for the project's preview deployments", () => {
+    const output = runBootstrap(...dryRunArgs).stdout.toString();
+    const providerFlags =
+      "--issuer-uri https://oidc.vercel.com/example-team --allowed-audiences https://vercel.com/example-team --attribute-mapping google.subject=assertion.sub\\,attribute.owner_id=assertion.owner_id\\,attribute.project_id=assertion.project_id\\,attribute.environment=assertion.environment --attribute-condition assertion.owner_id==\\'team_example1001\\'\\ \\&\\&\\ assertion.project_id==\\'prj_example2002\\'\\ \\&\\&\\ assertion.environment==\\'preview\\'\n";
+    expect(output).toContain(
+      "+ gcloud iam workload-identity-pools create workspace-vercel --project deskohub-ws-sandbox --location global --display-name Vercel\\ OIDC\n"
+    );
+    expect(output).toContain(
+      `+ gcloud iam workload-identity-pools providers create-oidc vercel --project deskohub-ws-sandbox --location global --workload-identity-pool workspace-vercel --display-name Vercel\\ preview ${providerFlags}`
+    );
+    expect(output).toContain(
+      `+ gcloud iam workload-identity-pools providers update-oidc vercel --project deskohub-ws-sandbox --location global --workload-identity-pool workspace-vercel ${providerFlags}`
+    );
+    const frontend = sandboxServiceAccount("workspace-frontend-preview");
+    expect(output).toContain(
+      "gcloud iam service-accounts create workspace-frontend-preview "
+    );
+    const frontendGrants = output
+      .split("\n")
+      .filter((line) => line.includes(frontend));
+    expect(frontendGrants).toEqual([
+      `+ gcloud iam service-accounts add-iam-policy-binding ${frontend} --project deskohub-ws-sandbox --role roles/iam.workloadIdentityUser --format=none --member principal://iam.googleapis.com/${vercelPool}/subject/owner:example-team:project:example-frontend:environment:preview`,
+      `WORKSPACE_FRONTEND_SERVICE_ACCOUNT=${frontend}`,
+    ]);
+    expect(output).toContain(
+      "WORKSPACE_GCP_PROJECT_NUMBER=123456789012\nWORKSPACE_WIF_POOL=workspace-vercel\nWORKSPACE_WIF_PROVIDER=vercel\n"
+    );
+  });
+
+  test.each([
+    ["--vercel-owner-id", "team_x' || true || '"],
+    ["--vercel-project-id", "example-project"],
+    ["--vercel-project", "example:environment:production"],
+    ["--vercel-team-slug", ""],
+  ] as const)(
+    "rejects a %s that could widen the provider condition",
+    (flag, value) => {
+      const args = [...dryRunArgs];
+      args[args.indexOf(flag) + 1] = value;
+      const result = runBootstrap(...args);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain(flag);
+      expect(result.stdout.toString()).toBe("");
+    }
+  );
+
+  // owner:example-team:project:<name>:environment:preview is 47 bytes
+  // plus the project name; Google maps subjects of at most 127 bytes.
+  test("accepts a preview subject of 127 bytes", () => {
+    const args = [...dryRunArgs];
+    args[args.indexOf("--vercel-project") + 1] = "p".repeat(80);
+    expect(runBootstrap(...args).exitCode).toBe(0);
+  });
+
+  test("rejects a preview subject of 128 bytes before any change", () => {
+    const args = [...dryRunArgs];
+    args[args.indexOf("--vercel-project") + 1] = "p".repeat(81);
+    const result = runBootstrap(...args);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("127 bytes");
+    expect(result.stdout.toString()).toBe("");
+  });
+
+  test("rejects a multibyte project name in a UTF-8 locale", () => {
+    // 41 two-byte letters: 88 characters but 129 bytes of subject, and
+    // [a-z] admits them under en_US.UTF-8 collation.
+    const args = [...dryRunArgs];
+    args[args.indexOf("--vercel-project") + 1] = "\u00e9".repeat(41);
+    const result = Bun.spawnSync(["bash", bootstrapScript, ...args], {
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        LC_ALL: "en_US.UTF-8",
+      },
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("--vercel-project");
+    expect(result.stdout.toString()).toBe("");
   });
 
   test("passes bash -n", () => {
@@ -472,17 +779,21 @@ describe("sandbox bootstrap script", () => {
     );
     for (const account of [
       "workspace-deployer",
-      "workspace-web",
+      "workspace-api",
       "workspace-tasks-worker",
       "workspace-scheduler-worker",
       "workspace-tasks-invoker",
       "workspace-scheduler-invoker",
       "workspace-mobile-publisher",
+      "workspace-frontend-preview",
     ]) {
       expect(output).toContain(
         `gcloud iam service-accounts create ${account} `
       );
     }
+    expect(output).not.toContain(
+      "gcloud iam service-accounts create workspace-web "
+    );
     expect(output).not.toMatch(
       /roles\/(?:owner|editor|iam\.securityAdmin|resourcemanager\.projectIamAdmin|secretmanager\.(?:admin|secretAccessor))\b/
     );

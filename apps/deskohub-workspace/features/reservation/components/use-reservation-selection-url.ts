@@ -1,10 +1,10 @@
 "use client";
 
+import { Struct } from "effect";
 import { useEffect, useEffectEvent, useRef } from "react";
 import {
   type Control,
   type FieldPath,
-  type FieldPathValue,
   type FieldValues,
   useWatch,
 } from "react-hook-form";
@@ -16,16 +16,17 @@ import {
 /** The form's current selection: the fields its selection link names. */
 export function useWatchedSelection<
   Values extends FieldValues,
-  Param extends FieldPath<Values>,
+  Param extends FieldPath<Values> & keyof Values,
   Transformed,
 >(
   link: { readonly params: readonly Param[] },
   control: Control<Values, unknown, Transformed>
-): { readonly [Name in Param]: FieldPathValue<Values, Name> } {
-  const values: readonly unknown[] = useWatch({ control, name: link.params });
-  return Object.fromEntries(
-    link.params.map((name, index) => [name, values[index]])
-  ) as { readonly [Name in Param]: FieldPathValue<Values, Name> };
+): Pick<Values, Param> {
+  // Re-renders only when the picked selection changes.
+  return useWatch({
+    control,
+    compute: (values: Values) => Struct.pick(values, link.params),
+  });
 }
 
 /**

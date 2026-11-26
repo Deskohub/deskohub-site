@@ -185,6 +185,10 @@ describe("campaignContentForRecipient", () => {
     }
   });
 
+  test("refuses a campaign without content", () => {
+    expect(() => campaignContentForRecipient({}, "en-US")).toThrow();
+  });
+
   test("German and Ukrainian recipients fall back to English, then Czech", () => {
     for (const locale of ["de-DE", "uk-UA"] as const) {
       expect(chosenLocale({ "cs-CZ": czech, "en-US": english }, locale)).toBe(

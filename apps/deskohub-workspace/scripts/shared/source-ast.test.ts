@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   callsNamed,
   containsNode,
   identifierNames,
   methodCallsNamed,
+  nodesOf,
   parseSource,
   stringLiterals,
   topLevelConstInitializer,
@@ -25,13 +27,13 @@ describe("source-ast structured checks", () => {
       ].join("\n")
     );
     const outerInitializer = topLevelConstInitializer(ast, "outer");
-    expect(outerInitializer).toBeDefined();
-    const insideOuter = callsNamed(outerInitializer!, "captureAccountReview");
+    assert(outerInitializer);
+    const insideOuter = callsNamed(outerInitializer, "captureAccountReview");
     expect(insideOuter).toHaveLength(2);
     const wholeFile = callsNamed(ast, "captureAccountReview");
     expect(wholeFile).toHaveLength(3);
     for (const call of insideOuter) {
-      expect(containsNode(outerInitializer!, call)).toBe(true);
+      expect(containsNode(outerInitializer, call)).toBe(true);
     }
   });
 
@@ -51,5 +53,18 @@ describe("source-ast structured checks", () => {
     );
     expect(identifierNames(ast).has("process")).toBe(true);
     expect(identifierNames(ast).has("stdout")).toBe(true);
+  });
+
+  test("walks syntax nodes only, not the parser's tokens", () => {
+    const types = nodesOf(parseSource("const sample = 1;")).map(
+      (node) => node.type
+    );
+    expect(types).toEqual([
+      "Program",
+      "VariableDeclaration",
+      "VariableDeclarator",
+      "Identifier",
+      "Literal",
+    ]);
   });
 });

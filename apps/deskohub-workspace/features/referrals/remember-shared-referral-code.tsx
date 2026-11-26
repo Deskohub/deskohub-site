@@ -8,8 +8,7 @@ import {
 } from "./referral-code-cookie";
 
 const isPrerendering = () =>
-  (document as Document & { readonly prerendering?: boolean }).prerendering ===
-  true;
+  "prerendering" in document && document.prerendering === true;
 
 /**
  * Remembers the shared referral code in the address of the page being shown,

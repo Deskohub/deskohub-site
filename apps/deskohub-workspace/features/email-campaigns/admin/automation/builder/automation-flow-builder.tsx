@@ -28,8 +28,8 @@ import {
   triggerPreviewKey,
 } from "./automation-flow-editing";
 import {
+  type AutomationFlowDraftValues,
   type AutomationFlowFormOutput,
-  type AutomationFlowFormValues,
   automationFlowFormValues,
   createAutomationFlowFormSchema,
   type FlowStepValue,
@@ -86,14 +86,18 @@ export function AutomationFlowBuilder({
   const [revision, setRevision] = useState(0);
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useForm<
-    AutomationFlowFormValues,
+    AutomationFlowDraftValues,
     unknown,
     AutomationFlowFormOutput
   >({
     defaultValues: automationFlowFormValues(automation.flow),
     mode: "onSubmit",
     reValidateMode: "onChange",
-    resolver: effectSchemaResolver(createAutomationFlowFormSchema(locale), {
+    resolver: effectSchemaResolver<
+      AutomationFlowDraftValues,
+      unknown,
+      AutomationFlowFormOutput
+    >(createAutomationFlowFormSchema(locale), {
       onExcessProperty: "error",
     }),
   });

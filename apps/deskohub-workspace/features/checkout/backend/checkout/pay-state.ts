@@ -46,39 +46,53 @@ import { getPriceVerdictChangedKeys, type PriceVerdict } from "./price-verdict";
 export { reservationHoldTtlMilliseconds as payStateDefaultTtlMilliseconds } from "@/features/reservation/reservation-hold-deadline";
 export { payStateTokenQueryParam };
 
+/** Each reservation family's order with its quote, as a Pay state signs them. */
+const coworkPayStatePricingSchema = Schema.Struct({
+  reservation: normalizedCoworkReservationOrderSchema,
+  quote: coworkReservationQuoteSchema,
+});
+const meetingRoomPayStatePricingSchema = Schema.Struct({
+  reservation: normalizedMeetingRoomReservationOrderSchema,
+  quote: meetingRoomReservationQuoteSchema,
+});
+const officePayStatePricingSchema = Schema.Struct({
+  reservation: normalizedOfficeReservationOrderSchema,
+  quote: officeReservationQuoteSchema,
+});
+
 /** A reservation family's Pay state: the signed envelope with its order. */
-const familyPayStateSchema = <
-  Reservation extends Schema.Top,
-  Quote extends Schema.Top,
->(
-  reservation: Reservation,
-  quote: Quote
+const familyPayStateSchema = <Fields extends Schema.Struct.Fields>(
+  pricing: Schema.Struct<Fields>
 ) =>
   Schema.Struct({
     ...signedPayStateEnvelopeSchema.fields,
-    reservation,
-    quote,
+    ...pricing.fields,
   });
 
+/**
+ * Whether a Pay state carries its submitted code and that code's discount
+ * together, or neither.
+ */
+const carriesSubmittedCodeWithItsDiscount = <
+  State extends {
+    readonly submittedCode?: CanonicalPromotionCode;
+    readonly submittedCodeDiscountId?: DiscountId;
+  },
+>(
+  state: State
+): state is State & PayStateSubmittedCodeMetadata =>
+  (state.submittedCode === undefined) ===
+  (state.submittedCodeDiscountId === undefined);
+
 export const signedPayStateSchema = Schema.Union([
-  familyPayStateSchema(
-    normalizedCoworkReservationOrderSchema,
-    coworkReservationQuoteSchema
-  ),
-  familyPayStateSchema(
-    normalizedMeetingRoomReservationOrderSchema,
-    meetingRoomReservationQuoteSchema
-  ),
-  familyPayStateSchema(
-    normalizedOfficeReservationOrderSchema,
-    officeReservationQuoteSchema
-  ),
+  familyPayStateSchema(coworkPayStatePricingSchema),
+  familyPayStateSchema(meetingRoomPayStatePricingSchema),
+  familyPayStateSchema(officePayStatePricingSchema),
 ])
   .check(
     Schema.makeFilter(
-      ({ submittedCode, submittedCodeDiscountId }) =>
-        (submittedCode === undefined) ===
-          (submittedCodeDiscountId === undefined) || {
+      (state) =>
+        carriesSubmittedCodeWithItsDiscount(state) || {
           path: ["submittedCodeDiscountId"],
           issue:
             "submitted code and submitted code discount id must occur together",
@@ -128,8 +142,15 @@ export const signedPayStateSchema = Schema.Union([
     description: "Workspace checkout Pay state payload.",
   });
 
-export type SignedPayState = typeof signedPayStateSchema.Type &
-  PayStateSubmittedCodeMetadata;
+/**
+ * The Pay state as built and opened: it repeats the submitted-code check as a
+ * refinement so the decoded type carries it.
+ */
+const signedPayStateCodec = signedPayStateSchema.pipe(
+  Schema.refine(carriesSubmittedCodeWithItsDiscount)
+);
+
+export type SignedPayState = typeof signedPayStateCodec.Type;
 
 /**
  * A Pay state whose reservation hold deadline is known. Every Pay state built
@@ -141,16 +162,12 @@ export type PayStateWithHoldExpiry = SignedPayState & {
   readonly holdExpiresAt: Instant;
 };
 
-const preserveSignedPayStateMetadataInvariant = (
-  state: typeof signedPayStateSchema.Type
-): SignedPayState => state as SignedPayState;
-
 /**
  * Pay-state tokens live in open Pay pages and agent links, so they keep the
  * sealed state format that predates purposes.
  */
 const payStateCodec = makeLegacySealedState({
-  schema: signedPayStateSchema,
+  schema: signedPayStateCodec,
   ttlMilliseconds: reservationHoldTtlMilliseconds,
 });
 
@@ -160,6 +177,19 @@ export type SignedPayStatePricing = SignedPayState extends infer State
     ? Pick<State, "reservation" | "quote">
     : never
   : never;
+
+/**
+ * Decodes an order and quote rebuilt from storage, such as a payment retry's,
+ * as the pricing of one family, as strictly as a new Pay state decodes it.
+ */
+export const decodeSignedPayStatePricing = Schema.decodeUnknownEffect(
+  Schema.Union([
+    coworkPayStatePricingSchema,
+    meetingRoomPayStatePricingSchema,
+    officePayStatePricingSchema,
+  ]),
+  { onExcessProperty: "error" }
+);
 
 /** What a new Pay state signs: the order, its pricing and its carried codes. */
 export type BuildSignedPayStateInput = BuildSignedPayStateCommonInput &
@@ -332,12 +362,12 @@ export const buildSignedPayState = Effect.fn("payState.build")(function* (
     quote: input.quote,
   };
 
-  return yield* Schema.decodeUnknownEffect(signedPayStateSchema, {
+  return yield* Schema.decodeUnknownEffect(signedPayStateCodec, {
     onExcessProperty: "error",
   })(state).pipe(
     Effect.map(
       (decoded): PayStateWithHoldExpiry => ({
-        ...preserveSignedPayStateMetadataInvariant(decoded),
+        ...decoded,
         holdExpiresAt: input.holdExpiresAt,
       })
     ),
@@ -381,10 +411,7 @@ const open = Effect.fn("payState.open")(function* (
 ) {
   const state = yield* payStateCodec
     .open(token)
-    .pipe(
-      Effect.map(preserveSignedPayStateMetadataInvariant),
-      Effect.mapError(PayStateTokenError.fromSealedState)
-    );
+    .pipe(Effect.mapError(PayStateTokenError.fromSealedState));
   if (page !== undefined && !continuesOn(state, page)) {
     return yield* PayStateTokenError.forAnotherPage();
   }

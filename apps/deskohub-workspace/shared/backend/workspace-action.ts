@@ -37,6 +37,9 @@ interface WorkspaceActionArgs<S extends StandardSchemaV1> {
 type WorkspaceActionValidationErrors<S extends StandardSchemaV1> =
   FlattenedValidationErrors<ValidationErrors<S>>;
 
+type WorkspaceActionFieldErrors<S extends StandardSchemaV1> =
+  WorkspaceActionValidationErrors<S>["fieldErrors"];
+
 /** What a state action's previous submission ended with. */
 interface WorkspaceActionState<S extends StandardSchemaV1, A> {
   readonly prevResult: SafeActionResult<
@@ -392,28 +395,35 @@ const handleWorkspaceActionValidationFailure = async <
     );
   }).pipe(runWorkspaceEffect(operation, { boundary: "action" }));
 
-  const fieldErrors = Object.groupBy(
-    issues.filter(({ path }) => path.length > 0),
-    ({ path }) => path[0] ?? ""
-  );
+  const formErrors: string[] = [];
+  const fieldMessages = new Map<string, string[]>();
 
-  return {
-    formErrors: issues
-      .filter(({ path }) => path.length === 0)
-      .map(({ message }) => message),
-    fieldErrors: Object.fromEntries(
-      Object.entries(fieldErrors).map(([field, fieldIssues]) => [
-        field,
-        (fieldIssues ?? []).map(({ message, path }) => {
-          const nestedPath = formatWorkspaceActionValidationPath(
-            path.slice(1),
-            ""
-          );
-          return nestedPath ? `${nestedPath}: ${message}` : message;
-        }),
-      ])
-    ),
-  } as WorkspaceActionValidationErrors<S>;
+  for (const { message, path } of issues) {
+    const [field, ...nested] = path;
+    if (field === undefined) {
+      formErrors.push(message);
+    } else {
+      const nestedPath = formatWorkspaceActionValidationPath(nested, "");
+      fieldMessages.set(field, [
+        ...(fieldMessages.get(field) ?? []),
+        nestedPath ? `${nestedPath}: ${message}` : message,
+      ]);
+    }
+  }
+
+  const fieldErrors: WorkspaceActionFieldErrors<S> = {};
+  for (const [field, messages] of fieldMessages) {
+    // Each issue's first path segment names its field. The field is written
+    // as an own data property, so a field such as `__proto__` stays a field.
+    Object.defineProperty(fieldErrors, field, {
+      configurable: true,
+      enumerable: true,
+      value: messages,
+      writable: true,
+    });
+  }
+
+  return { formErrors, fieldErrors };
 };
 
 const collectWorkspaceActionValidationIssues = <T>(

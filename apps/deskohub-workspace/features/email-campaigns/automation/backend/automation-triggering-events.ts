@@ -63,7 +63,7 @@ export const lockTriggeringCustomerEvents = (
             ),
             Effect.map(
               (rows): ReadonlySet<CustomerEventId> =>
-                new Set(rows.map(({ id }) => id as CustomerEventId))
+                new Set(rows.map(({ id }) => id))
             )
           );
   });

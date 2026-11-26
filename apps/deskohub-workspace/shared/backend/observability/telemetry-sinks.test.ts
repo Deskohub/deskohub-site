@@ -383,9 +383,9 @@ describe("flushLoggerProvider", () => {
   });
 
   test("bounds a flush by its deadline when the provider does not settle", async () => {
-    const provider = {
+    const provider: Pick<LoggerProvider, "forceFlush"> = {
       forceFlush: () => new Promise<void>(() => undefined),
-    } as Pick<LoggerProvider, "forceFlush">;
+    };
 
     expect(await runFlush(flushLoggerProvider(provider))).toEqual([
       "PostHog log flush exceeded its post-response deadline.",
@@ -393,9 +393,9 @@ describe("flushLoggerProvider", () => {
   });
 
   test("warns without failing when the provider rejects", async () => {
-    const provider = {
+    const provider: Pick<LoggerProvider, "forceFlush"> = {
       forceFlush: () => Promise.reject(new Error("export failed")),
-    } as Pick<LoggerProvider, "forceFlush">;
+    };
 
     expect(await runFlush(flushLoggerProvider(provider, 1_000))).toEqual([
       "PostHog log flush failed.",

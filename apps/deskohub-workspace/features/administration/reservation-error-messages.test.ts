@@ -6,20 +6,24 @@ import { getReservationRestorationErrorMessage } from "./reservation-error-messa
 
 type RestorationRefusal = ReservationRestorationFailureReason;
 
-const restorationRefusals = Object.keys({
-  not_found: true,
-  invalid_state: true,
-  cancellation_in_progress: true,
-  superseded: true,
-  refund_acknowledgement_required: true,
-  refund_check_failed: true,
-  table_unavailable: true,
-  changed_in_dotypos: true,
-  dotypos_failed: true,
-  access_uncertain: true,
-  details_unavailable: true,
-  record_failed: true,
-} satisfies Record<RestorationRefusal, true>) as RestorationRefusal[];
+const restorationRefusalsByKey = {
+  not_found: "not_found",
+  invalid_state: "invalid_state",
+  cancellation_in_progress: "cancellation_in_progress",
+  superseded: "superseded",
+  refund_acknowledgement_required: "refund_acknowledgement_required",
+  refund_check_failed: "refund_check_failed",
+  table_unavailable: "table_unavailable",
+  changed_in_dotypos: "changed_in_dotypos",
+  dotypos_failed: "dotypos_failed",
+  access_uncertain: "access_uncertain",
+  details_unavailable: "details_unavailable",
+  record_failed: "record_failed",
+} as const satisfies Record<RestorationRefusal, RestorationRefusal>;
+
+const restorationRefusals: readonly RestorationRefusal[] = Object.values(
+  restorationRefusalsByKey
+);
 
 describe("getReservationRestorationErrorMessage", () => {
   test.each(supportedLocales)(

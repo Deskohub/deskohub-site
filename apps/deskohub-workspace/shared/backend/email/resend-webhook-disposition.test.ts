@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import { Effect, Record } from "effect";
 import { defineWebhookRoute } from "@/shared/backend/service-route";
-import { DeliveryReportError, DeliveryRequestError } from "./delivery-reports";
+import {
+  DeliveryReportError,
+  DeliveryRequestError,
+  deliveryReportEventId,
+} from "./delivery-reports";
 import {
   resendWebhookRefusal,
   resendWebhookRequestDisposition,
@@ -74,7 +78,7 @@ test("logs the event ID with the handler's delivery identifiers", () => {
     new DeliveryReportError({
       errorCode: "resend_webhook_delivery_unattached",
       message: "Resend webhook test failure",
-      eventId: "evt-1" as never,
+      eventId: deliveryReportEventId("evt-1"),
       details: { workspaceReservationId: "reservation-1" },
     })
   );

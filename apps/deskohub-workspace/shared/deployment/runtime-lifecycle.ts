@@ -1,7 +1,7 @@
 import { subscribe } from "node:diagnostics_channel";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { EventEmitter } from "node:events";
 import { waitUntil } from "@vercel/functions";
-import { Data, type Duration, Effect } from "effect";
+import { Data, type Duration, Effect, Predicate } from "effect";
 
 /**
  * How the host runs and stops Workspace processes. On Vercel a function
@@ -44,7 +44,7 @@ type GlobalWithRuntimeLifecycle = typeof globalThis & {
 };
 
 const runtimeLifecycle = (): RuntimeLifecycle => {
-  const holder = globalThis as GlobalWithRuntimeLifecycle;
+  const holder: GlobalWithRuntimeLifecycle = globalThis;
   holder[runtimeLifecycleKey] ??= {
     pending: new Set(),
     hooks: new Map(),
@@ -80,11 +80,6 @@ export const trackRuntimeWork = (work: Promise<unknown>): void => {
   void settled.then(() => lifecycle.pending.delete(settled));
 };
 
-interface HttpServerRequestStart {
-  readonly request: IncomingMessage;
-  readonly response: ServerResponse;
-}
-
 /** Node's channel for each request an `http.Server` starts serving. */
 const httpServerRequestStartChannel = "http.server.request.start";
 
@@ -96,10 +91,15 @@ const httpServerRequestStartChannel = "http.server.request.start";
  */
 const trackHttpRequests = () =>
   subscribe(httpServerRequestStartChannel, (message) => {
-    const { response } = message as HttpServerRequestStart;
+    // Node publishes `{ request, response, socket, server }`; the response is
+    // an `http.ServerResponse`, which is an EventEmitter with `closed`.
+    if (!Predicate.hasProperty(message, "response")) return;
+    const { response } = message;
+    if (!(response instanceof EventEmitter)) return;
+    if (!Predicate.hasProperty(response, "closed")) return;
     trackRuntimeWork(
       new Promise<void>((resolve) => {
-        if (response.closed) resolve();
+        if (response.closed === true) resolve();
         else response.once("close", () => resolve());
       })
     );

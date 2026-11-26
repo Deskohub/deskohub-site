@@ -431,7 +431,7 @@ const parseTokenParts = Effect.fn("sealedState.parseParts")(function* (
 const parseJson = Effect.fn("sealedState.parseJson")(
   (value: Buffer, message: string) =>
     Effect.try({
-      try: () => JSON.parse(textDecoder.decode(value)) as unknown,
+      try: (): unknown => JSON.parse(textDecoder.decode(value)),
       catch: (cause) => invalidToken(message, cause),
     })
 );

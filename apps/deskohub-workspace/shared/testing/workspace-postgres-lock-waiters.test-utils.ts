@@ -15,12 +15,13 @@ export const holdPostgresTransaction = async (
 ) => {
   const client = await pool.connect();
   const {
-    rows: [{ pid }],
-  } = await client.query("select pg_backend_pid() as pid");
+    rows: [holder],
+  } = await client.query<{ pid: number }>("select pg_backend_pid() as pid");
+  if (holder === undefined) throw new Error("pg_backend_pid returned no row");
   await client.query("begin");
   const { rows } = await client.query(sql, [...values]);
   return {
-    pid: pid as number,
+    pid: holder.pid,
     rows,
     commit: async () => {
       await client.query("commit");

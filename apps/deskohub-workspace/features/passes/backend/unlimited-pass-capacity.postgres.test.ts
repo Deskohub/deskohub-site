@@ -2,6 +2,7 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { DotyposService, DotyposTableSchema } from "@deskohub/dotypos";
 import { Deferred, Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
@@ -11,15 +12,18 @@ import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservatio
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { waitForAdvisoryLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { withUnlimitedPassCapacity } from "./unlimited-pass-capacity";
 
 test.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
   "a same-date ordinary booking waits for the Unlimited intent and sees it before Dotypos does",
   async () => {
-    const database = (await createWorkspacePostgresSuiteDatabase(
-      "unlimited_capacity"
-    ))!;
+    const database = requireTestDatabase(
+      await createWorkspacePostgresSuiteDatabase("unlimited_capacity")
+    );
     const { pool } = database;
     const buyerId = crypto.randomUUID();
     const passId = crypto.randomUUID();
@@ -74,6 +78,8 @@ test.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             expect(plan.days).toHaveLength(30);
             yield* Deferred.succeed(started, undefined);
             yield* Deferred.await(commit);
+            const [firstDay] = plan.days;
+            assert(firstDay);
             yield* Effect.promise(() =>
               pool.query(
                 `insert into workspace_reservations
@@ -83,7 +89,7 @@ test.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
              select uuid_generate_v7(), '1', $2, 'creating_hold', 'not_started',
                'not_started', '{}', 'en-US', $1, $3::date + day, $4
              from generate_series(0, 29) day`,
-                [passId, buyerId, date, plan.days[0]!.tableId]
+                [passId, buyerId, date, firstDay.tableId]
               )
             );
           })

@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { sql } from "drizzle-orm";
-import { Cause, Clock, Context, Effect, Exit, Fiber, Option } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Predicate,
+} from "effect";
 import { SqlClient, SqlError } from "effect/sql";
 import { TestClock } from "effect/testing";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
@@ -18,7 +28,9 @@ const sqlErrorReason = (exit: Exit.Exit<unknown, unknown>) =>
     ? Option.getOrUndefined(
         Option.flatMap(Cause.findErrorOption(exit.cause), (error) => {
           if (SqlError.isSqlError(error)) return Option.some(error.reason);
-          const cause = (error as { readonly cause?: unknown }).cause;
+          const cause = Predicate.hasProperty(error, "cause")
+            ? error.cause
+            : undefined;
           if (!Cause.isCause(cause)) return Option.none();
           return Option.map(
             Option.filter(Cause.findErrorOption(cause), SqlError.isSqlError),
@@ -28,15 +40,19 @@ const sqlErrorReason = (exit: Exit.Exit<unknown, unknown>) =>
       )
     : undefined;
 
-const activeSleeps = async () =>
-  (
-    await postgresDatabase!.pool.query(
-      `select pid from pg_stat_activity
+const activeSleeps = async () => {
+  assert(postgresDatabase, "the Postgres test database is configured");
+  return (
+    (
+      await postgresDatabase.pool.query(
+        `select pid from pg_stat_activity
         where application_name = $1 and state = 'active'
           and query like 'select pg_sleep%'`,
-      [applicationName]
-    )
-  ).rowCount ?? 0;
+        [applicationName]
+      )
+    ).rowCount ?? 0
+  );
+};
 
 const openProbe = (settings: {
   readonly statementTimeout?: string;

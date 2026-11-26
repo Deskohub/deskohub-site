@@ -23,20 +23,20 @@ import {
 
 const servingDigest = ImageDigest.make(`sha256:${"1".repeat(64)}`);
 const candidateDigest = ImageDigest.make(`sha256:${"2".repeat(64)}`);
-const servingRevision = "workspace-web-r4-aaaaaaa";
-const candidateRevision = "workspace-web-r5-bbbbbbb";
+const servingRevision = "workspace-api-r4-aaaaaaa";
+const candidateRevision = "workspace-api-r5-bbbbbbb";
 // Synthetic; the fake only checks that it is sent as the bearer token.
 const accessToken = "synthetic-access-token";
 
 const servicesPath = `/v2/projects/${sandboxConfig.projectId}/locations/${sandboxConfig.region}/services`;
-const webPath = `${servicesPath}/workspace-web`;
-const revisionPath = (revision: string) => `${webPath}/revisions/${revision}`;
+const apiPath = `${servicesPath}/workspace-api`;
+const revisionPath = (revision: string) => `${apiPath}/revisions/${revision}`;
 const imageReference = (digest: string) =>
   `${sandboxConfig.region}-docker.pkg.dev/${sandboxConfig.projectId}/workspace/workspace@${digest}`;
 
 /** A Ready revision whose one container resolved to `digest`. */
 const readyRevision = (revision: string, digest: string) => ({
-  name: `projects/${sandboxConfig.projectId}/locations/${sandboxConfig.region}/services/workspace-web/revisions/${revision}`,
+  name: `projects/${sandboxConfig.projectId}/locations/${sandboxConfig.region}/services/workspace-api/revisions/${revision}`,
   containers: [{ name: "workspace", image: imageReference(digest) }],
   containerStatuses: [
     { name: "workspace", imageDigest: imageReference(digest) },
@@ -45,18 +45,18 @@ const readyRevision = (revision: string, digest: string) => ({
 });
 
 /**
- * The web service fully on one digest-pinned revision with a zero-percent
+ * The API service fully on one digest-pinned revision with a zero-percent
  * tagged candidate. Proto3 JSON omits the candidate's zero percent.
  */
-const steadyWeb = {
-  name: `projects/${sandboxConfig.projectId}/locations/${sandboxConfig.region}/services/workspace-web`,
-  uri: "https://workspace-web-abc123-ew.a.run.app",
+const steadyApi = {
+  name: `projects/${sandboxConfig.projectId}/locations/${sandboxConfig.region}/services/workspace-api`,
+  uri: "https://workspace-api-abc123-ew.a.run.app",
   urls: [
-    "https://workspace-web-123456789012.europe-west1.run.app",
-    "https://workspace-web-abc123-ew.a.run.app",
+    "https://workspace-api-123456789012.europe-west1.run.app",
+    "https://workspace-api-abc123-ew.a.run.app",
   ],
-  ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
-  invokerIamDisabled: true,
+  ingress: "INGRESS_TRAFFIC_ALL",
+  invokerIamDisabled: false,
   terminalCondition: { type: "Ready", state: "CONDITION_SUCCEEDED" },
   trafficStatuses: [
     {
@@ -209,9 +209,9 @@ const failure = async <A>(
   return reason?._tag === "Fail" ? reason.error : reason;
 };
 
-const steadyWebAnswer = { status: 200, body: steadyWeb };
+const steadyApiAnswer = { status: 200, body: steadyApi };
 const steadyRoutes = {
-  [webPath]: steadyWebAnswer,
+  [apiPath]: steadyApiAnswer,
   [revisionPath(servingRevision)]: {
     status: 200,
     body: readyRevision(servingRevision, servingDigest),
@@ -226,14 +226,14 @@ describe("Cloud Run service readback", () => {
   test("reads a steady service and the digests of its routed revisions", async () => {
     const fake = fakeCloudRun(steadyRoutes);
     const observed = await success(
-      readback(fake, (port) => port.service("web"))
+      readback(fake, (port) => port.service("api"))
     );
     expect(observed).toEqual({
-      workload: "web",
-      uri: steadyWeb.uri,
-      urls: steadyWeb.urls,
-      ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
-      invokerIamDisabled: true,
+      workload: "api",
+      uri: steadyApi.uri,
+      urls: steadyApi.urls,
+      ingress: "INGRESS_TRAFFIC_ALL",
+      invokerIamDisabled: false,
       terminalConditionState: "CONDITION_SUCCEEDED",
       reconciling: false,
       traffic: [
@@ -255,10 +255,10 @@ describe("Cloud Run service readback", () => {
 
   test("reads each resource at its exact path with the bearer token", async () => {
     const fake = fakeCloudRun(steadyRoutes);
-    await success(readback(fake, (port) => port.service("web")));
+    await success(readback(fake, (port) => port.service("api")));
     expect(fake.requests.map(({ path }) => path).toSorted()).toEqual(
       [
-        webPath,
+        apiPath,
         revisionPath(candidateRevision),
         revisionPath(servingRevision),
       ].toSorted()
@@ -323,7 +323,7 @@ describe("Cloud Run service readback", () => {
   test("a missing service or revision is null", async () => {
     const fake = fakeCloudRun({});
     expect(
-      await success(readback(fake, (port) => port.service("web")))
+      await success(readback(fake, (port) => port.service("api")))
     ).toBeNull();
     expect(
       await success(readback(fake, (port) => port.revision(servingRevision)))
@@ -331,9 +331,9 @@ describe("Cloud Run service readback", () => {
   });
 
   test("a routed revision that vanished leaves no digest", async () => {
-    const fake = fakeCloudRun({ [webPath]: steadyWebAnswer });
+    const fake = fakeCloudRun({ [apiPath]: steadyApiAnswer });
     const observed = await success(
-      readback(fake, (port) => port.service("web"))
+      readback(fake, (port) => port.service("api"))
     );
     expect(observed?.revisionDigests).toEqual({});
     expect(observed && trafficReadback(observed).servingImageDigest).toBeNull();
@@ -342,10 +342,10 @@ describe("Cloud Run service readback", () => {
   test("split traffic has no single serving revision", async () => {
     const fake = fakeCloudRun({
       ...steadyRoutes,
-      [webPath]: {
+      [apiPath]: {
         status: 200,
         body: {
-          ...steadyWeb,
+          ...steadyApi,
           trafficStatuses: [
             { revision: servingRevision, percent: 50 },
             { revision: candidateRevision, percent: 50 },
@@ -354,7 +354,7 @@ describe("Cloud Run service readback", () => {
       },
     });
     const observed = await success(
-      readback(fake, (port) => port.service("web"))
+      readback(fake, (port) => port.service("api"))
     );
     expect(observed?.revisionDigests).toEqual({
       [servingRevision]: servingDigest,
@@ -368,10 +368,10 @@ describe("Cloud Run service readback", () => {
 
   test("a LATEST row that names no revision never passes as one", async () => {
     const fake = fakeCloudRun({
-      [webPath]: {
+      [apiPath]: {
         status: 200,
         body: {
-          ...steadyWeb,
+          ...steadyApi,
           trafficStatuses: [
             { type: "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", percent: 100 },
           ],
@@ -379,7 +379,7 @@ describe("Cloud Run service readback", () => {
       },
     });
     const observed = await success(
-      readback(fake, (port) => port.service("web"))
+      readback(fake, (port) => port.service("api"))
     );
     expect(observed?.traffic).toEqual([]);
     expect(fake.requests).toHaveLength(1);
@@ -393,10 +393,10 @@ describe("Cloud Run service readback", () => {
     ]) {
       const fake = fakeCloudRun({
         ...steadyRoutes,
-        [webPath]: { status: 200, body: { ...steadyWeb, ...status } },
+        [apiPath]: { status: 200, body: { ...steadyApi, ...status } },
       });
       const observed = await success(
-        readback(fake, (port) => port.service("web"))
+        readback(fake, (port) => port.service("api"))
       );
       expect(observed && trafficReadback(observed).servingRevision).toBeNull();
     }
@@ -521,7 +521,7 @@ describe("Cloud Run service readback", () => {
 
   test("a name Cloud Run could not assign is no revision and sends no request", async () => {
     const fake = fakeCloudRun(steadyRoutes);
-    for (const name of ["../workspace-tasks-worker", "Workspace-web", ""]) {
+    for (const name of ["../workspace-tasks-worker", "Workspace-api", ""]) {
       expect(
         await success(readback(fake, (port) => port.revision(name)))
       ).toBeNull();
@@ -532,26 +532,26 @@ describe("Cloud Run service readback", () => {
   test("retries missing answers, rate limits and server errors, then reads", async () => {
     const fake = fakeCloudRun({
       ...steadyRoutes,
-      [webPath]: [
+      [apiPath]: [
         { status: 503 },
         { transport: "failed" },
         { status: 429 },
         { status: 200, stallBody: true },
-        steadyWebAnswer,
+        steadyApiAnswer,
       ],
     });
     const observed = await success(
-      readback(fake, (port) => port.service("web"))
+      readback(fake, (port) => port.service("api"))
     );
-    expect(observed?.workload).toBe("web");
-    expect(fake.requests.filter(({ path }) => path === webPath)).toHaveLength(
+    expect(observed?.workload).toBe("api");
+    expect(fake.requests.filter(({ path }) => path === apiPath)).toHaveLength(
       5
     );
   });
 
   test("mixed transient failures share one retry budget", async () => {
     const fake = fakeCloudRun({
-      [webPath]: [
+      [apiPath]: [
         { status: 500 },
         { transport: "stalled" },
         { status: 429 },
@@ -560,10 +560,10 @@ describe("Cloud Run service readback", () => {
         { status: 501 },
       ],
     });
-    const error = await failure(readback(fake, (port) => port.service("web")));
+    const error = await failure(readback(fake, (port) => port.service("api")));
     expect(error).toMatchObject({
       _tag: "ReleaseReadbackUnavailable",
-      resource: webPath.replace("/v2/", ""),
+      resource: apiPath.replace("/v2/", ""),
       status: null,
     });
     // One attempt plus the four retries the read allows.
@@ -571,11 +571,11 @@ describe("Cloud Run service readback", () => {
   });
 
   test("fails unavailable once the retries are spent", async () => {
-    const fake = fakeCloudRun({ [webPath]: { status: 501 } });
-    const error = await failure(readback(fake, (port) => port.service("web")));
+    const fake = fakeCloudRun({ [apiPath]: { status: 501 } });
+    const error = await failure(readback(fake, (port) => port.service("api")));
     expect(error).toMatchObject({
       _tag: "ReleaseReadbackUnavailable",
-      resource: webPath.replace("/v2/", ""),
+      resource: apiPath.replace("/v2/", ""),
       status: 501,
     });
     // One attempt plus the four retries the read allows.
@@ -590,9 +590,9 @@ describe("Cloud Run service readback", () => {
       [{ status: 200, body: { trafficStatuses: "not-a-list" } }, 200],
       [{ status: 200, text: "{not json" }, 200],
     ] as const) {
-      const fake = fakeCloudRun({ [webPath]: answer });
+      const fake = fakeCloudRun({ [apiPath]: answer });
       const error = await failure(
-        readback(fake, (port) => port.service("web"))
+        readback(fake, (port) => port.service("api"))
       );
       expect(error).toMatchObject({
         _tag: "ReleaseReadbackUnavailable",
@@ -613,7 +613,7 @@ describe("Cloud Run service readback", () => {
     ]) {
       const fake = fakeCloudRun(steadyRoutes);
       const error = await failure(
-        readback(fake, (port) => port.service("web"), credentials)
+        readback(fake, (port) => port.service("api"), credentials)
       );
       expect(error).toMatchObject({
         _tag: "ReleaseReadbackUnavailable",
@@ -631,7 +631,7 @@ describe("Cloud Run service readback", () => {
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
           Effect.gen(function* () {
-            return yield* (yield* ReleaseServiceReadback).service("web");
+            return yield* (yield* ReleaseServiceReadback).service("api");
           })
         );
         yield* TestClock.adjust("9999 millis");
@@ -659,13 +659,13 @@ describe("Cloud Run service readback", () => {
   test("times out each attempt at ten seconds and backs off from 250 ms", async () => {
     const fake = fakeCloudRun({
       ...steadyRoutes,
-      [webPath]: [{ transport: "stalled" }, steadyWebAnswer],
+      [apiPath]: [{ transport: "stalled" }, steadyApiAnswer],
     });
     const attempts = await Effect.runPromise(
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(
           Effect.gen(function* () {
-            return yield* (yield* ReleaseServiceReadback).service("web");
+            return yield* (yield* ReleaseServiceReadback).service("api");
           })
         );
         const seen: Array<number> = [];
@@ -677,7 +677,7 @@ describe("Cloud Run service readback", () => {
         ] as const) {
           yield* TestClock.adjust(step);
           seen.push(
-            fake.requests.filter(({ path }) => path === webPath).length
+            fake.requests.filter(({ path }) => path === apiPath).length
           );
         }
         yield* Fiber.join(fiber);
@@ -689,14 +689,14 @@ describe("Cloud Run service readback", () => {
 
   test("releases every attempt's request, bodies left unread included", async () => {
     const fake = fakeCloudRun({
-      [webPath]: [
+      [apiPath]: [
         { status: 503, stallBody: true },
         { status: 503, stallBody: true },
         { status: 404, stallBody: true },
       ],
     });
     expect(
-      await success(readback(fake, (port) => port.service("web")))
+      await success(readback(fake, (port) => port.service("api")))
     ).toBeNull();
     expect(fake.requests).toHaveLength(3);
     expect(fake.requests.every(({ signal }) => signal.aborted)).toBe(true);
@@ -707,13 +707,13 @@ describe("Cloud Run service template readback", () => {
   test("reports the revision the live template declares", async () => {
     const fake = fakeCloudRun({
       ...steadyRoutes,
-      [webPath]: {
+      [apiPath]: {
         status: 200,
-        body: { ...steadyWeb, template: { revision: candidateRevision } },
+        body: { ...steadyApi, template: { revision: candidateRevision } },
       },
     });
     const observed = await success(
-      readback(fake, (port) => port.service("web"))
+      readback(fake, (port) => port.service("api"))
     );
     expect(observed?.templateRevision).toBe(candidateRevision);
   });
@@ -725,10 +725,10 @@ describe("Cloud Run service template readback", () => {
         readback(
           fakeCloudRun({
             ...steadyRoutes,
-            [webPath]: {
+            [apiPath]: {
               status: 200,
               body: {
-                ...steadyWeb,
+                ...steadyApi,
                 template: {
                   revision: candidateRevision,
                   containers: [{ image }],
@@ -736,10 +736,10 @@ describe("Cloud Run service template readback", () => {
               },
             },
           }),
-          (port) => port.service("web")
+          (port) => port.service("api")
         )
       );
-    const registry = "europe-west1-docker.pkg.dev/project/workspace/web";
+    const registry = "europe-west1-docker.pkg.dev/project/workspace/api";
     expect((await read(`${registry}@${pinned}`))?.templateImageDigest).toBe(
       pinned
     );
@@ -749,16 +749,16 @@ describe("Cloud Run service template readback", () => {
   });
 
   test("reads an unrouted template revision's readiness and spec fingerprint", async () => {
-    const unrouted = "workspace-web-r3-aaaaaaa-t9";
+    const unrouted = "workspace-api-r3-aaaaaaa-t9";
     const read = (revisionAnswer: { status: number; body?: unknown }) =>
       success(
         readback(
           fakeCloudRun({
             ...steadyRoutes,
-            [webPath]: {
+            [apiPath]: {
               status: 200,
               body: {
-                ...steadyWeb,
+                ...steadyApi,
                 template: {
                   revision: unrouted,
                   annotations: { [templateSpecAnnotation]: "0123456789abcdef" },
@@ -767,7 +767,7 @@ describe("Cloud Run service template readback", () => {
             },
             [revisionPath(unrouted)]: revisionAnswer,
           }),
-          (port) => port.service("web")
+          (port) => port.service("api")
         )
       );
     const ready = await read({

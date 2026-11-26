@@ -379,7 +379,7 @@ const buildBundle = async (
   await mkdir(directory, { recursive: true });
   let result: BunBuildResult;
   try {
-    result = (await Bun.build({
+    result = await Bun.build({
       define: { "process.env.NODE_ENV": JSON.stringify("production") },
       entrypoints: [browserEntryPath],
       format: "esm",
@@ -388,7 +388,7 @@ const buildBundle = async (
       plugins: [makeBuildPlugin(accountShellAlias, kind === "nonsticky")],
       sourcemap: "none",
       target: "browser",
-    })) as BunBuildResult;
+    });
   } catch (error) {
     const details =
       error instanceof Error
@@ -1703,8 +1703,8 @@ const main = async () => {
   const mobile: MobileScenarioEvidence[] = [];
   let server: Awaited<ReturnType<typeof serveBuild>> | undefined;
   let regression: GeometryReport["regression"] = {
-    observedFailure: null as string | null,
-    status: "failed" as const,
+    observedFailure: null,
+    status: "failed",
   };
   const failures: string[] = [];
   try {

@@ -6,7 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import { ImageDigest } from "../config/stack-config";
 import { sandboxConfig } from "../config/stack-config.test-utils";
-import { webServiceProps, webTraffic } from "../resources/service-declarations";
+import { apiServiceProps, apiTraffic } from "../resources/service-declarations";
 import { workersServing } from "./release-readback.test-utils";
 import {
   promote,
@@ -134,7 +134,7 @@ describe("release reconciler", () => {
       active: {
         releaseId: first.releaseId,
         imageDigest: digestA,
-        revision: "workspace-web-r1-aaaaaaa",
+        revision: "workspace-api-r1-aaaaaaa",
         verifiedAt: "2026-11-22T10:00:00.000Z",
       },
       previous: null,
@@ -147,32 +147,32 @@ describe("release reconciler", () => {
 
   test("declares no service before the first release serves", () => {
     const staged = stageRelease(emptyReleaseRecord, shaA, digestA);
-    expect(webServiceProps(sandboxConfig, staged.record, t0)).toBeUndefined();
+    expect(apiServiceProps(sandboxConfig, staged.record, t0)).toBeUndefined();
   });
 
   test("materializes a later candidate at zero traffic and promotes it only after readback", () => {
     const first = release(emptyReleaseRecord, shaA, digestA, t0);
     const staged = stageRelease(first.settled, shaB, digestB);
-    const web = webServiceProps(sandboxConfig, staged.record, later(1));
-    expect(web?.template?.revision).toBe("workspace-web-r4-bbbbbbb");
-    expect(web?.traffic).toEqual([
+    const api = apiServiceProps(sandboxConfig, staged.record, later(1));
+    expect(api?.template?.revision).toBe("workspace-api-r4-bbbbbbb");
+    expect(api?.traffic).toEqual([
       {
         type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
-        revision: "workspace-web-r1-aaaaaaa",
+        revision: "workspace-api-r1-aaaaaaa",
         percent: 100,
         tag: "release-r1-aaaaaaa",
       },
       {
         type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
-        revision: "workspace-web-r4-bbbbbbb",
+        revision: "workspace-api-r4-bbbbbbb",
         percent: 0,
         tag: "release-r4-bbbbbbb",
       },
     ]);
     for (const candidateReadback of [
       null,
-      { revision: "workspace-web-r4-bbbbbbb", imageDigest: digestA },
-      { revision: "workspace-web-r1-aaaaaaa", imageDigest: digestB },
+      { revision: "workspace-api-r4-bbbbbbb", imageDigest: digestA },
+      { revision: "workspace-api-r1-aaaaaaa", imageDigest: digestB },
     ]) {
       expect(
         failure(
@@ -236,7 +236,7 @@ describe("release reconciler", () => {
         (entry) => entry.releaseId
       )
     ).toEqual([second.releaseId]);
-    expect(webTraffic(second.settled, later(13))).toHaveLength(1);
+    expect(apiTraffic(second.settled, later(13))).toHaveLength(1);
   });
 
   test("restores the previous release and moves the current one into the window", () => {
@@ -253,13 +253,13 @@ describe("release reconciler", () => {
     );
     expect(pending.pendingApply?.operation).toBe("restore");
     // Restore changes traffic only: the template stays the newest revision.
-    const web = webServiceProps(sandboxConfig, pending, later(2));
-    expect(web?.template?.revision).toBe("workspace-web-r4-bbbbbbb");
-    expect(web?.traffic?.[0]).toMatchObject({
-      revision: "workspace-web-r1-aaaaaaa",
+    const api = apiServiceProps(sandboxConfig, pending, later(2));
+    expect(api?.template?.revision).toBe("workspace-api-r4-bbbbbbb");
+    expect(api?.traffic?.[0]).toMatchObject({
+      revision: "workspace-api-r1-aaaaaaa",
       percent: 100,
     });
-    expect(web?.annotations).toEqual({
+    expect(api?.annotations).toEqual({
       "deskohub.workspace/traffic-generation": String(
         pending.trafficGeneration
       ),
@@ -268,7 +268,7 @@ describe("release reconciler", () => {
       settleApply(pending, {
         expectedGeneration: pending.generation,
         readback: {
-          servingRevision: "workspace-web-r1-aaaaaaa",
+          servingRevision: "workspace-api-r1-aaaaaaa",
           servingImageDigest: digestA,
           trafficGeneration: pending.trafficGeneration,
         },
@@ -320,7 +320,7 @@ describe("release reconciler", () => {
         releaseId: staged.releaseId,
         now: later(1),
         candidateReadback: {
-          revision: "workspace-web-r4-bbbbbbb",
+          revision: "workspace-api-r4-bbbbbbb",
           imageDigest: digestB,
         },
       })
@@ -351,7 +351,7 @@ describe("release reconciler", () => {
     // leave the intent pending: the interrupted request may still land.
     for (const readback of [
       {
-        servingRevision: "workspace-web-r1-aaaaaaa",
+        servingRevision: "workspace-api-r1-aaaaaaa",
         servingImageDigest: digestA,
         trafficGeneration: pending.trafficGeneration - 1,
       },
@@ -362,12 +362,12 @@ describe("release reconciler", () => {
       },
       // The target serves, but stamped by an older run's delayed write.
       {
-        servingRevision: "workspace-web-r4-bbbbbbb",
+        servingRevision: "workspace-api-r4-bbbbbbb",
         servingImageDigest: digestB,
         trafficGeneration: pending.trafficGeneration - 1,
       },
       {
-        servingRevision: "workspace-web-r4-bbbbbbb",
+        servingRevision: "workspace-api-r4-bbbbbbb",
         servingImageDigest: digestA,
         trafficGeneration: pending.trafficGeneration,
       },
@@ -392,7 +392,7 @@ describe("release reconciler", () => {
         settleApply(pending, {
           expectedGeneration: pending.generation,
           readback: {
-            servingRevision: "workspace-web-r4-bbbbbbb",
+            servingRevision: "workspace-api-r4-bbbbbbb",
             servingImageDigest: digestB,
             trafficGeneration: pending.trafficGeneration,
           },
@@ -445,7 +445,7 @@ describe("release reconciler", () => {
   });
 });
 
-describe("declared web template", () => {
+describe("declared API template", () => {
   /** r1 active and r4 serving, so r1 is the previous release. */
   const twoReleases = (): ReleaseRecord => {
     const first = release(emptyReleaseRecord, shaA, digestA, t0);
@@ -498,7 +498,7 @@ describe("declared web template", () => {
       releaseId: "r1-aaaaaaa",
       imageDigest: digestA,
       template: {
-        revision: `workspace-web-r1-aaaaaaa-t${pending.generation}`,
+        revision: `workspace-api-r1-aaaaaaa-t${pending.generation}`,
         specFingerprint: "spec-a",
       },
     });
@@ -506,12 +506,12 @@ describe("declared web template", () => {
     expect(restored.active?.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
     expect(restored.materialized).toEqual(pending.materialized);
     // Traffic still targets the release's own revision.
-    expect(restored.active?.revision).toBe("workspace-web-r1-aaaaaaa");
-    const web = webServiceProps(sandboxConfig, restored, later(2));
-    expect(web?.template?.revision).toBe(
-      `workspace-web-r1-aaaaaaa-t${pending.generation}`
+    expect(restored.active?.revision).toBe("workspace-api-r1-aaaaaaa");
+    const api = apiServiceProps(sandboxConfig, restored, later(2));
+    expect(api?.template?.revision).toBe(
+      `workspace-api-r1-aaaaaaa-t${pending.generation}`
     );
-    expect(web?.traffic?.[0]?.revision).toBe("workspace-web-r1-aaaaaaa");
+    expect(api?.traffic?.[0]?.revision).toBe("workspace-api-r1-aaaaaaa");
   });
 
   test("restore over a template from an older spec mints a fresh name", () => {
@@ -522,7 +522,7 @@ describe("declared web template", () => {
       () => "spec-b"
     );
     expect(pending.materialized?.template).toEqual({
-      revision: `workspace-web-r1-aaaaaaa-t${pending.generation}`,
+      revision: `workspace-api-r1-aaaaaaa-t${pending.generation}`,
       specFingerprint: "spec-b",
     });
   });
@@ -540,7 +540,7 @@ describe("declared web template", () => {
     );
     const minted = first.materialized?.template;
     expect(minted?.revision).toBe(
-      `workspace-web-r4-bbbbbbb-t${first.generation}`
+      `workspace-api-r4-bbbbbbb-t${first.generation}`
     );
     // The minted name may have landed and been displaced since: the next
     // decision never declares it again.
@@ -552,7 +552,7 @@ describe("declared web template", () => {
       })
     );
     expect(retried.materialized?.template).toEqual({
-      revision: `workspace-web-r4-bbbbbbb-t${retried.generation}`,
+      revision: `workspace-api-r4-bbbbbbb-t${retried.generation}`,
       specFingerprint: "spec-b",
     });
   });
@@ -569,7 +569,7 @@ describe("declared web template", () => {
       })
     );
     const mintedName = minted.materialized?.template?.revision;
-    expect(mintedName).toBe(`workspace-web-r4-bbbbbbb-t${minted.generation}`);
+    expect(mintedName).toBe(`workspace-api-r4-bbbbbbb-t${minted.generation}`);
     const staged = stageRelease(minted, shaC, digestC).record;
     const failedCandidate = templateOf(staged.candidate);
     const pending = run(
@@ -586,7 +586,7 @@ describe("declared web template", () => {
     );
     expect(pending.candidate).toBeNull();
     expect(pending.materialized?.template).toEqual({
-      revision: `workspace-web-r4-bbbbbbb-t${pending.generation}`,
+      revision: `workspace-api-r4-bbbbbbb-t${pending.generation}`,
       specFingerprint: "spec-a2",
     });
     expect(pending.materialized?.template?.revision).not.toBe(mintedName);
@@ -621,7 +621,7 @@ describe("declared web template", () => {
     );
     expect(again).toEqual(minted);
     expect(minted.materialized?.template?.revision).toBe(
-      `workspace-web-r4-bbbbbbb-t${minted.generation}`
+      `workspace-api-r4-bbbbbbb-t${minted.generation}`
     );
   });
 
@@ -659,7 +659,7 @@ describe("declared web template", () => {
     );
     expect(changed.candidate).toBeNull();
     expect(changed.materialized?.template?.revision).toBe(
-      `workspace-web-r4-bbbbbbb-t${changed.generation}`
+      `workspace-api-r4-bbbbbbb-t${changed.generation}`
     );
   });
 
@@ -669,7 +669,7 @@ describe("declared web template", () => {
     // The candidate's verification apply created its revision, then an
     // external rollout replaced the live template, then the spec changed.
     const external = {
-      revision: "workspace-web-external-00001",
+      revision: "workspace-api-external-00001",
       imageDigest: digestB,
       specFingerprint: "spec-external",
       ready: true,
@@ -683,9 +683,9 @@ describe("declared web template", () => {
     );
     expect(refreshed.candidate).toBeNull();
     expect(
-      webServiceProps(sandboxConfig, refreshed, later(2))?.template
+      apiServiceProps(sandboxConfig, refreshed, later(2))?.template
     ).toMatchObject({
-      revision: `workspace-web-r4-bbbbbbb-t${refreshed.generation}`,
+      revision: `workspace-api-r4-bbbbbbb-t${refreshed.generation}`,
     });
   });
 
@@ -741,7 +741,7 @@ describe("declared web template", () => {
       materialized: {
         ...materialized,
         template: {
-          revision: "workspace-web-r4-bbbbbbb-t5",
+          revision: "workspace-api-r4-bbbbbbb-t5",
           specFingerprint: "spec-old",
         },
       },
@@ -750,7 +750,7 @@ describe("declared web template", () => {
     const live = templateOf(disagreeing.materialized);
     const pending = restoreFirst(disagreeing, live);
     expect(pending.materialized?.template).toEqual({
-      revision: `workspace-web-r1-aaaaaaa-t${pending.generation}`,
+      revision: `workspace-api-r1-aaaaaaa-t${pending.generation}`,
       specFingerprint: "spec-a",
     });
   });

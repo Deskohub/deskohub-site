@@ -66,6 +66,7 @@ import { sealedStateKeyIdSchema } from "@/shared/backend/sealed-state-keys.servi
 import { currencyCZK } from "@/shared/money/currencies";
 import {
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
@@ -199,12 +200,13 @@ const recordAttempt = (
     return id;
   });
 
-const servicesFor = (dotypos: typeof DotyposService.Service) =>
-  Layer.mergeAll(
-    database!.layer,
-    WorkspaceDatabaseAdvisoryLock.makeLayer(database!.databasePool),
+const servicesFor = (dotypos: typeof DotyposService.Service) => {
+  const db = requireTestDatabase(database);
+  return Layer.mergeAll(
+    db.layer,
+    WorkspaceDatabaseAdvisoryLock.makeLayer(db.databasePool),
     Layer.succeed(DotyposService, dotypos),
-    WorkspaceReservationRepository.Default.pipe(Layer.provide(database!.layer)),
+    WorkspaceReservationRepository.Default.pipe(Layer.provide(db.layer)),
     Layer.mock(GoogleCalendarWorkspaceLimitationsService, {
       listLimitations: () => Effect.succeed([]),
     }),
@@ -220,6 +222,7 @@ const servicesFor = (dotypos: typeof DotyposService.Service) =>
     Layer.mock(PaymentProviders, { activeProviders: ["nexi"] }),
     Layer.mock(ProviderPaymentFinalizationService, {})
   );
+};
 
 const withInterruptedHoldRead = (service: typeof DotyposService.Service) => {
   let interruptRead = true;
@@ -461,7 +464,9 @@ for (const { tier, closesDuring, daysAhead } of [
 it("recovers a verified capture after an interrupted read of replacement holds", async () => {
   const now = Temporal.Now.instant().round({ smallestUnit: "millisecond" });
   const purchase = await Effect.runPromise(
-    recordPurchase(now).pipe(Effect.provide(database!.layer))
+    recordPurchase(now).pipe(
+      Effect.provide(requireTestDatabase(database).layer)
+    )
   );
   const services = servicesFor(
     withInterruptedHoldRead({
@@ -469,7 +474,7 @@ it("recovers a verified capture after an interrupted read of replacement holds",
       getTables: () =>
         Effect.gen(function* () {
           const { attempts, order } = yield* readState(purchase.id).pipe(
-            Effect.provide(database!.layer)
+            Effect.provide(requireTestDatabase(database).layer)
           );
           expect(attempts[0]).toMatchObject({
             state: "paid",
@@ -850,7 +855,9 @@ it("rechecks the first service day before activation after provider confirmation
 it("requires a full refund if the holder is tombstoned during provider confirmation", async () => {
   const now = Temporal.Now.instant();
   const purchase = await Effect.runPromise(
-    recordPurchase(now, 425).pipe(Effect.provide(database!.layer))
+    recordPurchase(now, 425).pipe(
+      Effect.provide(requireTestDatabase(database).layer)
+    )
   );
   const tombstoneHolder = Effect.gen(function* () {
     const { db } = yield* WorkspaceDatabase;
@@ -858,7 +865,7 @@ it("requires a full refund if the holder is tombstoned during provider confirmat
       .update(customerAccounts)
       .set({ deletedAt: now })
       .where(eq(customerAccounts.id, purchase.holderAccountId));
-  }).pipe(Effect.provide(database!.layer), Effect.orDie);
+  }).pipe(Effect.provide(requireTestDatabase(database).layer), Effect.orDie);
   let confirmations = 0;
   const services = servicesFor({
     ...provider.service,
@@ -1171,7 +1178,7 @@ const assertReceiptReplay = async (
       );
 
       yield* Effect.promise(() =>
-        database!.pool.query(`
+        requireTestDatabase(database).pool.query(`
         create function reject_receipt_acknowledgment() returns trigger
         language plpgsql as $$
         begin
@@ -1189,7 +1196,7 @@ const assertReceiptReplay = async (
         handler.fulfill(purchase.id).pipe(
           Effect.ensuring(
             Effect.promise(() =>
-              database!.pool.query(
+              requireTestDatabase(database).pool.query(
                 `drop trigger reject_receipt_acknowledgment on orders;
                    drop function reject_receipt_acknowledgment();`
               )
@@ -1385,7 +1392,7 @@ it("rolls back failed expiry settlement and repairs an already split expiry on t
       return { first, split };
     }).pipe(Effect.provide(services))
   );
-  await database!.pool.query(`
+  await requireTestDatabase(database).pool.query(`
     create function reject_unlimited_expiry() returns trigger
     language plpgsql as $$
     begin
@@ -1414,7 +1421,7 @@ it("rolls back failed expiry settlement and repairs an already split expiry on t
     expect(interrupted.order?.paymentState).toBe("expired");
     expect(interrupted.purchase?.status).toBe("pending_payment");
   } finally {
-    await database!.pool.query(
+    await requireTestDatabase(database).pool.query(
       "drop trigger reject_unlimited_expiry on pass_purchases"
     );
   }

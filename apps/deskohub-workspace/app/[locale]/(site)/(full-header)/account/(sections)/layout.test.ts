@@ -1,5 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import type { ReactElement } from "react";
+import { requireElement } from "@/shared/testing/route-element.test-utils";
 
 const AccountSections = mock(() => null);
 
@@ -15,12 +16,12 @@ const { default: AccountSectionsLayout } = await import("./layout");
 
 test("renders the account page beside the path's own page", () => {
   const page = "synthetic-page";
-  const layout = AccountSectionsLayout({ children: page }) as ReactElement<{
+  const layout = requireElement<{
     readonly children: readonly [
       ReactElement<{ readonly locale: string }>,
       string,
     ];
-  }>;
+  }>(AccountSectionsLayout({ children: page }));
   const [sections, children] = layout.props.children;
 
   expect(sections.type).toBe(AccountSections);

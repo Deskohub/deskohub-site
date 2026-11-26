@@ -6,6 +6,7 @@ import {
   accountProfileSchemas,
   customerReferralCodeHeader,
 } from "@deskohub/workspace-customer-api";
+import { ReferralCode } from "@deskohub/workspace-customer-api/referral-code";
 import { Effect, Layer, Option, Schema } from "effect";
 import { unzipSync } from "fflate";
 import {
@@ -72,6 +73,7 @@ import { MarketingPreferences } from "@/features/legal/backend/marketing-prefere
 import { getAccountMarketingManagementContext } from "@/features/legal/backend/marketing-preferences-authority";
 import { getLegalDocumentVersion } from "@/features/legal/document-version";
 import type { MarketingConsentStatus } from "@/features/legal/marketing-consent-status";
+import type { ReferralAccountSummary } from "@/features/referrals/contracts";
 import { ReferralServiceMock } from "@/features/referrals/referral.service.mock";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { ReferralSignupIntentRepository } from "@/features/referrals/signup-intent.repository";
@@ -103,6 +105,8 @@ const deletionPendingStanding = (session: CustomerAccountSession) =>
     session: { ...session, deletionRequested: true },
     reviewMarker: "absent",
   }) as const;
+
+const referralCode = Schema.decodeSync(ReferralCode)("RFL12345");
 
 describe("getAccount", () => {
   const getAccount: CustomerApiCall = { method: "GET", path: "/account" };
@@ -157,13 +161,13 @@ describe("getAccount", () => {
         referrals: ReferralServiceMock({
           hasSettledReferral: () => Effect.succeed(true),
           getAccountSummary: () =>
-            Effect.succeed({
-              code: "RFL12345",
+            Effect.succeed<ReferralAccountSummary>({
+              code: referralCode,
               inviteeCount: 0,
               eligibleInviteeCount: 0,
               discount: "0",
               savings: [],
-            }) as never,
+            }),
         }),
       },
       releases: { referralRelease: ReferralReleaseGate.fromDecision(true) },
@@ -1065,8 +1069,8 @@ describe("getReferrals", () => {
     method: "GET",
     path: "/account/referrals",
   };
-  const summary = {
-    code: "RFL12345",
+  const summary: ReferralAccountSummary = {
+    code: referralCode,
     inviteeCount: 2,
     eligibleInviteeCount: 1,
     discount: "5",
@@ -1075,7 +1079,7 @@ describe("getReferrals", () => {
   const withSummary = {
     ...linkedAccountServices,
     referrals: ReferralServiceMock({
-      getAccountSummary: () => Effect.succeed(summary) as never,
+      getAccountSummary: () => Effect.succeed(summary),
     }),
   };
 
@@ -1798,8 +1802,8 @@ describe("saveAnalyticsPreference", () => {
 });
 
 describe("overlapping requests in different release cohorts", () => {
-  const referralSummary = {
-    code: "RFL12345",
+  const referralSummary: ReferralAccountSummary = {
+    code: referralCode,
     inviteeCount: 0,
     eligibleInviteeCount: 0,
     discount: "0",
@@ -1807,7 +1811,7 @@ describe("overlapping requests in different release cohorts", () => {
   };
   const withReferralSummary = ReferralServiceMock({
     hasSettledReferral: () => Effect.succeed(false),
-    getAccountSummary: () => Effect.succeed(referralSummary) as never,
+    getAccountSummary: () => Effect.succeed(referralSummary),
   });
 
   // Each endpoint whose Layers carry a release gate, with services under

@@ -1,17 +1,28 @@
 import { describe, expect, mock, test } from "bun:test";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+} from "@deskohub/dotypos";
+import { NexiCorrelationIdSchema } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Schema } from "effect";
 import type { ReactNode } from "react";
 import { prerender } from "react-dom/static";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { CheckoutUnavailableError } from "@/features/checkout/backend/checkout/checkout-unavailable";
 import { makeOfficePayRouteFixture } from "@/features/checkout/backend/checkout/office-pay-route.test-utils";
 import type { PayableReservation } from "@/features/checkout/backend/checkout/payable-checkout.service";
 import { PayableCheckoutMock } from "@/features/checkout/backend/checkout/payable-checkout.service.mock";
-import { checkoutSessionIdSchema } from "@/features/checkout/checkout-identifiers";
+import {
+  checkoutAttemptKeySchema,
+  checkoutSessionIdSchema,
+  checkoutSessionKeySchema,
+} from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
 import type { Locale } from "@/features/i18n";
 import type { OfficeCheckoutPeople } from "@/features/office/components/office-checkout-people";
 import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
+import { withCoworkProductFields } from "@/features/reservation/cowork-reservation-product";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { reservationCheckoutStepQueryParam } from "@/features/reservation/reservation-checkout-step";
 import {
@@ -49,19 +60,65 @@ let reservationPayable = true;
 const payableCheckoutModule = await import(
   "@/features/checkout/backend/checkout/payable-checkout.service"
 );
+/** The held, unpaid reservation behind a payable Pay state. */
+const heldReservation = (id: PayableReservation["id"]): PayableReservation => {
+  const at = Temporal.Instant.from("2099-06-01T10:00:00.000Z");
+  return withCoworkProductFields({
+    id,
+    passId: null,
+    serviceDate: null,
+    passDayTableId: null,
+    passDayHoldRequestedAt: null,
+    passDayHoldGeneration: null,
+    checkoutSessionKey: checkoutSessionKeySchema.make(
+      "checkout-session-synthetic"
+    ),
+    checkoutAttemptKey: checkoutAttemptKeySchema.make(
+      "checkout-attempt-synthetic"
+    ),
+    correlationId: NexiCorrelationIdSchema.make("correlation-synthetic"),
+    dotyposCustomerId: DotyposCustomerIdSchema.make("1001"),
+    dotyposReservationId: DotyposReservationIdSchema.make(
+      "dotypos-reservation-id"
+    ),
+    activePaymentAttemptId: null,
+    activeCustomerEmailDeliveryId: null,
+    activeCustomerEmailDeliveryLocale: null,
+    authorAccountId: customerAccountIdSchema.make("account-synthetic-author"),
+    agentClientId: null,
+    agentSelectionKey: null,
+    reservationPurpose: null,
+    reservationState: "held",
+    paymentState: "not_started",
+    fulfillmentState: "not_started",
+    reservationDetails: {
+      kind: "cowork",
+      entryTier: "open-space",
+      coffee: false,
+    },
+    officeContactAttends: null,
+    locale: "cs-CZ",
+    paymentReturnTarget: null,
+    reservationHoldExpiresAt: Temporal.Instant.from("2099-06-01T10:08:00.000Z"),
+    reservationHoldExpiredAt: null,
+    reservationCreatedAt: at,
+    reservationConfirmedAt: null,
+    reservationCancelledAt: null,
+    cancellationCause: null,
+    cancellationEmailSentAt: null,
+    paidAt: null,
+    fulfilledAt: null,
+    fulfillmentFailedAt: null,
+    failureCode: null,
+    fulfillmentFailureCode: null,
+    createdAt: at,
+    updatedAt: at,
+  });
+};
 class PayableCheckout extends payableCheckoutModule.PayableCheckout {
   static override Live = PayableCheckoutMock((state) =>
     reservationPayable
-      ? Effect.succeed({
-          id: state.orderId,
-          reservationState: "held",
-          paymentState: "not_started",
-          dotyposCustomerId: "1001",
-          dotyposReservationId: "dotypos-reservation-id",
-          reservationHoldExpiresAt: Temporal.Instant.from(
-            "2099-06-01T10:08:00.000Z"
-          ),
-        } as PayableReservation)
+      ? Effect.succeed(heldReservation(state.orderId))
       : Effect.fail(
           new CheckoutUnavailableError({
             orderId: state.orderId,

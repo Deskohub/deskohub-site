@@ -1,16 +1,18 @@
 import { isNativeError } from "node:util/types";
+import type { Attributes } from "@opentelemetry/api";
 import {
   type AnyValue,
   type AnyValueMap,
   type LoggerProvider,
   SeverityNumber,
 } from "@opentelemetry/api-logs";
+import { isAttributeValue } from "@opentelemetry/core";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import {
   Cause,
-  type Context,
+  Context,
   Effect,
   Logger,
   type LogLevel,
@@ -339,9 +341,10 @@ function* censorQueryParameter<T>(
 ): CensorSteps {
   if (!Predicate.isString(value)) return yield value;
 
-  return Result.try(() =>
-    JSON.stringify(censorLogValueInternal(JSON.parse(value) as unknown, seen))
-  ).pipe(Result.getOrElse(() => censorLogValueInternal(value, seen)));
+  return Result.try(() => {
+    const parsed: unknown = JSON.parse(value);
+    return JSON.stringify(censorLogValueInternal(parsed, seen));
+  }).pipe(Result.getOrElse(() => censorLogValueInternal(value, seen)));
 }
 
 function* censorQueryParams<T>(
@@ -375,10 +378,11 @@ export const censorDatabaseQueryParams = (
   params: readonly unknown[]
 ): readonly unknown[] => {
   const seen: LogValueCensorship = new WeakMap();
-  return runCensorSteps(
-    censorQueryParams(query, params, seen),
-    seen
-  ) as readonly unknown[];
+  const censored = runCensorSteps(censorQueryParams(query, params, seen), seen);
+  // Censoring an array always yields one; anything else censors every value.
+  return Array.isArray(censored)
+    ? censored
+    : params.map(() => CENSORED_LOG_VALUE);
 };
 
 /**
@@ -746,26 +750,31 @@ export const censorLoggerOptions = (
     fiber: {
       ...fiber,
       getRef: (ref) => {
-        const value = fiber.getRef(ref);
-        if (ref !== References.CurrentLogAnnotations) return value;
-        const annotations = value as LogAnnotations;
-
-        return Object.fromEntries(
-          Object.entries(annotations).map(([key, nestedValue]) => {
-            const seen: LogValueCensorship = new WeakMap();
-            return [
-              key,
-              runCensorSteps(
-                censorLogRecordValue(key, nestedValue, seen),
-                seen
-              ),
-            ];
-          })
-        ) as typeof value;
+        if (ref !== References.CurrentLogAnnotations) return fiber.getRef(ref);
+        // `ref` is the annotations reference here, so a context holding the
+        // censored annotations under it returns them typed as `ref`'s value.
+        return Context.get(
+          Context.make(
+            References.CurrentLogAnnotations,
+            censorLogAnnotations(fiber.getRef(References.CurrentLogAnnotations))
+          ),
+          ref
+        );
       },
     },
   };
 };
+
+const censorLogAnnotations = (annotations: LogAnnotations): LogAnnotations =>
+  Object.fromEntries(
+    Object.entries(annotations).map(([key, nestedValue]) => {
+      const seen: LogValueCensorship = new WeakMap();
+      return [
+        key,
+        runCensorSteps(censorLogRecordValue(key, nestedValue, seen), seen),
+      ];
+    })
+  );
 
 // Effect 4.1's logfmt upper-cases the level (`level=ERROR`); log drains,
 // alerts and log queries match the level name the lines have always carried
@@ -827,7 +836,7 @@ export const createCensoredOtelLogger = (loggerProvider: LoggerProvider) =>
         options.logLevel
       );
       const now = options.date.getTime();
-      const attributes = { fiberId: `#${options.fiber.id}` } as AnyValueMap;
+      const attributes: AnyValueMap = { fiberId: `#${options.fiber.id}` };
 
       for (const [key, value] of Object.entries(
         options.fiber.getRef(References.CurrentLogAnnotations)
@@ -861,8 +870,26 @@ export const createCensoredOtelSpanExporter = (
   shutdown: () => spanExporter.shutdown(),
 });
 
+/**
+ * `attributes` censored, each checked on its own: a censored value that is no
+ * attribute value, such as a number array with a redacted item, is replaced
+ * by the censored marker, and its valid siblings are kept.
+ */
+const censorOtelAttributes = (attributes: Attributes): Attributes => {
+  const censored = censorLogValue(attributes);
+  if (!Predicate.isObject(censored)) return {};
+  return Object.fromEntries(
+    Object.entries(censored).map(([key, value]) => [
+      key,
+      value === undefined || isAttributeValue(value)
+        ? value
+        : CENSORED_LOG_VALUE,
+    ])
+  );
+};
+
 const censorReadableSpan = (span: ReadableSpan): ReadableSpan => ({
-  attributes: censorLogValue(span.attributes) as ReadableSpan["attributes"],
+  attributes: censorOtelAttributes(span.attributes),
   droppedAttributesCount: span.droppedAttributesCount,
   droppedEventsCount: span.droppedEventsCount,
   droppedLinksCount: span.droppedLinksCount,
@@ -870,9 +897,8 @@ const censorReadableSpan = (span: ReadableSpan): ReadableSpan => ({
   ended: span.ended,
   endTime: span.endTime,
   events: span.events.map((event) => {
-    const attributes = censorLogValue(
-      event.attributes
-    ) as typeof event.attributes;
+    const attributes =
+      event.attributes && censorOtelAttributes(event.attributes);
     const isException =
       event.attributes !== undefined &&
       Object.keys(event.attributes).some((key) => key.startsWith("exception."));
@@ -887,7 +913,7 @@ const censorReadableSpan = (span: ReadableSpan): ReadableSpan => ({
   kind: span.kind,
   links: span.links.map((link) => ({
     ...link,
-    attributes: censorLogValue(link.attributes) as typeof link.attributes,
+    attributes: link.attributes && censorOtelAttributes(link.attributes),
   })),
   name: span.name,
   parentSpanContext: span.parentSpanContext,
@@ -910,9 +936,7 @@ const trustedOtelResourceIdentityKeys = [
 const censorOtelResourceAttributes = (
   attributes: ReadableSpan["resource"]["attributes"]
 ): ReadableSpan["resource"]["attributes"] => {
-  const censored = censorLogValue(
-    attributes
-  ) as ReadableSpan["resource"]["attributes"];
+  const censored = censorOtelAttributes(attributes);
 
   for (const key of trustedOtelResourceIdentityKeys) {
     const value = attributes[key];

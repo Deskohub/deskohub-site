@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
@@ -42,6 +43,11 @@ import { AccountRoleGrants } from "./account-role-grants.service";
 import { LegacyAdministratorBackfill } from "./legacy-administrator-backfill.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+
+const connectedTestDatabase = () => {
+  assert(testDatabase, "Expected the Postgres test database");
+  return testDatabase;
+};
 const testAccounts: AdministratorAccountActor[] = [];
 
 const testKey: AccountingSnapshotKey = {
@@ -87,7 +93,7 @@ const runIsolated = async <A, E>(
     LegacyAdministratorBackfill | InvoiceRepository | WorkspaceDatabase
   >
 ) => {
-  const connection = await holdDatabaseConnection(testDatabase!);
+  const connection = await holdDatabaseConnection(connectedTestDatabase());
   try {
     await connection.query("begin");
     return await Effect.runPromise(
@@ -162,7 +168,8 @@ const insertCliSession = (input: {
         buildTarget: "development",
       })
       .returning({ id: cliSessions.id });
-    return row!.id;
+    assert(row, "Expected the inserted CLI session");
+    return row.id;
   });
 
 const insertAccessCodeEvent = (actor: AdministrationLegacyUsernameType) =>
@@ -229,7 +236,9 @@ describe.skipIf(!testDatabase)(
   () => {
     afterAll(async () => {
       await Effect.runPromise(
-        workspaceFixtures(testDatabase!.db).deleteAccounts(testAccounts)
+        workspaceFixtures(connectedTestDatabase().db).deleteAccounts(
+          testAccounts
+        )
       );
     });
 
@@ -468,6 +477,8 @@ describe.skipIf(!testDatabase)(
         },
       });
 
+      const [firstSession, secondSession] = outcome.sessions;
+      assert(firstSession && secondSession, "Expected both target sessions");
       const targetActor = {
         accountId: outcome.target.accountId,
         email: outcome.target.email,
@@ -481,8 +492,8 @@ describe.skipIf(!testDatabase)(
         )
       ).toEqual(
         new Map([
-          [outcome.sessions[0]!, targetActor],
-          [outcome.sessions[1]!, targetActor],
+          [firstSession, targetActor],
+          [secondSession, targetActor],
           [
             outcome.otherAccountSession,
             { accountId: outcome.other.accountId, email: outcome.other.email },

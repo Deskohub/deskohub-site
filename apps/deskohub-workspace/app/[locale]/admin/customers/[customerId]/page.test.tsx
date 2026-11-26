@@ -7,9 +7,13 @@ import {
   mock,
   test,
 } from "bun:test";
-import type { DotyposCustomer } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposCustomerSchema,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { within } from "@testing-library/react";
+import { Schema } from "effect";
 import { prerender } from "react-dom/static";
 import type { AdministrationCustomerActivity } from "@/features/administration/administration.service";
 import { loadFixtureReservations } from "@/features/administration/fixtures";
@@ -38,17 +42,25 @@ mock.module("next/navigation", () => ({
   useRouter: () => ({ back: mock(), refresh: mock(), replace: mock() }),
 }));
 
-const customerId = "customer-alex";
+const customerId = DotyposCustomerIdSchema.make("customer-alex");
 
-const customer = {
+const customer = Schema.decodeSync(DotyposCustomerSchema)({
+  _cloudId: "cloud-synthetic",
   id: customerId,
   firstName: "Alex",
   lastName: "Example",
   email: testEmailAddress("alex"),
+  points: null,
+  flags: "0",
+  display: true,
   deleted: false,
-} as DotyposCustomer;
+});
 const customerName = "Alex Example";
-const found: AdministrationCustomerLookup = { kind: "found", customer };
+const found: AdministrationCustomerLookup = {
+  kind: "found",
+  customer,
+  readAt: new Date("2026-08-01T08:00:00.000Z"),
+};
 
 const sections: AdminCustomerDiscountSections = {
   discountGroups: [],

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { parse } from "@typescript-eslint/parser";
+import { parse, parseForESLint } from "@typescript-eslint/parser";
 import type { TSESTree } from "@typescript-eslint/types";
 import { isString } from "effect/Predicate";
 
@@ -38,29 +38,38 @@ export const parseTrackedSource = (filePath: string): ParsedSource => {
   };
 };
 
+/**
+ * The child keys of each syntax node type. Walking only these keeps the
+ * parser's `tokens` array out of the tree: its entries also carry a string
+ * `type` (`Identifier`, `Keyword`, `Punctuator`) but are not syntax nodes.
+ * The parser hands its visitor keys out only with a parse, so an empty
+ * source supplies them once.
+ */
+const { visitorKeys } = parseForESLint("", { range: true });
+
 type NodeCandidate = { readonly type?: unknown };
 
-const isNode = (value: NodeCandidate): value is { readonly type: string } =>
-  isString(value.type);
+/** What a visitor key holds: one child, a list of them, or nothing. */
+type NodeChildren =
+  | NodeCandidate
+  | readonly (NodeCandidate | null)[]
+  | null
+  | undefined;
 
-const asNode = (value: NodeCandidate): AnyNode => value as AnyNode;
+/** A child object is a syntax node when it carries a string `type`. */
+const isNode = (value: NodeCandidate): value is AnyNode => isString(value.type);
 
 /** Every syntax node in the tree, parents before children. */
 export const nodesOf = (root: AnyNode): readonly AnyNode[] => {
   const collected: AnyNode[] = [];
   const visit = (node: AnyNode): void => {
     collected.push(node);
-    for (const [key, value] of Object.entries(node)) {
-      if (key === "parent" || key === "range" || key === "loc") continue;
-      if (value === null || value === undefined) continue;
-      if (Array.isArray(value)) {
-        for (const entry of value) {
-          if (entry !== null && entry !== undefined && isNode(entry)) {
-            visit(asNode(entry));
-          }
+    for (const key of visitorKeys[node.type] ?? []) {
+      const children: NodeChildren = Reflect.get(node, key);
+      for (const child of [children].flat()) {
+        if (child !== null && child !== undefined && isNode(child)) {
+          visit(child);
         }
-      } else if (isNode(value)) {
-        visit(asNode(value));
       }
     }
   };
@@ -71,7 +80,7 @@ export const nodesOf = (root: AnyNode): readonly AnyNode[] => {
 type RangedNode = AnyNode & { readonly range: [number, number] };
 
 const hasRange = (node: AnyNode): node is RangedNode =>
-  Array.isArray((node as RangedNode).range);
+  Array.isArray(node.range);
 
 /** True when `inner` sits lexically inside `outer` (range containment). */
 export const containsNode = (outer: AnyNode, inner: AnyNode): boolean =>

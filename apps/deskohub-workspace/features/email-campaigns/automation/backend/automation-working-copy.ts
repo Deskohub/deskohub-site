@@ -75,15 +75,16 @@ export const loadAutomationWorkingCopy = (
     Effect.bind("row", () => selectWorkingCopy(campaignId)),
     Effect.bind("flow", ({ row }) => decodeStoredFlow(row.automation.flow)),
     Effect.let("audience", ({ row }) => Option.fromNullishOr(row.audience)),
-    Effect.bind("publishedEmail", ({ row }) =>
-      row.campaign.emailId === null
+    Effect.bind("publishedEmail", ({ row: { campaign } }) => {
+      const { emailId } = campaign;
+      return emailId === null
         ? Effect.succeed(Option.none<CampaignEmailPublication>())
         : Effect.flatMap(WorkspaceTransaction, ({ db }) =>
-            getCampaignEmailPublication(db, row.campaign.emailId!).pipe(
+            getCampaignEmailPublication(db, emailId).pipe(
               Effect.map(Option.fromNullishOr)
             )
-          )
-    ),
+          );
+    }),
     Effect.map(
       ({ row, flow, audience, publishedEmail }): AutomationWorkingCopy => {
         const { campaign } = row;

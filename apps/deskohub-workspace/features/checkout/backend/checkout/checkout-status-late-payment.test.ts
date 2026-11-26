@@ -29,7 +29,7 @@ const instant = (value: string) => Temporal.Instant.from(value);
 const confirmedDotyposReservationId = "dotypos-confirmed";
 
 const reservationFixture = {
-  id: "late-reservation",
+  id: "0198c1a2-4e99-7263-8b3c-c431ca140117",
   correlationId: "correlation-id",
   dotyposCustomerId: "customer-id",
   dotyposReservationId: "dotypos-original",
@@ -50,7 +50,7 @@ const reservationFixture = {
 
 const paidAttempt = {
   id: "late-attempt",
-  workspaceReservationId: "late-reservation",
+  workspaceReservationId: "0198c1a2-4e99-7263-8b3c-c431ca140117",
   provider: "nexi",
   providerOrderId: "provider-order-id",
   state: "paid",
@@ -113,7 +113,8 @@ const makeHarness = (options: {
               (options.recovery
                 ? {
                     paymentAttemptId: "late-attempt",
-                    workspaceReservationId: "late-reservation",
+                    workspaceReservationId:
+                      "0198c1a2-4e99-7263-8b3c-c431ca140117",
                     ...options.recovery,
                   }
                 : null) as never
@@ -161,7 +162,7 @@ const makeHarness = (options: {
     Effect.gen(function* () {
       const service = yield* CheckoutStatusService;
       return yield* service.getStatus({
-        orderId: "late-reservation" as never,
+        orderId: "0198c1a2-4e99-7263-8b3c-c431ca140117" as never,
         returnOutcome: "success",
       });
     }).pipe(Effect.provide(layer), Effect.runPromise);
@@ -169,7 +170,7 @@ const makeHarness = (options: {
     Effect.gen(function* () {
       const service = yield* CheckoutStatusService;
       return yield* service.refreshStatus({
-        orderId: "late-reservation" as never,
+        orderId: "0198c1a2-4e99-7263-8b3c-c431ca140117" as never,
         returnOutcome: "success",
       });
     }).pipe(Effect.provide(layer), Effect.runPromise);
@@ -269,7 +270,7 @@ describe("CheckoutStatusService for late payments", () => {
     await harness.refreshStatus();
 
     expect(harness.startRecoveryIfSettled).toHaveBeenCalledWith({
-      orderId: "late-reservation",
+      orderId: "0198c1a2-4e99-7263-8b3c-c431ca140117",
       verificationDeadline: expect.anything(),
     });
   });

@@ -79,6 +79,9 @@ export function EntryPackChoose({
             className="lg:grid-cols-2"
             idPrefix="entry-pack-size"
             value={String(size)}
+            values={entryPackOffers
+              .filter((offer) => offer.product.tier === tier)
+              .map((offer) => String(offer.product.size))}
             onChange={(next) =>
               onChange({ ...product, size: next === "5" ? 5 : 10 })
             }

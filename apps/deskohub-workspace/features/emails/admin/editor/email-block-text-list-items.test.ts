@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   appendEmailTextListItem,
+  type EmailTextListItem,
   emailTextListItemAt,
   emailTextListItemIdentity,
   emailTextListItemPathAfter,
@@ -12,23 +13,19 @@ import {
   updateEmailTextListLevel,
 } from "./email-block-text-list-items";
 
-const nested = [
-  {
-    textKey: "a",
-    list: {
-      ordered: true,
-      start: 3,
-      items: [
-        { textKey: "a1" },
-        {
-          textKey: "a2",
-          list: { ordered: false, items: [{ textKey: "a2x" }] },
-        },
-      ],
-    },
+const nestedA2 = {
+  textKey: "a2",
+  list: { ordered: false, items: [{ textKey: "a2x" }] },
+} satisfies EmailTextListItem;
+const nestedA = {
+  textKey: "a",
+  list: {
+    ordered: true,
+    start: 3,
+    items: [{ textKey: "a1" }, nestedA2],
   },
-  { textKey: "b" },
-];
+} satisfies EmailTextListItem;
+const nested: readonly EmailTextListItem[] = [nestedA, { textKey: "b" }];
 
 describe("text list items", () => {
   test("text keys include every nested level", () => {
@@ -48,18 +45,18 @@ describe("text list items", () => {
     ]);
     expect(appendEmailTextListItem(nested, [0], "n")[0]?.list?.items).toEqual([
       { textKey: "a1" },
-      nested[0]?.list?.items[1],
+      nestedA2,
       { textKey: "n" },
     ]);
   });
 
   test("indenting keeps the moved item's own nested items", () => {
-    const items = [{ textKey: "a" }, ...nested[0]!.list.items];
+    const items = [{ textKey: "a" }, ...nestedA.list.items];
     expect(indentEmailTextListItem(items, [2], false)).toEqual([
       { textKey: "a" },
       {
         textKey: "a1",
-        list: { ordered: false, items: [nested[0]!.list.items[1]!] },
+        list: { ordered: false, items: [nestedA2] },
       },
     ]);
     // The first item of a level has nothing to nest under.
@@ -70,7 +67,7 @@ describe("text list items", () => {
     expect(indentEmailTextListItem(nested, [1], false)[0]?.list).toEqual({
       ordered: true,
       start: 3,
-      items: [...nested[0]!.list.items, { textKey: "b" }],
+      items: [...nestedA.list.items, { textKey: "b" }],
     });
   });
 
@@ -84,7 +81,7 @@ describe("text list items", () => {
 
   test("moving stays within the level and stops at its ends", () => {
     expect(
-      moveEmailTextListItem(nested, [0, 0], 1)[0]?.list?.items.map(
+      moveEmailTextListItem(nested, [0, 0], 1)[0]?.list?.items?.map(
         (item) => item.textKey
       )
     ).toEqual(["a2", "a1"]);
@@ -93,7 +90,7 @@ describe("text list items", () => {
 
   test("removing the last nested item drops its level", () => {
     expect(
-      removeEmailTextListItem(nested, [0, 1, 0])[0]?.list?.items[1]
+      removeEmailTextListItem(nested, [0, 1, 0])[0]?.list?.items?.[1]
     ).toEqual({ textKey: "a2" });
     expect(removeEmailTextListItem(nested, [0])).toEqual([{ textKey: "b" }]);
   });
@@ -103,7 +100,7 @@ describe("text list items", () => {
       ...level,
       ordered: true,
     }));
-    expect(next[0]?.list?.items[1]?.list?.ordered).toBe(true);
+    expect(next[0]?.list?.items?.[1]?.list?.ordered).toBe(true);
     expect(next[0]?.list?.ordered).toBe(true);
   });
 });

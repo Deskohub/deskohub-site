@@ -16,6 +16,16 @@ import {
 import { meetingRoomSelectionLink } from "./meeting-room-selection-link";
 import { setReservationSelectionSearchParams } from "./reservation-checkout-query";
 
+/** The form values a restorable reservation reopens with. */
+const restorableValues = (
+  reservation: Parameters<typeof getMeetingRoomReservationDefaultValues>[0]
+) => {
+  const values = getMeetingRoomReservationDefaultValues(reservation);
+  if (values === undefined)
+    throw new Error("Expected a restorable reservation");
+  return values;
+};
+
 const adaEmail = testEmailAddress("ada");
 
 const deterministicNow = () => Temporal.Instant.from("2099-07-30T13:01:00Z");
@@ -406,7 +416,7 @@ describe("meetingRoomSelectionLink.write", () => {
 
     expect(
       meetingRoomSelectionLink.restore(
-        getMeetingRoomReservationDefaultValues(restoredReservation),
+        restorableValues(restoredReservation),
         writeSelection(new URLSearchParams("payState=signed")),
         { locale: "cs-CZ", now: ongoingNow }
       )
@@ -435,14 +445,14 @@ describe("meetingRoomSelectionLink.write", () => {
 
     expect(
       meetingRoomSelectionLink.restore(
-        getMeetingRoomReservationDefaultValues(restoredReservation),
+        restorableValues(restoredReservation),
         new URLSearchParams("payState=signed"),
         { locale: "cs-CZ", now: ongoingNow }
       )?.earlySetup
     ).toBe(true);
     expect(
       meetingRoomSelectionLink.restore(
-        getMeetingRoomReservationDefaultValues(restoredReservation),
+        restorableValues(restoredReservation),
         writeSelection(new URLSearchParams("payState=signed")),
         { locale: "cs-CZ", now: ongoingNow }
       )?.earlySetup

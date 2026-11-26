@@ -1,12 +1,24 @@
+import type { PostHogFeatureFlagOverrides } from "@deskohub/analytics-posthog/feature-flags";
 import { Effect, type Layer } from "effect";
 import { currentRequestHeaders } from "@/shared/backend/workspace-request-context";
 import type { MeetingPoint } from "@/shared/testing/overlapping-requests.test-utils";
-import type { PostHogFeatureFlagKey } from "../generated/contract";
+import type {
+  PostHogFeatureFlagDefinitions,
+  PostHogFeatureFlagKey,
+} from "../generated/contract";
 import type { ReleaseGateClass } from "./release-gate";
 import { releaseGateOverFlags } from "./release-gate.test-utils";
 import { releaseGateForRun } from "./release-gate-run";
-import type { WorkspaceFeatureFlagService } from "./workspace-feature-flag.service";
+import type {
+  IWorkspaceFeatureFlagService,
+  WorkspaceFeatureFlagService,
+} from "./workspace-feature-flag.service";
 import { WorkspaceFeatureFlagServiceMock } from "./workspace-feature-flag.service.mock";
+
+/** What one evaluation of the request's flags answers. */
+type FlagSnapshot = Effect.Success<
+  ReturnType<IWorkspaceFeatureFlagService["evaluateFlags"]>
+>;
 
 /** The test request header naming the release cohort the request is in. */
 export const testReleaseCohortHeader = "x-test-release-cohort";
@@ -31,10 +43,13 @@ export const featureFlagsByCohort = (
     isEnabled: (key) => decide([key]),
     evaluateFlags: (options) =>
       decide(options?.flagKeys ?? []).pipe(
-        Effect.map((open) => ({
-          getFlag: ((key: PostHogFeatureFlagKey) =>
-            options?.flagKeys?.includes(key) ? open : undefined) as never,
-        }))
+        Effect.map((open): FlagSnapshot => {
+          const values: PostHogFeatureFlagOverrides<PostHogFeatureFlagDefinitions> =
+            Object.fromEntries(
+              (options?.flagKeys ?? []).map((key) => [key, open])
+            );
+          return { getFlag: (key) => values[key] };
+        })
       ),
   });
 };

@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { Schema } from "effect";
 import { z } from "zod";
 
 const appDir = resolve(import.meta.dir, "../..");
@@ -33,16 +34,20 @@ const graphSchema = z
   .strict();
 type Graph = z.infer<typeof graphSchema>;
 type Project = Graph["projects"][number];
-type Event = {
-  at: number;
-  event: string;
-  project: string;
-  scenario: string;
-  sequence: number;
-  workerIndex: number;
-  testName?: string;
-  outcome?: string;
-};
+const SchedulingEvent = Schema.Struct({
+  at: Schema.Number,
+  event: Schema.String,
+  project: Schema.String,
+  scenario: Schema.String,
+  sequence: Schema.Number,
+  workerIndex: Schema.Number,
+  testName: Schema.optionalKey(Schema.String),
+  outcome: Schema.optionalKey(Schema.String),
+});
+type Event = typeof SchedulingEvent.Type;
+const decodeSchedulingEvent = Schema.decodeUnknownSync(
+  Schema.fromJsonString(SchedulingEvent)
+);
 type Interval = { start: Event; end: Event };
 type Range = { start: number; end: number };
 type Run = {
@@ -330,7 +335,7 @@ async function readEvents(directory: string) {
       .trim()
       .split("\n")
       .filter(Boolean)
-      .map((line) => JSON.parse(line) as Event)
+      .map((line) => decodeSchedulingEvent(line))
   );
   return events.sort(
     (left, right) =>

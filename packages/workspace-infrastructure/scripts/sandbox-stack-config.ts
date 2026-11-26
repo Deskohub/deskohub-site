@@ -2,7 +2,6 @@ import * as Effect from "effect/Effect";
 import { withLogsOnStderr } from "../src/command-line";
 import {
   decodeWorkspaceStackConfig,
-  SandboxStackConfig,
   serializeWorkspaceStackConfig,
 } from "../src/config/stack-config";
 
@@ -12,8 +11,6 @@ export interface SandboxProofIdentity {
   readonly projectNumber: string;
   readonly region: string;
   readonly stateBucket: string;
-  /** The pushed collector image digest, once the images phase ran. */
-  readonly telemetryCollectorImage?: string;
   /** The proof run's disposable queue ID suffix, once foundation ran. */
   readonly disposableQueueSuffix?: string;
 }
@@ -25,29 +22,13 @@ export const sandboxProofBudget = {
   teardownAt: "2026-11-30T23:59:59Z",
 } as const;
 
-/** Whether the stack config schema declares the collector sidecar image. */
-export const stackConfigDeclaresTelemetryCollector =
-  "telemetryCollectorImage" in SandboxStackConfig.fields;
-
-/**
- * The proof's edge: plain HTTP through the load balancer's IP, since the
- * sandbox has no DNS, with WAF rules in preview and no static CDN. The
- * stack declares it with the first release and destroys it with the stack.
- */
-export const sandboxProofEdge = {
-  domains: [],
-  enableHttps: false,
-  staticCdnEnabled: false,
-  wafPreview: true,
-} as const;
-
 const serviceAccount = (projectId: string, name: string) =>
   [name, `${projectId}.iam.gserviceaccount.com`].join("@");
 
 /**
  * The sandbox stack config input: the accounts the bootstrap script
- * creates, no secrets, single-instance capacity, paused schedules and the
- * plain-HTTP proof edge.
+ * creates, no secrets, single-instance capacity and paused schedules. The
+ * services are IAM-private; nothing fronts them.
  */
 export const sandboxProofStackConfigInput = (
   identity: SandboxProofIdentity
@@ -61,7 +42,11 @@ export const sandboxProofStackConfigInput = (
     mobileUpdatesBucket: `${identity.projectId}-mobile-updates`,
     serviceAccounts: {
       deployer: serviceAccount(identity.projectId, "workspace-deployer"),
-      webRuntime: serviceAccount(identity.projectId, "workspace-web"),
+      apiRuntime: serviceAccount(identity.projectId, "workspace-api"),
+      frontendInvoker: serviceAccount(
+        identity.projectId,
+        "workspace-frontend-preview"
+      ),
       tasksWorkerRuntime: serviceAccount(
         identity.projectId,
         "workspace-tasks-worker"
@@ -85,7 +70,7 @@ export const sandboxProofStackConfigInput = (
     },
     secrets: [],
     capacity: {
-      webMaxInstances: 1,
+      apiMaxInstances: 1,
       workerMaxInstances: 1,
       queueMaxConcurrentDispatches: 1,
       queueMaxDispatchesPerSecond: 1,
@@ -93,18 +78,10 @@ export const sandboxProofStackConfigInput = (
     schedulesEnabled: false,
     alertNotificationChannels: [],
     budget: sandboxProofBudget,
-    edge: sandboxProofEdge,
   };
-  const withCollector =
-    identity.telemetryCollectorImage === undefined
-      ? input
-      : { ...input, telemetryCollectorImage: identity.telemetryCollectorImage };
   return identity.disposableQueueSuffix === undefined
-    ? withCollector
-    : {
-        ...withCollector,
-        disposableQueueSuffix: identity.disposableQueueSuffix,
-      };
+    ? input
+    : { ...input, disposableQueueSuffix: identity.disposableQueueSuffix };
 };
 
 /** Build and decode the config with the package schema; returns its JSON. */
@@ -121,38 +98,12 @@ const required = (name: string) => {
   return value;
 };
 
-/**
- * The collector digest to declare. A schema without the field refuses a
- * live run; a dry run omits it so the sequence still prints.
- */
-const collectorImage = (digest: string, dryRun: boolean) => {
-  if (digest === "") {
-    return undefined;
-  }
-  if (stackConfigDeclaresTelemetryCollector) {
-    return digest;
-  }
-  if (dryRun) {
-    console.error(
-      "dry run: the stack config schema has no telemetryCollectorImage; omitted"
-    );
-    return undefined;
-  }
-  throw new Error(
-    "The stack config schema has no telemetryCollectorImage field; the collector sidecar cannot be declared"
-  );
-};
-
 if (import.meta.main) {
   const identity: SandboxProofIdentity = {
     projectId: required("SANDBOX_PROJECT_ID"),
     projectNumber: required("SANDBOX_PROJECT_NUMBER"),
     region: required("SANDBOX_REGION"),
     stateBucket: required("SANDBOX_STATE_BUCKET"),
-    telemetryCollectorImage: collectorImage(
-      process.env.SANDBOX_TELEMETRY_COLLECTOR_DIGEST ?? "",
-      process.env.SANDBOX_STACK_CONFIG_DRY_RUN === "true"
-    ),
     disposableQueueSuffix: process.env.SANDBOX_QUEUE_SUFFIX || undefined,
   };
   process.stdout.write(

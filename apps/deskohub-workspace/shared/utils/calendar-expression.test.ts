@@ -613,10 +613,7 @@ describe("calendarFrequency", () => {
     [{ hours: [9, 17] }, 1, false],
     [
       {
-        minutes: Array.from({ length: 60 }, (_, minute) => minute) as [
-          number,
-          ...number[],
-        ],
+        minutes: [0, ...Array.from({ length: 59 }, (_, index) => index + 1)],
       },
       60,
       true,

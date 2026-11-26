@@ -58,7 +58,10 @@ const numberedInstances = (meet: Effect.Effect<void> = Effect.void) =>
 const perOperation = <R>(implementation: Layer.Layer<Operations, never, R>) =>
   servicePerOperation(
     Operations,
-    { answer: true, refuse: true },
+    (run) => ({
+      answer: (input) => run((instance) => instance.answer(input)),
+      refuse: (input) => run((instance) => instance.refuse(input)),
+    }),
     implementation
   );
 

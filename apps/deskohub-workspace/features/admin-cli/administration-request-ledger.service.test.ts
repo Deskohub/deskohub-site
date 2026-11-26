@@ -6,7 +6,13 @@ import {
   type AdministrationChannel,
   AdministrationDiscountMutationResult,
   AdministrationReservationAccessGrant,
+  AdministrationStandaloneAccessCodeAttemptId,
+  AdministrationStandaloneAccessCodeCleanupTarget,
+  AdministrationStandaloneAccessCodeCreateInput,
+  AdministrationStandaloneAccessCodePin,
   AdministrationStandaloneAccessCodeResult,
+  AdministrationStoredDiscountId,
+  AdministrationWorkspaceReservationId,
   CliMutationInProgress,
   CliMutationRejected,
   CliMutationRequestId,
@@ -25,7 +31,7 @@ import {
 } from "@deskohub/workspace-admin-api";
 import { NodeCrypto } from "@effect/platform-node";
 import { Cause, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
-import type { CliStoredMutation } from "@/db/schema";
+import type { CliStoredMutation, CliStoredMutationResult } from "@/db/schema";
 import { cliSessions } from "@/db/schema";
 import { ReservationAccessAdministrationError } from "@/features/administration/reservation-access-administration.service";
 import type { AdministratorAccountActor } from "@/features/administrators/account-role";
@@ -43,6 +49,7 @@ import {
 } from "./administration-mutation-recovery";
 import {
   AdministrationRequestLedger,
+  type RecoveryPolicy,
   StoredResult,
 } from "./administration-request-ledger.service";
 
@@ -159,10 +166,10 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
     );
 
   const ledgerEntry = async (requestId: CliMutationRequestIdType) => {
-    const result = (await testDatabase.pool.query(
+    const result = await testDatabase.pool.query<{ readonly result: unknown }>(
       "select result from cli_mutation_requests where session_id = $1 and request_id = $2",
       [sessionId, requestId]
-    )) as { rows: Array<{ result: unknown }> };
+    );
     return result.rows[0];
   };
 
@@ -266,10 +273,10 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
       );
 
     const countRows = async (table: string, title: string) => {
-      const result = (await testDatabase.pool.query(
+      const result = await testDatabase.pool.query<{ readonly count: number }>(
         `select count(*)::int as count from ${table} where title = $1`,
         [title]
-      )) as { rows: Array<{ count: number }> };
+      );
       return result.rows[0]?.count;
     };
 
@@ -428,10 +435,14 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
    * One administration mutation with external effects, as its handler
    * passes it to the ledger, with counters for every attempt it runs.
    */
-  const mutationWithEffects = async <A, E>(definition: {
+  const mutationWithEffects = async <
+    A,
+    S extends CliStoredMutationResult,
+    E,
+  >(definition: {
     readonly mutation: CliStoredMutation;
-    readonly stored: unknown;
-    readonly recovery: unknown;
+    readonly stored: StoredResult<A, S>;
+    readonly recovery: RecoveryPolicy<E>;
     readonly inProgressMessage?: string;
     readonly result: A;
     readonly withResume?: boolean;
@@ -459,8 +470,8 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
             ledger.applyOnceWithEffects({
               requestId,
               mutation: outcome.mutation ?? definition.mutation,
-              stored: definition.stored as never,
-              recovery: definition.recovery as never,
+              stored: definition.stored,
+              recovery: definition.recovery,
               inProgressMessage: definition.inProgressMessage,
               apply: count("applied").pipe(
                 Effect.andThen(
@@ -486,10 +497,10 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
   };
 
   describe("discount mutations", () => {
-    const mutation: CliStoredMutation = {
+    const mutation = {
       kind: "delete-discount",
-      id: crypto.randomUUID(),
-    } as CliStoredMutation;
+      id: AdministrationStoredDiscountId.make(crypto.randomUUID()),
+    } as const satisfies CliStoredMutation;
     const result = Schema.decodeUnknownSync(
       AdministrationDiscountMutationResult
     )({
@@ -635,7 +646,10 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
 
       await run(requestId);
       const reused = await run(requestId, {
-        mutation: { ...mutation, id: crypto.randomUUID() } as never,
+        mutation: {
+          ...mutation,
+          id: AdministrationStoredDiscountId.make(crypto.randomUUID()),
+        },
       });
       expect(failureOf(reused)).toBeInstanceOf(CliMutationRejected);
     });
@@ -645,8 +659,8 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
     const adminUiChannel: AdministrationChannel = { _tag: "AdminUi" };
     const mutation = {
       kind: "delete-discount",
-      id: crypto.randomUUID(),
-    } as CliStoredMutation;
+      id: AdministrationStoredDiscountId.make(crypto.randomUUID()),
+    } as const satisfies CliStoredMutation;
     const result = Schema.decodeUnknownSync(
       AdministrationDiscountMutationResult
     )({
@@ -657,10 +671,10 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
     });
     const claimsOf = async (requestId: CliMutationRequestIdType) =>
       (
-        (await testDatabase.pool.query(
+        await testDatabase.pool.query<{ readonly claims: number }>(
           "select count(*)::int as claims from cli_mutation_requests where request_id = $1",
           [requestId]
-        )) as { rows: Array<{ claims: number }> }
+        )
       ).rows[0]?.claims;
 
     test("applies a database-only mutation directly, without a claim", async () => {
@@ -721,11 +735,13 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
   });
 
   describe("reservation access mutations", () => {
-    const mutation: CliStoredMutation = {
+    const mutation = {
       kind: "reservation-access",
-      reservationId: crypto.randomUUID(),
+      reservationId: AdministrationWorkspaceReservationId.make(
+        crypto.randomUUID()
+      ),
       mutation: { kind: "retry-failed" },
-    } as CliStoredMutation;
+    } as const satisfies CliStoredMutation;
     const result = Schema.decodeUnknownSync(
       AdministrationReservationAccessGrant
     )({
@@ -847,7 +863,12 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
       await run(requestId);
       expect(await run(requestId)).toEqual(Exit.succeed(result));
       const reused = await run(requestId, {
-        mutation: { ...mutation, reservationId: crypto.randomUUID() } as never,
+        mutation: {
+          ...mutation,
+          reservationId: AdministrationWorkspaceReservationId.make(
+            crypto.randomUUID()
+          ),
+        },
       });
 
       expect(failureOf(reused)).toBeInstanceOf(CliMutationRejected);
@@ -856,15 +877,19 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
   });
 
   describe("standalone access-code creation", () => {
-    const attemptId = crypto.randomUUID();
-    const mutation: CliStoredMutation = {
-      kind: "standalone-access-code",
-      request: {
+    const attemptId = AdministrationStandaloneAccessCodeAttemptId.make(
+      crypto.randomUUID()
+    );
+    const mutation = {
+      kind: "standalone-access-code" as const,
+      request: Schema.decodeUnknownSync(
+        AdministrationStandaloneAccessCodeCreateInput
+      )({
         name: "Synthetic code",
         startsAt: "2026-11-02T10:00",
         endsAt: "2026-11-02T12:00",
-      },
-    } as CliStoredMutation;
+      }),
+    } satisfies CliStoredMutation;
     const stored = Schema.decodeUnknownSync(
       AdministrationStandaloneAccessCodeResult
     )({
@@ -878,14 +903,16 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
     const created = {
       ...stored,
       outcome: "created" as const,
-      pin: "1234567",
+      pin: AdministrationStandaloneAccessCodePin.make("1234567"),
     };
     const inProgressMessage =
       "This standalone access-code creation is still being applied. Retrying with the same attempt identifier is safe.";
-    const cleanupTarget = {
+    const cleanupTarget = Schema.decodeUnknownSync(
+      AdministrationStandaloneAccessCodeCleanupTarget
+    )({
       attemptId,
       name: "Synthetic code",
-    };
+    });
     const creation = () =>
       mutationWithEffects({
         mutation,
@@ -904,7 +931,7 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
         new CliStandaloneAccessCodeCleanupRequired({
           message: "Clean up first.",
           cleanupTarget,
-        } as never),
+        }),
       ],
       [
         "reconciled",
@@ -1056,8 +1083,11 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
       const reused = await run(requestId, {
         mutation: {
           ...mutation,
-          providerCredentialRemovedAttemptId: crypto.randomUUID(),
-        } as never,
+          providerCredentialRemovedAttemptId:
+            AdministrationStandaloneAccessCodeAttemptId.make(
+              crypto.randomUUID()
+            ),
+        },
       });
       expect(failureOf(reused)).toBeInstanceOf(CliMutationRejected);
     });

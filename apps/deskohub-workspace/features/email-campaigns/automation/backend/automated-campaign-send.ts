@@ -211,18 +211,24 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
       )
       .pipe(
         Effect.flatMap(([version]) =>
-          db
-            .insert(emailCampaignSends)
-            .values({
-              campaignId: input.campaignId,
-              automationVersionId: input.versionId,
-              audienceFilter: version!.audienceFilter,
-              contentHash: version!.contentHash,
-              createdAt: input.at,
-            })
-            .returning({ id: emailCampaignSends.id })
+          version === undefined
+            ? Effect.die("Automation version of the send was not found.")
+            : db
+                .insert(emailCampaignSends)
+                .values({
+                  campaignId: input.campaignId,
+                  automationVersionId: input.versionId,
+                  audienceFilter: version.audienceFilter,
+                  contentHash: version.contentHash,
+                  createdAt: input.at,
+                })
+                .returning({ id: emailCampaignSends.id })
         ),
-        Effect.map(([send]) => send!.id)
+        Effect.flatMap(([send]) =>
+          send === undefined
+            ? Effect.die("Campaign send insert returned no row.")
+            : Effect.succeed(send.id)
+        )
       );
 
   /**

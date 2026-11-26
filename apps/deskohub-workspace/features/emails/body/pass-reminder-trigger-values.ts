@@ -4,7 +4,7 @@ import type {
 } from "@deskohub/workspace-admin-api";
 import type { Locale } from "@/features/i18n";
 import { isLocale } from "@/features/i18n";
-import type { OrderId } from "@/features/order";
+import { orderIdSchema } from "@/features/order";
 import type { PassTier } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import { getPassReminderEndDates } from "@/features/passes/pass-reminder-schedule";
@@ -81,7 +81,7 @@ export const passReminderTriggerSnapshot = (
   };
 };
 
-const samplePassId = "019c0000-0000-7000-8000-000000000000" as OrderId;
+const samplePassId = orderIdSchema.make("019c0000-0000-7000-8000-000000000000");
 
 /** Synthetic pass reminder values for live editor and dry-run previews. */
 export const sampleEmailTriggerValue = (

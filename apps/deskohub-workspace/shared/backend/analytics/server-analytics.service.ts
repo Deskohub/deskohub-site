@@ -227,13 +227,19 @@ const addressEvent = (
 };
 
 /** Only scalar values are sent; anything else, undefined included, is not. */
-const sentProperties = (properties: ServerEventProperties) =>
-  Object.fromEntries(
-    Object.entries(properties).filter(
-      ([, value]) =>
-        value === null ||
-        Predicate.isString(value) ||
-        Predicate.isNumber(value) ||
-        Predicate.isBoolean(value)
-    )
-  ) as AnalyticsEventMessage["properties"];
+const isSentProperty = (
+  entry: [string, ServerEventProperty | undefined]
+): entry is [string, ServerEventProperty] => {
+  const [, value] = entry;
+  return (
+    value === null ||
+    Predicate.isString(value) ||
+    Predicate.isNumber(value) ||
+    Predicate.isBoolean(value)
+  );
+};
+
+const sentProperties = (
+  properties: ServerEventProperties
+): AnalyticsEventMessage["properties"] =>
+  Object.fromEntries(Object.entries(properties).filter(isSentProperty));

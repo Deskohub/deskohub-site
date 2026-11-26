@@ -217,7 +217,12 @@ export class EmailRecipientPersistence extends Context.Service<
                     )
                   )
                 );
-              return row!;
+              if (!row) {
+                return yield* Effect.die(
+                  "Email preparation insert left no row."
+                );
+              }
+              return row;
             })
           );
         }),
@@ -340,7 +345,12 @@ export class EmailRecipientPersistence extends Context.Service<
                 })
                 .where(eq(emailPreparations.id, preparationId))
                 .returning();
-              return sealed!;
+              if (!sealed) {
+                return yield* Effect.die(
+                  "Email preparation seal returned no row."
+                );
+              }
+              return sealed;
             })
           );
         }),
@@ -439,7 +449,12 @@ export class EmailRecipientPersistence extends Context.Service<
                     parameters: encoded,
                   })
                   .returning();
-                return row!;
+                if (!row) {
+                  return yield* Effect.die(
+                    "Email discount issuance insert returned no row."
+                  );
+                }
+                return row;
               })
             );
           }

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { Schema } from "effect";
 import { runCommand } from "./shared/command";
 import {
   findStepByName,
@@ -13,14 +14,21 @@ import {
 const parseWorkflowFile = (name: string): WorkflowDoc =>
   parseWorkflow(resolve(import.meta.dir, `../../../.github/workflows/${name}`));
 
-type PullRequestTrigger = {
-  readonly branches?: unknown;
-  readonly "branches-ignore"?: unknown;
-};
+const WorkflowPullRequestTrigger = Schema.Struct({
+  on: Schema.Struct({
+    pull_request: Schema.optionalKey(
+      Schema.NullOr(
+        Schema.Struct({
+          branches: Schema.optionalKey(Schema.Unknown),
+          "branches-ignore": Schema.optionalKey(Schema.Unknown),
+        })
+      )
+    ),
+  }),
+});
 
-const pullRequestTrigger = (doc: WorkflowDoc): PullRequestTrigger | undefined =>
-  (doc as WorkflowDoc & { readonly on?: { pull_request?: PullRequestTrigger } })
-    .on?.pull_request;
+const pullRequestTrigger = (doc: WorkflowDoc) =>
+  Schema.decodeUnknownSync(WorkflowPullRequestTrigger)(doc).on.pull_request;
 
 test("runs Workspace and dhw CI for stacked pull requests", () => {
   const workspace = parseWorkflowFile("workspace-tests.yml");

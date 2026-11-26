@@ -109,18 +109,24 @@ export function RoomImageCarousel({
     );
   }
 
-  const visibleSlides = (carouselImages.length === 1 ? [0] : slideOffsets).map(
-    (offset) => {
-      const virtualIndex = currentVirtualIndex + offset;
+  const visibleSlides = (
+    carouselImages.length === 1 ? [0] : slideOffsets
+  ).flatMap((offset) => {
+    const virtualIndex = currentVirtualIndex + offset;
+    const image =
+      carouselImages[wrapIndex(virtualIndex, carouselImages.length)];
 
-      return {
-        image: carouselImages[wrapIndex(virtualIndex, carouselImages.length)]!,
-        isCurrent: offset === 0,
-        offset: virtualIndex - visibleVirtualIndex,
-        virtualIndex,
-      };
-    }
-  );
+    return image
+      ? [
+          {
+            image,
+            isCurrent: offset === 0,
+            offset: virtualIndex - visibleVirtualIndex,
+            virtualIndex,
+          },
+        ]
+      : [];
+  });
 
   return (
     <section aria-label={openLabel} className={cn("mb-7 space-y-3", className)}>
@@ -209,7 +215,7 @@ export function RoomImageCarousel({
           activeIndex={activeIndex}
           count={carouselImages.length}
           getKey={(dotIndex) => carouselImages[dotIndex]?.id ?? dotIndex}
-          getLabel={(dotIndex) => carouselImages[dotIndex]!.label}
+          getLabel={(dotIndex) => carouselImages[dotIndex]?.label ?? ""}
           onSelect={moveToIndex}
           variant="navy"
         />

@@ -88,10 +88,9 @@ import {
   type ReservationAuditAttempt,
 } from "@/features/reservation/backend/reservation-audit";
 import { withCoworkProductFields } from "@/features/reservation/cowork-reservation-product";
-import {
-  reservationOrderId,
-  type StoredWorkspaceReservationDetails,
-  type WorkspaceReservationId,
+import type {
+  StoredWorkspaceReservationDetails,
+  WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
 import type { ReservationPurpose } from "@/features/reservation/reservation-purpose";
 import { recordReservationInviteeNotices } from "@/features/reservation-invitees/backend/record-reservation-invitee-notices";
@@ -1361,7 +1360,7 @@ export class WorkspaceReservationRepository extends Context.Service<
                 : input.refund?.targetValue;
             const activeAttempt = cancelled?.activePaymentAttemptId;
             const paidProviderAttempts = and(
-              eq(paymentAttempts.orderId, reservationOrderId(input.id)),
+              eq(paymentAttempts.workspaceReservationId, input.id),
               ne(paymentAttempts.provider, "internal"),
               eq(paymentAttempts.state, "paid")
             );
@@ -1761,13 +1760,17 @@ export class WorkspaceReservationRepository extends Context.Service<
               id: workspaceReservations.id,
               holdExpiresAt: workspaceReservations.reservationHoldExpiresAt,
             });
-          yield* ensureUpdated(
-            updated,
-            "workspaceReservations.markAttachFailedCancellationRequired",
-            input.id,
-            "Only creating_hold reservations can record attach-cancel recovery."
-          );
-          return updated[0]!.holdExpiresAt;
+          const [row] = updated;
+          if (row === undefined) {
+            return yield* new WorkspaceReservationStateError({
+              operation:
+                "workspaceReservations.markAttachFailedCancellationRequired",
+              reservationId: input.id,
+              message:
+                "Only creating_hold reservations can record attach-cancel recovery.",
+            });
+          }
+          return row.holdExpiresAt;
         }),
         claimCancellation: Effect.fn("workspaceReservations.claimCancellation")(
           function* (input) {
@@ -2172,7 +2175,7 @@ export class WorkspaceReservationRepository extends Context.Service<
                         .where(
                           eq(
                             reservationPaymentWindows.orderId,
-                            reservationOrderId(input.id)
+                            paymentAttempts.orderId
                           )
                         )
                     )

@@ -128,7 +128,7 @@ describe.skipIf(!testDatabase)(
         },
         locale: "en-US",
       });
-      expect(inviteeBooking?.id).toStartWith("account-referral-history-");
+      expect(inviteeBooking?.id).toStartWith("e2e5eed0");
       expect(inviteeBooking?.authorAccountId).toStartWith(
         "e2e-reservation-author-"
       );

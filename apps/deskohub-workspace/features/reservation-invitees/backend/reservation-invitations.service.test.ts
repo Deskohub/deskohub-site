@@ -7,11 +7,9 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Option } from "effect";
 import { m } from "@/features/i18n";
 import { InviteeEmail } from "@/features/office/office-people";
-import {
-  type WorkspaceReservation,
-  WorkspaceReservationRepository,
-} from "@/features/reservation/backend/workspace-reservation.repository";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationDetails } from "@/features/reservation/backend/workspace-reservation.service";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { reservationInviteeIdSchema } from "@/features/reservation-invitees/reservation-invitee";
 import { workspaceDefaultFromAddress } from "@/shared/backend/config/email.config";
@@ -89,15 +87,17 @@ const run = <A, E>(
               }),
               Layer.mock(WorkspaceReservationRepository, {
                 findById: () =>
-                  Effect.succeed({
-                    id: reservationId,
-                    reservationState: "confirmed",
-                    officeContactAttends: true,
-                    reservationDetails: reservation.reservationDetails,
-                    reservationCancelledAt: Temporal.Instant.from(
-                      "2026-11-10T10:00:00Z"
-                    ),
-                  } as WorkspaceReservation),
+                  Effect.succeed(
+                    workspaceReservationFixture({
+                      id: reservationId,
+                      reservationState: "confirmed",
+                      officeContactAttends: true,
+                      reservationDetails: reservation.reservationDetails,
+                      reservationCancelledAt: Temporal.Instant.from(
+                        "2026-11-10T10:00:00Z"
+                      ),
+                    })
+                  ),
               })
             )
           )

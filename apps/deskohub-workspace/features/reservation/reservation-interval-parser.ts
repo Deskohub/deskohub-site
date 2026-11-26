@@ -14,14 +14,14 @@ import {
 const localDateTimeTimestampSchema = localDateTimeSchema.pipe(
   Schema.decodeTo(
     Schema.TaggedStruct("LocalDateTime", {
-      value: localDateTimeSchema,
+      value: Schema.toType(localDateTimeSchema),
     }),
     {
       decode: SchemaGetter.transform((value) => ({
         _tag: "LocalDateTime" as const,
         value,
       })),
-      encode: SchemaGetter.transform(({ value }) => value as LocalDateTime),
+      encode: SchemaGetter.transform(({ value }) => value),
     }
   )
 );
@@ -29,14 +29,14 @@ const localDateTimeTimestampSchema = localDateTimeSchema.pipe(
 const instantTimestampSchema = instantStringSchema.pipe(
   Schema.decodeTo(
     Schema.TaggedStruct("Instant", {
-      value: instantStringSchema,
+      value: Schema.toType(instantStringSchema),
     }),
     {
       decode: SchemaGetter.transform((value) => ({
         _tag: "Instant" as const,
         value,
       })),
-      encode: SchemaGetter.transform(({ value }) => value as Instant),
+      encode: SchemaGetter.transform(({ value }) => value),
     }
   )
 );
