@@ -134,6 +134,19 @@ test("recovers a hold from the exact generation and booking without a captured p
   expect(release([record])[0]?.record).toEqual(record);
 });
 
+test("retains a captured ID for a conditional provider check when the filtered list omits it", () => {
+  const days = planUnlimitedPassDayRelease({
+    intent: { accountId, customerId, firstDay },
+    orderId,
+    records: [],
+    rows: rows.map((row, offset) =>
+      offset === 0 ? { ...row, dotyposReservationId: record.id } : row
+    ),
+  });
+  expect(days[0]?.reservationId).toBe(record.id);
+  expect(days[1]?.reservationId).toBeUndefined();
+});
+
 test("leaves mismatched booking facts and competing holds out of the cancellation plan", () => {
   expect(() =>
     release([{ ...record, _tableId: DotyposTableIdSchema.make("6") }])

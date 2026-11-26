@@ -211,25 +211,37 @@ const releaseOwnedPassDays = Effect.fnUntraced(function* (
   });
   const cancellations = yield* Effect.forEach(
     days,
-    (day) =>
-      Effect.exit(
-        day.record?.id && day.record.status !== "CANCELLED"
+    (day) => {
+      const { booking, record, reservationId, row } = day;
+      // A captured ID can be missing from a filtered list. The conditional
+      // transition checks the current provider booking by ID before writing.
+      const cancel =
+        reservationId &&
+        (record
+          ? record.status !== "CANCELLED"
+          : !isUnlimitedPassDayReleased(row))
           ? setUnlimitedPassDayHoldStatus(
-              day.record.id,
-              day.booking,
+              reservationId,
+              booking,
               "CANCELLED"
+            ).pipe(
+              Effect.catchTag("DotyposRejected", (error) =>
+                error.reason === "not-found" ? Effect.void : Effect.fail(error)
+              )
             )
-          : Effect.void
-      ).pipe(Effect.map((exit) => (Exit.isSuccess(exit) ? [day] : []))),
+          : Effect.void;
+      return Effect.exit(cancel).pipe(
+        Effect.map((exit) => (Exit.isSuccess(exit) ? [day] : []))
+      );
+    },
     { concurrency: 2 }
   );
   const settled = cancellations.flat();
   const reservationIds = [
     ...new Set(
-      settled.flatMap(({ record, row }) => {
-        const id = record?.id ?? row.dotyposReservationId;
-        return id ? [id] : [];
-      })
+      settled.flatMap(({ reservationId }) =>
+        reservationId ? [reservationId] : []
+      )
     ),
   ];
   if (reservationIds.length > 0) {
@@ -245,13 +257,12 @@ const releaseOwnedPassDays = Effect.fnUntraced(function* (
   const now = yield* currentInstant;
   yield* Effect.forEach(
     settled,
-    ({ record, row }) => {
-      const releasedId = record?.id ?? row.dotyposReservationId ?? undefined;
+    ({ reservationId, row }) => {
       if (isUnlimitedPassDayReleased(row)) return Effect.void;
       // An unbound dispatched POST can still appear in the provider. Keep that
       // claim until the exact hold is observed. Never dispatch another POST.
-      if (row.passDayHoldRequestedAt && !releasedId) return Effect.void;
-      return endReleasedPassDay(row, releasedId, now);
+      if (row.passDayHoldRequestedAt && !reservationId) return Effect.void;
+      return endReleasedPassDay(row, reservationId, now);
     },
     { discard: true }
   );

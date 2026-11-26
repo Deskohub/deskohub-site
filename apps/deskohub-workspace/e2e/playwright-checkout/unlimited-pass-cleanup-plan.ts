@@ -216,7 +216,12 @@ export const planUnlimitedPassDayRelease = ({
       );
     }
     if (record?.id) providerIds.add(record.id);
-    return { booking, record, row };
+    return {
+      booking,
+      record,
+      reservationId: record?.id ?? row.dotyposReservationId ?? undefined,
+      row,
+    };
   });
   if (
     records.some(
