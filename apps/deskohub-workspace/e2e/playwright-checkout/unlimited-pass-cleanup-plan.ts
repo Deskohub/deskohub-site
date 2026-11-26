@@ -3,7 +3,7 @@ import type {
   DotyposReservation,
   DotyposReservationId,
 } from "@deskohub/dotypos";
-import { Schema } from "effect";
+import { Data, Schema } from "effect";
 import type { WorkspaceReservationRow } from "@/db/schema/workspace-reservations";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { type OrderId, orderIdSchema } from "@/features/order";
@@ -20,7 +20,13 @@ import type { WorkspaceE2ERunId } from "../run-identifiers";
 import { parseReservationIntents } from "../soak-ownership";
 import { unlimitedPassAutoRenewalCaseId } from "./case-catalog";
 
-export class UnlimitedPassCleanupBlocked extends Error {}
+export class UnlimitedPassCleanupBlocked extends Data.TaggedError(
+  "UnlimitedPassCleanupBlocked"
+)<{ readonly message: string }> {
+  constructor(message: string) {
+    super({ message });
+  }
+}
 
 const invalidJournal = () =>
   new UnlimitedPassCleanupBlocked(

@@ -202,7 +202,12 @@ const releaseOwnedPassDays = Effect.fnUntraced(function* (
         records,
         rows,
       }),
-    catch: (cause) => cause,
+    catch: (cause) =>
+      cause instanceof UnlimitedPassCleanupBlocked
+        ? cause
+        : new UnlimitedPassCleanupBlocked(
+            "Unlimited pass provider ownership could not be verified"
+          ),
   });
   const cancellations = yield* Effect.forEach(
     days,
