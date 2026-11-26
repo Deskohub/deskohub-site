@@ -35,6 +35,7 @@ import { checkoutSessionKeySchema } from "@/features/checkout/checkout-identifie
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils";
 import {
   type AdministrationReservationDetail,
@@ -55,6 +56,10 @@ interface StubQuery<A> extends Effect.Effect<readonly A[]> {
   readonly orderBy: () => StubQuery<A>;
   readonly where: (condition?: SQL) => StubQuery<A>;
 }
+
+const emptyWorkspaceDatabase = Layer.unwrap(
+  Effect.promise(async () => (await makeRecordingWorkspaceDatabase()).layer)
+);
 
 const makeQuery = <A>(
   rows: readonly A[],
@@ -140,7 +145,7 @@ describe("AdministrationService", () => {
         testAdministrationLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              stubWorkspaceDatabaseLayer({ select: () => makeQuery([]) }),
+              emptyWorkspaceDatabase,
               DotyposServiceMock({
                 getCustomersByIds: (ids) =>
                   Effect.succeed([]).pipe(
@@ -220,7 +225,7 @@ describe("AdministrationService", () => {
         testAdministrationLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              stubWorkspaceDatabaseLayer({ select: () => makeQuery([]) }),
+              emptyWorkspaceDatabase,
               DotyposServiceMock({
                 getCustomersByIds: (ids) =>
                   makeInMemoryDotypos({ customers }).service.getCustomersByIds(
@@ -2034,7 +2039,7 @@ describe("AdministrationService", () => {
         testAdministrationLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              stubWorkspaceDatabaseLayer({ select: () => makeQuery([]) }),
+              emptyWorkspaceDatabase,
               DotyposServiceMock({
                 getReservation: () => Effect.succeed(Option.none()),
                 getTables: () => Effect.succeed([]),
@@ -2526,7 +2531,7 @@ describe("AdministrationService", () => {
         testAdministrationLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              stubWorkspaceDatabaseLayer({ select: () => makeQuery([]) }),
+              emptyWorkspaceDatabase,
               DotyposServiceMock({
                 listReservations: () =>
                   Effect.fail(

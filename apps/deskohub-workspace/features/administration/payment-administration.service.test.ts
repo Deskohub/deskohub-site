@@ -8,8 +8,12 @@ import {
 } from "@deskohub/nexi";
 import { NexiServiceMock } from "@deskohub/nexi/backend/service.mock";
 import { Effect, Layer } from "effect";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
-import { stubWorkspaceDatabaseLayer } from "./administration-database.test-utils";
+import {
+  makeRecordingWorkspaceDatabase,
+  type RecordingWorkspaceDatabase,
+} from "@/shared/testing/workspace-recording-database.test-utils";
 import {
   type IPaymentAdministrationService,
   PaymentAdministrationService,
@@ -44,47 +48,47 @@ const makeLocalOrder = (
   updatedAt: Temporal.Instant.from(createdAt),
 });
 
-const makeQuery = <A>(rows: readonly A[]) => {
-  const result = Effect.succeed(rows);
-  return Object.assign(result, {
-    limit: () => result,
-    orderBy: () => Object.assign(result, { limit: () => result }),
-  });
+const makeDatabase = async (
+  ...selections: readonly (readonly ReturnType<typeof makeLocalOrder>[])[]
+) => {
+  const database = await makeRecordingWorkspaceDatabase();
+  database.setRows([
+    ...selections.map((rows) =>
+      rows.map((row) => [
+        row.paymentAttemptId,
+        row.providerOrderId,
+        row.reservationId,
+        row.state,
+        row.refundState,
+        row.refundTargetValue,
+        row.refundedAmountValue,
+        row.refundedAt,
+        null, // failureCode
+        row.amountValue,
+        row.amountExponent,
+        row.currency,
+        row.attemptCreatedAt.toString(),
+        row.providerOrderCreatedAt?.toString() ?? null,
+        row.providerSessionAttached,
+        row.updatedAt.toString(),
+      ])
+    ),
+    [],
+  ]);
+  return database;
 };
 
-// A database whose every select returns the next of the given row sets.
-const makeDatabase = (...selections: readonly (readonly unknown[])[]) => {
-  const selected: number[] = [];
-  return {
-    selected,
-    database: {
-      select: () => {
-        selected.push(selected.length + 1);
-        const rows = selections[selected.length - 1] ?? [];
-        return { from: () => ({ where: () => makeQuery(rows) }) };
-      },
-    },
-  };
-};
-
-const runAdministration = <A>(
-  database: { readonly select: () => unknown },
+const runAdministration = <A, E>(
+  database: RecordingWorkspaceDatabase,
   nexi: Parameters<typeof NexiServiceMock>[0],
-  use: (
-    administration: IPaymentAdministrationService
-  ) => Effect.Effect<A, unknown>
+  use: (administration: IPaymentAdministrationService) => Effect.Effect<A, E>
 ) =>
   Effect.gen(function* () {
     return yield* use(yield* PaymentAdministrationService);
   }).pipe(
     Effect.provide(
       PaymentAdministrationService.Default.pipe(
-        Layer.provide(
-          Layer.merge(
-            stubWorkspaceDatabaseLayer(database),
-            NexiServiceMock(nexi)
-          )
-        )
+        Layer.provide(Layer.merge(database.layer, NexiServiceMock(nexi)))
       )
     ),
     Effect.runPromise
@@ -115,44 +119,24 @@ describe("PaymentAdministrationService", () => {
       "2026-08-06T10:00:00Z",
       { providerOrderCreatedAt: null }
     );
-    let selectCalls = 0;
-    const database = {
-      select: () => {
-        selectCalls += 1;
-        const rows =
-          selectCalls === 1 ? [newestLocalOrder] : [linkedOlderOrder];
-        return {
-          from: () => ({ where: () => makeQuery(rows) }),
-        };
-      },
-    };
+    const database = await makeDatabase([newestLocalOrder], [linkedOlderOrder]);
 
-    const result = await Effect.gen(function* () {
-      const administration = yield* PaymentAdministrationService;
-      return yield* administration.listOrders({ maxRecords: 1 });
-    }).pipe(
-      Effect.provide(
-        PaymentAdministrationService.Default.pipe(
-          Layer.provide(
-            Layer.merge(
-              stubWorkspaceDatabaseLayer(database),
-              NexiServiceMock({
-                listOrders: () =>
-                  Effect.succeed([
-                    {
-                      orderId: "provider-order",
-                      operations: [],
-                    },
-                  ]),
-              })
-            )
-          )
-        )
-      ),
-      Effect.runPromise
+    const result = await runAdministration(
+      database,
+      {
+        listOrders: () =>
+          Effect.succeed([
+            {
+              orderId: orderId("provider-order"),
+              operations: [],
+            },
+          ]),
+      },
+      (administration) => administration.listOrders({ maxRecords: 1 })
     );
 
-    expect(selectCalls).toBe(2);
+    expect(database.statements).toHaveLength(2);
+    expect(database.statements[1]?.params).toContain("provider-order");
     expect(result.items).toHaveLength(2);
     expect(result.items[0]).toMatchObject({
       orderId: "newest-local-order",
@@ -180,7 +164,7 @@ describe("PaymentAdministrationService", () => {
       "2026-08-06T09:00:00Z",
       { providerOrderCreatedAt: null, providerSessionAttached: false }
     );
-    const { database } = makeDatabase([attemptOnly]);
+    const database = await makeDatabase([attemptOnly]);
 
     const result = await runAdministration(
       database,
@@ -199,9 +183,9 @@ describe("PaymentAdministrationService", () => {
     );
 
     expect(result.items.map((item) => item.orderId)).toEqual([
-      "recent-activity",
-      "attempt-only",
-      "no-activity",
+      orderId("recent-activity"),
+      orderId("attempt-only"),
+      orderId("no-activity"),
     ]);
     expect(result.providerAvailable).toBe(true);
   });
@@ -212,7 +196,7 @@ describe("PaymentAdministrationService", () => {
       "single-reservation",
       "2026-08-06T10:00:00Z"
     );
-    const { database } = makeDatabase([local]);
+    const database = await makeDatabase([local]);
     const provider = {
       operations: [],
       orderId: orderId("single-order"),
@@ -235,9 +219,9 @@ describe("PaymentAdministrationService", () => {
 
   test("tells a missing Nexi order from an unreachable one when loading an order", async () => {
     const statuses = await Promise.all(
-      [nexiError(404), nexiError(502), networkError()].map((failure) =>
+      [nexiError(404), nexiError(502), networkError()].map(async (failure) =>
         runAdministration(
-          makeDatabase([]).database,
+          await makeDatabase(),
           { getOrder: () => Effect.fail(failure) },
           (administration) => administration.loadOrder(orderId("lost-order"))
         )
@@ -275,7 +259,7 @@ describe("PaymentAdministrationService", () => {
       "linked-reservation",
       "2026-08-06T10:00:00Z"
     );
-    const { database } = makeDatabase([linked]);
+    const database = await makeDatabase([linked]);
     const operations = [
       {
         operationId: operationId("op-linked"),
@@ -296,7 +280,11 @@ describe("PaymentAdministrationService", () => {
 
     expect(result).toEqual({
       items: [
-        { ...operations[0], linkedReservationId: "linked-reservation" },
+        {
+          ...operations[0],
+          linkedReservationId:
+            workspaceReservationIdSchema.make("linked-reservation"),
+        },
         { ...operations[1], linkedReservationId: null },
         { ...operations[2], linkedReservationId: null },
       ],
@@ -306,7 +294,7 @@ describe("PaymentAdministrationService", () => {
   });
 
   test("lists no operations while Nexi is unreachable", async () => {
-    const { database, selected } = makeDatabase();
+    const database = await makeDatabase();
 
     const result = await runAdministration(
       database,
@@ -319,7 +307,7 @@ describe("PaymentAdministrationService", () => {
       providerAvailable: false,
       truncated: false,
     });
-    expect(selected).toEqual([]);
+    expect(database.statements).toEqual([]);
   });
 
   test("loads one Nexi operation with the reservation that opened its order", async () => {
@@ -328,7 +316,7 @@ describe("PaymentAdministrationService", () => {
       "operation-reservation",
       "2026-08-06T10:00:00Z"
     );
-    const { database } = makeDatabase([linked]);
+    const database = await makeDatabase([linked]);
     const operation = {
       operationId: operationId("op-1"),
       orderId: orderId("operation-order"),
@@ -345,12 +333,14 @@ describe("PaymentAdministrationService", () => {
       operation,
       providerAvailable: true,
       providerStatus: "available",
-      linkedReservationId: "operation-reservation",
+      linkedReservationId: workspaceReservationIdSchema.make(
+        "operation-reservation"
+      ),
     });
   });
 
   test("skips the reservation lookup for an operation without a Nexi order", async () => {
-    const { database, selected } = makeDatabase();
+    const database = await makeDatabase();
     const operation = { operationId: operationId("op-orderless") };
 
     const result = await runAdministration(
@@ -362,19 +352,19 @@ describe("PaymentAdministrationService", () => {
 
     expect(result.linkedReservationId).toBeNull();
     expect(result.operation).toEqual(operation);
-    expect(selected).toEqual([]);
+    expect(database.statements).toEqual([]);
   });
 
   test("tells a missing Nexi operation from an unreachable one", async () => {
     const results = await Promise.all(
-      [nexiError(404), nexiError(500), networkError()].map((failure) => {
-        const { database, selected } = makeDatabase();
+      [nexiError(404), nexiError(500), networkError()].map(async (failure) => {
+        const database = await makeDatabase();
         return runAdministration(
           database,
           { getOperation: () => Effect.fail(failure) },
           (administration) =>
             administration.loadOperation(operationId("op-lost"))
-        ).then((result) => ({ result, selected }));
+        ).then((result) => ({ result, statements: database.statements }));
       })
     );
 
@@ -390,7 +380,9 @@ describe("PaymentAdministrationService", () => {
       ["unavailable", false, null, null],
       ["unavailable", false, null, null],
     ]);
-    expect(results.every(({ selected }) => selected.length === 0)).toBe(true);
+    expect(results.every(({ statements }) => statements.length === 0)).toBe(
+      true
+    );
   });
 
   test("keeps local orders listed while Nexi is unreachable", async () => {
@@ -399,7 +391,7 @@ describe("PaymentAdministrationService", () => {
       "local-reservation",
       "2026-08-06T10:00:00Z"
     );
-    const { database } = makeDatabase([local]);
+    const database = await makeDatabase([local]);
 
     const result = await runAdministration(
       database,
@@ -433,7 +425,7 @@ describe("PaymentAdministrationService", () => {
       "shared-reservation",
       "2026-08-06T11:00:00Z"
     );
-    const { database } = makeDatabase([first, second]);
+    const database = await makeDatabase([first, second]);
 
     const orders = await runAdministration(
       database,
@@ -456,8 +448,16 @@ describe("PaymentAdministrationService", () => {
         order.link?.paymentAttemptId,
       ])
     ).toEqual([
-      ["first-order", "available", "attempt-first-order"],
-      ["second-order", "not_found", "attempt-second-order"],
+      [
+        orderId("first-order"),
+        "available",
+        paymentAttemptIdSchema.make("attempt-first-order"),
+      ],
+      [
+        orderId("second-order"),
+        "not_found",
+        paymentAttemptIdSchema.make("attempt-second-order"),
+      ],
     ]);
   });
 });
