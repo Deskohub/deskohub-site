@@ -17,10 +17,9 @@
 # rerun with --grant-deploy-roles to grant deployment permissions.
 #
 # Once the hosted proof of the IAM-private stack passes, rerun with
-# --revoke-retired-edge-roles as well. It removes the load balancer, Cloud
-# Armor and log-exclusion roles earlier versions granted the deployer, then
-# reads the policy back and fails unless they are gone and the deployer
-# still reads logs and traces.
+# --revoke-retired-edge-roles as well. It removes the load balancer and Cloud
+# Armor admin roles earlier versions granted the deployer, then verifies that
+# the deployer retains log and trace access and the scheduler alert's Logging role.
 #
 # Usage:
 #   bootstrap-sandbox-wif.sh \
@@ -429,9 +428,10 @@ if [[ "$grant_deploy_roles" == true ]]; then
   echo "== Deployer project roles"
   # Compute read access lets the hosted proof show the stack owns no load
   # balancer, network endpoint group, security policy or certificate.
+  # The log-based SchedulerFailureAlert needs logging.notificationRules.create.
   for role in roles/run.admin roles/cloudtasks.admin roles/cloudscheduler.admin \
     roles/artifactregistry.admin roles/storage.admin roles/monitoring.alertPolicyEditor \
-    roles/compute.viewer roles/logging.viewer roles/cloudtrace.user \
+    roles/compute.viewer roles/logging.viewer roles/cloudtrace.user roles/logging.configWriter \
     roles/serviceusage.serviceUsageConsumer; do
     run gcloud projects add-iam-policy-binding "$project_id" --condition=None --quiet \
       --member "serviceAccount:${deployer}" --role "$role" --format=none
@@ -458,9 +458,7 @@ if [[ "$grant_deploy_roles" == true ]]; then
 
   if [[ "$revoke_retired_edge_roles" == true ]]; then
     echo "== Retired deployer edge roles"
-    # The stack declares no load balancer, Cloud Armor policy or log
-    # exclusion any more; earlier versions granted the roles to manage them.
-    retired_edge_roles=(roles/compute.loadBalancerAdmin roles/compute.securityAdmin roles/logging.configWriter)
+    retired_edge_roles=(roles/compute.loadBalancerAdmin roles/compute.securityAdmin)
     for role in "${retired_edge_roles[@]}"; do
       run_revoke gcloud projects remove-iam-policy-binding "$project_id" --condition=None --quiet \
         --member "serviceAccount:${deployer}" --role "$role" --format=none
@@ -475,10 +473,10 @@ if [[ "$grant_deploy_roles" == true ]]; then
       for role in "${retired_edge_roles[@]}"; do
         ! grep -qxF "$role" <<<"$deployer_roles" || fail "the deployer still holds ${role}"
       done
-      for role in roles/logging.viewer roles/cloudtrace.user; do
+      for role in roles/logging.viewer roles/cloudtrace.user roles/logging.configWriter; do
         grep -qxF "$role" <<<"$deployer_roles" || fail "the deployer lost ${role}"
       done
-      echo "deployer holds no retired edge role and keeps log and trace read access"
+      echo "deployer holds no retired edge role and keeps log and trace access and scheduler alert permissions"
     fi
   fi
 else
