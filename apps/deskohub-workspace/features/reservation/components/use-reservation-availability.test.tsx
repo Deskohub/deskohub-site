@@ -5,6 +5,7 @@ import {
   describe,
   expect,
   jest,
+  mock,
   test,
 } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -15,7 +16,6 @@ import type {
   PreloadedWorkspaceAvailability,
   WorkspaceAvailability,
 } from "@/features/reservation/workspace-availability";
-import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -52,8 +52,11 @@ const queryStartingAt = (
 
 type AvailabilityFetch = (url: string) => Promise<Response>;
 
-const mockAvailabilityFetch = (respond: AvailabilityFetch) =>
-  stubFetch((request) => respond(String(request)));
+const mockAvailabilityFetch = (respond: AvailabilityFetch) => {
+  const fetch = mock((request: RequestInfo | URL) => respond(String(request)));
+  globalThis.fetch = fetch as typeof globalThis.fetch;
+  return fetch;
+};
 
 const renderAvailability = (
   query: MeetingRoomWorkspaceAvailabilityQuery,

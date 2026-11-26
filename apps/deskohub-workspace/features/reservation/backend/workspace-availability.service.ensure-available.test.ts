@@ -2,13 +2,9 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import {
-  type DotyposReservation,
-  DotyposReservationSchema,
-  DotyposService,
-  DotyposTableSchema,
-} from "@deskohub/dotypos";
-import { Effect, Layer, Schema } from "effect";
+import { DotyposService } from "@deskohub/dotypos";
+import type { Reservation, Table } from "@deskohub/dotypos/generated";
+import { Effect, Layer } from "effect";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import {
@@ -18,7 +14,7 @@ import {
 } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 
-const meetingRoomTable = Schema.decodeUnknownSync(DotyposTableSchema)({
+const meetingRoomTable: Table = {
   _cloudId: "cloud",
   id: "room-1",
   display: true,
@@ -26,9 +22,9 @@ const meetingRoomTable = Schema.decodeUnknownSync(DotyposTableSchema)({
   name: "Meeting room",
   seats: "1",
   tags: ["reservation:meeting-room"],
-});
+};
 
-const officeTable = Schema.decodeUnknownSync(DotyposTableSchema)({
+const officeTable: Table = {
   _cloudId: "cloud",
   id: "office-1",
   display: true,
@@ -36,62 +32,55 @@ const officeTable = Schema.decodeUnknownSync(DotyposTableSchema)({
   name: "Office",
   seats: "6",
   tags: ["reservation:office"],
-});
+};
 
 const makeDotyposReservation = (
   startDate: string,
   endDate: string,
   tableId = "room-1"
-) =>
-  Schema.decodeUnknownSync(DotyposReservationSchema)({
-    _branchId: "branch",
-    _cloudId: "cloud",
-    id: "preceding-reservation",
-    _tableId: tableId,
-    startDate,
-    endDate,
-    seats: "1",
-    status: "CONFIRMED",
-  });
+): Reservation => ({
+  _branchId: "branch",
+  _cloudId: "cloud",
+  id: "preceding-reservation",
+  _tableId: tableId,
+  startDate,
+  endDate,
+  seats: "1",
+  status: "CONFIRMED",
+});
 
 const checkAvailability = async (
   reservation: AvailabilityReservation,
-  reservations: readonly DotyposReservation[]
+  reservations: readonly Reservation[]
 ) => {
   const dotyposService = {
     getTables: mock(() => Effect.succeed([meetingRoomTable, officeTable])),
-    listActiveReservationsOverlapping: mock(
-      (
-        interval: Parameters<
-          typeof DotyposService.Service.listActiveReservationsOverlapping
-        >[0]
-      ) => {
-        const intervalStart = interval.startDate.getTime();
-        const intervalEnd = interval.endDate.getTime();
-        return Effect.succeed(
-          reservations.filter((dotyposReservation) => {
-            const startDate = new Date(dotyposReservation.startDate).getTime();
-            const endDate = new Date(dotyposReservation.endDate).getTime();
-            return startDate < intervalEnd && endDate > intervalStart;
-          })
-        );
-      }
-    ),
+    listActiveReservationsOverlapping: mock((interval) => {
+      const intervalStart = interval.startDate.getTime();
+      const intervalEnd = interval.endDate.getTime();
+      return Effect.succeed(
+        reservations.filter((dotyposReservation) => {
+          const startDate = new Date(dotyposReservation.startDate).getTime();
+          const endDate = new Date(dotyposReservation.endDate).getTime();
+          return startDate < intervalEnd && endDate > intervalStart;
+        })
+      );
+    }),
   };
   const availabilityLayer = WorkspaceAvailabilityService.Default.pipe(
     Layer.provide(AdvisoryAvailabilityInventory.Provider),
     Layer.provide(
       Layer.mergeAll(
-        Layer.mock(DotyposService, dotyposService),
-        Layer.mock(GoogleCalendarWorkspaceLimitationsService, {
+        Layer.succeed(DotyposService, dotyposService as never),
+        Layer.succeed(GoogleCalendarWorkspaceLimitationsService, {
           listLimitations: mock(() => Effect.succeed([])),
-        }),
-        Layer.mock(WorkspaceReservationRepository, {
+        } as never),
+        Layer.succeed(WorkspaceReservationRepository, {
           selectPendingPassDayCapacity: () => Effect.succeed([]),
           selectExpiredHoldDotyposReservationIds: mock(() =>
             Effect.succeed([])
           ),
-        })
+        } as never)
       )
     )
   );

@@ -2,16 +2,11 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import {
-  DotyposCustomerIdSchema,
-  DotyposReservationIdSchema,
-  DotyposService,
-} from "@deskohub/dotypos";
+import { DotyposService } from "@deskohub/dotypos";
 import type { Customer, Reservation, Table } from "@deskohub/dotypos/generated";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Option } from "effect";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
-import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
@@ -20,7 +15,6 @@ import {
   WorkspaceReservationDetailsError,
   WorkspaceReservationService,
 } from "./workspace-reservation.service";
-import { workspaceReservationFixture } from "./workspace-reservation.test-utils";
 
 const customer: Customer = {
   _cloudId: "cloud",
@@ -41,25 +35,22 @@ type TestWorkspaceReservation = Pick<
 >;
 
 const makeWorkspaceReservation = (
-  overrides: Partial<WorkspaceReservation> = {}
-): WorkspaceReservation =>
-  workspaceReservationFixture({
-    id: workspaceReservationIdSchema.make("reservation-id"),
-    dotyposCustomerId: DotyposCustomerIdSchema.make("customer-id"),
-    dotyposReservationId: DotyposReservationIdSchema.make(
-      "dotypos-reservation-id"
-    ),
-    reservationState: "confirmed",
-    paymentState: "paid",
-    reservationDetails: {
-      kind: "cowork",
-      entryTier: "profi",
-      coffee: true,
-      monitorOption: "2x27-qhd",
-    },
-    locale: "cs-CZ",
-    ...overrides,
-  });
+  overrides: Partial<TestWorkspaceReservation> = {}
+): TestWorkspaceReservation => ({
+  id: "reservation-id",
+  dotyposCustomerId: "customer-id",
+  dotyposReservationId: " dotypos-reservation-id ",
+  reservationState: "confirmed",
+  paymentState: "paid",
+  reservationDetails: {
+    kind: "cowork",
+    entryTier: "profi",
+    coffee: true,
+    monitorOption: "2x27-qhd",
+  },
+  locale: "cs-CZ",
+  ...overrides,
+});
 
 const makeDotyposReservation = (
   overrides: Partial<Reservation> = {}
@@ -90,7 +81,7 @@ const makeTable = (overrides: Partial<Table> = {}): Table => ({
 
 const detailsEffect = (input: {
   readonly seatingMapEnabled?: boolean;
-  readonly workspaceReservation?: WorkspaceReservation | null;
+  readonly workspaceReservation?: TestWorkspaceReservation | null;
   readonly dotyposReservation?: Reservation;
   readonly tables?: readonly Table[];
   readonly onProviderRead?: (provider: "getReservation" | "getTables") => void;
@@ -98,9 +89,9 @@ const detailsEffect = (input: {
   const repository = {
     findById: mock(() =>
       Effect.succeed(
-        input.workspaceReservation === undefined
+        (input.workspaceReservation === undefined
           ? makeWorkspaceReservation()
-          : input.workspaceReservation
+          : input.workspaceReservation) as WorkspaceReservation | null
       )
     ),
   };
@@ -153,7 +144,8 @@ const accessTargetEffect = (input: {
             Layer.mock(WorkspaceReservationRepository, {
               findById: mock(() =>
                 Effect.succeed(
-                  input.workspaceReservation ?? makeWorkspaceReservation()
+                  (input.workspaceReservation ??
+                    makeWorkspaceReservation()) as WorkspaceReservation
                 )
               ),
             }),

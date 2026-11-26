@@ -2,7 +2,6 @@ import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { useForm } from "react-hook-form";
 import "@/shared/polyfills/temporal";
 import { m } from "@/features/i18n";
-import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -73,8 +72,8 @@ const renderDate = (
   }
 
   const view = render(<DateForm />);
-  const form = elementOf(view.container.querySelector("form"), HTMLFormElement);
-  const field = elementOf(view.getByRole("combobox"), HTMLInputElement);
+  const form = view.container.querySelector("form") as HTMLFormElement;
+  const field = view.getByRole("combobox") as HTMLInputElement;
   const typeDate = (text: string) => {
     fireEvent.change(field, { target: { value: text } });
     fireEvent.focusOut(field);

@@ -326,27 +326,19 @@ describe.skipIf(!testDatabase)(
         ),
       });
 
+      const tick = (at: Temporal.Instant) =>
+        TestClock.setTime(at.epochMilliseconds).pipe(
+          Effect.andThen(Effect.flatMap(AutomationPlanner, (p) => p.plan)),
+          Effect.andThen(
+            drainAutomationUnitQueue(queue, { maxDeliveries: 2_000 })
+          ),
+          Effect.asVoid
+        );
+
       return Effect.runPromise(
-        Effect.provide(
-          Effect.gen(function* () {
-            const services = yield* Effect.context<
-              Layer.Success<typeof engine> | TestClock.TestClock
-            >();
-            const tick = (at: Temporal.Instant) =>
-              TestClock.setTime(at.epochMilliseconds).pipe(
-                Effect.andThen(
-                  Effect.flatMap(AutomationPlanner, (p) => p.plan)
-                ),
-                Effect.andThen(
-                  drainAutomationUnitQueue(queue, { maxDeliveries: 2_000 })
-                ),
-                Effect.asVoid,
-                Effect.provide(services)
-              );
-            return yield* scenario(tick);
-          }),
-          Layer.merge(engine, TestClock.layer())
-        )
+        scenario(tick).pipe(
+          Effect.provide(Layer.merge(engine, TestClock.layer()))
+        ) as Effect.Effect<A, E>
       );
     };
 

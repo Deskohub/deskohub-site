@@ -1,7 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import type { DotyposCustomerId } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Deferred, Effect, Layer } from "effect";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import {
@@ -16,18 +15,12 @@ import {
   customerAccountUnavailable,
 } from "@/features/account/customer-account";
 import type { IMarketingConsentLedger } from "@/features/legal/backend/marketing-consent-ledger";
-import {
-  MarketingConsentLedger,
-  MarketingConsentUnavailable,
-} from "@/features/legal/backend/marketing-consent-ledger";
+import { MarketingConsentLedger } from "@/features/legal/backend/marketing-consent-ledger";
 import type { MarketingConsentStatus } from "@/features/legal/marketing-consent-status";
 import { getMeetingRoomReservationDuration } from "@/features/reservation/meeting-room-reservation-duration";
 import { getMeetingRoomReservationInterval } from "@/features/reservation/meeting-room-reservation-time";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
-import {
-  type CustomerLastReservation,
-  isCustomerLastReservationForKind,
-} from "@/features/reservation/reservation-existing-customer";
+import type { CustomerLastReservation } from "@/features/reservation/reservation-existing-customer";
 import {
   getMeetingRoomAvailabilityQuery,
   type WorkspaceAvailability,
@@ -52,7 +45,7 @@ const {
 
 const account: CurrentLinkedAccount = {
   accountId: customerAccountIdSchema.make("auth-user-1"),
-  dotyposCustomerId: DotyposCustomerIdSchema.make("60111"),
+  dotyposCustomerId: "60111" as DotyposCustomerId,
   email: reservationCustomerEmailSchema.make(testEmailAddressForAda),
 };
 
@@ -102,16 +95,11 @@ describe("loadLinkedExistingCustomer", () => {
         Effect.as(contact)
       )
     );
-    const load = mock<CustomerLastReservationService["Service"]["load"]>(
-      (_customerId, kind) =>
-        Deferred.succeed(lastReservationStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(contactStarted)),
-          Effect.as(
-            isCustomerLastReservationForKind(lastReservation, kind)
-              ? lastReservation
-              : null
-          )
-        )
+    const load = mock(() =>
+      Deferred.succeed(lastReservationStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(contactStarted)),
+        Effect.as(lastReservation as never)
+      )
     );
 
     const outcome = await runLoad({ linkedContact, load });
@@ -135,14 +123,7 @@ describe("loadLinkedExistingCustomer", () => {
   test("keeps the account contact when the last reservation fails", async () => {
     const outcome = await runLoad({
       linkedContact: () => Effect.succeed(contact),
-      load: () =>
-        Effect.fail(
-          new EffectDrizzleQueryError({
-            query: "customerLastReservation.load",
-            params: [],
-            cause: new Error("database unavailable"),
-          })
-        ),
+      load: () => Effect.fail(new Error("database unavailable") as never),
     });
 
     expect(outcome._tag).toBe("Success");
@@ -188,11 +169,7 @@ describe("loadLinkedExistingCustomer", () => {
   test("keeps asking for marketing consent when it cannot be read", async () => {
     const outcome = await runLoad({
       marketingConsentStatus: () =>
-        Effect.fail(
-          new MarketingConsentUnavailable({
-            cause: new Error("database unavailable"),
-          })
-        ),
+        Effect.fail(new Error("database unavailable") as never),
       linkedContact: () => Effect.succeed(contact),
       load: () => Effect.succeed(null),
     });

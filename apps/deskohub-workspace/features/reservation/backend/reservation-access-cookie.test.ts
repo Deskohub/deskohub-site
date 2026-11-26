@@ -3,9 +3,8 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
-import { reservationAccessTokenSchema } from "@/features/reservation/reservation-access-token";
 import {
   createReservationAccessCookieCapability,
   getReservationAccessCookieName,
@@ -18,7 +17,10 @@ import {
   sealReservationAccessCookie,
   writeReservationAccessCookie,
 } from "./reservation-access-cookie";
-import { openReservationAccessToken } from "./reservation-access-token";
+import {
+  openReservationAccessToken,
+  type ReservationAccessToken,
+} from "./reservation-access-token";
 
 const secret = Buffer.alloc(32, 13);
 const orderId = workspaceReservationIdSchema.make("reservation-cookie-1");
@@ -134,11 +136,9 @@ describe("reservation access cookie", () => {
   test("contains only cookie details and is not a legacy invoice capability", async () => {
     const value = await seal();
     const [encodedClaims] = value.split(".");
-    const claims = Schema.decodeUnknownSync(
-      Schema.Record(Schema.String, Schema.Unknown)
-    )(
-      JSON.parse(Buffer.from(encodedClaims ?? "", "base64url").toString("utf8"))
-    );
+    const claims = JSON.parse(
+      Buffer.from(encodedClaims ?? "", "base64url").toString("utf8")
+    ) as { readonly token?: unknown };
 
     expect(Object.keys(claims).sort()).toEqual([
       "expiresAtEpochMilliseconds",
@@ -152,7 +152,7 @@ describe("reservation access cookie", () => {
       Effect.runPromise(
         openReservationAccessToken(
           {
-            token: reservationAccessTokenSchema.make(value),
+            token: value as ReservationAccessToken,
             orderId,
             locale: "en-US",
           },

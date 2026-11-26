@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import assert from "node:assert/strict";
 import "@/shared/polyfills/temporal";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import {
@@ -48,8 +47,7 @@ describe("meeting room reservation time helpers", () => {
       startsAt: "2026-03-28T23:00:00Z",
       endsAt: "2026-03-29T22:00:00Z",
     });
-    assert(interval);
-    expect(getMeetingRoomLastServiceDate(interval)).toBe("2026-03-29");
+    expect(getMeetingRoomLastServiceDate(interval!)).toBe("2026-03-29");
   });
 
   test("keeps whole-day reservations at Prague midnight across autumn DST", () => {

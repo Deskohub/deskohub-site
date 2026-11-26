@@ -1,7 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import type { ComponentProps } from "react";
 import { m } from "@/features/i18n";
-import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -34,10 +33,7 @@ const renderSection = (
       {...props}
     />
   );
-  const button = elementOf(
-    view.container.querySelector("button"),
-    HTMLButtonElement
-  );
+  const button = view.container.querySelector("button") as HTMLButtonElement;
   const messages = () =>
     [...view.container.querySelectorAll("p, [role='alert']")].map(
       (element) => ({
@@ -135,10 +131,9 @@ describe("ReservationSubmitSection", () => {
       },
     ]);
     const retry = () =>
-      elementOf(
-        view.container.querySelector("#reservation-advertised-price-retry"),
-        HTMLButtonElement
-      );
+      view.container.querySelector(
+        "#reservation-advertised-price-retry"
+      ) as HTMLButtonElement;
     expect(retry().type).toBe("button");
     fireEvent.click(retry());
     expect(onRetryPrice).toHaveBeenCalledTimes(1);

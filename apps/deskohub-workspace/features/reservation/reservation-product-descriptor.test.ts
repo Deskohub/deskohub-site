@@ -31,7 +31,7 @@ describe("reservation product descriptor", () => {
       [...workspaceReservationKindSchema.literals].sort()
     );
     for (const [id, family] of Object.entries(reservationProductFamilies)) {
-      expect<string>(family.id).toBe(id);
+      expect(family.id).toBe(id as typeof family.id);
     }
   });
 

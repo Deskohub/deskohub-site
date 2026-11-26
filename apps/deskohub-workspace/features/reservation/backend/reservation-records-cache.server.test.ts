@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import "@/shared/testing/workspace-test-env";
 
@@ -9,11 +8,11 @@ import {
   DotyposRejected,
   type DotyposReservationId,
   DotyposReservationIdSchema,
-  DotyposReservationSchema,
   DotyposService,
   type ReservationListOptions,
 } from "@deskohub/dotypos";
-import { Effect, Layer, Schema } from "effect";
+import type { Reservation as DotyposReservation } from "@deskohub/dotypos/generated";
+import { Effect, Layer } from "effect";
 import { recordNextCache } from "@/shared/testing/next-cache-recorder.test-utils";
 import { reservationRecordTags } from "@/shared/utils/cache-tags";
 import { ReservationRecords } from "./reservation-records";
@@ -22,7 +21,7 @@ let providerFailure: DotyposReadFailure | undefined;
 
 const reservationId = DotyposReservationIdSchema.make("synthetic-reservation");
 const customerId = DotyposCustomerIdSchema.make("synthetic-customer");
-const reservation = Schema.decodeUnknownSync(DotyposReservationSchema)({
+const reservation: DotyposReservation = {
   _branchId: "synthetic-branch",
   _cloudId: "synthetic-cloud",
   _customerId: customerId,
@@ -33,7 +32,7 @@ const reservation = Schema.decodeUnknownSync(DotyposReservationSchema)({
   seats: "1",
   startDate: "2099-06-10T07:00:00Z",
   status: "NEW",
-});
+};
 const record = {
   id: reservationId,
   status: "NEW",
@@ -46,18 +45,14 @@ const record = {
 const getReservationWithoutCustomer = mock((_id: DotyposReservationId) =>
   providerFailure ? Effect.fail(providerFailure) : Effect.succeed(reservation)
 );
-const listReservations = mock(
-  (
-    _options?: ReservationListOptions & {
-      readonly ids?: readonly DotyposReservationId[];
-    }
-  ) => Effect.succeed([reservation])
+const listReservations = mock((_options: ReservationListOptions) =>
+  Effect.succeed([reservation])
 );
 const nextCache = recordNextCache();
 
 mock.module("next/cache", () => nextCache.module);
 mock.module("@/shared/backend/config/dotypos.config", () => ({
-  WorkspaceDotyposLayer: Layer.mock(DotyposService, {
+  WorkspaceDotyposLayer: Layer.succeed(DotyposService, {
     getReservationWithoutCustomer,
     listReservations,
     getReservationsByIds: (ids, options) =>
@@ -68,7 +63,7 @@ mock.module("@/shared/backend/config/dotypos.config", () => ({
           }).service.getReservationsByIds(ids)
         )
       ),
-  }),
+  } as never),
 }));
 
 const {
@@ -123,11 +118,9 @@ describe("shared reservation records", () => {
     listReservations.mockImplementation((options) =>
       Effect.succeed([{ ...reservation, id: options.ids?.[0] }])
     );
-    const [firstId] = ids;
-    assert(firstId);
     const records = await Effect.runPromise(
       Effect.flatMap(ReservationRecords, (shared) =>
-        shared.listByIds([...ids].reverse().concat(firstId))
+        shared.listByIds([...ids].reverse().concat(ids[0]!))
       ).pipe(Effect.provide(SharedReservationRecordsLive))
     );
 

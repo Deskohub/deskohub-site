@@ -51,20 +51,6 @@ const documents = {
   array: [{ kind: "office", seats: 2 }],
 } as const;
 type Label = keyof typeof documents;
-const documentLabels: readonly Label[] = [
-  "cowork",
-  "meetingRoom",
-  "office",
-  "unresolvedOffice",
-  "unknownKind",
-  "textValues",
-  "fractionalValues",
-  "largeValues",
-  "nonTextValues",
-  "stringCoffee",
-  "scalar",
-  "array",
-];
 
 describe.skipIf(!testDatabase)(
   "stored reservation details accessors on disposable Postgres",
@@ -73,7 +59,7 @@ describe.skipIf(!testDatabase)(
     const labels = new Map<WorkspaceReservationId, Label>();
 
     beforeAll(async () => {
-      for (const label of documentLabels) {
+      for (const label of Object.keys(documents) as Label[]) {
         const { id } = await Effect.runPromise(
           workspaceFixtures(testDatabase.db).reservation({
             stage: {
@@ -141,7 +127,7 @@ describe.skipIf(!testDatabase)(
 
       expect(
         Object.fromEntries(
-          documentLabels.map((label) => [
+          (Object.keys(documents) as Label[]).map((label) => [
             label,
             properties.map((values) => values[label]),
           ])

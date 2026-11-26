@@ -13,7 +13,6 @@ import type {
   ReservationContactValues,
   ReservationExistingCustomerForm,
 } from "@/features/reservation/reservation-existing-customer";
-import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -93,20 +92,16 @@ const existingCustomer: ReservationExistingCustomerForm = {
   },
 };
 
-type ReservationContactFormValues = ReservationContactValues & {
-  readonly emailConfirmation?: string;
-};
-
 function SectionHarness({
   customer,
   onForm,
   showSection = true,
 }: {
   readonly customer: ReservationExistingCustomerForm;
-  readonly onForm: (form: UseFormReturn<ReservationContactFormValues>) => void;
+  readonly onForm: (form: UseFormReturn<ReservationContactValues>) => void;
   readonly showSection?: boolean;
 }) {
-  const form = useForm<ReservationContactFormValues>({
+  const form = useForm<ReservationContactValues>({
     defaultValues: {
       name: customer.contact.name,
       email: customer.contact.email,
@@ -136,7 +131,7 @@ function SectionHarness({
 }
 
 const renderSection = (customer = existingCustomer) => {
-  let form: UseFormReturn<ReservationContactFormValues> | undefined;
+  let form: UseFormReturn<ReservationContactValues> | undefined;
   const harness = (showSection: boolean) => (
     <SectionHarness
       customer={customer}
@@ -149,7 +144,9 @@ const renderSection = (customer = existingCustomer) => {
   const view = render(harness(true));
   const getFormValues = () => {
     if (!form) throw new Error("form was not rendered");
-    return form.getValues();
+    return form.getValues() as ReservationContactValues & {
+      readonly emailConfirmation?: string;
+    };
   };
   // The contact the reservation books, without its repeated email.
   const getValues = () => {
@@ -190,10 +187,9 @@ describe("ReservationCustomerSection", () => {
       existingCustomer.otherContact.email
     );
 
-    const name = elementOf(
-      view.container.querySelector('input[name="name"]'),
-      HTMLInputElement
-    );
+    const name = view.container.querySelector(
+      'input[name="name"]'
+    ) as HTMLInputElement;
     fireEvent.input(name, { target: { value: "Katherine Johnson" } });
 
     fireEvent.click(
@@ -232,7 +228,7 @@ describe("ReservationCustomerSection", () => {
       })
     );
 
-    fireEvent.click(elementOf(document.activeElement, HTMLElement));
+    fireEvent.click(document.activeElement as HTMLElement);
     expect(document.activeElement).toBe(
       view.getByRole("button", {
         name: m.reservationBookForSomeoneElse({}, { locale: "en-US" }),
@@ -247,10 +243,7 @@ describe("ReservationCustomerSection", () => {
     });
 
     fireEvent.input(
-      elementOf(
-        view.container.querySelector('input[name="phone"]'),
-        HTMLInputElement
-      ),
+      view.container.querySelector('input[name="phone"]') as HTMLInputElement,
       { target: { value: "+420111222333" } }
     );
     fireEvent.click(
@@ -275,10 +268,7 @@ describe("ReservationCustomerSection", () => {
     });
 
     fireEvent.input(
-      elementOf(
-        view.container.querySelector('input[name="phone"]'),
-        HTMLInputElement
-      ),
+      view.container.querySelector('input[name="phone"]') as HTMLInputElement,
       { target: { value: "+420111222333" } }
     );
     fireEvent.click(
@@ -287,10 +277,7 @@ describe("ReservationCustomerSection", () => {
       })
     );
     fireEvent.input(
-      elementOf(
-        view.container.querySelector('input[name="name"]'),
-        HTMLInputElement
-      ),
+      view.container.querySelector('input[name="name"]') as HTMLInputElement,
       { target: { value: "Katherine Johnson" } }
     );
     fireEvent.click(

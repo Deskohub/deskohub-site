@@ -9,15 +9,7 @@ import type { ReservationCheckoutStep } from "@/features/reservation/reservation
  * the form under test.
  */
 export const mockReservationCheckoutStep = () => {
-  let initial: ReservationCheckoutStep = "selection";
-  const step = {
-    get initial() {
-      return initial;
-    },
-    set initial(value: ReservationCheckoutStep) {
-      initial = value;
-    },
-  };
+  const step = { initial: "selection" as ReservationCheckoutStep };
   mock.module(
     "@/features/reservation/components/use-reservation-checkout-step",
     () => ({

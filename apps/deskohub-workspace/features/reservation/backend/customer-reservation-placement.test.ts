@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  DotyposCloudIdSchema,
-  type DotyposTable,
-  DotyposTableIdSchema,
-} from "@deskohub/dotypos";
+import { type DotyposTable, DotyposTableIdSchema } from "@deskohub/dotypos";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { getCustomerReservationPlacement } from "./customer-reservation-placement";
 
@@ -22,20 +18,18 @@ const reservedDesk: StoredWorkspaceReservationDetails = {
 
 const makeTable = (
   overrides: Partial<Omit<DotyposTable, "id">> & { readonly id?: string } = {}
-): DotyposTable => {
-  const { id = "assigned-table", ...rest } = overrides;
-  return {
-    _cloudId: DotyposCloudIdSchema.make("cloud"),
-    id: DotyposTableIdSchema.make(id),
+): DotyposTable =>
+  ({
+    _cloudId: "cloud",
+    id: "assigned-table",
     name: "12",
     display: true,
     enabled: true,
     locationName: "Main room",
     seats: "1",
     tags: ["cowork:reserved-desk"],
-    ...rest,
-  };
-};
+    ...overrides,
+  }) as DotyposTable;
 
 const assignedTo = (tableId: string) => ({
   _tableId: DotyposTableIdSchema.make(tableId),

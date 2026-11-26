@@ -37,12 +37,21 @@ type PreparePayStateData =
     }
   | { readonly status: "error"; readonly message: string };
 
+type PreparePayStateOptions = {
+  readonly onSuccess: (result: {
+    readonly data: PreparePayStateData;
+    readonly input: Pick<PreparePayStateInput, "reservation">;
+  }) => void;
+  readonly onError: (result: {
+    readonly error: { readonly serverError?: string };
+  }) => void;
+  readonly onTransportError: () => void;
+};
+
 const executeAsync = mock((_input: PreparePayStateInput) =>
   Promise.resolve({})
 );
-let preparePayStateOptions:
-  | Parameters<typeof workspaceUseAction>[1]
-  | undefined;
+let preparePayStateOptions: PreparePayStateOptions | undefined;
 
 let analyticsAccepted = false;
 const cookieConsent = await import("@/features/cookie-consent");
@@ -80,7 +89,7 @@ const reservationFor = (startHour: number) =>
   });
 
 const completePreparation = (data: PreparePayStateData) =>
-  preparePayStateOptions?.onSuccess?.({
+  preparePayStateOptions?.onSuccess({
     data,
     input: { reservation: reservationFor(7) },
   });
@@ -101,7 +110,7 @@ describe("useReservationCheckout", () => {
 
   beforeEach(() => {
     workspaceUseAction.mockImplementation((_action, options) => {
-      preparePayStateOptions = options;
+      preparePayStateOptions = options as PreparePayStateOptions;
       return { executeAsync, isExecuting: false, result: {} };
     });
   });
@@ -146,9 +155,7 @@ describe("useReservationCheckout", () => {
   });
 
   test("never exposes a rejected office checkout while a matching retry is pending", async () => {
-    workspaceUseAction.mockImplementation((action, options) =>
-      useAction(action, options)
-    );
+    workspaceUseAction.mockImplementation(useAction as never);
     const { result } = renderCheckout();
     const startsOn = plainDateStringSchema.make("2099-07-30");
     const endsOn = plainDateStringSchema.make("2099-07-31");
@@ -288,15 +295,12 @@ describe("useReservationCheckout", () => {
     const serverError = m.reservationAvailabilityError({}, { locale: "en-US" });
 
     act(() => {
-      preparePayStateOptions?.onError?.({
-        error: { serverError },
-        input: undefined,
-      });
+      preparePayStateOptions?.onError({ error: { serverError } });
     });
     expect(result.current.submissionError).toBe(serverError);
 
     act(() => {
-      preparePayStateOptions?.onError?.({ error: {}, input: undefined });
+      preparePayStateOptions?.onError({ error: {} });
     });
     expect(result.current.submissionError).toBe(genericError);
   });
@@ -305,10 +309,7 @@ describe("useReservationCheckout", () => {
     const { result } = renderCheckout();
 
     act(() => {
-      preparePayStateOptions?.onTransportError?.({
-        error: new Error("network"),
-        input: undefined,
-      });
+      preparePayStateOptions?.onTransportError();
     });
 
     expect(result.current.submissionError).toBe(genericError);

@@ -4,13 +4,15 @@ import "@/shared/polyfills/temporal";
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   type DotyposReadFailure,
-  DotyposReservationSchema,
   DotyposService,
-  DotyposTableSchema,
   DotyposUnavailable,
 } from "@deskohub/dotypos";
+import type {
+  Reservation as DotyposReservation,
+  Table as DotyposTable,
+} from "@deskohub/dotypos/generated";
 import type { GoogleCalendarEventQuery } from "@deskohub/google-calendar";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer } from "effect";
 import { recordNextCache } from "@/shared/testing/next-cache-recorder.test-utils";
 import { availabilityTags } from "@/shared/utils/cache-tags";
 import * as limitationsModule from "./google-calendar-workspace-limitations.service";
@@ -22,14 +24,14 @@ const {
 
 let providerFailure: DotyposReadFailure | undefined;
 
-const table = Schema.decodeUnknownSync(DotyposTableSchema)({
+const table: DotyposTable = {
   _cloudId: "synthetic-cloud",
   id: "synthetic-table",
   name: "Synthetic table",
   seats: "2",
   tags: ["cowork:basic"],
-});
-const reservation = Schema.decodeUnknownSync(DotyposReservationSchema)({
+};
+const reservation: DotyposReservation = {
   _branchId: "synthetic-branch",
   _cloudId: "synthetic-cloud",
   _customerId: "synthetic-customer",
@@ -40,7 +42,7 @@ const reservation = Schema.decodeUnknownSync(DotyposReservationSchema)({
   seats: "1",
   startDate: "2099-06-10T07:00:00Z",
   status: "CONFIRMED",
-});
+};
 const limitation = WorkspaceCalendarLimitation.FullyOccupied({
   date: "2099-06-10",
 });
@@ -49,11 +51,8 @@ const getTables = mock(() =>
   providerFailure ? Effect.fail(providerFailure) : Effect.succeed([table])
 );
 const listActiveReservationsOverlapping = mock(
-  (
-    _interval: Parameters<
-      typeof DotyposService.Service.listActiveReservationsOverlapping
-    >[0]
-  ) => Effect.succeed([reservation])
+  (_interval: { readonly startDate: Date; readonly endDate: Date }) =>
+    Effect.succeed([reservation])
 );
 const listLimitations = mock((_query: GoogleCalendarEventQuery) =>
   Effect.succeed([limitation])
@@ -62,10 +61,10 @@ const nextCache = recordNextCache();
 
 mock.module("next/cache", () => nextCache.module);
 mock.module("@/shared/backend/config/dotypos.config", () => ({
-  WorkspaceDotyposLayer: Layer.mock(DotyposService, {
+  WorkspaceDotyposLayer: Layer.succeed(DotyposService, {
     getTables,
     listActiveReservationsOverlapping,
-  }),
+  } as never),
 }));
 mock.module("./google-calendar-workspace-limitations.service", () => ({
   ...limitationsModule,

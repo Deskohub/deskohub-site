@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import assert from "node:assert/strict";
 import {
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -133,14 +132,13 @@ describe("CustomerBookedReservations.listForCustomer", () => {
 
   test("fails on a reservation whose held span or seats can't be read", async () => {
     const [readable, unreadable] = reservationsOf(customer, 2);
-    assert(readable && unreadable);
     for (const malformed of [
       { seats: "many" },
-      { endDate: unreadable.startDate },
+      { endDate: unreadable!.startDate },
       { endDate: firstStart.toString() },
     ]) {
       const { result } = await listForCustomer(
-        [readable, { ...unreadable, ...malformed }],
+        [readable!, { ...unreadable!, ...malformed }],
         5
       );
 
@@ -148,7 +146,7 @@ describe("CustomerBookedReservations.listForCustomer", () => {
         Result.fail(
           new CustomerBookedReservationsUnreadableError({
             reason: "malformed-reservation",
-            dotyposReservationId: unreadable.id,
+            dotyposReservationId: unreadable!.id,
           })
         )
       );
@@ -157,7 +155,6 @@ describe("CustomerBookedReservations.listForCustomer", () => {
 
   test("fails on pages that contradict each other", async () => {
     const [first, second] = reservationsOf(customer, 2);
-    assert(first && second);
     const inconsistent = Result.fail(
       new CustomerBookedReservationsUnreadableError({
         reason: "inconsistent-pages",
@@ -167,9 +164,9 @@ describe("CustomerBookedReservations.listForCustomer", () => {
     expect(
       await readWith(
         pagedDotypos([
-          { reservations: [first], nextPage: 2 },
+          { reservations: [first!], nextPage: 2 },
           { reservations: [], nextPage: 3 },
-          { reservations: [second] },
+          { reservations: [second!] },
         ]),
         5
       )
@@ -177,8 +174,8 @@ describe("CustomerBookedReservations.listForCustomer", () => {
     expect(
       await readWith(
         pagedDotypos([
-          { reservations: [first, second], nextPage: 2 },
-          { reservations: [second] },
+          { reservations: [first!, second!], nextPage: 2 },
+          { reservations: [second!] },
         ]),
         5
       )

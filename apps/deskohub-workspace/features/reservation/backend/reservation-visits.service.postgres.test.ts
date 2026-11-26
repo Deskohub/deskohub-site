@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -135,21 +134,10 @@ describe.skipIf(!testDatabase)(
       const customers = ["a", "b", "c"].map((label) =>
         customerId(`cost-${label}`)
       );
-      const [firstCustomer, secondCustomer, thirdCustomer] = customers;
-      assert(firstCustomer && secondCustomer && thirdCustomer);
-      const customerCycle = [
-        firstCustomer,
-        secondCustomer,
-        thirdCustomer,
-      ] as const;
-      const bookings = Array.from({ length: 120 }, (_, index) => {
-        const customer = customerCycle[index % 3];
-        assert(customer);
-        return {
-          label: `cost-${index}`,
-          customer,
-        };
-      });
+      const bookings = Array.from({ length: 120 }, (_, index) => ({
+        label: `cost-${index}`,
+        customer: customers[index % 3]!,
+      }));
       await insert(bookings);
       const dotypos = countedDotyposReservationReads(
         bookings.map(dotyposReservation)
@@ -180,10 +168,10 @@ describe.skipIf(!testDatabase)(
       expect(customers.map((id) => visits.get(id)?.length)).toEqual([
         40, 40, 40,
       ]);
-      expect(visits.get(firstCustomer)).toContainEqual({
+      expect(visits.get(customers[0]!)).toContainEqual({
         workspaceReservationId: workspaceId("cost-0"),
         dotyposReservationId: dotyposId("cost-0"),
-        dotyposCustomerId: firstCustomer,
+        dotyposCustomerId: customers[0]!,
         startsAt: at(9),
         endsAt: at(11),
         status: "active",
@@ -328,15 +316,18 @@ describe.skipIf(!testDatabase)(
       expect(byReservation.get(workspaceId("status-missing"))).toEqual(
         Option.none()
       );
-      const cancelledVisit = byReservation.get(workspaceId("status-cancelled"));
-      const newVisit = byReservation.get(workspaceId("status-new"));
-      assert(cancelledVisit && newVisit);
-      expect(Option.map(cancelledVisit, (visit) => visit.status)).toEqual(
-        Option.some("cancelled")
-      );
-      expect(Option.map(newVisit, (visit) => visit.status)).toEqual(
-        Option.some("active")
-      );
+      expect(
+        Option.map(
+          byReservation.get(workspaceId("status-cancelled"))!,
+          (visit) => visit.status
+        )
+      ).toEqual(Option.some("cancelled"));
+      expect(
+        Option.map(
+          byReservation.get(workspaceId("status-new"))!,
+          (visit) => visit.status
+        )
+      ).toEqual(Option.some("active"));
       expect(
         byCustomer
           .get(customer)
@@ -512,15 +503,11 @@ describe.skipIf(!testDatabase)(
           ]);
         }).pipe(
           Effect.provide(
-            (() => {
-              const [firstLive] = live;
-              assert(firstLive);
-              return reservationVisitsFake([
-                ...live,
-                { ...firstLive, status: "cancelled" },
-                { ...firstLive, startsAt: at(12), endsAt: at(14) },
-              ]);
-            })()
+            reservationVisitsFake([
+              ...live,
+              { ...live[0]!, status: "cancelled" },
+              { ...live[0]!, startsAt: at(12), endsAt: at(14) },
+            ])
           )
         )
       );

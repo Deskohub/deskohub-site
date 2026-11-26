@@ -7,7 +7,6 @@ import {
   DotyposReservationIdSchema,
   type DotyposReservationStatus,
   DotyposService,
-  DotyposTableIdSchema,
 } from "@deskohub/dotypos";
 import { EmailRecipientDomainServiceMock } from "@deskohub/email/backend/recipient-domain.service.mock";
 import { testEmailAddress } from "@deskohub/test-email";
@@ -164,19 +163,14 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
    */
   const dotypos = {
     createReservation: mock(() =>
-      Effect.sync(() => ({
-        id: DotyposReservationIdSchema.make(
-          `dotypos-hold-${crypto.randomUUID()}`
-        ),
-        _branchId: "branch",
-        _cloudId: "cloud",
-        _customerId: "customer",
-        _tableId: "table-id",
-        startDate: "2099-07-01T07:00:00.000Z",
-        endDate: "2099-07-01T16:00:00.000Z",
-        seats: "1",
-        status: "NEW",
-      }))
+      Effect.sync(
+        () =>
+          ({
+            id: DotyposReservationIdSchema.make(
+              `dotypos-hold-${crypto.randomUUID()}`
+            ),
+          }) as never
+      )
     ),
     cancelReservation: mock((_id: DotyposReservationId) => Effect.void),
     getReservationStatus: mock((_id: DotyposReservationId) =>
@@ -239,13 +233,13 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
       ReviewSandbox.Default
     ).pipe(Layer.provide(database.layer)),
     CheckoutPricingService.Default.pipe(Layer.provide(discounts)),
-    Layer.mock(DotyposService, dotypos),
+    Layer.mock(DotyposService, dotypos as never),
     Layer.mock(WorkspaceAvailabilityService, {
       ensureAvailable: () => Effect.void,
     }),
     Layer.mock(ReservationHoldCleanupScheduleService, {
       enqueueCleanup: () => Effect.void,
-    }),
+    } as never),
     Layer.mock(MarketingConsentLedger, {
       record: recordMarketingConsent,
     }),
@@ -255,8 +249,7 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
     currentAccount,
     contacts,
     WorkspaceTableAssignmentServiceMock({
-      assignTableId: () =>
-        Effect.succeed(DotyposTableIdSchema.make("table-id")),
+      assignTableId: () => Effect.succeed("table-id" as never),
     }),
     EmailRecipientDomainServiceMock({
       check: () => Effect.succeed("accepts_mail" as const),

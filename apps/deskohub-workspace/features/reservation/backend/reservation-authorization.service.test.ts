@@ -2,7 +2,6 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Cause, Effect, Layer, Option } from "effect";
@@ -13,10 +12,7 @@ import {
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
-import {
-  type ReservationAccessToken,
-  reservationAccessTokenSchema,
-} from "@/features/reservation/reservation-access-token";
+import type { ReservationAccessToken } from "@/features/reservation/reservation-access-token";
 import { ReservationInvitees } from "@/features/reservation-invitees/backend/reservation-invitees.service";
 import {
   type ReservationInviteeId,
@@ -57,10 +53,8 @@ type AuthorizedReservation = Pick<
 const makeReservation = (
   dotyposCustomerId = accountCustomerId,
   authorAccountId: string = fixtureReservationAuthorId
-): AuthorizedReservation => ({
-  dotyposCustomerId: DotyposCustomerIdSchema.make(dotyposCustomerId),
-  authorAccountId: customerAccountIdSchema.make(authorAccountId),
-});
+): AuthorizedReservation =>
+  ({ dotyposCustomerId, authorAccountId }) as AuthorizedReservation;
 
 const invitedAccountEmail = testEmailAddress("authorization-invitee");
 
@@ -236,9 +230,8 @@ describe("ReservationAuthorizationService", () => {
     async (kind) => {
       let accessToken: ReservationAccessToken | undefined;
       if (kind === "bad") {
-        accessToken = reservationAccessTokenSchema.make(
-          `${await makeAccessToken()}tampered`
-        );
+        accessToken =
+          `${await makeAccessToken()}tampered` as ReservationAccessToken;
       } else if (kind === "wrong-order") {
         accessToken = await makeAccessToken(otherOrderId);
       }

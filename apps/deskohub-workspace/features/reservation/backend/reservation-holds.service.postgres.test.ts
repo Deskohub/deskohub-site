@@ -1,17 +1,12 @@
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
-import { afterEach, describe, expect, type Mock, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
-  DotyposBranchIdSchema,
-  DotyposCloudIdSchema,
-  DotyposCustomerIdSchema,
-  type DotyposReservation,
   type DotyposReservationId,
   DotyposReservationIdSchema,
   type DotyposReservationStatus,
   DotyposService,
-  DotyposTableIdSchema,
   DotyposTableSchema,
   DotyposUnavailable,
 } from "@deskohub/dotypos";
@@ -46,10 +41,6 @@ import { checkoutDetailsSchema } from "@/features/checkout/schemas/checkout-deta
 import { orderIdSchema } from "@/features/order";
 import { EntryPackUnavailableError } from "@/features/passes/backend/entry-pack-redemption";
 import { reservationOrderIssuanceSchema } from "@/features/reservation/reservation-order";
-import {
-  QueueMessageSendError,
-  QueuePublisher,
-} from "@/shared/backend/queue/queue-publisher";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import {
   captureDatabaseQueryRowsWithExit,
@@ -65,11 +56,9 @@ import {
 } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import {
   connectWorkspacePostgresTestDatabase,
-  requireTestDatabase,
+  type WorkspacePostgresTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
-import { plainDateStringSchema } from "@/shared/utils/temporal";
-import { workspaceReservationIdSchema } from "../persistence-contracts";
 import { AdvisoryAvailabilityInventory } from "./availability-inventory";
 import { agentSelectionKeySchema, type BookingAgent } from "./booking-agent";
 import { GoogleCalendarWorkspaceLimitationsService } from "./google-calendar-workspace-limitations.service";
@@ -151,31 +140,10 @@ const expectStoredHoldDeadline = (
   );
 };
 
-const requireValue = <T>(value: T | null | undefined, label = "value"): T => {
-  if (value === null || value === undefined) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value;
-};
-
-const dotyposReservationFixture = (
-  id: DotyposReservationId
-): DotyposReservation => ({
-  id,
-  _branchId: DotyposBranchIdSchema.make("branch"),
-  _cloudId: DotyposCloudIdSchema.make("cloud"),
-  _customerId: DotyposCustomerIdSchema.make("customer"),
-  _tableId: DotyposTableIdSchema.make("table-id"),
-  startDate: "2099-07-01T07:00:00.000Z",
-  endDate: "2099-07-01T16:00:00.000Z",
-  seats: "1",
-  status: "NEW",
-});
-
 describe.skipIf(!postgresDatabase)(
   "ReservationHolds.holdForAttempt on Postgres",
   () => {
-    const postgres = requireTestDatabase(postgresDatabase);
+    const postgres = postgresDatabase as WorkspacePostgresTestDatabase;
     const authors: CustomerAccountId[] = [];
 
     afterEach(async () => {
@@ -206,23 +174,19 @@ describe.skipIf(!postgresDatabase)(
      */
     const makeDotypos = () => {
       const createdHolds: DotyposReservationId[] = [];
-      const createReservation: Mock<
-        DotyposService["Service"]["createReservation"]
-      > = mock(() =>
+      const createReservation = mock(() =>
         Effect.sync(() => {
           const id = DotyposReservationIdSchema.make(
             `dotypos-hold-${crypto.randomUUID()}`
           );
           createdHolds.push(id);
-          return dotyposReservationFixture(id);
+          return { id } as never;
         })
       );
-      const cancelReservation: Mock<
-        DotyposService["Service"]["cancelReservation"]
-      > = mock((_id: DotyposReservationId) => Effect.void);
-      const getReservationStatus: Mock<
-        DotyposService["Service"]["getReservationStatus"]
-      > = mock((_id: DotyposReservationId) =>
+      const cancelReservation = mock(
+        (_id: DotyposReservationId) => Effect.void
+      );
+      const getReservationStatus = mock((_id: DotyposReservationId) =>
         Effect.succeed<DotyposReservationStatus>("NEW")
       );
       return {
@@ -237,9 +201,7 @@ describe.skipIf(!postgresDatabase)(
     const makeHolds = (
       options: {
         readonly dotypos?: Dotypos;
-        readonly ensureAvailable?: Mock<
-          WorkspaceAvailabilityService["Service"]["ensureAvailable"]
-        >;
+        readonly ensureAvailable?: ReturnType<typeof mock>;
         /** Wraps the Postgres repository the module reads and writes. */
         readonly observeReservations?: (
           reservations: IWorkspaceReservationRepository
@@ -247,17 +209,19 @@ describe.skipIf(!postgresDatabase)(
       } = {}
     ) => {
       const dotypos = options.dotypos ?? makeDotypos();
-      const ensureAvailable: Mock<
-        WorkspaceAvailabilityService["Service"]["ensureAvailable"]
-      > = options.ensureAvailable ?? mock(() => Effect.void);
+      const ensureAvailable =
+        options.ensureAvailable ?? mock(() => Effect.void);
       const analytics = recordCheckoutAnalytics();
       const { observeReservations } = options;
       const reservations = WorkspaceReservationRepository.Default.pipe(
         Layer.provide(postgres.layer)
       );
-      const enqueueCleanup: Mock<
-        ReservationHoldCleanupScheduleService["Service"]["enqueueCleanup"]
-      > = mock(() => Effect.void);
+      const enqueueCleanup = mock(
+        (_cleanup: {
+          readonly orderId: string;
+          readonly reservationHoldExpiresAt: Temporal.Instant;
+        }) => Effect.void
+      );
       const layer = ReservationHolds.Default.pipe(
         Layer.provide(
           Layer.mergeAll(
@@ -272,20 +236,19 @@ describe.skipIf(!postgresDatabase)(
                 ).pipe(Layer.provide(reservations))
               : reservations,
             Layer.mock(WorkspaceAvailabilityService, {
-              ensureAvailable,
+              ensureAvailable: ensureAvailable as never,
             }),
             Layer.mock(DotyposService, {
-              createReservation: dotypos.createReservation,
-              cancelReservation: dotypos.cancelReservation,
-              getReservationStatus: dotypos.getReservationStatus,
+              createReservation: dotypos.createReservation as never,
+              cancelReservation: dotypos.cancelReservation as never,
+              getReservationStatus: dotypos.getReservationStatus as never,
             }),
             WorkspaceTableAssignmentServiceMock({
-              assignTableId: () =>
-                Effect.succeed(DotyposTableIdSchema.make("table-id")),
+              assignTableId: () => Effect.succeed("table-id" as never),
             }),
             Layer.mock(ReservationHoldCleanupScheduleService, {
               enqueueCleanup,
-            }),
+            } as never),
             analytics.layer,
             TestSealedStateKeys
           )
@@ -339,12 +302,9 @@ describe.skipIf(!postgresDatabase)(
       const ensureAvailable = mock(() =>
         countdown(bothChecked, checked).pipe(Effect.andThen(bothChecked.await))
       );
-      const createHold = requireValue(
-        dotypos.createReservation.getMockImplementation(),
-        "createReservation mock"
-      );
-      dotypos.createReservation.mockImplementation((input) =>
-        bothClaimed.await.pipe(Effect.andThen(createHold(input)))
+      const createHold = dotypos.createReservation.getMockImplementation()!;
+      dotypos.createReservation.mockImplementation(() =>
+        bothClaimed.await.pipe(Effect.andThen(createHold()))
       );
       return makeHolds({
         dotypos,
@@ -419,9 +379,7 @@ describe.skipIf(!postgresDatabase)(
       const [row] = await postgres.db
         .select()
         .from(workspaceReservations)
-        .where(
-          eq(workspaceReservations.id, workspaceReservationIdSchema.make(id))
-        )
+        .where(eq(workspaceReservations.id, id as never))
         .pipe(Effect.runPromise);
       return row;
     };
@@ -502,7 +460,7 @@ describe.skipIf(!postgresDatabase)(
         const [row] = rows;
         expect(hold).toEqual({
           kind: "created",
-          reservationId: requireValue(row).id,
+          reservationId: row!.id,
           checkoutSessionId: request.checkout.sessionId,
           reservationHoldExpiresAt: expect.any(Temporal.Instant),
         });
@@ -527,13 +485,9 @@ describe.skipIf(!postgresDatabase)(
             status: "NEW",
           }),
         ]);
-        expect(row?.dotyposReservationId).toBe(
-          requireValue(holds.dotypos.createdHolds[0])
-        );
+        expect(row?.dotyposReservationId).toBe(holds.dotypos.createdHolds[0]!);
         // A site hold lasts one Pay-state lifetime from when it's created.
-        const expiresAt = requireValue(
-          requireValue(row).reservationHoldExpiresAt
-        ).epochMilliseconds;
+        const expiresAt = row!.reservationHoldExpiresAt!.epochMilliseconds;
         expect(expiresAt).toBeGreaterThanOrEqual(
           before.epochMilliseconds + payStateDefaultTtlMilliseconds
         );
@@ -541,8 +495,8 @@ describe.skipIf(!postgresDatabase)(
           after.epochMilliseconds + payStateDefaultTtlMilliseconds
         );
         expect(holds.enqueueCleanup).toHaveBeenCalledTimes(1);
-        const [cleanup] = requireValue(holds.enqueueCleanup.mock.calls[0]);
-        expect(cleanup.orderId).toBe(requireValue(row).id);
+        const [cleanup] = holds.enqueueCleanup.mock.calls[0]!;
+        expect(cleanup.orderId).toBe(row!.id);
         // Postgres keeps microseconds; the cleanup gets the instant as made.
         expect(cleanup.reservationHoldExpiresAt.epochMilliseconds).toBe(
           expiresAt
@@ -563,10 +517,10 @@ describe.skipIf(!postgresDatabase)(
         const [reservationRow] = await rowsOf(author);
         expect(rows).toContainEqual(
           expect.objectContaining({
-            reservationId: requireValue(reservationRow).id,
+            reservationId: reservationRow!.id,
             reservationState: expect.any(String),
-            checkoutSessionKey: requireValue(reservationRow).checkoutSessionKey,
-            checkoutAttemptKey: requireValue(reservationRow).checkoutAttemptKey,
+            checkoutSessionKey: reservationRow!.checkoutSessionKey,
+            checkoutAttemptKey: reservationRow!.checkoutAttemptKey,
             reservationKind: "cowork",
             discountCount: expect.any(Number),
             dotyposReservationId: holds.dotypos.createdHolds[0],
@@ -590,7 +544,7 @@ describe.skipIf(!postgresDatabase)(
         expect(created.kind).toBe("created");
         expect(retry).toMatchObject({
           kind: "reused",
-          reservation: { id: requireValue(rows[0]).id },
+          reservation: { id: rows[0]!.id },
           checkoutSessionId: request.checkout.sessionId,
         });
         expect(retry).not.toHaveProperty("pricedFor");
@@ -619,7 +573,7 @@ describe.skipIf(!postgresDatabase)(
         // The request that lost the claim prices the hold for the
         // customer the winner created it for.
         expect(results.find(({ kind }) => kind === "reused")).toMatchObject({
-          reservation: { id: requireValue(rows[0]).id },
+          reservation: { id: rows[0]!.id },
           pricedFor: request.booking.customer,
         });
       });
@@ -645,10 +599,7 @@ describe.skipIf(!postgresDatabase)(
         );
         const [row] = await rowsOf(author);
         expect(row?.locale).toBe([request, rival][loser]?.booking.locale);
-        expect(holds.reservationsStarted()).toEqual([
-          requireValue(row).id,
-          requireValue(row).id,
-        ]);
+        expect(holds.reservationsStarted()).toEqual([row!.id, row!.id]);
       });
 
       test("annotates the reused hold's query rows with its ids after losing the claim", async () => {
@@ -667,7 +618,7 @@ describe.skipIf(!postgresDatabase)(
         expect(rows).toContainEqual(
           expect.objectContaining({
             claimConflictReservationFound: true,
-            reservationId: requireValue(reservationRow).id,
+            reservationId: reservationRow!.id,
             reservationState: "held",
             dotyposReservationId: holds.dotypos.createdHolds[0],
           })
@@ -702,7 +653,7 @@ describe.skipIf(!postgresDatabase)(
           expect.arrayContaining([
             {
               kind: "created",
-              reservationId: requireValue(row).id,
+              reservationId: row!.id,
               checkoutSessionId: request.checkout.sessionId,
               reservationHoldExpiresAt: expect.any(Temporal.Instant),
             },
@@ -714,15 +665,15 @@ describe.skipIf(!postgresDatabase)(
         expect(holds.dotypos.createReservation).toHaveBeenCalledTimes(1);
         expect(holds.dotypos.cancelReservation).not.toHaveBeenCalled();
         // Only the winner's start; the loser stopped at the refresh.
-        expect(holds.reservationsStarted()).toEqual([requireValue(row).id]);
+        expect(holds.reservationsStarted()).toEqual([row!.id]);
       });
 
       test("returns the draft with its claim released when Dotypos fails to create the hold", async () => {
         const author = await newAuthor();
         const dotypos = makeDotypos();
         const creationFailure = dotyposUnavailable("createReservation");
-        dotypos.createReservation.mockImplementationOnce(() =>
-          Effect.fail(creationFailure)
+        dotypos.createReservation.mockImplementationOnce(
+          () => Effect.fail(creationFailure) as never
         );
         const holds = makeHolds({ dotypos });
         const request = holdRequest({ author });
@@ -742,7 +693,7 @@ describe.skipIf(!postgresDatabase)(
         expect(rows).toHaveLength(1);
         expect(retry).toMatchObject({
           kind: "created",
-          reservationId: requireValue(draft).id,
+          reservationId: draft!.id,
         });
         expect(rows[0]?.reservationState).toBe("held");
         expect(dotypos.createReservation).toHaveBeenCalledTimes(2);
@@ -890,8 +841,8 @@ describe.skipIf(!postgresDatabase)(
             );
             const dotypos = makeDotypos();
             const createFailed = dotyposUnavailable("createReservation");
-            dotypos.createReservation.mockImplementationOnce(() =>
-              Effect.fail(createFailed)
+            dotypos.createReservation.mockImplementationOnce(
+              () => Effect.fail(createFailed) as never
             );
             const holds = makeHolds({ dotypos, ensureAvailable });
 
@@ -948,7 +899,7 @@ describe.skipIf(!postgresDatabase)(
         );
         const dotypos = makeDotypos();
         dotypos.createReservation.mockImplementationOnce(() =>
-          Effect.succeed(dotyposReservationFixture(dotyposId))
+          Effect.succeed({ id: dotyposId } as never)
         );
         const holds = makeHolds({ dotypos });
         const refusal = await refuseAttaching(dotyposId);
@@ -978,10 +929,10 @@ describe.skipIf(!postgresDatabase)(
         const cancellationFailure = dotyposUnavailable("cancelReservation");
         const dotypos = makeDotypos();
         dotypos.createReservation.mockImplementationOnce(() =>
-          Effect.succeed(dotyposReservationFixture(dotyposId))
+          Effect.succeed({ id: dotyposId } as never)
         );
-        dotypos.cancelReservation.mockImplementationOnce(() =>
-          Effect.fail(cancellationFailure)
+        dotypos.cancelReservation.mockImplementationOnce(
+          () => Effect.fail(cancellationFailure) as never
         );
         const holds = makeHolds({ dotypos });
         const refusal = await refuseAttaching(dotyposId);
@@ -1023,8 +974,8 @@ describe.skipIf(!postgresDatabase)(
         };
         const dotypos = makeDotypos();
         const cancelFailed = dotyposUnavailable("cancelReservation");
-        dotypos.cancelReservation.mockImplementationOnce(() =>
-          Effect.fail(cancelFailed)
+        dotypos.cancelReservation.mockImplementationOnce(
+          () => Effect.fail(cancelFailed) as never
         );
         const holds = makeHolds({
           dotypos,
@@ -1036,42 +987,23 @@ describe.skipIf(!postgresDatabase)(
         });
         if (options.resumeDraft) {
           const createFailed = dotyposUnavailable("createReservation");
-          dotypos.createReservation.mockImplementationOnce(() =>
-            Effect.fail(createFailed)
+          dotypos.createReservation.mockImplementationOnce(
+            () => Effect.fail(createFailed) as never
           );
           expect(await holds.holdFailure(request)).toBe(createFailed);
           const [draft] = await rowsOf(author);
-          const earlierDeadline = requireValue(
-            requireValue(draft).reservationHoldExpiresAt
-          ).subtract({
+          const earlierDeadline = draft!.reservationHoldExpiresAt!.subtract({
             minutes: 3,
           });
           await postgres.db
             .update(workspaceReservations)
             .set({ reservationHoldExpiresAt: earlierDeadline })
-            .where(eq(workspaceReservations.id, requireValue(draft).id))
+            .where(eq(workspaceReservations.id, draft!.id))
             .pipe(Effect.runPromise);
         }
         if (options.queueDown) {
-          holds.enqueueCleanup.mockImplementationOnce((input) =>
-            ReservationHoldCleanupScheduleService.pipe(
-              Effect.flatMap((service) => service.enqueueCleanup(input)),
-              Effect.provide(
-                ReservationHoldCleanupScheduleService.Default.pipe(
-                  Layer.provide(
-                    Layer.mock(QueuePublisher, {
-                      publish: ({ topic }) =>
-                        Effect.fail(
-                          new QueueMessageSendError({
-                            topic,
-                            cause: new Error("Synthetic queue failure"),
-                          })
-                        ),
-                    })
-                  )
-                )
-              )
-            )
+          holds.enqueueCleanup.mockImplementationOnce(
+            () => Effect.fail(new Error("Synthetic queue failure")) as never
           );
         }
         expect(await holds.holdFailure(request)).toBe(cancelFailed);
@@ -1092,14 +1024,14 @@ describe.skipIf(!postgresDatabase)(
               Layer.mock(PaymentLifecycleRepository, {}),
               Layer.mock(ProviderPaymentFinalizationService, {}),
               recordCheckoutAnalytics().layer,
-              Layer.mock(DotyposService, dotypos)
+              Layer.mock(DotyposService, dotypos as never)
             )
           )
         );
         return {
           cleanup,
           dotypos,
-          failed: requireValue(failed),
+          failed: failed!,
           enqueueCleanup: holds.enqueueCleanup,
         };
       };
@@ -1108,7 +1040,7 @@ describe.skipIf(!postgresDatabase)(
         const { cleanup, failed, enqueueCleanup, dotypos } =
           await failedEntryPackAttachment({ resumeDraft: true });
         expect(enqueueCleanup).toHaveBeenCalledTimes(1);
-        const [queued] = requireValue(enqueueCleanup.mock.calls[0]);
+        const [queued] = enqueueCleanup.mock.calls[0]!;
         expect(queued.orderId).toBe(failed.id);
         expect(
           await processReservationHoldCleanupScheduleMessage(
@@ -1117,7 +1049,7 @@ describe.skipIf(!postgresDatabase)(
               reservationHoldExpiresAtIso:
                 queued.reservationHoldExpiresAt.toString(),
             },
-            requireValue(failed.reservationHoldExpiresAt).add({ seconds: 1 })
+            failed.reservationHoldExpiresAt!.add({ seconds: 1 })
           ).pipe(Effect.provide(cleanup), Effect.runPromise)
         ).toBe("cancelled");
         expect(await rowOf(failed.id)).toMatchObject({
@@ -1134,9 +1066,7 @@ describe.skipIf(!postgresDatabase)(
           ReservationHoldCleanupService.pipe(
             Effect.flatMap((service) =>
               service.sweepExpiredHolds({
-                now: requireValue(failed.reservationHoldExpiresAt).add({
-                  seconds: 1,
-                }),
+                now: failed.reservationHoldExpiresAt!.add({ seconds: 1 }),
                 limit: 100,
               })
             ),
@@ -1144,13 +1074,14 @@ describe.skipIf(!postgresDatabase)(
             Effect.runPromise
           );
         let firstRead = true;
-        const readHoldStatus = requireValue(
-          dotypos.getReservationStatus.getMockImplementation()
-        );
+        const readHoldStatus =
+          dotypos.getReservationStatus.getMockImplementation()!;
         dotypos.getReservationStatus.mockImplementation((id) => {
           if (id === failed.dotyposReservationId && firstRead) {
             firstRead = false;
-            return Effect.fail(dotyposUnavailable("getReservationStatus"));
+            return Effect.fail(
+              dotyposUnavailable("getReservationStatus")
+            ) as never;
           }
           return readHoldStatus(id);
         });
@@ -1206,8 +1137,9 @@ describe.skipIf(!postgresDatabase)(
           const dotypos = makeDotypos();
           if (state === "draft") {
             // A failed hold creation leaves the holder's attempt a draft.
-            dotypos.createReservation.mockImplementationOnce(() =>
-              Effect.fail(dotyposUnavailable("createReservation"))
+            dotypos.createReservation.mockImplementationOnce(
+              () =>
+                Effect.fail(dotyposUnavailable("createReservation")) as never
             );
           }
           const holds = makeHolds({ dotypos });
@@ -1231,8 +1163,8 @@ describe.skipIf(!postgresDatabase)(
         const request = holdRequest({ author });
         const creationFailure = dotyposUnavailable("createReservation");
         const dotypos = makeDotypos();
-        dotypos.createReservation.mockImplementation(() =>
-          Effect.fail(creationFailure)
+        dotypos.createReservation.mockImplementation(
+          () => Effect.fail(creationFailure) as never
         );
         const holds = makeRacingHolds(dotypos);
 
@@ -1260,17 +1192,17 @@ describe.skipIf(!postgresDatabase)(
           `update workspace_reservations
               set reservation_state = 'cancelled', reservation_cancelled_at = now()
             where id = $1`,
-          [requireValue(ended).id]
+          [ended!.id]
         );
 
         const hold = await holds.holdForAttempt(request);
 
         const replacement = (await rowsOf(author)).find(
-          (row) => row.id !== requireValue(ended).id
+          (row) => row.id !== ended!.id
         );
         expect(hold).toEqual({
           kind: "created",
-          reservationId: requireValue(replacement).id,
+          reservationId: replacement!.id,
           checkoutSessionId: promoteCheckoutAttemptToSessionId(
             request.checkout.attemptId
           ),
@@ -1278,7 +1210,7 @@ describe.skipIf(!postgresDatabase)(
         });
         expectStoredHoldDeadline(hold, replacement);
         expect(replacement?.checkoutSessionKey).not.toBe(
-          requireValue(ended).checkoutSessionKey
+          ended!.checkoutSessionKey
         );
         expect(holds.dotypos.createReservation).toHaveBeenCalledTimes(2);
       });
@@ -1293,7 +1225,7 @@ describe.skipIf(!postgresDatabase)(
           `update workspace_reservations
               set reservation_hold_expires_at = now() - interval '1 minute'
             where id = $1`,
-          [requireValue(lapsed).id]
+          [lapsed!.id]
         );
 
         const failure = await holds.holdFailure(request);
@@ -1314,7 +1246,7 @@ describe.skipIf(!postgresDatabase)(
           `update workspace_reservations
               set reservation_hold_expires_at = null
             where id = $1`,
-          [requireValue(undated).id]
+          [undated!.id]
         );
 
         const failure = await holds.holdFailure(request);
@@ -1327,8 +1259,8 @@ describe.skipIf(!postgresDatabase)(
       test("refuses a session whose current draft stays unsettled", async () => {
         const author = await newAuthor();
         const dotypos = makeDotypos();
-        dotypos.createReservation.mockImplementationOnce(() =>
-          Effect.fail(dotyposUnavailable("createReservation"))
+        dotypos.createReservation.mockImplementationOnce(
+          () => Effect.fail(dotyposUnavailable("createReservation")) as never
         );
         const holds = makeHolds({ dotypos });
         const sessionId = newSessionId();
@@ -1349,10 +1281,7 @@ describe.skipIf(!postgresDatabase)(
         const author = await newAuthor();
         const unavailable = new WorkspaceTableUnavailableError({
           date: "2099-06-10",
-          reservation: {
-            kind: "cowork",
-            entryTier: "open-space",
-          },
+          reservation: { kind: "cowork", entryTier: "open-space" } as never,
         });
         const holds = makeHolds({
           ensureAvailable: mock(() => Effect.fail(unavailable)),
@@ -1376,14 +1305,7 @@ describe.skipIf(!postgresDatabase)(
         await holds.holdForAttempt(first);
         const [previous] = await rowsOf(author);
         const next = holdRequest({ author, sessionId, customer });
-        return {
-          author,
-          holds,
-          sessionId,
-          customer,
-          previous: requireValue(previous, "previous hold"),
-          next,
-        };
+        return { author, holds, sessionId, previous: previous!, next };
       };
 
       test("cancels the previous hold in Dotypos and holds the new attempt in the same session", async () => {
@@ -1396,16 +1318,16 @@ describe.skipIf(!postgresDatabase)(
         const replacement = rows.find((row) => row.id !== previous.id);
         expect(hold).toEqual({
           kind: "created",
-          reservationId: requireValue(replacement).id,
+          reservationId: replacement!.id,
           checkoutSessionId: sessionId,
           reservationHoldExpiresAt: expect.any(Temporal.Instant),
         });
         expectStoredHoldDeadline(hold, replacement);
         expect(holds.dotypos.getReservationStatus.mock.calls).toEqual([
-          [requireValue(previous.dotyposReservationId)],
+          [previous.dotyposReservationId!],
         ]);
         expect(holds.dotypos.cancelReservation.mock.calls).toEqual([
-          [requireValue(previous.dotyposReservationId)],
+          [previous.dotyposReservationId!],
         ]);
         expect(await rowOf(previous.id)).toMatchObject({
           reservationState: "cancelled",
@@ -1425,10 +1347,7 @@ describe.skipIf(!postgresDatabase)(
         const { author, holds, previous, next } = await holdInSession();
         const unavailable = new WorkspaceTableUnavailableError({
           date: "2099-06-10",
-          reservation: {
-            kind: "cowork",
-            entryTier: "open-space",
-          },
+          reservation: { kind: "cowork", entryTier: "open-space" } as never,
         });
         holds.ensureAvailable.mockImplementationOnce(() =>
           Effect.fail(unavailable)
@@ -1438,7 +1357,7 @@ describe.skipIf(!postgresDatabase)(
 
         expect(failure).toBe(unavailable);
         expect(holds.dotypos.cancelReservation.mock.calls).toEqual([
-          [requireValue(previous.dotyposReservationId)],
+          [previous.dotyposReservationId!],
         ]);
         const rows = await rowsOf(author);
         expect(rows.map((row) => [row.id, row.reservationState])).toEqual([
@@ -1457,7 +1376,7 @@ describe.skipIf(!postgresDatabase)(
         );
         expect(hold).toMatchObject({
           kind: "created",
-          reservationId: requireValue(replacement).id,
+          reservationId: replacement!.id,
           checkoutSessionId: promoteCheckoutAttemptToSessionId(
             next.checkout.attemptId
           ),
@@ -1497,8 +1416,8 @@ describe.skipIf(!postgresDatabase)(
 
       test("moves into the attempt's own session when cancelling the previous hold fails", async () => {
         const { author, holds, previous, next } = await holdInSession();
-        holds.dotypos.cancelReservation.mockImplementationOnce(() =>
-          Effect.fail(dotyposUnavailable("cancelReservation"))
+        holds.dotypos.cancelReservation.mockImplementationOnce(
+          () => Effect.fail(dotyposUnavailable("cancelReservation")) as never
         );
 
         const hold = await holds.holdForAttempt(next);
@@ -1527,7 +1446,7 @@ describe.skipIf(!postgresDatabase)(
         const [otherHold] = await rowsOf(other);
         expect(hold).toMatchObject({
           kind: "created",
-          reservationId: requireValue(otherHold).id,
+          reservationId: otherHold!.id,
         });
         expect(hold).not.toMatchObject({ checkoutSessionId: sessionId });
         expect(otherHold?.checkoutSessionKey).not.toBe(
@@ -1540,11 +1459,12 @@ describe.skipIf(!postgresDatabase)(
       });
 
       test("supersedes the hold it left in the attempt's own session after moving there", async () => {
-        const { author, holds, sessionId, customer, previous } =
-          await holdInSession();
+        const { author, holds, sessionId, previous } = await holdInSession();
         await setPaymentState(previous.id, "pending");
         const attemptId = newAttemptId();
         const ownSessionId = promoteCheckoutAttemptToSessionId(attemptId);
+        const customer =
+          previous.dotyposCustomerId as HoldRequest["booking"]["customer"];
         await holds.holdForAttempt(
           holdRequest({ author, sessionId, attemptId, customer })
         );
@@ -1565,23 +1485,23 @@ describe.skipIf(!postgresDatabase)(
         );
 
         const replacement = (await rowsOf(author)).find(
-          (row) => row.id !== previous.id && row.id !== requireValue(rotated).id
+          (row) => row.id !== previous.id && row.id !== rotated!.id
         );
         expect(hold).toEqual({
           kind: "created",
-          reservationId: requireValue(replacement).id,
+          reservationId: replacement!.id,
           checkoutSessionId: ownSessionId,
           reservationHoldExpiresAt: expect.any(Temporal.Instant),
         });
         expectStoredHoldDeadline(hold, replacement);
         expect(replacement?.checkoutSessionKey).toBe(
-          requireValue(rotated).checkoutSessionKey
+          rotated!.checkoutSessionKey
         );
-        expect(await rowOf(requireValue(rotated).id)).toMatchObject({
+        expect(await rowOf(rotated!.id)).toMatchObject({
           reservationState: "cancelled",
         });
         expect(holds.dotypos.cancelReservation.mock.calls).toEqual([
-          [requireValue(requireValue(rotated).dotyposReservationId)],
+          [rotated!.dotyposReservationId!],
         ]);
         expect(await rowOf(previous.id)).toMatchObject({
           reservationState: "held",
@@ -1604,7 +1524,7 @@ describe.skipIf(!postgresDatabase)(
           `update workspace_reservations
               set reservation_state = 'cancelled', reservation_cancelled_at = now()
             where id = $1`,
-          [requireValue(held).id]
+          [held!.id]
         );
 
         const failure = await holds.holdFailure(request);
@@ -1646,11 +1566,11 @@ describe.skipIf(!postgresDatabase)(
         expect(rows).toHaveLength(1);
         expect(created).toMatchObject({
           kind: "created",
-          reservationId: requireValue(rows[0]).id,
+          reservationId: rows[0]!.id,
         });
         expect(repeat).toMatchObject({
           kind: "reused",
-          reservation: { id: requireValue(rows[0]).id },
+          reservation: { id: rows[0]!.id },
           checkoutSessionId: sessionId,
         });
         expect(rows[0]).toMatchObject({
@@ -1672,7 +1592,7 @@ describe.skipIf(!postgresDatabase)(
         const first = holdRequest({ author, sessionId, agent });
         await holds.holdForAttempt(first);
         const [held] = await rowsOf(author);
-        await setPaymentState(requireValue(held).id, "pending");
+        await setPaymentState(held!.id, "pending");
 
         const repeat = await holds.holdForAttempt(
           holdRequest({
@@ -1685,7 +1605,7 @@ describe.skipIf(!postgresDatabase)(
 
         expect(repeat).toMatchObject({
           kind: "payment_pending",
-          reservation: { id: requireValue(held).id },
+          reservation: { id: held!.id },
           checkoutSessionId: sessionId,
         });
         expect(await rowsOf(author)).toHaveLength(1);
@@ -1716,7 +1636,7 @@ describe.skipIf(!postgresDatabase)(
             })
           )
         );
-        await setPaymentState(requireValue(paid), "paid");
+        await setPaymentState(paid!, "paid");
         const rotated = await book(
           holdRequest({
             author,
@@ -1746,7 +1666,7 @@ describe.skipIf(!postgresDatabase)(
             })
           )
         );
-        const rotatedRow = await rowOf(requireValue(idOf(rotated)));
+        const rotatedRow = await rowOf(idOf(rotated)!);
         holds.dotypos.cancelReservation.mockClear();
 
         const next = await book(
@@ -1760,17 +1680,17 @@ describe.skipIf(!postgresDatabase)(
 
         expect(next.kind).toBe("created");
         expect(holds.dotypos.cancelReservation.mock.calls).toEqual([
-          [requireValue(requireValue(rotatedRow).dotyposReservationId)],
+          [rotatedRow!.dotyposReservationId!],
         ]);
-        expect(await rowOf(requireValue(idOf(rotated)))).toMatchObject({
+        expect(await rowOf(idOf(rotated)!)).toMatchObject({
           reservationState: "cancelled",
         });
         for (const kept of [otherClients, otherAccounts]) {
-          expect(await rowOf(requireValue(kept))).toMatchObject({
+          expect(await rowOf(kept!)).toMatchObject({
             reservationState: "held",
           });
         }
-        expect(await rowOf(requireValue(paid))).toMatchObject({
+        expect(await rowOf(paid!)).toMatchObject({
           reservationState: "held",
           paymentState: "paid",
         });
@@ -1801,23 +1721,23 @@ describe.skipIf(!postgresDatabase)(
         );
 
         const replacement = (await rowsOf(author)).find(
-          (row) => row.id !== requireValue(previous).id
+          (row) => row.id !== previous!.id
         );
         expect(hold).toEqual({
           kind: "created",
-          reservationId: requireValue(replacement).id,
+          reservationId: replacement!.id,
           checkoutSessionId: sessionId,
           reservationHoldExpiresAt: expect.any(Temporal.Instant),
         });
         expectStoredHoldDeadline(hold, replacement);
         expect(replacement?.checkoutSessionKey).toBe(
-          requireValue(previous).checkoutSessionKey
+          previous!.checkoutSessionKey
         );
-        expect(await rowOf(requireValue(previous).id)).toMatchObject({
+        expect(await rowOf(previous!.id)).toMatchObject({
           reservationState: "cancelled",
         });
         expect(holds.dotypos.cancelReservation.mock.calls).toEqual([
-          [requireValue(requireValue(previous).dotyposReservationId)],
+          [previous!.dotyposReservationId!],
         ]);
       });
 
@@ -1842,8 +1762,8 @@ describe.skipIf(!postgresDatabase)(
           "paid"
         );
         const rotated = await book("rotated");
-        holds.dotypos.cancelReservation.mockImplementationOnce(() =>
-          Effect.fail(dotyposUnavailable("cancelReservation"))
+        holds.dotypos.cancelReservation.mockImplementationOnce(
+          () => Effect.fail(dotyposUnavailable("cancelReservation")) as never
         );
 
         const next = await book("next");

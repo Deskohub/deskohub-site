@@ -2,11 +2,10 @@ import "@/shared/polyfills/temporal";
 
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Schema } from "effect";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
   getOfficeReservationDefaultValues,
-  normalizedOfficeReservationOrderSchema,
+  type NormalizedOfficeReservationOrder,
 } from "./office-reservation";
 import { officeSelectionLink } from "./office-selection-link";
 import { setReservationSelectionSearchParams } from "./reservation-checkout-query";
@@ -227,18 +226,16 @@ describe("officeSelectionLink.fromStored", () => {
 });
 
 describe("officeSelectionLink.restore", () => {
-  const restored = getOfficeReservationDefaultValues(
-    Schema.decodeUnknownSync(normalizedOfficeReservationOrderSchema)({
-      kind: "office",
-      startsOn: "2099-06-20",
-      endsOn: "2099-06-21",
-      seats: 3,
-      name: "Ada Lovelace",
-      email: testEmailAddress("ada"),
-      phone: "+420777777777",
-      billing: { purpose: "personal", invoice: "none" },
-    })
-  );
+  const restored = getOfficeReservationDefaultValues({
+    kind: "office",
+    startsOn: "2099-06-20",
+    endsOn: "2099-06-21",
+    seats: 3,
+    name: "Ada Lovelace",
+    email: testEmailAddress("ada"),
+    phone: "+420777777777",
+    billing: { purpose: "personal", invoice: "none" },
+  } as NormalizedOfficeReservationOrder);
   const context = { seatCapacity: 6, today: "2099-06-12" };
 
   test("keeps the restored selection without a selection parameter", () => {
