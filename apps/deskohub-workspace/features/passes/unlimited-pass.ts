@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { workspaceProductMonitorOptions } from "@/features/checkout/product-catalog";
+import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -57,9 +58,13 @@ export const getUnlimitedPassEndDate = (startDate: PlainDate): PlainDate =>
 
 export function unlimitedPassRequiresEarlyStart(
   startDate: PlainDate,
-  agreedOn: Temporal.PlainDate
+  agreedOn: Temporal.PlainDate,
+  purpose: ReservationBillingSelection["purpose"] = "personal"
 ) {
-  return Temporal.PlainDate.compare(startDate, agreedOn.add({ days: 14 })) <= 0;
+  return (
+    purpose === "personal" &&
+    Temporal.PlainDate.compare(startDate, agreedOn.add({ days: 14 })) <= 0
+  );
 }
 
 /** Withdrawal includes the current service date and releases later dates. */

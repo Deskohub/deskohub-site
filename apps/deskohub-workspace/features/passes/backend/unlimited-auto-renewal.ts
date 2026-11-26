@@ -37,7 +37,7 @@ export function readUnlimitedAutoRenewalDisclosure(
     ),
     nextRenewalOn: purchase.validUntil,
     termsHash: getLegalDocumentVersion(purchase.locale, "terms-and-conditions"),
-    termsPath: getLegalDocumentPath(purchase.locale, "terms-and-conditions"),
+    termsPath: `${getLegalDocumentPath(purchase.locale, "terms-and-conditions")}#section-16`,
   };
 }
 

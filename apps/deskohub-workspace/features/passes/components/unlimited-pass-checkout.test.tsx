@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { type OrderId, orderIdSchema } from "@/features/order";
+import { emptyBusinessBillingSelection } from "@/features/reservation/reservation-billing";
 import { currencyCZK } from "@/shared/money/currencies";
 import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
@@ -105,7 +106,7 @@ const renewalAuthorization = {
 };
 const renewalDisclosure = {
   ...renewalAuthorization,
-  termsPath: "/en-US/terms-and-conditions#unlimited-auto-renewal",
+  termsPath: "/en-US/terms-and-conditions#section-16",
 };
 
 test("auto renewal carries the choice through Details and requires each applicable Pay consent", async () => {
@@ -173,9 +174,10 @@ test("auto renewal carries the choice through Details and requires each applicab
   expect(
     view.getByRole("link", { name: "auto-renewal terms" }).getAttribute("href")
   ).toBe(renewalDisclosure.termsPath);
-  expect(
-    view.getByRole("link", { name: /Account.*Passes/ }).getAttribute("href")
-  ).toBe("/en-US/account/passes");
+  const passesLink = view.getByRole("link", { name: /Account.*Passes/ });
+  expect(passesLink.getAttribute("href")).toBe("/en-US/account/passes");
+  expect(passesLink.getAttribute("target")).toBe("_blank");
+  expect(passesLink.getAttribute("rel")).toBe("noreferrer");
   const ordinary = view.getByRole("checkbox", { name: /general terms/i });
   const start = view.getByRole("checkbox", { name: earlyStart });
   expect(earlyStart).toContain("on or after the start date");
@@ -219,7 +221,80 @@ test("auto renewal carries the choice through Details and requires each applicab
       }),
     ])
   );
-  expect(freshRecurring.getAttribute("aria-checked")).toBe("false");
+  expect(freshRecurring.getAttribute("aria-checked")).toBe("true");
+});
+
+test("business Pay retains renewal consent on invalid codes and payment errors without asking for consumer early start", async () => {
+  const payments: unknown[] = [];
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        discountCodeEntryEnabled
+        initialPayment={{
+          orderId: orderIdSchema.make(crypto.randomUUID()),
+          selection: { ...base.initialOptions, startDate: openSpaceStart },
+          state: {
+            ...readyCheckout,
+            autoRenew: true,
+            disclosure: {
+              documents: [],
+              earlyStartRequest: earlyStart,
+              renewal: renewalDisclosure,
+            },
+            billing: emptyBusinessBillingSelection,
+          },
+        }}
+        repriceCheckout={async () => ({
+          data: { status: "code_unavailable" },
+        })}
+        payCheckout={async (input) => {
+          payments.push(input);
+          return { serverError: "synthetic temporary error" };
+        }}
+      />
+    </QueryProvider>
+  );
+  expect(view.queryByRole("checkbox", { name: earlyStart })).toBeNull();
+  const ordinary = view.getByRole("checkbox", { name: /general terms/i });
+  const recurring = view.getByRole("checkbox", {
+    name: m.unlimitedPassCheckoutAutoRenewConsent({}, { locale }),
+  });
+  const pay = view.getByRole<HTMLButtonElement>("button", { name: /pay/i });
+  fireEvent.click(ordinary);
+  expect(pay.disabled).toBe(true);
+  fireEvent.click(recurring);
+  expect(pay.disabled).toBe(false);
+
+  fireEvent.change(
+    view.getByRole("textbox", {
+      name: m.checkoutDiscountCodeLabel({}, { locale }),
+    }),
+    { target: { value: "UNAVAILABLE" } }
+  );
+  fireEvent.click(
+    view.getByRole("button", {
+      name: m.checkoutDiscountCodeApply({}, { locale }),
+    })
+  );
+  await view.findByText(m.checkoutDiscountCodeUnavailable({}, { locale }));
+  expect(ordinary.getAttribute("aria-checked")).toBe("true");
+  expect(recurring.getAttribute("aria-checked")).toBe("true");
+  expect(pay.disabled).toBe(false);
+
+  fireEvent.click(pay);
+  await view.findByText(m.actionFailedUnexpectedly({}, { locale }));
+  expect(payments).toEqual([
+    expect.objectContaining({
+      accepted: true,
+      billing: emptyBusinessBillingSelection,
+      renewalAuthorization,
+      unlimitedEarlyStartAccepted: false,
+    }),
+  ]);
+  expect(ordinary.getAttribute("aria-checked")).toBe("true");
+  expect(recurring.getAttribute("aria-checked")).toBe("true");
+  expect(pay.disabled).toBe(false);
 });
 
 test("Pay refreshes the renewal disclosure and requires fresh consent after repricing and a payment retry", async () => {
@@ -362,7 +437,7 @@ test("Continue uses the selected tier's full-window starts and discards irreleva
   ).toBeDefined();
   fireEvent.click(view.getByRole("switch"));
   fireEvent.click(
-    view.getByRole("radio", { name: /^reserved desk (?!with workstation)/i })
+    view.getByRole("radio", { name: /^reserved desk (?!\+ workstation)/i })
   );
   expect(view.queryByRole("switch")).toBeNull();
   expect(view.queryByText(/same monitor setup/i)).toBeNull();
@@ -372,7 +447,7 @@ test("Continue uses the selected tier's full-window starts and discards irreleva
   expect(continueButton.disabled).toBe(true);
 
   fireEvent.click(
-    view.getByRole("radio", { name: /reserved desk with workstation/i })
+    view.getByRole("radio", { name: /reserved desk \+ workstation/i })
   );
   expect(continueButton.disabled).toBe(true);
   fireEvent.click(view.getByRole("button", { name: /November 1st, 2026/i }));
@@ -393,7 +468,7 @@ test("Continue uses the selected tier's full-window starts and discards irreleva
   fireEvent.click(view.getByRole("button", { name: /November 2nd, 2026/i }));
   expect(continueButton.disabled).toBe(false);
   fireEvent.click(continueButton);
-  expect(view.getByText("Reserved Desk with workstation")).toBeDefined();
+  expect(view.getByText("Reserved Desk + workstation")).toBeDefined();
 });
 
 test.each([false, true])(
@@ -486,7 +561,7 @@ test.each([false, true])(
   }
 );
 
-test("gift Details preserves the buyer and billing, and Pay renders one combined consent", async () => {
+test("gift Details preserves business billing and Pay asks only for terms", async () => {
   const requests: unknown[] = [];
   const payments: unknown[] = [];
   const view = render(
@@ -594,9 +669,8 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
 
   enterRecipientName(view);
   fireEvent.click(view.getByRole("button", { name: /continue/i }));
-  await waitFor(() =>
-    expect(view.getByText(earlyStart, { exact: false })).toBeDefined()
-  );
+  await view.findByRole("button", { name: /pay/i });
+  expect(view.queryByText(earlyStart, { exact: false })).toBeNull();
   expect(requests).toEqual([
     expect.objectContaining({
       locale,
@@ -619,7 +693,7 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
     expect(payments).toEqual([
       expect.objectContaining({
         accepted: true,
-        unlimitedEarlyStartAccepted: true,
+        unlimitedEarlyStartAccepted: false,
         acceptedDocuments: [
           { key: "terms-and-conditions", hash: "one" },
           { key: "operating-rules", hash: "two" },

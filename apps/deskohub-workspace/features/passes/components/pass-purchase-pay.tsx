@@ -96,10 +96,13 @@ export function PassPurchasePay({
   const [earlyStartChecked, setEarlyStartChecked] = useState(false);
   const [renewalChecked, setRenewalChecked] = useState(false);
   const renewal = state.autoRenew ? disclosure.renewal : undefined;
+  const earlyStartRequest =
+    state.billing.purpose === "personal"
+      ? disclosure.earlyStartRequest
+      : undefined;
   const consentComplete =
     checked &&
-    (!renewal ||
-      (renewalChecked && (!disclosure.earlyStartRequest || earlyStartChecked)));
+    (!renewal || (renewalChecked && (!earlyStartRequest || earlyStartChecked)));
   const { appliedDiscountCode } = price;
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string>();
@@ -188,7 +191,6 @@ export function PassPurchasePay({
   const busy = reprice.isPending || pay.isPending;
   const updateCode = (code?: string) => {
     setError(undefined);
-    setRenewalChecked(false);
     reprice.execute({
       ...input,
       displayedPriceFingerprint: price.fingerprint,
@@ -199,15 +201,13 @@ export function PassPurchasePay({
     if (!consentComplete || busy || quoteUnavailable || renewalRequiresPayment)
       return;
     setError(undefined);
-    setRenewalChecked(false);
     onRequestPayment();
     pay.execute({
       ...input,
       accepted: checked,
       ...(product === "unlimited" && {
         unlimitedEarlyStartAccepted:
-          Boolean(disclosure.earlyStartRequest) &&
-          (!renewal || earlyStartChecked),
+          Boolean(earlyStartRequest) && (!renewal || earlyStartChecked),
       }),
       ...(renewal &&
         renewalChecked && {
@@ -300,6 +300,8 @@ export function PassPurchasePay({
                 account: (label) => (
                   <Link
                     href={getAccountSectionPath(locale, "passes")}
+                    target="_blank"
+                    rel="noreferrer"
                     className={textLink({ tone: "inherit" })}
                   >
                     {label}
@@ -353,6 +355,7 @@ export function PassPurchasePay({
             <div className="flex flex-wrap gap-2">
               <Input
                 id={codeId}
+                name="discountCode"
                 disabled={busy || quoteUnavailable}
                 className="min-w-40 flex-1"
                 autoComplete="off"
@@ -384,15 +387,13 @@ export function PassPurchasePay({
           checked={checked}
           disabled={busy || quoteUnavailable}
           {...(!renewal &&
-            disclosure.earlyStartRequest !== undefined && {
-              earlyStartRequest: disclosure.earlyStartRequest,
-            })}
+            earlyStartRequest !== undefined && { earlyStartRequest })}
           id={consentId}
           locale={locale}
           onCheckedChange={setChecked}
           variant="pay"
         />
-        {renewal && disclosure.earlyStartRequest && (
+        {renewal && earlyStartRequest && (
           <ChoiceCard htmlFor={earlyStartConsentId}>
             <Checkbox
               id={earlyStartConsentId}
@@ -402,7 +403,7 @@ export function PassPurchasePay({
               onCheckedChange={(value) => setEarlyStartChecked(value === true)}
             />
             <span className="text-sm leading-6 text-navy-blue/66">
-              {disclosure.earlyStartRequest}
+              {earlyStartRequest}
             </span>
           </ChoiceCard>
         )}

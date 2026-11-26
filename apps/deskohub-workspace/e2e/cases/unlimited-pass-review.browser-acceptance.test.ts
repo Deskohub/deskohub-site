@@ -294,6 +294,83 @@ test.skipIf(!chromiumAvailable)(
   }
 );
 
+test.skipIf(!chromiumAvailable)(
+  "captures the chooser header at the top and leaves the empty discount field visible",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
+    const page = await browser.newPage();
+    try {
+      await page.route("**/*", (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body: `
+            <style>
+              body { margin: 0; min-height: 1800px; background: #fff; }
+              header { position: fixed; inset: 0 0 auto; height: 40px; background: #1944a5; }
+              a { position: fixed; top: -60px; width: 80px; height: 25px; background: #ff7f00; }
+              input { position: absolute; left: 40px; width: 150px; height: 30px; border: 0; background: #eee; }
+            </style>
+            <header class="fixed">Navigation</header>
+            <a href="#main-content">Skip to main content</a>
+            <main id="main-content">
+              <input name="discountCode" style="top: 80px" aria-label="Discount code">
+              <input style="top: 140px" value="synthetic masked value" aria-label="Private input">
+            </main>`,
+        })
+      );
+      await page.goto(`${origin}${checkoutPath}`);
+      await page.evaluate(() => window.scrollTo(0, 650));
+      expect(await page.evaluate(() => window.scrollY)).toBe(650);
+      const review = makeUnlimitedPassReviewCapture({
+        accountPath,
+        directory,
+        locale: "cs-CZ",
+        origin,
+        timeout: 5_000,
+      });
+      await review.captureWorkspace(page, "choose-renewal");
+      await review.captureWorkspace(page, "pay-unchecked");
+      expect(review.missingShots()).not.toContainEqual(
+        expect.objectContaining({ shot: "choose-renewal" })
+      );
+      expect(review.missingShots()).not.toContainEqual(
+        expect.objectContaining({ shot: "pay-unchecked" })
+      );
+
+      for (const width of [390, 1280]) {
+        const chooser = sharp(
+          join(directory, `unlimited-cs-CZ-choose-renewal-${width}.png`)
+        );
+        const pay = sharp(
+          join(directory, `unlimited-cs-CZ-pay-unchecked-${width}.png`)
+        );
+        const pixel = (
+          png: ReturnType<typeof sharp>,
+          left: number,
+          top: number
+        ) =>
+          png
+            .clone()
+            .extract({ left, top, width: 1, height: 1 })
+            .removeAlpha()
+            .raw()
+            .toBuffer();
+        expect(await pixel(chooser, 100, 4)).toEqual(
+          Buffer.from([25, 68, 165])
+        );
+        expect(await pixel(chooser, 100, 654)).toEqual(
+          Buffer.from([255, 255, 255])
+        );
+        expect(await pixel(pay, 55, 90)).toEqual(Buffer.from([238, 238, 238]));
+        expect(await pixel(pay, 55, 150)).toEqual(Buffer.from([255, 0, 255]));
+      }
+    } finally {
+      await page.close();
+      await rm(directory, { force: true, recursive: true });
+    }
+  }
+);
+
 for (const locale of ["en-US", "cs-CZ"] as const) {
   test.skipIf(!chromiumAvailable)(
     `captures the nearest canonical terms section in ${locale}`,

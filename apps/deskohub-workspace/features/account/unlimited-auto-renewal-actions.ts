@@ -8,21 +8,12 @@ import { CustomerAuthentication } from "@/features/account/backend/customer-auth
 import { requireVerifiedSession } from "@/features/account/backend/verified-customer-session";
 import { m } from "@/features/i18n";
 import { type OrderId, orderIdSchema } from "@/features/order";
-import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
-import { CoworkPassesReleaseGateRequest } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { cancelUnlimitedAutoRenewal } from "@/features/passes/backend/unlimited-auto-renewal-management";
-import { isUnlimitedAutoRenewalPreviewEnabled } from "@/features/passes/backend/unlimited-auto-renewal-preview.server";
 import { defineWorkspaceAction } from "@/shared/backend/workspace-action";
 
 const requestUnlimitedAutoRenewalCancellation = Effect.fn(
   "requestUnlimitedAutoRenewalCancellation"
 )(function* (orderId: OrderId) {
-  if (
-    !isUnlimitedAutoRenewalPreviewEnabled() ||
-    !(yield* CoworkPassesReleaseGate.isOpen)
-  ) {
-    return { status: "unavailable" as const };
-  }
   const { accountId } = yield* requireVerifiedSession;
   const status = yield* cancelUnlimitedAutoRenewal(accountId, orderId);
   return { status };
@@ -48,8 +39,7 @@ const cancelAccountUnlimitedAutoRenewalAction = defineWorkspaceAction(
       Effect.provide(
         Layer.mergeAll(
           WorkspaceDatabase.Default,
-          CustomerAccountSections.ForProvidedAuthentication,
-          CoworkPassesReleaseGateRequest
+          CustomerAccountSections.ForProvidedAuthentication
         ).pipe(Layer.provideMerge(CustomerAuthentication.Default))
       )
     )

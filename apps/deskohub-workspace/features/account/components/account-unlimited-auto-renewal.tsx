@@ -13,7 +13,10 @@ export function AccountUnlimitedAutoRenewalControls({
   locale,
   orderId,
 }: {
-  readonly autoRenewal: AccountUnlimitedAutoRenewal;
+  readonly autoRenewal: Exclude<
+    AccountUnlimitedAutoRenewal,
+    { readonly status: "unavailable" }
+  >;
   readonly locale: Locale;
   readonly orderId: OrderId;
 }) {

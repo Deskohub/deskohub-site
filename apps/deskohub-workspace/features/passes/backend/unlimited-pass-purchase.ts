@@ -755,7 +755,8 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
           purchase.locale,
           unlimitedPassRequiresEarlyStart(
             purchase.validFrom,
-            getCurrentWorkspaceDate(now)
+            getCurrentWorkspaceDate(now),
+            billing.purpose
           ),
           renewal
         ),

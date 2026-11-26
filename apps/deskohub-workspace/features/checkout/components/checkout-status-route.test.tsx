@@ -508,7 +508,7 @@ describe("CheckoutStatusRoute", () => {
       expect(html).toContain('data-entry-pack-status="granted"');
       expect(html).toContain("Complimentary pass granted");
       expect(html).toContain(
-        entryCount === null ? "Unlimited pass" : "Entry pack"
+        entryCount === null ? "Unlimited membership" : "Entry pack"
       );
       expect(html).toContain('data-auto-refresh="false"');
       expect(html).not.toContain("Paid on");

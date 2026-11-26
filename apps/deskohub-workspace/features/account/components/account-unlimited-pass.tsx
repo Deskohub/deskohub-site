@@ -1,3 +1,4 @@
+import { Interpolate } from "@doist/react-interpolate";
 import { Gift, KeyRound } from "lucide-react";
 import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
 import { AccountUnlimitedAutoRenewalControls } from "@/features/account/components/account-unlimited-auto-renewal";
@@ -6,7 +7,9 @@ import { UnlimitedDayMeter } from "@/features/passes/components/unlimited-day-me
 import { GuardedLink } from "@/shared/components/guarded-link";
 import { Button } from "@/shared/components/ui/button";
 import { StatusBadge } from "@/shared/components/ui/status-badge";
+import { textLink } from "@/shared/components/ui/text-link";
 import { formatCount } from "@/shared/utils/number";
+import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 
 type PassProps = {
   readonly pass: AccountUnlimitedPass;
@@ -80,7 +83,36 @@ export function UnlimitedReservationItem({ pass, locale }: PassProps) {
   );
 }
 
-export function AccountUnlimitedPassCard({ pass, locale }: PassProps) {
+export function AccountUnlimitedRenewalUnavailable({
+  locale,
+}: {
+  readonly locale: Locale;
+}) {
+  return (
+    <p role="alert" className="px-5 py-4 text-sm text-slate-600">
+      <Interpolate
+        string={m.accountUnlimitedAutoRenewalUnavailable({}, { locale })}
+        mapping={{
+          emailLink: (label) => (
+            <a
+              href={`mailto:${workspaceSiteConstants.contact.infoEmail}`}
+              className={textLink()}
+            >
+              {label}
+            </a>
+          ),
+        }}
+      />
+    </p>
+  );
+}
+
+export function AccountUnlimitedPassCard({
+  pass,
+  locale,
+  purchasesEnabled = true,
+}: PassProps & { readonly purchasesEnabled?: boolean }) {
+  const renewalPath = purchasesEnabled ? pass.renewalPath : undefined;
   const desk =
     pass.seating.kind === "shared"
       ? m.accountUnlimitedPassAnyDesk({}, { locale })
@@ -141,7 +173,10 @@ export function AccountUnlimitedPassCard({ pass, locale }: PassProps) {
           )}
         </dl>
       </div>
-      {pass.autoRenewal && (
+      {pass.autoRenewal?.status === "unavailable" && (
+        <AccountUnlimitedRenewalUnavailable locale={locale} />
+      )}
+      {pass.autoRenewal && pass.autoRenewal.status !== "unavailable" && (
         <AccountUnlimitedAutoRenewalControls
           autoRenewal={pass.autoRenewal}
           locale={locale}
@@ -162,11 +197,11 @@ export function AccountUnlimitedPassCard({ pass, locale }: PassProps) {
             </p>
           )}
         </div>
-        {(pass.renewalPath || pass.status === "active") && (
+        {(renewalPath || pass.status === "active") && (
           <div className="flex flex-wrap items-center gap-2">
-            {pass.renewalPath && (
+            {renewalPath && (
               <Button asChild size="sm" variant="secondary" wrap>
-                <GuardedLink href={pass.renewalPath}>
+                <GuardedLink href={renewalPath}>
                   {m.unlimitedPassRenew({}, { locale })}
                 </GuardedLink>
               </Button>

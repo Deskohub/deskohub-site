@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { type ReactElement, Suspense } from "react";
+import type { AccountPasses } from "@/features/account/account-passes.server";
+import type { AccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
+import { orderIdSchema } from "@/features/order";
 
 const events: string[] = [];
 const notFound = mock(() => {
@@ -13,10 +16,15 @@ const getRequestPathname = mock(() =>
   Promise.resolve<string | undefined>("/en-US/account")
 );
 const loadCustomerAccountPage = mock(() =>
-  Promise.resolve({ kind: "unavailable" as const })
+  Promise.resolve<{ kind: "unavailable" | "completion-required" }>({
+    kind: "unavailable",
+  })
 );
 const loadCustomerAccountPasses = mock((_locale: string) =>
-  Promise.resolve({ kind: "empty" as const })
+  Promise.resolve<AccountPasses>({ held: [], boughtForOthers: [] })
+);
+const loadCustomerAccountUnlimitedPasses = mock((_locale: string) =>
+  Promise.resolve<AccountUnlimitedPasses>([])
 );
 const loadCustomerInvoiceHistory = mock((_locale: string) =>
   Promise.resolve({ kind: "empty" as const })
@@ -26,6 +34,9 @@ const AccountContentLoading = mock(() => null);
 
 mock.module("next/navigation", () => ({ notFound }));
 mock.module("next/server", () => ({ connection }));
+mock.module("@/features/i18n/server/request-locale", () => ({
+  getRequestLocale: async () => "en-US",
+}));
 mock.module("@/features/account/server/account-release-gates.server", () => ({
   arePasskeysEnabled,
 }));
@@ -48,7 +59,7 @@ mock.module("@/features/account/account-passes.server", () => ({
   loadCustomerAccountPasses,
 }));
 mock.module("@/features/account/account-unlimited-passes.server", () => ({
-  loadCustomerAccountUnlimitedPasses: async () => [],
+  loadCustomerAccountUnlimitedPasses,
 }));
 mock.module("@/features/account/invoice-history.server", () => ({
   loadCustomerInvoiceHistory,
@@ -134,7 +145,13 @@ describe("customer account route boundary", () => {
       events.push("load");
       return { kind: "unavailable" as const };
     });
-    loadCustomerAccountPasses.mockClear();
+    loadCustomerAccountPasses.mockReset();
+    loadCustomerAccountPasses.mockImplementation(async () => ({
+      held: [],
+      boughtForOthers: [],
+    }));
+    loadCustomerAccountUnlimitedPasses.mockReset();
+    loadCustomerAccountUnlimitedPasses.mockImplementation(async () => []);
     AccountPage.mockClear();
   });
 
@@ -222,7 +239,6 @@ describe("customer account route boundary", () => {
   test.each([
     ["referrals", areReferralsEnabled],
     ["security", arePasskeysEnabled],
-    ["passes", isCoworkPassesPageOpenAfterConnection],
   ] as const)(
     "returns not found for the withheld %s section without loading the account",
     async (section, flag) => {
@@ -237,6 +253,57 @@ describe("customer account route boundary", () => {
       expect(loadCustomerAccountPage).not.toHaveBeenCalled();
     }
   );
+
+  test("keeps Passes and renewal cancellation available to a subscriber with purchases closed", async () => {
+    isCoworkPassesPageOpenAfterConnection.mockImplementation(async () => false);
+    getRequestPathname.mockImplementation(async () => "/en-US/account/passes");
+    loadCustomerAccountPage.mockImplementation(async () => ({
+      kind: "completion-required",
+    }));
+    loadCustomerAccountUnlimitedPasses.mockImplementation(async () => [
+      {
+        orderId: orderIdSchema.make(crypto.randomUUID()),
+        tier: "Open Space",
+        boughtForYou: false,
+        period: "Nov 1 to Nov 30, 2026",
+        seating: { kind: "shared" },
+        status: "upcoming",
+        startsOn: "Nov 1, 2026",
+        autoRenewal: {
+          status: "pending",
+          amount: "CZK 3,490",
+          nextRenewalOn: "Dec 1, 2026",
+        },
+      },
+    ]);
+
+    const output = await renderSections().content();
+    expect(output).toMatchObject({
+      type: AccountPage,
+      props: {
+        passPurchasesEnabled: false,
+        loadPasses: expect.any(Function),
+        unlimitedPasses: [
+          expect.objectContaining({
+            autoRenewal: expect.objectContaining({ status: "pending" }),
+          }),
+        ],
+      },
+    });
+    expect(await renderPathCheck("passes").content()).toBeNull();
+  });
+
+  test("withholds Passes while purchases are closed for an account with no passes", async () => {
+    isCoworkPassesPageOpenAfterConnection.mockImplementation(async () => false);
+    getRequestPathname.mockImplementation(async () => "/en-US/account/passes");
+    loadCustomerAccountPage.mockImplementation(async () => ({
+      kind: "completion-required",
+    }));
+    await expect(renderSections().content()).rejects.toThrow("NEXT_NOT_FOUND");
+    await expect(renderPathCheck("passes").content()).rejects.toThrow(
+      "NEXT_NOT_FOUND"
+    );
+  });
 
   test("leaves a released section's path to the sections' account page", async () => {
     const { content, route } = renderPathCheck("security");
@@ -264,7 +331,6 @@ describe("customer account route boundary", () => {
   test.each([
     ["referrals", areReferralsEnabled, "referrals"],
     ["security", arePasskeysEnabled, "passkeys"],
-    ["passes", isCoworkPassesPageOpenAfterConnection, "passes"],
   ] as const)(
     "returns not found for the withheld %s section",
     async (section, flag, event) => {

@@ -101,13 +101,14 @@ test("presents the buyer's order separately from passes they can use", async () 
   expect(markup).toContain(`href="${statusPath}"`);
   expect(markup).toContain("Invitation sent");
   expect(markup).toContain("Not claimed yet");
-  expect(markup).toContain("Unlimited pass");
+  expect(markup).toContain("Unlimited membership");
   expect(markup.match(/Resend invitation/g)).toHaveLength(1);
   expect(markup).not.toContain("entries left");
   expect(markup).not.toContain("Book a date");
   expect(markup).not.toContain("/reservation/access/");
   expect(markup).not.toContain("Day 1 of 30");
   expect(markup).not.toContain("You don’t have any passes yet.");
+  expect(markup).toContain('href="mailto:workspace@deskohub.cz"');
 });
 
 test("renders a held Unlimited pass with its assigned desk and purchase date", async () => {
@@ -190,7 +191,7 @@ test("shows a lookup failure when Entry Packs loaded empty and Unlimited did not
   ).text();
 
   expect(markup).toContain(
-    "Your Unlimited passes are temporarily unavailable."
+    "Your Unlimited memberships are temporarily unavailable."
   );
   expect(markup).not.toContain("You don’t have any passes yet.");
 });
@@ -224,4 +225,36 @@ test("shows generic gift attribution when there is no buyer name", async () => {
   expect(markup).toContain("Bought for you");
   expect(markup).not.toContain("Bought for you by");
   expect(markup).not.toContain("Book a date");
+});
+
+test("shows the cancellation email when a membership's renewal status cannot load", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const markup = await new Response(
+    await renderToReadableStream(
+      <UnsavedChangesProvider>
+        <AccountPassesPanel
+          locale="en-US"
+          packs={Promise.resolve({ held: [], boughtForOthers: [] })}
+          purchasesEnabled={false}
+          unlimitedPasses={[
+            {
+              orderId,
+              tier: "Open Space",
+              boughtForYou: false,
+              period: "Nov 1 to Nov 30, 2026",
+              seating: { kind: "shared" },
+              status: "upcoming",
+              startsOn: "Nov 1, 2026",
+              renewalPath: "/en-US/passes/unlimited",
+              autoRenewal: { status: "unavailable" },
+            },
+          ]}
+        />
+      </UnsavedChangesProvider>
+    )
+  ).text();
+  expect(markup).toContain('role="alert"');
+  expect(markup).toContain('href="mailto:workspace@deskohub.cz"');
+  expect(markup).not.toContain('href="/en-US/passes/unlimited"');
+  expect(markup).not.toContain('href="/en-US/passes/entry-pack"');
 });

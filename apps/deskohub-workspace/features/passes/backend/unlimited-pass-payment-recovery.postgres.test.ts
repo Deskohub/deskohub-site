@@ -69,7 +69,10 @@ import { orderIdSchema } from "@/features/order";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
-import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
+import {
+  defaultReservationBillingSelection,
+  type ReservationBillingSelection,
+} from "@/features/reservation/reservation-billing";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { sealedStateKeyIdSchema } from "@/shared/backend/sealed-state-keys.service";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -501,7 +504,7 @@ it("binds Unlimited renewal consent to the paid attempt and lets only the owner 
     await Effect.runPromise(
       Effect.gen(function* () {
         const { db, transaction } = yield* WorkspaceDatabase;
-        const purchase = yield* recordPurchase(now, 650, "reserved-desk", true);
+        const purchase = yield* recordPurchase(now, 10, "reserved-desk", true);
         const accountId = purchase.buyerAccountId;
         const otherBuyer = customerAccountIdSchema.make(crypto.randomUUID());
         yield* db.insert(customerAccounts).values({ id: otherBuyer });
@@ -607,12 +610,14 @@ it("binds Unlimited renewal consent to the paid attempt and lets only the owner 
           );
         const pay = (
           renewalAuthorization: typeof authorization | undefined,
-          displayedPriceFingerprint = fingerprint
+          displayedPriceFingerprint = fingerprint,
+          billing: ReservationBillingSelection = defaultReservationBillingSelection
         ) =>
           payForEntryPack({
             orderId: purchase.id,
             productKind: "unlimited",
             accepted: true,
+            billing,
             acceptedDocuments: getPaymentSubmitLegalDocuments(purchase.locale),
             displayedPriceFingerprint,
             ...(renewalAuthorization && { renewalAuthorization }),
@@ -635,6 +640,14 @@ it("binds Unlimited renewal consent to the paid attempt and lets only the owner 
         expect(yield* pay(authorization, "0".repeat(64))).toMatchObject({
           status: "pricing_changed",
         });
+        yield* createUnlimitedPassHolds(purchase);
+        expect(yield* Effect.result(pay(authorization))).toMatchObject({
+          failure: {
+            reason: "terms-changed",
+            earlyStartRequired: true,
+            renewal,
+          },
+        });
         expect((yield* readState(purchase.id)).attempts).toHaveLength(0);
         expect(providerSessions).toBe(0);
 
@@ -654,8 +667,23 @@ it("binds Unlimited renewal consent to the paid attempt and lets only the owner 
             expiredAt
           )
         );
-        yield* createUnlimitedPassHolds(purchase);
-        expect(yield* pay(authorization)).toMatchObject({ status: "hosted" });
+        expect(
+          yield* pay(authorization, fingerprint, {
+            purpose: "business",
+            invoice: "required",
+            buyer: {
+              kind: "business",
+              legalName: "Synthetic Unlimited Company",
+              companyId: "12345679",
+              address: {
+                line1: "Fixture Street 1",
+                city: "Praha",
+                postalCode: "18000",
+                country: "CZ",
+              },
+            },
+          })
+        ).toMatchObject({ status: "hosted" });
         expect(providerSessions).toBe(1);
         const { order, attempts } = yield* readState(purchase.id);
         const attempt = attempts.find(

@@ -15,6 +15,7 @@ export const listHeldUnlimitedPasses = Effect.fn("listHeldUnlimitedPasses")(
         orderId: passPurchases.id,
         tier: passPurchases.tier,
         buyerAccountId: passPurchases.buyerAccountId,
+        autoRenew: passPurchases.autoRenew,
         validFrom: passPurchases.validFrom,
         validUntil: passPurchases.validUntil,
         accessEndsOn: passPurchases.accessEndsOn,

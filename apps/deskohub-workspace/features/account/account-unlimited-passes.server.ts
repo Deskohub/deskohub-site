@@ -9,7 +9,6 @@ import type { OrderId } from "@/features/order";
 import { recoverEntryPackGiftClaims } from "@/features/passes/backend/entry-pack-gift";
 import { listHeldUnlimitedPasses } from "@/features/passes/backend/held-unlimited-passes";
 import { listUnlimitedAutoRenewals } from "@/features/passes/backend/unlimited-auto-renewal-management";
-import { isUnlimitedAutoRenewalPreviewEnabled } from "@/features/passes/backend/unlimited-auto-renewal-preview.server";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import {
   getUnlimitedAccessPath,
@@ -39,7 +38,8 @@ export type AccountUnlimitedAutoRenewal =
       readonly nextRenewalOn: string;
       readonly amount: string;
     }
-  | { readonly status: "cancelled" };
+  | { readonly status: "cancelled" }
+  | { readonly status: "unavailable" };
 
 export type AccountUnlimitedPass = {
   readonly orderId: OrderId;
@@ -87,15 +87,13 @@ export const loadAccountUnlimitedPasses = Effect.fn(
     {
       passes: listHeldUnlimitedPasses(accountId),
       now: currentInstant,
-      autoRenewals: isUnlimitedAutoRenewalPreviewEnabled()
-        ? listUnlimitedAutoRenewals(accountId).pipe(
-            catchRecoverableCause(() =>
-              Effect.logWarning(
-                "account.unlimited-auto-renewals.unavailable"
-              ).pipe(Effect.as(undefined))
-            )
+      autoRenewals: listUnlimitedAutoRenewals(accountId).pipe(
+        catchRecoverableCause(() =>
+          Effect.logWarning("account.unlimited-auto-renewals.unavailable").pipe(
+            Effect.as("unavailable" as const)
           )
-        : Effect.undefined,
+        )
+      ),
     },
     { concurrency: "unbounded" }
   );
@@ -131,9 +129,15 @@ export const loadAccountUnlimitedPasses = Effect.fn(
             name: pass.deskId ? deskNames.get(pass.deskId) : undefined,
           } as const);
     const autoRenewal =
-      pass.paymentState === "paid" && pass.buyerAccountId === accountId
-        ? autoRenewals?.get(pass.orderId)
-        : undefined;
+      autoRenewals === "unavailable"
+        ? undefined
+        : autoRenewals.get(pass.orderId);
+    const renewalUnavailable =
+      autoRenewals === "unavailable" &&
+      pass.autoRenew &&
+      pass.paymentState === "paid" &&
+      pass.buyerAccountId === accountId &&
+      (pass.status === "active" || pass.status === "expired");
     const summary = {
       orderId: pass.orderId,
       tier: getPassTierName(pass.tier, locale),
@@ -144,6 +148,9 @@ export const loadAccountUnlimitedPasses = Effect.fn(
         pass.paymentState === "paid" && pass.buyerAccountId !== accountId,
       period,
       seating,
+      ...(renewalUnavailable && {
+        autoRenewal: { status: "unavailable" as const },
+      }),
       ...(autoRenewal && {
         autoRenewal:
           autoRenewal.status === "pending"

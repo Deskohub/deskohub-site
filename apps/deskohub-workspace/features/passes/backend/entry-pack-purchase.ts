@@ -682,11 +682,11 @@ const prepareEntryPackPaymentConsent = Effect.fn(
         getPaymentSubmitLegalEvidence({
           acceptedAt: acceptedAt.toString(),
           locale,
-          earlyPerformanceConsent:
-            productKind === "entry-pack" || earlyStartRequired,
-          ...(productKind === "entry-pack"
-            ? { entryPackEarlyStartRequested: true }
-            : earlyStartRequired && { unlimitedPassEarlyStartRequested: true }),
+          earlyPerformanceConsent: earlyStartRequired,
+          ...(earlyStartRequired &&
+            (productKind === "entry-pack"
+              ? { entryPackEarlyStartRequested: true }
+              : { unlimitedPassEarlyStartRequested: true })),
         })
       ).map((record) => ({ orderId, evidence: record }))
     );
@@ -806,11 +806,13 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       }
       const now = yield* currentInstant;
       const earlyStartRequired =
-        productKind === "unlimited" &&
-        unlimitedPassRequiresEarlyStart(
-          purchase.validFrom,
-          getCurrentWorkspaceDate(now)
-        );
+        productKind === "entry-pack"
+          ? billing.purpose === "personal"
+          : unlimitedPassRequiresEarlyStart(
+              purchase.validFrom,
+              getCurrentWorkspaceDate(now),
+              billing.purpose
+            );
       if (
         renewal &&
         (input.displayedPriceFingerprint !== acceptedFingerprint ||

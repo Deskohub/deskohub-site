@@ -106,18 +106,21 @@ test("refuses cancellation without a verified session", async () => {
   expect(cancel).not.toHaveBeenCalled();
 });
 
-test("refuses cancellation outside the renewal preview or the passes release", async () => {
+test("allows cancellation after either enrollment gate closes", async () => {
   previewEnabled = false;
   expect(await cancelAccountUnlimitedAutoRenewal({ orderId })).toEqual({
-    data: { status: "unavailable" },
+    data: { status: "cancelled" },
   });
 
   previewEnabled = true;
   passesReleased = false;
   expect(await cancelAccountUnlimitedAutoRenewal({ orderId })).toEqual({
-    data: { status: "unavailable" },
+    data: { status: "cancelled" },
   });
-  expect(cancel).not.toHaveBeenCalled();
+  expect(cancel.mock.calls).toEqual([
+    [accountId, orderId],
+    [accountId, orderId],
+  ]);
 });
 
 test("rejects an account ID supplied with an otherwise valid order", async () => {

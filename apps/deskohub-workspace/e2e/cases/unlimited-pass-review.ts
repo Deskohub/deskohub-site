@@ -607,10 +607,21 @@ export function makeUnlimitedPassReviewCapture({
       return capture(page, shot, {
         mask: [
           page.locator(
-            "[data-ph-mask], input:not([type=checkbox], [type=radio]), textarea"
+            "[data-ph-mask], input:not([type=checkbox], [type=radio], [name=discountCode]), textarea"
           ),
           ...privateText.map((value) => page.getByText(value, { exact: true })),
         ],
+        // Full-page captures include the offscreen skip link and place a fixed
+        // header at the current viewport offset. Keep the header at the top of
+        // the chooser, and redact any typed code without painting its field.
+        style: `
+          a[href="#main-content"]:not(:focus-visible) { visibility: hidden; }
+          input[name="discountCode"] {
+            -webkit-text-fill-color: transparent;
+            caret-color: transparent;
+          }
+          ${shot === "choose-renewal" ? "header.fixed { position: absolute; }" : ""}
+        `,
         ...(shot === "terms" && {
           section: page
             .getByRole("heading", { level: 2, name: /^16\./ })
