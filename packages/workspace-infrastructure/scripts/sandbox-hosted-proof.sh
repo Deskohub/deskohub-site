@@ -1179,10 +1179,56 @@ phase_rpc_probe() {
   run_rpc_probe v1 primary
 }
 
+# The proof job runs on January 1 at midnight UTC. It must have been
+# created after the last tick, and the next tick must fall outside the
+# workflow's 15-minute worker step. Only a manual run can then deliver it.
+check_proof_schedule_window() {
+  local described="$1" job="$2" created now year last_tick next_tick
+  created="$(jq -er 'select(.schedule == "0 0 1 1 *" and .timeZone == "Etc/UTC")
+    | .userUpdateTime | strings | select(test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"))' \
+    <<<"$described")" && created="$(date -u -d "$created" +%s 2>/dev/null)" ||
+    fail "cannot rule out a scheduled proof tick for ${job}; expected an annual UTC schedule and creation time"
+  now="$(capture 1795694400 date -u +%s)" # Dry run uses 2026-11-26T12:00:00Z.
+  year="$(date -u -d "@$now" +%Y)"
+  last_tick="$(date -u -d "${year}-01-01" +%s)"
+  next_tick="$(date -u -d "$((year + 1))-01-01" +%s)"
+  ((created > last_tick && created <= now && now + 15 * 60 < next_tick)) ||
+    fail "cannot rule out a scheduled proof tick for ${job} within the lifetime of the job and worker step"
+}
+
+# Pause even if resume reported an error: it might have changed the job
+# before the response was lost. Read the state if pause itself fails.
+restore_paused_proof_schedule() {
+  local job="$1" state
+  if run gcloud scheduler jobs pause "$job" --project="$project_id" \
+    --location="$region" --format=none; then
+    return 0
+  fi
+  state="$(capture PAUSED gcloud scheduler jobs describe "$job" --project="$project_id" \
+    --location="$region" --format='value(state)')" && [[ "$state" == PAUSED ]] ||
+    fail "the proof-tick job could not be re-paused; teardown must remove ${job}"
+}
+
+# RunJob requires ENABLED. Keep the job enabled until its worker receives
+# the request, then restore PAUSED before the next proof phase.
+run_proof_schedule() (
+  local job="$1" start
+  trap 'restore_paused_proof_schedule "$job"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  run gcloud scheduler jobs resume "$job" --project="$project_id" \
+    --location="$region" --format=none || fail "the proof-tick job could not be resumed"
+  start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
+  run gcloud scheduler jobs run "$job" --project="$project_id" \
+    --location="$region" --format=none || fail "the proof-tick job could not be forced"
+  wait_for_log "scheduler worker receipt" \
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${scheduler_worker_service}\" AND jsonPayload.event=\"probe.schedule\" AND jsonPayload.job=\"${proof_schedule_path##*/}\" AND timestamp>=\"${start}\""
+)
+
 # One Cloud Task on the run's own paid-fulfillment queue, the marker in its
-# body, signed as the tasks invoker; the tasks worker must log its receipt
-# by markerSha256 alone. Then the run's paused proof-tick scheduler job is
-# forced once, and the scheduler worker must log its receipt.
+# body, signed as the tasks invoker. The tasks worker must log its receipt
+# by markerSha256 alone. Then force the run's Scheduler job once and wait
+# for the scheduler worker's receipt.
 phase_worker_probe() {
   load_proof_run_file
   [[ -n "${QUEUE_SUFFIX:-}" ]] || $dry_run || fail "no recorded queue suffix; foundation records it"
@@ -1217,7 +1263,7 @@ phase_worker_probe() {
 
   # The run's own paused job, aimed at the scheduler worker as its invoker.
   local job="${proof_schedule_job}-${suffix}" described
-  described="$(capture "{\"state\":\"PAUSED\",\"httpTarget\":{\"uri\":\"$(service_url "$scheduler_worker_service")${proof_schedule_path}\",\"httpMethod\":\"GET\",\"oidcToken\":{\"serviceAccountEmail\":\"${scheduler_invoker}\",\"audience\":\"$(service_url "$scheduler_worker_service")\"}}}" \
+  described="$(capture "{\"state\":\"PAUSED\",\"schedule\":\"0 0 1 1 *\",\"timeZone\":\"Etc/UTC\",\"userUpdateTime\":\"2026-11-26T11:30:00Z\",\"httpTarget\":{\"uri\":\"$(service_url "$scheduler_worker_service")${proof_schedule_path}\",\"httpMethod\":\"GET\",\"oidcToken\":{\"serviceAccountEmail\":\"${scheduler_invoker}\",\"audience\":\"$(service_url "$scheduler_worker_service")\"}}}" \
     gcloud scheduler jobs describe "$job" --project="$project_id" --location="$region" --format=json)" ||
     fail "the proof-tick job ${job} is unreadable"
   jq -e --arg uri "$(service_url "$scheduler_worker_service")${proof_schedule_path}" \
@@ -1227,11 +1273,8 @@ phase_worker_probe() {
       and .httpTarget.oidcToken.audience == $audience' \
     >/dev/null 2>&1 <<<"$described" ||
     fail "${job} is not a paused GET of ${proof_schedule_path} signed as the scheduler invoker"
-  start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
-  run gcloud scheduler jobs run "$job" --project="$project_id" \
-    --location="$region" || fail "the paused proof-tick job could not be forced"
-  wait_for_log "scheduler worker receipt" \
-    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${scheduler_worker_service}\" AND jsonPayload.event=\"probe.schedule\" AND jsonPayload.job=\"${proof_schedule_path##*/}\" AND timestamp>=\"${start}\""
+  check_proof_schedule_window "$described" "$job"
+  run_proof_schedule "$job"
 }
 
 phase_deliver_v2() {
