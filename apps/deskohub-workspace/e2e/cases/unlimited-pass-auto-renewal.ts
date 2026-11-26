@@ -19,12 +19,7 @@ import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { makeWorkspaceE2ECaseIdentities } from "../account/case-identities";
 import { resolveWorkspaceE2ESessionSigningSecret } from "../account/seeded-session";
 import type { WorkspaceE2EDateAllocation } from "../allocation";
-import {
-  openPage,
-  waitForPageUrl,
-  waitForReactFormSubmit,
-  waitForReactHandler,
-} from "../browser";
+import { openPage, waitForPageUrl, waitForReactHandler } from "../browser";
 import { getWorkspaceE2EDateInterval } from "../capacity";
 import { completeNexiHostedPayment } from "../checkout/nexi-hosted-payment";
 import { submitPaymentAndWaitForHostedPage } from "../checkout/payment";
@@ -162,7 +157,7 @@ export const makeUnlimitedPassAutoRenewalCase = ({
           yield* openPage(session, config, chooseUrl, {
             timeoutMs: timeouts.browserAction,
           });
-          yield* waitForReactFormSubmit(session, "main form", [], {
+          yield* waitForReactHandler(session, "main form", "onSubmit", {
             timeoutMs: timeouts.uiTransition,
           });
           yield* session.use(
@@ -197,9 +192,14 @@ export const makeUnlimitedPassAutoRenewalCase = ({
 
       const { intent, orderId } = yield* runStep({
         execute: Effect.gen(function* () {
-          yield* waitForReactFormSubmit(session, "main form[method=post]", [], {
-            timeoutMs: timeouts.uiTransition,
-          });
+          yield* waitForReactHandler(
+            session,
+            "main form[method=post]",
+            "onSubmit",
+            {
+              timeoutMs: timeouts.uiTransition,
+            }
+          );
           const intent = yield* recordReservationIntent({
             owner: { customerId: account.customerId },
             requestedAt: new Date().toISOString(),

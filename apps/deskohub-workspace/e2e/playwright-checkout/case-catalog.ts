@@ -44,7 +44,6 @@ export const unlimitedPassAutoRenewalRecipientLabel = "unlimited-renewal";
 // first. Only their hosted-payment portion holds the run's hosted-payment
 // permit.
 const workspaceE2EPaidCaseIds = [
-  unlimitedPassAutoRenewalCaseId,
   "checkout-calendar-sale",
   "checkout-referral-someone-else",
   "payment-late-recovery-recreated",
@@ -111,6 +110,7 @@ export const isWorkspaceE2ENightlyCaseId = (value: string) =>
 export const workspaceE2ECaseIds = [
   ...workspaceE2ENonPaymentCaseIds,
   ...workspaceE2EPaidCaseIds,
+  unlimitedPassAutoRenewalCaseId,
 ] as const;
 
 export type WorkspaceE2ECaseId = (typeof workspaceE2ECaseIds)[number];
@@ -118,8 +118,8 @@ export type WorkspaceE2ECaseId = (typeof workspaceE2ECaseIds)[number];
 // Playwright admits the case pool in registration order. Alternating paid and
 // non-payment cases, each longest first, keeps about three hosted sessions in
 // demand at a time, so case workers rarely wait for the hosted-payment permit.
-export const workspaceE2ECasePoolOrder: readonly WorkspaceE2ECaseId[] =
-  Array.from(
+export const workspaceE2ECasePoolOrder: readonly WorkspaceE2ECaseId[] = [
+  ...Array.from(
     {
       length: Math.max(
         workspaceE2EPaidCaseIds.length,
@@ -132,7 +132,9 @@ export const workspaceE2ECasePoolOrder: readonly WorkspaceE2ECaseId[] =
     ]
   )
     .flat()
-    .filter((caseId) => caseId !== undefined);
+    .filter((caseId) => caseId !== undefined),
+  unlimitedPassAutoRenewalCaseId,
+];
 
 export const isWorkspaceE2ECaseId = (
   value: string
