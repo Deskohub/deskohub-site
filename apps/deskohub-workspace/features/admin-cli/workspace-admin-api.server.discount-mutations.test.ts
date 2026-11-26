@@ -1,7 +1,9 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import {
+  AdministrationCanonicalPromotionCode,
   AdministrationDiscountCodeId,
   AdministrationDiscountCodeUpdateInput,
   type AdministrationDiscountMutationResult,
@@ -124,7 +126,7 @@ const requestId = Schema.decodeUnknownSync(CliMutationRequestId)(
 const codeId = Schema.decodeUnknownSync(AdministrationDiscountCodeId)(
   "01980000-0000-7000-8000-000000000002"
 );
-const customerId = "dotypos-customer-4217";
+const customerId = DotyposCustomerIdSchema.make("dotypos-customer-4217");
 const unavailableMessage = "The administration API is temporarily unavailable.";
 
 /**
@@ -477,7 +479,7 @@ const customerCodeCreation = {
   kind: "create-customer-code",
   customerId,
   code: {
-    code: "SUMMER10",
+    code: AdministrationCanonicalPromotionCode.make("SUMMER10"),
     enabled: true,
     validFrom: null,
     validUntil: null,
@@ -523,7 +525,7 @@ describe("discount mutation page revalidation over the administration API", () =
         kind: "create-customer-voucher",
         voucher: {
           customerId,
-          code: "CREDIT500",
+          code: AdministrationCanonicalPromotionCode.make("CREDIT500"),
           enabled: true,
           validFrom: null,
           validUntil: null,

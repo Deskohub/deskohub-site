@@ -1,6 +1,10 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Schema } from "effect";
 import type { PreparedCustomerQuote } from "@/features/checkout/backend/checkout/checkout-pricing.service";
@@ -14,6 +18,7 @@ import { buildOfficeReservationQuote } from "@/features/checkout/reservation-quo
 import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { normalizedMeetingRoomReservationOrderSchema } from "@/features/reservation/meeting-room-reservation";
 import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/office-reservation";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { moneyWithValue } from "@/shared/money/money";
 import {
   instantStringSchema,
@@ -78,9 +83,12 @@ const officePrepared: PreparedCustomerQuote = {
 describe("accounting document snapshot", () => {
   test("freezes supplier, buyer, reservation, and accepted quote facts", () => {
     expect(makeSnapshot()).toMatchObject({
-      workspaceReservationId: "reservation-id",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      workspaceReservationId:
+        workspaceReservationIdSchema.make("reservation-id"),
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       locale: "en-US",
       supplier: {
         legalName: "Desktechub s.r.o.",
@@ -229,9 +237,13 @@ describe("accounting document snapshot", () => {
       },
     };
     const snapshot = makeAccountingDocumentSnapshot({
-      workspaceReservationId: "business-reservation",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      workspaceReservationId: workspaceReservationIdSchema.make(
+        "business-reservation"
+      ),
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       locale: "cs-CZ",
       prepared: {
         ...prepared,

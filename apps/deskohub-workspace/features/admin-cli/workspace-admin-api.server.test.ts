@@ -90,6 +90,7 @@ import {
   type AdministrationOverviewSource,
   AdministrationService,
 } from "@/features/administration/administration.service";
+import { administrationHref } from "@/features/administration/administration-href";
 import { AdministrationCustomerDirectory } from "@/features/administration/customer-directory.service";
 import { UnusedAdministrationCustomerDirectory } from "@/features/administration/customer-directory.test-utils";
 import {
@@ -426,6 +427,8 @@ describe("Workspace Admin API", () => {
             customer: {
               id: customerId,
               displayName: "Synthetic Customer",
+              hasName: true,
+              lifecycle: "active",
               email: testEmailAddress("overview-customer"),
               phone: null,
             },
@@ -453,6 +456,20 @@ describe("Workspace Admin API", () => {
     expect(sourceInputs).toEqual([source]);
     expect(result).toMatchObject({
       ...expectedOverview,
+      newCustomers: {
+        ...overview.newCustomers,
+        customers: [
+          {
+            customerId,
+            customer: {
+              id: customerId,
+              displayName: "Synthetic Customer",
+              email: testEmailAddress("overview-customer"),
+              phone: null,
+            },
+          },
+        ],
+      },
       refundAttention: { unavailable: false, value: 4 },
     });
   });
@@ -949,7 +966,9 @@ describe("Workspace Admin API", () => {
       defaultServiceDate: "2026-10-22",
       defaultDueDate: "2026-11-05",
       suggestedVariableSymbol: "26000001",
-    };
+    } satisfies Effect.Success<
+      ReturnType<InvoiceAdministrationService["Service"]["getCreationDefaults"]>
+    >;
     const invoices = Layer.mock(InvoiceAdministrationService, {
       getCreationDefaults: () => Effect.succeed(defaults),
     });
@@ -1344,6 +1363,7 @@ describe("Workspace Admin API", () => {
             {
               ...session,
               ...cliAdministratorApprover,
+              id: CliSessionId.make(session.id),
               revokedAt: null,
               status: "active" as const,
             },
@@ -1683,7 +1703,10 @@ describe("invoice cancellation and archive endpoints", () => {
     actor: cliAdministrator.email,
     correctiveDocumentNumber: "WS-OD-2026-000001",
     correctiveDocumentIssuedAt: "2026-11-15T10:00:00Z",
-    correctiveDocumentPdfUrl: `/admin/invoices/${invoiceId}/corrective-document`,
+    correctiveDocumentPdfUrl: administrationHref(
+      "/[locale]/admin/invoices/[invoiceId]/corrective-document",
+      { invoiceId }
+    ),
     notices,
   } as const;
   const dhwActor = { source: "dhw-cli", administrator: cliAdministrator };
@@ -1770,11 +1793,11 @@ describe("invoice cancellation and archive endpoints", () => {
   test("cancels an invoice as the caller with the confirmations sent", async () => {
     const cancellations: unknown[] = [];
     const result = {
-      invoiceId: invoiceIdSchema.make(invoiceId),
+      invoiceId,
       outcome: "cancelled",
       cancellation,
       reservation: {
-        reservationId: workspaceReservationIdSchema.make(
+        reservationId: AdministrationWorkspaceReservationId.make(
           "01980000-0000-7000-8000-0000000000a2"
         ),
         outcome: "cancelled",
@@ -2395,9 +2418,8 @@ describe("customer and reservation administration endpoints", () => {
         paymentState: "paid",
         reservationDetails: {
           kind: "cowork",
-          entryTier: "profi",
+          entryTier: "open-space",
           coffee: false,
-          monitorOption: "none",
         },
         reservationState: "confirmed",
         updatedAt: Temporal.Now.instant(),

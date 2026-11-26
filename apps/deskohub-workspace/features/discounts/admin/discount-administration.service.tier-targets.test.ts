@@ -8,6 +8,7 @@ import type { WorkspaceProductTarget } from "@/features/discounts/product-target
 import {
   CalendarResourceConfig,
   salesCalendarIdSchema,
+  workspaceLimitationsCalendarIdSchema,
 } from "@/shared/backend/config/calendar-resource.config";
 import {
   makeRecordingWorkspaceDatabase,
@@ -47,6 +48,10 @@ const runAdministration = <A, E>(
             Layer.mock(DotyposService, {}),
             Layer.mock(CalendarResourceConfig, {
               salesCalendarId: salesCalendarIdSchema.make("sales-calendar"),
+              workspaceLimitationsCalendarId:
+                workspaceLimitationsCalendarIdSchema.make(
+                  "limitations-calendar"
+                ),
             })
           )
         )

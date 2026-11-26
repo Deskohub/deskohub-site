@@ -17,6 +17,7 @@ import { inactiveCustomerDisplayNames } from "@/features/administration/customer
 import {
   CalendarResourceConfig,
   salesCalendarIdSchema,
+  workspaceLimitationsCalendarIdSchema,
 } from "@/shared/backend/config/calendar-resource.config";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { discountCodeIdSchema } from "../persistence-contracts";
@@ -147,6 +148,9 @@ const readsLayer = (
     Layer.mock(GoogleCalendarService, {}),
     Layer.mock(CalendarResourceConfig, {
       salesCalendarId: salesCalendarIdSchema.make("sales-calendar"),
+      workspaceLimitationsCalendarId: workspaceLimitationsCalendarIdSchema.make(
+        "limitations-calendar"
+      ),
     })
   );
 

@@ -7,9 +7,13 @@ import {
   customerAgentClientIdSchema,
 } from "@/features/account";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
-import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
 import { instantStringSchema } from "@/shared/utils/temporal";
 import {
+  type AgentSelectionKey,
   agentSelectionKeySchema,
   deriveAgentCheckoutAttemptId,
   deriveAgentCheckoutIdentifiers,

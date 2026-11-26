@@ -15,7 +15,7 @@ import {
   getCustomerInvoiceSummary,
   getInvoicedReservation,
 } from "./customer-invoice";
-import { type InvoiceDocument, isManualInvoiceDocument } from "./invoice";
+import { type InvoiceDocument, isLineItemInvoiceDocument } from "./invoice";
 import {
   makeCoworkInvoiceDocument,
   makeMeetingRoomInvoiceDocument,
@@ -252,7 +252,7 @@ describe("invoiced reservation", () => {
   test("a cowork day spans that day's Prague midnights", () => {
     const document = makeCoworkInvoiceDocument("en-US");
     if (
-      isManualInvoiceDocument(document) ||
+      isLineItemInvoiceDocument(document) ||
       document.reservation.kind !== "cowork"
     )
       throw new Error("a cowork invoice");
@@ -273,7 +273,7 @@ describe("invoiced reservation", () => {
   test("a meeting room keeps the instants it was booked for", () => {
     const document = makeMeetingRoomInvoiceDocument("en-US");
     if (
-      isManualInvoiceDocument(document) ||
+      isLineItemInvoiceDocument(document) ||
       document.reservation.kind !== "meeting-room"
     )
       throw new Error("a meeting-room invoice");
@@ -293,7 +293,7 @@ describe("invoiced reservation", () => {
   test("an office spans its first day through the end of its last, with its seats", () => {
     const document = makeOfficeInvoiceDocument("en-US");
     if (
-      isManualInvoiceDocument(document) ||
+      isLineItemInvoiceDocument(document) ||
       document.reservation.kind !== "office"
     )
       throw new Error("an office invoice");

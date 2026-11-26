@@ -464,6 +464,7 @@ describe("discount administration pages", () => {
 
   describe("calendar sales collection", () => {
     const [associatedEvent] = dashboard.calendar.events;
+    if (!associatedEvent) throw new Error("Missing calendar event fixture");
     const calendarEvent = (
       overrides: Partial<DiscountAdminDashboard["calendar"]["events"][number]>
     ) => ({ ...associatedEvent, ...overrides });
@@ -546,9 +547,11 @@ describe("discount administration pages", () => {
       );
       const { SalesAdministrationCollection } = await import("./components");
       const [discount] = dashboard.discounts;
+      if (!discount) throw new Error("Missing discount fixture");
       const listedDiscount = {
         ...discount,
         labels: { "cs-CZ": "letní sleva", "en-US": "summer discount" },
+        products: [{ kind: "cowork", tier: "open-space" }] as const,
       };
       const unlistedDiscountId = storedDiscountIdSchema.make(
         "019c91dd-c560-7e55-b9d8-c95065efd59d"

@@ -17,6 +17,7 @@ import {
   syntheticPayStateOrderId,
 } from "@/features/checkout/backend/checkout/signed-pay-state.test-utils";
 import { QrPaymentRepository } from "@/features/checkout/backend/repositories/qr-payment.repository";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import type { ReferralService } from "@/features/referrals/referral.service";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
@@ -49,7 +50,9 @@ const runSubmitReservation = async (options?: {
   readonly alreadyPaid?: boolean;
   readonly invalidPayState?: boolean;
   readonly bookerCustomerId?: string;
-  readonly hasSettledReferral?: Mock<ReferralService["hasSettledReferral"]>;
+  readonly hasSettledReferral?: Mock<
+    (typeof ReferralService)["Service"]["hasSettledReferral"]
+  >;
 }) => {
   const { CheckoutService } = await import(
     "@/features/checkout/backend/checkout"
@@ -170,7 +173,7 @@ const runSubmitReservation = async (options?: {
                 reservationState: options?.alreadyPaid ? "confirmed" : "held",
                 paymentState: options?.alreadyPaid ? "paid" : unpaidState,
                 activePaymentAttemptId: options?.legacyActivePayment
-                  ? "legacy-card-attempt"
+                  ? paymentAttemptIdSchema.make("legacy-card-attempt")
                   : null,
               })
             ),

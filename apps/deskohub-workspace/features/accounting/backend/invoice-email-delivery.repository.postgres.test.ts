@@ -3,7 +3,6 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
-import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
@@ -22,10 +21,10 @@ import {
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
-const runRepository = <A>(
+const runRepository = <A, E>(
   operation: (
     repository: IInvoiceEmailDeliveryRepository
-  ) => Effect.Effect<A, EffectDrizzleQueryError>
+  ) => Effect.Effect<A, E>
 ): Promise<A> =>
   Effect.runPromise(
     Effect.gen(function* () {

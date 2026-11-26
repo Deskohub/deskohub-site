@@ -41,6 +41,7 @@ import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-util
 import {
   connectWorkspacePostgresTestDatabase,
   requireTestDatabase,
+  type WorkspacePostgresTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();

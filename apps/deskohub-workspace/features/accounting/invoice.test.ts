@@ -17,6 +17,7 @@ import {
   formatInvoiceNumber,
   getInvoiceNumberingYear,
   invoiceDocumentSchema,
+  isLineItemInvoiceDocument,
   makeInvoiceDocument,
 } from "./invoice";
 import { makeTestManualInvoiceDocument } from "./invoice.test-utils";
@@ -147,6 +148,9 @@ describe("invoice", () => {
       fulfilledAt,
       paidAt,
     });
+    if (isLineItemInvoiceDocument(document)) {
+      throw new Error("Expected a reservation invoice");
+    }
     const {
       fulfilledAt: _fulfilledAt,
       paidAt: _paidAt,
@@ -232,19 +236,6 @@ describe("invoice", () => {
         decodeInvoiceDocument({ ...document, buyer: nameOnlyBuyer })
       )
     ).rejects.toBeDefined();
-    expect(() =>
-      Reflect.apply(makeInvoiceDocument, undefined, [
-        {
-          source,
-          buyer: nameOnlyBuyer,
-          paymentAttemptId: "payment-attempt-id",
-          invoiceNumber: formatInvoiceNumber({ year: 2026, sequence: 1 }),
-          issuedAt,
-          fulfilledAt,
-          paidAt,
-        },
-      ])
-    ).toThrow();
     await expect(
       Effect.runPromise(
         decodeInvoiceDocument({

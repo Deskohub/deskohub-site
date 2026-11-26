@@ -3,6 +3,9 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterEach, describe, expect, type Mock, mock, test } from "bun:test";
 import {
+  DotyposBranchIdSchema,
+  DotyposCloudIdSchema,
+  DotyposCustomerIdSchema,
   type DotyposReservation,
   type DotyposReservationId,
   DotyposReservationIdSchema,
@@ -159,10 +162,10 @@ const dotyposReservationFixture = (
   id: DotyposReservationId
 ): DotyposReservation => ({
   id,
-  _branchId: "branch",
-  _cloudId: "cloud",
-  _customerId: "customer",
-  _tableId: "table-id",
+  _branchId: DotyposBranchIdSchema.make("branch"),
+  _cloudId: DotyposCloudIdSchema.make("cloud"),
+  _customerId: DotyposCustomerIdSchema.make("customer"),
+  _tableId: DotyposTableIdSchema.make("table-id"),
   startDate: "2099-07-01T07:00:00.000Z",
   endDate: "2099-07-01T16:00:00.000Z",
   seats: "1",
@@ -1348,7 +1351,6 @@ describe.skipIf(!postgresDatabase)(
           date: "2099-06-10",
           reservation: {
             kind: "cowork",
-            date: plainDateStringSchema.make("2099-06-10"),
             entryTier: "open-space",
           },
         });
@@ -1425,7 +1427,6 @@ describe.skipIf(!postgresDatabase)(
           date: "2099-06-10",
           reservation: {
             kind: "cowork",
-            date: plainDateStringSchema.make("2099-06-10"),
             entryTier: "open-space",
           },
         });

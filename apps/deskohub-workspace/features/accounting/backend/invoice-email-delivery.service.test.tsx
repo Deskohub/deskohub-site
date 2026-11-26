@@ -22,7 +22,10 @@ import {
   accountingDocumentSnapshotSchema,
 } from "@/features/accounting/accounting-document-snapshot";
 import { formatCorrectiveDocumentNumber } from "@/features/accounting/corrective-document";
-import { isManualInvoiceDocument } from "@/features/accounting/invoice";
+import {
+  isLineItemInvoiceDocument,
+  isManualInvoiceDocument,
+} from "@/features/accounting/invoice";
 import {
   makeCoworkInvoiceDocument,
   makeTestManualInvoiceDocument,
@@ -202,6 +205,7 @@ describe("invoice email delivery", () => {
     const customerPdf = sentMessages[0]?.attachments?.[0]?.content;
     const internalPdf = sentMessages[1]?.attachments?.[0]?.content;
     assert(Buffer.isBuffer(customerPdf));
+    assert(Buffer.isBuffer(internalPdf));
     expect(customerPdf).toEqual(internalPdf);
     expect(customerPdf.subarray(0, 4).toString()).toBe("%PDF");
     expect(harness.markAccepted).toHaveBeenCalledTimes(2);
@@ -530,7 +534,7 @@ const harnessLayer = (harness: ReturnType<typeof makeHarness>) =>
   InvoiceEmailDeliveryService.Default.pipe(
     Layer.provide(
       Layer.mergeAll(
-        Layer.succeed(InvoiceRepository, harness.invoices),
+        Layer.mock(InvoiceRepository, harness.invoices),
         Layer.succeed(AccountingDocumentSnapshots, harness.accountingSnapshots),
         Layer.succeed(InvoiceEmailDeliveryRepository, harness.deliveries),
         Layer.succeed(InvoiceCancellationNotices, harness.notices),
@@ -612,12 +616,12 @@ const makeHarness = (options: {
   };
   const selectedInvoice =
     options.invoice === undefined ? invoice : options.invoice;
-  const invoices: IInvoiceRepository = {
+  const invoices: Partial<IInvoiceRepository> = {
     findById: mock(() => Effect.succeed(selectedInvoice)),
     findLatestByPaymentAttemptId: mock(() =>
       Effect.succeed(
         selectedInvoice &&
-          !isManualInvoiceDocument(selectedInvoice.document) &&
+          !isLineItemInvoiceDocument(selectedInvoice.document) &&
           selectedInvoice.workspaceReservationId !== null &&
           selectedInvoice.paymentAttemptId !== null
           ? {

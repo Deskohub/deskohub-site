@@ -1,12 +1,25 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
+import {
+  AdministrationInvoiceId,
+  AdministrationWorkspaceReservationId,
+} from "@deskohub/workspace-admin-api";
 import { Effect, Layer } from "effect";
+import { formatInvoiceNumber } from "@/features/accounting/invoice";
 import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
 import { administrationHref } from "@/features/administration/administration-href";
+import { loadFixtureReservation } from "@/features/administration/fixtures";
 import { m } from "@/features/administration/i18n";
 import { mockAdministrationActionRequest } from "@/shared/testing/workspace-action-request.test-utils";
+import type {
+  InvoiceAdministrationCancellation,
+  InvoiceAdministrationCancellationPlan,
+  InvoiceAdministrationCancelResult,
+} from "./invoice-administration.service";
+import { invoiceAdministrationDetail } from "./invoice-detail.test-utils";
 
 const revalidatedPaths: string[] = [];
 
@@ -109,42 +122,40 @@ beforeEach(() => {
 });
 
 const locale = "en-US" as const;
-const invoiceId = "018f47d2-8f7c-7c5e-9f9a-6ef21f90cb21";
-const reservationId = "01980000-0000-7000-8000-00000000abcd";
+const invoiceId = AdministrationInvoiceId.make(
+  "018f47d2-8f7c-7c5e-9f9a-6ef21f90cb21"
+);
+const reservationId = AdministrationWorkspaceReservationId.make(
+  "01980000-0000-7000-8000-00000000abcd"
+);
 
 const invoicePaths = [
   administrationHref("/[locale]/admin/invoices"),
   administrationHref("/[locale]/admin/invoices/[invoiceId]", { invoiceId }),
 ];
 
-const liveDetail = (
-  plan: { customerNotice: "owed" | "not_owed"; reservation: string },
-  reservation: string | null = reservationId
-) => ({
-  id: invoiceId,
-  invoiceNumber: "2026000001",
-  reservationId: reservation,
-  cancellationPlan: plan,
-});
+const liveDetail = (plan: InvoiceAdministrationCancellationPlan) =>
+  invoiceAdministrationDetail({
+    id: invoiceId,
+    invoiceNumber: "2026000001",
+    reservationId,
+    cancellationPlan: plan,
+  });
 
-const reservationDetail = {
-  canCancel: true,
-  reservation: {
-    type: "cowork",
-    date: "2026-09-30",
-    startsAt: null,
-    product: { kind: "cowork", tier: "open-space" },
-  },
-};
+const reservationDetail = loadFixtureReservation("0198-admin-fixture-complete");
+assert(reservationDetail);
 
-const cancellation = {
+const cancellation: InvoiceAdministrationCancellation = {
   cancelledAt: "2026-10-01T10:00:00Z",
   cause: "invoice_cancellation",
   source: "admin-ui",
   actor: testEmailAddress("invoice-cancelling-operator"),
   correctiveDocumentNumber: "WS-OD-2026-000001",
   correctiveDocumentIssuedAt: "2026-10-01T10:00:00Z",
-  correctiveDocumentPdfUrl: "/admin/invoices/x/corrective-document",
+  correctiveDocumentPdfUrl: administrationHref(
+    "/[locale]/admin/invoices/[invoiceId]/corrective-document",
+    { invoiceId }
+  ),
   notices: {
     customer: "accepted",
     internal: "accepted",
@@ -183,7 +194,7 @@ describe("previewAdministrationInvoiceCancellation", () => {
     });
   });
 
-  test.each(["none", "already_cancelled", "cancellation_in_progress"])(
+  test.each(["none", "already_cancelled", "cancellation_in_progress"] as const)(
     "reads no reservation when the plan's reservation is %s",
     async (reservation) => {
       invoices = {
@@ -236,13 +247,9 @@ describe("previewAdministrationInvoiceCancellation", () => {
 
 describe("cancelAdministrationInvoice", () => {
   const cancelResult = (
-    reservation: {
-      readonly reservationId: string;
-      readonly outcome: "cancelled";
-      readonly email: "sent";
-    } | null = null
+    reservation: InvoiceAdministrationCancelResult["reservation"] = null
   ) =>
-    Effect.succeed({
+    Effect.succeed<InvoiceAdministrationCancelResult>({
       invoiceId,
       outcome: "cancelled",
       cancellation,
@@ -423,7 +430,7 @@ describe("archiveAdministrationInvoice", () => {
 });
 
 describe("retryAdministrationInvoice", () => {
-  const retryResult = (reservation: string | null) =>
+  const retryResult = (reservation: typeof reservationId | null) =>
     Effect.succeed({
       invoiceId,
       changed: true,
@@ -487,8 +494,8 @@ describe("Admin UI invoice creation provenance", () => {
     invoices = {
       create: () =>
         Effect.succeed({
-          invoiceId: invoiceInput.invoiceId,
-          invoiceNumber: "WS-FV-2026-000001",
+          invoiceId: AdministrationInvoiceId.make(invoiceInput.invoiceId),
+          invoiceNumber: formatInvoiceNumber({ year: 2026, sequence: 1 }),
           changed: true,
           needsAttention: false,
         }),
@@ -506,7 +513,7 @@ describe("Admin UI invoice creation provenance", () => {
 
   test("previews an Admin UI invoice with the admin-ui source and the signed-in administrator", async () => {
     invoices = {
-      preview: () => Effect.succeed(new Uint8Array([37, 80, 68, 70])),
+      preview: () => Effect.succeed(Buffer.from("%PDF")),
     };
 
     const result = await previewAdministrationInvoice(invoiceInput);

@@ -12,14 +12,18 @@ import {
   test,
 } from "bun:test";
 import {
+  DotyposBranchIdSchema,
+  DotyposCloudIdSchema,
   DotyposCustomerIdSchema,
   type DotyposReservation,
   DotyposReservationIdSchema,
   DotyposService,
+  DotyposTableIdSchema,
   DotyposUnavailable,
 } from "@deskohub/dotypos";
 import { EmailRecipientDomainServiceMock } from "@deskohub/email/backend/recipient-domain.service.mock";
 import { testEmailAddress } from "@deskohub/test-email";
+import { ReferralCode } from "@deskohub/workspace-customer-api/referral-code";
 import { eq } from "drizzle-orm";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import {
@@ -64,6 +68,7 @@ import {
   checkoutAttemptKeySchema,
   checkoutSessionIdSchema,
   checkoutSessionKeySchema,
+  paymentAttemptIdSchema,
 } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import { getOfficeEditPriceSummary } from "@/features/checkout/checkout-summary-office";
@@ -90,6 +95,8 @@ import {
   PromotionCodeUnavailableError,
 } from "@/features/discounts/errors";
 import { WorkspaceFeatureFlagServiceMock } from "@/features/feature-flags/backend/workspace-feature-flag.service.mock";
+import type { Locale } from "@/features/i18n";
+import type { AnalyticsConsentLedger } from "@/features/legal/backend/analytics-consent-ledger";
 import type {
   IMarketingConsentLedger,
   MarketingConsentLedger as MarketingConsentLedgerService,
@@ -132,6 +139,7 @@ import {
   connectWorkspacePostgresTestDatabase,
   requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { makeTestDatabaseClient } from "@/shared/testing/workspace-recording-database.test-utils";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import type { PreparePayStateInput } from "./prepare-pay-state.schema";
@@ -447,14 +455,16 @@ const advertisementVerdict = (
 };
 
 /** The account the activity fixture signs in, and so the author it resumes. */
-const signedInAccountId = "5b6f31d0-2c1a-4f0e-9a3d-6c7b8e2f1a01";
+const signedInAccountId = customerAccountIdSchema.make(
+  "5b6f31d0-2c1a-4f0e-9a3d-6c7b8e2f1a01"
+);
 
 const dotyposReservationFixture = (id: string): DotyposReservation => ({
   id: DotyposReservationIdSchema.make(id),
-  _branchId: "branch",
-  _cloudId: "cloud",
-  _customerId: "customer",
-  _tableId: "table-id",
+  _branchId: DotyposBranchIdSchema.make("branch"),
+  _cloudId: DotyposCloudIdSchema.make("cloud"),
+  _customerId: DotyposCustomerIdSchema.make("customer"),
+  _tableId: DotyposTableIdSchema.make("table-id"),
   startDate: "2099-07-01T07:00:00.000Z",
   endDate: "2099-07-01T16:00:00.000Z",
   seats: "1",
@@ -504,7 +514,12 @@ const unusedBookingDependencies = async () => {
     WorkspaceTableAssignmentServiceMock({}),
     recordCheckoutAnalytics().layer,
     Layer.mock(DotyposService, {}),
-    Layer.mock(WorkspaceDatabase, {})
+    Layer.effect(
+      WorkspaceDatabase,
+      makeTestDatabaseClient(Effect.die("Unexpected database read")).pipe(
+        Effect.map(WorkspaceDatabase.make)
+      )
+    )
   );
 };
 
@@ -626,7 +641,7 @@ const runReusableReservationScenario = async (input: {
   /** The `Cookie` header of the booking request; none by default. */
   readonly requestCookie?: string;
   readonly mirrorAnalyticsConsent?: Mock<
-    AnalyticsConsentLedger["Service"]["mirror"]
+    (typeof AnalyticsConsentLedger)["Service"]["mirror"]
   >;
   readonly affirmAdvertisement?: Mock<
     ICheckoutPricingService["affirmAdvertisement"]
@@ -3027,7 +3042,9 @@ describe("prepareWorkspacePayState", () => {
         const pending = agentHold({
           ...initial.held,
           paymentState: "pending",
-          activePaymentAttemptId: "pending-payment-attempt-id",
+          activePaymentAttemptId: paymentAttemptIdSchema.make(
+            "pending-payment-attempt-id"
+          ),
         });
         const claimHoldCreation = mock(() =>
           Effect.die("a pending retry must not claim hold creation")
@@ -3072,7 +3089,9 @@ describe("prepareWorkspacePayState", () => {
           ),
           reservationCreatedAt: Temporal.Instant.from("2026-10-20T12:09:59Z"),
           paymentState: "pending",
-          activePaymentAttemptId: "pending-payment-attempt-id",
+          activePaymentAttemptId: paymentAttemptIdSchema.make(
+            "pending-payment-attempt-id"
+          ),
         });
         const createReservation = mock(() =>
           Effect.succeed(
@@ -4103,7 +4122,9 @@ describe("prepareWorkspacePayState", () => {
       };
 
       test("prefills a usable code for a contact booking without accepting it", async () => {
-        const findAvailableCode = mock(() => Effect.succeed("RFL12345"));
+        const findAvailableCode = mock(() =>
+          Effect.succeed(ReferralCode.make("RFL12345"))
+        );
         const scenario = await runReusableReservationScenario({
           findByAttemptKeys: mock(() => Effect.succeed(null)),
           createDraft: createFreshDraft(),
@@ -4149,7 +4170,9 @@ describe("prepareWorkspacePayState", () => {
             "CAMPAIGN10"
           ),
           rememberedReferralCode: "RFL12345",
-          findAvailableCode: mock(() => Effect.succeed("RFL12345")),
+          findAvailableCode: mock(() =>
+            Effect.succeed(ReferralCode.make("RFL12345"))
+          ),
         });
 
         expect(scenario.result?.status).toBe("ready");
@@ -4277,7 +4300,9 @@ describe("prepareWorkspacePayState", () => {
             createDraft: createFreshDraft(),
             linkedAccount: linkedAccount(),
             rememberedReferralCode: "RFL12345",
-            findAvailableCode: mock(() => Effect.succeed("RFL12345")),
+            findAvailableCode: mock(() =>
+              Effect.succeed(ReferralCode.make("RFL12345"))
+            ),
             hasSettledReferral: mock(settled),
           });
 

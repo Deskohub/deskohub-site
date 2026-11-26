@@ -40,7 +40,9 @@ type PreparePayStateData =
 const executeAsync = mock((_input: PreparePayStateInput) =>
   Promise.resolve({})
 );
-let preparePayStateOptions: Parameters<typeof workspaceUseAction>[1];
+let preparePayStateOptions:
+  | Parameters<typeof workspaceUseAction>[1]
+  | undefined;
 
 let analyticsAccepted = false;
 const cookieConsent = await import("@/features/cookie-consent");

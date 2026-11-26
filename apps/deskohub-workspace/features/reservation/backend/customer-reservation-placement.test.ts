@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { type DotyposTable, DotyposTableIdSchema } from "@deskohub/dotypos";
+import {
+  DotyposCloudIdSchema,
+  type DotyposTable,
+  DotyposTableIdSchema,
+} from "@deskohub/dotypos";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { getCustomerReservationPlacement } from "./customer-reservation-placement";
 
@@ -21,7 +25,7 @@ const makeTable = (
 ): DotyposTable => {
   const { id = "assigned-table", ...rest } = overrides;
   return {
-    _cloudId: "cloud",
+    _cloudId: DotyposCloudIdSchema.make("cloud"),
     id: DotyposTableIdSchema.make(id),
     name: "12",
     display: true,

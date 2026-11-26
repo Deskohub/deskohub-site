@@ -32,6 +32,7 @@ const quoteInRequest = (
       discounts.quote({
         product: { kind: "cowork", tier: "basic" },
         discountableSubtotal: { value: 10_000, exponent: 2, currency: "CZK" },
+        firstServiceDate: "2026-07-20",
         lastServiceDate: "2026-07-20",
         bookedAt: Temporal.Instant.from("2026-07-20T10:00:00Z"),
         locale: "en-US",

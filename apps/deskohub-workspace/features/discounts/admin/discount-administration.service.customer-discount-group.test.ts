@@ -2,42 +2,58 @@ import "@/shared/polyfills/temporal";
 
 import { describe, expect, mock, test } from "bun:test";
 import {
+  DotyposCloudIdSchema,
+  type DotyposCustomer,
+  type DotyposCustomerId,
   DotyposCustomerIdSchema,
+  type DotyposDiscountGroup,
   type DotyposDiscountGroupId,
   DotyposDiscountGroupIdSchema,
   DotyposService,
 } from "@deskohub/dotypos";
-import type {
-  DiscountGroup,
-  Customer as DotyposCustomer,
-} from "@deskohub/dotypos/generated";
 import { GoogleCalendarService } from "@deskohub/google-calendar";
 import { Effect, Layer, Option } from "effect";
 import {
   CalendarResourceConfig,
   salesCalendarIdSchema,
+  workspaceLimitationsCalendarIdSchema,
 } from "@/shared/backend/config/calendar-resource.config";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { DiscountAdministration } from "./discount-administration.service";
 
 const customerId = DotyposCustomerIdSchema.make("dotypos-customer");
 const membersId = DotyposDiscountGroupIdSchema.make("members");
-const group = (overrides: Partial<DiscountGroup> = {}): DiscountGroup => ({
+const group = (
+  overrides: Partial<DotyposDiscountGroup> = {}
+): DotyposDiscountGroup => ({
   id: membersId,
   name: "Members",
   discountPercent: "10",
   ...overrides,
 });
 
+const customer = (
+  id: DotyposCustomerId,
+  overrides: Partial<DotyposCustomer> = {}
+): DotyposCustomer => ({
+  id,
+  _cloudId: DotyposCloudIdSchema.make("synthetic-cloud"),
+  points: null,
+  flags: "0",
+  display: true,
+  deleted: false,
+  ...overrides,
+});
+
 const setDiscountGroup = async (input: {
   readonly discountGroupId: DotyposDiscountGroupId | null;
   readonly customer?: Partial<DotyposCustomer>;
-  readonly groups?: readonly DiscountGroup[];
+  readonly groups?: readonly DotyposDiscountGroup[];
 }) => {
   const recording = await makeRecordingWorkspaceDatabase();
   const getDiscountGroups = mock(() => Effect.succeed(input.groups ?? []));
   const setCustomerDiscountGroup = mock(() =>
-    Effect.succeed({ id: customerId } satisfies DotyposCustomer)
+    Effect.succeed(customer(customerId))
   );
   const result = await Effect.gen(function* () {
     const administration = yield* DiscountAdministration;
@@ -54,18 +70,16 @@ const setDiscountGroup = async (input: {
             Layer.mock(GoogleCalendarService, {}),
             Layer.mock(DotyposService, {
               getCustomer: (id) =>
-                Effect.succeed(
-                  Option.some({
-                    id,
-                    deleted: false,
-                    ...input.customer,
-                  } satisfies DotyposCustomer)
-                ),
+                Effect.succeed(Option.some(customer(id, input.customer))),
               getDiscountGroups,
               setCustomerDiscountGroup,
             }),
             Layer.mock(CalendarResourceConfig, {
               salesCalendarId: salesCalendarIdSchema.make("sales-calendar"),
+              workspaceLimitationsCalendarId:
+                workspaceLimitationsCalendarIdSchema.make(
+                  "limitations-calendar"
+                ),
             })
           )
         )
@@ -107,7 +121,10 @@ describe("DiscountAdministration customer discount group", () => {
   test("assigns an available group with an exact percentage", async () => {
     const outcome = await setDiscountGroup({
       discountGroupId: membersId,
-      groups: [group({ id: "others" }), group()],
+      groups: [
+        group({ id: DotyposDiscountGroupIdSchema.make("others") }),
+        group(),
+      ],
     });
 
     expect(outcome.result._tag).toBe("Success");
@@ -119,7 +136,7 @@ describe("DiscountAdministration customer discount group", () => {
 
   test("rejects a missing, deleted, or hidden group without writing", async () => {
     for (const groups of [
-      [group({ id: "others" })],
+      [group({ id: DotyposDiscountGroupIdSchema.make("others") })],
       [group({ deleted: true })],
       [group({ display: false })],
     ]) {

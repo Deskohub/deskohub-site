@@ -15,6 +15,7 @@ import {
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   AdministrationInvoiceCreateInput,
+  AdministrationInvoiceId,
   administrationInputParseOptions,
 } from "@deskohub/workspace-admin-api";
 import { Schema } from "effect";
@@ -26,6 +27,9 @@ import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import { getLocalizedPagePath } from "@/features/i18n/routing";
 import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
+  submittedActionInput,
+  type WorkspaceActionExecute,
+  workspaceActionCallbacks,
   workspaceRouterPush,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -513,8 +517,8 @@ test("reuses the draft id for an unchanged retry and rotates it after a change",
 });
 
 test("retries creation with the same id for an unchanged invoice and a new id after a change", async () => {
-  const preview = mock();
-  const create = mock();
+  const preview = mock<WorkspaceActionExecute>();
+  const create = mock<WorkspaceActionExecute>();
   let previewOnSuccess:
     | ((result: { data: { dataUrl: string } }) => void)
     | undefined;
@@ -524,13 +528,19 @@ test("retries creation with the same id for an unchanged invoice and a new id af
   workspaceUseAction.mockImplementation((action, options) => {
     if (action === invoiceActions.previewAdministrationInvoice) {
       previewOnSuccess = (result) => {
-        options.onSuccess?.({ ...result, input: undefined });
+        void options.onSuccess?.({
+          ...result,
+          input: submittedActionInput(preview.mock.calls),
+        });
       };
       return { execute: preview, isExecuting: false };
     }
     if (action === invoiceActions.createAdministrationInvoice) {
       createOnError = (result) => {
-        options.onError?.({ ...result, input: undefined });
+        void options.onError?.({
+          ...result,
+          input: submittedActionInput(create.mock.calls),
+        });
       };
       return { execute: create, isExecuting: false };
     }
@@ -573,15 +583,18 @@ test("retries creation with the same id for an unchanged invoice and a new id af
 });
 
 test("leaves an unedited suggested variable symbol to the server", async () => {
-  const preview = mock();
-  const create = mock();
+  const preview = mock<WorkspaceActionExecute>();
+  const create = mock<WorkspaceActionExecute>();
   let previewOnSuccess:
     | ((result: { data: { dataUrl: string } }) => void)
     | undefined;
   workspaceUseAction.mockImplementation((action, options) => {
     if (action === invoiceActions.previewAdministrationInvoice) {
       previewOnSuccess = (result) => {
-        options.onSuccess?.({ ...result, input: undefined });
+        void options.onSuccess?.({
+          ...result,
+          input: submittedActionInput(preview.mock.calls),
+        });
       };
       return { execute: preview, isExecuting: false };
     }
@@ -614,8 +627,8 @@ test("leaves an unedited suggested variable symbol to the server", async () => {
 });
 
 test("keeps the draft id when a whitespace-only edit produces the same payload", async () => {
-  const preview = mock();
-  const create = mock();
+  const preview = mock<WorkspaceActionExecute>();
+  const create = mock<WorkspaceActionExecute>();
   let previewOnSuccess:
     | ((result: { data: { dataUrl: string } }) => void)
     | undefined;
@@ -625,13 +638,19 @@ test("keeps the draft id when a whitespace-only edit produces the same payload",
   workspaceUseAction.mockImplementation((action, options) => {
     if (action === invoiceActions.previewAdministrationInvoice) {
       previewOnSuccess = (result) => {
-        options.onSuccess?.({ ...result, input: undefined });
+        void options.onSuccess?.({
+          ...result,
+          input: submittedActionInput(preview.mock.calls),
+        });
       };
       return { execute: preview, isExecuting: false };
     }
     if (action === invoiceActions.createAdministrationInvoice) {
       createOnError = (result) => {
-        options.onError?.({ ...result, input: undefined });
+        void options.onError?.({
+          ...result,
+          input: submittedActionInput(create.mock.calls),
+        });
       };
       return { execute: create, isExecuting: false };
     }
@@ -929,21 +948,14 @@ const en = { locale: "en-US" } as const;
 
 type InvoiceActionName = keyof typeof invoiceActions;
 
-type CapturedInvoiceAction = {
-  readonly execute: ReturnType<typeof mock>;
-  options: {
-    readonly onSuccess?: (result: { readonly data?: unknown }) => void;
-    readonly onError?: (result: {
-      readonly error: { readonly serverError?: string };
-    }) => void;
-    readonly onTransportError?: () => void;
-  };
-};
+type InvoiceActionData<Name extends InvoiceActionName> = Awaited<
+  ReturnType<typeof import("./actions")[Name]>
+>["data"];
 
-const captureInvoiceAction = (): CapturedInvoiceAction => ({
-  execute: mock(),
-  options: {},
-});
+const captureInvoiceAction = <Data>(): {
+  readonly execute: ReturnType<typeof mock<WorkspaceActionExecute>>;
+  options: Partial<ReturnType<typeof workspaceActionCallbacks<Data>>>;
+} => ({ execute: mock<WorkspaceActionExecute>(), options: {} });
 
 const invoiceActionNames = [
   "createAdministrationInvoice",
@@ -959,29 +971,24 @@ const captureInvoiceActions = ({
   readonly executing?: readonly InvoiceActionName[];
 } = {}) => {
   const captured = {
-    createAdministrationInvoice: captureInvoiceAction(),
-    previewAdministrationInvoice: captureInvoiceAction(),
-    searchAdministrationInvoiceCustomers: captureInvoiceAction(),
+    createAdministrationInvoice:
+      captureInvoiceAction<InvoiceActionData<"createAdministrationInvoice">>(),
+    previewAdministrationInvoice:
+      captureInvoiceAction<InvoiceActionData<"previewAdministrationInvoice">>(),
+    searchAdministrationInvoiceCustomers:
+      captureInvoiceAction<
+        InvoiceActionData<"searchAdministrationInvoiceCustomers">
+      >(),
   };
   workspaceUseAction.mockImplementation((action, options) => {
     const name = invoiceActionNames.find(
       (key) => invoiceActions[key] === action
     );
     if (!name) throw new Error("Unexpected invoice action");
-    captured[name].options = {
-      onSuccess: (result) => {
-        options.onSuccess?.({ ...result, input: undefined });
-      },
-      onError: (result) => {
-        options.onError?.({ ...result, input: undefined });
-      },
-      onTransportError: () => {
-        options.onTransportError?.({
-          error: new Error("transport"),
-          input: undefined,
-        });
-      },
-    };
+    captured[name].options = workspaceActionCallbacks<unknown>(
+      options,
+      captured[name].execute
+    );
     return {
       execute: captured[name].execute,
       isExecuting: executing.includes(name),
@@ -1277,7 +1284,13 @@ test("opens the created invoice and reports creation and preview failures", asyn
 
   act(() => create.options.onSuccess?.({ data: undefined }));
   expect(workspaceRouterPush).not.toHaveBeenCalled();
-  act(() => create.options.onSuccess?.({ data: { invoiceId } }));
+  act(() =>
+    create.options.onSuccess?.({
+      data: {
+        invoiceId: AdministrationInvoiceId.make(invoiceId),
+      },
+    })
+  );
   expect(workspaceRouterPush).toHaveBeenCalledWith(
     getLocalizedPagePath("en-US", "/[locale]/admin/invoices/[invoiceId]", {
       invoiceId,

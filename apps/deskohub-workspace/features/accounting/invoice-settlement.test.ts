@@ -2,9 +2,10 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
 import { formatCurrencyAmount } from "@deskohub/i18n/currency";
+import { Schema } from "effect";
 import { findWorkspaceCurrencyDefinition } from "@/shared/money/currencies";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
-import type { InvoiceDocument } from "./invoice";
+import { type InvoiceDocument, invoiceDocumentSchema } from "./invoice";
 import {
   makeCoworkInvoiceDocument,
   makeTestManualInvoiceDocument,
@@ -24,7 +25,7 @@ const paidOn = { status: "paid", date: date("2026-08-20") } as const;
 
 const reservation = makeCoworkInvoiceDocument("en-US");
 const { payment } = reservation.quote;
-const zeroTotalReservation: InvoiceDocument = {
+const zeroTotalReservation = Schema.decodeUnknownSync(invoiceDocumentSchema)({
   ...reservation,
   quote: {
     ...reservation.quote,
@@ -33,7 +34,7 @@ const zeroTotalReservation: InvoiceDocument = {
       expectedPrice: { ...payment.expectedPrice, value: 0 },
     },
   },
-};
+});
 const due = makeTestManualInvoiceDocument("en-US", "450");
 const variableSymbol = due.variableSymbol;
 

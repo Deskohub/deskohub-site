@@ -9,6 +9,7 @@ import {
   AdministrationStandaloneAccessCodeAttemptId,
   AdministrationStandaloneAccessCodeCleanupTarget,
   AdministrationStandaloneAccessCodeCreateInput,
+  AdministrationStandaloneAccessCodePin,
   AdministrationStandaloneAccessCodeResult,
   AdministrationStoredDiscountId,
   AdministrationWorkspaceReservationId,
@@ -902,7 +903,7 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
     const created = {
       ...stored,
       outcome: "created" as const,
-      pin: "1234567",
+      pin: AdministrationStandaloneAccessCodePin.make("1234567"),
     };
     const inProgressMessage =
       "This standalone access-code creation is still being applied. Retrying with the same attempt identifier is safe.";

@@ -17,6 +17,7 @@ import { accountingDocumentSnapshots, paymentAttempts } from "@/db/schema";
 import {
   type AccountingDocumentSnapshot,
   accountingSnapshotKeyIdSchema,
+  coworkAccountingDocumentSnapshotSchema,
   encodeStoredAccountingDocumentSnapshot,
   makeAccountingDocumentSnapshot,
 } from "@/features/accounting/accounting-document-snapshot";
@@ -291,14 +292,17 @@ describe("AccountingDocumentSnapshots.prepare", () => {
     {
       name: "a snapshot whose items don't add up to its price",
       change: (snapshot) => {
-        assert(snapshot.reservation.kind === "cowork");
-        const [first, ...rest] = snapshot.quote.items;
-        assert(first !== undefined);
+        const cowork = Schema.decodeUnknownSync(
+          coworkAccountingDocumentSnapshotSchema
+        )(snapshot);
+        const [first, ...rest] = cowork.quote.items;
         return {
-          snapshot: {
-            ...snapshot,
+          snapshot: Schema.decodeUnknownSync(
+            coworkAccountingDocumentSnapshotSchema
+          )({
+            ...cowork,
             quote: {
-              ...snapshot.quote,
+              ...cowork.quote,
               items: [
                 {
                   ...first,
@@ -307,25 +311,26 @@ describe("AccountingDocumentSnapshots.prepare", () => {
                 ...rest,
               ],
             },
-          },
+          }),
         };
       },
     },
     {
       name: "a snapshot priced in another currency than its items",
       change: (snapshot) => {
-        assert(snapshot.reservation.kind === "cowork");
+        const cowork = Schema.decodeUnknownSync(
+          coworkAccountingDocumentSnapshotSchema
+        )(snapshot);
         return {
           snapshot: {
-            ...snapshot,
+            ...cowork,
             quote: {
-              ...snapshot.quote,
+              ...cowork.quote,
               payment: {
-                ...snapshot.quote.payment,
+                ...cowork.quote.payment,
                 undiscountedPrice: {
-                  ...snapshot.quote.payment.undiscountedPrice,
-                  exponent:
-                    snapshot.quote.payment.undiscountedPrice.exponent + 1,
+                  ...cowork.quote.payment.undiscountedPrice,
+                  exponent: cowork.quote.payment.undiscountedPrice.exponent + 1,
                 },
               },
             },

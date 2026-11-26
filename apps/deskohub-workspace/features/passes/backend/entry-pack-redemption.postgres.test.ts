@@ -26,8 +26,8 @@ import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { orderIdSchema } from "@/features/order";
 import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/reservation-audit.test-utils";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { getStoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
-import { reservationOrderIssuanceSchema } from "@/features/reservation/reservation-order";
 import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
@@ -50,7 +50,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     const holder = customerAccountIdSchema.make(crypto.randomUUID());
     const date = Schema.decodeUnknownSync(plainDateStringSchema);
     const decodeReservation = Schema.decodeUnknownSync(
-      reservationOrderIssuanceSchema("CZ")
+      normalizedCoworkReservationOrderSchema
     );
     const now = () => Temporal.Now.instant();
 
@@ -150,7 +150,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           details: getStoredWorkspaceReservationDetails(selection(serviceDate)),
         })
       );
-    const runReservations = (f) =>
+    const runReservations = <A, E>(
+      f: (
+        repository: typeof WorkspaceReservationRepository.Service
+      ) => Effect.Effect<A, E>
+    ) =>
       Effect.runPromise(
         WorkspaceReservationRepository.pipe(
           Effect.flatMap(f),
@@ -158,10 +162,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           Effect.provide(database.layer)
         )
       );
+    type DraftReservation = Awaited<ReturnType<typeof draft>>;
     const claim = (
-      reservation,
-      passId,
-      serviceDate,
+      reservation: DraftReservation,
+      passId: Awaited<ReturnType<typeof seedPack>>,
+      serviceDate: string,
       holderAccountId = holder,
       dotyposReservationId = DotyposReservationIdSchema.make(
         crypto.randomUUID()
@@ -186,11 +191,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           Effect.as(true)
         )
       );
-    const status = (reservation) =>
+    const status = (reservation: DraftReservation) =>
       runReservations((repository) =>
         repository.findEntryPackClaim(reservation.id)
       ).then((entry) => entry?.status);
-    const cancelHold = async (reservation) => {
+    const cancelHold = async (reservation: DraftReservation) => {
       const cancellation = await runReservations((repository) =>
         repository.claimCancellation({
           id: reservation.id,
@@ -206,7 +211,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         })
       );
     };
-    const runRecovery = (f) =>
+    const runRecovery = <A, E>(
+      f: (
+        repository: typeof LatePaymentRecoveryRepository.Service
+      ) => Effect.Effect<A, E>
+    ) =>
       Effect.runPromise(
         LatePaymentRecoveryRepository.pipe(
           Effect.flatMap(f),
@@ -214,7 +223,14 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           Effect.provide(database.layer)
         )
       );
-    const startVerifiedRecovery = async (reservation, attempt) => {
+    const startVerifiedRecovery = async (
+      reservation: DraftReservation,
+      attempt: {
+        readonly id: Parameters<
+          typeof LatePaymentRecoveryRepository.Service.start
+        >[0]["paymentAttemptId"];
+      }
+    ) => {
       const input = {
         workspaceReservationId: reservation.id,
         paymentAttemptId: attempt.id,
@@ -551,7 +567,15 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await status(reservation)).toBe("released");
     });
 
-    const exercisePayment = async ({ serviceDate, coffee, outcome }) => {
+    const exercisePayment = async ({
+      serviceDate,
+      coffee,
+      outcome,
+    }: {
+      readonly serviceDate: string;
+      readonly coffee: boolean;
+      readonly outcome: "paid" | "failed" | "abandoned" | "pending";
+    }) => {
       const passId = await seedPack();
       const reservation = await draft(serviceDate);
       const dotyposReservationId = DotyposReservationIdSchema.make(

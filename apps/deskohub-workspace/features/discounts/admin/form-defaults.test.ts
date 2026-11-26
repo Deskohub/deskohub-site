@@ -41,6 +41,7 @@ const code: DiscountCodeTableItem = {
   serviceDateUntil: "2026-07-31",
   serviceDates: "Jul 1 – 31, 2026",
   audienceSize: 0,
+  audienceCustomerIds: [],
   reservedUses: 0,
   redeemedUses: 0,
   remainingUses: 0,
@@ -55,6 +56,7 @@ const voucher: VoucherTableItem = {
   validFrom: null,
   validUntil: "2026-08-01T08:00:00Z",
   audienceSize: 0,
+  audienceCustomerIds: [],
   reservedUses: 0,
   redeemedUses: 0,
 };

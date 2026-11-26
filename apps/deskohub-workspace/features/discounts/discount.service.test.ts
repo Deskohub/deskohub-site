@@ -703,6 +703,7 @@ describe("DiscountService", () => {
       Effect.gen(function* () {
         const discounts = yield* DiscountService;
         return yield* discounts.applyCustomerDiscount({
+          firstServiceDate: paymentInput.lastServiceDate,
           affirmedAdvertisement,
           dotyposCustomerId: paymentInput.dotyposCustomerId,
           locale: paymentInput.locale,
@@ -756,6 +757,7 @@ describe("DiscountService", () => {
       Effect.gen(function* () {
         const discounts = yield* DiscountService;
         return yield* discounts.applyCustomerDiscount({
+          firstServiceDate: paymentInput.lastServiceDate,
           affirmedAdvertisement,
           dotyposCustomerId: paymentInput.dotyposCustomerId,
           locale: paymentInput.locale,
@@ -807,6 +809,7 @@ describe("DiscountService", () => {
       Effect.gen(function* () {
         const discounts = yield* DiscountService;
         return yield* discounts.applyCustomerDiscount({
+          firstServiceDate: paymentInput.lastServiceDate,
           affirmedAdvertisement,
           dotyposCustomerId: paymentInput.dotyposCustomerId,
           locale: paymentInput.locale,
@@ -858,6 +861,7 @@ describe("DiscountService", () => {
       Effect.gen(function* () {
         const discounts = yield* DiscountService;
         return yield* discounts.applyCustomerDiscount({
+          firstServiceDate: paymentInput.lastServiceDate,
           affirmedAdvertisement,
           dotyposCustomerId: paymentInput.dotyposCustomerId,
           locale: paymentInput.locale,
@@ -911,6 +915,7 @@ describe("DiscountService", () => {
       Effect.gen(function* () {
         const discounts = yield* DiscountService;
         return yield* discounts.applyCustomerDiscount({
+          firstServiceDate: paymentInput.lastServiceDate,
           affirmedAdvertisement,
           dotyposCustomerId: paymentInput.dotyposCustomerId,
           locale: paymentInput.locale,
@@ -1008,6 +1013,7 @@ describe("DiscountService", () => {
           }
           if (operation === "apply_customer_discount") {
             const result = yield* discounts.applyCustomerDiscount({
+              firstServiceDate: paymentInput.lastServiceDate,
               affirmedAdvertisement: emptyAffirmedAdvertisement,
               dotyposCustomerId: paymentInput.dotyposCustomerId,
               locale: paymentInput.locale,
@@ -1592,6 +1598,7 @@ describe("DiscountService", () => {
       Effect.gen(function* () {
         const discounts = yield* DiscountService;
         return yield* discounts.applyCustomerDiscount({
+          firstServiceDate: paymentInput.lastServiceDate,
           affirmedAdvertisement: emptyAffirmedAdvertisement,
           dotyposCustomerId: invitedCustomerId,
           locale: paymentInput.locale,

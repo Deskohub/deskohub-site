@@ -10,6 +10,8 @@ import {
 } from "bun:test";
 import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
+  type WorkspaceActionExecute,
+  workspaceActionCallbacks,
   workspaceRouterRefresh,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -19,13 +21,8 @@ import {
 } from "@/shared/testing/workspace-component-test-env";
 import { invoiceAdministrationDetail } from "./invoice-detail.test-utils";
 
-type RetryActionOptions = {
-  readonly onSuccess: () => void;
-  readonly onError: (result: {
-    readonly error: { readonly serverError?: string };
-  }) => void;
-  readonly onTransportError: () => void;
-};
+type RetryAction = typeof import("./actions").retryAdministrationInvoice;
+type RetryResult = Awaited<ReturnType<RetryAction>>["data"];
 
 // The real request-locale module reads the route locale from next/root-params.
 mock.module("next/root-params", () => ({ locale: async () => locale }));
@@ -47,9 +44,11 @@ const { RouteLocaleProvider } = await import("@/features/i18n/route-locale");
 const { InvoiceDetailActions } = await import("./invoice-detail");
 
 const locale = "cs-CZ";
-const execute = mock((_input: { readonly invoiceId: string }) => undefined);
+const execute = mock<WorkspaceActionExecute>();
 let isExecuting = false;
-let retryOptions: RetryActionOptions | undefined;
+let retryOptions:
+  | ReturnType<typeof workspaceActionCallbacks<RetryResult>>
+  | undefined;
 
 const renderActions = (needsAttention: boolean) =>
   render(
@@ -73,20 +72,7 @@ describe("InvoiceDetailActions", () => {
       if (action !== retryAdministrationInvoice) {
         return { execute: mock(), isExecuting: false };
       }
-      retryOptions = {
-        onSuccess: () => {
-          options.onSuccess?.({ data: undefined, input: undefined });
-        },
-        onError: (result) => {
-          options.onError?.({ ...result, input: undefined });
-        },
-        onTransportError: () => {
-          options.onTransportError?.({
-            error: new Error("transport"),
-            input: undefined,
-          });
-        },
-      };
+      retryOptions = workspaceActionCallbacks(options, execute);
       return { execute, isExecuting };
     });
   });
@@ -118,7 +104,13 @@ describe("InvoiceDetailActions", () => {
     expect(execute).toHaveBeenCalledWith({
       invoiceId: invoiceAdministrationDetail().id,
     });
-    await act(async () => retryOptions?.onSuccess());
+    await act(async () =>
+      retryOptions?.onSuccess({
+        data: {
+          reservationId: null,
+        },
+      })
+    );
     expect(workspaceRouterRefresh).toHaveBeenCalledTimes(1);
     expect(view.getByRole("alert").textContent).toBe("");
   });
@@ -138,6 +130,7 @@ describe("InvoiceDetailActions", () => {
 
   test("shows the server's error, or the fallback without one, and clears it on the next try", async () => {
     const view = renderActions(true);
+    fireEvent.click(view.getByRole("button", { name: retryButtonName() }));
 
     await act(async () =>
       retryOptions?.onError({ error: { serverError: "Delivery refused." } })
@@ -156,6 +149,7 @@ describe("InvoiceDetailActions", () => {
 
   test("shows the fallback error when the action can't be reached", async () => {
     const view = renderActions(true);
+    fireEvent.click(view.getByRole("button", { name: retryButtonName() }));
 
     await act(async () => retryOptions?.onTransportError());
 

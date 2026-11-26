@@ -8,7 +8,10 @@ import {
   mock,
   test,
 } from "bun:test";
-import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import {
+  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import type { ReactNode } from "react";
 import { m } from "@/features/administration/i18n";

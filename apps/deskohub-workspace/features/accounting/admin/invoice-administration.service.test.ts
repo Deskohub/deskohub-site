@@ -221,6 +221,10 @@ describe("InvoiceAdministrationService", () => {
   ): DotyposCustomer => ({
     id: DotyposCustomerIdSchema.make(id),
     _cloudId: DotyposCloudIdSchema.make("cloud-1"),
+    points: null,
+    flags: "0",
+    display: true,
+    deleted: false,
     ...fields,
   });
 

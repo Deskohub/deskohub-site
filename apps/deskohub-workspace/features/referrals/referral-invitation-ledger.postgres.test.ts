@@ -22,9 +22,11 @@ import {
   referralInvitationClaims,
   workspaceReservations,
 } from "@/db/schema";
+import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { AppliedDiscount } from "@/features/discounts/contracts";
 import { canonicalPromotionCodeSchema } from "@/features/discounts/persistence-contracts";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { WithdrawalRepository } from "@/features/withdrawal/backend/withdrawal.repository";
 import type { Money } from "@/shared/money/money";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";

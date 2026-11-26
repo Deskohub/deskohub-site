@@ -13,6 +13,8 @@ import {
   accountingDocumentSnapshotSchema,
 } from "@/features/accounting/accounting-document-snapshot";
 import { liveInvoiceStanding } from "@/features/accounting/admin/invoice-administration.service.test-utils";
+import { companyRegistrationIdSchema } from "@/features/accounting/billing-identity";
+import { correctiveDocumentNumberSchema } from "@/features/accounting/corrective-document";
 import { makeCoworkInvoiceDocument } from "@/features/accounting/invoice.test-utils";
 import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
@@ -378,7 +380,7 @@ describe("reservation invoice processing", () => {
           buyer: {
             kind: "business",
             legalName: "Synthetic Company s.r.o.",
-            companyId: "12345678",
+            companyId: companyRegistrationIdSchema.make("12345678"),
             address: personalAddress,
           },
         },
@@ -540,7 +542,8 @@ describe("reservation invoice processing", () => {
       "belongs to another reservation",
       (source: AccountingDocumentSnapshot) => ({
         ...source,
-        workspaceReservationId: "other-reservation",
+        workspaceReservationId:
+          workspaceReservationIdSchema.make("other-reservation"),
       }),
     ],
     [
@@ -628,8 +631,9 @@ describe("reservation invoice processing", () => {
     const cancelledInvoice = {
       cancellation: {
         cancelledAt: Temporal.Instant.from("2026-08-14T09:00:00Z"),
-        cause: "reservation_cancellation",
-        correctiveDocumentNumber: "WS-OD-2026-000001",
+        cause: "reservation_cancellation" as const,
+        correctiveDocumentNumber:
+          correctiveDocumentNumberSchema.make("WS-OD-2026-000001"),
       },
     };
     const requestedSource = () =>

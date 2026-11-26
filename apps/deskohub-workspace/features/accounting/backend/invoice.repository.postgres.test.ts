@@ -1264,7 +1264,7 @@ describe.skipIf(!testDatabase)(
         const fixture = await createPaidFixture();
         const original = await issue(fixture.paymentAttemptId);
         await cancelIssuedInvoice(original.invoice.id);
-        let replacementId: string | undefined;
+        let replacementId: InvoiceId | undefined;
 
         const read = await runRepository(
           find(fixture),

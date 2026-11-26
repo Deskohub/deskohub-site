@@ -8,6 +8,7 @@ import { Data, Effect, Exit, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { findSqlState, isDatabaseQueryError } from "@/db/sql-constraint";
 import { accountingSnapshotKeyIdSchema } from "@/features/accounting/accounting-document-snapshot";
+import { formatCorrectiveDocumentNumber } from "@/features/accounting/corrective-document";
 import {
   type InvoiceId,
   invoiceIdSchema,
@@ -354,9 +355,10 @@ describe.skipIf(!testDatabase)(
       );
       assert(year !== undefined);
       expect(next.record.correctiveDocumentNumber).toBe(
-        `WS-OD-${year.numbering_year}-${year.last_sequence
-          .toString()
-          .padStart(6, "0")}`
+        formatCorrectiveDocumentNumber({
+          year: year.numbering_year,
+          sequence: year.last_sequence,
+        })
       );
     });
 

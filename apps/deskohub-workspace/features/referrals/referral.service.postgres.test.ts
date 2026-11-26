@@ -448,8 +448,8 @@ describe.skipIf(!testDatabase)("ReferralService on disposable Postgres", () => {
     const codeB = canonicalPromotionCodeSchema.make(
       `RFL${uniqueId().replaceAll("-", "").slice(0, 12).toUpperCase()}`
     );
-    let promotionA: string | undefined;
-    let promotionB: string | undefined;
+    let promotionA: typeof promotionCodes.$inferSelect.id | undefined;
+    let promotionB: typeof promotionCodes.$inferSelect.id | undefined;
 
     await insertAuthUser(accountA, { linkedCustomer: customerA });
     await insertAuthUser(accountB, { linkedCustomer: customerB });
@@ -1973,7 +1973,7 @@ const createVerdictContext = async (): Promise<
     /** Another active referrer, removed with the context. */
     readonly otherReferrer: () => Promise<ActiveReferrer>;
     /** A referral code the invitee owns, removed with the context. */
-    readonly inviteeCode: () => Promise<string>;
+    readonly inviteeCode: () => Promise<typeof promotionCodes.$inferSelect.id>;
     readonly cleanup: () => Promise<void>;
   }
 > => {

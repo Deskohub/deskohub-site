@@ -9,11 +9,11 @@ import {
   DotyposRejected,
   type DotyposReservationId,
   DotyposReservationIdSchema,
+  DotyposReservationSchema,
   DotyposService,
   type ReservationListOptions,
 } from "@deskohub/dotypos";
-import type { Reservation as DotyposReservation } from "@deskohub/dotypos/generated";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { recordNextCache } from "@/shared/testing/next-cache-recorder.test-utils";
 import { reservationRecordTags } from "@/shared/utils/cache-tags";
 import { ReservationRecords } from "./reservation-records";
@@ -22,7 +22,7 @@ let providerFailure: DotyposReadFailure | undefined;
 
 const reservationId = DotyposReservationIdSchema.make("synthetic-reservation");
 const customerId = DotyposCustomerIdSchema.make("synthetic-customer");
-const reservation: DotyposReservation = {
+const reservation = Schema.decodeUnknownSync(DotyposReservationSchema)({
   _branchId: "synthetic-branch",
   _cloudId: "synthetic-cloud",
   _customerId: customerId,
@@ -33,7 +33,7 @@ const reservation: DotyposReservation = {
   seats: "1",
   startDate: "2099-06-10T07:00:00Z",
   status: "NEW",
-};
+});
 const record = {
   id: reservationId,
   status: "NEW",
@@ -46,8 +46,12 @@ const record = {
 const getReservationWithoutCustomer = mock((_id: DotyposReservationId) =>
   providerFailure ? Effect.fail(providerFailure) : Effect.succeed(reservation)
 );
-const listReservations = mock((_options: ReservationListOptions) =>
-  Effect.succeed([reservation])
+const listReservations = mock(
+  (
+    _options?: ReservationListOptions & {
+      readonly ids?: readonly DotyposReservationId[];
+    }
+  ) => Effect.succeed([reservation])
 );
 const nextCache = recordNextCache();
 

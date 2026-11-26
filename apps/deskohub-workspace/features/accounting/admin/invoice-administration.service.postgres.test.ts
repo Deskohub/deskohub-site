@@ -111,6 +111,10 @@ const dotyposCustomer = (
 ): DotyposCustomer => ({
   id: DotyposCustomerIdSchema.make(id),
   _cloudId: DotyposCloudIdSchema.make("cloud-1"),
+  points: null,
+  flags: "0",
+  display: true,
+  deleted: false,
   ...fields,
 });
 
@@ -385,7 +389,9 @@ describe.skipIf(!testDatabase)(
 
     describe("creation claims", () => {
       const document = makeTestManualInvoiceDocument("cs-CZ", "1000");
-      const storedInvoice = (dotyposCustomerId: string): Invoice => ({
+      const storedInvoice = (
+        dotyposCustomerId: string
+      ): ManualInvoiceIssuance["invoice"] => ({
         id: invoiceIdSchema.make(input.invoiceId),
         workspaceReservationId: null,
         paymentAttemptId: null,

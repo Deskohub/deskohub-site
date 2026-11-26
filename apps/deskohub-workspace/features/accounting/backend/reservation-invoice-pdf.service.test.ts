@@ -85,7 +85,7 @@ const runGetPdf = async (options: {
           options.invoice === undefined ? issuedInvoice : options.invoice
         )
   );
-  const ownership = Layer.succeed(CustomerAccountReservationOwnership, {
+  const ownership = Layer.mock(CustomerAccountReservationOwnership, {
     activeAccountId:
       options.visitor === "anonymous" ||
       options.visitor === "unreadable-account"
@@ -103,7 +103,7 @@ const runGetPdf = async (options: {
       dotyposCustomerId:
         options.visitor === "customer"
           ? reservationCustomerId
-          : "another-customer",
+          : DotyposCustomerIdSchema.make("another-customer"),
     }),
   });
 

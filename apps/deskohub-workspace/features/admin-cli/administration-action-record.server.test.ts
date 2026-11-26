@@ -16,6 +16,7 @@ import { NodeHttpServer } from "@effect/platform-node";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Effect, Exit, Layer, Option, type Schema } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
+import { type HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 import { StandaloneAccessCodeAdministration } from "@/features/access-codes";
 import { InvoiceAdministrationService } from "@/features/accounting/admin/invoice-administration.service";
 import { AdministrationService } from "@/features/administration/administration.service";
@@ -627,9 +628,14 @@ describe("administration action record", () => {
   });
 
   describe("around the operation itself", () => {
+    const administration = WorkspaceAdminApi.groups.administration;
+    const endpoint: HttpApiEndpoint.Top =
+      administration.endpoints.renameSession;
     const renameSessionEndpoint = {
-      group: WorkspaceAdminApi.groups.administration,
-      endpoint: WorkspaceAdminApi.groups.administration.endpoints.renameSession,
+      group: HttpApiGroup.make(administration.identifier)
+        .add(endpoint)
+        .annotateMerge(administration.annotations),
+      endpoint,
     };
     const runRecorded = (
       actionLog: Layer.Layer<AdministrationActionLog>,
