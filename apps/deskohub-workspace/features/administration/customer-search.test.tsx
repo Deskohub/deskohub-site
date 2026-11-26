@@ -12,8 +12,8 @@ import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import type { ReactNode } from "react";
 import {
-  submittedActionInput,
   type WorkspaceActionExecute,
+  workspaceActionCallbacks,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
 import {
@@ -54,17 +54,11 @@ mock.module("./actions", () => ({
   searchAdministrationCustomers,
 }));
 
-type ActionCallbacks = {
-  readonly onSuccess: (result: {
-    readonly data?: Awaited<ReturnType<SearchAction>>["data"];
-  }) => void;
-  readonly onError: (result: {
-    readonly error: { readonly serverError?: string };
-  }) => void;
-  readonly onTransportError: () => void;
-};
-
 type SearchAction = typeof import("./actions").searchAdministrationCustomers;
+type SearchActionData = Awaited<ReturnType<SearchAction>>["data"];
+type ActionCallbacks = ReturnType<
+  typeof workspaceActionCallbacks<SearchActionData>
+>;
 
 // Each test mounts one search, so the latest hook options are the ones its
 // callbacks report to.
@@ -112,26 +106,7 @@ describe("CustomerSearch", () => {
     actionCallbacks.clear();
     workspaceUseAction.mockReset();
     workspaceUseAction.mockImplementation((action, options) => {
-      actionCallbacks.set(action, {
-        onSuccess: ({ data }) => {
-          void options.onSuccess?.({
-            data,
-            input: submittedActionInput(execute.mock.calls),
-          });
-        },
-        onError: ({ error }) => {
-          void options.onError?.({
-            error,
-            input: submittedActionInput(execute.mock.calls),
-          });
-        },
-        onTransportError: () => {
-          options.onTransportError?.({
-            error: new Error("transport"),
-            input: submittedActionInput(execute.mock.calls),
-          });
-        },
-      });
+      actionCallbacks.set(action, workspaceActionCallbacks(options, execute));
       return { execute, isExecuting, result: {} };
     });
   });
@@ -245,7 +220,7 @@ describe("CustomerSearch", () => {
   test("ignores a success without data", async () => {
     const view = await submittedSearch("Test");
     await report(searchAdministrationCustomers, ({ onSuccess }) =>
-      onSuccess({})
+      onSuccess({ data: undefined })
     );
     expect(view.queryByRole("list")).toBeNull();
     expect(view.queryByRole("alert")).toBeNull();

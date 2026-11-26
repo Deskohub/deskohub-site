@@ -19,6 +19,7 @@ import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import {
   submittedActionInput,
   type WorkspaceActionExecute,
+  workspaceActionCallbacks,
   workspaceRouterRefresh,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -32,13 +33,9 @@ type CancelAction = typeof import("./actions").cancelAdministrationReservation;
 type CancelActionData = Awaited<ReturnType<CancelAction>>["data"];
 const execute = mock<WorkspaceActionExecute>();
 
-type ActionOptions = {
-  readonly onSuccess: (args: { readonly data?: CancelActionData }) => void;
-  readonly onError: (args: {
-    readonly error: { readonly serverError?: string };
-  }) => void;
-  readonly onTransportError: () => void;
-};
+type ActionOptions = ReturnType<
+  typeof workspaceActionCallbacks<CancelActionData>
+>;
 
 let actionOptions: ActionOptions | undefined;
 
@@ -64,26 +61,7 @@ beforeEach(() => {
 
 const withActionOptions = () => {
   workspaceUseAction.mockImplementation((_action, options) => {
-    actionOptions = {
-      onSuccess: ({ data }) => {
-        void options.onSuccess?.({
-          data,
-          input: submittedActionInput(execute.mock.calls),
-        });
-      },
-      onError: ({ error }) => {
-        void options.onError?.({
-          error,
-          input: submittedActionInput(execute.mock.calls),
-        });
-      },
-      onTransportError: () => {
-        options.onTransportError?.({
-          error: new Error("transport"),
-          input: submittedActionInput(execute.mock.calls),
-        });
-      },
-    };
+    actionOptions = workspaceActionCallbacks(options, execute);
     return { execute, isExecuting: false, result: {} };
   });
 };
@@ -274,7 +252,7 @@ describe("ReservationCancellation", () => {
     );
 
     act(() => {
-      actionOptions?.onSuccess({});
+      actionOptions?.onSuccess({ data: undefined });
     });
     expect(view.getByRole("dialog")).toBeDefined();
     expect(view.queryByRole("status")).toBeNull();
