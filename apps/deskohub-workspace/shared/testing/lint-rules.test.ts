@@ -1184,7 +1184,9 @@ test("no-promise-matchers-in-browser-tests holds across Workspace browser tests"
 // The corpus above lints with Biome's default file set, so these cases lint a
 // copy of the repository layout with the production `files.includes` and run
 // a package's own `lint` script from its directory, the way Turbo runs it.
-const productionRoot = join(fixtureRoot, "production");
+// A checkout directory named testing must not exempt feature production files.
+const productionFixture = "testing/production";
+const productionRoot = join(fixtureRoot, productionFixture);
 const assertionProbe =
   "export const probe = (input?: string) => input! as string;\n";
 const productionProbes = [
@@ -1234,6 +1236,8 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/administration/probe.test.tsx",
   "apps/deskohub-workspace/features/administration/testing/probe.ts",
   "apps/deskohub-workspace/features/reservation/backend/testing/probe.ts",
+  "apps/deskohub-workspace/features/account/backend/probe.ts",
+  "apps/deskohub-workspace/features/email-campaigns/automation/probe.ts",
   "apps/deskohub-workspace/features/checkout/product-catalog.ts",
   "apps/deskohub-workspace/features/checkout/actions/probe.test.ts",
   "apps/deskohub-workspace/features/checkout/backend/analytics/probe.postgres.test.ts",
@@ -1348,7 +1352,7 @@ const expectAssertionDiagnostics = (
 
 test("production Biome config rejects package and Workspace production assertions from the root and from each lint script", async () => {
   writeCase(
-    "production",
+    productionFixture,
     "biome.json",
     JSON.stringify({
       ...repositoryConfig,
@@ -1364,7 +1368,7 @@ test("production Biome config rejects package and Workspace production assertion
     ...workspaceProductionProbes,
     ...workspaceExemptProbes,
   ]) {
-    writeCase("production", probe, assertionProbe);
+    writeCase(productionFixture, probe, assertionProbe);
   }
   // The Workspace lint script resolves the root config through git.
   await runCommand(["git", "init", "--quiet"], { cwd: productionRoot });

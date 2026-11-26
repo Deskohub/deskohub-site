@@ -23,7 +23,7 @@ file($name, $body) where {
           }
         },
         or {
-          $name <: r".*/testing/.*",
+          $name <: r".*apps/deskohub-workspace/features/(?:account|checkout|email-campaigns)/(?:.*/)?testing/.*",
           $name <: r".*(?:\.(?:test|spec|pw|test-utils|browser-harness)|-fixture|\.fixture)\.(?:ts|tsx|mts|cts)$"
         }
       }
