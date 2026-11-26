@@ -276,19 +276,6 @@ describe("mutateDiscountAdmin", () => {
     ),
     ...(
       [
-        ["discount-code", m.discountsErrorCodeFinalCustomer],
-        ["voucher", m.discountsErrorVoucherFinalCustomer],
-      ] as const
-    ).map(
-      ([promotionKind, copy]) =>
-        [
-          `the last ${promotionKind} audience customer`,
-          new DiscountAdminAudienceError({ promotionKind, message: "last" }),
-          copy,
-        ] as const
-    ),
-    ...(
-      [
         ["promotion-code-taken", m.discountsErrorPromotionCodeTaken],
         ["discount-referenced", m.discountsErrorDiscountReferenced],
         ["discount-code-claimed", m.discountsErrorCodeClaimed],
@@ -328,6 +315,43 @@ describe("mutateDiscountAdmin", () => {
       `outside:revalidate:${calendarDiscountSourceTag}`
     );
   });
+
+  test.each([
+    [
+      "discount-code",
+      { kind: "remove-code-customer", codeId: "synthetic-code" },
+      m.discountsErrorCodeFinalCustomer,
+    ],
+    [
+      "voucher",
+      { kind: "remove-voucher-customer", voucherId: "synthetic-voucher" },
+      m.discountsErrorVoucherFinalCustomer,
+    ],
+  ] as const)(
+    "words the final %s audience removal refusal",
+    async (promotionKind, removal, copy) => {
+      const refused = () =>
+        Effect.fail(
+          new DiscountAdminAudienceError({ promotionKind, message: "last" })
+        );
+      administration = {
+        removeCodeCustomer: refused,
+        removeVoucherCustomer: refused,
+      };
+
+      expect(
+        await mutateDiscountAdmin({
+          ...removal,
+          customerId: customerCode.customerId,
+        })
+      ).toEqual({
+        serverError: copy({}, { locale: "en-US" }),
+      });
+      expect(timeline).not.toContain(
+        `outside:revalidate:${calendarDiscountSourceTag}`
+      );
+    }
+  );
 
   test("answers a defect with the unexpected-failure copy", async () => {
     administration = {

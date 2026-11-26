@@ -2,6 +2,11 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
 import assert from "node:assert/strict";
+import {
+  DotyposCloudIdSchema,
+  type DotyposCustomer,
+  type DotyposCustomerId,
+} from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { GoogleCalendarServiceMock } from "@deskohub/google-calendar/backend/service.mock";
 import {
@@ -28,6 +33,23 @@ import type { CreateDiscountAdminInput } from "./contracts";
 import { DiscountAdministration } from "./discount-administration.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+
+const dotyposForExistingCustomers = DotyposServiceMock({
+  // An empty audience batch falls back to individual reads.
+  getCustomersByIds: () =>
+    Effect.succeed(new Map<DotyposCustomerId, DotyposCustomer>()),
+  getCustomer: (id) =>
+    Effect.succeed(
+      Option.some({
+        id,
+        _cloudId: DotyposCloudIdSchema.make("synthetic-cloud"),
+        points: null,
+        flags: "0",
+        display: true,
+        deleted: false,
+      })
+    ),
+});
 
 type UncheckedServiceDates = {
   readonly serviceDateFrom?: string | null;
@@ -233,12 +255,6 @@ describe.skipIf(!testDatabase)(
       const customerId = Schema.decodeUnknownSync(
         AdministrationDotyposCustomerId
       )(`synthetic-dates-${suffix}`);
-      const dotypos = DotyposServiceMock({
-        // Audiences read customers in a batch; an empty batch reads each one on its own.
-        getCustomersByIds: () => Effect.succeed(new Map()),
-        getCustomer: (id) =>
-          Effect.succeed(Option.some({ id, deleted: false })),
-      });
       const configuration = (value: string) => ({
         code: value,
         enabled: true,
@@ -320,7 +336,7 @@ describe.skipIf(!testDatabase)(
             cleared: serviceDates(cleared),
           };
         }),
-        dotypos
+        dotyposForExistingCustomers
       );
 
       expect(outcome).toMatchObject({
@@ -448,12 +464,6 @@ describe.skipIf(!testDatabase)(
       );
       const first = decodeCustomerId(`synthetic-first-${suffix}`);
       const second = decodeCustomerId(`synthetic-second-${suffix}`);
-      const dotypos = DotyposServiceMock({
-        // Audiences read customers in a batch; an empty batch reads each one on its own.
-        getCustomersByIds: () => Effect.succeed(new Map()),
-        getCustomer: (id) =>
-          Effect.succeed(Option.some({ id, deleted: false })),
-      });
       const definition = (basisPoints: number) => ({
         labels: { "cs-CZ": label, "en-US": label },
         adjustment: { kind: "percentage", basisPoints },
@@ -594,7 +604,7 @@ describe.skipIf(!testDatabase)(
             updatedVoucherCredit: updatedVoucher.voucher.issuedCredit.value,
           };
         }),
-        dotypos
+        dotyposForExistingCustomers
       );
 
       expect(outcome).toMatchObject({
