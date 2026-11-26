@@ -183,7 +183,7 @@ test.skipIf(!chromiumAvailable)(
       const handoff = {
         checkoutPage,
         checkoutPageUrl: `${origin}${checkoutPath}?step=pay`,
-        isHandoffDocument: (candidate: typeof page) =>
+        isHandoffDocument: async (candidate: typeof page) =>
           candidate === page && candidate.url() === url,
         page,
         provider: "nexi" as const,
@@ -226,6 +226,15 @@ test.skipIf(!chromiumAvailable)(
       const remount = spyOn(body, "ariaSnapshot").mockImplementationOnce(
         async (options) => {
           const snapshot = await ariaSnapshot(options);
+          await Promise.all([
+            page.waitForEvent("framenavigated", {
+              predicate: (frame) => frame === page.mainFrame(),
+              timeout: 1_000,
+            }),
+            page.evaluate(() =>
+              history.replaceState({ ready: true }, "", location.href)
+            ),
+          ]);
           await page
             .locator('iframe[title="Card number"]')
             .evaluate((frame) => frame.replaceWith(frame.cloneNode(true)));

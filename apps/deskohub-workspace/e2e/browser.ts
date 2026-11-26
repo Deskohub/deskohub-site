@@ -1,4 +1,5 @@
-import type { Frame, Locator, Page } from "@playwright/test";
+import { setTimeout as delay } from "node:timers/promises";
+import type { Frame, Locator, Page, Request } from "@playwright/test";
 import { Effect } from "effect";
 import type {
   E2EBrowserSession,
@@ -390,27 +391,80 @@ export const readPageUrl = (
       Effect.orElseSucceed(() => undefined)
     );
 
-// Raw URLs stay in the returned predicate. Even a reload at the same URL
-// invalidates the observed document.
-const matchCurrentDocument = (page: Page, rawUrl: string) => {
+export type CurrentBrowserDocument = (
+  page: Page,
+  timeoutMs: number
+) => Promise<boolean>;
+
+// Playwright emits framenavigated for History API updates as well as document
+// replacement. Retain the original Document in its browser execution context.
+const matchCurrentDocument = (
+  page: Page,
+  rawUrl: string
+): CurrentBrowserDocument => {
   const mainFrame = page.mainFrame();
-  let navigated = false;
-  const stopWatching = () => {
+  let invalidated = false;
+  let bound = false;
+  const invalidate = () => {
+    invalidated = true;
     page.off("framenavigated", recordNavigation);
-    page.off("close", stopWatching);
+    page.off("request", recordRequest);
+    page.off("close", invalidate);
   };
   const recordNavigation = (frame: Frame) => {
     if (frame !== mainFrame) return;
-    navigated = true;
-    stopWatching();
+    if (!bound || frame.url() !== rawUrl) invalidate();
   };
+  const recordRequest = (request: Request) => {
+    if (!request.isNavigationRequest()) return;
+    try {
+      if (request.frame() === mainFrame) invalidate();
+    } catch {
+      // A request can precede its frame. The Document check still applies.
+    }
+  };
+  const matches = () =>
+    !invalidated && !page.isClosed() && page.url() === rawUrl;
   page.on("framenavigated", recordNavigation);
-  page.once("close", stopWatching);
-  return (candidate: Page) =>
-    candidate === page &&
-    !navigated &&
-    !page.isClosed() &&
-    page.url() === rawUrl;
+  page.on("request", recordRequest);
+  page.once("close", invalidate);
+  const original = page
+    .evaluateHandle(() => document)
+    .then(
+      async (handle) => {
+        if (!matches()) {
+          await handle.dispose().catch(() => undefined);
+          invalidate();
+          return undefined;
+        }
+        bound = true;
+        return handle;
+      },
+      () => {
+        invalidate();
+        return undefined;
+      }
+    );
+  return async (candidate, timeoutMs) => {
+    if (candidate !== page || !matches()) return false;
+    const timer = new AbortController();
+    try {
+      return await Promise.race([
+        original
+          .then(
+            async (handle) =>
+              !!handle &&
+              matches() &&
+              (await handle.evaluate((observed) => observed === document)) &&
+              matches()
+          )
+          .catch(() => false),
+        delay(timeoutMs, false, { signal: timer.signal }),
+      ]);
+    } finally {
+      timer.abort();
+    }
+  };
 };
 
 /**
@@ -427,7 +481,7 @@ export const waitForPageUrl = ({
 }: {
   readonly description: string;
   readonly matches: (url: string) => boolean;
-  readonly onDocumentMatch?: (isCurrent: (page: Page) => boolean) => void;
+  readonly onDocumentMatch?: (isCurrent: CurrentBrowserDocument) => void;
   readonly session: PolledBrowserSession;
   readonly timeoutMs: number;
 }): Effect.Effect<string, WorkspaceE2EError> =>

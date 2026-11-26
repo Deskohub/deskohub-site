@@ -170,6 +170,7 @@ export function makeUnlimitedPassReviewCapture({
       readonly mask: readonly Locator[];
       readonly section?: Locator;
       readonly style?: string;
+      readonly verifyDocument?: () => Promise<boolean>;
     }
   ) {
     if (results.get(shot) === "captured") return;
@@ -183,9 +184,17 @@ export function makeUnlimitedPassReviewCapture({
       let navigated = false;
       let restored = false;
       const recordNavigation = (frame: Frame) => {
-        if (frame === mainFrame) navigated = true;
+        if (
+          frame === mainFrame &&
+          (!options.verifyDocument || frame.url() !== originalUrl)
+        )
+          navigated = true;
       };
-      const documentChanged = () => navigated || page.url() !== originalUrl;
+      const navigationObserved = () => navigated || page.url() !== originalUrl;
+      const documentChanged = async () =>
+        navigationObserved() ||
+        (options.verifyDocument !== undefined &&
+          (!(await options.verifyDocument()) || navigationObserved()));
       page.on("framenavigated", recordNavigation);
       try {
         for (const viewport of viewports) {
@@ -193,12 +202,16 @@ export function makeUnlimitedPassReviewCapture({
           await page.setViewportSize(viewport);
           phase = "unexpected-document";
           const problem = await options.verify();
-          if (documentChanged()) {
+          if (navigationObserved()) {
             phase = "document-navigated";
             return;
           }
           if (problem) {
             phase = problem;
+            return;
+          }
+          if (await documentChanged()) {
+            phase = "document-navigated";
             return;
           }
           const mask = [...options.mask];
@@ -217,7 +230,7 @@ export function makeUnlimitedPassReviewCapture({
                 ...screenshot,
                 fullPage: shot !== "nexi-handoff",
               });
-          if (documentChanged()) {
+          if (await documentChanged()) {
             phase = "document-navigated";
             return;
           }
@@ -286,6 +299,9 @@ export function makeUnlimitedPassReviewCapture({
       // Share the existing two-width inspection budget. The first view may
       // spend most of it waiting for Nexi to render its hosted fields.
       let inspectionBudget = viewports.length * timeout;
+      const { isHandoffDocument } = hosted;
+      const verifyDocument = () =>
+        isHandoffDocument?.(page, timeout) ?? Promise.resolve(false);
       return capture(page, "nexi-handoff", {
         mask: [
           page.locator("[data-ph-mask]"),
@@ -295,14 +311,15 @@ export function makeUnlimitedPassReviewCapture({
         // form between the live value check and the screenshot.
         style:
           "input:not([type=submit], [type=button], [type=checkbox], [type=radio]), textarea { color: transparent !important; caret-color: transparent !important; }",
+        verifyDocument,
         verify: async () => {
           const url = URL.parse(page.url());
-          if (!hosted.isHandoffDocument) return "untracked-document";
+          if (!isHandoffDocument) return "untracked-document";
           if (
             page !== hosted.page ||
             hosted.provider !== "nexi" ||
             url?.origin !== sandboxOrigin ||
-            !hosted.isHandoffDocument(page)
+            !(await verifyDocument())
           )
             return "unexpected-document";
           const started = performance.now();

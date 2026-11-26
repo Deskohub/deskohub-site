@@ -6,6 +6,7 @@ import {
 } from "@/features/reservation/persistence-contracts";
 import {
   activateHydratedElement,
+  type CurrentBrowserDocument,
   openPage,
   readActivePage,
   readPageUrl,
@@ -553,7 +554,7 @@ const formatReservationStartDiagnostics = (
 export type HostedPaymentPage = {
   readonly checkoutPage: Page;
   readonly checkoutPageUrl: string;
-  readonly isHandoffDocument?: (page: Page) => boolean;
+  readonly isHandoffDocument?: CurrentBrowserDocument;
   readonly nexiNavigation?: NexiHostedNavigation;
   readonly page: Page;
   readonly provider: E2EPaymentProvider;
