@@ -101,6 +101,7 @@ import {
   cancelUnlimitedAutoRenewal,
   listUnlimitedAutoRenewals,
   readUnlimitedAutoRenewalDisclosure,
+  recordUnlimitedAutoRenewalAuthorization,
 } from "./unlimited-auto-renewal";
 import {
   confirmUnlimitedPassDays,
@@ -490,7 +491,7 @@ it("binds Unlimited renewal consent to the paid attempt and lets only the owner 
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const { db } = yield* WorkspaceDatabase;
+        const { db, transaction } = yield* WorkspaceDatabase;
         const purchase = yield* recordPurchase(now, 650, "reserved-desk", true);
         const accountId = purchase.buyerAccountId;
         const otherBuyer = customerAccountIdSchema.make(crypto.randomUUID());
@@ -628,10 +629,29 @@ it("binds Unlimited renewal consent to the paid attempt and lets only the owner 
         expect((yield* readState(purchase.id)).attempts).toHaveLength(0);
         expect(providerSessions).toBe(0);
 
+        // Keep evidence from an expired attempt so cancellation must select the paid attempt.
+        const expiredAt = now.subtract({ minutes: 1 });
+        const expiredId = yield* recordAttempt(
+          purchase.id,
+          "expired",
+          expiredAt
+        );
+        yield* transaction(
+          recordUnlimitedAutoRenewalAuthorization(
+            expiredId,
+            purchase.holderVersion,
+            renewal,
+            fingerprint,
+            expiredAt
+          )
+        );
         yield* createUnlimitedPassHolds(purchase);
         expect(yield* pay(authorization)).toMatchObject({ status: "hosted" });
         expect(providerSessions).toBe(1);
-        const [attempt] = (yield* readState(purchase.id)).attempts;
+        const { order, attempts } = yield* readState(purchase.id);
+        const attempt = attempts.find(
+          ({ id }) => id === order?.activePaymentAttemptId
+        );
         if (!attempt) throw new Error("Missing payment attempt");
         const evidence = db
           .select()
@@ -683,6 +703,15 @@ it("binds Unlimited renewal consent to the paid attempt and lets only the owner 
         expect((yield* evidence)[0]?.cancelledAt).toEqual(
           cancelled?.cancelledAt
         );
+        const [expiredEvidence] = yield* db
+          .select({
+            cancelledAt: unlimitedAutoRenewalAuthorizations.cancelledAt,
+          })
+          .from(unlimitedAutoRenewalAuthorizations)
+          .where(
+            eq(unlimitedAutoRenewalAuthorizations.paymentAttemptId, expiredId)
+          );
+        expect(expiredEvidence?.cancelledAt).toBeNull();
         expect(
           (yield* listUnlimitedAutoRenewals(accountId)).get(purchase.id)?.status
         ).toBe("cancelled");

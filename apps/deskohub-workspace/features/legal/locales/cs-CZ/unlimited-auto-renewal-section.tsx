@@ -11,7 +11,7 @@ export const unlimitedAutoRenewalSection: LegalSection = {
     "16.5 Klient povoluje budoucí platby z karty samostatným zaškrtávacím políčkem, které je ve výchozím stavu prázdné. Souhlas umožňuje Poskytovateli strhávat sjednanou částku každých 30 kalendářních dnů do zrušení obnovování. První karetní platba a případné ověření probíhají u Nexi. Poskytovatel použije pro další platby platební referenci. Potvrzení na trvalém nosiči obsahuje přijaté podmínky, udělený souhlas, částku, termíny a postup zrušení.",
     "16.6 Sedm kalendářních dnů před každou plánovanou platbou Poskytovatel pošle Klientovi e-mail s datem a částkou platby, dalším obdobím služby a přímým odkazem na správu obnovování. Jde o provozní zprávu, jejíž zasílání nezávisí na souhlasu s marketingem.",
     <>
-      16.7 Klient může obnovování bezplatně zrušit v části Členství ve svém účtu
+      16.7 Klient může obnovování bezplatně zrušit v části Balíčky ve svém účtu
       nebo jednoznačným oznámením na{" "}
       <a
         className="text-burned-orange underline underline-offset-4"

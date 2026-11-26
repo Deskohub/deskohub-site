@@ -11,8 +11,8 @@ export const unlimitedAutoRenewalSection: LegalSection = {
     "16.5 The Client authorizes future card charges with a separate checkbox that starts unchecked. The authorization allows the Provider to charge the agreed amount every 30 calendar days until renewal is cancelled. The first card payment and any required authentication take place with Nexi. The Provider uses a payment reference for later charges. Confirmation on a durable medium includes the accepted terms, authorization, amount, dates, and cancellation instructions.",
     "16.6 Seven calendar days before each scheduled charge, the Provider emails the Client the charge date and amount, the next service period, and a direct link to manage renewal. This is a service message sent independently of marketing consent.",
     <>
-      16.7 The Client can stop renewal free of charge in the Memberships section
-      of their Account or by sending an unequivocal notice to{" "}
+      16.7 The Client can stop renewal free of charge in the Passes section of
+      their Account or by sending an unequivocal notice to{" "}
       <a
         className="text-burned-orange underline underline-offset-4"
         href={`mailto:${contactEmail}`}
