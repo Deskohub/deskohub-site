@@ -1,6 +1,7 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
 import { parseWorkspaceAvailabilityQuery } from "@/features/reservation/workspace-availability";
+import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import {
   getMeetingRoomStartTimesUrl,
@@ -90,8 +91,7 @@ describe("getWorkspaceAvailabilityUrl", () => {
   });
 
   test("transports replacement state outside the public availability query", async () => {
-    const originalFetch = globalThis.fetch;
-    const fetchMock = mock(() =>
+    const fetchMock = stubFetch(() =>
       Promise.resolve(
         Response.json({
           date: "2099-07-30",
@@ -107,7 +107,6 @@ describe("getWorkspaceAvailabilityUrl", () => {
         })
       )
     );
-    globalThis.fetch = fetchMock as typeof fetch;
 
     try {
       await loadWorkspaceAvailability({
@@ -121,14 +120,14 @@ describe("getWorkspaceAvailabilityUrl", () => {
         replacementToken: "signed-restored-checkout-state",
         signal: new AbortController().signal,
       });
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
 
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(String(url)).not.toContain("signed-restored-checkout-state");
-    expect(
-      new Headers(init?.headers).get(workspaceAvailabilityReplacementHeader)
-    ).toBe("signed-restored-checkout-state");
+      const [url, init] = fetchMock.mock.calls[0] ?? [];
+      expect(String(url)).not.toContain("signed-restored-checkout-state");
+      expect(
+        new Headers(init?.headers).get(workspaceAvailabilityReplacementHeader)
+      ).toBe("signed-restored-checkout-state");
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 });

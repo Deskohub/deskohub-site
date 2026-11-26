@@ -29,7 +29,7 @@ describe("preparePayState", () => {
         phone: "+420 777 777 777",
         billing: { purpose: "personal", invoice: "none" },
       },
-    } as never);
+    });
 
     expect(request.checkBotId).toHaveBeenCalledTimes(1);
     expect(result).toEqual({

@@ -6,7 +6,7 @@ import {
   DotyposCustomerIdSchema,
 } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   CurrentCustomerAccount,
@@ -40,6 +40,7 @@ import { ReviewAccounts, ReviewSandbox } from "@/features/review-accounts";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
   type WorkspacePostgresTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 
@@ -114,14 +115,9 @@ const cleanupFixture = async (
        (select count(*) from auth."user" where id = $2) as users`,
     [fixture.reservationId, fixture.accountId]
   );
-  const row = remaining.rows[0] as
-    | { readonly reservations: string; readonly users: string }
-    | undefined;
-  if (!row) {
-    throw new Error(
-      "Reservation authorization fixture cleanup did not converge."
-    );
-  }
+  const row = Schema.decodeUnknownSync(
+    Schema.Struct({ reservations: Schema.String, users: Schema.String })
+  )(remaining.rows[0]);
   if (row.reservations !== "0" || row.users !== "0") {
     throw new Error(
       "Reservation authorization fixture cleanup did not converge."
@@ -283,7 +279,7 @@ const runStatusLoad = async (options: {
 describe.skipIf(!testDatabase)(
   "reservation authorization and checkout status ordering on disposable Postgres",
   () => {
-    const postgres = testDatabase as WorkspacePostgresTestDatabase;
+    const postgres = requireTestDatabase(testDatabase);
 
     afterAll(async () => {
       await postgres.close();
