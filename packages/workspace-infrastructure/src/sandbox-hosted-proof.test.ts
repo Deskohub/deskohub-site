@@ -451,7 +451,7 @@ describe("sandbox proof runner", () => {
       "bun scripts/sandbox-rpc-probe.ts --url https://workspace-api-",
       "sleep 90",
       'log_id\\(\\"run.googleapis.com/requests\\"\\)',
-      '\\"<marker>\\"\\ OR\\ textPayload:',
+      'gcloud logging read \\"<marker>\\" --project=deskohub-workspace-sandbox',
       "https://cloudtrace.googleapis.com/v1/projects/deskohub-workspace-sandbox/traces/",
       "https://cloudtrace.googleapis.com/v1/projects/deskohub-workspace-sandbox/traces\\?view=COMPLETE\\&pageSize=100",
       "bun scripts/sandbox-locked-stack.ts destroy",
@@ -465,6 +465,9 @@ describe("sandbox proof runner", () => {
     // command; every traced command shows it redacted.
     expect(output).not.toMatch(/sandbox-marker-[0-9a-f]/);
     expect(output).toContain("<marker>");
+    expect(output).not.toContain("jsonPayload:");
+    expect(output).not.toContain("textPayload:");
+    expect(output).not.toContain("httpRequest.requestUrl:");
   });
 
   test("dry-runs cleanup-only as teardown and inventory alone", () => {

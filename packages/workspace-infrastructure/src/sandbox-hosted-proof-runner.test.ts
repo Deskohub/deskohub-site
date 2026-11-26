@@ -2396,9 +2396,11 @@ describe("telemetry privacy", () => {
       },
     ]),
   };
+  const markerLogReadPattern =
+    '^logging read "sandbox-marker-[0-9a-f]+" --project=';
   const baseRules: ReadonlyArray<FakeRule> = [
     requestLog,
-    { tool: "gcloud", pattern: '^logging read "sandbox-marker-', stdout: "[]" },
+    { tool: "gcloud", pattern: markerLogReadPattern, stdout: "[]" },
     {
       tool: "curl",
       pattern: `cloudtrace\\.googleapis\\.com/v1/projects/${projectId}/traces/${traceId}$`,
@@ -2450,8 +2452,16 @@ describe("telemetry privacy", () => {
         output: "",
       });
       expect(calls).toContain(
-        `gcloud logging read "${marker}" OR textPayload:"${marker}" OR jsonPayload:"${marker}" OR httpRequest.requestUrl:"${marker}" --project=${projectId} --freshness=7200s --limit=20 --format=json(logName,timestamp)`
+        `gcloud logging read "${marker}" --project=${projectId} --freshness=7200s --limit=20 --format=json(logName,timestamp)`
       );
+      expect(
+        calls.some(
+          (call) =>
+            call.includes("jsonPayload:") ||
+            call.includes("textPayload:") ||
+            call.includes("httpRequest.requestUrl:")
+        )
+      ).toBe(false);
       expect(markerLeaks(output, marker)).toEqual([]);
     }
   });
@@ -2510,12 +2520,13 @@ describe("telemetry privacy", () => {
     const logged = privacy(() => [
       {
         tool: "gcloud",
-        pattern: '^logging read "sandbox-marker-',
+        pattern: markerLogReadPattern,
         stdout: JSON.stringify([{ logName: "projects/x/logs/stdout" }]),
       },
     ]);
     expect(logged.exitCode).toBe(1);
     expect(logged.output).toContain("the marker reached readable logs");
+    expect(markerLeaks(logged.output, logged.marker)).toEqual([]);
     const spanned = privacy((marker) => [
       {
         tool: "curl",
@@ -2534,10 +2545,26 @@ describe("telemetry privacy", () => {
 
   test("fails when a log read or the trace listing is unusable", () => {
     const denied = privacy(() => [
-      { tool: "gcloud", pattern: '^logging read "sandbox-marker-', exit: 1 },
+      {
+        tool: "gcloud",
+        pattern: markerLogReadPattern,
+        exit: 1,
+        stderr:
+          "ERROR: (gcloud.logging.read) INVALID_ARGUMENT: Cannot match a nested type 'jsonPayload'.",
+      },
     ]);
     expect(denied.exitCode).toBe(1);
     expect(denied.output).toContain("marker absence in logs unverified");
+    expect(markerLeaks(denied.output, denied.marker)).toEqual([]);
+    const malformed = privacy(() => [
+      {
+        tool: "gcloud",
+        pattern: markerLogReadPattern,
+        stdout: "{}",
+      },
+    ]);
+    expect(malformed.exitCode).toBe(1);
+    expect(malformed.output).toContain("the marker reached readable logs");
     const omitted = privacy(() => [
       {
         tool: "curl",
