@@ -30,6 +30,7 @@ import {
 } from "../services/telemetry.mock";
 import type { CheckoutData, CheckoutFlowState, CheckoutRow } from "../types";
 import {
+  reconcileWorkspaceE2ECheckout,
   runWorkspaceE2ECleanupWithPreparedCandidates,
   traceWorkspaceE2ESuiteCleanup,
 } from "./cleanup-plan";
@@ -45,15 +46,44 @@ test("records a failed suite-cleanup phase after reconciling the account lane", 
 
   const exit = await Effect.runPromiseExit(
     traceWorkspaceE2ESuiteCleanup({
-      cleanupCheckout: Effect.succeed(checkoutError),
-      reconcileAccountJournals: Effect.sync(() => {
-        accountLaneReconciled = true;
+      reconcileCheckout: reconcileWorkspaceE2ECheckout({
+        cleanupCheckout: Effect.succeed(checkoutError),
+        reconcileAccountJournals: Effect.sync(() => {
+          accountLaneReconciled = true;
+        }),
       }),
+      reconcileUnlimitedPass: Effect.void,
     }).pipe(Effect.provide(makeE2ETelemetryMock(observations)))
   );
 
   expect(exit._tag).toBe("Failure");
   expect(accountLaneReconciled).toBe(true);
+  expect(observations).toEqual([
+    {
+      failureKind: "error",
+      outcome: "failed",
+      phaseId: "suite-cleanup",
+      scope: "phase",
+    },
+  ]);
+});
+
+test("records both ordinary and Unlimited failures under the one suite-cleanup phase", async () => {
+  const observations: E2ETelemetryObservation[] = [];
+  const checkoutError = workspaceE2EError("checkout cleanup failed");
+  const passError = workspaceE2EError("Unlimited cleanup failed");
+
+  const result = await Effect.runPromise(
+    traceWorkspaceE2ESuiteCleanup({
+      reconcileCheckout: Effect.fail(checkoutError),
+      reconcileUnlimitedPass: Effect.fail(passError),
+    }).pipe(Effect.provide(makeE2ETelemetryMock(observations)), Effect.result)
+  );
+
+  expect(result).toMatchObject({
+    _tag: "Failure",
+    failure: { causes: [checkoutError, passError] },
+  });
   expect(observations).toEqual([
     {
       failureKind: "error",

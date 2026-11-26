@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { readWorkspaceE2EAccountJournal } from "../account/journal";
 import {
   prepareWorkspaceE2EAccountJournalReconciliations,
@@ -16,6 +16,7 @@ import {
   automationReservationCaseId,
   deleteRunAutomationJourneys,
 } from "../email-campaigns/automation-reservation-case";
+import { toWorkspaceE2EError } from "../errors";
 import { E2EDatabase } from "../integrations/database.service";
 import { reservationIntentJournalPath } from "../reservation-intents";
 import { readReservationJournal } from "../reservation-journal";
@@ -26,6 +27,7 @@ import {
   workspaceE2ECaseIds,
 } from "./case-catalog";
 import {
+  reconcileWorkspaceE2ECheckout,
   runWorkspaceE2ECleanupWithPreparedCandidates,
   traceWorkspaceE2ESuiteCleanup,
 } from "./cleanup-plan";
@@ -63,51 +65,65 @@ test("reconcile workspace checkout reservations", async ({
   runContext,
   runEffect,
 }) => {
-  const failures: unknown[] = [];
-  try {
-    await reconcileCheckout();
-  } catch (error) {
-    failures.push(error);
-  }
-  try {
-    if (await readUnlimitedPassCleanupJournals()) {
-      try {
-        await execFileAsync(
-          "bun",
-          [
-            "--no-env-file",
-            "--conditions=react-server",
-            "e2e/playwright-checkout/unlimited-pass-cleanup.ts",
-          ],
-          {
-            cwd: workspaceDir,
-            env: { NODE_ENV: "test", ...toPlaywrightEnvironment(environment) },
-            timeout:
-              workspaceE2ETimeouts.unlimitedPassCase +
-              workspaceE2ETimeouts.datasource,
-          }
-        );
-      } catch (error) {
-        // The child emits fixed diagnostics. Discard unexpected subprocess output.
-        const diagnostic =
-          error &&
-          typeof error === "object" &&
-          "stderr" in error &&
-          typeof error.stderr === "string" &&
-          /^Unlimited pass [a-zA-Z ]+\n$/.test(error.stderr)
-            ? error.stderr.trim()
-            : "Unlimited pass cleanup subprocess failed";
-        throw new Error(diagnostic);
-      }
-    }
-  } catch (error) {
-    failures.push(error);
-  }
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1)
-    throw new AggregateError(failures, "Workspace checkout cleanup failed");
+  await runEffect(
+    traceWorkspaceE2ESuiteCleanup({
+      reconcileCheckout: Effect.gen(function* () {
+        const span = yield* Effect.option(Effect.currentSpan);
+        const runInPhase: typeof runEffect = (effect) =>
+          runEffect(
+            Option.isSome(span)
+              ? effect.pipe(Effect.withParentSpan(span.value))
+              : effect
+          );
+        yield* Effect.tryPromise({
+          try: () => reconcileCheckout(runInPhase),
+          catch: (cause) =>
+            toWorkspaceE2EError("reconcile ordinary checkout", cause),
+        });
+      }),
+      reconcileUnlimitedPass: Effect.tryPromise({
+        try: reconcileUnlimitedPass,
+        catch: (cause) =>
+          toWorkspaceE2EError("reconcile Unlimited pass", cause),
+      }),
+    })
+  );
 
-  async function reconcileCheckout() {
+  async function reconcileUnlimitedPass(signal: AbortSignal) {
+    if (!(await readUnlimitedPassCleanupJournals())) return;
+    try {
+      await execFileAsync(
+        "bun",
+        [
+          "--no-orphans",
+          "--no-env-file",
+          "--conditions=react-server",
+          "e2e/playwright-checkout/unlimited-pass-cleanup.ts",
+        ],
+        {
+          cwd: workspaceDir,
+          env: { NODE_ENV: "test", ...toPlaywrightEnvironment(environment) },
+          signal,
+          timeout:
+            workspaceE2ETimeouts.unlimitedPassCase +
+            workspaceE2ETimeouts.datasource,
+        }
+      );
+    } catch (error) {
+      // The child emits fixed diagnostics. Discard unexpected subprocess output.
+      const diagnostic =
+        error &&
+        typeof error === "object" &&
+        "stderr" in error &&
+        typeof error.stderr === "string" &&
+        /^Unlimited pass [a-zA-Z ]+\n$/.test(error.stderr)
+          ? error.stderr.trim()
+          : "Unlimited pass cleanup subprocess failed";
+      throw new Error(diagnostic);
+    }
+  }
+
+  async function reconcileCheckout(runInPhase: typeof runEffect) {
     const datasourceConfig = getDatasourceConfig(environment);
     try {
       // An automation journey whose case never reached its own finalizer could
@@ -116,7 +132,7 @@ test("reconcile workspace checkout reservations", async ({
       const automationJournals = await readWorkspaceE2ECaseJournals([
         automationReservationCaseId,
       ]);
-      await runEffect(
+      await runInPhase(
         Effect.gen(function* () {
           const { db } = yield* E2EDatabase;
           yield* deleteRunAutomationJourneys({
@@ -130,7 +146,7 @@ test("reconcile workspace checkout reservations", async ({
     } finally {
       await runWorkspaceE2ECleanupWithPreparedCandidates({
         readAccountJournals: () =>
-          runEffect(
+          runInPhase(
             prepareWorkspaceE2EAccountJournalReconciliations(
               datasourceConfig,
               runContext.runId,
@@ -146,13 +162,13 @@ test("reconcile workspace checkout reservations", async ({
               (caseId) => caseId !== unlimitedPassAutoRenewalCaseId
             )
           );
-          return runEffect(
+          return runInPhase(
             prepareCheckoutFlowCleanup({ datasourceConfig, flowStates })
           );
         },
         reconcile: ({ accountJournals, checkoutCleanup }) =>
-          runEffect(
-            traceWorkspaceE2ESuiteCleanup({
+          runInPhase(
+            reconcileWorkspaceE2ECheckout({
               cleanupCheckout: cleanupPreparedCheckoutFlowStates({
                 datasourceConfig,
                 prepared: checkoutCleanup,
