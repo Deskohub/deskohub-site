@@ -99,6 +99,7 @@ test("reads a fixed HTTPS period and returns only the matched account's movement
       movementId: "8412000001",
       bookingDate: "2026-07-12",
       amount: { _tag: "CZK", minorUnits: -113 },
+      constantSymbol: null,
       reference: { _tag: "VariableSymbol", value: "123" },
     },
   ]);
@@ -299,6 +300,7 @@ test("keeps large IDs and exact amounts while discarding invalid variable symbol
       movementId: "9007199254740995",
       bookingDate: "2026-07-12",
       amount: { _tag: "CZK", minorUnits: 9007199254740991 },
+      constantSymbol: null,
       reference: { _tag: "Invalid" },
     },
     {
@@ -309,12 +311,14 @@ test("keeps large IDs and exact amounts while discarding invalid variable symbol
         currency: "KWD",
         decimalAmount: "-123456789012345.123",
       },
+      constantSymbol: null,
       reference: { _tag: "Invalid" },
     },
     {
       movementId: "8412000003",
       bookingDate: "2026-07-12",
       amount: { _tag: "CZK", minorUnits: -113 },
+      constantSymbol: null,
       reference: { _tag: "Absent" },
     },
   ]);
@@ -330,6 +334,51 @@ test("keeps large IDs and exact amounts while discarding invalid variable symbol
       reason: "invalid-response",
     });
   }
+});
+
+test("normalizes constant symbols and keeps movements with missing or malformed symbols", async () => {
+  const columns = [
+    { value: "0558" },
+    { value: "558" },
+    { value: 558 },
+    { value: 7 },
+    { value: "42" },
+    undefined,
+    null,
+    { value: null },
+    { value: "05580" },
+    { value: "05 8" },
+    "0558",
+  ];
+  const response = Response.json({
+    accountStatement: {
+      ...statement.accountStatement,
+      transactionList: {
+        transaction: columns.map((column4, index) => ({
+          ...movement,
+          column22: { value: movement.column22.value + index },
+          column4,
+        })),
+      },
+    },
+  });
+
+  const rows = await Effect.runPromise(
+    readPeriod(() => Promise.resolve(response))
+  );
+  expect(rows.map((row) => row.constantSymbol)).toEqual([
+    "0558",
+    "0558",
+    "0558",
+    "0007",
+    "0042",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+  ]);
 });
 
 test("preserves reference wire type and treats padded quoted IDs as the same movement", async () => {
