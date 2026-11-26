@@ -1,7 +1,6 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
-import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { Effect, Layer, Redacted, Schema } from "effect";
@@ -167,11 +166,10 @@ const createHarness = () => {
             const variableSymbol = yield* Effect.promise(async () => {
               const {
                 rows: [row],
-              } = await pool.query<{ readonly reference: string }>(
+              } = await pool.query<{ readonly reference?: unknown }>(
                 "select nextval('qr_payment_references')::text as reference"
               );
-              assert(row, "Expected a payment reference");
-              return row.reference;
+              return Schema.decodeUnknownSync(Schema.String)(row?.reference);
             });
             yield* db.execute(sql`insert into payment_attempts (id, order_id, workspace_reservation_id, provider, provider_order_id, state, amount_value, amount_exponent, currency) values
           (${qrId}, ${orderId}, ${reservation.id}, 'fio', ${variableSymbol}, 'pending', 12000, 2, 'CZK'),

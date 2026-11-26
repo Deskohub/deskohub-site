@@ -1184,8 +1184,8 @@ test("no-promise-matchers-in-browser-tests holds across Workspace browser tests"
 // The corpus above lints with Biome's default file set, so these cases lint a
 // copy of the repository layout with the production `files.includes` and run
 // a package's own `lint` script from its directory, the way Turbo runs it.
-// A checkout directory named testing must not exempt feature production files.
-const productionFixture = "testing/production";
+// Exemptions describe directories inside the repository, not its parent path.
+const productionFixture = "generated/paraglide/testing/production";
 const productionRoot = join(fixtureRoot, productionFixture);
 const assertionProbe =
   "export const probe = (input?: string) => input! as string;\n";
