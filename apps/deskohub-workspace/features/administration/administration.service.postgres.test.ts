@@ -1603,10 +1603,12 @@ describe.skipIf(!testDatabase)(
       );
 
       const [restorableDetail, replacedDetail] = await Promise.all(
-        ([
-          [restorable, "restorable"],
-          [replaced, "replaced"],
-        ] as const).map(([reservationId, label]) =>
+        (
+          [
+            [restorable, "restorable"],
+            [replaced, "replaced"],
+          ] as const
+        ).map(([reservationId, label]) =>
           run(
             (administration) =>
               administration.loadReservation(
