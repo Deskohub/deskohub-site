@@ -2,6 +2,7 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
@@ -10,8 +11,10 @@ import {
 import type { Customer, Reservation, Table } from "@deskohub/dotypos/generated";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Option } from "effect";
+import { workspaceReservations } from "@/db/schema";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
@@ -178,8 +181,19 @@ const accessTargetEffect = (input: {
 
 describe("WorkspaceReservationService", () => {
   test("builds details from Dotypos reservation dates and table", async () => {
+    const database = await makeRecordingWorkspaceDatabase();
+    database.setRows([[[" dotypos-reservation-id "]]]);
+    const [legacy] = await Effect.runPromise(
+      database.db
+        .select({
+          dotyposReservationId: workspaceReservations.dotyposReservationId,
+        })
+        .from(workspaceReservations)
+    );
+    assert(legacy);
     const details = await Effect.runPromise(
       detailsEffect({
+        workspaceReservation: makeWorkspaceReservation(legacy),
         tables: [
           makeTable(),
           makeTable({ id: "neighbor-table", name: "11" }),

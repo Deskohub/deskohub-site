@@ -5,7 +5,10 @@ import assert from "node:assert/strict";
 import { Cause, Effect, Exit, Option } from "effect";
 import type { WorkspaceReservationRow } from "@/db/schema";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
-import { StoredReservationDetails } from "./stored-reservation-details.server";
+import {
+  encodeStoredReservationDetails,
+  StoredReservationDetails,
+} from "./stored-reservation-details.server";
 
 type StoredDocument = WorkspaceReservationRow["reservationDetails"];
 
@@ -105,11 +108,16 @@ describe("StoredReservationDetails", () => {
   });
 
   test("refuses to encode a document a read would reject", async () => {
-    const document = { ...documents.unresolvedOffice, floor: 3 };
-    const exit = await Effect.runPromiseExit(
-      StoredReservationDetails.encode(document)
+    expect(StoredReservationDetails.encode).toBe(
+      encodeStoredReservationDetails
     );
-    assert(Exit.isFailure(exit));
-    expect(Cause.hasDies(exit.cause)).toBe(true);
+
+    for (const document of malformed) {
+      const exit = await Effect.runPromiseExit(
+        encodeStoredReservationDetails(document)
+      );
+      assert(Exit.isFailure(exit));
+      expect(Cause.hasDies(exit.cause)).toBe(true);
+    }
   });
 });

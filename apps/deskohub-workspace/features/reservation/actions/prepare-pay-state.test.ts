@@ -12,10 +12,7 @@ import {
   test,
 } from "bun:test";
 import {
-  DotyposBranchIdSchema,
-  DotyposCloudIdSchema,
   DotyposCustomerIdSchema,
-  type DotyposReservation,
   DotyposReservationIdSchema,
   DotyposService,
   DotyposTableIdSchema,
@@ -118,7 +115,10 @@ import type {
   WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
-import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import {
+  dotyposHoldFixture,
+  workspaceReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
 import {
   normalizedOpenSpaceCoworkReservationOrderSchema,
   normalizedReservedDeskCoworkReservationOrderSchema,
@@ -482,18 +482,6 @@ const signedInAccountId = customerAccountIdSchema.make(
   "5b6f31d0-2c1a-4f0e-9a3d-6c7b8e2f1a01"
 );
 
-const dotyposReservationFixture = (id: string): DotyposReservation => ({
-  id: DotyposReservationIdSchema.make(id),
-  _branchId: DotyposBranchIdSchema.make("branch"),
-  _cloudId: DotyposCloudIdSchema.make("cloud"),
-  _customerId: DotyposCustomerIdSchema.make("customer"),
-  _tableId: DotyposTableIdSchema.make("table-id"),
-  startDate: "2099-07-01T07:00:00.000Z",
-  endDate: "2099-07-01T16:00:00.000Z",
-  seats: "1",
-  status: "NEW",
-});
-
 const unusedBookingDependencies = async () => {
   const { WorkspaceAvailabilityService } = await import(
     "@/features/reservation/backend/workspace-availability.service"
@@ -830,7 +818,7 @@ const runReusableReservationScenario = async (input: {
   const createReservation =
     input.createReservation ??
     mock(() =>
-      Effect.succeed(dotyposReservationFixture("new-dotypos-reservation-id"))
+      Effect.succeed(dotyposHoldFixture("new-dotypos-reservation-id"))
     );
   const getReservationStatus =
     input.getReservationStatus ?? mock(() => Effect.succeed("NEW" as const));
@@ -1204,9 +1192,7 @@ const runMeetingRoomNewHoldScenario = async (
     afterDotypos(Effect.succeed("meeting-room-table-id"))
   );
   const createReservation = mock(() =>
-    afterDotypos(
-      Effect.succeed(dotyposReservationFixture("dotypos-meeting-room-id"))
-    )
+    afterDotypos(Effect.succeed(dotyposHoldFixture("dotypos-meeting-room-id")))
   );
   const attachHold = mock(() => Effect.void);
   const enqueueCleanup = mock(() => Effect.void);
@@ -2946,7 +2932,7 @@ describe("prepareWorkspacePayState", () => {
         const bookedAt = Temporal.Instant.from("2026-10-20T12:09:59Z");
         const createDraft = makeAgentDraft("agent-live-hold-id");
         const createReservation = mock(() =>
-          Effect.succeed(dotyposReservationFixture("dotypos-live-hold-id"))
+          Effect.succeed(dotyposHoldFixture("dotypos-live-hold-id"))
         );
         const cancelReservation = mock(() => Effect.void);
         const claimSupersessionCancellation = mock(() => Effect.succeed(null));
@@ -3197,9 +3183,7 @@ describe("prepareWorkspacePayState", () => {
           ),
         });
         const createReservation = mock(() =>
-          Effect.succeed(
-            dotyposReservationFixture("unexpected-dotypos-hold-id")
-          )
+          Effect.succeed(dotyposHoldFixture("unexpected-dotypos-hold-id"))
         );
         const cancelReservation = mock(() => Effect.void);
         const scenario = await runAgentAt(
@@ -3239,9 +3223,7 @@ describe("prepareWorkspacePayState", () => {
           dotyposReservationId: "rotated-dotypos-reservation-id",
         });
         const createReservation = mock(() =>
-          Effect.succeed(
-            dotyposReservationFixture("unexpected-dotypos-hold-id")
-          )
+          Effect.succeed(dotyposHoldFixture("unexpected-dotypos-hold-id"))
         );
         const cancelReservation = mock(() => Effect.void);
         const claimSupersessionCancellation = mock(() =>
@@ -3275,9 +3257,7 @@ describe("prepareWorkspacePayState", () => {
           "agent-after-expiry-hold-id"
         );
         const createReservation = mock(() =>
-          Effect.succeed(
-            dotyposReservationFixture("dotypos-after-expiry-hold-id")
-          )
+          Effect.succeed(dotyposHoldFixture("dotypos-after-expiry-hold-id"))
         );
         const cancelReservation = mock(() => Effect.void);
         const claimSupersessionCancellation = mock(() =>
@@ -3401,9 +3381,7 @@ describe("prepareWorkspacePayState", () => {
           const bookedAt = Temporal.Instant.from("2026-10-20T12:09:59Z");
           const createDraft = makeAgentDraft("rotated-live-hold-id");
           const createReservation = mock(() =>
-            Effect.succeed(
-              dotyposReservationFixture("dotypos-rotated-live-hold-id")
-            )
+            Effect.succeed(dotyposHoldFixture("dotypos-rotated-live-hold-id"))
           );
           const firstAgentSession = paidAgentSession();
           const first = await runAgentAt(bookedAt, {

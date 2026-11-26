@@ -1,8 +1,10 @@
 import {
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
+  DotyposReservationSchema,
 } from "@deskohub/dotypos";
 import { NexiCorrelationIdSchema } from "@deskohub/nexi";
+import { Schema } from "effect";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import type { PayableReservation } from "@/features/checkout/backend/checkout/payable-checkout.service";
 import {
@@ -92,3 +94,16 @@ export const payableReservationFixture = (
   reservationHoldExpiresAt: Temporal.Instant.from("2099-06-01T10:10:00Z"),
   ...overrides,
 });
+
+export const dotyposHoldFixture = (id: string) =>
+  Schema.decodeSync(DotyposReservationSchema)({
+    id,
+    _branchId: "branch",
+    _cloudId: "cloud",
+    _customerId: "customer",
+    _tableId: "table-id",
+    startDate: "2099-07-01T07:00:00.000Z",
+    endDate: "2099-07-01T16:00:00.000Z",
+    seats: "1",
+    status: "NEW",
+  });

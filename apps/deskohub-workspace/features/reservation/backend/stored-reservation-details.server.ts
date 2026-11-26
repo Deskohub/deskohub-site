@@ -48,13 +48,21 @@ const decodeDetails = Schema.decodeUnknownEffect(
   parseOptions
 );
 
-const encodeDetails = Schema.encodeEffect(storedDetailsCodec, parseOptions);
-
-// A document typed as stored details that fails their schema is a bug in the
-// code that built it, not a state the caller can handle, so it dies.
-const encode = Effect.fn("StoredReservationDetails.encode")(
-  (document: StoredDocument) => encodeDetails(document).pipe(Effect.orDie)
+const encodeDetails = Schema.encodeUnknownEffect(
+  storedDetailsCodec,
+  parseOptions
 );
+
+// A document that fails encoding is a defect in the code that built it.
+export const encodeStoredReservationDetails = Effect.fn(
+  "StoredReservationDetails.encode"
+)((document: ColumnValue) => encodeDetails(document).pipe(Effect.orDie));
+
+// Database writers construct typed documents before passing them to the codec.
+const encode: (
+  document: StoredDocument
+) => ReturnType<typeof encodeStoredReservationDetails> =
+  encodeStoredReservationDetails;
 
 const decode = Effect.fn("StoredReservationDetails.decode")(
   (reservationId: WorkspaceReservationId, raw: ColumnValue) =>

@@ -1,13 +1,12 @@
+import { requireValue } from "@/shared/testing/require-value.test-utils";
+import { dotyposHoldFixture } from "./workspace-reservation.test-utils";
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { afterEach, describe, expect, type Mock, mock, test } from "bun:test";
 import { PostHogDistinctId } from "@deskohub/analytics-posthog/identifiers";
 import {
-  DotyposBranchIdSchema,
-  DotyposCloudIdSchema,
   DotyposCustomerIdSchema,
-  type DotyposReservation,
   type DotyposReservationId,
   DotyposReservationIdSchema,
   type DotyposReservationStatus,
@@ -152,27 +151,6 @@ const expectStoredHoldDeadline = (
   );
 };
 
-const requireValue = <T>(value: T | null | undefined, label = "value"): T => {
-  if (value === null || value === undefined) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value;
-};
-
-const dotyposReservationFixture = (
-  id: DotyposReservationId
-): DotyposReservation => ({
-  id,
-  _branchId: DotyposBranchIdSchema.make("branch"),
-  _cloudId: DotyposCloudIdSchema.make("cloud"),
-  _customerId: DotyposCustomerIdSchema.make("customer"),
-  _tableId: DotyposTableIdSchema.make("table-id"),
-  startDate: "2099-07-01T07:00:00.000Z",
-  endDate: "2099-07-01T16:00:00.000Z",
-  seats: "1",
-  status: "NEW",
-});
-
 describe.skipIf(!postgresDatabase)(
   "ReservationHolds.holdForAttempt on Postgres",
   () => {
@@ -215,7 +193,7 @@ describe.skipIf(!postgresDatabase)(
             `dotypos-hold-${crypto.randomUUID()}`
           );
           createdHolds.push(id);
-          return dotyposReservationFixture(id);
+          return dotyposHoldFixture(id);
         })
       );
       const cancelReservation: Mock<
@@ -954,7 +932,7 @@ describe.skipIf(!postgresDatabase)(
         );
         const dotypos = makeDotypos();
         dotypos.createReservation.mockImplementationOnce(() =>
-          Effect.succeed(dotyposReservationFixture(dotyposId))
+          Effect.succeed(dotyposHoldFixture(dotyposId))
         );
         const holds = makeHolds({ dotypos });
         const refusal = await refuseAttaching(dotyposId);
@@ -984,7 +962,7 @@ describe.skipIf(!postgresDatabase)(
         const cancellationFailure = dotyposUnavailable("cancelReservation");
         const dotypos = makeDotypos();
         dotypos.createReservation.mockImplementationOnce(() =>
-          Effect.succeed(dotyposReservationFixture(dotyposId))
+          Effect.succeed(dotyposHoldFixture(dotyposId))
         );
         dotypos.cancelReservation.mockImplementationOnce(() =>
           Effect.fail(cancellationFailure)

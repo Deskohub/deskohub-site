@@ -1,10 +1,10 @@
+import { dotyposHoldFixture } from "./workspace-reservation.test-utils";
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import {
   type DotyposReservationId,
-  DotyposReservationSchema,
   type DotyposReservationStatus,
   DotyposService,
   DotyposTableIdSchema,
@@ -165,17 +165,7 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
   const dotypos = {
     createReservation: mock(() =>
       Effect.sync(() =>
-        Schema.decodeSync(DotyposReservationSchema)({
-          id: `dotypos-hold-${crypto.randomUUID()}`,
-          _branchId: "branch",
-          _cloudId: "cloud",
-          _customerId: "customer",
-          _tableId: "table-id",
-          startDate: "2099-07-01T07:00:00.000Z",
-          endDate: "2099-07-01T16:00:00.000Z",
-          seats: "1",
-          status: "NEW",
-        })
+        dotyposHoldFixture(`dotypos-hold-${crypto.randomUUID()}`)
       )
     ),
     cancelReservation: mock((_id: DotyposReservationId) => Effect.void),
