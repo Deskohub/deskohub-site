@@ -335,6 +335,9 @@ const reconcileUnlimitedPass = Effect.fnUntraced(function* (
         "Unlimited pass reservation intent is invalid"
       ),
   });
+  const reconcileAccount = account
+    ? reconcileWorkspaceE2EAccountJournals([account])
+    : Effect.void;
   if (intent) {
     // Pay cannot load until the Continue action returns. With no response,
     // budget the click, the deployed action, and its last provider request.
@@ -352,19 +355,16 @@ const reconcileUnlimitedPass = Effect.fnUntraced(function* (
     }
     const { db } = yield* E2EDatabase;
     yield* Effect.gen(function* () {
-      const owned = yield* readOwnedPurchase(intent);
-      if (!owned) {
-        yield* Effect.gen(function* () {
-          if (yield* readOwnedPurchase(intent)) {
-            return yield* Effect.fail(
-              new UnlimitedPassCleanupBlocked(
-                "Unlimited pass order appeared during cleanup"
-              )
-            );
-          }
-        }).pipe(WorkspaceLockSections.customerAccount(intent.accountId));
-        return;
-      }
+      const owned =
+        (yield* readOwnedPurchase(intent)) ??
+        (yield* Effect.gen(function* () {
+          const appeared = yield* readOwnedPurchase(intent);
+          // Close this synthetic account before unlocking admission. A delayed
+          // Continue must find the tombstone when it takes the buyer lock.
+          if (!appeared) yield* reconcileAccount;
+          return appeared;
+        }).pipe(WorkspaceLockSections.customerAccount(intent.accountId)));
+      if (!owned) return;
       if (
         (intent.paymentStarted || owned.paymentAttemptId) &&
         !isPaidAndActive(owned)
@@ -395,6 +395,7 @@ const reconcileUnlimitedPass = Effect.fnUntraced(function* (
         }
         yield* requireSettledPayment(locked, intent);
         yield* releaseOwnedPassDays(locked, intent, config);
+        yield* reconcileAccount;
       }).pipe(
         holdCustomerAccountAndPassPurchase(intent.accountId, owned.id),
         WorkspaceLockSections.unlimitedPassRecovery(owned.id)
@@ -410,8 +411,9 @@ const reconcileUnlimitedPass = Effect.fnUntraced(function* (
         })
       )
     );
+  } else {
+    yield* reconcileAccount;
   }
-  if (account) yield* reconcileWorkspaceE2EAccountJournals([account]);
 });
 
 // Playwright launches this server-only entry point only for the opted-in

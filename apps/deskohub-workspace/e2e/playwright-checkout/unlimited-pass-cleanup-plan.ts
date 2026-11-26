@@ -11,6 +11,7 @@ import {
   hasUnlimitedPassDayMarker,
   matchesUnlimitedPassDayHold,
 } from "@/features/passes/backend/unlimited-pass-dotypos-holds";
+import { ambiguousPassDayHoldCode } from "@/features/passes/pass-day-marker";
 import { unlimitedPassDays } from "@/features/passes/pass-offer";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
@@ -181,6 +182,14 @@ export const planUnlimitedPassDayRelease = ({
     ) {
       throw new UnlimitedPassCleanupBlocked(
         "Unlimited pass day ownership did not match"
+      );
+    }
+    if (
+      row.failureCode === ambiguousPassDayHoldCode &&
+      !isUnlimitedPassDayReleased(row)
+    ) {
+      throw new UnlimitedPassCleanupBlocked(
+        "Unlimited pass has a recorded ambiguous hold"
       );
     }
     const booking = {

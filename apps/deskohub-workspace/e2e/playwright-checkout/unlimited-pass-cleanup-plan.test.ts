@@ -11,7 +11,10 @@ import {
 } from "@deskohub/dotypos";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { orderIdSchema } from "@/features/order";
-import { formatPassDayMarker } from "@/features/passes/pass-day-marker";
+import {
+  ambiguousPassDayHoldCode,
+  formatPassDayMarker,
+} from "@/features/passes/pass-day-marker";
 import { unlimitedPassDays } from "@/features/passes/pass-offer";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
@@ -157,6 +160,19 @@ test("leaves mismatched booking facts and competing holds out of the cancellatio
   expect(() =>
     release([{ ...record, note: formatPassDayMarker(orderId, firstDay, null) }])
   ).toThrow("unproven hold");
+});
+
+test("retains a durable ambiguity when a later inventory read sees only one hold", () => {
+  expect(() =>
+    planUnlimitedPassDayRelease({
+      intent: { accountId, customerId, firstDay },
+      orderId,
+      records: [record],
+      rows: rows.map((row, offset) =>
+        offset === 0 ? { ...row, failureCode: ambiguousPassDayHoldCode } : row
+      ),
+    })
+  ).toThrow("recorded ambiguous hold");
 });
 
 test("a retired hold from a previous generation is irrelevant to provider cleanup", () => {
