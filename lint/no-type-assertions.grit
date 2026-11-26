@@ -14,8 +14,19 @@ file($name, $body) where {
       $name <: r".*apps/deskohub-workspace/.*\.(?:ts|tsx|mts|cts)$",
       not $name <: r".*apps/deskohub-workspace/e2e/.*",
       not $name <: r".*/(?:generated|paraglide)/.*",
-      not $name <: r".*apps/deskohub-workspace/features/(?:account|checkout|email-campaigns)/(?:.*/)?testing/.*",
-      not $name <: r".*apps/deskohub-workspace/features/(?:account|checkout|email-campaigns)/.*(?:\.(?:test|spec|pw|test-utils|browser-harness)|-fixture|\.fixture)\.(?:ts|tsx|mts|cts)$"
+      not and {
+        or {
+          $name <: r".*apps/deskohub-workspace/features/(?:account|email-campaigns)/.*",
+          and {
+            $name <: r".*apps/deskohub-workspace/features/checkout/.*",
+            not $name <: r".*apps/deskohub-workspace/features/checkout/(?:actions/.*|backend/(?:analytics|fio|repositories)/.*|(?:checkout-quote|workspace-table-map)\.test\.(?:ts|tsx|mts|cts))$"
+          }
+        },
+        or {
+          $name <: r".*/testing/.*",
+          $name <: r".*(?:\.(?:test|spec|pw|test-utils|browser-harness)|-fixture|\.fixture)\.(?:ts|tsx|mts|cts)$"
+        }
+      }
     }
   },
   // Every `as` assertion has the `as` keyword and every angle-bracket assertion a `<`.

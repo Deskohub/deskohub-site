@@ -117,8 +117,6 @@
       "includes": [
         "apps/deskohub-workspace/**",
         "!apps/deskohub-workspace/e2e/**",
-        "!**/generated/**",
-        "!**/paraglide/**",
         "!apps/deskohub-workspace/features/{account,checkout,email-campaigns}/testing/**",
         "!apps/deskohub-workspace/features/{account,checkout,email-campaigns}/**/testing/**",
         "!apps/deskohub-workspace/features/{account,checkout,email-campaigns}/**/*.test.ts",
@@ -148,7 +146,12 @@
         "!apps/deskohub-workspace/features/{account,checkout,email-campaigns}/**/*.fixture.ts",
         "!apps/deskohub-workspace/features/{account,checkout,email-campaigns}/**/*.fixture.tsx",
         "!apps/deskohub-workspace/features/{account,checkout,email-campaigns}/**/*.fixture.mts",
-        "!apps/deskohub-workspace/features/{account,checkout,email-campaigns}/**/*.fixture.cts"
+        "!apps/deskohub-workspace/features/{account,checkout,email-campaigns}/**/*.fixture.cts",
+        "apps/deskohub-workspace/features/checkout/actions/**",
+        "apps/deskohub-workspace/features/checkout/backend/{analytics,fio,repositories}/**",
+        "apps/deskohub-workspace/features/checkout/{checkout-quote,workspace-table-map}.test.{ts,tsx,mts,cts}",
+        "!**/generated/**",
+        "!**/paraglide/**"
       ],
       "linter": {
         "rules": {

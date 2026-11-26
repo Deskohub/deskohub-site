@@ -1235,6 +1235,13 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/administration/testing/probe.ts",
   "apps/deskohub-workspace/features/reservation/backend/testing/probe.ts",
   "apps/deskohub-workspace/features/checkout/product-catalog.ts",
+  "apps/deskohub-workspace/features/checkout/actions/probe.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/analytics/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/fio/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/repositories/probe.test-utils.ts",
+  "apps/deskohub-workspace/features/checkout/backend/repositories/testing/probe.ts",
+  "apps/deskohub-workspace/features/checkout/checkout-quote.test.ts",
+  "apps/deskohub-workspace/features/checkout/workspace-table-map.test.ts",
 ];
 const generatedProbes = [
   "packages/standard-schema/generated/probe.mts",
@@ -1244,6 +1251,9 @@ const generatedProbes = [
 const workspaceExemptProbes = [
   "apps/deskohub-workspace/e2e/probe.ts",
   "apps/deskohub-workspace/features/checkout/probe.test.ts",
+  "apps/deskohub-workspace/features/checkout/components/probe.test.tsx",
+  "apps/deskohub-workspace/features/checkout/backend/payment/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/repositories/generated/probe.ts",
   "apps/deskohub-workspace/features/checkout/probe.postgres.test.ts",
   "apps/deskohub-workspace/features/checkout/probe.spec.ts",
   "apps/deskohub-workspace/features/checkout/probe.pw.ts",
