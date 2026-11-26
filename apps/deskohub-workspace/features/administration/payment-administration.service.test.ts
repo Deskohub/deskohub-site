@@ -8,8 +8,8 @@ import {
 } from "@deskohub/nexi";
 import { NexiServiceMock } from "@deskohub/nexi/backend/service.mock";
 import { Effect, Layer } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { stubWorkspaceDatabaseLayer } from "./administration-database.test-utils";
 import {
   type IPaymentAdministrationService,
   PaymentAdministrationService,
@@ -81,10 +81,7 @@ const runAdministration = <A>(
       PaymentAdministrationService.Default.pipe(
         Layer.provide(
           Layer.merge(
-            Layer.succeed(
-              WorkspaceDatabase,
-              WorkspaceDatabase.make(database as never)
-            ),
+            stubWorkspaceDatabaseLayer(database),
             NexiServiceMock(nexi)
           )
         )
@@ -138,10 +135,7 @@ describe("PaymentAdministrationService", () => {
         PaymentAdministrationService.Default.pipe(
           Layer.provide(
             Layer.merge(
-              Layer.succeed(
-                WorkspaceDatabase,
-                WorkspaceDatabase.make(database as never)
-              ),
+              stubWorkspaceDatabaseLayer(database),
               NexiServiceMock({
                 listOrders: () =>
                   Effect.succeed([

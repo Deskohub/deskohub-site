@@ -5,34 +5,17 @@ import { describe, expect, test } from "bun:test";
 import { DotyposUnavailable } from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { Effect, Layer, Option, Result } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
 import { ReservationAuthorDirectory } from "@/features/account";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { AdministrationService } from "./administration.service";
+import {
+  makeStubDatabaseQuery,
+  stubWorkspaceDatabaseLayer,
+} from "./administration-database.test-utils";
 import { PaymentAdministrationServiceMock } from "./payment-administration.service.mock";
 import { PostHogReservationHistory } from "./posthog-reservation-history";
 
 type DotyposOverrides = Parameters<typeof DotyposServiceMock>[0];
-
-const makeQuery = <A>(rows: readonly A[]) => {
-  const query = Effect.succeed(rows) as Effect.Effect<readonly A[]> & {
-    from: () => typeof query;
-    groupBy: () => typeof query;
-    innerJoin: () => typeof query;
-    limit: () => typeof query;
-    offset: () => typeof query;
-    orderBy: () => typeof query;
-    where: () => typeof query;
-  };
-  query.from = () => query;
-  query.groupBy = () => query;
-  query.innerJoin = () => query;
-  query.limit = () => query;
-  query.offset = () => query;
-  query.orderBy = () => query;
-  query.where = () => query;
-  return query;
-};
 
 const instant = Temporal.Instant.from("2026-08-10T08:00:00Z");
 
@@ -104,7 +87,7 @@ const runAdministration = <A, E>(
 ) => {
   let selectCall = 0;
   const database = {
-    select: () => makeQuery(selects[selectCall++] ?? []),
+    select: () => makeStubDatabaseQuery(selects[selectCall++] ?? []),
   };
   return Effect.gen(function* () {
     return yield* operation(yield* AdministrationService);
@@ -116,10 +99,7 @@ const runAdministration = <A, E>(
         Layer.provide(Layer.mock(WorkspaceReservationRepository, {})),
         Layer.provide(
           Layer.mergeAll(
-            Layer.succeed(
-              WorkspaceDatabase,
-              WorkspaceDatabase.make(database as never)
-            ),
+            stubWorkspaceDatabaseLayer(database),
             DotyposServiceMock(dotypos),
             Layer.succeed(
               PostHogReservationHistory,

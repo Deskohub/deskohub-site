@@ -87,7 +87,7 @@ WithdrawalService.Live = Layer.mock(WithdrawalService, {
       settled.push(contract);
       return answer;
     }),
-}) as typeof WithdrawalService.Live;
+});
 AdministrationActionLog.Live = Layer.mock(AdministrationActionLog, {
   start: provenance,
   finish,

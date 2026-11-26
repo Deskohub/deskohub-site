@@ -25,6 +25,8 @@ import type { SingleInputActionFn } from "next-safe-action/hooks";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import { formatMoney } from "@/shared/money/money";
 import {
+  submittedActionInput,
+  type WorkspaceActionExecute,
   workspaceRouterRefresh,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -40,7 +42,7 @@ import type {
   ReservationRestorationResult,
 } from "./reservation-restoration";
 
-const execute = mock();
+const execute = mock<WorkspaceActionExecute>();
 const restoreReservation: ReservationRestorationAction = mock();
 
 type ActionOptions = {
@@ -55,12 +57,13 @@ type ActionOptions = {
 
 // The restore Server Action has the shape every administration action has, so
 // the reservation detail can pass it straight to the component.
+const restorationRequestSchema = Schema.Struct({
+  reservationId: AdministrationWorkspaceReservationId,
+  acknowledgeRefundedPayment: Schema.Boolean,
+  sendRestorationEmail: Schema.Boolean,
+});
 const administrationRestorationSchema = Schema.toStandardSchemaV1(
-  Schema.Struct({
-    reservationId: AdministrationWorkspaceReservationId,
-    acknowledgeRefundedPayment: Schema.Boolean,
-    sendRestorationEmail: Schema.Boolean,
-  })
+  restorationRequestSchema
 );
 type AdministrationRestorationAction = SingleInputActionFn<
   string,
@@ -91,7 +94,26 @@ beforeEach(() => {
   workspaceUseAction.mockReset();
   workspaceUseAction.mockImplementation((action, options) => {
     usedAction = action;
-    actionOptions = options as ActionOptions | undefined;
+    actionOptions = {
+      onSuccess: ({ data }) => {
+        void options.onSuccess?.({
+          data,
+          input: submittedActionInput(execute.mock.calls),
+        });
+      },
+      onError: ({ error }) => {
+        void options.onError?.({
+          error,
+          input: submittedActionInput(execute.mock.calls),
+        });
+      },
+      onTransportError: () => {
+        options.onTransportError?.({
+          error: new Error("transport"),
+          input: submittedActionInput(execute.mock.calls),
+        });
+      },
+    };
     return { execute, isExecuting: false, result: {} };
   });
 });
@@ -174,8 +196,10 @@ const statusMessages = (view: ReturnType<typeof render>) =>
     (notice) => notice.textContent
   );
 
-const submittedRequest = () =>
-  execute.mock.calls[0]?.[0] as ReservationRestorationRequest | undefined;
+const submittedRequest = (): ReservationRestorationRequest | undefined => {
+  const call = execute.mock.calls[0];
+  return call && Schema.decodeUnknownSync(restorationRequestSchema)(call[0]);
+};
 
 const emailCheckbox = (dialog: ReturnType<typeof within>) =>
   dialog.queryByRole("checkbox", {
@@ -698,6 +722,16 @@ describe("ReservationRestoration", () => {
         )
       )
     ).toBeDefined();
+
+    fireEvent.click(
+      dialog.getByRole("checkbox", {
+        name: m.administrationReservationRestorationRefundAcknowledgement(
+          {},
+          { locale }
+        ),
+      })
+    );
+    await submitDialog(dialog, locale);
 
     act(() => {
       actionOptions?.onSuccess({

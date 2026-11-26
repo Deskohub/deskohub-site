@@ -8,10 +8,14 @@ import {
   mock,
   test,
 } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import type { ReactNode } from "react";
-import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
-import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
+import {
+  submittedActionInput,
+  type WorkspaceActionExecute,
+  workspaceUseAction,
+} from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -51,20 +55,21 @@ mock.module("./actions", () => ({
 }));
 
 type ActionCallbacks = {
-  readonly onSuccess: (result: { readonly data?: unknown }) => void;
+  readonly onSuccess: (result: {
+    readonly data?: Awaited<ReturnType<SearchAction>>["data"];
+  }) => void;
   readonly onError: (result: {
     readonly error: { readonly serverError?: string };
   }) => void;
   readonly onTransportError: () => void;
 };
 
+type SearchAction = typeof import("./actions").searchAdministrationCustomers;
+
 // Each test mounts one search, so the latest hook options are the ones its
 // callbacks report to.
-const actionCallbacks = new Map<
-  typeof searchAdministrationCustomers,
-  ActionCallbacks
->();
-const execute = mock();
+const actionCallbacks = new Map<unknown, ActionCallbacks>();
+const execute = mock<WorkspaceActionExecute>();
 let isExecuting = false;
 
 const report = (
@@ -87,9 +92,10 @@ const renderInLocale = async (node: ReactNode) => {
 const customer = (
   overrides: Partial<AdministrationCustomer>
 ): AdministrationCustomer => ({
-  id: "dotypos-customer" as DotyposCustomerId,
+  id: DotyposCustomerIdSchema.make("dotypos-customer"),
   displayName: "Test Customer",
   hasName: true,
+  lifecycle: "active",
   email: testEmailAddress("customer-search"),
   phone: "+420 123 456 789",
   ...overrides,
@@ -106,10 +112,26 @@ describe("CustomerSearch", () => {
     actionCallbacks.clear();
     workspaceUseAction.mockReset();
     workspaceUseAction.mockImplementation((action, options) => {
-      actionCallbacks.set(
-        action as typeof searchAdministrationCustomers,
-        options as ActionCallbacks
-      );
+      actionCallbacks.set(action, {
+        onSuccess: ({ data }) => {
+          void options.onSuccess?.({
+            data,
+            input: submittedActionInput(execute.mock.calls),
+          });
+        },
+        onError: ({ error }) => {
+          void options.onError?.({
+            error,
+            input: submittedActionInput(execute.mock.calls),
+          });
+        },
+        onTransportError: () => {
+          options.onTransportError?.({
+            error: new Error("transport"),
+            input: submittedActionInput(execute.mock.calls),
+          });
+        },
+      });
       return { execute, isExecuting, result: {} };
     });
   });
@@ -155,7 +177,7 @@ describe("CustomerSearch", () => {
 
     const reachable = customer({});
     const unnamed = customer({
-      id: "unnamed-customer" as DotyposCustomerId,
+      id: DotyposCustomerIdSchema.make("unnamed-customer"),
       displayName: "—",
       hasName: false,
       email: null,
@@ -172,7 +194,10 @@ describe("CustomerSearch", () => {
     ).toBeDefined();
     const items = view.getAllByRole("listitem");
     expect(items).toHaveLength(2);
-    const [reachableItem, unnamedItem] = items as [HTMLElement, HTMLElement];
+    const [reachableItem, unnamedItem] = items;
+    if (!reachableItem || !unnamedItem) {
+      throw new Error("Expected two customer search result items");
+    }
     expect(
       within(reachableItem).getByText(reachable.displayName)
     ).toBeDefined();

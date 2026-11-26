@@ -3,24 +3,54 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterEach, expect, mock, test } from "bun:test";
 import {
+  DotyposBranchIdSchema,
+  DotyposCloudIdSchema,
+  DotyposCustomerIdSchema,
+  DotyposRejected,
   type DotyposReservation,
   type DotyposReservationBooking,
+  DotyposReservationIdSchema,
+  DotyposReservationNotRestorable,
   DotyposService,
+  DotyposTableIdSchema,
+  DotyposUnavailable,
+  DotyposUncertain,
+  DotyposVersionConflict,
   RestoreCancelledReservationResult,
 } from "@deskohub/dotypos";
+import { EmailServiceError } from "@deskohub/email/backend/service";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer, Logger, References } from "effect";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
+import { Data, Effect, Layer, Logger, References } from "effect";
 import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { WorkspaceReservationEmailService } from "@/features/checkout/backend/fulfillment/workspace-reservation-email.service";
-import { PaymentRefundService } from "@/features/checkout/backend/payment/payment-refund.service";
+import {
+  PaymentRefundReconciliationError,
+  PaymentRefundService,
+} from "@/features/checkout/backend/payment/payment-refund.service";
 import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/reservation/workspace-table-assignment.service";
-import type { WorkspaceReservation } from "@/features/reservation/backend/workspace-reservation.repository";
-import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
+import { checkoutSessionKeySchema } from "@/features/checkout/checkout-identifiers";
+import {
+  type WorkspaceReservation,
+  WorkspaceReservationRepository,
+  WorkspaceReservationSessionTakenError,
+} from "@/features/reservation/backend/workspace-reservation.repository";
+import {
+  WorkspaceReservationDetailsError,
+  WorkspaceReservationService,
+} from "@/features/reservation/backend/workspace-reservation.service";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
-import { ReservationAccessService } from "@/features/reservation-access";
+import {
+  type ReservationAccessGrant,
+  ReservationAccessIssuanceError,
+  ReservationAccessService,
+} from "@/features/reservation-access";
+import { reservationAccessGrantIdSchema } from "@/features/reservation-access/reservation-access";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
+import { workspaceReservationDetailsFixture } from "./administration-database.test-utils";
 import type { RestorationRefundAttempt } from "./reservation-restoration-refund";
 
 // getRestorationBooking is a plain function, so the test swaps it per case and
@@ -52,7 +82,9 @@ const { ReservationRestorationService } = await import(
 
 const id = workspaceReservationIdSchema.make("reservation-restore");
 const otherId = workspaceReservationIdSchema.make("reservation-successor");
-const dotyposReservationId = "dotypos-restore";
+const dotyposReservationId = DotyposReservationIdSchema.make("dotypos-restore");
+const dotyposCustomerId = DotyposCustomerIdSchema.make("customer-restore");
+const dotyposTableId = DotyposTableIdSchema.make("table-restore");
 const cancelledAt = Temporal.Instant.from("2026-08-10T10:00:00Z");
 
 const upcoming = {
@@ -64,10 +96,10 @@ const ended = {
   endDate: "2020-06-10T16:00:00Z",
 };
 
-const cancelledReservation = {
+const cancelledReservation: WorkspaceReservation = workspaceReservationFixture({
   id,
-  checkoutSessionKey: "checkout-restore",
-  dotyposCustomerId: "customer-restore",
+  checkoutSessionKey: checkoutSessionKeySchema.make("checkout-restore"),
+  dotyposCustomerId,
   dotyposReservationId,
   reservationState: "cancelled",
   paymentState: "paid",
@@ -76,68 +108,129 @@ const cancelledReservation = {
   reservationCancelledAt: cancelledAt,
   reservationHoldExpiredAt: null,
   cancellationEmailSentAt: Temporal.Instant.from("2026-08-10T10:01:00Z"),
-  reservationDetails: { kind: "cowork" } as never,
-} satisfies Partial<WorkspaceReservation>;
+  reservationDetails: {
+    kind: "cowork",
+    entryTier: "open-space",
+    coffee: false,
+  },
+});
 
-const confirmedReservation = {
+const confirmedReservation: WorkspaceReservation = {
   ...cancelledReservation,
   reservationState: "confirmed",
   reservationCancelledAt: null,
   cancellationEmailSentAt: null,
-} satisfies Partial<WorkspaceReservation>;
+};
 
 const dotyposReservation = (
   input: Partial<DotyposReservation> = {}
-): DotyposReservation =>
-  ({
-    _branchId: "branch",
-    _cloudId: "cloud",
-    _customerId: "customer-restore",
-    _tableId: "table-restore",
-    id: dotyposReservationId,
-    seats: "1",
-    status: "CANCELLED",
-    ...upcoming,
-    ...input,
-  }) as DotyposReservation;
+): DotyposReservation => ({
+  _branchId: DotyposBranchIdSchema.make("branch"),
+  _cloudId: DotyposCloudIdSchema.make("cloud"),
+  _customerId: dotyposCustomerId,
+  _tableId: dotyposTableId,
+  id: dotyposReservationId,
+  seats: "1",
+  status: "CANCELLED",
+  ...upcoming,
+  ...input,
+});
 
-const booking = {
-  customerId: "customer-restore",
-  tableId: "table-restore",
+const booking: DotyposReservationBooking = {
+  customerId: dotyposCustomerId,
+  tableId: dotyposTableId,
   startDate: new Date(upcoming.startDate),
   endDate: new Date(upcoming.endDate),
   seats: 1,
-} as DotyposReservationBooking;
+};
 
-const details = { id, dotyposReservationId } as never;
+const details = workspaceReservationDetailsFixture({
+  id,
+  dotyposReservationId,
+});
 
-const paidAttempt = {
+const accessGrant = (
+  overrides: Partial<ReservationAccessGrant> = {}
+): ReservationAccessGrant => ({
+  id: reservationAccessGrantIdSchema.make("grant-restore"),
+  reservationId: id,
+  provider: "igloohome",
+  credentialType: "algopin_hourly",
+  deviceId: "EK1",
+  state: "issued",
+  providerCredentialId: null,
+  accessName: "Deskohub grant-restore",
+  scheduledAccessStartsAt: Temporal.Instant.from(upcoming.startDate),
+  accessStartsAt: Temporal.Instant.from(upcoming.startDate),
+  accessEndsAt: Temporal.Instant.from(upcoming.endDate),
+  provisioningStartedAt: null,
+  issuedAt: Temporal.Instant.from("2026-08-01T10:00:00Z"),
+  failedAt: null,
+  failureCode: null,
+  createdAt: Temporal.Instant.from("2026-08-01T10:00:00Z"),
+  updatedAt: Temporal.Instant.from("2026-08-01T10:00:00Z"),
+  ...overrides,
+});
+
+const paidAttempt: RestorationRefundAttempt = {
   amountExponent: 2,
   amountValue: 45_000,
   currency: "CZK",
   refundState: "not_required",
   refundedAmountValue: null,
   state: "paid",
-} as RestorationRefundAttempt;
-
-const refundedAttempt = (refundedAmountValue: number) =>
-  ({
-    ...paidAttempt,
-    refundState: "refunded",
-    refundedAmountValue,
-  }) as RestorationRefundAttempt;
-
-/** The fields the restore reads from a failure it maps. */
-type FailureFields = {
-  readonly reason?: string;
-  readonly reservationId?: string;
 };
 
-const failure = (tag: string, fields: FailureFields = {}) =>
-  Effect.fail({ _tag: tag, ...fields } as never);
+const refundedAttempt = (
+  refundedAmountValue: number
+): RestorationRefundAttempt => ({
+  ...paidAttempt,
+  refundState: "refunded",
+  refundedAmountValue,
+});
+
+const queryError = () =>
+  new EffectDrizzleQueryError({
+    query: "select",
+    params: [],
+    cause: new Error("synthetic query failure"),
+  });
+
+const accessIssuanceError = () =>
+  new ReservationAccessIssuanceError({
+    reservationId: id,
+    outcome: "rejected",
+    message: "synthetic access failure",
+  });
+
+const emailError = () =>
+  new EmailServiceError({
+    message: "synthetic email failure",
+    failureKind: "provider",
+  });
+
+const detailsError = () =>
+  new WorkspaceReservationDetailsError({
+    reservationId: id,
+    errorCode: "dotypos_reservation_load_failed",
+    message: "synthetic details failure",
+  });
+
+class TestRestorationBookingChanged extends Data.TaggedError(
+  "RestorationBookingChanged"
+)<{ readonly message: string }> {}
+
+class TestRestorationBookingUnreadable extends Data.TaggedError(
+  "RestorationBookingUnreadable"
+)<{ readonly message: string; readonly cause?: unknown }> {}
 
 const sessionTaken = () =>
-  failure("WorkspaceReservationSessionTakenError", { reservationId: id });
+  Effect.fail(
+    new WorkspaceReservationSessionTakenError({
+      reservationId: id,
+      message: "checkout session taken",
+    })
+  );
 
 /** No other active reservation at the preflight, then a successor holding the checkout session on every later read. */
 const successorAfterPreflight = () => {
@@ -149,28 +242,22 @@ const successorAfterPreflight = () => {
 };
 
 type Fakes = {
-  readonly reservations: readonly Partial<WorkspaceReservation>[];
-  readonly findById: () => Effect.Effect<unknown, unknown>;
-  readonly findCurrentByCheckoutSessionKey: () => Effect.Effect<
-    unknown,
-    unknown
-  >;
-  readonly hasRecordedCancellation: () => Effect.Effect<boolean, unknown>;
-  readonly markAdministrationRestored: () => Effect.Effect<unknown, unknown>;
-  readonly getReservationWithoutCustomer: () => Effect.Effect<unknown, unknown>;
-  readonly restoreCancelledReservation: () => Effect.Effect<unknown, unknown>;
-  readonly cancelReservation: () => Effect.Effect<void, unknown>;
-  readonly loadGrant: () => Effect.Effect<unknown, unknown>;
-  readonly prepareRestoredAccess: () => Effect.Effect<unknown, unknown>;
-  readonly issueRestoredAccess: () => Effect.Effect<unknown>;
-  readonly reconcileReservationRefunds: () => Effect.Effect<unknown, unknown>;
-  readonly getAssignedTableAvailability: () => Effect.Effect<unknown, unknown>;
-  readonly getReservation: () => Effect.Effect<unknown, unknown>;
-  readonly sendRestorationEmail: () => Effect.Effect<void, unknown>;
-  readonly getRestorationBooking: () => Effect.Effect<
-    DotyposReservationBooking,
-    unknown
-  >;
+  readonly reservations: readonly WorkspaceReservation[];
+  readonly findById: WorkspaceReservationRepository["Service"]["findById"];
+  readonly findCurrentByCheckoutSessionKey: WorkspaceReservationRepository["Service"]["findCurrentByCheckoutSessionKey"];
+  readonly hasRecordedCancellation: WorkspaceReservationRepository["Service"]["hasRecordedCancellation"];
+  readonly markAdministrationRestored: WorkspaceReservationRepository["Service"]["markAdministrationRestored"];
+  readonly getReservationWithoutCustomer: DotyposService["Service"]["getReservationWithoutCustomer"];
+  readonly restoreCancelledReservation: DotyposService["Service"]["restoreCancelledReservation"];
+  readonly cancelReservation: DotyposService["Service"]["cancelReservation"];
+  readonly loadGrant: ReservationAccessService["Service"]["loadGrant"];
+  readonly prepareRestoredAccess: ReservationAccessService["Service"]["prepareRestoredAccess"];
+  readonly issueRestoredAccess: ReservationAccessService["Service"]["issueRestoredAccess"];
+  readonly reconcileReservationRefunds: PaymentRefundService["Service"]["reconcileReservationRefunds"];
+  readonly getAssignedTableAvailability: WorkspaceTableAssignmentService["Service"]["getAssignedTableAvailability"];
+  readonly getReservation: WorkspaceReservationService["Service"]["getReservation"];
+  readonly sendRestorationEmail: WorkspaceReservationEmailService["Service"]["sendRestorationEmail"];
+  readonly getRestorationBooking: typeof realGetRestorationBooking;
   readonly acknowledgeRefundedPayment: boolean;
   readonly sendRestorationEmailRequested: boolean;
   /** Fails the next SQL statement after the reservation write: the cancellation event's retraction. */
@@ -183,14 +270,24 @@ const restoreWith = async (overrides: Partial<Fakes> = {}) => {
   const events: { readonly name: string; readonly at: number }[] = [];
   /** Records when the fake runs, relative to the SQL statements so far. */
   const traced =
-    <A, E>(name: string, fake: () => Effect.Effect<A, E>) =>
-    () =>
+    <Args extends readonly unknown[], A, E, R>(
+      name: string,
+      fake: (...args: Args) => Effect.Effect<A, E, R>
+    ) =>
+    (...args: Args) =>
       Effect.sync(() => {
         events.push({ name, at: database.statements.length });
-      }).pipe(Effect.andThen(fake));
+      }).pipe(Effect.andThen(() => fake(...args)));
   const queue = [...(overrides.reservations ?? [cancelledReservation])];
-  const fakes = {
-    findById: () => Effect.succeed(queue.length > 1 ? queue.shift() : queue[0]),
+  const fakes: Omit<
+    Fakes,
+    | "reservations"
+    | "acknowledgeRefundedPayment"
+    | "sendRestorationEmailRequested"
+    | "failRetraction"
+  > = {
+    findById: () =>
+      Effect.succeed((queue.length > 1 ? queue.shift() : queue[0]) ?? null),
     findCurrentByCheckoutSessionKey: () => Effect.succeed(null),
     hasRecordedCancellation: () => Effect.succeed(true),
     markAdministrationRestored: () =>
@@ -216,18 +313,22 @@ const restoreWith = async (overrides: Partial<Fakes> = {}) => {
     getRestorationBooking: () => Effect.succeed(booking),
     ...overrides,
   };
-  const markAdministrationRestored = overrides.failRetraction
-    ? () =>
-        fakes
-          .markAdministrationRestored()
-          .pipe(
-            Effect.tap(() =>
-              Effect.sync(() =>
-                database.failNextQueriesWith(new Error("events unavailable"), 1)
+  const markAdministrationRestored: Fakes["markAdministrationRestored"] =
+    overrides.failRetraction
+      ? (input) =>
+          fakes
+            .markAdministrationRestored(input)
+            .pipe(
+              Effect.tap(() =>
+                Effect.sync(() =>
+                  database.failNextQueriesWith(
+                    new Error("events unavailable"),
+                    1
+                  )
+                )
               )
             )
-          )
-    : fakes.markAdministrationRestored;
+      : fakes.markAdministrationRestored;
   const calls = {
     findById: mock(fakes.findById),
     findCurrentByCheckoutSessionKey: mock(
@@ -259,7 +360,7 @@ const restoreWith = async (overrides: Partial<Fakes> = {}) => {
     ),
     getRestorationBooking: mock(fakes.getRestorationBooking),
   };
-  getRestorationBooking = calls.getRestorationBooking as never;
+  getRestorationBooking = calls.getRestorationBooking;
 
   const logs: { readonly level: string; readonly annotations: object }[] = [];
   const result = await Effect.gen(function* () {
@@ -268,7 +369,7 @@ const restoreWith = async (overrides: Partial<Fakes> = {}) => {
       actor: {
         source: "assistant",
         administrator: {
-          accountId: "restore-operator" as never,
+          accountId: customerAccountIdSchema.make("restore-operator"),
           email: testEmailAddress("restore-operator"),
         },
       },
@@ -289,31 +390,31 @@ const restoreWith = async (overrides: Partial<Fakes> = {}) => {
                 calls.getReservationWithoutCustomer,
               restoreCancelledReservation: calls.restoreCancelledReservation,
               cancelReservation: calls.cancelReservation,
-            } as never),
+            }),
             Layer.mock(WorkspaceReservationEmailService, {
               sendRestorationEmail: calls.sendRestorationEmail,
-            } as never),
+            }),
             Layer.mock(PaymentRefundService, {
               reconcileReservationRefunds: calls.reconcileReservationRefunds,
-            } as never),
+            }),
             Layer.mock(WorkspaceReservationRepository, {
               findById: calls.findById,
               findCurrentByCheckoutSessionKey:
                 calls.findCurrentByCheckoutSessionKey,
               hasRecordedCancellation: calls.hasRecordedCancellation,
               markAdministrationRestored: calls.markAdministrationRestored,
-            } as never),
+            }),
             Layer.mock(WorkspaceReservationService, {
               getReservation: calls.getReservation,
-            } as never),
+            }),
             Layer.mock(WorkspaceTableAssignmentService, {
               getAssignedTableAvailability: calls.getAssignedTableAvailability,
-            } as never),
+            }),
             Layer.mock(ReservationAccessService, {
               loadGrant: calls.loadGrant,
               prepareRestoredAccess: calls.prepareRestoredAccess,
               issueRestoredAccess: calls.issueRestoredAccess,
-            } as never)
+            })
           )
         )
       )
@@ -477,7 +578,7 @@ test("refuses a reservation Workspace can't restore as it records it", async () 
   expect(
     await refusals([
       { findById: () => Effect.succeed(null) },
-      { findById: () => failure("EffectDrizzleQueryError") },
+      { findById: () => Effect.fail(queryError()) },
       {
         reservations: [
           { ...cancelledReservation, reservationState: "cancelling" },
@@ -490,8 +591,7 @@ test("refuses a reservation Workspace can't restore as it records it", async () 
         reservations: [{ ...cancelledReservation, paymentState: "pending" }],
       },
       {
-        findCurrentByCheckoutSessionKey: () =>
-          failure("EffectDrizzleQueryError"),
+        findCurrentByCheckoutSessionKey: () => Effect.fail(queryError()),
       },
       {
         reservations: [confirmedReservation],
@@ -548,7 +648,12 @@ test("a failed compensating cancel is logged for an operator and still refuses",
     markAdministrationRestored: sessionTaken,
     findCurrentByCheckoutSessionKey: successorAfterPreflight(),
     cancelReservation: () =>
-      failure("DotyposUnavailable", { reason: "server" }),
+      Effect.fail(
+        new DotyposUnavailable({
+          operation: "cancelReservation",
+          reason: "server",
+        })
+      ),
   });
 
   expect(run.reason).toBe("superseded");
@@ -590,7 +695,7 @@ test("a superseded restore cancels its Dotypos write only while the reservation 
       return () =>
         reads++ === 0
           ? Effect.succeed(cancelledReservation)
-          : failure("EffectDrizzleQueryError");
+          : Effect.fail(queryError());
     })(),
     markAdministrationRestored: sessionTaken,
     findCurrentByCheckoutSessionKey: successorAfterPreflight(),
@@ -758,38 +863,67 @@ test("a refund recorded after the Dotypos write recovers through an acknowledged
 test("refuses a restore Dotypos, the refunds, the table or the access grant can't support", async () => {
   expect(
     await refusals([
-      { reconcileReservationRefunds: () => failure("NexiFailed") },
+      {
+        reconcileReservationRefunds: () =>
+          Effect.fail(
+            new PaymentRefundReconciliationError({
+              message: "Nexi failed",
+              cause: new Error("NexiFailed"),
+            })
+          ),
+      },
       {
         getAssignedTableAvailability: () => Effect.succeed("unavailable"),
       },
       {
         getAssignedTableAvailability: () =>
-          failure("DotyposUnavailable", { reason: "server" }),
+          Effect.fail(
+            new DotyposUnavailable({
+              operation: "listReservations",
+              reason: "server",
+            })
+          ),
       },
       {
         getReservationWithoutCustomer: () =>
-          failure("DotyposUnavailable", { reason: "timeout" }),
+          Effect.fail(
+            new DotyposUnavailable({
+              operation: "getReservationWithoutCustomer",
+              reason: "timeout",
+            })
+          ),
       },
       {
         getReservationWithoutCustomer: () =>
-          failure("DotyposRejected", { reason: "not-found" }),
+          Effect.fail(
+            new DotyposRejected({
+              operation: "getReservationWithoutCustomer",
+              reason: "not-found",
+            })
+          ),
       },
       {
         getReservationWithoutCustomer: () =>
           Effect.succeed(dotyposReservation({ status: "NEW" })),
       },
       {
-        getRestorationBooking: () => failure("RestorationBookingChanged"),
+        getRestorationBooking: () =>
+          Effect.fail(
+            new TestRestorationBookingChanged({ message: "changed" })
+          ),
       },
       {
-        getRestorationBooking: () => failure("RestorationBookingUnreadable"),
+        getRestorationBooking: () =>
+          Effect.fail(
+            new TestRestorationBookingUnreadable({ message: "unreadable" })
+          ),
       },
       {
         getReservationWithoutCustomer: () =>
           Effect.succeed(dotyposReservation({ endDate: "not a date" })),
       },
-      { loadGrant: () => failure("ReservationAccessIssuanceError") },
-      { loadGrant: () => Effect.succeed({ state: "issued" }) },
+      { loadGrant: () => Effect.fail(accessIssuanceError()) },
+      { loadGrant: () => Effect.succeed(accessGrant({ state: "issued" })) },
     ])
   ).toEqual([
     { code: "restoration_failed", reason: "refund_check_failed" },
@@ -807,19 +941,55 @@ test("refuses a restore Dotypos, the refunds, the table or the access grant can'
 });
 
 test("maps each failed Dotypos restore write", async () => {
-  const writeFailing = (tag: string, fields: FailureFields = {}) => ({
-    restoreCancelledReservation: () => failure(tag, fields),
-  });
-
   expect(
     await refusals([
-      writeFailing("DotyposReservationNotRestorable", {
-        reason: "booking-changed",
-      }),
-      writeFailing("DotyposRejected", { reason: "not-found" }),
-      writeFailing("DotyposVersionConflict"),
-      writeFailing("DotyposUnavailable", { reason: "server" }),
-      writeFailing("DotyposUncertain", { reason: "timeout" }),
+      {
+        restoreCancelledReservation: () =>
+          Effect.fail(
+            new DotyposReservationNotRestorable({
+              reservationId: dotyposReservationId,
+              reason: "booking-changed",
+              status: "CANCELLED",
+              changedFields: ["seats"],
+              message: "booking changed",
+            })
+          ),
+      },
+      {
+        restoreCancelledReservation: () =>
+          Effect.fail(
+            new DotyposRejected({
+              operation: "restoreCancelledReservation",
+              reason: "not-found",
+            })
+          ),
+      },
+      {
+        restoreCancelledReservation: () =>
+          Effect.fail(
+            new DotyposVersionConflict({
+              operation: "restoreCancelledReservation",
+            })
+          ),
+      },
+      {
+        restoreCancelledReservation: () =>
+          Effect.fail(
+            new DotyposUnavailable({
+              operation: "restoreCancelledReservation",
+              reason: "server",
+            })
+          ),
+      },
+      {
+        restoreCancelledReservation: () =>
+          Effect.fail(
+            new DotyposUncertain({
+              operation: "restoreCancelledReservation",
+              reason: "timeout",
+            })
+          ),
+      },
     ])
   ).toEqual([
     { code: "not_restorable", reason: "changed_in_dotypos" },
@@ -835,10 +1005,10 @@ test("refuses a restore its transaction can't record, rolling it back", async ()
     prepareRestoredAccess: () => Effect.succeed("uncertain"),
   });
   const accessStorage = await refused({
-    prepareRestoredAccess: () => failure("ReservationAccessIssuanceError"),
+    prepareRestoredAccess: () => Effect.fail(accessIssuanceError()),
   });
   const reservationWrite = await refused({
-    markAdministrationRestored: () => failure("EffectDrizzleQueryError"),
+    markAdministrationRestored: () => Effect.fail(queryError()),
   });
   const retraction = await refused({ failRetraction: true });
 
@@ -903,15 +1073,18 @@ test("a confirmed reservation Dotypos holds differently was not restored by Work
           Effect.succeed(
             dotyposReservation({
               status: "CONFIRMED",
-              _customerId: "customer-other",
-            } as never)
+              _customerId: DotyposCustomerIdSchema.make("customer-other"),
+            })
           ),
       },
       {
         reservations: [confirmedReservation],
         getReservationWithoutCustomer: () =>
           Effect.succeed(dotyposReservation({ status: "CONFIRMED" })),
-        getRestorationBooking: () => failure("RestorationBookingChanged"),
+        getRestorationBooking: () =>
+          Effect.fail(
+            new TestRestorationBookingChanged({ message: "changed" })
+          ),
       },
     ])
   ).toEqual([
@@ -1006,10 +1179,10 @@ test("tells the customer only when asked and when they were told about the cance
     reservations: [{ ...cancelledReservation, cancellationEmailSentAt: null }],
   });
   const sendFailed = await restored({
-    sendRestorationEmail: () => failure("EmailSendError"),
+    sendRestorationEmail: () => Effect.fail(emailError()),
   });
   const detailsFailed = await restored({
-    getReservation: () => failure("WorkspaceReservationDetailsError"),
+    getReservation: () => Effect.fail(detailsError()),
   });
 
   expect(
@@ -1050,7 +1223,7 @@ test("keeps the restore when its new access can't be issued", async () => {
 test("keeps the restored transition when both code issuance and booker email fail", async () => {
   const run = await restored({
     issueRestoredAccess: () => Effect.succeed("failed"),
-    sendRestorationEmail: () => failure("EmailSendError"),
+    sendRestorationEmail: () => Effect.fail(emailError()),
   });
 
   expect(run.value).toEqual({

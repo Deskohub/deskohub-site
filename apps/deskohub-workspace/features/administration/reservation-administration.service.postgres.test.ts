@@ -2,9 +2,15 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import assert from "node:assert/strict";
+import {
+  DotyposReservationIdSchema,
+  DotyposService,
+  DotyposUnavailable,
+} from "@deskohub/dotypos";
 import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
+import { accountingSnapshotKeyIdSchema } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingSnapshotKeyError } from "@/features/accounting/backend/accounting-snapshot-key.service";
 import { InvoiceRepository } from "@/features/accounting/backend/invoice.repository";
 import { InvoiceCancellationService } from "@/features/accounting/backend/invoice-cancellation.service";
@@ -21,7 +27,11 @@ import { WorkspaceReservationRepository } from "@/features/reservation/backend/w
 import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { workspaceReservationDetailsFixture } from "./administration-database.test-utils";
 import {
   ReservationAdministrationService,
   type ReservationCancellationInput,
@@ -33,7 +43,15 @@ const testDatabase = await createWorkspacePostgresSuiteDatabase(
 );
 afterAll(() => testDatabase?.close());
 
-const kit = makeInvoiceCancellationTestKit(testDatabase!);
+const testKit = testDatabase
+  ? makeInvoiceCancellationTestKit(testDatabase)
+  : null;
+const requireKit = () => {
+  if (!testKit) {
+    throw new Error("No test database: set WORKSPACE_TEST_DATABASE_URL");
+  }
+  return testKit;
+};
 const runFioRepository = <A, E>(
   effect: Effect.Effect<A, E, FioPaymentSettlementRepository>
 ) =>
@@ -41,12 +59,12 @@ const runFioRepository = <A, E>(
     effect.pipe(
       Effect.provide(
         FioPaymentSettlementRepository.Default.pipe(
-          Layer.provide(testDatabase!.layer)
+          Layer.provide(requireTestDatabase(testDatabase).layer)
         )
       )
     )
   );
-const testKeyId = "K202611";
+const testKeyId = accountingSnapshotKeyIdSchema.make("K202611");
 const missingKey = new AccountingSnapshotKeyError({
   keyId: testKeyId,
   message: "Synthetic key is unavailable.",
@@ -54,7 +72,7 @@ const missingKey = new AccountingSnapshotKeyError({
 const readableKey = {
   id: testKeyId,
   secret: "synthetic corrective document secret!",
-} as never;
+};
 
 /**
  * Reservation cancellation over the suite database: the real reservation
@@ -73,7 +91,7 @@ const makeCancellation = (
     readonly duringProviderCancel?: Effect.Effect<void>;
   } = {}
 ) => {
-  const repositories = kit.layer({
+  const repositories = requireKit().layer({
     getActive: options.encryptionKeyFails
       ? Effect.fail(missingKey)
       : Effect.succeed(readableKey),
@@ -135,11 +153,14 @@ const makeCancellation = (
         }),
         Layer.mock(WorkspaceReservationService, {
           getReservation: (id: WorkspaceReservationId) =>
-            Effect.succeed({
-              id,
-              dotyposReservationId: "synthetic-dotypos",
-              providerStatus: "CONFIRMED",
-            } as never),
+            Effect.succeed(
+              workspaceReservationDetailsFixture({
+                id,
+                dotyposReservationId:
+                  DotyposReservationIdSchema.make("synthetic-dotypos"),
+                providerStatus: "CONFIRMED",
+              })
+            ),
         })
       )
     )
@@ -191,7 +212,7 @@ const makeRestoration = (
     readonly decryptionKeyFails?: boolean;
   } = {}
 ) => {
-  const repositories = kit.layer({
+  const repositories = requireKit().layer({
     getActive: Effect.succeed(readableKey),
     getById: () =>
       options.decryptionKeyFails
@@ -216,23 +237,26 @@ const makeRestoration = (
       return ReservationRestorationService.of({
         restore: ({ actor, reservationId }) =>
           repository.findById(reservationId).pipe(
-            Effect.flatMap((current) =>
-              current?.reservationState === "cancelled" &&
-              current.reservationCancelledAt
+            Effect.flatMap((current) => {
+              const cancelledAt =
+                current?.reservationState === "cancelled"
+                  ? current.reservationCancelledAt
+                  : null;
+              return cancelledAt
                 ? transaction(
                     startReservationAudit(actor).pipe(
                       Effect.flatMap((audit) =>
                         repository.markAdministrationRestored({
                           audit,
                           id: reservationId,
-                          cancelledAt: current.reservationCancelledAt!,
+                          cancelledAt,
                           restoredAt: Temporal.Now.instant(),
                         })
                       )
                     )
                   ).pipe(Effect.as("restored" as const))
-                : Effect.succeed("already_confirmed" as const)
-            ),
+                : Effect.succeed("already_confirmed" as const);
+            }),
             Effect.map((outcome) => ({
               outcome,
               email: "not_requested" as const,
@@ -252,13 +276,18 @@ const makeRestoration = (
           updateCustomerBillingDetails: (customerId) =>
             options.billingUpdateFails
               ? // A typed failure, as Dotypos fails.
-                Effect.fail(new Error("Synthetic Dotypos failure.") as never)
+                Effect.fail(
+                  new DotyposUnavailable({
+                    operation: "updateCustomerBillingDetails",
+                    reason: "server",
+                  })
+                )
               : Effect.sync(() => billingUpdates(customerId)),
         }),
         Layer.mock(InvoiceEmailDeliveryService, {
           deliverByPaymentAttemptId: (input) =>
             Effect.sync(() => delivered(input)).pipe(
-              Effect.as({ status: "sent" } as never)
+              Effect.as({ status: "delivered" as const, changed: true })
             ),
         })
       )
@@ -280,7 +309,7 @@ const makeRestoration = (
     reservationInvoices
   );
   const restore = async (reservationId: WorkspaceReservationId) => {
-    const actor = await kit.makeActor(
+    const actor = await requireKit().makeActor(
       `reservation-restore-${crypto.randomUUID()}`
     );
     return Effect.runPromise(
@@ -311,14 +340,14 @@ const makeRestoration = (
 };
 
 const readLatestInvoice = (reservationId: WorkspaceReservationId) =>
-  kit.run(
+  requireKit().run(
     Effect.flatMap(InvoiceRepository, (invoices) =>
       invoices.findLatestByReservationId(reservationId)
     )
   );
 
 const readInvoiceChain = (reservationId: string) =>
-  kit.query<{
+  requireKit().query<{
     id: string;
     invoice_number: string;
     replaces_invoice_id: string | null;
@@ -328,18 +357,18 @@ const readInvoiceChain = (reservationId: string) =>
   );
 
 const readCreditNotes = (invoiceId: string) =>
-  kit.query(
+  requireKit().query(
     "select * from corrective_documents where cancelled_invoice_id = $1",
     [invoiceId]
   );
 
 const readState = async (reservationId: string, invoiceId?: string) => {
-  const [reservation] = await kit.query<{ reservation_state: string }>(
+  const [reservation] = await requireKit().query<{ reservation_state: string }>(
     "select reservation_state from workspace_reservations where id = $1",
     [reservationId]
   );
   const cancellations = invoiceId
-    ? await kit.query<{ cause: string; source: string }>(
+    ? await requireKit().query<{ cause: string; source: string }>(
         "select cause, source from invoice_cancellations where invoice_id = $1",
         [invoiceId]
       )
@@ -354,7 +383,7 @@ const cancellationInput = async (
   reservationId: WorkspaceReservationId,
   confirmedConsequences?: ReservationCancellationInput["confirmedConsequences"]
 ): Promise<ReservationCancellationInput> => ({
-  actor: await kit.makeActor(`reservation-cancel-${reservationId}`),
+  actor: await requireKit().makeActor(`reservation-cancel-${reservationId}`),
   ...(confirmedConsequences && { confirmedConsequences }),
   reservationId,
   sendCancellationEmail: false,
@@ -364,7 +393,8 @@ describe.skipIf(!testDatabase)(
   "Reservation cancellation with its invoice on disposable Postgres",
   () => {
     test("cancels the reservation and its live invoice together, then sends the notices", async () => {
-      const { invoice, reservation } = await kit.issueReservationInvoice();
+      const { invoice, reservation } =
+        await requireKit().issueReservationInvoice();
       const { cancel, deliver } = makeCancellation();
 
       const result = await cancel(
@@ -391,7 +421,7 @@ describe.skipIf(!testDatabase)(
       });
       // The reservation keeps its own record of why it was cancelled beside
       // the invoice's cancellation cause.
-      const [reservationCause] = await kit.query<{
+      const [reservationCause] = await requireKit().query<{
         cancellation_cause: string | null;
       }>(
         "select cancellation_cause from workspace_reservations where id = $1",
@@ -399,17 +429,17 @@ describe.skipIf(!testDatabase)(
       );
       expect(reservationCause?.cancellation_cause).toBe("operator");
       expect(deliver).toHaveBeenCalledTimes(1);
-      expect(deliver.mock.calls[0]![0].invoiceId).toBe(invoice.id);
+      expect(deliver.mock.calls[0]?.[0].invoiceId).toBe(invoice.id);
     });
 
     test("tracks and preserves a manually refunded Fio winner independently of its duplicate", async () => {
       const { reservation, paymentAttemptId } =
-        await kit.issueReservationInvoice();
-      await kit.query(
+        await requireKit().issueReservationInvoice();
+      await requireKit().query(
         "update payment_attempts set provider = 'fio', provider_order_id = '9000000000', last_provider_operation_id = 'manual-fio-winner' where id = $1",
         [paymentAttemptId]
       );
-      await kit.query(
+      await requireKit().query(
         `insert into fio_payment_settlements
           (order_id, payment_attempt_id, account_key, movement_id, variable_symbol, amount_value, currency, booking_date, observed_at, disposition)
           select order_id, id, 'synthetic-account', evidence.movement_id, '9000000000', amount_value, currency, current_date, now(), evidence.disposition
@@ -426,10 +456,12 @@ describe.skipIf(!testDatabase)(
       const before = await listEvidence();
       const winner = before.find(
         ({ movementId }) => movementId === "manual-fio-winner"
-      )!;
+      );
       const duplicate = before.find(
         ({ movementId }) => movementId === "manual-fio-duplicate"
-      )!;
+      );
+      assert(winner, "Expected manual-fio-winner settlement");
+      assert(duplicate, "Expected manual-fio-duplicate settlement");
 
       const { cancel } = makeCancellation();
       expect(
@@ -473,7 +505,7 @@ describe.skipIf(!testDatabase)(
       );
       expect(restored.find(({ id }) => id === duplicate.id)).toEqual(duplicate);
       expect(
-        await kit.query(
+        await requireKit().query(
           "select refund_state from payment_attempts where id = $1",
           [paymentAttemptId]
         )
@@ -481,7 +513,8 @@ describe.skipIf(!testDatabase)(
     });
 
     test("a failed invoice cancellation rolls the reservation's completion back with it", async () => {
-      const { invoice, reservation } = await kit.issueReservationInvoice();
+      const { invoice, reservation } =
+        await requireKit().issueReservationInvoice();
       const { cancelFailure, cancelReservation, deliver } = makeCancellation({
         encryptionKeyFails: true,
       });
@@ -501,7 +534,7 @@ describe.skipIf(!testDatabase)(
     });
 
     test("records a failed cancellation and its retry once per guarded commit", async () => {
-      const { reservation } = await kit.issueReservationInvoice();
+      const { reservation } = await requireKit().issueReservationInvoice();
       const input = await cancellationInput(reservation.id);
       const first = makeCancellation({ encryptionKeyFails: true });
       expect((await first.cancelFailure(input)).reason).toBe("record_failed");
@@ -528,34 +561,39 @@ describe.skipIf(!testDatabase)(
         ["cancelling", "cancellation_failed", "local_cancellation_failed"],
         ["confirmed", "cancelling", "operator_cancellation"],
       ]);
-      const [completed, reclaimed, failed, claimed] = page!.events;
+      assert(page, "Expected audit page");
+      const [completed, reclaimed, failed, claimed] = page.events;
+      assert(completed, "Expected completed audit event");
+      assert(reclaimed, "Expected reclaimed audit event");
+      assert(failed, "Expected failed audit event");
+      assert(claimed, "Expected claimed audit event");
       expect(completed).toMatchObject({
-        causedByEventId: reclaimed!.id,
-        correlationId: reclaimed!.correlationId,
+        causedByEventId: reclaimed.id,
+        correlationId: reclaimed.correlationId,
         administrationActionId: actionId,
         actorAccountId: input.actor.administrator.accountId,
         source: "dhw-cli",
         schemaVersion: 1,
       });
       expect(failed).toMatchObject({
-        causedByEventId: claimed!.id,
-        correlationId: claimed!.correlationId,
+        causedByEventId: claimed.id,
+        correlationId: claimed.correlationId,
       });
-      expect(reclaimed!.correlationId).not.toBe(claimed!.correlationId);
+      expect(reclaimed.correlationId).not.toBe(claimed.correlationId);
       expect(JSON.stringify(page)).not.toContain(
         input.actor.administrator.email
       );
       const older = await replay.readAudit({
         actor: input.actor,
         reservationId: reservation.id,
-        before: reclaimed!.id,
+        before: reclaimed.id,
       });
       expect(older?.events.map(({ id }) => id)).toEqual([
-        failed!.id,
-        claimed!.id,
+        failed.id,
+        claimed.id,
       ]);
       expect(
-        await kit.query(
+        await requireKit().query(
           "select actor_account_id, source, before_event_id, returned_count from reservation_audit_accesses where reservation_id = $1 order by occurred_at",
           [reservation.id]
         )
@@ -569,18 +607,19 @@ describe.skipIf(!testDatabase)(
         {
           actor_account_id: input.actor.administrator.accountId,
           source: "dhw-cli",
-          before_event_id: reclaimed!.id,
+          before_event_id: reclaimed.id,
           returned_count: 2,
         },
       ]);
     });
 
     test("rolls back a claim when audit append fails and refuses reads when access logging fails", async () => {
-      const { reservation, invoice } = await kit.issueReservationInvoice();
+      const { reservation, invoice } =
+        await requireKit().issueReservationInvoice();
       const input = await cancellationInput(reservation.id);
       const { cancelFailure, cancelReservation, readAudit } =
         makeCancellation();
-      await kit.query(
+      await requireKit().query(
         "alter table reservation_audit_events add constraint reject_test_claim check (false) not valid"
       );
       try {
@@ -591,12 +630,12 @@ describe.skipIf(!testDatabase)(
           cancellations: [],
         });
       } finally {
-        await kit.query(
+        await requireKit().query(
           "alter table reservation_audit_events drop constraint reject_test_claim"
         );
       }
 
-      await kit.query(
+      await requireKit().query(
         "alter table reservation_audit_accesses add constraint reject_test_access check (false) not valid"
       );
       try {
@@ -604,17 +643,18 @@ describe.skipIf(!testDatabase)(
           readAudit({ actor: input.actor, reservationId: reservation.id })
         ).rejects.toThrow();
       } finally {
-        await kit.query(
+        await requireKit().query(
           "alter table reservation_audit_accesses drop constraint reject_test_access"
         );
       }
     });
 
     test("rolls back the completed cancellation and its invoice when the completion event cannot append", async () => {
-      const { reservation, invoice } = await kit.issueReservationInvoice();
+      const { reservation, invoice } =
+        await requireKit().issueReservationInvoice();
       const input = await cancellationInput(reservation.id);
       const { cancelFailure, readAudit } = makeCancellation();
-      await kit.query(
+      await requireKit().query(
         "alter table reservation_audit_events add constraint reject_test_completion check (reason <> 'cancellation_completed') not valid"
       );
       try {
@@ -632,7 +672,7 @@ describe.skipIf(!testDatabase)(
           "operator_cancellation",
         ]);
       } finally {
-        await kit.query(
+        await requireKit().query(
           "alter table reservation_audit_events drop constraint reject_test_completion"
         );
       }
@@ -648,7 +688,7 @@ describe.skipIf(!testDatabase)(
           `delete from ${table} where false`,
           `truncate ${table} cascade`,
         ]) {
-          await expect(kit.query(statement)).rejects.toMatchObject({
+          await expect(requireKit().query(statement)).rejects.toMatchObject({
             code: "23514",
           });
         }
@@ -656,9 +696,9 @@ describe.skipIf(!testDatabase)(
     });
 
     test("bounds reads to 100 events and continues with the next event", async () => {
-      const { reservation } = await kit.createPaidReservation();
+      const { reservation } = await requireKit().createPaidReservation();
       const { actor } = await cancellationInput(reservation.id);
-      await kit.query(
+      await requireKit().query(
         `insert into reservation_audit_events (
           id, reservation_id, actor_account_id, source, before_state, after_state,
           reason, occurred_at, correlation_id
@@ -670,29 +710,32 @@ describe.skipIf(!testDatabase)(
       );
       const { readAudit } = makeCancellation();
       const first = await readAudit({ actor, reservationId: reservation.id });
-      expect(first?.events).toHaveLength(100);
-      expect(first?.nextBefore).toBe(first?.events.at(-1)?.id);
+      assert(first, "Expected first audit page");
+      expect(first.events).toHaveLength(100);
+      expect(first.nextBefore).toBe(first.events.at(-1)?.id);
+      assert(first.nextBefore, "Expected nextBefore cursor");
       const next = await readAudit({
         actor,
         reservationId: reservation.id,
-        before: first!.nextBefore!,
+        before: first.nextBefore,
       });
-      expect(next?.events).toHaveLength(1);
-      expect(next?.nextBefore).toBeNull();
+      assert(next, "Expected second audit page");
+      expect(next.events).toHaveLength(1);
+      expect(next.nextBefore).toBeNull();
       expect(
-        new Set([...first!.events, ...next!.events].map(({ id }) => id)).size
+        new Set([...first.events, ...next.events].map(({ id }) => id)).size
       ).toBe(101);
 
-      const other = await kit.createPaidReservation();
+      const other = await requireKit().createPaidReservation();
       expect(
         await readAudit({
           actor,
           reservationId: other.reservation.id,
-          before: first!.nextBefore!,
+          before: first.nextBefore,
         })
       ).toBeNull();
       expect(
-        await kit.query(
+        await requireKit().query(
           "select id from reservation_audit_accesses where reservation_id = $1",
           [other.reservation.id]
         )
@@ -700,7 +743,8 @@ describe.skipIf(!testDatabase)(
     });
 
     test("an unreadable invoice stops the cancellation before the provider call", async () => {
-      const { invoice, reservation } = await kit.issueReservationInvoice();
+      const { invoice, reservation } =
+        await requireKit().issueReservationInvoice();
       const { cancelFailure, cancelReservation } = makeCancellation({
         decryptionKeyFails: true,
       });
@@ -718,7 +762,8 @@ describe.skipIf(!testDatabase)(
     });
 
     test("refuses consequences the operator did not confirm, before the provider call", async () => {
-      const { invoice, reservation } = await kit.issueReservationInvoice();
+      const { invoice, reservation } =
+        await requireKit().issueReservationInvoice();
       const { cancelFailure, cancelReservation } = makeCancellation();
 
       const failure = await cancelFailure(
@@ -739,7 +784,7 @@ describe.skipIf(!testDatabase)(
     });
 
     test("an invoice issued just before the claim refuses a cancellation confirmed without it", async () => {
-      const paid = await kit.createPaidReservation();
+      const paid = await requireKit().createPaidReservation();
       let issuedId: string | undefined;
       const { cancelFailure, cancelReservation } = makeCancellation({
         // Issued and committed on its own connection once the operator's
@@ -774,15 +819,18 @@ describe.skipIf(!testDatabase)(
     });
 
     test("an invoice issued while the claim is being checked waits for it and is refused", async () => {
-      const paid = await kit.createPaidReservation();
+      const paid = await requireKit().createPaidReservation();
       let issuance: Promise<unknown> | undefined;
       const { cancel } = makeCancellation({
         afterClaim: Effect.promise(async () => {
           issuance = Effect.runPromise(Effect.flip(paid.issueInvoice()));
-          await waitForPostgresLockWaiter(testDatabase!.pool, {
-            condition: "locktype = 'transactionid'",
-            description: "the invoice issuance waiting for the claim",
-          });
+          await waitForPostgresLockWaiter(
+            requireTestDatabase(testDatabase).pool,
+            {
+              condition: "locktype = 'transactionid'",
+              description: "the invoice issuance waiting for the claim",
+            }
+          );
         }),
       });
 
@@ -799,7 +847,7 @@ describe.skipIf(!testDatabase)(
         reason: "reservation_cancelled",
       });
       expect(
-        await kit.query(
+        await requireKit().query(
           "select id from invoices where workspace_reservation_id = $1",
           [paid.reservation.id]
         )
@@ -807,7 +855,7 @@ describe.skipIf(!testDatabase)(
     });
 
     test("issuance refuses once the reservation's cancellation is claimed", async () => {
-      const paid = await kit.createPaidReservation();
+      const paid = await requireKit().createPaidReservation();
       let refusal: unknown;
       const { cancel } = makeCancellation({
         duringProviderCancel: Effect.flip(paid.issueInvoice()).pipe(
@@ -830,7 +878,8 @@ describe.skipIf(!testDatabase)(
     });
 
     test("an already cancelled reservation answers already_cancelled without touching its invoice", async () => {
-      const { invoice, reservation } = await kit.issueReservationInvoice();
+      const { invoice, reservation } =
+        await requireKit().issueReservationInvoice();
       const first = makeCancellation();
       await first.cancel(await cancellationInput(reservation.id));
       const replay = makeCancellation();
@@ -867,9 +916,11 @@ describe.skipIf(!testDatabase)(
     } as const;
 
     const cancelWithInvoice = async (
-      options: Parameters<typeof kit.issueReservationInvoice>[0] = {}
+      options: Parameters<
+        ReturnType<typeof requireKit>["issueReservationInvoice"]
+      >[0] = {}
     ) => {
-      const issued = await kit.issueReservationInvoice(options);
+      const issued = await requireKit().issueReservationInvoice(options);
       await makeCancellation().cancel(
         await cancellationInput(issued.reservation.id)
       );
@@ -882,7 +933,8 @@ describe.skipIf(!testDatabase)(
     ) => {
       const chain = await readInvoiceChain(reservationId);
       expect(chain).toHaveLength(2);
-      const replacement = chain.find(({ id }) => id !== cancelled.id)!;
+      const replacement = chain.find(({ id }) => id !== cancelled.id);
+      assert(replacement, "Expected replacement invoice in chain");
       expect(replacement.replaces_invoice_id).toBe(cancelled.id);
       expect(replacement.invoice_number).not.toBe(cancelled.invoiceNumber);
       return replacement;
@@ -954,8 +1006,9 @@ describe.skipIf(!testDatabase)(
         },
       });
       const reissued = await readLatestInvoice(reservation.id);
+      assert(cancelled, "Expected cancelled invoice");
       expect(reissued?.id).toBe(replacement.id);
-      expect(reissued?.document.buyer).toEqual(cancelled!.document.buyer);
+      expect(reissued?.document.buyer).toEqual(cancelled.document.buyer);
       expect(delivered).toHaveBeenCalledTimes(1);
       // Dotypos takes the buyer before the invoice commits it.
       expect(billingUpdates).toHaveBeenCalledTimes(1);
@@ -983,14 +1036,15 @@ describe.skipIf(!testDatabase)(
     });
 
     test("issues nothing for a reservation without an invoice, or whose invoice is still live", async () => {
-      const unbilled = await kit.createPaidReservation();
+      const unbilled = await requireKit().createPaidReservation();
       await makeCancellation().cancel(
         await cancellationInput(unbilled.reservation.id)
       );
       // Cancelled before invoices were cancelled with reservations: the
       // reservation is cancelled while its invoice stays live.
-      const { invoice, reservation } = await kit.issueReservationInvoice();
-      await kit.query(
+      const { invoice, reservation } =
+        await requireKit().issueReservationInvoice();
+      await requireKit().query(
         "update workspace_reservations set reservation_state = 'cancelled', reservation_cancelled_at = now(), cancellation_cause = 'operator' where id = $1",
         [reservation.id]
       );
@@ -1012,11 +1066,12 @@ describe.skipIf(!testDatabase)(
     });
 
     test("issues nothing for an invoice an administrator cancelled on its own", async () => {
-      const { invoice, reservation } = await kit.issueReservationInvoice();
-      await kit.run(
-        kit.cancel({
+      const { invoice, reservation } =
+        await requireKit().issueReservationInvoice();
+      await requireKit().run(
+        requireKit().cancel({
           invoiceId: invoice.id,
-          actor: await kit.makeActor(`invoice-cancel-${invoice.id}`),
+          actor: await requireKit().makeActor(`invoice-cancel-${invoice.id}`),
         })
       );
       await makeCancellation().cancel(await cancellationInput(reservation.id));

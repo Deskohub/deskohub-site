@@ -8,7 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { Locale } from "@/features/i18n";
+import { isLocale, type Locale } from "@/features/i18n";
 import { languageNames } from "@/features/i18n/language-labels";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import {
@@ -36,12 +36,17 @@ afterAll(async () => {
 });
 
 // The root layout provides the locale of the current route.
-const renderInRoute = (ui: ReactNode) =>
-  render(
-    <RouteLocaleProvider locale={currentPathname.split("/")[1] as Locale}>
-      {ui}
-    </RouteLocaleProvider>
+const renderInRoute = (ui: ReactNode) => {
+  const locale = currentPathname.split("/")[1];
+  if (!isLocale(locale)) {
+    throw new Error(
+      `Invalid test route locale in pathname: ${currentPathname}`
+    );
+  }
+  return render(
+    <RouteLocaleProvider locale={locale}>{ui}</RouteLocaleProvider>
   );
+};
 
 const renderShell = async (pathname: string) => {
   currentPathname = pathname;

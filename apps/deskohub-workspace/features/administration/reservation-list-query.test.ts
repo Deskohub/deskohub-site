@@ -8,6 +8,7 @@ import {
   setSystemTime,
   test,
 } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { getSearchParamsRecord } from "@/shared/utils/search-params";
 import { reservationListQuery } from "./reservation-list-query";
 
@@ -35,7 +36,7 @@ describe("reservationListQuery", () => {
         type: "office",
       })
     ).toEqual({
-      customerId: "dotypos-customer-1" as never,
+      customerId: DotyposCustomerIdSchema.make("dotypos-customer-1"),
       direction: "asc",
       from: "2026-08-01",
       page: 3,
