@@ -1,3 +1,13 @@
+import {
+  type CorrectiveDocumentNumber,
+  correctiveDocumentNumberSchema,
+} from "@deskohub/workspace-domain/features/accounting/corrective-document";
+
+export {
+  type CorrectiveDocumentNumber,
+  correctiveDocumentNumberSchema,
+} from "@deskohub/workspace-domain/features/accounting/corrective-document";
+
 import { BigDecimal, Schema } from "effect";
 import { accountingDocumentIdentitySchema } from "@/features/accounting/accounting-document-snapshot";
 import {
@@ -27,18 +37,6 @@ import {
   instantStringSchema,
   temporalInstantToIsoString,
 } from "@/shared/utils/temporal";
-
-/** A corrective document's number in its own annual series, `WS-OD-YYYY-NNNNNN`. */
-export const correctiveDocumentNumberSchema = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^WS-OD-[0-9]{4}-[0-9]{6,}$/)),
-  Schema.brand("CorrectiveDocumentNumber")
-).annotate({
-  identifier: "CorrectiveDocumentNumber",
-  description: "Deskohub corrective document number.",
-});
-
-export type CorrectiveDocumentNumber =
-  typeof correctiveDocumentNumberSchema.Type;
 
 const decodeCorrectiveDocumentNumber = Schema.decodeUnknownSync(
   correctiveDocumentNumberSchema

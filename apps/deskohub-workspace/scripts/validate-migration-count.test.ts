@@ -42,9 +42,9 @@ test("regenerates Workspace migrations in CI before accepting them", () => {
   const runs = workflowStepRuns(workflow).join("\n");
   expect(runs).toContain("bun turbo db:generate --filter=deskohub-workspace");
   expect(runs).toContain(
-    "git add --intent-to-add -- apps/deskohub-workspace/db/migrations"
+    "git add --intent-to-add -- packages/workspace-backend/src/db/migrations"
   );
   expect(runs).toContain(
-    "git diff --exit-code -- apps/deskohub-workspace/db/migrations"
+    "git diff --exit-code -- packages/workspace-backend/src/db/migrations"
   );
 });

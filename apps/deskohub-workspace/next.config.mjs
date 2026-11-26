@@ -133,9 +133,13 @@ const nextConfig = {
   transpilePackages: [
     "@deskohub/cloudinary",
     "@deskohub/cloudinary-image",
+    "@deskohub/google-oidc",
     "@deskohub/tooltip",
     "@deskohub/workspace-admin-api",
+    "@deskohub/workspace-backend",
     "@deskohub/workspace-customer-api",
+    "@deskohub/workspace-domain",
+    "@deskohub/workspace-rpc",
   ],
   async redirects() {
     return [

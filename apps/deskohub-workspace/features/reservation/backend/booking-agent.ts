@@ -1,7 +1,17 @@
+import {
+  type AgentSelectionKey,
+  agentSelectionKeySchema,
+} from "@deskohub/workspace-domain/features/reservation/agent-selection-key";
+
+export {
+  type AgentSelectionKey,
+  agentSelectionKeySchema,
+} from "@deskohub/workspace-domain/features/reservation/agent-selection-key";
+
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { Context, Data, Schema } from "effect";
+import { Context, Data } from "effect";
 import type {
   CustomerAgentClientId,
   CustomerAgentGrant,
@@ -15,15 +25,6 @@ import {
 import type { OrderId } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { SelectedReservation } from "./booking-selection";
-
-export const agentSelectionKeySchema = Schema.NonEmptyString.pipe(
-  Schema.brand("AgentSelectionKey")
-).annotate({
-  identifier: "AgentSelectionKey",
-  description:
-    "Digest of one agent booking request: the account, the agent client, and the complete selection.",
-});
-export type AgentSelectionKey = typeof agentSelectionKeySchema.Type;
 
 /**
  * The customer's AI agent a booking is made through. Only the customer MCP

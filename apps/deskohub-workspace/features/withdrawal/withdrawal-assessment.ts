@@ -1,7 +1,8 @@
-import { type Money, moneyShareRoundedUp } from "@/shared/money/money";
+import type { WithdrawalRefundUnit } from "@deskohub/workspace-domain/features/withdrawal/withdrawal-assessment";
 
-/** The unit a partial refund counts unused service in. */
-export type WithdrawalRefundUnit = "day" | "hour" | "entry";
+export type { WithdrawalRefundUnit } from "@deskohub/workspace-domain/features/withdrawal/withdrawal-assessment";
+
+import { type Money, moneyShareRoundedUp } from "@/shared/money/money";
 
 /** How a withdrawal's refund relates to the amount paid. */
 export type WithdrawalRefundBasis =

@@ -1,3 +1,10 @@
+import { workspaceCoworkProductIdentitySchema } from "@deskohub/workspace-domain/features/reservation/cowork-reservation-product";
+
+export {
+  workspaceCoworkProductIdentitySchema,
+  workspaceCoworkProductTargetSchema,
+} from "@deskohub/workspace-domain/features/reservation/cowork-reservation-product";
+
 import { Match, Schema, SchemaGetter } from "effect";
 import {
   getCoworkTierWorkstationAddon,
@@ -6,7 +13,6 @@ import {
   type WorkspaceCoworkHistoricalTier,
   type WorkspaceCoworkProductTier,
   type WorkspaceProductMonitorOption,
-  workspaceCoworkCurrentTiers,
   workspaceCoworkTiers,
   workspaceProductMonitorOptions,
 } from "@/features/checkout/product-catalog";
@@ -29,22 +35,8 @@ export const coworkReservationProductInputSchema = Schema.Struct({
   monitorOption: coworkReservationMonitorOptionInputSchema,
 });
 
-export const workspaceCoworkProductIdentitySchema = Schema.Struct({
-  kind: Schema.Literal(coworkReservationKind),
-  tier: Schema.Literals(workspaceCoworkTiers),
-});
-
 export type WorkspaceCoworkProductIdentity =
   typeof workspaceCoworkProductIdentitySchema.Type;
-
-/**
- * A discount target for cowork. Without a tier it covers every cowork tier;
- * with one it covers only that saleable tier.
- */
-export const workspaceCoworkProductTargetSchema = Schema.Struct({
-  kind: workspaceCoworkProductIdentitySchema.fields.kind,
-  tier: Schema.optional(Schema.Literals(workspaceCoworkCurrentTiers)),
-});
 
 export type WorkspaceCoworkAvailabilityTarget = {
   readonly kind: typeof coworkReservationKind;

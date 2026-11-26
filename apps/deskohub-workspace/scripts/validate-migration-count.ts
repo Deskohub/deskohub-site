@@ -5,6 +5,8 @@ const workspaceLegacyMigrationPathspec =
   ":(glob)apps/deskohub-workspace/db/migrations/*.sql";
 const workspaceMigrationPathspec =
   ":(glob)apps/deskohub-workspace/db/migrations/**/migration.sql";
+const backendMigrationPathspec =
+  ":(glob)packages/workspace-backend/src/db/migrations/**/migration.sql";
 
 export const parseChangedMigrationPaths = (output: string) =>
   output
@@ -24,7 +26,7 @@ export const assertValidMigrationCount = (
 
 const validateMigrationCount = async (baseSha: string) => {
   const git =
-    await $`git diff --find-renames --diff-filter=A --name-only ${`${baseSha}...HEAD`} -- ${workspaceLegacyMigrationPathspec} ${workspaceMigrationPathspec}`
+    await $`git diff --find-renames --diff-filter=A --name-only ${`${baseSha}...HEAD`} -- ${workspaceLegacyMigrationPathspec} ${workspaceMigrationPathspec} ${backendMigrationPathspec}`
       .cwd(fileURLToPath(new URL("../../..", import.meta.url)))
       .quiet()
       .nothrow();
