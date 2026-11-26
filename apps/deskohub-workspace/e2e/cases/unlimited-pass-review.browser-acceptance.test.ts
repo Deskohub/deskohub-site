@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Browser, type BrowserContext, chromium } from "@playwright/test";
 import { Effect } from "effect";
+import sharp from "sharp";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import {
   type CurrentBrowserDocument,
@@ -33,13 +34,38 @@ const accountPath = "/cs-CZ/account/passes";
 const checkoutPath = "/cs-CZ/passes/unlimited";
 const hostedPath = "/hpp/nexi/card";
 const cardFields = [
-  { label: "Card number", role: "card_number", preset: "placeholder" },
-  { label: "Expiration date", role: "expiration_date", preset: "default" },
-  { label: "CVV", role: "security_code", preset: "unavailable" },
-  { label: "First Name", role: "cardholder_name" },
-  { label: "Email", role: "cardholder_email" },
+  {
+    title: "CARD_NUMBER",
+    label: "Card number",
+    role: "card_number",
+    preset: "placeholder",
+  },
+  {
+    title: "EXPIRATION_DATE",
+    label: "Expiration date",
+    role: "expiration_date",
+    preset: "default",
+  },
+  {
+    title: "SECURITY_CODE",
+    label: "CVV",
+    role: "security_code",
+    preset: "unavailable",
+  },
 ] as const;
-const cardFieldLabels = cardFields.map(({ label }) => label);
+const identityFields = [
+  {
+    title: "CARDHOLDER_NAME",
+    label: "First Name",
+    value: "synthetic-private-name",
+  },
+  {
+    title: "CARDHOLDER_EMAIL",
+    label: "Email",
+    value: "synthetic-private-email",
+  },
+] as const;
+const hostedFields = [...cardFields, ...identityFields];
 
 const serveReviewPages = (context: BrowserContext) =>
   context.route("**/*", (route) => {
@@ -47,19 +73,20 @@ const serveReviewPages = (context: BrowserContext) =>
     if (url.origin === sandbox && url.pathname === hostedPath) {
       return route.fulfill({
         contentType: "text/html",
-        body: cardFieldLabels
+        body: hostedFields
           .map(
-            (label, index) =>
-              `<iframe title="${label}" src="/hosted-field/${index}"></iframe>`
+            ({ title }, index) =>
+              `<iframe title="${title}" src="/hosted-field/${index}"></iframe>`
           )
           .join(""),
       });
     }
     if (url.origin === sandbox && url.pathname.startsWith("/hosted-field/")) {
-      const label = cardFieldLabels[Number(url.pathname.split("/").at(-1))];
+      const field = hostedFields[Number(url.pathname.split("/").at(-1))];
+      const value = field && "value" in field ? field.value : "";
       return route.fulfill({
         contentType: "text/html",
-        body: `<input type="hidden" value="synthetic-hidden-frame-input"><input aria-label="${label}">`,
+        body: `<input type="hidden" value="synthetic-hidden-frame-input"><input aria-label="${field?.label}" value="${value}">`,
       });
     }
     return route.fulfill({
@@ -101,13 +128,13 @@ for (const transition of [
                   contentType: "text/html",
                   body:
                     index === undefined
-                      ? cardFieldLabels
+                      ? hostedFields
                           .map(
-                            (label, n) =>
-                              `<iframe title="${label}" src="/field/${n}"></iframe>`
+                            ({ title }, n) =>
+                              `<iframe title="${title}" src="/field/${n}"></iframe>`
                           )
                           .join("")
-                      : `<input aria-label="${cardFieldLabels[Number(index)]}">`,
+                      : `<input aria-label="${hostedFields[Number(index)]?.label}">`,
                 });
               });
               await page.goto(initial);
@@ -306,17 +333,9 @@ for (const locale of ["en-US", "cs-CZ"] as const) {
   );
 }
 
-const diagnosticCases = [
-  ...cardFields.map((entry, index) => ({
-    entry,
-    index,
-    matchesBuyer: entry.role === "cardholder_name",
-  })),
-  { entry: cardFields[4], index: 4, matchesBuyer: true },
-];
-for (const { entry, index, matchesBuyer } of diagnosticCases) {
+for (const [index, { label, role, title, preset }] of cardFields.entries()) {
   test.skipIf(!chromiumAvailable)(
-    `reports only fixed diagnostics for a populated Nexi ${entry.role} field${matchesBuyer ? " matching the synthetic buyer" : ""}`,
+    `reports only fixed diagnostics for a populated Nexi ${role} field`,
     async () => {
       const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
       const original = { height: 720, width: 960 };
@@ -324,19 +343,12 @@ for (const { entry, index, matchesBuyer } of diagnosticCases) {
       try {
         const page = await context.newPage();
         await serveReviewPages(context);
-        const { label, role } = entry;
-        const preset = "preset" in entry ? entry.preset : undefined;
         const value = `synthetic-private-input-${role}`;
         const syntheticPayment = "synthetic-diagnostic-order-id";
         const url = `${sandbox}${hostedPath}?orderId=${syntheticPayment}`;
         await page.goto(url);
-        if (role === "cardholder_email") {
-          await page
-            .locator('iframe[title="First Name"]')
-            .evaluate((el) => el.remove());
-        }
         const field = page
-          .frameLocator(`iframe[title="${label}"]`)
+          .frameLocator(`iframe[title="${title}"]`)
           .getByRole("textbox", { name: label });
         if (preset) {
           await field.evaluate(
@@ -378,26 +390,13 @@ for (const { entry, index, matchesBuyer } of diagnosticCases) {
               provider: "nexi",
               url,
             },
-            [],
-            {
-              email:
-                role === "cardholder_email" && matchesBuyer
-                  ? value
-                  : "synthetic-expected-email",
-              name: "synthetic-private-input-cardholder_name",
-            }
+            []
           );
           const logs = output.mock.calls.map(([line]) => String(line));
-          const previous = cardFields
-            .slice(0, index)
-            .map(({ role: previousRole }) => ({
-              role: previousRole,
-              state:
-                role === "cardholder_email" &&
-                previousRole === "cardholder_name"
-                  ? "missing"
-                  : "empty",
-            }));
+          const previous = cardFields.slice(0, index).map(({ role }) => ({
+            role,
+            state: "empty",
+          }));
           const expected = {
             problem: "card-field-populated",
             fields: [
@@ -413,10 +412,6 @@ for (const { entry, index, matchesBuyer } of diagnosticCases) {
                         matchesDefaultValue: preset === "default",
                         matchesPlaceholder: preset === "placeholder",
                       },
-                ...((role === "cardholder_name" ||
-                  role === "cardholder_email") && {
-                  matchesSyntheticBuyer: matchesBuyer,
-                }),
               },
             ],
           };
@@ -426,7 +421,8 @@ for (const { entry, index, matchesBuyer } of diagnosticCases) {
           expect(logs.join("")).not.toContain(value);
           expect(logs.join("")).not.toContain(syntheticPayment);
           expect(logs.join("")).not.toContain("synthetic-hidden-frame-input");
-          expect(logs.join("")).not.toContain("synthetic-expected-email");
+          expect(logs.join("")).not.toContain("synthetic-private-name");
+          expect(logs.join("")).not.toContain("synthetic-private-email");
         } finally {
           output.mockRestore();
         }
@@ -446,7 +442,7 @@ for (const { entry, index, matchesBuyer } of diagnosticCases) {
 }
 
 test.skipIf(!chromiumAvailable)(
-  "captures the same sandbox handoff with empty hosted iframes at both widths",
+  "captures the same sandbox handoff with verified identity masks at both widths",
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
     const original = { height: 720, width: 960 };
@@ -482,21 +478,6 @@ test.skipIf(!chromiumAvailable)(
         provider: "nexi" as const,
         url,
       };
-      await page.goto(url);
-      const name = page
-        .frameLocator('iframe[title="First Name"]')
-        .getByRole("textbox", { name: "First Name" });
-      await name.fill("synthetic nonempty value");
-      await review.captureNexi(page, handoff, []);
-      expect(review.missingShots()).toContainEqual({
-        shot: "nexi-handoff",
-        problem: "card-field-populated",
-      });
-      expect((await readdir(directory)).sort()).toEqual([
-        "unlimited-cs-CZ-choose-default-1280.png",
-        "unlimited-cs-CZ-choose-default-390.png",
-      ]);
-
       addRedaction(syntheticPayment);
       const redactedHandoff = {
         ...handoff,
@@ -514,56 +495,56 @@ test.skipIf(!chromiumAvailable)(
       });
 
       await page.goto(url);
-      const body = page.locator("body");
-      const ariaSnapshot = body.ariaSnapshot.bind(body);
-      let returnedStaleSnapshot = false;
-      const remount = spyOn(body, "ariaSnapshot").mockImplementationOnce(
-        async (options) => {
-          const snapshot = await ariaSnapshot(options);
-          await Promise.all([
-            page.waitForEvent("framenavigated", {
-              predicate: (frame) => frame === page.mainFrame(),
-              timeout: 1_000,
-            }),
-            page.evaluate(() =>
-              history.replaceState({ ready: true }, "", location.href)
-            ),
-          ]);
-          await page
-            .locator('iframe[title="Card number"]')
-            .evaluate((frame) => frame.replaceWith(frame.cloneNode(true)));
-          await page
-            .frameLocator('iframe[title="Card number"]')
-            .getByRole("textbox", { name: "Card number" })
-            .waitFor({ state: "visible", timeout: 800 });
-          returnedStaleSnapshot = true;
-          return snapshot;
-        }
-      );
-      const locator = page.locator.bind(page);
-      const readBody = spyOn(page, "locator").mockImplementation(
-        (selector, options) =>
-          selector === "body" ? body : locator(selector, options)
-      );
-      try {
-        await review.captureNexi(page, redactedHandoff, []);
-        expect(remount).toHaveBeenCalled();
-        expect(returnedStaleSnapshot).toBe(true);
-      } finally {
-        readBody.mockRestore();
-        remount.mockRestore();
-      }
+      await Promise.all([
+        page.waitForEvent("framenavigated", {
+          predicate: (frame) => frame === page.mainFrame(),
+          timeout: 1_000,
+        }),
+        page.evaluate(() =>
+          history.replaceState({ ready: true }, "", location.href)
+        ),
+      ]);
+      await review.captureNexi(page, redactedHandoff, []);
       expect(
         review.missingShots().some(({ shot }) => shot === "nexi-handoff")
       ).toBe(false);
       expect(page.viewportSize()).toEqual(original);
-      for (const width of [390, 1280]) {
+      for (const [width, height] of [
+        [390, 844],
+        [1280, 900],
+      ] as const) {
+        await page.setViewportSize({ width, height });
         for (const shot of ["choose-default", "nexi-handoff"]) {
           const pixels = await readFile(
             join(directory, `unlimited-cs-CZ-${shot}-${width}.png`)
           );
           expect(pixels.toString("ascii", 12, 16)).toBe("IHDR");
           expect(pixels.readUInt32BE(16)).toBe(width);
+          if (shot === "nexi-handoff") {
+            for (const { title, label, value } of identityFields) {
+              const frame = page.locator(`iframe[title="${title}"]`);
+              const box = await frame.boundingBox();
+              expect(box).not.toBeNull();
+              if (!box) throw new Error("Hosted identity frame is missing");
+              const pixel = await sharp(pixels)
+                .extract({
+                  left: Math.floor(box.x + box.width / 2),
+                  top: Math.floor(box.y + box.height / 2),
+                  width: 1,
+                  height: 1,
+                })
+                .removeAlpha()
+                .raw()
+                .toBuffer();
+              expect([...pixel]).toEqual([255, 0, 255]);
+              expect(
+                await frame
+                  .contentFrame()
+                  .getByRole("textbox", { name: label })
+                  .inputValue()
+              ).toBe(value);
+            }
+          }
         }
       }
     } finally {
@@ -572,6 +553,105 @@ test.skipIf(!chromiumAvailable)(
     }
   }
 );
+
+for (const { failure, problem } of [
+  { failure: "missing", problem: "identity-mask-unavailable" },
+  { failure: "unpainted", problem: "identity-mask-not-rendered" },
+  { failure: "remounted", problem: "identity-mask-changed" },
+  { failure: "navigated", problem: "document-navigated" },
+] as const) {
+  test.skipIf(!chromiumAvailable)(
+    `publishes neither Nexi width when an identity mask is ${failure}`,
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
+      const original = { height: 720, width: 960 };
+      const context = await browser.newContext({ viewport: original });
+      try {
+        const page = await context.newPage();
+        await serveReviewPages(context);
+        const url = `${sandbox}${hostedPath}?orderId=synthetic-mask-failure`;
+        await page.goto(url);
+        const emailFrame = page.locator('iframe[title="CARDHOLDER_EMAIL"]');
+        if (failure === "missing") {
+          await emailFrame.evaluate((node) => node.remove());
+        }
+        const screenshot = page.screenshot.bind(page);
+        const injected = spyOn(page, "screenshot").mockImplementation(
+          async (options) => {
+            if (page.viewportSize()?.width !== 1280) return screenshot(options);
+            if (failure === "unpainted") {
+              return screenshot({
+                ...options,
+                mask: options?.mask?.slice(0, -1),
+              });
+            }
+            if (failure === "remounted") {
+              const pixels = await screenshot(options);
+              await Promise.all([
+                page.waitForEvent("framedetached", { timeout: 1_000 }),
+                emailFrame.evaluate((node) =>
+                  node.replaceWith(node.cloneNode(true))
+                ),
+              ]);
+              await emailFrame
+                .contentFrame()
+                .getByRole("textbox", { name: "Email" })
+                .waitFor({ state: "visible", timeout: 1_000 });
+              return pixels;
+            }
+            if (failure === "navigated") {
+              const pixels = await screenshot(options);
+              await Promise.all([
+                page.waitForEvent("framenavigated", {
+                  predicate: (frame) => frame === page.mainFrame(),
+                  timeout: 1_000,
+                }),
+                page.evaluate(() =>
+                  history.replaceState({}, "", "/hpp/nexi/other-card")
+                ),
+              ]);
+              return pixels;
+            }
+            return screenshot(options);
+          }
+        );
+        try {
+          const review = makeUnlimitedPassReviewCapture({
+            accountPath,
+            directory,
+            locale: "en-US",
+            origin,
+            timeout: 1_000,
+          });
+          await review.captureNexi(
+            page,
+            {
+              checkoutPage: page,
+              checkoutPageUrl: `${origin}${checkoutPath}?step=pay`,
+              isHandoffDocument: async (candidate) =>
+                candidate === page && candidate.url() === url,
+              page,
+              provider: "nexi",
+              url,
+            },
+            []
+          );
+          expect(review.missingShots(["nexi-handoff"])).toEqual([
+            { shot: "nexi-handoff", problem },
+          ]);
+          expect(injected).toHaveBeenCalledTimes(failure === "missing" ? 0 : 2);
+          expect(await readdir(directory)).toEqual([]);
+          expect(page.viewportSize()).toEqual(original);
+        } finally {
+          injected.mockRestore();
+        }
+      } finally {
+        await context.close();
+        await rm(directory, { force: true, recursive: true });
+      }
+    }
+  );
+}
 
 test.skipIf(!chromiumAvailable)(
   "reports fixed capture errors and rolls back a partial screenshot pair",

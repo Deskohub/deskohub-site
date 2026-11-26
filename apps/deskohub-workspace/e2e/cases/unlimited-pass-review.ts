@@ -4,12 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Frame, Locator, Page } from "@playwright/test";
 import { getLegalDocumentPath } from "@/features/legal/legal-document-path";
 import { unlimitedPassCheckoutPath } from "@/features/passes/routes";
-import { locateSnapshotRef } from "../browser";
-import {
-  findNexiCardField,
-  type NexiCardField,
-  parseNexiSnapshot,
-} from "../checkout/nexi-hosted-page";
+import type { NexiCardField } from "../checkout/nexi-hosted-page";
 import { observeNexiReviewNavigation } from "../checkout/nexi-review-navigation";
 import type { HostedPaymentPage } from "../checkout/payment";
 import type { unlimitedPassReviewLocale } from "../e2e-env";
@@ -17,10 +12,6 @@ import { log, workspaceDir } from "../runtime";
 import { workspaceE2EPollIntervalMs } from "../timeouts";
 
 type ReviewLocale = NonNullable<ReturnType<typeof unlimitedPassReviewLocale>>;
-type SyntheticReviewBuyer = {
-  readonly email: string;
-  readonly name: string;
-};
 
 const workspaceShots = [
   "choose-default",
@@ -38,21 +29,19 @@ const workspaceShots = [
 type WorkspaceShot = (typeof workspaceShots)[number];
 type ReviewShot = WorkspaceShot | "nexi-handoff";
 type CardFieldProblem =
-  | "snapshot-unavailable"
-  | "card-field-missing"
   | "card-field-unreadable"
-  | "card-field-populated";
+  | "card-field-populated"
+  | "identity-mask-unavailable";
 type PopulatedCardFieldDetails = {
   readonly autofilled: boolean;
   readonly matchesDefaultValue: boolean;
   readonly matchesPlaceholder: boolean;
 };
 type CardFieldObservation = { readonly role: NexiCardField } & (
-  | { readonly state: "empty" | "missing" | "unreadable" }
+  | { readonly state: "empty" | "unreadable" }
   | {
       readonly state: "populated";
       readonly details: PopulatedCardFieldDetails | "unavailable";
-      readonly matchesSyntheticBuyer?: boolean;
     }
 );
 type CardFieldInspection = {
@@ -67,6 +56,8 @@ type CaptureProblem =
   | "untracked-document"
   | "unexpected-document"
   | "document-navigated"
+  | "identity-mask-changed"
+  | "identity-mask-not-rendered"
   | "screenshot-failed"
   | "write-failed";
 
@@ -74,6 +65,12 @@ type ReviewImage = {
   readonly filename: string;
   readonly pixels: Buffer;
 };
+type IdentityMasks = readonly [Locator, Locator];
+type MaskRectangle = NonNullable<Awaited<ReturnType<Locator["boundingBox"]>>>;
+type CaptureVerification =
+  | CaptureProblem
+  | { readonly identityMasks: IdentityMasks }
+  | undefined;
 
 const viewports = [
   { height: 844, width: 390 },
@@ -85,8 +82,24 @@ const requiredCardFields = [
   "expiration_date",
   "security_code",
 ] as const;
-const optionalCardFields = ["cardholder_name", "cardholder_email"] as const;
+// Nexi's card-data form assigns each hosted iframe the title of its field ID.
+const nexiFieldFrameTitles = {
+  card_number: "CARD_NUMBER",
+  expiration_date: "EXPIRATION_DATE",
+  security_code: "SECURITY_CODE",
+  cardholder_name: "CARDHOLDER_NAME",
+  cardholder_email: "CARDHOLDER_EMAIL",
+} as const satisfies Record<NexiCardField, string>;
 const sandboxOrigin = "https://xpaysandbox.nexigroup.com";
+const identityMaskColor = "#ff00ff";
+
+const nexiFieldFrame = (page: Page, role: NexiCardField) =>
+  page.locator(`iframe[title="${nexiFieldFrameTitles[role]}"]`).filter({
+    visible: true,
+  });
+
+const nexiFrameInput = (frame: Locator) =>
+  frame.contentFrame().locator("input").filter({ visible: true });
 
 async function describePopulatedCardField(
   input: Locator,
@@ -124,33 +137,11 @@ async function describePopulatedCardField(
 async function inspectCardFields(
   page: Page,
   deadline: number,
-  buyer: SyntheticReviewBuyer | undefined
+  identityMasks: IdentityMasks
 ): Promise<CardFieldInspection> {
-  const snapshotTimeout = deadline - performance.now();
-  if (snapshotTimeout <= 0)
-    return { problem: "snapshot-unavailable", fields: [] };
-  const body = await page
-    .locator("body")
-    .ariaSnapshot({ mode: "ai", timeout: snapshotTimeout })
-    .catch(() => undefined);
-  if (!body) return { problem: "snapshot-unavailable", fields: [] };
-  const snapshot = parseNexiSnapshot(body);
   const fields: CardFieldObservation[] = [];
-  for (const field of [...requiredCardFields, ...optionalCardFields]) {
-    const target = findNexiCardField(snapshot, field);
-    if (!target) {
-      fields.push({ role: field, state: "missing" });
-      if (field === "cardholder_name" || field === "cardholder_email") continue;
-      return { problem: "card-field-missing", fields };
-    }
-    const input = (
-      target.frameRef
-        ? locateSnapshotRef(page, target.frameRef)
-            .filter({ visible: true })
-            .contentFrame()
-            .locator("input")
-        : locateSnapshotRef(page, target.ref)
-    ).filter({ visible: true });
+  for (const field of requiredCardFields) {
+    const input = nexiFrameInput(nexiFieldFrame(page, field));
     const timeout = Math.min(
       deadline - performance.now(),
       workspaceE2EPollIntervalMs.browser
@@ -166,20 +157,29 @@ async function inspectCardFields(
     if (value !== "") {
       // A failed or changed diagnostic sample cannot overturn the refusal.
       const details = await describePopulatedCardField(input, deadline);
-      let expectedBuyerField: string | undefined;
-      if (field === "cardholder_name") expectedBuyerField = buyer?.name;
-      if (field === "cardholder_email") expectedBuyerField = buyer?.email;
-      fields.push({
-        role: field,
-        state: "populated",
-        details,
-        ...(expectedBuyerField !== undefined && {
-          matchesSyntheticBuyer: value === expectedBuyerField,
-        }),
-      });
+      fields.push({ role: field, state: "populated", details });
       return { problem: "card-field-populated", fields };
     }
     fields.push({ role: field, state: "empty" });
+  }
+  for (const [index, frame] of identityMasks.entries()) {
+    const timeout = Math.min(
+      deadline - performance.now(),
+      workspaceE2EPollIntervalMs.browser
+    );
+    const visible =
+      timeout > 0 &&
+      (await nexiFrameInput(frame)
+        .waitFor({ state: "visible", timeout })
+        .then(
+          () => true,
+          () => false
+        ));
+    if (!visible) {
+      const role = index === 0 ? "cardholder_name" : "cardholder_email";
+      fields.push({ role, state: "unreadable" });
+      return { problem: "identity-mask-unavailable", fields };
+    }
   }
   return { fields };
 }
@@ -187,12 +187,12 @@ async function inspectCardFields(
 async function waitForEmptyCardFields(
   page: Page,
   timeout: number,
-  buyer: SyntheticReviewBuyer | undefined
+  identityMasks: IdentityMasks
 ) {
   const deadline = performance.now() + timeout;
   while (true) {
     const nextRead = performance.now() + workspaceE2EPollIntervalMs.browser;
-    const inspection = await inspectCardFields(page, deadline, buyer);
+    const inspection = await inspectCardFields(page, deadline, identityMasks);
     if (!inspection.problem || inspection.problem === "card-field-populated") {
       return inspection;
     }
@@ -203,6 +203,63 @@ async function waitForEmptyCardFields(
     if (wait > 0) await delay(wait);
     if (performance.now() >= deadline) return inspection;
   }
+}
+
+async function identityMaskRectangles(
+  masks: IdentityMasks,
+  timeout: number
+): Promise<readonly MaskRectangle[] | undefined> {
+  const boxes = await Promise.all(
+    masks.map((mask) => mask.boundingBox({ timeout }).catch(() => null))
+  );
+  if (boxes.some((box) => box === null)) return;
+  return boxes.filter((box) => box !== null);
+}
+
+const sameMaskRectangles = (
+  before: readonly MaskRectangle[],
+  after: readonly MaskRectangle[]
+) =>
+  before.length === after.length &&
+  before.every((box, index) => {
+    const other = after[index];
+    return (
+      box.x === other?.x &&
+      box.y === other.y &&
+      box.width === other.width &&
+      box.height === other.height
+    );
+  });
+
+async function identityMasksRendered(
+  pixels: Buffer,
+  boxes: readonly MaskRectangle[]
+): Promise<boolean> {
+  const { default: sharp } = await import("sharp");
+  const { data, info } = await sharp(pixels)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return boxes.every((box) => {
+    const left = Math.max(0, Math.ceil(box.x));
+    const top = Math.max(0, Math.ceil(box.y));
+    const right = Math.min(info.width, Math.floor(box.x + box.width));
+    const bottom = Math.min(info.height, Math.floor(box.y + box.height));
+    // A frame completely outside this viewport contributes no pixels.
+    for (let y = top; y < bottom; y++) {
+      for (let x = left; x < right; x++) {
+        const index = (y * info.width + x) * info.channels;
+        if (
+          data[index] !== 255 ||
+          data[index + 1] !== 0 ||
+          data[index + 2] !== 255
+        ) {
+          return false;
+        }
+      }
+    }
+    return true;
+  });
 }
 
 async function writeReviewImages(
@@ -254,7 +311,7 @@ export function makeUnlimitedPassReviewCapture({
     page: Page,
     shot: ReviewShot,
     options: {
-      readonly verify: () => Promise<CaptureProblem | undefined>;
+      readonly verify: () => Promise<CaptureVerification>;
       readonly mask: readonly Locator[];
       readonly section?: Locator;
       readonly style?: string;
@@ -271,7 +328,15 @@ export function makeUnlimitedPassReviewCapture({
       const images: ReviewImage[] = [];
       let navigated = false;
       let restored = false;
+      let identityMasksBound = false;
+      let identityFramesChanged = false;
+      const recordFrameChange = (frame: Frame) => {
+        if (identityMasksBound && frame !== mainFrame) {
+          identityFramesChanged = true;
+        }
+      };
       const recordNavigation = (frame: Frame) => {
+        recordFrameChange(frame);
         if (
           frame === mainFrame &&
           (!options.verifyDocument || frame.url() !== originalUrl)
@@ -284,18 +349,22 @@ export function makeUnlimitedPassReviewCapture({
         (options.verifyDocument !== undefined &&
           (!(await options.verifyDocument()) || navigationObserved()));
       page.on("framenavigated", recordNavigation);
+      if (shot === "nexi-handoff") {
+        page.on("frameattached", recordFrameChange);
+        page.on("framedetached", recordFrameChange);
+      }
       try {
         for (const viewport of viewports) {
           phase = "viewport-change-failed";
           await page.setViewportSize(viewport);
           phase = "unexpected-document";
-          const problem = await options.verify();
+          const verification = await options.verify();
           if (navigationObserved()) {
             phase = "document-navigated";
             return;
           }
-          if (problem) {
-            phase = problem;
+          if (typeof verification === "string") {
+            phase = verification;
             return;
           }
           if (await documentChanged()) {
@@ -303,9 +372,28 @@ export function makeUnlimitedPassReviewCapture({
             return;
           }
           const mask = [...options.mask];
+          const identityMasks = verification?.identityMasks;
+          let identityBoxes: readonly MaskRectangle[] | undefined;
+          const maskTimeout = Math.min(
+            timeout,
+            workspaceE2EPollIntervalMs.browser
+          );
+          if (identityMasks) {
+            identityMasksBound = true;
+            phase = "identity-mask-changed";
+            if (identityFramesChanged) return;
+            phase = "identity-mask-unavailable";
+            identityBoxes = await identityMaskRectangles(
+              identityMasks,
+              maskTimeout
+            );
+            if (!identityBoxes) return;
+            mask.push(...identityMasks);
+          }
           const screenshot = {
             animations: "disabled",
             mask,
+            ...(identityMasks && { maskColor: identityMaskColor }),
             scale: "css",
             ...(options.style && { style: options.style }),
             timeout,
@@ -322,6 +410,27 @@ export function makeUnlimitedPassReviewCapture({
             phase = "document-navigated";
             return;
           }
+          if (identityMasks && identityBoxes) {
+            phase = "identity-mask-changed";
+            const after = await identityMaskRectangles(
+              identityMasks,
+              maskTimeout
+            );
+            if (
+              !after ||
+              identityFramesChanged ||
+              !sameMaskRectangles(identityBoxes, after)
+            )
+              return;
+            phase = "identity-mask-not-rendered";
+            if (!(await identityMasksRendered(pixels, identityBoxes))) return;
+            if (await documentChanged()) {
+              phase = "document-navigated";
+              return;
+            }
+            phase = "identity-mask-changed";
+            if (identityFramesChanged) return;
+          }
           images.push({
             filename: `unlimited-${locale}-${shot}-${viewport.width}.png`,
             pixels,
@@ -329,6 +438,10 @@ export function makeUnlimitedPassReviewCapture({
         }
       } finally {
         page.off("framenavigated", recordNavigation);
+        if (shot === "nexi-handoff") {
+          page.off("frameattached", recordFrameChange);
+          page.off("framedetached", recordFrameChange);
+        }
         try {
           await page.setViewportSize(original);
           restored = true;
@@ -382,14 +495,17 @@ export function makeUnlimitedPassReviewCapture({
     captureNexi: async (
       page: Page,
       hosted: HostedPaymentPage,
-      privateText: readonly string[],
-      buyer?: SyntheticReviewBuyer
+      privateText: readonly string[]
     ) => {
       if (results.get("nexi-handoff") === "captured") return;
       // Share the existing two-width inspection budget. The first view may
       // spend most of it waiting for Nexi to render its hosted fields.
       let inspectionBudget = viewports.length * timeout;
       let fieldInspection: CardFieldInspection | undefined;
+      const identityMasks: IdentityMasks = [
+        nexiFieldFrame(page, "cardholder_name"),
+        nexiFieldFrame(page, "cardholder_email"),
+      ];
       const { isHandoffDocument } = hosted;
       const verifyDocument = () =>
         isHandoffDocument?.(page, timeout) ?? Promise.resolve(false);
@@ -429,10 +545,10 @@ export function makeUnlimitedPassReviewCapture({
             fieldInspection = await waitForEmptyCardFields(
               page,
               inspectionBudget,
-              buyer
+              identityMasks
             );
             inspectionBudget -= performance.now() - started;
-            return fieldInspection.problem;
+            return fieldInspection.problem ?? { identityMasks };
           },
         });
       } finally {
