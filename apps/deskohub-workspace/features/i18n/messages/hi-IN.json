@@ -1915,6 +1915,13 @@
   "accountUnlimitedPassPeriod": "वैधता अवधि",
   "accountUnlimitedPassWhere": "बैठने की जगह",
   "accountUnlimitedPassAnyDesk": "कोई भी खाली डेस्क",
+  "accountUnlimitedAutoRenewalTitle": "स्वचालित नवीनीकरण",
+  "accountUnlimitedAutoRenewalPlan": "{date} को {amount} में नवीनीकरण की योजना है।",
+  "accountUnlimitedAutoRenewalPending": "भुगतान प्रदाता की मंज़ूरी मिलने तक नवीनीकरण का शुल्क लेना और रिमाइंडर भेजना रुका हुआ है।",
+  "accountUnlimitedAutoRenewalCancel": "नवीनीकरण रोकें",
+  "accountUnlimitedAutoRenewalStopped": "स्वचालित नवीनीकरण रुक गया है।",
+  "accountUnlimitedAutoRenewalScope": "नवीनीकरण रोकने का असर आगे की अवधियों पर पड़ता है। आपने जिस अवधि के लिए भुगतान किया है, उस दौरान आपकी पहुँच बनी रहती है। अनुबंध से हटने के वैधानिक अधिकार की प्रक्रिया अलग है।",
+  "accountUnlimitedAutoRenewalError": "नवीनीकरण रोका नहीं जा सका। फिर से कोशिश करें।",
   "accountUnlimitedPassDaysLeft": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],

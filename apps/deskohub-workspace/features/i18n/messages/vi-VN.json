@@ -1895,6 +1895,13 @@
   "accountUnlimitedPassPeriod": "Thời hạn",
   "accountUnlimitedPassWhere": "Chỗ ngồi",
   "accountUnlimitedPassAnyDesk": "Bất kỳ bàn trống nào",
+  "accountUnlimitedAutoRenewalTitle": "Tự động gia hạn",
+  "accountUnlimitedAutoRenewalPlan": "Dự kiến gia hạn vào {date} với giá {amount}.",
+  "accountUnlimitedAutoRenewalPending": "Các khoản thanh toán gia hạn và thông báo nhắc đang tạm dừng cho đến khi nhà cung cấp dịch vụ thanh toán phê duyệt.",
+  "accountUnlimitedAutoRenewalCancel": "Dừng tự động gia hạn",
+  "accountUnlimitedAutoRenewalStopped": "Đã dừng tự động gia hạn.",
+  "accountUnlimitedAutoRenewalScope": "Việc dừng gia hạn chỉ áp dụng cho các kỳ sau. Bạn vẫn có quyền sử dụng trong thời hạn đã thanh toán. Quyền rút khỏi hợp đồng theo luật được thực hiện riêng.",
+  "accountUnlimitedAutoRenewalError": "Không thể dừng tự động gia hạn. Hãy thử lại.",
   "accountUnlimitedPassDaysLeft": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],

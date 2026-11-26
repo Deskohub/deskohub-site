@@ -1935,6 +1935,13 @@
   "accountUnlimitedPassPeriod": "Platnost",
   "accountUnlimitedPassWhere": "Kde se posadit",
   "accountUnlimitedPassAnyDesk": "Kterýkoliv volný stůl",
+  "accountUnlimitedAutoRenewalTitle": "Automatické prodloužení",
+  "accountUnlimitedAutoRenewalPlan": "Plánované prodloužení na {date} za {amount}.",
+  "accountUnlimitedAutoRenewalPending": "Platby za prodloužení a připomínky jsou pozastavené, dokud je nepovolí poskytovatel plateb.",
+  "accountUnlimitedAutoRenewalCancel": "Zastavit prodlužování",
+  "accountUnlimitedAutoRenewalStopped": "Automatické prodlužování je zastavené.",
+  "accountUnlimitedAutoRenewalScope": "Zastavení prodlužování se týká budoucích období. Přístup na zaplacené období ti zůstává. Zákonné odstoupení od smlouvy se řeší samostatně.",
+  "accountUnlimitedAutoRenewalError": "Prodlužování se nepodařilo zastavit. Zkus to znovu.",
   "accountUnlimitedPassDaysLeft": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],

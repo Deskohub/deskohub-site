@@ -1915,6 +1915,13 @@
   "accountUnlimitedPassPeriod": "Gültigkeit",
   "accountUnlimitedPassWhere": "Sitzplatz",
   "accountUnlimitedPassAnyDesk": "Ein beliebiger freier Schreibtisch",
+  "accountUnlimitedAutoRenewalTitle": "Automatische Verlängerung",
+  "accountUnlimitedAutoRenewalPlan": "Geplante Verlängerung am {date} für {amount}.",
+  "accountUnlimitedAutoRenewalPending": "Zahlungen für Verlängerungen und Erinnerungen sind bis zur Freigabe durch den Zahlungsanbieter ausgesetzt.",
+  "accountUnlimitedAutoRenewalCancel": "Verlängerung stoppen",
+  "accountUnlimitedAutoRenewalStopped": "Die automatische Verlängerung ist gestoppt.",
+  "accountUnlimitedAutoRenewalScope": "Der Stopp betrifft künftige Zeiträume. Du behältst den Zugang für den bezahlten Zeitraum. Der gesetzliche Widerruf läuft separat.",
+  "accountUnlimitedAutoRenewalError": "Die Verlängerung konnte nicht gestoppt werden. Versuch es erneut.",
   "accountUnlimitedPassDaysLeft": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],

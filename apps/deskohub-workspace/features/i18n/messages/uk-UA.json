@@ -1955,6 +1955,13 @@
   "accountUnlimitedPassPeriod": "Період дії",
   "accountUnlimitedPassWhere": "Де сісти",
   "accountUnlimitedPassAnyDesk": "Будь-який вільний стіл",
+  "accountUnlimitedAutoRenewalTitle": "Автоматичне продовження",
+  "accountUnlimitedAutoRenewalPlan": "Заплановано продовження на {date} за {amount}.",
+  "accountUnlimitedAutoRenewalPending": "Платежі за продовження та нагадування призупинено до схвалення платіжним провайдером.",
+  "accountUnlimitedAutoRenewalCancel": "Зупинити продовження",
+  "accountUnlimitedAutoRenewalStopped": "Автоматичне продовження зупинено.",
+  "accountUnlimitedAutoRenewalScope": "Зупинення продовження стосується майбутніх періодів. Доступ діє протягом оплаченого періоду. Законне право на відмову від договору реалізується окремо.",
+  "accountUnlimitedAutoRenewalError": "Не вдалося зупинити продовження. Спробуйте ще раз.",
   "accountUnlimitedPassDaysLeft": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],

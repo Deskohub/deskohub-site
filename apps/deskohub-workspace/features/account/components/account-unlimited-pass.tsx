@@ -1,5 +1,6 @@
 import { Gift, KeyRound } from "lucide-react";
 import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
+import { AccountUnlimitedAutoRenewalControls } from "@/features/account/components/account-unlimited-auto-renewal";
 import { type Locale, m } from "@/features/i18n";
 import { UnlimitedDayMeter } from "@/features/passes/components/unlimited-day-meter";
 import { GuardedLink } from "@/shared/components/guarded-link";
@@ -140,6 +141,13 @@ export function AccountUnlimitedPassCard({ pass, locale }: PassProps) {
           )}
         </dl>
       </div>
+      {pass.autoRenewal && (
+        <AccountUnlimitedAutoRenewalControls
+          autoRenewal={pass.autoRenewal}
+          locale={locale}
+          orderId={pass.orderId}
+        />
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3 @xl:px-6">
         <div className="space-y-1">
           {pass.boughtForYou && (

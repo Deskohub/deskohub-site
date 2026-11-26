@@ -1915,6 +1915,13 @@
   "accountUnlimitedPassPeriod": "Pass period",
   "accountUnlimitedPassWhere": "Where to sit",
   "accountUnlimitedPassAnyDesk": "Any free desk",
+  "accountUnlimitedAutoRenewalTitle": "Automatic renewal",
+  "accountUnlimitedAutoRenewalPlan": "Planned renewal on {date} for {amount}.",
+  "accountUnlimitedAutoRenewalPending": "Renewal charges and reminders are paused pending payment provider approval.",
+  "accountUnlimitedAutoRenewalCancel": "Stop auto-renewal",
+  "accountUnlimitedAutoRenewalStopped": "Automatic renewal is stopped.",
+  "accountUnlimitedAutoRenewalScope": "Stopping renewal affects future periods. You keep access for the period you paid for. Statutory withdrawal is a separate process.",
+  "accountUnlimitedAutoRenewalError": "Automatic renewal couldn’t be stopped. Try again.",
   "accountUnlimitedPassDaysLeft": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],

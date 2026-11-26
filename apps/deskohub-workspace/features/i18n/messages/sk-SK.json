@@ -1955,6 +1955,13 @@
   "accountUnlimitedPassPeriod": "Platnosť",
   "accountUnlimitedPassWhere": "Kde si sadnúť",
   "accountUnlimitedPassAnyDesk": "Ktorýkoľvek voľný stôl",
+  "accountUnlimitedAutoRenewalTitle": "Automatické predĺženie",
+  "accountUnlimitedAutoRenewalPlan": "Plánované predĺženie na {date} za {amount}.",
+  "accountUnlimitedAutoRenewalPending": "Platby za predĺženie a pripomienky sú pozastavené, kým ich nepovolí poskytovateľ platieb.",
+  "accountUnlimitedAutoRenewalCancel": "Zastaviť predlžovanie",
+  "accountUnlimitedAutoRenewalStopped": "Automatické predlžovanie je zastavené.",
+  "accountUnlimitedAutoRenewalScope": "Zastavenie predlžovania sa týka budúcich období. Prístup na zaplatené obdobie ti zostáva. Zákonné odstúpenie od zmluvy sa rieši samostatne.",
+  "accountUnlimitedAutoRenewalError": "Predlžovanie sa nepodarilo zastaviť. Skús to znova.",
   "accountUnlimitedPassDaysLeft": [
     {
       "declarations": ["input count", "local countPlural = count: plural"],
