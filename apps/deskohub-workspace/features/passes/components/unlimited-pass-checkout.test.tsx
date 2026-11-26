@@ -178,6 +178,8 @@ test("auto renewal carries the choice through Details and requires each applicab
   ).toBe("/en-US/account/passes");
   const ordinary = view.getByRole("checkbox", { name: /general terms/i });
   const start = view.getByRole("checkbox", { name: earlyStart });
+  expect(earlyStart).toContain("on or after the start date");
+  expect(earlyStart).toContain("fully performed");
   const recurring = view.getByRole("checkbox", {
     name: m.unlimitedPassCheckoutAutoRenewConsent({}, { locale }),
   });

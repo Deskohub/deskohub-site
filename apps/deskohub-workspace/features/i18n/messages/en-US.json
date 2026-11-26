@@ -2005,7 +2005,7 @@
   "unlimitedPassCheckoutBlockingDates": "Your pass can’t cover {dates} in the selected period. Choose another start date.",
   "unlimitedPassCheckoutRenewalBlockingDates": "Your pass can’t cover {dates} in the renewal period.",
   "unlimitedPassCheckoutMetadataDescription": "Choose a desk and start date for your {days}-day Unlimited pass at Deskohub Workspace.",
-  "unlimitedPassEarlyStartConsent": "I ask for my Unlimited Pass to start within the statutory 14-day withdrawal period. I acknowledge that my right to withdraw expires once the service has been fully performed, and that if I withdraw after the start date before full performance, any refund is pro-rated based on the date of withdrawal.",
+  "unlimitedPassEarlyStartConsent": "I ask for my Unlimited Pass to start within the statutory 14-day withdrawal period. I acknowledge that my right to withdraw expires once the service has been fully performed, and that if I withdraw on or after the start date before full performance, any refund is pro-rated based on the date of withdrawal.",
   "passEarlyStartConsent": "I request that my Entry pack can be used right away, within the statutory withdrawal period.",
   "passEmailSubject": "Your Entry pack is paid",
   "passEmailSelfBody": "Your entries are in your account. Each visit uses one entry.",
