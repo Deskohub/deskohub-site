@@ -37,8 +37,9 @@ export const scheduleJobProps = (
 
 /**
  * The hosted proof's own scheduler job (sandbox only, once the run has a
- * disposable suffix). It stays paused, so it fires only when the proof runs
- * it by hand, and it calls a proof-only path no Workspace schedule serves.
+ * disposable suffix). The probe briefly resumes it for a manual run and
+ * restores it to paused. The runner keeps the probe outside the annual
+ * UTC tick, and the job calls a proof-only path.
  */
 export const sandboxProofScheduleJobs = (
   config: WorkspaceStackConfig

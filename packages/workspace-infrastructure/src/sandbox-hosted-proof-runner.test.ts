@@ -2085,22 +2085,27 @@ describe("RPC probe", () => {
 });
 
 describe("worker probe", () => {
-  const pausedJob = (overrides: Schema.JsonObject = {}): FakeRule => ({
-    tool: "gcloud",
-    pattern: "^scheduler jobs describe workspace-proof-tick-r111-1 ",
-    stdout: JSON.stringify({
-      state: "PAUSED",
-      httpTarget: {
-        uri: `${schedulerWorkerUrl}/api/cron/workspace/proof-tick`,
-        httpMethod: "GET",
-        oidcToken: {
-          serviceAccountEmail: serviceAccount("workspace-scheduler-invoker"),
-          audience: schedulerWorkerUrl,
-        },
+  const jobName = "workspace-proof-tick-r111-1";
+  const schedulerCall = (command: string, format = "none") =>
+    `gcloud scheduler jobs ${command} ${jobName} --project=${projectId} --location=europe-west1 --format=${format}`;
+  const isSchedulerReceipt = (call: string) =>
+    call.startsWith("gcloud logging read ") &&
+    call.includes('jsonPayload.event="probe.schedule"');
+  const pausedJob = {
+    name: `projects/${projectId}/locations/europe-west1/jobs/${jobName}`,
+    state: "PAUSED",
+    schedule: "0 0 1 1 *",
+    timeZone: "Etc/UTC",
+    userUpdateTime: "2026-11-26T11:30:00.123Z",
+    httpTarget: {
+      uri: `${schedulerWorkerUrl}/api/cron/workspace/proof-tick`,
+      httpMethod: "GET",
+      oidcToken: {
+        serviceAccountEmail: serviceAccount("workspace-scheduler-invoker"),
+        audience: schedulerWorkerUrl,
       },
-      ...overrides,
-    }),
-  });
+    },
+  };
   const proofQueue = (path: string): FakeRule => ({
     tool: "gcloud",
     pattern: "^tasks queues describe workspace-paid-fulfillment-r111-1 ",
@@ -2123,7 +2128,6 @@ describe("worker probe", () => {
   });
   const receipts = (sha: string): ReadonlyArray<FakeRule> => [
     proofQueue("/api/queues/workspace/paid-fulfillment"),
-    pausedJob(),
     {
       tool: "gcloud",
       pattern: `^logging read .*service_name="workspace-tasks-worker" AND jsonPayload\\.event="probe\\.task" AND jsonPayload\\.queue="paid-fulfillment" AND jsonPayload\\.markerSha256="${sha}"`,
@@ -2131,34 +2135,37 @@ describe("worker probe", () => {
         { jsonPayload: { event: "probe.task", markerSha256: sha } },
       ]),
     },
-    {
-      tool: "gcloud",
-      pattern:
-        '^logging read .*service_name="workspace-scheduler-worker" AND jsonPayload\\.event="probe\\.schedule" AND jsonPayload\\.job="proof-tick"',
-      stdout: JSON.stringify([{ jsonPayload: { event: "probe.schedule" } }]),
-    },
   ];
   const workers = (
-    rules: (sha: string, marker: string) => ReadonlyArray<FakeRule>
+    rules: (sha: string, marker: string) => ReadonlyArray<FakeRule>,
+    world: FakeWorld = {}
   ) =>
-    withProofFakes({}, (fakes) => {
-      seedServices(fakes);
-      seed(fakes, { "proof-run.env": "QUEUE_SUFFIX=r111-1\n" });
-      const { marker, sha } = seedMarker(fakes);
-      writeFileSync(
-        fakes.env.FAKE_WORLD ?? "",
-        JSON.stringify({ rules: rules(sha, marker) })
-      );
-      return {
-        ...runPhase(fakes, "worker-probe"),
-        marker,
-        calls: fakes.calls(),
-        bodyLeft: existsSync(join(fakes.privateDir, "task-body.json")),
-      };
-    });
+    withProofFakes(
+      {
+        now: Date.parse("2026-11-26T12:00:00Z") / 1000,
+        schedulerJob: pausedJob,
+        ...world,
+      },
+      (fakes) => {
+        seedServices(fakes);
+        seed(fakes, { "proof-run.env": "QUEUE_SUFFIX=r111-1\n" });
+        const { marker, sha } = seedMarker(fakes);
+        writeFileSync(
+          fakes.env.FAKE_WORLD ?? "",
+          JSON.stringify({ ...fakes.world(), rules: rules(sha, marker) })
+        );
+        return {
+          ...runPhase(fakes, "worker-probe"),
+          marker,
+          calls: fakes.calls(),
+          schedulerState: fakes.world().schedulerJob?.state,
+          bodyLeft: existsSync(join(fakes.privateDir, "task-body.json")),
+        };
+      }
+    );
 
   test("enqueues the marker in a task body and finds both receipts", () => {
-    const result = workers((sha) => receipts(sha));
+    const result = workers(receipts);
     expect({
       exitCode: result.exitCode,
       output: result.exitCode === 0 ? "" : result.output,
@@ -2170,9 +2177,19 @@ describe("worker probe", () => {
         )
       )
     );
-    expect(result.calls).toContain(
-      `gcloud scheduler jobs run workspace-proof-tick-r111-1 --project=${projectId} --location=europe-west1`
-    );
+    expect(
+      result.calls.filter(
+        (call) =>
+          call.startsWith("gcloud scheduler jobs ") || isSchedulerReceipt(call)
+      )
+    ).toEqual([
+      schedulerCall("describe", "json"),
+      schedulerCall("resume"),
+      schedulerCall("run"),
+      expect.stringContaining('jsonPayload.event="probe.schedule"'),
+      schedulerCall("pause"),
+    ]);
+    expect(result.schedulerState).toBe("PAUSED");
     expect(result.calls.filter((call) => call.includes(result.marker))).toEqual(
       []
     );
@@ -2215,17 +2232,120 @@ describe("worker probe", () => {
       },
     ];
     for (const overrides of overridesList) {
-      const { exitCode, output, calls } = workers((sha) => [
-        pausedJob(overrides),
-        ...receipts(sha),
-      ]);
+      const { exitCode, output, calls } = workers(receipts, {
+        schedulerJob: { ...pausedJob, ...overrides },
+      });
       expect({ overrides, exitCode }).toEqual({ overrides, exitCode: 1 });
       expect(output).toContain(
         "is not a paused GET of /api/cron/workspace/proof-tick"
       );
-      expect(calls.join("\n")).not.toContain("scheduler jobs run");
+      expect(calls).not.toContain(schedulerCall("resume"));
+      expect(calls).not.toContain(schedulerCall("run"));
     }
   });
+
+  test("refuses to resume if a calendar tick could be mistaken for the manual run", () => {
+    const unsafeJobs: ReadonlyArray<FakeWorld> = [
+      { schedulerJob: { ...pausedJob, schedule: "* * * * *" } },
+      { schedulerJob: { ...pausedJob, timeZone: "Europe/Prague" } },
+      { schedulerJob: { ...pausedJob, userUpdateTime: null } },
+      { schedulerJob: { ...pausedJob, userUpdateTime: "" } },
+      {
+        schedulerJob: { ...pausedJob, userUpdateTime: "2025-12-31T23:59:59Z" },
+      },
+      {
+        schedulerJob: { ...pausedJob, userUpdateTime: "2026-11-26T12:01:00Z" },
+      },
+      { now: Date.parse("2026-12-31T23:50:00Z") / 1000 },
+    ];
+    for (const world of unsafeJobs) {
+      const { exitCode, output, calls, schedulerState } = workers(
+        receipts,
+        world
+      );
+      expect({ world, exitCode }).toEqual({ world, exitCode: 1 });
+      expect(output).toContain("cannot rule out a scheduled proof tick");
+      expect(calls).not.toContain(schedulerCall("resume"));
+      expect(calls).not.toContain(schedulerCall("run"));
+      expect(schedulerState).toBe("PAUSED");
+    }
+  });
+
+  test("re-pauses when the scheduler rejects the manual run", () => {
+    const { exitCode, output, calls, schedulerState } = workers((sha) => [
+      { tool: "gcloud", pattern: `^scheduler jobs run ${jobName} `, exit: 1 },
+      ...receipts(sha),
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain("the proof-tick job could not be forced");
+    expect(calls).toContain(schedulerCall("pause"));
+    expect(calls.some(isSchedulerReceipt)).toBe(false);
+    expect(schedulerState).toBe("PAUSED");
+  });
+
+  test("re-pauses when the manual run yields no worker receipt", () => {
+    const { exitCode, output, calls, schedulerState } = workers((sha) => [
+      {
+        tool: "gcloud",
+        pattern: '^logging read .*jsonPayload\\.event="probe\\.schedule"',
+        stdout: "[]",
+      },
+      ...receipts(sha),
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain("no scheduler worker receipt within four minutes");
+    expect(calls.at(-1)).toBe(schedulerCall("pause"));
+    expect(schedulerState).toBe("PAUSED");
+  });
+
+  test("re-pauses after a resume error that leaves the job enabled", () => {
+    const { exitCode, output, calls, schedulerState } = workers((sha) => [
+      {
+        tool: "gcloud",
+        pattern: `^scheduler jobs resume ${jobName} `,
+        set: { schedulerJob: { ...pausedJob, state: "ENABLED" } },
+        exit: 1,
+      },
+      ...receipts(sha),
+    ]);
+    expect(exitCode).toBe(1);
+    expect(output).toContain("the proof-tick job could not be resumed");
+    expect(calls).not.toContain(schedulerCall("run"));
+    expect(calls.at(-1)).toBe(schedulerCall("pause"));
+    expect(schedulerState).toBe("PAUSED");
+  });
+
+  test.each([
+    ["PAUSED", 0],
+    ["ENABLED", 0],
+    ["PAUSED", 1],
+  ] as const)(
+    "requires paused readback after a pause error leaves %s (describe exit %i)",
+    (state, describeExit) => {
+      const { exitCode, output, calls, schedulerState } = workers((sha) => [
+        {
+          tool: "gcloud",
+          pattern: `^scheduler jobs pause ${jobName} `,
+          set: { schedulerJob: { ...pausedJob, state } },
+          exit: 1,
+        },
+        {
+          tool: "gcloud",
+          pattern: `^scheduler jobs describe ${jobName} .* --format=value\\(state\\)$`,
+          stdout: state,
+          exit: describeExit,
+        },
+        ...receipts(sha),
+      ]);
+      const confirmedPaused = state === "PAUSED" && describeExit === 0;
+      expect(exitCode).toBe(confirmedPaused ? 0 : 1);
+      if (!confirmedPaused) {
+        expect(output).toContain("the proof-tick job could not be re-paused");
+      }
+      expect(calls.at(-1)).toBe(schedulerCall("describe", "value(state)"));
+      expect(schedulerState).toBe(state);
+    }
+  );
 
   test("fails when a receipt carries the raw marker", () => {
     const { exitCode, output, marker } = workers((sha, leaked) => [

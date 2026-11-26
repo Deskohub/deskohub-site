@@ -87,6 +87,8 @@ export interface FakeWorld {
   readonly tokeninfoDelay?: number;
   /** The Artifact Registry repository's description, as gcloud reads it. */
   readonly repositoryDescription?: string;
+  readonly schedulerJob?: Schema.JsonObject;
+  readonly schedulerRunAccepted?: boolean;
   /** The fake clock's start, in epoch seconds; defaults to the real clock. */
   readonly now?: number;
   /**
@@ -261,6 +263,8 @@ const isFakeWorld = (
     detachedChildPid: optionalNumber,
     tokenLifetimes: isOptional(isRecordOf(Predicate.isNumber)),
     tokeninfoDelay: optionalNumber,
+    schedulerJob: isOptional(isJsonObject),
+    schedulerRunAccepted: optionalBoolean,
     now: optionalNumber,
     rpcVerdict: isOptional(isJsonObject),
     rpcPrintsMarker: optionalBoolean,
@@ -683,6 +687,58 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     }
   }
   if (tool === "gcloud") {
+    const job = world.schedulerJob;
+    if (
+      job !== undefined &&
+      args[0] === "scheduler" &&
+      args[1] === "jobs" &&
+      job.name ===
+        `projects/${flag(args, "--project")}/locations/${flag(args, "--location")}/jobs/${args[3]}`
+    ) {
+      switch (args[2]) {
+        case "describe":
+          print(
+            flag(args, "--format") === "value(state)"
+              ? String(job.state)
+              : JSON.stringify(job)
+          );
+          return 0;
+        case "resume":
+          if (job.state !== "PAUSED") return 1;
+          save({ ...world, schedulerJob: { ...job, state: "ENABLED" } });
+          return 0;
+        case "run":
+          if (job.state !== "ENABLED") {
+            process.stderr.write(
+              "FAILED_PRECONDITION: Job.state must be ENABLED for RunJob.\n"
+            );
+            return 1;
+          }
+          save({ ...world, schedulerRunAccepted: true });
+          return 0;
+        case "pause":
+          if (job.state !== "ENABLED") return 1;
+          save({ ...world, schedulerJob: { ...job, state: "PAUSED" } });
+          return 0;
+      }
+    }
+    if (
+      job !== undefined &&
+      args[0] === "logging" &&
+      args[1] === "read" &&
+      joined.includes(
+        'resource.labels.service_name="workspace-scheduler-worker"'
+      ) &&
+      joined.includes('jsonPayload.event="probe.schedule"') &&
+      joined.includes('jsonPayload.job="proof-tick"')
+    ) {
+      print(
+        world.schedulerRunAccepted
+          ? '[{"jsonPayload":{"event":"probe.schedule"}}]'
+          : "[]"
+      );
+      return 0;
+    }
     if (args[0] === "auth" && args[1] === "print-access-token") {
       print("fake-access-token");
       return 0;
