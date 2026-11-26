@@ -127,7 +127,7 @@ describe.each([
       `https://workspace.deskohub.cz/${locale}/pricing`
     );
     expect(markdownPlainText(markdown).match(/^16\.\d+(?= )/gm)).toEqual(
-      Array.from({ length: 11 }, (_, index) => `16.${index + 1}`)
+      Array.from({ length: 9 }, (_, index) => `16.${index + 1}`)
     );
     const getOrderClause = (document: ReturnType<typeof getLegalDocument>) => {
       const canonical: CanonicalSections = JSON.parse(

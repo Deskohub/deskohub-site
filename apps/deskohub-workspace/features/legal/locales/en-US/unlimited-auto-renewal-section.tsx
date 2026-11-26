@@ -19,9 +19,9 @@ export const unlimitedAutoRenewalSection: LegalSection = {
       including any selected recurring add-ons. Reserved Desk tiers include
       coffee. Open Space coffee is available as a recurring add-on. Promotions,
       discount codes, and referral discounts apply only to the first period. A
-      first period priced at zero cannot renew automatically.
+      first order discounted by 100% to zero cannot renew automatically.
     </>,
-    "16.3 The Client pays for the first period at checkout. Before submitting the order, the Client sees the selected tier and services, the first day of access, the amount due now, the next charge date, and the recurring amount. Renewal is charged at the start of the next period at 00:00 Prague time. For example, a period starting on 1 December covers 1 through 30 December, and the next period begins on 31 December.",
+    "16.3 The Client pays for the first period at checkout. Before submitting the order, the Client sees the selected tier and services, the first day of access, the amount due now, the next charge date, and the recurring amount. Renewal is charged at the start of the next period at 00:00 Prague time. For example, a period starting on 1 December covers 1 through 30 December, and the next period begins on 31 December. For business purchases, the Provider automatically issues an invoice for each paid renewal using the saved billing details. For changes to appear on the next invoice, the Client must update the details in the Billing & Invoices section of their Account before 00:00 Prague time on the scheduled renewal date.",
     "16.4 The Client authorizes future card charges with a separate checkbox that starts unchecked. The authorization allows the Provider to charge the agreed amount every 30 calendar days until renewal is cancelled. The first card payment and any required authentication take place with Nexi. The Provider uses a payment reference for later charges. Confirmation on a durable medium includes the accepted terms, authorization, amount, dates, and cancellation instructions.",
     "16.5 Seven calendar days before each scheduled charge, the Provider emails the Client the charge date and amount, the next service period, the 00:00 Prague time cancellation deadline on the renewal date, and a direct link to manage renewal. This is a service message sent independently of marketing consent.",
     <>
@@ -44,26 +44,30 @@ export const unlimitedAutoRenewalSection: LegalSection = {
       charges after cancellation, and access continues through the end of the
       paid period.
     </>,
-    "16.7 The Provider secures capacity for the entire next period before charging. If the agreed service or the specific Reserved Desk cannot be provided, the Provider asks the Client to agree to a suitable alternative or stops renewal without charging for the next period. A different price, a change to a recurring add-on, or a material service change requires the Client's fresh agreement before charging. If the Client buys another Unlimited membership for their own use that covers the scheduled renewal date, the earlier membership stops renewing. Entry packs and passes bought for someone else leave the earlier renewal in place. If the earlier membership is still charged for that renewal, the Provider cancels the duplicate renewal period and refunds the charge in full without undue delay. The new membership renews automatically only if the Client authorizes it separately at checkout.",
-    "16.8 If a renewal payment fails, the Provider informs the Client and offers a new checkout. The Provider will not retry the unsuccessful charge automatically. If the next period is unpaid, access ends when the paid period ends.",
-    "16.9 The Consumer's right to withdraw from the contract is governed by section 9 and applicable law. Starting service during the withdrawal period requires a separate express request where the statutory right applies. A valid statutory withdrawal stops automatic renewal. Section 9.7 explains the refund if the Consumer withdraws after using part of the paid period.",
-    "16.10 For business purchases, the Provider issues each renewal invoice using the saved billing details. To apply a change to the next invoice, the Client must update the billing details in their Account before 00:00 Prague time on the scheduled renewal date. To replace a card, including a card that is about to expire, the Client must stop renewal and place a new order with the new card.",
+    "16.7 The Provider secures capacity for the entire next period before charging. If the agreed service or the specific Reserved Desk cannot be provided, the Provider asks the Client to agree to a suitable alternative or stops renewal without charging for the next period. A different price, a change to a recurring add-on, or a material service change requires the Client's fresh agreement before charging. If the Client buys another Unlimited membership for their own use that covers the scheduled renewal date, the earlier membership stops renewing. Entry packs and memberships bought as gifts for someone else leave the earlier renewal in place. If the earlier membership is still charged for that renewal, the Provider cancels the duplicate renewal period and refunds the charge in full without undue delay. The new membership renews automatically only if the Client authorizes it separately at checkout.",
     <>
-      16.11 During a paid membership period, Open Space is available each day
-      from 00:00 to 17:00 Prague time and Reserved Desk is available around the
-      clock. The Client must use the current access PIN, which changes
-      regularly. The Client may leave belongings at their assigned Reserved Desk
-      overnight while paid access continues and must remove them when that
-      access ends, including if renewal fails. If anything is left behind, the
-      Client can arrange collection by writing to{" "}
+      16.8 If a renewal payment fails, the Provider informs the Client and
+      offers a new checkout. The Provider does not retry the unsuccessful charge
+      automatically. If the next period is unpaid, access ends when the paid
+      period ends. To replace a card, including one that is about to expire, the
+      Client must stop renewal and place a new order with the new card. During a
+      paid membership period, Open Space is available each day from 00:00 to
+      17:00 Prague time and Reserved Desk is available around the clock. The
+      Client must use the current access PIN, which changes daily. The Client
+      may leave belongings at their assigned Reserved Desk overnight while paid
+      access continues and must remove them when that access ends, including if
+      renewal fails. If anything is left behind, the Client can arrange
+      collection by writing to{" "}
       <a
         className="text-burned-orange underline underline-offset-4"
         href={`mailto:${contactEmail}`}
       >
         {contactEmail}
       </a>
-      . The Provider's duty to take reasonable care of belongings and any
-      liability that cannot be excluded or limited under Czech law still apply.
+      . The Provider assumes no additional responsibility for loss of or damage
+      to belongings left behind beyond the duties of care and liability that
+      apply under Czech law.
     </>,
+    "16.9 The Consumer's right to withdraw from the contract is governed by section 9 and applicable law. Starting service during the withdrawal period requires a separate express request where the statutory right applies. A valid statutory withdrawal stops automatic renewal. Under section 9.7, where the law permits a proportional charge, the Provider refunds the price actually paid for the period multiplied by the unused whole calendar days and divided by 30, rounded down to whole Czech crowns. The withdrawal day counts as used if service has started, and the Consumer keeps access through the end of that day.",
   ],
 };

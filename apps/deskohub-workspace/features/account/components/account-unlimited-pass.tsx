@@ -1,4 +1,4 @@
-import { Interpolate } from "@doist/react-interpolate";
+import Interpolate from "@doist/react-interpolate";
 import { Gift, KeyRound } from "lucide-react";
 import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
 import { AccountUnlimitedAutoRenewalControls } from "@/features/account/components/account-unlimited-auto-renewal";
