@@ -8,14 +8,17 @@ import {
   mock,
   test,
 } from "bun:test";
+import {
+  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import type { ReactNode } from "react";
 import { m } from "@/features/administration/i18n";
-import type {
-  DiscountCodeId,
-  VoucherId,
+import {
+  discountCodeIdSchema,
+  voucherIdSchema,
 } from "@/features/discounts/persistence-contracts";
-import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
@@ -71,8 +74,8 @@ type ActionCallbacks = {
 type WorkspaceAction =
   | typeof mutateDiscountAdmin
   | typeof searchAdministrationCustomers;
-const actionCallbacks = new Map<WorkspaceAction, ActionCallbacks>();
-const executions = new Map<WorkspaceAction, ReturnType<typeof mock>>();
+const actionCallbacks = new Map<unknown, ActionCallbacks>();
+const executions = new Map<unknown, ReturnType<typeof mock>>();
 
 const executeOf = (action: WorkspaceAction) => {
   const execute = executions.get(action);
@@ -97,10 +100,12 @@ const renderInLocale = async (node: ReactNode) => {
   );
 };
 
-const customerId = "dotypos-customer" as DotyposCustomerId;
-const otherCustomerId = "other-customer" as DotyposCustomerId;
-const codeId = "019c91dd-c560-7e55-b9d8-c95065efd52d" as DiscountCodeId;
-const voucherId = "019c91dd-c560-7e55-b9d8-c95065efd55d" as VoucherId;
+const customerId = DotyposCustomerIdSchema.make("dotypos-customer");
+const otherCustomerId = DotyposCustomerIdSchema.make("other-customer");
+const codeId = discountCodeIdSchema.make(
+  "019c91dd-c560-7e55-b9d8-c95065efd52d"
+);
+const voucherId = voucherIdSchema.make("019c91dd-c560-7e55-b9d8-c95065efd55d");
 
 const searchMatch: AdminDotyposCustomer = {
   id: customerId,
@@ -156,12 +161,13 @@ describe("promotion customer picker", () => {
     executions.clear();
     workspaceUseAction.mockReset();
     workspaceUseAction.mockImplementation((action, options) => {
-      actionCallbacks.set(
-        action as WorkspaceAction,
-        options as ActionCallbacks
-      );
-      const execute = executions.get(action as WorkspaceAction) ?? mock();
-      executions.set(action as WorkspaceAction, execute);
+      actionCallbacks.set(action, {
+        onSuccess: (result) => {
+          options.onSuccess?.({ data: result.data, input: result.input });
+        },
+      });
+      const execute = executions.get(action) ?? mock();
+      executions.set(action, execute);
       return { execute, isExecuting: false, result: {} };
     });
   });

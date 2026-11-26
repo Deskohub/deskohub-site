@@ -14,8 +14,8 @@ file($name, $body) where {
       $name <: r".*apps/deskohub-workspace/.*\.(?:ts|tsx|mts|cts)$",
       not $name <: r".*apps/deskohub-workspace/e2e/.*",
       not $name <: r".*/(?:generated|paraglide)/.*",
-      not $name <: r".*apps/deskohub-workspace/features/(?:account|accounting|admin-cli|administration|checkout|discounts|email-campaigns|passes|referrals|reservation)/(?:.*/)?testing/.*",
-      not $name <: r".*apps/deskohub-workspace/features/(?:account|accounting|admin-cli|administration|checkout|discounts|email-campaigns|passes|referrals|reservation)/.*(?:\.(?:test|spec|pw|test-utils|browser-harness)|-fixture|\.fixture)\.(?:ts|tsx|mts|cts)$"
+      not $name <: r".*apps/deskohub-workspace/features/(?:account|administration|checkout|email-campaigns|reservation)/(?:.*/)?testing/.*",
+      not $name <: r".*apps/deskohub-workspace/features/(?:account|administration|checkout|email-campaigns|reservation)/.*(?:\.(?:test|spec|pw|test-utils|browser-harness)|-fixture|\.fixture)\.(?:ts|tsx|mts|cts)$"
     }
   },
   // Every `as` assertion has the `as` keyword and every angle-bracket assertion a `<`.
@@ -25,11 +25,13 @@ file($name, $body) where {
       TsAsExpression() as $assertion where {
         not $assertion <: `$value as const`
       },
-      TsTypeAssertionExpression() as $assertion
+      TsTypeAssertionExpression(ty = $type) as $assertion where {
+        not $type <: r"^const$"
+      }
     } where {
       register_diagnostic(
         span = $assertion,
-        message = "[anti-slop/no-type-assertions] Decode with Schema or narrow the value instead of asserting its type; only `as const` is allowed.",
+        message = "[anti-slop/no-type-assertions] Decode with Schema or narrow the value. Const assertions are allowed with `as const` and `<const>`.",
         severity = "error"
       )
     }

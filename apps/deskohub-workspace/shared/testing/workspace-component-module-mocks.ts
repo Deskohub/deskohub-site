@@ -1,4 +1,5 @@
-import { mock } from "bun:test";
+import { type Mock, mock } from "bun:test";
+import assert from "node:assert/strict";
 import type { useWorkspaceAction } from "@/shared/utils/use-workspace-action";
 
 export const workspaceRouterPush = mock((_href: string) => undefined);
@@ -30,7 +31,46 @@ type WorkspaceActionHook = (
   ...args: Parameters<typeof useWorkspaceAction>
 ) => Partial<ReturnType<typeof useWorkspaceAction>> | undefined;
 
+export type WorkspaceActionExecute = ReturnType<
+  typeof useWorkspaceAction
+>["execute"];
 export const workspaceUseAction = mock<WorkspaceActionHook>();
+
+export const submittedActionInput = <Input>(
+  calls: readonly (readonly [Input])[]
+): Input => {
+  const lastCall = calls.at(-1);
+  assert(lastCall, "The action was not submitted");
+  return lastCall[0];
+};
+
+export const workspaceActionCallbacks = <Data>(
+  options: Parameters<typeof useWorkspaceAction>[1],
+  execute: Mock<WorkspaceActionExecute>
+) => ({
+  onSuccess: ({ data }: { readonly data: Data }) => {
+    void options.onSuccess?.({
+      data,
+      input: submittedActionInput(execute.mock.calls),
+    });
+  },
+  onError: ({
+    error,
+  }: {
+    readonly error: { readonly serverError?: string };
+  }) => {
+    void options.onError?.({
+      error,
+      input: submittedActionInput(execute.mock.calls),
+    });
+  },
+  onTransportError: () => {
+    options.onTransportError?.({
+      error: new Error("transport"),
+      input: submittedActionInput(execute.mock.calls),
+    });
+  },
+});
 
 const navigation = await import("next/navigation");
 mock.module("next/navigation", () => ({

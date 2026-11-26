@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { DotyposDiscountGroupIdSchema } from "@deskohub/dotypos";
 import { m } from "@/features/administration/i18n";
 import { formatDiscountAdjustment } from "@/features/checkout/format-discount-adjustment";
+import { discountCodeClaimIdSchema } from "../persistence-contracts";
 import {
   adminCodeClaim,
   adminCustomer,
@@ -16,18 +18,20 @@ import {
   customerVisiblePromotionCodes,
   formatCustomerDiscountGroup,
 } from "./customer-profile-display";
-import type { AdminCustomerProfile } from "./discount-administration.service";
 
 const locale = "en-US";
-type GroupId = AdminCustomerProfile["discountGroups"][number]["id"];
 
 describe("customer profile display", () => {
   test("names the customer's discount group with its percentage", () => {
-    const groupId = "group-regulars" as GroupId;
+    const groupId = DotyposDiscountGroupIdSchema.make("group-regulars");
     const profile = adminCustomerProfile({
       customer: adminCustomer({ discountGroupId: groupId }),
       discountGroups: [
-        { id: "group-other" as GroupId, name: "Other", basisPoints: 500 },
+        {
+          id: DotyposDiscountGroupIdSchema.make("group-other"),
+          name: "Other",
+          basisPoints: 500,
+        },
         { id: groupId, name: "Regulars", basisPoints: 1500 },
       ],
     });
@@ -40,7 +44,7 @@ describe("customer profile display", () => {
   });
 
   test("reports a discount group Dotypos no longer lists, or no group", () => {
-    const groupId = "group-gone" as GroupId;
+    const groupId = DotyposDiscountGroupIdSchema.make("group-gone");
     expect(
       formatCustomerDiscountGroup(
         adminCustomerProfile({
@@ -106,7 +110,7 @@ describe("customer profile display", () => {
       reservedAt: Temporal.Instant.from("2026-08-20T08:00:00Z"),
     });
     const middle = adminCodeClaim({
-      id: "code-claim-2" as typeof older.id,
+      id: discountCodeClaimIdSchema.make("code-claim-2"),
       reservedAt: Temporal.Instant.from("2026-08-10T08:00:00Z"),
     });
     expect(

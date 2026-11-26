@@ -8,7 +8,10 @@ import {
   mock,
   test,
 } from "bun:test";
-import { AdministrationInvoiceId } from "@deskohub/workspace-admin-api";
+import {
+  AdministrationInvoiceId,
+  AdministrationWorkspaceReservationId,
+} from "@deskohub/workspace-admin-api";
 import {
   act,
   cleanup,
@@ -19,6 +22,8 @@ import {
 import { m } from "@/features/administration/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import {
+  type WorkspaceActionExecute,
+  workspaceActionCallbacks,
   workspaceRouterRefresh,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -35,17 +40,17 @@ mock.module("./actions", () => ({
   cancelAdministrationInvoice: cancelAction,
 }));
 
-type Callbacks = {
-  readonly onSuccess: (args: { readonly data?: unknown }) => void;
-  readonly onError: (args: {
-    readonly error: { readonly serverError?: string };
-  }) => void;
-};
+type CancelAction = typeof import("./actions").cancelAdministrationInvoice;
+type CancelResult = Awaited<ReturnType<CancelAction>>["data"];
 
-const executePreview = mock();
-const executeCancel = mock();
-let previewCallbacks: Callbacks | undefined;
-let cancelCallbacks: Callbacks | undefined;
+const executePreview = mock<WorkspaceActionExecute>();
+const executeCancel = mock<WorkspaceActionExecute>();
+let previewCallbacks:
+  | ReturnType<typeof workspaceActionCallbacks<InvoiceCancellationPreview>>
+  | undefined;
+let cancelCallbacks:
+  | ReturnType<typeof workspaceActionCallbacks<CancelResult>>
+  | undefined;
 
 let InvoiceCancellation: typeof import("./invoice-cancellation-dialog").InvoiceCancellation;
 
@@ -61,11 +66,11 @@ beforeEach(() => {
   workspaceUseAction.mockReset();
   workspaceUseAction.mockImplementation((action, options) => {
     if (action === previewAction) {
-      previewCallbacks = options as Callbacks;
-      return { execute: executePreview, isExecuting: false } as never;
+      previewCallbacks = workspaceActionCallbacks(options, executePreview);
+      return { execute: executePreview, isExecuting: false };
     }
-    cancelCallbacks = options as Callbacks;
-    return { execute: executeCancel, isExecuting: false } as never;
+    cancelCallbacks = workspaceActionCallbacks(options, executeCancel);
+    return { execute: executeCancel, isExecuting: false };
   });
 });
 
@@ -77,7 +82,9 @@ const invoiceId = AdministrationInvoiceId.make(
   "018f47d2-8f7c-7c5e-9f9a-6ef21f90cb21"
 );
 const invoiceNumber = "2026000001";
-const reservationId = "01980000-0000-7000-8000-00000000abcd";
+const reservationId = AdministrationWorkspaceReservationId.make(
+  "01980000-0000-7000-8000-00000000abcd"
+);
 
 const livePreview = ({
   sent,
@@ -91,7 +98,7 @@ const livePreview = ({
   customerNotice: sent ? "owed" : "not_owed",
   reservation: reservation
     ? {
-        reservationId: reservationId as never,
+        reservationId,
         label: "Open space, 30 Sept 2026",
       }
     : null,
@@ -252,6 +259,7 @@ describe("InvoiceCancellation", () => {
       { locale }
     );
 
+    await submit(dialog);
     await act(async () => {
       cancelCallbacks?.onError({ error: { serverError: refusal } });
     });
@@ -273,7 +281,11 @@ describe("InvoiceCancellation", () => {
 
   test("closes and reports the outcome once the invoice is cancelled", async () => {
     const { view, onCancelled } = renderCancellation();
-    await openWith(view, livePreview({ sent: false, reservation: true }));
+    const dialog = await openWith(
+      view,
+      livePreview({ sent: false, reservation: true })
+    );
+    await submit(dialog);
 
     await act(async () => {
       cancelCallbacks?.onSuccess({

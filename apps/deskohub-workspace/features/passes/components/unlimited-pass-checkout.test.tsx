@@ -1,8 +1,10 @@
 import { afterAll, afterEach, expect, mock, spyOn, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -655,16 +657,20 @@ test("a linked gift keeps its recipient and original order until Continue succee
     </QueryProvider>
   );
   expect(view.getByDisplayValue(holderEmail)).toBeDefined();
-  const name = view.getByRole<HTMLInputElement>("textbox", {
-    name: recipientNameLabel,
-  });
+  const name = elementOf(
+    view.getByRole("textbox", {
+      name: recipientNameLabel,
+    }),
+    HTMLInputElement
+  );
   fireEvent.change(name, { target: { value: "   " } });
-  fireEvent.submit(name.form!);
+  assert(name.form);
+  fireEvent.submit(name.form);
   expect(await view.findByText("Enter the recipient’s name.")).toBeDefined();
   expect(beginCheckout).not.toHaveBeenCalled();
 
   enterRecipientName(view);
-  fireEvent.submit(name.form!);
+  fireEvent.submit(name.form);
   await waitFor(() =>
     expect(beginCheckout).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -902,9 +908,12 @@ test("Unlimited gift requires a private name and clears it when returning to sel
   });
   expect(view.queryByRole("textbox", { name: recipientNameLabel })).toBeNull();
   fireEvent.click(gift);
-  const name = view.getByRole<HTMLInputElement>("textbox", {
-    name: recipientNameLabel,
-  });
+  const name = elementOf(
+    view.getByRole("textbox", {
+      name: recipientNameLabel,
+    }),
+    HTMLInputElement
+  );
   expect(name.required).toBe(true);
   expect(name.hasAttribute("data-ph-mask")).toBe(true);
   expect(name.hasAttribute("data-ph-no-capture")).toBe(true);
@@ -913,7 +922,8 @@ test("Unlimited gift requires a private name and clears it when returning to sel
     { target: { value: holderEmail } }
   );
   fireEvent.change(name, { target: { value: "   " } });
-  fireEvent.submit(name.form!);
+  assert(name.form);
+  fireEvent.submit(name.form);
   expect(await view.findByText("Enter the recipient’s name.")).toBeDefined();
   expect(beginCheckout).not.toHaveBeenCalled();
 
@@ -1074,7 +1084,8 @@ test("a failed Continue frees only acknowledged predecessor slots and preserves 
     { length: unlimitedCheckoutPredecessorLimit },
     () => orderIdSchema.make(crypto.randomUUID())
   );
-  const unresolved = predecessorOrderIds.at(-1)!;
+  const unresolved = predecessorOrderIds.at(-1);
+  assert(unresolved);
   const beginCheckout = mock(async (_input: { orderId: OrderId }) => ({
     data: {
       status: "purchase_error" as const,
@@ -1284,11 +1295,12 @@ test.each(["Details", "sign-in"] as const)(
         fireEvent.click(view.getByRole("checkbox"));
         fireEvent.click(pay);
         await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
-        const signIn = new URL(
-          assign.mock.calls[0]![0],
-          "https://deskohub.example"
-        );
-        url = new URL(signIn.searchParams.get("returnTo")!, signIn.origin);
+        const assignedUrl = assign.mock.calls[0]?.[0];
+        assert(assignedUrl);
+        const signIn = new URL(assignedUrl, "https://deskohub.example");
+        const returnTo = signIn.searchParams.get("returnTo");
+        assert(returnTo);
+        url = new URL(returnTo, signIn.origin);
       }
       expect(url.searchParams.get("step")).toBe("details");
       expect(url.searchParams.get("submittedOrder")).toBe(orderId);
@@ -1307,7 +1319,8 @@ test("Refresh quote at the predecessor limit clears a voided draft and lets the 
     { length: unlimitedCheckoutPredecessorLimit },
     () => orderIdSchema.make(crypto.randomUUID())
   );
-  const unresolvedPredecessor = predecessorOrderIds.at(-1)!;
+  const unresolvedPredecessor = predecessorOrderIds.at(-1);
+  assert(unresolvedPredecessor);
   let cutoffReached = false;
   const beginCheckout = mock(async (input: { orderId: OrderId }) =>
     cutoffReached && input.orderId === orderId

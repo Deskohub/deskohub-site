@@ -2,6 +2,7 @@ import { standaloneReservationOrderId } from "@/features/reservation/reservation
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
   DotyposCustomerIdSchema,
@@ -10,22 +11,27 @@ import {
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
 import { eq, sql } from "drizzle-orm";
-import { Data, Effect, Layer } from "effect";
+import { Data, Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { accountingDocumentSnapshots, paymentAttempts } from "@/db/schema";
 import {
   type AccountingDocumentSnapshot,
   accountingSnapshotKeyIdSchema,
+  coworkAccountingDocumentSnapshotSchema,
   encodeStoredAccountingDocumentSnapshot,
   makeAccountingDocumentSnapshot,
 } from "@/features/accounting/accounting-document-snapshot";
 import type { PreparedCustomerQuote } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { moneyWithValue } from "@/shared/money/money";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   AccountingDocumentSnapshots,
   type AccountingRecordReference,
@@ -61,14 +67,15 @@ const makeKeys = (
 const run = <A, E>(
   effect: Effect.Effect<A, E, AccountingDocumentSnapshots | WorkspaceDatabase>,
   keys: IAccountingSnapshotKeyService = makeKeys()
-) =>
-  Effect.runPromise(
+) => {
+  const database = requireTestDatabase(testDatabase);
+  return Effect.runPromise(
     effect.pipe(
       Effect.provide(
         Layer.merge(
-          testDatabase!.layer,
+          database.layer,
           testAccountingStorage(
-            testDatabase!.layer,
+            database.layer,
             Layer.succeed(
               AccountingSnapshotKeyService,
               AccountingSnapshotKeyService.of(keys)
@@ -78,6 +85,7 @@ const run = <A, E>(
       )
     )
   );
+};
 
 const inTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.flatMap(WorkspaceDatabase, ({ transaction }) => transaction(effect));
@@ -93,29 +101,32 @@ const createReservation = async () => {
     `accounting-snapshots-reservation-${randomUUID()}`
   );
   const reservation = await Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).reservation({
+    workspaceFixtures(requireTestDatabase(testDatabase).db).reservation({
       stage: { reservation: "held", payment: "not_started" },
       customer: dotyposCustomerId,
       overrides: { dotyposReservationId },
     })
   );
+  const prepared: PreparedCustomerQuote = {
+    kind: "cowork",
+    reservation: Schema.decodeUnknownSync(
+      normalizedCoworkReservationOrderSchema
+    )({
+      kind: "cowork",
+      ...coworkOrder,
+      date: "2099-01-01",
+      name: "Synthetic Snapshot Customer",
+      email: testEmailAddress("accounting-document-snapshots"),
+      phone: "+420 700 000 000",
+    }),
+    quote: buildCoworkReservationQuote(coworkOrder),
+  };
   const snapshot = makeAccountingDocumentSnapshot({
     workspaceReservationId: reservation.id,
     dotyposReservationId,
     dotyposCustomerId,
     locale: "en-US",
-    prepared: {
-      kind: "cowork",
-      reservation: {
-        kind: "cowork",
-        ...coworkOrder,
-        date: "2099-01-01",
-        name: "Synthetic Snapshot Customer",
-        email: testEmailAddress("accounting-document-snapshots"),
-        phone: "+420 700 000 000",
-      },
-      quote: buildCoworkReservationQuote(coworkOrder),
-    } as PreparedCustomerQuote,
+    prepared,
   });
   return { reservationId: reservation.id, snapshot };
 };
@@ -134,17 +145,19 @@ const prepareFor = (
     readonly amount: AccountingDocumentSnapshot["quote"]["payment"]["expectedPrice"];
     readonly locale: AccountingDocumentSnapshot["locale"];
   }> = {}
-) =>
-  Effect.flatMap(AccountingDocumentSnapshots, (snapshots) =>
-    snapshots.prepare({
+) => {
+  return Effect.flatMap(AccountingDocumentSnapshots, (snapshots) => {
+    const input = {
       snapshot,
       orderId: standaloneReservationOrderId(snapshot.workspaceReservationId),
       amount: snapshot.quote.payment.expectedPrice,
       locale: snapshot.locale,
       reference,
       ...overrides,
-    })
-  );
+    };
+    return snapshots.prepare(input);
+  });
+};
 
 /** Inserts the attempt a snapshot is recorded for, in the caller's transaction. */
 const insertAttempt = (snapshot: AccountingDocumentSnapshot) =>
@@ -172,9 +185,10 @@ const providerIdentity = (snapshot: AccountingDocumentSnapshot) => ({
 const storedRows = async (
   workspaceReservationId: AccountingDocumentSnapshot["workspaceReservationId"]
 ) => {
+  const database = requireTestDatabase(testDatabase);
   const [attempts, snapshots] = await Promise.all([
     Effect.runPromise(
-      testDatabase!.db
+      database.db
         .select({ id: paymentAttempts.id })
         .from(paymentAttempts)
         .where(
@@ -182,7 +196,7 @@ const storedRows = async (
         )
     ),
     Effect.runPromise(
-      testDatabase!.db
+      database.db
         .select({
           paymentAttemptId: accountingDocumentSnapshots.paymentAttemptId,
           keyId: accountingDocumentSnapshots.keyId,
@@ -227,8 +241,8 @@ describe("AccountingDocumentSnapshots.prepare", () => {
       snapshots: [{ paymentAttemptId, keyId: testKey.id }],
     });
     const [stored] = await Effect.runPromise(
-      testDatabase!.db
-        .select({
+      requireTestDatabase(testDatabase)
+        .db.select({
           json: sql<string>`pgp_sym_decrypt(${accountingDocumentSnapshots.encryptedSnapshot}, ${testKey.secret})`,
         })
         .from(accountingDocumentSnapshots)
@@ -249,9 +263,10 @@ describe("AccountingDocumentSnapshots.prepare", () => {
   }[] = [
     {
       name: "a snapshot with a property its schema doesn't declare",
-      change: (snapshot) => ({
-        snapshot: { ...snapshot, unexpected: true } as never,
-      }),
+      change: (snapshot) => {
+        const snapshotWithExtraField = { ...snapshot, unexpected: true };
+        return { snapshot: snapshotWithExtraField };
+      },
     },
     {
       name: "another reservation's snapshot",
@@ -277,44 +292,51 @@ describe("AccountingDocumentSnapshots.prepare", () => {
     {
       name: "a snapshot whose items don't add up to its price",
       change: (snapshot) => {
-        const [first, ...rest] = snapshot.quote.items;
+        const cowork = Schema.decodeUnknownSync(
+          coworkAccountingDocumentSnapshotSchema
+        )(snapshot);
+        const [first, ...rest] = cowork.quote.items;
         return {
-          snapshot: {
-            ...snapshot,
+          snapshot: Schema.decodeUnknownSync(
+            coworkAccountingDocumentSnapshotSchema
+          )({
+            ...cowork,
             quote: {
-              ...snapshot.quote,
+              ...cowork.quote,
               items: [
                 {
-                  ...first!,
-                  amount: moneyWithValue(
-                    first!.amount.value + 1,
-                    first!.amount
-                  ),
+                  ...first,
+                  amount: moneyWithValue(first.amount.value + 1, first.amount),
                 },
                 ...rest,
               ],
             },
-          } as AccountingDocumentSnapshot,
+          }),
         };
       },
     },
     {
       name: "a snapshot priced in another currency than its items",
-      change: (snapshot) => ({
-        snapshot: {
-          ...snapshot,
-          quote: {
-            ...snapshot.quote,
-            payment: {
-              ...snapshot.quote.payment,
-              undiscountedPrice: {
-                ...snapshot.quote.payment.undiscountedPrice,
-                exponent: snapshot.quote.payment.undiscountedPrice.exponent + 1,
+      change: (snapshot) => {
+        const cowork = Schema.decodeUnknownSync(
+          coworkAccountingDocumentSnapshotSchema
+        )(snapshot);
+        return {
+          snapshot: {
+            ...cowork,
+            quote: {
+              ...cowork.quote,
+              payment: {
+                ...cowork.quote.payment,
+                undiscountedPrice: {
+                  ...cowork.quote.payment.undiscountedPrice,
+                  exponent: cowork.quote.payment.undiscountedPrice.exponent + 1,
+                },
               },
             },
           },
-        } as AccountingDocumentSnapshot,
-      }),
+        };
+      },
     },
   ];
 

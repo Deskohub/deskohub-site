@@ -88,12 +88,16 @@ const reasons = {
   voucherCredit: "usage_limit_reached",
 } satisfies Record<PromotionAvailabilityRule, string>;
 
-const stages = Object.keys(
-  promotionAvailabilityStages
-) as PromotionAvailabilityStage[];
-const allRules = Object.keys(failing) as PromotionAvailabilityRule[];
-const stageRules = (stage: PromotionAvailabilityStage) =>
-  promotionAvailabilityStages[stage] as readonly PromotionAvailabilityRule[];
+const isStage = (key: string): key is PromotionAvailabilityStage =>
+  Object.hasOwn(promotionAvailabilityStages, key);
+const isRule = (key: string): key is PromotionAvailabilityRule =>
+  Object.hasOwn(failing, key);
+
+const stages = Object.keys(promotionAvailabilityStages).filter(isStage);
+const allRules = Object.keys(failing).filter(isRule);
+const stageRules = (
+  stage: PromotionAvailabilityStage
+): readonly PromotionAvailabilityRule[] => promotionAvailabilityStages[stage];
 
 /** Evaluates any stage, comparing its outcome with any rule's. */
 const evaluate = (
@@ -134,6 +138,9 @@ const callers = {
 } satisfies Record<string, readonly PromotionAvailabilityStage[]>;
 
 type Caller = keyof typeof callers;
+
+const isCaller = (key: string): key is Caller => Object.hasOwn(callers, key);
+const allCallers = Object.keys(callers).filter(isCaller);
 
 const callerRules = (caller: Caller) =>
   callers[caller].flatMap((stage) => stageRules(stage));
@@ -205,21 +212,18 @@ describe("promotionAvailabilityStages", () => {
     ).toEqual([]);
   });
 
-  test.each(Object.keys(callers) as Caller[])(
-    "%s runs its stages in the shared order",
-    (caller) => {
-      expect(callerRules(caller)).toEqual(
-        promotionAvailabilityOrder.filter((rule) =>
-          callerRules(caller).includes(rule)
-        )
-      );
-    }
-  );
+  test.each(allCallers)("%s runs its stages in the shared order", (caller) => {
+    expect(callerRules(caller)).toEqual(
+      promotionAvailabilityOrder.filter((rule) =>
+        callerRules(caller).includes(rule)
+      )
+    );
+  });
 });
 
 describe("one reason at every caller", () => {
   test.each(
-    (Object.keys(callers) as Caller[]).flatMap((caller) =>
+    allCallers.flatMap((caller) =>
       allRules.map((rule) => [caller, rule] as const)
     )
   )(

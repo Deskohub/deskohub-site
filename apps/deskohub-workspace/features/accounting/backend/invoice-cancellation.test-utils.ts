@@ -23,11 +23,15 @@ import type { AdministrationActor } from "@/features/administrators/administrati
 import type { PreparedCustomerQuote } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { holdPostgresTransaction } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
-import type { WorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  requireTestDatabase,
+  type WorkspacePostgresTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { temporalInstantToIsoString } from "@/shared/utils/temporal";
 import type { AccountingDocumentSnapshots } from "./accounting-document-snapshots";
 import { recordAccountingDocumentSnapshot } from "./accounting-document-snapshots.test-utils";
@@ -77,8 +81,9 @@ export const lockingAfterKeyLookup = (input: {
 };
 
 export const makeInvoiceCancellationTestKit = (
-  database: WorkspacePostgresTestDatabase
+  database: WorkspacePostgresTestDatabase | null
 ) => {
+  const requireDatabase = () => requireTestDatabase(database);
   const testKey: AccountingSnapshotKey = {
     id: accountingSnapshotKeyIdSchema.make("K202611"),
     secret: "synthetic corrective document secret!",
@@ -104,12 +109,13 @@ export const makeInvoiceCancellationTestKit = (
       AccountingSnapshotKeyService,
       AccountingSnapshotKeyService.of(keys)
     );
-    const base = Layer.merge(database.layer, keyLayer);
+    const resolvedDatabase = requireDatabase();
+    const base = Layer.merge(resolvedDatabase.layer, keyLayer);
     return Layer.mergeAll(
       base,
       InvoiceArchiveRepository.Default.pipe(Layer.provide(base)),
       InvoiceEmailDeliveryRepository.Default.pipe(Layer.provide(base)),
-      testAccountingStorage(database.layer, keyLayer)
+      testAccountingStorage(resolvedDatabase.layer, keyLayer)
     );
   };
 
@@ -130,7 +136,7 @@ export const makeInvoiceCancellationTestKit = (
   const makeActor = async (label: string): Promise<AdministrationActor> => ({
     source: "dhw-cli",
     administrator: await Effect.runPromise(
-      workspaceFixtures(database.db).account(label)
+      workspaceFixtures(requireDatabase().db).account(label)
     ),
   });
 
@@ -192,9 +198,11 @@ export const makeInvoiceCancellationTestKit = (
       temporalInstantToIsoString(Temporal.Now.instant())
     );
     const order = { entryTier: "open-space", coffee: true } as const;
-    const prepared = {
+    const prepared: PreparedCustomerQuote = {
       kind: "cowork",
-      reservation: {
+      reservation: Schema.decodeUnknownSync(
+        normalizedCoworkReservationOrderSchema
+      )({
         kind: "cowork",
         ...order,
         date: "2099-01-01",
@@ -202,9 +210,9 @@ export const makeInvoiceCancellationTestKit = (
         email: testEmailAddress("invoice-cancellation-reservation"),
         phone: "+420 700 000 000",
         ...(options.billing && { billing: options.billing }),
-      },
+      }),
       quote: buildCoworkReservationQuote(order),
-    } as PreparedCustomerQuote;
+    };
     const reservation = await run(
       Effect.flatMap(WorkspaceDatabase, ({ db, transaction }) =>
         transaction(
@@ -324,7 +332,7 @@ export const makeInvoiceCancellationTestKit = (
   const query = async <Row extends QueryResultRow>(
     text: string,
     values: readonly unknown[] = []
-  ) => (await database.pool.query<Row>(text, [...values])).rows;
+  ) => (await requireDatabase().pool.query<Row>(text, [...values])).rows;
 
   return {
     acceptInvoiceEmail,

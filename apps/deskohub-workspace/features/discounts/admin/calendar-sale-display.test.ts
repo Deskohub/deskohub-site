@@ -1,16 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { m } from "@/features/administration/i18n";
-import type { StoredDiscountId } from "@/features/discounts/persistence-contracts";
+import { storedDiscountIdSchema } from "@/features/discounts/persistence-contracts";
 import {
   findCalendarSaleDiscount,
   getCalendarSaleDiscountLabel,
   getCalendarStatusLabel,
 } from "./calendar-sale-display";
 
-const listedDiscountId =
-  "019c91dd-c560-7e55-b9d8-c95065efd51d" as StoredDiscountId;
-const unlistedDiscountId =
-  "019c91dd-c560-7e55-b9d8-c95065efd59d" as StoredDiscountId;
+const listedDiscountId = storedDiscountIdSchema.make(
+  "019c91dd-c560-7e55-b9d8-c95065efd51d"
+);
+const unlistedDiscountId = storedDiscountIdSchema.make(
+  "019c91dd-c560-7e55-b9d8-c95065efd59d"
+);
 const listedDiscount = {
   labels: { "cs-CZ": "Letní sleva", "en-US": "Summer discount" },
 };

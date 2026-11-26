@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import "@/shared/polyfills/temporal";
-import type { StoredDiscountId } from "@/features/discounts/persistence-contracts";
+import { storedDiscountIdSchema } from "@/features/discounts/persistence-contracts";
 import { isLocale } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import {
@@ -20,7 +20,7 @@ const locale = isLocale(requestedLocale) ? requestedLocale : "en-US";
 
 const discounts = [
   {
-    id: "019c91dd-c560-7e55-b9d8-c95065efd51d" as StoredDiscountId,
+    id: storedDiscountIdSchema.make("019c91dd-c560-7e55-b9d8-c95065efd51d"),
     labels: { "cs-CZ": "Letní sleva", "en-US": "Summer discount" },
   },
 ];

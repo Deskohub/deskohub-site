@@ -126,27 +126,12 @@ type CampaignServiceOverrides = {
 
 const campaignServices = (overrides: CampaignServiceOverrides) =>
   Layer.mergeAll(
-    Layer.succeed(CampaignAudienceService, {
-      ...({} as CampaignAudienceService["Service"]),
-      ...overrides.audiences,
-    }),
-    Layer.succeed(CampaignService, {
-      ...({} as CampaignService["Service"]),
-      ...overrides.campaigns,
-    }),
-    Layer.succeed(CampaignRecipientService, {
-      ...({} as CampaignRecipientService["Service"]),
-      ...overrides.recipients,
-    }),
+    Layer.mock(CampaignAudienceService, overrides.audiences ?? {}),
+    Layer.mock(CampaignService, overrides.campaigns ?? {}),
+    Layer.mock(CampaignRecipientService, overrides.recipients ?? {}),
     overrides.sendingLayer ??
-      Layer.succeed(CampaignSendService, {
-        ...({} as CampaignSendService["Service"]),
-        ...overrides.sending,
-      }),
-    Layer.succeed(CampaignSendStatusService, {
-      ...({} as CampaignSendStatusService["Service"]),
-      ...overrides.sendStatus,
-    }),
+      Layer.mock(CampaignSendService, overrides.sending ?? {}),
+    Layer.mock(CampaignSendStatusService, overrides.sendStatus ?? {}),
     automationServiceStubs()
   );
 
@@ -1046,10 +1031,7 @@ describe.skipIf(!testDatabase)(
             CampaignService.Default,
             CampaignAudienceService.Default,
             AdministrationRequestLedger.Default,
-            Layer.succeed(
-              CampaignRecipientService,
-              {} as CampaignRecipientService["Service"]
-            ),
+            Layer.mock(CampaignRecipientService, {}),
             // The one-off guards refuse before sending touches its other
             // capabilities, so they are unimplemented mocks.
             CampaignSendService.Default.pipe(
@@ -1065,10 +1047,7 @@ describe.skipIf(!testDatabase)(
                 )
               )
             ),
-            Layer.succeed(
-              CampaignSendStatusService,
-              {} as CampaignSendStatusService["Service"]
-            )
+            Layer.mock(CampaignSendStatusService, {})
           ).pipe(Layer.provide(testDatabase.layer))
         ),
         Effect.provide(CliClientCompatibilityLive),
@@ -1080,10 +1059,10 @@ describe.skipIf(!testDatabase)(
       );
 
     const countRows = async (table: string, title: string) => {
-      const result = (await testDatabase.pool.query(
+      const result = await testDatabase.pool.query<{ readonly count: number }>(
         `select count(*)::int as count from ${table} where title like $1`,
         [`%${title}%`]
-      )) as { rows: Array<{ count: number }> };
+      );
       return result.rows[0]?.count;
     };
 
@@ -1201,7 +1180,9 @@ describe.skipIf(!testDatabase)(
            returning id`,
           [title, status]
         );
-        const params = { campaignId: rows[0]!.id };
+        const row = rows[0];
+        if (!row) throw new Error("Expected inserted campaign row");
+        const params = { campaignId: row.id };
         // Edits, deletion and duplication follow the automation lifecycle
         // (campaign.service.postgres.test.ts); only sending is one-off.
         const operations = [

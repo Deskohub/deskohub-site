@@ -38,9 +38,10 @@ const execute = mock();
 
 beforeEach(() => {
   execute.mockReset();
-  workspaceUseAction.mockImplementation(
-    () => ({ execute, isExecuting: false }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute,
+    isExecuting: false,
+  }));
 });
 
 afterEach(() => {
@@ -124,17 +125,11 @@ describe("client name rule", () => {
 });
 
 test("reports a failed rename and closes the dialog after a successful one", async () => {
-  type RenameCallbacks = {
-    readonly onSuccess: (result: { data?: unknown }) => void;
-    readonly onError: (result: {
-      error: { serverError?: string | undefined };
-    }) => void;
-    readonly onTransportError: () => void;
-  };
+  type RenameCallbacks = Parameters<typeof workspaceUseAction>[1];
   let callbacks: RenameCallbacks | undefined;
   workspaceUseAction.mockImplementation((_action, options) => {
-    callbacks = options as RenameCallbacks;
-    return { execute, isExecuting: false } as never;
+    callbacks = options;
+    return { execute, isExecuting: false };
   });
   workspaceRouterRefresh.mockClear();
   const locale = "en-US";
@@ -157,18 +152,39 @@ test("reports a failed rename and closes the dialog after a successful one", asy
     });
   const alertText = () => view.queryByRole("alert")?.textContent;
 
-  settle(({ onError }) => onError({ error: { serverError: "Server says" } }));
+  settle(({ onError }) => {
+    if (!onError) throw new Error("Expected onError callback");
+    onError({ error: { serverError: "Server says" }, input: undefined });
+  });
   expect(alertText()).toBe("Server says");
-  settle(({ onError }) => onError({ error: {} }));
+  settle(({ onTransportError }) => {
+    if (!onTransportError)
+      throw new Error("Expected onTransportError callback");
+    onTransportError({ error: new Error("transport"), input: undefined });
+  });
   expect(alertText()).toBe(m.adminCliRenameFailed({}, { locale }));
-  settle(({ onTransportError }) => onTransportError());
+  settle(({ onError }) => {
+    if (!onError) throw new Error("Expected onError callback");
+    onError({ error: { serverError: "Server says" }, input: undefined });
+  });
+  expect(alertText()).toBe("Server says");
+  settle(({ onError }) => {
+    if (!onError) throw new Error("Expected onError callback");
+    onError({ error: {}, input: undefined });
+  });
   expect(alertText()).toBe(m.adminCliRenameFailed({}, { locale }));
 
-  settle(({ onSuccess }) => onSuccess({ data: undefined }));
+  settle(({ onSuccess }) => {
+    if (!onSuccess) throw new Error("Expected onSuccess callback");
+    onSuccess({ data: undefined, input: undefined });
+  });
   expect(view.queryByRole("dialog")).not.toBeNull();
   expect(workspaceRouterRefresh).not.toHaveBeenCalled();
 
-  settle(({ onSuccess }) => onSuccess({ data: { renamed: true } }));
+  settle(({ onSuccess }) => {
+    if (!onSuccess) throw new Error("Expected onSuccess callback");
+    onSuccess({ data: { renamed: true }, input: undefined });
+  });
   expect(view.queryByRole("dialog")).toBeNull();
   expect(workspaceRouterRefresh).toHaveBeenCalledTimes(1);
 });
