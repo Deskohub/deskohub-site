@@ -588,6 +588,9 @@
         "effect": "4.1.4",
         "jose": "6.2.12",
       },
+      "devDependencies": {
+        "@deskohub/test-email": "workspace:*",
+      },
     },
     "packages/i18n": {
       "name": "@deskohub/i18n",

@@ -15,6 +15,7 @@ import { HttpRouter, HttpServer } from "effect/http";
 import { RpcServer } from "effect/rpc";
 
 const apiOrigin = "https://workspace-api.test";
+const googleProject = "example-sandbox";
 const signedToken = `${Buffer.from(JSON.stringify(["send-synthetic", "customer-synthetic"])).toString("base64url")}.${"s".repeat(43)}`;
 const managementToken = MarketingManagementAccessToken.make("A".repeat(43));
 const browserUserAgent =
@@ -85,8 +86,7 @@ beforeAll(() => {
     WORKSPACE_GCP_PROJECT_NUMBER: "123456789",
     WORKSPACE_WIF_POOL: "workspace-vercel",
     WORKSPACE_WIF_PROVIDER: "vercel",
-    WORKSPACE_FRONTEND_SERVICE_ACCOUNT:
-      "workspace-frontend@example-sandbox.iam.gserviceaccount.com",
+    WORKSPACE_FRONTEND_SERVICE_ACCOUNT: `workspace-frontend@${googleProject}.iam.gserviceaccount.com`,
   });
   globalThis.fetch = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) => {

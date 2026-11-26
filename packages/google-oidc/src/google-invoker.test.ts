@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import { Effect } from "effect";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import {
@@ -7,7 +8,7 @@ import {
 } from "./google-invoker";
 
 const invoker = {
-  email: "tasks@workspace.test",
+  email: testEmailAddress("tasks"),
   audience: "https://tasks-worker.workspace.test",
 };
 const signer = await generateKeyPair("RS256");

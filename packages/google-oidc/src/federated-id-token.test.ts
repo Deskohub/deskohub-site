@@ -5,7 +5,8 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { TestClock } from "effect/testing";
 import { GoogleIdToken } from "./federated-id-token";
 
-const serviceAccount = "frontend@synthetic.iam.gserviceaccount.com";
+const googleProject = "synthetic-project";
+const serviceAccount = `frontend@${googleProject}.iam.gserviceaccount.com`;
 const audience = "https://workspace-api.example.test";
 const workloadIdentityProvider =
   "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/test/providers/test";
@@ -193,7 +194,7 @@ test("refreshes below the five-minute skew and isolates each account and audienc
     expect(
       yield* tokens.get({
         ...input,
-        serviceAccount: "other@synthetic.iam.gserviceaccount.com",
+        serviceAccount: `other@${googleProject}.iam.gserviceaccount.com`,
       })
     ).not.toBe(renewed);
     expect(yield* tokens.get(input)).toBe(renewed);

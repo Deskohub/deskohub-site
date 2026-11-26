@@ -14,5 +14,8 @@
   "dependencies": {
     "effect": "4.1.4",
     "jose": "6.2.12"
+  },
+  "devDependencies": {
+    "@deskohub/test-email": "workspace:*"
   }
 }
