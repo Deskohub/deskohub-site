@@ -388,6 +388,59 @@ describe("Workspace E2E target resolution", () => {
     expect(withoutOptIn.calls).toEqual([]);
   });
 
+  test("admits only the original synthetic recovery on its exact internal draft", async () => {
+    const branch = "feat/unlimited-membership-checkout";
+    const owned = {
+      ...draft,
+      number: 1527,
+      head: { ...draft.head, ref: branch },
+    };
+    const recovery = {
+      ...manualDraft,
+      GITHUB_REF: `refs/heads/${branch}`,
+      TARGET_REF: branch,
+      INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL: "false",
+      RECOVER_UNLIMITED_RUN: "45856799102",
+    };
+    const allowed = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [owned],
+      recovery
+    );
+    expect(allowed.result.exitCode).toBe(0);
+    expect(allowed.outputs).toMatchObject({
+      draft_preview: "true",
+      pr_number: "1527",
+      recover_unlimited_run: "45856799102",
+      run_e2e: "true",
+    });
+    for (const options of [
+      { RECOVER_UNLIMITED_RUN: "123" },
+      { ALLOW_DRAFT_PREVIEW: "false" },
+      { INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL: "true" },
+      { GITHUB_REF: "refs/heads/main" },
+      { INPUT_PAYMENT_PROVIDER: "mock" },
+    ]) {
+      const result = await resolveTarget(
+        "success",
+        deploymentSucceeded,
+        [owned],
+        { ...recovery, ...options }
+      );
+      expect(result.result.exitCode).toBe(1);
+      expect(result.outputs.recover_unlimited_run).toBeUndefined();
+    }
+    const ready = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [{ ...owned, draft: false }],
+      recovery
+    );
+    expect(ready.outputs.eligible).toBe("false");
+    expect(ready.outputs.recover_unlimited_run).toBeUndefined();
+  });
+
   test.each([
     { EVENT_NAME: "workflow_dispatch" },
     { ALLOW_DRAFT_PREVIEW: "false", EVENT_NAME: "workflow_dispatch" },

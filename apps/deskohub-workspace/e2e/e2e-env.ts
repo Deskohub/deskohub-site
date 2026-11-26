@@ -131,6 +131,10 @@ const e2eEnvironmentSchema = Schema.Struct({
   WORKSPACE_E2E_FLOWS: optionalFlowsInput,
   WORKSPACE_E2E_NIGHTLY_CASES: optionalOptIn,
   WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL: optionalOptIn,
+  WORKSPACE_E2E_RECOVER_UNLIMITED_RUN: toEnvironmentSchema(
+    Schema.optional(Schema.Literal("45856799102"))
+  ),
+  WORKSPACE_E2E_RECOVERY_GITHUB_TOKEN: optionalNonEmptyString,
   WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE: toEnvironmentSchema(
     Schema.optional(Schema.Literals(["en-US", "cs-CZ"]))
   ),
@@ -203,6 +207,10 @@ export const makeE2EEnvironment = (
         runtimeEnvironment.WORKSPACE_E2E_NIGHTLY_CASES,
       WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL:
         runtimeEnvironment.WORKSPACE_E2E_UNLIMITED_PASS_AUTO_RENEWAL,
+      WORKSPACE_E2E_RECOVER_UNLIMITED_RUN:
+        runtimeEnvironment.WORKSPACE_E2E_RECOVER_UNLIMITED_RUN,
+      WORKSPACE_E2E_RECOVERY_GITHUB_TOKEN:
+        runtimeEnvironment.WORKSPACE_E2E_RECOVERY_GITHUB_TOKEN,
       WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE:
         runtimeEnvironment.WORKSPACE_E2E_UNLIMITED_REVIEW_LOCALE,
       WORKSPACE_E2E_PR_NUMBER: runtimeEnvironment.WORKSPACE_E2E_PR_NUMBER,
@@ -342,6 +350,10 @@ export const unlimitedPassReviewLocale = (
 export const unlimitedPassWorkspaceReviewOnly = (
   environment: UnlimitedPassReviewEnvironment
 ) => unlimitedPassReviewLocale(environment) === "cs-CZ";
+
+export const unlimitedPassReviewOnly = (
+  environment: UnlimitedPassReviewEnvironment
+) => unlimitedPassReviewLocale(environment) !== undefined;
 
 /**
  * Nightly cases are too slow for the per-PR gate, so a run includes them

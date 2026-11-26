@@ -64,7 +64,7 @@ export const registerWorkspaceE2ECases = (
         const {
           nightlyCasesEnabled,
           unlimitedPassAutoRenewalCaseEnabled,
-          unlimitedPassWorkspaceReviewOnly,
+          unlimitedPassReviewOnly,
           workspaceE2EFlowSelection,
         } = await import("../e2e-env");
         test.skip(
@@ -74,8 +74,7 @@ export const registerWorkspaceE2ECases = (
             {
               includeUnlimitedPassAutoRenewal:
                 unlimitedPassAutoRenewalCaseEnabled(environment),
-              unlimitedPassWorkspaceReviewOnly:
-                unlimitedPassWorkspaceReviewOnly(environment),
+              unlimitedPassReviewOnly: unlimitedPassReviewOnly(environment),
             }
           ),
           "Excluded by WORKSPACE_E2E_FLOWS"

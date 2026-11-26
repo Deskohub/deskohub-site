@@ -468,7 +468,9 @@ describe("workspace E2E workflow", () => {
     expect(browserIndex).toBeGreaterThan(migrateIndex);
     expect(runIndex).toBeGreaterThan(migrateIndex);
     // A failed migration must stop the run instead of testing a stale schema.
-    expect(migration.if).toBeUndefined();
+    expect(migration.if).toBe(
+      "needs.resolve-target.outputs.recover_unlimited_run == ''"
+    );
     expect(migration["continue-on-error"]).toBeUndefined();
   });
 
@@ -487,7 +489,9 @@ describe("workspace E2E workflow", () => {
 
     const diagnostic = stepByName("Classify synthetic main account state");
     const diagnosticEnv = JSON.stringify(diagnostic.env);
-    expect(diagnostic.if).toBe("failure()");
+    expect(diagnostic.if).toBe(
+      "failure() && needs.resolve-target.outputs.recover_unlimited_run == ''"
+    );
     expect(diagnostic["continue-on-error"]).toBe(true);
     expect(diagnosticEnv.includes("WORKSPACE_E2E_RESEND_API_KEY")).toBe(false);
     expect(diagnosticEnv.includes("WORKSPACE_E2E_PROVIDER_PERMIT")).toBe(false);

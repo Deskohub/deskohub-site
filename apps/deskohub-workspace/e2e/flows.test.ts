@@ -56,13 +56,13 @@ describe("Workspace E2E flow catalog", () => {
     ).toBe(false);
   });
 
-  test("excludes every other payment case from the Czech Workspace review", () => {
+  test("excludes every other payment case from a manual Unlimited review", () => {
     const payments = resolveWorkspaceE2EFlowSelection("payments");
     expect(
       workspaceE2ECaseIds.filter((caseId) =>
         isWorkspaceE2ECaseSelected(caseId, payments, {
           includeUnlimitedPassAutoRenewal: true,
-          unlimitedPassWorkspaceReviewOnly: true,
+          unlimitedPassReviewOnly: true,
         })
       )
     ).toEqual([unlimitedPassAutoRenewalCaseId]);

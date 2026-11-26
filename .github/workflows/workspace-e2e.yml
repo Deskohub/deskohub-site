@@ -56,6 +56,11 @@ on:
         options:
           - en-US
           - cs-CZ
+      recover_unlimited_run:
+        description: Existing cancelled synthetic Unlimited run to reconcile (45856799102 only)
+        type: string
+        required: false
+        default: ""
       sha:
         description: Exact commit SHA to test
         required: true
@@ -97,6 +102,7 @@ jobs:
       nightly: ${{ steps.target.outputs.nightly }}
       nightly_cases: ${{ steps.target.outputs.nightly_cases }}
       pr_number: ${{ steps.target.outputs.pr_number }}
+      recover_unlimited_run: ${{ steps.target.outputs.recover_unlimited_run }}
       run_e2e: ${{ steps.target.outputs.run_e2e }}
       sha: ${{ steps.target.outputs.sha }}
       status_description: ${{ steps.status-without-run.outputs.description }}
@@ -125,6 +131,7 @@ jobs:
           INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL: ${{ github.event_name == 'workflow_dispatch' && inputs.include_unlimited_pass_auto_renewal && 'true' || 'false' }}
           INPUT_FLOWS: ${{ github.event_name == 'workflow_dispatch' && inputs.flows || '' }}
           INPUT_PAYMENT_PROVIDER: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_provider || '' }}
+          RECOVER_UNLIMITED_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.recover_unlimited_run || '' }}
           INPUT_UNLIMITED_REVIEW_LOCALE: ${{ github.event_name == 'workflow_dispatch' && inputs.review_screenshots && inputs.include_unlimited_pass_auto_renewal && inputs.unlimited_review_locale || '' }}
           # Only workspace-e2e-nightly.yml moves this branch, to a commit of
           # main whose Workspace preview it waits for.
@@ -167,12 +174,24 @@ jobs:
             allow_draft_preview=true
           fi
           require_draft_preview=false
-          if [[ "${INPUT_UNLIMITED_REVIEW_LOCALE:-}" == "cs-CZ" ]]; then
+          if [[ -n "${INPUT_UNLIMITED_REVIEW_LOCALE:-}" || -n "${RECOVER_UNLIMITED_RUN:-}" ]]; then
             if [[ "$allow_draft_preview" != "true" ]]; then
-              echo 'Czech Unlimited Workspace review requires allow_draft_preview' >&2
+              echo 'Unlimited review or recovery requires allow_draft_preview' >&2
               exit 1
             fi
             require_draft_preview=true
+          fi
+          if [[ -n "${RECOVER_UNLIMITED_RUN:-}" ]]; then
+            if [[ "$RECOVER_UNLIMITED_RUN" != "45856799102" ||
+                "$TARGET_REF" != "feat/unlimited-membership-checkout" ||
+                "${GITHUB_REF:-}" != "refs/heads/$TARGET_REF" ||
+                "${GITHUB_WORKFLOW_SHA:-}" != "$TARGET_SHA" ||
+                "$INPUT_FLOWS" != "payments" || "$INPUT_PAYMENT_PROVIDER" != "nexi" ||
+                "${INCLUDE_UNLIMITED_PASS_AUTO_RENEWAL:-false}" == "true" ||
+                "$INCLUDE_NIGHTLY_CASES" == "true" ]]; then
+              echo 'Recovery is limited to the original cancelled Unlimited run on its exact draft branch' >&2
+              exit 1
+            fi
           fi
           # Nightly cases test main only (D38). A dispatch that asks for them
           # against any other target fails before it resolves a PR, so it
@@ -333,6 +352,13 @@ jobs:
                 ambiguous-pr
             fi
             pr_number="$(jq -r '.[0].number' <<<"$eligible_pulls")"
+            if [[ -n "${RECOVER_UNLIMITED_RUN:-}" ]]; then
+              if [[ "$pr_number" != "1527" ]]; then
+                echo 'The original Unlimited recovery is limited to PR 1527' >&2
+                exit 1
+              fi
+              echo "recover_unlimited_run=$RECOVER_UNLIMITED_RUN" >> "$GITHUB_OUTPUT"
+            fi
             pr_body="$(jq -r '.[0].body // ""' <<<"$eligible_pulls")"
             {
               echo "head_ref=$TARGET_REF"
@@ -942,6 +968,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Migrate preview database
+        if: needs.resolve-target.outputs.recover_unlimited_run == ''
         working-directory: apps/deskohub-workspace
         env:
           DATABASE_URL: ${{ steps.preview-database.outputs.direct_url }}
@@ -949,7 +976,7 @@ jobs:
         run: bun run db:migrate
 
       - name: Reconcile stale Workspace E2E reservations
-        if: github.event_name == 'workflow_dispatch' && inputs.cleanup_stale_e2e_reservations
+        if: github.event_name == 'workflow_dispatch' && inputs.cleanup_stale_e2e_reservations && needs.resolve-target.outputs.recover_unlimited_run == ''
         env:
           DATABASE_URL: ${{ steps.preview-database.outputs.direct_url }}
           WORKSPACE_E2E_DATABASE_URL_UNPOOLED: ${{ steps.preview-database.outputs.direct_url }}
@@ -964,6 +991,7 @@ jobs:
         run: bun --cwd apps/deskohub-workspace e2e:cleanup-stale --apply
 
       - name: Validate aggregate Dotypos capacity
+        if: needs.resolve-target.outputs.recover_unlimited_run == ''
         env:
           DATABASE_URL: ${{ steps.preview-database.outputs.pooled_url }}
           WORKSPACE_E2E_DATABASE_URL_UNPOOLED: ${{ steps.preview-database.outputs.direct_url }}
@@ -978,6 +1006,7 @@ jobs:
         run: bun --cwd apps/deskohub-workspace e2e:capacity
 
       - name: Verify hosted browser runtime
+        if: needs.resolve-target.outputs.recover_unlimited_run == ''
         run: |
           set -euo pipefail
           browser_path="$(command -v google-chrome || command -v chromium || true)"
@@ -1027,6 +1056,8 @@ jobs:
           WORKSPACE_E2E_POSTHOG_HOST: ${{ vars.WORKSPACE_E2E_POSTHOG_HOST }}
           WORKSPACE_E2E_POSTHOG_PROJECT_TOKEN: ${{ vars.WORKSPACE_E2E_POSTHOG_PROJECT_TOKEN }}
           WORKSPACE_E2E_ALLOCATION_SHARD: ${{ steps.lease.outputs.shard }}
+          WORKSPACE_E2E_RECOVER_UNLIMITED_RUN: ${{ needs.resolve-target.outputs.recover_unlimited_run }}
+          WORKSPACE_E2E_RECOVERY_GITHUB_TOKEN: ${{ needs.resolve-target.outputs.recover_unlimited_run != '' && github.token || '' }}
           WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS: ${{ github.event_name == 'workflow_dispatch' && inputs.campaign_screenshots && 'true' || '' }}
           NIGHTLY_TARGET: ${{ needs.resolve-target.outputs.nightly }}
           PREVIEW_BRANCH: ${{ needs.resolve-target.outputs.head_ref }}
@@ -1054,7 +1085,12 @@ jobs:
               exit 1
             fi
           fi
-          bun turbo test:e2e --filter=deskohub-workspace
+          if [[ -n "$WORKSPACE_E2E_RECOVER_UNLIMITED_RUN" ]]; then
+            bun turbo i18n:compile --filter=deskohub-workspace
+            bun --cwd apps/deskohub-workspace e2e/playwright-checkout/unlimited-pass-cleanup.ts
+          else
+            bun turbo test:e2e --filter=deskohub-workspace
+          fi
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
@@ -1103,7 +1139,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Classify synthetic main account state
-        if: failure()
+        if: failure() && needs.resolve-target.outputs.recover_unlimited_run == ''
         continue-on-error: true
         env:
           DATABASE_URL: ${{ steps.preview-database.outputs.direct_url }}
