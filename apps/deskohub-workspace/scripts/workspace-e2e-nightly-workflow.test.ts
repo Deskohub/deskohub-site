@@ -295,18 +295,18 @@ describe("Workspace E2E nightly preview check", () => {
 
 describe("Workspace E2E nightly workflow contract", () => {
   test.each([
-    ["totalolage/deskohub-site", true],
-    ["deskohub-bar/website", false],
+    ["1015951989", true],
+    ["1280170238", false],
   ] as const)(
-    "evaluates nightly job eligibility in %s",
-    (repositoryName, expected) => {
+    "evaluates nightly job eligibility for repository ID %s",
+    (repositoryId, expected) => {
       const condition = nightly.jobs["start-nightly-e2e"]?.if;
       const eligible =
         condition === undefined ||
         evaluateWorkflowValue(condition, {
           contexts: ["github"],
           values: new Map([
-            ["github.repository", workflowExpressionString(repositoryName)],
+            ["github.repository_id", workflowExpressionString(repositoryId)],
           ]),
         }) === "true";
       expect(eligible).toBe(expected);

@@ -162,7 +162,7 @@ describe("Workspace E2E PR flows sync workflow contract", () => {
 
     const validateCondition = String(validateJob?.if);
     for (const guard of [
-      "github.repository == 'totalolage/deskohub-site'",
+      "github.repository_id == '1015951989'",
       "github.event.pull_request.state == 'open'",
     ]) {
       expect(validateCondition).toContain(guard);
@@ -172,7 +172,7 @@ describe("Workspace E2E PR flows sync workflow contract", () => {
 
     const syncCondition = String(syncJob?.if);
     for (const guard of [
-      "github.repository == 'totalolage/deskohub-site'",
+      "github.repository_id == '1015951989'",
       "github.event.action != 'synchronize'",
       "github.event.pull_request.state == 'open'",
       "github.event.pull_request.draft == false",
