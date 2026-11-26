@@ -1,20 +1,28 @@
 import "@/shared/polyfills/temporal";
 
 import { describe, expect, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Effect, Schema } from "effect";
 import {
   getDiscountCommitmentPayload,
   makeDiscountCommitment,
 } from "@/features/discounts/commitment";
 import { discountIdSchema } from "@/features/discounts/contracts";
+import {
+  discountCodeIdSchema,
+  promotionCodeIdSchema,
+  storedDiscountIdSchema,
+  voucherIdSchema,
+} from "@/features/discounts/persistence-contracts";
 import type { DiscountClaimInstruction } from "@/features/discounts/provider";
+import type { Money } from "@/shared/money/money";
 import {
   validateDiscountCommitment,
   validateInternalPaymentCommitment,
 } from "./payment-lifecycle.repository";
 
 const product = { kind: "cowork", tier: "basic" } as const;
-const czk = (value: number) => ({ value, exponent: 2, currency: "CZK" });
+const czk = (value: number): Money => ({ value, exponent: 2, currency: "CZK" });
 
 /** A consistent 10% application of `claim` to `subtotal`. */
 const claimedApplication = (
@@ -42,36 +50,38 @@ const claimedApplication = (
   };
 };
 
-const codeClaim = (codeId: string, tier: "basic" | "pro" = "basic") =>
-  ({
-    kind: "discount_code",
-    codeId,
-    storedDiscountId: `stored-${codeId}`,
-    dotyposCustomerId: "customer-1",
-    product: { kind: "cowork", tier },
-  }) as DiscountClaimInstruction;
+const codeClaim = (
+  codeId: string,
+  tier: "basic" | "profi" = "basic"
+): DiscountClaimInstruction => ({
+  kind: "discount_code",
+  codeId: discountCodeIdSchema.make(codeId),
+  storedDiscountId: storedDiscountIdSchema.make(
+    "01980000-0000-7000-8000-00000000c001"
+  ),
+  dotyposCustomerId: DotyposCustomerIdSchema.make("customer-1"),
+  product: { kind: "cowork", tier },
+});
 
-const voucherClaim = (voucherId: string) =>
-  ({
-    kind: "voucher",
-    voucherId,
-    availableAmount: czk(1000),
-    dotyposCustomerId: "customer-1",
-  }) as DiscountClaimInstruction;
+const voucherClaim = (voucherId: string): DiscountClaimInstruction => ({
+  kind: "voucher",
+  voucherId: voucherIdSchema.make(voucherId),
+  availableAmount: czk(1000),
+  dotyposCustomerId: DotyposCustomerIdSchema.make("customer-1"),
+});
 
-const invitationClaim = () =>
-  ({
-    kind: "referral_invitation",
-    invitedDotyposCustomerId: "customer-1",
-    referrerDotyposCustomerId: "customer-2",
-    promotionCodeId: "promotion-1",
-  }) as DiscountClaimInstruction;
+const invitationClaim = (): DiscountClaimInstruction => ({
+  kind: "referral_invitation",
+  invitedDotyposCustomerId: DotyposCustomerIdSchema.make("customer-1"),
+  referrerDotyposCustomerId: DotyposCustomerIdSchema.make("customer-2"),
+  promotionCodeId: promotionCodeIdSchema.make("promotion-1"),
+});
 
 const validateClaims = (
   claims: readonly (DiscountClaimInstruction | undefined)[],
   committedProduct: {
     readonly kind: "cowork";
-    readonly tier: "basic" | "pro";
+    readonly tier: "basic" | "profi";
   } = product
 ) =>
   Effect.runPromise(
@@ -232,7 +242,7 @@ describe("PaymentLifecycleRepository", () => {
 
   test("refuses a discount-code claim for another product", async () => {
     expect(
-      await validateClaims([invitationClaim(), codeClaim("code-1", "pro")])
+      await validateClaims([invitationClaim(), codeClaim("code-1", "profi")])
     ).toMatchObject({
       _tag: "Failure",
       failure: { reason: "product_ineligible", codeId: "code-1" },
