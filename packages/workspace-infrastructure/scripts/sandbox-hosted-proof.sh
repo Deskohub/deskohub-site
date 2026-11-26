@@ -1637,9 +1637,12 @@ phase_telemetry_privacy() {
   $control || fail "no POST /rpc request log carries the probe trace ${trace_id}; marker absence would prove nothing"
   echo "Cloud Logging holds the probe's POST /rpc request log"
 
+  # A bare quoted global restriction applies substring matching across every
+  # log field and payload; Cloud Logging rejects nested message fields such as
+  # jsonPayload:"..." with INVALID_ARGUMENT.
   local logs
   logs="$(capture '[]' gcloud logging read \
-    "\"${marker}\" OR textPayload:\"${marker}\" OR jsonPayload:\"${marker}\" OR httpRequest.requestUrl:\"${marker}\"" \
+    "\"${marker}\"" \
     --project="$project_id" --freshness="${freshness}s" --limit=20 --format='json(logName,timestamp)')" ||
     fail "Cloud Logging is unreadable; marker absence in logs unverified"
   jq -e 'type == "array" and length == 0' >/dev/null 2>&1 <<<"$logs" ||
