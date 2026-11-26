@@ -1,12 +1,11 @@
 import { type Locale, m } from "@/features/i18n";
+import { offersUnlimitedAutoRenewal } from "@/features/passes/backend/unlimited-auto-renewal";
 import {
-  unlimitedPassCoffeePrice,
+  unlimitedPassDays,
   unlimitedPassOffers,
 } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
-import { currencyCZK } from "@/shared/money/currencies";
-import { formatMoney, moneyMajorAmount } from "@/shared/money/money";
-import { workspaceSiteConstants } from "@/shared/utils/site-constants";
+import { getUnlimitedPassPriceCopy } from "../unlimited-pass-price-copy";
 import { UnlimitedPassPurchaseButton } from "./unlimited-pass-purchase-button";
 
 export function UnlimitedPassPrices({ locale }: { readonly locale: Locale }) {
@@ -22,10 +21,24 @@ export function UnlimitedPassPrices({ locale }: { readonly locale: Locale }) {
       <p className="mt-3 text-base leading-7 text-white/76">
         {m.unlimitedPassDiscoveryIntro({}, { locale })}
       </p>
+      {offersUnlimitedAutoRenewal(locale) && (
+        <p className="mt-3 text-base leading-7 text-white/76">
+          {m.unlimitedPassDiscoveryAutoRenewal(
+            { days: unlimitedPassDays },
+            { locale }
+          )}
+        </p>
+      )}
       <ul className="mt-5 divide-y divide-white/14 border-y border-white/14">
         {unlimitedPassOffers.map(
           ({ product: { tier }, price, validityDays }) => {
             const name = getPassTierName(tier, locale);
+            const copy = getUnlimitedPassPriceCopy(
+              tier,
+              price,
+              validityDays,
+              locale
+            );
             return (
               <li
                 key={tier}
@@ -36,61 +49,18 @@ export function UnlimitedPassPrices({ locale }: { readonly locale: Locale }) {
                     {name}
                   </h3>
                   <p className="mt-2 text-base leading-7 text-white/76">
-                    {
-                      {
-                        "open-space":
-                          m.unlimitedPassDiscoveryOpenSpaceDescription(
-                            {
-                              until:
-                                workspaceSiteConstants.openingHours
-                                  .openSpaceUsableUntil,
-                            },
-                            { locale }
-                          ),
-                        "reserved-desk":
-                          m.unlimitedPassDiscoveryReservedDeskDescription(
-                            {},
-                            { locale }
-                          ),
-                        "reserved-desk-workstation":
-                          m.unlimitedPassDiscoveryWorkstationDescription(
-                            {},
-                            { locale }
-                          ),
-                      }[tier]
-                    }
+                    {copy.description}
                   </p>
-                  {tier === "open-space" && (
-                    <p className="mt-3 text-base leading-7 text-white/86">
-                      {m.unlimitedPassDiscoveryCoffee(
-                        {
-                          price: formatMoney(unlimitedPassCoffeePrice, locale),
-                        },
-                        { locale }
-                      )}
-                    </p>
-                  )}
+                  <p className="mt-3 text-base leading-7 text-white/86">
+                    {copy.coffee}
+                  </p>
                 </div>
                 <div className="flex flex-col items-start sm:items-end sm:text-right">
                   <p className="text-2xl font-semibold text-sunset-yellow">
-                    {m.unlimitedPassDiscoveryPrice(
-                      { price: formatMoney(price, locale), days: validityDays },
-                      { locale }
-                    )}
+                    {copy.period}
                   </p>
                   <p className="text-sm leading-6 text-white/76">
-                    {m.unlimitedPassDiscoveryPerDay(
-                      {
-                        price: formatMoney(
-                          currencyCZK(
-                            Math.round(moneyMajorAmount(price) / validityDays) *
-                              100
-                          ),
-                          locale
-                        ),
-                      },
-                      { locale }
-                    )}
+                    {copy.perDay}
                   </p>
                   <UnlimitedPassPurchaseButton
                     aria-label={m.unlimitedPassDiscoveryBuyTier(

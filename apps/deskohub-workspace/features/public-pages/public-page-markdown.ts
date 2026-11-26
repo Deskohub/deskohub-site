@@ -41,6 +41,8 @@ export interface PublicPageMarkdownSources {
   readonly offerings: Effect.Effect<ReadonlyArray<PublicOffering>>;
   /** The home page's sale banner while a sale runs. */
   readonly saleBanner: Effect.Effect<LandingPageSaleBannerContent | undefined>;
+  /** Pass purchase options shown on the pricing page while released. */
+  readonly pricingPasses?: { readonly offersAutoRenewal: boolean };
 }
 
 export interface PublicPageMarkdown {

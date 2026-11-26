@@ -129,6 +129,7 @@ export function UnlimitedPassChoose({
         <PassTierInput
           className="lg:grid-cols-3"
           locale={locale}
+          kind="unlimited"
           tier={options.tier}
           onChange={(tier) => changeOptions(unlimitedPassOptionsForTier(tier))}
           priceForTier={(tier) => (

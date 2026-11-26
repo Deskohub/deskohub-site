@@ -82,7 +82,7 @@ export const publicPageDefinitions: Readonly<
   "/faq": {
     title: m.faqMetadataTitle,
     description: m.faqMetadataDescription,
-    contentDate: "2026-11-18",
+    contentDate: "2026-11-26",
   },
   "/ai-assistants": {
     title: m.aiAssistantsMetadataTitle,
@@ -97,7 +97,7 @@ export const publicPageDefinitions: Readonly<
   "/pricing": {
     title: m.pricingMetadataTitle,
     description: m.pricingMetadataDescription,
-    contentDate: "2026-11-20",
+    contentDate: "2026-11-26",
   },
   "/meeting-room": {
     title: m.meetingRoomMetadataTitle,

@@ -152,6 +152,24 @@ beforeEach(() => {
 });
 
 describe("renderPublicPageMarkdown", () => {
+  test("uses the request's pass decision in the shared pricing render", async () => {
+    const closed = await renderPublicPageMarkdown(
+      "en-US",
+      "/pricing",
+      releases()
+    );
+    const open = await renderPublicPageMarkdown("en-US", "/pricing", {
+      ...releases(),
+      pricingPasses: { offersAutoRenewal: true },
+    });
+
+    expect(closed).not.toContain("/passes/unlimited");
+    expect(open).toContain("/passes/unlimited");
+    expect(open).toContain("automatic renewal every 30 days");
+    expect(headers).not.toHaveBeenCalled();
+    expect(nextCache.calls).toEqual([shared, shared]);
+  });
+
   test("prices a sale under the request's gate decisions without reading the request", async () => {
     const saleMarkdown = await renderPublicPageMarkdown(
       "en-US",

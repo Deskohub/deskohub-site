@@ -23,6 +23,7 @@ import {
 import { getOfferingSale } from "../offering-sale";
 import { getPriceFamilies } from "../price-family";
 import { EntryPackPrices } from "./entry-pack-prices";
+import { PassPricesStructuredData } from "./pass-prices-structured-data";
 import { UnlimitedPassPrices } from "./unlimited-pass-prices";
 
 type PricingPageProps = {
@@ -202,6 +203,7 @@ function PriceList({
             >
               <EntryPackPrices locale={locale} />
               <UnlimitedPassPrices locale={locale} />
+              <PassPricesStructuredData locale={locale} />
             </GlobalReleaseGate>
           )}
         </Fragment>

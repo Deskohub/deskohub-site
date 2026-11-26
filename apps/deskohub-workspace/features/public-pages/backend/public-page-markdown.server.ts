@@ -40,6 +40,7 @@ export interface PublicPageMarkdownReleases {
   /** The public pages production serves now. */
   readonly publishedPathnames: ReadonlyArray<PublicPagePathname>;
   readonly discountReleaseGates: DiscountReleaseGates;
+  readonly pricingPasses?: PublicPageMarkdownSources["pricingPasses"];
 }
 
 export const decidePublicPageMarkdownReleases = Effect.all({
@@ -177,6 +178,7 @@ export const renderFromMarkdownSources = <A>(
       isPublished: (pathname) => releases.publishedPathnames.includes(pathname),
       offerings: yield* read(loadMarkdownOfferings(locale, releases)),
       saleBanner: yield* read(loadMarkdownSaleBanner(locale, releases)),
+      pricingPasses: releases.pricingPasses,
     });
     return { value, complete: yield* Ref.get(complete) };
   });
