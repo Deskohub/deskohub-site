@@ -6,6 +6,7 @@ import {
   Effect,
   Exit,
   Layer,
+  Option,
   Redacted,
   Ref,
   Schedule,
@@ -205,7 +206,7 @@ const exchangeToken = (
 ) =>
   Effect.suspend(() => {
     // Local to this mint. An IAM retry can reuse a successful STS exchange.
-    let accessToken: string | undefined;
+    let accessToken = Option.none<string>();
     const fetchAccessToken = exchangeSubjectToken(
       client,
       target.workloadIdentityProvider,
@@ -213,12 +214,15 @@ const exchangeToken = (
     ).pipe(
       Effect.tap((token) =>
         Effect.sync(() => {
-          accessToken = token;
+          accessToken = Option.some(token);
         })
       )
     );
     return Effect.suspend(() =>
-      accessToken === undefined ? fetchAccessToken : Effect.succeed(accessToken)
+      Option.match(accessToken, {
+        onNone: () => fetchAccessToken,
+        onSome: Effect.succeed,
+      })
     ).pipe(
       Effect.flatMap((token) => generateIdToken(client, target, token)),
       Effect.flatMap(decodeIssuedToken),
