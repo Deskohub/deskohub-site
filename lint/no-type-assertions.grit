@@ -1,34 +1,9 @@
 engine biome(1.0)
 language js(typescript, jsx)
 
-// Packages and Workspace code decode or narrow values instead of asserting their
-// types. Only tests, fixtures, and testing helpers under the remaining large
-// feature directories stay exempt while they are migrated.
+// Biome overrides select the package and Workspace paths relative to the config.
 file($name, $body) where {
-  or {
-    and {
-      $name <: r".*packages/.*\.(?:ts|tsx|mts|cts)$",
-      not $name <: r".*packages/(?:.*/)?generated/.*"
-    },
-    and {
-      $name <: r".*apps/deskohub-workspace/.*\.(?:ts|tsx|mts|cts)$",
-      not $name <: r".*apps/deskohub-workspace/e2e/.*",
-      not $name <: r".*apps/deskohub-workspace/(?:.*/)?(?:generated|paraglide)/.*",
-      not and {
-        or {
-          $name <: r".*apps/deskohub-workspace/features/(?:account|email-campaigns)/.*",
-          and {
-            $name <: r".*apps/deskohub-workspace/features/checkout/.*",
-            not $name <: r".*apps/deskohub-workspace/features/checkout/(?:actions/.*|backend/(?:analytics|fio|repositories)/.*|(?:checkout-quote|workspace-table-map)\.test\.(?:ts|tsx|mts|cts))$"
-          }
-        },
-        or {
-          $name <: r".*apps/deskohub-workspace/features/(?:account|checkout|email-campaigns)/(?:.*/)?testing/.*",
-          $name <: r".*(?:\.(?:test|spec|pw|test-utils|browser-harness)|-fixture|\.fixture)\.(?:ts|tsx|mts|cts)$"
-        }
-      }
-    }
-  },
+  $name <: r".*\.(?:ts|tsx|mts|cts)$",
   // Every `as` assertion has the `as` keyword and every angle-bracket assertion a `<`.
   $body <: r"(?s).*(?:\bas\b|<).*",
   $body <: contains bubble {

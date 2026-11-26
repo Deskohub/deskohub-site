@@ -62,7 +62,6 @@
     "./lint/no-standalone-capability-layers.grit",
     "./lint/no-synchronous-subprocess.grit",
     "./lint/no-throw-in-workspace-effect-modules.grit",
-    "./lint/no-type-assertions.grit",
     "./lint/no-unknown-parameters.grit",
     "./lint/no-unknown-type-aliases.grit",
     "./lint/no-unsafe-dictionary-type.grit",
@@ -104,7 +103,8 @@
   },
   "overrides": [
     {
-      "includes": ["packages/**"],
+      "includes": ["packages/**", "!packages/**/generated/**"],
+      "plugins": ["./lint/no-type-assertions.grit"],
       "linter": {
         "rules": {
           "style": {
@@ -153,6 +153,7 @@
         "!**/generated/**",
         "!**/paraglide/**"
       ],
+      "plugins": ["./lint/no-type-assertions.grit"],
       "linter": {
         "rules": {
           "style": {

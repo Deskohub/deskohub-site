@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Schema } from "effect";
+import { biomeFixtureConfig } from "@/shared/testing/biome-config.test-utils";
 import { runCommand } from "./shared/command";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -25,6 +26,8 @@ const lint = async (
   mkdirSync(directory, { recursive: true });
   const path = join(directory, filename);
   writeFileSync(path, source);
+  const config = join(temporaryRoot, "biome.json");
+  writeFileSync(config, JSON.stringify(biomeFixtureConfig(repositoryRoot)));
 
   try {
     return await runCommand(
@@ -34,9 +37,7 @@ const lint = async (
         "lint",
         path,
         "--config-path",
-        "biome.json",
-        "--vcs-root",
-        ".",
+        config,
         "--max-diagnostics=none",
       ],
       { cwd: repositoryRoot }
