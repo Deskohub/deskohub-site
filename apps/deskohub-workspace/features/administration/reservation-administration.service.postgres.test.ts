@@ -712,7 +712,9 @@ describe.skipIf(!testDatabase)(
       const first = await readAudit({ actor, reservationId: reservation.id });
       assert(first, "Expected first audit page");
       expect(first.events).toHaveLength(100);
-      expect(first.nextBefore).toBe(first.events.at(-1)?.id);
+      const last = first.events.at(-1);
+      assert(last, "Expected last audit event");
+      expect(first.nextBefore).toBe(last.id);
       assert(first.nextBefore, "Expected nextBefore cursor");
       const next = await readAudit({
         actor,

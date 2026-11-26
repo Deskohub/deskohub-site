@@ -59,6 +59,7 @@ import {
   type AdministrationReservationExportInput,
   AdministrationService,
 } from "./administration.service";
+import { dotyposCustomerFixture } from "./customer-directory.test-utils";
 import { getAdministrationPaymentStatus } from "./formatters";
 import { PaymentAdministrationServiceMock } from "./payment-administration.service.mock";
 import { PostHogReservationHistory } from "./posthog-reservation-history";
@@ -1602,10 +1603,10 @@ describe.skipIf(!testDatabase)(
       );
 
       const [restorableDetail, replacedDetail] = await Promise.all(
-        [
+        ([
           [restorable, "restorable"],
           [replaced, "replaced"],
-        ].map(([reservationId, label]) =>
+        ] as const).map(([reservationId, label]) =>
           run(
             (administration) =>
               administration.loadReservation(
@@ -1615,7 +1616,7 @@ describe.skipIf(!testDatabase)(
               getReservation: () =>
                 Effect.succeed(
                   Option.some({
-                    customer: null,
+                    customer: dotyposCustomerFixture(makeCustomerId(label)),
                     reservation: {
                       _branchId: DotyposBranchIdSchema.make("branch"),
                       _cloudId: DotyposCloudIdSchema.make("cloud"),

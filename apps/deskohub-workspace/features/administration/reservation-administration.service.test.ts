@@ -45,11 +45,14 @@ const detailsError = (message: string) =>
     message,
   });
 
-const dotyposError = (operation = "cancelReservation") =>
-  new DotyposUnavailable({ operation, reason: "server" });
+const dotyposError = (
+  operation: DotyposUnavailable["operation"] = "cancelReservation"
+) => new DotyposUnavailable({ operation, reason: "server" });
 
 const emailError = (message: string) =>
-  new EmailServiceError({ message, failureKind: "provider" });
+  new EmailServiceError(message, undefined, undefined, {
+    failureKind: "provider",
+  });
 
 /** The invoice side of a cancellation for reservations without an invoice. */
 const invoiceCancellationFakes = async () => {

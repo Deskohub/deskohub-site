@@ -1,10 +1,8 @@
-import {
-  DotyposCloudIdSchema,
-  DotyposReservationIdSchema,
-} from "@deskohub/dotypos";
+import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import type { WorkspaceReservationRow } from "@/db/schema";
 import type { WorkspaceReservationDetails } from "@/features/reservation/backend/workspace-reservation.service";
 import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import { dotyposCustomerFixture } from "./customer-directory.test-utils";
 
 /**
  * A confirmed `WorkspaceReservationDetails` fixture for administration service
@@ -25,14 +23,7 @@ export const workspaceReservationDetailsFixture = (
     dotyposReservationId: DotyposReservationIdSchema.make(
       "dotypos-reservation-1"
     ),
-    customer: {
-      id: reservation.dotyposCustomerId,
-      _cloudId: DotyposCloudIdSchema.make("cloud-1"),
-      points: null,
-      flags: "0",
-      display: true,
-      deleted: false,
-    },
+    customer: dotyposCustomerFixture(reservation.dotyposCustomerId),
     reservedFrom,
     reservedUntil,
     providerStatus: "CONFIRMED",
@@ -69,7 +60,7 @@ export const reservationSummaryRowValues = (row: WorkspaceReservationRow) =>
 export const reservationDetailRowValues = (row: WorkspaceReservationRow) =>
   [
     ...reservationSummaryRowValues(row),
-    row.authorAccountId,
+    row.authorAccountId ?? null,
     row.passId,
     row.cancellationEmailSentAt?.toString() ?? null,
     row.checkoutSessionKey,

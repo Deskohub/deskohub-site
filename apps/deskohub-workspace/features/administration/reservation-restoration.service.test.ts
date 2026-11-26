@@ -204,8 +204,7 @@ const accessIssuanceError = () =>
   });
 
 const emailError = () =>
-  new EmailServiceError({
-    message: "synthetic email failure",
+  new EmailServiceError("synthetic email failure", undefined, undefined, {
     failureKind: "provider",
   });
 

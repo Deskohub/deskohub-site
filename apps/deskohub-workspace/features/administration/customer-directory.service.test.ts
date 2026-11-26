@@ -12,6 +12,7 @@ import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { Effect, Layer, Logger, Option, Result } from "effect";
 import { AdministrationCustomerDirectory } from "./customer-directory.service";
+import { dotyposCustomerFixture } from "./customer-directory.test-utils";
 import {
   degradeProviderRead,
   failProviderRead,
@@ -21,13 +22,12 @@ import {
 const customer = (
   id: string,
   fields: Partial<DotyposCustomer> = {}
-): DotyposCustomer => ({
-  id: DotyposCustomerIdSchema.make(id),
-  firstName: "Synthetic",
-  lastName: id,
-  deleted: false,
-  ...fields,
-});
+): DotyposCustomer =>
+  dotyposCustomerFixture(DotyposCustomerIdSchema.make(id), {
+    firstName: "Synthetic",
+    lastName: id,
+    ...fields,
+  });
 
 const dotyposUnavailable = () =>
   Effect.fail(

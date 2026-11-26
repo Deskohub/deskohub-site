@@ -39,6 +39,7 @@ import {
   reservationDetailRowValues,
   reservationSummaryRowValues,
 } from "./administration-database.test-utils";
+import { dotyposCustomerFixture } from "./customer-directory.test-utils";
 import { inactiveCustomerDisplayNames } from "./customer-name";
 import { PaymentAdministrationServiceMock } from "./payment-administration.service.mock";
 import { PostHogReservationHistory } from "./posthog-reservation-history";
@@ -3533,7 +3534,7 @@ describe("AdministrationService reservation restoration", () => {
   const checkoutSessionKey = checkoutSessionKeySchema.make("restore-session");
   const cancelledRow = workspaceReservationFixture({
     id: workspaceReservationIdSchema.make("cancelled-reservation"),
-    authorAccountId: null,
+    authorAccountId: undefined,
     dotyposCustomerId: DotyposCustomerIdSchema.make("restore-customer"),
     dotyposReservationId: DotyposReservationIdSchema.make("restore-booking"),
     reservationState: "cancelled",
@@ -3709,7 +3710,8 @@ describe("AdministrationService reservation restoration", () => {
               }),
               database.layer,
               DotyposServiceMock({
-                getCustomer: (id) => Effect.succeed(Option.some({ id })),
+                getCustomer: (id) =>
+                  Effect.succeedSome(dotyposCustomerFixture(id)),
                 getReservation: (id) =>
                   held === null
                     ? Effect.fail(
@@ -3720,13 +3722,10 @@ describe("AdministrationService reservation restoration", () => {
                       )
                     : Effect.succeed(
                         Option.some({
-                          customer: {
-                            id: DotyposCustomerIdSchema.make(
-                              "restore-customer"
-                            ),
-                            _cloudId: DotyposCloudIdSchema.make("cloud"),
-                            deleted: false,
-                          },
+                          customer: dotyposCustomerFixture(
+                            cancelledRow.dotyposCustomerId,
+                            { _cloudId: DotyposCloudIdSchema.make("cloud") }
+                          ),
                           reservation: { ...booking(held), id },
                         })
                       ),
