@@ -221,4 +221,4 @@ const isVerifiableAsset = (
 const isGithubReleaseUrl = (url: URL) =>
   url.protocol === "https:" &&
   url.hostname === "github.com" &&
-  url.pathname.startsWith("/totalolage/deskohub-site/releases/");
+  /^\/(totalolage|deskohub)\/deskohub-site\/releases\//i.test(url.pathname);

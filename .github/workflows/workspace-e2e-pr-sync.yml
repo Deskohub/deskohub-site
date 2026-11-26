@@ -23,7 +23,7 @@ concurrency:
 jobs:
   validate-pr-e2e-flows:
     if: >-
-      github.repository == 'totalolage/deskohub-site' &&
+      github.repository_id == '1015951989' &&
       github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -119,7 +119,7 @@ jobs:
   sync-pr-e2e-flows:
     needs: validate-pr-e2e-flows
     if: >-
-      github.repository == 'totalolage/deskohub-site' &&
+      github.repository_id == '1015951989' &&
       github.event.action != 'synchronize' &&
       github.event.pull_request.state == 'open' &&
       github.event.pull_request.draft == false &&
