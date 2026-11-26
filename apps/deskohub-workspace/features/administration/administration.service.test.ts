@@ -14,8 +14,6 @@ import {
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { testEmailAddress } from "@deskohub/test-email";
 import { AdministrationReservationAuthor } from "@deskohub/workspace-admin-api";
-import type { SQL } from "drizzle-orm";
-import { PgDialect } from "drizzle-orm/pg-core";
 import { Cause, Effect, Exit, Layer, Option, Schema } from "effect";
 import {
   paymentAttempts,
@@ -54,17 +52,14 @@ interface StubQuery<A> extends Effect.Effect<readonly A[]> {
   readonly limit: () => StubQuery<A>;
   readonly offset: () => StubQuery<A>;
   readonly orderBy: () => StubQuery<A>;
-  readonly where: (condition?: SQL) => StubQuery<A>;
+  readonly where: () => StubQuery<A>;
 }
 
 const emptyWorkspaceDatabase = Layer.unwrap(
   Effect.promise(async () => (await makeRecordingWorkspaceDatabase()).layer)
 );
 
-const makeQuery = <A>(
-  rows: readonly A[],
-  onWhere?: (condition: SQL | undefined) => void
-): StubQuery<A> => {
+const makeQuery = <A>(rows: readonly A[]): StubQuery<A> => {
   const self = (): StubQuery<A> => query;
   const query: StubQuery<A> = Object.assign(Effect.succeed(rows), {
     from: self,
@@ -73,10 +68,7 @@ const makeQuery = <A>(
     limit: self,
     offset: self,
     orderBy: self,
-    where: (condition?: SQL) => {
-      onWhere?.(condition);
-      return query;
-    },
+    where: self,
   });
   return query;
 };
@@ -414,11 +406,8 @@ describe("AdministrationService", () => {
 
   test("filters reservations by an inclusive provider date range", async () => {
     const listInputs: unknown[] = [];
-    const rows = [[{ value: 0 }], []] as const;
-    let selectCall = 0;
-    const database = {
-      select: () => makeQuery(rows[selectCall++] ?? []),
-    };
+    const database = await makeRecordingWorkspaceDatabase();
+    database.setRows([[[0]], []]);
 
     const result = await Effect.gen(function* () {
       const administration = yield* AdministrationService;
@@ -431,7 +420,7 @@ describe("AdministrationService", () => {
         testAdministrationLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              stubWorkspaceDatabaseLayer(database),
+              database.layer,
               DotyposServiceMock({
                 listReservations: (input) =>
                   Effect.sync(() => {
@@ -491,29 +480,15 @@ describe("AdministrationService", () => {
       "late-on-time": "2026-08-10T21:50:00Z",
     };
     const earlySetup = { kind: "meeting-room", earlySetup: true } as const;
-    const rows = [
+    const database = await makeRecordingWorkspaceDatabase();
+    database.setRows([
       [
-        {
-          dotyposReservationId: "midnight-early",
-          reservationDetails: earlySetup,
-        },
-        { dotyposReservationId: "late-early", reservationDetails: earlySetup },
+        ["midnight-early", earlySetup],
+        ["late-early", earlySetup],
       ],
-      [{ value: 0 }],
+      [[0]],
       [],
-    ] as const;
-    const conditionParams: unknown[] = [];
-    let selectCall = 0;
-    const database = {
-      select: () =>
-        makeQuery(rows[selectCall++] ?? [], (condition) => {
-          if (condition) {
-            conditionParams.push(
-              ...new PgDialect().sqlToQuery(condition).params
-            );
-          }
-        }),
-    };
+    ]);
 
     const result = await Effect.gen(function* () {
       const administration = yield* AdministrationService;
@@ -526,7 +501,7 @@ describe("AdministrationService", () => {
         testAdministrationLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              stubWorkspaceDatabaseLayer(database),
+              database.layer,
               DotyposServiceMock({
                 listReservations: () =>
                   Effect.succeed(
@@ -578,6 +553,7 @@ describe("AdministrationService", () => {
       Effect.runPromise
     );
 
+    const conditionParams = database.statements.flatMap(({ params }) => params);
     expect(result.dateFilterUnavailable).toBe(false);
     expect(conditionParams).toContainEqual([
       "midnight-early",
@@ -594,11 +570,8 @@ describe("AdministrationService", () => {
 
   test("keeps single-sided provider date ranges open", async () => {
     const listInputs: unknown[] = [];
-    const rows = [[{ value: 0 }], [], [{ value: 0 }], []] as const;
-    let selectCall = 0;
-    const database = {
-      select: () => makeQuery(rows[selectCall++] ?? []),
-    };
+    const database = await makeRecordingWorkspaceDatabase();
+    database.setRows([[[0]], [], [[0]], []]);
 
     await Effect.gen(function* () {
       const administration = yield* AdministrationService;
@@ -609,7 +582,7 @@ describe("AdministrationService", () => {
         testAdministrationLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              stubWorkspaceDatabaseLayer(database),
+              database.layer,
               DotyposServiceMock({
                 listReservations: (input) =>
                   Effect.sync(() => {
@@ -2087,9 +2060,7 @@ describe("AdministrationService", () => {
           testAdministrationLayer.pipe(
             Layer.provide(
               Layer.mergeAll(
-                stubWorkspaceDatabaseLayer({
-                  select: () => makeQuery([]),
-                }),
+                emptyWorkspaceDatabase,
                 DotyposServiceMock({
                   getReservation: () => Effect.fail(failure),
                   getTables: () => Effect.succeed([]),
@@ -2159,9 +2130,7 @@ describe("AdministrationService", () => {
         testAdministrationLayer.pipe(
           Layer.provide(
             Layer.mergeAll(
-              stubWorkspaceDatabaseLayer({
-                select: () => makeQuery([]),
-              }),
+              emptyWorkspaceDatabase,
               DotyposServiceMock({
                 getReservation: () =>
                   Effect.succeed(
