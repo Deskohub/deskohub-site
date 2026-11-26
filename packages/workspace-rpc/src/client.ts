@@ -126,12 +126,11 @@ export const layerWorkspaceRpcProtocol = (
               }
 
               const unauthorized = response.status === 401;
-              return discardBody(response).pipe(
-                Effect.andThen(
-                  Effect.suspend(() =>
-                    options.invalidateAuthorization(token)
-                  ).pipe(Effect.when(Effect.succeed(unauthorized)))
-                ),
+              return Effect.suspend(() =>
+                options.invalidateAuthorization(token)
+              ).pipe(
+                Effect.when(Effect.succeed(unauthorized)),
+                Effect.andThen(discardBody(response)),
                 Effect.flatMap(() =>
                   unauthorized && canRetry && retryAuthentication
                     ? send(request, false)
@@ -219,14 +218,9 @@ const withBackendFailures = <A, R>(
   >
 ): Effect.Effect<A, BackendUnavailable | CampaignUnsubscribeRejected, R> =>
   effect.pipe(
-    Effect.catchIf(
-      (error) =>
-        error instanceof RpcClientError.RpcClientError ||
-        error instanceof InvalidCallerHeaders,
-      (error) => Effect.fail(mapClientError(error))
-    ),
-    Effect.catchCauseIf(Cause.hasDies, (cause) => {
+    Effect.catchCause((cause) => {
       if (
+        cause.reasons.length > 0 &&
         cause.reasons.every(
           (reason) =>
             Cause.isDieReason(reason) && Schema.isSchemaError(reason.defect)
@@ -239,13 +233,23 @@ const withBackendFailures = <A, R>(
       // defect channel and retain any typed failures and interruptions.
       return Effect.failCause(
         Cause.fromReasons(
-          cause.reasons.map((reason) =>
-            Cause.isDieReason(reason)
-              ? Cause.makeDieReason(
-                  new Error("Unexpected Workspace RPC defect")
-                )
-              : reason
-          )
+          cause.reasons.map((reason) => {
+            if (Cause.isDieReason(reason)) {
+              return Cause.makeDieReason(
+                new Error("Unexpected Workspace RPC defect")
+              );
+            }
+            if (Cause.isFailReason(reason)) {
+              const { error } = reason;
+              return Cause.makeFailReason(
+                error instanceof RpcClientError.RpcClientError ||
+                  error instanceof InvalidCallerHeaders
+                  ? mapClientError(error)
+                  : error
+              );
+            }
+            return reason;
+          })
         )
       );
     })

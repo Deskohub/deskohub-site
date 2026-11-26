@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Option } from "effect";
+import { Effect, Option, Result, Schema } from "effect";
 import { Headers } from "effect/http";
-import { decodeCallerHeaders, InvalidCallerHeaders } from "./caller";
+import {
+  CallerHeaders,
+  decodeCallerHeaders,
+  InvalidCallerHeaders,
+} from "./caller";
 import { correlationIdHeader } from "./correlation";
 
 const correlationId = "72823c14-d2de-4a19-94ec-8b70ad590242";
@@ -76,11 +80,19 @@ describe("caller header decoding", () => {
         "x-deskohub-user-agent",
         Buffer.from("a".repeat(2049)).toString("base64url")
       ),
-      Headers.set(headers, "x-deskohub-user-agent", "A".repeat(8196)),
     ]) {
       expect(
         await Effect.runPromise(Effect.flip(decodeCallerHeaders(invalid)))
       ).toBeInstanceOf(InvalidCallerHeaders);
     }
+  });
+
+  test("rejects an oversized encoded user-agent before decoding it", () => {
+    const decoded = Schema.decodeUnknownResult(CallerHeaders)(
+      Headers.set(headers, "x-deskohub-user-agent", "A".repeat(8196))
+    );
+    if (Result.isSuccess(decoded))
+      throw new Error("Expected an invalid wire header");
+    expect(decoded.failure.message).toContain("a length of at most 8192");
   });
 });

@@ -81,7 +81,8 @@ const runClient = <A, E>(
   > = Effect.succeed(Redacted.make("synthetic-id-token")),
   invalidateAuthorization: (
     token: Redacted.Redacted<string>
-  ) => Effect.Effect<void> = () => Effect.void
+  ) => Effect.Effect<void> = () => Effect.void,
+  signal?: AbortSignal
 ) => {
   const fetchStub = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) =>
@@ -101,7 +102,8 @@ const runClient = <A, E>(
         Layer.mergeAll(protocol, layerCallerContextClient(caller))
       ),
       Effect.provideService(FetchHttpClient.Fetch, fetchStub)
-    )
+    ),
+    { signal }
   );
 };
 
@@ -266,6 +268,39 @@ describe("Workspace RPC HTTP client", () => {
     }
   });
 
+  test("preserves campaign rejection when the exit also contains a defect", async () => {
+    const server = makeTestServer(
+      EmailPreferencesRpcs.toLayer({
+        ...handlers,
+        "EmailPreferences.openPreferences": () =>
+          Effect.failCause(
+            Cause.fromReasons([
+              Cause.makeFailReason(new CampaignUnsubscribeRejected()),
+              Cause.makeDieReason(
+                new Error("synthetic private backend detail")
+              ),
+            ])
+          ),
+      })
+    );
+    try {
+      const exit = await runClient(
+        (client) => Effect.exit(client.openPreferences(payload)),
+        (request) => server.handler(request)
+      );
+      if (Exit.isSuccess(exit)) throw new Error("Expected a failed RPC exit");
+      expect(exit.cause.reasons.find(Cause.isFailReason)?.error).toBeInstanceOf(
+        CampaignUnsubscribeRejected
+      );
+      expect(exit.cause.reasons.find(Cause.isDieReason)?.defect).toMatchObject({
+        message: "Unexpected Workspace RPC defect",
+      });
+      expect(exit.cause.reasons).toHaveLength(2);
+    } finally {
+      await server.dispose();
+    }
+  });
+
   test("maps a failed token mint without issuing an HTTP request", async () => {
     const error = new BackendUnavailable({ reason: "authorization" });
     const failure = await runClient(
@@ -345,6 +380,43 @@ describe("Workspace RPC HTTP client", () => {
     );
     expect(evicted).toEqual(["synthetic-id-token"]);
     expect(attempt).toBe(1);
+  });
+
+  test("401 eviction is committed before canceling the response body", async () => {
+    const cleanupStarted = Promise.withResolvers<void>();
+    const releaseCleanup = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const token = Redacted.make("synthetic-rejected-id");
+    const evicted: Redacted.Redacted<string>[] = [];
+    const outcome = runClient(
+      (client) => client.openPreferences(payload),
+      () =>
+        new Response(
+          new ReadableStream({
+            cancel() {
+              cleanupStarted.resolve();
+              return releaseCleanup.promise;
+            },
+          }),
+          { status: 401 }
+        ),
+      Effect.succeed(token),
+      (rejected) =>
+        Effect.sync(() => {
+          evicted.push(rejected);
+        }),
+      controller.signal
+    ).then(Exit.succeed, Exit.die);
+
+    try {
+      await cleanupStarted.promise;
+      controller.abort();
+      expect(Exit.isFailure(await outcome)).toBe(true);
+      expect(evicted).toHaveLength(1);
+      expect(evicted[0]).toBe(token);
+    } finally {
+      releaseCleanup.resolve();
+    }
   });
 
   test("evicts both rejected token identities after two one-click 401 responses", async () => {
