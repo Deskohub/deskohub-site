@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type DotyposCustomer,
   type DotyposCustomerId,
+  DotyposCustomerIdSchema,
   type DotyposService,
   DotyposUnavailable,
   dotyposIdReadBatchSize,
@@ -11,6 +12,7 @@ import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { Effect, Layer, Logger, Option, Result } from "effect";
 import { AdministrationCustomerDirectory } from "./customer-directory.service";
+import { dotyposCustomerFixture } from "./customer-directory.test-utils";
 import {
   degradeProviderRead,
   failProviderRead,
@@ -21,13 +23,11 @@ const customer = (
   id: string,
   fields: Partial<DotyposCustomer> = {}
 ): DotyposCustomer =>
-  ({
-    id,
+  dotyposCustomerFixture(DotyposCustomerIdSchema.make(id), {
     firstName: "Synthetic",
     lastName: id,
-    deleted: false,
     ...fields,
-  }) as DotyposCustomer;
+  });
 
 const dotyposUnavailable = () =>
   Effect.fail(
@@ -141,9 +141,9 @@ describe("AdministrationCustomerDirectory.find", () => {
   });
 
   const find = (id: string) =>
-    runDirectory(dotypos.layer, (d) => d.find(id as DotyposCustomerId)).then(
-      ({ result }) => Result.getOrThrow(result)
-    );
+    runDirectory(dotypos.layer, (d) =>
+      d.find(DotyposCustomerIdSchema.make(id))
+    ).then(({ result }) => Result.getOrThrow(result));
 
   test("finds an active customer, including one whose expiry is still ahead", async () => {
     expect(Option.map(await find("customer-active"), ({ id }) => id)).toEqual(
@@ -167,8 +167,8 @@ describe("AdministrationCustomerDirectory.findMany", () => {
     customer("customer-2", { deleted: true }),
     customer("customer-3"),
   ];
-  const requested = ["customer-1", "customer-2", "customer-3"].map(
-    (id) => id as DotyposCustomerId
+  const requested = ["customer-1", "customer-2", "customer-3"].map((id) =>
+    DotyposCustomerIdSchema.make(id)
   );
 
   /**
@@ -238,7 +238,10 @@ describe("AdministrationCustomerDirectory.findMany", () => {
       makeInMemoryDotypos({ customers: [customer("customer-1")] }).layer,
       (d) =>
         d.findMany(
-          ["customer-1", "customer-missing"] as DotyposCustomerId[],
+          [
+            DotyposCustomerIdSchema.make("customer-1"),
+            DotyposCustomerIdSchema.make("customer-missing"),
+          ],
           failProviderRead
         )
     );

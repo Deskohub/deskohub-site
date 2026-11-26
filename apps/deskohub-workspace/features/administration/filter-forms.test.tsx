@@ -1,7 +1,8 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos/types";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { m } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -48,14 +49,17 @@ const formEntries = (form: HTMLFormElement) =>
   ]);
 
 const getForm = (container: HTMLElement) =>
-  container.querySelector("form") as HTMLFormElement;
+  elementOf(container.querySelector("form"), HTMLFormElement);
 
 /** The canonical value a filter submits under `name`. */
 const submittedValue = (form: HTMLFormElement, name: string) =>
   new FormData(form).get(name);
 
 const getDateField = (view: ReturnType<typeof render>, name: string) =>
-  view.getByRole("combobox", { name }) as HTMLInputElement;
+  elementOf(view.getByRole("combobox", { name }), HTMLInputElement);
+
+const getSelect = (view: ReturnType<typeof render>, label: string) =>
+  elementOf(view.getByLabelText(label), HTMLSelectElement);
 
 /** The text a date field shows for a canonical date on an en-US route. */
 const shownDate = (date: string) =>
@@ -90,7 +94,9 @@ const reservationFilterForm = ({
       page: 1,
       sort: "created",
       ...query,
-      ...(customerId && { customerId: customerId as DotyposCustomerId }),
+      ...(customerId && {
+        customerId: DotyposCustomerIdSchema.make(customerId),
+      }),
     }}
     shortcuts={reservationShortcuts}
   />
@@ -277,7 +283,7 @@ describe("administration filter forms", () => {
         />
       );
       const form = getForm(view.container);
-      const channel = view.getByLabelText("Origin") as HTMLSelectElement;
+      const channel = getSelect(view, "Origin");
       typeDate(getDateField(view, "From"), "2026-07-02");
       fireEvent.change(channel, { target: { value: "ECOMMERCE" } });
       view.rerender(
@@ -304,12 +310,8 @@ describe("administration filter forms", () => {
         />
       );
 
-      expect((view.getByLabelText("Origin") as HTMLSelectElement).value).toBe(
-        "ECOMMERCE"
-      );
-      expect((view.getByLabelText("Type") as HTMLSelectElement).value).toBe(
-        "CAPTURE"
-      );
+      expect(getSelect(view, "Origin").value).toBe("ECOMMERCE");
+      expect(getSelect(view, "Type").value).toBe("CAPTURE");
       expect(formEntries(form)).toEqual([
         ["from", "2026-07-03"],
         ["to", "2026-08-03"],
@@ -334,7 +336,7 @@ describe("administration filter forms", () => {
         })
       );
       const form = getForm(view.container);
-      const type = view.getByLabelText("Reservation type") as HTMLSelectElement;
+      const type = getSelect(view, "Reservation type");
 
       expect(form.getAttribute("method")).toBe("get");
       expect(form.getAttribute("action")).toBe("/en-US/admin/reservations");
@@ -371,9 +373,7 @@ describe("administration filter forms", () => {
       });
       typeDate(getDateField(view, "Start date from"), "2026-08-05");
       view.rerender(reservationFilterForm({ ...filteredInput }));
-      expect(
-        (view.getByLabelText("Deskohub status") as HTMLSelectElement).value
-      ).toBe("cancelled");
+      expect(getSelect(view, "Deskohub status").value).toBe("cancelled");
       expect(submittedValue(form, "from")).toBe("2026-08-05");
       expect(
         view.getByRole("link", { name: "Clear" }).getAttribute("href")
@@ -383,12 +383,8 @@ describe("administration filter forms", () => {
         reservationFilterForm({ direction: "desc", sort: "created" })
       );
 
-      expect(
-        (view.getByLabelText("Deskohub status") as HTMLSelectElement).value
-      ).toBe("");
-      expect(
-        (view.getByLabelText("Reservation type") as HTMLSelectElement).value
-      ).toBe("");
+      expect(getSelect(view, "Deskohub status").value).toBe("");
+      expect(getSelect(view, "Reservation type").value).toBe("");
       expect(getDateField(view, "Start date from").value).toBe("");
       expect(form.querySelector('input[name="customerId"]')).toBeNull();
       expect(formEntries(form)).toEqual([
@@ -420,9 +416,7 @@ describe("administration filter forms", () => {
       );
 
       expect(submittedValue(form, "from")).toBe("2026-08-13");
-      expect(
-        (view.getByLabelText("Deskohub status") as HTMLSelectElement).value
-      ).toBe("");
+      expect(getSelect(view, "Deskohub status").value).toBe("");
       expect(form.querySelector('input[name="customerId"]')).toBeNull();
       expect(formEntries(form)).toEqual([
         ["status", ""],
@@ -447,9 +441,7 @@ describe("administration filter forms", () => {
         })
       );
       const form = getForm(view.container);
-      const consent = view.getByLabelText(
-        "Marketing consent"
-      ) as HTMLSelectElement;
+      const consent = getSelect(view, "Marketing consent");
 
       expect(form.getAttribute("method")).toBe("get");
       expect(form.getAttribute("action")).toBe("/en-US/admin/customers");
@@ -528,8 +520,7 @@ describe("administration filter forms", () => {
       expect(view.getByLabelText("Začátek rezervace od")).toBeDefined();
       expect(view.getByLabelText("Začátek rezervace do")).toBeDefined();
       expect(
-        (view.getByLabelText("Marketingový souhlas") as HTMLSelectElement)
-          .selectedOptions[0]?.textContent
+        getSelect(view, "Marketingový souhlas").selectedOptions[0]?.textContent
       ).toBe("Nikdy neudělen");
     });
   });
@@ -556,7 +547,7 @@ describe("administration filter forms", () => {
       </RouteLocaleProvider>
     );
 
-    const status = view.getByLabelText("Stav v Deskohubu") as HTMLSelectElement;
+    const status = getSelect(view, "Stav v Deskohubu");
     expect(status.selectedOptions[0]?.textContent).toBe("Zrušeno");
     expect(view.getByLabelText("Začátek od")).toBeDefined();
     expect(
@@ -595,7 +586,7 @@ describe("administration filter forms", () => {
     expect(
       view.getByRole("button", { name: "Zobrazit rezervace stolů" })
     ).toBeDefined();
-    const origin = view.getByLabelText("Původ") as HTMLSelectElement;
+    const origin = getSelect(view, "Původ");
     expect(origin.selectedOptions[0]?.textContent).toBe("Vše");
     expect(
       Array.from(origin.options).map(({ textContent }) => textContent)

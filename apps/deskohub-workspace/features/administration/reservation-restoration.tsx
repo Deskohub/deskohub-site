@@ -45,7 +45,7 @@ export type ReservationRestorationPreview = NonNullable<
 >;
 
 /** What the operator asks for when restoring a reservation. */
-export type ReservationRestorationRequest = ReservationRestorationInput;
+type ReservationRestorationRequest = ReservationRestorationInput;
 
 /** How a restoration ended, as the restore action reports it. */
 export type ReservationRestorationResult =

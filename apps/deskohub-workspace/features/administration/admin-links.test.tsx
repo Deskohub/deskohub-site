@@ -7,13 +7,13 @@ import {
   mock,
   test,
 } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { cleanup, render } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
-import type { AdministrationCustomerSummary } from "./administration.service";
 
 type CapturedLink = {
   readonly href: string;
@@ -68,8 +68,7 @@ test("does not prefetch live administration routes", async () => {
   const { AdminShell } = await import("./admin-shell");
   const { AdministrationCustomerTable } = await import("./customer-table");
   const { customerListQuery } = await import("./customer-list-query");
-  const customerId =
-    "customer-id" as AdministrationCustomerSummary["customerId"];
+  const customerId = DotyposCustomerIdSchema.make("customer-id");
 
   render(
     <AdminShell breadcrumb={<span>Customers</span>}>

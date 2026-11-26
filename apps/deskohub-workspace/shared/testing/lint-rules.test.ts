@@ -1231,6 +1231,8 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/passes/probe-fixture.ts",
   "apps/deskohub-workspace/features/referrals/backend/testing/probe.ts",
   "apps/deskohub-workspace/features/reservation/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/administration/probe.test.tsx",
+  "apps/deskohub-workspace/features/administration/testing/probe.ts",
   "apps/deskohub-workspace/features/reservation/backend/testing/probe.ts",
   "apps/deskohub-workspace/features/checkout/product-catalog.ts",
 ];
@@ -1240,7 +1242,6 @@ const generatedProbes = [
 ];
 // Remaining large-feature tests, fixtures, testing helpers, generated files, and E2E may still assert.
 const workspaceExemptProbes = [
-  "apps/deskohub-workspace/features/administration/testing/probe.ts",
   "apps/deskohub-workspace/e2e/probe.ts",
   "apps/deskohub-workspace/features/checkout/probe.test.ts",
   "apps/deskohub-workspace/features/checkout/probe.postgres.test.ts",

@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import type { Locale } from "@/features/i18n";
+import { isLocale } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import { AdminShell } from "./admin-shell";
 import { AdministrationLocaleSwitcher } from "./administration-locale-switcher";
@@ -10,8 +10,15 @@ if (!mountPoint) {
   throw new Error("The AdminShell browser harness root is missing.");
 }
 
+const locale = mountPoint.dataset.locale;
+if (!isLocale(locale)) {
+  throw new Error(
+    `The AdminShell browser harness locale is invalid: ${String(locale)}`
+  );
+}
+
 createRoot(mountPoint).render(
-  <RouteLocaleProvider locale={mountPoint.dataset.locale as Locale}>
+  <RouteLocaleProvider locale={locale}>
     <AdminShell
       breadcrumb={null}
       localeSwitcher={<AdministrationLocaleSwitcher />}
