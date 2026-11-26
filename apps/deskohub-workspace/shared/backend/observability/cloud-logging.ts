@@ -26,12 +26,6 @@ export interface CloudLoggingIdentity {
   readonly serviceRole: string;
   readonly revisionSha?: string | undefined;
   readonly deploymentId?: string | undefined;
-  /**
-   * The Google Cloud project whose trace store holds the spans; Cloud
-   * Logging links a record to its trace only through this project's trace
-   * name. Without it the record keeps the bare trace id.
-   */
-  readonly traceProjectId?: string | undefined;
 }
 
 const cloudLoggingSeverity = (logLevel: LogLevel.LogLevel) => {
@@ -75,31 +69,23 @@ export interface CloudLoggingRecord {
   readonly message: string;
   readonly time: string;
   readonly "logging.googleapis.com/labels": CloudLoggingLabels;
-  readonly "logging.googleapis.com/trace"?: string | undefined;
-  readonly "logging.googleapis.com/spanId"?: string | undefined;
-  readonly "logging.googleapis.com/trace_sampled"?: boolean | undefined;
   readonly trace_id?: string | undefined;
+  readonly span_id?: string | undefined;
   readonly annotations?: LogAnnotations | undefined;
   readonly details?: readonly unknown[] | undefined;
   readonly spans?: Readonly<Record<string, string>> | undefined;
   readonly cause?: string | undefined;
 }
 
-const traceFields = (
-  options: Logger.Options<unknown>,
-  traceProjectId: string | undefined
-) => {
+/**
+ * The active trace and span as plain fields, which a record's PostHog trace
+ * is found by; Cloud Trace holds no Workspace spans to link to.
+ */
+const traceFields = (options: Logger.Options<unknown>) => {
   const span = Context.getOption(options.fiber.context, Tracer.ParentSpan);
   if (Option.isNone(span)) return {};
-  const { traceId, spanId, sampled } = span.value;
-  return {
-    "logging.googleapis.com/trace": traceProjectId
-      ? `projects/${traceProjectId}/traces/${traceId}`
-      : undefined,
-    "logging.googleapis.com/spanId": spanId,
-    "logging.googleapis.com/trace_sampled": sampled,
-    trace_id: traceProjectId ? undefined : traceId,
-  };
+  const { traceId, spanId } = span.value;
+  return { trace_id: traceId, span_id: spanId };
 };
 
 const logSpanDurations = (options: Logger.Options<unknown>) => {
@@ -167,7 +153,7 @@ export const cloudLoggingRecord = (
       revision: identity.revisionSha,
       deployment_id: identity.deploymentId,
     },
-    ...traceFields(options, identity.traceProjectId),
+    ...traceFields(options),
     annotations: Object.keys(annotations).length > 0 ? annotations : undefined,
     details: details.length > 0 ? details : undefined,
     spans: logSpanDurations(options),

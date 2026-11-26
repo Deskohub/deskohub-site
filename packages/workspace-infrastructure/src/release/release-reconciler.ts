@@ -3,7 +3,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type { ImageDigest, WorkspaceWorkload } from "../config/stack-config";
-import { workspaceWebServiceId } from "../resources/workload-names";
+import { workspaceApiServiceId } from "../resources/workload-names";
 import {
   type CompatibleDeployment,
   compatibleDeploymentWindowHours,
@@ -56,7 +56,7 @@ export class ReleaseNotRestorable extends Data.TaggedError(
 }> {}
 
 /**
- * Readback does not show the intended target serving on the web service
+ * Readback does not show the intended target serving on the API service
  * and its image on every worker. The intent stays
  * pending and blocks every other release step: the caller re-applies the
  * same declaration (apply is idempotent) and settles again. There is no
@@ -81,11 +81,11 @@ export interface TrafficReadback {
   readonly trafficGeneration: number | null;
 }
 
-/** The workers that run the serving release's image beside the web service. */
-export type ReleaseWorker = Exclude<WorkspaceWorkload, "web">;
+/** The workers that run the serving release's image beside the API service. */
+export type ReleaseWorker = Exclude<WorkspaceWorkload, "api">;
 
 /**
- * The revision the web service's live template declares and the image
+ * The revision the API service's live template declares and the image
  * digest it pins, or null while the service does not exist.
  */
 export interface LiveTemplate {
@@ -99,7 +99,7 @@ export interface LiveTemplate {
 
 /** What a step needs to decide which revision template to declare. */
 export interface TemplateInput {
-  /** The web service's live template, read just before the step. */
+  /** The API service's live template, read just before the step. */
   readonly liveTemplate: LiveTemplate | null;
   /** The fingerprint of the template spec the stack declares now for an image. */
   readonly specFingerprintOf: (imageDigest: ImageDigest) => string;
@@ -209,7 +209,7 @@ export interface StageInput {
   readonly sha: GitSha;
   readonly imageDigest: ImageDigest;
   readonly origin: ReleaseOrigin;
-  /** The web service's live template, read just before the step. */
+  /** The API service's live template, read just before the step. */
   readonly liveTemplate: LiveTemplate | null;
   readonly now: DateTime.Utc;
 }
@@ -239,7 +239,7 @@ export const stage = Effect.fn("WorkspaceRelease.stage")(function* (
     sha: input.sha,
     imageDigest: input.imageDigest,
     origin: input.origin,
-    revision: `${workspaceWebServiceId}-${releaseId}`,
+    revision: `${workspaceApiServiceId}-${releaseId}`,
   };
   if (record.active === null && record.pendingApply?.operation === "promote") {
     return {
@@ -330,7 +330,7 @@ export const promote = Effect.fn("WorkspaceRelease.promote")(function* (
 export interface RestoreInput extends TrafficChangeInput, TemplateInput {}
 
 /**
- * The template the web service keeps once restore or a plain deploy drops
+ * The template the API service keeps once restore or a plain deploy drops
  * the candidate: the candidate or the materialized template, whichever
  * Cloud Run runs ready from the current spec. Otherwise `target`'s image
  * gets a template under a fresh name, since a failed or outdated revision
@@ -397,7 +397,7 @@ export const restore = Effect.fn("WorkspaceRelease.restore")(function* (
 
 export interface SettleInput {
   readonly expectedGeneration: number;
-  /** The web service's traffic. */
+  /** The API service's traffic. */
   readonly readback: TrafficReadback;
   /** Each worker's traffic; workers run the serving release's image. */
   readonly workers: Readonly<Record<ReleaseWorker, TrafficReadback>>;
@@ -493,7 +493,7 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
   return yield* new ReleaseApplyNotObserved({
     intended: pending.target.releaseId,
     servingRevision: input.readback.servingRevision,
-    observed: { web: input.readback, ...input.workers },
+    observed: { api: input.readback, ...input.workers },
   });
 });
 
@@ -506,7 +506,7 @@ export interface RefreshTemplateInput extends TemplateInput {
  * the template Cloud Run runs when that is ready and current. A staged
  * candidate is always dropped: only its own verification apply may declare
  * its name, and a plain deploy only ever finds one a failed delivery left.
- * The web service then keeps the candidate or materialized template Cloud
+ * The API service then keeps the candidate or materialized template Cloud
  * Run runs ready from the current spec, else the active release's image
  * gets a template under a fresh name.
  */
@@ -531,7 +531,7 @@ export const refreshTemplate = Effect.fn("WorkspaceRelease.refreshTemplate")(
   }
 );
 
-/** Revisions the edge may route to now: serving, pending and compatible. */
+/** Revisions traffic may route to now: serving, pending and compatible. */
 export const routableDeployments = (
   record: ReleaseRecord,
   now: DateTime.Utc

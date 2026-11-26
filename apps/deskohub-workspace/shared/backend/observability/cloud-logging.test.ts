@@ -14,7 +14,6 @@ const identity: CloudLoggingIdentity = {
   serviceRole: "web",
   revisionSha: "synthetic-sha",
   deploymentId: "workspace-00007-abc",
-  traceProjectId: "synthetic-project",
 };
 
 const privateAddress = testEmailAddress("cloud-logging-private");
@@ -109,23 +108,8 @@ describe("cloudLoggingRecord", () => {
       }).pipe(Effect.withSpan("reservation.confirm"))
     );
 
-    expect(record?.["logging.googleapis.com/trace"]).toBe(
-      `projects/synthetic-project/traces/${spanIds?.traceId}`
-    );
-    expect(record?.["logging.googleapis.com/spanId"]).toBe(spanIds?.spanId);
-    expect(record?.["logging.googleapis.com/trace_sampled"]).toBe(true);
-  });
-
-  test("keeps the bare trace id without a trace project", async () => {
-    const [record] = await recordsOf(
-      Effect.logInfo("Reservation confirmed.").pipe(
-        Effect.withSpan("reservation.confirm")
-      ),
-      { ...identity, traceProjectId: undefined }
-    );
-
-    expect(record?.["logging.googleapis.com/trace"]).toBeUndefined();
-    expect(record?.trace_id).toMatch(/^[0-9a-f]+$/);
+    expect(record?.trace_id).toBe(spanIds?.traceId);
+    expect(record?.span_id).toBe(spanIds?.spanId);
   });
 
   test("passes annotations, details and causes through the shared censor", async () => {

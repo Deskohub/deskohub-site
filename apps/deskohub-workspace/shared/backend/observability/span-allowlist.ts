@@ -16,8 +16,8 @@ import { Predicate } from "effect";
 
 /**
  * The span allowlist of the Workspace server: what a span may carry when it
- * leaves the process, to PostHog, Vercel's collector, or a loopback OTLP
- * collector alike. Instrumentations name spans after full request URLs and
+ * leaves the process, to PostHog or Vercel's collector alike.
+ * Instrumentations name spans after full request URLs and
  * record URLs, query strings and headers as attributes, and those can carry
  * sign-in tokens and personal data. The policy keeps stable operation names,
  * route templates, status, timings and an explicit attribute allowlist,
@@ -399,7 +399,7 @@ export class SpanAllowlistProcessor implements SpanProcessor {
 }
 
 /**
- * Resource attributes a span keeps at the loopback collector: the
+ * Resource attributes a span keeps in the PostHog export: the
  * Workspace's own identity and the SDK's. Host and process details the
  * resource detectors add stay in the process.
  */
@@ -485,10 +485,10 @@ const toAllowlistedSpan = (span: ReadableSpan): ReadableSpan => {
 };
 
 /**
- * The exporter of the loopback collector: every span it receives satisfies
+ * The exporter of the PostHog span export: every span it receives satisfies
  * the allowlist again, after every processor has run. The allowlist is
  * stricter than the shared log censorship, which would also mask the hosts,
- * database names and operation names the collector is meant to keep.
+ * database names and operation names the export is meant to keep.
  */
 export const createAllowlistedSpanExporter = (
   exporter: SpanExporter

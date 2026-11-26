@@ -18,6 +18,7 @@ import {
   createIdentifiedTracingLive,
   createPostHogLoggerProvider,
   createWorkspaceOTelRegistration,
+  exportsPostHogTraces,
   flushLoggerProvider,
 } from "./telemetry-sinks";
 import { WorkspaceClockLive } from "./workspace-clock";
@@ -25,17 +26,26 @@ import { WorkspaceClockLive } from "./workspace-clock";
 /** The build and rollout this process serves, whichever host runs it. */
 const workspaceDeploymentIdentity = () => resolveDeploymentIdentity(env);
 
+/** Where and for which deployments this process exports its spans. */
+const workspaceTraceExport = () => ({
+  deploymentEnvironment: env.VERCEL_ENV,
+  posthogHost: env.POSTHOG_INGEST_HOST,
+  posthogProjectToken: env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN,
+  tracesExport: env.POSTHOG_TRACES_EXPORT,
+});
+
 /**
- * `registerOTel` options for this process: Vercel's by default; on a
- * container host the span allowlist and the loopback collector when
- * `WORKSPACE_OTLP_ENDPOINT` names one, and no automatic exporter.
+ * `registerOTel` options for this process: the span allowlist and the
+ * PostHog trace export when `POSTHOG_TRACES_EXPORT` includes the deployment,
+ * on any host; otherwise Vercel's automatic exporters, or on a container
+ * host no exporter.
  */
 export const workspaceOTelRegistration = () => {
   const identity = workspaceDeploymentIdentity();
   return createWorkspaceOTelRegistration({
+    ...workspaceTraceExport(),
     serviceVersion: identity.revisionSha,
     deploymentId: identity.deploymentId,
-    otlpEndpoint: env.WORKSPACE_OTLP_ENDPOINT,
     automaticExport: env.WORKSPACE_RUNTIME_HOST !== "container",
   });
 };
@@ -48,7 +58,6 @@ const workspaceCloudLoggingIdentity = (): CloudLoggingIdentity => {
     serviceRole: env.WORKSPACE_SERVICE_ROLE ?? defaultServiceRole,
     revisionSha: identity.revisionSha,
     deploymentId: identity.deploymentId,
-    traceProjectId: env.WORKSPACE_TRACE_PROJECT_ID,
   };
 };
 
@@ -233,24 +242,25 @@ export const flushWorkspaceTraces = (): Promise<void> => {
 };
 
 /**
- * Whether this process exports its own spans, to the loopback collector
- * `WORKSPACE_OTLP_ENDPOINT` names. On Vercel `registerOTel`'s automatic
- * exporters send them and the Workspace never flushes them.
+ * Whether this process exports its own spans, to PostHog. Otherwise
+ * `registerOTel`'s automatic exporters, if any, send them and the Workspace
+ * never flushes them.
  */
 export const exportsWorkspaceTraces = () =>
-  env.WORKSPACE_OTLP_ENDPOINT !== undefined;
+  exportsPostHogTraces(workspaceTraceExport());
 
 class TraceFlushError extends Data.TaggedError("TraceFlushError")<{
   readonly cause: unknown;
 }> {}
 
-/** The post-response deadline of the loopback trace flush. */
+/** The post-response deadline of the PostHog trace flush. */
 const traceFlushTimeoutMs = 2_000;
 
 /**
- * Exports the spans the process batches for its loopback collector within
- * the post-response deadline, so a container that idles after the response
- * still sends them. A no-op without the collector, as on Vercel. Never fails.
+ * Exports the spans the process batches for PostHog within the
+ * post-response deadline, so a container that idles or a function that
+ * freezes after the response still sends them. A no-op when the process
+ * doesn't export its spans. Never fails.
  */
 export const flushWorkspaceTracesAfterResponse: Effect.Effect<void> =
   Effect.suspend(() =>

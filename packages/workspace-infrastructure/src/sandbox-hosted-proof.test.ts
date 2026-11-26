@@ -96,13 +96,15 @@ const proofPhases = [
   "foundation",
   "images",
   "deliver-v1",
-  "edge-readback",
+  "private-access",
+  "rpc-probe",
+  "worker-probe",
   "deliver-v2",
   "drift",
   "interrupt-recover",
   "state-snapshot-restore",
   "restore-v1",
-  "edge-privacy",
+  "telemetry-privacy",
 ];
 const teardownPhases = ["stack-destroy", "post-destroy-inventory"];
 const teardownCondition =
@@ -215,7 +217,7 @@ describe("sandbox workflow modes", () => {
     expect(workflowText).not.toContain("GOOGLE_ACCESS_TOKEN_EXPIRES_AT");
   });
 
-  test("sets up no Terraform: Alchemy owns the edge", () => {
+  test("sets up no Terraform: Alchemy owns the stack", () => {
     expect(
       steps.filter(
         (step) =>
@@ -241,8 +243,12 @@ describe("sandbox workflow modes", () => {
     const authSteps = steps.filter((step) =>
       step.uses?.startsWith("google-github-actions/auth@")
     );
-    expect(authSteps).toHaveLength(2);
-    expect(authSteps[0]?.with?.token_format).toBeUndefined();
+    expect(authSteps.map((step) => step.with?.token_format)).toEqual([
+      undefined,
+      "access_token",
+      "id_token",
+      "id_token",
+    ]);
     const alchemy = authSteps[1];
     expect(alchemy?.id).toBe("alchemy-auth");
     expect(alchemy?.with).toMatchObject({
@@ -257,6 +263,47 @@ describe("sandbox workflow modes", () => {
     ]) {
       expect(stepFor(phase)?.env?.GOOGLE_ACCESS_TOKEN).toBe(
         expression("steps.alchemy-auth.outputs.access_token")
+      );
+    }
+  });
+
+  test("mints a fresh workspace-api ID token for each step that calls it", () => {
+    const deliver = indexOf((step) => phaseOf(step) === "deliver-v1");
+    expect(steps[deliver]?.id).toBe("deliver-v1");
+    const callers = [
+      ["rpc-probe", "api-id-token"],
+      ["restore-v1", "api-id-token-restore"],
+    ] as const;
+    for (const [phase, id] of callers) {
+      const mint = indexOf((step) => step.id === id);
+      const caller = indexOf((step) => phaseOf(step) === phase);
+      expect({ id, after: mint > deliver }).toEqual({ id, after: true });
+      // Minted right before its caller, so the hour starts there.
+      expect({ id, next: steps[mint + 1] === steps[caller] }).toEqual({
+        id,
+        next: true,
+      });
+      expect(steps[mint]?.if).toBe("inputs.mode == 'hosted-proof'");
+      expect(steps[mint]?.with).toMatchObject({
+        service_account: expression("vars.GCP_SANDBOX_DEPLOY_SA"),
+        token_format: "id_token",
+        id_token_audience: expression("steps.deliver-v1.outputs.api_url"),
+        create_credentials_file: false,
+      });
+      expect(steps[caller]?.env?.SANDBOX_API_ID_TOKEN).toBe(
+        expression(`steps.${id}.outputs.id_token`)
+      );
+    }
+    // No other step sees an ID token.
+    expect(
+      steps.filter((step) => step.env?.SANDBOX_API_ID_TOKEN !== undefined)
+    ).toHaveLength(callers.length);
+  });
+
+  test("wires no collector or OTLP export into the proof", () => {
+    for (const text of [workflowText, runnerScript]) {
+      expect(text).not.toMatch(
+        /WORKSPACE_OTLP_ENDPOINT|WORKSPACE_TRACE_PROJECT_ID|collector|workspace-web\b/
       );
     }
   });
@@ -366,19 +413,22 @@ describe("sandbox proof runner", () => {
       "PROBE_BUILD_VERSION=v1",
       "PROBE_BUILD_VERSION=v2",
       "PROBE_BUILD_VERSION=v3",
-      "collector.Dockerfile",
       "bun run release deliver --sha",
       "bun run release status",
       "bun run release plan",
-      "bun scripts/sandbox-edge-declaration.ts",
-      "gcloud compute addresses describe workspace-sandbox-edge",
-      "gcloud compute forwarding-rules describe workspace-sandbox-http",
-      "gcloud compute target-http-proxies describe workspace-sandbox-edge-http",
-      "gcloud compute backend-services describe workspace-sandbox-dynamic",
-      "gcloud compute backend-services describe workspace-sandbox-static",
-      "gcloud compute security-policies describe workspace-sandbox-edge",
-      "http://198.51.100.10/healthz",
-      "http://198.51.100.10/robots.txt",
+      "gcloud run services describe workspace-api --project=deskohub-workspace-sandbox --region=europe-west1 --format=json",
+      "gcloud run services describe workspace-scheduler-worker --project=deskohub-workspace-sandbox --region=europe-west1 --format=json",
+      "/health",
+      "/rpc",
+      "gcloud run services get-iam-policy workspace-api",
+      "Authorization:\\ Bearer\\ garbage",
+      "bun scripts/sandbox-rpc-probe.ts --url https://workspace-api-",
+      "--expect-version v1",
+      "gcloud tasks queues describe workspace-paid-fulfillment-r0-1",
+      "gcloud tasks create-http-task --queue=workspace-paid-fulfillment-r0-1",
+      "gcloud logging read",
+      "gcloud scheduler jobs run workspace-proof-tick-r0-1",
+      "gcloud logging read",
       "bun run release deliver --sha",
       "gcloud artifacts repositories update workspace",
       "bun scripts/sandbox-locked-stack.ts drift",
@@ -395,15 +445,12 @@ describe("sandbox proof runner", () => {
       "bun scripts/sandbox-locked-stack.ts state-restore",
       "bun run release deploy",
       "bun run release restore --release-id",
-      "https://logging.googleapis.com/v2/projects/deskohub-workspace-sandbox/exclusions",
-      "gcloud projects get-ancestors",
-      "https://logging.googleapis.com/v2/projects/deskohub-workspace-sandbox/sinks",
-      "http://198.51.100.10/probe/trace",
-      "gcloud logging read",
+      "bun scripts/sandbox-rpc-probe.ts --url https://workspace-api-",
+      "sleep 90",
+      'log_id\\(\\"run.googleapis.com/requests\\"\\)',
+      '\\"<marker>\\"\\ OR\\ textPayload:',
       "https://cloudtrace.googleapis.com/v1/projects/deskohub-workspace-sandbox/traces/",
-      "token=synthetic-probe-marker",
-      "gcloud logging read",
-      "cloudtrace.googleapis.com",
+      "https://cloudtrace.googleapis.com/v1/projects/deskohub-workspace-sandbox/traces\\?view=COMPLETE\\&pageSize=100",
       "bun scripts/sandbox-locked-stack.ts destroy",
       "gcloud storage rm gs://deskohub-workspace-sandbox-workspace-state/workspace-release-record.sandbox.json",
       "gcloud storage rm gs://deskohub-workspace-sandbox-workspace-state/sandbox-proof/run.env",
@@ -411,6 +458,10 @@ describe("sandbox proof runner", () => {
       "CLOUDSDK_BILLING_QUOTA_PROJECT=deskohub-workspace-sandbox gcloud billing projects describe",
     ]);
     expect(output).not.toContain("::error::");
+    // Outside GitHub Actions nothing shows the marker, not even a mask
+    // command; every traced command shows it redacted.
+    expect(output).not.toMatch(/sandbox-marker-[0-9a-f]/);
+    expect(output).toContain("<marker>");
   });
 
   test("dry-runs cleanup-only as teardown and inventory alone", () => {
@@ -450,14 +501,8 @@ describe("sandbox proof stack config", () => {
     );
     expect(config.secrets).toEqual([]);
     expect(config.schedulesEnabled).toBe(false);
-    // The plain-HTTP proof edge, allowed in the approved sandbox only.
-    expect(config.edge).toEqual({
-      domains: [],
-      enableHttps: false,
-      staticCdnEnabled: false,
-      wafPreview: true,
-      authRateLimitPerMinute: 120,
-    });
+    // IAM-private Cloud Run: no HTTP edge.
+    expect("edge" in config).toBe(false);
     expect(
       JSON.parse(await Effect.runPromise(sandboxProofStackConfig(identity)))
     ).toMatchObject({ projectNumber: "759037106024", stage: "sandbox" });
@@ -514,8 +559,9 @@ describe("writer-locked stack actions", () => {
       operation: "plan",
       mutates: false,
     });
+    // Its own operation lets it drain a stack a pre-rename record names.
     expect(lockedStackActions.destroy).toMatchObject({
-      operation: "deploy",
+      operation: "destroy",
       mutates: true,
     });
     expect(isLockedStackAction("destroy")).toBe(true);

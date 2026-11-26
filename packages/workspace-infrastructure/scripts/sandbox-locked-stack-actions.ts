@@ -49,7 +49,7 @@ export const lockedStackActions = {
   },
   /** Destroy exactly this stage's stack. */
   destroy: {
-    operation: "deploy",
+    operation: "destroy",
     mutates: true,
     acceptedExitCodes: [0],
     program: "alchemy",

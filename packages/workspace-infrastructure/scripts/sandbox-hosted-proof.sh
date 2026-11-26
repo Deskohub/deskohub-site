@@ -10,9 +10,12 @@
 # curl or the release command. Proof state between steps lives in
 # SANDBOX_PROOF_DIR (uploaded as a workflow artifact); it never holds a
 # token. Every Alchemy write goes through the release command or the
-# writer-locked helper, so this runner is never a second stack writer. The
-# edge is part of the same stack: the first release declares it, the
-# runner reads its outputs back, and the stack destroy removes it.
+# writer-locked helper, so this runner is never a second stack writer.
+# The three Cloud Run services are IAM-private: the runner reaches them
+# only with a workspace-api ID token the workflow mints, Cloud Tasks and
+# Cloud Scheduler OIDC, or Cloud Run readback. The run's synthetic marker
+# and that token live in SANDBOX_PROOF_PRIVATE_DIR, outside the uploaded
+# proof directory, and are never printed.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,13 +27,15 @@ hosted_proof_phases=(
   foundation
   images
   deliver-v1
-  edge-readback
+  private-access
+  rpc-probe
+  worker-probe
   deliver-v2
   drift
   interrupt-recover
   state-snapshot-restore
   restore-v1
-  edge-privacy
+  telemetry-privacy
   stack-destroy
   post-destroy-inventory
 )
@@ -68,11 +73,22 @@ if $dry_run; then
   : "${GITHUB_RUN_ID:=0}"
   : "${GITHUB_RUN_ATTEMPT:=1}"
   : "${SANDBOX_PROOF_DIR:=$(mktemp -d)}"
+  : "${SANDBOX_PROOF_PRIVATE_DIR:=$(mktemp -d)}"
 fi
 
 : "${SANDBOX_PROOF_DIR:=${RUNNER_TEMP:-/tmp}/sandbox-proof}"
 proof_dir="$SANDBOX_PROOF_DIR"
 mkdir -p "$proof_dir"
+# The run's marker and the workspace-api ID token: never in the proof
+# directory, which the workflow uploads as an artifact.
+: "${SANDBOX_PROOF_PRIVATE_DIR:=${RUNNER_TEMP:-/tmp}/sandbox-proof-private}"
+private_dir="$SANDBOX_PROOF_PRIVATE_DIR"
+marker_file="${private_dir}/marker"
+id_token_file="${private_dir}/api-id-token"
+task_body_file="${private_dir}/task-body.json"
+# The token file and task body go when the runner exits; the marker stays
+# for later steps.
+trap 'rm -f "$id_token_file" "$task_body_file"' EXIT
 
 project_id="${GCP_SANDBOX_PROJECT_ID:-}"
 # Alchemy pairs GOOGLE_ACCESS_TOKEN with this project.
@@ -83,30 +99,36 @@ stage=sandbox
 stack_prefix="DeskohubWorkspace/${stage}/"
 lease_object="${stack_prefix}__lease__.json"
 record_object="workspace-release-record.${stage}.json"
-web_service=workspace-web
-release_services=(workspace-web workspace-tasks-worker workspace-scheduler-worker)
+api_service=workspace-api
+tasks_worker_service=workspace-tasks-worker
+scheduler_worker_service=workspace-scheduler-worker
+release_services=("$api_service" "$tasks_worker_service" "$scheduler_worker_service")
 artifact_repository=workspace
 probe_image=workspace
-collector_image=workspace-otel-collector
 mobile_updates_bucket="${project_id}-mobile-updates"
-edge_exclusion="workspace-${stage}-token-route-requests"
-edge_security_policy="workspace-${stage}-edge"
-edge_backend_services=("workspace-${stage}-dynamic" "workspace-${stage}-static")
-# The auth throttle's requests per minute: the stack config's default.
-edge_auth_rate_limit=120
-marker=synthetic-probe-marker
-# Token-bearing routes the privacy phase sends the marker to.
-token_routes=(/app/auth/callback /api/auth/magic-link/verify /marketing-preferences/access)
-# Request sources that record the full URL of a token-route request.
-token_request_sources=('resource.type="http_load_balancer"' 'resource.type="cloud_run_revision"' 'log_id("run.googleapis.com/requests")')
-dry_run_exclusion_filter='(resource.type="http_load_balancer" OR (resource.type="cloud_run_revision" AND log_id("run.googleapis.com/requests"))) AND httpRequest.requestUrl=~"^https?://[^/]+(/app/auth/callback|/api/auth/magic-link/verify|/marketing-preferences/access)([/?#]|$)"'
+# The stack grants these roles/run.invoker on workspace-api.
+frontend_invoker="workspace-frontend-preview@${project_id}.iam.gserviceaccount.com"
+tasks_invoker="workspace-tasks-invoker@${project_id}.iam.gserviceaccount.com"
+scheduler_invoker="workspace-scheduler-invoker@${project_id}.iam.gserviceaccount.com"
+# The worker probe's queue contract and the sandbox-only paused job, each
+# suffixed with the run's queue suffix.
+proof_queue=workspace-paid-fulfillment
+proof_queue_path=/api/queues/workspace/paid-fulfillment
+proof_schedule_job=workspace-proof-tick
+proof_schedule_path=/api/cron/workspace/proof-tick
+rpc_content_type=application/vnd.effect.rpc+schema-binary
+# Set by load_marker; trace() redacts it.
+marker=""
+# Resource classes the IAM-private topology never declares: none may exist
+# before the proof or after its teardown.
+edge_classes=(forwarding-rules addresses backend-services url-maps target-http-proxies
+  target-https-proxies network-endpoint-groups security-policies ssl-certificates logging-exclusions
+  sink-exclusions)
 declared_repository_description="Workspace container images, deployed by digest."
 plan_log="${proof_dir}/plan.log"
-# How long the edge may take to serve a version: a new global load
-# balancer's first propagation, then a revision change on a live one. Each
-# fits inside its workflow step's limit.
-: "${SANDBOX_FIRST_SERVING_TIMEOUT_SECONDS:=1080}"
-: "${SANDBOX_SERVING_TIMEOUT_SECONDS:=600}"
+# How long a delivered release may take to report every service Ready with
+# all its traffic on the new revisions.
+: "${SANDBOX_SERVING_TIMEOUT_SECONDS:=300}"
 
 # ---------------------------------------------------------------- helpers
 
@@ -121,6 +143,7 @@ trace() {
   local line="+"
   local arg
   for arg in "$@"; do line+=" $(printf '%q' "$arg")"; done
+  [[ -z "$marker" ]] || line="${line//"$marker"/<marker>}"
   echo "$line" >&2
 }
 
@@ -249,6 +272,49 @@ project_sink_rows() {
   $dry_run || jq -r '.[] | [.name, .destination] | @tsv' <<<"$sinks"
 }
 
+# The names of one Compute collection in every region, zone and global
+# scope of the project, from its aggregatedList pages. gcloud drops a
+# response's top-level `unreachables` and exits 0, so the raw pages are
+# read: partial success is not requested, and any warning but an empty
+# page's, at page or scope level, any unreachable scope, a malformed page
+# or more than 20 pages fails rather than reading as empty.
+compute_names() {
+  local collection="$1" body url page_token="" pages="" count=0
+  while true; do
+    url="https://compute.googleapis.com/compute/v1/projects/${project_id}/aggregated/${collection}?maxResults=500&returnPartialSuccess=false"
+    [[ -z "$page_token" ]] || url+="&pageToken=${page_token}"
+    body="$(google_get '{"items":{}}' "$url")" || return 1
+    jq -se --arg collection "$collection" '
+      # A warning, when present at all, must be NO_RESULTS_ON_PAGE.
+      def quiet: (has("warning") | not)
+        or (.warning | type == "object" and .code == "NO_RESULTS_ON_PAGE");
+      length == 1 and (.[0] | type == "object"
+        and ((has("items") | not) or (.items | type == "object"))
+        and ((has("unreachables") | not) or (.unreachables == []))
+        and ((has("nextPageToken") | not) or (.nextPageToken | type == "string"))
+        and quiet
+        and all((.items // {})[]; type == "object"
+          and quiet
+          and ((has($collection) | not) or (.[$collection] | type == "array"
+            and all(.[]; type == "object" and (.name | type == "string"))))))' \
+      >/dev/null 2>&1 <<<"$body" || return 1
+    pages+="${body}"$'\n'
+    page_token="$(jq -r '.nextPageToken // empty | @uri' <<<"$body")" || return 1
+    [[ -n "$page_token" ]] || break
+    count=$((count + 1))
+    ((count < 20)) || return 1
+  done
+  $dry_run || jq -r --arg collection "$collection" '(.items // {})[] | (.[$collection] // [])[] | .name' <<<"$pages"
+}
+
+# Every exclusion on any of the project's sinks as `sink<TAB>exclusion`
+# rows: the project exclusions API covers only _Default.
+project_sink_exclusion_rows() {
+  local sinks
+  sinks="$(log_sinks_json "projects/${project_id}")" || return 1
+  $dry_run || jq -r '.[] | .name as $sink | (.exclusions // [])[] | [$sink, .name] | @tsv' <<<"$sinks"
+}
+
 project_exclusion_names() {
   local exclusions
   exclusions="$(project_exclusions_json)" || return 1
@@ -296,7 +362,7 @@ ensure_alchemy_token() {
     config="$(mktemp -d)"
     GOOGLE_ACCESS_TOKEN="$(CLOUDSDK_CONFIG="$config" gcloud auth print-access-token)"
     rm -rf "${config:?}"
-    echo "::add-mask::${GOOGLE_ACCESS_TOKEN}"
+    [[ "${GITHUB_ACTIONS:-}" != true ]] || echo "::add-mask::${GOOGLE_ACCESS_TOKEN}"
     expires_at="$(token_expiry "$GOOGLE_ACCESS_TOKEN")" ||
       fail "the minted access token's lifetime is unreadable"
     now="$(date +%s)"
@@ -310,9 +376,8 @@ ensure_alchemy_token() {
 stack_config_file="${proof_dir}/stack-config.json"
 digests_file="${proof_dir}/digests.env"
 releases_file="${proof_dir}/releases.env"
-edge_file="${proof_dir}/edge.env"
-edge_outputs_file="${proof_dir}/edge-outputs.json"
-exclusion_filter_file="${proof_dir}/edge-exclusion-filter.txt"
+services_file="${proof_dir}/services.env"
+telemetry_file="${proof_dir}/telemetry.env"
 # The proof run's disposable queue ID suffix, kept in the state bucket
 # outside the stack prefix so a later cleanup-only run declares the same
 # queues. Removed with the stack.
@@ -363,7 +428,6 @@ record_value() {
 # The sandbox stack config, generated from the verified identity and decoded
 # with the package's own schema before any use.
 write_stack_config() {
-  local collector_digest="${1:-}"
   load_proof_run_file
   trace bun scripts/sandbox-stack-config.ts
   (
@@ -372,7 +436,6 @@ write_stack_config() {
       SANDBOX_PROJECT_NUMBER="${SANDBOX_EXPECTED_PROJECT_NUMBER}" \
       SANDBOX_REGION="$region" \
       SANDBOX_STATE_BUCKET="$state_bucket" \
-      SANDBOX_TELEMETRY_COLLECTOR_DIGEST="$collector_digest" \
       SANDBOX_QUEUE_SUFFIX="${QUEUE_SUFFIX:-}" \
       SANDBOX_STACK_CONFIG_DRY_RUN="$dry_run" \
       bun scripts/sandbox-stack-config.ts
@@ -381,10 +444,7 @@ write_stack_config() {
 }
 
 use_stack_config() {
-  [[ -f "$stack_config_file" ]] || {
-    load_env_file "$digests_file"
-    write_stack_config "${COLLECTOR_DIGEST:-}"
-  }
+  [[ -f "$stack_config_file" ]] || write_stack_config
   WORKSPACE_STACK_CONFIG="$(cat "$stack_config_file")"
   export WORKSPACE_STACK_CONFIG
 }
@@ -450,41 +510,200 @@ expect_no_op_plan() {
     fail "release plan printed no recognizable summary"
 }
 
-edge_ip() {
-  load_env_file "$edge_file"
+# Lowercase hex from the kernel's random source: $1 bytes.
+random_hex() {
+  od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'
+}
+
+# The private directory: outside the uploaded proof directory, readable by
+# the runner's user alone.
+ensure_private_dir() {
+  local private proof
+  private="$(realpath -m "$private_dir")"
+  proof="$(realpath -m "$proof_dir")"
+  [[ "${private}/" != "${proof}/"* ]] ||
+    fail "SANDBOX_PROOF_PRIVATE_DIR must lie outside the uploaded proof directory"
+  (umask 077 && mkdir -p "$private_dir")
+  chmod 700 "$private_dir"
+}
+
+# The run's synthetic marker, kept in the private directory. Only the
+# primary RPC probe creates it (`load_marker create`), first discarding any
+# earlier attempt's record; its digest is recorded with the probe's trace
+# and start only once the probe passed. Every later phase must find that
+# very marker, so a lost marker, or one from a failed attempt, can never
+# stand in for the one the RPC received. Masked in a GitHub job log;
+# trace() redacts it and no check prints it.
+load_marker() {
+  ensure_private_dir
+  if [[ "${1:-}" == create ]]; then
+    rm -f "$telemetry_file"
+    unset MARKER_SHA256 PROBE_STARTED_AT PROBE_TRACE_ID
+    (umask 077 && printf 'sandbox-marker-%s' "$(random_hex 16)" >"$marker_file")
+  fi
+  [[ -s "$marker_file" ]] || fail "the run's marker is missing; only the rpc-probe phase creates it"
+  marker="$(cat "$marker_file")"
+  [[ "$marker" =~ ^sandbox-marker-[0-9a-f]{32}$ ]] || fail "the private marker file is malformed"
+  [[ "${GITHUB_ACTIONS:-}" != true ]] || echo "::add-mask::${marker}"
+  [[ "${1:-}" != create ]] || return 0
+  load_env_file "$telemetry_file"
+  [[ -n "${MARKER_SHA256:-}" && "$(marker_sha256)" == "$MARKER_SHA256" ]] ||
+    fail "the private marker is not the one the rpc-probe phase sent"
+}
+
+# Lowercase hex SHA-256 of the marker's UTF-8 bytes, as the probe logs it.
+marker_sha256() {
+  printf '%s' "$marker" | sha256sum | cut -d' ' -f1
+}
+
+# A JWT's claims, decoded from its base64url payload; fails unless they
+# are one JSON object.
+jwt_claims() {
+  local payload
+  payload="$(cut -d. -f2 <"$1" | tr '_-' '/+')"
+  while ((${#payload} % 4)); do payload+="="; done
+  base64 -d <<<"$payload" 2>/dev/null | jq -ce 'select(type == "object")'
+}
+
+# The workspace-api ID token the workflow minted for this step
+# (google-github-actions/auth `token_format: id_token`), moved from the
+# environment into the private token file before any command runs, and
+# removed when the runner exits. Its audience must be the recorded
+# workspace-api URL and it must outlive the given seconds: an ID token
+# lives one hour and is never refreshed here, so a later step gets its own.
+load_id_token() {
+  local min_seconds="$1" url="$2" claims expires now
+  ensure_private_dir
   if $dry_run; then
-    echo "${EDGE_IP:-198.51.100.10}"
-  else
-    [[ -n "${EDGE_IP:-}" ]] || fail "the edge has no recorded IP address"
-    echo "$EDGE_IP"
+    echo "+ (SANDBOX_API_ID_TOKEN to the private token file; audience ${url}; at least ${min_seconds} s left)" >&2
+    return
+  fi
+  [[ -n "${SANDBOX_API_ID_TOKEN:-}" ]] ||
+    fail "no workspace-api ID token: the workflow mints one with token_format: id_token before this step"
+  (umask 077 && printf '%s' "$SANDBOX_API_ID_TOKEN" >"$id_token_file")
+  unset SANDBOX_API_ID_TOKEN
+  claims="$(jwt_claims "$id_token_file")" || fail "the workspace-api ID token is not a readable JWT"
+  [[ "$(jq -r '.aud // empty' <<<"$claims")" == "$url" ]] ||
+    fail "the ID token's audience is not the workspace-api URL ${url}"
+  expires="$(jq -r '.exp // empty' <<<"$claims")"
+  now="$(date +%s)"
+  if ! [[ "$expires" =~ ^[0-9]+$ ]] || ((expires - now < min_seconds)); then
+    fail "the workspace-api ID token expires in under ${min_seconds} s; this step needs a freshly minted one"
   fi
 }
 
-# Every one of several requests through the load balancer must report the
-# expected probe build: proof that it serves 100% of untagged traffic.
-# The wait is bounded by time, not by a count of attempts: the given
-# seconds, else the serving timeout.
-expect_serving() {
-  local version="$1" timeout="${2:-$SANDBOX_SERVING_TIMEOUT_SECONDS}"
-  local ip attempt=0 served=0 body deadline=$((SECONDS + timeout))
-  ip="$(edge_ip)"
-  trace curl -fsS "http://${ip}/healthz" "(x10, until version=${version})"
-  $dry_run && return 0
-  while ((SECONDS < deadline)); do
-    attempt=$((attempt + 1))
-    served=0
-    for _ in $(seq 1 10); do
-      body="$(curl -fsS --max-time 10 "http://${ip}/healthz" 2>/dev/null || true)"
-      [[ "$(jq -r '.version // empty' <<<"$body" 2>/dev/null)" == "$version" ]] &&
-        served=$((served + 1))
-    done
-    ((served == 10)) && {
-      echo "edge serves ${version} on 10/10 requests (attempt ${attempt})"
-      return 0
-    }
-    sleep 10
+# The proof record key of each release service's URL.
+service_url_key() {
+  case "$1" in
+    "$api_service") echo API_URL ;;
+    "$tasks_worker_service") echo TASKS_WORKER_URL ;;
+    "$scheduler_worker_service") echo SCHEDULER_WORKER_URL ;;
+    *) fail "${1} is no release service" ;;
+  esac
+}
+
+# Each release service's run.app URL, read back after the first deliver.
+# The workspace-api URL is the step's `api_url` output: the audience every
+# later ID token is minted for.
+# The stack aims queues, jobs and ID-token audiences at each service's
+# deterministic URL (https://<service>-<project number>.<region>.run.app);
+# the service must report it among its URLs.
+record_service_urls() {
+  local service url described
+  for service in "${release_services[@]}"; do
+    url="https://${service}-${SANDBOX_EXPECTED_PROJECT_NUMBER}.${region}.run.app"
+    described="$(capture "{\"status\":{\"url\":\"${url}\"}}" gcloud run services describe "$service" \
+      --project="$project_id" --region="$region" --format=json)" ||
+      fail "the URLs of ${service} are unreadable"
+    jq -e --arg url "$url" '.status.url == $url
+      or ((.metadata.annotations["run.googleapis.com/urls"] // "[]") | fromjson | index($url)) != null' \
+      >/dev/null 2>&1 <<<"$described" || fail "${service} does not report its deterministic URL ${url}"
+    record_value "$services_file" "$(service_url_key "$service")" "$url"
   done
-  fail "the edge did not serve ${version} on every request within ${timeout} s (${served}/10)"
+  load_env_file "$services_file"
+  [[ -z "${GITHUB_OUTPUT:-}" ]] || echo "api_url=${API_URL}" >>"$GITHUB_OUTPUT"
+}
+
+service_url() {
+  local key
+  key="$(service_url_key "$1")"
+  load_env_file "$services_file"
+  if [[ -z "${!key:-}" ]]; then
+    $dry_run || fail "no recorded URL for ${1}; deliver-v1 records them"
+    echo "https://${1}-759037106024.${region}.run.app"
+    return
+  fi
+  echo "${!key}"
+}
+
+# Whether one service is Ready and sends all its traffic to revisions
+# running the given image digest. Every read must succeed.
+service_serves() {
+  local service="$1" digest="$2" described revision image
+  local -a revisions
+  described="$(gcloud run services describe "$service" --project="$project_id" \
+    --region="$region" --format=json 2>/dev/null)" || return 1
+  jq -e 'any(.status.conditions[]?; .type == "Ready" and .status == "True")
+    and .status.observedGeneration != null
+    and .status.observedGeneration == .metadata.generation
+    and ([.status.traffic[]? | .percent // 0] | add) == 100
+    and all(.status.traffic[]? | select((.percent // 0) > 0); (.revisionName // "") != "")' \
+    >/dev/null 2>&1 <<<"$described" || return 1
+  mapfile -t revisions < <(jq -r '.status.traffic[] | select((.percent // 0) > 0) | .revisionName' <<<"$described")
+  ((${#revisions[@]} > 0)) || return 1
+  for revision in "${revisions[@]}"; do
+    image="$(gcloud run revisions describe "$revision" --project="$project_id" \
+      --region="$region" --format='value(status.imageDigest)' 2>/dev/null)" || return 1
+    [[ "$image" == "$digest" || "$image" == *"@${digest}" ]] || return 1
+  done
+}
+
+# Cloud Run readback of a release: every release service is Ready and
+# sends 100% of its traffic to revisions of the given probe build. The
+# services are IAM-private, so this needs no request through them; the
+# RPC probe proves the data path with an ID token where one is minted.
+expect_released() {
+  local version="$1" key digest service deadline
+  key="PROBE_${version^^}_DIGEST"
+  load_env_file "$digests_file"
+  digest="${!key:-}"
+  if $dry_run; then
+    for service in "${release_services[@]}"; do
+      trace gcloud run services describe "$service" --project="$project_id" --region="$region" --format=json
+    done
+    echo "  expect every release service Ready with 100% of its traffic on probe ${version}" >&2
+    return
+  fi
+  [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "no recorded digest for probe ${version}"
+  deadline=$(($(date +%s) + SANDBOX_SERVING_TIMEOUT_SECONDS))
+  for service in "${release_services[@]}"; do
+    until service_serves "$service" "$digest"; do
+      (($(date +%s) < deadline)) ||
+        fail "${service} did not send all its traffic to Ready revisions of probe ${version} within ${SANDBOX_SERVING_TIMEOUT_SECONDS} s"
+      sleep 10
+    done
+  done
+  echo "every release service sends 100% of its traffic to probe ${version}"
+}
+
+# Repeated Cloud Logging reads until the filter matches: Logging must stay
+# readable, and a match must not carry the raw marker. Nothing read is
+# printed.
+wait_for_log() {
+  local label="$1" filter="$2" entries
+  for _ in $(seq 1 16); do
+    entries="$(capture '[{"jsonPayload":{}}]' gcloud logging read "$filter" --project="$project_id" \
+      --freshness=1h --limit=5 --format=json)" ||
+      fail "Cloud Logging is unreadable; ${label} is unverified"
+    if jq -e 'type == "array" and length > 0' >/dev/null 2>&1 <<<"$entries"; then
+      [[ -z "$marker" || "$entries" != *"$marker"* ]] || fail "${label} carries the raw marker"
+      echo "found ${label}"
+      return 0
+    fi
+    $dry_run && return 0
+    pause 15
+  done
+  fail "no ${label} within four minutes"
 }
 
 # One state-bucket object's live metadata from the Cloud Storage JSON API,
@@ -554,11 +773,14 @@ inventory_class() {
   shift 2
   trace "$@"
   $dry_run && return 0
-  if "$@" >"${dir}/${class}.txt" 2>"${dir}/${class}.err"; then
+  # Aggregated gcloud lists report an unreachable scope as a warning on
+  # stderr and still exit 0: a partial listing is no listing.
+  if "$@" >"${dir}/${class}.txt" 2>"${dir}/${class}.err" &&
+    ! grep -Eqi '(^|[[:space:]])(WARNING|ERROR):|did not succeed|could not fetch|unreachable' "${dir}/${class}.err"; then
     rm -f "${dir}/${class}.err"
   else
     echo "UNVERIFIED" >"${dir}/${class}.txt"
-    notice "${class}: listing failed (permission or API); unverified, not empty"
+    notice "${class}: listing failed or was partial (permission, API or scope); unverified, not empty"
   fi
 }
 
@@ -567,21 +789,27 @@ take_inventory() {
   mkdir -p "$dir"
   local p=(--project="$project_id")
   inventory_class "$dir" run-services gcloud run services list "${p[@]}" --region="$region" --format='value(metadata.name)'
+  inventory_class "$dir" run-revisions gcloud run revisions list "${p[@]}" --region="$region" --format='value(metadata.name)'
   inventory_class "$dir" artifact-repositories gcloud artifacts repositories list "${p[@]}" --location="$region" --format='value(name)'
-  inventory_class "$dir" forwarding-rules gcloud compute forwarding-rules list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" addresses gcloud compute addresses list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" backend-services gcloud compute backend-services list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" url-maps gcloud compute url-maps list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" target-http-proxies gcloud compute target-http-proxies list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" target-https-proxies gcloud compute target-https-proxies list "${p[@]}" --global --format='value(name)'
-  inventory_class "$dir" network-endpoint-groups gcloud compute network-endpoint-groups list "${p[@]}" --regions="$region" --format='value(name)'
-  inventory_class "$dir" security-policies gcloud compute security-policies list "${p[@]}" --format='value(name)'
-  inventory_class "$dir" ssl-certificates gcloud compute ssl-certificates list "${p[@]}" --global --format='value(name)'
+  inventory_class "$dir" forwarding-rules compute_names forwardingRules
+  inventory_class "$dir" addresses compute_names addresses
+  inventory_class "$dir" backend-services compute_names backendServices
+  inventory_class "$dir" url-maps compute_names urlMaps
+  inventory_class "$dir" target-http-proxies compute_names targetHttpProxies
+  inventory_class "$dir" target-https-proxies compute_names targetHttpsProxies
+  inventory_class "$dir" network-endpoint-groups compute_names networkEndpointGroups
+  inventory_class "$dir" security-policies compute_names securityPolicies
+  inventory_class "$dir" ssl-certificates compute_names sslCertificates
   inventory_class "$dir" logging-exclusions project_exclusion_names
   inventory_class "$dir" logging-sinks project_sink_rows
+  inventory_class "$dir" sink-exclusions project_sink_exclusion_rows
   inventory_class "$dir" tasks-queues gcloud tasks queues list "${p[@]}" --location="$region" --format='value(name)'
   inventory_class "$dir" scheduler-jobs gcloud scheduler jobs list "${p[@]}" --location="$region" --format='value(name)'
   inventory_class "$dir" storage-buckets gcloud storage buckets list "${p[@]}" --format='value(name)'
+  # The stack grants roles/run.invoker per service only; a project-level
+  # grant of it is a leak, and none outlives the services.
+  inventory_class "$dir" project-run-invokers gcloud projects get-iam-policy "$project_id" \
+    --flatten='bindings[].members' --filter='bindings.role=roles/run.invoker' --format='value(bindings.members)'
   inventory_class "$dir" state-objects gcloud storage ls -r "gs://${state_bucket}/"
 }
 
@@ -590,12 +818,13 @@ take_inventory() {
 # matched.
 proof_pattern() {
   case "$1" in
-    run-services) echo '^workspace-' ;;
+    run-services | run-revisions) echo '^workspace-' ;;
     # `value(name)` lists the bare repository ID.
     artifact-repositories) echo "(^|/repositories/)${artifact_repository}\$" ;;
-    forwarding-rules | addresses | backend-services | url-maps | target-http-proxies | target-https-proxies | network-endpoint-groups | security-policies | ssl-certificates)
-      echo "^workspace-${stage}-" ;;
-    logging-exclusions) echo "^${edge_exclusion}\$" ;;
+    # Load balancers, NEGs, Cloud Armor, certificates and log exclusions:
+    # any at all, and any project-level invoker grant.
+    forwarding-rules | addresses | backend-services | url-maps | target-http-proxies | target-https-proxies | network-endpoint-groups | security-policies | ssl-certificates | logging-exclusions | sink-exclusions | project-run-invokers)
+      echo '.' ;;
     # `value(name)` lists bare queue and job IDs.
     tasks-queues | scheduler-jobs) echo '(^|/)workspace-' ;;
     storage-buckets) echo "^(gs://)?${mobile_updates_bucket}/?\$" ;;
@@ -643,8 +872,7 @@ phase_preflight() {
     ! run gcloud storage cp "gs://${state_bucket}/${proof_run_object}" "$proof_run_file"; then
     notice "no recorded proof run; queue IDs come from Alchemy state alone"
   fi
-  load_env_file "$digests_file"
-  write_stack_config "${COLLECTOR_DIGEST:-}"
+  write_stack_config
   check_teardown_window
 }
 
@@ -673,8 +901,9 @@ phase_readonly_inventory() {
   local enabled api
   if enabled="$(capture "" gcloud services list --enabled --project="$project_id" --format='value(config.name)')"; then
     for api in run.googleapis.com artifactregistry.googleapis.com cloudtasks.googleapis.com \
-      compute.googleapis.com logging.googleapis.com monitoring.googleapis.com \
-      cloudtrace.googleapis.com telemetry.googleapis.com secretmanager.googleapis.com; do
+      cloudscheduler.googleapis.com logging.googleapis.com monitoring.googleapis.com \
+      cloudtrace.googleapis.com secretmanager.googleapis.com sts.googleapis.com \
+      iamcredentials.googleapis.com; do
       if $dry_run; then
         continue
       elif grep -qx "$api" <<<"$enabled"; then
@@ -702,8 +931,25 @@ phase_readonly_inventory() {
   fi
 }
 
+# The baseline must prove the project holds no load balancer, NEG, Cloud
+# Armor policy, certificate or log exclusion: an unreadable class fails.
 phase_baseline_inventory() {
   take_inventory baseline
+  if $dry_run; then
+    echo "  expect none of: ${edge_classes[*]}" >&2
+    return
+  fi
+  local dir="${proof_dir}/inventory-baseline" class found=false
+  for class in "${edge_classes[@]}"; do
+    [[ "$(cat "${dir}/${class}.txt")" != UNVERIFIED ]] ||
+      fail "${class} is unreadable; the baseline cannot prove the project has none"
+    if grep -q . "${dir}/${class}.txt"; then
+      found=true
+      echo "::error::the project already holds ${class}: $(tr '\n' ' ' <"${dir}/${class}.txt")"
+    fi
+  done
+  ! $found || fail "the project holds resources the IAM-private topology must not need"
+  echo "no load balancer, NEG, Cloud Armor policy, certificate or log exclusion exists"
 }
 
 phase_foundation() {
@@ -735,20 +981,19 @@ build_and_push() {
   echo "${key}=${digest}"
 }
 
+# The RPC probe, bundled once by its build script, then built and pushed
+# as v1, v2 and v3 from that bundle.
 phase_images() {
   run gcloud auth configure-docker "${region}-docker.pkg.dev" --quiet
-  local probe="${package_dir}/sandbox-probe"
-  local suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-  local version
+  local suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" context version
+  context="$(mktemp -d)"
+  (cd "$repo_root" && run bun packages/workspace-infrastructure/sandbox-probe/build.ts --outdir "$context") ||
+    fail "the RPC probe bundle failed to build"
   for version in v1 v2 v3; do
     build_and_push "PROBE_${version^^}_DIGEST" "$probe_image" "probe-${version}-${suffix}" \
-      "${probe}/Dockerfile" "$probe" --build-arg "PROBE_BUILD_VERSION=${version}"
+      "${package_dir}/sandbox-probe/Dockerfile" "$context" --build-arg "PROBE_BUILD_VERSION=${version}"
   done
-  build_and_push COLLECTOR_DIGEST "$collector_image" "collector-${suffix}" \
-    "${probe}/collector.Dockerfile" "$repo_root"
-  load_env_file "$digests_file"
-  # Before any release exists, so every revision carries the sidecar.
-  write_stack_config "$COLLECTOR_DIGEST"
+  rm -rf "${context:?}"
 }
 
 phase_deliver_v1() {
@@ -759,144 +1004,234 @@ phase_deliver_v1() {
   expect_settled "$status" "${PROBE_V1_DIGEST:-}"
   record_value "$releases_file" V1_RELEASE_ID "$(json_require '.record.active.releaseId' "$status")"
   expect_no_op_plan
+  record_service_urls
+  expect_released v1
 }
 
-# Both backends enforce the stack's Cloud Armor policy, with the sandbox's
-# WAF rules in preview and the auth throttle enforced.
-verify_edge_security() {
-  local backend attached
-  for backend in "${edge_backend_services[@]}"; do
-    attached="$(capture "projects/${project_id}/global/securityPolicies/${edge_security_policy}" \
-      gcloud compute backend-services describe "$backend" --global --project="$project_id" \
-      --format='value(securityPolicy)')" ||
-      fail "backend service ${backend} is unreadable; its Cloud Armor policy is unverified"
-    expect_equal "${backend} Cloud Armor policy" "${attached##*/}" "$edge_security_policy"
+# One unauthenticated (or garbage-bearer) request's HTTP status, 000 when
+# no response came back.
+request_status() {
+  local method="$1" url="$2" code
+  shift 2
+  local request=(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -X "$method" "$@" "$url")
+  trace "${request[@]}"
+  if $dry_run; then
+    echo 403
+    return
+  fi
+  code="$("${request[@]}" 2>/dev/null)" || code=000
+  [[ "$code" =~ ^[0-9]{3}$ ]] || code=000
+  printf '%s\n' "$code"
+}
+
+# A refused request: any 2xx means the service answered without IAM.
+expect_refused() {
+  local label="$1" code="$2" accepted="$3"
+  if $dry_run; then
+    echo "  expect ${label}: HTTP ${accepted}" >&2
+    return
+  fi
+  [[ ! "$code" =~ ^2 ]] || fail "${label} was served (HTTP ${code}); the service is not IAM-private"
+  [[ "$code" =~ ^(${accepted})$ ]] || fail "${label}: HTTP ${code}, expected ${accepted}"
+}
+
+# The service's expected unconditional roles/run.invoker members and ingress.
+service_invokers() {
+  case "$1" in
+    "$api_service") printf '%s\n' "serviceAccount:${frontend_invoker}" "serviceAccount:${GCP_SANDBOX_DEPLOY_SA:-}" ;;
+    "$tasks_worker_service") printf '%s\n' "serviceAccount:${tasks_invoker}" ;;
+    "$scheduler_worker_service") printf '%s\n' "serviceAccount:${scheduler_invoker}" ;;
+  esac
+}
+# Every service keeps the default run.app ingress; IAM alone keeps it private.
+service_ingress() { echo all; }
+
+# IAM readback: no public member, exactly the expected unconditional
+# invokers, the invoker IAM check on, and the expected ingress.
+expect_iam_private() {
+  local service="$1" policy described invokers ingress
+  policy="$(capture '{"bindings":[]}' gcloud run services get-iam-policy "$service" \
+    --project="$project_id" --region="$region" --format=json)" ||
+    fail "the IAM policy of ${service} is unreadable"
+  described="$(capture '{"metadata":{"annotations":{}}}' gcloud run services describe "$service" \
+    --project="$project_id" --region="$region" --format=json)" ||
+    fail "${service} is unreadable"
+  ingress="$(service_ingress "$service")"
+  if $dry_run; then
+    echo "  expect ${service}: no public member; invokers exactly $(service_invokers "$service" | paste -sd ' '); invoker IAM check on; ingress ${ingress}" >&2
+    return
+  fi
+  invokers="$(service_invokers "$service" | jq -Rnc '[inputs] | sort')"
+  jq -e '[.bindings[]?.members[]?] | any(. == "allUsers" or . == "allAuthenticatedUsers") | not' \
+    >/dev/null 2>&1 <<<"$policy" || fail "${service} grants allUsers or allAuthenticatedUsers"
+  jq -e --argjson want "$invokers" '[.bindings[]? | select(.role == "roles/run.invoker")] as $grants
+    | ($grants | all(.condition == null))
+      and ([$grants[].members[]?] | unique) == ($want | unique)' >/dev/null 2>&1 <<<"$policy" ||
+    fail "${service} does not grant roles/run.invoker unconditionally to exactly ${invokers}"
+  jq -e '(.metadata.annotations["run.googleapis.com/invoker-iam-disabled"] // "false") != "true"' \
+    >/dev/null 2>&1 <<<"$described" || fail "${service} has the invoker IAM check disabled"
+  jq -e --arg ingress "$ingress" '.metadata.annotations["run.googleapis.com/ingress"] == $ingress
+      and .metadata.annotations["run.googleapis.com/ingress-status"] == $ingress' \
+    >/dev/null 2>&1 <<<"$described" || fail "${service} does not have ingress ${ingress}, requested and active"
+  echo "${service}: IAM-private"
+}
+
+# While the services are live, the project grants no public member and no
+# project-wide roles/run.invoker that would bypass the service policies.
+expect_project_iam_private() {
+  local policy
+  policy="$(capture '{"bindings":[]}' gcloud projects get-iam-policy "$project_id" --format=json)" ||
+    fail "the project IAM policy is unreadable"
+  $dry_run && return 0
+  jq -e '[.bindings[]? | select(.role == "roles/run.invoker"
+      or any(.members[]?; . == "allUsers" or . == "allAuthenticatedUsers"))] == []' \
+    >/dev/null 2>&1 <<<"$policy" ||
+    fail "the project grants roles/run.invoker or a public member at project level"
+  echo "the project grants no project-wide invoker or public member"
+}
+
+# Every service refuses callers without roles/run.invoker, on its own
+# routes too: an unauthenticated request gets 403 and a malformed bearer
+# 401, from Cloud Run before the container sees it. All three keep the
+# default run.app ingress, so the runner reaches IAM on each. The probe
+# serves GET /health beside its startup /healthz: Cloud Run reserves some
+# paths ending in z on the run.app URL.
+phase_private_access() {
+  local service url
+  for service in "${release_services[@]}"; do
+    url="$(service_url "$service")"
+    expect_refused "unauthenticated GET /health on ${service}" \
+      "$(request_status GET "${url}/health")" 403
+    expect_refused "unauthenticated POST /rpc on ${service}" \
+      "$(request_status POST "${url}/rpc" --data-binary '')" 403
+    expect_refused "POST /rpc with a garbage bearer on ${service}" \
+      "$(request_status POST "${url}/rpc" -H 'Authorization: Bearer garbage' --data-binary '')" 401
+    case "$service" in
+      "$tasks_worker_service")
+        expect_refused "unauthenticated POST ${proof_queue_path} on ${service}" \
+          "$(request_status POST "${url}${proof_queue_path}" --data-binary '{}')" 403
+        ;;
+      "$scheduler_worker_service")
+        expect_refused "unauthenticated GET ${proof_schedule_path} on ${service}" \
+          "$(request_status GET "${url}${proof_schedule_path}")" 403
+        ;;
+    esac
+    expect_iam_private "$service"
   done
-  # The whole policy. Google Cloud SDK 594.0.1 returns the describe
-  # request's result list (security_policies/client.py Describe has no
-  # [0]), so `--format=json` prints `[policy]`; a bare object is accepted
-  # too. A lone projected field such as `json(rules)` prints bare.
-  local described policy mismatched
-  described="$(capture '[{"rules":[]}]' gcloud compute security-policies describe "$edge_security_policy" \
-    --project="$project_id" --format=json)" ||
-    fail "Cloud Armor policy ${edge_security_policy} is unreadable"
-  if $dry_run; then
-    echo "  expect the declared SQLi and XSS rules in preview, the auth throttle enforced and the default allow" >&2
-    return 0
-  fi
-  policy="$(jq -ce 'if type == "array" then select(length == 1) | .[0] else . end | select(type == "object")' \
-    <<<"$described")" ||
-    fail "Cloud Armor policy ${edge_security_policy} describe printed no single policy"
-  # Each rule as the stack declares it for the sandbox: matcher, action,
-  # preview, the auth throttle's limit and the enforced match-all default.
-  # A mismatch names the rule, never its contents.
-  mismatched="$(jq -r --arg sqli "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})" \
-    --arg xss "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})" \
-    --arg auth "request.path.startsWith('/api/auth/')" \
-    --argjson limit "$edge_auth_rate_limit" '
-    def rule($priority): [.rules[]? | select(.priority == $priority)] | select(length == 1) | .[0];
-    def waf($priority; $expression):
-      rule($priority) | .action == "deny(403)" and .preview == true
-        and .match.expr.expression == $expression;
-    [{rule: "1000 SQLi WAF in preview", ok: (waf(1000; $sqli) // false)},
-      {rule: "1010 XSS WAF in preview", ok: (waf(1010; $xss) // false)},
-      {rule: "2000 auth throttle enforced", ok: ((rule(2000) | .action == "throttle" and .preview != true
-        and .match.expr.expression == $auth
-        and .rateLimitOptions.conformAction == "allow"
-        and .rateLimitOptions.exceedAction == "deny(429)"
-        and .rateLimitOptions.enforceOnKey == "IP"
-        and .rateLimitOptions.rateLimitThreshold.count == $limit
-        and .rateLimitOptions.rateLimitThreshold.intervalSec == 60) // false)},
-      {rule: "2147483647 default allow enforced", ok: ((rule(2147483647) | .action == "allow" and .preview != true
-        and .match.versionedExpr == "SRC_IPS_V1"
-        and .match.config.srcIpRanges == ["*"]) // false)}]
-    | .[] | select(.ok | not) | .rule' <<<"$policy")" ||
-    fail "Cloud Armor policy ${edge_security_policy} rules are unreadable"
-  [[ -z "$mismatched" ]] ||
-    fail "Cloud Armor policy ${edge_security_policy} does not hold the declared rules: ${mismatched//$'\n'/, }"
-  echo "both backends enforce ${edge_security_policy}: WAF rules in preview, auth throttle enforced"
+  expect_project_iam_private
 }
 
-# The edge the stack config declares, from the package's own declarations:
-# protocol, physical object names and the token-route exclusion filter.
-declared_edge() {
-  use_stack_config
-  trace bun scripts/sandbox-edge-declaration.ts
-  if $dry_run; then
-    jq -cn --arg filter "$dry_run_exclusion_filter" --arg policy "$edge_security_policy" \
-      --arg dynamic "${edge_backend_services[0]}" --arg static "${edge_backend_services[1]}" \
-      --arg exclusion "$edge_exclusion" '{protocol: "http",
-        names: {address: "workspace-sandbox-edge", securityPolicy: $policy,
-          dynamicBackend: $dynamic, staticBackend: $static, urlMap: "workspace-sandbox-edge",
-          httpProxy: "workspace-sandbox-edge-http", httpForwardingRule: "workspace-sandbox-http",
-          tokenRouteExclusion: $exclusion},
-        tokenRouteExclusionFilter: $filter}'
+# The RPC probe against workspace-api as the deployer, with the run's
+# marker in the body and a fresh sampled traceparent. Its verdict, which
+# holds no token and no marker, is kept as rpc-probe-<label>.json; the
+# first probe's trace ID is the privacy phase's positive control.
+run_rpc_probe() {
+  local version="$1" label="$2" url trace_id file="${proof_dir}/rpc-probe-${2}.json" code=0 problems
+  url="$(service_url "$api_service")"
+  local started
+  started="$(date -u +%s)"
+  if [[ "$label" == primary ]]; then
+    load_marker create
   else
-    (cd "$package_dir" && bun scripts/sandbox-edge-declaration.ts)
+    load_marker
   fi
+  load_id_token 600 "$url"
+  trace_id="$(random_hex 16)"
+  [[ "$trace_id" =~ ^[0-9a-f]{32}$ && "$trace_id" != "${trace_id//?/0}" ]] || fail "no usable trace ID"
+  trace bun scripts/sandbox-rpc-probe.ts --url "$url" --id-token-file "<private token file>" \
+    --marker-file "<private marker file>" --traceparent "00-${trace_id}-<span>-01" --expect-version "$version"
+  if ! $dry_run; then
+    (cd "$package_dir" && bun scripts/sandbox-rpc-probe.ts --url "$url" --id-token-file "$id_token_file" \
+      --marker-file "$marker_file" --traceparent "00-${trace_id}-$(random_hex 8)-01" \
+      --expect-version "$version") >"${file}.next" || code=$?
+    if grep -qF -- "$marker" "${file}.next"; then
+      rm -f "${file}.next"
+      fail "the RPC probe printed the marker"
+    fi
+    mv "${file}.next" "$file"
+    jq -se 'length == 1 and (.[0] | type == "object")' "$file" >/dev/null 2>&1 ||
+      fail "the RPC probe printed no single JSON verdict (exit ${code}); see $(basename "$file")"
+    problems="$(jq -r --arg sha "$(marker_sha256)" --arg version "$version" --arg type "$rpc_content_type" '
+      [ if .ok != true then "verdict not ok" else empty end,
+        if .status != 200 then "HTTP \(.status)" else empty end,
+        if ((.contentType // "") | startswith($type)) then empty else "content type \(.contentType)" end,
+        if .version != $version then "version \(.version)" else empty end,
+        if .markerSha256 != $sha or .markerMatches != true then "markerSha256 does not match the local hash" else empty end,
+        if .failDecoded != "ProbeRejected" then "Probe.fail decoded as \(.failDecoded)" else empty end,
+        if ((.countChunks // []) | length) != 3 then "Probe.count yielded \((.countChunks // []) | length) chunks" else empty end,
+        ((.failures // [])[] | tostring)
+      ] | join("; ")' "$file")"
+    [[ "$code" == 0 && -z "$problems" ]] ||
+      fail "the RPC probe failed (exit ${code}): ${problems:-see $(basename "$file")}"
+  else
+    echo "  expect HTTP 200, ${rpc_content_type}, matching markerSha256, ProbeRejected, 3 chunks, version ${version}" >&2
+  fi
+  if [[ "$label" == primary ]]; then
+    # Published together, after the verdict passed.
+    record_value "$telemetry_file" PROBE_STARTED_AT "$started"
+    record_value "$telemetry_file" PROBE_TRACE_ID "$trace_id"
+    record_value "$telemetry_file" MARKER_SHA256 "$(marker_sha256)"
+  fi
+  echo "RPC probe ${label}: workspace-api serves ${version} over SchemaBinary (trace ${trace_id})"
 }
 
-# One declared edge object's physical name.
-declared_edge_name() {
-  jq -r --arg key "$2" '.names[$key] // empty' "$1"
+phase_rpc_probe() {
+  run_rpc_probe v1 primary
 }
 
-# deliver-v1 declared the edge with the first release, in the same locked
-# apply. The live state holds no stack outputs object (run 45279064237
-# found only per-resource state), so the edge is read back live by
-# the names the stack declares: the address's IP, the HTTP forwarding rule
-# on it, its proxy and URL map. Reading back writes nothing. The web service
-# only admits load-balancer traffic (ingress INTERNAL_LOAD_BALANCER), so
-# every HTTP check goes through this edge.
-phase_edge_readback() {
-  local declared="${proof_dir}/edge-declaration.json"
-  declared_edge >"$declared" ||
-    fail "the stack config's edge declaration is unreadable"
-  jq -e 'type == "object"' "$declared" >/dev/null 2>&1 ||
-    fail "the stack config declares no edge; deliver-v1 must declare it"
-  expect_equal "edge protocol" "$(jq -r '.protocol' "$declared")" http
-  expect_equal "edge Cloud Armor policy" "$(declared_edge_name "$declared" securityPolicy)" "$edge_security_policy"
-  expect_equal "edge dynamic backend" "$(declared_edge_name "$declared" dynamicBackend)" "${edge_backend_services[0]}"
-  expect_equal "edge static backend" "$(declared_edge_name "$declared" staticBackend)" "${edge_backend_services[1]}"
-  expect_equal "edge token-route exclusion" "$(declared_edge_name "$declared" tokenRouteExclusion)" "$edge_exclusion"
-  local p=(--project="$project_id" --global) ip rule target url_map
-  ip="$(capture 198.51.100.10 gcloud compute addresses describe "$(declared_edge_name "$declared" address)" "${p[@]}" \
-    --format='value(address)')" ||
-    fail "the edge address $(declared_edge_name "$declared" address) is unreadable; deliver-v1 must declare the edge"
-  [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] ||
-    fail "the edge address $(declared_edge_name "$declared" address) holds no IPv4 address"
-  rule="$(capture "{\"IPAddress\":\"${ip}\",\"portRange\":\"80-80\",\"target\":\"targetHttpProxies/$(declared_edge_name "$declared" httpProxy)\"}" \
-    gcloud compute forwarding-rules describe "$(declared_edge_name "$declared" httpForwardingRule)" "${p[@]}" \
-    --format='json(IPAddress,portRange,target)')" ||
-    fail "the edge forwarding rule $(declared_edge_name "$declared" httpForwardingRule) is unreadable"
-  expect_equal "edge forwarding rule address" "$(jq -r '.IPAddress // empty' <<<"$rule")" "$ip"
-  # Compute reports a single port as `80-80`; `80` means the same.
-  local port
-  port="$(jq -r '.portRange // empty' <<<"$rule")"
-  [[ "$port" == 80 ]] && port=80-80
-  expect_equal "edge forwarding rule port" "$port" 80-80
-  target="$(jq -r '.target // empty' <<<"$rule")"
-  expect_equal "edge forwarding rule target" "${target##*/targetHttpProxies/}" "$(declared_edge_name "$declared" httpProxy)"
-  url_map="$(capture "urlMaps/$(declared_edge_name "$declared" urlMap)" gcloud compute target-http-proxies describe \
-    "$(declared_edge_name "$declared" httpProxy)" "${p[@]}" --format='value(urlMap)')" ||
-    fail "the edge proxy $(declared_edge_name "$declared" httpProxy) is unreadable"
-  expect_equal "edge proxy URL map" "${url_map##*/urlMaps/}" "$(declared_edge_name "$declared" urlMap)"
-  # The edge as read back, for the proof artifact; no other stack value.
-  jq --arg ip "$ip" '{edgeIpAddress: $ip, edgeProtocol: .protocol,
-    securityPolicy: .names.securityPolicy,
-    backendServices: {dynamic: .names.dynamicBackend, static: .names.staticBackend},
-    tokenRouteExclusionFilter}' "$declared" >"$edge_outputs_file"
-  record_value "$edge_file" EDGE_IP "$ip"
-  # The declared filter's exact bytes, with no newline added: what the
-  # privacy phase requires the live exclusion to apply.
-  jq -j '.tokenRouteExclusionFilter // empty' "$declared" >"$exclusion_filter_file"
-  [[ -s "$exclusion_filter_file" ]] ||
-    fail "the edge declares no token-route exclusion filter"
-  verify_edge_security
-  expect_serving v1 "$SANDBOX_FIRST_SERVING_TIMEOUT_SECONDS"
-  local robots
-  robots="$(capture 'text/plain' curl -fsS -o /dev/null -w '%{content_type}' "http://${ip}/robots.txt")"
-  [[ "$robots" == text/plain* ]] || fail "/robots.txt is not text/plain"
+# One Cloud Task on the run's own paid-fulfillment queue, the marker in its
+# body, signed as the tasks invoker; the tasks worker must log its receipt
+# by markerSha256 alone. Then the run's paused proof-tick scheduler job is
+# forced once, and the scheduler worker must log its receipt.
+phase_worker_probe() {
+  load_proof_run_file
+  [[ -n "${QUEUE_SUFFIX:-}" ]] || $dry_run || fail "no recorded queue suffix; foundation records it"
+  local suffix="${QUEUE_SUFFIX:-r${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}" url body_file start
+  url="$(service_url "$tasks_worker_service")"
+  load_marker
+  body_file="$task_body_file"
+  (umask 077 && jq -cn --arg marker "$marker" '{marker: $marker}' >"$body_file")
+  # The queue itself must send every task to the paid-fulfillment route
+  # as the tasks invoker: the task carries no identity of its own, so the
+  # receipt proves the queue's configuration.
+  local queue="${proof_queue}-${suffix}" queue_config
+  queue_config="$(capture "{\"state\":\"RUNNING\",\"httpTarget\":{\"uriOverride\":{\"host\":\"${url#https://}\",\"pathOverride\":{\"path\":\"${proof_queue_path}\"},\"uriOverrideEnforceMode\":\"ALWAYS\"},\"oidcToken\":{\"serviceAccountEmail\":\"${tasks_invoker}\",\"audience\":\"${url}\"}}}" \
+    gcloud tasks queues describe "$queue" --project="$project_id" --location="$region" --format=json)" ||
+    fail "the proof queue ${queue} is unreadable"
+  jq -e --arg host "${url#https://}" --arg path "$proof_queue_path" --arg invoker "$tasks_invoker" --arg audience "$url" \
+    '.state == "RUNNING"
+      and .httpTarget.uriOverride.host == $host
+      and .httpTarget.uriOverride.pathOverride.path == $path
+      and .httpTarget.uriOverride.uriOverrideEnforceMode == "ALWAYS"
+      and .httpTarget.oidcToken.serviceAccountEmail == $invoker
+      and .httpTarget.oidcToken.audience == $audience' >/dev/null 2>&1 <<<"$queue_config" ||
+    fail "${queue} does not send every task to ${proof_queue_path} on the tasks worker as the tasks invoker"
+  start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
+  run gcloud tasks create-http-task --queue="$queue" --project="$project_id" \
+    --location="$region" --url="${url}${proof_queue_path}" --method=POST \
+    --header=Content-Type:application/json --body-file="$body_file" \
+    --format='value(name)' || fail "the proof task could not be enqueued"
+  rm -f "$body_file"
+  wait_for_log "tasks worker receipt" \
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${tasks_worker_service}\" AND jsonPayload.event=\"probe.task\" AND jsonPayload.queue=\"${proof_queue_path##*/}\" AND jsonPayload.markerSha256=\"$(marker_sha256)\" AND timestamp>=\"${start}\""
+
+  # The run's own paused job, aimed at the scheduler worker as its invoker.
+  local job="${proof_schedule_job}-${suffix}" described
+  described="$(capture "{\"state\":\"PAUSED\",\"httpTarget\":{\"uri\":\"$(service_url "$scheduler_worker_service")${proof_schedule_path}\",\"httpMethod\":\"GET\",\"oidcToken\":{\"serviceAccountEmail\":\"${scheduler_invoker}\",\"audience\":\"$(service_url "$scheduler_worker_service")\"}}}" \
+    gcloud scheduler jobs describe "$job" --project="$project_id" --location="$region" --format=json)" ||
+    fail "the proof-tick job ${job} is unreadable"
+  jq -e --arg uri "$(service_url "$scheduler_worker_service")${proof_schedule_path}" \
+    --arg invoker "$scheduler_invoker" --arg audience "$(service_url "$scheduler_worker_service")" \
+    '.state == "PAUSED" and .httpTarget.uri == $uri
+      and .httpTarget.httpMethod == "GET" and .httpTarget.oidcToken.serviceAccountEmail == $invoker
+      and .httpTarget.oidcToken.audience == $audience' \
+    >/dev/null 2>&1 <<<"$described" ||
+    fail "${job} is not a paused GET of ${proof_schedule_path} signed as the scheduler invoker"
+  start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
+  run gcloud scheduler jobs run "$job" --project="$project_id" \
+    --location="$region" || fail "the paused proof-tick job could not be forced"
+  wait_for_log "scheduler worker receipt" \
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${scheduler_worker_service}\" AND jsonPayload.event=\"probe.schedule\" AND jsonPayload.job=\"${proof_schedule_path##*/}\" AND timestamp>=\"${start}\""
 }
 
 phase_deliver_v2() {
@@ -906,7 +1241,7 @@ phase_deliver_v2() {
   status="$(release_status after-v2)"
   expect_settled "$status" "${PROBE_V2_DIGEST:-}"
   record_value "$releases_file" V2_RELEASE_ID "$(json_require '.record.active.releaseId' "$status")"
-  expect_serving v2
+  expect_released v2
 }
 
 repository_description() {
@@ -1094,7 +1429,7 @@ phase_interrupt_recover() {
   status="$(release_status after-recovery)"
   expect_settled "$status" "${PROBE_V3_DIGEST:-}"
   expect_no_op_plan
-  expect_serving v3
+  expect_released v3
 }
 
 # One live generation and CRC32C per Alchemy state object of the stack,
@@ -1185,7 +1520,7 @@ phase_state_snapshot_restore() {
   status="$(release_status before-tracked-change)"
   generation="$(json_require '.record.generation' "$status")"
   release restore --release-id "${V2_RELEASE_ID:-}" --expected-generation "$generation"
-  expect_serving v2
+  expect_released v2
 
   expect_settled "$(release_status after-tracked-change)"
   wait_for_quiet_lease
@@ -1202,7 +1537,7 @@ phase_state_snapshot_restore() {
   release deploy
   expect_no_op_plan
   expect_settled "$(release_status after-state-restore)"
-  expect_serving v2
+  expect_released v2
 }
 
 phase_restore_v1() {
@@ -1213,200 +1548,101 @@ phase_restore_v1() {
   generation="$(json_require '.record.generation' "$status")"
   release restore --release-id "${V1_RELEASE_ID:-}" --expected-generation "$generation"
   expect_settled "$(release_status after-restore)" "${PROBE_V1_DIGEST:-}"
-  expect_serving v1
+  expect_released v1
+  # The data path too, with an ID token minted for this step.
+  run_rpc_probe v1 restore
 }
 
-# Every enabled sink that receives this project's logs must drop
-# token-route request logs before a marker is sent: the project's own sinks
-# and any folder or organization sink that includes or intercepts its
-# children. _Default is covered by the stack's project exclusion, every
-# other sink by an enabled sink exclusion with the same filter. _Required
-# carries only audit logs and cannot be changed. An unreadable level, or a
-# sink whose filter could match without that exclusion, fails the proof.
-verify_log_routing() {
-  local dir="${proof_dir}/log-routing" exclusions ancestors sinks id type
-  mkdir -p "$dir"
-  exclusions="$(project_exclusions_json)" ||
-    fail "project log exclusions are unreadable; log routing unverified"
-  printf '%s\n' "$exclusions" >"${dir}/project-exclusions.json"
-  ancestors="$(capture "[{\"id\":\"${project_id}\",\"type\":\"project\"}]" \
-    gcloud projects get-ancestors "$project_id" --format=json)" ||
-    fail "the project's folders and organization are unreadable; inherited sinks unverified"
-  sinks="$(log_sinks_json "projects/${project_id}")" ||
-    fail "project log sinks are unreadable; log routing unverified"
+# The run's marker travelled only in RPC and task bodies; it must reach no
+# searchable log and no readable trace. Each source needs a positive
+# control first: Cloud Logging must hold the probe's POST /rpc request log
+# under its trace, and Cloud Trace the probe's trace. A control that is
+# absent or unreadable fails the proof rather than counting as clean.
+phase_telemetry_privacy() {
+  load_marker
+  load_env_file "$telemetry_file"
+  local trace_id="${PROBE_TRACE_ID:-}"
   if $dry_run; then
-    trace curl -fsS "https://logging.googleapis.com/v2/<each ancestor folder and organization>/sinks?pageSize=100" \
-      "(every page; bearer from gcloud, never printed)"
-    echo "  expect every enabled project and inherited sink to exclude ${edge_exclusion}'s filter" >&2
-    return 0
+    trace_id="${trace_id:-0123456789abcdef0123456789abcdef}"
   fi
-  jq --arg parent "projects/${project_id}" '[.[] | . + {parent: $parent, level: "project"}]' \
-    <<<"$sinks" >"${dir}/sinks.json"
-  while IFS=$'\t' read -r id type; do
-    case "$type" in
-      project) continue ;;
-      folder | organization) ;;
-      *) fail "unknown ancestor type ${type}; inherited sinks unverified" ;;
-    esac
-    sinks="$(log_sinks_json "${type}s/${id}")" ||
-      fail "${type} ${id} log sinks are unreadable; inherited sinks unverified"
-    jq --arg parent "${type}s/${id}" --slurpfile known "${dir}/sinks.json" \
-      '$known[0] + [.[] | . + {parent: $parent, level: "ancestor"}]' <<<"$sinks" >"${dir}/sinks.next"
-    mv "${dir}/sinks.next" "${dir}/sinks.json"
-  done < <(jq -r '.[] | [.id, .type] | @tsv' <<<"$ancestors")
-  # The live project exclusion must be the filter the stack declares, and
-  # that filter must name both request sources and every token route.
-  local expected source route
-  expected="$(cat "$exclusion_filter_file" 2>/dev/null)" ||
-    fail "the edge recorded no token-route exclusion filter; log routing unverified"
-  [[ -n "$expected" ]] || fail "the edge recorded an empty token-route exclusion filter"
-  for source in "${token_request_sources[@]}"; do
-    [[ "$expected" == *"$source"* ]] || fail "the token-route exclusion filter omits ${source}"
-  done
-  for route in "${token_routes[@]}"; do
-    [[ "$expected" == *"$route"* ]] || fail "the token-route exclusion filter omits ${route}"
-  done
-  # Compared as decoded strings: command substitution would strip a
-  # trailing newline from either side.
-  jq -e --arg name "$edge_exclusion" --rawfile expected "$exclusion_filter_file" \
-    'map(select(.name == $name and .disabled != true)) | first | .filter == $expected' \
-    "${dir}/project-exclusions.json" >/dev/null ||
-    fail "the enabled project exclusion ${edge_exclusion} does not apply the stack's token-route filter"
-  local uncovered
-  uncovered="$(jq -r --arg name "$edge_exclusion" --slurpfile exclusions "${dir}/project-exclusions.json" '
-    ($exclusions[0] | map(select(.name == $name and .disabled != true)) | first | .filter) as $filter
-    | if $filter == "" or $filter == null then "missing enabled project exclusion \($name)"
-      else .[]
-        | select(.disabled != true)
-        | select(.level == "project" or .includeChildren == true or .interceptChildren == true)
-        | select(.level != "project" or (.name != "_Required" and .name != "_Default"))
-        | select([.exclusions[]? | select(.disabled != true and .filter == $filter)] | length == 0)
-        | "\(.parent) sink \(.name) -> \(.destination)"
-      end' "${dir}/sinks.json")"
-  [[ -z "$uncovered" ]] ||
-    fail "token-route request logs could reach: $(tr '\n' ';' <<<"$uncovered")"
-  echo "every project and inherited log sink drops token-route request logs"
-}
+  [[ "$trace_id" =~ ^[0-9a-f]{32}$ ]] || fail "no recorded probe trace ID; the rpc-probe phase records it"
+  pause 90
+  # Log reads reach back past the primary probe, at least two hours.
+  local freshness=7200
+  if [[ "${PROBE_STARTED_AT:-}" =~ ^[0-9]+$ ]] && (($(date -u +%s) - PROBE_STARTED_AT + 900 > freshness)); then
+    freshness=$(($(date -u +%s) - PROBE_STARTED_AT + 900))
+  fi
 
-# A fresh OTLP export the probe sends on request (a warm instance's
-# startup export may be older than the readback windows): its trace ID
-# must name a structured log line from this service and a Cloud Trace
-# trace holding the synthetic span.
-# A missing, empty or unreadable answer fails the proof.
-verify_probe_telemetry() {
-  local ip body trace_id="" status="" attempt
-  ip="$(edge_ip)"
-  for attempt in $(seq 1 10); do
-    body="$(capture '{"otlp":{"traceId":"0123456789abcdef0123456789abcdef","status":200}}' \
-      curl -fsS --max-time 10 "http://${ip}/probe/trace" || true)"
-    trace_id="$(jq -r '.otlp.traceId // empty' <<<"$body" 2>/dev/null || true)"
-    status="$(jq -r '.otlp.status // empty' <<<"$body" 2>/dev/null || true)"
-    [[ "$trace_id" =~ ^[0-9a-f]{32}$ && "$status" =~ ^2[0-9][0-9]$ ]] && break
-    $dry_run && break
-    pause 10
-  done
-  [[ "$trace_id" =~ ^[0-9a-f]{32}$ && "$status" =~ ^2[0-9][0-9]$ ]] ||
-    fail "the probe reports no accepted OTLP export (trace '${trace_id}', status '${status}')"
-  echo "probe exported synthetic trace ${trace_id} (collector status ${status})"
-
-  local entries="" found=false
-  for attempt in $(seq 1 12); do
-    if entries="$(capture '[{}]' gcloud logging read \
-      "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${web_service}\" AND jsonPayload.otlp.traceId=\"${trace_id}\"" \
-      --project="$project_id" --freshness=1h --limit=1 --format='json(timestamp,jsonPayload.otlp)')"; then
-      jq -e 'length > 0' >/dev/null <<<"$entries" 2>&1 && {
-        found=true
-        break
-      }
-    else
-      fail "Cloud Logging is unreadable; the probe's structured log is unverified"
+  local requests="" control=false
+  for _ in $(seq 1 8); do
+    requests="$(capture "[{\"trace\":\"projects/${project_id}/traces/${trace_id}\",\"httpRequest\":{\"requestUrl\":\"https://${api_service}.run.app/rpc\"}}]" \
+      gcloud logging read \
+      "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${api_service}\" AND log_id(\"run.googleapis.com/requests\") AND httpRequest.requestMethod=\"POST\" AND trace=\"projects/${project_id}/traces/${trace_id}\"" \
+      --project="$project_id" --freshness="${freshness}s" --limit=5 --format='json(trace,httpRequest.requestUrl)')" ||
+      fail "Cloud Run request logs are unreadable; marker absence unverified"
+    if jq -e --arg id "$trace_id" 'type == "array" and any(.[];
+        ((.trace // "") | endswith("/traces/" + $id))
+        and ((.httpRequest.requestUrl // "") | test("^https?://[^/?#]+/rpc([?#].*)?$")))' \
+      >/dev/null 2>&1 <<<"$requests"; then
+      control=true
+      break
     fi
     $dry_run && break
     pause 15
   done
-  $found || fail "no structured probe log for trace ${trace_id}"
-  echo "structured probe log present for trace ${trace_id}"
+  $control || fail "no POST /rpc request log carries the probe trace ${trace_id}; marker absence would prove nothing"
+  echo "Cloud Logging holds the probe's POST /rpc request log"
+
+  local logs
+  logs="$(capture '[]' gcloud logging read \
+    "\"${marker}\" OR textPayload:\"${marker}\" OR jsonPayload:\"${marker}\" OR httpRequest.requestUrl:\"${marker}\"" \
+    --project="$project_id" --freshness="${freshness}s" --limit=20 --format='json(logName,timestamp)')" ||
+    fail "Cloud Logging is unreadable; marker absence in logs unverified"
+  jq -e 'type == "array" and length == 0' >/dev/null 2>&1 <<<"$logs" ||
+    fail "the marker reached readable logs: $(jq -c '[.[]? | .logName]' <<<"$logs" 2>/dev/null)"
+  echo "marker absent from every searchable Cloud Logging entry"
 
   local trace_body="" spans=0
-  for attempt in $(seq 1 12); do
-    if trace_body="$(google_get '{"spans":[{"name":"sandbox-probe.synthetic"}]}' \
+  for _ in $(seq 1 12); do
+    if trace_body="$(google_get "{\"traceId\":\"${trace_id}\",\"spans\":[{\"name\":\"/rpc\"}]}" \
       "https://cloudtrace.googleapis.com/v1/projects/${project_id}/traces/${trace_id}")"; then
-      spans="$(jq '[.spans[]? | select(.name == "sandbox-probe.synthetic")] | length' <<<"$trace_body")"
+      spans="$(jq '[.spans[]?] | length' <<<"$trace_body" 2>/dev/null || echo 0)"
       ((spans > 0)) && break
     fi
     $dry_run && break
     pause 15
   done
   ((spans > 0)) ||
-    fail "Cloud Trace returned no sandbox-probe.synthetic span for trace ${trace_id} (denied, empty or not ingested)"
-  echo "Cloud Trace holds the probe's synthetic span for trace ${trace_id}"
-  record_value "${proof_dir}/telemetry.env" PROBE_TRACE_ID "$trace_id"
-}
+    fail "trace control unavailable: Cloud Trace holds no span of the probe trace ${trace_id} (denied, empty or not ingested); marker absence in traces would prove nothing"
+  [[ "$trace_body" != *"$marker"* ]] || fail "the marker reached the probe's trace"
+  echo "Cloud Trace holds the probe trace ${trace_id}"
 
-# Token-route requests carry a synthetic marker; it must reach no
-# searchable log or readable trace. Routing is verified first, request
-# logs for other routes must be readable (the control), and any unreadable
-# source fails the proof rather than counting as clean.
-phase_edge_privacy() {
-  verify_log_routing
-  verify_probe_telemetry
-  local ip path body start
-  ip="$(edge_ip)"
-  start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
-  for path in "${token_routes[@]}"; do
-    body="$(capture "{\"route\":\"${path}\"}" curl -fsS --max-time 10 "http://${ip}${path}?token=${marker}")"
-    [[ "$body" != *"$marker"* ]] || fail "${path} echoed the marker"
-  done
-  capture '{}' curl -fsS --max-time 10 "http://${ip}/healthz" >/dev/null
-  pause 90
-
-  local requests="" attempt control=false
-  for attempt in $(seq 1 8); do
-    requests="$(capture '[{}]' gcloud logging read \
-      "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${web_service}\" AND log_id(\"run.googleapis.com/requests\") AND timestamp>=\"${start}\"" \
-      --project="$project_id" --freshness=1h --limit=1 --format='json(logName,timestamp)')" ||
-      fail "Cloud Run request logs are unreadable; marker absence unverified"
-    jq -e 'length > 0' >/dev/null <<<"$requests" 2>&1 && {
-      control=true
-      break
-    }
-    $dry_run && break
-    pause 15
-  done
-  $control || fail "no Cloud Run request log since ${start}; marker absence would prove nothing"
-
-  local logs
-  logs="$(capture '[]' gcloud logging read "\"${marker}\"" --project="$project_id" \
-    --freshness=1h --limit=20 --format='json(logName,timestamp)')" ||
-    fail "Cloud Logging is unreadable; marker absence in logs unverified"
-  [[ "$(jq 'length' <<<"$logs")" == 0 ]] ||
-    fail "the marker reached readable logs: $(jq -c '[.[] | .logName]' <<<"$logs")"
-  echo "marker absent from searchable Cloud Logging entries"
-
-  # Every trace of the last hour, which must include the probe's own.
-  load_env_file "${proof_dir}/telemetry.env"
-  local window traces page="" listed=false
-  window="$(capture 2026-01-01T00:00:00Z date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)"
+  # Every trace since the earlier of the primary probe and an hour ago,
+  # spans with names and labels, which must include the probe's own.
+  local window traces page="" listed=false start_epoch
+  start_epoch=$(($(date -u +%s) - 3600))
+  if [[ "${PROBE_STARTED_AT:-}" =~ ^[0-9]+$ ]] && ((PROBE_STARTED_AT - 300 < start_epoch)); then
+    start_epoch=$((PROBE_STARTED_AT - 300))
+  fi
+  window="$(capture 2026-01-01T00:00:00Z date -u -d "@${start_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
   for _ in $(seq 1 20); do
-    traces="$(google_get '{"traces":[{"traceId":"0123456789abcdef0123456789abcdef"}]}' \
+    traces="$(google_get "{\"traces\":[{\"traceId\":\"${trace_id}\"}]}" \
       "https://cloudtrace.googleapis.com/v1/projects/${project_id}/traces?view=COMPLETE&pageSize=100&startTime=${window}${page:+&pageToken=${page}}")" ||
       fail "Cloud Trace is unreadable; marker absence in traces unverified"
-    [[ "$traces" != *"$marker"* ]] || fail "the marker reached Cloud Trace"
-    jq -e --arg id "${PROBE_TRACE_ID:-}" 'any(.traces[]?; .traceId == $id)' >/dev/null <<<"$traces" &&
+    [[ "$traces" != *"$marker"* ]] || fail "the marker reached a Cloud Trace span"
+    jq -e --arg id "$trace_id" 'any(.traces[]?; .traceId == $id)' >/dev/null 2>&1 <<<"$traces" &&
       listed=true
-    # Encoded like the sink pages' tokens: a raw `+`, `/` or `=` in a page
-    # token would reach Cloud Trace altered.
+    # A raw `+`, `/` or `=` in a page token would reach Cloud Trace altered.
     page="$(jq -r '.nextPageToken // empty | @uri' <<<"$traces")"
     [[ -z "$page" ]] && break
   done
   [[ -z "$page" ]] || fail "more than 20 pages of traces; marker absence unverified"
-  $dry_run || $listed || fail "the trace listing omits the probe's trace; marker absence unverified"
+  $listed || fail "the trace listing omits the probe's trace; marker absence unverified"
   echo "marker absent from every Cloud Trace span of the last hour"
 }
 
-# Scoped destroy of exactly the sandbox stack, edge included, under the
-# writer lock. Alchemy removes the edge before the web service its endpoint
-# group names. The state bucket, WIF and deployer stay; the release record's
+# Scoped destroy of exactly the sandbox stack under the writer lock. The
+# state bucket, the GitHub and Vercel WIF and the deployer stay; the release record's
 # live object and the proof run record are removed so the next proof starts
 # empty, and their generations stay as noncurrent history in the versioned
 # bucket. A refused lock or a failed destroy stops here: nothing is ever
@@ -1463,11 +1699,15 @@ phase_post_destroy_inventory() {
       fi
     done
   fi
-  ((${#unverified[@]} == 0)) || notice "unverified after destroy: ${unverified[*]}"
   billing projects describe "$project_id" --format='value(billingEnabled,billingAccountName)' ||
     notice "billing link unverified (denied)"
+  rm -f "$marker_file"
   ! $residual || fail "proof resources remain after teardown"
-  echo "no proof resources remain in any verified class"
+  # Every class is required: an unreadable one could hide residue. Each
+  # listing's error stays in its .err file.
+  ((${#unverified[@]} == 0)) ||
+    fail "teardown unverified: ${unverified[*]} could not be listed (see each class's .err file)"
+  echo "no proof resources remain in any class"
 }
 
 # ---------------------------------------------------------------- dispatch
@@ -1491,7 +1731,9 @@ run_phase() {
     foundation) phase_foundation ;;
     images) phase_images ;;
     deliver-v1) phase_deliver_v1 ;;
-    edge-readback) phase_edge_readback ;;
+    private-access) phase_private_access ;;
+    rpc-probe) phase_rpc_probe ;;
+    worker-probe) phase_worker_probe ;;
     deliver-v2) phase_deliver_v2 ;;
     drift) phase_drift ;;
     interrupt-recover) phase_interrupt_recover ;;
@@ -1499,7 +1741,7 @@ run_phase() {
     state-snapshot-locked) phase_state_snapshot_locked ;;
     state-restore-locked) phase_state_restore_locked ;;
     restore-v1) phase_restore_v1 ;;
-    edge-privacy) phase_edge_privacy ;;
+    telemetry-privacy) phase_telemetry_privacy ;;
     stack-destroy) phase_stack_destroy ;;
     post-destroy-inventory) phase_post_destroy_inventory ;;
     *) usage ;;

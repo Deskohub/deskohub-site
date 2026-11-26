@@ -23,8 +23,8 @@ import {
   SpanAllowlistProcessor,
 } from "./span-allowlist";
 import {
-  isPostHogLogsExportEnabled,
-  type PostHogLogsExport,
+  isPostHogExportEnabled,
+  type PostHogExportPolicy,
 } from "./telemetry-policy";
 
 /**
@@ -62,44 +62,77 @@ const identityResource = ({
   });
 
 export interface WorkspaceOTelRegistrationOptions {
+  /** The stage the process serves, such as production or preview. */
+  readonly deploymentEnvironment?: string | undefined;
   /** The source commit the process serves. */
   readonly serviceVersion?: string | undefined;
   /** The host's rollout, such as a Cloud Run revision. */
   readonly deploymentId?: string | undefined;
+  readonly posthogHost?: string | undefined;
+  readonly posthogProjectToken?: string | undefined;
+  /** Which deployments export their spans to PostHog. */
+  readonly tracesExport?: PostHogExportPolicy | undefined;
   /**
-   * A loopback OTLP/HTTP collector, such as the Cloud Run sidecar at
-   * `http://127.0.0.1:4318`.
-   */
-  readonly otlpEndpoint?: string | undefined;
-  /**
-   * Whether `registerOTel` may add its automatic exporters when there is no
-   * OTLP endpoint, as on Vercel (the default). A container host turns it off:
-   * there they would send spans unfiltered to any OTLP endpoint the
+   * Whether `registerOTel` may add its automatic exporters when the spans
+   * don't go to PostHog, as on Vercel (the default). A container host turns
+   * it off: there they would send spans unfiltered to any OTLP endpoint the
    * environment names, or to `localhost:4318`.
    */
   readonly automaticExport?: boolean | undefined;
 }
 
 /**
+ * Whether a process with these options exports its spans to PostHog: it has
+ * a project token and `tracesExport` includes its deployment.
+ */
+export const exportsPostHogTraces = ({
+  deploymentEnvironment,
+  posthogProjectToken,
+  tracesExport,
+}: Pick<
+  WorkspaceOTelRegistrationOptions,
+  "deploymentEnvironment" | "posthogProjectToken" | "tracesExport"
+>) =>
+  Boolean(posthogProjectToken) &&
+  isPostHogExportEnabled({ deploymentEnvironment, policy: tracesExport });
+
+/**
  * `registerOTel` options for the Workspace server.
  *
- * By default, as on Vercel, they are the Workspace identity and the span
- * redactors ahead of `registerOTel`'s automatic exporting processors, as
- * they have always been.
+ * When the deployment exports its spans to PostHog, on Vercel and on a
+ * container host alike, the span redactors and the span allowlist run ahead
+ * of a single bounded batch export to PostHog's `/i/v1/traces`, which
+ * applies the allowlist again, and no automatic exporter runs; the identity
+ * adds the stage, the revision and the rollout.
  *
- * With an OTLP endpoint, as in a container, the span redactors and the span
- * allowlist run ahead of a single bounded batch export to that collector,
- * which applies the allowlist again, and no automatic exporter runs; the
- * identity adds the revision and the rollout. Without automatic export and
- * without an endpoint, spans are recorded and filtered but never exported.
+ * Otherwise, by default, as on Vercel, they are the Workspace identity and
+ * the span redactors ahead of `registerOTel`'s automatic exporting
+ * processors. Without automatic export, spans are recorded and filtered but
+ * never exported.
  */
 export const createWorkspaceOTelRegistration = ({
+  deploymentEnvironment,
   serviceVersion,
   deploymentId,
-  otlpEndpoint,
+  posthogHost,
+  posthogProjectToken,
+  tracesExport,
   automaticExport = true,
 }: WorkspaceOTelRegistrationOptions = {}) => {
-  if (!otlpEndpoint && automaticExport) {
+  const postHogExport =
+    posthogProjectToken &&
+    exportsPostHogTraces({
+      deploymentEnvironment,
+      posthogProjectToken,
+      tracesExport,
+    })
+      ? createPostHogSpanProcessor({
+          posthogHost,
+          posthogProjectToken,
+          deploymentEnvironment,
+        })
+      : undefined;
+  if (!postHogExport && automaticExport) {
     return {
       serviceName: WORKSPACE_SERVICE_NAME,
       attributes: { "service.namespace": WORKSPACE_SERVICE_NAMESPACE },
@@ -110,40 +143,19 @@ export const createWorkspaceOTelRegistration = ({
     serviceName: WORKSPACE_SERVICE_NAME,
     attributes: {
       "service.namespace": WORKSPACE_SERVICE_NAMESPACE,
+      ...(deploymentEnvironment && {
+        "deployment.environment.name": deploymentEnvironment,
+      }),
       ...(serviceVersion && { "service.version": serviceVersion }),
       ...(deploymentId && { "deployment.id": deploymentId }),
     },
     spanProcessors: [
       ...createWorkspaceSpanRedactors(),
       new SpanAllowlistProcessor(),
-      ...(otlpEndpoint ? [createCollectorSpanProcessor(otlpEndpoint)] : []),
+      ...(postHogExport ? [postHogExport] : []),
     ],
   };
 };
-
-/** A loopback collector answers fast or is down; either way, don't wait. */
-const collectorExportTimeoutMs = 1_000;
-
-/**
- * The batch export to a loopback collector, which applies the span allowlist
- * again to what it exports. Its queue and batches are bounded, so a collector that is down drops spans instead of growing the
- * process's memory.
- */
-const createCollectorSpanProcessor = (otlpEndpoint: string): SpanProcessor =>
-  new BatchSpanProcessor(
-    createAllowlistedSpanExporter(
-      new OTLPTraceExporter({
-        timeoutMillis: collectorExportTimeoutMs,
-        url: new URL("/v1/traces", otlpEndpoint).toString(),
-      })
-    ),
-    {
-      exportTimeoutMillis: collectorExportTimeoutMs,
-      maxExportBatchSize: 256,
-      maxQueueSize: 2_048,
-      scheduledDelayMillis: 1_000,
-    }
-  );
 
 /**
  * Span processors that scrub credentials, such as signed Cloudinary URL
@@ -159,6 +171,72 @@ const postHogEndpoint = (posthogHost: string, path: string) =>
   new URL(path, posthogHost).toString();
 
 const postHogExportTimeoutMs = 2_000;
+
+/**
+ * A batch span processor whose flush also waits for the exports already in
+ * flight. The SDK's flush exports the queued spans only, so it can resolve
+ * while a batch its timer started is still sending, and a container that
+ * idles or a function that freezes after the flush would lose that batch.
+ */
+class DrainingBatchSpanProcessor extends BatchSpanProcessor {
+  readonly #exporter: SpanExporter;
+
+  constructor(
+    exporter: SpanExporter,
+    config: ConstructorParameters<typeof BatchSpanProcessor>[1]
+  ) {
+    super(exporter, config);
+    this.#exporter = exporter;
+  }
+
+  override async forceFlush(): Promise<void> {
+    await super.forceFlush();
+    await this.#exporter.forceFlush?.();
+  }
+}
+
+/**
+ * The batch export of the Workspace server's spans to PostHog's
+ * `/i/v1/traces`, never its AI-only OTLP endpoint, which drops other spans.
+ * Its exporter applies the span allowlist again, after every processor ran.
+ * Its queue and batches are bounded, so an unreachable PostHog drops spans
+ * instead of growing the process's memory.
+ */
+const createPostHogSpanProcessor = ({
+  posthogHost,
+  posthogProjectToken,
+  deploymentEnvironment,
+}: {
+  readonly posthogHost: string | undefined;
+  readonly posthogProjectToken: string;
+  readonly deploymentEnvironment: string | undefined;
+}): SpanProcessor => {
+  if (!posthogHost) {
+    throw new Error(
+      "POSTHOG_INGEST_HOST is required when PostHog tracing is enabled"
+    );
+  }
+  if (!deploymentEnvironment) {
+    throw new Error(
+      "The deployment stage (WORKSPACE_DEPLOYMENT_STAGE or VERCEL_ENV) is required when PostHog tracing is enabled"
+    );
+  }
+  return new DrainingBatchSpanProcessor(
+    createAllowlistedSpanExporter(
+      new OTLPTraceExporter({
+        headers: { Authorization: `Bearer ${posthogProjectToken}` },
+        timeoutMillis: postHogExportTimeoutMs,
+        url: postHogEndpoint(posthogHost, "/i/v1/traces"),
+      })
+    ),
+    {
+      exportTimeoutMillis: postHogExportTimeoutMs,
+      maxExportBatchSize: 256,
+      maxQueueSize: 2_048,
+      scheduledDelayMillis: 1_000,
+    }
+  );
+};
 
 interface PostHogSinkOptions extends TelemetryIdentity {
   readonly posthogHost?: string;
@@ -194,7 +272,7 @@ export const createWorkspaceLoggerProvider = (
   });
 
 interface PostHogLogSinkOptions extends PostHogSinkOptions {
-  readonly logsExport?: PostHogLogsExport;
+  readonly logsExport?: PostHogExportPolicy;
 }
 
 /**
@@ -209,9 +287,9 @@ export function createPostHogLoggerProvider({
 }: PostHogLogSinkOptions) {
   if (!posthogProjectToken) return undefined;
   if (
-    !isPostHogLogsExportEnabled({
+    !isPostHogExportEnabled({
       deploymentEnvironment: identity.deploymentEnvironment,
-      logsExport,
+      policy: logsExport,
     })
   ) {
     return undefined;

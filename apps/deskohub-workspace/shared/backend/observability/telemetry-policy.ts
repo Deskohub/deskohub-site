@@ -1,27 +1,27 @@
 import { type LogLevel, Schema } from "effect";
 
 /**
- * Which deployments export Workspace logs to PostHog. "production-only", the
- * default, keeps preview and development logs on the console: E2E runs against
- * previews used to exhaust the PostHog Logs quota. "always" opts a deployment
- * in, for example through a branch-scoped Vercel Preview variable while
- * diagnosing that preview.
+ * Which deployments export a Workspace signal, its logs or its traces, to
+ * PostHog. "production-only", the default, keeps preview and development
+ * telemetry out of PostHog: E2E runs against previews used to exhaust the
+ * PostHog Logs quota. "always" opts a deployment in, for example through a
+ * branch-scoped Vercel Preview variable while diagnosing that preview.
  */
-export const postHogLogsExportSchema = Schema.Literals([
+export const postHogExportPolicySchema = Schema.Literals([
   "production-only",
   "always",
 ]);
 
-export type PostHogLogsExport = typeof postHogLogsExportSchema.Type;
+export type PostHogExportPolicy = typeof postHogExportPolicySchema.Type;
 
-/** Whether a deployment in `deploymentEnvironment` exports its logs. */
-export const isPostHogLogsExportEnabled = ({
+/** Whether a deployment in `deploymentEnvironment` exports under `policy`. */
+export const isPostHogExportEnabled = ({
   deploymentEnvironment,
-  logsExport = "production-only",
+  policy = "production-only",
 }: {
   readonly deploymentEnvironment?: string | undefined;
-  readonly logsExport?: PostHogLogsExport | undefined;
-}) => logsExport === "always" || deploymentEnvironment === "production";
+  readonly policy?: PostHogExportPolicy | undefined;
+}) => policy === "always" || deploymentEnvironment === "production";
 
 /** Effect's log level names, as `WORKSPACE_LOG_LEVEL` accepts them. */
 export const workspaceLogLevelSchema = Schema.Literals([

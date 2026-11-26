@@ -16,9 +16,9 @@ import {
   trafficReadback,
 } from "../readback";
 import {
-  declaredWebTemplate,
+  apiTemplateSpecFingerprint,
+  declaredApiTemplate,
   releaseTrafficTag,
-  webTemplateSpecFingerprint,
 } from "../resources/service-declarations";
 import {
   observeReleaseServices,
@@ -166,7 +166,7 @@ const contractDrift = (
 
 /**
  * Read every release-owned service back and settle the pending traffic
- * change from what the web service actually serves. Contract drift fails
+ * change from what the API service actually serves. Contract drift fails
  * before the record changes.
  */
 const settleFromReadback = Effect.fn("WorkspaceRelease.settleFromReadback")(
@@ -191,7 +191,7 @@ const settleFromReadback = Effect.fn("WorkspaceRelease.settleFromReadback")(
     return yield* runLockedReleaseStep((record) =>
       settleApply(record, {
         expectedGeneration,
-        readback: readbackOf("web"),
+        readback: readbackOf("api"),
         workers,
         now,
       }).pipe(Effect.map((next) => ({ record: next, result: next })))
@@ -221,10 +221,10 @@ const applyAndSettle = Effect.fn("WorkspaceRelease.applyAndSettle")(function* (
   return serving;
 });
 
-/** The web service's live template as Cloud Run reports it now. */
+/** The API service's live template as Cloud Run reports it now. */
 const readLiveTemplate = Effect.gen(function* () {
   const readback = yield* ReleaseServiceReadback;
-  return liveTemplateOf(yield* readback.service("web"));
+  return liveTemplateOf(yield* readback.service("api"));
 });
 
 /**
@@ -257,11 +257,11 @@ const requireDeclarableTemplate = Effect.fn(
   "WorkspaceRelease.requireDeclarableTemplate"
 )(function* (config: WorkspaceStackConfig) {
   const { record } = yield* (yield* ReleaseRecordStore).read;
-  const declared = declaredWebTemplate(record);
+  const declared = declaredApiTemplate(record);
   if (declared === null) {
     return;
   }
-  const declaredSpecFingerprint = webTemplateSpecFingerprint(
+  const declaredSpecFingerprint = apiTemplateSpecFingerprint(
     config,
     declared.imageDigest
   );
@@ -290,22 +290,22 @@ const requireDeclarableTemplate = Effect.fn(
 });
 
 /**
- * The web service still sends all traffic to the active release, and the
+ * The API service still sends all traffic to the active release, and the
  * candidate is reachable only through its zero-percent tag.
  */
 const holdsCandidateAtZero = (
-  web: ObservedService | null,
+  api: ObservedService | null,
   active: VerifiedDeployment,
   candidate: ReleaseDeployment
 ) => {
-  if (web === null) {
+  if (api === null) {
     return false;
   }
-  const serving = trafficReadback(web);
+  const serving = trafficReadback(api);
   return (
     serving.servingRevision === active.revision &&
     serving.servingImageDigest === active.imageDigest &&
-    web.traffic.some(
+    api.traffic.some(
       (entry) =>
         entry.revision === candidate.revision &&
         entry.percent === 0 &&
@@ -327,11 +327,11 @@ const observeCandidate = Effect.fn("WorkspaceRelease.observeCandidate")(
   ) {
     const readback = yield* ReleaseServiceReadback;
     const observed = yield* readback.revision(candidate.revision);
-    const web = yield* readback.service("web");
+    const api = yield* readback.service("api");
     if (
       observed === null ||
       !observed.ready ||
-      !holdsCandidateAtZero(web, active, candidate)
+      !holdsCandidateAtZero(api, active, candidate)
     ) {
       return yield* new CandidateNotVerified({
         releaseId: candidate.releaseId,
@@ -450,7 +450,7 @@ export const restoreRelease = Effect.fn("WorkspaceRelease.restore")(function* (
         now,
         liveTemplate,
         specFingerprintOf: (imageDigest) =>
-          webTemplateSpecFingerprint(config, imageDigest),
+          apiTemplateSpecFingerprint(config, imageDigest),
       }).pipe(Effect.map((next) => ({ record: next, result: next.generation })))
     );
     return yield* applyAndSettle(config, generation, policy);
@@ -478,7 +478,7 @@ export const recoverRelease = Effect.fn("WorkspaceRelease.recover")(function* (
 });
 
 /**
- * The current record with the web template a plain deploy decides from
+ * The current record with the API template a plain deploy decides from
  * what Cloud Run runs now (`refreshTemplate`).
  */
 const refreshedPlainRunRecord = Effect.fn(
@@ -489,7 +489,7 @@ const refreshedPlainRunRecord = Effect.fn(
     expectedGeneration: record.generation,
     liveTemplate,
     specFingerprintOf: (imageDigest) =>
-      webTemplateSpecFingerprint(config, imageDigest),
+      apiTemplateSpecFingerprint(config, imageDigest),
   });
 });
 
@@ -514,7 +514,7 @@ export const stackRunRecord = (
  * as the stage's only writer: `deploy` applies it and `plan` previews it.
  * It declares the current record, so a pending traffic change must be
  * recovered or restored first. Before a deploy runs, its own step decides
- * the web template (`refreshTemplate`): it drops a candidate a failed
+ * the API template (`refreshTemplate`): it drops a candidate a failed
  * delivery left staged, and a failed or outdated template gets a fresh
  * revision name, so a config change never re-declares an existing revision
  * name with another spec.
