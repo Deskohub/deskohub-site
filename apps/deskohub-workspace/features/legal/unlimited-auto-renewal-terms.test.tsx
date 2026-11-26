@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { locales } from "@/features/i18n";
+import { locales, m } from "@/features/i18n";
 import { serializeMarkdown } from "@/shared/markdown/markdown";
-import { markdownPlainText } from "@/shared/markdown/markdown.test-utils";
+import {
+  markdownLinkUrls,
+  markdownPlainText,
+} from "@/shared/markdown/markdown.test-utils";
 import { getCanonicalLegalDocument } from "./canonical-document";
 import { InAppLegalPage } from "./components/in-app-legal-page";
 import { LegalPage } from "./components/legal-page";
@@ -18,6 +21,11 @@ import {
 import { supportsUnlimitedAutoRenewalTerms } from "./unlimited-auto-renewal-terms";
 
 const documentKey = "terms-and-conditions";
+const membershipDocumentKeys = [
+  documentKey,
+  "privacy-policy",
+  "operating-rules",
+] as const;
 let previewEnabled = false;
 
 type CanonicalSections = {
@@ -36,57 +44,106 @@ afterEach(() => {
   previewEnabled = false;
 });
 
+const collapseWhitespace = (value: string) => value.replace(/\s+/g, " ").trim();
+
 describe.each([
   ["cs-CZ", "16. Automatické obnovování členství Unlimited"],
   ["en-US", "16. Automatic renewal of Unlimited memberships"],
 ] as const)("Unlimited renewal terms in %s", (locale, heading) => {
-  test("serves the same draft in site HTML, in-app HTML and Markdown", () => {
-    previewEnabled = true;
-    const published = getLegalDocument(locale, documentKey);
-    const served = getServedLegalDocument(locale, documentKey);
-    const draft = served.sections.at(-1);
+  test.each(membershipDocumentKeys)(
+    "serves the same %s in site HTML, in-app HTML, Markdown and version evidence",
+    (key) => {
+      const published = getLegalDocument(locale, key);
+      const publishedHash = getLegalDocumentVersion(locale, key);
+      previewEnabled = true;
+      const served = getServedLegalDocument(locale, key);
+      const canonical: CanonicalSections = JSON.parse(
+        getCanonicalLegalDocument(served)
+      );
+      expect(served.updatedAt).not.toBe(published.updatedAt);
+      expect(served.translationNotice).toBe(published.translationNotice);
+      const site = renderToStaticMarkup(
+        <LegalPage locale={locale} documentKey={key} />
+      );
+      const inApp = renderToStaticMarkup(
+        <InAppLegalPage locale={locale} documentKey={key} />
+      );
+      const markdown = serializeMarkdown(legalPageMarkdown(locale, key));
+      for (const html of [site, inApp]) {
+        expect(html).toContain(served.updatedAt);
+        // The app can add its query parameter to links to other legal pages.
+        const content = html.replaceAll(/ href="[^"]+"/g, "");
+        for (const section of served.sections) {
+          expect(html).toContain(renderToStaticMarkup(section.heading));
+          for (const paragraph of section.body) {
+            expect(content).toContain(
+              renderToStaticMarkup(paragraph).replaceAll(/ href="[^"]+"/g, "")
+            );
+          }
+        }
+      }
+      expect(markdownPlainText(markdown)).toBe(
+        [
+          served.title,
+          served.lead,
+          `${m.legalPageLastUpdatedLabel({}, { locale })}: ${served.updatedAt}`,
+          served.translationNotice ?? "",
+          ...canonical.sections.flatMap(({ heading, body }) => [
+            heading,
+            ...body,
+          ]),
+        ]
+          .map(collapseWhitespace)
+          .filter(Boolean)
+          .join("\n")
+      );
+      expect(getLegalDocumentVersion(locale, key)).toBe(
+        hashLegalDocument(served)
+      );
+      expect(getLegalDocumentVersion(locale, key)).not.toBe(publishedHash);
 
-    expect(draft?.heading).toBe(heading);
-    expect(served.updatedAt).toBe(published.updatedAt);
-    expect(served.sections.slice(0, -1)).toEqual(published.sections);
+      previewEnabled = false;
+      expect(getServedLegalDocument(locale, key)).toEqual(published);
+      expect(getLegalDocumentVersion(locale, key)).toBe(publishedHash);
+    }
+  );
+
+  test("links to the numbered renewal section and localized pricing", () => {
+    previewEnabled = true;
     const site = renderToStaticMarkup(
       <LegalPage locale={locale} documentKey={documentKey} />
     );
     const inApp = renderToStaticMarkup(
       <InAppLegalPage locale={locale} documentKey={documentKey} />
     );
-    const markdown = markdownPlainText(
-      serializeMarkdown(legalPageMarkdown(locale, documentKey))
-    );
-    const canonical: CanonicalSections = JSON.parse(
-      getCanonicalLegalDocument(served)
-    );
-    const canonicalDraft = canonical.sections.at(-1);
-
+    expect(site).toContain("scroll-mt-[calc(var(--site-header-height)+1rem)]");
     for (const html of [site, inApp]) {
+      expect(html).toContain('id="section-16"');
       expect(html).toContain(heading);
-      for (const paragraph of draft?.body ?? []) {
-        expect(html).toContain(renderToStaticMarkup(paragraph));
-      }
+      expect(html).toContain(`href="/${locale}/pricing"`);
     }
-    expect(markdown.split("\n").slice(-10)).toEqual([
-      heading,
-      ...(canonicalDraft?.body ?? []).map((line) =>
-        line.replace(/\s+/g, " ").trim()
-      ),
-    ]);
-    expect(markdown.match(/^16\.\d+(?= )/gm)).toEqual(
-      Array.from({ length: 9 }, (_, index) => `16.${index + 1}`)
+    const markdown = serializeMarkdown(legalPageMarkdown(locale, documentKey));
+    expect(markdownLinkUrls(markdown)).toContain(
+      `https://workspace.deskohub.cz/${locale}/pricing`
     );
-
-    previewEnabled = false;
-    expect(getServedLegalDocument(locale, documentKey)).toEqual(published);
-    expect(
-      serializeMarkdown(legalPageMarkdown(locale, documentKey))
-    ).not.toContain(heading);
+    expect(markdownPlainText(markdown).match(/^16\.\d+(?= )/gm)).toEqual(
+      Array.from({ length: 11 }, (_, index) => `16.${index + 1}`)
+    );
+    const getOrderClause = (document: ReturnType<typeof getLegalDocument>) => {
+      const canonical: CanonicalSections = JSON.parse(
+        getCanonicalLegalDocument(document)
+      );
+      return canonical.sections
+        .find(({ heading }) => heading.startsWith("4. "))
+        ?.body.find((paragraph) => paragraph.startsWith("4.2 "));
+    };
+    expect(getOrderClause(getLegalDocument(locale, documentKey))).toBeString();
+    expect(getOrderClause(getServedLegalDocument(locale, documentKey))).toBe(
+      getOrderClause(getLegalDocument(locale, documentKey))
+    );
   });
 
-  test("records the exact served terms hash and rejects baseline acceptance in preview", () => {
+  test("records the served terms and house rules and rejects older acceptance", () => {
     const publishedAcceptance = getPaymentSubmitLegalDocuments(locale);
     const publishedHash = getLegalDocumentVersion(locale, documentKey);
     expect(publishedHash).toBe(
@@ -104,6 +161,14 @@ describe.each([
       key: documentKey,
       path: `/${locale}/${documentKey}`,
       hash: draftHash,
+      hashAlgorithm: "sha256",
+    });
+    expect(draftAcceptance).toContainEqual({
+      key: "operating-rules",
+      path: `/${locale}/operating-rules`,
+      hash: hashLegalDocument(
+        getServedLegalDocument(locale, "operating-rules")
+      ),
       hashAlgorithm: "sha256",
     });
     expect(isCurrentPaymentSubmitLegalAcceptance(locale, draftAcceptance)).toBe(
@@ -134,13 +199,19 @@ test("keeps other locales and documents on their published version in preview", 
   ]);
 
   for (const locale of locales) {
-    if (!supportsUnlimitedAutoRenewalTerms(locale)) {
-      expect(getServedLegalDocument(locale, documentKey)).toEqual(
-        getLegalDocument(locale, documentKey)
+    for (const key of [
+      ...membershipDocumentKeys,
+      "marketing-communications",
+      "cookie-policy",
+    ] as const) {
+      if (
+        supportsUnlimitedAutoRenewalTerms(locale) &&
+        membershipDocumentKeys.some((document) => document === key)
+      )
+        continue;
+      expect(getServedLegalDocument(locale, key)).toEqual(
+        getLegalDocument(locale, key)
       );
     }
-    expect(getServedLegalDocument(locale, "operating-rules")).toEqual(
-      getLegalDocument(locale, "operating-rules")
-    );
   }
 });

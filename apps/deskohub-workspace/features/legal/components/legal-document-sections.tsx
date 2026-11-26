@@ -13,7 +13,7 @@ export function LegalDocumentSections({
 }: LegalDocumentSectionsProps) {
   const classNames = {
     page: {
-      section: "space-y-3",
+      section: "scroll-mt-[calc(var(--site-header-height)+1rem)] space-y-3",
       heading: "text-2xl leading-tight",
       body: "space-y-3 text-base leading-7 text-navy-blue/78",
     },
@@ -26,7 +26,11 @@ export function LegalDocumentSections({
   }[variant];
 
   return sections.map((section) => (
-    <section key={section.heading} className={classNames.section}>
+    <section
+      key={section.heading}
+      className={classNames.section}
+      id={`section-${Number.parseInt(section.heading, 10)}`}
+    >
       <h2 className={classNames.heading}>{section.heading}</h2>
       <div className={classNames.body}>
         {section.body.map((paragraph, index) => (

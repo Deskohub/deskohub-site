@@ -5,11 +5,16 @@ import type {
   LegalSection,
 } from "../../legal-document-body";
 import { companyAddress, companyName, contactEmail } from "../operator-details";
+import { unlimitedAutoRenewalSection } from "./unlimited-auto-renewal-section";
+
+const unlimitedAutoRenewalRevisionDate = "26 November 2026";
 
 const commercialRegisterDisclosure =
   "Commercial register details are available in the linked official company extract.";
 
-const termsAndConditionsSections: LegalSection[] = [
+const termsAndConditionsSections = (
+  includesUnlimitedAutoRenewal: boolean
+): LegalSection[] => [
   {
     heading: "1. Introductory Provisions",
     body: [
@@ -24,7 +29,9 @@ const termsAndConditionsSections: LegalSection[] = [
         (hereinafter referred to as the "Provider"), and the client (hereinafter
         referred to as the "Client").
       </>,
-      "1.2 These GTC apply to coworking entries, online bookings of the meeting room and private office, and individually agreed short-term use of premises for events.",
+      includesUnlimitedAutoRenewal
+        ? "1.2 These GTC apply to coworking entries, Entry packs, Unlimited memberships, online Bookings of the meeting room and private office, and individually agreed short-term use of premises for events."
+        : "1.2 These GTC apply to coworking entries, online bookings of the meeting room and private office, and individually agreed short-term use of premises for events.",
       "1.3 The provisions of these GTC are an integral part of every contract concluded between the Provider and the Client.",
       "1.4 Legal relationships not regulated by these GTC are governed by the laws of the Czech Republic, in particular Act No. 89/2012 Coll., the Civil Code.",
       "1.5 If the Client is a Consumer, these GTC do not limit rights that cannot be waived under mandatory law.",
@@ -33,13 +40,25 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "2. Definition of Terms",
     body: [
-      "2.1 Client means a natural or legal person who uses the Provider's services.",
-      "2.2 Consumer means a Client acting outside the scope of their business activity.",
+      includesUnlimitedAutoRenewal
+        ? "2.1 Client means the natural or legal person who orders or uses the Provider’s Services."
+        : "2.1 Client means a natural or legal person who uses the Provider's services.",
+      includesUnlimitedAutoRenewal
+        ? "2.2 Consumer means a natural person who contracts or otherwise deals with the Provider outside their business or independent professional activity."
+        : "2.2 Consumer means a Client acting outside the scope of their business activity.",
       "2.3 Premises means the coworking spaces, meeting room, private office, and event spaces operated by the Provider.",
       "2.4 Services means time-limited use of the selected Premises and the related services stated in the order.",
       "2.5 Tariff means the specific scope of coworking services and the conditions for their use according to the Provider's current Price List.",
       "2.6 Access PIN Code means the current code enabling entry into the Provider's premises.",
-      "2.7 Booking means an order for a specific coworking entry, a meeting-room time slot, or a private-office date range, day count, and seat count.",
+      includesUnlimitedAutoRenewal
+        ? "2.7 Booking means an order for a specific coworking entry, a meeting-room time slot, or a private-office date range, day count, and seat count. A coworking Booking can be purchased separately or made using an Entry pack."
+        : "2.7 Booking means an order for a specific coworking entry, a meeting-room time slot, or a private-office date range, day count, and seat count.",
+      ...(includesUnlimitedAutoRenewal
+        ? [
+            "2.8 Pass means an Entry pack or an Unlimited membership. An Entry pack gives its named holder a fixed number of coworking entries. An Unlimited membership gives its named holder access during each paid 30-calendar-day period, within the selected tier’s hours and scope.",
+            "2.9 Entry packs and Unlimited memberships without automatic renewal have a fixed term. An Unlimited membership with automatic renewal continues indefinitely under section 16. A Pass is for the named holder’s personal use. Bookings can include authorized guests within the confirmed capacity.",
+          ]
+        : []),
     ],
   },
   {
@@ -85,9 +104,15 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "7. Access and Use of Services",
     body: [
-      "7.1 The confirmation email contains a secure link to the Booking access page. Once a Booking is paid, confirmed locally and by live verification, and an Access PIN Code has been issued, the protected page displays that PIN together with the exact programmed validity bounds of the code. Acceptance of the code is determined solely by the lock system's programmed AlgoPIN bounds; the application does not impose its own display clock. The PIN is not included directly in the confirmation email.",
-      "7.2 The Provider may change the Access PIN Code; the Client must use the code currently displayed on the Booking access page. Displaying the PIN does not extend the confirmed use of the Premises and creates no right to enter outside the confirmed time or into other premises. The Premises may be used only during the confirmed Booking time.",
-      "7.3 The Client may disclose the PIN Code only to people authorized to attend the Booking, must protect it from everyone else, and is responsible for its use by the Client's guests. Suspected misuse must be reported to the Provider without delay.",
+      includesUnlimitedAutoRenewal
+        ? "7.1 The confirmation email contains a secure link to the Booking access page. Once the Provider issues a PIN for a confirmed Booking, the page shows the current code and its validity period. An Unlimited membership holder can find the current PIN in their Account during the paid membership period. Membership PINs change regularly. Open Space is available each day from 00:00 to 17:00 Prague time and Reserved Desk is available around the clock."
+        : "7.1 The confirmation email contains a secure link to the Booking access page. Once a Booking is paid, confirmed locally and by live verification, and an Access PIN Code has been issued, the protected page displays that PIN together with the exact programmed validity bounds of the code. Acceptance of the code is determined solely by the lock system's programmed AlgoPIN bounds; the application does not impose its own display clock. The PIN is not included directly in the confirmation email.",
+      includesUnlimitedAutoRenewal
+        ? "7.2 The Provider may change the access PIN. The Client must use the current code displayed on the Booking access page or in their Account, as applicable. The Client may enter and use the Premises only within the time and scope of the confirmed Booking or paid Pass."
+        : "7.2 The Provider may change the Access PIN Code; the Client must use the code currently displayed on the Booking access page. Displaying the PIN does not extend the confirmed use of the Premises and creates no right to enter outside the confirmed time or into other premises. The Premises may be used only during the confirmed Booking time.",
+      includesUnlimitedAutoRenewal
+        ? "7.3 The Pass holder must keep their personal Pass access PIN private. The Client may share a Booking access PIN only with people authorized to attend that Booking and is responsible for its use by those guests. The Client must report suspected misuse to the Provider without delay."
+        : "7.3 The Client may disclose the PIN Code only to people authorized to attend the Booking, must protect it from everyone else, and is responsible for its use by the Client's guests. Suspected misuse must be reported to the Provider without delay.",
       "7.4 The Client and guests must observe the capacity, Booking purpose, confirmed time, and House Rules. The Client must ensure that guests leave the Premises by the end of the Booking.",
     ],
   },
@@ -134,9 +159,13 @@ const termsAndConditionsSections: LegalSection[] = [
         sent.
       </>,
       "9.4 Following a valid withdrawal, the Provider will reimburse payments received without undue delay and no later than 14 days, using the same payment method unless the parties agree otherwise without additional cost to the Consumer.",
-      "9.5 Model notice: “I hereby give notice that I withdraw from my contract for the following Service: [description and Booking number], ordered on [date]. Consumer name: [complete]. Consumer address: [complete]. Date: [complete]. Signature only if submitted on paper.” Use of the model is optional.",
+      includesUnlimitedAutoRenewal
+        ? "9.5 Model notice (optional). “I hereby give notice that I withdraw from my contract for the following Service [description and order number], ordered on [date]. Consumer name [complete]. Consumer address [complete]. Date [complete]. Signature only if submitted on paper.”"
+        : "9.5 Model notice: “I hereby give notice that I withdraw from my contract for the following Service: [description and Booking number], ordered on [date]. Consumer name: [complete]. Consumer address: [complete]. Date: [complete]. Signature only if submitted on paper.” Use of the model is optional.",
       "9.6 The rights in this article apply only to a Consumer and operate alongside any more favorable cancellation terms stated in the order summary or individual offer.",
-      "9.7 If a Consumer validly withdraws from an Entry pack purchase after requesting immediate use and the statutory conditions for a proportional charge are met, the refund is the price actually paid multiplied by the number of unused entries and divided by the total number of entries in the pack, rounded down to whole Czech koruna. Entries for past visits and an entry booked for the day of withdrawal count as used. Bookings for later dates are cancelled and those entries count as unused.",
+      includesUnlimitedAutoRenewal
+        ? "9.7 A Consumer who validly withdraws after requesting early performance pays a proportionate part of the price only if the statutory conditions are met. For an Entry pack, the Provider refunds the price actually paid multiplied by the number of unused entries and divided by the total number of entries in the pack. Past visits and an entry booked for the day of withdrawal count as used. Later Bookings are cancelled and those entries count as unused. For an Unlimited membership, the Provider refunds the price actually paid for the period multiplied by the number of unused calendar days in Prague and divided by 30. If service has started, the Consumer keeps access through the day of withdrawal. That day counts as used. Both calculations round the refund down to whole Czech koruna."
+        : "9.7 If a Consumer validly withdraws from an Entry pack purchase after requesting immediate use and the statutory conditions for a proportional charge are met, the refund is the price actually paid multiplied by the number of unused entries and divided by the total number of entries in the pack, rounded down to whole Czech koruna. Entries for past visits and an entry booked for the day of withdrawal count as used. Bookings for later dates are cancelled and those entries count as unused.",
     ],
   },
   {
@@ -151,7 +180,9 @@ const termsAndConditionsSections: LegalSection[] = [
     heading: "11. Provider Liability",
     body: [
       "11.1 The Provider is responsible for properly supplying the confirmed Service and for harm to the extent required by law. Nothing in these GTC excludes or limits liability that cannot validly be excluded or a Consumer's statutory rights.",
-      "11.2 The Client is responsible for the Client's business activities, data, and items brought into the Premises. The Provider is liable for loss of or damage to an item only to the extent required by law; the Client should therefore not leave items unattended and should secure them appropriately.",
+      includesUnlimitedAutoRenewal
+        ? "11.2 The Client is responsible for their business activities and data and should secure belongings they bring. Section 16.11 and the House Rules explain when belongings may be left at an assigned Reserved Desk. The Provider remains responsible for lost or damaged belongings to the extent required by law."
+        : "11.2 The Client is responsible for the Client's business activities, data, and items brought into the Premises. The Provider is liable for loss of or damage to an item only to the extent required by law; the Client should therefore not leave items unattended and should secure them appropriately.",
       "11.3 The Provider is not liable for an obstacle beyond its control that it could not reasonably foresee or prevent. If such an obstacle or temporary unavailability prevents a material part of the confirmed Service from being supplied, Article 6.4 applies.",
       "11.4 To the maximum extent permitted by law, the Provider is not liable to a Client who is not a Consumer for indirect loss, loss of profit, or loss of data unless caused intentionally or by gross negligence.",
     ],
@@ -159,7 +190,9 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "12. Defects and Complaints",
     body: [
-      "12.1 The Client must report a Service defect without undue delay so that it can be remedied and provide at least contact details, the Booking number, a description of the defect, and the requested resolution.",
+      includesUnlimitedAutoRenewal
+        ? "12.1 The Client must report a Service defect without undue delay so that it can be remedied and provide contact details, the order number, a description of the defect, and the requested resolution."
+        : "12.1 The Client must report a Service defect without undue delay so that it can be remedied and provide at least contact details, the Booking number, a description of the defect, and the requested resolution.",
       <>
         12.2 A complaint may be made at the establishment, at the Provider's
         address, or by email to{" "}
@@ -205,14 +238,21 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "15. Final Provisions",
     body: [
-      "15.1 The Provider may amend these GTC for contracts concluded after a new version takes effect. An already concluded Booking is governed by the version accepted at checkout unless a later amendment is more favorable to the Client or the Client expressly accepts it.",
+      includesUnlimitedAutoRenewal
+        ? "15.1 The Provider may amend these GTC for contracts concluded after a new version takes effect. The version accepted at checkout governs an existing contract unless a later amendment is more favorable to the Client or the Client expressly accepts it."
+        : "15.1 The Provider may amend these GTC for contracts concluded after a new version takes effect. An already concluded Booking is governed by the version accepted at checkout unless a later amendment is more favorable to the Client or the Client expressly accepts it.",
       "15.2 An individual agreement takes precedence over these GTC. If one provision is invalid or ineffective, the remaining provisions are unaffected.",
-      "15.3 These GTC become effective on August 12, 2026.",
+      includesUnlimitedAutoRenewal
+        ? "15.3 This version applies to contracts concluded once it takes effect. The automatic renewal terms in section 16 apply when automatic renewal is offered and the Client separately authorizes it."
+        : "15.3 These GTC become effective on August 12, 2026.",
     ],
   },
+  ...(includesUnlimitedAutoRenewal ? [unlimitedAutoRenewalSection] : []),
 ];
 
-const operatingRulesSections: LegalSection[] = [
+const operatingRulesSections = (
+  includesUnlimitedAutoRenewal: boolean
+): LegalSection[] => [
   {
     heading: "1. Introductory Provisions",
     body: [
@@ -258,6 +298,26 @@ const operatingRulesSections: LegalSection[] = [
       "4.3 The User must maintain order and cleanliness and return the used space and shared equipment to an appropriate condition after use.",
       "4.4 Without the Operator's consent, a User must not move equipment, make alterations, install devices, or interfere with technical systems.",
       "4.5 A User must operate audiovisual, conferencing, and other equipment according to instructions and report a defect without undue delay. Equipment must be safely switched off after the Booking where appropriate.",
+      ...(includesUnlimitedAutoRenewal
+        ? [
+            <>
+              4.6 Users with paid Reserved Desk access that continues overnight
+              may leave belongings at their assigned desk overnight. Users must
+              remove their belongings by the end of paid access, including if
+              renewal fails. To collect anything left behind, contact the
+              Operator at{" "}
+              <a
+                className="text-burned-orange underline underline-offset-4"
+                href={`mailto:${contactEmail}`}
+              >
+                {contactEmail}
+              </a>
+              . The Operator’s duty to take reasonable care of belongings and
+              any liability that cannot be excluded or limited under Czech law
+              still apply.
+            </>,
+          ]
+        : []),
     ],
   },
   {
@@ -273,8 +333,12 @@ const operatingRulesSections: LegalSection[] = [
       "6.1 The User is obliged to look out for their own safety and the safety of other persons.",
       "6.2 The User must not block escape routes or otherwise jeopardize the safe operation of the premises.",
       "6.3 The User is obliged to notify the Operator of any dangerous situation or defect without undue delay.",
-      "6.4 The Client may disclose an Access PIN Code only to people authorized to attend the Booking. Users must protect it from disclosure to or observation by an unauthorized person and take particular care when entering it.",
-      "6.5 Displaying the PIN on the Booking access page neither limits nor extends the authorized use of the Premises; acceptance of the code is determined solely by the lock system. Users may enter and remain only during the confirmed Booking time.",
+      includesUnlimitedAutoRenewal
+        ? "6.4 Users must keep personal Pass PINs private. A Client may disclose a Booking PIN only to people authorized to attend that Booking. Users must take care that an unauthorized person cannot see or learn the code."
+        : "6.4 The Client may disclose an Access PIN Code only to people authorized to attend the Booking. Users must protect it from disclosure to or observation by an unauthorized person and take particular care when entering it.",
+      includesUnlimitedAutoRenewal
+        ? "6.5 Users must use the current access PIN. Users may enter and remain on the premises only within the time and scope of the confirmed Booking or paid Pass. Open Space membership access runs daily from 00:00 to 17:00 Prague time. Reserved Desk membership access is available around the clock during the paid period."
+        : "6.5 Displaying the PIN on the Booking access page neither limits nor extends the authorized use of the Premises; acceptance of the code is determined solely by the lock system. Users may enter and remain only during the confirmed Booking time.",
       "6.6 Doors and other secured entrances must not be left open. Suspected code misuse or entry by an unauthorized person must be reported to the Operator without delay.",
       "6.7 The Client must ensure guests arrive and leave safely and must not grant them access outside the confirmed time or to other premises.",
       "6.8 The Operator or its authorized representative may enter a booked space when necessary for an emergency, safety, damage prevention, or essential maintenance and will inform the Client in advance where circumstances allow.",
@@ -299,15 +363,21 @@ const operatingRulesSections: LegalSection[] = [
   {
     heading: "9. Final Provisions",
     body: [
-      "9.1 The Operator may amend these House Rules for future Bookings. A confirmed Booking is governed by the version accepted at checkout unless an immediate measure is necessary for safety or under mandatory law.",
-      "9.2 These House Rules become effective on August 12, 2026.",
+      includesUnlimitedAutoRenewal
+        ? "9.1 The Operator may amend these House Rules for future orders. The version accepted at checkout applies to an existing order unless an immediate measure is necessary for safety or under mandatory law."
+        : "9.1 The Operator may amend these House Rules for future Bookings. A confirmed Booking is governed by the version accepted at checkout unless an immediate measure is necessary for safety or under mandatory law.",
+      includesUnlimitedAutoRenewal
+        ? "9.2 This version applies to orders placed once it takes effect."
+        : "9.2 These House Rules become effective on August 12, 2026.",
     ],
   },
 ];
 
-const legalDocuments = {
+const membershipLegalDocuments = (includesUnlimitedAutoRenewal: boolean) => ({
   "privacy-policy": {
-    updatedAt: "18 November 2026",
+    updatedAt: includesUnlimitedAutoRenewal
+      ? unlimitedAutoRenewalRevisionDate
+      : "18 November 2026",
     sections: [
       {
         heading: "1. Controller",
@@ -361,6 +431,11 @@ const legalDocuments = {
             to use for an accounting document. We do not receive your complete
             payment-card details from the payment provider.
           </>,
+          ...(includesUnlimitedAutoRenewal
+            ? [
+                "If you choose automatic renewal, we keep a record of what you authorized and when, the agreed recurring amount and dates, the terms you accepted, and any cancellation. We use a reusable payment reference from Nexi for the authorized charges. Nexi handles the card details. We do not receive your full card number or card security code (CVV).",
+              ]
+            : []),
           <>
             If you create a customer account, we process your verified email
             address, your profile details, and the sign-in data needed to keep
@@ -420,6 +495,11 @@ const legalDocuments = {
             prevent duplicate or fraudulent orders, and support the Booking when
             you contact us.
           </>,
+          ...(includesUnlimitedAutoRenewal
+            ? [
+                "If you authorize automatic renewal, we use your order and payment data to renew the membership, manage cancellations, and send confirmations and invoices where applicable. We use your email address to send an operational reminder seven calendar days before each scheduled charge, regardless of your marketing choices.",
+              ]
+            : []),
           <>
             We use customer account data to authenticate you, let you manage
             your profile, and connect the account with reservations made using
@@ -479,6 +559,11 @@ const legalDocuments = {
             complaints. We process accounting and transaction records where
             necessary to comply with legal obligations.
           </>,
+          ...(includesUnlimitedAutoRenewal
+            ? [
+                "We process recurring payments, renewal reminders, and cancellations to perform the membership contract. We keep accounting, payment, and authorization records to the extent necessary to comply with legal obligations. We also rely on our legitimate interests where necessary to establish, exercise, or defend legal claims and your rights do not override those interests.",
+              ]
+            : []),
           <>
             Account authentication, profile management, and the reservation
             history are processed to provide the account service you request
@@ -541,6 +626,11 @@ const legalDocuments = {
             reasonably necessary to establish, exercise, or defend legal claims.
             Technical abuse-prevention signals are short-lived.
           </>,
+          ...(includesUnlimitedAutoRenewal
+            ? [
+                "If you cancel renewal or delete your Account, we deactivate the authorization for future charges and stop using the payment reference for that membership. We retain the authorization, cancellation, and transaction records only for required statutory retention periods or as long as reasonably necessary to establish, exercise, or defend legal claims.",
+              ]
+            : []),
           <>
             We keep the customer account while it is active; sign-in sessions
             and links expire automatically and are deleted regularly. Deleting
@@ -586,10 +676,12 @@ const legalDocuments = {
             necessary for their role, by providers of website hosting,
             reservation and customer management, payment processing, email
             delivery, accounting-document generation, security, analytics,
-            external measurement, and other technical services. Payment data is
-            sent to the payment provider only to create and verify the
-            transaction. We use appropriate contractual, organizational, and
-            technical safeguards for provider access.
+            external measurement, and other technical services.{" "}
+            {includesUnlimitedAutoRenewal
+              ? "We send the data needed to process and verify card payments to Nexi. When you authorize automatic renewal, we use the reusable Nexi payment reference to process authorized recurring charges."
+              : "Payment data is sent to the payment provider only to create and verify the transaction."}{" "}
+            We use appropriate contractual, organizational, and technical
+            safeguards for provider access.
           </>,
           <>
             Customer profiles and reservations are kept in our booking system,
@@ -694,6 +786,25 @@ const legalDocuments = {
       },
     ],
   },
+  "terms-and-conditions": {
+    updatedAt: includesUnlimitedAutoRenewal
+      ? unlimitedAutoRenewalRevisionDate
+      : "18 November 2026",
+    sections: termsAndConditionsSections(includesUnlimitedAutoRenewal),
+  },
+  "operating-rules": {
+    updatedAt: includesUnlimitedAutoRenewal
+      ? unlimitedAutoRenewalRevisionDate
+      : "12 August 2026",
+    sections: operatingRulesSections(includesUnlimitedAutoRenewal),
+  },
+});
+
+export const unlimitedAutoRenewalLegalDocuments =
+  membershipLegalDocuments(true);
+
+const legalDocuments = {
+  ...membershipLegalDocuments(false),
   "marketing-communications": {
     updatedAt: "5 August 2026",
     sections: [
@@ -764,10 +875,6 @@ const legalDocuments = {
         ],
       },
     ],
-  },
-  "terms-and-conditions": {
-    updatedAt: "18 November 2026",
-    sections: termsAndConditionsSections,
   },
   "cookie-policy": {
     updatedAt: "19 November 2026",
@@ -874,10 +981,6 @@ const legalDocuments = {
         ],
       },
     ],
-  },
-  "operating-rules": {
-    updatedAt: "12 August 2026",
-    sections: operatingRulesSections,
   },
 } satisfies LegalDocumentBodies;
 

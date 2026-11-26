@@ -4,28 +4,28 @@ import type { Locale } from "@/features/i18n";
 import { isUnlimitedAutoRenewalPreviewEnabled } from "@/features/passes/backend/unlimited-auto-renewal-preview.server";
 import { getLegalDocument, type LegalDocumentContent } from "./content";
 import type { LegalDocumentKey } from "./legal-document-summaries";
-import { unlimitedAutoRenewalSection as czech } from "./locales/cs-CZ/unlimited-auto-renewal-section";
-import { unlimitedAutoRenewalSection as english } from "./locales/en-US/unlimited-auto-renewal-section";
+import { unlimitedAutoRenewalLegalDocuments as czech } from "./locales/cs-CZ/documents";
+import { unlimitedAutoRenewalLegalDocuments as english } from "./locales/en-US/documents";
 import { supportsUnlimitedAutoRenewalTerms } from "./unlimited-auto-renewal-terms";
 
-const unlimitedAutoRenewalSections = { "cs-CZ": czech, "en-US": english };
+const unlimitedAutoRenewalDocuments = { "cs-CZ": czech, "en-US": english };
 
 export function getPreviewLegalDocument(
   locale: Locale,
   documentKey: LegalDocumentKey
 ): LegalDocumentContent | undefined {
   if (
-    documentKey !== "terms-and-conditions" ||
     !supportsUnlimitedAutoRenewalTerms(locale) ||
-    !isUnlimitedAutoRenewalPreviewEnabled()
+    !isUnlimitedAutoRenewalPreviewEnabled() ||
+    documentKey === "cookie-policy" ||
+    documentKey === "marketing-communications"
   ) {
     return undefined;
   }
 
-  const terms = getLegalDocument(locale, documentKey);
   return {
-    ...terms,
-    sections: [...terms.sections, unlimitedAutoRenewalSections[locale]],
+    ...getLegalDocument(locale, documentKey),
+    ...unlimitedAutoRenewalDocuments[locale][documentKey],
   };
 }
 

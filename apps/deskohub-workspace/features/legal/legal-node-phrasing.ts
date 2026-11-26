@@ -8,16 +8,19 @@ import {
 } from "react";
 import { getWorkspacePageUrl } from "@/features/i18n";
 import { markdownLink, markdownText } from "@/shared/markdown/markdown";
+import { getWorkspaceCanonicalUrl } from "@/shared/utils/site-constants";
 
 type LegalElementProps = {
   readonly children?: ReactNode;
   readonly href?: string;
+  readonly hrefLang?: string;
 };
 
-// Same-site links are written as paths, some with a locale; Markdown readers
-// need the full, locale-agnostic URL.
-const absoluteHref = (href: string) =>
-  href.startsWith("/") ? getWorkspacePageUrl(href) : href;
+// Keep the locale when the author explicitly links to a language variant.
+const absoluteHref = (href: string, hrefLang: string | undefined) => {
+  if (!href.startsWith("/")) return href;
+  return hrefLang ? getWorkspaceCanonicalUrl(href) : getWorkspacePageUrl(href);
+};
 
 /** Nodes React renders as nothing. */
 const isEmptyLegalNode = (node: ReactNode) =>
@@ -30,9 +33,10 @@ const isEmptyLegalNode = (node: ReactNode) =>
 const legalElementToPhrasing = (
   element: ReactElement<LegalElementProps>
 ): PhrasingContent[] => {
-  const children = legalNodeToPhrasing(element.props.children);
-  return element.type === "a" && element.props.href
-    ? [markdownLink(absoluteHref(element.props.href), ...children)]
+  const { href, hrefLang, children: authoredChildren } = element.props;
+  const children = legalNodeToPhrasing(authoredChildren);
+  return element.type === "a" && href
+    ? [markdownLink(absoluteHref(href, hrefLang), ...children)]
     : children;
 };
 
