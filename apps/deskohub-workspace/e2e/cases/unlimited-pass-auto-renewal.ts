@@ -451,10 +451,12 @@ export const makeUnlimitedPassAutoRenewalCase = ({
             execute: Effect.gen(function* () {
               if (review) {
                 yield* session.use("capture empty Nexi handoff", (page) =>
-                  review.captureNexi(page, hostedPaymentPage, [
-                    ...buyerText,
-                    orderId,
-                  ])
+                  review.captureNexi(
+                    page,
+                    hostedPaymentPage,
+                    [...buyerText, orderId],
+                    account
+                  )
                 );
               }
               yield* completeNexiHostedPayment({

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Browser, chromium } from "@playwright/test";
+import { type Browser, type BrowserContext, chromium } from "@playwright/test";
 import { Effect } from "effect";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import {
@@ -32,13 +32,41 @@ const sandbox = "https://xpaysandbox.nexigroup.com";
 const accountPath = "/cs-CZ/account/passes";
 const checkoutPath = "/cs-CZ/passes/unlimited";
 const hostedPath = "/hpp/nexi/card";
-const cardFieldLabels = [
-  "Card number",
-  "Expiration date",
-  "CVV",
-  "First Name",
-  "Email",
-];
+const cardFields = [
+  { label: "Card number", role: "card_number", preset: "placeholder" },
+  { label: "Expiration date", role: "expiration_date", preset: "default" },
+  { label: "CVV", role: "security_code", preset: "unavailable" },
+  { label: "First Name", role: "cardholder_name" },
+  { label: "Email", role: "cardholder_email" },
+] as const;
+const cardFieldLabels = cardFields.map(({ label }) => label);
+
+const serveReviewPages = (context: BrowserContext) =>
+  context.route("**/*", (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin === sandbox && url.pathname === hostedPath) {
+      return route.fulfill({
+        contentType: "text/html",
+        body: cardFieldLabels
+          .map(
+            (label, index) =>
+              `<iframe title="${label}" src="/hosted-field/${index}"></iframe>`
+          )
+          .join(""),
+      });
+    }
+    if (url.origin === sandbox && url.pathname.startsWith("/hosted-field/")) {
+      const label = cardFieldLabels[Number(url.pathname.split("/").at(-1))];
+      return route.fulfill({
+        contentType: "text/html",
+        body: `<input type="hidden" value="synthetic-hidden-frame-input"><input aria-label="${label}">`,
+      });
+    }
+    return route.fulfill({
+      contentType: "text/html",
+      body: '<main><h1>Unlimited</h1><span data-ph-mask>masked</span><input value="synthetic form value"></main>',
+    });
+  });
 
 for (const transition of [
   "card",
@@ -278,6 +306,134 @@ for (const locale of ["en-US", "cs-CZ"] as const) {
   );
 }
 
+for (const [index, entry] of cardFields.entries()) {
+  test.skipIf(!chromiumAvailable)(
+    `reports only fixed diagnostics for a populated Nexi ${entry.role} field`,
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
+      const original = { height: 720, width: 960 };
+      const context = await browser.newContext({ viewport: original });
+      try {
+        const page = await context.newPage();
+        await serveReviewPages(context);
+        const { label, role } = entry;
+        const preset = "preset" in entry ? entry.preset : undefined;
+        const value = `synthetic-private-input-${role}`;
+        const syntheticPayment = "synthetic-diagnostic-order-id";
+        const url = `${sandbox}${hostedPath}?orderId=${syntheticPayment}`;
+        await page.goto(url);
+        if (role === "cardholder_email") {
+          await page
+            .locator('iframe[title="First Name"]')
+            .evaluate((el) => el.remove());
+        }
+        const field = page
+          .frameLocator(`iframe[title="${label}"]`)
+          .getByRole("textbox", { name: label });
+        if (preset) {
+          await field.evaluate(
+            (el, { preset, value }) => {
+              if (!(el instanceof HTMLInputElement)) {
+                throw new Error("Expected a hosted-field input");
+              }
+              if (preset === "default") el.defaultValue = value;
+              else if (preset === "placeholder") el.placeholder = value;
+              else {
+                el.matches = () => {
+                  throw new Error(value);
+                };
+              }
+            },
+            { preset, value }
+          );
+        }
+        await field.fill(value);
+        const review = makeUnlimitedPassReviewCapture({
+          accountPath,
+          directory,
+          locale: "cs-CZ",
+          origin,
+          timeout: 1_000,
+        });
+        const output = spyOn(process.stdout, "write").mockImplementation(
+          () => true
+        );
+        try {
+          await review.captureNexi(
+            page,
+            {
+              checkoutPage: page,
+              checkoutPageUrl: `${origin}${checkoutPath}?step=pay`,
+              isHandoffDocument: async (candidate) =>
+                candidate === page && candidate.url() === url,
+              page,
+              provider: "nexi",
+              url,
+            },
+            [],
+            {
+              email: "synthetic-expected-email",
+              name: "synthetic-private-input-cardholder_name",
+            }
+          );
+          const logs = output.mock.calls.map(([line]) => String(line));
+          const previous = cardFields
+            .slice(0, index)
+            .map(({ role: previousRole }) => ({
+              role: previousRole,
+              state:
+                role === "cardholder_email" &&
+                previousRole === "cardholder_name"
+                  ? "missing"
+                  : "empty",
+            }));
+          const expected = {
+            problem: "card-field-populated",
+            fields: [
+              ...previous,
+              {
+                role,
+                state: "populated",
+                details:
+                  preset === "unavailable"
+                    ? "unavailable"
+                    : {
+                        autofilled: false,
+                        matchesDefaultValue: preset === "default",
+                        matchesPlaceholder: preset === "placeholder",
+                      },
+                ...((role === "cardholder_name" ||
+                  role === "cardholder_email") && {
+                  matchesSyntheticBuyer: role === "cardholder_name",
+                }),
+              },
+            ],
+          };
+          expect(
+            logs.filter((line) => line.startsWith("NEXI REVIEW CARD FIELDS "))
+          ).toEqual([`NEXI REVIEW CARD FIELDS ${JSON.stringify(expected)}\n`]);
+          expect(logs.join("")).not.toContain(value);
+          expect(logs.join("")).not.toContain(syntheticPayment);
+          expect(logs.join("")).not.toContain("synthetic-hidden-frame-input");
+          expect(logs.join("")).not.toContain("synthetic-expected-email");
+        } finally {
+          output.mockRestore();
+        }
+        expect(review.missingShots()).toContainEqual({
+          shot: "nexi-handoff",
+          problem: "card-field-populated",
+        });
+        expect(await readdir(directory)).toEqual([]);
+        expect(await field.inputValue()).toBe(value);
+        expect(page.viewportSize()).toEqual(original);
+      } finally {
+        await context.close();
+        await rm(directory, { force: true, recursive: true });
+      }
+    }
+  );
+}
+
 test.skipIf(!chromiumAvailable)(
   "captures the same sandbox handoff with empty hosted iframes at both widths",
   async () => {
@@ -287,34 +443,7 @@ test.skipIf(!chromiumAvailable)(
     try {
       const checkoutPage = await context.newPage();
       const page = await context.newPage();
-      await context.route("**/*", (route) => {
-        const url = new URL(route.request().url());
-        if (url.origin === sandbox && url.pathname === hostedPath) {
-          return route.fulfill({
-            contentType: "text/html",
-            body: cardFieldLabels
-              .map(
-                (label, index) =>
-                  `<iframe title="${label}" src="/hosted-field/${index}"></iframe>`
-              )
-              .join(""),
-          });
-        }
-        if (
-          url.origin === sandbox &&
-          url.pathname.startsWith("/hosted-field/")
-        ) {
-          const label = cardFieldLabels[Number(url.pathname.split("/").at(-1))];
-          return route.fulfill({
-            contentType: "text/html",
-            body: `<input aria-label="${label}">`,
-          });
-        }
-        return route.fulfill({
-          contentType: "text/html",
-          body: '<main><h1>Unlimited</h1><span data-ph-mask>masked</span><input value="synthetic form value"></main>',
-        });
-      });
+      await serveReviewPages(context);
 
       const review = makeUnlimitedPassReviewCapture({
         accountPath,

@@ -7,6 +7,7 @@ import { unlimitedPassCheckoutPath } from "@/features/passes/routes";
 import { locateSnapshotRef } from "../browser";
 import {
   findNexiCardField,
+  type NexiCardField,
   parseNexiSnapshot,
 } from "../checkout/nexi-hosted-page";
 import { observeNexiReviewNavigation } from "../checkout/nexi-review-navigation";
@@ -16,6 +17,10 @@ import { log, workspaceDir } from "../runtime";
 import { workspaceE2EPollIntervalMs } from "../timeouts";
 
 type ReviewLocale = NonNullable<ReturnType<typeof unlimitedPassReviewLocale>>;
+type SyntheticReviewBuyer = {
+  readonly email: string;
+  readonly name: string;
+};
 
 const workspaceShots = [
   "choose-default",
@@ -37,6 +42,23 @@ type CardFieldProblem =
   | "card-field-missing"
   | "card-field-unreadable"
   | "card-field-populated";
+type PopulatedCardFieldDetails = {
+  readonly autofilled: boolean;
+  readonly matchesDefaultValue: boolean;
+  readonly matchesPlaceholder: boolean;
+};
+type CardFieldObservation = { readonly role: NexiCardField } & (
+  | { readonly state: "empty" | "missing" | "unreadable" }
+  | {
+      readonly state: "populated";
+      readonly details: PopulatedCardFieldDetails | "unavailable";
+      readonly matchesSyntheticBuyer?: boolean;
+    }
+);
+type CardFieldInspection = {
+  readonly problem?: CardFieldProblem;
+  readonly fields: readonly CardFieldObservation[];
+};
 type CaptureProblem =
   | CardFieldProblem
   | "viewport-unavailable"
@@ -66,23 +88,60 @@ const requiredCardFields = [
 const optionalCardFields = ["cardholder_name", "cardholder_email"] as const;
 const sandboxOrigin = "https://xpaysandbox.nexigroup.com";
 
+async function describePopulatedCardField(
+  input: Locator,
+  deadline: number
+): Promise<PopulatedCardFieldDetails | "unavailable"> {
+  const timeout = Math.min(
+    deadline - performance.now(),
+    workspaceE2EPollIntervalMs.browser
+  );
+  if (timeout <= 0) return "unavailable";
+  const details = await input
+    .evaluate(
+      (element) => {
+        if (
+          !(element instanceof HTMLInputElement) &&
+          !(element instanceof HTMLTextAreaElement)
+        ) {
+          return;
+        }
+        const { value } = element;
+        if (value === "") return;
+        return {
+          autofilled: element.matches(":autofill") === true,
+          matchesDefaultValue: value === element.defaultValue,
+          matchesPlaceholder: value === element.placeholder,
+        };
+      },
+      undefined,
+      { timeout }
+    )
+    .catch(() => undefined);
+  return details ?? "unavailable";
+}
+
 async function inspectCardFields(
   page: Page,
-  deadline: number
-): Promise<CardFieldProblem | undefined> {
+  deadline: number,
+  buyer: SyntheticReviewBuyer | undefined
+): Promise<CardFieldInspection> {
   const snapshotTimeout = deadline - performance.now();
-  if (snapshotTimeout <= 0) return "snapshot-unavailable";
+  if (snapshotTimeout <= 0)
+    return { problem: "snapshot-unavailable", fields: [] };
   const body = await page
     .locator("body")
     .ariaSnapshot({ mode: "ai", timeout: snapshotTimeout })
     .catch(() => undefined);
-  if (!body) return "snapshot-unavailable";
+  if (!body) return { problem: "snapshot-unavailable", fields: [] };
   const snapshot = parseNexiSnapshot(body);
+  const fields: CardFieldObservation[] = [];
   for (const field of [...requiredCardFields, ...optionalCardFields]) {
     const target = findNexiCardField(snapshot, field);
     if (!target) {
+      fields.push({ role: field, state: "missing" });
       if (field === "cardholder_name" || field === "cardholder_email") continue;
-      return "card-field-missing";
+      return { problem: "card-field-missing", fields };
     }
     const input = (
       target.frameRef
@@ -96,25 +155,53 @@ async function inspectCardFields(
       deadline - performance.now(),
       workspaceE2EPollIntervalMs.browser
     );
-    if (timeout <= 0) return "card-field-unreadable";
-    const value = await input.inputValue({ timeout }).catch(() => undefined);
-    if (value === undefined) return "card-field-unreadable";
-    if (value !== "") return "card-field-populated";
+    const value =
+      timeout > 0
+        ? await input.inputValue({ timeout }).catch(() => undefined)
+        : undefined;
+    if (value === undefined) {
+      fields.push({ role: field, state: "unreadable" });
+      return { problem: "card-field-unreadable", fields };
+    }
+    if (value !== "") {
+      // A failed or changed diagnostic sample cannot overturn the refusal.
+      const details = await describePopulatedCardField(input, deadline);
+      let expectedBuyerField: string | undefined;
+      if (field === "cardholder_name") expectedBuyerField = buyer?.name;
+      if (field === "cardholder_email") expectedBuyerField = buyer?.email;
+      fields.push({
+        role: field,
+        state: "populated",
+        details,
+        ...(expectedBuyerField !== undefined && {
+          matchesSyntheticBuyer: value === expectedBuyerField,
+        }),
+      });
+      return { problem: "card-field-populated", fields };
+    }
+    fields.push({ role: field, state: "empty" });
   }
+  return { fields };
 }
 
-async function waitForEmptyCardFields(page: Page, timeout: number) {
+async function waitForEmptyCardFields(
+  page: Page,
+  timeout: number,
+  buyer: SyntheticReviewBuyer | undefined
+) {
   const deadline = performance.now() + timeout;
   while (true) {
     const nextRead = performance.now() + workspaceE2EPollIntervalMs.browser;
-    const problem = await inspectCardFields(page, deadline);
-    if (!problem || problem === "card-field-populated") return problem;
+    const inspection = await inspectCardFields(page, deadline, buyer);
+    if (!inspection.problem || inspection.problem === "card-field-populated") {
+      return inspection;
+    }
     const now = performance.now();
     const remaining = deadline - now;
-    if (remaining <= 0) return problem;
+    if (remaining <= 0) return inspection;
     const wait = Math.min(remaining, nextRead - now);
     if (wait > 0) await delay(wait);
-    if (performance.now() >= deadline) return problem;
+    if (performance.now() >= deadline) return inspection;
   }
 }
 
@@ -295,12 +382,14 @@ export function makeUnlimitedPassReviewCapture({
     captureNexi: async (
       page: Page,
       hosted: HostedPaymentPage,
-      privateText: readonly string[]
+      privateText: readonly string[],
+      buyer?: SyntheticReviewBuyer
     ) => {
       if (results.get("nexi-handoff") === "captured") return;
       // Share the existing two-width inspection budget. The first view may
       // spend most of it waiting for Nexi to render its hosted fields.
       let inspectionBudget = viewports.length * timeout;
+      let fieldInspection: CardFieldInspection | undefined;
       const { isHandoffDocument } = hosted;
       const verifyDocument = () =>
         isHandoffDocument?.(page, timeout) ?? Promise.resolve(false);
@@ -337,12 +426,13 @@ export function makeUnlimitedPassReviewCapture({
           verify: async () => {
             if (!(await verifyDocument())) return "unexpected-document";
             const started = performance.now();
-            const problem = await waitForEmptyCardFields(
+            fieldInspection = await waitForEmptyCardFields(
               page,
-              inspectionBudget
+              inspectionBudget,
+              buyer
             );
             inspectionBudget -= performance.now() - started;
-            return problem;
+            return fieldInspection.problem;
           },
         });
       } finally {
@@ -352,6 +442,9 @@ export function makeUnlimitedPassReviewCapture({
           log(
             `NEXI REVIEW DOCUMENT ${JSON.stringify({ result, ...lifecycle })}`
           );
+          if (fieldInspection?.problem === result) {
+            log(`NEXI REVIEW CARD FIELDS ${JSON.stringify(fieldInspection)}`);
+          }
         }
       }
     },
