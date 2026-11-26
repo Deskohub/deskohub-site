@@ -47,7 +47,7 @@ export const invoiceAdministrationDetail = (
       postalCode: "100 00",
       country: "CZ",
     },
-  } as InvoiceAdministrationDetail["buyer"],
+  },
   pdfUrl: administrationHref("/[locale]/admin/invoices/[invoiceId]/pdf", {
     invoiceId,
   }),

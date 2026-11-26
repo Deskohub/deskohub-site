@@ -6,8 +6,11 @@ import {
   WorkspaceDatabase,
   type WorkspaceTransaction,
 } from "@/db/database.service";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { PromotionClaims } from "./promotion-claims";
+
+const attemptId = paymentAttemptIdSchema.make("attempt-1");
 
 /** Runs a claim redemption in a transaction on the recording database. */
 const redeemOnRecording = async (
@@ -47,7 +50,7 @@ describe("PromotionClaims.redeem", () => {
         const { transaction } = yield* WorkspaceDatabase;
         return yield* transaction(
           PromotionClaims.redeem({
-            paymentAttemptId: "attempt-1" as never,
+            paymentAttemptId: attemptId,
             redeemedAt: Temporal.Instant.from("2026-01-01T00:00:00Z"),
             readmitReleased: true,
           })
@@ -80,7 +83,7 @@ describe("PromotionClaims.redeem", () => {
         const { transaction } = yield* WorkspaceDatabase;
         return yield* transaction(
           PromotionClaims.redeem({
-            paymentAttemptId: "attempt-1" as never,
+            paymentAttemptId: attemptId,
             redeemedAt: Temporal.Instant.from("2026-01-01T00:00:00Z"),
             readmitReleased: true,
           })
@@ -106,7 +109,7 @@ describe("PromotionClaims.redeem", () => {
       [[["customer-1", "code-1", "released"]], [], []],
       () =>
         PromotionClaims.redeem({
-          paymentAttemptId: "attempt-1" as never,
+          paymentAttemptId: attemptId,
           redeemedAt,
           readmitReleased: true,
         })
@@ -128,7 +131,7 @@ describe("PromotionClaims.redeem", () => {
       [[], [["application-1", "customer-1", "voucher-1", "released"]], []],
       () =>
         PromotionClaims.redeem({
-          paymentAttemptId: "attempt-1" as never,
+          paymentAttemptId: attemptId,
           redeemedAt,
           readmitReleased: true,
         })
@@ -167,7 +170,7 @@ describe("PromotionClaims.redeem", () => {
       ],
       () =>
         PromotionClaims.redeem({
-          paymentAttemptId: "attempt-1" as never,
+          paymentAttemptId: attemptId,
           redeemedAt,
           readmitReleased: true,
         })

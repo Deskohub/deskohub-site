@@ -11,6 +11,7 @@ import { type OrderId, orderIdSchema } from "@/features/order";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import {
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
@@ -51,9 +52,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     let database: WorkspacePostgresSuiteDatabase;
 
     beforeAll(async () => {
-      database = (await createWorkspacePostgresSuiteDatabase(
-        "pass_reminders"
-      ))!;
+      database = requireTestDatabase(
+        await createWorkspacePostgresSuiteDatabase("pass_reminders")
+      );
     });
     afterAll(async () => {
       await database?.close();

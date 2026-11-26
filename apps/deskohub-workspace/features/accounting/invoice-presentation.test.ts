@@ -6,7 +6,7 @@ import { Schema } from "effect";
 import { discountIdSchema } from "@/features/discounts/contracts";
 import { m } from "@/features/i18n";
 import { workspaceSiteConstants } from "@/shared/utils";
-import type { InvoiceDocument } from "./invoice";
+import { invoiceDocumentSchema } from "./invoice";
 import {
   makeCoworkInvoiceDocument,
   makeMeetingRoomInvoiceDocument,
@@ -147,7 +147,7 @@ describe("invoice presentation", () => {
       exponent: 2,
       currency: "CZK" as const,
     });
-    const document = {
+    const document = Schema.decodeUnknownSync(invoiceDocumentSchema)({
       ...original,
       quote: {
         ...original.quote,
@@ -168,7 +168,7 @@ describe("invoice presentation", () => {
           ],
         },
       },
-    } as InvoiceDocument;
+    });
 
     const presentation = getInvoicePresentation(document);
 

@@ -3,17 +3,21 @@ import { NoReservationInvitees } from "@/features/reservation-invitees/backend/r
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Effect, Layer } from "effect";
 import { CustomerAccountAccessError } from "@/features/account";
 import { CustomerAccountReservationOwnership } from "@/features/account/backend/customer-account-reservation-ownership";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { liveInvoiceStanding } from "@/features/accounting/admin/invoice-administration.service.test-utils";
 import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { createReservationAccessToken } from "@/features/reservation/backend/reservation-access-token";
 import { ReservationAuthorizationService } from "@/features/reservation/backend/reservation-authorization.service";
 import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import type { ReservationAccessToken } from "@/features/reservation/reservation-access-token";
 import { ReviewSandbox } from "@/features/review-accounts";
@@ -27,18 +31,21 @@ import { AccountingRecordUnavailable } from "./sealed-accounting-json";
 
 const orderId = workspaceReservationIdSchema.make("reservation-1");
 const signedInAccountId = customerAccountIdSchema.make("account-id");
-const reservationCustomerId = "reservation-customer";
+const reservationCustomerId = DotyposCustomerIdSchema.make(
+  "reservation-customer"
+);
 
 const document = makeCoworkInvoiceDocument("en-US");
-const issuedInvoice = {
+const issuedInvoice: ReservationInvoice = {
   id: invoiceIdSchema.make("01980000-0000-7000-8000-000000000001"),
   workspaceReservationId: orderId,
-  paymentAttemptId: "payment-attempt",
+  paymentAttemptId: paymentAttemptIdSchema.make("payment-attempt"),
   dotyposCustomerId: reservationCustomerId,
   invoiceNumber: document.invoiceNumber,
   issuedAt: Temporal.Instant.from(document.issuedAt),
   document,
-} as ReservationInvoice;
+  ...liveInvoiceStanding,
+};
 
 type Visitor =
   /** Signed in with the account linked to the reservation's customer. */
@@ -58,13 +65,13 @@ const runGetPdf = async (options: {
   readonly reservationExists?: boolean;
   readonly invoice?: ReservationInvoice | null | "unreadable";
 }) => {
-  const reservation = {
+  const reservation: WorkspaceReservation = workspaceReservationFixture({
     dotyposCustomerId: reservationCustomerId,
     authorAccountId:
       options.visitor === "author"
         ? signedInAccountId
         : customerAccountIdSchema.make("booking-author"),
-  } as WorkspaceReservation;
+  });
   const findLiveByReservationId = mock(() =>
     options.invoice === "unreadable"
       ? Effect.fail(
@@ -78,7 +85,7 @@ const runGetPdf = async (options: {
           options.invoice === undefined ? issuedInvoice : options.invoice
         )
   );
-  const ownership = Layer.succeed(CustomerAccountReservationOwnership, {
+  const ownership = Layer.mock(CustomerAccountReservationOwnership, {
     activeAccountId:
       options.visitor === "anonymous" ||
       options.visitor === "unreadable-account"
@@ -96,7 +103,7 @@ const runGetPdf = async (options: {
       dotyposCustomerId:
         options.visitor === "customer"
           ? reservationCustomerId
-          : "another-customer",
+          : DotyposCustomerIdSchema.make("another-customer"),
     }),
   });
 

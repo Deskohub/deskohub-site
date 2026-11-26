@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import {
   countEligibleReferralInvitees,
   hasPriorConfirmedDotyposBooking,
 } from "./eligibility";
 
-const customer = (value: string) => value as DotyposCustomerId;
+const customer = (value: string) => DotyposCustomerIdSchema.make(value);
 const instant = (value: string) => Temporal.Instant.from(value);
 
 describe("referral eligibility history", () => {

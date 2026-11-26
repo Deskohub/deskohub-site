@@ -14,7 +14,7 @@ const testDatabase = await createWorkspacePostgresSuiteDatabase(
 );
 afterAll(() => testDatabase?.close());
 
-const kit = makeInvoiceCancellationTestKit(testDatabase!);
+const kit = makeInvoiceCancellationTestKit(testDatabase);
 
 const readStanding = (reservationId: WorkspaceReservationId) =>
   kit.run(

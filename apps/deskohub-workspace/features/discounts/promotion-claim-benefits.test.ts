@@ -1,7 +1,7 @@
 import "@/shared/polyfills/temporal";
 
 import { describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Schema } from "effect";
 import {
   type AppliedDiscount,
@@ -9,6 +9,7 @@ import {
   discountIdSchema,
 } from "@/features/discounts/contracts";
 import { deriveOpaqueDiscountId } from "@/features/discounts/opaque-discount-id";
+import { voucherIdSchema } from "@/features/discounts/persistence-contracts";
 import { getPromotionTiming } from "@/features/discounts/promotion-code";
 import { m } from "@/features/i18n";
 import { getReferralBenefitIds } from "@/features/referrals/referral-benefits";
@@ -20,7 +21,7 @@ import {
 } from "./promotion-claim-benefits";
 
 const czk = (value: number) => ({ value, exponent: 2, currency: "CZK" });
-const invited = "100000001" as DotyposCustomerId;
+const invited = DotyposCustomerIdSchema.make("100000001");
 
 const applied = (
   discount: Partial<AppliedDiscount["discount"]>,
@@ -102,7 +103,7 @@ describe("promotionTimingChanged", () => {
 describe("voucher credit and presentation", () => {
   const claim = {
     kind: "voucher" as const,
-    voucherId: "voucher-1" as never,
+    voucherId: voucherIdSchema.make("voucher-1"),
     availableAmount: czk(10_000),
     dotyposCustomerId: invited,
   };

@@ -13,6 +13,7 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { discountCodeClaimIdSchema } from "../persistence-contracts";
 import { toClaimHistoryItem } from "./claim-history-item";
 import { adminCodeClaim } from "./customer-admin-fixtures.test-utils";
 
@@ -47,19 +48,18 @@ describe("claim history table", () => {
       "@/features/i18n/route-locale"
     );
     const { ClaimHistoryTable } = await import("./customer-admin-tables");
-    type ClaimId = ReturnType<typeof adminCodeClaim>["id"];
     const claims = [
       adminCodeClaim({
-        id: "redeemed" as ClaimId,
+        id: discountCodeClaimIdSchema.make("redeemed"),
         redeemedAt: Temporal.Instant.from("2026-08-12T08:00:00Z"),
         state: "redeemed",
       }),
       adminCodeClaim({
-        id: "released" as ClaimId,
+        id: discountCodeClaimIdSchema.make("released"),
         releasedAt: Temporal.Instant.from("2026-08-11T08:00:00Z"),
         state: "released",
       }),
-      adminCodeClaim({ id: "reserved" as ClaimId }),
+      adminCodeClaim({ id: discountCodeClaimIdSchema.make("reserved") }),
     ].map((claim) => toClaimHistoryItem(claim, locale));
     const view = render(
       <RouteLocaleProvider locale={locale}>

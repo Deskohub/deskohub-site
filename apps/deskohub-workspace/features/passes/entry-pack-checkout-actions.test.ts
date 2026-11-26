@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Result, Schema } from "effect";
@@ -134,10 +135,14 @@ const unlimited = await import("./backend/unlimited-pass-purchase");
 const unlimitedFailures = new Map<OrderId, Error>();
 const beginUnlimited = mock(
   (input: Parameters<typeof unlimited.beginUnlimitedPassPurchase>[0]) =>
-    Effect.sync(() => ({
-      outcome: Result.fail(unlimitedFailures.get(input.orderId)!),
-      retiredPredecessorOrderIds: input.supersedeOrderIds?.slice(1) ?? [],
-    }))
+    Effect.sync(() => {
+      const failure = unlimitedFailures.get(input.orderId);
+      assert(failure);
+      return {
+        outcome: Result.fail(failure),
+        retiredPredecessorOrderIds: input.supersedeOrderIds?.slice(1) ?? [],
+      };
+    })
 );
 mock.module("./backend/unlimited-pass-purchase", () => ({
   ...unlimited,

@@ -1,18 +1,34 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Schema } from "effect";
+import {
+  companyRegistrationIdSchema,
+  vatRegistrationIdSchema,
+} from "@/features/accounting/billing-identity";
 import type { PreparedCustomerQuote } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import {
   buildCoworkReservationQuote,
   type CoworkReservationQuoteOrder,
 } from "@/features/checkout/checkout-quote.test-utils";
+import { getReservationQuoteFingerprint } from "@/features/checkout/reservation-quote-fingerprint";
+import { getMeetingRoomReservationQuote } from "@/features/checkout/reservation-quote-meeting-room";
 import { buildOfficeReservationQuote } from "@/features/checkout/reservation-quote-office";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
+import { normalizedMeetingRoomReservationOrderSchema } from "@/features/reservation/meeting-room-reservation";
 import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/office-reservation";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { moneyWithValue } from "@/shared/money/money";
 import {
-  type AccountingDocumentSnapshot,
+  instantStringSchema,
+  plainDateStringSchema,
+} from "@/shared/utils/temporal";
+import {
   accountingDocumentIdentitySchema,
   accountingDocumentSnapshotSchema,
   decodeStoredAccountingDocumentSnapshot,
@@ -28,24 +44,28 @@ const coworkOrder = {
   coffee: true,
 } satisfies CoworkReservationQuoteOrder;
 
-const prepared = {
+const prepared: PreparedCustomerQuote = {
   kind: "cowork",
-  reservation: {
-    kind: "cowork",
-    ...coworkOrder,
-    date: "2099-01-01",
-    name: "Ada Lovelace",
-    email: adaEmail,
-    phone: "+420 777 777 777",
-  },
+  reservation: Schema.decodeUnknownSync(normalizedCoworkReservationOrderSchema)(
+    {
+      kind: "cowork",
+      ...coworkOrder,
+      date: "2099-01-01",
+      name: "Ada Lovelace",
+      email: adaEmail,
+      phone: "+420 777 777 777",
+    }
+  ),
   quote: buildCoworkReservationQuote(coworkOrder),
-} as PreparedCustomerQuote;
+};
 
 const makeSnapshot = () =>
   makeAccountingDocumentSnapshot({
-    workspaceReservationId: "reservation-id",
-    dotyposReservationId: "dotypos-reservation-id",
-    dotyposCustomerId: "dotypos-customer-id",
+    workspaceReservationId: workspaceReservationIdSchema.make("reservation-id"),
+    dotyposReservationId: DotyposReservationIdSchema.make(
+      "dotypos-reservation-id"
+    ),
+    dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
     locale: "en-US",
     prepared,
   });
@@ -69,13 +89,16 @@ const officePrepared: PreparedCustomerQuote = {
 describe("accounting document snapshot", () => {
   test("freezes supplier, buyer, reservation, and accepted quote facts", () => {
     expect(makeSnapshot()).toMatchObject({
-      workspaceReservationId: "reservation-id",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      workspaceReservationId:
+        workspaceReservationIdSchema.make("reservation-id"),
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       locale: "en-US",
       supplier: {
         legalName: "Desktechub s.r.o.",
-        companyId: "24531596",
+        companyId: companyRegistrationIdSchema.make("24531596"),
         vatStatus: "not-vat-payer",
       },
       buyer: {
@@ -103,9 +126,13 @@ describe("accounting document snapshot", () => {
 
   test("freezes office reservation and accepted quote facts", async () => {
     const snapshot = makeAccountingDocumentSnapshot({
-      workspaceReservationId: "office-reservation-id",
-      dotyposReservationId: "dotypos-office-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      workspaceReservationId: workspaceReservationIdSchema.make(
+        "office-reservation-id"
+      ),
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-office-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       locale: "en-US",
       prepared: officePrepared,
     });
@@ -133,27 +160,65 @@ describe("accounting document snapshot", () => {
   });
 
   test("reads the Prague start date of every reservation family", () => {
-    const meetingRoomSnapshot = {
-      ...makeSnapshot(),
-      reservation: {
+    const baseMeetingRoomReservation =
+      normalizedMeetingRoomReservationOrderSchema.make({
         kind: "meeting-room",
-        // 00:30 in Prague on June 21, still June 20 in UTC.
-        startsAt: "2099-06-20T22:30:00Z",
-        endsAt: "2099-06-21T00:30:00Z",
-      },
-    } as AccountingDocumentSnapshot;
-    const overnightMeetingRoomSnapshot = {
-      ...makeSnapshot(),
-      reservation: {
+        duration: { unit: "hour", amount: 4 },
+        reservationDate: plainDateStringSchema.make("2099-02-03"),
+        startsAt: instantStringSchema.make("2099-02-03T08:00:00Z"),
+        endsAt: instantStringSchema.make("2099-02-03T12:00:00Z"),
+        name: "Ada Lovelace",
+        email: adaEmail,
+        phone: "+420 777 777 777",
+      });
+    const baseMeetingRoomQuote = Effect.runSync(
+      getMeetingRoomReservationQuote(baseMeetingRoomReservation)
+    );
+    const baseMeetingRoomSnapshot = makeAccountingDocumentSnapshot({
+      workspaceReservationId:
+        workspaceReservationIdSchema.make("reservation-id"),
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
+      locale: "en-US",
+      prepared: {
         kind: "meeting-room",
-        startsAt: "2099-06-20T20:00:00Z",
-        endsAt: "2099-06-20T23:00:00Z",
+        reservation: baseMeetingRoomReservation,
+        quote: {
+          ...baseMeetingRoomQuote,
+          fingerprint: getReservationQuoteFingerprint(
+            baseMeetingRoomReservation,
+            baseMeetingRoomQuote
+          ),
+        },
       },
-    } as AccountingDocumentSnapshot;
+    });
+    const makeMeetingRoomSnapshot = (startsAt: string, endsAt: string) =>
+      Schema.decodeUnknownSync(accountingDocumentSnapshotSchema)({
+        ...baseMeetingRoomSnapshot,
+        reservation: {
+          kind: "meeting-room",
+          startsAt: instantStringSchema.make(startsAt),
+          endsAt: instantStringSchema.make(endsAt),
+        },
+      });
+    // 00:30 in Prague on June 21, still June 20 in UTC.
+    const meetingRoomSnapshot = makeMeetingRoomSnapshot(
+      "2099-06-20T22:30:00Z",
+      "2099-06-21T00:30:00Z"
+    );
+    const overnightMeetingRoomSnapshot = makeMeetingRoomSnapshot(
+      "2099-06-20T20:00:00Z",
+      "2099-06-20T23:00:00Z"
+    );
     const officeSnapshot = makeAccountingDocumentSnapshot({
-      workspaceReservationId: "reservation-id",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      workspaceReservationId:
+        workspaceReservationIdSchema.make("reservation-id"),
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       locale: "en-US",
       prepared: officePrepared,
     });
@@ -178,8 +243,8 @@ describe("accounting document snapshot", () => {
     const buyer = {
       kind: "business" as const,
       legalName: "Analytical Engines s.r.o.",
-      companyId: "12345678",
-      vatId: "CZ12345678",
+      companyId: companyRegistrationIdSchema.make("12345678"),
+      vatId: vatRegistrationIdSchema.make("CZ12345678"),
       address: {
         line1: "Počernická 1",
         city: "Praha",
@@ -188,9 +253,13 @@ describe("accounting document snapshot", () => {
       },
     };
     const snapshot = makeAccountingDocumentSnapshot({
-      workspaceReservationId: "business-reservation",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      workspaceReservationId: workspaceReservationIdSchema.make(
+        "business-reservation"
+      ),
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       locale: "cs-CZ",
       prepared: {
         ...prepared,

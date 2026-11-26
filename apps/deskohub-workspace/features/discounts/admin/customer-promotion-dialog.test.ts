@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { m } from "@/features/administration/i18n";
-import type {
-  DiscountCodeId,
-  VoucherId,
+import {
+  discountCodeIdSchema,
+  voucherIdSchema,
 } from "@/features/discounts/persistence-contracts";
-import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import {
   customerPromotionCodeMutations,
   customerPromotionDialogConfirmation,
@@ -14,7 +14,7 @@ import {
 } from "./customer-promotion-dialog";
 
 const locale = "en-US";
-const customerId = "dotypos-customer" as DotyposCustomerId;
+const customerId = DotyposCustomerIdSchema.make("dotypos-customer");
 const names = { code: "SUMMER10", customerName: "Test Customer" };
 
 describe("customer promotion dialog", () => {
@@ -26,7 +26,7 @@ describe("customer promotion dialog", () => {
   });
 
   test("builds each audience mutation for the promotion's kind", () => {
-    const codeId = "code-id" as DiscountCodeId;
+    const codeId = discountCodeIdSchema.make("code-id");
     expect(
       customerPromotionCodeMutations(
         { kind: "discount-code", id: codeId },
@@ -39,7 +39,7 @@ describe("customer promotion dialog", () => {
       delete: { kind: "delete-code", id: codeId },
     });
 
-    const voucherId = "voucher-id" as VoucherId;
+    const voucherId = voucherIdSchema.make("voucher-id");
     expect(
       customerPromotionCodeMutations(
         { kind: "voucher", id: voucherId },

@@ -12,6 +12,7 @@ import {
   type CliSessionIdType,
 } from "@deskohub/workspace-admin-api";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -60,7 +61,7 @@ const openDialog = async (view: ReturnType<typeof render>) => {
 
 const submitDialog = async (dialog: HTMLElement) => {
   await act(async () => {
-    fireEvent.submit(dialog.querySelector("form")!);
+    fireEvent.submit(elementOf(dialog.querySelector("form"), HTMLFormElement));
     await Promise.resolve();
   });
 };
@@ -83,7 +84,8 @@ test("requires confirmation and submits only the session ID to the server action
   await submitDialog(dialog);
 
   expect(revokeCliSessionAction).toHaveBeenCalledTimes(1);
-  const formData = revokeCliSessionAction.mock.calls[0]?.[0] as FormData;
+  const formData = revokeCliSessionAction.mock.calls[0]?.[0];
+  if (!formData) throw new Error("Expected revokeCliSession FormData");
   expect([...formData.keys()]).toEqual(["sessionId"]);
   expect(formData.get("sessionId")).toBe(sessionId);
 });

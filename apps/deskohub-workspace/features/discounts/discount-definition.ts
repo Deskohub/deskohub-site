@@ -23,11 +23,17 @@ export type DiscountDefinition = {
   readonly products: readonly WorkspaceProductTarget[];
 };
 
-export type DiscountDefinitionRow = StoredDiscount & {
-  readonly productTargets: readonly Pick<
-    DiscountProductTarget,
-    "discountId" | "productTarget"
-  >[];
+type StoredDiscountTarget = Pick<
+  DiscountProductTarget,
+  "discountId" | "productTarget"
+>;
+
+export type DiscountDefinitionRow = Omit<StoredDiscount, "labels"> & {
+  readonly labels: unknown;
+  readonly productTargets: readonly {
+    readonly discountId: StoredDiscountTarget["discountId"];
+    readonly productTarget: unknown;
+  }[];
 };
 
 export class DiscountDefinitionMalformedError extends Data.TaggedError(
@@ -68,12 +74,11 @@ const discountLabelsCodec: Schema.Decoder<DiscountLabels> = Schema.Record(
   definitionLabelSchema
 );
 
-const discountTargetSchema: Schema.Decoder<
-  DiscountDefinitionRow["productTargets"][number]
-> = Schema.Struct({
-  discountId: storedDiscountIdSchema,
-  productTarget: workspaceProductTargetSchema,
-});
+const discountTargetSchema: Schema.Decoder<StoredDiscountTarget> =
+  Schema.Struct({
+    discountId: storedDiscountIdSchema,
+    productTarget: workspaceProductTargetSchema,
+  });
 
 const discountTargetsSchema = (discountId: StoredDiscountId) =>
   Schema.NonEmptyArray(discountTargetSchema).check(

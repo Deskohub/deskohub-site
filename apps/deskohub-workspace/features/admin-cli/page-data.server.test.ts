@@ -24,7 +24,7 @@ import { mockAdministratorAccess } from "@/features/administrators/server/admini
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   connectWorkspacePostgresTestDatabase,
-  type WorkspacePostgresTestDatabase,
+  requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 
 const access = mockAdministratorAccess(`cli-page-${crypto.randomUUID()}`);
@@ -47,7 +47,8 @@ const digestSecret = (secret: string) =>
   digestCliAuthenticationSecret(secret).pipe(Effect.provide(NodeCrypto.layer));
 
 describe.skipIf(!postgresDatabase)("admin CLI page-data projections", () => {
-  const postgres = postgresDatabase as WorkspacePostgresTestDatabase;
+  if (!postgresDatabase) return;
+  const postgres = requireTestDatabase(postgresDatabase);
   const fixtureSessionIds: CliSessionId[] = [];
   const fixtureRequestIds: CliAuthenticationRequestId[] = [];
   let admin: AdministratorAccountActor;

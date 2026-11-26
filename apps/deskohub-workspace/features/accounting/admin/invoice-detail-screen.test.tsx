@@ -8,13 +8,17 @@ import {
   test,
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { AdministrationInvoiceId } from "@deskohub/workspace-admin-api";
 import type { ReactElement, ReactNode } from "react";
+import { invoiceVariableSymbolSchema } from "@/features/accounting/manual-invoice";
+import { administrationHref } from "@/features/administration/administration-href";
 import type { Locale } from "@/features/i18n";
 import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import type {
   InvoiceAdministrationCancellation,
   InvoiceAdministrationDetail,
@@ -99,9 +103,10 @@ const definition = (
 describe("InvoiceAdministrationDetailScreen", () => {
   beforeAll(() => {
     registerWorkspaceComponentTestEnv();
-    workspaceUseAction.mockImplementation(
-      () => ({ execute: mock(), isExecuting: false }) as never
-    );
+    workspaceUseAction.mockImplementation(() => ({
+      execute: mock(),
+      isExecuting: false,
+    }));
   });
   afterEach(() => {
     cleanup();
@@ -145,8 +150,8 @@ describe("InvoiceAdministrationDetailScreen", () => {
     const view = await renderDetail(
       invoiceAdministrationDetail({
         settlement: InvoiceSettlement.PaymentRequested({
-          dueDate: "2026-09-01" as never,
-          variableSymbol: "2026000042" as never,
+          dueDate: plainDateStringSchema.make("2026-09-01"),
+          variableSymbol: invoiceVariableSymbolSchema.make("2026000042"),
         }),
       })
     );
@@ -165,7 +170,7 @@ describe("InvoiceAdministrationDetailScreen", () => {
         paidOn: "2026-08-20",
         paymentStatus: "paid",
         settlement: InvoiceSettlement.Paid({
-          paidOn: "2026-08-20" as never,
+          paidOn: plainDateStringSchema.make("2026-08-20"),
           variableSymbol: null,
         }),
       })
@@ -190,8 +195,14 @@ describe("InvoiceAdministrationDetailScreen", () => {
     actor: testEmailAddress("invoice-detail-operator"),
     correctiveDocumentNumber: "WS-OD-2026-000001",
     correctiveDocumentIssuedAt: "2026-08-20T10:00:00.000Z",
-    correctiveDocumentPdfUrl:
-      "/admin/invoices/01980000-0000-7000-8000-000000000042/corrective-document" as never,
+    correctiveDocumentPdfUrl: administrationHref(
+      "/[locale]/admin/invoices/[invoiceId]/corrective-document",
+      {
+        invoiceId: AdministrationInvoiceId.make(
+          "01980000-0000-7000-8000-000000000042"
+        ),
+      }
+    ),
     notices,
   });
   const cancelledDetail = (
@@ -299,8 +310,12 @@ describe("InvoiceAdministrationDetailScreen", () => {
 
     const view = await renderDetail(
       invoiceAdministrationDetail({
-        replacesInvoiceId: "01980000-0000-7000-8000-000000000041" as never,
-        replacedByInvoiceId: "01980000-0000-7000-8000-000000000043" as never,
+        replacesInvoiceId: AdministrationInvoiceId.make(
+          "01980000-0000-7000-8000-000000000041"
+        ),
+        replacedByInvoiceId: AdministrationInvoiceId.make(
+          "01980000-0000-7000-8000-000000000043"
+        ),
       })
     );
 
