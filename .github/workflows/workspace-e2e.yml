@@ -1013,10 +1013,14 @@ jobs:
           # The trace reporter replaces each with sanitized-trace.zip; a raw
           # trace a killed run left behind, and the worker's trace working
           # files that an early stop can leave, never leave the runner.
+          # The Unlimited case's journals contain synthetic ownership IDs
+          # used by teardown. They also stay on the runner.
           path: |
             apps/deskohub-workspace/e2e-artifacts/**
             !apps/deskohub-workspace/e2e-artifacts/**/trace*.zip
             !apps/deskohub-workspace/e2e-artifacts/**/.playwright-artifacts-*/**
+            !apps/deskohub-workspace/e2e-artifacts/checkout/account-journals/unlimited-pass-auto-renewal.json
+            !apps/deskohub-workspace/e2e-artifacts/checkout/cleanup-journals/unlimited-pass-auto-renewal.json
           if-no-files-found: ignore
           retention-days: 7
 

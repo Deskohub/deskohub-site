@@ -140,6 +140,8 @@ export const makeUnlimitedPassAutoRenewalCase = ({
         id: "seed-unlimited-pass-buyer",
         timeoutMs: timeouts.datasource,
       });
+      addRedaction(account.accountId);
+      addRedaction(account.customerId, true);
       const session = yield* runStep({
         execute: identities
           .signIn(account, { openSession })
