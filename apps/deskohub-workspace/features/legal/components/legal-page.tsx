@@ -1,7 +1,7 @@
 import type { Locale } from "@/features/i18n";
 import { m } from "@/features/i18n";
 import { DocumentPage } from "@/shared/components/document-page";
-import { getLegalDocument } from "../content";
+import { getServedLegalDocument } from "../content.server";
 import type { LegalDocumentKey } from "../legal-document-summaries";
 import { LegalDocumentSections } from "./legal-document-sections";
 
@@ -11,7 +11,7 @@ type LegalPageProps = {
 };
 
 export function LegalPage({ locale, documentKey }: LegalPageProps) {
-  const document = getLegalDocument(locale, documentKey);
+  const document = getServedLegalDocument(locale, documentKey);
 
   return (
     <DocumentPage

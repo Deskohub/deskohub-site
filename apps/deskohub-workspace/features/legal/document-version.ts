@@ -1,30 +1,27 @@
-import { createHash } from "node:crypto";
 import type { Locale } from "@/features/i18n";
-import { getCanonicalLegalDocument } from "./canonical-document";
-import { getLegalDocument, type LegalDocumentContent } from "./content";
+import { hashLegalDocument } from "./canonical-document";
+import { getLegalDocument } from "./content";
+import { getPreviewLegalDocument } from "./content.server";
 import { getLegalDocumentPath } from "./legal-document-path";
 import type { LegalDocumentKey } from "./legal-document-summaries";
 
-export const legalDocumentHashAlgorithm = "sha256";
-
-/**
- * Hashes a legal document's canonical form. The hash is the document's
- * version: any change to its title, lead, date, or text gives a new one, and
- * stored consents and legal evidence record it.
- */
-export function hashLegalDocument(document: LegalDocumentContent): string {
-  return createHash(legalDocumentHashAlgorithm)
-    .update(getCanonicalLegalDocument(document))
-    .digest("hex");
-}
+export {
+  hashLegalDocument,
+  legalDocumentHashAlgorithm,
+} from "./canonical-document";
 
 const documentVersions = new Map<string, string>();
 
-/** The current version of the published document, hashed once per process. */
+/** The version of the served document. Published versions are cached by path. */
 export function getLegalDocumentVersion(
   locale: Locale,
   documentKey: LegalDocumentKey
 ): string {
+  const preview = getPreviewLegalDocument(locale, documentKey);
+  if (preview !== undefined) {
+    return hashLegalDocument(preview);
+  }
+
   const path = getLegalDocumentPath(locale, documentKey);
   const cached = documentVersions.get(path);
   if (cached !== undefined) {

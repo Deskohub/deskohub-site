@@ -1,6 +1,6 @@
 import type { Locale } from "@/features/i18n";
 import { m } from "@/features/i18n";
-import { getLegalDocument } from "../content";
+import { getServedLegalDocument } from "../content.server";
 import { keepLegalLinksInApp } from "../in-app-legal-links";
 import type { LegalDocumentKey } from "../legal-document-path";
 import { LegalDocumentSections } from "./legal-document-sections";
@@ -16,7 +16,7 @@ type InAppLegalPageProps = {
  * eyebrow card. Links to other legal documents stay in this variant.
  */
 export function InAppLegalPage({ locale, documentKey }: InAppLegalPageProps) {
-  const document = getLegalDocument(locale, documentKey);
+  const document = getServedLegalDocument(locale, documentKey);
   const sections = document.sections.map((section) => ({
     heading: section.heading,
     body: section.body.map(keepLegalLinksInApp),
