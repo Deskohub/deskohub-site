@@ -1,4 +1,3 @@
-import { cva } from "class-variance-authority";
 import { Match } from "effect";
 import { Undo2 } from "lucide-react";
 import Link from "next/link";
@@ -33,13 +32,13 @@ import { ReservationWithdrawalLink } from "@/features/withdrawal/components/rese
 import type { ContractWithdrawalEntry } from "@/features/withdrawal/withdrawal-read-model";
 import { Button } from "@/shared/components/ui/button";
 import { formatMoney } from "@/shared/money/money";
-import { cn } from "@/shared/utils";
 import { CheckoutFlowLayout } from "./checkout-flow-layout";
 import type { CheckoutQrPayment } from "./checkout-qr-payment-details";
 import {
   type CheckoutStatusCopy,
   getCheckoutStatusCopy,
 } from "./checkout-status-copy";
+import { CheckoutStatusHeadline } from "./checkout-status-headline";
 import {
   CheckoutStatusPaymentMethods,
   type ContinueCheckoutPaymentAction,
@@ -65,22 +64,6 @@ type CheckoutStatusPageProps = {
    */
   readonly withdrawal?: ContractWithdrawalEntry;
 };
-
-const statusIconWrapperVariants = cva(
-  "flex h-16 w-16 shrink-0 items-center justify-center rounded-full ring-8",
-  {
-    variants: {
-      tone: {
-        success:
-          "bg-aquamarine-green/14 text-aquamarine-ink ring-aquamarine-green/8",
-        pending: "bg-burned-orange/12 text-burned-orange ring-burned-orange/8",
-        warning: "bg-burned-orange/12 text-burned-orange ring-burned-orange/8",
-        failed: "bg-red-500/10 text-red-600 ring-red-500/8",
-        unknown: "bg-navy-blue/8 text-navy-blue/60 ring-navy-blue/6",
-      },
-    },
-  }
-);
 
 const getSummaryPresentation = (
   status: CheckoutStatusViewModel,
@@ -154,7 +137,7 @@ const getContactReservationDetails = (
   ].join("\n");
 
 const getSupportContactMessage = (
-  status: CheckoutStatusViewModel,
+  status: CheckoutReservationStatusViewModel,
   locale: Locale,
   summaryPresentation: CheckoutStatusSummaryPresentation | undefined,
   topic: NonNullable<
@@ -243,14 +226,14 @@ const getReserveAgainLabel = (
 };
 
 const getSupportContactHref = (
-  status: CheckoutStatusViewModel,
+  status: CheckoutReservationStatusViewModel,
   locale: Locale,
-  summaryPresentation: CheckoutStatusSummaryPresentation | undefined
-) => {
-  const topic = checkoutStatusTraits[status.status].supportTopic;
-  if (!topic || status.status === "not_found") return undefined;
-
-  return getContactPageHref(locale, {
+  summaryPresentation: CheckoutStatusSummaryPresentation | undefined,
+  topic: NonNullable<
+    (typeof checkoutStatusTraits)[CheckoutStatusKind]["supportTopic"]
+  >
+) =>
+  getContactPageHref(locale, {
     ...status.supportContactPrefill,
     message: getSupportContactMessage(
       status,
@@ -259,7 +242,6 @@ const getSupportContactHref = (
       topic
     ),
   });
-};
 
 type CheckoutStatusPresentation = NonNullable<
   CheckoutStatusPageProps["presentation"]
@@ -349,11 +331,13 @@ export function CheckoutStatusPage({
     locale,
     officePeople || undefined
   );
-  const supportContactHref = getSupportContactHref(
-    status,
-    locale,
-    summaryPresentation
-  );
+  const supportTopic = checkoutStatusTraits[status.status].supportTopic;
+  const supportContactHref =
+    !canSwitchPayment?.qrPayment &&
+    supportTopic &&
+    status.status !== "not_found"
+      ? getSupportContactHref(status, locale, summaryPresentation, supportTopic)
+      : undefined;
   const offersRetry =
     checkoutStatusTraits[status.status].offersReservationRetry;
   const repeatReservationSearchParams =
@@ -368,27 +352,41 @@ export function CheckoutStatusPage({
   const paymentPageReopenable =
     status.status !== "not_found" && status.paymentPageReopenable;
 
+  const headline = (
+    <CheckoutStatusHeadline
+      copy={copy}
+      locale={locale}
+      reviewSandbox={!!reviewSandbox}
+      showSupportButton={!!supportContactHref}
+    />
+  );
   return (
     <CheckoutStatusFrame
       locale={locale}
       presentation={presentation}
       reserveAgainPath={offersNewReservation ? reserveAgainPath : undefined}
     >
-      <CheckoutStatusHeadline
-        copy={copy}
-        locale={locale}
-        reviewSandbox={!!reviewSandbox}
-        showSupportButton={!!supportContactHref}
-      />
-
-      {canSwitchPayment && (
+      {canSwitchPayment && status.status !== "not_found" ? (
         <CheckoutStatusPaymentMethods
           continuePaymentAction={canSwitchPayment.continuePaymentAction}
           expiresAt={canSwitchPayment.expiresAt}
+          headline={headline}
           locale={locale}
           orderId={status.orderId}
-          qrPayment={canSwitchPayment.qrPayment}
+          qrWait={
+            canSwitchPayment.qrPayment && {
+              payment: canSwitchPayment.qrPayment,
+              supportHref: getSupportContactHref(
+                status,
+                locale,
+                summaryPresentation,
+                "payment_pending"
+              ),
+            }
+          }
         />
+      ) : (
+        headline
       )}
 
       {!!supportContactHref && (
@@ -498,59 +496,6 @@ function CheckoutStatusFrame({
     >
       {content}
     </CheckoutFlowLayout>
-  );
-}
-
-function CheckoutStatusHeadline({
-  copy,
-  locale,
-  reviewSandbox,
-  showSupportButton,
-}: {
-  readonly copy: CheckoutStatusCopy;
-  readonly locale: Locale;
-  readonly reviewSandbox: boolean;
-  readonly showSupportButton: boolean;
-}) {
-  const Icon = copy.Icon;
-
-  return (
-    <>
-      <output className="sr-only" aria-live="polite" aria-atomic>
-        {m.checkoutStatusEyebrow({}, { locale })}: {copy.title}
-      </output>
-      <div className="flex flex-col gap-6 sm:flex-row sm:items-start">
-        <div className={statusIconWrapperVariants({ tone: copy.tone })}>
-          <Icon className="h-9 w-9" aria-hidden="true" />
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-burned-orange">
-            {m.checkoutStatusEyebrow({}, { locale })}
-          </p>
-          <h1 className="mt-4 text-balance text-4xl leading-none sm:text-5xl">
-            {copy.title}
-          </h1>
-          <p
-            className={cn(
-              "mt-5 text-lg leading-8 text-navy-blue/70",
-              showSupportButton &&
-                "after:content-['_↴'] after:text-4xl after:leading-0"
-            )}
-          >
-            {copy.lead}
-          </p>
-          {reviewSandbox && (
-            <p
-              className="mt-4 rounded-2xl border border-navy-blue/10 bg-navy-blue/3 px-4 py-3 text-sm leading-6 text-navy-blue/72"
-              id="checkout-status-review-sandbox"
-            >
-              {m.checkoutStatusReviewSandboxNotice({}, { locale })}
-            </p>
-          )}
-        </div>
-      </div>
-    </>
   );
 }
 

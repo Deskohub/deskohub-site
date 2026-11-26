@@ -7,6 +7,7 @@ import {
   beforeEach,
   describe,
   expect,
+  jest,
   mock,
   test,
 } from "bun:test";
@@ -159,6 +160,112 @@ describe("CheckoutStatusPage", () => {
     }
   });
 
+  test("uses the localized payment support prefill only after the QR wait", () => {
+    jest.useFakeTimers({ now: new Date("2026-11-20T14:00:00Z") });
+    const expiresAt = "2026-11-20T14:30:00Z";
+    const paymentMethods = {
+      continuePaymentAction: mock(async () => ({})),
+      expiresAt,
+      qrPayment: {
+        accountNumber: "0000000001/0000",
+        amount: "CZK 450.50",
+        deadline: "Nov 20, 2026, 3:30 PM",
+        expiresAt,
+        qrCodeSource: "data:image/png;base64,iVBORw0KGgo=",
+        variableSymbol: "0012345678",
+      },
+    };
+    const pendingStatus = {
+      ...baseStatus,
+      status: "payment_pending_delayed",
+      paymentStatus: "pending",
+      fulfillmentStatus: "not_started",
+      supportContactPrefill: {
+        name: "Ada Lovelace",
+        email: testEmailAddressForAda,
+      },
+    } as const;
+    const view = render(
+      <CheckoutStatusPage
+        locale="en-US"
+        paymentMethods={paymentMethods}
+        status={pendingStatus}
+      />
+    );
+    const paymentSent = view.getByRole("button", { name: "Payment sent" });
+    expect(
+      view.queryByRole("link", { name: "Send support request" })
+    ).toBeNull();
+    expect(view.queryByRole("link", { name: "Contact support" })).toBeNull();
+    fireEvent.click(paymentSent);
+    expect(view.getByRole("timer").textContent).toBe("1:00");
+    view.unmount();
+
+    jest.setSystemTime(new Date("2026-11-20T14:06:00Z"));
+    const restored = render(
+      <CheckoutStatusPage
+        locale="en-US"
+        paymentMethods={paymentMethods}
+        status={pendingStatus}
+      />
+    );
+    expect(restored.queryByRole("timer")).toBeNull();
+    expect(
+      restored.getByText(
+        "We’ll keep checking until your reservation hold ends at Nov 20, 2026, 3:30 PM."
+      )
+    ).toBeTruthy();
+    expect(
+      restored.getByText(
+        "If your bank shows the transfer went through, please don’t pay again."
+      )
+    ).toBeTruthy();
+    const link = restored.getByRole("link", { name: "Contact support" });
+    const href = new URL(
+      link.getAttribute("href") ?? "",
+      "https://deskohub.local"
+    );
+    expect(href.pathname).toBe("/en-US/contact");
+    expect(readContactPrefill(href.searchParams)).toEqual({
+      ...pendingStatus.supportContactPrefill,
+      message: m.checkoutStatusPaymentPendingContactMessage(
+        {
+          reservationDetails: m.checkoutStatusContactOrderReference(
+            { orderId: baseStatus.orderId },
+            { locale: "en-US" }
+          ),
+        },
+        { locale: "en-US" }
+      ),
+    });
+
+    restored.rerender(
+      <CheckoutStatusPage
+        locale="en-US"
+        paymentMethods={paymentMethods}
+        presentation="modal"
+        status={pendingStatus}
+      />
+    );
+    expect(
+      restored.queryByRole("link", { name: "Contact support" })
+    ).toBeNull();
+    expect(
+      restored.getByRole("link", { name: "Send support request" })
+    ).toBeTruthy();
+    restored.rerender(
+      <CheckoutStatusPage
+        locale="en-US"
+        paymentMethods={paymentMethods}
+        status={baseStatus}
+      />
+    );
+    expect(
+      restored.queryByRole("link", { name: "Contact support" })
+    ).toBeNull();
+    expect(restored.queryByText("Show transfer details")).toBeNull();
+  });
+
   beforeAll(() => {
     registerWorkspaceComponentTestEnv();
   });
@@ -169,6 +276,8 @@ describe("CheckoutStatusPage", () => {
 
   afterEach(() => {
     cleanup();
+    sessionStorage.clear();
+    jest.useRealTimers();
   });
 
   afterAll(async () => {
