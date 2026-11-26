@@ -3178,6 +3178,39 @@ describe("DotyposService marked reservation transitions", () => {
       etags: ['"version-1"'],
     },
     {
+      label: "refuses a wildcard ETag before the first guarded PATCH",
+      requireNew: true,
+      reads: ["new-wildcard-etag"],
+      patches: [],
+      expected: "DotyposRejected",
+      etags: [],
+    },
+    {
+      label: "refuses a weak ETag before the first guarded PATCH",
+      requireNew: true,
+      reads: ["new-weak-etag"],
+      patches: [],
+      expected: "DotyposRejected",
+      etags: [],
+    },
+    {
+      label: "refuses multiple ETags before the first guarded PATCH",
+      requireNew: true,
+      reads: ["new-multiple-etags"],
+      patches: [],
+      expected: "DotyposRejected",
+      etags: [],
+    },
+    {
+      label:
+        "keeps a lost reply uncertain without patching the wildcard retry read",
+      requireNew: true,
+      reads: ["new", "new-wildcard-etag"],
+      patches: ["transport", 412],
+      expected: "DotyposUncertain",
+      etags: ['"version-1"', '"version-1"'],
+    },
+    {
       label: "refuses a confirmed hold when NEW is required",
       requireNew: true,
       reads: ["owned"],
@@ -3298,7 +3331,12 @@ describe("DotyposService marked reservation transitions", () => {
       if (request.method === "GET") {
         const state = reads[readsSeen++];
         expect(state).toBeDefined();
-        const priorStatus = state === "new" ? "NEW" : "CONFIRMED";
+        const priorStatus = state?.startsWith("new") ? "NEW" : "CONFIRMED";
+        const etagsByState: Readonly<Record<string, string>> = {
+          "new-wildcard-etag": "*",
+          "new-weak-etag": 'W/"weak"',
+          "new-multiple-etags": '"first", "second"',
+        };
         return Response.json(
           reservation({
             ...(state === "changed-id" && { id: "different-reservation" }),
@@ -3321,7 +3359,9 @@ describe("DotyposService marked reservation transitions", () => {
           state === "no-etag"
             ? undefined
             : {
-                headers: { ETag: `"version-${readsSeen}"` },
+                headers: {
+                  ETag: etagsByState[state ?? ""] ?? `"version-${readsSeen}"`,
+                },
               }
         );
       }
