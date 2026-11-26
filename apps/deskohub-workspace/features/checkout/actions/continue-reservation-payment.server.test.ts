@@ -8,10 +8,8 @@ import { readAuthorPaymentStatus } from "@/features/checkout/backend/checkout/pu
 import { FioAccounts } from "@/features/checkout/backend/fio/fio-accounts.service";
 import { QrPaymentRepository } from "@/features/checkout/backend/repositories/qr-payment.repository";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
-import {
-  type WorkspaceReservation,
-  WorkspaceReservationRepository,
-} from "@/features/reservation/backend/workspace-reservation.repository";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { continueReservationPaymentForAuthor } from "./continue-reservation-payment.server";
@@ -62,13 +60,17 @@ const scenario = ({
     }),
     Layer.mock(WorkspaceReservationRepository, {
       findById: () =>
-        Effect.succeed({
-          id: orderId,
-          authorAccountId: author,
-          reservationState: "held",
-          paymentState: paid ? "paid" : "pending",
-          activePaymentAttemptId: "synthetic-attempt",
-        } as WorkspaceReservation),
+        Effect.succeed(
+          workspaceReservationFixture({
+            id: orderId,
+            authorAccountId: author,
+            reservationState: "held",
+            paymentState: paid ? "paid" : "pending",
+            fulfillmentState: "not_started",
+            activePaymentAttemptId:
+              paymentAttemptIdSchema.make("synthetic-attempt"),
+          })
+        ),
     }),
     Layer.mock(QrPaymentRepository, {
       findPaymentWindow,
