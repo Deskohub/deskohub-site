@@ -400,9 +400,11 @@ export type CurrentBrowserDocument = (
 // replacement. Retain the original Document in its browser execution context.
 const matchCurrentDocument = (
   page: Page,
-  rawUrl: string
+  rawUrl: string,
+  readyUrl: string
 ): CurrentBrowserDocument => {
   const mainFrame = page.mainFrame();
+  let currentUrl = rawUrl;
   let invalidated = false;
   let bound = false;
   const invalidate = () => {
@@ -413,7 +415,16 @@ const matchCurrentDocument = (
   };
   const recordNavigation = (frame: Frame) => {
     if (frame !== mainFrame) return;
-    if (!bound || frame.url() !== rawUrl) invalidate();
+    const nextUrl = frame.url();
+    if (
+      !bound ||
+      (nextUrl !== currentUrl &&
+        !(currentUrl === rawUrl && nextUrl === readyUrl))
+    ) {
+      invalidate();
+      return;
+    }
+    currentUrl = nextUrl;
   };
   const recordRequest = (request: Request) => {
     if (!request.isNavigationRequest()) return;
@@ -424,7 +435,8 @@ const matchCurrentDocument = (
     }
   };
   const matches = () =>
-    !invalidated && !page.isClosed() && page.url() === rawUrl;
+    !invalidated && !page.isClosed() && page.url() === currentUrl;
+  const ready = () => matches() && currentUrl === readyUrl;
   page.on("framenavigated", recordNavigation);
   page.on("request", recordRequest);
   page.once("close", invalidate);
@@ -451,13 +463,20 @@ const matchCurrentDocument = (
     try {
       return await Promise.race([
         original
-          .then(
-            async (handle) =>
-              !!handle &&
-              matches() &&
+          .then(async (handle) => {
+            if (!handle || !matches()) return false;
+            if (currentUrl !== readyUrl) {
+              await page.waitForURL((url) => url.href !== rawUrl, {
+                waitUntil: "commit",
+                timeout: timeoutMs,
+              });
+            }
+            return (
+              ready() &&
               (await handle.evaluate((observed) => observed === document)) &&
-              matches()
-          )
+              ready()
+            );
+          })
           .catch(() => false),
         delay(timeoutMs, false, { signal: timer.signal }),
       ]);
@@ -474,12 +493,14 @@ const matchCurrentDocument = (
  */
 export const waitForPageUrl = ({
   description,
+  documentReadyUrl,
   matches,
   onDocumentMatch,
   session,
   timeoutMs,
 }: {
   readonly description: string;
+  readonly documentReadyUrl?: (matchedUrl: string) => string;
   readonly matches: (url: string) => boolean;
   readonly onDocumentMatch?: (isCurrent: CurrentBrowserDocument) => void;
   readonly session: PolledBrowserSession;
@@ -492,7 +513,13 @@ export const waitForPageUrl = ({
             const rawUrl = page.url();
             const url = redact(rawUrl).trim();
             if (!url || !matches(url)) return undefined;
-            onDocumentMatch(matchCurrentDocument(page, rawUrl));
+            onDocumentMatch(
+              matchCurrentDocument(
+                page,
+                rawUrl,
+                documentReadyUrl?.(rawUrl) ?? rawUrl
+              )
+            );
             return url;
           })
         : readPageUrl(activeSession).pipe(

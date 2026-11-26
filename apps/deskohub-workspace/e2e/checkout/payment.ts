@@ -42,6 +42,7 @@ import {
   readMockHostedPaymentUrl,
 } from "./mock-payment-url";
 import type { NexiHostedNavigation } from "./nexi-hosted-page-ownership";
+import { nexiReviewReadyUrl } from "./nexi-review-navigation";
 import {
   prepareReservationForm,
   type ReservationFormPreparation,
@@ -601,6 +602,8 @@ export const submitPaymentAndWaitForHostedPage = ({
           isHandoffDocument = isCurrent;
         },
       }),
+      ...(observeHandoffDocument &&
+        paymentProvider === "nexi" && { documentReadyUrl: nexiReviewReadyUrl }),
       session,
       timeoutMs: timeouts.providerTransition,
     });

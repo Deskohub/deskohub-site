@@ -297,19 +297,31 @@ export function makeUnlimitedPassReviewCapture({
       hosted: HostedPaymentPage,
       privateText: readonly string[]
     ) => {
+      if (results.get("nexi-handoff") === "captured") return;
       // Share the existing two-width inspection budget. The first view may
       // spend most of it waiting for Nexi to render its hosted fields.
       let inspectionBudget = viewports.length * timeout;
       const { isHandoffDocument } = hosted;
       const verifyDocument = () =>
         isHandoffDocument?.(page, timeout) ?? Promise.resolve(false);
-      const observation =
+      const matchesHostedPage =
         page === hosted.page &&
         hosted.provider === "nexi" &&
-        URL.parse(page.url())?.origin === sandboxOrigin
-          ? observeNexiReviewNavigation(page)
-          : undefined;
+        URL.parse(page.url())?.origin === sandboxOrigin;
+      const observation = matchesHostedPage
+        ? observeNexiReviewNavigation(page)
+        : undefined;
       try {
+        if (!isHandoffDocument) {
+          results.set("nexi-handoff", "untracked-document");
+          return;
+        }
+        const started = performance.now();
+        if (!matchesHostedPage || !(await verifyDocument())) {
+          results.set("nexi-handoff", "unexpected-document");
+          return;
+        }
+        inspectionBudget -= performance.now() - started;
         await capture(page, "nexi-handoff", {
           mask: [
             page.locator("[data-ph-mask]"),
@@ -323,15 +335,7 @@ export function makeUnlimitedPassReviewCapture({
             "input:not([type=submit], [type=button], [type=checkbox], [type=radio]), textarea { color: transparent !important; caret-color: transparent !important; }",
           verifyDocument,
           verify: async () => {
-            const url = URL.parse(page.url());
-            if (!isHandoffDocument) return "untracked-document";
-            if (
-              page !== hosted.page ||
-              hosted.provider !== "nexi" ||
-              url?.origin !== sandboxOrigin ||
-              !(await verifyDocument())
-            )
-              return "unexpected-document";
+            if (!(await verifyDocument())) return "unexpected-document";
             const started = performance.now();
             const problem = await waitForEmptyCardFields(
               page,

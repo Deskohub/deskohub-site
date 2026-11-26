@@ -3,7 +3,11 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Browser, chromium } from "@playwright/test";
+import { Effect } from "effect";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
+import { type CurrentBrowserDocument, waitForPageUrl } from "../browser";
+import { runBrowserStep } from "../case-runner.browser.test-utils";
+import { nexiReviewReadyUrl } from "../checkout/nexi-review-navigation";
 import { addRedaction, redact } from "../redaction";
 import { makeUnlimitedPassReviewCapture } from "./unlimited-pass-review";
 
@@ -31,6 +35,124 @@ const cardFieldLabels = [
   "First Name",
   "Email",
 ];
+
+for (const transition of [
+  "card",
+  "different-operation",
+  "reload",
+  "return",
+] as const) {
+  test.skipIf(!chromiumAvailable)(
+    `checks the exact Nexi card bootstrap: ${transition}`,
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "unlimited-review-"));
+      const initial = `${sandbox}/hpp/nexi/card-bootstrap-session?operationId=bootstrap-operation`;
+      const ready = `${sandbox}/hpp/nexi/card-bootstrap-session/card?operationId=bootstrap-operation`;
+      try {
+        const review = makeUnlimitedPassReviewCapture({
+          accountPath,
+          directory,
+          locale: "en-US",
+          origin,
+          timeout: 1_000,
+        });
+        const execution = await runBrowserStep({
+          browser,
+          prepare: (session) =>
+            session.use("open synthetic Nexi bootstrap page", async (page) => {
+              await page.route("**/*", (route) => {
+                const url = new URL(route.request().url());
+                const index = url.pathname.match(/^\/field\/([0-4])$/)?.[1];
+                return route.fulfill({
+                  contentType: "text/html",
+                  body:
+                    index === undefined
+                      ? cardFieldLabels
+                          .map(
+                            (label, n) =>
+                              `<iframe title="${label}" src="/field/${n}"></iframe>`
+                          )
+                          .join("")
+                      : `<input aria-label="${cardFieldLabels[Number(index)]}">`,
+                });
+              });
+              await page.goto(initial);
+            }),
+          drive: ({ session }) =>
+            Effect.gen(function* () {
+              let isHandoffDocument: CurrentBrowserDocument | undefined;
+              yield* waitForPageUrl({
+                description: "synthetic Nexi handoff",
+                documentReadyUrl: nexiReviewReadyUrl,
+                matches: (url) => url === initial,
+                onDocumentMatch: (document) => {
+                  isHandoffDocument = document;
+                },
+                session,
+                timeoutMs: 1_000,
+              });
+              yield* session.use(
+                "capture the synthetic Nexi bootstrap",
+                async (page) => {
+                  await page.evaluate(() => document.body !== null);
+                  const handoff = {
+                    checkoutPage: page,
+                    checkoutPageUrl: `${origin}${checkoutPath}`,
+                    isHandoffDocument,
+                    page,
+                    provider: "nexi" as const,
+                    url: initial,
+                  };
+                  const replace = async (url: string) => {
+                    await Promise.all([
+                      page.waitForEvent("framenavigated", {
+                        predicate: (frame) => frame === page.mainFrame(),
+                        timeout: 1_000,
+                      }),
+                      page.evaluate(
+                        (target) => history.replaceState({}, "", target),
+                        url
+                      ),
+                    ]);
+                  };
+                  const pending = review.captureNexi(page, handoff, []);
+                  if (transition === "reload") {
+                    await page.goto(ready);
+                  } else if (transition === "different-operation") {
+                    await replace(
+                      ready.replace(
+                        "bootstrap-operation",
+                        "different-operation"
+                      )
+                    );
+                  } else {
+                    await replace(ready);
+                    if (transition === "return") {
+                      await replace(initial);
+                      await replace(ready);
+                    }
+                  }
+                  await pending;
+                }
+              );
+            }),
+        });
+        expect(execution.succeeded).toBe(true);
+        const files = (await readdir(directory)).sort();
+        if (transition === "card") {
+          expect(files).toEqual([
+            "unlimited-en-US-nexi-handoff-1280.png",
+            "unlimited-en-US-nexi-handoff-390.png",
+          ]);
+        } else {
+          expect(files).toEqual([]);
+        }
+      } finally {
+        await rm(directory, { force: true, recursive: true });
+      }
+    }
+  );
+}
 
 test.skipIf(!chromiumAvailable)(
   "publishes neither width when a review page navigates away and returns during capture",

@@ -1,5 +1,17 @@
 import type { CDPSession, Page } from "@playwright/test";
 
+const nexiEntryUrl =
+  /^(https:\/\/xpaysandbox\.nexigroup\.com\/hpp\/nexi\/[A-Za-z0-9._~-]+)(\?operationId=[^#&?\s]+)$/;
+
+/**
+ * Nexi's CARD_DATA_COLLECTION route appends /card to the existing HPP
+ * session and retains operationId. Preserve those raw bytes for comparison.
+ */
+export const nexiReviewReadyUrl = (rawUrl: string) => {
+  const initial = nexiEntryUrl.exec(rawUrl);
+  return initial ? `${initial[1]}/card${initial[2]}` : rawUrl;
+};
+
 const urlRelation = (initial: string, current: string) => {
   if (initial === current) return "same-url";
   return initial.split("#", 1)[0] === current.split("#", 1)[0]
