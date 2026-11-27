@@ -14,6 +14,7 @@ import { getCoworkCheckoutAttemptDetails } from "@/features/reservation/cowork-r
 import { getMeetingRoomReservationDetails } from "@/features/reservation/meeting-room-reservation";
 import { getOfficeReservationDetails } from "@/features/reservation/office-reservation";
 import type { ReservationOrderData } from "@/features/reservation/reservation-order";
+import { getTableReservationDetails } from "@/features/reservation/table-reservation";
 import {
   deriveSealedStateSubkey,
   type SealedStateKey,
@@ -77,6 +78,7 @@ export const deriveCheckoutAttemptKeys = Effect.fn(
       cowork: getCoworkCheckoutAttemptDetails,
       "meeting-room": getMeetingRoomReservationDetails,
       office: getOfficeReservationDetails,
+      table: getTableReservationDetails,
     })
   );
 

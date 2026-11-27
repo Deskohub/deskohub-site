@@ -15,6 +15,7 @@ const products: ReadonlyArray<CustomerReservationProduct> = [
   { kind: "meeting-room" },
   { kind: "office" },
   { kind: "other" },
+  { kind: "other", family: "table" },
 ];
 
 const allDistinctAndPresent = (labels: ReadonlyArray<string>) => {
@@ -37,6 +38,22 @@ describe("reservation labels", () => {
         (["cowork", "meeting-room", "office"] as const).map((kind) =>
           reservationKindTitle(kind, locale)
         )
+      );
+    }
+  });
+
+  test("recognizes Team Table before and after its booked size is available", () => {
+    for (const locale of locales) {
+      const family = { kind: "other", family: "table" } as const;
+      const details = {
+        kind: "other",
+        teamTable: { kind: "table", seats: 6, durationMinutes: 90 },
+      } as const;
+      expect(reservationProductTitle(details, locale)).toBe(
+        reservationProductTitle(family, locale)
+      );
+      expect(reservationProductTitle(family, locale)).not.toBe(
+        reservationProductTitle({ kind: "other" }, locale)
       );
     }
   });

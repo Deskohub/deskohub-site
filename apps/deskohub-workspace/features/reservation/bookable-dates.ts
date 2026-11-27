@@ -19,6 +19,7 @@ const getAvailabilityRangeDates = (today: Temporal.PlainDate) => {
 const bookableDatesByKind = {
   cowork: getAvailabilityRangeDates,
   "meeting-room": getAvailabilityRangeDates,
+  table: getAvailabilityRangeDates,
   office: (today) => ({
     earliest: today.toString(),
     latest: getOfficeReservationMaximumEndsOn(today).toString(),

@@ -12,7 +12,10 @@ import {
   type WorkspaceCoworkTableCandidateQuery,
   type WorkspaceTableCandidate,
 } from "@/features/checkout/backend/reservation";
-import { selectWorkspaceTableFromCandidates } from "@/features/checkout/backend/reservation/workspace-table-selection";
+import {
+  selectOpenSpaceTableFromCandidates,
+  selectWorkspaceTableFromCandidates,
+} from "@/features/checkout/backend/reservation/workspace-table-selection";
 import {
   type WorkspaceProductMonitorOption,
   workspaceProductMonitorOptions,
@@ -32,7 +35,7 @@ import type { ReservationInterval } from "@/features/reservation/reservation-int
 import { getPlainDatesBetween } from "@/shared/utils/temporal";
 import { unlimitedPassDays } from "../pass-offer";
 import {
-  getBookingsWithPassDayIntents,
+  getBookingsWithCapacityClaims,
   observePassDayInventory,
 } from "./pass-day-capacity-bookings";
 
@@ -90,10 +93,10 @@ const loadUnlimitedInventory = Effect.fn("loadUnlimitedInventory")(function* (
   const last = Arr.lastNonEmpty(dates);
   // Read intents before the provider list so a concurrent attach cannot
   // disappear between a stale provider list and a later local-state read.
-  const intents = yield* workspaceReservations.selectPendingPassDayCapacity({
-    first,
-    last,
-  });
+  const [intents, localTableClaims] = yield* Effect.all([
+    workspaceReservations.selectPendingPassDayCapacity({ first, last }),
+    workspaceReservations.selectLocalTableCapacity({ first, last }),
+  ]);
 
   const reads = yield* Effect.all(
     {
@@ -132,9 +135,9 @@ const loadUnlimitedInventory = Effect.fn("loadUnlimitedInventory")(function* (
     closedDates: getFullyOccupiedCalendarDates(
       yield* Effect.fromResult(reads.limitations)
     ),
-    bookings: getBookingsWithPassDayIntents(
+    bookings: getBookingsWithCapacityClaims(
       excludeDotyposReservationsById(observations.reservations, expiredIds),
-      observations.passDayIntents,
+      { passDayIntents: observations.passDayIntents, localTableClaims },
       supersedeOrderId
     ),
   };
@@ -346,7 +349,7 @@ const allocateUnlimitedPass = Effect.fn("allocateUnlimitedPass")(function* (
         freeTables,
         occupancy,
       }) {
-        const table = yield* selectWorkspaceTableFromCandidates(
+        const table = yield* selectOpenSpaceTableFromCandidates(
           freeTables,
           tables,
           occupancy

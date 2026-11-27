@@ -8,14 +8,35 @@ import { customerRead } from "../../customer-api/customer-request";
 import type { CustomerRequestFailure } from "../../customer-api/customer-view-error";
 import { appForegroundAtom } from "../../platform/app-foreground";
 import { reservationHistoryAtom } from "./reservations-list-state";
-import { type StatusRefreshState, statusRefreshes } from "./status-refresh";
+import {
+  type ReservationOrder,
+  type StatusRefreshState,
+  statusRefreshes,
+} from "./status-refresh";
 import { AutomaticRefresh, type StatusVisit } from "./status-refresh-rules";
 
 /** One status read: the server refreshes the order and it spends the budget. */
-export const readOrderStatus = (orderId: CustomerReservationOrderId) =>
-  Effect.flatMap(Effect.service(CustomerApi), (api) =>
-    api.reservations.getReservationStatus({ params: { orderId } })
-  ).pipe(customerRead({ accountRead: true }));
+export const readOrderStatus = (
+  orderId: CustomerReservationOrderId,
+  kind?: ReservationOrder["kind"]
+) =>
+  Effect.service(CustomerApi).pipe(
+    Effect.flatMap((api) => {
+      const request = { params: { orderId } };
+      if (kind === "table") return api.teamTable.getStatus(request);
+      const legacy = api.reservations.getReservationStatus(request);
+      // The legacy adapter returns this same error for a Team Table and an
+      // inaccessible order. The Team Table adapter authorizes independently.
+      return kind === undefined
+        ? legacy.pipe(
+            Effect.catchTag("CustomerReservationNotFound", () =>
+              api.teamTable.getStatus(request)
+            )
+          )
+        : legacy;
+    }),
+    customerRead({ accountRead: true })
+  );
 
 /** The advisory number of reads left. */
 export const remainingReadBudget = Effect.flatMap(
@@ -193,13 +214,24 @@ export const makeOrderStatusAtoms = (foreground: Atom.Atom<boolean>) => {
         return Stream.fail(failure.value);
       }
       const previous = Option.flatMap(prior, AsyncResult.value);
+      let knownKind = Option.getOrUndefined(
+        Option.map(previous, ({ state }) => state.order.kind)
+      );
       const resume = previous.pipe(
         Option.filter((previous) => previous.session === session),
         Option.map((previous) => previous.state)
       );
       return owner !== undefined && visible && get(foreground)
         ? statusRefreshes({
-            read: readOrderStatus(orderId),
+            read: Effect.suspend(() =>
+              readOrderStatus(orderId, knownKind)
+            ).pipe(
+              Effect.tap((order) =>
+                Effect.sync(() => {
+                  knownKind = order.kind;
+                })
+              )
+            ),
             remainingBudget: remainingReadBudget,
             visit,
             manualRequests: refreshTaps(get.registry, refreshRequests(orderId)),

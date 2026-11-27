@@ -8,6 +8,63 @@ export type Command = (
   input?: string
 ) => Promise<string>;
 
+const deskohubRepository = "Deskohub/deskohub-site";
+const deskohubRepositoryId = 1015951989;
+const deskohubOrganizationId = 361691508;
+const deskohubMaintainerId = 41711263; // totalolage
+const repositorySlug = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/;
+
+export function isGitHubRepositorySlug(value: string): boolean {
+  return (
+    repositorySlug.test(value) &&
+    !/\/(?:\.|\.\.)$/.test(value) &&
+    value.trim() === value
+  );
+}
+
+function githubApi(run: Command, args: readonly string[], input?: string) {
+  return run("gh", ["api", ...args, "--hostname", "github.com"], input);
+}
+
+export class GitHubIdentityError extends Error {}
+
+export async function resolveIssuePoolGitHub(
+  run: Command,
+  reporterId = deskohubMaintainerId
+) {
+  const [repository, reporter] = await Promise.all([
+    githubApi(run, [`repos/${deskohubRepository}`]),
+    githubApi(run, ["user", "--jq", ".id"]),
+  ]);
+  const metadata: {
+    id?: unknown;
+    full_name?: unknown;
+    owner?: { id?: unknown; type?: unknown } | null;
+  } | null = JSON.parse(repository);
+  const repo = metadata?.full_name;
+  if (
+    metadata?.id !== deskohubRepositoryId ||
+    typeof repo !== "string" ||
+    !isGitHubRepositorySlug(repo)
+  ) {
+    throw new GitHubIdentityError(
+      "Unexpected GitHub issue pool repository identity"
+    );
+  }
+  const owner = metadata.owner;
+  if (owner?.type !== "Organization" || owner.id !== deskohubOrganizationId) {
+    throw new GitHubIdentityError(
+      "The GitHub issue pool repository must be owned by the Deskohub organization"
+    );
+  }
+  if (reporter.trim() !== String(reporterId)) {
+    throw new GitHubIdentityError(
+      "The authenticated GitHub account does not match the configured issue pool reporter ID"
+    );
+  }
+  return { repo, reporterId, maintainerId: deskohubMaintainerId };
+}
+
 interface RestIssue {
   number: number;
   state: "open" | "closed";
@@ -84,7 +141,7 @@ export function githubIssueTracker({
   const trustedAuthor = (authorId: number | null | undefined) =>
     authorId != null && trusted.has(authorId);
   const getPages = async <T>(path: string): Promise<T[]> => {
-    const response = await run("gh", ["api", "--paginate", "--slurp", path]);
+    const response = await githubApi(run, ["--paginate", "--slurp", path]);
     const pages: T[][] = JSON.parse(response);
     return pages.flat();
   };
@@ -111,16 +168,15 @@ export function githubIssueTracker({
       threadMarker.test(body ?? "")
     );
   async function postComment(number: number, body: string): Promise<void> {
-    await run(
-      "gh",
-      ["api", "--method", "POST", `${base}/${number}/comments`, "--input", "-"],
+    await githubApi(
+      run,
+      ["--method", "POST", `${base}/${number}/comments`, "--input", "-"],
       JSON.stringify({ body })
     );
     comments.delete(number);
   }
   async function readOwnership(number: number) {
-    const response = await run("gh", [
-      "api",
+    const response = await githubApi(run, [
       "graphql",
       "-f",
       `query=${ownershipQuery}`,
@@ -144,9 +200,9 @@ export function githubIssueTracker({
         .map(issueFromRest);
     },
     async file(title, body) {
-      const response = await run(
-        "gh",
-        ["api", "--method", "POST", base, "--input", "-"],
+      const response = await githubApi(
+        run,
+        ["--method", "POST", base, "--input", "-"],
         JSON.stringify({ title, body })
       );
       const issue: RestIssue = JSON.parse(response);

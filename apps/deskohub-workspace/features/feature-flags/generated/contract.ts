@@ -61,6 +61,10 @@ export const postHogFeatureFlags = definePostHogFeatureFlags<
     payload: Schema.Undefined,
     value: Schema.Boolean,
   },
+  "team_table_page": {
+    payload: Schema.Undefined,
+    value: Schema.Boolean,
+  },
   "webmcp_site_tools": {
     payload: Schema.Undefined,
     value: Schema.Boolean,
@@ -124,6 +128,10 @@ export interface PostHogFeatureFlagDefinitions {
     readonly payload: undefined;
   };
   readonly "seating_map": {
+    readonly value: boolean;
+    readonly payload: undefined;
+  };
+  readonly "team_table_page": {
     readonly value: boolean;
     readonly payload: undefined;
   };

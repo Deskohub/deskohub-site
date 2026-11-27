@@ -49,6 +49,7 @@ describe.skipIf(!postgresDatabase)(
       readonly fulfillmentState: FulfillmentState;
       readonly activeCustomerEmailDeliveryId?: EmailDeliveryId;
       readonly activeCustomerEmailDeliveryLocale?: "en-US" | "cs-CZ";
+      readonly activeCustomerEmailDeliveryOpenSpaceTables?: string;
     }) =>
       workspaceFixtures(postgres.db)
         .reservation({
@@ -199,11 +200,12 @@ describe.skipIf(!postgresDatabase)(
       expect(stored?.activeCustomerEmailDeliveryLocale).toBeNull();
     });
 
-    test("clears the retained email locale when fulfillment records the accepted delivery", async () => {
+    test("clears retained email details when fulfillment records the accepted delivery", async () => {
       const id = await Effect.runPromise(
         insertPaidReservationFixture({
           fulfillmentState: "processing",
           activeCustomerEmailDeliveryLocale: "cs-CZ",
+          activeCustomerEmailDeliveryOpenSpaceTables: "12–16",
         })
       );
       const customerEmailDeliveryId = newEmailDeliveryId();
@@ -221,6 +223,42 @@ describe.skipIf(!postgresDatabase)(
         customerEmailDeliveryId
       );
       expect(stored?.activeCustomerEmailDeliveryLocale).toBeNull();
+      expect(stored?.activeCustomerEmailDeliveryOpenSpaceTables).toBeNull();
+    });
+
+    test("retains an empty Open Space list until its delivery generation closes", async () => {
+      const id = await Effect.runPromise(
+        insertPaidReservationFixture({ fulfillmentState: "processing" })
+      );
+      const retain = (tableNames: string) =>
+        Effect.runPromise(
+          ledger.retainActiveCustomerEmailDeliveryOpenSpaceTables({
+            id,
+            tableNames,
+            expectedActiveCustomerEmailDeliveryId: null,
+          })
+        );
+
+      expect(await retain("")).toBe("");
+      expect(await retain("12–16")).toBe("");
+      expect(
+        (await Effect.runPromise(reservations.findById(id)))
+          ?.activeCustomerEmailDeliveryOpenSpaceTables
+      ).toBe("");
+
+      await Effect.runPromise(
+        ledger.markAwaitingCustomerEmailDelivery({
+          id,
+          customerEmailDeliveryId: newEmailDeliveryId(),
+          expectedActiveCustomerEmailDeliveryId: null,
+        })
+      );
+
+      expect(await retain("12–16")).toBeNull();
+      expect(
+        (await Effect.runPromise(reservations.findById(id)))
+          ?.activeCustomerEmailDeliveryOpenSpaceTables
+      ).toBeNull();
     });
 
     test("returns the authoritative retained locale to a losing retain writer", async () => {

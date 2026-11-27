@@ -124,6 +124,12 @@ export const submitWorkspaceReservation = Effect.fn(
                         { locale: input.locale }
                       )
                     ),
+                    Match.when("table_reservation_ended", () =>
+                      m.reservationValidationTableEnded(
+                        {},
+                        { locale: input.locale }
+                      )
+                    ),
                     Match.when("cowork_reservation_ended", () =>
                       m.reservationValidationCoworkEnded(
                         {},

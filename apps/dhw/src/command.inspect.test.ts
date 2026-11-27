@@ -148,7 +148,7 @@ describe("dhw reservations", () => {
         "--status",
         "needs_refund",
         "--type",
-        "office",
+        "table",
       ],
       { listReservations: reservations }
     );
@@ -163,7 +163,7 @@ describe("dhw reservations", () => {
           page: 2,
           sort: "date",
           status: "needs_refund",
-          type: "office",
+          type: "table",
         },
       ],
     ]);
@@ -849,7 +849,11 @@ describe("dhw discounts, codes, vouchers, and sales", () => {
       id: "discount-2",
       labels: { "en-US": "Fixed", "cs-CZ": "Pevná" },
       adjustment: { kind: "fixed", amount: money(15_000) },
-      products: [{ kind: "meeting-room" }, { kind: "office" }],
+      products: [
+        { kind: "meeting-room" },
+        { kind: "office" },
+        { kind: "table" },
+      ],
       codeCount: 0,
     },
     {
@@ -984,7 +988,7 @@ describe("dhw discounts, codes, vouchers, and sales", () => {
     expect(text.output).toEqual([
       "Discounts: 3",
       "discount-1\tSummer\t12.5%\tcowork:day,cowork\t2 codes",
-      "discount-2\tFixed\t150 CZK\tmeeting-room,office\t0 codes",
+      "discount-2\tFixed\t150 CZK\tmeeting-room,office,table\t0 codes",
       "discount-3\tSmall\t99.5 CZK\toffice\t1 codes",
     ]);
   });

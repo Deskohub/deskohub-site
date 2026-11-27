@@ -12,6 +12,7 @@ import { getCoworkCheckoutAttemptDetails } from "@/features/reservation/cowork-r
 import { getMeetingRoomReservationDetails } from "@/features/reservation/meeting-room-reservation";
 import { getOfficeReservationDetails } from "@/features/reservation/office-reservation";
 import type { ReservationOrderData } from "@/features/reservation/reservation-order";
+import { getTableReservationDetails } from "@/features/reservation/table-reservation";
 import type { CheckoutLookupKeys } from "./checkout-lookup-keys.server";
 
 // Frozen copy of the derivation every worker used before keyed lookup keys
@@ -43,6 +44,7 @@ export const deriveRingKeyedCheckoutAttemptKey = (
       cowork: getCoworkCheckoutAttemptDetails,
       "meeting-room": getMeetingRoomReservationDetails,
       office: getOfficeReservationDetails,
+      table: getTableReservationDetails,
     })
   );
 

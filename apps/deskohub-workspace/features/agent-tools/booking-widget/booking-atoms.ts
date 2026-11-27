@@ -7,6 +7,7 @@ import { startReservationResultSchema } from "../start-reservation.schema";
 import {
   type BookingSelection,
   type BookingStart,
+  type BookingTableSlotSelection,
   withRequiredWorkstation,
 } from "./booking-draft";
 import { BookingHost } from "./booking-host";
@@ -22,6 +23,24 @@ export const bookingLocaleAtom = bookingRuntime
 export const bookingStartAtom = bookingRuntime
   .atom(Effect.service(BookingHost).pipe(Effect.flatMap((host) => host.start)))
   .pipe(Atom.keepAlive);
+
+/** Finds the available starts and ends for a date and exact table size. */
+export const bookingTableSlotsAtom = bookingRuntime.fn(
+  ({
+    selection,
+    locale,
+  }: {
+    readonly selection: BookingTableSlotSelection;
+    readonly locale: Locale;
+  }) =>
+    BookingHost.use((host) =>
+      host.callTool(
+        "check_availability",
+        { ...selection, locale },
+        checkAvailabilityResultSchema
+      )
+    )
+);
 
 /**
  * Checks whether the selection looks free and, when it does, quotes it as it

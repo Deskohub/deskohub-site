@@ -175,6 +175,7 @@ const makeAssignmentLayer = (
           listReservations: () => Effect.succeed([...dotyposReservations]),
         }),
         Layer.mock(WorkspaceReservationRepository, {
+          selectLocalTableCapacity: () => Effect.succeed([]),
           selectPendingPassDayCapacity: () => Effect.succeed([]),
           selectExpiredHoldDotyposReservationIds: () =>
             Effect.succeed(
@@ -376,6 +377,28 @@ describe("WorkspaceTableAssignmentService", () => {
       _tag: "TableAssignmentUnavailableError",
       requiredTags: ["cowork:open-space"],
     });
+  });
+
+  test("uses ordinary Open Space before a Team Table with free seats", async () => {
+    const teamTable = makeTable({
+      id: "team-table",
+      name: "A Team Table",
+      tags: ["cowork:open-space", "reservation:table"],
+      seats: "4",
+    });
+    const openSpace = makeTable({
+      id: "open-space",
+      name: "Z Open Space",
+      tags: ["cowork:open-space"],
+    });
+
+    await expect(
+      assignTableId(
+        makeReservation({ entryTier: "open-space" }),
+        [teamTable, openSpace],
+        []
+      )
+    ).resolves.toBe(openSpace.id);
   });
 
   test("keeps the 17:00 half-open boundary parity on the assignment path", async () => {
@@ -1101,6 +1124,42 @@ describe("WorkspaceTableAssignmentService.getAssignedTableAvailability", () => {
         [
           sharing,
           { ...sharing, id: DotyposReservationIdSchema.make("sharing-2") },
+        ]
+      )
+    ).resolves.toBe("unavailable");
+  });
+
+  test("restores a Team Table only on an empty enabled table of the exact size", async () => {
+    const table = makeTable({
+      id: "team",
+      name: "Team",
+      seats: "4",
+      tags: ["cowork:open-space", "reservation:table"],
+    });
+    const restored = makeDotyposReservation({
+      id: "team-restoration",
+      tableId: "team",
+      status: "CANCELLED",
+      seats: "4",
+    });
+    const input = { reservation: restored, kind: "table" as const };
+    await expect(getAssignedTableAvailability(input, [table])).resolves.toBe(
+      "available"
+    );
+    await expect(
+      getAssignedTableAvailability(input, [{ ...table, seats: "6" }])
+    ).resolves.toBe("unavailable");
+    await expect(
+      getAssignedTableAvailability(
+        input,
+        [table],
+        [
+          makeDotyposReservation({
+            id: "other",
+            tableId: "team",
+            status: "CONFIRMED",
+            seats: "1",
+          }),
         ]
       )
     ).resolves.toBe("unavailable");

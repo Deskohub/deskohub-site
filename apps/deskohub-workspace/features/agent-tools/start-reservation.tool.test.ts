@@ -84,14 +84,17 @@ const start = (
   {
     clientId = assistant,
     now = Temporal.Now.instant(),
-  }: { readonly clientId?: string; readonly now?: Temporal.Instant } = {}
+    services = makeAgentToolTestServices(),
+  }: {
+    readonly clientId?: string;
+    readonly now?: Temporal.Instant;
+    readonly services?: ReturnType<typeof makeAgentToolTestServices>;
+  } = {}
 ) =>
   startReservationTool
     .call(args, Option.some({ grant: grantFor(clientId), accessToken: "t" }))
     .pipe(
-      Effect.provide(
-        Layer.merge(makeAgentToolTestServices().layer, callerServices)
-      ),
+      Effect.provide(Layer.merge(services.layer, callerServices)),
       atInstant(now),
       Effect.result,
       Effect.runPromise
@@ -120,6 +123,55 @@ describe("start_reservation", () => {
       email: testEmailAddress("start-reservation"),
       phone: "+420 777 123 456",
     };
+  });
+
+  test("starts a Team Table hold for the exact selection while the gate is open", async () => {
+    const date = workspaceDateFromToday(2);
+    const selection = {
+      family: "table",
+      date,
+      seats: 4,
+      start_time: "09:15",
+      end_time: "10:45",
+    };
+
+    const closed = await start(selection);
+    expect(closed).toMatchObject({
+      _tag: "Failure",
+      failure: { details: { code: "unsupported_family" } },
+    });
+    expect(requests).toEqual([]);
+
+    const result = await start(selection, {
+      services: makeAgentToolTestServices({
+        teamTableEnabled: true,
+        teamTableSizes: [4],
+      }),
+    });
+    expect(result).toMatchObject({
+      _tag: "Success",
+      success: { family: "table", total: { amount: 360, currency: "CZK" } },
+    });
+    expect(requests).toMatchObject([
+      {
+        reservation: { kind: "table", seats: 4 },
+      },
+    ]);
+    const reservation = requests[0]?.reservation;
+    if (reservation?.kind !== "table")
+      throw new Error("Expected a Team Table hold");
+    expect(
+      Temporal.Instant.from(reservation.startsAt)
+        .toZonedDateTimeISO("Europe/Prague")
+        .toPlainDateTime()
+        .toString({ smallestUnit: "minute" })
+    ).toBe(`${date}T09:15`);
+    expect(
+      Temporal.Instant.from(reservation.endsAt)
+        .toZonedDateTimeISO("Europe/Prague")
+        .toPlainDateTime()
+        .toString({ smallestUnit: "minute" })
+    ).toBe(`${date}T10:45`);
   });
 
   test("holds the selection as the account's own booking and returns the Pay link", async () => {
@@ -157,6 +209,37 @@ describe("start_reservation", () => {
         locale: "en-US",
       },
     ]);
+  });
+
+  test.each([
+    ["WorkspaceTableUnavailableError", "selection_unavailable"],
+    ["TableAssignmentUnavailableError", "selection_unavailable"],
+    ["TeamTableReservationsDisabledError", "unsupported_family"],
+    ["TeamTableAvailabilityClosed", "unsupported_family"],
+  ])("maps %s after a Team Table quote", async (_tag, code) => {
+    prepared = { fail: { _tag } };
+
+    const result = await start(
+      {
+        family: "table",
+        date: workspaceDateFromToday(2),
+        seats: 4,
+        start_time: "09:15",
+        end_time: "10:45",
+      },
+      {
+        services: makeAgentToolTestServices({
+          teamTableEnabled: true,
+          teamTableSizes: [4],
+        }),
+      }
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { details: { code } },
+    });
   });
 
   test("passes a repeated selection the same way and another selection as its own", async () => {

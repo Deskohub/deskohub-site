@@ -30,10 +30,12 @@ export const officeInvitationEmailSubject = ({
   locale,
   reservation,
 }: Pick<OfficeInvitationEmailProps, "locale" | "reservation">) =>
-  m.officeInvitationSubject({ booker: reservation.bookedBy }, { locale });
+  (reservation.teamTable
+    ? m.tableInvitationSubject
+    : m.officeInvitationSubject)({ booker: reservation.bookedBy }, { locale });
 
 /**
- * Invites a person a booker added to a private office: what, when, who
+ * Invites a person a booker added to a reservation: what, when, who
  * booked it, and their personal link to the door code. It carries neither
  * the code nor how many people are coming.
  */
@@ -52,7 +54,9 @@ export function OfficeInvitationEmail(props: OfficeInvitationEmailProps) {
       preview={officeInvitationEmailSubject(props)}
     >
       <WorkspaceEmailHeading>
-        {m.officeInvitationHeading(
+        {(reservation.teamTable
+          ? m.tableInvitationHeading
+          : m.officeInvitationHeading)(
           { booker: reservation.bookedBy, date },
           { locale }
         )}

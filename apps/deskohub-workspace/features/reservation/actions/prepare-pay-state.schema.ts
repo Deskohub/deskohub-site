@@ -22,9 +22,9 @@ const reservationSubmissionFields = (locale: Locale) => ({
   locale: Schema.Literal(locale),
   reservation: reservationOrderIssuanceSchema(defaultPhoneRegion(locale)),
   /**
-   * Who is coming to a private office, beside its reservation so the
+   * Who is coming to an Office or Team Table, beside the reservation so the
    * signed Pay state never carries an invitee's address. A submission
-   * without it books the office's `seats` with no invitations.
+   * without it books the selected seats with no invitations.
    */
   people: Schema.optionalKey(officePeopleSchema),
   entryPackId: Schema.optionalKey(orderIdSchema),

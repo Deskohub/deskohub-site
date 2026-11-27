@@ -20,8 +20,10 @@ import {
   getReservationStatus,
 } from "@/features/account/backend/customer-reservation-history.service";
 import { getReservationProductName } from "@/features/account/reservation-product-name";
+import { getWorkspaceTableProductTitle } from "@/features/checkout/product-catalog.i18n";
 import type { Locale } from "@/features/i18n";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
+import { getCustomerReservationPlacement } from "@/features/reservation/backend/customer-reservation-placement";
 import { ReservationAccessService } from "@/features/reservation/backend/reservation-access.service";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
@@ -67,7 +69,8 @@ const makeInvitedReservations = Effect.gen(function* () {
       concurrency,
     });
     const orders = stored.flatMap((row) =>
-      row?.reservationDetails.kind === "office" &&
+      (row?.reservationDetails.kind === "office" ||
+        row?.reservationDetails.kind === "table") &&
       row.dotyposReservationId &&
       (row.paymentState === "paid" || row.reservationConfirmedAt !== null) &&
       row.authorAccountId !== viewer.accountId &&
@@ -86,9 +89,15 @@ const makeInvitedReservations = Effect.gen(function* () {
       orders.map(({ providerId }) => providerId)
     );
     const liveById = new Map(live.map((record) => [record.id, record]));
+    const loadTables = yield* Effect.cached(
+      Effect.suspend(() => dotypos.getTables()).pipe(
+        Effect.timeout("8 seconds"),
+        Effect.option
+      )
+    );
     const now = yield* currentInstant;
-    const product = { kind: "office" } as const;
-    const productName = getReservationProductName(product, locale);
+    const officeProduct = { kind: "office" } as const;
+    const officeName = getReservationProductName(officeProduct, locale);
     const bookers = yield* Effect.forEach(
       [...new Set(orders.map(({ row }) => row.dotyposCustomerId))],
       (id) => readBooker(id).pipe(Effect.map((name) => [id, name] as const)),
@@ -133,11 +142,47 @@ const makeInvitedReservations = Effect.gen(function* () {
               })
             : undefined;
 
+        const details = row.reservationDetails;
+        const isTeamTable = details.kind === "table";
+        const product = isTeamTable
+          ? {
+              kind: "other" as const,
+              family: "table" as const,
+              ...(details.seats !== undefined &&
+                details.durationMinutes !== undefined && {
+                  teamTable: {
+                    kind: "table" as const,
+                    seats: details.seats,
+                    durationMinutes: details.durationMinutes,
+                  },
+                }),
+            }
+          : officeProduct;
+        const tableName =
+          isTeamTable &&
+          today?.state === "available" &&
+          record?.status === "CONFIRMED" &&
+          record._tableId
+            ? Option.getOrUndefined(
+                Option.map(
+                  yield* loadTables,
+                  (tables) =>
+                    getCustomerReservationPlacement({
+                      reservationDetails: details,
+                      dotyposReservation: record,
+                      tables,
+                      seatingMap: false,
+                    }).table?.name
+                )
+              )
+            : undefined;
         return {
           entry: {
             orderId: row.id,
             product,
-            productName,
+            productName: isTeamTable
+              ? getWorkspaceTableProductTitle(locale)
+              : officeName,
             status,
             accessStartsAt: window?.reservedFrom.toString() ?? null,
             accessEndsAt: window?.reservedUntil.toString() ?? null,
@@ -149,6 +194,7 @@ const makeInvitedReservations = Effect.gen(function* () {
                 code: today.code,
                 accessStartsAt: today.accessStartsAt.toString(),
                 accessEndsAt: today.accessEndsAt.toString(),
+                ...(tableName && { tableName }),
               },
             }),
           } satisfies CustomerInvitedReservation,

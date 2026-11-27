@@ -4,7 +4,8 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Effect, Layer } from "effect";
 import { advertisedCatalogOfferings } from "@/features/checkout/public-offerings.test-utils";
 import { DiscountReleaseGateService } from "@/features/discounts/discount-release-gate.service";
-import type { Locale } from "@/features/i18n";
+import type { GlobalRelease } from "@/features/feature-flags/backend/global-release";
+import { type Locale, m } from "@/features/i18n";
 import { getLegalDocument } from "@/features/legal/content";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
 import { PublishedPublicPagesService } from "@/features/public-pages/backend";
@@ -13,10 +14,20 @@ import {
   publicPages,
 } from "@/features/public-pages/public-page-definitions";
 import { publicPageMarkdown } from "@/features/public-pages/public-page-markdown";
+import { markdownPlainText } from "@/shared/markdown/markdown.test-utils";
+import { currencyCZK } from "@/shared/money/currencies";
 
 // Outside a Next.js render there is no cache to configure.
 const nextCache = await import("next/cache");
 mock.module("next/cache", () => ({ ...nextCache, cacheLife: () => {} }));
+
+let coworkPassesRelease: GlobalRelease = "off";
+const loadGlobalRelease = mock((_flag: string) =>
+  Promise.resolve(coworkPassesRelease)
+);
+mock.module("@/features/feature-flags/backend/global-release.server", () => ({
+  loadGlobalRelease,
+}));
 
 // The FAQ's occupancy loader has its own tests; keep this one off Dotypos.
 mock.module("@/features/faq/backend/faq-occupancy.server", () => ({
@@ -38,6 +49,15 @@ mock.module("@/features/checkout/backend/checkout/public-offerings", () => ({
         }),
         complete: true,
       };
+    }),
+}));
+mock.module("@/features/pricing/backend/team-table-price-list.server", () => ({
+  loadTeamTablePriceList: () =>
+    Effect.succeed({
+      prices: [
+        { seats: 6, base: currencyCZK(36_000), hourly: currencyCZK(12_000) },
+      ],
+      complete: true,
     }),
 }));
 
@@ -69,6 +89,8 @@ const { GET } = await import("./route");
 
 beforeEach(() => {
   publishedPages = publicPages;
+  coworkPassesRelease = "off";
+  loadGlobalRelease.mockClear();
 });
 
 const getMarkdown = (locale: string, segments?: ReadonlyArray<string>) =>
@@ -117,6 +139,23 @@ describe("public page Markdown route", () => {
     }
   );
 
+  test.each(["on", "off", "undecided"] as const)(
+    "includes the membership price only when its global release is on (%s)",
+    async (release) => {
+      coworkPassesRelease = release;
+      const locale = "cs-CZ";
+      const response = await getMarkdown(locale, ["pricing"]);
+      const markdown = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(loadGlobalRelease).toHaveBeenCalledWith("cowork_passes");
+      expect(markdown.includes(m.passUnlimited({}, { locale }))).toBe(
+        release === "on"
+      );
+      expect(markdown.includes("/ 30 dní")).toBe(release === "on");
+    }
+  );
+
   test("renders every page of the registry in every locale", async () => {
     for (const { pathname } of publicPages) {
       for (const locale of ["en-US", "cs-CZ"] as const) {
@@ -142,6 +181,21 @@ describe("public page Markdown route", () => {
     expect(response.headers.get("content-type") ?? "").not.toContain(
       "markdown"
     );
+  });
+
+  test("the released Team Table route serves its rates and the closed route returns 404", async () => {
+    const segments = ["reservation", "table"];
+    const open = await getMarkdown("en-US", segments);
+
+    expect(open.status).toBe(200);
+    expect(markdownPlainText(await open.text())).toContain(
+      "Table for 6 · CZK 360 to reserve + CZK 120/hour"
+    );
+
+    publishedPages = publicPages.filter(
+      ({ pathname }) => pathname !== "/reservation/table"
+    );
+    expect((await getMarkdown("en-US", segments)).status).toBe(404);
   });
 
   test.each([

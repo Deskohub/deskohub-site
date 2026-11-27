@@ -21,6 +21,7 @@ import {
 import { CustomerLocale } from "./customer-locale";
 import { customerInputParseOptions } from "./customer-profile";
 import { CustomerServiceUnavailable } from "./customer-session";
+import { CustomerTeamTableProduct } from "./customer-team-table-selection";
 import { responseHeaders } from "./openapi-response-headers";
 
 // Errors
@@ -192,7 +193,13 @@ export const CustomerReservationProduct = Schema.Union([
   }),
   Schema.Struct({ kind: Schema.Literal("meeting-room") }),
   Schema.Struct({ kind: Schema.Literal("office") }),
-  Schema.Struct({ kind: Schema.Literal("other") }),
+  Schema.Struct({
+    kind: Schema.Literal("other"),
+    /** Team Table uses the legacy fallback tag so older clients can read it. */
+    family: Schema.optionalKey(Schema.Literal("table")),
+    /** Absent when the booked size or interval cannot be reconstructed. */
+    teamTable: Schema.optionalKey(CustomerTeamTableProduct),
+  }),
 ]).annotate({ identifier: "CustomerReservationProduct" });
 export type CustomerReservationProduct = typeof CustomerReservationProduct.Type;
 
@@ -230,6 +237,8 @@ export const CustomerReservationAccess = Schema.Struct({
   code: Schema.NonEmptyString,
   accessStartsAt: isoInstant,
   accessEndsAt: isoInstant,
+  /** The assigned Team Table, when its name is available. */
+  tableName: Schema.optionalKey(Schema.String),
 }).annotate({ identifier: "CustomerReservationAccess" });
 export type CustomerReservationAccess = typeof CustomerReservationAccess.Type;
 

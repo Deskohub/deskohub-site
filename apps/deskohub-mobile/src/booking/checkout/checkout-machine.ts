@@ -13,7 +13,10 @@ import {
   type RememberedReferralUpdate,
   rememberedReferralUpdate,
 } from "../remembered-referral";
-import { withoutAbsentOptions } from "../selection/booking-selection";
+import {
+  isEntryPassBooking,
+  withoutAbsentOptions,
+} from "../selection/booking-selection";
 import {
   BookingProblem,
   type CheckoutReplacementToken,
@@ -126,8 +129,7 @@ export const canPay = (review: ReviewState): boolean =>
 const onDetails = (details: DetailsState, event: CheckoutEvent) =>
   Event.$match(event, {
     Continue: ({ checkoutAttemptId, details: form }) =>
-      details.flow.selection.funding?.kind === "entry" &&
-      form.bookingFor !== "self"
+      isEntryPassBooking(details.flow.selection) && form.bookingFor !== "self"
         ? stay(details)
         : create(details.flow, form, checkoutAttemptId),
     Retry: () =>
@@ -328,8 +330,7 @@ const onReview = (review: ReviewState, event: CheckoutEvent) =>
     // The field and checkbox hold still while a write runs, so its answer
     // and any retry match what the customer sees.
     CodeChanged: ({ input }) =>
-      review.flow.selection.funding?.kind === "entry" ||
-      Option.isSome(review.pending)
+      isEntryPassBooking(review.flow.selection) || Option.isSome(review.pending)
         ? stay(review)
         : stay(
             CheckoutState.Review({
@@ -346,8 +347,7 @@ const onReview = (review: ReviewState, event: CheckoutEvent) =>
       whenIdle(review, () =>
         Option.liftPredicate(
           review.code.input.trim(),
-          (code) =>
-            code !== "" && review.flow.selection.funding?.kind !== "entry"
+          (code) => code !== "" && !isEntryPassBooking(review.flow.selection)
         )
       ).pipe(
         Option.match({

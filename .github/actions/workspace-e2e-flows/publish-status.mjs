@@ -8,7 +8,8 @@
  * 1. Success requires affirmative live evidence of PR head, valid `## E2E flows`,
  *    the current Vercel deployment's current status (never falling through from
  *    an unresolved deployment or treating lookup failure as valid), readable
- *    head commit-status history, and un-invalidated flow coverage.
+ *    head commit-status history, and un-invalidated flow coverage. A backend
+ *    pilot also needs a proof tied to its PR, commit, and current deployment.
  * 2. Restored passes use `Protected preview E2E restored` (`kind: "restored"`)
  *    rather than `Protected preview E2E passed`, so persisted tentative writes
  *    from a restoration can never be mistaken by a subsequent process for a
@@ -32,6 +33,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
+import { classifyPullRequestTarget } from "../workspace-backend-preview/target.mjs";
 import {
   classifyE2EStatusDescription,
   diffFlowIds,
@@ -60,6 +62,16 @@ const RACE_FAILURE_DESCRIPTION =
   "Workspace E2E status raced with concurrent updates; re-run this check";
 const WAITING_FOR_PREVIEW_DESCRIPTION =
   "Waiting for Vercel preview to resolve E2E";
+const BACKEND_PREVIEW_CONTEXT = "Workspace backend preview";
+const BACKEND_PREVIEW_FLOW = "email-campaigns";
+const BACKEND_PREVIEW_CLASSIFICATION_UNAVAILABLE =
+  "Workspace E2E could not verify backend preview eligibility";
+const BACKEND_PREVIEW_FLOW_REQUIRED =
+  "Add email-campaigns to the pilot E2E flows before dispatch";
+const BACKEND_PREVIEW_DEPLOYMENT_REQUIRED =
+  "Deploy the exact protected Vercel preview before running the backend pilot";
+const BACKEND_PREVIEW_PROOF_REQUIRED =
+  "Run email-campaigns E2E against this Workspace backend preview";
 const PREVIEW_ENVIRONMENT =
   process.env.PREVIEW_ENVIRONMENT || "Preview – deskohub-workspace-site";
 const MAX_CAS_ATTEMPTS = 3;
@@ -74,6 +86,7 @@ const RECONCILABLE_NO_RUN_REASONS = new Set([
 const repoSlug = process.env.GITHUB_REPOSITORY ?? "";
 const repoApi = `repos/${repoSlug}`;
 const runUrl = `${process.env.GITHUB_SERVER_URL ?? ""}/${repoSlug}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
+const pilotPrNumber = process.env.PILOT_PR_NUMBER ?? "";
 
 const appendSummary = (line) => {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -166,11 +179,63 @@ const createSingleEligiblePrChecker = (sha, prNumber) => {
 
 const normalizePreviewUrl = (url) => String(url ?? "").replace(/\/+$/, "");
 
-const previewUrlTag = (url) =>
-  createHash("sha256")
-    .update(normalizePreviewUrl(url))
-    .digest("hex")
-    .slice(0, 8);
+const previewUrlDigest = (url) =>
+  createHash("sha256").update(normalizePreviewUrl(url)).digest("hex");
+
+const previewUrlTag = (url) => previewUrlDigest(url).slice(0, 8);
+
+const backendProofDescription = (generation) =>
+  `Workspace backend preview E2E passed for PR #${pilotPrNumber} [${generation}]`;
+
+const readPilotRun = (path) => {
+  const result = ghApiJson([path]);
+  return result.ok ? result.data : undefined;
+};
+
+const readBackendPreviewRequirement = async (prNumber, sha) => {
+  if (!pilotPrNumber) return "not-required";
+  const isPilot = prNumber === pilotPrNumber;
+  if (!isPilot) {
+    // The required status is shared by every PR with this head commit.
+    const pilot = fetchPr(pilotPrNumber);
+    if (!pilot.ok || !pilot.data) return "unavailable";
+    if (!isEligibleInternalPr(pilot.data) || pilot.data.head.sha !== sha) {
+      return "not-required";
+    }
+  }
+  try {
+    const { backendRequired } = await classifyPullRequestTarget(
+      { operation: "deploy", number: Number(pilotPrNumber), sha },
+      process.env,
+      async (url) => {
+        // Use the publisher's GitHub reader for the classifier's API requests.
+        const { pathname, search } = new URL(url);
+        const result = ghApiJson([`${pathname.slice(1)}${search}`]);
+        return { ok: result.ok, json: async () => result.data };
+      }
+    );
+    if (!backendRequired) return "not-required";
+    return isPilot ? "required" : "pilot-owned";
+  } catch {
+    return "unavailable";
+  }
+};
+
+const backendPreviewBlock = (snapshot, parsedPr, hasLiveProof = false) => {
+  if (snapshot.backendPreviewRequirement === "not-required") return null;
+  if (snapshot.backendPreviewRequirement === "unavailable") {
+    return BACKEND_PREVIEW_CLASSIFICATION_UNAVAILABLE;
+  }
+  if (!(parsedPr.ok && parsedPr.selected.includes(BACKEND_PREVIEW_FLOW))) {
+    return BACKEND_PREVIEW_FLOW_REQUIRED;
+  }
+  if (snapshot.deployment.state !== "success") {
+    return BACKEND_PREVIEW_DEPLOYMENT_REQUIRED;
+  }
+  // A historical result cannot prove that the generation still exists. Only
+  // the trusted completion workflow can supply a fresh verified binding.
+  return hasLiveProof ? null : BACKEND_PREVIEW_PROOF_REQUIRED;
+};
 
 const PREVIEW_MISMATCH_TAG_PATTERN =
   /^No Vercel deployment record matches this preview yet.*\[preview:\s*(success|skipped|failed):([0-9a-f]{8})\]$/;
@@ -441,6 +506,37 @@ const findActiveRunForFlows = (summary, flowIds) => {
   return matching ?? summary.activeRuns[0];
 };
 
+const findForeignActiveRun = (summary, selection, ownerUrl) =>
+  summary.activeRuns.find(
+    (run) =>
+      run.targetUrl !== "" &&
+      run.targetUrl !== ownerUrl &&
+      run.flows.some((flow) => selection.includes(flow))
+  );
+
+const readPilotStatusOrder = (statuses, sourceRun, selection) => {
+  const relevant = statuses.filter(
+    (status) => status?.context === "Workspace E2E" &&
+      status.creator?.login === "github-actions[bot]"
+  );
+  // GitHub lists the newest statuses first. The source pending write precedes
+  // its test and gives us the boundary for later results on this same SHA.
+  const source = relevant.findIndex(
+    (status) => status.state === "pending" && status.target_url === sourceRun
+  );
+  const later = source < 0 ? undefined : relevant.slice(0, source).find((status) => {
+    if (status.target_url === sourceRun) return false;
+    const verdict = classifyE2EStatusDescription(status.description);
+    if (status.state === "success") {
+      return verdict.kind === "passed" &&
+        selection.every((flow) => verdict.selected.includes(flow));
+    }
+    return (status.state === "failure" || status.state === "error") &&
+      (!verdict.selected?.length || verdict.selected.some((flow) => selection.includes(flow)));
+  });
+  return { sourceFound: source >= 0, later };
+};
+
 /**
  * Filters a carried flow set against head-SHA failures and active reruns so an
  * outgoing `same-tree-passed` status never advertises a flow that failed or is
@@ -525,13 +621,46 @@ const evaluateSameTreeCommit = (
  * - Mutable metadata failures (`verifyAfterPost: true`) also verify after
  *   publication so a delayed failure cannot overwrite a concurrent correction.
  */
-const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
+const publishWithCasReconcile = async ({
+  sha,
+  prNumber,
+  readSnapshot,
+  decide,
+  onBlockedSuccess,
+}) => {
+  const evaluate = async (snapshot) => {
+    const backendPreviewRequirement = await readBackendPreviewRequirement(
+      prNumber,
+      sha
+    );
+    const current = { ...snapshot, backendPreviewRequirement };
+    const decision = decide(current);
+    if (
+      backendPreviewRequirement === "not-required" ||
+      (decision.state !== "success" && !decision.satisfiedSuccess)
+    ) {
+      return decision;
+    }
+    if (backendPreviewRequirement === "pilot-owned") return { skipPost: true };
+    const hasLiveProof = Boolean(
+      current.liveGeneration &&
+        current.liveGeneration === decision.verifiedGeneration
+    );
+    const blocked = backendPreviewBlock(
+      current,
+      parsePrBodyE2EFlows(String(snapshot.pr?.body ?? "")),
+      hasLiveProof
+    );
+    if (!blocked) return decision;
+    return onBlockedSuccess ?? { state: "failure", description: blocked };
+  };
+
   const tentativePosts = [];
   let pendingSnapshot = null;
   let overrideDecision = null;
 
   for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
-    const rawBefore = pendingSnapshot ?? readSnapshot();
+    const rawBefore = pendingSnapshot ?? (await readSnapshot());
     pendingSnapshot = null;
     const before = {
       ...rawBefore,
@@ -539,7 +668,7 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
         ? stripTentativePosts(rawBefore.statuses, tentativePosts)
         : rawBefore.statuses,
     };
-    const decision = overrideDecision ?? decide(before);
+    const decision = overrideDecision ?? (await evaluate(before));
     overrideDecision = null;
     if (decision.skipPost) {
       if (tentativePosts.length === 0) {
@@ -602,14 +731,14 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
 
     // Verify linearizability against fresh live state after writing, excluding
     // all tentative posts made by this process.
-    const rawAfter = readSnapshot();
+    const rawAfter = await readSnapshot();
     const after = {
       ...rawAfter,
       statuses: rawAfter.statusesOk
         ? stripTentativePosts(rawAfter.statuses, tentativePosts)
         : rawAfter.statuses,
     };
-    const verifyDecision = decide(after);
+    const verifyDecision = await evaluate(after);
 
     const samePr =
       before.prOk &&
@@ -625,7 +754,8 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
       sameDeployment &&
       !verifyDecision.skipPost &&
       verifyDecision.state === decision.state &&
-      verifyDecision.description === decision.description
+      verifyDecision.description === decision.description &&
+      (verifyDecision.targetUrl || runUrl) === postTargetUrl
     ) {
       return decision;
     }
@@ -673,8 +803,11 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
     // concurrent pass landed). When a tentative failure overwrote a concurrent
     // success, reinstate that success and CAS-verify it on the next attempt.
     if (verifyDecision.skipPost) {
+      const sameSuccessOwner = decision.state === "success" &&
+        (!verifyDecision.reinstateDecision?.targetUrl ||
+          verifyDecision.reinstateDecision.targetUrl === postTargetUrl);
       if (
-        decision.state === "success" &&
+        sameSuccessOwner &&
         verifyDecision.satisfiedSuccess === true &&
         after.prOk &&
         (after.deployment.state === "success" ||
@@ -683,7 +816,7 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
         return decision;
       }
       if (
-        decision.state !== "success" &&
+        !sameSuccessOwner &&
         verifyDecision.satisfiedSuccess === true &&
         verifyDecision.reinstateDecision &&
         after.prOk &&
@@ -697,7 +830,8 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
       if (verifyDecision.undoDecision) {
         if (
           verifyDecision.undoDecision.state === decision.state &&
-          verifyDecision.undoDecision.description === decision.description
+          verifyDecision.undoDecision.description === decision.description &&
+          (verifyDecision.undoDecision.targetUrl || runUrl) === postTargetUrl
         ) {
           return decision;
         }
@@ -736,7 +870,166 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
   return { state: "failure", description: RACE_FAILURE_DESCRIPTION };
 };
 
-const runPublishFinalStatus = () => {
+const runPublishCompletedPilot = async () => {
+  const { findPilotRunGeneration, pilotRunUrl, pilotTargetKey } =
+    await import("../workspace-backend-preview/run-proof.mjs");
+  const { readCompletedPreviewGeneration } =
+    await import("../workspace-backend-preview/e2e-gate.mjs");
+  if (!/^[1-9][0-9]{0,8}$/.test(pilotPrNumber)) return;
+
+  const initial = fetchPr(pilotPrNumber);
+  if (!initial.ok || !isEligibleInternalPr(initial.data)) return;
+  const sha = initial.data.head.sha;
+  if (!/^[0-9a-f]{40}$/.test(sha)) return;
+  const source = pilotRunUrl(process.env.PILOT_SOURCE_RUN_ID, process.env.PILOT_SOURCE_RUN_ATTEMPT);
+  const sourceRun = source.split("/attempts/")[0];
+
+  const readSnapshot = async () => {
+    const prRead = fetchPr(pilotPrNumber);
+    const pr = prRead.data;
+    const deployment = fetchDeploymentState(sha);
+    const statusesRead = fetchCommitStatuses(sha);
+    const selection = parsePrBodyE2EFlows(String(pr?.body ?? ""));
+    const statusesOk = statusesRead.ok && Array.isArray(statusesRead.data);
+    const snapshot = {
+      prOk: prRead.ok,
+      pr,
+      deployment,
+      statusesOk,
+      statuses: statusesOk ? statusesRead.data : [],
+      selection,
+    };
+    if (
+      !prRead.ok || !isEligibleInternalPr(pr) || pr.head.sha !== sha ||
+      deployment.state !== "success" ||
+      !selection.ok || !selection.selected.includes(BACKEND_PREVIEW_FLOW)
+    ) return snapshot;
+
+    const target = pilotTargetKey(pilotPrNumber, sha, previewUrlDigest(deployment.previewUrl), selection.flows);
+    const generation = findPilotRunGeneration({ targetUrl: source, target, read: readPilotRun });
+    if (!generation) return snapshot;
+
+    let liveGeneration;
+    try {
+      liveGeneration = await readCompletedPreviewGeneration({
+        number: Number(pilotPrNumber),
+        sha,
+        expectedOrigin: deployment.previewUrl,
+      }, { ...process.env, GIT_REF: pr.head.ref });
+    } catch {
+      // A changed or unavailable protected deployment cannot authorize a pass.
+    }
+    return { ...snapshot, target, generation, liveGeneration };
+  };
+
+  const confirmed = await readSnapshot();
+  if (!confirmed.generation) return;
+
+  const result = await publishWithCasReconcile({
+    sha,
+    prNumber: pilotPrNumber,
+    readSnapshot,
+    decide: ({
+      backendPreviewRequirement,
+      prOk,
+      pr,
+      selection,
+      liveGeneration,
+      target,
+      generation,
+      statusesOk,
+      statuses,
+    }) => {
+      if (
+        backendPreviewRequirement !== "required" ||
+        !prOk ||
+        !isEligibleInternalPr(pr) ||
+        pr.head.sha !== sha ||
+        generation !== confirmed.generation
+      ) {
+        return { skipPost: true };
+      }
+      if (!statusesOk) {
+        return {
+          state: "failure",
+          description: STATUSES_UNAVAILABLE_DESCRIPTION,
+          targetUrl: sourceRun,
+          verifyAfterPost: true,
+        };
+      }
+      const pending = findForeignActiveRun(summarizeCommitStatuses(statuses), selection.selected, sourceRun);
+      if (pending) {
+        return {
+          skipPost: true,
+          restorePendingDescription: pending.description,
+          restorePendingTargetUrl: pending.targetUrl,
+        };
+      }
+      const { sourceFound, later } = readPilotStatusOrder(
+        statuses,
+        sourceRun,
+        selection.selected
+      );
+      if (!sourceFound) return { skipPost: true };
+      const failedProof = {
+        state: "failure",
+        description: BACKEND_PREVIEW_PROOF_REQUIRED,
+        targetUrl: sourceRun,
+        verifyAfterPost: true,
+      };
+      if (later?.state === "success") {
+        const laterGeneration = findPilotRunGeneration({
+          targetUrl: later.target_url,
+          target,
+          read: readPilotRun,
+          followLatest: true,
+        });
+        if (laterGeneration && laterGeneration === liveGeneration) {
+          return {
+            skipPost: true,
+            satisfiedSuccess: true,
+            verifiedGeneration: laterGeneration,
+            reinstateDecision: {
+              state: "success",
+              description: later.description,
+              targetUrl: later.target_url,
+            },
+          };
+        }
+        return failedProof;
+      }
+      if (later) {
+        return {
+          skipPost: true,
+          undoDecision: {
+            state: later.state,
+            description: later.description || BACKEND_PREVIEW_PROOF_REQUIRED,
+            targetUrl: later.target_url || sourceRun,
+          },
+        };
+      }
+      return liveGeneration === generation ? {
+        state: "success",
+        description: formatE2EStatusDescription({ kind: "passed", flows: selection.flows }),
+        targetUrl: sourceRun,
+        verifiedGeneration: generation,
+      } : failedProof;
+    },
+  });
+  if (
+    (result.state === "success" || result.state === "failure") &&
+    (!result.targetUrl || result.targetUrl === sourceRun)
+  ) {
+    postCommitStatus(sha, {
+      context: BACKEND_PREVIEW_CONTEXT,
+      state: result.state,
+      description: result.state === "success" ? backendProofDescription(confirmed.generation) : BACKEND_PREVIEW_PROOF_REQUIRED,
+      targetUrl: source,
+    });
+  }
+};
+
+const runPublishFinalStatus = async () => {
   const targetSha = process.env.TARGET_SHA ?? "";
   const prNumber = process.env.PR_NUMBER ?? "";
   const statusState = process.env.STATUS_STATE ?? "failure";
@@ -748,6 +1041,16 @@ const runPublishFinalStatus = () => {
   const parsedRunFlows = parseFlowsInput(effectiveFlows);
   if (!parsedRunFlows.ok) {
     throw new Error(parsedRunFlows.error);
+  }
+
+  if (statusState === "success" && process.env.BACKEND_PREVIEW_REQUIRED === "true") {
+    postCommitStatus(targetSha, {
+      context: "Workspace E2E allocation",
+      state: "success",
+      description: allocationDescription,
+      targetUrl: runUrl,
+    });
+    return;
   }
 
   const readSnapshot = () => {
@@ -768,8 +1071,9 @@ const runPublishFinalStatus = () => {
   };
 
   if (statusState === "success") {
-    publishWithCasReconcile({
+    await publishWithCasReconcile({
       sha: targetSha,
+      prNumber,
       readSnapshot,
       decide: ({
         prOk,
@@ -845,12 +1149,7 @@ const runPublishFinalStatus = () => {
 
         // Never overwrite a newer active run started by a DIFFERENT workflow run
         // for any requested flow.
-        const foreignActiveRun = summary.activeRuns.find(
-          (run) =>
-            run.targetUrl !== "" &&
-            run.targetUrl !== runUrl &&
-            run.flows.some((flow) => parsedPr.selected.includes(flow))
-        );
+        const foreignActiveRun = findForeignActiveRun(summary, parsedPr.selected, runUrl);
         if (foreignActiveRun) {
           return {
             skipPost: true,
@@ -930,9 +1229,11 @@ const runPublishFinalStatus = () => {
       description: failedDescription,
       targetUrl: runUrl,
     };
-    publishWithCasReconcile({
+    await publishWithCasReconcile({
       sha: targetSha,
+      prNumber,
       readSnapshot,
+      onBlockedSuccess: { skipPost: true, undoDecision: undoToFailure },
       decide: ({
         prOk,
         pr,
@@ -1054,7 +1355,7 @@ const runPublishFinalStatus = () => {
   });
 };
 
-const runPublishStatusWithoutRun = () => {
+const runPublishStatusWithoutRun = async () => {
   const targetSha = process.env.TARGET_SHA ?? "";
   const prNumber = process.env.PR_NUMBER ?? "";
   const statusState = process.env.STATUS_STATE ?? "failure";
@@ -1106,9 +1407,16 @@ const runPublishStatusWithoutRun = () => {
       return;
     }
 
-    publishWithCasReconcile({
+    const defaultFailure = {
+      state: statusState,
+      description: statusDescription,
+      verifyAfterPost: true,
+    };
+    await publishWithCasReconcile({
       sha: targetSha,
+      prNumber,
       readSnapshot,
+      onBlockedSuccess: defaultFailure,
       decide: ({
         prOk,
         pr,
@@ -1117,11 +1425,6 @@ const runPublishStatusWithoutRun = () => {
         deployment,
         hasSingleEligiblePr,
       }) => {
-        const defaultFailure = {
-          state: statusState,
-          description: statusDescription,
-          verifyAfterPost: true,
-        };
         if (!prOk) {
           return defaultFailure;
         }
@@ -1238,8 +1541,9 @@ const runPublishStatusWithoutRun = () => {
 
   const classified = classifyE2EStatusDescription(statusDescription);
 
-  publishWithCasReconcile({
+  await publishWithCasReconcile({
     sha: targetSha,
+    prNumber,
     readSnapshot,
     decide: ({
       prOk,
@@ -1414,7 +1718,7 @@ const runPublishStatusWithoutRun = () => {
   });
 };
 
-const runSyncPrFlows = () => {
+const runSyncPrFlows = async () => {
   const prNumber = process.env.PR_NUMBER ?? "";
   const initialPrRes = fetchPr(prNumber);
   if (!initialPrRes.ok || !initialPrRes.data) {
@@ -1478,10 +1782,12 @@ const runSyncPrFlows = () => {
     };
   };
 
-  const outcome = publishWithCasReconcile({
+  const outcome = await publishWithCasReconcile({
     sha: headSha,
+    prNumber,
     readSnapshot,
     decide: ({
+      backendPreviewRequirement,
       prOk,
       pr,
       statusesOk,
@@ -1551,6 +1857,28 @@ const runSyncPrFlows = () => {
       }
       const requestedFlows = parsedPr.flows;
       const requestedSelected = parsedPr.selected;
+      if (backendPreviewRequirement === "pilot-owned") return { skipPost: true };
+      const previewBlock = backendPreviewBlock(
+        { backendPreviewRequirement, deployment, statusesOk, statuses },
+        parsedPr
+      );
+      const backendPreviewRequired = backendPreviewRequirement === "required";
+      const missingBackendProof = previewBlock === BACKEND_PREVIEW_PROOF_REQUIRED;
+      if (
+        previewBlock &&
+        !missingBackendProof &&
+        (previewBlock !== BACKEND_PREVIEW_DEPLOYMENT_REQUIRED ||
+          deployment.state !== "pending")
+      ) {
+        return { state: "failure", description: previewBlock };
+      }
+      if (
+        backendPreviewRequired &&
+        deployment.state === "pending" &&
+        summary.latestState === "success"
+      ) {
+        return { state: "pending", description: WAITING_FOR_PREVIEW_DESCRIPTION };
+      }
       const deploymentResolved =
         deployment.state === "success" || deployment.state === "skipped";
       const pendingPreviewUndo = {
@@ -1585,7 +1913,10 @@ const runSyncPrFlows = () => {
         return { skipPost: true, undoDecision: pendingPreviewUndo };
       }
 
-      const missingReal = diffFlowIds(requestedSelected, summary.realPassedFlows);
+      const passedFlows = missingBackendProof
+        ? summary.realPassedFlows.filter((flow) => flow !== BACKEND_PREVIEW_FLOW)
+        : summary.realPassedFlows;
+      const missingReal = diffFlowIds(requestedSelected, passedFlows);
       if (missingReal.length === 0) {
         if (!deploymentResolved) {
           if (
@@ -1625,7 +1956,7 @@ const runSyncPrFlows = () => {
         summary.carriedSources,
         requestedSelected
       );
-      if (coveringCarried) {
+      if (coveringCarried && !missingBackendProof) {
         if (!deploymentResolved) {
           if (
             summary.latestState === "failure" &&
@@ -1661,7 +1992,7 @@ const runSyncPrFlows = () => {
       }
 
       const inFlightCovered = unionFlowIds(
-        summary.realPassedFlows,
+        passedFlows,
         summary.runningFlows
       );
       const coveredByRunning =
@@ -1691,7 +2022,9 @@ const runSyncPrFlows = () => {
       }
 
       if (deployment.state === "success") {
-        const dispatchFlows = toCanonicalFlows(missingReal);
+        const dispatchFlows = backendPreviewRequired
+          ? requestedFlows
+          : toCanonicalFlows(missingReal);
         if (!dispatchFlows || dispatchFlows === "none") {
           return {
             state: "failure",
@@ -1837,14 +2170,17 @@ const runSyncPrFlows = () => {
 
 const [mode] = process.argv.slice(2);
 switch (mode) {
+  case "publish-completed-pilot":
+    await runPublishCompletedPilot();
+    break;
   case "publish-final-status":
-    runPublishFinalStatus();
+    await runPublishFinalStatus();
     break;
   case "publish-status-without-run":
-    runPublishStatusWithoutRun();
+    await runPublishStatusWithoutRun();
     break;
   case "sync-pr-flows":
-    runSyncPrFlows();
+    await runSyncPrFlows();
     break;
   default:
     process.stderr.write(

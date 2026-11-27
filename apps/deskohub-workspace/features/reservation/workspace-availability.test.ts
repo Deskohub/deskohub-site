@@ -24,6 +24,19 @@ const parseQuery = (params: Record<string, string>) =>
   );
 
 describe("parseWorkspaceAvailabilityQuery", () => {
+  test("requires the exact seat count for a Team Table calendar", () => {
+    const params = { kind: "table", from: "2099-06-10", to: "2099-06-12" };
+    expect(parseQuery({ ...params, seats: "4" })).toEqual({
+      ...params,
+      seats: 4,
+    });
+    expect(
+      Option.isNone(
+        parseWorkspaceAvailabilityQuery(new URLSearchParams(params))
+      )
+    ).toBe(true);
+  });
+
   test("keeps the public kind query param as the domain discriminator", () => {
     const query = parseQuery({
       kind: "meeting-room",

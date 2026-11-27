@@ -1,6 +1,7 @@
 import {
   getWorkspaceMeetingRoomProductTitle,
   getWorkspaceOfficeProductTitle,
+  getWorkspaceTableProductTitle,
 } from "@/features/checkout/product-catalog.i18n";
 import type { PublicPriceListOffering } from "@/features/checkout/public-offerings";
 import { type Locale, m } from "@/features/i18n";
@@ -34,6 +35,7 @@ export const getPriceFamilies = <Offering extends PublicPriceListOffering>(
               cowork: () => m.pricingCoworkTitle({}, { locale }),
               "meeting-room": () => getWorkspaceMeetingRoomProductTitle(locale),
               office: () => getWorkspaceOfficeProductTitle(locale),
+              table: () => getWorkspaceTableProductTitle(locale),
             }[kind](),
             offerings: familyOfferings,
           },

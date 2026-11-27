@@ -4,16 +4,22 @@ import { HttpApi, type HttpApiGroup, OpenApi } from "effect/http-api";
 import { CustomerBookingSelection } from "./customer-booking-selection";
 import {
   CustomerBookedSelection,
+  CustomerInvitedReservation,
+  CustomerReservationAccess,
   CustomerReservationInvitee,
+  CustomerReservationOrderId,
   CustomerReservationPeople,
+  CustomerReservationProduct,
 } from "./customer-reservations-api";
 import {
   CustomerRequestOriginCheck,
   CustomerSessionAuthentication,
 } from "./customer-session";
+import { CustomerTeamTableSelection } from "./customer-team-table-selection";
 import {
   customerApiPathPrefix,
   WorkspaceCustomerApi,
+  WorkspaceCustomerApiWithTeamTable,
 } from "./workspace-customer-api";
 
 /**
@@ -61,7 +67,96 @@ const endpointsOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
 };
 
 describe("WorkspaceCustomerApi", () => {
-  const endpoints = endpointsOf(WorkspaceCustomerApi);
+  const endpoints = endpointsOf(WorkspaceCustomerApiWithTeamTable);
+
+  test("keeps Team Table discovery and checkout out of the legacy booking contract", () => {
+    const legacy = endpointsOf(WorkspaceCustomerApi).map(({ path }) => path);
+    expect(legacy).toContain(`${customerApiPathPrefix}/booking/offerings`);
+    expect(legacy.some((path) => path.includes("team-table"))).toBe(false);
+    expect(
+      endpoints
+        .filter(({ group }) => group === "teamTable")
+        .map(({ path }) => path)
+    ).toEqual([
+      "/api/customer/booking/team-table/offerings",
+      "/api/customer/booking/team-table/availability",
+      "/api/customer/booking/team-table/slots",
+      "/api/customer/booking/team-table/quote",
+      "/api/customer/booking/team-table/checkouts",
+      "/api/customer/reservations/:orderId/team-table/status",
+      "/api/customer/reservations/:orderId/invitations",
+    ]);
+  });
+
+  test("carries Team Table details on the legacy-decodable history product", () => {
+    const product = {
+      kind: "other",
+      family: "table",
+      teamTable: { kind: "table", seats: 4, durationMinutes: 75 },
+    } as const;
+    const legacyOther = Schema.Struct({ kind: Schema.Literal("other") });
+    const wire = Schema.encodeSync(CustomerReservationProduct)(product);
+    expect(Schema.decodeUnknownSync(legacyOther)(wire)).toEqual({
+      kind: "other",
+    });
+    expect(Schema.decodeUnknownSync(CustomerReservationProduct)(wire)).toEqual(
+      product
+    );
+  });
+
+  test("keeps Team Table invitations readable without the optional metadata", () => {
+    const legacyOther = Schema.Struct({ kind: Schema.Literal("other") });
+    const legacyAccess = Schema.Struct({
+      code: CustomerReservationAccess.fields.code,
+      accessStartsAt: CustomerReservationAccess.fields.accessStartsAt,
+      accessEndsAt: CustomerReservationAccess.fields.accessEndsAt,
+    });
+    const legacyInvitation = Schema.Struct({
+      ...CustomerInvitedReservation.fields,
+      product: legacyOther,
+      todayAccess: Schema.optional(legacyAccess),
+    });
+    const accessStartsAt = "2027-01-20T10:15:00Z";
+    const accessEndsAt = "2027-01-20T11:15:00Z";
+    const legacy = {
+      orderId: CustomerReservationOrderId.make("synthetic-team-table-order"),
+      product: { kind: "other" },
+      productName: "Team Table",
+      status: "confirmed",
+      accessStartsAt,
+      accessEndsAt,
+      bookedBy: { name: "Synthetic Booker" },
+      todayAccess: { code: "123456", accessStartsAt, accessEndsAt },
+    } as const;
+    const invitation = {
+      ...legacy,
+      product: {
+        ...legacy.product,
+        family: "table",
+        teamTable: { kind: "table", seats: 3, durationMinutes: 60 },
+      },
+      todayAccess: { ...legacy.todayAccess, tableName: "Team Table 12" },
+    } as const;
+    const wire = Schema.encodeSync(CustomerInvitedReservation)(invitation);
+    expect(Schema.decodeUnknownSync(legacyInvitation)(wire)).toEqual(legacy);
+    expect(Schema.decodeUnknownSync(CustomerInvitedReservation)(wire)).toEqual(
+      invitation
+    );
+  });
+
+  test("accepts exact quarter-hour Team Table selections across midnight", () => {
+    const selection = {
+      family: "table",
+      date: "2026-12-01",
+      startTime: "23:45",
+      endTime: "00:15",
+      seats: 4,
+    } as const;
+    const decode = Schema.decodeUnknownSync(CustomerTeamTableSelection);
+    expect(decode(selection)).toEqual(selection);
+    expect(() => decode({ ...selection, endTime: "00:20" })).toThrow();
+    expect(() => decode({ ...selection, seats: 0 })).toThrow();
+  });
 
   test("accepts Entry funding on booking input and keeps the legacy record selection", () => {
     const selection = {
@@ -97,7 +192,7 @@ describe("WorkspaceCustomerApi", () => {
 
   test("serves every endpoint under its group's customer API prefix", () => {
     expect(endpoints.length).toBeGreaterThan(0);
-    for (const endpoint of endpoints) {
+    for (const endpoint of endpointsOf(WorkspaceCustomerApi)) {
       expect({
         reference: endpoint.reference,
         underGroupPrefix:
@@ -141,6 +236,8 @@ describe("WorkspaceCustomerApi", () => {
         "passes.beginPassPurchase",
         "passes.submitPassPurchase",
         "passes.updatePassPurchasePrice",
+        "teamTable.createCheckout",
+        "teamTable.addInvitees",
       ].map((reference) => ({
         reference,
         options: { errors: "all", onExcessProperty: "error" },
@@ -186,7 +283,7 @@ describe("WorkspaceCustomerApi", () => {
   });
 
   test("keeps its recorded OpenAPI document", async () => {
-    const current = OpenApi.fromApi(WorkspaceCustomerApi);
+    const current = OpenApi.fromApi(WorkspaceCustomerApiWithTeamTable);
     if (process.env.UPDATE_OPENAPI === "1") {
       await Bun.write(fixture, `${JSON.stringify(current, null, 2)}\n`);
       // Biome lints the fixture, so write it in Biome's committed form.

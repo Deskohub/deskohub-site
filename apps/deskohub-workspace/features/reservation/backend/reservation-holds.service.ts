@@ -1,4 +1,5 @@
 import {
+  type DotyposReservation,
   type DotyposReservationId,
   DotyposService,
   type DotyposWriteFailure,
@@ -11,6 +12,7 @@ import {
   Exit,
   Layer,
   Match,
+  Option,
   Predicate,
   Schedule,
   Schema,
@@ -18,7 +20,10 @@ import {
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import type { CustomerAgentClientId } from "@/features/account";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import type {
+  CustomerAccountAccessError,
+  CustomerAccountId,
+} from "@/features/account/customer-account";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics";
 import {
   deriveCheckoutAttemptKeys,
@@ -37,6 +42,7 @@ import {
   WorkspaceTableAssignmentService,
   withWorkspaceReservationCapacity,
 } from "@/features/checkout/backend/reservation";
+import { formatWorkspaceReservationNote } from "@/features/checkout/backend/reservation/dotypos-reservation.adapter";
 import {
   type CheckoutAttemptId,
   type CheckoutSessionId,
@@ -63,7 +69,10 @@ import {
   deriveAgentCheckoutAttemptId,
 } from "@/features/reservation/backend/booking-agent";
 import { supersedableReservationPaymentStates } from "@/features/reservation/backend/reservation-supersession";
-import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
+import {
+  WorkspaceAvailabilityService,
+  WorkspaceTableUnavailableError,
+} from "@/features/reservation/backend/workspace-availability.service";
 import {
   type CreateWorkspaceReservationInput,
   entryPackAttachCancellationFailureCode,
@@ -84,8 +93,20 @@ import {
   getReservationHoldExpiresAt,
   reservationHoldTtlMilliseconds,
 } from "@/features/reservation/reservation-hold-deadline";
+import { getReservationDateBounds } from "@/features/reservation/reservation-interval";
 import type { ReservationPurpose } from "@/features/reservation/reservation-purpose";
 import type { SealedOfficePeople } from "@/features/reservation-invitees/backend/reservation-invitees.service";
+import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
+import {
+  readDisplacedTeamTableHold,
+  type TeamTableBookingCapacity,
+  TeamTableBookingCapacityLive,
+  withTeamTableBookingCapacity,
+} from "@/features/team-table/backend/team-table-booking-capacity";
+import {
+  expiredTeamTableCreationCode,
+  TeamTableHoldClaims,
+} from "@/features/team-table/backend/team-table-hold-claims";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { MissingDotyposId } from "@/shared/backend/missing-dotypos-id";
 import { VercelQueuePublisher } from "@/shared/backend/queue/vercel-queue-publisher";
@@ -100,6 +121,11 @@ type ReservationHoldRequest = {
   /** The normalized reservation the advertisement priced; attempt keys bind it. */
   readonly reservation: PreparePayStateInput["reservation"];
   readonly entryPack?: EntryPackRedemption;
+  readonly teamTableCapacity?: TeamTableBookingCapacity;
+  readonly recheckTeamTableAuthority?: Effect.Effect<
+    void,
+    CustomerAccountAccessError
+  >;
   /** Who books, for whom, and how the stored draft is attributed. */
   readonly booking: {
     readonly author: CustomerAccountId;
@@ -165,7 +191,7 @@ interface IReservationHolds {
     request: ReservationHoldRequest
   ) => Effect.Effect<
     ReservationHold,
-    Effect.Error<ReturnType<typeof holdForAttempt>>
+    Effect.Error<ReturnType<typeof holdForAttemptWithCapacity>>
   >;
 }
 
@@ -206,11 +232,19 @@ export class ReservationHolds extends Context.Service<
       const context = Context.pick(...holdCapabilities)(
         yield* Effect.context<HoldCapabilities>()
       );
+      const teamTableClaims = yield* Effect.serviceOption(TeamTableHoldClaims);
+      const moves = yield* Effect.serviceOption(OpenSpaceTableMoves);
+      const claimsContext = Option.isSome(teamTableClaims)
+        ? Context.add(context, TeamTableHoldClaims, teamTableClaims.value)
+        : context;
+      const services = Option.isSome(moves)
+        ? Context.add(claimsContext, OpenSpaceTableMoves, moves.value)
+        : claimsContext;
       return ReservationHolds.of({
         holdForAttempt: (request) =>
-          holdForAttempt(request).pipe(
+          holdForAttemptWithCapacity(request).pipe(
             Effect.scoped,
-            Effect.provideContext(context)
+            Effect.provideContext(services)
           ),
       });
     })
@@ -221,7 +255,7 @@ export class ReservationHolds extends Context.Service<
       Layer.mergeAll(
         WorkspaceDatabaseAdvisoryLock.Default,
         WorkspaceReservationRepository.Live,
-        WorkspaceAvailabilityService.Live,
+        TeamTableBookingCapacityLive,
         WorkspaceTableAssignmentService.Default.pipe(
           Layer.provide(CoworkPassesReleaseGateForRun),
           Layer.provide(PassDayMoves.Default),
@@ -234,12 +268,99 @@ export class ReservationHolds extends Context.Service<
           Layer.provide(VercelQueuePublisher)
         ),
         CheckoutAnalytics.Live,
+        TeamTableHoldClaims.Default.pipe(
+          Layer.provide(
+            Layer.merge(WorkspaceDatabase.Default, WorkspaceDotyposLayer)
+          )
+        ),
         WorkspaceDotyposLayer,
         SealedStateKeys.Default
       )
     )
   );
 }
+
+const selectCheckoutAttempt = Effect.fnUntraced(function* (
+  request: ReservationHoldRequest
+) {
+  const { booking, reservation } = request;
+  if (!booking.agent) {
+    return {
+      kind: "attempt",
+      checkoutSessionId: request.checkout.sessionId,
+      checkoutAttemptId: request.checkout.attemptId,
+      supersedeRotated: undefined,
+    } satisfies AgentCheckout;
+  }
+  return yield* resolveAgentCheckout({
+    selectionKey: booking.agent.selectionKey,
+    clientId: booking.agent.clientId,
+    authorAccountId: booking.author,
+    checkoutSessionId: request.checkout.sessionId,
+    reservation,
+    ...(request.entryPack && { entryPackId: request.entryPack.passId }),
+  });
+});
+
+const lookupTeamTableDisplacedHolds = Effect.fnUntraced(function* (
+  request: ReservationHoldRequest
+) {
+  const repository = yield* WorkspaceReservationRepository;
+  const checkout = yield* selectCheckoutAttempt(request);
+  if (checkout.kind !== "attempt") return [];
+  const current = yield* findSessionHoldToSupersede(repository, {
+    checkoutSessionId: checkout.checkoutSessionId,
+    checkoutAttemptId: checkout.checkoutAttemptId,
+    reservation: request.reservation,
+    people: request.officePeople?.valid,
+    entryPack: request.entryPack,
+    authorAccountId: request.booking.author,
+  });
+  const rotated =
+    checkout.supersedeRotated && request.booking.agent
+      ? yield* findRotatedAgentHolds({
+          authorAccountId: request.booking.author,
+          agentClientId: request.booking.agent.clientId,
+          agentCheckoutSessionId: request.checkout.sessionId,
+        })
+      : [];
+  const prior =
+    current && !rotated.some(({ id }) => id === current.id)
+      ? [current, ...rotated]
+      : rotated;
+  const holds = yield* Effect.forEach(prior, readDisplacedTeamTableHold);
+  return holds.filter((hold) => hold !== undefined);
+});
+
+const holdForAttemptWithCapacity = Effect.fnUntraced(function* (
+  request: ReservationHoldRequest
+) {
+  const { reservation, recheckTeamTableAuthority } = request;
+  if (
+    reservation.kind !== "table" ||
+    request.teamTableCapacity ||
+    !recheckTeamTableAuthority
+  )
+    return yield* holdForAttempt(request);
+  const moves = yield* Effect.serviceOption(OpenSpaceTableMoves);
+  if (Option.isNone(moves)) {
+    return yield* new WorkspaceTableUnavailableError({
+      date: getReservationDateBounds(reservation).first.toString(),
+      reservation: { kind: "table" },
+    });
+  }
+  return yield* withTeamTableBookingCapacity(
+    {
+      reservation,
+      authorAccountId: request.booking.author,
+      lookupDisplacedHolds: lookupTeamTableDisplacedHolds(request),
+    },
+    (teamTableCapacity) =>
+      recheckTeamTableAuthority.pipe(
+        Effect.andThen(holdForAttempt({ ...request, teamTableCapacity }))
+      )
+  ).pipe(Effect.provideService(OpenSpaceTableMoves, moves.value));
+});
 
 const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
   request: ReservationHoldRequest
@@ -249,6 +370,7 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
   const reservations = yield* WorkspaceReservationRepository;
   const dotypos = yield* DotyposService;
   const checkoutAnalytics = yield* CheckoutAnalytics;
+  const teamTableClaims = yield* Effect.serviceOption(TeamTableHoldClaims);
 
   const releaseHoldCreation = (
     reservationId: WorkspaceReservationId,
@@ -263,21 +385,21 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
       Effect.ignore
     );
 
-  const checkout: AgentCheckout =
-    booking.agent === undefined
-      ? {
-          kind: "attempt",
-          checkoutSessionId: request.checkout.sessionId,
-          checkoutAttemptId: request.checkout.attemptId,
-        }
-      : yield* resolveAgentCheckout({
-          selectionKey: booking.agent.selectionKey,
-          clientId: booking.agent.clientId,
-          authorAccountId: booking.author,
-          checkoutSessionId: request.checkout.sessionId,
-          reservation,
-          ...(request.entryPack && { entryPackId: request.entryPack.passId }),
-        });
+  const checkout = yield* selectCheckoutAttempt(request);
+  if (
+    checkout.kind === "attempt" &&
+    checkout.supersedeRotated &&
+    booking.agent
+  ) {
+    yield* supersedeRotatedAgentHolds(
+      {
+        authorAccountId: booking.author,
+        agentClientId: booking.agent.clientId,
+        agentCheckoutSessionId: request.checkout.sessionId,
+      },
+      request.teamTableCapacity
+    );
+  }
   if (checkout.kind === "payment_pending") {
     return {
       kind: "payment_pending",
@@ -294,6 +416,9 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
     checkoutSessionId: checkout.checkoutSessionId,
     checkoutAttemptId: checkout.checkoutAttemptId,
     reservation,
+    ...(request.teamTableCapacity && {
+      teamTableCapacity: request.teamTableCapacity,
+    }),
     ...(request.entryPack && { entryPack: request.entryPack }),
     ...(request.officePeople && { people: request.officePeople.valid }),
     draft: {
@@ -341,12 +466,13 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
     reservationDraft: WorkspaceReservation,
     checkoutSessionId: CheckoutSessionId
   ) {
-    const claimConflictReservation = yield* waitForPendingReservationTransition(
-      {
-        reservations,
-        reservationId: reservationDraft.id,
-      }
-    );
+    const claimConflictReservation =
+      reservation.kind === "table"
+        ? yield* reservations.findById(reservationDraft.id)
+        : yield* waitForPendingReservationTransition({
+            reservations,
+            reservationId: reservationDraft.id,
+          });
     // A missing reservation keeps the draft's fields.
     yield* Effect.annotateLogsScoped({
       claimConflictReservationFound: claimConflictReservation !== null,
@@ -456,13 +582,45 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
         checkoutDetailsLogFields(checkoutDetails)
       );
 
-      const dotyposReservation = yield* createWorkspaceDotyposReservation({
-        paymentOrderId: reservationDraft.id,
-        dotyposCustomerId: booking.customer,
-        checkoutDetails,
-        reservation: checkoutDetails.reservation,
-        status: "NEW",
-        allowPassDayMove: true,
+      const created = yield* Effect.gen(function* () {
+        const selected = checkoutDetails.reservation;
+        const create = {
+          paymentOrderId: reservationDraft.id,
+          dotyposCustomerId: booking.customer,
+          checkoutDetails,
+          reservation: selected,
+          status: "NEW",
+          allowPassDayMove: true,
+        } as const;
+        if (selected.kind !== "table") {
+          return {
+            record: yield* createWorkspaceDotyposReservation(create),
+            team: undefined,
+          };
+        }
+        const unavailable = new WorkspaceTableUnavailableError({
+          date: getReservationDateBounds(selected).first.toString(),
+          reservation: { kind: selected.kind },
+        });
+        if (!request.teamTableCapacity || Option.isNone(teamTableClaims))
+          return yield* unavailable;
+        const claims = teamTableClaims.value;
+        const receipt = yield* claims.create({
+          reservationId: reservationDraft.id,
+          customerId: booking.customer,
+          reservation: selected,
+          owner: { purpose: "checkout" },
+          assign: request.teamTableCapacity.assignTableId,
+          note: formatWorkspaceReservationNote(create),
+        });
+        if (receipt.kind === "released") {
+          yield* claims.finishCheckout(receipt.claim, Temporal.Now.instant());
+        }
+        if (receipt.kind !== "active") return yield* unavailable;
+        return {
+          record: receipt.record,
+          team: { claims, claim: receipt.claim },
+        };
       }).pipe(
         Effect.tapError(
           Effect.fn(function* (cause) {
@@ -473,10 +631,18 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
               }
             );
 
-            yield* releaseHoldCreation(reservationDraft.id);
+            const retained =
+              checkoutDetails.reservation.kind === "table" &&
+              Option.isSome(teamTableClaims) &&
+              (yield* teamTableClaims.value.find(reservationDraft.id).pipe(
+                Effect.map((claim) => claim !== undefined),
+                Effect.orElseSucceed(() => true)
+              ));
+            if (!retained) yield* releaseHoldCreation(reservationDraft.id);
           })
         )
       );
+      const dotyposReservation = created.record;
       yield* Effect.annotateLogsScoped(
         dotyposReservationLogFields(dotyposReservation)
       );
@@ -485,6 +651,17 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
       yield* Effect.logInfo("Workspace Dotypos reservation hold created");
 
       const reservationCreatedAt = Temporal.Now.instant();
+      if (created.team) {
+        yield* attachTeamTableCheckoutHold({
+          ...created.team,
+          reservations,
+          record: dotyposReservation,
+          customerId: booking.customer,
+          now: reservationCreatedAt,
+          reservationHoldExpiresAt: holdExpiresAt,
+        });
+        return reservationCreatedAt;
+      }
 
       yield* reservations
         .attachHold({
@@ -585,9 +762,12 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
         const book = Effect.sync(() => {
           waitingForCapacity = false;
         }).pipe(Effect.andThen(createAndAttachHold));
-        return yield* restore(
-          withWorkspaceReservationCapacity(interval, book)
-        ).pipe(
+        const capacity =
+          request.checkoutDetails.reservation.kind === "table" &&
+          request.teamTableCapacity
+            ? book.pipe(Effect.uninterruptible)
+            : withWorkspaceReservationCapacity(interval, book);
+        return yield* restore(capacity).pipe(
           Effect.onExit((exit) =>
             Exit.isFailure(exit) && waitingForCapacity
               ? releaseHoldCreation(reservationDraft.id)
@@ -848,6 +1028,7 @@ type ReservationDraftRequest = {
   readonly reservation: PreparePayStateInput["reservation"];
   readonly entryPack?: EntryPackRedemption;
   readonly people?: ValidOfficePeople;
+  readonly teamTableCapacity?: TeamTableBookingCapacity;
   readonly draft: Omit<
     CreateWorkspaceReservationInput,
     "checkoutSessionKey" | "checkoutAttemptKey"
@@ -927,7 +1108,174 @@ const rotateCheckoutSession = (input: {
         ),
       } satisfies ReservationDraftStep);
 
+const getSessionReservationAction = (
+  reservation: WorkspaceReservation,
+  authorAccountId: CustomerAccountId | null
+) => {
+  if (
+    reservation.reservationState === "draft" &&
+    reservation.failureCode === entryPackUnavailableFailureCode
+  )
+    return "rotate";
+  if (isSessionReservationPending(reservation)) return "wait";
+  if (
+    mustRotateCheckoutSession(reservation) ||
+    isAnotherAccountsReservation(reservation, authorAccountId)
+  )
+    return "rotate";
+  return "supersede";
+};
+
+type DraftAttemptSelection = Pick<
+  ReservationDraftRequest,
+  "checkoutAttemptId" | "reservation" | "people" | "entryPack"
+>;
+
+const getDraftAttemptKeys = (
+  request: DraftAttemptSelection,
+  checkoutSessionId: CheckoutSessionId
+) =>
+  deriveCheckoutAttemptKeys({
+    checkoutSessionId,
+    checkoutAttemptId: request.checkoutAttemptId,
+    reservation: request.reservation,
+    people: request.people,
+    ...(request.entryPack && { entryPackId: request.entryPack.passId }),
+  });
+
+const readCurrentDraftSession = Effect.fnUntraced(function* (
+  reservations: IWorkspaceReservationRepository,
+  checkoutSessionId: CheckoutSessionId
+) {
+  const sessionKeys = yield* deriveCheckoutSessionKeys(checkoutSessionId);
+  // Keep using the session key stored by its first row across Pay-state key rotations.
+  const sessionKey =
+    (yield* reservations.findStoredCheckoutSessionKey(sessionKeys.accepted)) ??
+    sessionKeys.current;
+  const current =
+    yield* reservations.findCurrentByCheckoutSessionKey(sessionKey);
+  return { sessionKeys, sessionKey, current };
+});
+
+/** Follows draft preparation's session rotation without settling or cancelling any row. */
+const findSessionHoldToSupersede = Effect.fnUntraced(function* (
+  reservations: IWorkspaceReservationRepository,
+  input: DraftAttemptSelection & {
+    readonly checkoutSessionId: CheckoutSessionId;
+    readonly authorAccountId: CustomerAccountId;
+  }
+) {
+  let checkoutSessionId = input.checkoutSessionId;
+  while (true) {
+    const attemptKeys = yield* getDraftAttemptKeys(input, checkoutSessionId);
+    const existingAttempt = yield* reservations.findByAttemptKeys(
+      attemptKeys.accepted
+    );
+    if (existingAttempt) {
+      // Pending provider receipt recovery belongs to draft preparation.
+      if (isHoldTransitionPending(existingAttempt)) return;
+      const next = yield* continueExistingAttempt(
+        input.checkoutAttemptId,
+        checkoutSessionId,
+        existingAttempt
+      );
+      if (next.kind === "prepared") return;
+      checkoutSessionId = next.checkoutSessionId;
+      continue;
+    }
+
+    const { current } = yield* readCurrentDraftSession(
+      reservations,
+      checkoutSessionId
+    );
+    if (!current) return;
+
+    const action = getSessionReservationAction(current, input.authorAccountId);
+    if (action === "supersede") return current;
+    if (action === "wait")
+      return yield* new CheckoutAttemptUnavailableError({
+        reservation: current,
+      });
+    const rotated = yield* rotateCheckoutSession({
+      checkoutSessionId,
+      checkoutAttemptId: input.checkoutAttemptId,
+      reservation: current,
+    });
+    checkoutSessionId = rotated.checkoutSessionId;
+  }
+});
+
 /** The attempt's own reservation, once no hold transition is in flight. */
+const attachTeamTableCheckoutHold = Effect.fn(
+  "ReservationHolds.attachTeamTableHold"
+)(function* ({
+  reservations,
+  claims,
+  claim,
+  record,
+  customerId,
+  now,
+  reservationHoldExpiresAt,
+}: {
+  readonly reservations: IWorkspaceReservationRepository;
+  readonly claims: TeamTableHoldClaims["Service"];
+  readonly claim: NonNullable<
+    Effect.Success<ReturnType<TeamTableHoldClaims["Service"]["find"]>>
+  >;
+  readonly record: DotyposReservation;
+  readonly customerId: DotyposCustomerId;
+  readonly now: Temporal.Instant;
+  readonly reservationHoldExpiresAt: Temporal.Instant;
+}) {
+  const id = claim.reservationId;
+  yield* reservations
+    .attachHold({
+      id,
+      dotyposReservationId: record.id,
+      reservationCreatedAt: now,
+      reservationHoldExpiresAt,
+    })
+    .pipe(
+      Effect.catch(
+        Effect.fnUntraced(function* (cause) {
+          const persisted = yield* reservations.findById(id);
+          if (
+            persisted?.dotyposReservationId === record.id &&
+            persisted.reservationState === "held"
+          )
+            return;
+          yield* claims.requestCancellation(claim, now);
+          const cancelled = yield* claims
+            .cancel(claim, customerId, record)
+            .pipe(
+              Effect.catch((failure) =>
+                Effect.logWarning("Team Table attach compensation is pending", {
+                  failure,
+                }).pipe(Effect.as(false))
+              )
+            );
+          if (cancelled) {
+            yield* claims.finishCheckout(claim, now, record.id);
+          } else {
+            const deadline =
+              yield* reservations.markAttachFailedCancellationRequired({
+                id,
+                dotyposReservationId: record.id,
+                reservationCreatedAt: now,
+                failureCode: "attach_failed_cancel_failed",
+              });
+            yield* enqueueReservationHoldCleanup({
+              orderId: id,
+              reservationHoldExpiresAt: deadline,
+            });
+          }
+          return yield* cause;
+        })
+      )
+    );
+  yield* claims.attached(claim, record.id, now);
+});
+
 const findSettledAttemptReservation = Effect.fnUntraced(function* (
   reservations: IWorkspaceReservationRepository,
   checkoutAttemptKeys: CheckoutAttemptKeys
@@ -935,7 +1283,51 @@ const findSettledAttemptReservation = Effect.fnUntraced(function* (
   let existingAttempt = yield* reservations.findByAttemptKeys(
     checkoutAttemptKeys.accepted
   );
-  if (isHoldTransitionPending(existingAttempt)) {
+  if (
+    existingAttempt?.reservationState === "creating_hold" &&
+    existingAttempt.reservationDetails.kind === "table"
+  ) {
+    const { id, reservationHoldExpiresAt, dotyposCustomerId } = existingAttempt;
+    const now = Temporal.Now.instant();
+    const claims = yield* Effect.serviceOption(TeamTableHoldClaims);
+    if (
+      Option.isSome(claims) &&
+      reservationHoldExpiresAt &&
+      Temporal.Instant.compare(reservationHoldExpiresAt, now) > 0
+    ) {
+      const claim = yield* claims.value.find(id);
+      const customerId = yield* getDotyposCustomerId(dotyposCustomerId);
+      const receipt =
+        claim?.purpose === "checkout" && !claim.cancelRequestedAt
+          ? yield* claims.value.inspect(claim, customerId)
+          : undefined;
+      if (
+        claim &&
+        receipt?.kind === "active" &&
+        receipt.record.status === "NEW"
+      ) {
+        yield* claims.value.remember(claim, [receipt.record.id]);
+        yield* attachTeamTableCheckoutHold({
+          claims: claims.value,
+          claim,
+          reservations,
+          record: receipt.record,
+          customerId,
+          now,
+          reservationHoldExpiresAt,
+        });
+        yield* enqueueReservationHoldCleanup({
+          orderId: id,
+          reservationHoldExpiresAt,
+        });
+        existingAttempt = yield* reservations.findById(id);
+      }
+    }
+  }
+  if (
+    isHoldTransitionPending(existingAttempt) &&
+    existingAttempt.reservationDetails.kind !== "table"
+  ) {
     existingAttempt = yield* waitForPendingReservationTransition({
       reservations,
       reservationId: existingAttempt.id,
@@ -952,10 +1344,15 @@ const findSettledAttemptReservation = Effect.fnUntraced(function* (
 
 /** Resumes the attempt's own reservation, rotates past it, or refuses it. */
 const continueExistingAttempt = Effect.fnUntraced(function* (
-  request: ReservationDraftRequest,
+  checkoutAttemptId: CheckoutAttemptId,
   checkoutSessionId: CheckoutSessionId,
   existingAttempt: WorkspaceReservation
 ) {
+  if (existingAttempt.failureCode === expiredTeamTableCreationCode) {
+    return yield* new CheckoutAttemptUnavailableError({
+      reservation: existingAttempt,
+    });
+  }
   if (
     existingAttempt.reservationState === "draft" ||
     (isReusableSubmissionReservation(existingAttempt) &&
@@ -971,7 +1368,7 @@ const continueExistingAttempt = Effect.fnUntraced(function* (
   if (mustRotateCheckoutSession(existingAttempt)) {
     return yield* rotateCheckoutSession({
       checkoutSessionId,
-      checkoutAttemptId: request.checkoutAttemptId,
+      checkoutAttemptId,
       reservation: existingAttempt,
     });
   }
@@ -1015,6 +1412,9 @@ const supersedeSessionReservation = Effect.fnUntraced(function* (input: {
 }) {
   const { reservations, availability } = input.services;
   const { checkoutSessionId, request } = input;
+  yield* request.teamTableCapacity?.assertCanDisplace?.(
+    input.currentReservation
+  ) ?? Effect.void;
   const claimed = yield* reservations.claimSupersessionCancellation(
     input.currentReservation.id
   );
@@ -1089,18 +1489,16 @@ const resolveSessionReservation = Effect.fnUntraced(function* (input: {
   readonly checkoutSessionKey: CheckoutSessionKeys["current"];
   readonly checkoutAttemptKey: CheckoutAttemptKeys["current"];
 }) {
-  const { checkoutSessionId, currentReservation } = input;
-  if (
-    currentReservation.reservationState === "draft" &&
-    currentReservation.failureCode === entryPackUnavailableFailureCode
-  ) {
-    return yield* rotateCheckoutSession({
-      checkoutSessionId,
-      checkoutAttemptId: input.request.checkoutAttemptId,
-      reservation: currentReservation,
-    });
-  }
-  if (isSessionReservationPending(currentReservation)) {
+  const { checkoutSessionId, currentReservation, request } = input;
+  const action = getSessionReservationAction(
+    currentReservation,
+    request.draft.authorAccountId
+  );
+  if (action === "wait") {
+    if (input.request.reservation.kind === "table")
+      return yield* new CheckoutAttemptUnavailableError({
+        reservation: currentReservation,
+      });
     return yield* awaitSessionReservation(
       input.services.reservations,
       checkoutSessionId,
@@ -1108,21 +1506,17 @@ const resolveSessionReservation = Effect.fnUntraced(function* (input: {
     );
   }
 
-  if (
-    mustRotateCheckoutSession(currentReservation) ||
-    isAnotherAccountsReservation(
-      currentReservation,
-      input.request.draft.authorAccountId
-    )
-  ) {
-    yield* Effect.logInfo(
-      "Checkout session rotated before reservation creation",
-      {
-        previousReservationId: currentReservation.id,
-        previousReservationState: currentReservation.reservationState,
-        previousPaymentState: currentReservation.paymentState,
-      }
-    );
+  if (action === "rotate") {
+    if (currentReservation.reservationState !== "draft") {
+      yield* Effect.logInfo(
+        "Checkout session rotated before reservation creation",
+        {
+          previousReservationId: currentReservation.id,
+          previousReservationState: currentReservation.reservationState,
+          previousPaymentState: currentReservation.paymentState,
+        }
+      );
+    }
     return yield* rotateCheckoutSession({
       checkoutSessionId,
       checkoutAttemptId: input.request.checkoutAttemptId,
@@ -1181,15 +1575,10 @@ const prepareDraftInSession = Effect.fnUntraced(function* (
   checkoutSessionId: CheckoutSessionId
 ) {
   const { reservations } = services;
-  const checkoutSessionKeys =
-    yield* deriveCheckoutSessionKeys(checkoutSessionId);
-  const checkoutAttemptKeys = yield* deriveCheckoutAttemptKeys({
-    checkoutSessionId,
-    checkoutAttemptId: request.checkoutAttemptId,
-    reservation: request.reservation,
-    people: request.people,
-    ...(request.entryPack && { entryPackId: request.entryPack.passId }),
-  });
+  const checkoutAttemptKeys = yield* getDraftAttemptKeys(
+    request,
+    checkoutSessionId
+  );
 
   const existingAttempt = yield* findSettledAttemptReservation(
     reservations,
@@ -1197,20 +1586,17 @@ const prepareDraftInSession = Effect.fnUntraced(function* (
   );
   if (existingAttempt) {
     return yield* continueExistingAttempt(
-      request,
+      request.checkoutAttemptId,
       checkoutSessionId,
       existingAttempt
     );
   }
 
-  // Rows of one session keep the key stored by its first row, so a
-  // session that spans a Pay-state key rotation still groups as one.
-  const checkoutSessionKey =
-    (yield* reservations.findStoredCheckoutSessionKey(
-      checkoutSessionKeys.accepted
-    )) ?? checkoutSessionKeys.current;
-  const currentReservation =
-    yield* reservations.findCurrentByCheckoutSessionKey(checkoutSessionKey);
+  const {
+    sessionKeys: checkoutSessionKeys,
+    sessionKey: checkoutSessionKey,
+    current: currentReservation,
+  } = yield* readCurrentDraftSession(reservations, checkoutSessionId);
   if (currentReservation) {
     return yield* resolveSessionReservation({
       services,
@@ -1277,13 +1663,15 @@ export const getAgentHoldBookedAt = (reservation: WorkspaceReservation) =>
  * or completed payment is never cancelled, nor is another client's or another
  * account's.
  */
-const supersedeRotatedAgentHolds = Effect.fn(
-  "preparePayState.supersedeRotatedAgentHolds"
-)(function* (input: {
+type AgentHoldScope = {
   readonly authorAccountId: CustomerAccountId;
   readonly agentClientId: CustomerAgentClientId;
   readonly agentCheckoutSessionId: CheckoutSessionId;
-}) {
+};
+
+const findRotatedAgentHolds = Effect.fnUntraced(function* (
+  input: AgentHoldScope
+) {
   const reservations = yield* WorkspaceReservationRepository;
   const agentSessionKeys = yield* deriveCheckoutSessionKeys(
     input.agentCheckoutSessionId
@@ -1292,16 +1680,22 @@ const supersedeRotatedAgentHolds = Effect.fn(
     authorAccountId: input.authorAccountId,
     agentClientId: input.agentClientId,
   });
-  const rotatedHolds = holds.filter(
+  return holds.filter(
     (hold) =>
       !hold.checkoutSessionKey ||
       !agentSessionKeys.accepted.includes(hold.checkoutSessionKey)
   );
+});
 
+const supersedeRotatedAgentHolds = Effect.fn(
+  "preparePayState.supersedeRotatedAgentHolds"
+)(function* (input: AgentHoldScope, capacity?: TeamTableBookingCapacity) {
+  const rotatedHolds = yield* findRotatedAgentHolds(input);
   const unpaidHoldRelease = yield* UnpaidHoldRelease;
   yield* Effect.forEach(
     rotatedHolds,
     Effect.fn(function* (hold) {
+      yield* capacity?.assertCanDisplace?.(hold) ?? Effect.void;
       const dotyposReleaseFailed = (cause: DotyposWriteFailure) =>
         Effect.logError("Checkout supersession Dotypos cancellation failed", {
           reservationId: hold.id,
@@ -1345,6 +1739,7 @@ type AgentCheckout =
       readonly kind: "attempt";
       readonly checkoutSessionId: CheckoutSessionId;
       readonly checkoutAttemptId: CheckoutAttemptId;
+      readonly supersedeRotated?: true;
     }
   | {
       readonly kind: "payment_pending";
@@ -1444,26 +1839,21 @@ const resolveAgentCheckout = Effect.fn("preparePayState.resolveAgentCheckout")(
         agentSelectionKey: input.selectionKey,
       });
     const startNextAttempt = (latest?: WorkspaceReservation) =>
-      supersedeRotatedAgentHolds({
-        authorAccountId: input.authorAccountId,
-        agentClientId: input.clientId,
-        agentCheckoutSessionId: input.checkoutSessionId,
-      }).pipe(
-        Effect.as({
-          kind: "attempt",
-          checkoutSessionId: input.checkoutSessionId,
-          checkoutAttemptId: deriveAgentCheckoutAttemptId(
-            input.selectionKey,
-            latest?.id
-          ),
-        } satisfies AgentCheckout)
-      );
+      Effect.succeed({
+        kind: "attempt",
+        checkoutSessionId: input.checkoutSessionId,
+        checkoutAttemptId: deriveAgentCheckoutAttemptId(
+          input.selectionKey,
+          latest?.id
+        ),
+        supersedeRotated: true,
+      } satisfies AgentCheckout);
     if (!latestFound) return yield* startNextAttempt();
 
-    const latest = yield* settleLatestAgentReservation(
-      reservations,
-      latestFound
-    );
+    const latest =
+      input.reservation.kind === "table"
+        ? latestFound
+        : yield* settleLatestAgentReservation(reservations, latestFound);
     const checkoutAttemptId = deriveAgentCheckoutAttemptId(
       input.selectionKey,
       previous?.id
@@ -1496,6 +1886,7 @@ const resolveAgentCheckout = Effect.fn("preparePayState.resolveAgentCheckout")(
         kind: "attempt",
         checkoutSessionId,
         checkoutAttemptId,
+        supersedeRotated: undefined,
       } satisfies AgentCheckout;
     }
     // The agent session's current reservation is superseded as usual, but a

@@ -1,4 +1,8 @@
-import type { DotyposReservation, DotyposTable } from "@deskohub/dotypos";
+import type {
+  DotyposReservation,
+  DotyposTable,
+  DotyposTableId,
+} from "@deskohub/dotypos";
 import { Result } from "effect";
 import {
   decodeTableSeatCapacity,
@@ -28,7 +32,7 @@ export type CustomerReservationPlacement = {
   readonly tableMap?: WorkspaceTableMap;
 };
 
-const hasSharedSeating = (details: StoredWorkspaceReservationDetails) =>
+export const hasSharedSeating = (details: StoredWorkspaceReservationDetails) =>
   details.kind === "cowork" && details.entryTier === "open-space";
 
 /** The assigned table's name, or its ID when the table has no name. */
@@ -45,22 +49,36 @@ const getAssignedTableName = (
 };
 
 /** Named, assignable Open Space tables whose seat capacity is usable. */
-const getOpenSpaceTableNames = (tables: readonly DotyposTable[]) =>
+const getOpenSpaceTableNames = (
+  tables: readonly DotyposTable[],
+  excludedTableIds: ReadonlySet<DotyposTableId>
+) =>
   getWorkspaceTableCandidatesByPredicate(tables, (tableTags) =>
     isWorkspaceCoworkTableCandidate(tableTags, { entryTier: "open-space" })
   )
-    .filter((table) => Result.isSuccess(decodeTableSeatCapacity(table)))
+    .filter(
+      (table) =>
+        !excludedTableIds.has(table.id) &&
+        Result.isSuccess(decodeTableSeatCapacity(table))
+    )
     .map((table) => table.name?.trim());
 
-const getCustomerReservationTable = (input: {
+type PlacementInput = {
   readonly reservationDetails: StoredWorkspaceReservationDetails;
   readonly dotyposReservation: Pick<DotyposReservation, "_tableId">;
   readonly tables: readonly DotyposTable[];
-}): CustomerReservationTable | undefined => {
-  // Open Space never names the assigned table, not even by its ID.
+  /** Absent when the Open Space overlap check is unavailable. */
+  readonly openSpaceExcludedTableIds?: ReadonlySet<DotyposTableId>;
+  readonly seatingMap: boolean;
+};
+
+const getCustomerReservationTable = (
+  input: PlacementInput
+): CustomerReservationTable | undefined => {
   if (hasSharedSeating(input.reservationDetails)) {
+    if (!input.openSpaceExcludedTableIds) return undefined;
     const name = formatNamesWithNumericRanges(
-      getOpenSpaceTableNames(input.tables)
+      getOpenSpaceTableNames(input.tables, input.openSpaceExcludedTableIds)
     );
     return name ? { mode: "shared", name } : undefined;
   }
@@ -73,12 +91,9 @@ const getCustomerReservationTable = (input: {
  * The customer-facing placement of a booked reservation: the table its
  * customer uses and, when `seatingMap` is released, the assigned table's room.
  */
-export const getCustomerReservationPlacement = (input: {
-  readonly reservationDetails: StoredWorkspaceReservationDetails;
-  readonly dotyposReservation: Pick<DotyposReservation, "_tableId">;
-  readonly tables: readonly DotyposTable[];
-  readonly seatingMap: boolean;
-}): CustomerReservationPlacement => {
+export const getCustomerReservationPlacement = (
+  input: PlacementInput
+): CustomerReservationPlacement => {
   const table = getCustomerReservationTable(input);
   const tableMap = input.seatingMap
     ? getWorkspaceTableMap(input.dotyposReservation, input.tables)

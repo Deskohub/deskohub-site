@@ -15,8 +15,11 @@ const { DATABASE_URL, DATABASE_URL_UNPOOLED } = Schema.decodeUnknownSync(
 });
 
 export default defineConfig({
-  schema: ["./db/schema/index.ts", "./db/schema/auth.ts"],
-  out: "./db/migrations",
+  schema: [
+    "../../packages/workspace-backend/src/db/schema/index.ts",
+    "../../packages/workspace-backend/src/db/schema/auth.ts",
+  ],
+  out: "../../packages/workspace-backend/src/db/migrations",
   dialect: "postgresql",
   schemaFilter: ["public", "auth"],
   dbCredentials: {

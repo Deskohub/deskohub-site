@@ -211,12 +211,14 @@ describe.skipIf(!testDatabase)(
 
     const insertReservation = async ({
       customerId,
+      details = openSpaceDetails,
       fulfillmentState,
       label,
       reservationState,
       updatedAt,
     }: {
       readonly customerId: DotyposCustomerId;
+      readonly details?: StoredWorkspaceReservationDetails;
       readonly fulfillmentState: Exclude<FulfillmentState, "awaiting_delivery">;
       readonly label: string;
       readonly reservationState: ReservationState;
@@ -230,7 +232,7 @@ describe.skipIf(!testDatabase)(
             fulfillment: fulfillmentState,
           },
           customer: customerId,
-          details: openSpaceDetails,
+          details,
           overrides: {
             dotyposReservationId: bookingId(label),
             ...(updatedAt && { updatedAt }),
@@ -412,58 +414,77 @@ describe.skipIf(!testDatabase)(
       });
     });
 
-    test("counts only the amount kept after refunds as customer revenue", async () => {
-      const customerId = makeCustomerId("revenue");
-      const payments = [
-        { label: "refunded", amountValue: 39_000, refundedAmountValue: 39_000 },
-        { label: "partial", amountValue: 45_000, refundedAmountValue: 15_000 },
-        { label: "kept", amountValue: 35_000, refundedAmountValue: null },
-      ] as const;
-      for (const { label, amountValue, refundedAmountValue } of payments) {
-        const reservationId = await insertReservation({
-          customerId,
-          label: `revenue-${label}`,
-          reservationState: "confirmed",
-          fulfillmentState: "fulfilled",
-        });
-        const id = `revenue-${label}-${runId}`;
-        await Effect.runPromise(
-          testDatabase.db.insert(paymentAttempts).values({
-            id: paymentAttemptIdSchema.make(`attempt-${id}`),
-            workspaceReservationId: reservationId,
-            provider: "nexi",
-            providerOrderId: NexiOrderIdSchema.make(`order-${id}`),
-            state: "paid",
-            amountValue,
-            amountExponent: 2,
-            currency: "CZK",
-            ...(refundedAmountValue === null
-              ? { refundState: "not_required" }
-              : {
-                  refundState: "refunded",
-                  refundedAmountValue,
-                  refundedAt: Temporal.Instant.from("2026-10-11T12:00:00Z"),
-                }),
+    test.each(["cowork", "table"] as const)(
+      "counts only the amount kept after refunds for a %s customer",
+      async (kind) => {
+        const customerId = makeCustomerId(`revenue-${kind}`);
+        const details =
+          kind === "table"
+            ? { kind, seats: 4, durationMinutes: 60 }
+            : openSpaceDetails;
+        const product =
+          kind === "table" ? { kind } : { kind, tier: "open-space" };
+        const payments = [
+          {
+            label: "refunded",
+            amountValue: 39_000,
+            refundedAmountValue: 39_000,
+          },
+          {
+            label: "partial",
+            amountValue: 45_000,
+            refundedAmountValue: 15_000,
+          },
+          { label: "kept", amountValue: 35_000, refundedAmountValue: null },
+        ] as const;
+        for (const { label, amountValue, refundedAmountValue } of payments) {
+          const reservationId = await insertReservation({
+            customerId,
+            details,
+            label: `revenue-${kind}-${label}`,
+            reservationState: "confirmed",
+            fulfillmentState: "fulfilled",
+          });
+          const id = `revenue-${kind}-${label}-${runId}`;
+          await Effect.runPromise(
+            testDatabase.db.insert(paymentAttempts).values({
+              id: paymentAttemptIdSchema.make(`attempt-${id}`),
+              workspaceReservationId: reservationId,
+              provider: "nexi",
+              providerOrderId: NexiOrderIdSchema.make(`order-${id}`),
+              state: "paid",
+              amountValue,
+              amountExponent: 2,
+              currency: "CZK",
+              ...(refundedAmountValue === null
+                ? { refundState: "not_required" }
+                : {
+                    refundState: "refunded",
+                    refundedAmountValue,
+                    refundedAt: Temporal.Instant.from("2026-10-11T12:00:00Z"),
+                  }),
+            })
+          );
+        }
+
+        const activity = await run((administration) =>
+          administration.loadCustomerActivity(customerId, {
+            excludedType: kind === "table" ? "table" : undefined,
           })
         );
+
+        expect(activity.reservations).toHaveLength(kind === "table" ? 0 : 3);
+        expect(activity.stats.reservationCount).toBe(3);
+        expect(activity.stats.revenue).toEqual([
+          { value: 65_000, exponent: 2, currency: "CZK" },
+        ]);
+        // The Admin UI names products from these codes in the operator's language.
+        expect(activity.stats.favoriteReservationProduct).toEqual(product);
+        expect(
+          activity.transactions.map(({ reservation }) => reservation.product)
+        ).toEqual(payments.map(() => product));
       }
-
-      const activity = await run((administration) =>
-        administration.loadCustomerActivity(customerId)
-      );
-
-      expect(activity.stats.revenue).toEqual([
-        { value: 65_000, exponent: 2, currency: "CZK" },
-      ]);
-      // The Admin UI names products from these codes in the operator's language.
-      expect(activity.stats.favoriteReservationProduct).toEqual({
-        kind: "cowork",
-        tier: "open-space",
-      });
-      expect(
-        activity.transactions.map(({ reservation }) => reservation.product)
-      ).toEqual(payments.map(() => ({ kind: "cowork", tier: "open-space" })));
-    });
+    );
 
     describe("customer list filters", () => {
       const range = { from: "2026-10-01", to: "2026-10-31" } as const;
@@ -1981,6 +2002,7 @@ describe.skipIf(!testDatabase)(
     describe("stored reservation details", () => {
       const customerId = makeCustomerId("stored-details");
       const favoriteOfficeCustomerId = makeCustomerId("stored-details-office");
+      const favoriteTableCustomerId = makeCustomerId("stored-details-table");
       const products = {
         openSpace: openSpaceDetails,
         reservedDesk: {
@@ -2000,6 +2022,7 @@ describe.skipIf(!testDatabase)(
           duration: { unit: "hour", amount: 4 },
         },
         office: { kind: "office", seats: 4, dayCount: 3 },
+        table: { kind: "table", seats: 4, durationMinutes: 90 },
       } as const satisfies Record<string, StoredWorkspaceReservationDetails>;
       type Product = keyof typeof products;
       const ids = new Map<WorkspaceReservationId, Product>();
@@ -2034,12 +2057,24 @@ describe.skipIf(!testDatabase)(
           ["retiredProfi", products.retiredProfi],
           ["meetingRoom", products.meetingRoom],
           ["office", products.office],
+          ["table", products.table],
         ] as const) {
           ids.set(await insert(customerId, product, details), product);
         }
         await insert(favoriteOfficeCustomerId, "office-a", products.office);
         await insert(favoriteOfficeCustomerId, "office-b", products.office);
         await insert(favoriteOfficeCustomerId, "cowork", products.openSpace);
+        await insert(favoriteTableCustomerId, "table-a", products.table);
+        await insert(favoriteTableCustomerId, "table-b", {
+          kind: "table",
+          seats: 6,
+          durationMinutes: 60,
+        });
+        await insert(
+          favoriteTableCustomerId,
+          "table-cowork",
+          products.openSpace
+        );
       });
 
       const productsOf = (items: readonly { readonly id: string }[]) =>
@@ -2047,7 +2082,7 @@ describe.skipIf(!testDatabase)(
 
       test("filters reservations by their product family", async () => {
         const listed = await Promise.all(
-          (["cowork", "meeting-room", "office"] as const).map((type) =>
+          (["cowork", "meeting-room", "office", "table"] as const).map((type) =>
             run((administration) =>
               administration.listReservations({ customerId, type })
             )
@@ -2058,6 +2093,7 @@ describe.skipIf(!testDatabase)(
           ["openSpace", "reservedDesk", "retiredProfi"],
           ["meetingRoom"],
           ["office"],
+          ["table"],
         ]);
       });
 
@@ -2079,10 +2115,12 @@ describe.skipIf(!testDatabase)(
           "retiredProfi",
           "reservedDesk",
           "meetingRoom",
+          "table",
           "office",
         ]);
         expect(productsOf(descending?.items ?? [])).toEqual([
           "office",
+          "table",
           "meetingRoom",
           "reservedDesk",
           "retiredProfi",
@@ -2133,6 +2171,11 @@ describe.skipIf(!testDatabase)(
             product: { kind: "office" },
             label: "Private Office",
           },
+          table: {
+            type: "table",
+            product: { kind: "table" },
+            label: "Team Table",
+          },
         });
         expect(loaded).toEqual([
           { kind: "cowork", tier: "open-space" },
@@ -2140,15 +2183,17 @@ describe.skipIf(!testDatabase)(
           { kind: "cowork", tier: "profi" },
           { kind: "meeting-room" },
           { kind: "office" },
+          { kind: "table" },
         ]);
       });
 
       test("picks the most booked product as the customer's favorite", async () => {
-        const [mixed, offices] = await Promise.all(
-          [customerId, favoriteOfficeCustomerId].map((customer) =>
-            run((administration) =>
-              administration.loadCustomerActivity(customer)
-            )
+        const [mixed, offices, tables] = await Promise.all(
+          [customerId, favoriteOfficeCustomerId, favoriteTableCustomerId].map(
+            (customer) =>
+              run((administration) =>
+                administration.loadCustomerActivity(customer)
+              )
           )
         );
 
@@ -2162,6 +2207,10 @@ describe.skipIf(!testDatabase)(
           kind: "office",
         });
         expect(offices?.stats.favoriteProduct).toBeNull();
+        expect(tables?.stats.favoriteReservationProduct).toEqual({
+          kind: "table",
+        });
+        expect(tables?.stats.favoriteProduct).toBe("Team Table");
         expect(productsOf(mixed?.reservations ?? []).sort()).toEqual(
           Object.keys(products).sort()
         );
@@ -2281,32 +2330,56 @@ describe.skipIf(!testDatabase)(
       const loadDetail = (
         reservationId: WorkspaceReservationId,
         label: string,
-        listReservations: DotyposServiceOverrides["listReservations"]
+        listReservations: DotyposServiceOverrides["listReservations"],
+        excludedType?: "table"
       ) =>
-        run((administration) => administration.loadReservation(reservationId), {
-          getReservation: () =>
-            Effect.succeed(
-              Option.some({
-                customer: null,
-                reservation: liveBooking(label, makeCustomerId(label)),
-              })
-            ),
-          getTables: () =>
-            Effect.succeed([{ id: "table-desk", name: "Desk 4" }]),
-          listReservations,
-        });
+        run(
+          (administration) =>
+            administration.loadReservation(reservationId, { excludedType }),
+          {
+            getReservation: () =>
+              Effect.succeed(
+                Option.some({
+                  customer: null,
+                  reservation: liveBooking(label, makeCustomerId(label)),
+                })
+              ),
+            getTables: () =>
+              Effect.succeed([{ id: "table-desk", name: "Desk 4" }]),
+            listReservations,
+          }
+        );
 
       test("lists the other Workspace reservations Dotypos books on the same date", async () => {
         const reservationId = await insertBooked("same-date-own");
         const sameDateId = await insertBooked("same-date-other");
 
-        const detail = await loadDetail(reservationId, "same-date-own", () =>
+        const tableLabel = "same-date-table";
+        const tableId = await insertReservation({
+          customerId: makeCustomerId(tableLabel),
+          details: { kind: "table", seats: 4, durationMinutes: 60 },
+          fulfillmentState: "fulfilled",
+          label: tableLabel,
+          reservationState: "confirmed",
+        });
+        const listReservations = () =>
           Effect.succeed([
             liveBooking("same-date-own", makeCustomerId("same-date-own")),
             liveBooking("same-date-other", makeCustomerId("same-date-other")),
+            liveBooking(tableLabel, makeCustomerId(tableLabel)),
             // A booking Workspace doesn't hold lists nothing.
             liveBooking("same-date-walk-in", makeCustomerId("walk-in")),
-          ])
+          ]);
+        const detail = await loadDetail(
+          reservationId,
+          "same-date-own",
+          listReservations
+        );
+        const legacyDetail = await loadDetail(
+          reservationId,
+          "same-date-own",
+          listReservations,
+          "table"
         );
 
         expect(detail?.booking).toMatchObject({
@@ -2314,7 +2387,10 @@ describe.skipIf(!testDatabase)(
           tableName: "Desk 4",
           linkedReservation: { id: reservationId },
         });
-        expect(detail?.sameDateReservations.map(({ id }) => id)).toEqual([
+        expect(detail?.sameDateReservations.map(({ id }) => id).sort()).toEqual(
+          [sameDateId, tableId].sort()
+        );
+        expect(legacyDetail?.sameDateReservations.map(({ id }) => id)).toEqual([
           sameDateId,
         ]);
       });
@@ -2448,6 +2524,7 @@ describe.skipIf(!testDatabase)(
         ids.push(
           await insertReservation({
             customerId,
+            details: index === 0 ? { kind: "office" } : openSpaceDetails,
             fulfillmentState: "fulfilled",
             label: `reservation-pages-${index}`,
             reservationState: "confirmed",
@@ -2469,6 +2546,36 @@ describe.skipIf(!testDatabase)(
       expect(second).toMatchObject({ page: 2, pageCount: 2, total: 11 });
       expect(second?.items.map(({ id }) => id)).toEqual(ids.slice(10));
       expect(beyond?.page).toBe(2);
+
+      const [history, list, conflicting] = await Promise.all([
+        run((administration) =>
+          administration.loadCustomerReservations({
+            customerId,
+            excludedType: "office",
+            page: 2,
+          })
+        ),
+        run((administration) =>
+          administration.listReservations({
+            customerId,
+            excludedType: "office",
+            pageSize: 1,
+          })
+        ),
+        run((administration) =>
+          administration.listReservations({
+            customerId,
+            excludedType: "office",
+            type: "office",
+          })
+        ),
+      ]);
+
+      expect(history).toMatchObject({ page: 1, pageCount: 1, total: 10 });
+      expect(history.items.map(({ id }) => id)).toEqual(ids.slice(1));
+      expect(list).toMatchObject({ page: 1, pageCount: 10, total: 10 });
+      expect(list.items.map(({ type }) => type)).toEqual(["cowork"]);
+      expect(conflicting).toMatchObject({ items: [], total: 0 });
     });
 
     test("pages no reservations for a customer without any", async () => {

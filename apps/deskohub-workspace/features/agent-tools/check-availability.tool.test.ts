@@ -1,7 +1,11 @@
 import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
-import { Effect, type Schema } from "effect";
+import { Effect, Layer, type Schema } from "effect";
 import { m } from "@/features/i18n";
+import {
+  TeamTableAvailabilityClosed,
+  WorkspaceAvailabilityService,
+} from "@/features/reservation/backend/workspace-availability.service";
 import { meetingRoomSelectionLink } from "@/features/reservation/meeting-room-selection-link";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { checkAvailabilityResultSchema } from "./check-availability.schema";
@@ -39,6 +43,67 @@ const checkAvailabilityFailure = (
     .pipe(Effect.flip, Effect.provide(services.layer), Effect.runPromise);
 
 describe("check_availability", () => {
+  test("rejects Team Table availability while the release gate is closed", async () => {
+    const services = makeAgentToolTestServices();
+
+    const failure = await checkAvailabilityFailure(
+      { family: "table", date: workspaceDateFromToday(1), seats: 4 },
+      services
+    );
+
+    expect(failure.details).toEqual({ code: "unsupported_family" });
+    expect(services.snapshotReads).toEqual([]);
+    expect(services.dotyposRequests).toEqual([]);
+  });
+
+  test("reports Team Table as unsupported when the availability gate closes", async () => {
+    const services = makeAgentToolTestServices({ teamTableEnabled: true });
+    const failure = await checkAvailabilityTool
+      .call({ family: "table", date: workspaceDateFromToday(1), seats: 4 })
+      .pipe(
+        Effect.flip,
+        Effect.provide(
+          Layer.mock(WorkspaceAvailabilityService, {
+            getTableSlots: () => Effect.fail(new TeamTableAvailabilityClosed()),
+          })
+        ),
+        Effect.provide(services.layer),
+        Effect.runPromise
+      );
+
+    expect(failure.details).toEqual({ code: "unsupported_family" });
+  });
+
+  test("lists Team Table start and end choices and checks an exact quarter-hour interval", async () => {
+    const date = workspaceDateFromToday(1);
+    const services = makeAgentToolTestServices({
+      teamTableEnabled: true,
+      teamTableSizes: [4, 8],
+    });
+    const table = { family: "table", date, seats: 4 };
+    const slots = await checkAvailability(table, services);
+
+    expect(slots).toMatchObject({
+      family: "table",
+      available: true,
+      table: { date, seats: 4, slotMinutes: 15 },
+    });
+    expect(slots.table?.availableStarts).toContain("09:15");
+    expect(
+      slots.table?.availableEndsByStart.find(
+        ({ startTime }) => startTime === "09:15"
+      )?.endTimes
+    ).toContain("10:45");
+
+    const result = await checkAvailability(
+      { ...table, start_time: "09:15", end_time: "10:45" },
+      services
+    );
+    expect(result.available).toBe(true);
+    expect(new URL(result.reservation_url).pathname).toBe("/reservation/table");
+    expect(services.dotyposRequests).toEqual([]);
+  });
+
   test("answers cowork days from the advisory snapshot without calling Dotypos", async () => {
     const first = workspaceDateFromToday(1);
     const busy = workspaceDateFromToday(2);

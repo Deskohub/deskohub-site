@@ -1,7 +1,14 @@
 import "@/shared/testing/workspace-test-env";
 import "@/shared/polyfills/temporal";
 import { describe, expect, mock, test } from "bun:test";
-import { type Context, Effect, Logger, References, Schema } from "effect";
+import {
+  type Context,
+  Effect,
+  Layer,
+  Logger,
+  References,
+  Schema,
+} from "effect";
 import { type ActiveSale, discountIdSchema } from "@/features/discounts";
 import {
   type WorkspaceProductFamily,
@@ -9,6 +16,7 @@ import {
   workspaceReservationProductFamilies,
 } from "@/features/discounts/product-target";
 import { m } from "@/features/i18n";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { getLandingPageSaleBannerLabel } from "./landing-page-sale-banner-content";
 
 type LogAnnotations = Context.Service.Shape<
@@ -45,6 +53,9 @@ const meetingRoomProduct = {
 const officeProduct = {
   kind: "office",
 } satisfies WorkspaceProductTarget;
+const teamTableProduct = {
+  kind: "table",
+} satisfies WorkspaceProductTarget;
 
 const sale = (
   products: readonly WorkspaceProductTarget[],
@@ -58,13 +69,16 @@ const sale = (
   products,
 });
 
-const bookableWithoutOffice = workspaceReservationProductFamilies.filter(
+const bookableWithoutTeamTable = workspaceReservationProductFamilies.filter(
+  (family) => family !== "table"
+);
+const bookableWithoutOffice = bookableWithoutTeamTable.filter(
   (family) => family !== "office"
 );
 
 const advertisedLabel = (
   products: readonly WorkspaceProductTarget[],
-  bookableProducts: readonly WorkspaceProductFamily[] = workspaceReservationProductFamilies
+  bookableProducts: readonly WorkspaceProductFamily[] = bookableWithoutTeamTable
 ) =>
   getLandingPageSaleBannerLabel(
     {
@@ -92,7 +106,8 @@ const getBannerEffect = (
   activeSales: readonly ActiveSale[],
   locale: "en-US" | "cs-CZ" = "en-US",
   officePageEnabledValue = true,
-  failure?: Error
+  failure?: Error,
+  teamTablePageEnabled = false
 ) => {
   activePublicSales = activeSales;
   activePublicSalesFailure = failure;
@@ -105,7 +120,10 @@ const getBannerEffect = (
     return { banner };
   }).pipe(
     Effect.provide(
-      OfficeReleaseGate.fromEvaluation(Effect.sync(isOfficePageEnabled))
+      Layer.mergeAll(
+        OfficeReleaseGate.fromEvaluation(Effect.sync(isOfficePageEnabled)),
+        TeamTableReleaseGate.fromDecision(teamTablePageEnabled)
+      )
     )
   );
 };
@@ -113,13 +131,36 @@ const getBannerEffect = (
 const getBanner = (
   activeSales: readonly ActiveSale[],
   locale: "en-US" | "cs-CZ" = "en-US",
-  officePageEnabled = true
+  officePageEnabled = true,
+  teamTablePageEnabled = false
 ) =>
-  getBannerEffect(activeSales, locale, officePageEnabled).pipe(
-    Effect.runPromise
-  );
+  getBannerEffect(
+    activeSales,
+    locale,
+    officePageEnabled,
+    undefined,
+    teamTablePageEnabled
+  ).pipe(Effect.runPromise);
 
 describe("getActiveLandingPageSaleBanner", () => {
+  test("links a Team Table sale to its booking page only while released", async () => {
+    const sales = [sale([teamTableProduct])];
+    const closed = await getBanner(sales);
+    const open = await getBanner(sales, "en-US", true, true);
+
+    expect(closed.banner).toBeUndefined();
+    expect(open.banner?.href).toBe("/en-US/reservation/table");
+  });
+
+  test("a Team Table sale while closed does not suppress a sale on bookable products", async () => {
+    const { banner } = await getBanner([
+      sale([teamTableProduct]),
+      sale([coworkProduct], "cowork-sale"),
+    ]);
+
+    expect(banner?.href).toBe("/en-US/reservation/cowork");
+  });
+
   test.each([
     ["mixed", [coworkProduct, meetingRoomProduct], "/en-US/reservation/cowork"],
     [

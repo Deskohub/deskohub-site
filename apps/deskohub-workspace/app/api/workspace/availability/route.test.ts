@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { DotyposRejected } from "@deskohub/dotypos";
 import { Data, Effect, Layer } from "effect";
 import { InvalidDotyposTableSeats } from "@/features/checkout/backend/reservation/workspace-table-selection";
-import { AvailabilityQueryInvalid } from "@/features/reservation/backend/workspace-availability.service";
+import {
+  AvailabilityQueryInvalid,
+  TeamTableAvailabilityClosed,
+} from "@/features/reservation/backend/workspace-availability.service";
 
 class SyntheticAvailabilityOutage extends Data.TaggedError(
   "SyntheticAvailabilityOutage"
@@ -15,9 +18,20 @@ let availabilityFailure:
   | InvalidDotyposTableSeats
   | SyntheticAvailabilityOutage
   | DotyposRejected
+  | TeamTableAvailabilityClosed
   | null = null;
 const loadedAvailabilityQueries: unknown[] = [];
 const loadedStartTimesQueries: unknown[] = [];
+const loadedTableSlotsQueries: unknown[] = [];
+const syntheticTableSlots = {
+  date: "2099-06-10",
+  seats: 4,
+  slotMinutes: 15,
+  usableFrom: "00:00",
+  usableUntil: "17:00",
+  availableStarts: ["16:45"],
+  availableEndsByStart: [{ startTime: "16:45", endTimes: ["17:00"] }],
+};
 const syntheticStartTimes = {
   date: "2099-06-10",
   duration: "hour:1",
@@ -46,6 +60,15 @@ mock.module(
         ? Effect.fail(availabilityFailure)
         : Effect.succeed(syntheticStartTimes);
     },
+    loadTableSlots: (request: {
+      readonly query: unknown;
+      readonly replacementToken?: string;
+    }) => {
+      loadedTableSlotsQueries.push(request);
+      return availabilityFailure
+        ? Effect.fail(availabilityFailure)
+        : Effect.succeed(syntheticTableSlots);
+    },
   })
 );
 
@@ -59,6 +82,7 @@ describe("workspace availability route", () => {
     availabilityFailure = null;
     loadedAvailabilityQueries.length = 0;
     loadedStartTimesQueries.length = 0;
+    loadedTableSlotsQueries.length = 0;
   });
 
   test("returns availability without caching it", async () => {
@@ -68,6 +92,41 @@ describe("workspace availability route", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     await expect(response.json()).resolves.toEqual({ unavailableDates: [] });
+  });
+
+  test("returns Team Table slots and passes the replacement token to the loader", async () => {
+    const { GET } = await loadRoute();
+    const response = await GET(
+      new Request(
+        "https://workspace.test/api/workspace/availability?kind=table&mode=table-slots&date=2099-06-10&seats=4",
+        { headers: { "x-deskohub-workspace-replacement": "test-replacement" } }
+      )
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(loadedTableSlotsQueries).toEqual([
+      {
+        query: {
+          kind: "table",
+          mode: "table-slots",
+          date: "2099-06-10",
+          seats: 4,
+        },
+        replacementToken: "test-replacement",
+      },
+    ]);
+    await expect(response.json()).resolves.toEqual(syntheticTableSlots);
+  });
+
+  test("does not expose Team Table slots when the release gate is closed", async () => {
+    availabilityFailure = new TeamTableAvailabilityClosed();
+    const { GET } = await loadRoute();
+    const response = await GET(
+      new Request(
+        "https://workspace.test/api/workspace/availability?kind=table&mode=table-slots&date=2099-06-10&seats=4"
+      )
+    );
+    expect(response.status).toBe(404);
   });
 
   test("answers an invalid query with 400 and its message", async () => {

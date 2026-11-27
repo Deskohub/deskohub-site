@@ -1,14 +1,14 @@
 import "server-only";
 
+import {
+  authenticateGoogleInvoker,
+  type GoogleInvoker,
+} from "@deskohub/google-oidc";
 import { isMatchingSecret } from "@deskohub/secret-comparison";
 import { Data, Effect } from "effect";
 import { NextResponse } from "next/server";
 import { env } from "@/env";
-import {
-  authenticateGoogleInvoker,
-  cloudSchedulerInvoker,
-  type GoogleInvoker,
-} from "./google-cloud/google-oidc";
+import { cloudSchedulerInvoker } from "./google-cloud/google-invokers";
 import { defineWorkspaceRoute, WorkspaceRouteFailure } from "./workspace-route";
 
 /**

@@ -1,12 +1,10 @@
-import type {
-  CustomerBookingQuote,
-  CustomerBookingSelection,
-} from "@deskohub/workspace-customer-api";
+import type { CustomerBookingQuote } from "@deskohub/workspace-customer-api";
 import { Option } from "effect";
 import type { AppLocale } from "../../i18n/app-locale";
 import { m } from "../../i18n/messages";
 import { bookingOverviewOf } from "../checkout-screen/booking-overview";
 import { productLabel } from "../checkout-screen/checkout-copy";
+import type { BookingSelection } from "../selection/booking-selection";
 import {
   type CoworkOvernightStay,
   openSpaceClosingTime,
@@ -41,7 +39,7 @@ export interface BookingSummaryText {
  * comes with. One composer for every booking step that shows the bar.
  */
 export const bookingSummaryOf = (
-  selection: CustomerBookingSelection,
+  selection: BookingSelection,
   locale: AppLocale,
   {
     name: product = productLabel(selection, locale),
@@ -67,7 +65,7 @@ export interface BookingSummaryParts {
 }
 
 export const bookingSummaryParts = (
-  selection: CustomerBookingSelection,
+  selection: BookingSelection,
   locale: AppLocale,
   /** A Reserved Desk's overnight stay times, for an overnight selection. */
   overnightStay?: CoworkOvernightStay
@@ -78,13 +76,13 @@ export const bookingSummaryParts = (
   switch (overview._tag) {
     case "Cowork": {
       const date = formatShortPragueDate(overview.date, locale);
-      if (selection.tier === "reserved-desk") {
+      if (selection.family === "cowork" && selection.tier === "reserved-desk") {
         return {
           title: Option.match(overview.overnight, {
             onNone: () =>
               m.booking_summary_reserved_desk_day({ date }, { locale }),
             onSome: ({ start, end, endDate }) =>
-              m.booking_summary_reserved_desk_overnight(
+              m.booking_summary_overnight_span(
                 {
                   arrivalDate: date,
                   arrivalTime: formatPragueTime(start, locale),
@@ -107,7 +105,7 @@ export const bookingSummaryParts = (
           { locale }
         ),
         extras: extrasOf(
-          selection.coffee === true
+          selection.family === "cowork" && selection.coffee === true
             ? m.booking_summary_coffee({}, { locale })
             : undefined
         ),
@@ -134,7 +132,8 @@ export const bookingSummaryParts = (
               { locale }
             ),
             extras: extrasOf(
-              selection.duration === "hour:4"
+              selection.family === "meeting-room" &&
+                selection.duration === "hour:4"
                 ? m.booking_summary_four_hours({}, { locale })
                 : m.booking_summary_one_hour({}, { locale })
             ),
@@ -160,6 +159,31 @@ export const bookingSummaryParts = (
         ),
       };
     }
+    case "TeamTable": {
+      const date = formatShortPragueDate(overview.date, locale);
+      const start = formatPragueTime(overview.start, locale);
+      const end = formatPragueTime(overview.end, locale);
+      return {
+        title:
+          overview.endDate === overview.date
+            ? m.booking_summary_hours({ date, start, end }, { locale })
+            : m.booking_summary_overnight_span(
+                {
+                  arrivalDate: date,
+                  arrivalTime: start,
+                  departureDate: formatShortPragueDate(
+                    overview.endDate,
+                    locale
+                  ),
+                  departureTime: end,
+                },
+                { locale }
+              ),
+        extras: [
+          m.booking_team_table_for_seats({ seats: overview.seats }, { locale }),
+        ],
+      };
+    }
   }
 };
 
@@ -169,7 +193,7 @@ export const bookingSummaryParts = (
  * discount lowers it.
  */
 export const quotedBarSummary = (
-  selection: CustomerBookingSelection,
+  selection: BookingSelection,
   {
     summary,
     regularPrice,

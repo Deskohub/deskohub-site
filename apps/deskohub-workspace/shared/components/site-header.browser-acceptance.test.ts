@@ -193,6 +193,7 @@ type SiteHeaderPageOptions = {
   // A signed-in customer is shown on their account page, where the header
   // marks the account link as the current page.
   readonly session?: AccountSession;
+  readonly teamTableEnabled?: boolean;
   readonly variant?: HeaderVariant;
 };
 
@@ -203,6 +204,7 @@ const openSiteHeader = async (
     administrator = false,
     scrollbar = false,
     session = "signed-out",
+    teamTableEnabled = true,
     variant = "full",
   }: SiteHeaderPageOptions = {}
 ) => {
@@ -212,7 +214,7 @@ const openSiteHeader = async (
   // at the page it stands in for.
   await page.route(`${harnessOrigin}/**`, (route) =>
     route.fulfill({
-      body: `<!doctype html><html lang="${locale}" style="${localeFontStyle(locale)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="site-header-test-root" data-locale="${locale}" data-administrator="${administrator}" data-session="${session}" data-variant="${variant}"></div></body></html>`,
+      body: `<!doctype html><html lang="${locale}" style="${localeFontStyle(locale)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="site-header-test-root" data-locale="${locale}" data-administrator="${administrator}" data-session="${session}" data-team-table-enabled="${teamTableEnabled}" data-variant="${variant}"></div></body></html>`,
       contentType: "text/html",
     })
   );
@@ -594,6 +596,53 @@ for (const locale of locales) {
       );
     }
   }
+
+  test.skipIf(!chromiumAvailable)(
+    `fits the desktop and mobile navigation with Team Table disabled (${locale})`,
+    async () => {
+      const page = await openSiteHeader(locale, narrowDesktopViewport, {
+        administrator: true,
+        scrollbar: true,
+        session: "signed-in",
+        teamTableEnabled: false,
+      });
+      const tableLink = page.locator(
+        `header a[href="/${locale}/reservation/table"]`
+      );
+      const navigationLabel = m.primaryNavigationLabel({}, { locale });
+      try {
+        await expectNoHorizontalOverflow(page, { insideRowPadding: true });
+        expect(
+          await readWrappedNavigationLabels(page, navigationLabel)
+        ).toEqual([]);
+        expect(await tableLink.count()).toBe(0);
+
+        await page.setViewportSize(desktopViewport);
+        await expectNoHorizontalOverflow(page, { insideRowPadding: true });
+        expect(
+          await readWrappedNavigationLabels(page, navigationLabel)
+        ).toEqual([]);
+
+        await page.setViewportSize(mobileViewport);
+        await page
+          .getByRole("button", {
+            exact: true,
+            name: m.openNavigationMenuLabel({}, { locale }),
+          })
+          .click();
+        await page
+          .getByRole("navigation", {
+            exact: true,
+            name: m.mobilePrimaryNavigationLabel({}, { locale }),
+          })
+          .waitFor();
+        expect(await tableLink.count()).toBe(0);
+        await expectNoHorizontalOverflow(page);
+      } finally {
+        await page.close();
+      }
+    }
+  );
 
   for (const viewport of [narrowDesktopViewport, desktopViewport]) {
     for (const variant of headerVariants) {

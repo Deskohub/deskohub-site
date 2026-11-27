@@ -16,10 +16,12 @@ import { meetingRoomReservationPageMarkdown } from "@/features/meeting-room/meet
 import { androidDownloadPageMarkdown } from "@/features/mobile-distribution/android-download-page-markdown";
 import { officeReservationPageMarkdown } from "@/features/office/office-reservation-page-markdown";
 import { pricingPageMarkdown } from "@/features/pricing/pricing-page-markdown";
+import type { TeamTablePrice } from "@/features/pricing/team-table-price";
 import { teamPageMarkdown } from "@/features/team/team-page-markdown";
 import { ttrpgRoomPageMarkdown } from "@/features/ttrpg-room/ttrpg-room-page-markdown";
 import type { MarkdownBlocks } from "@/shared/markdown/markdown";
 import type { PublicPagePathname } from "./public-pages";
+import { teamTableReservationPageMarkdown } from "./team-table-reservation-page-markdown";
 
 /** What a page is about, which groups it in `llms.txt`. */
 export type PublicPageTopic =
@@ -37,8 +39,12 @@ export interface PublicPageMarkdownSources {
    * while a gated page is released, such as a link to it, checks its page.
    */
   readonly isPublished: (pathname: PublicPagePathname) => boolean;
+  /** Whether cowork passes are released for every visitor. */
+  readonly coworkPassesPublished?: boolean;
   /** Every bookable product with its advertised price, in catalog order. */
   readonly offerings: Effect.Effect<ReadonlyArray<PublicOffering>>;
+  /** Live configured sizes with their regular rates and optional sale. */
+  readonly teamTablePrices: Effect.Effect<ReadonlyArray<TeamTablePrice>>;
   /** The home page's sale banner while a sale runs. */
   readonly saleBanner: Effect.Effect<LandingPageSaleBannerContent | undefined>;
 }
@@ -100,4 +106,8 @@ export const publicPageMarkdown = {
     meetingRoomReservationPageMarkdown
   ),
   "/reservation/office": reservationPage(officeReservationPageMarkdown),
+  "/reservation/table": {
+    topic: "booking",
+    render: teamTableReservationPageMarkdown,
+  },
 } satisfies Record<PublicPagePathname, PublicPageMarkdown>;

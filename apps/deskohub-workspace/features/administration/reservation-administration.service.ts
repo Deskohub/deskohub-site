@@ -1,4 +1,4 @@
-import { DotyposService } from "@deskohub/dotypos";
+import { type DotyposReservationId, DotyposService } from "@deskohub/dotypos";
 import type { AdministrationReservationAuditPage } from "@deskohub/workspace-admin-api";
 import { Context, Effect, Layer, Option, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
@@ -165,6 +165,7 @@ export class ReservationAdministrationService extends Context.Service<
 
       const claimCancellation = Effect.fnUntraced(function* (
         current: WorkspaceReservation,
+        expectedDotyposReservationId: DotyposReservationId,
         forcedPendingPayment: boolean,
         audit: ReservationAuditAttempt
       ) {
@@ -176,6 +177,7 @@ export class ReservationAdministrationService extends Context.Service<
           .claimAdministrationCancellation({
             audit,
             id: current.id,
+            expectedDotyposReservationId,
             ...(pendingPaymentCancellation && {
               pendingPaymentCancellation,
             }),
@@ -359,6 +361,7 @@ export class ReservationAdministrationService extends Context.Service<
       const claimWithInvoiceConsequences = Effect.fnUntraced(function* (
         input: ReservationCancellationInput,
         current: WorkspaceReservation,
+        expectedDotyposReservationId: DotyposReservationId,
         forcedPendingPayment: boolean,
         audit: ReservationAuditAttempt
       ) {
@@ -366,6 +369,7 @@ export class ReservationAdministrationService extends Context.Service<
           Effect.gen(function* () {
             const claimed = yield* claimCancellation(
               current,
+              expectedDotyposReservationId,
               forcedPendingPayment,
               audit
             );
@@ -638,6 +642,7 @@ export class ReservationAdministrationService extends Context.Service<
             const claimed = yield* claimWithInvoiceConsequences(
               input,
               current,
+              details.dotyposReservationId,
               forcedPendingPayment,
               audit
             );

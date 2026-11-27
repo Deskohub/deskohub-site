@@ -7,7 +7,7 @@ import { formatMoney, moneyWithValue } from "@/shared/money/money";
  * one runs today.
  */
 export const getOfferingSale = (
-  { advertisedPrice }: PublicPriceListOffering,
+  { advertisedPrice }: Pick<PublicPriceListOffering, "advertisedPrice">,
   locale: Locale
 ) =>
   advertisedPrice && advertisedPrice.discount.value > 0

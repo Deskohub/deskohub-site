@@ -204,6 +204,7 @@ export interface SetMatchingDotyposReservationStatusInput {
   readonly status: "CONFIRMED" | "CANCELLED";
   readonly expectedBooking: DotyposReservationBooking;
   readonly expectedNoteLine: string;
+  readonly expectedCurrentStatus?: "NEW" | "CONFIRMED";
 }
 
 export interface ReassignDotyposReservationCustomerInput {

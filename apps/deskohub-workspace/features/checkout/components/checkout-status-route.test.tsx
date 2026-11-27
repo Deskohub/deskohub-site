@@ -167,14 +167,23 @@ mock.module("@/features/withdrawal/backend/withdrawal-entry.server", () => ({
 const { resendReservationInvitation } = await import(
   "@/features/reservation/actions/resend-reservation-invitation"
 );
+const addReservationInvitees = mock(async () => ({
+  status: "added" as const,
+  added: 1,
+}));
+mock.module("@/features/reservation/actions/add-reservation-invitees", () => ({
+  addReservationInvitees,
+}));
 mock.module("@/features/checkout/components/checkout-status-page", () => ({
   CheckoutStatusPage: ({
+    addInvitees,
     locale,
     presentation,
     resendInvitation,
     status,
     withdrawal,
   }: {
+    readonly addInvitees?: typeof addReservationInvitees;
     readonly locale: string;
     readonly presentation: string;
     readonly resendInvitation?: typeof resendReservationInvitation;
@@ -182,6 +191,9 @@ mock.module("@/features/checkout/components/checkout-status-page", () => ({
     readonly withdrawal?: ContractWithdrawalEntry;
   }) => (
     <article
+      data-add-invitees-action={
+        addInvitees === addReservationInvitees ? "connected" : undefined
+      }
       data-locale={locale}
       data-order={status.orderId}
       data-presentation={presentation}
@@ -196,8 +208,14 @@ mock.module("@/features/checkout/components/checkout-status-page", () => ({
   ),
 }));
 mock.module("@/shared/components/route-auto-refresh", () => ({
-  RouteAutoRefresh: ({ enabled }: { readonly enabled: boolean }) => (
-    <meta data-auto-refresh={String(enabled)} />
+  RouteAutoRefresh: ({
+    enabled,
+    refreshAt,
+  }: {
+    readonly enabled: boolean;
+    readonly refreshAt?: string;
+  }) => (
+    <meta data-auto-refresh={String(enabled)} data-refresh-at={refreshAt} />
   ),
 }));
 const referralSettlement = await import(
@@ -425,6 +443,26 @@ describe("CheckoutStatusRoute", () => {
     expect(html).toContain('data-resend-action="connected"');
   });
 
+  test("connects Team Table additions and refreshes eligibility at the booking end", async () => {
+    const endsAt = Temporal.Instant.from("2026-11-18T09:45:00Z");
+    loadResult = Effect.succeed({
+      kind: "table",
+      orderId,
+      returnOutcome: "success",
+      status: "fulfilled",
+      paymentStatus: "paid",
+      fulfillmentStatus: "fulfilled",
+      inviteeAdditionEndsAt: endsAt,
+    });
+
+    const { errors, html } = await renderRoute();
+
+    expect(errors).toEqual([]);
+    expect(html).toContain('data-add-invitees-action="connected"');
+    expect(html).toContain(`data-refresh-at="${endsAt.toString()}"`);
+    expect(html).toContain('data-auto-refresh="false"');
+  });
+
   test("sends a signed-out visitor of an unknown order to sign in and back", async () => {
     loadResult = Effect.succeed(statusOf("not_found"));
     signedOut = true;
@@ -506,9 +544,9 @@ describe("CheckoutStatusRoute", () => {
 
       expect(errors).toEqual([]);
       expect(html).toContain('data-entry-pack-status="granted"');
-      expect(html).toContain("Complimentary pass granted");
+      expect(html).toContain("Complimentary access granted");
       expect(html).toContain(
-        entryCount === null ? "Unlimited pass" : "Entry pack"
+        entryCount === null ? "Unlimited membership" : "Entry pack"
       );
       expect(html).toContain('data-auto-refresh="false"');
       expect(html).not.toContain("Paid on");
@@ -542,7 +580,7 @@ describe("CheckoutStatusRoute", () => {
 
       expect(errors).toEqual([]);
       expect(html).toContain('data-entry-pack-status="grant_cancelled"');
-      expect(html).toContain("Complimentary pass cancelled");
+      expect(html).toContain("Complimentary access cancelled");
       expect(html).not.toContain("Payment was cancelled");
       expect(html).not.toContain("Try again");
       expect(html).toContain('data-auto-refresh="false"');

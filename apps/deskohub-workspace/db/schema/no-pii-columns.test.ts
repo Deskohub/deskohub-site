@@ -107,6 +107,10 @@ const allowedColumns = new Map([
     "public.workspace_reservations.active_customer_email_delivery_locale",
     "customer email delivery locale",
   ],
+  [
+    "public.workspace_reservations.active_customer_email_delivery_open_space_tables",
+    "Open Space table labels retained for email delivery retries",
+  ],
   // An administrator's login email recorded as provenance on what they did,
   // so it stays readable after the account is deleted.
   [

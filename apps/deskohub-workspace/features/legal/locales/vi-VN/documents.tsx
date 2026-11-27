@@ -23,7 +23,7 @@ const termsAndConditionsSections: LegalSection[] = [
         Městský soud v Praze (Tòa án Thành phố Praha) quản lý (sau đây gọi là
         “Bên Cung cấp”), và khách hàng (sau đây gọi là “Khách hàng”).
       </>,
-      "1.2 Điều kiện Giao dịch Chung này áp dụng cho các lượt vào coworking, việc đặt chỗ trực tuyến phòng họp và văn phòng riêng, cũng như việc sử dụng ngắn hạn mặt bằng cho các sự kiện được thỏa thuận riêng.",
+      "1.2 Điều kiện Giao dịch Chung này áp dụng cho các lượt vào coworking, việc đặt chỗ trực tuyến phòng họp, văn phòng riêng và Bàn nhóm, cũng như việc sử dụng ngắn hạn mặt bằng cho các sự kiện được thỏa thuận riêng.",
       "1.3 Các quy định của Điều kiện Giao dịch Chung này là một phần không thể tách rời của mọi hợp đồng được giao kết giữa Bên Cung cấp và Khách hàng.",
       "1.4 Các quan hệ pháp lý không được Điều kiện Giao dịch Chung này điều chỉnh tuân theo pháp luật của Cộng hòa Séc, đặc biệt là zákon č. 89/2012 Sb., občanský zákoník (Bộ luật Dân sự Cộng hòa Séc, Luật số 89/2012 Sb.).",
       "1.5 Nếu Khách hàng là người tiêu dùng, Điều kiện Giao dịch Chung này không hạn chế các quyền mà theo các quy định pháp luật bắt buộc Khách hàng không thể từ bỏ.",
@@ -34,22 +34,23 @@ const termsAndConditionsSections: LegalSection[] = [
     body: [
       "2.1 Khách hàng là cá nhân hoặc pháp nhân sử dụng dịch vụ của Bên Cung cấp.",
       "2.2 Người tiêu dùng là Khách hàng hành động ngoài phạm vi hoạt động kinh doanh của mình.",
-      "2.3 Mặt bằng là không gian coworking, phòng họp, văn phòng riêng và không gian tổ chức sự kiện do Bên Cung cấp vận hành.",
+      "2.3 Mặt bằng là không gian coworking, phòng họp, văn phòng riêng và không gian tổ chức sự kiện do Bên Cung cấp vận hành. Không gian coworking bao gồm cả khu vực Open Space có Bàn nhóm.",
       "2.4 Dịch vụ là việc cho phép sử dụng Mặt bằng đã chọn trong một khoảng thời gian giới hạn và các dịch vụ liên quan được nêu trong đơn hàng.",
       "2.5 Gói là phạm vi cụ thể của dịch vụ coworking và các điều kiện sử dụng dịch vụ đó theo Bảng giá hiện hành của Bên Cung cấp.",
       "2.6 Mã PIN Ra vào là mã hiện hành cho phép đi vào mặt bằng của Bên Cung cấp.",
-      "2.7 Đặt chỗ là đơn hàng cho một lượt vào coworking cụ thể, một khung giờ sử dụng phòng họp, hoặc một khoảng thời gian, số ngày và số chỗ trong văn phòng riêng.",
+      "2.7 Đặt chỗ là đơn hàng cho một lượt vào coworking cụ thể, một khung giờ sử dụng phòng họp, một khoảng thời gian với số ngày và số chỗ trong văn phòng riêng, hoặc một khung giờ sử dụng Bàn nhóm với kích cỡ bàn đã chọn.",
     ],
   },
   {
     heading: "3. Đối tượng của hợp đồng",
     body: [
-      "3.1 Bên Cung cấp cung cấp cho Khách hàng dịch vụ coworking, bao gồm việc tạm thời cho phép sử dụng không gian làm việc chung tại mặt bằng của Bên Cung cấp, trong phạm vi gói đã chọn. Không gian làm việc chung là một chỗ làm việc được chỉ định không độc quyền hoặc một phần không gian coworking dành cho công việc thông thường, không bảo đảm một bàn hoặc chỗ ngồi cụ thể, trừ khi gói cụ thể nêu rõ khác.",
+      "3.1 Bên Cung cấp cung cấp cho Khách hàng dịch vụ coworking, bao gồm việc tạm thời cho phép sử dụng không gian làm việc chung tại mặt bằng của Bên Cung cấp, trong phạm vi gói đã chọn. Không gian làm việc chung là một chỗ làm việc được chỉ định không độc quyền hoặc một phần không gian coworking dành cho công việc thông thường, không bảo đảm một bàn hoặc chỗ ngồi cụ thể, trừ khi gói cụ thể nêu rõ khác. Mục 3.7 áp dụng cho việc đặt Bàn nhóm.",
       "3.2 Đặt chỗ phòng họp cho phép Khách hàng sử dụng độc quyền phòng đã chọn vào thời gian đã xác nhận, với thời lượng một giờ, bốn giờ hoặc một ngày dương lịch theo giờ Praha. Đặt chỗ cả ngày kéo dài từ nửa đêm của ngày đã chọn đến nửa đêm của ngày hôm sau theo múi giờ Europe/Prague.",
       "3.3 Đặt chỗ văn phòng riêng cho phép Khách hàng sử dụng độc quyền văn phòng với số chỗ đã xác nhận trong trọn các ngày dương lịch đã chọn. Mỗi ngày kéo dài từ nửa đêm đến nửa đêm tiếp theo theo múi giờ Europe/Prague, và ngày cuối cùng nêu trong xác nhận được tính vào Đặt chỗ.",
-      "3.4 Sức chứa, trang thiết bị, giá, thời gian và phạm vi cụ thể của Đặt chỗ được nêu trên trang đặt chỗ và trong phần tóm tắt đơn hàng. Khách hàng không được vượt quá sức chứa đã xác nhận và chịu trách nhiệm về khách của mình cũng như những người khác mà Khách hàng cho phép vào.",
+      "3.4 Sức chứa, trang thiết bị, giá, thời gian và phạm vi cụ thể của Đặt chỗ được nêu trên trang đặt chỗ và trong phần tóm tắt đơn hàng. Khách hàng không được vượt quá sức chứa đã xác nhận và chịu trách nhiệm về khách của mình cũng như những người khác mà Khách hàng cho phép vào. Sức chứa của lượt đặt Bàn nhóm bằng số chỗ ngồi của bàn có kích cỡ đã chọn.",
       "3.5 Ngoài ra, Bên Cung cấp cho phép Khách hàng sử dụng ngắn hạn mặt bằng để tổ chức sự kiện, luôn trên cơ sở thỏa thuận riêng.",
       "3.6 Dịch vụ là quyền sử dụng ngắn hạn Mặt bằng được chỉ định và các dịch vụ liên quan; Dịch vụ không tạo ra quyền thuê, trụ sở, cơ sở kinh doanh hay bất kỳ quyền đối vật nào khác đối với Mặt bằng. Nếu không có thỏa thuận riêng bằng văn bản, Khách hàng không được sử dụng địa chỉ của Mặt bằng làm trụ sở, địa điểm kinh doanh, cơ sở kinh doanh hoặc địa chỉ nhận thư.",
+      "3.7 Việc đặt Bàn nhóm cho phép Khách hàng sử dụng riêng một bàn cụ thể được chỉ định trong khu vực làm việc chung Open Space trong thời gian đã xác nhận. Thời điểm bắt đầu và kết thúc đều phải trùng với mốc 15 phút. Thời lượng đặt chỗ tối thiểu là 15 phút, tối đa là 24 giờ và toàn bộ thời gian đặt chỗ phải nằm trong giờ sử dụng Open Space.",
     ],
   },
   {
@@ -70,6 +71,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "5.3 Giá văn phòng riêng được tính cho mỗi ngày đã chọn, bằng giá văn phòng theo ngày cộng giá theo ngày cho mỗi chỗ đã xác nhận. Giá phòng họp tương ứng với sản phẩm một giờ, bốn giờ hoặc cả ngày đã chọn.",
       "5.4 Giảm giá chỉ được áp dụng khi được nêu trong phần tóm tắt đơn hàng. Nếu giá hoặc mức giảm giá áp dụng được thay đổi trước khi bắt đầu thanh toán, Bên Cung cấp sẽ hiển thị phần tóm tắt mới và yêu cầu Khách hàng xác nhận lại.",
       "5.5 Giá mặt bằng cho sự kiện được thỏa thuận riêng được xác định trong báo giá tùy theo tính chất của sự kiện.",
+      "5.6 Giá Bàn nhóm gồm phí cơ bản và phí sử dụng theo thời gian. Mức phí cơ bản và đơn giá theo giờ đều phụ thuộc vào kích cỡ bàn. Phí sử dụng được tính theo tỷ lệ cho từng khoảng 15 phút. Giá chưa bao gồm cà phê.",
     ],
   },
   {
@@ -84,10 +86,12 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "7. Ra vào và sử dụng dịch vụ",
     body: [
-      "7.1 Email xác nhận chứa một liên kết an toàn đến trang ra vào của Đặt chỗ. Khi Đặt chỗ đã được thanh toán, xác nhận và xác minh trực tiếp, đồng thời đã được cấp mã PIN ra vào, trang được bảo vệ sẽ hiển thị mã PIN này cùng với khoảng thời gian hiệu lực đã được lập trình chính xác của mã. Việc hệ thống khóa chấp nhận mã chỉ do khoảng thời gian đã được lập trình trong AlgoPIN quyết định; các ứng dụng không dùng đồng hồ riêng của mình cho việc này. Mã PIN không được ghi trực tiếp trong email xác nhận.",
+      "7.1 Email xác nhận chứa một liên kết an toàn đến trang ra vào của Đặt chỗ. Khi Đặt chỗ đã được thanh toán, xác nhận và xác minh trực tiếp, đồng thời đã được cấp mã PIN ra vào, trang được bảo vệ sẽ hiển thị mã PIN này cùng với khoảng thời gian hiệu lực đã được lập trình chính xác của mã. Việc hệ thống khóa chấp nhận mã chỉ do khoảng thời gian đã được lập trình trong AlgoPIN quyết định; các ứng dụng không dùng đồng hồ riêng của mình cho việc này. Mã PIN không được ghi trực tiếp trong email xác nhận. Thời gian hiển thị trên trang truy cập của Bàn nhóm được quy định tại mục 7.5.",
       "7.2 Bên Cung cấp có thể thay đổi mã PIN ra vào; Khách hàng sử dụng mã đang hiển thị trên trang ra vào của Đặt chỗ. Việc hiển thị mã PIN không kéo dài thời gian sử dụng Mặt bằng đã xác nhận và không tạo ra quyền ra vào ngoài thời gian đó hoặc vào mặt bằng khác. Chỉ được sử dụng Mặt bằng trong thời gian Đặt chỗ đã xác nhận.",
       "7.3 Khách hàng chỉ được cho những người có quyền tham gia Đặt chỗ của mình biết mã PIN, phải bảo vệ mã khỏi những người khác và chịu trách nhiệm về việc khách của mình sử dụng mã. Khách hàng thông báo ngay cho Bên Cung cấp khi nghi ngờ mã bị lạm dụng.",
       "7.4 Khách hàng và khách của Khách hàng có nghĩa vụ tuân thủ sức chứa, mục đích của Đặt chỗ, thời gian đã xác nhận và Nội quy. Khách hàng bảo đảm rằng khách của mình rời khỏi Mặt bằng chậm nhất khi Đặt chỗ kết thúc.",
+      "7.5 Khi đặt Bàn nhóm, Khách hàng và khách đi cùng dùng chung một Mã PIN Ra vào. Trang truy cập hiển thị chính xác thời điểm bắt đầu và kết thúc đặt chỗ. Hệ thống khóa có thể làm tròn thời điểm bắt đầu hiệu lực của mã PIN xuống giờ tròn và thời điểm hết hiệu lực lên giờ tròn. Thời gian sử dụng đã xác nhận không thay đổi.",
+      "7.6 Sau khi lượt đặt Bàn nhóm đã được thanh toán và xác nhận, Khách hàng có thể thêm người được mời trên trang trạng thái đặt chỗ cho đến khi hết thời gian đặt chỗ. Tổng số người tham dự, kể cả Khách hàng nếu có tham dự, không được vượt quá số chỗ ngồi của bàn. Người được mời có thể mở trang truy cập từ lời mời. Sau khi đặt chỗ đã được thanh toán và xác nhận, không thể xóa người được mời vì họ đã có quyền truy cập mã PIN dùng chung.",
     ],
   },
   {
@@ -113,7 +117,7 @@ const termsAndConditionsSections: LegalSection[] = [
     heading: "9. Quyền rút khỏi hợp đồng của Người tiêu dùng",
     body: [
       "9.1 Người tiêu dùng có thể rút khỏi hợp đồng được giao kết trực tuyến mà không cần nêu lý do trong vòng 14 ngày kể từ ngày giao kết, trừ khi trong trường hợp cụ thể quyền rút khỏi hợp đồng bị luật loại trừ hoặc đã chấm dứt.",
-      "9.2 Nếu Dịch vụ bắt đầu trước khi thời hạn này kết thúc, khi xác nhận đơn hàng, Người tiêu dùng yêu cầu rõ ràng Bên Cung cấp bắt đầu thực hiện trước khi hết thời hạn và xác nhận đã biết rằng quyền rút khỏi hợp đồng chấm dứt sau khi Dịch vụ được cung cấp đầy đủ. Nếu Người tiêu dùng rút khỏi hợp đồng sau khi Dịch vụ đã bắt đầu nhưng trước khi Dịch vụ được cung cấp đầy đủ, Người tiêu dùng thanh toán phần giá tương ứng với phần đã được thực hiện, nếu đáp ứng các điều kiện luật định.",
+      "9.2 Nếu Dịch vụ bắt đầu trước khi thời hạn này kết thúc, khi xác nhận đơn hàng, Người tiêu dùng yêu cầu rõ ràng Bên Cung cấp bắt đầu thực hiện trước khi hết thời hạn và xác nhận đã biết rằng quyền rút khỏi hợp đồng chấm dứt sau khi Dịch vụ được cung cấp đầy đủ. Nếu Người tiêu dùng rút khỏi hợp đồng sau khi Dịch vụ đã bắt đầu nhưng trước khi Dịch vụ được cung cấp đầy đủ, Người tiêu dùng thanh toán phần giá tương ứng với phần đã được thực hiện, nếu đáp ứng các điều kiện luật định. Mục 9.8 áp dụng cho Bàn nhóm.",
       <>
         9.3 Có thể gửi thông báo rút khỏi hợp đồng bằng một tuyên bố rõ ràng đến
         địa chỉ trụ sở của Bên Cung cấp hoặc qua email đến{" "}
@@ -135,6 +139,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "9.5 Mẫu thông báo: “Tôi xin thông báo rằng tôi rút khỏi hợp đồng đối với Dịch vụ sau: [mô tả và số Đặt chỗ], được đặt ngày [ngày]. Họ và tên của Người tiêu dùng: [điền vào]. Địa chỉ của Người tiêu dùng: [điền vào]. Ngày: [điền vào]. Chữ ký chỉ khi gửi bằng văn bản giấy.” Việc sử dụng mẫu này không bắt buộc.",
       "9.6 Các quyền theo điều này chỉ thuộc về Người tiêu dùng và áp dụng song song với các điều kiện hủy có lợi hơn (nếu có) được nêu trong phần tóm tắt đơn hàng hoặc báo giá riêng.",
       "9.7 Nếu Người tiêu dùng rút khỏi hợp đồng mua gói lượt vào một cách hợp lệ sau khi yêu cầu sử dụng ngay và đáp ứng các điều kiện pháp luật về thanh toán theo tỷ lệ, số tiền hoàn lại bằng giá thực trả nhân với số lượt chưa dùng rồi chia cho tổng số lượt trong gói. Số tiền được làm tròn xuống đến đơn vị korun Séc. Các lượt đã đến và lượt đã đặt cho ngày rút khỏi hợp đồng được tính là đã dùng. Các đặt chỗ cho những ngày sau đó sẽ bị hủy và những lượt này được tính là chưa dùng.",
+      "9.8 Khi áp dụng quyền rút khỏi hợp đồng, một lượt đặt Bàn nhóm được tính là một đơn vị duy nhất. Trong thời hạn 14 ngày quy định tại mục 9.1, Người tiêu dùng chỉ có thể rút khỏi hợp đồng đối với toàn bộ lượt đặt chỗ trước thời điểm bắt đầu đã xác nhận. Trong trường hợp đó, Bên Cung cấp hoàn lại toàn bộ số tiền đã thanh toán. Kể từ thời điểm bắt đầu đã xác nhận, Người tiêu dùng không còn có thể rút khỏi hợp đồng đối với lượt đặt chỗ, kể cả phần thời gian còn lại.",
     ],
   },
   {
@@ -143,6 +148,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "10.1 Khách hàng có nghĩa vụ sử dụng Mặt bằng đúng cách, chỉ cho mục đích đã xác nhận và phù hợp với Điều kiện Giao dịch Chung này, Nội quy, các hướng dẫn an toàn và quy định pháp luật.",
       "10.2 Khách hàng chịu trách nhiệm về hành vi của khách của mình và về thiệt hại do Khách hàng hoặc khách của Khách hàng gây ra do vi phạm nghĩa vụ. Hao mòn thông thường không được coi là thiệt hại. Khách hàng thông báo về thiệt hại hoặc hư hỏng mà không chậm trễ không cần thiết.",
       "10.3 Bên Cung cấp có thể hạn chế hoặc chấm dứt việc cung cấp Dịch vụ ở mức độ tương xứng khi có vi phạm nghiêm trọng hoặc lặp lại Điều kiện Giao dịch Chung hoặc Nội quy, vượt quá sức chứa, hành vi nguy hiểm hoặc trái pháp luật, hoặc lạm dụng quyền ra vào. Điều này không ảnh hưởng đến các quyền của Khách hàng nếu biện pháp đó không có căn cứ.",
+      "10.4 Trong Open Space, Khách hàng và khách đi cùng phải tôn trọng không gian làm việc của người khác. Nếu Bên Cung cấp yêu cầu nhường bàn cho một lượt đặt Bàn nhóm, họ phải chuyển sang chỗ ngồi khác trong Open Space.",
     ],
   },
   {
@@ -205,7 +211,7 @@ const termsAndConditionsSections: LegalSection[] = [
     body: [
       "15.1 Bên Cung cấp có thể sửa đổi Điều kiện Giao dịch Chung này đối với các hợp đồng được giao kết sau khi phiên bản mới có hiệu lực. Đối với Đặt chỗ đã được giao kết, áp dụng phiên bản mà Khách hàng đã chấp nhận khi đặt hàng, trừ khi thay đổi sau đó có lợi hơn cho Khách hàng hoặc Khách hàng chấp nhận rõ ràng thay đổi đó.",
       "15.2 Thỏa thuận riêng khác biệt được ưu tiên áp dụng so với Điều kiện Giao dịch Chung này. Việc một điều khoản vô hiệu hoặc không có hiệu lực không ảnh hưởng đến các điều khoản khác.",
-      "15.3 Điều kiện Giao dịch Chung này có hiệu lực từ ngày 12 tháng 8 năm 2026.",
+      "15.3 Điều kiện Giao dịch Chung này có hiệu lực từ ngày 1 tháng 12 năm 2026.",
     ],
   },
 ];
@@ -231,6 +237,7 @@ const operatingRulesSections: LegalSection[] = [
       "2.1 Người dùng có nghĩa vụ cư xử chu đáo và tôn trọng những người khác tại mặt bằng.",
       "2.2 Tại các không gian làm việc chung và khu vực chung, Người dùng giữ yên tĩnh ở mức tương ứng với một cuộc trò chuyện nhỏ thông thường. Trong phòng họp hoặc văn phòng riêng, Người dùng giữ tiếng ồn trong phạm vi không gian đã đặt.",
       "2.3 Người dùng không được có hành vi làm phiền quá mức những người dùng khác hoặc hạn chế việc họ sử dụng mặt bằng. Khách hàng chịu trách nhiệm về hành vi của khách của mình.",
+      "2.4 Trong Open Space, Người dùng phải tôn trọng không gian làm việc của người khác. Nếu Bên Vận hành yêu cầu nhường bàn cho một lượt đặt Bàn nhóm, Người dùng phải chuyển sang chỗ ngồi khác trong Open Space.",
     ],
   },
   {
@@ -251,7 +258,7 @@ const operatingRulesSections: LegalSection[] = [
     heading: "4. Sử dụng mặt bằng",
     body: [
       "4.1 Người dùng có nghĩa vụ chỉ sử dụng mặt bằng cho các mục đích phù hợp với tính chất và công năng của mặt bằng.",
-      "4.2 Phòng họp và văn phòng riêng chỉ được sử dụng trong thời gian đã xác nhận và với sức chứa đã xác nhận. Người dùng rời khỏi các phòng này cùng với đồ đạc của mình chậm nhất khi đặt chỗ kết thúc.",
+      "4.2 Phòng họp, văn phòng riêng và Bàn nhóm chỉ được sử dụng trong thời gian và trong giới hạn sức chứa đã xác nhận. Người dùng phải rời khỏi khu vực đã đặt cùng với đồ đạc của mình chậm nhất khi kết thúc thời gian đặt chỗ.",
       "4.3 Người dùng có nghĩa vụ giữ gìn trật tự, vệ sinh và sau khi sử dụng xong phải đưa chỗ đã sử dụng và trang thiết bị chung về trạng thái phù hợp.",
       "4.4 Nếu không có sự đồng ý của Bên Vận hành, Người dùng không được di chuyển trang thiết bị, thực hiện sửa đổi, lắp đặt thiết bị hoặc can thiệp vào hệ thống kỹ thuật.",
       "4.5 Người dùng sử dụng thiết bị nghe nhìn, thiết bị hội nghị và các thiết bị khác theo hướng dẫn và thông báo về sự cố mà không chậm trễ không cần thiết. Sau khi đặt chỗ kết thúc, Người dùng tắt thiết bị một cách an toàn nếu tính chất của thiết bị đòi hỏi.",
@@ -297,14 +304,14 @@ const operatingRulesSections: LegalSection[] = [
     heading: "9. Điều khoản cuối cùng",
     body: [
       "9.1 Bên Vận hành có thể sửa đổi Nội quy này đối với các đặt chỗ trong tương lai. Đối với đặt chỗ đã được xác nhận, áp dụng phiên bản đã được chấp nhận khi đặt hàng, trừ khi cần có biện pháp tức thời vì lý do an toàn hoặc theo quy định pháp luật bắt buộc.",
-      "9.2 Nội quy này có hiệu lực từ ngày 12 tháng 8 năm 2026.",
+      "9.2 Nội quy này có hiệu lực từ ngày 1 tháng 12 năm 2026.",
     ],
   },
 ];
 
 const legalDocuments = {
   "privacy-policy": {
-    updatedAt: "18 tháng 11, 2026",
+    updatedAt: "1 tháng 12, 2026",
     sections: [
       {
         heading: "1. Bên Kiểm soát dữ liệu cá nhân",
@@ -343,15 +350,17 @@ const legalDocuments = {
           </>,
           <>
             Chúng tôi nhận địa chỉ email của người được mời từ khách hàng đã đặt
-            chỗ văn phòng riêng. Chúng tôi dùng địa chỉ này để gửi lời mời và
-            thông báo về những thay đổi đối với lượt đặt chỗ, đồng thời cấp
-            quyền vào văn phòng cho người được mời. Cơ sở pháp lý là lợi ích hợp
-            pháp của chúng tôi trong việc giúp người được mời sử dụng lượt đặt
-            chỗ và biết tình trạng của lượt đặt chỗ đó. Chúng tôi lưu địa chỉ
-            đến 30 ngày sau khi quyền ra vào kết thúc. Nếu địa chỉ thuộc về một
-            tài khoản khách hàng hoặc một khách hàng đã đăng ký, sau thời hạn
-            này chúng tôi chỉ lưu liên kết giữa lời mời và tài khoản hoặc hồ sơ
-            khách hàng trong thời gian tài khoản hoặc hồ sơ đó còn tồn tại.
+            chỗ văn phòng riêng hoặc Bàn nhóm. Chúng tôi dùng địa chỉ này để gửi
+            lời mời và thông báo về thay đổi đối với lượt đặt chỗ, kể cả khi
+            lượt đặt chỗ bị hủy hoặc được khôi phục, cũng như để người được mời
+            có thể sử dụng quyền ra vào chung của lượt đặt chỗ đó. Cơ sở pháp lý
+            là lợi ích hợp pháp của chúng tôi trong việc giúp người được mời sử
+            dụng lượt đặt chỗ và biết tình trạng của lượt đặt chỗ đó. Chúng tôi
+            lưu địa chỉ đến 30 ngày sau khi quyền ra vào kết thúc. Nếu địa chỉ
+            thuộc về một tài khoản khách hàng hoặc một khách hàng đã đăng ký,
+            sau thời hạn này chúng tôi chỉ lưu liên kết giữa lời mời và tài
+            khoản hoặc hồ sơ khách hàng trong thời gian tài khoản hoặc hồ sơ đó
+            còn tồn tại.
           </>,
           <>
             Khi Quý khách tiếp tục đặt hàng, chúng tôi cũng xử lý số tiền được
@@ -811,7 +820,7 @@ const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "18 tháng 11, 2026",
+    updatedAt: "1 tháng 12, 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {
@@ -927,7 +936,7 @@ const legalDocuments = {
     ],
   },
   "operating-rules": {
-    updatedAt: "12 tháng 8, 2026",
+    updatedAt: "1 tháng 12, 2026",
     sections: operatingRulesSections,
   },
 } satisfies LegalDocumentBodies;

@@ -69,7 +69,7 @@ export function UnlimitedCredential({
         <CredentialMark size={large ? 30 : 38} />
         <View style={styles.names}>
           <Text variant="offerTitle" style={styles.title} balanced>
-            {m.passes_unlimited({}, { locale })}
+            {m.passes_membership({}, { locale })}
           </Text>
           <Text variant="bodySmall" style={styles.quiet} balanced>
             {tagline}

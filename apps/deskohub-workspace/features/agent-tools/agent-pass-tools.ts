@@ -44,9 +44,9 @@ const heldPassFields = {
 
 const listPasses = {
   name: "list_passes",
-  title: "List the customer's Deskohub Workspace passes",
+  title: "List the customer's Deskohub Workspace entry packs and memberships",
   description:
-    "Lists the customer's held cowork passes: entry packs with remaining entries and expiry, and Unlimited passes with their dates. Use show_pass_access for a customer's Unlimited pass link.",
+    "Lists the customer's entry packs with remaining entries and expiry, and Unlimited memberships with their dates. Use show_pass_access for the customer's membership access link.",
   input: Schema.Struct({ locale: agentToolLocaleField }),
   output: Schema.Struct({
     passes: Schema.Array(
@@ -88,16 +88,17 @@ const listPasses = {
 
 const accessInput = Schema.Struct({
   pass_id: orderIdSchema.annotate({
-    description: "The ID of the customer's Unlimited pass from list_passes.",
+    description:
+      "The ID of the customer's Unlimited membership from list_passes.",
   }),
   locale: agentToolLocaleField,
 });
 
 const showPassAccess = {
   name: "show_pass_access",
-  title: "Open a Deskohub Workspace Unlimited pass access page",
+  title: "Open a Deskohub Workspace Unlimited membership access page",
   description:
-    "Returns the account-only access page for the customer's own Unlimited pass. Give the link to the customer to open while signed in on the website.",
+    "Returns the account-only access page for the customer's Unlimited membership. Give the link to the customer to open while signed in on the website.",
   input: accessInput,
   output: Schema.Struct({ access_url: Schema.String }),
   readOnly: true,
@@ -246,9 +247,9 @@ const startPassPurchase = Effect.fn("agentTools.startPassPurchase")(function* (
 
 const passPurchaseTool = {
   name: "start_pass_purchase",
-  title: "Start a Deskohub Workspace pass purchase",
+  title: "Start a Deskohub Workspace entry pack or membership purchase",
   description:
-    "Prepares the selected entry pack or Unlimited pass for the signed-in customer. Reuse the purchase_request_id and product when retrying. Give the customer the pay_url to finish any missing details, review the terms and start-date consent, and pay on the signed-in website. If payment already started, give them the status_url instead.",
+    "Prepares the selected entry pack or Unlimited membership for the signed-in customer. An Unlimited membership purchase covers 30 days. Reuse the purchase_request_id and product when retrying. Give the customer the pay_url to finish any missing details, review the terms and start-date consent, and pay on the signed-in website. If payment already started, give them the status_url instead.",
   input: purchaseInput,
   output: purchaseOutput,
   readOnly: false,

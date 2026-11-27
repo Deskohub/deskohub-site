@@ -13,7 +13,7 @@ import {
   CustomerSelectionUnavailable,
   customerAvailabilityReplacementHeader,
 } from "@deskohub/workspace-customer-api";
-import { Duration, Effect, Layer } from "effect";
+import { Duration, Effect, Layer, Result } from "effect";
 import { AsyncResult, type Atom, type AtomRegistry } from "effect/reactivity";
 import { TestClock } from "effect/testing";
 import {
@@ -46,6 +46,9 @@ import {
   meetingRoomStartTimesAtom,
   offeringsRolloverRetryDelay,
   quoteRefreshInterval,
+  teamTableCalendarAtom,
+  teamTableOfferingsAtom,
+  teamTableSlotsAtom,
 } from "./booking-queries";
 import { toBookingQueryError } from "./booking-query-error";
 
@@ -103,6 +106,62 @@ const coworkSelection = (date: string): CustomerBookingSelection => ({
   tier: "open-space",
   date,
   coffee: true,
+});
+
+test("loads Team Table's calendar, slots and quote without spending account reads", async () => {
+  const { registry, workspace } = makeFakeCustomerData("linked");
+  const booking = fakeBooking(workspace);
+  const blocked = booking.dateIn(2);
+  const date = booking.dateIn(3);
+  booking.unavailableDates = [blocked];
+  const offerings = Result.getOrThrow(
+    await settle(registry, teamTableOfferingsAtom("en-US"))
+  );
+  expect(offerings.offerings.map(({ product }) => product.seats)).toEqual([
+    4, 6,
+  ]);
+  const calendar = Result.getOrThrow(
+    await settle(registry, teamTableCalendarAtom({ seats: 4 }))
+  );
+  expect(calendar).toMatchObject({ seats: 4, unavailableDates: [blocked] });
+  const slots = Result.getOrThrow(
+    await settle(registry, teamTableSlotsAtom({ seats: 4, date }))
+  );
+  expect(slots.availableStarts).toContain("09:00");
+  expect(slots.availableEndsByStart[0]?.endTimes[0]).toBe("09:15");
+  const quote = Result.getOrThrow(
+    await settle(
+      registry,
+      bookingQuoteAtom(
+        {
+          family: "table",
+          date,
+          seats: 4,
+          startTime: "09:00",
+          endTime: "09:15",
+        },
+        "en-US"
+      )
+    )
+  );
+  expect(quote).toMatchObject({ family: "table", total: { value: 26_000 } });
+  const unavailable = await settle(
+    registry,
+    bookingQuoteAtom(
+      {
+        family: "table",
+        date: blocked,
+        seats: 4,
+        startTime: "09:00",
+        endTime: "09:15",
+      },
+      "en-US"
+    )
+  );
+  expect(
+    unavailable._tag === "Failure" && toBookingQueryError(unavailable.failure)
+  ).toMatchObject({ _tag: "SlotUnavailable" });
+  expect(await remainingReads(registry)).toBe(accountReadAllowance.reads);
 });
 
 const quoteCalls = (registry: { booking: ReturnType<typeof fakeBooking> }) =>

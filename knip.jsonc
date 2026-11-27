@@ -19,6 +19,8 @@
         "db/schema/auth.ts",
         "e2e/coordination/schema.ts",
         "env.ts",
+        // Server Action for the Team Table status page's Phase 3 invite form.
+        "features/reservation/actions/add-reservation-invitees.ts",
         // Public reusable-email service API during the additive rollout, before delivery switches.
         "features/emails/backend/index.ts",
         // Public customer-value resolver consumed by recipient preparation.

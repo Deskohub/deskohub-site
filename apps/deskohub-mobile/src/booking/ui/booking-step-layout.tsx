@@ -1,3 +1,4 @@
+import { useHeaderHeight } from "expo-router/react-navigation";
 import {
   type ComponentRef,
   type ReactNode,
@@ -5,8 +6,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { ScrollView, StyleSheet, View } from "react-native";
+import { KeyboardAvoidingView, ScrollView, StyleSheet } from "react-native";
 import type { AppLocale } from "../../i18n/app-locale";
+import {
+  FocusedFieldContext,
+  useFocusedFieldScroll,
+} from "../../ui/focused-field-scroll";
 import { ScrollScreenContext } from "../../ui/scroll-screen";
 import { color, space } from "../../ui/tokens";
 import { useContentColumn, useViewport } from "../../ui/viewport";
@@ -34,14 +39,20 @@ export function BookingStepLayout({
 }) {
   const column = useContentColumn("wide");
   const { isWide } = useViewport();
+  const headerHeight = useHeaderHeight();
   const [raised, setRaised] = useState(false);
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  const focusedField = useFocusedFieldScroll(scroll);
   const scrollToTop = useCallback(
     () => scroll.current?.scrollTo({ y: 0, animated: false }),
     []
   );
   return (
-    <View style={styles.screen}>
+    <KeyboardAvoidingView
+      behavior="padding"
+      keyboardVerticalOffset={headerHeight}
+      style={styles.screen}
+    >
       <BookingSteps
         current={step}
         raised={raised}
@@ -50,6 +61,7 @@ export function BookingStepLayout({
       />
       <ScrollView
         ref={scroll}
+        onLayout={focusedField.onLayout}
         style={styles.body}
         contentContainerStyle={[
           styles.content,
@@ -63,12 +75,14 @@ export function BookingStepLayout({
         }
       >
         <QuietUpdateOffer backdrop="paper" style={styles.updateOffer} />
-        <ScrollScreenContext value={scrollToTop}>
-          {children}
-        </ScrollScreenContext>
+        <FocusedFieldContext value={focusedField.tracker}>
+          <ScrollScreenContext value={scrollToTop}>
+            {children}
+          </ScrollScreenContext>
+        </FocusedFieldContext>
       </ScrollView>
       {bar}
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

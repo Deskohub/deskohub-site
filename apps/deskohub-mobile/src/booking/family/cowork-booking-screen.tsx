@@ -546,7 +546,12 @@ function CoworkSelection({
       ...(offering.advertisedPrice.discount.value > 0 && {
         was: offering.price,
       }),
-      description: offering.summary ?? offering.usage,
+      description: [
+        offering.summary ?? offering.usage,
+        ...(offering.tier === "open-space"
+          ? [m.booking_cowork_open_space_etiquette({}, { locale })]
+          : []),
+      ].join(" "),
       artwork: tierArtwork(
         offering.tier,
         offering.tier === model.draft.tier &&

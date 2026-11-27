@@ -115,13 +115,25 @@ const createCheckout = ({
   request,
   referralCode,
 }: CreateCheckoutCommand) =>
-  bookingApi.pipe(
-    Effect.flatMap((booking) =>
-      booking.createCheckout({
-        payload: request,
-        headers: referralHeaders(referralCode),
-      })
-    ),
+  Effect.gen(function* () {
+    const api = yield* CustomerApi;
+    const { selection, earlySetup, ...details } = request;
+    const headers = referralHeaders(referralCode);
+    if (selection.family === "table") {
+      return yield* api.teamTable.createCheckout({
+        payload: { ...details, selection },
+        headers,
+      });
+    }
+    return yield* api.booking.createCheckout({
+      payload: {
+        ...details,
+        selection,
+        ...(earlySetup === undefined ? {} : { earlySetup }),
+      },
+      headers,
+    });
+  }).pipe(
     customerWrite,
     Effect.map((start) =>
       CheckoutEvent.CheckoutCreated({ operationId, start })

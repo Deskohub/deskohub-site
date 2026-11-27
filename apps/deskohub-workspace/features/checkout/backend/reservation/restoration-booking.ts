@@ -1,7 +1,8 @@
 import "@/shared/polyfills/temporal";
 
 import type { DotyposReservationBooking } from "@deskohub/dotypos";
-import { Data, Effect, Match, Option } from "effect";
+import { tableDurationMinutesSchema } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
+import { Data, Effect, Match, Option, Schema } from "effect";
 import type { AccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import {
@@ -20,7 +21,11 @@ import { getOfficeReservationSelection } from "@/features/reservation/office-res
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import type { ReservationInterval } from "@/features/reservation/reservation-interval";
-import { temporalInstantToDate } from "@/shared/utils/temporal";
+import { getTableReservationDurationMinutes } from "@/features/reservation/table-reservation-time";
+import {
+  instantStringSchema,
+  temporalInstantToDate,
+} from "@/shared/utils/temporal";
 import {
   getOrderCoworkStay,
   rebuildAcceptedReservation,
@@ -63,6 +68,8 @@ type RecordBooking = {
 
 const sameInstant = (left: Temporal.Instant, right: Temporal.Instant) =>
   Temporal.Instant.compare(left, right) === 0;
+
+const isTableDuration = Schema.is(tableDurationMinutesSchema);
 
 const sameInterval = (
   expected: Pick<ReservationInterval, "startsAt" | "endsAt">,
@@ -210,6 +217,22 @@ const storedDetailChanges = (
             ? []
             : ["day count"]),
           ...(office.seats === undefined || office.seats === seats
+            ? []
+            : ["seats"]),
+        ];
+      },
+      table: (table) => {
+        const duration = getTableReservationDurationMinutes({
+          startsAt: instantStringSchema.make(held.startsAt.toString()),
+          endsAt: instantStringSchema.make(held.endsAt.toString()),
+        });
+        return [
+          ...(isTableDuration(duration) &&
+          (table.durationMinutes === undefined ||
+            table.durationMinutes === duration)
+            ? []
+            : ["duration"]),
+          ...(table.seats === undefined || table.seats === seats
             ? []
             : ["seats"]),
         ];

@@ -22,7 +22,13 @@ const reservationSchema = Schema.Struct({
         "The order ID for get_reservation_status; absent for reservations not booked on the website.",
     })
   ),
-  family: Schema.Literals(["cowork", "meeting-room", "office", "other"]),
+  family: Schema.Literals([
+    "cowork",
+    "meeting-room",
+    "office",
+    "table",
+    "other",
+  ]),
   tier: Schema.optionalKey(Schema.Literals(workspaceCoworkTiers)),
   stay: Schema.optionalKey(
     coworkStaySchema.annotate({

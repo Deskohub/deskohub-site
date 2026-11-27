@@ -35,6 +35,9 @@ import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/
 import { providerOrderAbandonmentTimeoutMinutes } from "@/features/checkout/provider-order-abandonment";
 import { endedUnpaidPaymentStates } from "@/features/order";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
+import { reconcileTeamTableHolds } from "@/features/team-table/backend/reconcile-team-table-holds";
+import { TeamTableHoldClaims } from "@/features/team-table/backend/team-table-hold-claims";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { reconcilePassChanges } from "../admin/complete-pass-change";
 import { entryPackGiftInvitationDue } from "./entry-pack-gift";
@@ -279,15 +282,33 @@ export const runPassPurchaseReconciliation = Effect.fn(
     const releasesChecked = yield* reconcileUnlimitedPassReleases(input);
     const moves = yield* PassDayMoves;
     const reseatsChecked = yield* moves.reconcile(input.limit);
+    const tableMoves = yield* OpenSpaceTableMoves;
+    const openSpaceMoveBatchesChecked = yield* tableMoves.reconcile(
+      Math.min(input.limit, 2)
+    );
+    yield* reconcileTeamTableHolds({
+      ...input,
+      limit: Math.min(input.limit, 2),
+    });
     const changesChecked = yield* reconcilePassChanges(
       Math.min(input.limit, 2)
     );
-    return { ...summary, releasesChecked, reseatsChecked, changesChecked };
+    return {
+      ...summary,
+      releasesChecked,
+      reseatsChecked,
+      openSpaceMoveBatchesChecked,
+      changesChecked,
+    };
   },
   Effect.provide(
     Layer.mergeAll(
-      PassDayMoves.Default.pipe(
-        Layer.provide(WorkspaceReservationRepository.Live),
+      Layer.mergeAll(
+        PassDayMoves.Default,
+        OpenSpaceTableMoves.Default,
+        TeamTableHoldClaims.Default
+      ).pipe(
+        Layer.provideMerge(WorkspaceReservationRepository.Live),
         Layer.provide(WorkspaceDatabase.Default),
         Layer.provide(WorkspaceDatabaseAdvisoryLock.Default),
         Layer.provide(WorkspaceDotyposLayer)

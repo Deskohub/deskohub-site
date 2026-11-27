@@ -1271,12 +1271,16 @@ describe("customer MCP route", () => {
     }
     expect(tools[1]?.inputSchema).toMatchObject({
       properties: {
-        family: { enum: ["cowork", "meeting-room", "office"] },
+        family: { enum: ["cowork", "meeting-room", "office", "table"] },
         date: {
           type: "string",
           description: expect.stringContaining("YYYY-MM-DD"),
         },
         seats: expect.objectContaining({ type: "integer" }),
+        end_time: {
+          type: "string",
+          description: expect.stringContaining("Team Table"),
+        },
         duration: { enum: ["hour:1", "hour:4", "day:1"] },
       },
       required: ["family", "date"],
@@ -2169,7 +2173,7 @@ describe("customer MCP route for administration tools", () => {
 });
 
 describe("customer MCP route booking view", () => {
-  const bookingViewUri = "ui://dh-workspace/booking-v2.html";
+  const bookingViewUri = "ui://dh-workspace/booking-v3.html";
   const viewMimeType = "text/html;profile=mcp-app";
 
   beforeEach(() => {
@@ -2627,7 +2631,7 @@ describe("customer MCP route per client", () => {
     const { result } = await readJsonRpc(
       await postRpc(
         "resources/read",
-        { uri: "ui://dh-workspace/booking-v2.html" },
+        { uri: "ui://dh-workspace/booking-v3.html" },
         chatGpt
       )
     );

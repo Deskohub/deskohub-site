@@ -21,7 +21,7 @@ const termsAndConditionsSections: LegalSection[] = [
         Městským soudem v Praze (dále jen „Poskytovatel“), a klientem (dále jen
         „Klient“).
       </>,
-      "1.2 Tyto VOP se vztahují na coworkingové vstupy, online rezervace zasedací místnosti a soukromé kanceláře a na krátkodobé užívání prostor pro akce sjednané individuálně.",
+      "1.2 Tyto VOP se vztahují na coworkingové vstupy, online rezervace zasedací místnosti, soukromé kanceláře a Týmového stolu a na krátkodobé užívání prostor pro akce sjednané individuálně.",
       "1.3 Ustanovení těchto VOP jsou nedílnou součástí každé smlouvy uzavřené mezi Poskytovatelem a Klientem.",
       "1.4 Právní vztahy neupravené těmito VOP se řídí právním řádem České republiky, zejména zákonem č. 89/2012 Sb., občanský zákoník.",
       "1.5 Je-li Klient spotřebitelem, nejsou těmito VOP omezena práva, kterých se podle kogentních právních předpisů nemůže vzdát.",
@@ -32,22 +32,23 @@ const termsAndConditionsSections: LegalSection[] = [
     body: [
       "2.1 Klientem se rozumí fyzická nebo právnická osoba, která využívá služby Poskytovatele.",
       "2.2 Spotřebitelem se rozumí Klient, který jedná mimo rámec své podnikatelské činnosti.",
-      "2.3 Prostory jsou coworkingové prostory, zasedací místnost, soukromá kancelář a eventové prostory provozované Poskytovatelem.",
+      "2.3 Prostory jsou coworkingové prostory, zasedací místnost, soukromá kancelář a eventové prostory provozované Poskytovatelem. Mezi coworkingové prostory patří také Open Space s Týmovými stoly.",
       "2.4 Službami se rozumí časově omezené umožnění užívání zvolených Prostor a související služby uvedené v objednávce.",
       "2.5 Tarifem se rozumí konkrétní rozsah coworkingových služeb a podmínek jejich čerpání dle aktuálního Ceníku Poskytovatele.",
       "2.6 Přístupovým PIN kódem se rozumí aktuální kód umožňující vstup do prostor Poskytovatele.",
-      "2.7 Rezervací se rozumí objednávka konkrétního coworkingového vstupu, termínu zasedací místnosti nebo termínu, počtu dnů a počtu míst v soukromé kanceláři.",
+      "2.7 Rezervací se rozumí objednávka konkrétního coworkingového vstupu, termínu zasedací místnosti, termínu, počtu dnů a počtu míst v soukromé kanceláři nebo termínu a velikosti Týmového stolu.",
     ],
   },
   {
     heading: "3. Předmět smlouvy",
     body: [
-      "3.1 Poskytovatel poskytuje Klientovi coworkingové služby spočívající v dočasném umožnění užívání sdíleného pracovního prostoru v prostorách Poskytovatele, a to v rozsahu zvoleného tarifu. Sdíleným pracovním prostorem se rozumí nevýhradně určené pracovní místo nebo část coworkingových prostor určená k běžné práci, bez garance konkrétního stolu či místa, není-li u konkrétního tarifu výslovně uvedeno jinak.",
+      "3.1 Poskytovatel poskytuje Klientovi coworkingové služby spočívající v dočasném umožnění užívání sdíleného pracovního prostoru v prostorách Poskytovatele, a to v rozsahu zvoleného tarifu. Sdíleným pracovním prostorem se rozumí nevýhradně určené pracovní místo nebo část coworkingových prostor určená k běžné práci, bez garance konkrétního stolu či místa, není-li u konkrétního tarifu výslovně uvedeno jinak. Pro Rezervaci Týmového stolu platí článek 3.7.",
       "3.2 Rezervace zasedací místnosti opravňuje Klienta k výhradnímu užívání vybrané místnosti v potvrzeném termínu a rozsahu jedné hodiny, čtyř hodin nebo jednoho pražského kalendářního dne. Celodenní Rezervace trvá od půlnoci vybraného dne do půlnoci následujícího dne v časovém pásmu Europe/Prague.",
       "3.3 Rezervace soukromé kanceláře opravňuje Klienta k výhradnímu užívání kanceláře v potvrzeném počtu míst po celé zvolené kalendářní dny. Každý den trvá od půlnoci do následující půlnoci v časovém pásmu Europe/Prague a poslední den uvedený v potvrzení je do Rezervace zahrnut.",
-      "3.4 Konkrétní kapacita, vybavení, cena, termín a rozsah Rezervace jsou uvedeny na rezervační stránce a v souhrnu objednávky. Klient nesmí překročit potvrzenou kapacitu a odpovídá za své hosty a další osoby, kterým umožní vstup.",
+      "3.4 Konkrétní kapacita, vybavení, cena, termín a rozsah Rezervace jsou uvedeny na rezervační stránce a v souhrnu objednávky. Klient nesmí překročit potvrzenou kapacitu a odpovídá za své hosty a další osoby, kterým umožní vstup. Kapacita Rezervace Týmového stolu odpovídá počtu míst u stolu zvolené velikosti.",
       "3.5 Poskytovatel dále umožňuje Klientovi krátkodobé užívání prostor pro účely pořádání akcí, a to vždy na základě individuální dohody.",
       "3.6 Služby představují krátkodobé oprávnění užívat určené Prostory a související služby; nezakládají nájemní právo, sídlo, provozovnu ani jiné věcné právo k Prostorám. Klient nesmí bez samostatné písemné dohody používat adresu Prostor jako sídlo, místo podnikání, provozovnu nebo doručovací adresu.",
+      "3.7 Rezervace Týmového stolu opravňuje Klienta k výhradnímu užívání konkrétního přiděleného stolu ve sdíleném prostoru Open Space po potvrzenou dobu. Začátek i konec Rezervace připadá na hranici čtvrthodiny. Rezervace trvá nejméně 15 minut a nejvýše 24 hodin a musí se celá vejít do doby, kdy lze Open Space využívat.",
     ],
   },
   {
@@ -68,6 +69,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "5.3 Cena soukromé kanceláře se počítá za každý vybraný den jako denní cena za kancelář plus denní cena za každé potvrzené místo. Cena zasedací místnosti odpovídá vybranému jednohodinovému, čtyřhodinovému nebo celodennímu produktu.",
       "5.4 Slevy se uplatní pouze tehdy, jsou-li uvedeny v souhrnu objednávky. Změní-li se před zahájením platby cena nebo použitelná sleva, Poskytovatel zobrazí nový souhrn a vyžádá nové potvrzení Klienta.",
       "5.5 Cena prostoru pro individuálně sjednanou akci je stanovena v nabídce podle charakteru akce.",
+      "5.6 Cena Týmového stolu se skládá ze základního poplatku a časové složky. Základní poplatek i hodinová sazba závisejí na velikosti stolu. Časová složka se účtuje poměrně po 15 minutách. Káva není v ceně.",
     ],
   },
   {
@@ -82,10 +84,12 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "7. Přístup a užívání služeb",
     body: [
-      "7.1 Potvrzovací email obsahuje bezpečný odkaz na přístupovou stránku Rezervace. Jakmile je Rezervace zaplacená, potvrzená a živě ověřená a má vystaven přístupový PIN kód, zobrazuje chráněná stránka tento PIN společně s přesně naprogramovanými hranicemi platnosti kódu. Přijímání kódu zamykacím systémem určuje výhradně naprogramované hranice AlgoPINu; aplikace nesdílejí vlastní hodiny. PIN není obsažen přímo v potvrzovacím emailu.",
+      "7.1 Potvrzovací email obsahuje bezpečný odkaz na přístupovou stránku Rezervace. Jakmile je Rezervace zaplacená, potvrzená a živě ověřená a má vystaven přístupový PIN kód, zobrazuje chráněná stránka tento PIN společně s přesně naprogramovanými hranicemi platnosti kódu. Přijímání kódu zamykacím systémem určuje výhradně naprogramované hranice AlgoPINu; aplikace nesdílejí vlastní hodiny. PIN není obsažen přímo v potvrzovacím emailu. U Týmového stolu se zobrazené časové údaje řídí článkem 7.5.",
       "7.2 Poskytovatel může přístupový PIN změnit; Klient použije kód aktuálně zobrazený na přístupové stránce Rezervace. Zobrazení PIN kódu neprodlužuje potvrzenou dobu užívání Prostor a nezakládá právo na přístup mimo tuto dobu nebo do jiných prostor. Používání Prostor je možné pouze v potvrzené době Rezervace.",
       "7.3 Klient smí PIN kód sdělit pouze osobám oprávněným účastnit se jeho Rezervace, musí jej chránit před dalšími osobami a odpovídá za jeho použití svými hosty. Podezření na zneužití neprodleně oznámí Poskytovateli.",
       "7.4 Klient a jeho hosté jsou povinni dodržovat kapacitu, účel Rezervace, potvrzený čas a Provozní řád. Klient zajistí, aby hosté Prostory opustili nejpozději na konci Rezervace.",
+      "7.5 U Týmového stolu používá Klient a jeho hosté společný přístupový PIN kód. Přístupová stránka zobrazuje přesný začátek a konec Rezervace. Zamykací systém může platnost PIN kódu zaokrouhlit tak, že začátek platnosti posune dolů a konec nahoru na celé hodiny. Potvrzená doba užívání se nemění.",
+      "7.6 Po zaplacení a potvrzení Rezervace Týmového stolu může Klient na stránce jejího stavu přidávat pozvané osoby až do konce Rezervace. Celkový počet účastníků včetně Klienta, pokud se účastní, nesmí překročit kapacitu stolu. Pozvané osoby mohou přes pozvánku otevřít přístupovou stránku. Po zaplacení a potvrzení Rezervace nelze pozvané osoby odebrat, protože mají přístup ke společnému PIN kódu.",
     ],
   },
   {
@@ -112,7 +116,7 @@ const termsAndConditionsSections: LegalSection[] = [
     heading: "9. Právo Spotřebitele odstoupit od smlouvy",
     body: [
       "9.1 Spotřebitel může od smlouvy uzavřené online odstoupit bez uvedení důvodu do 14 dnů od jejího uzavření, ledaže je právo na odstoupení v konkrétním případě zákonem vyloučeno nebo již zaniklo.",
-      "9.2 Má-li Služba začít před uplynutím této lhůty, Spotřebitel v rámci potvrzení objednávky výslovně žádá, aby Poskytovatel začal plnit před uplynutím lhůty, a bere na vědomí, že po úplném poskytnutí Služby právo odstoupit zaniká. Odstoupí-li po zahájení, ale před úplným poskytnutím Služby, uhradí poměrnou část ceny za již poskytnuté plnění, jsou-li splněny zákonné podmínky.",
+      "9.2 Má-li Služba začít před uplynutím této lhůty, Spotřebitel v rámci potvrzení objednávky výslovně žádá, aby Poskytovatel začal plnit před uplynutím lhůty, a bere na vědomí, že po úplném poskytnutí Služby právo odstoupit zaniká. Odstoupí-li po zahájení, ale před úplným poskytnutím Služby, uhradí poměrnou část ceny za již poskytnuté plnění, jsou-li splněny zákonné podmínky. Pro Týmový stůl platí článek 9.8.",
       <>
         9.3 Odstoupení lze zaslat jednoznačným prohlášením na adresu sídla
         Poskytovatele nebo e-mailem na{" "}
@@ -133,6 +137,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "9.5 Vzor oznámení: „Oznamuji, že odstupuji od smlouvy na tuto Službu: [popis a číslo Rezervace], objednanou dne [datum]. Jméno a příjmení Spotřebitele: [doplnit]. Adresa Spotřebitele: [doplnit]. Datum: [doplnit]. Podpis pouze při listinném podání.“ Použití vzoru není povinné.",
       "9.6 Práva podle tohoto článku náleží pouze Spotřebiteli a platí vedle případných výhodnějších storno podmínek uvedených v souhrnu objednávky nebo individuální nabídce.",
       "9.7 Odstoupí-li Spotřebitel platně od smlouvy o nákupu balíčku vstupů poté, co požádal o jeho okamžité využití, a jsou-li splněny zákonné podmínky pro úhradu poměrné části ceny, vrátí Poskytovatel skutečně zaplacenou cenu vynásobenou počtem nevyužitých vstupů a vydělenou celkovým počtem vstupů v balíčku, zaokrouhlenou dolů na celé koruny. Za využité se považují vstupy za předchozí návštěvy a vstup rezervovaný na den odstoupení. Rezervace na pozdější dny se zruší a tyto vstupy se považují za nevyužité.",
+      "9.8 Pro účely odstoupení tvoří Rezervace Týmového stolu jeden celek. Spotřebitel může ve 14denní lhůtě podle článku 9.1 odstoupit od celé Rezervace pouze před jejím potvrzeným začátkem. Poskytovatel v takovém případě vrátí celou zaplacenou cenu. Od potvrzeného začátku Rezervace již nelze odstoupit ani od její zbývající části.",
     ],
   },
   {
@@ -141,6 +146,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "10.1 Klient je povinen užívat Prostory řádně, pouze k potvrzenému účelu a v souladu s těmito VOP, Provozním řádem, bezpečnostními pokyny a právními předpisy.",
       "10.2 Klient odpovídá za jednání svých hostů a za škodu, kterou on nebo jeho hosté způsobí porušením povinnosti. Běžné opotřebení se za škodu nepovažuje. Škodu nebo závadu Klient oznámí bez zbytečného odkladu.",
       "10.3 Poskytovatel může přiměřeně omezit nebo ukončit poskytování Služby při závažném nebo opakovaném porušení VOP či Provozního řádu, překročení kapacity, nebezpečném nebo protiprávním jednání nebo zneužití přístupu. Tím nejsou dotčena práva Klienta, pokud opatření nebylo oprávněné.",
+      "10.4 V prostoru Open Space jsou Klient a jeho hosté povinni respektovat pracovní prostor ostatních osob. Pokud je Poskytovatel požádá o uvolnění stolu pro Rezervaci Týmového stolu, přesunou se na jiné místo v Open Space.",
     ],
   },
   {
@@ -202,7 +208,7 @@ const termsAndConditionsSections: LegalSection[] = [
     body: [
       "15.1 Poskytovatel může tyto VOP měnit pro smlouvy uzavřené po účinnosti nového znění. Na již uzavřenou Rezervaci se použije znění přijaté Klientem při objednávce, není-li pozdější změna pro Klienta výhodnější nebo ji výslovně nepřijme.",
       "15.2 Odchylné individuální ujednání má přednost před těmito VOP. Neplatnost nebo neúčinnost jednoho ustanovení nemá vliv na ostatní ustanovení.",
-      "15.3 Tyto VOP nabývají účinnosti dne 12. 8. 2026.",
+      "15.3 Tyto VOP nabývají účinnosti dne 1. 12. 2026.",
     ],
   },
 ];
@@ -228,6 +234,7 @@ const operatingRulesSections: LegalSection[] = [
       "2.1 Uživatel je povinen chovat se v prostorách ohleduplně a s respektem k ostatním osobám.",
       "2.2 Ve sdílených a společných prostorách Uživatel zachovává klid odpovídající běžné tiché konverzaci. V zasedací místnosti nebo soukromé kanceláři udržuje hluk uvnitř rezervovaného prostoru.",
       "2.3 Uživatel nesmí svým jednáním nadměrně rušit ostatní uživatele ani omezovat jejich užívání prostor. Klient odpovídá za chování svých hostů.",
+      "2.4 V prostoru Open Space Uživatel respektuje pracovní prostor ostatních osob. Pokud ho Provozovatel požádá o uvolnění stolu pro rezervaci Týmového stolu, přesune se na jiné místo v Open Space.",
     ],
   },
   {
@@ -248,7 +255,7 @@ const operatingRulesSections: LegalSection[] = [
     heading: "4. Užívání prostor",
     body: [
       "4.1 Uživatel je povinen užívat prostory výhradně k účelům odpovídajícím jejich povaze a určení.",
-      "4.2 Zasedací místnost a soukromá kancelář smějí být užívány pouze po potvrzenou dobu a v potvrzené kapacitě. Uživatelé je včetně svých věcí opustí nejpozději na konci rezervace.",
+      "4.2 Zasedací místnost, soukromá kancelář a Týmový stůl smějí být užívány pouze po potvrzenou dobu a v potvrzené kapacitě. Uživatelé rezervovaný prostor včetně svých věcí opustí nejpozději na konci rezervace.",
       "4.3 Uživatel je povinen udržovat pořádek a čistotu a po skončení užívání uvést využívané místo a společné vybavení do odpovídajícího stavu.",
       "4.4 Uživatel nesmí bez souhlasu Provozovatele přemisťovat vybavení, provádět úpravy, instalovat zařízení nebo zasahovat do technických rozvodů.",
       "4.5 Uživatel používá audiovizuální, konferenční a jiné vybavení podle pokynů a bez zbytečného odkladu oznámí závadu. Po skončení rezervace zařízení bezpečně vypne, vyžaduje-li to jeho povaha.",
@@ -294,14 +301,14 @@ const operatingRulesSections: LegalSection[] = [
     heading: "9. Závěrečná ustanovení",
     body: [
       "9.1 Provozovatel může tento Provozní řád měnit pro budoucí rezervace. Pro již potvrzenou rezervaci je rozhodné znění přijaté při objednávce, nejsou-li bezodkladná opatření nutná z důvodu bezpečnosti nebo kogentního právního předpisu.",
-      "9.2 Tento Provozní řád nabývá účinnosti dne 12. 8. 2026.",
+      "9.2 Tento Provozní řád nabývá účinnosti dne 1. 12. 2026.",
     ],
   },
 ];
 
 export const legalDocuments = {
   "privacy-policy": {
-    updatedAt: "18. listopadu 2026",
+    updatedAt: "1. prosince 2026",
     sections: [
       {
         heading: "1. Správce",
@@ -338,10 +345,11 @@ export const legalDocuments = {
             nebo pracovní stanice.
           </>,
           <>
-            E-mailovou adresu osoby pozvané do soukromé kanceláře získáváme od
-            zákazníka, který kancelář rezervoval. Používáme ji k zaslání
-            pozvánky a zpráv o změnách této rezervace a k tomu, aby pozvaná
-            osoba mohla využít přístup do kanceláře. Právním základem je náš
+            E-mailovou adresu pozvané osoby získáváme od zákazníka, který
+            rezervoval soukromou kancelář nebo Týmový stůl. Adresu používáme k
+            zaslání pozvánky a zpráv o změnách rezervace, včetně jejího zrušení
+            nebo obnovení, a k tomu, aby pozvaná osoba mohla využít sdílený
+            přístup do prostor v rámci rezervace. Právním základem je náš
             oprávněný zájem umožnit pozvaným osobám využít rezervaci a
             informovat je o jejím stavu. Adresu uchováváme do 30 dnů po skončení
             přístupu. Pokud adresa patří k zákaznickému účtu nebo evidovanému
@@ -767,7 +775,7 @@ export const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "18. listopadu 2026",
+    updatedAt: "1. prosince 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {
@@ -878,7 +886,7 @@ export const legalDocuments = {
     ],
   },
   "operating-rules": {
-    updatedAt: "12. srpna 2026",
+    updatedAt: "1. prosince 2026",
     sections: operatingRulesSections,
   },
 } satisfies LegalDocumentBodies;

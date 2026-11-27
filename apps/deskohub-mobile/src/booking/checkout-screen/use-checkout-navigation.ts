@@ -1,7 +1,7 @@
-import type { CustomerBookingSelection } from "@deskohub/workspace-customer-api";
 import { useIsFocused, useNavigation, useRouter } from "expo-router";
 import { useEffect, useRef } from "react";
 import type { CheckoutFlowView } from "../checkout/checkout-flow";
+import type { BookingFamily } from "../selection/booking-selection";
 import {
   type CheckoutDestinationHref,
   checkoutDestination,
@@ -16,7 +16,7 @@ import {
  */
 export function useCheckoutNavigation(
   view: CheckoutFlowView,
-  family: CustomerBookingSelection["family"],
+  family: BookingFamily,
   waits: boolean,
   retriedOrderId?: string
 ) {

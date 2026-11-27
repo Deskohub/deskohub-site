@@ -11,7 +11,7 @@ import { workspaceStatementConcurrency } from "@/db/database.service";
 import { workspaceProductMonitorOptionTableTags } from "@/features/checkout/product-catalog";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
-  getBookingsWithPassDayIntents,
+  getBookingsWithCapacityClaims,
   observePassDayInventory,
 } from "@/features/passes/backend/pass-day-capacity-bookings";
 import {
@@ -20,6 +20,7 @@ import {
 } from "@/features/passes/backend/pass-day-move-plan";
 import { PassDayMoves } from "@/features/passes/backend/unlimited-pass-day-moves";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
+import { isTeamTableCapacityClaim } from "@/features/reservation/backend/open-space-move-capacity";
 import type { ReservationRecord } from "@/features/reservation/backend/reservation-record";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import {
@@ -45,6 +46,9 @@ import {
 } from "@/features/reservation/reservation-interval";
 import { ReservationIntervalValidationError } from "@/features/reservation/reservation-interval-domain";
 import type { WorkspaceReservationKind } from "@/features/reservation/reservation-kind";
+import type { TableReservationDetails } from "@/features/reservation/table-reservation";
+import { getUnclassifiedTeamTableBookings } from "@/features/team-table/backend/team-table-inventory";
+import { planTeamTable } from "@/features/team-table/backend/team-table-plan";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { currentInstant } from "@/shared/utils/temporal";
 import {
@@ -63,11 +67,13 @@ import {
   hasCandidateCapacity,
   type InvalidDotyposTableSeats,
   isWorkspaceCoworkTableCandidate,
+  selectOpenSpaceTableFromCandidates,
   selectWorkspaceTableFromCandidates,
   workspaceCoworkOpenSpaceTableTag,
   workspaceCoworkReservedDeskTableTag,
   workspaceMeetingRoomReservationTableTag,
   workspaceOfficeReservationTableTag,
+  workspaceTableReservationTableTag,
 } from "./workspace-table-selection";
 
 type CoworkTableAssignmentReservation = StoredCoworkReservationDetails &
@@ -79,11 +85,13 @@ type CoworkTableAssignmentReservation = StoredCoworkReservationDetails &
 export type WorkspaceTableAssignmentReservation =
   | CoworkTableAssignmentReservation
   | MeetingRoomReservationDetails
-  | OfficeReservationDetails;
+  | OfficeReservationDetails
+  | TableReservationDetails;
 
 type WorkspaceTableAssignment = {
   readonly requiredTags: readonly string[];
   readonly isCandidateTable: (tableTags: ReadonlySet<string>) => boolean;
+  readonly selectTable?: typeof selectWorkspaceTableFromCandidates;
   readonly scoreCoworkOpenSpaceCapacity?: true;
 };
 
@@ -96,7 +104,7 @@ const getRequiredTagsAssignment = (
 });
 
 /**
- * Meeting rooms and offices hold their table exclusively. Cowork bookings
+ * Meeting rooms, offices, and Team Tables hold their table exclusively. Cowork bookings
  * share a table up to its seat capacity.
  */
 const requiresEmptyTable = (kind: WorkspaceReservationKind) =>
@@ -105,6 +113,7 @@ const requiresEmptyTable = (kind: WorkspaceReservationKind) =>
       cowork: () => false,
       "meeting-room": () => true,
       office: () => true,
+      table: () => true,
     })
   );
 
@@ -175,6 +184,7 @@ export const getWorkspaceReservationInterval = (
           getCoworkReservationIntervalInput(entryTier, date, stay),
         "meeting-room": getMeetingRoomOccupiedInterval,
         office: getOfficeReservationIntervalInput,
+        table: (table) => table,
       })
     )
   );
@@ -248,8 +258,10 @@ export class WorkspaceTableAssignmentService extends Context.Service<
         });
         // Read local intents before provider reservations so an attaching
         // pass day remains visible on at least one side of the handover.
-        const passDayIntents =
-          yield* workspaceReservations.selectPendingPassDayCapacity(dates);
+        const [passDayIntents, localTableClaims] = yield* Effect.all([
+          workspaceReservations.selectPendingPassDayCapacity(dates),
+          workspaceReservations.selectLocalTableCapacity(dates),
+        ]);
         const concurrency = yield* workspaceStatementConcurrency;
         const reads = yield* Effect.all(
           {
@@ -280,6 +292,7 @@ export class WorkspaceTableAssignmentService extends Context.Service<
         const observations = yield* Effect.fromResult(reads.observations);
         return {
           ...observations,
+          localTableClaims,
           tables: yield* Effect.fromResult(reads.tables),
           expiredDotyposReservationIds: yield* Effect.fromResult(
             reads.expiredDotyposReservationIds
@@ -331,10 +344,7 @@ export class WorkspaceTableAssignmentService extends Context.Service<
               "occupancyByTableId",
               ({ activeReservations, occupancyWindow, inventory }) =>
                 getTableBookingOccupancyById(
-                  getBookingsWithPassDayIntents(
-                    activeReservations,
-                    inventory.passDayIntents
-                  ),
+                  getBookingsWithCapacityClaims(activeReservations, inventory),
                   occupancyWindow
                 )
             ),
@@ -362,13 +372,14 @@ export class WorkspaceTableAssignmentService extends Context.Service<
             Effect.bind(
               "matchingTable",
               ({
+                assignment,
                 seats,
                 inventory,
                 matchingTables,
                 occupancyByTableId,
                 rankingOccupancyByTableId,
               }) =>
-                selectWorkspaceTableFromCandidates(
+                (assignment.selectTable ?? selectWorkspaceTableFromCandidates)(
                   matchingTables,
                   inventory.tables,
                   occupancyByTableId,
@@ -417,10 +428,7 @@ export class WorkspaceTableAssignmentService extends Context.Service<
                   full.reservations,
                   full.expiredDotyposReservationIds
                 );
-                const bookings = getBookingsWithPassDayIntents(
-                  active,
-                  full.passDayIntents
-                );
+                const bookings = getBookingsWithCapacityClaims(active, full);
                 const candidates = yield* Effect.fromResult(
                   decodeTableCandidates(
                     getWorkspaceTableCandidatesByPredicate(
@@ -466,17 +474,16 @@ export class WorkspaceTableAssignmentService extends Context.Service<
                   refreshed.reservations,
                   refreshed.expiredDotyposReservationIds
                 );
-                return yield* selectWorkspaceTableFromCandidates(
+                const selectTable =
+                  assignment.selectTable ?? selectWorkspaceTableFromCandidates;
+                return yield* selectTable(
                   getWorkspaceTableCandidatesByPredicate(
                     refreshed.tables,
                     assignment.isCandidateTable
                   ),
                   refreshed.tables,
                   getTableBookingOccupancyById(
-                    getBookingsWithPassDayIntents(
-                      remaining,
-                      refreshed.passDayIntents
-                    ),
+                    getBookingsWithCapacityClaims(remaining, refreshed),
                     occupancyWindow
                   ),
                   seats,
@@ -500,6 +507,41 @@ export class WorkspaceTableAssignmentService extends Context.Service<
             Effect.annotateLogs(getReservationLogAnnotations(reservation))
           )
       );
+
+      const assignEmptyTeamTable = Effect.fn(
+        "WorkspaceTableAssignmentService.assignEmptyTeamTable"
+      )(function* (reservation: TableReservationDetails) {
+        const interval = yield* getWorkspaceReservationInterval(reservation);
+        const window = getOccupancyWindow(interval);
+        const inventory = yield* loadInventory(window);
+        const active = excludeDotyposReservationsById(
+          inventory.reservations,
+          inventory.expiredDotyposReservationIds
+        );
+        const plan = yield* Effect.fromResult(
+          planTeamTable({
+            tables: inventory.tables,
+            bookings: getUnclassifiedTeamTableBookings(active, inventory),
+            window: {
+              startsAt: Temporal.Instant.from(interval.startsAt),
+              endsAt: Temporal.Instant.from(interval.endsAt),
+            },
+            seats: reservation.seats,
+            now: yield* currentInstant,
+          })
+        );
+        const assignment = getReservationAssignment(reservation);
+        return yield* validateTableAssignment({
+          assignment,
+          matchingTable: inventory.tables.find(
+            ({ id }) => id === plan?.tableId
+          ),
+          matchingTables: getWorkspaceTableCandidatesByPredicate(
+            inventory.tables,
+            assignment.isCandidateTable
+          ),
+        });
+      });
 
       const getAssignedTableAvailability = Effect.fn(
         "WorkspaceTableAssignmentService.getAssignedTableAvailability"
@@ -539,11 +581,34 @@ export class WorkspaceTableAssignmentService extends Context.Service<
                   input.reservation.id,
                 ]
           );
+          if (input.kind === "table") {
+            const plan = yield* Effect.fromResult(
+              planTeamTable({
+                tables: [table],
+                bookings: getUnclassifiedTeamTableBookings(otherReservations, {
+                  ...inventory,
+                  localTableClaims: inventory.localTableClaims.filter(
+                    (claim) =>
+                      !isTeamTableCapacityClaim(claim) ||
+                      claim.reservationId !== input.reservation.id
+                  ),
+                }),
+                window: {
+                  startsAt: Temporal.Instant.fromEpochMilliseconds(
+                    booking.value.startsAt
+                  ),
+                  endsAt: Temporal.Instant.fromEpochMilliseconds(
+                    booking.value.endsAt
+                  ),
+                },
+                seats: booking.value.seats,
+                now: yield* currentInstant,
+              })
+            );
+            return plan ? ("available" as const) : ("unavailable" as const);
+          }
           const occupancyByTableId = getTableBookingOccupancyById(
-            getBookingsWithPassDayIntents(
-              otherReservations,
-              inventory.passDayIntents
-            ),
+            getBookingsWithCapacityClaims(otherReservations, inventory),
             booking.value
           );
           const seatCapacity = yield* getWorkspaceTableSeatCapacity(table);
@@ -574,7 +639,10 @@ export class WorkspaceTableAssignmentService extends Context.Service<
       );
 
       return {
-        assignTableId,
+        assignTableId: (reservation, options) =>
+          reservation.kind === "table"
+            ? assignEmptyTeamTable(reservation)
+            : assignTableId(reservation, options),
         getAssignedTableAvailability,
       } satisfies IWorkspaceTableAssignmentService;
     })
@@ -593,6 +661,7 @@ const getReservationAssignment = (
               requiredTags: [workspaceCoworkOpenSpaceTableTag],
               isCandidateTable: (tableTags: ReadonlySet<string>) =>
                 isWorkspaceCoworkTableCandidate(tableTags, { entryTier }),
+              selectTable: selectOpenSpaceTableFromCandidates,
             }),
             "reserved-desk": ({ entryTier, monitorOption }) => ({
               requiredTags: [workspaceCoworkReservedDeskTableTag],
@@ -618,6 +687,11 @@ const getReservationAssignment = (
         getRequiredTagsAssignment([workspaceMeetingRoomReservationTableTag]),
       office: () =>
         getRequiredTagsAssignment([workspaceOfficeReservationTableTag]),
+      table: () =>
+        getRequiredTagsAssignment([
+          workspaceTableReservationTableTag,
+          workspaceCoworkOpenSpaceTableTag,
+        ]),
     })
   );
 
@@ -651,6 +725,7 @@ const getWorkspaceOccupiedInterval = (
         getReservationIntervalNormalization(
           getOfficeReservationIntervalInput(officeReservation)
         ),
+      table: getWorkspaceReservationInterval,
     })
   );
 
@@ -663,6 +738,7 @@ export const getWorkspaceReservationSeats = (
       cowork: () => workspaceBookingSeatCount,
       "meeting-room": () => workspaceBookingSeatCount,
       office: ({ seats }) => seats,
+      table: ({ seats }) => seats,
     })
   );
 
@@ -724,6 +800,12 @@ const getReservationLogAnnotations = (
         startsOn: officeReservation.startsOn,
         endsOn: officeReservation.endsOn,
         seats: officeReservation.seats,
+      }),
+      table: ({ startsAt, endsAt, seats }) => ({
+        reservationKind: "table",
+        startsAt,
+        endsAt,
+        seats,
       }),
     })
   );

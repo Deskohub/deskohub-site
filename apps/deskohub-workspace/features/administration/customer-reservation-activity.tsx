@@ -2,6 +2,7 @@ import {
   getWorkspaceMeetingRoomProductTitle,
   getWorkspaceOfficeProductTitle,
   getWorkspaceProductTierTitle,
+  getWorkspaceTableProductTitle,
 } from "@/features/checkout/product-catalog.i18n";
 import type { Locale } from "@/features/i18n";
 import type {
@@ -44,6 +45,10 @@ const reservationActivityCategoryStyles = {
   office: {
     className: "bg-[#fb923c]",
     label: getWorkspaceOfficeProductTitle,
+  },
+  table: {
+    className: "bg-[#8b5cf6]",
+    label: getWorkspaceTableProductTitle,
   },
 } satisfies Record<
   AdministrationCustomerReservationActivityCategory,

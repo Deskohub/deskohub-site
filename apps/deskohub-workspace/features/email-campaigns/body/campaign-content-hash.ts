@@ -1,17 +1,10 @@
 import { createHash } from "node:crypto";
 import type { EmailVersionId } from "@deskohub/workspace-admin-api";
-import { Schema } from "effect";
+import { CampaignContentHash } from "@deskohub/workspace-domain/features/email-campaigns/campaign-content-hash";
 import { canonicalJson } from "@/shared/utils/canonical-json";
 import type { CampaignContent } from "./campaign-content";
 
-export const CampaignContentHash = Schema.String.pipe(
-  Schema.brand("CampaignContentHash")
-).annotate({
-  identifier: "CampaignContentHash",
-  description:
-    "SHA-256 of everything a campaign renders; a test-send confirmation code is bound to it.",
-});
-export type CampaignContentHash = typeof CampaignContentHash.Type;
+export { CampaignContentHash } from "@deskohub/workspace-domain/features/email-campaigns/campaign-content-hash";
 
 /**
  * Hashes the subject, preheader, and body of every locale together with the

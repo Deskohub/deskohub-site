@@ -263,7 +263,10 @@ export type DiscountAdminSalesPage = Pick<
   "calendar" | "discounts"
 >;
 
-export type DiscountTargetScope = "all" | "reservations";
+export type DiscountTargetScope =
+  | "all"
+  | "reservations"
+  | "reservations-before-team-table";
 
 export interface IDiscountAdministration {
   readonly loadDashboard: () => Effect.Effect<
@@ -550,10 +553,14 @@ export class DiscountAdministration extends Context.Service<
                 and(
                   eq(discountProductTargets.discountId, input.id),
                   // The v1 API replaces only targets in its reservation view.
-                  targetScope === "reservations"
+                  targetScope !== "all"
                     ? inArray(
                         sql`${discountProductTargets.productTarget}->>'kind'`,
-                        workspaceReservationProductFamilies
+                        targetScope === "reservations"
+                          ? workspaceReservationProductFamilies
+                          : workspaceReservationProductFamilies.filter(
+                              (kind) => kind !== "table"
+                            )
                       )
                     : undefined
                 )

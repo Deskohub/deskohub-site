@@ -2,6 +2,7 @@ import {
   type CustomerBookedSelection,
   CustomerBookingSelectionQuery,
   type CustomerReservationFamily,
+  CustomerTeamTableSelection,
 } from "@deskohub/workspace-customer-api";
 import { Option, Schema } from "effect";
 
@@ -17,9 +18,19 @@ type RouteParams = Readonly<
 export const bookAgainHref = ({
   selection: { family, ...fields },
   earlySetup,
-}: CustomerBookedSelection) => {
+}: CustomerBookedSelection) => selectionHref(family, { ...fields, earlySetup });
+
+export const teamTableBookAgainHref = ({
+  family,
+  ...selection
+}: CustomerTeamTableSelection) => selectionHref(family, selection);
+
+const selectionHref = (
+  family: CustomerReservationFamily | "table",
+  fields: Readonly<Record<string, unknown>>
+) => {
   const query = new URLSearchParams();
-  for (const [key, value] of Object.entries({ ...fields, earlySetup })) {
+  for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined) query.set(key, String(value));
   }
   return `/book/${family}?${query.toString()}` as const;
@@ -29,6 +40,22 @@ const decodeQuery = Schema.decodeUnknownOption(CustomerBookingSelectionQuery);
 
 const single = (value: string | ReadonlyArray<string> | undefined) =>
   typeof value === "string" ? value : undefined;
+
+const decodeTeamTableSelection = Schema.decodeUnknownOption(
+  CustomerTeamTableSelection
+);
+
+export const teamTablePreselectionOf = (params: RouteParams) => {
+  const seats = single(params.seats);
+  return decodeTeamTableSelection({
+    family: "table",
+    date: single(params.date),
+    seats:
+      seats !== undefined && /^\d+$/.test(seats) ? Number(seats) : undefined,
+    startTime: single(params.startTime),
+    endTime: single(params.endTime),
+  });
+};
 
 /**
  * The selection a family screen was opened with; none without one, or when

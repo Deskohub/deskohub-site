@@ -7,7 +7,6 @@ import {
   passAdministrationChanges,
   passEntryClaims,
   passPurchases,
-  unlimitedPassDayMoves,
   workspaceReservations,
 } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
@@ -23,6 +22,7 @@ import {
 } from "@/shared/utils/temporal";
 import { queueInitialEntryPackGift } from "../backend/entry-pack-gift";
 import { pendingPassChange } from "../backend/pass-administration-pending";
+import { passDayMoveJournal } from "../backend/pass-day-move-journal";
 import {
   attemptUnlimitedPassHolds,
   confirmUnlimitedPassDays,
@@ -111,19 +111,20 @@ const hasUnsettledDayMoves = Effect.fn("hasUnsettledDayMoves")(function* (
   range: DayRange
 ) {
   const { db } = yield* WorkspaceDatabase;
+  const moveJournal = passDayMoveJournal(db);
   const [unsettledMove] = yield* db
-    .select({ id: unlimitedPassDayMoves.reservationId })
-    .from(unlimitedPassDayMoves)
+    .select({ id: moveJournal.reservationId })
+    .from(moveJournal)
     .innerJoin(
       workspaceReservations,
-      eq(workspaceReservations.id, unlimitedPassDayMoves.reservationId)
+      eq(workspaceReservations.id, moveJournal.reservationId)
     )
     .where(
       and(
         eq(workspaceReservations.passId, passId),
         gte(workspaceReservations.serviceDate, range.from),
         lt(workspaceReservations.serviceDate, range.until),
-        isNull(unlimitedPassDayMoves.settledAt)
+        isNull(moveJournal.settledAt)
       )
     )
     .limit(1);

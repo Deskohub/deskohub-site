@@ -21,7 +21,8 @@ export function EntryPackEmailCard({
     <Section className="mt-6 overflow-hidden rounded-[22px] border border-[#d8d9e4]">
       <Section className="bg-[#e9fff6] px-5 py-5 text-center">
         <WorkspaceEmailLabel>
-          {m.passEntryPack({}, { locale })} · {getPassTierName(tier, locale)}
+          {entryCount !== null && `${m.passEntryPack({}, { locale })} · `}
+          {getPassTierName(tier, locale)}
         </WorkspaceEmailLabel>
         <Text className="m-0 mt-1 text-[38px] font-bold leading-[46px] text-navy">
           {entryCount === null

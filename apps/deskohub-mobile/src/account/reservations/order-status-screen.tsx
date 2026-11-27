@@ -1,12 +1,9 @@
-import type {
-  CustomerBookedSelection,
-  CustomerOrderState,
-  CustomerReservationOrderId,
-} from "@deskohub/workspace-customer-api";
+import type { CustomerReservationOrderId } from "@deskohub/workspace-customer-api";
 import { RegistryContext, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { DateTime, Match, Option } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import {
+  type Href,
   useFocusEffect,
   useIsFocused,
   useNavigation,
@@ -30,7 +27,12 @@ import {
 } from "react";
 import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { bookAgainHref, reservationsHref } from "../../booking/booking-routes";
+import { teamTableBookAgainHref } from "../../booking/booking-preselection";
+import {
+  bookAgainHref,
+  bookFamilyHref,
+  reservationsHref,
+} from "../../booking/booking-routes";
 import { AsyncView, viewErrorOf } from "../../customer-api/async-view";
 import { accountAtom } from "../../customer-api/customer-data-runtime";
 import {
@@ -86,8 +88,13 @@ import {
 } from "./order-status-state";
 import { orderTicketView, reservationOfOrderAtom } from "./order-ticket-view";
 import { bookedSelectionOf } from "./payment-recovery";
-import { canRefreshManually, type StatusRefreshState } from "./status-refresh";
+import {
+  canRefreshManually,
+  type ReservationOrder,
+  type StatusRefreshState,
+} from "./status-refresh";
 import { AutomaticRefresh, type StatusVisit } from "./status-refresh-rules";
+import { teamTableSelectionOfReservation } from "./team-table-rebooking";
 import { usePaymentRecovery } from "./use-payment-recovery";
 import { WhenWithdrawable } from "./withdrawal-offer";
 
@@ -117,10 +124,12 @@ const invoiceFailureMessage = (
 function MoreActions({
   order,
   event,
+  invoiceAllowed,
   withdrawn = false,
   announce,
 }: {
-  readonly order: CustomerOrderState;
+  readonly order: ReservationOrder;
+  readonly invoiceAllowed: boolean;
   /** Withdrawn from already: no second withdrawal. */
   readonly withdrawn?: boolean;
   /** The booking as a calendar event; none while its times are unknown. */
@@ -149,7 +158,7 @@ function MoreActions({
             onPress={() => shareEvent(event)}
           />
         )}
-        {offersInvoice(order) && (
+        {invoiceAllowed && offersInvoice(order) && (
           <ListRow
             kind="action"
             icon={FileText}
@@ -231,7 +240,8 @@ function ContactLink() {
 function TicketStub({
   model,
   order,
-  booked,
+  rebookingHref,
+  accessAllowed,
   accessHint,
   checking,
   onCheckAgain,
@@ -239,9 +249,10 @@ function TicketStub({
   retryPaymentAction,
 }: {
   readonly model: BookingTicketModel;
-  readonly order: CustomerOrderState;
+  readonly order: ReservationOrder;
   /** What the order books, for Book again. */
-  readonly booked: CustomerBookedSelection | undefined;
+  readonly rebookingHref: Href;
+  readonly accessAllowed: boolean;
   readonly accessHint: string | undefined;
   /** A read the customer asked for is under way. */
   readonly checking: boolean;
@@ -256,7 +267,7 @@ function TicketStub({
   const { stub } = model;
   switch (stub._tag) {
     case "AccessPin":
-      return offersAccessLink(order) ? (
+      return accessAllowed && offersAccessLink(order) ? (
         <>
           <AccessPinButton orderId={order.orderId} />
           {accessHint !== undefined && (
@@ -277,7 +288,7 @@ function TicketStub({
           <Button
             icon={RotateCcw}
             label={m.reservations_book_again({}, { locale })}
-            onPress={() => router.push(bookAgainHref(booked))}
+            onPress={() => router.push(rebookingHref)}
           />
         </>
       );
@@ -328,6 +339,7 @@ function OrderTicket({
   onCheckAgain,
   onPaymentCheckAgain,
   onPaymentPageLeft,
+  onTeamTableChanged,
   announce,
 }: {
   readonly state: StatusRefreshState;
@@ -335,16 +347,43 @@ function OrderTicket({
   readonly onPaymentCheckAgain: () => void;
   /** The customer came back from the payment page: follow the payment. */
   readonly onPaymentPageLeft: () => void;
+  readonly onTeamTableChanged: () => void;
   readonly announce: boolean;
 }) {
   const locale = useAppLocale();
   const { order } = state;
   const reservation = useAtomValue(reservationOfOrderAtom(order.orderId));
-  const booked = bookedSelectionOf(order, reservation);
-  const recovery = usePaymentRecovery(order, booked, {
-    onCheckAgain: onPaymentCheckAgain,
-    onPaymentPageLeft,
-  });
+  const row = Option.getOrUndefined(reservation);
+  // Saved history strips party details. The endpoints authorize unknown viewers.
+  const customerActionsAllowed =
+    order.kind !== "table" || row?.party?.kind !== "booked-for";
+  const booked =
+    order.kind === "table" ? undefined : bookedSelectionOf(order, reservation);
+  const tableSelection =
+    order.kind === "table"
+      ? teamTableSelectionOfReservation({
+          product:
+            order.product ??
+            (row?.product.kind === "other" ? row.product.teamTable : undefined),
+          startsAt: order.startsAt ?? row?.startsAt,
+          endsAt: order.endsAt ?? row?.endsAt,
+        })
+      : undefined;
+  const recovery = usePaymentRecovery(
+    order,
+    tableSelection === undefined ? booked : { selection: tableSelection },
+    {
+      onCheckAgain: onPaymentCheckAgain,
+      onPaymentPageLeft,
+    }
+  );
+  let rebookingHref: Href = bookAgainHref(booked);
+  if (order.kind === "table") {
+    rebookingHref =
+      tableSelection === undefined
+        ? bookFamilyHref("table")
+        : teamTableBookAgainHref(tableSelection);
+  }
   const model = orderTicketModel(
     order,
     orderCheckingOf(state.automatic),
@@ -399,7 +438,8 @@ function OrderTicket({
         <TicketStub
           model={model}
           order={order}
-          booked={booked}
+          rebookingHref={rebookingHref}
+          accessAllowed={customerActionsAllowed}
           accessHint={view.accessHint}
           checking={state.reading}
           onCheckAgain={onCheckAgain}
@@ -423,11 +463,17 @@ function OrderTicket({
         />
       </BookingTicket>
       {order.people !== undefined && (
-        <OrderPeopleSection order={order} people={order.people} />
+        <OrderPeopleSection
+          order={order}
+          people={order.people}
+          refreshing={state.reading}
+          onTeamTableChanged={onTeamTableChanged}
+        />
       )}
       {model.followUp === "more-actions" && (
         <MoreActions
           order={order}
+          invoiceAllowed={customerActionsAllowed}
           event={view.event}
           withdrawn={withdrawn}
           announce={announce}
@@ -615,6 +661,7 @@ export function OrderStatusScreen({
                 state={state}
                 onCheckAgain={refresh}
                 onPaymentCheckAgain={checkAfterPayment}
+                onTeamTableChanged={retryRead}
                 onPaymentPageLeft={() => {
                   if (!navigation.isFocused()) return;
                   setFocus(restartStatusVisit(owner, "after-payment"));

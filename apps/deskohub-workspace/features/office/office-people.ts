@@ -2,10 +2,8 @@ import { Data, Option, Result, Schema } from "effect";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 
 /**
- * Who is coming to a private office, as the booking form and the customer
- * API submit it: the reservation's contact (the "You" row) while they attend,
- * and the people added by email address. Each person takes one seat, so the
- * office's `seats` is derived from this list, never chosen beside it.
+ * Who is coming to an Office or Team Table reservation: the contact (the
+ * "You" row) while they attend, and the people added by email address.
  */
 export const officePeopleSchema = Schema.Struct({
   contactAttends: Schema.Boolean,
@@ -13,7 +11,7 @@ export const officePeopleSchema = Schema.Struct({
 }).annotate({
   identifier: "OfficePeople",
   description:
-    "Who is coming to a private office: the contact, and the people added by email address.",
+    "Who is coming to the reservation: the contact and the people invited by email.",
 });
 export type OfficePeople = typeof officePeopleSchema.Type;
 
@@ -22,8 +20,7 @@ export const InviteeEmail = Schema.String.pipe(
   Schema.brand("InviteeEmail")
 ).annotate({
   identifier: "InviteeEmail",
-  description:
-    "An email address a private office booker added, trimmed and lower-cased.",
+  description: "An email address a booker added, trimmed and lower-cased.",
 });
 export type InviteeEmail = typeof InviteeEmail.Type;
 
@@ -43,7 +40,7 @@ export type InviteeEmailRejection = "invalid" | "duplicate" | "contact";
 export type OfficePeopleIssue = Data.TaggedEnum<{
   /** Neither the contact nor anyone else is coming. */
   NoPeople: Record<never, never>;
-  /** More people than the office has seats. */
+  /** More people than the reservation has seats. */
   OverCapacity: { readonly seatCapacity: number };
   /** The invitee at `index` (in submitted order) can't be added. */
   InviteeRejected: {
@@ -96,7 +93,7 @@ export const checkInviteeEmail = (
 
 /**
  * Checks a submitted list: every invitee in order, then that at least one
- * person is coming and that everyone fits in the office.
+ * person is coming and that everyone fits in the booked seats.
  */
 export const validateOfficePeople = (
   people: OfficePeople,
@@ -128,11 +125,9 @@ export const validateOfficePeople = (
 };
 
 /**
- * Who is coming to a booked office, as its booker sees them: the stored
- * `contactAttends` and the invitees in order. None for an office booked
- * without a people list (`contactAttends` null), and none once the retention
- * purge reduced or deleted any invitee, which shows as a missing address or
- * as fewer people than the booked `seats`.
+ * Who is coming, as the booker sees them. A booking without a saved
+ * attendance choice or with a purged address has no complete people list.
+ * Office can also detect a deleted address from the fixed head count.
  */
 export const getBookedOfficePeople = <
   Invitee extends { readonly email: InviteeEmail | null },
@@ -140,6 +135,7 @@ export const getBookedOfficePeople = <
   readonly contactAttends: boolean | null;
   readonly seats: number;
   readonly invitees: ReadonlyArray<Invitee>;
+  readonly kind?: "office" | "table";
 }): Option.Option<{
   readonly contactAttends: boolean;
   readonly invitees: ReadonlyArray<Invitee & { readonly email: InviteeEmail }>;
@@ -150,8 +146,10 @@ export const getBookedOfficePeople = <
     (invitee): invitee is Invitee & { readonly email: InviteeEmail } =>
       invitee.email !== null
   );
-  return invitees.length === booking.invitees.length &&
-    getOfficePeopleSeats({ contactAttends, invitees }) === seats
+  const occupied = getOfficePeopleSeats({ contactAttends, invitees });
+  const fits =
+    booking.kind === "table" ? occupied <= seats : occupied === seats;
+  return invitees.length === booking.invitees.length && fits
     ? Option.some({ contactAttends, invitees })
     : Option.none();
 };

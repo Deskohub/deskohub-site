@@ -1,14 +1,14 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
-import { WorkspaceCustomerApi } from "@deskohub/workspace-customer-api";
+import { WorkspaceCustomerApiWithTeamTable } from "@deskohub/workspace-customer-api";
 import { HttpApi } from "effect/http-api";
 import { customerRequestBudgetClasses } from "./customer-request-budget";
 
 /** Each contract endpoint's method, by `group.endpoint`. */
 const contractMethods = () => {
   const methods = new Map<string, string>();
-  HttpApi.reflect(WorkspaceCustomerApi, {
+  HttpApi.reflect(WorkspaceCustomerApiWithTeamTable, {
     onGroup: () => undefined,
     onEndpoint: ({ group, endpoint }) => {
       methods.set(
@@ -126,6 +126,7 @@ describe("customer request budget classes", () => {
       "reservations.getReservationStatus",
       "reservations.listInvitedReservations",
       "reservations.listReservations",
+      "teamTable.getStatus",
     ]);
     expect(customerRequestBudgetClasses).toMatchObject({
       account: {
@@ -138,6 +139,7 @@ describe("customer request budget classes", () => {
         getInvoicePdf: "dotypos-read",
         getCorrectiveDocumentPdf: "dotypos-read",
       },
+      teamTable: { getQuote: "dotypos-read" },
     });
   });
 

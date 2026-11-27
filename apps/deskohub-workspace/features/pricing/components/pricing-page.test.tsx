@@ -21,6 +21,7 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import type { TeamTablePrice } from "../team-table-price";
 
 const nextServer = await import("next/server");
 
@@ -66,12 +67,16 @@ type PriceListLoad = (
 let sharedPriceList: PriceListLoad;
 let variesByVisitor = false;
 let visitorPriceList: PriceListLoad;
-const loadVisitorPriceList = mock((locale: Locale) =>
-  Promise.resolve(visitorPriceList(locale))
-);
+let teamTablePrices: ReadonlyArray<TeamTablePrice> = [];
+let visitorTeamTablePrices: ReadonlyArray<TeamTablePrice> = [];
+const loadVisitorPriceList = mock(async (locale: Locale) => ({
+  offerings: await visitorPriceList(locale),
+  teamTablePrices: visitorTeamTablePrices,
+}));
 mock.module("@/features/pricing/backend/price-list.server", () => ({
   loadSharedPriceList: async (locale: Locale) => ({
     offerings: await sharedPriceList(locale),
+    teamTablePrices,
     variesByVisitor,
     complete: true,
   }),
@@ -101,10 +106,18 @@ const saleOnOpenSpace = (locale: Locale) => {
 };
 
 const renderPage = async (locale: Locale, signal?: AbortSignal) => {
+  const renderErrors: unknown[] = [];
   const { prelude } = await prerender(<PricingPage locale={locale} />, {
     signal,
+    onError(error) {
+      if (!signal?.aborted || error !== signal.reason) {
+        renderErrors.push(error);
+      }
+    },
   });
-  return new Response(prelude).text();
+  const html = await new Response(prelude).text();
+  expect(renderErrors).toEqual([]);
+  return html;
 };
 
 /**
@@ -137,10 +150,92 @@ beforeEach(() => {
   sharedPriceList = saleOnOpenSpace;
   variesByVisitor = false;
   visitorPriceList = saleOnOpenSpace;
+  teamTablePrices = [];
+  visitorTeamTablePrices = [];
   loadVisitorPriceList.mockClear();
 });
 
 describe("PricingPage", () => {
+  test("shows configured Team Table rates and a sale in server HTML and JSON-LD", async () => {
+    teamTablePrices = [
+      {
+        seats: 4,
+        base: currencyCZK(24_000),
+        hourly: currencyCZK(8_000),
+        advertisedPrice: {
+          price: currencyCZK(25_600),
+          discount: currencyCZK(6_400),
+        },
+      },
+      { seats: 6, base: currencyCZK(36_000), hourly: currencyCZK(12_000) },
+    ];
+    const html = await renderPage("en-US");
+    const text = visibleText(html).replace(/\s+/g, " ");
+    const document = new DOMParser().parseFromString(html, "text/html");
+    const schema = Array.from(
+      document.querySelectorAll('script[type="application/ld+json"]'),
+      (script) => JSON.parse(script.textContent ?? "null")
+    ).find((data) => data.name === "Team Table");
+
+    expect(text).toContain("Table for 4 · CZK 240 to reserve + CZK 80/hour");
+    expect(text).toContain("Table for 6 · CZK 360 to reserve + CZK 120/hour");
+    expect(text).toContain("CZK 256 (regular price CZK 320)");
+    expect(visibleLinks(html)).toContain("/en-US/reservation/table");
+    expect(schema?.offers).toMatchObject([
+      {
+        price: 256,
+        priceSpecification: [{ price: 240 }, { price: 80, unitCode: "HUR" }],
+      },
+      { priceSpecification: [{ price: 360 }, { price: 120, unitCode: "HUR" }] },
+    ]);
+  });
+
+  test("omits Team Table rates, link, and structured offers when there are no public prices", async () => {
+    const html = await renderPage("en-US");
+
+    expect(visibleText(html)).not.toContain("Team Table");
+    expect(html).not.toContain("/reservation/table");
+  });
+
+  test("publishes the same Team Table rate and sale in visitor HTML and structured data during rollout", async () => {
+    variesByVisitor = true;
+    visitorTeamTablePrices = [
+      {
+        seats: 4,
+        base: currencyCZK(24_000),
+        hourly: currencyCZK(8_000),
+        advertisedPrice: {
+          price: currencyCZK(25_600),
+          discount: currencyCZK(6_400),
+        },
+      },
+    ];
+    const html = await renderPage("en-US");
+    const document = new DOMParser().parseFromString(html, "text/html");
+    const services = Array.from(
+      document.querySelectorAll('script[type="application/ld+json"]'),
+      (script) => JSON.parse(script.textContent ?? "null")
+    ).filter((data) => data.name === "Team Table");
+
+    const text = (document.body.textContent ?? "").replace(/\s+/g, " ");
+    expect(text).toContain("Table for 4 · CZK 240 to reserve + CZK 80/hour");
+    expect(text).toContain("CZK 256 (regular price CZK 320)");
+    expect(services).toMatchObject([
+      {
+        offers: [
+          {
+            price: 256,
+            priceSpecification: [
+              { price: 240 },
+              { price: 80, unitCode: "HUR" },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(services).toHaveLength(1);
+  });
+
   test("keeps cowork pass offers out of the price page while the release is off", async () => {
     const html = await renderPage("en-US");
     expect(
@@ -199,7 +294,9 @@ describe("PricingPage", () => {
     if (!section) throw new Error("Expected the Unlimited pass price section");
 
     expect(section.previousElementSibling?.id).toBe("pricing-entry-packs");
-    expect(section.querySelector("h2")?.textContent).toBe("Unlimited pass");
+    expect(section.querySelector("h2")?.textContent).toBe(
+      "Unlimited membership"
+    );
     const price = (amount: number) => formatMoney(currencyCZK(amount), locale);
     const rows = [...section.querySelectorAll("li")];
     expect(rows).toHaveLength(3);
@@ -217,7 +314,7 @@ describe("PricingPage", () => {
         `/en-US/passes/unlimited?tier=${offer.tier}`
       );
       expect(link?.getAttribute("aria-label")).toBe(
-        `Buy an Unlimited pass (${row.querySelector("h3")?.textContent})`
+        `Buy Unlimited membership (${row.querySelector("h3")?.textContent})`
       );
     }
     expect(isCoworkPassesPageOpenAfterConnection).not.toHaveBeenCalled();

@@ -36,6 +36,12 @@ const legalDocumentKeys = [
   "marketing-communications",
 ] as const satisfies ReadonlyArray<LegalDocumentKey>;
 
+const teamTableLegalPages = [
+  "/terms-and-conditions",
+  "/privacy-policy",
+  "/operating-rules",
+] as const;
+
 // The legal pages print their date in each locale's long form; English uses
 // the day-first form.
 const dateFormatLocale = (locale: Locale) =>
@@ -50,20 +56,51 @@ const longDate = (isoDate: string, locale: Locale) =>
   }).format(new Date(`${isoDate}T12:00:00Z`));
 
 describe("public page content dates", () => {
-  test("date every page with a calendar day that has passed", () => {
+  test("dates the Open Space seating policy update on each page that presents it", () => {
+    for (const path of ["/coworking", "/faq", "/reservation/cowork"] as const) {
+      for (const locale of locales) {
+        const date = getPublicPageContentDate(
+          publicPageDefinitions[path],
+          locale
+        );
+        expect(date >= "2026-11-27").toBe(true);
+      }
+    }
+  });
+
+  test("date each page by its publication or scheduled legal effective date", () => {
     const today = Temporal.Now.plainDateISO("Europe/Prague");
 
-    for (const { contentDate, localeContentDates } of publicPages) {
+    for (const { pathname, contentDate, localeContentDates } of publicPages) {
       for (const isoDate of [
         contentDate,
         ...Object.values(localeContentDates ?? {}),
       ]) {
         const date = Temporal.PlainDate.from(isoDate);
         expect(date.toString()).toBe(isoDate);
-        expect(Temporal.PlainDate.compare(date, today)).toBeLessThanOrEqual(0);
+        const scheduledLegalRevision =
+          isoDate === contentDate &&
+          isoDate === "2026-12-01" &&
+          teamTableLegalPages.some((page) => page === pathname);
+        if (!scheduledLegalRevision) {
+          expect(Temporal.PlainDate.compare(date, today)).toBeLessThanOrEqual(
+            0
+          );
+        }
       }
     }
   });
+
+  test.each(teamTableLegalPages)(
+    "date %s in every locale by the Team Table revision",
+    (pathname) => {
+      for (const locale of locales) {
+        expect(
+          getPublicPageContentDate(publicPageDefinitions[pathname], locale)
+        ).toBe("2026-12-01");
+      }
+    }
+  );
 
   test("date each legal page by its document's last update in every locale", () => {
     for (const documentKey of legalDocumentKeys) {

@@ -10,6 +10,8 @@ Every discount defines one customer benefit:
 
 A whole-cowork target covers every cowork offer, including historical tiers in stored reservations; existing whole-cowork discounts keep that meaning. A single-offer target covers only that offer. One discount either targets the whole cowork family or lists individual cowork offers, never both.
 
+When Team Table is released, discounts and Calendar sales can target the whole Team Table family. Both the base charge and the time charge count toward the discountable subtotal. Cowork passes apply only to their cowork offers. [Team Table reservation product](reservation-products.md#team-table-planned)
+
 The label shown to a customer is preserved with the completed checkout so later wording changes cannot rewrite history. A missing or blank required translation makes that discount unavailable; labels never fall back from one language to another.
 
 Several sales or codes may share the same benefit definition while keeping their own schedules, audiences, and usage limits.
@@ -27,6 +29,8 @@ A sale applies to a reservation only when both of these hold:
 
 For a cowork reservation the last service date is its reserved date. For an office reservation it is the final reserved day. For a meeting-room reservation it is the Prague date on which the booking ends: an hourly booking that runs past midnight ends on the next day, while one ending exactly at midnight still belongs to its start date. Service dates before or during the sale qualify. A reservation whose last service date falls after the sale's last day gets no sale at all, even when it is booked during the sale and some of its days fall inside the sale. The sale is never split across the days of one reservation.
 
+For the planned Team Table family, the last service date is the last Prague date included in the booked interval. A booking ending at midnight counts through the previous date.
+
 The booking moment is when the customer submits the reservation and its price is locked. Later checks in the same checkout judge the sale at that moment rather than at the current time, including accepting an updated summary, entering a code, and starting payment. A customer who submitted before the sale ended therefore keeps the sale through payment. Editing or resubmitting the reservation books it again. If the sale has ended by then, checkout shows an updated summary without it for acceptance.
 
 Overlapping valid sales may all participate in pricing. The home-page banner is intentionally narrower: it appears only when exactly one active sale can be advertised unambiguously.
@@ -43,6 +47,8 @@ Codes use uppercase ASCII letters, digits, underscores, and hyphens and contain 
 - an optional customer allowlist.
 
 The service-date range limits which reservations the code covers. It is a first and a last Prague calendar date, and a reservation qualifies when its start date falls on either date or between them, so a one-day range names the same date twice. A cowork reservation starts on its reserved date, an office reservation on its first reserved day, and a meeting-room reservation on the Prague date its booking starts. Only the start date counts: an overnight booking or a multi-day office stay qualifies by its first day, whatever its later days are. A code without a range covers every reservation date. The range has both dates or neither, and the last date is never before the first. It is separate from the code's validity window, which governs when the code can be entered and redeemed. A code must satisfy both. Vouchers never have a service-date range.
+
+For the planned Team Table family, the range uses the Prague date on which the booking starts.
 
 Checkout checks the code's current range wherever it checks the code: the anonymous preview from the reservation URL, the order summary, code entry, and final payment admission. A code whose range was changed after the customer saw it is handled like any other change to a shown discount: checkout presents an updated summary for acceptance.
 

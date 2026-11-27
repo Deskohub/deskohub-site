@@ -20,7 +20,8 @@ import { restartReasonOf } from "./booking-family-view";
 export const useRestartReasonInView = (
   restart: string | undefined,
   focused: boolean,
-  reread: () => void
+  reread: () => void,
+  refreshOnOpen = false
 ): Option.Option<CheckoutRestartReason> => {
   const scrollToTop = useScrollScreenToTop();
   const latest = useRef({ reread, scrollToTop });
@@ -28,11 +29,11 @@ export const useRestartReasonInView = (
   const focusedBefore = useRef(false);
   useEffect(() => {
     if (!focused) return;
-    if (focusedBefore.current && Option.isSome(restartReasonOf(restart))) {
-      latest.current.reread();
-      latest.current.scrollToTop();
+    if (Option.isSome(restartReasonOf(restart))) {
+      if (focusedBefore.current || refreshOnOpen) latest.current.reread();
+      if (focusedBefore.current) latest.current.scrollToTop();
     }
     focusedBefore.current = true;
-  }, [focused, restart]);
+  }, [focused, refreshOnOpen, restart]);
   return focused ? restartReasonOf(restart) : Option.none();
 };

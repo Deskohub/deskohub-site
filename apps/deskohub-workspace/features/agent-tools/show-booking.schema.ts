@@ -28,6 +28,7 @@ export const showBookingResultSchema = Schema.Struct({
     tier: Schema.optionalKey(Schema.Literals(workspaceCoworkCurrentTiers)),
     duration: Schema.optionalKey(meetingRoomReservationDurationKeySchema),
     start_time: Schema.optionalKey(Schema.String),
+    end_time: Schema.optionalKey(Schema.String),
     seats: Schema.optionalKey(Schema.Int),
   }).annotate({ description: "The choices the view opens with." }),
   advertised_on: Schema.String.annotate({

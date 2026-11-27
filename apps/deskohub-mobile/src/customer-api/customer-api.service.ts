@@ -1,6 +1,6 @@
 import {
   makeCustomerAuthApiClient,
-  makeWorkspaceCustomerApiClient,
+  makeWorkspaceCustomerApiClientWithTeamTable,
 } from "@deskohub/workspace-customer-api/client";
 import { Context, Effect, Layer } from "effect";
 import type { HttpClient } from "effect/http";
@@ -29,7 +29,7 @@ export class CustomerApiTransport extends Context.Service<
 >()("CustomerApiTransport") {}
 
 type CustomerApiClient = Effect.Success<
-  ReturnType<typeof makeWorkspaceCustomerApiClient>
+  ReturnType<typeof makeWorkspaceCustomerApiClientWithTeamTable>
 >;
 
 /** The typed Workspace customer API (`/api/customer`). */
@@ -40,7 +40,7 @@ export class CustomerApi extends Context.Service<
   static Default = Layer.effect(
     this,
     Effect.flatMap(Effect.service(CustomerApiTransport), (transport) =>
-      makeWorkspaceCustomerApiClient({
+      makeWorkspaceCustomerApiClientWithTeamTable({
         baseUrl: transport.apiOrigin,
         transformClient: transport.customerApi,
       })

@@ -1,11 +1,9 @@
 import type {
   CustomerBookedSelection,
-  CustomerBookingSelection,
   CustomerReservationProduct,
 } from "@deskohub/workspace-customer-api";
 import type { CheckoutRestartReason } from "./checkout/booking-problem";
-
-type BookingFamily = CustomerBookingSelection["family"];
+import type { BookingFamily } from "./selection/booking-selection";
 
 /** The family screen's route, optionally saying why the booking restarted. */
 export const bookFamilyHref = (

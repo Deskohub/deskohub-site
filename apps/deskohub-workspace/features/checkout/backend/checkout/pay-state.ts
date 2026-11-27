@@ -5,11 +5,13 @@ import type { CheckoutSummary } from "@/features/checkout/checkout-summary";
 import { getCoworkCheckoutSummary } from "@/features/checkout/checkout-summary-cowork";
 import { getMeetingRoomCheckoutSummary } from "@/features/checkout/checkout-summary-meeting-room";
 import { getOfficeCheckoutSummary } from "@/features/checkout/checkout-summary-office";
+import { getTableCheckoutSummary } from "@/features/checkout/checkout-summary-table";
 import type { DiscountCodeRejection } from "@/features/checkout/discount-code-rejection";
 import { payStateTokenQueryParam } from "@/features/checkout/pay-state-token-query";
 import { coworkReservationQuoteSchema } from "@/features/checkout/reservation-quote-cowork";
 import { meetingRoomReservationQuoteSchema } from "@/features/checkout/reservation-quote-meeting-room";
 import { officeReservationQuoteSchema } from "@/features/checkout/reservation-quote-office";
+import { tableReservationQuoteSchema } from "@/features/checkout/reservation-quote-table";
 import type { AppliedDiscount } from "@/features/discounts";
 import type {
   CanonicalPromotionCode,
@@ -20,6 +22,7 @@ import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/c
 import { normalizedMeetingRoomReservationOrderSchema } from "@/features/reservation/meeting-room-reservation";
 import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/office-reservation";
 import { reservationHoldTtlMilliseconds } from "@/features/reservation/reservation-hold-deadline";
+import { normalizedTableReservationOrderSchema } from "@/features/reservation/table-reservation";
 import {
   makeLegacySealedState,
   type SealedStateIssueOptions,
@@ -60,6 +63,11 @@ const officePayStatePricingSchema = Schema.Struct({
   quote: officeReservationQuoteSchema,
 });
 
+const tablePayStatePricingSchema = Schema.Struct({
+  reservation: normalizedTableReservationOrderSchema,
+  quote: tableReservationQuoteSchema,
+});
+
 /** A reservation family's Pay state: the signed envelope with its order. */
 const familyPayStateSchema = <Fields extends Schema.Struct.Fields>(
   pricing: Schema.Struct<Fields>
@@ -88,6 +96,7 @@ export const signedPayStateSchema = Schema.Union([
   familyPayStateSchema(coworkPayStatePricingSchema),
   familyPayStateSchema(meetingRoomPayStatePricingSchema),
   familyPayStateSchema(officePayStatePricingSchema),
+  familyPayStateSchema(tablePayStatePricingSchema),
 ])
   .check(
     Schema.makeFilter(
@@ -187,6 +196,7 @@ export const decodeSignedPayStatePricing = Schema.decodeUnknownEffect(
     coworkPayStatePricingSchema,
     meetingRoomPayStatePricingSchema,
     officePayStatePricingSchema,
+    tablePayStatePricingSchema,
   ]),
   { onExcessProperty: "error" }
 );
@@ -209,6 +219,9 @@ const getSignedPayStateCheckoutSummary = (
     ),
     Match.when({ reservation: { kind: "office" } }, ({ quote }) =>
       getOfficeCheckoutSummary(quote)
+    ),
+    Match.when({ reservation: { kind: "table" } }, ({ quote }) =>
+      getTableCheckoutSummary(quote)
     ),
     Match.exhaustive
   );

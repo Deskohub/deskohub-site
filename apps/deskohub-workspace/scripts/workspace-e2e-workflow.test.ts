@@ -359,6 +359,7 @@ describe("workspace E2E workflow", () => {
       )
     ).toEqual({
       "resolve-target": undefined,
+      "resolve-backend-preview": { contents: "read", deployments: "read" },
       // Reads the exact-SHA checkout and saves the Bun package cache.
       "fill-bun-package-cache": { contents: "read" },
       "test-e2e": {
@@ -369,6 +370,7 @@ describe("workspace E2E workflow", () => {
       },
       // Cancels only its own run, and runs no exact-SHA code.
       "cancel-superseded-run": { actions: "write", "pull-requests": "read" },
+      "confirm-backend-preview": { contents: "read" },
       "publish-final-status": {
         contents: "read",
         deployments: "read",
@@ -406,7 +408,11 @@ describe("workspace E2E workflow", () => {
       (step) => step.name === "Run checkout E2E"
     );
 
-    expect(testJob.needs).toEqual(["resolve-target", "fill-bun-package-cache"]);
+    expect(testJob.needs).toEqual([
+      "resolve-target",
+      "fill-bun-package-cache",
+      "resolve-backend-preview",
+    ]);
     expect(resolveIndex).toBeGreaterThanOrEqual(0);
     expect(migrateIndex).toBeGreaterThan(resolveIndex);
     expect(staleCleanupIndex).toBeGreaterThan(migrateIndex);
@@ -416,6 +422,68 @@ describe("workspace E2E workflow", () => {
     // A failed migration must stop the run instead of testing a stale schema.
     expect(migration.if).toBeUndefined();
     expect(migration["continue-on-error"]).toBeUndefined();
+  });
+
+  test("validates the backend generation in trusted code before the pilot migrates", () => {
+    const gate = doc.jobs["resolve-backend-preview"];
+    expect(gate?.needs).toBe("resolve-target");
+    expect(gate?.if).toContain("github.ref_protected");
+    expect(gate?.environment).toBe("workspace-backend-preview-e2e");
+    expect(gate?.env?.PR_NUMBER).toBe(
+      `\${{ needs.resolve-target.outputs.pr_number }}`
+    );
+    const steps = gate?.steps ?? [];
+    expect(steps[0]?.with?.ref).toBe(`\${{ github.workflow_sha }}`);
+    expect(steps[1]?.env?.VERCEL_TOKEN).toBe(
+      `\${{ secrets.WORKSPACE_BACKEND_PREVIEW_VERCEL_TOKEN }}`
+    );
+    expect(JSON.stringify(testJob)).not.toContain(
+      "WORKSPACE_BACKEND_PREVIEW_VERCEL_TOKEN"
+    );
+    expect(JSON.stringify(gate)).not.toContain("WORKSPACE_E2E_BASE_URL");
+    const testSteps = testJob?.steps ?? [];
+    const binding = testSteps.indexOf(
+      stepByName("Verify the backend generation under the preview lease")
+    );
+    expect(binding).toBeGreaterThan(
+      testSteps.indexOf(stepByName("Resolve Neon branch backing the preview"))
+    );
+    expect(binding).toBeLessThan(
+      testSteps.indexOf(stepByName("Migrate preview database"))
+    );
+  });
+
+  test("passes pilot proof only to the trusted status publishers", () => {
+    const confirmation = doc.jobs["confirm-backend-preview"];
+    expect(confirmation?.needs).toEqual([
+      "resolve-target",
+      "resolve-backend-preview",
+      "test-e2e",
+    ]);
+    expect(confirmation?.if).toContain("github.ref_protected");
+    expect(confirmation?.if).toContain("needs.test-e2e.result == 'success'");
+    expect(confirmation?.name).toContain(
+      "needs.resolve-backend-preview.outputs.proof"
+    );
+    expect(confirmation?.steps?.[0]?.with?.ref).toBe(
+      `\${{ github.workflow_sha }}`
+    );
+    const final = stepByName("Publish final commit status");
+    const withoutRun = stepByName("Publish status without an E2E run");
+    for (const publisher of [final, withoutRun]) {
+      expect(publisher.env?.PILOT_PR_NUMBER).toBe(
+        `\${{ vars.WORKSPACE_BACKEND_PREVIEW_PR }}`
+      );
+    }
+    expect(final.env?.BACKEND_PREVIEW_REQUIRED).toBe(
+      `\${{ needs.resolve-target.outputs.backend_preview }}`
+    );
+    expect(final.env?.STATUS_STATE).toContain(
+      "needs.confirm-backend-preview.result == 'success'"
+    );
+    expect(final.env?.TARGET_URL_DIGEST).toBeUndefined();
+    expect(withoutRun.env?.BACKEND_PREVIEW_REQUIRED).toBeUndefined();
+    expect(JSON.stringify(testJob)).not.toContain("TARGET_URL_DIGEST");
   });
 
   test("classifies the synthetic main account only after a failed E2E run", () => {
@@ -669,19 +737,117 @@ describe("workspace E2E workflow", () => {
     expect(trackedTurboExposures("WORKSPACE_E2E_RESEND_API_KEY")).toEqual([]);
   });
 
-  test("keeps the preview session-signing secret inside the checkout Playwright execution only", () => {
-    expect(
-      stepByName("Run checkout E2E").env?.WORKSPACE_E2E_BETTER_AUTH_SECRETS
-    ).toBe(`\${{ secrets.WORKSPACE_E2E_BETTER_AUTH_SECRETS }}`);
+  test("scopes the preview signing secrets to validation and checkout", () => {
+    const checkout = stepByName("Run checkout E2E");
+    const validation = stepByName("Validate the backend preview signer");
     expect(
       serializedWorkflow.split("WORKSPACE_E2E_BETTER_AUTH_SECRETS").length - 1
     ).toBe(2);
+    expect(
+      serializedWorkflow.split("WORKSPACE_BACKEND_PREVIEW_BETTER_AUTH_SECRETS")
+        .length - 1
+    ).toBe(2);
+    expect(testJob?.steps).toContain(checkout);
+    expect(testJob?.steps).toContain(validation);
+    expect(testJob).toHaveProperty("environment", "workspace-checkout-e2e");
     expect(serializedProductionWorkflow.includes("BETTER_AUTH")).toBe(false);
 
     expect(trackedTurboExposures("WORKSPACE_E2E_BETTER_AUTH_SECRETS")).toEqual([
       "root tasks.test:e2e.passThroughEnv",
     ]);
   });
+
+  test("validates the pilot signer with reviewed code before acquiring the preview lease", () => {
+    const steps = testJob?.steps ?? [];
+    const checkout = stepByName("Checkout workflow actions");
+    const validation = stepByName("Validate the backend preview signer");
+    expect(checkout.with?.ref).toBe(`\${{ github.workflow_sha }}`);
+    expect(checkout.with?.["sparse-checkout"]).toContain(
+      "packages/workspace-domain/src/shared/credentials"
+    );
+    expect(checkout.with?.path).toBe(validation["working-directory"]);
+    expect(steps.indexOf(validation)).toBeGreaterThan(steps.indexOf(checkout));
+    expect(steps.indexOf(validation)).toBeLessThan(
+      steps.indexOf(stepByName("Lease an available date shard"))
+    );
+    expect(validation["continue-on-error"]).toBeUndefined();
+    expect(testJob?.if).toContain(
+      "needs.resolve-target.outputs.backend_preview != 'true' || needs.resolve-backend-preview.result == 'success'"
+    );
+  });
+
+  const sharedTestSigner = "shared-test-signer";
+  const validPilotTestSigner = "1:V7m2QqX9arc6tBK51Tz7LWpH3dM8FW2N";
+  test.each([
+    ["ordinary", "false", validPilotTestSigner, sharedTestSigner, ""],
+    ["nightly", "", validPilotTestSigner, sharedTestSigner, ""],
+    ["pilot", "true", validPilotTestSigner, validPilotTestSigner, ""],
+    [
+      "pilot with no signer",
+      "true",
+      undefined,
+      "",
+      "BETTER_AUTH_SECRETS is not configured.",
+    ],
+    [
+      "pilot with a weak signer",
+      "true",
+      "1:weak",
+      "1:weak",
+      "BETTER_AUTH_SECRETS has a weak secret value.",
+    ],
+  ])(
+    "selects the checkout signer for %s",
+    async (_target, pilot, pilotSigner, expected, error) => {
+      const pilotKey = "WORKSPACE_BACKEND_PREVIEW_BETTER_AUTH_SECRETS";
+      const secrets = new Map([
+        ["WORKSPACE_E2E_BETTER_AUTH_SECRETS", sharedTestSigner],
+      ]);
+      if (pilotSigner !== undefined) secrets.set(pilotKey, pilotSigner);
+
+      const checkout = stepByName("Run checkout E2E");
+      const validation = stepByName("Validate the backend preview signer");
+      const selector = /^\$\{\{\s*secrets\[(.+)\]\s*\}\}$/.exec(
+        String(checkout.env?.WORKSPACE_E2E_BETTER_AUTH_SECRETS)
+      )?.[1];
+      if (selector === undefined)
+        throw new Error("Checkout must look up one selected signing secret");
+      const context: WorkflowExpressionContext = {
+        contexts: ["needs"],
+        values: new Map([
+          [
+            "needs.resolve-target.outputs.backend_preview",
+            workflowExpressionString(pilot),
+          ],
+        ]),
+      };
+      const selected = evaluateWorkflowValue(`\${{ ${selector} }}`, context);
+      const signer = secrets.get(selected) ?? "";
+      expect(signer).toBe(expected);
+
+      const condition = `\${{ ${validation.if} }}`;
+      expect(evaluateWorkflowValue(condition, context)).toBe(
+        String(pilot === "true")
+      );
+      if (pilot !== "true") return;
+
+      expect(validation.env?.BETTER_AUTH_SECRETS).toBe(
+        `\${{ secrets.${pilotKey} }}`
+      );
+      const result = await runCommand(
+        ["bash", "-e", "-o", "pipefail", "-c", validation.run ?? ""],
+        {
+          cwd: resolve(import.meta.dir, "../../.."),
+          env: { PATH: process.env.PATH, BETTER_AUTH_SECRETS: signer },
+        }
+      );
+      expect(result.exitCode).toBe(error ? 1 : 0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trim()).toBe(
+        error ? `Workspace backend preview signer is invalid. ${error}` : ""
+      );
+    }
+  );
 
   test("the Turborepo secret guard finds global and wildcard exposures", () => {
     const root = readJsonFile(
@@ -782,6 +948,7 @@ describe("workspace E2E workflow", () => {
       "resolve-target",
       "fill-bun-package-cache",
       "test-e2e",
+      "confirm-backend-preview",
     ]);
     // A target E2E never ran against gets no final status.
     expect(doc.jobs["publish-final-status"].if).toContain(
@@ -914,7 +1081,10 @@ describe("workspace E2E workflow", () => {
     // The fill job finishes before test-e2e starts.
     expect(testJob?.needs).toContain("fill-bun-package-cache");
     expect(fillJob?.needs).toBe("resolve-target");
-    expect(fillJob?.if).toBe(testJob?.if);
+    expect(testJob?.if).toContain(fillJob?.if ?? "");
+    expect(testJob?.if).toContain(
+      "needs.resolve-backend-preview.result == 'success'"
+    );
     expect(steps.indexOf(install)).toBeGreaterThan(steps.indexOf(restore));
     // The fill installs outside the checkout, so this install always starts
     // from an empty tree and runs every lifecycle script.
@@ -1018,9 +1188,11 @@ describe("workspace E2E workflow", () => {
       )
     ).toEqual({
       "resolve-target": "read",
+      "resolve-backend-preview": "read",
       "fill-bun-package-cache": "write",
       "test-e2e": "read",
       "cancel-superseded-run": "read",
+      "confirm-backend-preview": "read",
       "publish-final-status": "read",
       "publish-status-without-run": "read",
     });

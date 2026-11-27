@@ -14,6 +14,7 @@ import type { PublicPageMarkdownSources } from "@/features/public-pages/public-p
 import {
   coworkReservationPath,
   meetingRoomReservationPath,
+  tableReservationPath,
 } from "@/features/reservation/routes";
 import {
   type MarkdownBlocks,
@@ -152,6 +153,18 @@ export const landingPageMarkdown = (
         )
       ),
     ]),
+    ...(isPublished(tableReservationPath)
+      ? [
+          markdownHeading(3, m.reservationTableProductTitle({}, { locale })),
+          markdownParagraph(m.landingOfferingTeamTableText({}, { locale })),
+          markdownParagraph(
+            markdownLink(
+              getWorkspacePageUrl(tableReservationPath),
+              m.landingOfferingTeamTableBookingLink({}, { locale })
+            )
+          ),
+        ]
+      : []),
     markdownHeading(3, getWorkspaceMeetingRoomProductTitle(locale)),
     markdownParagraph(m.landingOfferingMeetingRoomText({}, { locale })),
     markdownList([

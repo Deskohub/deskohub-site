@@ -2,6 +2,7 @@ import { Match, Schema } from "effect";
 import type { CoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
 import type { MeetingRoomReservationQuote } from "@/features/checkout/reservation-quote-meeting-room";
 import type { OfficeReservationQuote } from "@/features/checkout/reservation-quote-office";
+import type { TableReservationQuote } from "@/features/checkout/reservation-quote-table";
 import {
   coworkCheckoutDetailsSchema,
   getCoworkCheckoutDetails,
@@ -14,15 +15,21 @@ import {
   getOfficeCheckoutDetails,
   officeCheckoutDetailsSchema,
 } from "@/features/checkout/schemas/checkout-details-office";
+import {
+  getTableCheckoutDetails,
+  tableCheckoutDetailsSchema,
+} from "@/features/checkout/schemas/checkout-details-table";
 import type { Locale } from "@/features/i18n";
 import type { NormalizedCoworkReservationOrder } from "@/features/reservation/cowork-reservation";
 import type { NormalizedMeetingRoomReservationOrder } from "@/features/reservation/meeting-room-reservation";
 import type { NormalizedOfficeReservationOrder } from "@/features/reservation/office-reservation";
+import type { NormalizedTableReservationOrder } from "@/features/reservation/table-reservation";
 
 export const checkoutDetailsSchema = Schema.Union([
   coworkCheckoutDetailsSchema,
   meetingRoomCheckoutDetailsSchema,
   officeCheckoutDetailsSchema,
+  tableCheckoutDetailsSchema,
 ]).annotate({
   identifier: "CheckoutDetails",
   description: "Transient PII-free checkout provider snapshot.",
@@ -57,6 +64,11 @@ type PricedReservation =
       readonly kind: NormalizedOfficeReservationOrder["kind"];
       readonly reservation: NormalizedOfficeReservationOrder;
       readonly quote: OfficeReservationQuote;
+    }
+  | {
+      readonly kind: "table";
+      readonly reservation: NormalizedTableReservationOrder;
+      readonly quote: TableReservationQuote;
     };
 
 /** The checkout details of a priced reservation, by its family. */
@@ -79,6 +91,8 @@ export const getCheckoutDetails = (input: {
         }),
       office: ({ reservation, quote }) =>
         getOfficeCheckoutDetails({ locale, reservation, quote, legalEvidence }),
+      table: ({ reservation, quote }) =>
+        getTableCheckoutDetails({ locale, reservation, quote, legalEvidence }),
     })
   );
 };

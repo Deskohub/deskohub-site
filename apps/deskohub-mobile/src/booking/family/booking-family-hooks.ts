@@ -8,11 +8,14 @@ import { useEffect } from "react";
 import { trackBookingStarted } from "../../analytics/events";
 import { bookingPreselectionOf } from "../booking-preselection";
 import type { CheckoutRestartReason } from "../checkout/booking-problem";
-import { reservationKindOf } from "../selection/booking-selection";
+import {
+  type BookingFamily,
+  reservationKindOf,
+} from "../selection/booking-selection";
 import { useRestartReasonInView } from "./restart-reason";
 
 /** Reports the booking started once, when the family's screen opens. */
-export const useBookingStarted = (family: CustomerReservationFamily) => {
+export const useBookingStarted = (family: BookingFamily) => {
   useEffect(() => {
     trackBookingStarted(reservationKindOf(family));
   }, [family]);
@@ -23,10 +26,11 @@ export const useBookingStarted = (family: CustomerReservationFamily) => {
  * while the screen is in view (see `useRestartReasonInView`).
  */
 export const useRestartReason = (
-  reread: () => void
+  reread: () => void,
+  { refreshOnOpen = false }: { readonly refreshOnOpen?: boolean } = {}
 ): Option.Option<CheckoutRestartReason> => {
   const { restart } = useLocalSearchParams<{ restart?: string }>();
-  return useRestartReasonInView(restart, useIsFocused(), reread);
+  return useRestartReasonInView(restart, useIsFocused(), reread, refreshOnOpen);
 };
 
 /**

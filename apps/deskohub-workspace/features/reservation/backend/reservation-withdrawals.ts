@@ -252,6 +252,12 @@ const getReservationContractLabel = (
           details.reservedUntil,
           locale
         ),
+      table: () =>
+        formatReservationDisplayDateTimeRange(
+          details.reservedFrom,
+          details.reservedUntil,
+          locale
+        ),
       office: () =>
         formatReservationDisplayDateRange(
           details.reservedFrom,

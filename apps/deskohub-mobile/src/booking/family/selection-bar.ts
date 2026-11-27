@@ -1,10 +1,10 @@
 import type {
   CustomerBookingQuote,
-  CustomerBookingSelection,
   Money,
 } from "@deskohub/workspace-customer-api";
 import { Option } from "effect";
 import type { AppLocale } from "../../i18n/app-locale";
+import type { BookingSelection } from "../selection/booking-selection";
 import type { CoworkOvernightStay } from "../selection/cowork-selection";
 import type { BookingBarSummary } from "../ui/booking-bar";
 import { bookingSummaryOf, quotedBarSummary } from "../ui/booking-summary";
@@ -47,7 +47,8 @@ export const selectionBar = ({
    */
   readonly from: {
     readonly title: string;
-    readonly amount: Money;
+    /** The from-price, when the catalog offers one. */
+    readonly amount?: Money;
     /** Such as "per day". */
     readonly unit?: string;
     /**
@@ -57,9 +58,11 @@ export const selectionBar = ({
     readonly overnightStay?: CoworkOvernightStay;
   };
   /** None until the selection is complete. */
-  readonly selection: Option.Option<CustomerBookingSelection>;
+  readonly selection: Option.Option<BookingSelection>;
   /** None while there is nothing to quote. */
-  readonly quote: Option.Option<BookingRead<CustomerBookingQuote>>;
+  readonly quote: Option.Option<
+    BookingRead<Pick<CustomerBookingQuote, "summary" | "regularPrice">>
+  >;
   /** Why the selection can't continue, worded; none when nothing blocks it. */
   readonly blocked: Option.Option<string>;
   /** Information to show once the booking can continue. */
@@ -72,11 +75,14 @@ export const selectionBar = ({
     return {
       summary: {
         title: from.title,
-        price: {
-          kind: "from",
-          amount: from.amount,
-          ...(from.unit !== undefined && { unit: from.unit }),
-        },
+        price:
+          from.amount === undefined
+            ? { kind: "none" }
+            : {
+                kind: "from",
+                amount: from.amount,
+                ...(from.unit !== undefined && { unit: from.unit }),
+              },
       },
       action: "continue",
       disabled: true,

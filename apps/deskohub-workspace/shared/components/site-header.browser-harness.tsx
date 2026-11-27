@@ -25,8 +25,7 @@ const administrator = mountPoint.dataset.administrator === "true";
 const signedIn = mountPoint.dataset.session === "signed-in";
 const signInHref = `/${locale}/auth/sign-in`;
 
-// The full header renders the production menu with every item enabled, so it
-// is measured at its widest.
+// The full header defaults to measuring the production menu at its widest.
 createRoot(mountPoint).render(
   mountPoint.dataset.variant === "minimal" ? (
     <MinimalSiteHeader
@@ -54,7 +53,9 @@ createRoot(mountPoint).render(
         save: async () => undefined,
         signedIn: Promise.resolve(signedIn),
       }}
-      links={createSiteHeaderLinks(locale)}
+      links={createSiteHeaderLinks(locale, {
+        teamTable: mountPoint.dataset.teamTableEnabled === "false",
+      })}
       mobilePrimaryNavigationLabel={m.mobilePrimaryNavigationLabel(
         {},
         { locale }

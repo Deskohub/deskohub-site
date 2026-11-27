@@ -12,6 +12,7 @@ import {
   availabilityResult,
   bookingOfficeSeats,
   bookingStart,
+  bookingTeamTableOffering,
   bookingToday,
 } from "./booking-widget.test-utils";
 
@@ -38,6 +39,16 @@ describe("getBookingLocale", () => {
 });
 
 describe("getInitialDraft", () => {
+  test("requires a choice when an explicit Team Table size is unavailable", () => {
+    const table = { ...start, offerings: [bookingTeamTableOffering] };
+    expect(
+      getInitialDraft({ ...table, selection: { family: "table", seats: 3 } })
+        .tableSeats
+    ).toBe("");
+    expect(
+      getInitialDraft({ ...table, selection: { family: "table" } }).tableSeats
+    ).toBe("4");
+  });
   test("opens on the first family and options, today, one day and one seat", () => {
     expect(getInitialDraft(start)).toEqual({
       family: "cowork",
@@ -45,8 +56,11 @@ describe("getInitialDraft", () => {
       duration: "hour:1",
       date: bookingToday,
       startTime: "",
+      tableStartTime: "",
+      tableEndTime: "",
       dayCount: "1",
       seats: "1",
+      tableSeats: "",
     });
   });
 
@@ -83,12 +97,14 @@ describe("getInitialDraft", () => {
   });
 });
 
+const resolverOptions = { fields: {}, shouldUseNativeValidation: false };
+
 /** Validates the draft as the form's resolver does. */
 const resolve = (change: Partial<BookingDraft>, locale: Locale = "en-US") =>
   effectSchemaResolver(makeBookingDraftSchema({ ...start, locale }))(
     draft(change),
     undefined,
-    { fields: {}, shouldUseNativeValidation: false }
+    resolverOptions
   );
 
 /** Each invalid field's message. */
@@ -103,6 +119,40 @@ const messages = async (
   );
 
 describe("makeBookingDraftSchema", () => {
+  test("decodes an offered Team Table size and exact quarter-hour interval", async () => {
+    const tableStart = {
+      ...start,
+      offerings: [...start.offerings, bookingTeamTableOffering],
+    };
+    const resolver = effectSchemaResolver(makeBookingDraftSchema(tableStart));
+    const selection = {
+      ...getInitialDraft(tableStart),
+      family: "table" as const,
+      tableSeats: "4",
+      tableStartTime: "09:15",
+      tableEndTime: "10:45",
+    };
+
+    expect(
+      (await resolver(selection, undefined, resolverOptions)).values
+    ).toEqual({
+      family: "table",
+      date: bookingToday,
+      seats: 4,
+      start_time: "09:15",
+      end_time: "10:45",
+    });
+    expect(
+      (
+        await resolver(
+          { ...selection, tableSeats: "3" },
+          undefined,
+          resolverOptions
+        )
+      ).errors
+    ).toHaveProperty("tableSeats");
+  });
+
   test("builds the cowork arguments for one date and tier", async () => {
     expect(await resolve({ tier: "reserved-desk" })).toEqual({
       values: { family: "cowork", date: bookingToday, tier: "reserved-desk" },

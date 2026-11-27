@@ -75,6 +75,33 @@ export const formatInstantTime = ({
     temporalInstantToDate(instant)
   );
 
+const isCzechLocale = (locale: string) => /^cs(?:-|$)/i.test(locale);
+
+/**
+ * Formats a date-only range. CLDR's Czech `medium` interval pattern switches
+ * to zero-padded `03.03.2027 – 01.04.2027` even though single `medium` dates
+ * use standard Czech spaced `3. 3. 2027`, so Czech `medium` ranges join the
+ * formatter's own single-date output instead.
+ */
+const formatDateRange = ({
+  start,
+  end,
+  options,
+}: {
+  readonly start: Date;
+  readonly end: Date;
+  readonly options: InstantDateFormatOptions;
+}) => {
+  const formatter = makeDateFormatter(options);
+  const { dateStyle, locale } = formatter.resolvedOptions();
+  if (dateStyle === "medium" && isCzechLocale(locale)) {
+    const startText = formatter.format(start);
+    const endText = formatter.format(end);
+    return startText === endText ? startText : `${startText} – ${endText}`;
+  }
+  return formatter.formatRange(start, end);
+};
+
 export const formatInstantDateRange = ({
   start,
   end,
@@ -83,10 +110,11 @@ export const formatInstantDateRange = ({
   readonly start: Temporal.Instant;
   readonly end: Temporal.Instant;
 }) =>
-  makeDateFormatter(options).formatRange(
-    temporalInstantToDate(start),
-    temporalInstantToDate(end)
-  );
+  formatDateRange({
+    start: temporalInstantToDate(start),
+    end: temporalInstantToDate(end),
+    options,
+  });
 
 /**
  * Both instants' dates and times of day, for a span that crosses dates. Plain
@@ -131,10 +159,11 @@ export const formatPlainDateRange = ({
   readonly start: Temporal.PlainDate;
   readonly end: Temporal.PlainDate;
 }) =>
-  makeDateFormatter({ ...options, timeZone: "UTC" }).formatRange(
-    plainDateToDate(start),
-    plainDateToDate(end)
-  );
+  formatDateRange({
+    start: plainDateToDate(start),
+    end: plainDateToDate(end),
+    options: { ...options, timeZone: "UTC" },
+  });
 
 /** The locale's short name for an ISO weekday, 1 (Monday) to 7 (Sunday). */
 export const formatWeekday = ({

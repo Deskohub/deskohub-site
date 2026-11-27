@@ -3,12 +3,14 @@ import bookingWidgetHtml from "@/features/agent-tools/booking-widget/generated/b
   type: "text",
 };
 import { m } from "@/features/i18n";
+import { ensureTeamTableReservationsEnabled } from "@/features/team-table/backend/team-table-release-gate";
 import {
   agentToolLocaleField,
   CallableAgentTools,
   defineAgentTool,
   getAgentToolLocale,
 } from "./agent-tool";
+import { AgentToolError } from "./agent-tool-error";
 import type { AgentToolView } from "./agent-tool-view";
 import { loadAgentOfferings } from "./list-offerings.tool";
 import { completeSelectionFields } from "./quote-selection";
@@ -21,7 +23,7 @@ import { startReservationTool } from "./start-reservation.tool";
 
 /** The booking view: offerings, availability, a quote, and the handoff. */
 const bookingView: AgentToolView = {
-  uri: "ui://dh-workspace/booking-v2.html",
+  uri: "ui://dh-workspace/booking-v3.html",
   name: "booking",
   title: "Deskohub Workspace booking",
   description:
@@ -40,6 +42,7 @@ const inputSchema = Schema.Struct({
   tier: completeSelectionFields.tier,
   duration: completeSelectionFields.duration,
   start_time: completeSelectionFields.start_time,
+  end_time: completeSelectionFields.end_time,
   seats: completeSelectionFields.seats,
   locale: agentToolLocaleField,
 });
@@ -58,7 +61,7 @@ export const makeShowBookingTool = ({
     name: "show_booking",
     title: "Show the Deskohub Workspace booking view",
     description:
-      "Shows the customer an interactive booking view where they choose cowork, the meeting room, or the office, a date and options, see availability and the price, and continue on the website. Prefill any choices the customer already made. The result also lists the offerings and the booking_mode, so where no view is shown, continue with check_availability and get_quote.",
+      "Shows an interactive view where the customer chooses a Workspace offering, a date and options, checks availability and the price, and continues on the website. Prefill any choices the customer already made, including seats and times for a Team Table. The result lists the offerings and the booking_mode, so where no view is shown, continue with check_availability and get_quote.",
     access: "public",
     readOnly: true,
     unavailableCode: "offerings_unavailable",
@@ -67,6 +70,13 @@ export const makeShowBookingTool = ({
     output: showBookingResultSchema,
     run: Effect.fn("agentTools.showBooking")((input) =>
       Effect.Do.pipe(
+        Effect.tap(() =>
+          input.family === "table"
+            ? ensureTeamTableReservationsEnabled.pipe(
+                Effect.mapError(AgentToolError.unsupportedFamily)
+              )
+            : Effect.void
+        ),
         Effect.let("locale", () => getAgentToolLocale(input)),
         Effect.bind("listing", ({ locale }) => loadAgentOfferings(locale)),
         Effect.bind("mode", () => getBookingMode(admitsCheckout)),

@@ -133,9 +133,14 @@ const nextConfig = {
   transpilePackages: [
     "@deskohub/cloudinary",
     "@deskohub/cloudinary-image",
+    "@deskohub/google-oidc",
     "@deskohub/tooltip",
     "@deskohub/workspace-admin-api",
+    "@deskohub/workspace-backend",
     "@deskohub/workspace-customer-api",
+    "@deskohub/workspace-domain",
+    "@deskohub/workspace-rpc",
+    "@deskohub/workspace-telemetry",
   ],
   async redirects() {
     return [
@@ -151,6 +156,16 @@ const nextConfig = {
           utm_medium: "print",
           utm_campaign: "bud jako doma",
         })}`,
+        permanent: true,
+      },
+      {
+        source: "/prices",
+        destination: "/pricing",
+        permanent: true,
+      },
+      {
+        source: `/:locale(${localeRedirectPattern})/prices`,
+        destination: "/:locale/pricing",
         permanent: true,
       },
       {

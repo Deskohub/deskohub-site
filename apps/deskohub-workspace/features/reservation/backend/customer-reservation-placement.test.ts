@@ -52,6 +52,7 @@ const place = (input: {
     dotyposReservation:
       input.tableId === undefined ? {} : assignedTo(input.tableId),
     tables: input.tables,
+    openSpaceExcludedTableIds: new Set(),
     seatingMap: input.seatingMap ?? false,
   });
 
@@ -183,6 +184,33 @@ describe("getCustomerReservationPlacement", () => {
         ),
       }).table
     ).toEqual({ mode: "shared", name: "9-12, 15, 16, wallee, gromice" });
+  });
+
+  test("excludes tables held by Team Table bookings before compacting names", () => {
+    const placement = getCustomerReservationPlacement({
+      reservationDetails: openSpace,
+      dotyposReservation: assignedTo("open-9"),
+      tables: ["9", "10", "11", "12", "15"].map((name) =>
+        makeTable({ id: `open-${name}`, name, tags: ["cowork:open-space"] })
+      ),
+      seatingMap: false,
+      openSpaceExcludedTableIds: new Set([
+        DotyposTableIdSchema.make("open-12"),
+      ]),
+    });
+
+    expect(placement.table).toEqual({ mode: "shared", name: "9-11, 15" });
+  });
+
+  test("omits the shared table list when exclusions could not be loaded", () => {
+    expect(
+      getCustomerReservationPlacement({
+        reservationDetails: openSpace,
+        dotyposReservation: assignedTo("open-9"),
+        tables: [makeTable({ id: "open-9", tags: ["cowork:open-space"] })],
+        seatingMap: false,
+      })
+    ).toEqual({});
   });
 
   test("never names an Open Space reservation's assigned table, even by ID", () => {

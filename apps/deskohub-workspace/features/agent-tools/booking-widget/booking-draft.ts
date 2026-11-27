@@ -16,6 +16,7 @@ import {
 import { isPlainDateString } from "@/shared/utils/temporal";
 import type { CheckAvailabilityResult } from "../check-availability.schema";
 import type { AgentOffering } from "../list-offerings.schema";
+import { quarterHourTimePattern } from "../reservation-selection";
 import type { BookingMode, ShowBookingResult } from "../show-booking.schema";
 
 /** What the booking view opens with, from the `show_booking` call. */
@@ -54,6 +55,14 @@ export const getFamilyOfferings = (
   offerings: ReadonlyArray<AgentOffering>,
   family: WorkspaceReservationKind
 ) => offerings.filter((offering) => offering.family === family);
+
+export const getTeamTableOfferings = (
+  offerings: ReadonlyArray<AgentOffering>
+) =>
+  offerings.filter(
+    (offering): offering is AgentOffering & { readonly seats: number } =>
+      offering.family === "table" && offering.seats !== undefined
+  );
 
 const hoursPerDay = 24;
 
@@ -105,15 +114,26 @@ export const getInitialDraft = ({
   today,
 }: BookingStart): BookingDraft => {
   const date = selection.date ?? today;
+  const tableOfferings = getTeamTableOfferings(offerings);
+  const requestedSeats =
+    selection.family === "table" ? selection.seats : undefined;
+  const initialTable =
+    requestedSeats === undefined
+      ? tableOfferings[0]
+      : tableOfferings.find(({ seats }) => seats === requestedSeats);
 
   return {
     family: getInitialFamily(offerings, selection.family),
     tier: getInitialTier(offerings, selection.tier),
     duration: getInitialDuration(offerings, selection.duration),
     date,
-    startTime: selection.start_time ?? "",
+    startTime: selection.family === "table" ? "" : (selection.start_time ?? ""),
+    tableStartTime:
+      selection.family === "table" ? (selection.start_time ?? "") : "",
+    tableEndTime: selection.end_time ?? "",
     dayCount: getInitialDayCount(date, selection.end_date),
-    seats: String(selection.seats ?? 1),
+    seats: String(selection.family === "table" ? 1 : (selection.seats ?? 1)),
+    tableSeats: String(initialTable?.seats ?? ""),
   };
 };
 
@@ -139,9 +159,21 @@ const bookingSelectionSchema = Schema.Union([
     end_date: Schema.optionalKey(Schema.String),
     seats: Schema.Int,
   }),
+  Schema.Struct({
+    family: Schema.Literal("table"),
+    date: Schema.String,
+    seats: Schema.Int,
+    start_time: Schema.String,
+    end_time: Schema.String,
+  }),
 ]);
 
 export type BookingSelection = typeof bookingSelectionSchema.Type;
+
+export type BookingTableSlotSelection = Pick<
+  Extract<BookingSelection, { readonly family: "table" }>,
+  "family" | "date" | "seats"
+>;
 
 /** The customer's choices as the form holds them; numbers stay as typed. */
 const bookingDraftSchema = Schema.Struct({
@@ -150,8 +182,11 @@ const bookingDraftSchema = Schema.Struct({
   duration: meetingRoomReservationDurationKeySchema,
   date: Schema.String,
   startTime: Schema.String,
+  tableStartTime: Schema.String,
+  tableEndTime: Schema.String,
   dayCount: Schema.String,
   seats: Schema.String,
+  tableSeats: Schema.String,
 });
 
 export type BookingDraft = typeof bookingDraftSchema.Type;
@@ -197,6 +232,7 @@ export const makeBookingDraftSchema = ({
     (office?.max_duration_hours ?? hoursPerDay) / hoursPerDay
   );
   const maxSeats = office?.max_seats;
+  const tableOfferings = getTeamTableOfferings(offerings);
 
   return Schema.Union([
     Schema.Struct({
@@ -273,6 +309,41 @@ export const makeBookingDraftSchema = ({
           ...(dayCount > 1 && { end_date: addDays(date, dayCount - 1) }),
           seats,
         })),
+        encode: formOnly(),
+      })
+    ),
+    Schema.Struct({
+      ...bookingDraftSchema.fields,
+      family: Schema.Literal("table"),
+      date,
+      tableSeats: Schema.FiniteFromString.check(
+        Schema.makeFilter(
+          (seats: number) =>
+            tableOfferings.some((offering) => offering.seats === seats),
+          { message: m.bookingWidgetTableSizeRequired({}, { locale }) }
+        )
+      ),
+      tableStartTime: Schema.String.check(
+        Schema.isPattern(quarterHourTimePattern, {
+          message: m.bookingWidgetStartTimeRequired({}, { locale }),
+        })
+      ),
+      tableEndTime: Schema.String.check(
+        Schema.isPattern(quarterHourTimePattern, {
+          message: m.bookingWidgetEndTimeRequired({}, { locale }),
+        })
+      ),
+    }).pipe(
+      Schema.decodeTo(bookingSelectionSchema.members[3], {
+        decode: SchemaGetter.transform(
+          ({ family, date, tableSeats, tableStartTime, tableEndTime }) => ({
+            family,
+            date,
+            seats: tableSeats,
+            start_time: tableStartTime,
+            end_time: tableEndTime,
+          })
+        ),
         encode: formOnly(),
       })
     ),

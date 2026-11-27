@@ -3,7 +3,6 @@ import type {
   ApplyCustomerCheckoutDiscountCode,
   ClearCustomerCheckoutDiscountCode,
   CreateCustomerCheckout,
-  CustomerBookingSelection,
   CustomerCheckout,
   CustomerCheckoutDiscountCodeResult,
   CustomerCheckoutStart,
@@ -19,6 +18,10 @@ import type {
 import { Data, type Option } from "effect";
 import type { PaymentBrowserResult } from "../payment-browser.service";
 import type { RememberedReferralUpdate } from "../remembered-referral";
+import type {
+  BookingFamily,
+  BookingSelection,
+} from "../selection/booking-selection";
 import type {
   BookingProblem,
   CheckoutBlockedReason,
@@ -37,12 +40,12 @@ export interface CheckoutStartInput {
   /** Stable while the customer stays on this booking. */
   readonly checkoutSessionId: string;
   readonly locale: CustomerLocale;
-  readonly selection: CustomerBookingSelection;
+  readonly selection: BookingSelection;
   /** Empty for a payment retry, which reviews an existing order and never creates one. */
   readonly advertisedPriceToken: string;
   /** Meeting room only. */
   readonly earlySetup?: boolean;
-  /** Office only: who is coming, sent with the order. */
+  /** Office and Team Table: who is coming, sent with the order. */
   readonly people?: CustomerOfficePeople;
   /** The referral code the app remembers for the signed-in account. */
   readonly rememberedReferralCode: Option.Option<ReferralCode>;
@@ -82,7 +85,7 @@ export interface HeldCheckout {
   >;
   readonly earlyPerformanceConsent: CustomerCheckout["earlyPerformanceConsent"];
   readonly referralApplied: boolean;
-  /** An office order's people as the server holds them. */
+  /** The attendees the server holds for the booking. */
   readonly people: Option.Option<CustomerOfficePeople>;
 }
 
@@ -120,7 +123,9 @@ export const LegalDocuments = Data.taggedEnum<LegalDocuments>();
 export type CheckoutCommand = Data.TaggedEnum<{
   CreateCheckout: {
     readonly operationId: CheckoutOperationId;
-    readonly request: CreateCustomerCheckout;
+    readonly request: Omit<CreateCustomerCheckout, "selection"> & {
+      readonly selection: BookingSelection;
+    };
     readonly referralCode: Option.Option<ReferralCode>;
   };
   LoadLegalDocuments: {
@@ -153,7 +158,7 @@ export type CheckoutCommand = Data.TaggedEnum<{
   };
   UpdateRememberedReferral: { readonly update: RememberedReferralUpdate };
   TrackBookingSubmitted: {
-    readonly family: CustomerBookingSelection["family"];
+    readonly family: BookingFamily;
   };
 }>;
 export const CheckoutCommand = Data.taggedEnum<CheckoutCommand>();

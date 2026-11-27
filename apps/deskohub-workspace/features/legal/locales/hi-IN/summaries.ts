@@ -14,7 +14,7 @@ export const legalDocumentSummaries = {
   },
   "terms-and-conditions": {
     title: "सामान्य नियम और शर्तें",
-    lead: "ये सामान्य नियम और शर्तें Deskohub Workspace में कोवर्किंग प्रवेश, और मीटिंग रूम तथा निजी ऑफ़िस की ऑनलाइन बुकिंग को नियंत्रित करती हैं।",
+    lead: "ये सामान्य नियम और शर्तें Deskohub Workspace में कोवर्किंग प्रवेश तथा मीटिंग रूम, निजी ऑफ़िस और टीम टेबल की ऑनलाइन बुकिंग पर लागू होती हैं।",
   },
   "cookie-policy": {
     title: "कुकी नीति",
@@ -22,6 +22,6 @@ export const legalDocumentSummaries = {
   },
   "operating-rules": {
     title: "परिसर नियमावली",
-    lead: "यह परिसर नियमावली Deskohub Workspace के कोवर्किंग स्पेस, मीटिंग रूम, निजी ऑफ़िस और कार्यक्रम स्थलों में आचरण और उनके उपयोग को नियंत्रित करती है।",
+    lead: "यह परिसर नियमावली Deskohub Workspace के कोवर्किंग स्पेस, मीटिंग रूम, निजी ऑफ़िस और कार्यक्रम स्थलों में आचरण और उनके उपयोग को नियंत्रित करती है। इसमें Open Space में दूसरों की जगह का सम्मान करने और टीम टेबल की बुकिंग के लिए दूसरी सीट पर जाने के नियम भी हैं।",
   },
 } satisfies Record<LegalDocumentKey, LegalDocumentSummary>;

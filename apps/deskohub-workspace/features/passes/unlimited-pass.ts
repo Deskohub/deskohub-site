@@ -1,5 +1,8 @@
-import { Schema } from "effect";
-import { workspaceProductMonitorOptions } from "@/features/checkout/product-catalog";
+import type { unlimitedPassSelectionSchema } from "@deskohub/workspace-domain/features/passes/unlimited-pass";
+
+export { unlimitedPassSelectionSchema } from "@deskohub/workspace-domain/features/passes/unlimited-pass";
+
+import { getLastConsumerWithdrawalDate } from "@/features/legal/early-performance";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -7,22 +10,6 @@ import { type Money, sameMoneyUnit } from "@/shared/money/money";
 import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
 import type { PassStatus } from "./pass";
 import { unlimitedPassDays } from "./pass-offer";
-
-const periodFields = { startDate: plainDateStringSchema };
-
-export const unlimitedPassSelectionSchema = Schema.Union([
-  Schema.Struct({
-    ...periodFields,
-    tier: Schema.Literal("open-space"),
-    coffee: Schema.Boolean,
-  }),
-  Schema.Struct({ ...periodFields, tier: Schema.Literal("reserved-desk") }),
-  Schema.Struct({
-    ...periodFields,
-    tier: Schema.Literal("reserved-desk-workstation"),
-    monitorOption: Schema.Literals(workspaceProductMonitorOptions),
-  }),
-]);
 
 export type UnlimitedPassSelection = typeof unlimitedPassSelectionSchema.Type;
 
@@ -59,7 +46,12 @@ export function unlimitedPassRequiresEarlyStart(
   startDate: PlainDate,
   agreedOn: Temporal.PlainDate
 ) {
-  return Temporal.PlainDate.compare(startDate, agreedOn.add({ days: 14 })) <= 0;
+  return (
+    Temporal.PlainDate.compare(
+      startDate,
+      getLastConsumerWithdrawalDate(agreedOn)
+    ) <= 0
+  );
 }
 
 /** Withdrawal includes the current service date and releases later dates. */

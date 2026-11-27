@@ -9,8 +9,13 @@ import {
   type CoworkReservationQuoteOrder,
 } from "@/features/checkout/checkout-quote.test-utils";
 import { buildOfficeReservationQuote } from "@/features/checkout/reservation-quote-office";
+import { buildTableReservationQuote } from "@/features/checkout/reservation-quote-table";
+import { orderIdSchema } from "@/features/order";
 import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/office-reservation";
+import { tableReservationOrderSchema } from "@/features/reservation/table-reservation";
+import { currencyCZK } from "@/shared/money/currencies";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { makeAccountingDocumentSnapshot } from "./accounting-document-snapshot";
 import {
   decodeInvoiceDocument,
@@ -19,8 +24,10 @@ import {
   invoiceDocumentSchema,
   isLineItemInvoiceDocument,
   makeInvoiceDocument,
+  makePassPurchaseInvoiceDocument,
 } from "./invoice";
 import { makeTestManualInvoiceDocument } from "./invoice.test-utils";
+import { getInvoiceStatedLines } from "./invoice-presentation";
 
 const coworkOrder = {
   entryTier: "basic",
@@ -66,6 +73,85 @@ const personalInvoiceBuyer = {
 };
 
 describe("invoice", () => {
+  test("freezes both Team Table charges and the precise booked interval", async () => {
+    const reservation = Schema.decodeUnknownSync(
+      tableReservationOrderSchema("CZ")
+    )({
+      kind: "table",
+      startsAt: "2026-08-11T09:15:00Z",
+      endsAt: "2026-08-11T10:00:00Z",
+      seats: 4,
+      name: "Table Buyer",
+      email: testEmailAddress("table-buyer"),
+      phone: "+420 700 000 000",
+    });
+    const tableSource = makeAccountingDocumentSnapshot({
+      workspaceReservationId: "table-reservation-id",
+      dotyposReservationId: "dotypos-table-reservation-id",
+      dotyposCustomerId: "dotypos-customer-id",
+      locale: "en-US",
+      prepared: {
+        kind: "table",
+        reservation,
+        quote: Effect.runSync(buildTableReservationQuote(reservation)),
+      },
+    });
+    const document = makeInvoiceDocument({
+      source: tableSource,
+      buyer: personalInvoiceBuyer,
+      paymentAttemptId: "table-payment-attempt-id",
+      invoiceNumber: formatInvoiceNumber({ year: 2026, sequence: 2 }),
+      issuedAt,
+      fulfilledAt,
+      paidAt,
+    });
+
+    expect(document.reservation).toEqual(tableSource.reservation);
+    expect(getInvoiceStatedLines(document)).toEqual([
+      { description: "Team Table base charge · 4 seats", amount: "240.00" },
+      { description: "Team Table time charge · 45 min", amount: "60.00" },
+    ]);
+    await expect(
+      Effect.runPromise(decodeInvoiceDocument(document))
+    ).resolves.toEqual(document);
+  });
+
+  test("uses the paid coffee price for a pass bought before catalog repricing", () => {
+    const product = { kind: "unlimited", tier: "open-space" } as const;
+    const document = makePassPurchaseInvoiceDocument({
+      source: {
+        orderId: orderIdSchema.make("019ac0e6-f461-77de-9492-26af32cc74a3"),
+        dotyposCustomerId: source.dotyposCustomerId,
+        locale: source.locale,
+        supplier: source.supplier,
+        buyer: personalInvoiceBuyer,
+        billing: { purpose: "personal", invoice: "none" },
+        delivery: { email: testEmailAddress("pass-buyer") },
+        serviceDate: plainDateStringSchema.make("2026-08-10"),
+        product,
+        coffeeAmountMinor: 53_000,
+        quote: {
+          product,
+          discountableSubtotal: currencyCZK(350_000),
+          discountedSubtotal: currencyCZK(350_000),
+          totalDiscount: currencyCZK(0),
+          discounts: [],
+        },
+      },
+      buyer: personalInvoiceBuyer,
+      paymentAttemptId: "payment-attempt-id",
+      invoiceNumber: formatInvoiceNumber({ year: 2026, sequence: 42 }),
+      issuedAt,
+      paidAt,
+    });
+
+    expect(document.lines.map(({ price }) => price)).toEqual([
+      "3500.00",
+      "530.00",
+    ]);
+    expect(document.total).toBe("4030.00");
+  });
+
   test("formats positive annual sequences without arbitrary upper bounds", () => {
     expect(formatInvoiceNumber({ year: 2026, sequence: 1 })).toBe(
       "WS-FV-2026-000001"

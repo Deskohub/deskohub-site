@@ -119,10 +119,10 @@ export const CustomerBookingSelection = Schema.Struct({
 export type CustomerBookingSelection = typeof CustomerBookingSelection.Type;
 
 /**
- * Who is coming to a private office: the checkout's contact while
+ * Who is coming to an office or Team Table: the checkout's contact while
  * `contactAttends`, and the people added by email address in `invitees`, in
- * the order the booker added them. At least one person comes, the office
- * capacity (`maximumSeats`) bounds the count, and an address appears once and
+ * the order the booker added them. At least one person comes, the selected
+ * seats bound the count, and an address appears once and
  * never as the contact's own. Each invitee gets their own access email once
  * the order is paid.
  */

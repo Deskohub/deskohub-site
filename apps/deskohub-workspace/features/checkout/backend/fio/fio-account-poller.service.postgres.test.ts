@@ -257,6 +257,7 @@ const credit = (
 ): FioMovement => ({
   movementId,
   bookingDate,
+  constantSymbol: null,
   amount: { _tag: "CZK", minorUnits: 12000 },
   reference: { _tag: "VariableSymbol", value },
 });
@@ -429,6 +430,23 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
       { movementId: "winner", disposition: "winner", orderId: attempt.orderId },
     ]);
     expect((await h.state())?.covered_through).toBe(h.reads[0]?.to);
+  });
+
+  test("advances account coverage past an ignored card payout", async () => {
+    const h = createHarness();
+    await h.start();
+    const job = h.take();
+    h.setRead(({ to }) =>
+      Effect.succeed([
+        { ...credit("card-payout", to, "966220033"), constantSymbol: "0558" },
+      ])
+    );
+
+    await h.consume(job);
+
+    expect(h.reads).toHaveLength(1);
+    expect((await h.state())?.covered_through).toBe(h.reads[0]?.to);
+    expect(await h.evidence()).toEqual([]);
   });
 
   test("idle polls do no work or follow-up; new demand replays old references and preserves exact coverage on failure", async () => {

@@ -6,7 +6,6 @@ import { Data, Effect, Array as EffectArray, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
   type passPurchases,
-  unlimitedPassDayMoves,
   type WorkspaceReservationRow,
   workspaceReservations,
 } from "@/db/schema";
@@ -20,6 +19,7 @@ import {
 import { type PassTier, unlimitedPassDays } from "../pass-offer";
 import { hasUnlimitedPassFirstDayEnded } from "./entry-pack-settlement";
 import { recordAmbiguousPassDayHolds } from "./pass-day-hold-ownership";
+import { passDayMoveJournal } from "./pass-day-move-journal";
 import {
   bookPassDay,
   endReleasedPassDay,
@@ -438,24 +438,25 @@ export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
       observePassDayHolds(purchase, rows, range)
     );
     const provider = Result.isSuccess(lookup) ? lookup.success : undefined;
+    const moveJournal = passDayMoveJournal(db);
     const attachedMoves = yield* db
       .select({
-        reservationId: unlimitedPassDayMoves.reservationId,
-        targetId: unlimitedPassDayMoves.targetReservationId,
-        generation: unlimitedPassDayMoves.generation,
-        customerId: unlimitedPassDayMoves.customerId,
-        tableId: unlimitedPassDayMoves.targetTableId,
-        settledAt: unlimitedPassDayMoves.settledAt,
+        reservationId: moveJournal.reservationId,
+        targetId: moveJournal.targetReservationId,
+        generation: moveJournal.generation,
+        customerId: moveJournal.customerId,
+        tableId: moveJournal.targetTableId,
+        settledAt: moveJournal.settledAt,
       })
-      .from(unlimitedPassDayMoves)
+      .from(moveJournal)
       .innerJoin(
         workspaceReservations,
-        eq(workspaceReservations.id, unlimitedPassDayMoves.reservationId)
+        eq(workspaceReservations.id, moveJournal.reservationId)
       )
       .where(
         and(
           eq(workspaceReservations.passId, purchase.id),
-          isNotNull(unlimitedPassDayMoves.attachedAt)
+          isNotNull(moveJournal.attachedAt)
         )
       );
     const movesByTarget = new Map(

@@ -235,8 +235,23 @@ export {
   customerApiClientHeader,
   customerReferralCodeHeader,
 } from "./customer-session";
+export {
+  CreateCustomerTeamTableCheckout,
+  CustomerTeamTableCalendar,
+  CustomerTeamTableInvitationRejected,
+  CustomerTeamTableOfferings,
+  CustomerTeamTableQuote,
+  CustomerTeamTableSlots,
+  CustomerTeamTableStatus,
+  CustomerTeamTableUnavailable,
+} from "./customer-team-table-api";
+export {
+  CustomerTeamTableProduct,
+  CustomerTeamTableSelection,
+} from "./customer-team-table-selection";
 export { ReferralCode } from "./referral-code";
 export {
   customerApiPathPrefix,
   WorkspaceCustomerApi,
+  WorkspaceCustomerApiWithTeamTable,
 } from "./workspace-customer-api";

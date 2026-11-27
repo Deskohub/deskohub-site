@@ -50,7 +50,10 @@ import type {
 } from "../workspace-availability";
 
 export type AvailabilityEvaluationInput = {
-  readonly query: WorkspaceAvailabilityQuery;
+  readonly query: Exclude<
+    WorkspaceAvailabilityQuery,
+    { readonly kind: "table" }
+  >;
   /** Every date in the queried range, as `YYYY-MM-DD`. */
   readonly dates: readonly string[];
   readonly reservation: ReservationInterval | undefined;
@@ -491,7 +494,7 @@ const createInventoryView = (
 const isUnavailableForSelection = (
   inventory: InventoryView,
   occupancy: Occupancy,
-  query: WorkspaceAvailabilityQuery,
+  query: AvailabilityEvaluationInput["query"],
   getCoworkOfferOccupancy: (tier: WorkspaceCoworkProductTier) => Occupancy
 ) =>
   Match.value(query).pipe(

@@ -11,13 +11,18 @@ import { createPublicPageMetadata } from "../page-metadata";
 import { publicPageDefinitions } from "../public-page-definitions";
 import type { PublicPagePathname } from "../public-pages";
 import { PublishedPublicPagesService } from "./published-public-pages.service";
+import { TeamTableReleaseGateRequest } from "./team-table-public-release.server";
 
 // Each release gate evaluates once per render, shared with the page's other
 // readers of that gate such as the header and the advertised prices.
 const PublishedPublicPagesRenderLayer =
   PublishedPublicPagesService.Default.pipe(
     Layer.provide(
-      Layer.mergeAll(MeetingRoomReleaseGateRequest, OfficeReleaseGateRequest)
+      Layer.mergeAll(
+        MeetingRoomReleaseGateRequest,
+        OfficeReleaseGateRequest,
+        TeamTableReleaseGateRequest
+      )
     )
   );
 
