@@ -12,21 +12,22 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
-import * as store from "./email-sign-in-request";
+
+let store: typeof import("./email-sign-in-request");
 
 const storageKey = "deskohub:account-sign-in-code";
 const email = testEmailAddress("sign-in-request");
 const returnTo = "/en-US/reservation?date=2026-10-20";
 
 describe("email sign-in request of this tab", () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     registerWorkspaceComponentTestEnv();
-    store.rememberEmailSignInRequest(null);
     // Stored before link-only requests were kept: no `signInCode` field.
     sessionStorage.setItem(
       storageKey,
       JSON.stringify({ email, requestedAt: Date.now() })
     );
+    store = await import("./email-sign-in-request");
   });
 
   afterEach(() => {
