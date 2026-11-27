@@ -8,11 +8,9 @@ import {
   ReservationBooking,
 } from "./reservation-booking.service";
 import { ReservationHolds } from "./reservation-holds.service";
-import { WorkspaceAvailabilityService } from "./workspace-availability.service";
 
 const teamTableDisabled = Layer.mergeAll(
   TeamTableReleaseGate.fromDecision(false),
-  Layer.mock(WorkspaceAvailabilityService, {}),
   Layer.mock(OpenSpaceTableMoves, {})
 );
 
