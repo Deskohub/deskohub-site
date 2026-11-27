@@ -46,6 +46,7 @@ import {
   type WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
 import type { ReservationSelection } from "@/features/reservation/selection-path";
+import type { StoredTableReservationDetails } from "@/features/reservation/table-reservation";
 import {
   getBookedPeopleQuery,
   ReservationInvitees,
@@ -109,6 +110,9 @@ export type CheckoutMeetingRoomStatusSummary = CheckoutStatusSummaryBase &
 export type CheckoutOfficeStatusSummary = CheckoutStatusSummaryBase &
   StoredOfficeReservationDetails & { readonly seats: number };
 
+type CheckoutTableStatusSummary = CheckoutStatusSummaryBase &
+  StoredTableReservationDetails;
+
 type CheckoutStatusContactPrefill = {
   readonly name?: string;
   readonly email?: string;
@@ -167,6 +171,12 @@ type CheckoutOfficeStatusViewModel = CheckoutReservationStatusViewModelBase & {
   readonly people?: ReservationPeopleView;
 };
 
+type CheckoutTableStatusViewModel = CheckoutReservationStatusViewModelBase & {
+  readonly kind: "table";
+  readonly summary?: CheckoutTableStatusSummary;
+  readonly people?: ReservationPeopleView;
+};
+
 type CheckoutStatusNotFoundViewModel = CheckoutStatusViewModelBase & {
   readonly status: "not_found";
   readonly summary?: undefined;
@@ -175,7 +185,8 @@ type CheckoutStatusNotFoundViewModel = CheckoutStatusViewModelBase & {
 type CheckoutReservationStatusViewModel =
   | CheckoutCoworkStatusViewModel
   | CheckoutMeetingRoomStatusViewModel
-  | CheckoutOfficeStatusViewModel;
+  | CheckoutOfficeStatusViewModel
+  | CheckoutTableStatusViewModel;
 
 export type CheckoutStatusViewModel =
   | CheckoutReservationStatusViewModel
@@ -193,6 +204,10 @@ type CheckoutStatusReservationReconstruction =
   | {
       readonly kind: "office";
       readonly summary?: CheckoutOfficeStatusSummary;
+    }
+  | {
+      readonly kind: "table";
+      readonly summary?: CheckoutTableStatusSummary;
     };
 
 type CheckoutStatusReconstruction = {
@@ -282,6 +297,7 @@ const getEmptyCheckoutStatusReservation = (
       cowork: () => ({ kind: "cowork" as const }),
       "meeting-room": () => ({ kind: "meeting-room" as const }),
       office: () => ({ kind: "office" as const }),
+      table: () => ({ kind: "table" as const }),
     })
   );
 
@@ -333,6 +349,18 @@ const toStatusReservation = ({
             ...timing,
             price: attempt.amount,
             seats,
+          },
+        };
+      },
+      table: (details) => {
+        const seats = Option.getOrUndefined(booked.seats) ?? details.seats;
+        return {
+          kind: "table" as const,
+          summary: {
+            ...details,
+            ...timing,
+            price: attempt.amount,
+            ...(seats !== undefined && { seats }),
           },
         };
       },
