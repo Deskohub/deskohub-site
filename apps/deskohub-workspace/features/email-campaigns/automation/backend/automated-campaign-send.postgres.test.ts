@@ -253,7 +253,7 @@ describe.skipIf(!testDatabase)(
       const { payload } = requireValue(requests[0], "batch request");
       expect(payload).toContain("Verze jedna");
       expect(payload).not.toContain("Rozpracovan");
-      const [message] = Schema.decodeUnknownSync(
+      const [message] = Schema.decodeSync(
         Schema.fromJsonString(
           Schema.NonEmptyArray(
             Schema.Struct({
