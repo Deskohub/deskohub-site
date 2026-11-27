@@ -5,13 +5,15 @@ import { testEmailAddress } from "@deskohub/test-email";
 import {
   AdministrationCampaignId,
   CliMutationRequestId,
+  campaignOperations,
 } from "@deskohub/workspace-admin-api";
-import { Temporal } from "@js-temporal/polyfill";
-import { Effect, Layer } from "effect";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
+import { Effect, Layer, Schema } from "effect";
 import type { CampaignRow } from "@/db/schema";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { AccountRoleGrants } from "@/features/administrators/backend/account-role-grants.service";
 import { CurrentAdministrator } from "@/features/administrators/backend/current-administrator";
+import { campaignAudienceIdSchema } from "../campaign-identifiers";
 import {
   CampaignDeliveryMismatch,
   CampaignNotFound,
@@ -25,6 +27,7 @@ import { automationServiceStubs } from "./campaign-operations.test-utils";
 import { CampaignRecipientService } from "./campaign-recipient.service";
 import { CampaignSendService } from "./campaign-send.service";
 import { CampaignSendStatusService } from "./campaign-send-status.service";
+import { everyoneFilter } from "./email-campaigns.test-utils";
 import { OperationRequestLedger } from "./operation-request-ledger.service";
 
 const campaignId = AdministrationCampaignId.make(
@@ -43,6 +46,7 @@ const campaignRow = (overrides: Partial<CampaignRow> = {}): CampaignRow => ({
   templateKey: "workspace",
   content: {},
   audienceId: null,
+  emailId: null,
   delivery: "once",
   status: "draft",
   createdAt,
@@ -53,6 +57,8 @@ const campaignRow = (overrides: Partial<CampaignRow> = {}): CampaignRow => ({
 type Overrides = {
   readonly isAdministrator?: boolean;
   readonly campaigns?: Partial<CampaignService["Service"]>;
+  readonly audiences?: Partial<CampaignAudienceService["Service"]>;
+  readonly recipients?: Partial<CampaignRecipientService["Service"]>;
   readonly sending?: Partial<CampaignSendService["Service"]>;
   readonly ledger?: OperationRequestLedger["Service"];
 };
@@ -79,8 +85,8 @@ const runOperations = <A, E>(
               has: () => Effect.succeed(overrides.isAdministrator ?? true),
             }),
             Layer.mock(CampaignService, overrides.campaigns ?? {}),
-            Layer.mock(CampaignAudienceService, {}),
-            Layer.mock(CampaignRecipientService, {}),
+            Layer.mock(CampaignAudienceService, overrides.audiences ?? {}),
+            Layer.mock(CampaignRecipientService, overrides.recipients ?? {}),
             Layer.mock(CampaignSendService, overrides.sending ?? {}),
             Layer.mock(CampaignSendStatusService, {}),
             automationServiceStubs()
@@ -128,12 +134,9 @@ describe("CampaignOperations.invoke", () => {
 
   test("refuses an unknown input key as invalid input before the handler runs", async () => {
     const calls: string[] = [];
+    const invalidInput = { campaignId, unexpected: true };
     const error = await failureOf(
-      (operations) =>
-        operations.invoke("getCampaign", {
-          campaignId,
-          unexpected: true,
-        } as never),
+      (operations) => operations.invoke("getCampaign", invalidInput),
       {
         campaigns: {
           get: () =>
@@ -183,25 +186,51 @@ describe("CampaignOperations.invoke", () => {
     ],
     [
       "an unexpected failure",
-      new Error("connection reset"),
+      new EffectDrizzleQueryError({
+        query: "select 1",
+        params: [],
+        cause: new Error("connection reset"),
+      }),
       "OperationUnavailable",
       "service-unavailable",
     ],
   ] as const)(
     "maps %s to its category and code, keeping the cause",
     async (_, cause, category, code) => {
-      const error = await failureOf(
-        (operations) =>
-          operations.invoke("testSendCampaign", {
-            campaignId,
-            recipients: [],
-          }),
-        {
-          sending: {
-            testSend: () => Effect.fail(cause as CampaignNotFound),
-          },
-        }
+      const audienceId = campaignAudienceIdSchema.make(
+        "01990000-0000-7000-8000-000000000002"
       );
+      const error =
+        cause instanceof CampaignRecipientResolutionError
+          ? await failureOf(
+              (operations) =>
+                operations.invoke("previewCampaignRecipients", { campaignId }),
+              {
+                campaigns: {
+                  get: () => Effect.succeed(campaignRow({ audienceId })),
+                },
+                audiences: {
+                  get: () =>
+                    Effect.succeed({
+                      id: audienceId,
+                      title: "Everyone",
+                      filter: everyoneFilter,
+                      archivedAt: null,
+                      createdAt,
+                      updatedAt: createdAt,
+                    }),
+                },
+                recipients: { resolve: () => Effect.fail(cause) },
+              }
+            )
+          : await failureOf(
+              (operations) =>
+                operations.invoke("testSendCampaign", {
+                  campaignId,
+                  recipients: [],
+                }),
+              { sending: { testSend: () => Effect.fail(cause) } }
+            );
 
       expect(error).toMatchObject({ _tag: category, code });
       expect(error.cause).toBe(cause);
@@ -212,14 +241,21 @@ describe("CampaignOperations.invoke", () => {
     const stored = new Map<string, unknown>();
     const handled: string[] = [];
     const replayingLedger: OperationRequestLedger["Service"] = {
-      applyOnce: (entry) =>
-        stored.has(entry.input.requestId)
-          ? Effect.succeed(stored.get(entry.input.requestId) as never)
-          : entry.apply.pipe(
-              Effect.tap((result) =>
-                Effect.sync(() => stored.set(entry.input.requestId, result))
-              )
-            ),
+      applyOnce: (entry) => {
+        const { requestId } = entry.input;
+        if (!stored.has(requestId)) {
+          return entry.apply.pipe(
+            Effect.tap((result) =>
+              Effect.sync(() => stored.set(requestId, result))
+            )
+          );
+        }
+        const result = stored.get(requestId);
+        const isOutput = Schema.is(campaignOperations[entry.operation].output);
+        if (!isOutput(result))
+          throw new Error("Expected a stored operation output");
+        return Effect.succeed(result);
+      },
     };
     const requestId = CliMutationRequestId.make(crypto.randomUUID());
     const duplicate = (operations: CampaignOperations["Service"]) =>

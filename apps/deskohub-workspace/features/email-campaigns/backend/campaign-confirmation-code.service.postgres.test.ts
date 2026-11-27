@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -220,6 +221,8 @@ describe.skipIf(!testDatabase)(
     test("rolls back code consumption and status when freezing recipients fails", async () => {
       const campaign = await createDraft();
       const { code } = await issueFor(campaign);
+      const [recipient] = frozenSend.recipients;
+      assert(recipient, "Expected a frozen recipient");
       const failed = await runAt(
         { minutes: 5 },
         CampaignConfirmationCodeService.pipe(
@@ -229,10 +232,7 @@ describe.skipIf(!testDatabase)(
               code,
               send: {
                 ...frozenSend,
-                recipients: [
-                  frozenSend.recipients[0]!,
-                  frozenSend.recipients[0]!,
-                ],
+                recipients: [recipient, recipient],
               },
             })
           )
@@ -464,7 +464,9 @@ describe.skipIf(!testDatabase)(
            returning id`,
           [status]
         );
-        const campaignId = rows[0]!.id;
+        const [automated] = rows;
+        assert(automated, "Expected an inserted automated campaign");
+        const campaignId = automated.id;
         campaignIds.push(campaignId);
         const mismatch = {
           _tag: "CampaignDeliveryMismatch",

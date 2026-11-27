@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   AdminCliAutomationsApi,
   AdminCliCampaignsApi,
@@ -22,20 +23,27 @@ import {
   WorkspaceAdminApi,
 } from "@deskohub/workspace-admin-api";
 import { NodeCrypto, NodeHttpServer } from "@effect/platform-node";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, Schema, Struct } from "effect";
 import { HttpRouter } from "effect/http";
-import { HttpApiBuilder } from "effect/http-api";
+import { HttpApi, HttpApiBuilder, type HttpApiEndpoint } from "effect/http-api";
 import * as nextCache from "next/cache";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { cliSessions } from "@/db/schema";
 import type { AdministratorAccountActor } from "@/features/administrators/account-role";
 import { mockAdministratorAccess } from "@/features/administrators/server/administrator-access.test-utils";
-import type { CampaignId } from "@/features/email-campaigns/campaign-identifiers";
+import {
+  type CampaignId,
+  campaignIdSchema,
+} from "@/features/email-campaigns/campaign-identifiers";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
+import { decodeJson } from "@/shared/testing/json-file.test-utils";
 import { recordNextCache } from "@/shared/testing/next-cache-recorder.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
-import type { AutomationPreviewId } from "../automation/automation-identifiers";
+import {
+  type AutomationPreviewId,
+  automationPreviewIdSchema,
+} from "../automation/automation-identifiers";
 import { richCampaignBodies } from "../body/campaign-body-document.test-utils";
 
 /**
@@ -79,8 +87,14 @@ mock.module("next/headers", () => ({
 }));
 
 type Registry = CampaignOperationRegistry;
-type AnyOperationInput = OperationInput<Registry[CampaignOperationName]>;
-type CliErrorBody = { readonly _tag?: string; readonly code?: string };
+type RunAdapter = <Name extends CampaignOperationName>(
+  name: Name,
+  input: NoInfer<OperationInput<Registry[Name]>>
+) => Promise<Outcome>;
+const CliErrorBody = Schema.Struct({
+  _tag: Schema.optionalKey(Schema.String),
+  code: Schema.optionalKey(Schema.String),
+});
 
 /** What every adapter must agree on: the output, or category and code. */
 type Outcome =
@@ -99,9 +113,9 @@ type Seeded = {
   readonly draftId: string;
   readonly deletableDraftId: string;
   readonly draftWithoutAudienceId: string;
-  readonly automatedDraftId: string;
+  readonly automatedDraftId: CampaignId;
   /** A completed dry run of the automated draft's current working copy. */
-  readonly readyPreviewId: string;
+  readonly readyPreviewId: AutomationPreviewId;
   /** A completed dry run of an older working copy. */
   readonly stalePreviewId: string;
 };
@@ -139,7 +153,11 @@ const failure = (
 ): Outcome => ({ _tag: "Failure", category, code });
 const requestId = () => CliMutationRequestId.make(crypto.randomUUID());
 const missingId = "01990000-0000-7000-8000-00000000dead";
-const savedAudienceFilter = { _tag: "Group", operator: "and", filters: [] };
+const savedAudienceFilter = {
+  _tag: "Group",
+  operator: "and",
+  filters: [],
+} as const;
 /** "Twice an hour, send": the schedule fires more than hourly (D33). */
 const twiceHourlyFlow = {
   trigger: { _tag: "Schedule", calendar: { minutes: [0, 30] } },
@@ -379,8 +397,11 @@ const cases: AdapterContractCases<Registry> = {
     },
     {
       title: "refuses an unknown input key",
-      input: ({ draftId }) =>
-        ({ campaignId: draftId, title: "Renamed", unexpected: true }) as never,
+      input: ({ draftId }) => ({
+        campaignId: draftId,
+        title: "Renamed",
+        unexpected: true,
+      }),
       expect: failure("OperationInputInvalid", "input-invalid"),
     },
   ],
@@ -481,12 +502,11 @@ const cases: AdapterContractCases<Registry> = {
     },
     {
       title: "refuses an unknown input key",
-      input: ({ automatedDraftId }) =>
-        ({
-          campaignId: automatedDraftId,
-          flow: twiceHourlyFlow,
-          unexpected: true,
-        }) as never,
+      input: ({ automatedDraftId }) => ({
+        campaignId: automatedDraftId,
+        flow: twiceHourlyFlow,
+        unexpected: true,
+      }),
       expect: failure("OperationInputInvalid", "input-invalid"),
     },
     {
@@ -739,16 +759,13 @@ const handleCliRequest = await (async () => {
   const { UnrecordedAdministrationActions, UnusedCliSessionAuthentication } =
     await import("@/features/admin-cli/cli-api.test-utils");
   const { CampaignOperations } = await import("./campaign-operations.service");
-  const { unhandledHttpApiGroups } = await import(
-    "@/shared/testing/http-api-test-groups.test-utils"
-  );
+  const campaignApi = HttpApi.make(WorkspaceAdminApi.identifier)
+    .add(AdminCliCampaignsApi)
+    .add(AdminCliAutomationsApi);
   return HttpRouter.toWebHandler(
-    HttpApiBuilder.layer(WorkspaceAdminApi).pipe(
+    HttpApiBuilder.layer(campaignApi).pipe(
       Layer.provide(AdminCliCampaignsApiHandlers),
       Layer.provide(AdminCliAutomationsApiHandlers),
-      Layer.provide(
-        unhandledHttpApiGroups(WorkspaceAdminApi, ["campaigns", "automations"])
-      ),
       Layer.provide(
         Layer.mergeAll(
           UnusedCliSessionAuthentication,
@@ -775,6 +792,8 @@ const handleCliRequest = await (async () => {
 
 describe.skipIf(!testDatabase)("campaign operation adapters", () => {
   if (!testDatabase) return;
+  assert(handleCliRequest, "Expected the CLI handler for the test database");
+  const cliHandler: typeof handleCliRequest = handleCliRequest;
   const { pool } = testDatabase;
 
   beforeAll(async () => {
@@ -823,8 +842,8 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
     draftId: crypto.randomUUID(),
     deletableDraftId: crypto.randomUUID(),
     draftWithoutAudienceId: crypto.randomUUID(),
-    automatedDraftId: crypto.randomUUID(),
-    readyPreviewId: crypto.randomUUID(),
+    automatedDraftId: campaignIdSchema.make(crypto.randomUUID()),
+    readyPreviewId: automationPreviewIdSchema.make(crypto.randomUUID()),
     stalePreviewId: crypto.randomUUID(),
   });
 
@@ -882,7 +901,7 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
 
   /** Saves the working copy as an administrator would; returns its hash. */
   const saveAutomationFlow = async (
-    campaignId: string,
+    campaignId: CampaignId,
     flow: typeof twiceHourlyFlow | typeof passReminderFlow
   ) => {
     const { AutomationLifecycle } = await import(
@@ -894,17 +913,16 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
     const { loadAutomationWorkingCopy } = await import(
       "../automation/backend/automation-working-copy"
     );
-    const id = campaignId as CampaignId;
     return AutomationLifecycle.pipe(
       Effect.flatMap((lifecycle) =>
         lifecycle.updateFlow({
-          campaignId: id,
+          campaignId,
           flow: automationFlowFixture(flow),
         })
       ),
       Effect.andThen(
         Effect.flatMap(WorkspaceDatabase, ({ transaction }) =>
-          transaction(loadAutomationWorkingCopy(id))
+          transaction(loadAutomationWorkingCopy(campaignId))
         )
       ),
       Effect.map((copy) => Option.getOrThrow(copy.draftHash)),
@@ -930,8 +948,7 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
       passReminderFlow.trigger,
       Temporal.Now.instant()
     );
-    const campaignId = seeded.automatedDraftId as CampaignId;
-    const previewId = seeded.readyPreviewId as AutomationPreviewId;
+    const { automatedDraftId: campaignId, readyPreviewId: previewId } = seeded;
     await pool.query(
       "update email_campaign_automation_previews set draft_hash = $2, as_of = $3 where id = $1",
       [
@@ -941,8 +958,8 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
       ]
     );
 
-    const holderId = crypto.randomUUID() as CampaignId;
-    const holderPreviewId = crypto.randomUUID() as AutomationPreviewId;
+    const holderId = campaignIdSchema.make(crypto.randomUUID());
+    const holderPreviewId = automationPreviewIdSchema.make(crypto.randomUUID());
     await pool.query(
       `insert into email_campaigns (id, title, purpose, template_key, content, audience_id, delivery, status)
        select $2, 'Trigger holder', purpose, template_key, content, audience_id, delivery, status
@@ -1027,9 +1044,9 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
           )
       : run();
 
-  const outcomeOf = (
-    result: Effect.Effect<unknown, AdministrationOperationError>
-  ): Effect.Effect<Outcome> =>
+  const outcomeOf = <R>(
+    result: Effect.Effect<unknown, AdministrationOperationError, R>
+  ): Effect.Effect<Outcome, never, R> =>
     result.pipe(
       Effect.match({
         onFailure: ({ _tag, code }) => failure(_tag, code),
@@ -1038,7 +1055,7 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
     );
 
   const harnesses = {
-    invoke: async (name: CampaignOperationName, input: AnyOperationInput) => {
+    invoke: async (name, input) => {
       const { CampaignOperations } = await import(
         "./campaign-operations.service"
       );
@@ -1050,38 +1067,34 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
       );
       return CampaignOperations.pipe(
         Effect.flatMap((operations) =>
-          outcomeOf(operations.invoke(name, input as never))
+          outcomeOf(operations.invoke(name, input))
         ),
         Effect.provideService(CurrentAdministrator, administrator),
-        Effect.provide(OperationRequestLedger.unscoped),
-        Effect.provide(CampaignOperations.Live),
+        Effect.provide(
+          Layer.mergeAll(
+            OperationRequestLedger.unscoped,
+            CampaignOperations.Live
+          )
+        ),
         Effect.runPromise
       );
     },
-    "admin UI": async (
-      name: CampaignOperationName,
-      input: AnyOperationInput
-    ) => {
+    "admin UI": async (name, input) => {
       const { runCampaignOperation } = await import(
         "../admin/campaign-operations.actions"
       );
       const result = await runCampaignOperation({
         operation: name,
-        input: input as never,
+        input,
       });
       const data = result?.data;
-      if (!data) return { _tag: "Unexpected", result } as never;
+      assert(data, `Expected an admin action outcome for ${name}`);
       return data._tag === "Success"
         ? ({ _tag: "Success", output: data.output } satisfies Outcome)
         : failure(data.category, data.code);
     },
-    "/api/v1/cli": async (
-      name: CampaignOperationName,
-      input: AnyOperationInput
-    ) => {
-      const response = await (
-        handleCliRequest as NonNullable<typeof handleCliRequest>
-      )(cliRequest(name, input));
+    "/api/v1/cli": async (name, input) => {
+      const response = await cliHandler(cliRequest(name, input));
       const text = await response.text();
       // HttpApi answers its own strict payload decoding with an empty 400.
       if (text === "") {
@@ -1089,30 +1102,32 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
           ? failure("OperationInputInvalid", "input-invalid")
           : failure("OperationUnavailable", `<empty ${response.status}>`);
       }
-      const body: CliErrorBody = JSON.parse(text);
       return response.ok
-        ? ({ _tag: "Success", output: body } satisfies Outcome)
-        : cliFailure(response.status, body);
+        ? ({
+            _tag: "Success",
+            output: decodeJson(Schema.Json, text, "CLI output"),
+          } satisfies Outcome)
+        : cliFailure(
+            response.status,
+            decodeJson(CliErrorBody, text, "CLI failure")
+          );
     },
-  };
+  } satisfies Record<string, RunAdapter>;
 
   /** The endpoint's request, carrying the input as the binding places it. */
-  const cliRequest = (
-    name: CampaignOperationName,
-    input: AnyOperationInput
+  const cliRequest = <Name extends CampaignOperationName>(
+    name: Name,
+    input: NoInfer<OperationInput<Registry[Name]>>
   ) => {
     const group = [AdminCliCampaignsApi, AdminCliAutomationsApi].find(
       (candidate) => Object.hasOwn(candidate.endpoints, name)
     );
-    const endpoint = group?.endpoints[name as never];
-    if (group === undefined || endpoint === undefined) {
-      throw new Error(`${name} has no CLI endpoint.`);
-    }
-    const parts = operationRequest(
-      group as never,
-      name as never,
-      input as never
-    );
+    assert(group, `${name} has no CLI group`);
+    const endpoints: Readonly<Record<string, HttpApiEndpoint.Top>> =
+      group.endpoints;
+    const endpoint = endpoints[name];
+    assert(endpoint, `${name} has no CLI endpoint`);
+    const parts = operationRequest<Operations, string>(group, name, input);
     const params = new Map(Object.entries(parts.params ?? {}));
     const path = endpoint.path.replace(/:(\w+)/g, (_, param: string) =>
       encodeURIComponent(String(params.get(param)))
@@ -1140,20 +1155,25 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
    */
   const cliFailure = (
     status: number,
-    { _tag, code }: CliErrorBody
+    { _tag, code }: typeof CliErrorBody.Type
   ): Outcome => {
-    const category = (
-      {
-        400: "OperationInputInvalid",
-        401: "OperationUnauthorized",
-        404: "OperationNotFound",
-        409:
-          _tag === "CliMutationInProgress"
-            ? "OperationInProgress"
-            : "OperationConflict",
-        503: "OperationUnavailable",
-      } as const
-    )[status as 400 | 401 | 404 | 409 | 503];
+    const categories: ReadonlyMap<
+      number,
+      AdministrationOperationError["_tag"]
+    > = new Map([
+      [400, "OperationInputInvalid"],
+      [401, "OperationUnauthorized"],
+      [404, "OperationNotFound"],
+      [
+        409,
+        _tag === "CliMutationInProgress"
+          ? "OperationInProgress"
+          : "OperationConflict",
+      ],
+      [503, "OperationUnavailable"],
+    ]);
+    const category = categories.get(status);
+    assert(category, `Unexpected CLI status ${status}`);
     return failure(category, code ?? uncodedFailure(status, _tag));
   };
 
@@ -1164,9 +1184,8 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
     return `<${status} ${tag} without a code>`;
   };
 
-  for (const [name, operationCases] of Object.entries(cases) as Array<
-    [CampaignOperationName, ReadonlyArray<AdapterContractCase<never>>]
-  >) {
+  const registerCases = <Name extends CampaignOperationName>(name: Name) => {
+    const operationCases = cases[name];
     for (const contractCase of operationCases) {
       test(`${name}: ${contractCase.title}`, async () => {
         const runs = [];
@@ -1188,18 +1207,21 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
         }
 
         const [reference, ...others] = runs;
-        expect(reference?.outcome).toMatchObject(contractCase.expect);
+        assert(reference, "Expected the direct port run");
+        expect(reference.outcome).toMatchObject(contractCase.expect);
         for (const other of others) {
           expect({ adapter: other.adapter, outcome: other.outcome }).toEqual({
             adapter: other.adapter,
-            outcome: reference?.outcome,
+            outcome: reference.outcome,
           });
           expect({ adapter: other.adapter, state: other.state }).toEqual({
             adapter: other.adapter,
-            state: reference?.state,
+            state: reference.state,
           });
         }
       });
     }
-  }
+  };
+
+  for (const name of Struct.keys(cases)) registerCases(name);
 });
