@@ -40,7 +40,8 @@ type ReservationPermission =
   | "retry-payment"
   | "view-access-code"
   | "view-invoice"
-  | "resend-invitation";
+  | "resend-invitation"
+  | "add-invitees";
 
 /**
  * Who may see what. The customer's emailed capability links, the access
@@ -57,6 +58,7 @@ const reservationAccessPolicy = {
     "view-access-code",
     "view-invoice",
     "resend-invitation",
+    "add-invitees",
   ],
   customer: [
     "view-status",
@@ -65,12 +67,14 @@ const reservationAccessPolicy = {
     "view-access-code",
     "view-invoice",
     "resend-invitation",
+    "add-invitees",
   ],
   author: [
     "view-status",
     "open-payment-page",
     "retry-payment",
     "resend-invitation",
+    "add-invitees",
   ],
   // A person the booker invited sees the door code and nothing else of the
   // order: no status, payment, invoice or other people.

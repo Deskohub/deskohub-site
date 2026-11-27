@@ -8,6 +8,7 @@ import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceCheckoutAccessCodeService } from "@/features/checkout/backend/reservation/access-code.service";
 import type { Locale } from "@/features/i18n";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
+import { getCustomerReservationPlacement } from "@/features/reservation/backend/customer-reservation-placement";
 import {
   ReservationAuthorizationService,
   type ReservationViewer,
@@ -38,6 +39,7 @@ export type ReservationAccessViewModel =
        * access spans whole days (an office): show these dates alone.
        */
       readonly accessDays?: ReservationAccessDays;
+      readonly teamTable?: { readonly name?: string };
       /** Whom the page shows itself to; an invitee gets the guest view. */
       readonly viewer: ReservationViewer;
       /**
@@ -51,6 +53,7 @@ export type ReservationAccessViewModel =
       readonly state: "unavailable";
       readonly reason: ReservationAccessUnavailableReason;
       readonly viewer?: "invitee";
+      readonly teamTable?: { readonly name?: string };
     };
 
 /**
@@ -73,7 +76,7 @@ type ReservationAccessRequest = {
 /** The provider fields that decide whether a reservation's code is shown. */
 type ProviderReservationFacts = Pick<
   ReservationRecord,
-  "id" | "status" | "startDate" | "endDate" | "seats"
+  "id" | "status" | "startDate" | "endDate" | "seats" | "_tableId"
 >;
 
 export interface IReservationAccessService {
@@ -96,11 +99,13 @@ export interface IReservationAccessService {
 const invalidLinkAccess: ReservationAccessViewModel = { state: "invalid_link" };
 const unavailableAccess = (
   reason: ReservationAccessUnavailableReason,
-  viewer: ReservationViewer
+  viewer: ReservationViewer,
+  isTeamTable = false
 ): ReservationAccessViewModel => ({
   state: "unavailable",
   reason,
   ...(viewer === "invitee" && { viewer }),
+  ...(isTeamTable && { teamTable: {} }),
 });
 
 /**
@@ -156,7 +161,12 @@ const implementation = Effect.gen(function* () {
       reservation.reservationState !== "confirmed" ||
       !reservation.dotyposReservationId
     ) {
-      return unavailableAccess("reservation-state", viewer.value);
+      return unavailableAccess(
+        "reservation-state",
+        viewer.value,
+        reservation !== "missing" &&
+          reservation.reservationDetails.kind === "table"
+      );
     }
     return {
       state: "granted" as const,
@@ -178,8 +188,9 @@ const implementation = Effect.gen(function* () {
     readonly record: ProviderReservationFacts | undefined;
     readonly viewer: ReservationViewer;
   }) {
+    const isTeamTable = reservation.reservationDetails.kind === "table";
     if (record?.status !== "CONFIRMED") {
-      return unavailableAccess("reservation-state", viewer);
+      return unavailableAccess("reservation-state", viewer, isTeamTable);
     }
 
     const timing = yield* getDotyposReservationAccessTiming({
@@ -194,7 +205,7 @@ const implementation = Effect.gen(function* () {
       ),
       Effect.orElseSucceed(() => undefined)
     );
-    if (!timing) return unavailableAccess("lookup-failed", viewer);
+    if (!timing) return unavailableAccess("lookup-failed", viewer, isTeamTable);
 
     const bookedBy =
       viewer === "invitee"
@@ -211,13 +222,16 @@ const implementation = Effect.gen(function* () {
         Effect.flatMap((access) =>
           Schema.decodeUnknownEffect(Schema.NonEmptyString)(access.code).pipe(
             Effect.map((code): ReservationAccessViewModel => {
-              const accessDays = getReservationAccessDays(access);
+              const accessDays = isTeamTable
+                ? undefined
+                : getReservationAccessDays(access);
               return {
                 state: "available",
                 code,
                 accessStartsAt: access.accessStartsAt,
                 accessEndsAt: access.accessEndsAt,
                 ...(accessDays && { accessDays }),
+                ...(isTeamTable && { teamTable: {} }),
                 viewer,
                 ...(bookedBy && { bookedBy }),
               };
@@ -234,7 +248,8 @@ const implementation = Effect.gen(function* () {
                 failure.refusal
                 ? "reservation-state"
                 : "lookup-failed",
-              viewer
+              viewer,
+              isTeamTable
             )
           )
         )
@@ -289,9 +304,40 @@ const implementation = Effect.gen(function* () {
 
     const record = yield* readProviderReservation(granted.dotyposReservationId);
     if (record === "failed")
-      return unavailableAccess("lookup-failed", granted.viewer);
+      return unavailableAccess(
+        "lookup-failed",
+        granted.viewer,
+        granted.reservation.reservationDetails.kind === "table"
+      );
 
-    return yield* resolveCode({ ...granted, record });
+    const reservationDetails = granted.reservation.reservationDetails;
+    const code = resolveCode({ ...granted, record });
+    if (
+      reservationDetails.kind !== "table" ||
+      record?.status !== "CONFIRMED" ||
+      !record._tableId
+    ) {
+      return yield* code;
+    }
+
+    const [access, tables] = yield* Effect.all(
+      [
+        code,
+        dotypos
+          .getTables()
+          .pipe(Effect.timeout(providerLookupDeadline), Effect.option),
+      ],
+      { concurrency: 2 }
+    );
+    if (access.state !== "available" || Option.isNone(tables)) return access;
+
+    const { table } = getCustomerReservationPlacement({
+      reservationDetails,
+      dotyposReservation: record,
+      tables: tables.value,
+      seatingMap: false,
+    });
+    return table ? { ...access, teamTable: { name: table.name } } : access;
   }, annotateRequest);
 
   const getAccessWithLiveRecord = Effect.fn(
@@ -306,7 +352,11 @@ const implementation = Effect.gen(function* () {
     if (granted.state !== "granted") return granted;
     // A record of another reservation says nothing about this order's.
     if (record.id !== granted.dotyposReservationId) {
-      return unavailableAccess("lookup-failed", granted.viewer);
+      return unavailableAccess(
+        "lookup-failed",
+        granted.viewer,
+        granted.reservation.reservationDetails.kind === "table"
+      );
     }
 
     return yield* resolveCode({ ...granted, record });

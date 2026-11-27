@@ -11,7 +11,7 @@ import { IgloohomeDeviceIdSchema } from "@deskohub/igloohome";
 import { testEmailAddress } from "@deskohub/test-email";
 import { NodeCrypto } from "@effect/platform-node";
 import { eq } from "drizzle-orm";
-import { Deferred, Effect, Layer, Option, Redacted } from "effect";
+import { Deferred, Effect, Layer, Option, Redacted, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { toStoredInstant } from "@/db/instant";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
@@ -51,6 +51,7 @@ import {
 } from "@/shared/testing/workspace-fixtures.test-utils";
 import { waitForAdvisoryLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { addAuthorizedReservationInvitees } from "./add-reservation-invitees";
 import { resendAuthorizedReservationInvitation } from "./resend-reservation-invitation";
 import { ReservationInvitations } from "./reservation-invitations.service";
 import { ReservationInviteeEmailKeys } from "./reservation-invitee-email-keys.service";
@@ -429,6 +430,7 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
   const prepareGuestNotices = async ({
     ended = false,
     beforeBookingRead = () => Effect.void,
+    teamTable = false,
   } = {}) => {
     const start = toStoredInstant(Temporal.Now.instant());
     const tick = (minutes: number) => start.add({ minutes });
@@ -438,17 +440,19 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
       payment: "paid",
       fulfillment: "processing",
     });
-    const office = { kind: "office", seats: 1, dayCount: 1 } as const;
+    const details = teamTable
+      ? ({ kind: "table", seats: 3, durationMinutes: 60 } as const)
+      : ({ kind: "office", seats: 1, dayCount: 1 } as const);
     await Effect.runPromise(
       testDatabase.db
         .update(workspaceReservations)
-        .set({ officeContactAttends: false, reservationDetails: office })
+        .set({ officeContactAttends: teamTable, reservationDetails: details })
         .where(eq(workspaceReservations.id, id))
     );
     const address = invitee("worker-recovery");
     await record(
       id,
-      { contactAttends: false, invitees: [address] },
+      { contactAttends: teamTable, invitees: [address] },
       { accessEndsAt: reservedUntil }
     );
     const repository = <A, E>(
@@ -512,7 +516,7 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
                 dotyposCustomerId: row.dotyposCustomerId,
                 authorAccountId: row.authorAccountId,
                 dotyposReservationId: providerId,
-                reservationDetails: office,
+                reservationDetails: details,
                 locale: "en-US",
                 customer: {
                   id: row.dotyposCustomerId,
@@ -520,7 +524,7 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
                   firstName: delivery.bookerName,
                   lastName: "Sample",
                   companyName: null,
-                  email: null,
+                  email: teamTable ? testEmailAddress("table-booker") : null,
                   phone: null,
                   points: null,
                   flags: "0",
@@ -530,7 +534,7 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
                 reservedFrom: reservedUntil.subtract({ hours: 24 }),
                 reservedUntil,
                 providerStatus: delivery.providerStatus,
-                seats: 1,
+                seats: details.seats,
                 placement: {},
               }) satisfies WorkspaceReservationDetails
           )
@@ -649,6 +653,33 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
           )
         )
       );
+    const add = (emails: readonly string[], authorized = true) =>
+      run(
+        addAuthorizedReservationInvitees({
+          orderId: id,
+          locale: "en-US",
+          emails,
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              worker,
+              locks,
+              workspace,
+              WorkspaceReservationRepository.Default,
+              WithdrawalRepository.Default,
+              Layer.mock(ReservationAuthorizationService, {
+                authorize: ({ orderId, permission }) =>
+                  Effect.succeed(
+                    authorized &&
+                      orderId === id &&
+                      permission === "add-invitees"
+                  ),
+              })
+            )
+          ),
+          Effect.result
+        )
+      );
 
     return {
       id,
@@ -663,8 +694,65 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
       sent,
       drain,
       resend,
+      add,
     };
   };
+
+  test("concurrent Team Table invitee additions fill the last seat only once and send only to the new guest", async () => {
+    const { id, add, sent } = await prepareGuestNotices({ teamTable: true });
+    const candidates = [invitee("last-seat-a"), invitee("last-seat-b")];
+    const results = await Promise.all(candidates.map((email) => add([email])));
+    const admitted = results.flatMap((result, index) =>
+      Result.isSuccess(result) ? [candidates[index]] : []
+    );
+    expect(admitted).toHaveLength(1);
+    expect(results).toContainEqual(
+      expect.objectContaining({ success: { added: 1 } })
+    );
+    expect(results).toContainEqual(
+      expect.objectContaining({
+        failure: expect.objectContaining({ refusal: { reason: "capacity" } }),
+      })
+    );
+    const people = await run(
+      Effect.flatMap(ReservationInvitees, (service) =>
+        service.listForReservation(id)
+      )
+    );
+    expect(people.map(({ email }) => email)).toEqual([
+      invitee("worker-recovery"),
+      ...admitted,
+    ]);
+    expect(
+      people.map(({ invitationSendCount }) => invitationSendCount)
+    ).toEqual([0, 1]);
+    expect(sent).toEqual(["invitation"]);
+  });
+
+  test("refuses to add guests to Office or to someone else's Team Table", async () => {
+    const office = await prepareGuestNotices();
+    const table = await prepareGuestNotices({ teamTable: true });
+    const emails = [invitee("not-authorized")];
+    const results = await Promise.all([
+      office.add(emails),
+      table.add(emails, false),
+    ]);
+    for (const result of results) {
+      expect(result).toMatchObject({
+        failure: { refusal: { reason: "not-found" } },
+      });
+    }
+    expect(office.sent).toEqual([]);
+    expect(table.sent).toEqual([]);
+  });
+
+  test("refuses to add guests after a Team Table ends", async () => {
+    const table = await prepareGuestNotices({ teamTable: true, ended: true });
+    expect(await table.add([invitee("ended-table")])).toMatchObject({
+      failure: { refusal: { reason: "ended" } },
+    });
+    expect(table.sent).toEqual([]);
+  });
 
   test("an authorized resend delivers an ended office's pending invitation once", async () => {
     const { acceptedCount, attempts, notices, resend, sent } =

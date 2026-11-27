@@ -130,6 +130,9 @@ export class ReservationInvitations extends Context.Service<
         reservedFrom: reservation.reservedFrom,
         reservedUntil: reservation.reservedUntil,
         bookedBy: getBookerName(reservation),
+        ...(reservation.reservationDetails.kind === "table" && {
+          teamTable: { name: reservation.placement.table?.name },
+        }),
       });
 
       // Idempotent provider retries resend the same link, so the token is

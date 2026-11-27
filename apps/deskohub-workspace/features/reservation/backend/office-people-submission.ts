@@ -10,9 +10,9 @@ import { getOfficeReservationIntervalInput } from "@/features/reservation/office
 import type { ReservationOrderData } from "@/features/reservation/reservation-order";
 
 /**
- * Why a submitted people list can't book: one of the list's own issues, a
- * `seats` that isn't the list's head count, or a list sent with a reservation
- * that isn't a private office.
+ * Why a submitted people list can't book: one of the list's own issues,
+ * an office head count that differs from its seats, or a reservation that
+ * doesn't support invitees.
  */
 export type OfficePeopleRejection =
   | OfficePeopleIssue
@@ -25,17 +25,22 @@ export class OfficePeopleRejectedError extends Data.TaggedError(
 
 /**
  * Checks the people a submission sends with its reservation, against the
- * reservation's contact email and seats. The booked `seats` are the list's
- * head count; booking checks them against the office's live capacity, so a
- * list longer than the office fails here as over capacity or there. None
- * when the submission sent no list: older apps and agents book `seats` alone.
+ * reservation's contact email and seats. Office seats equal the head count.
+ * A Team Table can have spare seats and defaults to the contact attending.
+ * Older Office submissions can still book seats without a people list.
  */
 export const validateSubmittedOfficePeople = (
   people: OfficePeople | undefined,
   reservation: ReservationOrderData
 ): Effect.Effect<ValidOfficePeople | undefined, OfficePeopleRejectedError> => {
-  if (people === undefined) return Effect.succeed(undefined);
-  if (reservation.kind !== "office") {
+  if (people === undefined) {
+    return Effect.succeed(
+      reservation.kind === "table"
+        ? { contactAttends: true, invitees: [] }
+        : undefined
+    );
+  }
+  if (reservation.kind !== "office" && reservation.kind !== "table") {
     return Effect.fail(
       new OfficePeopleRejectedError({ rejection: { _tag: "NotOffice" } })
     );
@@ -49,7 +54,8 @@ export const validateSubmittedOfficePeople = (
       new OfficePeopleRejectedError({ rejection: checked.failure })
     );
   }
-  return getOfficePeopleSeats(checked.success) === reservation.seats
+  return reservation.kind === "table" ||
+    getOfficePeopleSeats(checked.success) === reservation.seats
     ? Effect.succeed(checked.success)
     : Effect.fail(
         new OfficePeopleRejectedError({

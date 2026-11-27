@@ -20,6 +20,7 @@ import {
   getReservationStatus,
 } from "@/features/account/backend/customer-reservation-history.service";
 import { getReservationProductName } from "@/features/account/reservation-product-name";
+import { getWorkspaceTableProductTitle } from "@/features/checkout/product-catalog.i18n";
 import type { Locale } from "@/features/i18n";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
 import { ReservationAccessService } from "@/features/reservation/backend/reservation-access.service";
@@ -67,7 +68,8 @@ const makeInvitedReservations = Effect.gen(function* () {
       concurrency,
     });
     const orders = stored.flatMap((row) =>
-      row?.reservationDetails.kind === "office" &&
+      (row?.reservationDetails.kind === "office" ||
+        row?.reservationDetails.kind === "table") &&
       row.dotyposReservationId &&
       (row.paymentState === "paid" || row.reservationConfirmedAt !== null) &&
       row.authorAccountId !== viewer.accountId &&
@@ -87,8 +89,8 @@ const makeInvitedReservations = Effect.gen(function* () {
     );
     const liveById = new Map(live.map((record) => [record.id, record]));
     const now = yield* currentInstant;
-    const product = { kind: "office" } as const;
-    const productName = getReservationProductName(product, locale);
+    const officeProduct = { kind: "office" } as const;
+    const officeName = getReservationProductName(officeProduct, locale);
     const bookers = yield* Effect.forEach(
       [...new Set(orders.map(({ row }) => row.dotyposCustomerId))],
       (id) => readBooker(id).pipe(Effect.map((name) => [id, name] as const)),
@@ -133,11 +135,28 @@ const makeInvitedReservations = Effect.gen(function* () {
               })
             : undefined;
 
+        const details = row.reservationDetails;
+        const isTeamTable = details.kind === "table";
+        const product = isTeamTable
+          ? {
+              kind: "other" as const,
+              ...(details.seats !== undefined &&
+                details.durationMinutes !== undefined && {
+                  teamTable: {
+                    kind: "table" as const,
+                    seats: details.seats,
+                    durationMinutes: details.durationMinutes,
+                  },
+                }),
+            }
+          : officeProduct;
         return {
           entry: {
             orderId: row.id,
             product,
-            productName,
+            productName: isTeamTable
+              ? getWorkspaceTableProductTitle(locale)
+              : officeName,
             status,
             accessStartsAt: window?.reservedFrom.toString() ?? null,
             accessEndsAt: window?.reservedUntil.toString() ?? null,
