@@ -106,7 +106,8 @@ Never put production Nexi, Dotypos, or database credentials in Preview. Never ad
 | `WORKSPACE_E2E_VERCEL_PROJECT` | Variable | Project for log retrieval. |
 | `WORKSPACE_E2E_COORDINATOR_DATABASE_URL` | Secret | Allocator role; used only by the trusted allocation action. |
 | `WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL` | Secret | Connect-only role for the replay permit. |
-| `WORKSPACE_E2E_BETTER_AUTH_SECRETS` | Secret | Copy of the Preview-only `BETTER_AUTH_SECRETS`. Required to run checkout E2E: booker and case-specific verification or referral identity binders use it; administrator sessions use it too ([seeded sessions](referral-lane.md#seeded-sessions)). |
+| `WORKSPACE_E2E_BETTER_AUTH_SECRETS` | Secret | Copy of the shared Preview `BETTER_AUTH_SECRETS` for ordinary and nightly runs. Checkout, referral, and administrator tests use it for [seeded sessions](referral-lane.md#seeded-sessions). |
+| `WORKSPACE_BACKEND_PREVIEW_BETTER_AUTH_SECRETS` | Secret | Dedicated signer for the approved backend pilot. Use the same versioned value in the exact pilot branch's Vercel Preview `BETTER_AUTH_SECRETS` and the pilot's GCP signing secret. The workflow validates it before acquiring the preview lease and passes it to the runner as `WORKSPACE_E2E_BETTER_AUTH_SECRETS`. |
 | `WORKSPACE_E2E_CRON_SECRET` | Secret | Copy of the Preview-only `CRON_SECRET`. Vercel Cron never fires on previews, so the automation journey ticks the email automation planner through its cron route with this secret. Never copy the Production value; the journey fails closed without it. |
 | `WORKSPACE_E2E_DOTYPOS_*` | Secrets | E2E Dotypos cloud; mapped to `DOTYPOS_*` per step. |
 | `VERCEL_AUTOMATION_BYPASS_SECRET`, `NEON_API_KEY`, `TURBO_TOKEN` | Secrets | Protection bypass, branch lookup, remote cache. |

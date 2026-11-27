@@ -737,19 +737,117 @@ describe("workspace E2E workflow", () => {
     expect(trackedTurboExposures("WORKSPACE_E2E_RESEND_API_KEY")).toEqual([]);
   });
 
-  test("keeps the preview session-signing secret inside the checkout Playwright execution only", () => {
-    expect(
-      stepByName("Run checkout E2E").env?.WORKSPACE_E2E_BETTER_AUTH_SECRETS
-    ).toBe(`\${{ secrets.WORKSPACE_E2E_BETTER_AUTH_SECRETS }}`);
+  test("scopes the preview signing secrets to validation and checkout", () => {
+    const checkout = stepByName("Run checkout E2E");
+    const validation = stepByName("Validate the backend preview signer");
     expect(
       serializedWorkflow.split("WORKSPACE_E2E_BETTER_AUTH_SECRETS").length - 1
     ).toBe(2);
+    expect(
+      serializedWorkflow.split("WORKSPACE_BACKEND_PREVIEW_BETTER_AUTH_SECRETS")
+        .length - 1
+    ).toBe(2);
+    expect(testJob?.steps).toContain(checkout);
+    expect(testJob?.steps).toContain(validation);
+    expect(testJob).toHaveProperty("environment", "workspace-checkout-e2e");
     expect(serializedProductionWorkflow.includes("BETTER_AUTH")).toBe(false);
 
     expect(trackedTurboExposures("WORKSPACE_E2E_BETTER_AUTH_SECRETS")).toEqual([
       "root tasks.test:e2e.passThroughEnv",
     ]);
   });
+
+  test("validates the pilot signer with reviewed code before acquiring the preview lease", () => {
+    const steps = testJob?.steps ?? [];
+    const checkout = stepByName("Checkout workflow actions");
+    const validation = stepByName("Validate the backend preview signer");
+    expect(checkout.with?.ref).toBe(`\${{ github.workflow_sha }}`);
+    expect(checkout.with?.["sparse-checkout"]).toContain(
+      "packages/workspace-domain/src/shared/credentials"
+    );
+    expect(checkout.with?.path).toBe(validation["working-directory"]);
+    expect(steps.indexOf(validation)).toBeGreaterThan(steps.indexOf(checkout));
+    expect(steps.indexOf(validation)).toBeLessThan(
+      steps.indexOf(stepByName("Lease an available date shard"))
+    );
+    expect(validation["continue-on-error"]).toBeUndefined();
+    expect(testJob?.if).toContain(
+      "needs.resolve-target.outputs.backend_preview != 'true' || needs.resolve-backend-preview.result == 'success'"
+    );
+  });
+
+  const sharedTestSigner = "shared-test-signer";
+  const validPilotTestSigner = "1:V7m2QqX9arc6tBK51Tz7LWpH3dM8FW2N";
+  test.each([
+    ["ordinary", "false", validPilotTestSigner, sharedTestSigner, ""],
+    ["nightly", "", validPilotTestSigner, sharedTestSigner, ""],
+    ["pilot", "true", validPilotTestSigner, validPilotTestSigner, ""],
+    [
+      "pilot with no signer",
+      "true",
+      undefined,
+      "",
+      "BETTER_AUTH_SECRETS is not configured.",
+    ],
+    [
+      "pilot with a weak signer",
+      "true",
+      "1:weak",
+      "1:weak",
+      "BETTER_AUTH_SECRETS has a weak secret value.",
+    ],
+  ])(
+    "selects the checkout signer for %s",
+    async (_target, pilot, pilotSigner, expected, error) => {
+      const pilotKey = "WORKSPACE_BACKEND_PREVIEW_BETTER_AUTH_SECRETS";
+      const secrets = new Map([
+        ["WORKSPACE_E2E_BETTER_AUTH_SECRETS", sharedTestSigner],
+      ]);
+      if (pilotSigner !== undefined) secrets.set(pilotKey, pilotSigner);
+
+      const checkout = stepByName("Run checkout E2E");
+      const validation = stepByName("Validate the backend preview signer");
+      const selector = /^\$\{\{\s*secrets\[(.+)\]\s*\}\}$/.exec(
+        String(checkout.env?.WORKSPACE_E2E_BETTER_AUTH_SECRETS)
+      )?.[1];
+      if (selector === undefined)
+        throw new Error("Checkout must look up one selected signing secret");
+      const context: WorkflowExpressionContext = {
+        contexts: ["needs"],
+        values: new Map([
+          [
+            "needs.resolve-target.outputs.backend_preview",
+            workflowExpressionString(pilot),
+          ],
+        ]),
+      };
+      const selected = evaluateWorkflowValue(`\${{ ${selector} }}`, context);
+      const signer = secrets.get(selected) ?? "";
+      expect(signer).toBe(expected);
+
+      const condition = `\${{ ${validation.if} }}`;
+      expect(evaluateWorkflowValue(condition, context)).toBe(
+        String(pilot === "true")
+      );
+      if (pilot !== "true") return;
+
+      expect(validation.env?.BETTER_AUTH_SECRETS).toBe(
+        `\${{ secrets.${pilotKey} }}`
+      );
+      const result = await runCommand(
+        ["bash", "-e", "-o", "pipefail", "-c", validation.run ?? ""],
+        {
+          cwd: resolve(import.meta.dir, "../../.."),
+          env: { PATH: process.env.PATH, BETTER_AUTH_SECRETS: signer },
+        }
+      );
+      expect(result.exitCode).toBe(error ? 1 : 0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trim()).toBe(
+        error ? `Workspace backend preview signer is invalid. ${error}` : ""
+      );
+    }
+  );
 
   test("the Turborepo secret guard finds global and wildcard exposures", () => {
     const root = readJsonFile(
