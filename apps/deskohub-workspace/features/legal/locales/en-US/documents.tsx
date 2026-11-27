@@ -24,7 +24,7 @@ const termsAndConditionsSections: LegalSection[] = [
         (hereinafter referred to as the "Provider"), and the client (hereinafter
         referred to as the "Client").
       </>,
-      "1.2 These GTC apply to coworking entries, online bookings of the meeting room and private office, and individually agreed short-term use of premises for events.",
+      "1.2 These GTC apply to coworking entries, online bookings of the meeting room, private office, and Team Table, and individually agreed short-term use of premises for events.",
       "1.3 The provisions of these GTC are an integral part of every contract concluded between the Provider and the Client.",
       "1.4 Legal relationships not regulated by these GTC are governed by the laws of the Czech Republic, in particular Act No. 89/2012 Coll., the Civil Code.",
       "1.5 If the Client is a Consumer, these GTC do not limit rights that cannot be waived under mandatory law.",
@@ -35,22 +35,23 @@ const termsAndConditionsSections: LegalSection[] = [
     body: [
       "2.1 Client means a natural or legal person who uses the Provider's services.",
       "2.2 Consumer means a Client acting outside the scope of their business activity.",
-      "2.3 Premises means the coworking spaces, meeting room, private office, and event spaces operated by the Provider.",
+      "2.3 Premises means the coworking spaces, meeting room, private office, and event spaces operated by the Provider. The coworking spaces include Open Space and its Team Tables.",
       "2.4 Services means time-limited use of the selected Premises and the related services stated in the order.",
       "2.5 Tariff means the specific scope of coworking services and the conditions for their use according to the Provider's current Price List.",
       "2.6 Access PIN Code means the current code enabling entry into the Provider's premises.",
-      "2.7 Booking means an order for a specific coworking entry, a meeting-room time slot, or a private-office date range, day count, and seat count.",
+      "2.7 Booking means an order for a specific coworking entry, a meeting-room time slot, a private-office date range, day count, and seat count, or a Team Table time slot and table size.",
     ],
   },
   {
     heading: "3. Subject of the Contract",
     body: [
-      "3.1 The Provider provides the Client with coworking services consisting of temporarily enabling the use of a shared workspace in the Provider's premises, within the scope of the selected tariff. Shared workspace means a non-exclusively designated workstation or part of the coworking space intended for routine work, without a guarantee of a specific desk or seat, unless expressly stated otherwise for a specific tariff.",
+      "3.1 The Provider provides the Client with coworking services consisting of temporarily enabling the use of a shared workspace in the Provider's premises, within the scope of the selected tariff. Shared workspace means a non-exclusively designated workstation or part of the coworking space intended for routine work, without a guarantee of a specific desk or seat, unless expressly stated otherwise for a specific tariff. Section 3.7 applies to Team Table Bookings.",
       "3.2 A meeting-room Booking entitles the Client to exclusive use of the selected room for the confirmed time and duration of one hour, four hours, or one Prague calendar day. A whole-day Booking runs from midnight on the selected day to midnight on the following day in the Europe/Prague time zone.",
       "3.3 A private-office Booking entitles the Client to exclusive use of the office for the confirmed number of seats throughout the selected calendar days. Each day runs from midnight to the following midnight in the Europe/Prague time zone, and the last date stated in the confirmation is included in the Booking.",
-      "3.4 The specific capacity, equipment, price, time, and scope of a Booking are stated on the reservation page and in the order summary. The Client must not exceed the confirmed capacity and is responsible for guests and any other persons to whom the Client grants access.",
+      "3.4 The specific capacity, equipment, price, time, and scope of a Booking are stated on the reservation page and in the order summary. The Client must not exceed the confirmed capacity and is responsible for guests and any other persons to whom the Client grants access. The capacity of a Team Table Booking is the seat count of the selected table size.",
       "3.5 The Provider also enables short-term use of premises for events, always under an individual agreement.",
       "3.6 The Services grant a limited right to use the designated Premises and related services; they do not create a tenancy, registered office, establishment, or other real-property interest. Without a separate written agreement, the Client must not use the Premises' address as a registered office, business address, establishment, or mailing address.",
+      "3.7 A Team Table Booking gives the Client exclusive use of a specific assigned table in the shared Open Space area for the confirmed period. The Booking starts and ends on a 15-minute boundary. It lasts at least 15 minutes and at most 24 hours and must fit entirely within the hours when Open Space is available for use.",
     ],
   },
   {
@@ -71,6 +72,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "5.3 The private-office price is calculated for each selected day as the daily office price plus the daily price for each confirmed seat. The meeting-room price corresponds to the selected one-hour, four-hour, or whole-day product.",
       "5.4 A discount applies only if shown in the order summary. If the price or an applicable discount changes before payment starts, the Provider will show a new summary and obtain the Client's renewed confirmation.",
       "5.5 The price of an individually arranged event space is stated in the offer according to the nature of the event.",
+      "5.6 The Team Table price consists of a base fee and a time charge. The base fee and hourly rate both depend on the table size. The time charge is prorated in 15-minute increments. The price excludes coffee.",
     ],
   },
   {
@@ -85,10 +87,12 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "7. Access and Use of Services",
     body: [
-      "7.1 The confirmation email contains a secure link to the Booking access page. Once a Booking is paid, confirmed locally and by live verification, and an Access PIN Code has been issued, the protected page displays that PIN together with the exact programmed validity bounds of the code. Acceptance of the code is determined solely by the lock system's programmed AlgoPIN bounds; the application does not impose its own display clock. The PIN is not included directly in the confirmation email.",
+      "7.1 The confirmation email contains a secure link to the Booking access page. Once a Booking is paid, confirmed locally and by live verification, and an Access PIN Code has been issued, the protected page displays that PIN together with the exact programmed validity bounds of the code. Acceptance of the code is determined solely by the lock system's programmed AlgoPIN bounds; the application does not impose its own display clock. The PIN is not included directly in the confirmation email. For Team Table, the times displayed on the access page are specified in Section 7.5.",
       "7.2 The Provider may change the Access PIN Code; the Client must use the code currently displayed on the Booking access page. Displaying the PIN does not extend the confirmed use of the Premises and creates no right to enter outside the confirmed time or into other premises. The Premises may be used only during the confirmed Booking time.",
       "7.3 The Client may disclose the PIN Code only to people authorized to attend the Booking, must protect it from everyone else, and is responsible for its use by the Client's guests. Suspected misuse must be reported to the Provider without delay.",
       "7.4 The Client and guests must observe the capacity, Booking purpose, confirmed time, and House Rules. The Client must ensure that guests leave the Premises by the end of the Booking.",
+      "7.5 For Team Table, the Client and their guests share one Access PIN Code. The access page shows the exact start and end of the Booking. The lock system may round the start of PIN validity down to a whole hour and the end up to a whole hour. The confirmed period of use stays the same.",
+      "7.6 The total number of people attending, including the Client if they attend, must stay within the table's seat capacity. Invitees can open the access page from their invitation. Once the Booking is paid and confirmed, invitees cannot be removed because they have access to the shared PIN.",
     ],
   },
   {
@@ -114,7 +118,7 @@ const termsAndConditionsSections: LegalSection[] = [
     heading: "9. Consumer Right of Withdrawal",
     body: [
       "9.1 A Consumer may withdraw from a contract concluded online without giving a reason within 14 days after the contract is concluded, unless the right is excluded by law or has already expired in the particular case.",
-      "9.2 If the Service is to begin before the period expires, as part of confirming the order the Consumer expressly requests that the Provider begin performance before the period ends and acknowledges that the withdrawal right expires after the Service has been fully performed. If the Consumer withdraws after performance begins but before it is complete, the Consumer pays a proportionate part of the price for performance already supplied, provided the statutory conditions are met.",
+      "9.2 If the Service is to begin before the period expires, as part of confirming the order the Consumer expressly requests that the Provider begin performance before the period ends and acknowledges that the withdrawal right expires after the Service has been fully performed. If the Consumer withdraws after performance begins but before it is complete, the Consumer pays a proportionate part of the price for performance already supplied, provided the statutory conditions are met. Section 9.8 applies to Team Table.",
       <>
         9.3 Withdrawal may be sent as an unequivocal statement to the Provider's
         registered-office address or by email to{" "}
@@ -136,6 +140,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "9.5 Model notice: “I hereby give notice that I withdraw from my contract for the following Service: [description and Booking number], ordered on [date]. Consumer name: [complete]. Consumer address: [complete]. Date: [complete]. Signature only if submitted on paper.” Use of the model is optional.",
       "9.6 The rights in this article apply only to a Consumer and operate alongside any more favorable cancellation terms stated in the order summary or individual offer.",
       "9.7 If a Consumer validly withdraws from an Entry pack purchase after requesting immediate use and the statutory conditions for a proportional charge are met, the refund is the price actually paid multiplied by the number of unused entries and divided by the total number of entries in the pack, rounded down to whole Czech koruna. Entries for past visits and an entry booked for the day of withdrawal count as used. Bookings for later dates are cancelled and those entries count as unused.",
+      "9.8 For withdrawal purposes, a Team Table Booking is a single unit. Within the 14-day period in Section 9.1, the Consumer may withdraw from the entire Booking only before its confirmed start. The Provider then refunds the full amount paid. Once the Booking reaches its confirmed start, the Consumer can no longer withdraw from any part of it.",
     ],
   },
   {
@@ -144,6 +149,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "10.1 The Client must use the Premises properly, only for the confirmed purpose, and in accordance with these GTC, the House Rules, safety instructions, and applicable law.",
       "10.2 The Client is responsible for guests and for damage caused by the Client's or guests' breach of duty. Normal wear and tear is not damage. Damage or a defect must be reported without undue delay.",
       "10.3 The Provider may proportionately restrict or end a Service for a serious or repeated breach of the GTC or House Rules, exceeding capacity, dangerous or illegal conduct, or misuse of access. This does not affect the Client's rights if the measure was not justified.",
+      "10.4 In Open Space, the Client and their guests must respect other people's workspace. If the Provider asks them to vacate a table for a Team Table Booking, they must move to another Open Space seat.",
     ],
   },
   {
@@ -206,7 +212,7 @@ const termsAndConditionsSections: LegalSection[] = [
     body: [
       "15.1 The Provider may amend these GTC for contracts concluded after a new version takes effect. An already concluded Booking is governed by the version accepted at checkout unless a later amendment is more favorable to the Client or the Client expressly accepts it.",
       "15.2 An individual agreement takes precedence over these GTC. If one provision is invalid or ineffective, the remaining provisions are unaffected.",
-      "15.3 These GTC become effective on August 12, 2026.",
+      "15.3 These GTC become effective on December 1, 2026.",
     ],
   },
 ];
@@ -233,6 +239,7 @@ const operatingRulesSections: LegalSection[] = [
       "2.1 The User is obliged to behave considerately and with respect toward other persons within the premises.",
       "2.2 In shared and common areas, a User must maintain a level of quiet corresponding to normal, quiet conversation. In a meeting room or private office, noise must be contained within the booked space.",
       "2.3 A User must not excessively disturb other users or restrict their use of the premises. The Client is responsible for guests' conduct.",
+      "2.4 In Open Space, Users must respect other people's workspace. If the Operator asks them to vacate a table for a Team Table Booking, they must move to another Open Space seat.",
     ],
   },
   {
@@ -253,7 +260,7 @@ const operatingRulesSections: LegalSection[] = [
     heading: "4. Use of the Premises",
     body: [
       "4.1 The User is obliged to use the premises exclusively for purposes corresponding to their nature and designation.",
-      "4.2 A meeting room or private office may be used only during the confirmed time and within the confirmed capacity. Users must leave it with all their belongings by the end of the Booking.",
+      "4.2 The meeting room, private office, and Team Table may be used only during the confirmed period and within the confirmed capacity. Users must leave the booked space with their belongings by the end of the Booking.",
       "4.3 The User must maintain order and cleanliness and return the used space and shared equipment to an appropriate condition after use.",
       "4.4 Without the Operator's consent, a User must not move equipment, make alterations, install devices, or interfere with technical systems.",
       "4.5 A User must operate audiovisual, conferencing, and other equipment according to instructions and report a defect without undue delay. Equipment must be safely switched off after the Booking where appropriate.",
@@ -299,7 +306,7 @@ const operatingRulesSections: LegalSection[] = [
     heading: "9. Final Provisions",
     body: [
       "9.1 The Operator may amend these House Rules for future Bookings. A confirmed Booking is governed by the version accepted at checkout unless an immediate measure is necessary for safety or under mandatory law.",
-      "9.2 These House Rules become effective on August 12, 2026.",
+      "9.2 These House Rules become effective on December 1, 2026.",
     ],
   },
 ];
@@ -765,7 +772,7 @@ const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "18 November 2026",
+    updatedAt: "1 December 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {
@@ -875,7 +882,7 @@ const legalDocuments = {
     ],
   },
   "operating-rules": {
-    updatedAt: "12 August 2026",
+    updatedAt: "1 December 2026",
     sections: operatingRulesSections,
   },
 } satisfies LegalDocumentBodies;

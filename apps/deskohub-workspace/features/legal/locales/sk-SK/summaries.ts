@@ -14,7 +14,7 @@ export const legalDocumentSummaries = {
   },
   "terms-and-conditions": {
     title: "Všeobecné obchodné podmienky",
-    lead: "Tieto všeobecné obchodné podmienky upravujú coworkingové vstupy a online rezervácie zasadacej miestnosti a súkromnej kancelárie v Deskohub Workspace.",
+    lead: "Tieto všeobecné obchodné podmienky upravujú coworkingové vstupy a online rezervácie zasadacej miestnosti, súkromnej kancelárie a Tímového stola v Deskohub Workspace.",
   },
   "cookie-policy": {
     title: "Zásady používania cookies",
@@ -22,6 +22,6 @@ export const legalDocumentSummaries = {
   },
   "operating-rules": {
     title: "Prevádzkový poriadok",
-    lead: "Tento prevádzkový poriadok upravuje správanie a užívanie coworkingových priestorov, zasadacej miestnosti, súkromnej kancelárie a eventových priestorov Deskohub Workspace.",
+    lead: "Tento prevádzkový poriadok upravuje správanie a užívanie coworkingových priestorov, zasadacej miestnosti, súkromnej kancelárie a eventových priestorov Deskohub Workspace. Stanovuje aj pravidlá ohľaduplnosti a presunu na iné miesto v Open Space pri rezervácii Tímového stola.",
   },
 } satisfies Record<LegalDocumentKey, LegalDocumentSummary>;

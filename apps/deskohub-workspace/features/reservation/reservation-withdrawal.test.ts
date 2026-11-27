@@ -38,6 +38,11 @@ const office: ReservationServiceSchedule = {
   dayCount: 3,
 };
 
+const teamTable: ReservationServiceSchedule = {
+  kind: "table",
+  startsAt: prague("2027-01-10T09:15"),
+};
+
 const meetingRoom = (
   duration: Extract<
     ReservationServiceSchedule,
@@ -57,6 +62,7 @@ describe("assessReservationWithdrawal before the service starts", () => {
       office,
       meetingRoom({ unit: "hour", amount: 4 }),
       meetingRoom({ unit: "day", amount: 1 }),
+      teamTable,
     ]) {
       expect(assessReservationWithdrawal(facts(schedule), now)).toEqual({
         withdrawable: true,
@@ -83,6 +89,12 @@ describe("assessReservationWithdrawal before the service starts", () => {
 });
 
 describe("assessReservationWithdrawal after the service starts", () => {
+  test("counts the whole Team Table booking as supplied at its booked start", () => {
+    expect(
+      assessReservationWithdrawal(facts(teamTable), teamTable.startsAt)
+    ).toEqual({ withdrawable: false, reason: "performance_started" });
+  });
+
   test("counts a started cowork day as supplied, leaving nothing to withdraw", () => {
     expect(
       assessReservationWithdrawal(facts(coworkDay), prague("2027-01-10T00:00"))

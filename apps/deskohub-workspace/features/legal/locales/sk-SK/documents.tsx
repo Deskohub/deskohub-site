@@ -22,7 +22,7 @@ const termsAndConditionsSections: LegalSection[] = [
         Městský soud v Praze (Mestský súd v Prahe) (ďalej len „Poskytovateľ“), a
         klientom (ďalej len „Klient“).
       </>,
-      "1.2 Tieto VOP sa vzťahujú na coworkingové vstupy, online rezervácie zasadacej miestnosti a súkromnej kancelárie a na krátkodobé užívanie priestorov na individuálne dohodnuté podujatia.",
+      "1.2 Tieto VOP sa vzťahujú na coworkingové vstupy, online rezervácie zasadacej miestnosti, súkromnej kancelárie a Tímového stola a na krátkodobé užívanie priestorov na individuálne dohodnuté podujatia.",
       "1.3 Ustanovenia týchto VOP sú neoddeliteľnou súčasťou každej zmluvy uzavretej medzi Poskytovateľom a Klientom.",
       "1.4 Právne vzťahy neupravené týmito VOP sa riadia právnym poriadkom Českej republiky, najmä zákonom č. 89/2012 Sb., občanský zákoník (zákon č. 89/2012 Zb., Občiansky zákonník).",
       "1.5 Ak je Klient spotrebiteľom, nie sú týmito VOP obmedzené práva, ktorých sa podľa kogentných právnych predpisov nemôže vzdať.",
@@ -33,22 +33,23 @@ const termsAndConditionsSections: LegalSection[] = [
     body: [
       "2.1 Klientom sa rozumie fyzická alebo právnická osoba, ktorá využíva služby Poskytovateľa.",
       "2.2 Spotrebiteľom sa rozumie Klient, ktorý koná mimo rámca svojej podnikateľskej činnosti.",
-      "2.3 Priestory sú coworkingové priestory, zasadacia miestnosť, súkromná kancelária a eventové priestory prevádzkované Poskytovateľom.",
+      "2.3 Priestory sú coworkingové priestory, zasadacia miestnosť, súkromná kancelária a eventové priestory prevádzkované Poskytovateľom. Medzi coworkingové priestory patrí aj Open Space s Tímovými stolmi.",
       "2.4 Službami sa rozumie časovo obmedzené umožnenie užívania zvolených Priestorov a súvisiace služby uvedené v objednávke.",
       "2.5 Tarifou sa rozumie konkrétny rozsah coworkingových služieb a podmienok ich čerpania podľa aktuálneho Cenníka Poskytovateľa.",
       "2.6 Prístupovým PIN kódom sa rozumie aktuálny kód umožňujúci vstup do priestorov Poskytovateľa.",
-      "2.7 Rezerváciou sa rozumie objednávka konkrétneho coworkingového vstupu, termínu zasadacej miestnosti alebo termínu, počtu dní a počtu miest v súkromnej kancelárii.",
+      "2.7 Rezerváciou sa rozumie objednávka konkrétneho coworkingového vstupu, termínu zasadacej miestnosti, termínu, počtu dní a počtu miest v súkromnej kancelárii alebo termínu a veľkosti Tímového stola.",
     ],
   },
   {
     heading: "3. Predmet zmluvy",
     body: [
-      "3.1 Poskytovateľ poskytuje Klientovi coworkingové služby spočívajúce v dočasnom umožnení užívania zdieľaného pracovného priestoru v priestoroch Poskytovateľa, a to v rozsahu zvolenej tarify. Zdieľaným pracovným priestorom sa rozumie nevýhradne určené pracovné miesto alebo časť coworkingových priestorov určená na bežnú prácu, bez garancie konkrétneho stola či miesta, ak pri konkrétnej tarife nie je výslovne uvedené inak.",
+      "3.1 Poskytovateľ poskytuje Klientovi coworkingové služby spočívajúce v dočasnom umožnení užívania zdieľaného pracovného priestoru v priestoroch Poskytovateľa, a to v rozsahu zvolenej tarify. Zdieľaným pracovným priestorom sa rozumie nevýhradne určené pracovné miesto alebo časť coworkingových priestorov určená na bežnú prácu, bez garancie konkrétneho stola či miesta, ak pri konkrétnej tarife nie je výslovne uvedené inak. Pre Rezerváciu Tímového stola platí článok 3.7.",
       "3.2 Rezervácia zasadacej miestnosti oprávňuje Klienta na výhradné užívanie vybranej miestnosti v potvrdenom termíne a v rozsahu jednej hodiny, štyroch hodín alebo jedného pražského kalendárneho dňa. Celodenná Rezervácia trvá od polnoci vybraného dňa do polnoci nasledujúceho dňa v časovom pásme Europe/Prague.",
       "3.3 Rezervácia súkromnej kancelárie oprávňuje Klienta na výhradné užívanie kancelárie v potvrdenom počte miest počas celých zvolených kalendárnych dní. Každý deň trvá od polnoci do nasledujúcej polnoci v časovom pásme Europe/Prague a posledný deň uvedený v potvrdení je do Rezervácie zahrnutý.",
-      "3.4 Konkrétna kapacita, vybavenie, cena, termín a rozsah Rezervácie sú uvedené na rezervačnej stránke a v súhrne objednávky. Klient nesmie prekročiť potvrdenú kapacitu a zodpovedá za svojich hostí a ďalšie osoby, ktorým umožní vstup.",
+      "3.4 Konkrétna kapacita, vybavenie, cena, termín a rozsah Rezervácie sú uvedené na rezervačnej stránke a v súhrne objednávky. Klient nesmie prekročiť potvrdenú kapacitu a zodpovedá za svojich hostí a ďalšie osoby, ktorým umožní vstup. Kapacita Rezervácie Tímového stola zodpovedá počtu miest pri stole zvolenej veľkosti.",
       "3.5 Poskytovateľ ďalej umožňuje Klientovi krátkodobé užívanie priestorov na účely organizovania podujatí, a to vždy na základe individuálnej dohody.",
       "3.6 Služby predstavujú krátkodobé oprávnenie užívať určené Priestory a súvisiace služby; nezakladajú nájomné právo, sídlo, prevádzkareň ani iné vecné právo k Priestorom. Klient nesmie bez samostatnej písomnej dohody používať adresu Priestorov ako sídlo, miesto podnikania, prevádzkareň alebo doručovaciu adresu.",
+      "3.7 Rezervácia Tímového stola oprávňuje Klienta na výhradné užívanie konkrétneho prideleného stola v zdieľanom priestore Open Space počas potvrdenej doby. Začiatok aj koniec Rezervácie pripadajú na hranicu štvrťhodiny. Rezervácia trvá najmenej 15 minút a najviac 24 hodín a musí sa celá zmestiť do doby, keď možno Open Space využívať.",
     ],
   },
   {
@@ -69,6 +70,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "5.3 Cena súkromnej kancelárie sa počíta za každý vybraný deň ako denná cena za kanceláriu plus denná cena za každé potvrdené miesto. Cena zasadacej miestnosti zodpovedá vybranému jednohodinovému, štvorhodinovému alebo celodennému produktu.",
       "5.4 Zľavy sa uplatnia iba vtedy, ak sú uvedené v súhrne objednávky. Ak sa pred začatím platby zmení cena alebo uplatniteľná zľava, Poskytovateľ zobrazí nový súhrn a vyžiada si nové potvrdenie Klienta.",
       "5.5 Cena priestoru na individuálne dohodnuté podujatie je stanovená v ponuke podľa charakteru podujatia.",
+      "5.6 Cena Tímového stola sa skladá zo základného poplatku a poplatku za čas. Základný poplatok aj hodinová sadzba závisia od veľkosti stola. Poplatok za čas sa účtuje pomerne po 15 minútach. Káva nie je v cene.",
     ],
   },
   {
@@ -83,10 +85,12 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "7. Prístup a používanie služieb",
     body: [
-      "7.1 Potvrdzujúci e-mail obsahuje bezpečný odkaz na prístupovú stránku Rezervácie. Hneď ako je Rezervácia zaplatená, potvrdená a overená v reálnom čase a má vystavený prístupový PIN kód, zobrazuje chránená stránka tento PIN spolu s presne naprogramovanými hranicami platnosti kódu. O tom, kedy zamykací systém kód prijíma, rozhodujú výlučne naprogramované hranice AlgoPINu; aplikácie nezdieľajú vlastné hodiny. PIN nie je uvedený priamo v potvrdzujúcom e-maile.",
+      "7.1 Potvrdzujúci e-mail obsahuje bezpečný odkaz na prístupovú stránku Rezervácie. Hneď ako je Rezervácia zaplatená, potvrdená a overená v reálnom čase a má vystavený prístupový PIN kód, zobrazuje chránená stránka tento PIN spolu s presne naprogramovanými hranicami platnosti kódu. O tom, kedy zamykací systém kód prijíma, rozhodujú výlučne naprogramované hranice AlgoPINu; aplikácie nezdieľajú vlastné hodiny. PIN nie je uvedený priamo v potvrdzujúcom e-maile. Pri Tímovom stole sa zobrazené časové údaje riadia článkom 7.5.",
       "7.2 Poskytovateľ môže prístupový PIN zmeniť; Klient použije kód aktuálne zobrazený na prístupovej stránke Rezervácie. Zobrazenie PIN kódu nepredlžuje potvrdenú dobu užívania Priestorov a nezakladá právo na prístup mimo tejto doby alebo do iných priestorov. Používanie Priestorov je možné iba v potvrdenom čase Rezervácie.",
       "7.3 Klient smie PIN kód oznámiť iba osobám oprávneným zúčastniť sa na jeho Rezervácii, musí ho chrániť pred ďalšími osobami a zodpovedá za to, ako ho použijú jeho hostia. Podozrenie zo zneužitia bezodkladne oznámi Poskytovateľovi.",
       "7.4 Klient a jeho hostia sú povinní dodržiavať kapacitu, účel Rezervácie, potvrdený čas a Prevádzkový poriadok. Klient zabezpečí, aby hostia opustili Priestory najneskôr na konci Rezervácie.",
+      "7.5 Pri Tímovom stole Klient a jeho hostia používajú spoločný prístupový PIN kód. Prístupová stránka zobrazuje presný začiatok a koniec Rezervácie. Uzamykací systém môže zaokrúhliť začiatok platnosti PIN kódu nadol a koniec nahor na celé hodiny. Potvrdená doba užívania sa nemení.",
+      "7.6 Celkový počet účastníkov vrátane Klienta, ak sa zúčastní, nesmie prekročiť počet miest pri stole. Pozvané osoby môžu cez pozvánku otvoriť prístupovú stránku. Po zaplatení a potvrdení Rezervácie už nemožno pozvané osoby odobrať, pretože majú prístup k spoločnému PIN kódu.",
     ],
   },
   {
@@ -113,7 +117,7 @@ const termsAndConditionsSections: LegalSection[] = [
     heading: "9. Právo Spotrebiteľa odstúpiť od zmluvy",
     body: [
       "9.1 Spotrebiteľ môže od zmluvy uzavretej online odstúpiť bez uvedenia dôvodu do 14 dní od jej uzavretia, ibaže je právo na odstúpenie v konkrétnom prípade zákonom vylúčené alebo už zaniklo.",
-      "9.2 Ak sa má Služba začať poskytovať pred uplynutím tejto lehoty, Spotrebiteľ v rámci potvrdenia objednávky výslovne žiada, aby Poskytovateľ začal plniť pred uplynutím lehoty, a berie na vedomie, že po úplnom poskytnutí Služby právo na odstúpenie zaniká. Ak odstúpi po začatí, ale pred úplným poskytnutím Služby, uhradí pomernú časť ceny za už poskytnuté plnenie, ak sú splnené zákonné podmienky.",
+      "9.2 Ak sa má Služba začať poskytovať pred uplynutím tejto lehoty, Spotrebiteľ v rámci potvrdenia objednávky výslovne žiada, aby Poskytovateľ začal plniť pred uplynutím lehoty, a berie na vedomie, že po úplnom poskytnutí Služby právo na odstúpenie zaniká. Ak odstúpi po začatí, ale pred úplným poskytnutím Služby, uhradí pomernú časť ceny za už poskytnuté plnenie, ak sú splnené zákonné podmienky. Pre Tímový stôl platí článok 9.8.",
       <>
         9.3 Odstúpenie je možné zaslať jednoznačným vyhlásením na adresu sídla
         Poskytovateľa alebo e-mailom na{" "}
@@ -134,6 +138,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "9.5 Vzor oznámenia: „Oznamujem, že odstupujem od zmluvy na túto Službu: [opis a číslo Rezervácie], objednanú dňa [dátum]. Meno a priezvisko Spotrebiteľa: [doplniť]. Adresa Spotrebiteľa: [doplniť]. Dátum: [doplniť]. Podpis iba pri listinnom podaní.“ Použitie vzoru nie je povinné.",
       "9.6 Práva podľa tohto článku patria iba Spotrebiteľovi a platia popri prípadných výhodnejších podmienkach zrušenia uvedených v súhrne objednávky alebo v individuálnej ponuke.",
       "9.7 Ak Spotrebiteľ platne odstúpi od zmluvy o kúpe balíka vstupov po tom, čo požiadal o jeho okamžité využitie, a sú splnené zákonné podmienky na úhradu pomernej časti ceny, vrátená suma sa vypočíta vynásobením skutočne zaplatenej ceny počtom nevyužitých vstupov a vydelením celkovým počtom vstupov v balíku. Suma sa zaokrúhli nadol na celé české koruny. Za využité sa považujú vstupy za predchádzajúce návštevy a vstup rezervovaný na deň odstúpenia. Rezervácie na neskoršie dni sa zrušia a tieto vstupy sa považujú za nevyužité.",
+      "9.8 Na účely odstúpenia tvorí Rezervácia Tímového stola jeden celok. Spotrebiteľ môže v 14-dňovej lehote podľa článku 9.1 odstúpiť od celej Rezervácie iba pred jej potvrdeným začiatkom. Poskytovateľ v takom prípade vráti celú zaplatenú cenu. Od potvrdeného začiatku Rezervácie už nemožno odstúpiť ani od jej zostávajúcej časti.",
     ],
   },
   {
@@ -142,6 +147,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "10.1 Klient je povinný užívať Priestory riadne, iba na potvrdený účel a v súlade s týmito VOP, Prevádzkovým poriadkom, bezpečnostnými pokynmi a právnymi predpismi.",
       "10.2 Klient zodpovedá za konanie svojich hostí a za škodu, ktorú on alebo jeho hostia spôsobia porušením povinnosti. Bežné opotrebenie sa za škodu nepovažuje. Škodu alebo poruchu Klient oznámi bez zbytočného odkladu.",
       "10.3 Poskytovateľ môže primerane obmedziť alebo ukončiť poskytovanie Služby pri závažnom alebo opakovanom porušení VOP či Prevádzkového poriadku, prekročení kapacity, nebezpečnom alebo protiprávnom konaní alebo zneužití prístupu. Tým nie sú dotknuté práva Klienta, ak opatrenie nebolo oprávnené.",
+      "10.4 V priestore Open Space sú Klient a jeho hostia povinní rešpektovať pracovný priestor ostatných osôb. Ak ich Poskytovateľ požiada o uvoľnenie stola pre Rezerváciu Tímového stola, presunú sa na iné miesto v Open Space.",
     ],
   },
   {
@@ -203,7 +209,7 @@ const termsAndConditionsSections: LegalSection[] = [
     body: [
       "15.1 Poskytovateľ môže tieto VOP meniť pre zmluvy uzavreté po nadobudnutí účinnosti nového znenia. Na už uzavretú Rezerváciu sa použije znenie prijaté Klientom pri objednávke, ak neskoršia zmena nie je pre Klienta výhodnejšia alebo ak ju Klient výslovne neprijme.",
       "15.2 Odchylné individuálne dojednanie má prednosť pred týmito VOP. Neplatnosť alebo neúčinnosť jedného ustanovenia nemá vplyv na ostatné ustanovenia.",
-      "15.3 Tieto VOP nadobúdajú účinnosť dňa 12. 8. 2026.",
+      "15.3 Tieto VOP nadobúdajú účinnosť dňa 1. 12. 2026.",
     ],
   },
 ];
@@ -230,6 +236,7 @@ const operatingRulesSections: LegalSection[] = [
       "2.1 Používateľ je povinný správať sa v priestoroch ohľaduplne a s rešpektom k ostatným osobám.",
       "2.2 V zdieľaných a spoločných priestoroch Používateľ udržiava hladinu hluku zodpovedajúcu bežnej tichej konverzácii. V zasadacej miestnosti alebo súkromnej kancelárii udržiava hluk vo vnútri rezervovaného priestoru.",
       "2.3 Používateľ nesmie svojím konaním nadmerne rušiť ostatných používateľov ani obmedzovať ich užívanie priestorov. Klient zodpovedá za správanie svojich hostí.",
+      "2.4 V priestore Open Space Používateľ rešpektuje pracovný priestor ostatných osôb. Ak ho Prevádzkovateľ požiada o uvoľnenie stola pre rezerváciu Tímového stola, presunie sa na iné miesto v Open Space.",
     ],
   },
   {
@@ -250,7 +257,7 @@ const operatingRulesSections: LegalSection[] = [
     heading: "4. Užívanie priestorov",
     body: [
       "4.1 Používateľ je povinný užívať priestory výlučne na účely zodpovedajúce ich povahe a určeniu.",
-      "4.2 Zasadacia miestnosť a súkromná kancelária sa smú užívať iba počas potvrdenej doby a v potvrdenej kapacite. Používatelia ich vrátane svojich vecí opustia najneskôr na konci rezervácie.",
+      "4.2 Zasadacia miestnosť, súkromná kancelária a Tímový stôl sa smú užívať iba počas potvrdenej doby a v potvrdenej kapacite. Používatelia opustia rezervovaný priestor aj so svojimi vecami najneskôr na konci rezervácie.",
       "4.3 Používateľ je povinný udržiavať poriadok a čistotu a po skončení užívania uviesť využívané miesto a spoločné vybavenie do zodpovedajúceho stavu.",
       "4.4 Používateľ nesmie bez súhlasu Prevádzkovateľa premiestňovať vybavenie, vykonávať úpravy, inštalovať zariadenia alebo zasahovať do technických rozvodov.",
       "4.5 Používateľ používa audiovizuálne, konferenčné a iné vybavenie podľa pokynov a bez zbytočného odkladu oznámi poruchu. Po skončení rezervácie zariadenie bezpečne vypne, ak si to vyžaduje jeho povaha.",
@@ -296,7 +303,7 @@ const operatingRulesSections: LegalSection[] = [
     heading: "9. Záverečné ustanovenia",
     body: [
       "9.1 Prevádzkovateľ môže tento Prevádzkový poriadok meniť pre budúce rezervácie. Pre už potvrdenú rezerváciu je rozhodujúce znenie prijaté pri objednávke, ak nie sú bezodkladné opatrenia nevyhnutné z dôvodu bezpečnosti alebo kogentného právneho predpisu.",
-      "9.2 Tento Prevádzkový poriadok nadobúda účinnosť dňa 12. 8. 2026.",
+      "9.2 Tento Prevádzkový poriadok nadobúda účinnosť dňa 1. 12. 2026.",
     ],
   },
 ];
@@ -778,7 +785,7 @@ const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "18. novembra 2026",
+    updatedAt: "1. decembra 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {
@@ -890,7 +897,7 @@ const legalDocuments = {
     ],
   },
   "operating-rules": {
-    updatedAt: "12. augusta 2026",
+    updatedAt: "1. decembra 2026",
     sections: operatingRulesSections,
   },
 } satisfies LegalDocumentBodies;

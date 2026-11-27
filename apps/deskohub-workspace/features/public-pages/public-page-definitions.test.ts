@@ -62,20 +62,40 @@ describe("public page content dates", () => {
     }
   });
 
-  test("date every page with a calendar day that has passed", () => {
+  test("date each page by its publication or scheduled legal effective date", () => {
     const today = Temporal.Now.plainDateISO("Europe/Prague");
 
-    for (const { contentDate, localeContentDates } of publicPages) {
+    for (const { pathname, contentDate, localeContentDates } of publicPages) {
       for (const isoDate of [
         contentDate,
         ...Object.values(localeContentDates ?? {}),
       ]) {
         const date = Temporal.PlainDate.from(isoDate);
         expect(date.toString()).toBe(isoDate);
-        expect(Temporal.PlainDate.compare(date, today)).toBeLessThanOrEqual(0);
+        const scheduledLegalRevision =
+          isoDate === contentDate &&
+          isoDate === "2026-12-01" &&
+          (pathname === "/terms-and-conditions" ||
+            pathname === "/operating-rules");
+        if (!scheduledLegalRevision) {
+          expect(Temporal.PlainDate.compare(date, today)).toBeLessThanOrEqual(
+            0
+          );
+        }
       }
     }
   });
+
+  test.each(["/terms-and-conditions", "/operating-rules"] as const)(
+    "date %s in every locale by the Team Table revision",
+    (pathname) => {
+      for (const locale of locales) {
+        expect(
+          getPublicPageContentDate(publicPageDefinitions[pathname], locale)
+        ).toBe("2026-12-01");
+      }
+    }
+  );
 
   test("date each legal page by its document's last update in every locale", () => {
     for (const documentKey of legalDocumentKeys) {

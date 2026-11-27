@@ -17,7 +17,8 @@ export const governingLegalLocale = "cs-CZ" satisfies Locale;
  * translation notice or a translation fix, while the governing Czech version
  * and its document date stayed the same. The sitemap dates the locale's legal
  * pages by it when it is later than the document date. It is not part of a
- * document, so it never changes a document's version.
+ * document, so it never changes a document's version. Revisions to the Czech
+ * document and its translations use the document date in the public page registry.
  */
 export type LegalTranslationDate = `${number}-${number}-${number}`;
 

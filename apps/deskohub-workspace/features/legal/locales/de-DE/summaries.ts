@@ -14,7 +14,7 @@ export const legalDocumentSummaries = {
   },
   "terms-and-conditions": {
     title: "Allgemeine Geschäftsbedingungen",
-    lead: "Diese Allgemeinen Geschäftsbedingungen regeln den Coworking-Zutritt sowie Online-Reservierungen des Meetingraums und des Privatbüros bei Deskohub Workspace.",
+    lead: "Diese Allgemeinen Geschäftsbedingungen regeln den Coworking-Zutritt und Online-Reservierungen für den Meetingraum, das Privatbüro und den Teamtisch bei Deskohub Workspace.",
   },
   "cookie-policy": {
     title: "Cookie-Richtlinie",
@@ -22,6 +22,6 @@ export const legalDocumentSummaries = {
   },
   "operating-rules": {
     title: "Hausordnung",
-    lead: "Diese Hausordnung regelt das Verhalten und die Nutzung in den Coworking-Räumen, im Meetingraum, im Privatbüro und in den Veranstaltungsräumen von Deskohub Workspace.",
+    lead: "Diese Hausordnung regelt das Verhalten und die Nutzung in den Coworking-Räumen, im Meetingraum, im Privatbüro und in den Veranstaltungsräumen von Deskohub Workspace. Sie regelt auch die Rücksichtnahme im Open Space und den Platzwechsel für Teamtisch-Reservierungen.",
   },
 } satisfies Record<LegalDocumentKey, LegalDocumentSummary>;

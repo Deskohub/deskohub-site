@@ -11,10 +11,10 @@ import {
 } from "./payment-submit-evidence";
 
 const termsHash =
-  "de75ea2a10fff4dbdd526fdba1403b03d94f6249acd9ac9f4ff6ca7648400eae";
+  "73265b936f8cafee216a8d7eec114ddb7f0f8cc4b278e047c6a3eb8819d5a723";
 const operatingRulesHash =
-  "05cefdd98d32159cfce228b230931f9cc257643d90f83f327589732476c8ba56";
-const acceptedAt = "2026-11-18T10:00:00Z";
+  "5f86f935f8d3f4d9bce7c5dc5fc966cf162a6da942a1ffcb0aeba5180d861cbf";
+const acceptedAt = "2026-12-01T10:00:00Z";
 
 // The payment evidence stored for the published documents.
 const expectedEvidence = (earlyPerformanceConsent: boolean) =>

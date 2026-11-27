@@ -120,6 +120,8 @@ The booking calendar covers six months. A customer can book for today, and can s
 
 Checkout and invoices show two price lines. The base charge is CZK 60 per seat. The time charge is CZK 20 per seat per hour, billed at CZK 5 per seat for every 15-minute slot in the booking. Both charges use the selected table size and are discountable. Public prices show the base and hourly amounts for each bookable table size.
 
+Within 14 days of concluding the contract, a consumer can withdraw from the entire Team Table booking before its booked start and receive a full refund. The booking counts as one unit. Once it starts, the rest of the booking is ineligible for partial withdrawal.
+
 Team Table becomes bookable when its reservation flow is complete and its release switch is on. While the switch is off, booking surfaces hide the offer and refuse new Team Table selections and bookings.
 
 ### Shared tables and reassignment
