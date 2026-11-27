@@ -2,6 +2,7 @@ import type { DotyposCustomer } from "@deskohub/dotypos";
 import {
   type DotyposReservationId,
   DotyposService,
+  type DotyposTable,
   getCustomerDisplayName,
 } from "@deskohub/dotypos";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
@@ -24,10 +25,9 @@ import {
   getStoredRebookingSelection,
   type RebookingSelection,
 } from "@/features/reservation/backend/booking-selection";
-import {
-  type CustomerReservationPlacement,
-  getCustomerReservationPlacement,
-} from "@/features/reservation/backend/customer-reservation-placement";
+import type { CustomerReservationPlacement } from "@/features/reservation/backend/customer-reservation-placement";
+import { getCustomerReservationPlacement } from "@/features/reservation/backend/customer-reservation-placement";
+import { loadOpenSpaceExcludedTableIds } from "@/features/reservation/backend/open-space-table-exclusions";
 import type { ReservationRecord } from "@/features/reservation/backend/reservation-record";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
@@ -212,7 +212,12 @@ type CheckoutStatusReservationReconstruction =
 
 type CheckoutStatusReconstruction = {
   readonly reservation: CheckoutStatusReservationReconstruction;
-  readonly placement?: CustomerReservationPlacement;
+  readonly placement?: {
+    readonly dotyposReservation: ReservationRecord;
+    readonly tables: readonly DotyposTable[];
+    readonly seatingMap: boolean;
+    readonly occupiedInterval: BookedReservation["occupiedInterval"];
+  };
   readonly bookedSelection?: RebookingSelection;
 };
 
@@ -555,17 +560,16 @@ const implementation = Effect.gen(function* () {
         "Checkout status summary Dotypos reservation loaded"
       );
 
-      const placement = getCustomerReservationPlacement({
-        reservationDetails: reservation.reservationDetails,
-        dotyposReservation,
-        tables,
-        seatingMap: seatingMapEnabled,
-      });
-
       const booked = decodeBookedReservation(
         dotyposReservation,
         reservation.reservationDetails
       );
+      const placement = {
+        dotyposReservation,
+        tables,
+        seatingMap: seatingMapEnabled,
+        occupiedInterval: booked.occupiedInterval,
+      };
       const timing = yield* getDotyposReservationTiming({
         reservationId: reservation.id,
         reservation: booked,
@@ -923,17 +927,47 @@ const implementation = Effect.gen(function* () {
         )
       );
 
+      // A cancelled reservation or one still in late-payment recovery has no
+      // place to show. A slow overlap read should leave the summary intact.
+      const source =
+        !latePaymentStatusKind && statusKind !== "reservation_cancelled"
+          ? reconstruction.placement
+          : undefined;
+      const openSpaceExcludedTableIds = source?.tables.length
+        ? yield* loadOpenSpaceExcludedTableIds(
+            {
+              reservationDetails: reservation.reservationDetails,
+              occupiedInterval: source.occupiedInterval,
+            },
+            { dotypos, reservations }
+          ).pipe(
+            Effect.timeout(summaryTimeout),
+            Effect.tapError((cause) =>
+              Effect.logWarning(
+                "Checkout status Open Space table exclusions load failed",
+                {
+                  cause,
+                }
+              )
+            ),
+            Effect.orElseSucceed(() => undefined)
+          )
+        : undefined;
+      const placement =
+        source &&
+        getCustomerReservationPlacement({
+          ...source,
+          reservationDetails: reservation.reservationDetails,
+          openSpaceExcludedTableIds,
+        });
+
       const resultBase: CheckoutReservationStatusViewModelBase = {
         orderId: reservation.id,
         returnOutcome: input.returnOutcome,
         status: statusKind,
         paymentStatus: reservation.paymentState,
         fulfillmentStatus: reservation.fulfillmentState,
-        // A cancelled reservation or one still in late-payment recovery
-        // has no assigned place to show.
-        ...(!latePaymentStatusKind &&
-          statusKind !== "reservation_cancelled" &&
-          reconstruction.placement),
+        ...placement,
         supportContactPrefill,
         ...(paymentPageReopenable && { paymentPageReopenable: true as const }),
         // A late payment that settled takes over the status, and with it the

@@ -1,4 +1,4 @@
-import type { DotyposReservation } from "@deskohub/dotypos";
+import { type DotyposReservation, DotyposService } from "@deskohub/dotypos";
 import { Context, Effect, Layer } from "effect";
 import {
   type WorkspaceCheckoutNetworkDetails,
@@ -8,11 +8,15 @@ import type {
   StoredWorkspaceReservationDetails,
   WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
+import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { AdvisoryAvailabilityInventory } from "./availability-inventory";
+import { decodeBookedReservation } from "./booked-reservation";
 import {
   type CustomerReservationPlacement,
   getCustomerReservationPlacement,
 } from "./customer-reservation-placement";
+import { loadOpenSpaceExcludedTableIds } from "./open-space-table-exclusions";
+import { WorkspaceReservationRepository } from "./workspace-reservation.repository";
 
 /**
  * What a booked customer needs on site, as the confirmation email tells
@@ -27,14 +31,17 @@ export type ReservationOnSiteDetails = {
 export type OnSiteReservation = {
   readonly id: WorkspaceReservationId;
   readonly reservationDetails: StoredWorkspaceReservationDetails;
-  readonly dotyposReservation: Pick<DotyposReservation, "_tableId">;
+  readonly dotyposReservation: Pick<
+    DotyposReservation,
+    "_tableId" | "startDate" | "endDate" | "seats"
+  >;
 };
 
 interface IReservationOnSite {
   /**
    * Each reservation's table and Wi-Fi. Reads the shared tables snapshot the
-   * status page uses, once, and only when there is a reservation to place; a
-   * failed read leaves the tables out instead of failing.
+   * status page uses once. Open Space also checks Team Table bookings live.
+   * A failed overlap check leaves out the shared table list.
    */
   readonly forReservations: (
     reservations: readonly OnSiteReservation[]
@@ -47,16 +54,18 @@ export class ReservationOnSite extends Context.Service<
   ReservationOnSite,
   IReservationOnSite
 >()("@deskohub-workspace/reservation/ReservationOnSite") {
-  static Live = Layer.effect(
+  static Default = Layer.effect(
     this,
     Effect.gen(function* () {
       const inventory = yield* AdvisoryAvailabilityInventory;
       const networks = yield* WorkspaceCheckoutNetworkDetailsService;
+      const dotypos = yield* DotyposService;
+      const reservations = yield* WorkspaceReservationRepository;
 
       return {
         forReservations: Effect.fn("ReservationOnSite.forReservations")(
-          function* (reservations: readonly OnSiteReservation[]) {
-            if (reservations.length === 0) {
+          function* (bookings: readonly OnSiteReservation[]) {
+            if (bookings.length === 0) {
               return new Map<
                 WorkspaceReservationId,
                 ReservationOnSiteDetails
@@ -70,25 +79,40 @@ export class ReservationOnSite extends Context.Service<
               ),
               Effect.orElseSucceed(() => [])
             );
-            const details = yield* Effect.forEach(reservations, (reservation) =>
-              networks
-                .resolveCustomerNetworkDetails({
-                  reservation: { id: reservation.id },
-                })
-                .pipe(
-                  Effect.map((network) => {
-                    const { table } = getCustomerReservationPlacement({
-                      reservationDetails: reservation.reservationDetails,
-                      dotyposReservation: reservation.dotyposReservation,
-                      tables,
-                      seatingMap: false,
-                    });
-                    return [
-                      reservation.id,
-                      { ...(table && { table }), network },
-                    ] as const;
-                  })
-                )
+            const details = yield* Effect.forEach(
+              bookings,
+              Effect.fnUntraced(function* (reservation) {
+                const { id, reservationDetails, dotyposReservation } =
+                  reservation;
+                const { occupiedInterval } = decodeBookedReservation(
+                  dotyposReservation,
+                  reservationDetails
+                );
+                const openSpaceExcludedTableIds =
+                  yield* loadOpenSpaceExcludedTableIds(
+                    { reservationDetails, occupiedInterval },
+                    { dotypos, reservations }
+                  ).pipe(
+                    Effect.tapError((cause) =>
+                      Effect.logWarning(
+                        "Reservation on-site Open Space table exclusions load failed",
+                        { cause }
+                      )
+                    ),
+                    Effect.orElseSucceed(() => undefined)
+                  );
+                const { table } = getCustomerReservationPlacement({
+                  reservationDetails,
+                  dotyposReservation,
+                  tables,
+                  openSpaceExcludedTableIds,
+                  seatingMap: false,
+                });
+                const network = yield* networks.resolveCustomerNetworkDetails({
+                  reservation: { id },
+                });
+                return [id, { ...(table && { table }), network }] as const;
+              })
             );
             return new Map<WorkspaceReservationId, ReservationOnSiteDetails>(
               details
@@ -97,5 +121,11 @@ export class ReservationOnSite extends Context.Service<
         ),
       };
     })
+  );
+
+  static Live = this.Default.pipe(
+    Layer.provide(
+      Layer.mergeAll(WorkspaceDotyposLayer, WorkspaceReservationRepository.Live)
+    )
   );
 }

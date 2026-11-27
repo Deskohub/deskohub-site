@@ -3,7 +3,7 @@ import { NoReservationInvitees } from "@/features/reservation-invitees/backend/r
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import { DotyposService, DotyposUnavailable } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Duration, Effect, Fiber, Layer, Option } from "effect";
 import { TestClock } from "effect/testing";
@@ -527,7 +527,7 @@ describe("CheckoutStatusService", () => {
     expect(getTables).toHaveBeenCalledTimes(3);
   });
 
-  test("uses the shared Open Space table list instead of its assigned table", async () => {
+  test("uses the Open Space table list with overlapping Team Tables removed", async () => {
     const { CheckoutStatusService } = await import("./checkout-status.service");
     const { ProviderPaymentFinalizationService } = await import(
       "../payment/provider-payment-finalization.service"
@@ -556,6 +556,9 @@ describe("CheckoutStatusService", () => {
           })
         )
       ),
+      selectTeamTableDotyposReservationIds: () =>
+        Effect.succeed(["synthetic-team-booking"]),
+      selectExpiredHoldDotyposReservationIds: () => Effect.succeed([]),
     };
     const paymentAttempts = {
       findDisplayableForReservation: mock(() =>
@@ -565,6 +568,7 @@ describe("CheckoutStatusService", () => {
     const finalization: ProviderPaymentFinalizationServiceType = {
       finalizePendingProviderPayment: mock(() => Effect.die("not used")),
     };
+    let overlapAvailable = true;
     const dotypos = makeDotypos({
       getReservationWithoutCustomer: mock(() =>
         Effect.succeed({
@@ -577,6 +581,25 @@ describe("CheckoutStatusService", () => {
           status: "CONFIRMED",
         })
       ),
+      listActiveReservationsOverlapping: () =>
+        overlapAvailable
+          ? Effect.succeed([
+              {
+                _cloudId: "cloud-id",
+                _branchId: "branch-id",
+                id: "synthetic-team-booking",
+                _tableId: "open-space-12",
+                status: "CONFIRMED",
+                startDate: "2026-06-20T08:00:00.000Z",
+                endDate: "2026-06-20T10:00:00.000Z",
+              },
+            ])
+          : Effect.fail(
+              new DotyposUnavailable({
+                operation: "listActiveReservationsOverlapping",
+                reason: "timeout",
+              })
+            ),
       getTables: mock(() =>
         Effect.succeed([
           {
@@ -655,38 +678,40 @@ describe("CheckoutStatusService", () => {
       ),
     });
 
-    const status = await Effect.gen(function* () {
-      const service = yield* CheckoutStatusService;
-      return yield* service.getStatus({
-        orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
-        returnOutcome: "success",
-      });
-    }).pipe(
-      Effect.provide(
-        CheckoutStatusService.Default.pipe(
-          Layer.provide(testReservationPaymentWindow()),
-          Layer.provide(NoReservationInvitees),
-          Layer.provide(observePaymentPagesAs("unknown").layer),
-          Layer.provide(
-            Layer.mergeAll(
-              Layer.mock(ProviderPaymentFinalizationService, finalization),
-              Layer.mock(WorkspaceReservationRepository, reservations),
-              Layer.mock(PaymentAttemptRepository, paymentAttempts),
-              reviewSandboxLayer,
-              dotyposLayer(dotypos),
-              noLatePaymentLayer(),
-              SeatingMapReleaseGate.fromDecision(false)
+    const loadStatus = () =>
+      Effect.gen(function* () {
+        const service = yield* CheckoutStatusService;
+        return yield* service.getStatus({
+          orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
+          returnOutcome: "success",
+        });
+      }).pipe(
+        Effect.provide(
+          CheckoutStatusService.Default.pipe(
+            Layer.provide(testReservationPaymentWindow()),
+            Layer.provide(NoReservationInvitees),
+            Layer.provide(observePaymentPagesAs("unknown").layer),
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.mock(ProviderPaymentFinalizationService, finalization),
+                Layer.mock(WorkspaceReservationRepository, reservations),
+                Layer.mock(PaymentAttemptRepository, paymentAttempts),
+                reviewSandboxLayer,
+                dotyposLayer(dotypos),
+                noLatePaymentLayer(),
+                SeatingMapReleaseGate.fromDecision(false)
+              )
             )
           )
-        )
-      ),
-      Effect.runPromise
-    );
+        ),
+        Effect.runPromise
+      );
 
+    const status = await loadStatus();
     expect(status).toMatchObject({
       kind: "cowork",
       status: "fulfilled",
-      table: { mode: "shared", name: "9-12, 15, 16" },
+      table: { mode: "shared", name: "9-11, 15, 16" },
       summary: {
         kind: "cowork",
         entryTier: "open-space",
@@ -695,6 +720,14 @@ describe("CheckoutStatusService", () => {
     });
     expect(status.table?.name).not.toContain("Assigned-only sentinel");
     expect(status.table?.name).not.toContain("Monitored sentinel");
+
+    overlapAvailable = false;
+    const degraded = await loadStatus();
+    expect(degraded).toMatchObject({
+      status: status.status,
+      summary: status.summary,
+    });
+    expect(degraded.table).toBeUndefined();
   });
 
   const getMeetingRoomStatus = async ({

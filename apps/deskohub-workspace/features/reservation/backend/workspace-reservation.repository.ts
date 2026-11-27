@@ -673,6 +673,10 @@ export interface IWorkspaceReservationRepository {
   readonly selectExpiredHoldDotyposReservationIds: (input: {
     readonly now: Temporal.Instant;
   }) => Effect.Effect<readonly DotyposReservationId[], EffectDrizzleQueryError>;
+  /** The provider IDs in this set that belong to Workspace Team Table orders. */
+  readonly selectTeamTableDotyposReservationIds: (
+    ids: readonly DotyposReservationId[]
+  ) => Effect.Effect<readonly DotyposReservationId[], EffectDrizzleQueryError>;
   readonly recordAmbiguousPassDayHolds: (
     holds: readonly UnboundPassDayHold[]
   ) => Effect.Effect<void, EffectDrizzleQueryError>;
@@ -2442,6 +2446,21 @@ export class WorkspaceReservationRepository extends Context.Service<
           return rows.flatMap(({ dotyposReservationId }) =>
             dotyposReservationId ? [dotyposReservationId] : []
           );
+        }),
+        selectTeamTableDotyposReservationIds: Effect.fn(
+          "workspaceReservations.selectTeamTableDotyposReservationIds"
+        )(function* (ids) {
+          const rows = yield* db
+            .select({ id: workspaceReservations.dotyposReservationId })
+            .from(workspaceReservations)
+            .where(
+              and(
+                inArray(workspaceReservations.dotyposReservationId, ids),
+                eq(StoredReservationDetails.kind, "table")
+              )
+            )
+            .pipe(retryDatabaseRead);
+          return rows.flatMap(({ id }) => (id ? [id] : []));
         }),
         recordAmbiguousPassDayHolds: (holds) =>
           recordAmbiguousPassDayHolds(db, holds),

@@ -17,6 +17,7 @@ import {
   type CustomerReservationPlacement,
   getCustomerReservationPlacement,
 } from "@/features/reservation/backend/customer-reservation-placement";
+import { loadOpenSpaceExcludedTableIds } from "@/features/reservation/backend/open-space-table-exclusions";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
 import {
   type WorkspaceReservation,
@@ -181,10 +182,31 @@ export class WorkspaceReservationService extends Context.Service<
           }
           const seats = booked.seats.value;
 
+          const openSpaceExcludedTableIds =
+            yield* loadOpenSpaceExcludedTableIds(
+              {
+                reservationDetails: reservation.reservationDetails,
+                occupiedInterval: booked.occupiedInterval,
+              },
+              { dotypos, reservations }
+            ).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new WorkspaceReservationDetailsError({
+                    reservationId: reservation.id,
+                    errorCode: "dotypos_reservation_load_failed",
+                    message:
+                      "Open Space table availability could not be loaded.",
+                    cause,
+                  })
+              )
+            );
+
           const placement = getCustomerReservationPlacement({
             reservationDetails: reservation.reservationDetails,
             dotyposReservation: dotyposReservationDetails.reservation,
             tables,
+            openSpaceExcludedTableIds,
             seatingMap: yield* seatingMap.isOpen,
           });
 
