@@ -48,6 +48,7 @@ import { getTableCheckoutDetails } from "@/features/checkout/schemas/checkout-de
 import { orderIdSchema } from "@/features/order";
 import { EntryPackUnavailableError } from "@/features/passes/backend/entry-pack-redemption";
 import { reservationOrderIssuanceSchema } from "@/features/reservation/reservation-order";
+import { reconcileTeamTableHolds } from "@/features/team-table/backend/reconcile-team-table-holds";
 import { TeamTableHoldClaims } from "@/features/team-table/backend/team-table-hold-claims";
 import {
   QueueMessageSendError,
@@ -222,6 +223,7 @@ describe.skipIf(!postgresDatabase)(
           DotyposService["Service"],
           "listActiveReservationsOverlapping" | "getReservationWithoutCustomer"
         >;
+        readonly conditionalCancel?: DotyposService["Service"]["setReservationStatusIfMatches"];
         readonly ensureAvailable?: Mock<
           WorkspaceAvailabilityService["Service"]["ensureAvailable"]
         >;
@@ -248,6 +250,9 @@ describe.skipIf(!postgresDatabase)(
         cancelReservation: dotypos.cancelReservation,
         getReservationStatus: dotypos.getReservationStatus,
         ...options.providerReads,
+        ...(options.conditionalCancel && {
+          setReservationStatusIfMatches: options.conditionalCancel,
+        }),
       });
       const layer = ReservationHolds.Default.pipe(
         Layer.provide(
@@ -296,6 +301,19 @@ describe.skipIf(!postgresDatabase)(
             .filter(({ event }) => event === "reservation started")
             .map(({ distinctId }) => distinctId),
         hold,
+        reconcile: (now: Temporal.Instant) =>
+          reconcileTeamTableHolds({ now, limit: 10 }).pipe(
+            Effect.provide(TeamTableHoldClaims.Default),
+            Effect.provide(
+              Layer.mergeAll(
+                postgres.layer,
+                provider,
+                reservations,
+                WorkspaceDatabaseAdvisoryLock.makeLayer(postgres.databasePool)
+              )
+            ),
+            Effect.runPromise
+          ),
         holdForAttempt: (request: HoldRequest) =>
           hold(request).pipe(Effect.runPromise),
         /** The failure `holdForAttempt` ends with. */
@@ -397,102 +415,128 @@ describe.skipIf(!postgresDatabase)(
       checkoutDetails,
     });
 
-    test("keeps a lost Team Table POST exclusive and attaches it on retry without a second POST", async () => {
-      const author = await newAuthor();
-      const dotypos = makeDotypos();
-      const providerId = DotyposReservationIdSchema.make("uncertain-team-hold");
-      const tableId = DotyposTableIdSchema.make("exact-team-table");
-      const selection = {
-        kind: "table",
-        seats: 4,
-        startsAt: "2099-06-10T09:00:00Z",
-        endsAt: "2099-06-10T09:15:00Z",
-      } as const;
-      type ProviderHold = ReturnType<typeof dotyposHoldFixture>;
-      const records: ProviderHold[] = [];
-      let visible = false;
-      dotypos.createReservation.mockImplementation((input) =>
-        Effect.gen(function* () {
-          expect(input).toMatchObject({
-            tableId,
-            seats: 4,
-            singleAttempt: true,
-          });
-          const claims = yield* postgres.db
-            .select()
-            .from(teamTableHoldClaims)
-            .where(eq(teamTableHoldClaims.tableId, tableId));
-          expect(claims).toHaveLength(1);
-          records.push({
-            ...dotyposHoldFixture(providerId),
-            _tableId: input.tableId,
-            _customerId: input.customerId,
-            seats: String(input.seats),
-            startDate: input.startDate.toISOString(),
-            endDate: input.endDate.toISOString(),
-            note: input.note,
-          });
-          return yield* new DotyposUncertain({
-            operation: "createReservation",
-            request: "reservation.create",
-            reason: "transport",
-            message: "Synthetic lost reply",
-          });
-        })
-      );
-      const holds = makeHolds({
-        dotypos,
-        providerReads: {
-          listActiveReservationsOverlapping: () =>
-            Effect.sync(() => (visible ? records : [])),
-          getReservationWithoutCustomer: () =>
-            Effect.sync(() => requireValue(records[0], "posted hold")),
-        },
-      });
-      const ordered = Schema.decodeUnknownSync(
-        reservationOrderIssuanceSchema("CZ")
-      )({ ...reservation, ...selection });
-      if (ordered.kind !== "table")
-        throw new Error("Expected a Team Table order");
-      const quote = await getTableReservationQuote(ordered).pipe(
-        Effect.runPromise
-      );
-      const request: HoldRequest = {
-        ...holdRequest({ author }),
-        reservation: ordered,
-        checkoutDetails: getTableCheckoutDetails({
-          locale: "en-US",
+    test.each(["retry", "expired"] as const)(
+      "handles a lost Team Table POST after %s without a second POST",
+      async (outcome) => {
+        const author = await newAuthor();
+        const dotypos = makeDotypos();
+        const providerId = DotyposReservationIdSchema.make(
+          "uncertain-team-hold"
+        );
+        const tableId = DotyposTableIdSchema.make("exact-team-table");
+        const selection = {
+          kind: "table",
+          seats: 4,
+          startsAt: "2099-06-10T09:00:00Z",
+          endsAt: "2099-06-10T09:15:00Z",
+        } as const;
+        type ProviderHold = ReturnType<typeof dotyposHoldFixture>;
+        const records: ProviderHold[] = [];
+        let visible = false;
+        dotypos.createReservation.mockImplementation((input) =>
+          Effect.gen(function* () {
+            expect(input).toMatchObject({
+              tableId,
+              seats: 4,
+              singleAttempt: true,
+            });
+            const claims = yield* postgres.db
+              .select()
+              .from(teamTableHoldClaims)
+              .where(eq(teamTableHoldClaims.tableId, tableId));
+            expect(claims).toHaveLength(1);
+            records.push({
+              ...dotyposHoldFixture(providerId),
+              _tableId: input.tableId,
+              _customerId: input.customerId,
+              seats: String(input.seats),
+              startDate: input.startDate.toISOString(),
+              endDate: input.endDate.toISOString(),
+              note: input.note,
+            });
+            return yield* new DotyposUncertain({
+              operation: "createReservation",
+              request: "reservation.create",
+              reason: "transport",
+              message: "Synthetic lost reply",
+            });
+          })
+        );
+        const conditionalCancel = mock(() =>
+          Effect.sync(() => ({
+            ...requireValue(records[0], "posted hold"),
+            status: "CANCELLED" as const,
+          }))
+        );
+        const holds = makeHolds({
+          dotypos,
+          conditionalCancel,
+          providerReads: {
+            listActiveReservationsOverlapping: () =>
+              Effect.sync(() => (visible ? records : [])),
+            getReservationWithoutCustomer: () =>
+              Effect.sync(() => requireValue(records[0], "posted hold")),
+          },
+        });
+        const ordered = Schema.decodeUnknownSync(
+          reservationOrderIssuanceSchema("CZ")
+        )({ ...reservation, ...selection });
+        if (ordered.kind !== "table")
+          throw new Error("Expected a Team Table order");
+        const quote = await getTableReservationQuote(ordered).pipe(
+          Effect.runPromise
+        );
+        const request: HoldRequest = {
+          ...holdRequest({ author }),
           reservation: ordered,
-          quote,
-          legalEvidence: {},
-        }),
-        teamTableCapacity: { assignTableId: Effect.succeed(tableId) },
-      };
-      expect((await holds.holdFailure(request))._tag).toBe("DotyposUncertain");
-      expect((await rowsOf(author))[0]?.reservationState).toBe("creating_hold");
-      const date = Temporal.PlainDate.from("2099-06-10");
-      const capacity = await WorkspaceReservationRepository.pipe(
-        Effect.flatMap((repository) =>
-          repository.selectLocalTableCapacity({ first: date, last: date })
-        ),
-        Effect.provide(
-          WorkspaceReservationRepository.Default.pipe(
-            Layer.provide(postgres.layer)
-          )
-        ),
-        Effect.runPromise
-      );
-      expect(capacity).toContainEqual(
-        expect.objectContaining({ tableId, seats: 4, exclusive: true })
-      );
-      visible = true;
-      const recovered = await holds.holdForAttempt(request);
-      expect(recovered).toMatchObject({
-        kind: "reused",
-        reservation: { dotyposReservationId: providerId },
-      });
-      expect(dotypos.createReservation).toHaveBeenCalledTimes(1);
-    });
+          checkoutDetails: getTableCheckoutDetails({
+            locale: "en-US",
+            reservation: ordered,
+            quote,
+            legalEvidence: {},
+          }),
+          teamTableCapacity: { assignTableId: Effect.succeed(tableId) },
+        };
+        expect((await holds.holdFailure(request))._tag).toBe(
+          "DotyposUncertain"
+        );
+        expect((await rowsOf(author))[0]?.reservationState).toBe(
+          "creating_hold"
+        );
+        const date = Temporal.PlainDate.from("2099-06-10");
+        const capacity = await WorkspaceReservationRepository.pipe(
+          Effect.flatMap((repository) =>
+            repository.selectLocalTableCapacity({ first: date, last: date })
+          ),
+          Effect.provide(
+            WorkspaceReservationRepository.Default.pipe(
+              Layer.provide(postgres.layer)
+            )
+          ),
+          Effect.runPromise
+        );
+        expect(capacity).toContainEqual(
+          expect.objectContaining({ tableId, seats: 4, exclusive: true })
+        );
+        visible = true;
+        if (outcome === "expired") {
+          await holds.reconcile(Temporal.Now.instant().add({ hours: 1 }));
+          expect(conditionalCancel).toHaveBeenCalledTimes(1);
+          expect((await rowsOf(author))[0]?.reservationState).toBe("cancelled");
+          expect((await holds.holdFailure(request))._tag).toBe(
+            "CheckoutAttemptUnavailableError"
+          );
+          expect(dotypos.createReservation).toHaveBeenCalledTimes(1);
+          return;
+        }
+        const recovered = await holds.holdForAttempt(request);
+        expect(recovered).toMatchObject({
+          kind: "reused",
+          reservation: { dotyposReservationId: providerId },
+        });
+        expect(dotypos.createReservation).toHaveBeenCalledTimes(1);
+      }
+    );
 
     const rowsOf = (author: CustomerAccountId) =>
       postgres.db
