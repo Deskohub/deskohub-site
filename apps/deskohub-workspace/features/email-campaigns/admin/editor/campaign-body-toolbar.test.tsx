@@ -1,11 +1,13 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { Schema } from "effect";
 import { m } from "@/features/administration/i18n";
 import { m as customerMessages } from "@/features/i18n";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { CampaignBodyNode } from "../../body/campaign-body-document";
 import {
   campaignBodyOf,
   loadCampaignBodyEditorHarness,
@@ -43,8 +45,13 @@ const select = (rendered: Rendered, from: number, to = from) =>
 const blockTypes = (rendered: Rendered) =>
   (rendered.editor.getJSON().content ?? []).map(({ type }) => type);
 
+const decodeBlock = Schema.decodeUnknownSync(
+  Schema.UndefinedOr(CampaignBodyNode)
+);
 const firstBlock = (rendered: Rendered) =>
-  rendered.editor.getJSON().content?.[0];
+  decodeBlock(rendered.editor.getJSON().content?.[0], {
+    onExcessProperty: "error",
+  });
 
 const labels = {
   bold: m.emailCampaignsEditorBold({}, { locale }),

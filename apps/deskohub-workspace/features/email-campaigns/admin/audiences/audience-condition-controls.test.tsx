@@ -409,6 +409,7 @@ const changed = (onChange: ReturnType<typeof mock>) =>
 describe("campaign picker with a chosen campaign", () => {
   const sourceWording =
     campaignEmailCountWording("en-US").campaignSources?.campaign;
+  assert(sourceWording);
   const specific = (campaignId: string) =>
     ({
       ...newCondition("campaignEmailCount"),
@@ -428,14 +429,14 @@ describe("campaign picker with a chosen campaign", () => {
       specific("01970000-0000-7000-8000-0000000000ff"),
       onChange
     );
-    const picker = view.getByRole("combobox", { name: sourceWording?.label });
-    expect(picker.textContent).toBe(sourceWording?.unknown);
+    const picker = view.getByRole("combobox", { name: sourceWording.label });
+    expect(picker.textContent).toBe(sourceWording.unknown);
     await openCampaignPicker(picker);
     const options = view.getAllByRole("option");
     expect(options).toHaveLength(campaigns.length + 2);
     const unknownOption = options[1];
     assert(unknownOption);
-    expect(unknownOption.textContent).toBe(sourceWording?.unknown);
+    expect(unknownOption.textContent).toBe(sourceWording.unknown);
     fireEvent.click(unknownOption);
     expect(onChange).not.toHaveBeenCalled();
     expect(picker.getAttribute("aria-expanded")).toBe("false");
@@ -445,11 +446,9 @@ describe("campaign picker with a chosen campaign", () => {
     const onChange = mock((_condition: AudienceCondition) => undefined);
     const view = renderCampaignEmailCount(specific(springSaleId), onChange);
     await openCampaignPicker(
-      view.getByRole("combobox", { name: sourceWording?.label })
+      view.getByRole("combobox", { name: sourceWording.label })
     );
-    fireEvent.click(
-      view.getByRole("option", { name: sourceWording?.absent ?? "" })
-    );
+    fireEvent.click(view.getByRole("option", { name: sourceWording.absent }));
     expect(changed(onChange)).toEqual({
       ...newCondition("campaignEmailCount"),
       params: { purpose: "any", period: { _tag: "Past" } },
@@ -914,6 +913,28 @@ describe("SetConditionControls", () => {
   const decodeLocales = Schema.decodeUnknownSync(
     Schema.Array(AdministrationCampaignLocale)
   );
+  const setCondition = (
+    attribute: "locale" | "dotyposTags" | "discountGroup",
+    value: readonly string[]
+  ) => {
+    switch (attribute) {
+      case "locale":
+        return {
+          ...newConditionFrom(audienceAttributeCatalogue.locale),
+          value: decodeLocales(value),
+        };
+      case "dotyposTags":
+        return {
+          ...newConditionFrom(audienceAttributeCatalogue.dotyposTags),
+          value,
+        };
+      case "discountGroup":
+        return {
+          ...newConditionFrom(audienceAttributeCatalogue.discountGroup),
+          value,
+        };
+    }
+  };
 
   const renderSet = (
     attribute: "locale" | "dotyposTags" | "discountGroup",
@@ -935,17 +956,7 @@ describe("SetConditionControls", () => {
         <SetConditionControls
           entry={audienceAttributeCatalogue[attribute]}
           wording={wording}
-          value={
-            attribute === "locale"
-              ? {
-                  ...newConditionFrom(audienceAttributeCatalogue.locale),
-                  value: decodeLocales(value),
-                }
-              : {
-                  ...newConditionFrom(audienceAttributeCatalogue[attribute]),
-                  value,
-                }
-          }
+          value={setCondition(attribute, value)}
           onChange={onChange}
           errorAt={(field) =>
             invalid && field === "value" ? "empty" : undefined
