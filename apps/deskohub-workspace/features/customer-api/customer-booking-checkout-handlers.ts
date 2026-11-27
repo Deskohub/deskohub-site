@@ -442,7 +442,11 @@ const answerPreparationFailure =
           Effect.fail(entryPackUnavailableAnswer()),
       }),
       // An unreadable discount or other service failure can be retried.
-      Match.orElse(retryable(operation))
+      Match.orElse((failure) =>
+        answerUnavailable(operation, {
+          failure: "_tag" in failure ? failure._tag : "checkout-preparation",
+        })
+      )
     );
 
 /**
