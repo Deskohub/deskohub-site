@@ -450,6 +450,24 @@ describe("workspace E2E workflow", () => {
     );
   });
 
+  test("passes pilot proof only to the trusted status publishers", () => {
+    const final = stepByName("Publish final commit status");
+    const withoutRun = stepByName("Publish status without an E2E run");
+    for (const publisher of [final, withoutRun]) {
+      expect(publisher.env?.PILOT_PR_NUMBER).toBe(
+        `\${{ vars.WORKSPACE_BACKEND_PREVIEW_PR }}`
+      );
+    }
+    expect(final.env?.BACKEND_PREVIEW_REQUIRED).toBe(
+      `\${{ needs.resolve-target.outputs.backend_preview }}`
+    );
+    expect(final.env?.TARGET_URL_DIGEST).toBe(
+      `\${{ needs.resolve-target.outputs.url_digest }}`
+    );
+    expect(withoutRun.env?.BACKEND_PREVIEW_REQUIRED).toBeUndefined();
+    expect(JSON.stringify(testJob)).not.toContain("TARGET_URL_DIGEST");
+  });
+
   test("classifies the synthetic main account only after a failed E2E run", () => {
     const uploadIndex = allSteps.findIndex((step) =>
       (step.uses ?? "").startsWith("actions/upload-artifact@")

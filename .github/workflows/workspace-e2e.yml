@@ -1233,21 +1233,26 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .workspace-e2e-flows
           persist-credentials: false
-          sparse-checkout: .github/actions/workspace-e2e-flows
+          sparse-checkout: |
+            .github/actions/workspace-e2e-flows
+            .github/actions/workspace-backend-preview
 
       - name: Publish final commit status
         if: always()
         env:
           ALLOCATION_SHARD: ${{ needs.test-e2e.outputs.shard }}
+          BACKEND_PREVIEW_REQUIRED: ${{ needs.resolve-target.outputs.backend_preview }}
           ALLOCATION_DESCRIPTION: ${{ needs.fill-bun-package-cache.result != 'success' && 'Workspace E2E Bun package cache fill failed' || needs.test-e2e.outputs.shard == '' && 'Workspace E2E shard allocation failed' || needs.test-e2e.outputs.release_outcome == 'success' && 'Workspace E2E shard released' || 'Workspace E2E shard release failed' }}
           FLOWS: ${{ needs.resolve-target.outputs.flows }}
           FLOWS_PUBLISH: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/publish-status.mjs
           GH_TOKEN: ${{ github.token }}
+          PILOT_PR_NUMBER: ${{ vars.WORKSPACE_BACKEND_PREVIEW_PR }}
           PR_NUMBER: ${{ needs.resolve-target.outputs.pr_number }}
           PREVIEW_ENVIRONMENT: 'Preview – deskohub-workspace-site'
           STATUS_STATE: ${{ needs.test-e2e.result == 'success' && 'success' || 'failure' }}
           SUPERSEDED_DESCRIPTION: Superseded by a newer PR head before E2E finished
           TARGET_SHA: ${{ needs.resolve-target.outputs.sha }}
+          TARGET_URL_DIGEST: ${{ needs.resolve-target.outputs.url_digest }}
         run: |
           set -euo pipefail
           # Publishes 'Protected preview E2E passed' / 'Protected preview E2E failed'
@@ -1282,12 +1287,15 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .workspace-e2e-flows
           persist-credentials: false
-          sparse-checkout: .github/actions/workspace-e2e-flows
+          sparse-checkout: |
+            .github/actions/workspace-e2e-flows
+            .github/actions/workspace-backend-preview
 
       - name: Publish status without an E2E run
         env:
           FLOWS_PUBLISH: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/publish-status.mjs
           GH_TOKEN: ${{ github.token }}
+          PILOT_PR_NUMBER: ${{ vars.WORKSPACE_BACKEND_PREVIEW_PR }}
           PR_NUMBER: ${{ needs.resolve-target.outputs.pr_number }}
           PREVIEW_ENVIRONMENT: 'Preview – deskohub-workspace-site'
           STATUS_DESCRIPTION: ${{ needs.resolve-target.outputs.status_description || 'Workspace E2E could not resolve this preview; re-run the failed jobs of this Workspace E2E run' }}
