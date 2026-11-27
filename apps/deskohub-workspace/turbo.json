@@ -175,6 +175,7 @@
         "@deskohub/tooltip#test",
         "@deskohub/workspace-admin-api#test",
         "@deskohub/workspace-backend#test",
+        "@deskohub/workspace-cloud-run#test",
         "@deskohub/workspace-customer-api#test",
         "@deskohub/workspace-domain#test",
         "@deskohub/workspace-rpc#test",
