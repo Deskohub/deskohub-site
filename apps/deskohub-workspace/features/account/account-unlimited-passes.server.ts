@@ -8,8 +8,10 @@ import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
 import { recoverEntryPackGiftClaims } from "@/features/passes/backend/entry-pack-gift";
 import { listHeldUnlimitedPasses } from "@/features/passes/backend/held-unlimited-passes";
+import { canHolderViewPassOrderStatus } from "@/features/passes/backend/pass-order-status-access";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import {
+  getPassPurchaseStatusPath,
   getUnlimitedAccessPath,
   getUnlimitedRenewalPath,
 } from "@/features/passes/routes";
@@ -36,6 +38,7 @@ export type AccountUnlimitedPass = {
   readonly boughtOn?: string;
   readonly boughtForYou: boolean;
   readonly period: string;
+  readonly statusPath?: string;
   readonly renewalPath?: string;
   readonly seating:
     | { readonly kind: "shared" }
@@ -116,6 +119,9 @@ export const loadAccountUnlimitedPasses = Effect.fn(
         pass.paymentState === "paid" && pass.buyerAccountId !== accountId,
       period,
       seating,
+      ...(canHolderViewPassOrderStatus(pass, accountId) && {
+        statusPath: getPassPurchaseStatusPath(locale, pass.orderId),
+      }),
       ...(pass.paymentState === "paid" &&
         !pass.renewalOverlaps &&
         isUnlimitedPassRenewalEligible(pass, now) && {

@@ -26,8 +26,10 @@ import {
   getEntryPackLastUsableDate,
 } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
-import { getEntryPackBookingPath } from "@/features/passes/routes";
-import { reservationStatusPath } from "@/features/reservation/routes";
+import {
+  getEntryPackBookingPath,
+  getPassPurchaseStatusPath,
+} from "@/features/passes/routes";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import {
   formatInstantDate,
@@ -45,6 +47,7 @@ export type AccountEntryPack = {
   readonly lastUsableDay: string;
   readonly status: "active" | "expired" | "depleted" | "ended";
   readonly bookPath?: string;
+  readonly statusPath?: string;
   readonly gift?: {
     readonly orderId: OrderId;
     readonly buyerName?: string;
@@ -128,7 +131,7 @@ const listBoughtGifts = Effect.fn("listBoughtPassGifts")(function* (
       const summary = {
         ...gift,
         orderId,
-        statusPath: `/${locale}${reservationStatusPath}/${orderId}`,
+        statusPath: getPassPurchaseStatusPath(locale, orderId),
         tier: getPassTierName(product.tier, locale),
       };
       return product.kind === "unlimited"
@@ -184,5 +187,8 @@ function toAccountEntryPack(
       pack.giftPaymentIsUsable && {
         bookPath: getEntryPackBookingPath(locale, pack.id),
       }),
+    ...(pack.canViewOrderStatus && {
+      statusPath: getPassPurchaseStatusPath(locale, pack.id),
+    }),
   };
 }

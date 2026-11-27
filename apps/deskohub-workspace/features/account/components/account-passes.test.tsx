@@ -14,6 +14,10 @@ import { AccountPassesPanel } from "./account-passes";
 
 test("shows the purchase date and balance, and links only the bookable pack", async () => {
   const syntheticPackId = "fixture-holder-pack";
+  const openPackOrderId = orderIdSchema.make(crypto.randomUUID());
+  const expiredPackOrderId = orderIdSchema.make(crypto.randomUUID());
+  const openPackStatusPath = `/en-US/reservation/status/${openPackOrderId}`;
+  const expiredPackStatusPath = `/en-US/reservation/status/${expiredPackOrderId}`;
   const openPack: AccountEntryPack = {
     position: 0,
     tier: "Open Space",
@@ -23,6 +27,7 @@ test("shows the purchase date and balance, and links only the bookable pack", as
     lastUsableDay: "Dec 30, 2026",
     status: "active",
     bookPath: `/en-US/reservation/cowork?pass=${syntheticPackId}`,
+    statusPath: openPackStatusPath,
   };
   const expiredPack: AccountEntryPack = {
     position: 1,
@@ -32,6 +37,7 @@ test("shows the purchase date and balance, and links only the bookable pack", as
     boughtOn: "May 31, 2026",
     lastUsableDay: "Aug 30, 2026",
     status: "expired",
+    statusPath: expiredPackStatusPath,
   };
   const markup = await new Response(
     await renderToReadableStream(
@@ -52,6 +58,9 @@ test("shows the purchase date and balance, and links only the bookable pack", as
   expect(markup).toContain("4 of 10 entries left");
   expect(markup).toContain("Expired");
   expect(markup).toContain(`href="${openPack.bookPath}"`);
+  expect(markup).toContain(`href="${openPackStatusPath}"`);
+  expect(markup).toContain(`href="${expiredPackStatusPath}"`);
+  expect(markup.match(/View order status/g)).toHaveLength(2);
   expect(markup.match(/Book a date/g)).toHaveLength(1);
   expect(markup.match(new RegExp(syntheticPackId, "g"))).toHaveLength(1);
 });
@@ -142,6 +151,55 @@ test("renders a held Unlimited pass with its assigned desk and purchase date", a
   expect(markup).toContain("Desk 14");
   expect(markup).toContain("Bought Oct 31, 2026");
   expect(markup).toContain(`href="${pass.accessPath}"`);
+  expect(markup).not.toContain("View order status");
+});
+
+test("links a buyer's Unlimited pass cards to their pass order status pages", async () => {
+  const activeOrderId = orderIdSchema.make(crypto.randomUUID());
+  const upcomingOrderId = orderIdSchema.make(crypto.randomUUID());
+  const activeStatusPath = `/en-US/reservation/status/${activeOrderId}`;
+  const upcomingStatusPath = `/en-US/reservation/status/${upcomingOrderId}`;
+  const markup = await new Response(
+    await renderToReadableStream(
+      <UnsavedChangesProvider>
+        <AccountPassesPanel
+          locale="en-US"
+          packs={Promise.resolve({ held: [], boughtForOthers: [] })}
+          unlimitedPasses={[
+            {
+              orderId: activeOrderId,
+              tier: "Open Space",
+              boughtOn: "Oct 31, 2026",
+              boughtForYou: false,
+              period: "Nov 10 – Dec 9, 2026",
+              seating: { kind: "shared" },
+              statusPath: activeStatusPath,
+              status: "active",
+              day: 8,
+              totalDays: 30,
+              daysLeft: 23,
+              accessPath: `/en-US/reservation/access/${activeOrderId}`,
+            },
+            {
+              orderId: upcomingOrderId,
+              tier: "Reserved Desk",
+              boughtOn: "Nov 20, 2026",
+              boughtForYou: false,
+              period: "Dec 10, 2026 – Jan 8, 2027",
+              seating: { kind: "assigned", name: "Desk 7" },
+              statusPath: upcomingStatusPath,
+              status: "upcoming",
+              startsOn: "Dec 10, 2026",
+            },
+          ]}
+        />
+      </UnsavedChangesProvider>
+    )
+  ).text();
+
+  expect(markup).toContain(`href="${activeStatusPath}"`);
+  expect(markup).toContain(`href="${upcomingStatusPath}"`);
+  expect(markup.match(/View order status/g)).toHaveLength(2);
 });
 
 test("uses the adjusted Unlimited term for the day label and remaining meter segments", async () => {
@@ -224,4 +282,5 @@ test("shows generic gift attribution when there is no buyer name", async () => {
   expect(markup).toContain("Bought for you");
   expect(markup).not.toContain("Bought for you by");
   expect(markup).not.toContain("Book a date");
+  expect(markup).not.toContain("View order status");
 });
