@@ -1,1 +1,0 @@
-ALTER TABLE "workspace_reservations" ADD COLUMN "active_customer_email_delivery_open_space_tables" text;

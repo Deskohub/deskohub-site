@@ -34,6 +34,19 @@ CREATE TABLE "open_space_table_moves" (
         and ("attached_at" is null or "target_reservation_id" is not null))
 );
 --> statement-breakpoint
+CREATE TABLE "team_table_hold_claims" (
+	"reservation_id" text PRIMARY KEY,
+	"table_id" text NOT NULL,
+	"starts_at" timestamp with time zone NOT NULL,
+	"ends_at" timestamp with time zone NOT NULL,
+	"seats" integer NOT NULL,
+	"provider_reservation_ids" text[],
+	"checked_at" timestamp with time zone,
+	CONSTRAINT "team_table_hold_claims_interval" CHECK ("starts_at" < "ends_at"),
+	CONSTRAINT "team_table_hold_claims_seats" CHECK ("seats" > 0)
+);
+--> statement-breakpoint
+ALTER TABLE "workspace_reservations" ADD COLUMN "active_customer_email_delivery_open_space_tables" text;--> statement-breakpoint
 CREATE UNIQUE INDEX "open_space_table_moves_pending_reservation_idx" ON "open_space_table_moves" ("reservation_id") WHERE "settled_at" is null;--> statement-breakpoint
 CREATE UNIQUE INDEX "open_space_table_moves_pending_source_idx" ON "open_space_table_moves" ("source_reservation_id") WHERE "settled_at" is null;--> statement-breakpoint
 CREATE UNIQUE INDEX "open_space_table_moves_target_idx" ON "open_space_table_moves" ("target_reservation_id");--> statement-breakpoint
@@ -42,5 +55,7 @@ CREATE INDEX "open_space_table_moves_reservation_idx" ON "open_space_table_moves
 CREATE INDEX "open_space_table_moves_pending_date_idx" ON "open_space_table_moves" ("service_date") WHERE "settled_at" is null and "attempted_at" is not null;--> statement-breakpoint
 CREATE INDEX "open_space_table_moves_pending_checked_idx" ON "open_space_table_moves" ("checked_at","batch_id") WHERE "settled_at" is null and "ambiguous_at" is null;--> statement-breakpoint
 CREATE INDEX "open_space_table_moves_batch_idx" ON "open_space_table_moves" ("batch_id");--> statement-breakpoint
+CREATE INDEX "team_table_hold_claims_interval_idx" ON "team_table_hold_claims" ("ends_at","starts_at");--> statement-breakpoint
 ALTER TABLE "open_space_table_moves" ADD CONSTRAINT "open_space_table_moves_ha5oUveoSeYa_fkey" FOREIGN KEY ("batch_id") REFERENCES "open_space_table_move_batches"("id");--> statement-breakpoint
-ALTER TABLE "open_space_table_moves" ADD CONSTRAINT "open_space_table_moves_KTLaSVJAnLJg_fkey" FOREIGN KEY ("reservation_id") REFERENCES "workspace_reservations"("id");
+ALTER TABLE "open_space_table_moves" ADD CONSTRAINT "open_space_table_moves_KTLaSVJAnLJg_fkey" FOREIGN KEY ("reservation_id") REFERENCES "workspace_reservations"("id");--> statement-breakpoint
+ALTER TABLE "team_table_hold_claims" ADD CONSTRAINT "team_table_hold_claims_GG82H69LKXnb_fkey" FOREIGN KEY ("reservation_id") REFERENCES "workspace_reservations"("id") ON DELETE CASCADE;
