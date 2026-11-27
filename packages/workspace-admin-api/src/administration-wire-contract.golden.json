@@ -1,4 +1,5 @@
 {
+  "dhwTeamTableHeader": "x-dhw-team-table",
   "dhwVersionHeader": "x-dhw-version",
   "groups": {
     "cli": {
