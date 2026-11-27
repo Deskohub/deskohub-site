@@ -13,12 +13,13 @@ import {
   DotyposTableIdSchema,
   DotyposTableSchema,
   DotyposUnavailable,
+  DotyposUncertain,
 } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { asc, eq, inArray } from "drizzle-orm";
 import { Effect, Fiber, Latch, Layer, Ref, Result, Schema } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
-import { workspaceReservations } from "@/db/schema";
+import { teamTableHoldClaims, workspaceReservations } from "@/db/schema";
 import { customerAgentClientIdSchema } from "@/features/account/backend/auth/customer-agent-authorization.service";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { recordCheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service.mock";
@@ -41,10 +42,13 @@ import {
   promoteCheckoutAttemptToSessionId,
 } from "@/features/checkout/checkout-identifiers";
 import { workspaceProductMonitorOptionTableTags } from "@/features/checkout/product-catalog";
+import { getTableReservationQuote } from "@/features/checkout/reservation-quote-table";
 import { checkoutDetailsSchema } from "@/features/checkout/schemas/checkout-details";
+import { getTableCheckoutDetails } from "@/features/checkout/schemas/checkout-details-table";
 import { orderIdSchema } from "@/features/order";
 import { EntryPackUnavailableError } from "@/features/passes/backend/entry-pack-redemption";
 import { reservationOrderIssuanceSchema } from "@/features/reservation/reservation-order";
+import { TeamTableHoldClaims } from "@/features/team-table/backend/team-table-hold-claims";
 import {
   QueueMessageSendError,
   QueuePublisher,
@@ -214,6 +218,10 @@ describe.skipIf(!postgresDatabase)(
     const makeHolds = (
       options: {
         readonly dotypos?: Dotypos;
+        readonly providerReads?: Pick<
+          DotyposService["Service"],
+          "listActiveReservationsOverlapping" | "getReservationWithoutCustomer"
+        >;
         readonly ensureAvailable?: Mock<
           WorkspaceAvailabilityService["Service"]["ensureAvailable"]
         >;
@@ -235,6 +243,12 @@ describe.skipIf(!postgresDatabase)(
       const enqueueCleanup: Mock<
         ReservationHoldCleanupScheduleService["Service"]["enqueueCleanup"]
       > = mock(() => Effect.void);
+      const provider = Layer.mock(DotyposService, {
+        createReservation: dotypos.createReservation,
+        cancelReservation: dotypos.cancelReservation,
+        getReservationStatus: dotypos.getReservationStatus,
+        ...options.providerReads,
+      });
       const layer = ReservationHolds.Default.pipe(
         Layer.provide(
           Layer.mergeAll(
@@ -251,11 +265,10 @@ describe.skipIf(!postgresDatabase)(
             Layer.mock(WorkspaceAvailabilityService, {
               ensureAvailable,
             }),
-            Layer.mock(DotyposService, {
-              createReservation: dotypos.createReservation,
-              cancelReservation: dotypos.cancelReservation,
-              getReservationStatus: dotypos.getReservationStatus,
-            }),
+            provider,
+            TeamTableHoldClaims.Default.pipe(
+              Layer.provide(Layer.merge(postgres.layer, provider))
+            ),
             WorkspaceTableAssignmentServiceMock({
               assignTableId: () =>
                 Effect.succeed(DotyposTableIdSchema.make("table-id")),
@@ -382,6 +395,103 @@ describe.skipIf(!postgresDatabase)(
         ...(input.agent && { agent: input.agent }),
       },
       checkoutDetails,
+    });
+
+    test("keeps a lost Team Table POST exclusive and attaches it on retry without a second POST", async () => {
+      const author = await newAuthor();
+      const dotypos = makeDotypos();
+      const providerId = DotyposReservationIdSchema.make("uncertain-team-hold");
+      const tableId = DotyposTableIdSchema.make("exact-team-table");
+      const selection = {
+        kind: "table",
+        seats: 4,
+        startsAt: "2099-06-10T09:00:00Z",
+        endsAt: "2099-06-10T09:15:00Z",
+      } as const;
+      type ProviderHold = ReturnType<typeof dotyposHoldFixture>;
+      const records: ProviderHold[] = [];
+      let visible = false;
+      dotypos.createReservation.mockImplementation((input) =>
+        Effect.gen(function* () {
+          expect(input).toMatchObject({
+            tableId,
+            seats: 4,
+            singleAttempt: true,
+          });
+          const claims = yield* postgres.db
+            .select()
+            .from(teamTableHoldClaims)
+            .where(eq(teamTableHoldClaims.tableId, tableId));
+          expect(claims).toHaveLength(1);
+          records.push({
+            ...dotyposHoldFixture(providerId),
+            _tableId: input.tableId,
+            _customerId: input.customerId,
+            seats: String(input.seats),
+            startDate: input.startDate.toISOString(),
+            endDate: input.endDate.toISOString(),
+            note: input.note,
+          });
+          return yield* new DotyposUncertain({
+            operation: "createReservation",
+            request: "reservation.create",
+            reason: "transport",
+            message: "Synthetic lost reply",
+          });
+        })
+      );
+      const holds = makeHolds({
+        dotypos,
+        providerReads: {
+          listActiveReservationsOverlapping: () =>
+            Effect.sync(() => (visible ? records : [])),
+          getReservationWithoutCustomer: () =>
+            Effect.sync(() => requireValue(records[0], "posted hold")),
+        },
+      });
+      const ordered = Schema.decodeUnknownSync(
+        reservationOrderIssuanceSchema("CZ")
+      )({ ...reservation, ...selection });
+      if (ordered.kind !== "table")
+        throw new Error("Expected a Team Table order");
+      const quote = await getTableReservationQuote(ordered).pipe(
+        Effect.runPromise
+      );
+      const request: HoldRequest = {
+        ...holdRequest({ author }),
+        reservation: ordered,
+        checkoutDetails: getTableCheckoutDetails({
+          locale: "en-US",
+          reservation: ordered,
+          quote,
+          legalEvidence: {},
+        }),
+        teamTableCapacity: { assignTableId: Effect.succeed(tableId) },
+      };
+      expect((await holds.holdFailure(request))._tag).toBe("DotyposUncertain");
+      expect((await rowsOf(author))[0]?.reservationState).toBe("creating_hold");
+      const date = Temporal.PlainDate.from("2099-06-10");
+      const capacity = await WorkspaceReservationRepository.pipe(
+        Effect.flatMap((repository) =>
+          repository.selectLocalTableCapacity({ first: date, last: date })
+        ),
+        Effect.provide(
+          WorkspaceReservationRepository.Default.pipe(
+            Layer.provide(postgres.layer)
+          )
+        ),
+        Effect.runPromise
+      );
+      expect(capacity).toContainEqual(
+        expect.objectContaining({ tableId, seats: 4, exclusive: true })
+      );
+      visible = true;
+      const recovered = await holds.holdForAttempt(request);
+      expect(recovered).toMatchObject({
+        kind: "reused",
+        reservation: { dotyposReservationId: providerId },
+      });
+      expect(dotypos.createReservation).toHaveBeenCalledTimes(1);
     });
 
     const rowsOf = (author: CustomerAccountId) =>
@@ -855,7 +965,7 @@ describe.skipIf(!postgresDatabase)(
                     listLimitations: () => Effect.succeed([]),
                   }),
                   Layer.mock(WorkspaceReservationRepository, {
-                    selectOpenSpaceMoveCapacity: () => Effect.succeed([]),
+                    selectLocalTableCapacity: () => Effect.succeed([]),
                     selectPendingPassDayCapacity: () =>
                       Effect.sync(() =>
                         bareDeskAvailable ? [] : [pendingDay]

@@ -100,6 +100,7 @@ import {
   recordOfficeInvitees,
   type SealedOfficePeople,
 } from "@/features/reservation-invitees/backend/reservation-invitees.service";
+import { loadTeamTableHoldCapacity } from "@/features/team-table/backend/team-table-hold-capacity";
 import { recordCustomerEvent } from "@/shared/backend/customer-events/customer-event-outbox";
 import {
   type ReadLimitExceededError,
@@ -107,7 +108,7 @@ import {
   requireWithinReadLimit,
 } from "@/shared/backend/read-limit";
 import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
-import type { OpenSpaceMoveCapacityClaim } from "./open-space-move-capacity";
+import type { LocalTableCapacityClaim } from "./open-space-move-capacity";
 import { supersedableReservationPaymentStates } from "./reservation-supersession";
 import {
   StoredReservationDetails,
@@ -682,11 +683,11 @@ export interface IWorkspaceReservationRepository {
     readonly PendingPassDayCapacity[],
     EffectDrizzleQueryError
   >;
-  readonly selectOpenSpaceMoveCapacity: (input: {
+  readonly selectLocalTableCapacity: (input: {
     readonly first: Temporal.PlainDate;
     readonly last: Temporal.PlainDate;
   }) => Effect.Effect<
-    readonly OpenSpaceMoveCapacityClaim[],
+    readonly LocalTableCapacityClaim[],
     EffectDrizzleQueryError
   >;
   readonly hasAttachedOpenSpaceMove: (
@@ -2459,8 +2460,8 @@ export class WorkspaceReservationRepository extends Context.Service<
             );
           return pending !== undefined;
         }),
-        selectOpenSpaceMoveCapacity: Effect.fn(
-          "workspaceReservations.selectOpenSpaceMoveCapacity"
+        selectLocalTableCapacity: Effect.fn(
+          "workspaceReservations.selectLocalTableCapacity"
         )(function* ({ first, last }) {
           const rows = yield* db
             .select({
@@ -2488,15 +2489,22 @@ export class WorkspaceReservationRepository extends Context.Service<
                 )
               )
             );
-          return rows.map((row) => ({
-            generation: row.attachedAt ? null : row.generation,
-            tableId: row.attachedAt ? row.sourceTableId : row.targetTableId,
-            reservationId: row.attachedAt
-              ? row.sourceReservationId
-              : row.targetReservationId,
-            startsAt: row.startsAt.epochMilliseconds,
-            endsAt: row.endsAt.epochMilliseconds,
-          }));
+          const teamTableClaims = yield* loadTeamTableHoldCapacity(db, {
+            first,
+            last,
+          });
+          return [
+            ...teamTableClaims,
+            ...rows.map((row) => ({
+              generation: row.attachedAt ? null : row.generation,
+              tableId: row.attachedAt ? row.sourceTableId : row.targetTableId,
+              reservationId: row.attachedAt
+                ? row.sourceReservationId
+                : row.targetReservationId,
+              startsAt: row.startsAt.epochMilliseconds,
+              endsAt: row.endsAt.epochMilliseconds,
+            })),
+          ];
         }),
         selectPendingPassDayCapacity: Effect.fn(
           "workspaceReservations.selectPendingPassDayCapacity"

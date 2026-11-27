@@ -87,7 +87,7 @@ const checkAvailability = async (
           listLimitations: mock(() => Effect.succeed([])),
         }),
         Layer.mock(WorkspaceReservationRepository, {
-          selectOpenSpaceMoveCapacity: () => Effect.succeed([]),
+          selectLocalTableCapacity: () => Effect.succeed([]),
           selectPendingPassDayCapacity: () => Effect.succeed([]),
           selectExpiredHoldDotyposReservationIds: mock(() =>
             Effect.succeed([])

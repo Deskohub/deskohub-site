@@ -15,7 +15,11 @@ import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { orderIdSchema } from "@/features/order";
 import { formatPassDayMarker } from "@/features/passes/pass-day-marker";
-import { getUnobservedOpenSpaceMoveBookings } from "@/features/reservation/backend/open-space-move-capacity";
+import {
+  getUnobservedOpenSpaceMoveBookings,
+  isTeamTableCapacityClaim,
+} from "@/features/reservation/backend/open-space-move-capacity";
+import { toReservationRecord } from "@/features/reservation/backend/reservation-record";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
@@ -27,6 +31,8 @@ import {
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { OpenSpaceTableMoves } from "./open-space-table-moves";
+import { TeamTableInventory } from "./team-table-inventory";
+import { planTeamTable } from "./team-table-plan";
 
 const database = await createWorkspacePostgresSuiteDatabase("open_space_moves");
 afterAll(() => database?.close());
@@ -129,7 +135,9 @@ describe.skipIf(!database)("Open Space table moves", () => {
       effect: Effect.Effect<
         A,
         E,
-        OpenSpaceTableMoves | WorkspaceReservationRepository
+        | OpenSpaceTableMoves
+        | WorkspaceReservationRepository
+        | TeamTableInventory
       >,
       overrides: Partial<typeof DotyposService.Service> = {}
     ) =>
@@ -138,7 +146,9 @@ describe.skipIf(!database)("Open Space table moves", () => {
           yield* TestClock.setTime(now);
           return yield* effect;
         }).pipe(
-          Effect.provide(OpenSpaceTableMoves.Default),
+          Effect.provide(
+            Layer.merge(OpenSpaceTableMoves.Default, TeamTableInventory.Default)
+          ),
           Effect.provide(
             Layer.mergeAll(
               database.layer,
@@ -191,6 +201,63 @@ describe.skipIf(!database)("Open Space table moves", () => {
       targetTable,
     };
   };
+
+  test("plans a future paid hold from redacted inventory and verifies the Team Table is clear after moving it", async () => {
+    const f = fixture();
+    const source = await f.source("CONFIRMED");
+    const current = Temporal.Instant.fromEpochMilliseconds(now);
+    const window = {
+      startsAt: Temporal.Instant.from(interval.startsAt),
+      endsAt: Temporal.Instant.from(interval.endsAt),
+    };
+    const tableOptions = {
+      tables: [f.sourceTable, f.targetTable],
+      window,
+      seats: 4,
+      now: current,
+    };
+    const original = await f.read(source.sourceReservationId);
+    const final = await f.run(
+      Effect.gen(function* () {
+        const inventory = yield* TeamTableInventory;
+        const bookings = yield* inventory(
+          [toReservationRecord(original)],
+          {
+            passDayIntents: [],
+            localTableClaims: [],
+          },
+          current
+        );
+        const plan = yield* Effect.fromResult(
+          planTeamTable({ ...tableOptions, bookings })
+        );
+        expect(plan?.moves).toEqual([source]);
+        if (!plan) throw new Error("Expected a table move");
+        const moves = yield* OpenSpaceTableMoves;
+        return yield* moves.repack(
+          { ...plan, interval },
+          Effect.gen(function* () {
+            const records =
+              yield* f.provider.service.listActiveReservationsOverlapping({
+                startDate: new Date(source.startsAt.epochMilliseconds),
+                endDate: new Date(source.endsAt.epochMilliseconds),
+              });
+            const fresh = yield* inventory(
+              records,
+              { passDayIntents: [], localTableClaims: [] },
+              current
+            );
+            return yield* Effect.fromResult(
+              planTeamTable({ ...tableOptions, bookings: fresh })
+            );
+          })
+        );
+      })
+    );
+    expect(final).toEqual(
+      Option.some({ tableId: f.sourceTable.id, moves: [] })
+    );
+  });
 
   test("moves paid Open Space to another table without replacing the order or access grant", async () => {
     const f = fixture();
@@ -292,14 +359,16 @@ describe.skipIf(!database)("Open Space table moves", () => {
     expect((await f.local(second.reservationId)).dotypos_reservation_id).toBe(
       second.sourceReservationId
     );
-    const claims = await f.run(
-      Effect.flatMap(WorkspaceReservationRepository, (repository) =>
-        repository.selectOpenSpaceMoveCapacity({
-          first: Temporal.PlainDate.from(nextDate),
-          last: Temporal.PlainDate.from(nextDate),
-        })
+    const claims = (
+      await f.run(
+        Effect.flatMap(WorkspaceReservationRepository, (repository) =>
+          repository.selectLocalTableCapacity({
+            first: Temporal.PlainDate.from(nextDate),
+            last: Temporal.PlainDate.from(nextDate),
+          })
+        )
       )
-    );
+    ).filter((claim) => !isTeamTableCapacityClaim(claim));
     expect(getUnobservedOpenSpaceMoveBookings(claims, [])).toMatchObject([
       { tableId: f.targetTable.id, seats: 1 },
     ]);

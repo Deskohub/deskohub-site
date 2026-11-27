@@ -11,6 +11,7 @@ import {
   workspaceReservations,
 } from "@/db/schema";
 import { noteNamesPaymentOrder } from "@/features/checkout/backend/reservation/order-reservation-note";
+import type { TableBooking } from "@/features/checkout/backend/reservation/workspace-table-occupancy";
 import { movablePassDay } from "@/features/passes/backend/movable-pass-day";
 import { getCapacityInventory } from "@/features/passes/backend/pass-day-capacity-bookings";
 import { formatPassDayMarker } from "@/features/passes/pass-day-marker";
@@ -26,6 +27,21 @@ type ProviderRecord = ReservationRecord &
   Pick<DotyposReservation, "_customerId" | "note">;
 type LocalHold = typeof workspaceReservations.$inferSelect;
 type EntryClaim = Pick<typeof passEntryClaims.$inferSelect, "status" | "date">;
+
+const projectBooking = (booking: TableBooking): TeamTableBooking => {
+  const interval = {
+    startsAt: Temporal.Instant.fromEpochMilliseconds(booking.startsAt),
+    endsAt: Temporal.Instant.fromEpochMilliseconds(booking.endsAt),
+  };
+  return booking.exclusive
+    ? { kind: "team-table", tableId: booking.tableId, interval }
+    : {
+        kind: "shared",
+        tableId: booking.tableId,
+        seats: booking.seats,
+        interval,
+      };
+};
 
 /** Capacity checks without local ownership treat active provider holds as exclusive. */
 export const getUnclassifiedTeamTableBookings = (
@@ -49,18 +65,11 @@ export const getUnclassifiedTeamTableBookings = (
       ...(interval && { interval }),
     });
   }
-  for (const booking of inventory.unobservedBookings) {
-    bookings.push({
-      kind: "shared",
-      tableId: booking.tableId,
-      seats: booking.seats,
-      interval: {
-        startsAt: Temporal.Instant.fromEpochMilliseconds(booking.startsAt),
-        endsAt: Temporal.Instant.fromEpochMilliseconds(booking.endsAt),
-      },
-    });
-  }
-  return bookings;
+  return [
+    ...bookings,
+    ...inventory.unobservedBookings.map(projectBooking),
+    ...inventory.exclusiveBookings.map(projectBooking),
+  ];
 };
 
 const decodeCoworkDetails = Schema.decodeUnknownOption(
@@ -129,7 +138,20 @@ const makeInventory = Effect.gen(function* () {
       ? yield* Effect.all([
           db
             .select({
-              row: workspaceReservations,
+              row: {
+                id: workspaceReservations.id,
+                dotyposReservationId: workspaceReservations.dotyposReservationId,
+                dotyposCustomerId: workspaceReservations.dotyposCustomerId,
+                reservationDetails: workspaceReservations.reservationDetails,
+                passId: workspaceReservations.passId,
+                serviceDate: workspaceReservations.serviceDate,
+                passDayTableId: workspaceReservations.passDayTableId,
+                passDayHoldGeneration: workspaceReservations.passDayHoldGeneration,
+                reservationState: workspaceReservations.reservationState,
+                paymentState: workspaceReservations.paymentState,
+                fulfillmentState: workspaceReservations.fulfillmentState,
+                reservationHoldExpiresAt: workspaceReservations.reservationHoldExpiresAt,
+              },
               claim: {
                 status: passEntryClaims.status,
                 date: passEntryClaims.date,
@@ -227,7 +249,9 @@ const makeInventory = Effect.gen(function* () {
       }
 
       let move: Move;
-      if (hold && !hold.moving) {
+      // A NEW checkout hold can still be changed by payment or supersession
+      // before those paths have taken a source-order section.
+      if (hold && !hold.moving && record.status === "CONFIRMED") {
         const { row } = hold;
         const day = getWorkspaceDate(interval.startsAt);
         const serviceDate = plainDateStringSchema.make(day.toString());
@@ -294,18 +318,11 @@ const makeInventory = Effect.gen(function* () {
       });
     }
 
-    for (const booking of occupancy.unobservedBookings) {
-      bookings.push({
-        kind: "shared",
-        tableId: booking.tableId,
-        seats: booking.seats,
-        interval: {
-          startsAt: Temporal.Instant.fromEpochMilliseconds(booking.startsAt),
-          endsAt: Temporal.Instant.fromEpochMilliseconds(booking.endsAt),
-        },
-      });
-    }
-    return bookings;
+    return [
+      ...bookings,
+      ...occupancy.unobservedBookings.map(projectBooking),
+      ...occupancy.exclusiveBookings.map(projectBooking),
+    ];
   });
 });
 

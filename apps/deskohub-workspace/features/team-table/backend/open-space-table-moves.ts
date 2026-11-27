@@ -5,7 +5,7 @@ import {
   type DotyposTableId,
 } from "@deskohub/dotypos";
 import { and, asc, eq, isNull } from "drizzle-orm";
-import { Context, Effect, Layer, Option, Result, Schema } from "effect";
+import { Context, Effect, Layer, Option, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
@@ -38,7 +38,6 @@ import {
   withoutOpenSpaceMoveMarkers,
 } from "@/features/reservation/backend/open-space-move-marker";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { storedCoworkReservationDetailsSchema } from "@/features/reservation/cowork-reservation-product";
 import { findReservationOrderId } from "@/features/reservation/persistence-contracts";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import {
@@ -51,6 +50,7 @@ import {
   plainDateStringSchema,
   temporalInstantToDate,
 } from "@/shared/utils/temporal";
+import { getOrdinaryOpenSpaceMoveStanding } from "./team-table-inventory";
 
 type Move = typeof openSpaceTableMoves.$inferSelect;
 type Batch = typeof openSpaceTableMoveBatches.$inferSelect;
@@ -119,10 +119,6 @@ const datesForBatch = (batch: Batch, moves: readonly MoveRequest[]) => [
   ),
   ...moves.map(({ serviceDate }) => Temporal.PlainDate.from(serviceDate)),
 ];
-
-const decodeCoworkDetails = Schema.decodeUnknownOption(
-  storedCoworkReservationDetailsSchema
-);
 
 const makeOpenSpaceTableMoves = Effect.gen(function* () {
   const { db, transaction } = yield* WorkspaceDatabase;
@@ -213,10 +209,6 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
         : undefined;
     }
 
-    const details = decodeCoworkDetails(row.reservationDetails);
-    if (!Option.exists(details, (detail) => detail.entryTier === "open-space"))
-      return undefined;
-
     const orderId = findReservationOrderId(row.id);
     if (Option.isNone(orderId)) return undefined;
     const [order] = yield* db
@@ -229,21 +221,13 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
       .select({ status: passEntryClaims.status, date: passEntryClaims.date })
       .from(passEntryClaims)
       .where(eq(passEntryClaims.reservationId, row.id));
-    const eligible =
-      request.status === "NEW"
-        ? row.reservationState === "held" &&
-          (row.paymentState === "not_started" ||
-            row.paymentState === "pending") &&
-          row.fulfillmentState === "not_started" &&
-          row.reservationHoldExpiresAt !== null &&
-          Temporal.Instant.compare(row.reservationHoldExpiresAt, now) > 0 &&
-          (!claim ||
-            (claim.status === "reserved" && claim.date === request.serviceDate))
-        : row.reservationState === "confirmed" &&
-          row.fulfillmentState !== "processing" &&
-          (claim
-            ? claim.status === "consumed" && claim.date === request.serviceDate
-            : row.paymentState === "paid");
+    const eligible = getOrdinaryOpenSpaceMoveStanding(
+      row,
+      claim,
+      request.status,
+      request.serviceDate,
+      now
+    );
     return eligible
       ? source.note
           ?.split("\n")
@@ -438,7 +422,7 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
           first: date,
           last: date,
         }),
-        pendingTargets: reservations.selectOpenSpaceMoveCapacity({
+        pendingTargets: reservations.selectLocalTableCapacity({
           first: date,
           last: date,
         }),
@@ -470,10 +454,19 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
     };
     const inventory = getCapacityInventory(observed, {
       passDayIntents: claims,
-      openSpaceMoveClaims: pendingTargets.filter(
+      localTableClaims: pendingTargets.filter(
         ({ generation }) => generation !== move.generation
       ),
     });
+    if (
+      inventory.exclusiveBookings.some(
+        (booking) =>
+          booking.tableId === move.targetTableId &&
+          booking.startsAt < window.endsAt &&
+          booking.endsAt > window.startsAt
+      )
+    )
+      return false;
     for (const record of inventory.records) {
       if (record._tableId !== move.targetTableId) continue;
       const { interval, seats } = decodeBookedReservation(record);
@@ -694,6 +687,62 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
         )
     );
 
+  /** Execute a freshly validated plan under its source and capacity locks. */
+  const repackInCapacitySection = Effect.fn(
+    "OpenSpaceTableMoves.repackInCapacitySection"
+  )(function* (input: RepackRequest) {
+    if (input.moves.length === 0) return true;
+    const { first, last } = getReservationDateBounds(input.interval);
+    const batch = {
+      id: crypto.randomUUID(),
+      firstDate: plainDateStringSchema.make(first.toString()),
+      lastDate: plainDateStringSchema.make(last.toString()),
+      requestedAt: yield* currentInstant,
+    };
+    const window = getOccupancyWindow(input.interval);
+    const moves = yield* Effect.forEach(input.moves, (move) =>
+      makeMove(batch, input.tableId, window, move)
+    );
+    if (moves.some((move) => move === undefined)) return false;
+    const ready = moves.filter((move) => move !== undefined);
+    if (
+      new Set(ready.map(({ reservationId }) => reservationId)).size !==
+        ready.length ||
+      new Set(ready.map(({ sourceReservationId }) => sourceReservationId))
+        .size !== ready.length
+    )
+      return false;
+    const journaled = yield* transaction(
+      Effect.gen(function* () {
+        yield* db.insert(openSpaceTableMoveBatches).values(batch);
+        return yield* db
+          .insert(openSpaceTableMoves)
+          .values(ready)
+          .onConflictDoNothing()
+          .returning({ generation: openSpaceTableMoves.generation });
+      })
+    );
+    if (journaled.length !== ready.length) {
+      yield* abandonUnstarted(batch.id);
+      return false;
+    }
+
+    return yield* Effect.gen(function* () {
+      for (const move of ready) {
+        if (!(yield* withPassOrder(move, startMove(move)))) return false;
+      }
+      return true;
+    }).pipe(
+      Effect.ensuring(
+        abandonUnstarted(batch.id).pipe(
+          Effect.catch(() =>
+            Effect.logWarning("Open Space move batch needs reconciliation")
+          )
+        )
+      )
+    );
+  });
+
   /**
    * Enter before the account and capacity sections. The caller supplies
    * the author if booking under its account lock. Plan validation and
@@ -710,61 +759,18 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const { first, last } = getReservationDateBounds(input.interval);
-      const batch = {
-        id: crypto.randomUUID(),
-        firstDate: plainDateStringSchema.make(first.toString()),
-        lastDate: plainDateStringSchema.make(last.toString()),
-        requestedAt: yield* currentInstant,
-      };
       const work = Effect.gen(function* () {
-        if (!(yield* validatePlan)) return Option.none<A>();
-        if (input.moves.length === 0) return Option.some(yield* assign);
-        const window = getOccupancyWindow(input.interval);
-        const moves = yield* Effect.forEach(input.moves, (move) =>
-          makeMove(batch, input.tableId, window, move)
-        );
-        if (moves.some((move) => move === undefined)) return Option.none<A>();
-        const ready = moves.filter((move) => move !== undefined);
-        if (
-          new Set(ready.map(({ reservationId }) => reservationId)).size !==
-            ready.length ||
-          new Set(ready.map(({ sourceReservationId }) => sourceReservationId))
-            .size !== ready.length
-        )
+        if (!(yield* validatePlan) || !(yield* repackInCapacitySection(input)))
           return Option.none<A>();
-        const journaled = yield* transaction(
-          Effect.gen(function* () {
-            yield* db.insert(openSpaceTableMoveBatches).values(batch);
-            return yield* db
-              .insert(openSpaceTableMoves)
-              .values(ready)
-              .onConflictDoNothing()
-              .returning({ generation: openSpaceTableMoves.generation });
-          })
-        );
-        if (journaled.length !== ready.length) {
-          yield* abandonUnstarted(batch.id);
-          return Option.none<A>();
-        }
-
-        const moved = yield* Effect.gen(function* () {
-          for (const move of ready) {
-            if (!(yield* withPassOrder(move, startMove(move)))) return false;
-          }
-          return true;
-        }).pipe(
-          Effect.ensuring(
-            abandonUnstarted(batch.id).pipe(
-              Effect.catch(() =>
-                Effect.logWarning("Open Space move batch needs reconciliation")
-              )
-            )
-          )
-        );
-        return moved ? Option.some(yield* assign) : Option.none<A>();
+        return Option.some(yield* assign);
       });
       return yield* WorkspaceLockSections.reservationCapacity(
-        datesForBatch(batch, input.moves),
+        [
+          ...getPlainDatesBetween(first, last),
+          ...input.moves.map(({ serviceDate }) =>
+            Temporal.PlainDate.from(serviceDate)
+          ),
+        ],
         {
           movedReservations: input.moves.map(
             ({ reservationId }) => reservationId
@@ -847,7 +853,7 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
     return uniqueBatches.size;
   });
 
-  return { repack, reconcile };
+  return { repack, repackInCapacitySection, reconcile };
 });
 
 export class OpenSpaceTableMoves extends Context.Service<

@@ -16,6 +16,7 @@ import {
   getWorkspaceOfficeProductTitle,
   getWorkspaceProductMonitorTitle,
   getWorkspaceProductTierTitle,
+  getWorkspaceTableProductTitle,
 } from "@/features/checkout/product-catalog.i18n";
 import type { CheckoutDetails } from "@/features/checkout/schemas/checkout-details";
 import { getMeetingRoomSetupStart } from "@/features/reservation/meeting-room-early-setup";
@@ -72,6 +73,7 @@ export interface CreateWorkspaceDotyposReservationInput {
   readonly reservation: WorkspaceTableAssignmentReservation;
   readonly status: DotyposReservationStatus;
   readonly allowPassDayMove?: true;
+  readonly assignedTeamTableId?: DotyposTableId;
 }
 
 export const createWorkspaceDotyposReservation: (
@@ -96,11 +98,14 @@ export const createWorkspaceDotyposReservation: (
     const { startsAt, endsAt } = yield* getWorkspaceReservationInterval(
       input.reservation
     );
-    const tableId: DotyposTableId = yield* input.allowPassDayMove
-      ? tableAssignments.assignTableId(input.reservation, {
-          allowPassDayMove: true,
-        })
-      : tableAssignments.assignTableId(input.reservation);
+    const tableId =
+      input.reservation.kind === "table" && input.assignedTeamTableId
+        ? input.assignedTeamTableId
+        : yield* input.allowPassDayMove
+            ? tableAssignments.assignTableId(input.reservation, {
+                allowPassDayMove: true,
+              })
+            : tableAssignments.assignTableId(input.reservation);
     const seats = getWorkspaceReservationSeats(input.reservation);
 
     const reservationInput: CreateDotyposReservationInput = {
@@ -111,6 +116,7 @@ export const createWorkspaceDotyposReservation: (
       tableId,
       status: input.status,
       note: formatWorkspaceReservationNote(input),
+      ...(input.reservation.kind === "table" && { singleAttempt: true }),
     };
     // Not the input itself: its note holds checkout details.
     yield* Effect.annotateLogsScoped({
@@ -206,6 +212,10 @@ export const formatWorkspaceReservationNote = (
           `Počet míst: ${officeReservation.seats}`,
         ],
       }),
+      table: ({ startsAt, endsAt, seats }) => ({
+        productLabel: getWorkspaceTableProductTitle(staffLocale),
+        reservationRows: [`Čas: ${startsAt}-${endsAt}`, `Počet míst: ${seats}`],
+      }),
     })
   );
   const lines = [
@@ -247,5 +257,6 @@ const getReservationLogAnnotations = (
         endsOn: officeReservation.endsOn,
         seats: officeReservation.seats,
       }),
+      table: ({ startsAt, endsAt, seats }) => ({ startsAt, endsAt, seats }),
     })
   );

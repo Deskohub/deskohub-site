@@ -11,7 +11,9 @@ import {
   Exit,
   Layer,
   Match,
+  Option,
   Predicate,
+  Result,
   Schedule,
   Schema,
 } from "effect";
@@ -63,7 +65,10 @@ import {
   deriveAgentCheckoutAttemptId,
 } from "@/features/reservation/backend/booking-agent";
 import { supersedableReservationPaymentStates } from "@/features/reservation/backend/reservation-supersession";
-import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
+import {
+  WorkspaceAvailabilityService,
+  WorkspaceTableUnavailableError,
+} from "@/features/reservation/backend/workspace-availability.service";
 import {
   type CreateWorkspaceReservationInput,
   entryPackAttachCancellationFailureCode,
@@ -84,8 +89,15 @@ import {
   getReservationHoldExpiresAt,
   reservationHoldTtlMilliseconds,
 } from "@/features/reservation/reservation-hold-deadline";
+import { getReservationDateBounds } from "@/features/reservation/reservation-interval";
 import type { ReservationPurpose } from "@/features/reservation/reservation-purpose";
 import type { SealedOfficePeople } from "@/features/reservation-invitees/backend/reservation-invitees.service";
+import type { TeamTableBookingCapacity } from "@/features/team-table/backend/team-table-booking-capacity";
+import {
+  getTeamTableHoldClaim,
+  matchesTeamTableHold,
+  TeamTableHoldClaims,
+} from "@/features/team-table/backend/team-table-hold-claims";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { MissingDotyposId } from "@/shared/backend/missing-dotypos-id";
 import { VercelQueuePublisher } from "@/shared/backend/queue/vercel-queue-publisher";
@@ -100,6 +112,7 @@ type ReservationHoldRequest = {
   /** The normalized reservation the advertisement priced; attempt keys bind it. */
   readonly reservation: PreparePayStateInput["reservation"];
   readonly entryPack?: EntryPackRedemption;
+  readonly teamTableCapacity?: TeamTableBookingCapacity;
   /** Who books, for whom, and how the stored draft is attributed. */
   readonly booking: {
     readonly author: CustomerAccountId;
@@ -206,11 +219,15 @@ export class ReservationHolds extends Context.Service<
       const context = Context.pick(...holdCapabilities)(
         yield* Effect.context<HoldCapabilities>()
       );
+      const teamTableClaims = yield* Effect.serviceOption(TeamTableHoldClaims);
+      const services = Option.isSome(teamTableClaims)
+        ? Context.add(context, TeamTableHoldClaims, teamTableClaims.value)
+        : context;
       return ReservationHolds.of({
         holdForAttempt: (request) =>
           holdForAttempt(request).pipe(
             Effect.scoped,
-            Effect.provideContext(context)
+            Effect.provideContext(services)
           ),
       });
     })
@@ -234,6 +251,11 @@ export class ReservationHolds extends Context.Service<
           Layer.provide(VercelQueuePublisher)
         ),
         CheckoutAnalytics.Live,
+        TeamTableHoldClaims.Default.pipe(
+          Layer.provide(
+            Layer.merge(WorkspaceDatabase.Default, WorkspaceDotyposLayer)
+          )
+        ),
         WorkspaceDotyposLayer,
         SealedStateKeys.Default
       )
@@ -249,6 +271,7 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
   const reservations = yield* WorkspaceReservationRepository;
   const dotypos = yield* DotyposService;
   const checkoutAnalytics = yield* CheckoutAnalytics;
+  const teamTableClaims = yield* Effect.serviceOption(TeamTableHoldClaims);
 
   const releaseHoldCreation = (
     reservationId: WorkspaceReservationId,
@@ -456,13 +479,71 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
         checkoutDetailsLogFields(checkoutDetails)
       );
 
-      const dotyposReservation = yield* createWorkspaceDotyposReservation({
-        paymentOrderId: reservationDraft.id,
-        dotyposCustomerId: booking.customer,
-        checkoutDetails,
-        reservation: checkoutDetails.reservation,
-        status: "NEW",
-        allowPassDayMove: true,
+      const dotyposReservation = yield* Effect.gen(function* () {
+        const selected = checkoutDetails.reservation;
+        const create = {
+          paymentOrderId: reservationDraft.id,
+          dotyposCustomerId: booking.customer,
+          checkoutDetails,
+          reservation: selected,
+          status: "NEW",
+          allowPassDayMove: true,
+        } as const;
+        if (selected.kind !== "table") {
+          return yield* createWorkspaceDotyposReservation(create);
+        }
+        const unavailable = new WorkspaceTableUnavailableError({
+          date: getReservationDateBounds(selected).first.toString(),
+          reservation: { kind: selected.kind },
+        });
+        if (!request.teamTableCapacity || Option.isNone(teamTableClaims))
+          return yield* unavailable;
+        const claims = teamTableClaims.value;
+        const assignedTeamTableId =
+          yield* request.teamTableCapacity.assignTableId;
+        const claim = getTeamTableHoldClaim(
+          reservationDraft.id,
+          assignedTeamTableId,
+          selected
+        );
+        if (!(yield* claims.start(claim))) return yield* unavailable;
+
+        const posted = yield* Effect.result(
+          createWorkspaceDotyposReservation({
+            ...create,
+            assignedTeamTableId,
+          })
+        );
+        if (
+          Result.isFailure(posted) &&
+          posted.failure._tag !== "DotyposUncertain"
+        ) {
+          yield* claims.clear(claim.reservationId);
+          return yield* posted.failure;
+        }
+        const providerIds = Result.isSuccess(posted)
+          ? [posted.success.id]
+          : (posted.failure.createdReservationIds ?? []);
+        if (providerIds.length > 0)
+          yield* claims.remember(claim.reservationId, providerIds);
+        if (
+          Result.isSuccess(posted) &&
+          matchesTeamTableHold(posted.success, claim, booking.customer)
+        )
+          return posted.success;
+        const recovered = yield* claims.recover(
+          claim.reservationId,
+          booking.customer
+        );
+        if (recovered) {
+          yield* claims.remember(claim.reservationId, [recovered.id]);
+          return recovered;
+        }
+        if (Result.isFailure(posted)) return yield* posted.failure;
+        yield* Effect.logWarning(
+          "The created Team Table hold did not match its capacity claim"
+        );
+        return yield* unavailable;
       }).pipe(
         Effect.tapError(
           Effect.fn(function* (cause) {
@@ -473,7 +554,14 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
               }
             );
 
-            yield* releaseHoldCreation(reservationDraft.id);
+            const retained =
+              checkoutDetails.reservation.kind === "table" &&
+              Option.isSome(teamTableClaims) &&
+              (yield* teamTableClaims.value.find(reservationDraft.id).pipe(
+                Effect.map((claim) => claim !== undefined),
+                Effect.orElseSucceed(() => true)
+              ));
+            if (!retained) yield* releaseHoldCreation(reservationDraft.id);
           })
         )
       );
@@ -556,6 +644,12 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
                   })
                 )
               );
+              if (
+                checkoutDetails.reservation.kind === "table" &&
+                Option.isSome(teamTableClaims)
+              ) {
+                yield* teamTableClaims.value.clear(reservationDraft.id);
+              }
               yield* releaseHoldCreation(
                 reservationDraft.id,
                 cause._tag === "EntryPackUnavailableError"
@@ -585,9 +679,12 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
         const book = Effect.sync(() => {
           waitingForCapacity = false;
         }).pipe(Effect.andThen(createAndAttachHold));
-        return yield* restore(
-          withWorkspaceReservationCapacity(interval, book)
-        ).pipe(
+        const capacity =
+          request.checkoutDetails.reservation.kind === "table" &&
+          request.teamTableCapacity
+            ? book.pipe(Effect.uninterruptible)
+            : withWorkspaceReservationCapacity(interval, book);
+        return yield* restore(capacity).pipe(
           Effect.onExit((exit) =>
             Exit.isFailure(exit) && waitingForCapacity
               ? releaseHoldCreation(reservationDraft.id)
@@ -935,6 +1032,38 @@ const findSettledAttemptReservation = Effect.fnUntraced(function* (
   let existingAttempt = yield* reservations.findByAttemptKeys(
     checkoutAttemptKeys.accepted
   );
+  if (
+    existingAttempt?.reservationState === "creating_hold" &&
+    existingAttempt.reservationDetails.kind === "table"
+  ) {
+    const { id, reservationHoldExpiresAt, dotyposCustomerId } = existingAttempt;
+    const now = Temporal.Now.instant();
+    const claims = yield* Effect.serviceOption(TeamTableHoldClaims);
+    if (
+      Option.isSome(claims) &&
+      reservationHoldExpiresAt &&
+      Temporal.Instant.compare(reservationHoldExpiresAt, now) > 0
+    ) {
+      const record = yield* claims.value.recover(
+        id,
+        yield* getDotyposCustomerId(dotyposCustomerId)
+      );
+      if (record) {
+        yield* claims.value.remember(id, [record.id]);
+        yield* reservations.attachHold({
+          id,
+          dotyposReservationId: record.id,
+          reservationCreatedAt: now,
+          reservationHoldExpiresAt,
+        });
+        yield* enqueueReservationHoldCleanup({
+          orderId: id,
+          reservationHoldExpiresAt,
+        });
+        existingAttempt = yield* reservations.findById(id);
+      }
+    }
+  }
   if (isHoldTransitionPending(existingAttempt)) {
     existingAttempt = yield* waitForPendingReservationTransition({
       reservations,

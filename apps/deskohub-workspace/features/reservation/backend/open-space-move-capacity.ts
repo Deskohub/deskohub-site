@@ -11,10 +11,28 @@ import { decodeBookedReservation } from "./booked-reservation";
 import { formatOpenSpaceMoveMarker } from "./open-space-move-marker";
 import type { ReservationRecord } from "./reservation-record";
 
-export type OpenSpaceMoveCapacityClaim = Omit<TableBooking, "seats"> & {
+export type OpenSpaceMoveCapacityClaim = Omit<
+  TableBooking,
+  "seats" | "exclusive"
+> & {
+  readonly exclusive?: never;
   readonly reservationId: DotyposReservationId | null;
   readonly generation: string | null;
 };
+
+type TeamTableCapacityClaim = TableBooking & {
+  readonly exclusive: true;
+  readonly reservationId: DotyposReservationId | null;
+  readonly generation: null;
+};
+
+export type LocalTableCapacityClaim =
+  | OpenSpaceMoveCapacityClaim
+  | TeamTableCapacityClaim;
+
+export const isTeamTableCapacityClaim = (
+  claim: LocalTableCapacityClaim
+): claim is TeamTableCapacityClaim => claim.exclusive === true;
 
 type CapacityRecord = ReservationRecord & Pick<DotyposReservation, "note">;
 
