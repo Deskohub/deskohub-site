@@ -379,6 +379,28 @@ describe("WorkspaceTableAssignmentService", () => {
     });
   });
 
+  test("uses ordinary Open Space before a Team Table with free seats", async () => {
+    const teamTable = makeTable({
+      id: "team-table",
+      name: "A Team Table",
+      tags: ["cowork:open-space", "reservation:table"],
+      seats: "4",
+    });
+    const openSpace = makeTable({
+      id: "open-space",
+      name: "Z Open Space",
+      tags: ["cowork:open-space"],
+    });
+
+    await expect(
+      assignTableId(
+        makeReservation({ entryTier: "open-space" }),
+        [teamTable, openSpace],
+        []
+      )
+    ).resolves.toBe(openSpace.id);
+  });
+
   test("keeps the 17:00 half-open boundary parity on the assignment path", async () => {
     // A reservation starting exactly at 17:00 Prague does not occupy the
     // 00:00-17:00 exclusive-end open-space interval.

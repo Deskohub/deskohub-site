@@ -12,7 +12,10 @@ import {
   type WorkspaceCoworkTableCandidateQuery,
   type WorkspaceTableCandidate,
 } from "@/features/checkout/backend/reservation";
-import { selectWorkspaceTableFromCandidates } from "@/features/checkout/backend/reservation/workspace-table-selection";
+import {
+  selectOpenSpaceTableFromCandidates,
+  selectWorkspaceTableFromCandidates,
+} from "@/features/checkout/backend/reservation/workspace-table-selection";
 import {
   type WorkspaceProductMonitorOption,
   workspaceProductMonitorOptions,
@@ -346,7 +349,7 @@ const allocateUnlimitedPass = Effect.fn("allocateUnlimitedPass")(function* (
         freeTables,
         occupancy,
       }) {
-        const table = yield* selectWorkspaceTableFromCandidates(
+        const table = yield* selectOpenSpaceTableFromCandidates(
           freeTables,
           tables,
           occupancy

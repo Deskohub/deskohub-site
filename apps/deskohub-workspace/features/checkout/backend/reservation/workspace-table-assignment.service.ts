@@ -63,6 +63,7 @@ import {
   hasCandidateCapacity,
   type InvalidDotyposTableSeats,
   isWorkspaceCoworkTableCandidate,
+  selectOpenSpaceTableFromCandidates,
   selectWorkspaceTableFromCandidates,
   workspaceCoworkOpenSpaceTableTag,
   workspaceCoworkReservedDeskTableTag,
@@ -84,6 +85,7 @@ export type WorkspaceTableAssignmentReservation =
 type WorkspaceTableAssignment = {
   readonly requiredTags: readonly string[];
   readonly isCandidateTable: (tableTags: ReadonlySet<string>) => boolean;
+  readonly selectTable?: typeof selectWorkspaceTableFromCandidates;
   readonly scoreCoworkOpenSpaceCapacity?: true;
 };
 
@@ -362,13 +364,14 @@ export class WorkspaceTableAssignmentService extends Context.Service<
             Effect.bind(
               "matchingTable",
               ({
+                assignment,
                 seats,
                 inventory,
                 matchingTables,
                 occupancyByTableId,
                 rankingOccupancyByTableId,
               }) =>
-                selectWorkspaceTableFromCandidates(
+                (assignment.selectTable ?? selectWorkspaceTableFromCandidates)(
                   matchingTables,
                   inventory.tables,
                   occupancyByTableId,
@@ -463,7 +466,9 @@ export class WorkspaceTableAssignmentService extends Context.Service<
                   refreshed.reservations,
                   refreshed.expiredDotyposReservationIds
                 );
-                return yield* selectWorkspaceTableFromCandidates(
+                const selectTable =
+                  assignment.selectTable ?? selectWorkspaceTableFromCandidates;
+                return yield* selectTable(
                   getWorkspaceTableCandidatesByPredicate(
                     refreshed.tables,
                     assignment.isCandidateTable
@@ -584,6 +589,7 @@ const getReservationAssignment = (
               requiredTags: [workspaceCoworkOpenSpaceTableTag],
               isCandidateTable: (tableTags: ReadonlySet<string>) =>
                 isWorkspaceCoworkTableCandidate(tableTags, { entryTier }),
+              selectTable: selectOpenSpaceTableFromCandidates,
             }),
             "reserved-desk": ({ entryTier, monitorOption }) => ({
               requiredTags: [workspaceCoworkReservedDeskTableTag],
