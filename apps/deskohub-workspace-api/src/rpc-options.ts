@@ -1,5 +1,7 @@
 import type { RpcServer } from "effect/rpc";
 
+export const previewRpcPath = "/rpc/preview";
+
 export const workspaceRpcOptions = {
   path: "/rpc",
   protocol: "http",
@@ -9,3 +11,7 @@ export const workspaceRpcOptions = {
   Parameters<typeof RpcServer.layerHttp>[0],
   "path" | "protocol" | "spanPrefix" | "disableFatalDefects"
 >;
+
+export type WorkspaceRpcPath =
+  | typeof workspaceRpcOptions.path
+  | typeof previewRpcPath;
