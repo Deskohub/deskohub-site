@@ -59,7 +59,7 @@ export const tableSelectionLink = defineSelectionLink({
     readonly reservedFrom: Temporal.Instant;
     readonly reservedUntil: Temporal.Instant;
     readonly seats: number;
-  }) => {
+  }): TableSelection | undefined => {
     const start = reservedFrom.toZonedDateTimeISO(
       workspaceSiteConstants.location.timeZone
     );
