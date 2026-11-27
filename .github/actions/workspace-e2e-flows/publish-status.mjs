@@ -506,6 +506,14 @@ const findActiveRunForFlows = (summary, flowIds) => {
   return matching ?? summary.activeRuns[0];
 };
 
+const findForeignActiveRun = (summary, selection, ownerUrl) =>
+  summary.activeRuns.find(
+    (run) =>
+      run.targetUrl !== "" &&
+      run.targetUrl !== ownerUrl &&
+      run.flows.some((flow) => selection.includes(flow))
+  );
+
 /**
  * Filters a carried flow set against head-SHA failures and active reruns so an
  * outgoing `same-tree-passed` status never advertises a flow that failed or is
@@ -841,13 +849,23 @@ const runPublishCompletedPilot = async () => {
   const sha = initial.data.head.sha;
   if (!/^[0-9a-f]{40}$/.test(sha)) return;
   const source = pilotRunUrl(process.env.PILOT_SOURCE_RUN_ID, process.env.PILOT_SOURCE_RUN_ATTEMPT);
+  const sourceRun = source.split("/attempts/")[0];
 
   const readSnapshot = async () => {
     const prRead = fetchPr(pilotPrNumber);
     const pr = prRead.data;
     const deployment = fetchDeploymentState(sha);
+    const statusesRead = fetchCommitStatuses(sha);
     const selection = parsePrBodyE2EFlows(String(pr?.body ?? ""));
-    const snapshot = { prOk: prRead.ok, pr, deployment, statusesOk: false, statuses: [], selection };
+    const statusesOk = statusesRead.ok && Array.isArray(statusesRead.data);
+    const snapshot = {
+      prOk: prRead.ok,
+      pr,
+      deployment,
+      statusesOk,
+      statuses: statusesOk ? statusesRead.data : [],
+      selection,
+    };
     if (
       !prRead.ok || !isEligibleInternalPr(pr) || pr.head.sha !== sha ||
       deployment.state !== "success" ||
@@ -878,18 +896,29 @@ const runPublishCompletedPilot = async () => {
     sha,
     prNumber: pilotPrNumber,
     readSnapshot,
-    decide: ({ backendPreviewRequirement, prOk, pr, selection, livePilotProof, generation }) => {
+    decide: ({ backendPreviewRequirement, prOk, pr, selection, livePilotProof, generation, statusesOk, statuses }) => {
       if (backendPreviewRequirement !== "required" || !prOk || !isEligibleInternalPr(pr) || pr.head.sha !== sha || generation !== confirmed.generation) {
         return { skipPost: true };
+      }
+      if (!statusesOk) {
+        return { state: "failure", description: STATUSES_UNAVAILABLE_DESCRIPTION, targetUrl: sourceRun };
+      }
+      const pending = findForeignActiveRun(summarizeCommitStatuses(statuses), selection.selected, sourceRun);
+      if (pending) {
+        return {
+          skipPost: true,
+          restorePendingDescription: pending.description,
+          restorePendingTargetUrl: pending.targetUrl,
+        };
       }
       return livePilotProof ? {
         state: "success",
         description: formatE2EStatusDescription({ kind: "passed", flows: selection.flows }),
-        targetUrl: source,
+        targetUrl: sourceRun,
       } : {
         state: "failure",
         description: BACKEND_PREVIEW_PROOF_REQUIRED,
-        targetUrl: source,
+        targetUrl: sourceRun,
       };
     },
   });
@@ -1023,12 +1052,7 @@ const runPublishFinalStatus = async () => {
 
         // Never overwrite a newer active run started by a DIFFERENT workflow run
         // for any requested flow.
-        const foreignActiveRun = summary.activeRuns.find(
-          (run) =>
-            run.targetUrl !== "" &&
-            run.targetUrl !== runUrl &&
-            run.flows.some((flow) => parsedPr.selected.includes(flow))
-        );
+        const foreignActiveRun = findForeignActiveRun(summary, parsedPr.selected, runUrl);
         if (foreignActiveRun) {
           return {
             skipPost: true,

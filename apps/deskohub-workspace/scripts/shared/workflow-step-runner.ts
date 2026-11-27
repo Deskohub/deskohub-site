@@ -24,7 +24,7 @@ export type GhFixtures = Readonly<Record<string, Schema.Json>>;
 // A fixture keyed by a request field, such as `deployments@sha=<sha>`, wins
 // over the path's own. Every call is logged for assertions on what the step
 // published.
-const fakeGh = `#!/usr/bin/env bash
+export const fakeGh = `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
 path=""
