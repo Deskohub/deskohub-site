@@ -92,7 +92,7 @@ export const getLatePaymentStatusKind = (
     WorkspaceReservation,
     "activePaymentAttemptId" | "paymentState"
   >,
-  recovery: LatePaymentRecovery | null
+  recovery: Pick<LatePaymentRecovery, "state" | "paymentAttemptId"> | null
 ): CheckoutReservationStatusKind | undefined => {
   if (!recovery || recovery.state === "recovered") return undefined;
   if (

@@ -9,9 +9,10 @@ import {
   test,
 } from "bun:test";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { RouteAutoRefresh } from "@/shared/components/route-auto-refresh";
 import {
+  type WorkspaceActionExecute,
   workspaceRouterRefresh,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -19,7 +20,16 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
-import { CheckoutStatusPaymentMethods } from "./checkout-status-payment-methods";
+import { checkoutPaymentActionCallbacks } from "./checkout-payment.test-utils";
+import {
+  CheckoutStatusPaymentMethods,
+  type ContinueCheckoutPaymentAction,
+} from "./checkout-status-payment-methods";
+import { openTestPaymentWindow } from "./payment-window-fixture";
+
+type PaymentActionData = Awaited<
+  ReturnType<ContinueCheckoutPaymentAction>
+>["data"];
 
 beforeAll(registerWorkspaceComponentTestEnv);
 afterAll(unregisterWorkspaceComponentTestEnv);
@@ -32,11 +42,12 @@ afterEach(() => {
 
 test("switches from card to QR and reopens card on the same reservation", () => {
   jest.useFakeTimers({ now: new Date("2026-11-19T14:29:59Z") });
-  const execute = mock();
+  const execute = mock<WorkspaceActionExecute>();
   workspaceUseAction.mockReturnValue({ execute, isExecuting: false });
   const continuePaymentAction = mock(async () => ({}));
-  const orderId =
-    "658d5a17-1ccc-4d97-baab-6cbb015125ca" as WorkspaceReservationId;
+  const orderId = workspaceReservationIdSchema.make(
+    "658d5a17-1ccc-4d97-baab-6cbb015125ca"
+  );
   const checkout = {
     continuePaymentAction,
     expiresAt: "2026-11-19T14:30:00Z",
@@ -54,16 +65,8 @@ test("switches from card to QR and reopens card on the same reservation", () => 
     orderId,
   });
 
-  const actionOptions = workspaceUseAction.mock.calls.at(-1)?.[1] as
-    | {
-        readonly onSuccess: (result: {
-          readonly data:
-            | { readonly status: "qr_pending" }
-            | { readonly status: "redirect"; readonly redirectUrl: string };
-        }) => void;
-      }
-    | undefined;
-  if (!actionOptions) throw new Error("Checkout action options missing");
+  const actionOptions =
+    checkoutPaymentActionCallbacks<PaymentActionData>(execute);
   act(() => actionOptions.onSuccess({ data: { status: "qr_pending" } }));
   expect(workspaceRouterRefresh).toHaveBeenCalled();
 
@@ -94,7 +97,8 @@ test("switches from card to QR and reopens card on the same reservation", () => 
     method: "card",
     orderId,
   });
-  const open = spyOn(window, "open").mockReturnValue({} as Window);
+  const paymentWindow = openTestPaymentWindow();
+  const open = spyOn(window, "open").mockReturnValue(paymentWindow);
   const redirectUrl = "https://payments.example.test/same-hosted-session";
   act(() =>
     actionOptions.onSuccess({ data: { status: "redirect", redirectUrl } })
@@ -111,7 +115,9 @@ test("stops showing payment instructions and both methods at expiry while the st
     expiresAt,
     headline: null,
     locale: "en-US",
-    orderId: "658d5a17-1ccc-4d97-baab-6cbb015125ca" as WorkspaceReservationId,
+    orderId: workspaceReservationIdSchema.make(
+      "658d5a17-1ccc-4d97-baab-6cbb015125ca"
+    ),
   } as const;
   // The mock router never delivers replacement server props.
   const view = render(
@@ -154,14 +160,16 @@ test("stops showing payment instructions and both methods at expiry while the st
 test("restores a sent transfer for only its order and payment window", () => {
   const start = new Date("2026-11-20T14:00:00Z");
   jest.useFakeTimers({ now: start });
-  const execute = mock();
+  const execute = mock<WorkspaceActionExecute>();
   workspaceUseAction.mockReturnValue({ execute, isExecuting: false });
   const checkout = {
     continuePaymentAction: mock(async () => ({})),
     expiresAt: "2026-11-20T14:30:00Z",
     headline: <h1>Waiting for payment</h1>,
     locale: "en-US",
-    orderId: "658d5a17-1ccc-4d97-baab-6cbb015125ca" as WorkspaceReservationId,
+    orderId: workspaceReservationIdSchema.make(
+      "658d5a17-1ccc-4d97-baab-6cbb015125ca"
+    ),
     qrWait: {
       supportHref: "/en-US/contact",
       payment: {
@@ -198,7 +206,9 @@ test("restores a sent transfer for only its order and payment window", () => {
   restored.rerender(
     <CheckoutStatusPaymentMethods
       {...checkout}
-      orderId={"4e94cfaa-950d-441c-bc6d-5d4abc74a5b2" as WorkspaceReservationId}
+      orderId={workspaceReservationIdSchema.make(
+        "4e94cfaa-950d-441c-bc6d-5d4abc74a5b2"
+      )}
     />
   );
   expect(restored.getByRole("button", { name: "Payment sent" })).toBeTruthy();

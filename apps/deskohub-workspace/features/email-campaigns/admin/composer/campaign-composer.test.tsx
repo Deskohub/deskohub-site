@@ -41,9 +41,10 @@ const operations = captureCampaignOperations();
 
 beforeEach(() => {
   workspaceUseAction.mockReset();
-  workspaceUseAction.mockImplementation(
-    () => ({ execute: mock(), isExecuting: false }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute: mock(),
+    isExecuting: false,
+  }));
 });
 afterEach(cleanup);
 afterAll(unregisterWorkspaceComponentTestEnv);
@@ -293,9 +294,10 @@ test("an archived automated campaign offers no save and holds its form", async (
 });
 
 test("a save in flight says it's saving and can't be submitted again", async () => {
-  workspaceUseAction.mockImplementation(
-    () => ({ execute: mock(), isExecuting: true }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute: mock(),
+    isExecuting: true,
+  }));
   const view = await renderComposer("once");
 
   expect(

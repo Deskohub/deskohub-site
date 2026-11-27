@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { workspaceReservationIdSchema } from "@deskohub/workspace-domain/features/reservation/persistence-contracts";
+import { Schema } from "effect";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -16,7 +18,10 @@ import {
   checkoutStatusKinds,
 } from "@/features/checkout/checkout-status-kind";
 import { type Locale, m } from "@/features/i18n";
-import { getCheckoutStatusCopy } from "./checkout-status-copy";
+import {
+  type CheckoutStatusCopy,
+  getCheckoutStatusCopy,
+} from "./checkout-status-copy";
 
 type Message = (
   inputs: Record<string, never>,
@@ -135,7 +140,7 @@ const expectedCopy = {
     readonly title: Message;
     readonly lead: Message;
     readonly recipientLead?: Message;
-    readonly tone: string;
+    readonly tone: CheckoutStatusCopy["tone"];
     readonly Icon: typeof CheckCircle2;
   }
 >;
@@ -143,21 +148,28 @@ const expectedCopy = {
 const locales = ["cs-CZ", "en-US"] as const satisfies readonly Locale[];
 const reservationKinds = ["cowork", "meeting-room", "office"] as const;
 const recipient = testEmailAddress("ada");
+const orderId = Schema.decodeSync(workspaceReservationIdSchema)(
+  "reservation-status-copy"
+);
+
+type ReservationStatus = Exclude<
+  CheckoutStatusViewModel,
+  { status: "not_found" }
+>;
 
 const reservationStatus = (
-  status: Exclude<CheckoutStatusKind, "not_found">,
+  status: ReservationStatus["status"],
   kind: (typeof reservationKinds)[number],
   email?: string
-) =>
-  ({
-    kind,
-    orderId: "reservation-status-copy",
-    returnOutcome: "success",
-    status,
-    paymentStatus: "paid",
-    fulfillmentStatus: "fulfilled",
-    ...(email && { supportContactPrefill: { name: "Ada", email } }),
-  }) as CheckoutStatusViewModel;
+): ReservationStatus => ({
+  kind,
+  orderId,
+  returnOutcome: "success",
+  status,
+  paymentStatus: "paid",
+  fulfillmentStatus: "fulfilled",
+  ...(email !== undefined && { supportContactPrefill: { name: "Ada", email } }),
+});
 
 const reservationStatuses = checkoutStatusKinds.filter(
   (status) => status !== "not_found"
@@ -175,10 +187,10 @@ describe("getCheckoutStatusCopy", () => {
       const expected = expectedCopy.not_found;
       const copy = getCheckoutStatusCopy(
         {
-          orderId: "reservation-status-copy",
+          orderId,
           returnOutcome: "unknown",
           status: "not_found",
-        } as CheckoutStatusViewModel,
+        },
         locale
       );
 
@@ -255,10 +267,7 @@ describe("getCheckoutStatusCopy", () => {
 
   test("falls back to the lead without a recipient for an empty address", () => {
     const lead = getCheckoutStatusCopy(
-      {
-        ...reservationStatus("fulfillment_failed", "cowork"),
-        supportContactPrefill: { name: "Ada", email: "" },
-      } as CheckoutStatusViewModel,
+      reservationStatus("fulfillment_failed", "cowork", ""),
       "en-US"
     ).lead;
 

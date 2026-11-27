@@ -3,14 +3,16 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schema } from "effect";
+import { checkoutSessionIdSchema } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import type { CheckoutSummaryChangedKeys } from "@/features/checkout/checkout-summary";
 import {
   canonicalPromotionCodeSchema,
   discountIdSchema,
 } from "@/features/discounts/contracts";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { instantStringSchema } from "@/shared/utils/temporal";
 import { makeOfficePayRouteFixture } from "./office-pay-route.test-utils";
@@ -19,17 +21,19 @@ import {
   findCheckoutOfficeSelectionForVisitor,
   getPayStateCheckoutView,
 } from "./pay-state-checkout-view";
+import { getSubmittedCodeMetadata } from "./pay-state-contract";
+import { buildPayStateCodeQuote } from "./pay-state-discount-code.test-utils";
 
-const reservation = {
-  kind: "cowork" as const,
-  entryTier: "basic" as const,
+const reservation = Schema.decodeSync(normalizedCoworkReservationOrderSchema)({
+  kind: "cowork",
+  entryTier: "basic",
   coffee: false,
   date: "2026-12-14",
   name: "Ada Lovelace",
   email: testEmailAddress("ada"),
   phone: "+420777000111",
-};
-const orderId = "reservation-id" as WorkspaceReservationId;
+});
+const orderId = workspaceReservationIdSchema.make("reservation-id");
 
 test("does not turn an unreadable office guest list into a seat-only hold", async () => {
   const { seal, services } = makeOfficePayRouteFixture({
@@ -64,14 +68,16 @@ const buildState = (input?: {
       {
         locale: "en-US",
         reservation,
-        quote: buildCoworkReservationQuote(reservation),
+        quote: input?.withSubmittedCode
+          ? buildPayStateCodeQuote(reservation, submittedCodeDiscountId)
+          : buildCoworkReservationQuote(reservation),
         orderId,
         bookedAt: instantStringSchema.make("2026-07-01T09:58:00.000Z"),
         holdExpiresAt,
-        checkoutSessionId: "checkout-session-id",
+        checkoutSessionId: checkoutSessionIdSchema.make("checkout-session-id"),
         changedKeys: input?.changedKeys,
-        ...(input?.withSubmittedCode && {
-          submittedCode,
+        ...getSubmittedCodeMetadata({
+          submittedCode: input?.withSubmittedCode ? submittedCode : undefined,
           submittedCodeDiscountId,
         }),
       },

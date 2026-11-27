@@ -37,7 +37,8 @@ const requestPasskeySignIn = mock(
   }): Promise<PasskeyResponse> => Promise.resolve({ data: null, error: null })
 );
 const addPasskey = mock(
-  (): Promise<PasskeyResponse> => Promise.resolve({ data: null, error: null })
+  (): Promise<PasskeyResponse | string> =>
+    Promise.resolve({ data: null, error: null })
 );
 const updatePasskey = mock(
   (_body: { readonly id: string; readonly name: string }) =>
@@ -253,7 +254,7 @@ describe("passkey client", () => {
       passkeyClient.signInWithPasskey({ locale: "en-US" })
     ).resolves.toBe("failed");
 
-    addPasskey.mockResolvedValueOnce("unexpected" as never);
+    addPasskey.mockResolvedValueOnce("unexpected");
     await expect(passkeyClient.createPasskey("account-1")).resolves.toEqual({
       result: "failed",
     });

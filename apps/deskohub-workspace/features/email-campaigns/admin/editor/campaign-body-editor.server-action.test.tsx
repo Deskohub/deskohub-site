@@ -1,8 +1,10 @@
 /// <reference path="./campaign-body-editor.server-action.d.ts" />
 
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { Editor } from "@tiptap/core";
+import { Schema } from "effect";
 // The reply encoder the browser uses to send a Server Action's arguments, as
 // the app's Turbopack build bundles it; the webpack build needs webpack's
 // runtime to load.
@@ -70,7 +72,8 @@ test("sends the edited body to the preview Server Action as plain data", async (
       .run();
   });
   const edited = changes.at(-1);
-  expect(edited?.content?.[1]?.attrs).toMatchObject({
+  assert(edited, "Expected the editor to emit the edited body.");
+  expect(edited.content?.[1]?.attrs).toMatchObject({
     align: "left",
     roundedCorners: false,
   });
@@ -83,7 +86,7 @@ test("sends the edited body to the preview Server Action as plain data", async (
     fields: {
       subject: "Podzim",
       preheader: "",
-      body: edited!,
+      body: edited,
       operationalReason: "",
     },
   });
@@ -96,10 +99,13 @@ test("sends the edited body to the preview Server Action as plain data", async (
   // temporary reference ("$T"), which the server can't read.
   expect(payload).toBeTypeOf("string");
   expect(payload).not.toContain('"$T"');
-  expect(JSON.parse(payload as string)).toEqual([
+  const decodeJson = Schema.decodeUnknownSync(
+    Schema.fromJsonString(Schema.Unknown)
+  );
+  expect(decodeJson(payload)).toEqual([
     {
       operation: "previewCampaignTemplate",
-      input: JSON.parse(JSON.stringify(request)),
+      input: decodeJson(JSON.stringify(request)),
     },
   ]);
 });

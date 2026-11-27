@@ -6,6 +6,8 @@ import {
   DotyposCustomerIdSchema,
   type DotyposReservation,
   DotyposReservationIdSchema,
+  DotyposReservationSchema,
+  DotyposTableIdSchema,
 } from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
@@ -14,16 +16,18 @@ import type {
   ReservationPayment,
   ReservationStay,
 } from "@deskohub/workspace-admin-api";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import type { WorkspaceCoworkProductTier } from "@/features/checkout/product-catalog";
+import { orderIdSchema } from "@/features/order/order";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import type { CoworkStay } from "@/features/reservation/cowork-stay";
-import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
+import { storedWorkspaceReservationDetailsSchema } from "@/features/reservation/persistence-contracts";
 import {
   type ReservationFixtureInput,
   workspaceFixtures,
 } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import type { AudienceCondition, AudienceFilter } from "../audience-filter";
 import { AutomationConditionEvaluation } from "../automation/backend/automation-condition-evaluation.service";
 import { AutomationEvaluationFacts } from "../automation/backend/automation-evaluation-facts.service";
@@ -189,14 +193,8 @@ const visits = [
 
 type Label = (typeof visits)[number]["label"] | "dotypos-only";
 
-const customers = new Map<Label, DotyposCustomerId>(
-  [...visits.map(({ label }) => label), "dotypos-only" as const].map(
-    (label) => [label, customerId(label)]
-  )
-);
-const of = (...labels: readonly Label[]) =>
-  labels.map((label) => customers.get(label)!);
-const everyone = [...customers.values()];
+const of = (...labels: readonly Label[]) => labels.map(customerId);
+const everyone = of(...visits.map(({ label }) => label), "dotypos-only");
 
 const cowork = { family: "cowork", properties: [] } as const;
 
@@ -206,7 +204,7 @@ const reservationCount = (params: {
   readonly stay?: ReservationStay;
   readonly payment?: ReservationPayment;
   readonly coworkOnly?: false;
-}) => {
+}): AudienceCondition => {
   const { coworkOnly, ...rest } = params;
   return {
     _tag: "Condition",
@@ -214,7 +212,7 @@ const reservationCount = (params: {
     params: { ...rest, ...(coworkOnly !== false && { product: cowork }) },
     operator: "gte",
     value: 1,
-  } as AudienceCondition;
+  };
 };
 
 const lastSixtyDays: DatePeriod = { _tag: "Last", count: 60, unit: "day" };
@@ -227,7 +225,7 @@ describe.skipIf(!testDatabase)(
     const { db, pool } = testDatabase;
     const reservationIds: string[] = [];
     const accountId = `count-qualifier-holder-${run}`;
-    const passId = `count-qualifier-pack-${run}`;
+    const passId = orderIdSchema.make(crypto.randomUUID());
     const passAttemptId = crypto.randomUUID();
 
     /** One Entry pack, which funds the pack visits and stands in for an Unlimited pass. */
@@ -267,9 +265,11 @@ describe.skipIf(!testDatabase)(
     ): ReservationFixtureInput["overrides"] =>
       funding._tag === "Unlimited"
         ? {
-            passId: passId as never,
-            serviceDate: date as never,
-            passDayTableId: `count-qualifier-table-${run}` as never,
+            passId,
+            serviceDate: plainDateStringSchema.make(date),
+            passDayTableId: DotyposTableIdSchema.make(
+              `count-qualifier-table-${run}`
+            ),
           }
         : {};
 
@@ -312,6 +312,9 @@ describe.skipIf(!testDatabase)(
     };
 
     const confirmedAt = Temporal.Instant.from("2026-10-01T08:00:00Z");
+    const decodeDetails = Schema.decodeUnknownSync(
+      storedWorkspaceReservationDetailsSchema
+    );
 
     const seeded = (async () => {
       await seedPass();
@@ -323,12 +326,12 @@ describe.skipIf(!testDatabase)(
               payment: visit.funding._tag === "Unpaid" ? "pending" : "paid",
               fulfillment: "fulfilled",
             },
-            customer: customers.get(visit.label),
-            details: {
+            customer: customerId(visit.label),
+            details: decodeDetails({
               kind: "cowork",
               entryTier: visit.tier,
-              coffee: false,
-            } as StoredWorkspaceReservationDetails,
+              coffee: visit.tier === "reserved-desk",
+            }),
             at: confirmedAt,
             locale: "cs-CZ",
             overrides: {
@@ -338,10 +341,19 @@ describe.skipIf(!testDatabase)(
           }))
         )
       );
+      reservationIds.push(...rows.map(({ id }) => id));
       const dotyposVisits = await Promise.all(
         rows.map(async (row, index) => {
-          const visit = visits[index]!;
-          reservationIds.push(row.id);
+          const visit = visits[index];
+          if (visit === undefined) {
+            throw new Error("Reservation fixture returned an unexpected row");
+          }
+          const id = row.dotyposReservationId;
+          if (id === null) {
+            throw new Error(
+              "Reservation fixture has no Dotypos reservation ID"
+            );
+          }
           await seedFunding(row.id, visit);
           const { startsAt, endsAt } = getCoworkReservationInterval(
             // The interval is booked as a Reserved Desk stay of that length;
@@ -350,20 +362,15 @@ describe.skipIf(!testDatabase)(
             visit.date,
             visit.interval
           );
-          return dotyposVisit(
-            row.dotyposReservationId!,
-            row.dotyposCustomerId,
-            startsAt,
-            endsAt
-          );
+          return dotyposVisit(id, row.dotyposCustomerId, startsAt, endsAt);
         })
       );
       // A visit Workspace didn't book: Dotypos alone knows it.
       const dotyposOnly = dotyposVisit(
         DotyposReservationIdSchema.make(`count-qualifier-${run}-dotypos-only`),
-        customers.get("dotypos-only")!,
-        Temporal.Instant.from("2026-10-14T08:00:00Z"),
-        Temporal.Instant.from("2026-10-14T16:00:00Z")
+        customerId("dotypos-only"),
+        "2026-10-14T08:00:00Z",
+        "2026-10-14T16:00:00Z"
       );
       return [...dotyposVisits, dotyposOnly];
     })();
@@ -596,17 +603,17 @@ describe.skipIf(!testDatabase)(
 function dotyposVisit(
   id: DotyposReservation["id"],
   customer: DotyposCustomerId,
-  startsAt: Temporal.Instant,
-  endsAt: Temporal.Instant
+  startsAt: string,
+  endsAt: string
 ): DotyposReservation {
-  return {
+  return Schema.decodeSync(DotyposReservationSchema)({
     id,
     _branchId: "count-qualifier-branch",
     _cloudId: "count-qualifier-cloud",
     _customerId: customer,
-    startDate: startsAt.toString(),
-    endDate: endsAt.toString(),
+    startDate: startsAt,
+    endDate: endsAt,
     seats: "1",
     status: "CONFIRMED",
-  } satisfies DotyposReservation;
+  });
 }

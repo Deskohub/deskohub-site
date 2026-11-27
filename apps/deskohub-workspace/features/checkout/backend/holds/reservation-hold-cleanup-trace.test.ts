@@ -1,14 +1,26 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService, DotyposUnavailable } from "@deskohub/dotypos";
+import assert from "node:assert/strict";
+import {
+  DotyposReservationIdSchema,
+  DotyposService,
+  DotyposUnavailable,
+} from "@deskohub/dotypos";
 import { Cause, Effect, Exit, Layer, Predicate } from "effect";
 import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
   type EffectTrace,
   recordEffectTrace,
   startEffectTrace,
 } from "@/shared/testing/effect-trace.test-utils";
+import {
+  expiredPaymentTransitionFixture,
+  holdCleanupQueryFailure,
+} from "./reservation-hold-cleanup.test-utils";
 
 mock.module("server-only", () => ({}));
 
@@ -37,56 +49,66 @@ const { silentCheckoutAnalytics } = await import(
   "../analytics/checkout-analytics.service.mock"
 );
 
-type Methods = Record<
-  string,
-  (...args: never[]) => Effect.Effect<unknown, unknown>
->;
-
 interface Collaborators {
-  readonly reservations?: Methods;
-  readonly paymentLifecycle?: Methods;
-  readonly finalization?: Methods;
-  readonly dotypos?: Methods;
+  readonly reservations?: Partial<
+    typeof WorkspaceReservationRepository.Service
+  >;
+  readonly paymentLifecycle?: Partial<
+    typeof PaymentLifecycleRepository.Service
+  >;
+  readonly finalization?: Partial<
+    typeof ProviderPaymentFinalizationService.Service
+  >;
+  readonly dotypos?: Partial<typeof DotyposService.Service>;
 }
 
-const orderId = "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5";
+const orderId = workspaceReservationIdSchema.make(
+  "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5"
+);
 const checkedAt = Temporal.Instant.from("2026-07-01T08:00:00.000Z");
 const holdExpiresAt = Temporal.Instant.from("2026-07-01T07:50:00.000Z");
+const paymentAttemptId = paymentAttemptIdSchema.make("payment-attempt-id");
 
-const heldOrder = {
+const heldOrder = workspaceReservationFixture({
   id: orderId,
   reservationState: "held",
   paymentState: "pending",
-  activePaymentAttemptId: "payment-attempt-id",
-  dotyposReservationId: "dotypos-reservation-id",
+  fulfillmentState: "not_started",
+  activePaymentAttemptId: paymentAttemptId,
+  dotyposReservationId: DotyposReservationIdSchema.make(
+    "dotypos-reservation-id"
+  ),
   reservationHoldExpiresAt: holdExpiresAt,
-};
+  reservationConfirmedAt: null,
+  paidAt: null,
+  fulfilledAt: null,
+});
 
 /** Claimed long ago, so another cleanup may take the claim over. */
-const cancellingOrder = {
+const cancellingOrder = workspaceReservationFixture({
   ...heldOrder,
   reservationState: "cancelling",
   updatedAt: Temporal.Instant.from("2026-07-01T08:00:00.500Z"),
-};
+});
 
 const succeed =
-  <A>(value: A) =>
+  <const A>(value: A) =>
   () =>
-    Effect.succeed(value as never);
+    Effect.succeed(value);
 const fail =
   <E>(error: E) =>
   () =>
-    Effect.fail(error as never);
+    Effect.fail(error);
 
 const paymentLifecycleStateError = new PaymentLifecycleStateError({
   operation: "markTerminal",
-  paymentReference: { paymentAttemptId: "payment-attempt-id" } as never,
+  paymentReference: { type: "paymentAttemptId", id: paymentAttemptId },
   message: "The payment attempt is no longer pending.",
 });
 
 const reservationStateError = new WorkspaceReservationStateError({
   operation: "markCancelled",
-  reservationId: orderId as never,
+  reservationId: orderId,
   message: "The reservation is no longer cancelling.",
 });
 
@@ -105,7 +127,9 @@ const cancellingCollaborators = (
     ...overrides.reservations,
   },
   paymentLifecycle: {
-    markTerminal: succeed({ changed: true }),
+    markTerminal: succeed(
+      expiredPaymentTransitionFixture(orderId, paymentAttemptId, checkedAt)
+    ),
     ...overrides.paymentLifecycle,
   },
   finalization: {
@@ -124,14 +148,16 @@ const cancelOrderHold = async (
   input: { readonly checkedAt?: Temporal.Instant } = { checkedAt }
 ) => {
   const trace: EffectTrace = startEffectTrace();
-  const record = (service: string, methods: Methods | undefined) =>
-    trace.recordCalls(service, methods ?? {});
+  const record = <Methods extends object>(
+    service: string,
+    methods: Methods | undefined
+  ) => trace.recordCalls(service, methods ?? {});
   const exit = await Effect.gen(function* () {
     const cleanup = yield* ReservationHoldCleanupService;
     return yield* recordEffectTrace(
       trace,
       cleanup.cancelOrderHold({
-        orderId: orderId as never,
+        orderId: orderId,
         holdExpiresAt,
         ...input,
       })
@@ -193,7 +219,9 @@ const dotyposUnavailable = new DotyposUnavailable({
 describe("ReservationHoldCleanupService.cancelOrderHold trace", () => {
   test("fails when the order can't be loaded", async () => {
     const { outcome, trace } = await cancelOrderHold({
-      reservations: { findById: fail(new Error("db down")) },
+      reservations: {
+        findById: fail(holdCleanupQueryFailure("reservations", "db down")),
+      },
     });
 
     expect(outcome).toBe(
@@ -212,7 +240,12 @@ describe("ReservationHoldCleanupService.cancelOrderHold trace", () => {
     const { outcome, trace } = await cancelOrderHold(
       cancellingCollaborators({
         finalization: {
-          finalizePendingProviderPayment: fail(new Error("nexi down")),
+          finalizePendingProviderPayment: fail(
+            holdCleanupQueryFailure(
+              "payment attempt lookup",
+              "database unavailable during provider verification"
+            )
+          ),
         },
       })
     );
@@ -343,7 +376,11 @@ describe("ReservationHoldCleanupService.cancelOrderHold trace", () => {
     const { outcome, trace } = await cancelOrderHold(
       cancellingCollaborators({
         finalization: { finalizePendingProviderPayment: succeed("abandoned") },
-        paymentLifecycle: { markTerminal: fail(new Error("db down")) },
+        paymentLifecycle: {
+          markTerminal: fail(
+            holdCleanupQueryFailure("reservations", "db down")
+          ),
+        },
       })
     );
 
@@ -361,7 +398,7 @@ describe("ReservationHoldCleanupService.cancelOrderHold trace", () => {
         "Info Reservation hold cancellation provider finalization completed {abandonmentCutoff,activePaymentAttemptId,checkedAt,dotyposReservationId,fulfillmentState,holdExpiresAt,orderId,paymentState,providerFinalizationResult,reservationId,reservationState} in reservationHoldCleanup.cancelOrderHold",
         "Info Reservation hold cancellation expiring payment attempt (reason=abandoned) {abandonmentCutoff,activePaymentAttemptId,checkedAt,dotyposReservationId,fulfillmentState,holdExpiresAt,orderId,paymentState,providerFinalizationResult,reservationId,reservationState} in reservationHoldCleanup.cancelOrderHold",
         "call paymentLifecycle.markTerminal(id=payment-attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, state=expired, failureCode=payment_abandoned_after_provider_cutoff)",
-        "Warn Reservation hold cancellation payment attempt expiration failed (orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, paymentAttemptId=payment-attempt-id, cause=<Error>) {abandonmentCutoff,activePaymentAttemptId,checkedAt,dotyposReservationId,fulfillmentState,holdExpiresAt,orderId,paymentState,providerFinalizationResult,reservationId,reservationState} in reservationHoldCleanup.cancelOrderHold",
+        "Warn Reservation hold cancellation payment attempt expiration failed (orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, paymentAttemptId=payment-attempt-id, cause=<EffectDrizzleQueryError>) {abandonmentCutoff,activePaymentAttemptId,checkedAt,dotyposReservationId,fulfillmentState,holdExpiresAt,orderId,paymentState,providerFinalizationResult,reservationId,reservationState} in reservationHoldCleanup.cancelOrderHold",
       ]
     `);
   });
@@ -421,7 +458,9 @@ describe("ReservationHoldCleanupService.cancelOrderHold trace", () => {
       cancellingCollaborators({
         finalization: { finalizePendingProviderPayment: succeed("not_found") },
         reservations: {
-          recordHoldCleanupSkipped: fail(new Error("db down")),
+          recordHoldCleanupSkipped: fail(
+            holdCleanupQueryFailure("reservations", "db down")
+          ),
         },
       })
     );
@@ -503,7 +542,7 @@ describe("ReservationHoldCleanupService.cancelOrderHold trace", () => {
   });
 
   test("fails when the cancellation can't be claimed", async () => {
-    const dbDown = new Error("db down");
+    const dbDown = holdCleanupQueryFailure("reservations", "db down");
     const { failure, trace } = await cancelOrderHold(
       cancellingCollaborators({
         reservations: { claimCancellation: fail(dbDown) },
@@ -572,12 +611,10 @@ describe("ReservationHoldCleanupService.cancelOrderHold trace", () => {
       })
     );
 
-    expect(outcome).toBeInstanceOf(HoldCancellationInProgress);
-    expect(
-      (
-        outcome as InstanceType<typeof HoldCancellationInProgress>
-      ).staleAt.toString()
-    ).toBe(claimedAt.add({ minutes: 10 }).toString());
+    assert(outcome instanceof HoldCancellationInProgress);
+    expect(outcome.staleAt.toString()).toBe(
+      claimedAt.add({ minutes: 10 }).toString()
+    );
     expect(trace.some((entry) => entry.startsWith("call dotypos."))).toBe(
       false
     );
@@ -626,8 +663,10 @@ describe("ReservationHoldCleanupService.cancelOrderHold trace", () => {
   });
 
   test("fails when an already claimed cancellation can't be reloaded", async () => {
-    const dbDown = new Error("db down");
-    const findById = mock(fail(dbDown));
+    const dbDown = holdCleanupQueryFailure("reservations", "db down");
+    const findById = mock<
+      typeof WorkspaceReservationRepository.Service.findById
+    >(fail(dbDown));
     findById.mockImplementationOnce(succeed(cancellingOrder));
     const { failure, trace } = await cancelOrderHold(
       cancellingCollaborators({
@@ -864,7 +903,7 @@ describe("ReservationHoldCleanupService.cancelOrderHold trace", () => {
   });
 
   test("fails when the cancelled marker can't be stored", async () => {
-    const dbDown = new Error("db down");
+    const dbDown = holdCleanupQueryFailure("reservations", "db down");
     const { failure, trace } = await cancelOrderHold(
       cancellingCollaborators({
         reservations: { markCancelled: fail(dbDown) },

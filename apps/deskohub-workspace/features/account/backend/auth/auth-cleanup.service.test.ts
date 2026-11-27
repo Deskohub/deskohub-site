@@ -2,48 +2,49 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
-  type AuthCleanupFailure,
-  AuthCleanupService,
-} from "./auth-cleanup.service";
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
+import { AuthCleanupService } from "./auth-cleanup.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
 const insertUser = (id: string, createdAt?: string) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("cleanup", {
+    workspaceFixtures(requireTestDatabase(testDatabase).db).account("cleanup", {
       id: customerAccountIdSchema.make(id),
       createdAt: createdAt ? Temporal.Instant.from(createdAt) : undefined,
     })
   );
 
 const insertSession = (id: string, userId: string, expiresAt: string) =>
-  testDatabase!.pool.query(
+  requireTestDatabase(testDatabase).pool.query(
     `insert into auth.session (id, expires_at, token, created_at, updated_at, user_id)
      values ($1, $2::timestamptz, $3, now(), now(), $4)`,
     [id, expiresAt, `token-${id}`, userId]
   );
 
 const insertVerification = (id: string, expiresAt: string) =>
-  testDatabase!.pool.query(
+  requireTestDatabase(testDatabase).pool.query(
     `insert into auth.verification (id, identifier, value, expires_at, created_at, updated_at)
      values ($1, $2, '{}', $3::timestamptz, now(), now())`,
     [id, `identifier-${id}`, expiresAt]
   );
 
 const insertRateLimitRow = (id: string, lastRequestEpochMs: string) =>
-  testDatabase!.pool.query(
+  requireTestDatabase(testDatabase).pool.query(
     `insert into auth.rate_limit (id, key, count, last_request)
      values ($1, $2, 3, $3::bigint)`,
     [id, `key-${id}`, lastRequestEpochMs]
   );
 
 const insertAgentClient = (id: string) =>
-  testDatabase!.pool.query(
+  requireTestDatabase(testDatabase).pool.query(
     `insert into auth.oauth_client (id, client_id, redirect_uris, created_at, updated_at)
      values ($1, $2, array['https://agent.example/callback'], now(), now())`,
     [id, `https://agent.example/${id}`]
@@ -55,7 +56,7 @@ const insertAgentRefreshToken = (
   userId: string,
   expiresAt: string
 ) =>
-  testDatabase!.pool.query(
+  requireTestDatabase(testDatabase).pool.query(
     `insert into auth.oauth_refresh_token (id, token, client_id, user_id, scopes, expires_at, created_at)
      values ($1, $2, $3, $4, array['reservations:read'], $5::timestamptz, now())`,
     [id, `hash-${id}`, `https://agent.example/${clientId}`, userId, expiresAt]
@@ -72,7 +73,7 @@ const insertRotatedAgentRefreshToken = (
   expiresAt: string,
   replayExpiresAt: string | null
 ) =>
-  testDatabase!.pool.query(
+  requireTestDatabase(testDatabase).pool.query(
     `insert into auth.oauth_refresh_token (id, token, client_id, user_id, scopes, expires_at, created_at, revoked, rotated_at, rotation_replay_response, rotation_replay_expires_at)
      values ($1, $2, $3, $4, array['reservations:read'], $5::timestamptz, now(), now(), now(), 'encrypted-replay', $6::timestamptz)`,
     [
@@ -86,12 +87,14 @@ const insertRotatedAgentRefreshToken = (
   );
 
 const countStoredReplays = async (runId: string) => {
-  const result = await testDatabase!.pool.query(
+  const result = await requireTestDatabase(testDatabase).pool.query<{
+    count: number;
+  }>(
     `select count(*)::int as count from auth.oauth_refresh_token
      where id like $1 and rotation_replay_response is not null`,
     [`%${runId}`]
   );
-  return result.rows[0]!.count as number;
+  return requireValue(result.rows[0], "count row").count;
 };
 
 const insertAgentAccessToken = (
@@ -101,7 +104,7 @@ const insertAgentAccessToken = (
   expiresAt: string,
   refreshId: string | null = null
 ) =>
-  testDatabase!.pool.query(
+  requireTestDatabase(testDatabase).pool.query(
     `insert into auth.oauth_access_token (id, token, client_id, user_id, refresh_id, scopes, expires_at, created_at)
      values ($1, $2, $3, $4, $5, array['reservations:read'], $6::timestamptz, now())`,
     [
@@ -115,7 +118,7 @@ const insertAgentAccessToken = (
   );
 
 const insertAgentClientAssertion = (id: string, expiresAt: string) =>
-  testDatabase!.pool.query(
+  requireTestDatabase(testDatabase).pool.query(
     `insert into auth.oauth_client_assertion (id, expires_at)
      values ($1, $2::timestamptz)`,
     [id, expiresAt]
@@ -123,14 +126,14 @@ const insertAgentClientAssertion = (id: string, expiresAt: string) =>
 
 const insertCustomerAccount = (id: string, createdAt: string) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).customerAccount({
+    workspaceFixtures(requireTestDatabase(testDatabase).db).customerAccount({
       id: customerAccountIdSchema.make(id),
       createdAt: Temporal.Instant.from(createdAt),
     })
   );
 
 const readAccountDeletions = async (runId: string) => {
-  const result = await testDatabase!.pool.query<{
+  const result = await requireTestDatabase(testDatabase).pool.query<{
     id: string;
     deleted: boolean;
   }>(
@@ -145,11 +148,12 @@ const readAccountDeletions = async (runId: string) => {
 
 const countSweepRows = async (runId: string) => {
   const count = async (table: string) => {
-    const result = await testDatabase!.pool.query(
-      `select count(*)::int as count from auth."${table}" where id like $1`,
-      [`%${runId}`]
-    );
-    return result.rows[0]!.count as number;
+    const result = await requireTestDatabase(testDatabase).pool.query<{
+      count: number;
+    }>(`select count(*)::int as count from auth."${table}" where id like $1`, [
+      `%${runId}`,
+    ]);
+    return requireValue(result.rows[0], "count row").count;
   };
   return {
     sessions: await count("session"),
@@ -369,20 +373,10 @@ describe.skipIf(!testDatabase)("AuthCleanupService", () => {
 describe("AuthCleanupService failures", () => {
   test("reports a fixed censored failure without the raw database error", async () => {
     const failure = new Error("sensitive relation and constraint details");
-    const failingDb = {
-      delete: () => ({
-        where: () => ({
-          returning: () => Effect.fail(failure),
-        }),
-      }),
-    } as never;
-    const failingDatabase = Layer.succeed(
-      WorkspaceDatabase,
-      WorkspaceDatabase.make(failingDb)
-    );
-
+    const database = await makeRecordingWorkspaceDatabase();
+    database.failNextQueriesWith(failure, 1);
     const failingService = AuthCleanupService.Default.pipe(
-      Layer.provide(failingDatabase)
+      Layer.provide(database.layer)
     );
 
     const outcome = await Effect.runPromise(
@@ -396,7 +390,7 @@ describe("AuthCleanupService failures", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const failure = outcome.failure as AuthCleanupFailure;
+      const failure = outcome.failure;
       expect(failure._tag).toBe("AuthCleanupFailure");
       expect(failure.code).toBe("account.cleanup.unavailable");
       expect(JSON.stringify(failure)).not.toContain("sensitive relation");

@@ -1,8 +1,16 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, test } from "bun:test";
+import type { AdministrationCampaignSummaryType } from "@deskohub/workspace-admin-api";
 import { Effect } from "effect";
-import { stubCampaignPageQueries } from "../campaign-operation-query.test-utils";
+import {
+  campaignAudienceIdSchema,
+  campaignIdSchema,
+} from "../../campaign-identifiers";
+import {
+  campaignAudienceFixture,
+  stubCampaignPageQueries,
+} from "../campaign-operation-query.test-utils";
 
 const port = stubCampaignPageQueries();
 
@@ -12,29 +20,30 @@ const { loadCampaignList, loadCampaignListDelivery } = await import(
 
 const summary = (
   id: string,
-  fields: {
-    readonly delivery: string;
-    readonly status: string;
-    readonly audienceId?: string | null;
-  }
-) => ({
-  id,
+  fields: Pick<AdministrationCampaignSummaryType, "delivery" | "status"> &
+    Partial<Pick<AdministrationCampaignSummaryType, "audienceId">>
+): AdministrationCampaignSummaryType => ({
+  id: campaignIdSchema.make(id),
   title: `Campaign ${id}`,
   purpose: "marketing",
+  templateKey: "workspace",
   audienceId: null,
+  locales: [],
+  createdAt: "2026-10-01T08:00:00.000Z",
   updatedAt: "2026-10-05T08:00:00.000Z",
   ...fields,
 });
 
+const regulars = campaignAudienceIdSchema.make("regulars");
 const onceDraft = summary("once-draft", {
   delivery: "once",
   status: "draft",
-  audienceId: "regulars",
+  audienceId: regulars,
 });
 const automatedActive = summary("automated-active", {
   delivery: "automated",
   status: "active",
-  audienceId: "deleted-audience",
+  audienceId: campaignAudienceIdSchema.make("deleted-audience"),
 });
 
 beforeEach(() => {
@@ -43,7 +52,7 @@ beforeEach(() => {
   port.responses = {
     listCampaigns: Effect.succeed([onceDraft, automatedActive]),
     listCampaignAudiences: Effect.succeed([
-      { id: "regulars", title: "Regulars" },
+      campaignAudienceFixture(regulars, "Regulars"),
     ]),
   };
 });
@@ -65,7 +74,7 @@ describe("loadCampaignList", () => {
   test("lists every campaign with its delivery, status, and audience title", async () => {
     expect(await loadCampaignList(Promise.resolve(undefined))).toEqual([
       {
-        id: "once-draft",
+        id: onceDraft.id,
         title: "Campaign once-draft",
         purpose: "marketing",
         audienceTitle: "Regulars",
@@ -74,7 +83,7 @@ describe("loadCampaignList", () => {
         status: "draft",
       },
       {
-        id: "automated-active",
+        id: automatedActive.id,
         title: "Campaign automated-active",
         purpose: "marketing",
         audienceTitle: null,
@@ -89,8 +98,8 @@ describe("loadCampaignList", () => {
     const idsOf = async (delivery: "once" | "automated") =>
       (await loadCampaignList(Promise.resolve(delivery))).map(({ id }) => id);
 
-    expect(await idsOf("once")).toEqual(["once-draft"]);
-    expect(await idsOf("automated")).toEqual(["automated-active"]);
+    expect(await idsOf("once")).toEqual([onceDraft.id]);
+    expect(await idsOf("automated")).toEqual([automatedActive.id]);
   });
 
   test("a campaign without an audience lists with no audience title", async () => {
@@ -112,7 +121,7 @@ describe("loadCampaignList", () => {
 
     expect(
       (await loadCampaignList(Promise.resolve(undefined))).map(({ id }) => id)
-    ).toEqual(["once-draft"]);
+    ).toEqual([onceDraft.id]);
   });
 
   test("reads the campaigns and audiences from the campaign port", async () => {

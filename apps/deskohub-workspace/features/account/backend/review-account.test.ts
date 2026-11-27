@@ -3,13 +3,17 @@ import "@/shared/polyfills/temporal";
 import { describe, expect, mock, test } from "bun:test";
 import { DotyposService } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer, Result } from "effect";
+import { Effect, Layer, Result, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { ReviewAccountsMock } from "@/features/review-accounts/backend/review-accounts.repository.mock";
 import { ReviewSandboxMock } from "@/features/review-accounts/backend/review-sandbox.service.mock";
-import type { CustomerReservationHistory } from "../contracts";
+import { makeTestDatabaseClient } from "@/shared/testing/workspace-recording-database.test-utils";
+import {
+  type CustomerReservationHistory,
+  updateCustomerProfileSchema,
+} from "../contracts";
 import {
   type CustomerAccountAccessError,
   customerAccountIdSchema,
@@ -20,6 +24,7 @@ import { CustomerAccountLinkRepository } from "./customer-account-link.repositor
 import { CustomerAccountSections } from "./customer-account-sections";
 import { makeCustomerAccountSections } from "./customer-account-sections.test-utils";
 import { CustomerAuthentication } from "./customer-authentication.service";
+import { testSessionProfile } from "./customer-authentication.test-utils";
 import { CustomerDotyposAdapter } from "./customer-dotypos-adapter.service";
 import { CustomerProfileService } from "./customer-profile.service";
 import { CustomerReservationHistoryService } from "./customer-reservation-history.service";
@@ -90,12 +95,14 @@ describe("a review account's Dotypos link", () => {
   test("is never created by completing a profile", async () => {
     const outcome = await CustomerProfileService.pipe(
       Effect.flatMap((profiles) =>
-        profiles.create(accountId, {
-          firstName: "App",
-          lastName: "Review",
-          phone: "+44 20 7946 0123",
-          billing: null,
-        } as never)
+        profiles.create(
+          accountId,
+          Schema.decodeSync(updateCustomerProfileSchema("en-US"))({
+            firstName: "App",
+            lastName: "Review",
+            phone: "+44 20 7946 0123",
+          })
+        )
       ),
       Effect.provide(
         CustomerProfileService.Default.pipe(
@@ -135,8 +142,9 @@ describe("a review account's booking contact", () => {
                         accountId,
                         email,
                         deletionRequested: false,
+                        ...testSessionProfile,
                       }),
-                    } as never),
+                    }),
                     activeLinks,
                     Layer.mock(CustomerAccountSections, {}),
                     unreachableDotypos,
@@ -180,9 +188,13 @@ describe("a review account's reservation history", () => {
           Layer.provide(
             Layer.mergeAll(
               // A database query would throw on this client.
-              Layer.succeed(
+              Layer.effect(
                 WorkspaceDatabase,
-                WorkspaceDatabase.make({} as never)
+                makeTestDatabaseClient(
+                  Effect.die(
+                    new Error("Review history must not query the database")
+                  )
+                ).pipe(Effect.map(WorkspaceDatabase.make))
               ),
               Layer.mock(DotyposService, {}),
               Layer.mock(ReservationRecords, {}),

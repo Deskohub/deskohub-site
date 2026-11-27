@@ -7,7 +7,7 @@ import type {
   PaymentState,
   ReservationState,
 } from "@/db/schema";
-import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import {
   getLatePaymentStatusKind,
   toCheckoutStatusKind,
@@ -25,14 +25,14 @@ const statusKind = (input: {
   readonly paymentState: PaymentState;
   readonly fulfillmentState?: FulfillmentState;
   readonly reservationState?: ReservationState;
-  readonly paidAt?: keyof typeof paidMoments;
+  readonly paidAt?: Temporal.Instant | null;
 }) =>
   toCheckoutStatusKind(
     {
       paymentState: input.paymentState,
       fulfillmentState: input.fulfillmentState ?? "not_started",
       reservationState: input.reservationState ?? "held",
-      paidAt: paidMoments[input.paidAt ?? "unknown"],
+      paidAt: input.paidAt ?? null,
     },
     now
   );
@@ -53,21 +53,23 @@ describe("checkout reservation status kind", () => {
         "failed",
       ] as const) {
         expect(
-          statusKind({ paymentState, fulfillmentState, paidAt: "overdue" })
+          statusKind({
+            paymentState,
+            fulfillmentState,
+            paidAt: paidMoments.overdue,
+          })
         ).toBe(expected);
       }
     }
   );
 
   test("reports a finished fulfillment the same however long ago the payment was", () => {
-    for (const moment of Object.keys(paidMoments) as Array<
-      keyof typeof paidMoments
-    >) {
+    for (const paidAt of Object.values(paidMoments)) {
       expect(
         statusKind({
           paymentState: "paid",
           fulfillmentState: "fulfilled",
-          paidAt: moment,
+          paidAt,
         })
       ).toBe("fulfilled");
       expect(
@@ -75,7 +77,7 @@ describe("checkout reservation status kind", () => {
           paymentState: "paid",
           fulfillmentState: "failed",
           reservationState: "confirmed",
-          paidAt: moment,
+          paidAt,
         })
       ).toBe("fulfillment_failed");
     }
@@ -93,7 +95,7 @@ describe("checkout reservation status kind", () => {
           paymentState: "paid",
           fulfillmentState,
           reservationState,
-          paidAt: moment,
+          paidAt: paidMoments[moment],
         });
       expect(kindAt("unknown")).toBe("paid_waiting_fulfillment");
       expect(kindAt("recent")).toBe("paid_waiting_fulfillment");
@@ -108,7 +110,7 @@ describe("checkout reservation status kind", () => {
         paymentState: "paid",
         fulfillmentState: "awaiting_delivery",
         reservationState: "confirmed",
-        paidAt: moment,
+        paidAt: paidMoments[moment],
       });
     expect(kindAt("unknown")).toBe("paid_awaiting_delivery");
     expect(kindAt("recent")).toBe("paid_awaiting_delivery");
@@ -118,15 +120,14 @@ describe("checkout reservation status kind", () => {
 });
 
 describe("late payment status kind", () => {
-  const activePaymentAttemptId = "active-attempt" as PaymentAttemptId;
+  const activePaymentAttemptId = paymentAttemptIdSchema.make("active-attempt");
   const recovery = (
     state: LatePaymentRecovery["state"],
     paymentAttemptId: string = activePaymentAttemptId
-  ) =>
-    ({
-      state,
-      paymentAttemptId: paymentAttemptId as PaymentAttemptId,
-    }) as LatePaymentRecovery;
+  ): Pick<LatePaymentRecovery, "state" | "paymentAttemptId"> => ({
+    state,
+    paymentAttemptId: paymentAttemptIdSchema.make(paymentAttemptId),
+  });
 
   test("takes over until recovery confirms the reservation", () => {
     const reservation = {

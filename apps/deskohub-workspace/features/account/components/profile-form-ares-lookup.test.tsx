@@ -1,101 +1,60 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import React, { type ComponentPropsWithoutRef } from "react";
-import type { AresBusinessLookupResult } from "@/features/account/actions";
-import { workspaceRouterRefresh } from "@/shared/testing/workspace-component-module-mocks";
+import type * as accountActions from "@/features/account/actions";
+import type * as avatarActions from "@/features/account/avatar-actions";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { getProfileForm, getProfileInput } from "./profile-form.test-utils";
 
 registerWorkspaceComponentTestEnv();
 const { act, cleanup, fireEvent, render } = await import(
   "@testing-library/react"
 );
 
-type ActionResult = {
-  data?: unknown;
-  serverError?: string;
-  validationErrors?: unknown;
-};
-
-const completeCustomerProfile = mock(() =>
-  Promise.resolve({ data: { status: "completed" } })
-);
-const updateCustomerProfile = mock(() =>
-  Promise.resolve({ data: { status: "updated" } })
-);
-type LookupOutcome = {
-  readonly data?: AresBusinessLookupResult;
-  readonly serverError?: string;
-  readonly validationErrors?: unknown;
-};
-
-const lookupAresBusiness = mock(
-  (): Promise<LookupOutcome> =>
-    Promise.resolve({
-      data: { status: "not-found", message: "No company was found." },
-    })
-);
-
-mock.module("@/features/account/actions", () => ({
-  acknowledgeSignupReferralNotice: mock(() =>
-    Promise.resolve({ data: { status: "acknowledged" } })
-  ),
-  completeCustomerProfile,
-  lookupAresBusiness,
-  updateCustomerProfile,
-  updateLocalePreference: () => Promise.resolve({ data: { status: "saved" } }),
+const workspaceRouterRefresh = mock(() => undefined);
+const navigation = await import("next/navigation");
+mock.module("next/navigation", () => ({
+  ...navigation,
+  useRouter: () => ({ refresh: workspaceRouterRefresh }),
 }));
 
-mock.module("@/features/account/avatar-actions", () => ({
-  removeCustomerAvatar: () => Promise.resolve({ data: null }),
-  uploadCustomerAvatar: () => Promise.resolve({ data: null }),
-}));
+const completeCustomerProfile = mock<
+  typeof accountActions.completeCustomerProfile
+>(() => Promise.resolve({ data: { status: "completed" } }));
+const updateCustomerProfile = mock<typeof accountActions.updateCustomerProfile>(
+  () => Promise.resolve({ data: { status: "updated" } })
+);
+type LookupOutcome = Awaited<
+  ReturnType<typeof accountActions.lookupAresBusiness>
+>;
 
-// Same faithful stand-in for next-safe-action's hook contract that the
-// profile-form tests use, shared by the save and lookup actions alike.
-mock.module("@/shared/utils/use-workspace-action", () => ({
-  useWorkspaceAction: (
-    action: (input: never) => Promise<unknown>,
-    options?: {
-      readonly onSuccess?: (args: { readonly data?: unknown }) => void;
-      readonly onError?: (args: { readonly error: unknown }) => void;
-      readonly onTransportError?: (args: { readonly error: unknown }) => void;
-    }
-  ) => {
-    const [result, setResult] = React.useState<ActionResult>({});
-    const [isExecuting, setExecuting] = React.useState(false);
-    const execute = (input: never) => {
-      setExecuting(true);
-      void action(input)
-        .then((outcome) => {
-          setExecuting(false);
-          setResult((outcome ?? {}) as ActionResult);
-          const serverError = (outcome as { serverError?: string })
-            ?.serverError;
-          const validationErrors = (outcome as { validationErrors?: unknown })
-            ?.validationErrors;
-          if (serverError || validationErrors) {
-            options?.onError?.({ error: outcome });
-            return;
-          }
-          options?.onSuccess?.({
-            data: (outcome as { data?: unknown })?.data,
-          });
-        })
-        .catch((error) => {
-          setExecuting(false);
-          options?.onTransportError?.({ error });
-        });
-    };
-    return {
-      result,
-      isExecuting,
-      execute,
-      reset: () => setResult({}),
-    };
-  },
+const lookupAresBusiness = mock<typeof accountActions.lookupAresBusiness>(() =>
+  Promise.resolve({
+    data: { status: "not-found", message: "No company was found." },
+  })
+);
+
+mock.module(
+  "@/features/account/actions",
+  (): Partial<typeof accountActions> => ({
+    acknowledgeSignupReferralNotice: () =>
+      Promise.resolve({ data: { status: "acknowledged" } }),
+    completeCustomerProfile,
+    lookupAresBusiness,
+    updateCustomerProfile,
+    updateLocalePreference: () =>
+      Promise.resolve({ data: { status: "saved" } }),
+  })
+);
+
+mock.module("@/features/account/avatar-actions", (): typeof avatarActions => ({
+  removeCustomerAvatar: () => Promise.resolve({ data: { status: "removed" } }),
+  uploadCustomerAvatar: () =>
+    Promise.resolve({ data: { status: "retryable" } }),
 }));
 
 type NavigateEvent = {
@@ -179,10 +138,7 @@ const renderForm = (
 const companyIdInput = (
   view: ReturnType<typeof render>,
   locale: "en-US" | "cs-CZ" = "en-US"
-) =>
-  view.getByLabelText(
-    m.accountAresLookupIcoLabel({}, { locale })
-  ) as HTMLInputElement;
+) => getProfileInput(view, m.accountAresLookupIcoLabel({}, { locale }));
 
 const lookupButton = (
   view: ReturnType<typeof render>,
@@ -200,22 +156,21 @@ const applyButton = (
     name: m.accountAresLookupApply({}, { locale }),
   });
 
-const statusRegion = (view: ReturnType<typeof render>) =>
-  view.container.querySelector("#account-profile-ares-status")!;
+const statusRegion = (view: ReturnType<typeof render>) => {
+  const status = view.container.querySelector("#account-profile-ares-status");
+  assert(status);
+  return status;
+};
 
 async function runLookup(
   view: ReturnType<typeof render>,
-  result: AresBusinessLookupResult,
+  result: accountActions.AresBusinessLookupResult,
   options: { ico?: string; locale?: "en-US" | "cs-CZ" } = {}
 ) {
   const { ico = "27121043", locale = "en-US" } = options;
-  let resolveLookup!: (result: AresBusinessLookupResult) => void;
-  lookupAresBusiness.mockImplementationOnce(
-    () =>
-      new Promise<LookupOutcome>((resolve) => {
-        resolveLookup = resolve;
-      })
-  );
+  const { promise: pendingLookup, resolve: resolveLookup } =
+    Promise.withResolvers<LookupOutcome>();
+  lookupAresBusiness.mockImplementationOnce(() => pendingLookup);
   fireEvent.input(companyIdInput(view, locale), {
     target: { value: ico },
   });
@@ -265,10 +220,12 @@ describe("ProfileForm ARES business lookup", () => {
       ).toBeTruthy();
 
       const applyControl = applyButton(view, locale);
-      companyIdInput(view, locale).focus();
+      const companyId = companyIdInput(view, locale);
+      companyId.focus();
+      expect(document.activeElement).toBe(companyId);
       await act(async () => {
-        fireEvent.keyDown(document.activeElement!, { key: "Tab" });
-        (applyControl as HTMLElement).focus();
+        fireEvent.keyDown(companyId, { key: "Tab" });
+        applyControl.focus();
       });
       expect(document.activeElement).toBe(applyControl);
 
@@ -277,14 +234,11 @@ describe("ProfileForm ARES business lookup", () => {
       });
 
       expect(
-        view.container.querySelector<HTMLInputElement>(
-          "#account-profile-billing-company-name"
-        )!.value
+        getProfileInput(view, m.accountProfileCompanyNameLabel({}, { locale }))
+          .value
       ).toBe(foundCompany.companyName);
       expect(
-        view.container.querySelector<HTMLInputElement>(
-          "#account-profile-billing-vat-id"
-        )!.value
+        getProfileInput(view, m.accountProfileVatIdLabel({}, { locale })).value
       ).toBe(foundCompany.vatId);
       expect(
         view.getByText(m.accountAresLookupApplied({}, { locale }))
@@ -320,41 +274,32 @@ describe("ProfileForm ARES business lookup", () => {
       );
     });
 
-    expect(
-      (view.getByLabelText("Company name") as HTMLInputElement).value
-    ).toBe(foundCompany.companyName);
-    expect((view.getByLabelText("VAT ID") as HTMLInputElement).value).toBe(
-      "CZ12345678"
+    expect(getProfileInput(view, "Company name").value).toBe(
+      foundCompany.companyName
     );
-    expect(
-      (view.getByLabelText("Apartment, suite") as HTMLInputElement).value
-    ).toBe("Suite 9");
+    expect(getProfileInput(view, "VAT ID").value).toBe("CZ12345678");
+    expect(getProfileInput(view, "Apartment, suite").value).toBe("Suite 9");
 
     await act(async () => {
       fireEvent.input(view.getByLabelText("First name"), {
         target: { value: "Grace" },
       });
-      fireEvent.submit(view.container.querySelector("#account-profile-form")!);
+      fireEvent.submit(getProfileForm(view));
       await Promise.resolve();
     });
 
     expect(updateCustomerProfile).toHaveBeenCalledTimes(1);
-    const input = updateCustomerProfile.mock.calls[0]![0] as {
-      billing?: { vatId?: string; addressLine2?: string };
-    };
-    expect(input.billing?.vatId).toBe("CZ12345678");
-    expect(input.billing?.addressLine2).toBe("Suite 9");
+    const billing = updateCustomerProfile.mock.calls[0]?.[0].billing;
+    assert(billing?.kind === "business", "Expected submitted business billing");
+    expect(billing.vatId).toBe("CZ12345678");
+    expect(billing.addressLine2).toBe("Suite 9");
   });
 
   test("preserves concurrent edits elsewhere in the form while a lookup is pending", async () => {
     const view = renderForm();
-    let resolveLookup!: (outcome: LookupOutcome) => void;
-    lookupAresBusiness.mockImplementationOnce(
-      () =>
-        new Promise<LookupOutcome>((resolve) => {
-          resolveLookup = resolve;
-        })
-    );
+    const { promise: pendingLookup, resolve: resolveLookup } =
+      Promise.withResolvers<LookupOutcome>();
+    lookupAresBusiness.mockImplementationOnce(() => pendingLookup);
 
     fireEvent.input(companyIdInput(view), {
       target: { value: "27121043" },
@@ -366,11 +311,10 @@ describe("ProfileForm ARES business lookup", () => {
 
     const lookupControl = view.getByRole("button", {
       name: m.accountAresLookupLoading({}, { locale: "en-US" }),
-    }) as HTMLButtonElement;
+    });
+    assert(lookupControl instanceof HTMLButtonElement);
     expect(lookupControl.disabled).toBe(true);
-    expect(
-      (view.getByLabelText("First name") as HTMLInputElement).disabled
-    ).toBe(false);
+    expect(getProfileInput(view, "First name").disabled).toBe(false);
 
     await act(async () => {
       fireEvent.input(view.getByLabelText("First name"), {
@@ -392,15 +336,11 @@ describe("ProfileForm ARES business lookup", () => {
       fireEvent.click(applyButton(view));
     });
 
-    expect((view.getByLabelText("First name") as HTMLInputElement).value).toBe(
-      "Grace"
+    expect(getProfileInput(view, "First name").value).toBe("Grace");
+    expect(getProfileInput(view, "City").value).toBe("Brno");
+    expect(getProfileInput(view, "Company name").value).toBe(
+      foundCompany.companyName
     );
-    expect((view.getByLabelText("City") as HTMLInputElement).value).toBe(
-      "Brno"
-    );
-    expect(
-      (view.getByLabelText("Company name") as HTMLInputElement).value
-    ).toBe(foundCompany.companyName);
   });
 
   test.each(["en-US", "cs-CZ"] as const)(
@@ -434,13 +374,9 @@ describe("ProfileForm ARES business lookup", () => {
     "announces the pending lookup and the found review in the live region for %s",
     async (locale) => {
       const view = renderForm({ locale });
-      let resolveLookup!: (outcome: LookupOutcome) => void;
-      lookupAresBusiness.mockImplementationOnce(
-        () =>
-          new Promise<LookupOutcome>((resolve) => {
-            resolveLookup = resolve;
-          })
-      );
+      const { promise: pendingLookup, resolve: resolveLookup } =
+        Promise.withResolvers<LookupOutcome>();
+      lookupAresBusiness.mockImplementationOnce(() => pendingLookup);
 
       fireEvent.input(companyIdInput(view, locale), {
         target: { value: "27121043" },
@@ -572,7 +508,8 @@ describe("ProfileForm ARES business lookup", () => {
       expect(statusRegion(view).textContent).toContain(message);
       const retryButton = view.getByRole("button", {
         name: m.accountAresLookupRetry({}, { locale: "en-US" }),
-      }) as HTMLButtonElement;
+      });
+      assert(retryButton instanceof HTMLButtonElement);
       expect(retryButton.disabled).toBe(false);
 
       await act(async () => {
@@ -580,7 +517,7 @@ describe("ProfileForm ARES business lookup", () => {
         await Promise.resolve();
       });
       expect(lookupAresBusiness).toHaveBeenCalledTimes(2);
-      expect(lookupAresBusiness.mock.calls[1]![0]).toEqual({
+      expect(lookupAresBusiness.mock.calls[1]?.[0]).toEqual({
         ico: "27121043",
       });
     }

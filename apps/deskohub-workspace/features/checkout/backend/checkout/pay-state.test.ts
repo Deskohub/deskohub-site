@@ -1,8 +1,7 @@
 import "@/shared/polyfills/temporal";
 import { describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Predicate, Schema } from "effect";
-import type { JsonObject } from "type-fest";
+import { Effect, Match, Schema } from "effect";
 import {
   checkoutSessionIdSchema,
   paymentAttemptIdSchema,
@@ -10,13 +9,19 @@ import {
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import type { CheckoutSummaryChangedKeys } from "@/features/checkout/checkout-summary";
 import { buildReservationQuote } from "@/features/checkout/reservation-quote";
+import type { CoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
+import { meetingRoomReservationQuoteSchema } from "@/features/checkout/reservation-quote-meeting-room";
 import {
   canonicalPromotionCodeSchema,
   discountIdSchema,
 } from "@/features/discounts/contracts";
 import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { reservationOrderSchema } from "@/features/reservation/reservation-order";
-import type { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
+import {
+  type SealedStateKeys,
+  sealedStateKeyIdSchema,
+} from "@/shared/backend/sealed-state-keys.service";
 import {
   runSealedState,
   syntheticSealedStateKeyRing,
@@ -28,6 +33,7 @@ import type {
   PayStateWithHoldExpiry,
   SignedPayState,
 } from "./pay-state";
+import type { PayStateSubmittedCodeMetadata } from "./pay-state-contract";
 import { withoutPayStateHoldExpiry } from "./signed-pay-state.test-utils";
 
 const testEmailAddressForAda = testEmailAddress("ada");
@@ -62,7 +68,11 @@ const fixedNow = new Date("2026-06-01T10:00:00.000Z");
 const fixedKey = syntheticSealedStateKeyRing(["test-kid", 1]);
 const wrongKey = syntheticSealedStateKeyRing(["test-kid", 2]);
 const rotatedKey = syntheticSealedStateKeyRing(["rotated-kid", 3]);
-const rotatedKid = "rotated-kid";
+const rotatedKid = sealedStateKeyIdSchema.make("rotated-kid");
+const orderId = workspaceReservationIdSchema.make("pay-state-test-order-id");
+const checkoutSessionId = checkoutSessionIdSchema.make(
+  "pay-state-test-checkout-session-id"
+);
 
 /** Runs Pay-state work under `fixedKey` at `fixedNow` unless told otherwise. */
 const run = <A, E>(
@@ -93,22 +103,43 @@ const baseReservation = Schema.decodeUnknownSync(
   phone: "+420 777 777 777",
 });
 
-const buildState = (overrides: Partial<PayStateWithHoldExpiry> = {}) => ({
-  ...run(
-    buildSignedPayState({
-      locale: "en-US",
-      reservation: baseReservation,
-      quote: buildCoworkReservationQuote(baseReservation),
-      orderId: "pay-state-test-order-id",
-      bookedAt: payStateBookedAt,
-      holdExpiresAt: payStateHoldExpiresAt,
-      checkoutSessionId: "pay-state-test-checkout-session-id",
-      ttlMilliseconds: 10 * 60 * 1000,
-    }),
-    { keys: fixedKey, at: fixedNow }
-  ),
-  ...overrides,
-});
+type CoworkStateOverrides = Partial<
+  Pick<
+    BuildSignedPayStateInput,
+    | "binding"
+    | "changedKeys"
+    | "checkoutSessionId"
+    | "holdExpiresAt"
+    | "locale"
+    | "referralCode"
+    | "requestedDiscountCode"
+    | "retriedAttemptId"
+  >
+> & { readonly quote?: CoworkReservationQuote };
+
+const buildState = (
+  overrides: CoworkStateOverrides & PayStateSubmittedCodeMetadata = {}
+) =>
+  Match.value(
+    run(
+      buildSignedPayState({
+        locale: "en-US",
+        reservation: baseReservation,
+        quote: buildCoworkReservationQuote(baseReservation),
+        orderId,
+        bookedAt: payStateBookedAt,
+        holdExpiresAt: payStateHoldExpiresAt,
+        checkoutSessionId,
+        ttlMilliseconds: 10 * 60 * 1000,
+        ...overrides,
+      })
+    )
+  ).pipe(
+    Match.when({ reservation: { kind: "cowork" } }, (state) => state),
+    Match.orElse(() => {
+      throw new Error("Expected a signed cowork reservation");
+    })
+  );
 
 const buildMeetingRoomState = ({
   earlySetup,
@@ -134,8 +165,12 @@ const buildMeetingRoomState = ({
     buildSignedPayState({
       locale: "en-US",
       reservation,
-      quote: Effect.runSync(buildReservationQuote(reservation)),
-      orderId: "meeting-room-pay-state-test-order-id",
+      quote: Schema.decodeUnknownSync(meetingRoomReservationQuoteSchema)(
+        Effect.runSync(buildReservationQuote(reservation))
+      ),
+      orderId: workspaceReservationIdSchema.make(
+        "meeting-room-pay-state-test-order-id"
+      ),
       bookedAt: payStateBookedAt,
       holdExpiresAt: payStateHoldExpiresAt,
     }),
@@ -143,12 +178,12 @@ const buildMeetingRoomState = ({
   );
 };
 
-const seal = (state = buildState()) =>
+const seal = (state: SignedPayState = buildState()) =>
   run(sealPayState(state), { keys: fixedKey });
 
 const replaceTokenHeader = (
   token: string,
-  replace: (header: JsonObject) => JsonObject
+  replace: (header: Schema.JsonObject) => Schema.JsonObject
 ) => {
   const [encodedHeader, ...rest] = token.split(".");
   if (!encodedHeader) throw new Error("Unexpected test token shape");
@@ -163,14 +198,9 @@ const replaceTokenHeader = (
   ].join(".");
 };
 
-const parseJsonRecord = (json: string): JsonObject => {
-  const parsed = JSON.parse(json);
-  if (!Predicate.isObject(parsed) || Array.isArray(parsed)) {
-    throw new Error("Expected JSON object");
-  }
-
-  return parsed as JsonObject;
-};
+const parseJsonRecord = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.JsonObject)
+);
 
 const tamperCiphertext = (token: string) => {
   const parts = token.split(".");
@@ -187,8 +217,8 @@ describe("Pay URL state", () => {
     expect(run(PayState.open(token), { keys: fixedKey, at: fixedNow })).toEqual(
       state
     );
-    expect(state.orderId).toBe("pay-state-test-order-id");
-    expect(state.checkoutSessionId).toBe("pay-state-test-checkout-session-id");
+    expect(state.orderId).toBe(orderId);
+    expect(state.checkoutSessionId).toBe(checkoutSessionId);
     expect(state.submittedCode).toBeUndefined();
     expect(token.split(".")).toHaveLength(4);
   });
@@ -262,8 +292,9 @@ describe("Pay URL state", () => {
           locale: "en-US",
           reservation: baseReservation,
           quote: buildCoworkReservationQuote(baseReservation),
-          orderId: "missing-key-test",
+          orderId: workspaceReservationIdSchema.make("missing-key-test"),
           bookedAt: payStateBookedAt,
+          holdExpiresAt: payStateHoldExpiresAt,
         }),
         { keys: "" }
       )
@@ -331,8 +362,9 @@ describe("Pay URL state", () => {
         locale: "en-US",
         reservation: baseReservation,
         quote: buildCoworkReservationQuote(baseReservation),
-        orderId: "rotated-key-order-id",
+        orderId: workspaceReservationIdSchema.make("rotated-key-order-id"),
         bookedAt: payStateBookedAt,
+        holdExpiresAt: payStateHoldExpiresAt,
       }),
       { keys: `${rotatedKey},${fixedKey}`, at: fixedNow }
     );
@@ -578,7 +610,7 @@ const discountedQuote = {
 };
 
 /** A state carrying every optional field a continuation may keep. */
-const buildCarryingState = (overrides: Partial<PayStateWithHoldExpiry> = {}) =>
+const buildCarryingState = (overrides: CoworkStateOverrides = {}) =>
   buildState({
     quote: discountedQuote,
     submittedCode: canonicalCode,
@@ -586,36 +618,25 @@ const buildCarryingState = (overrides: Partial<PayStateWithHoldExpiry> = {}) =>
     requestedDiscountCode: canonicalCode,
     referralCode,
     ...overrides,
-  } as Partial<PayStateWithHoldExpiry>);
+  });
 
 /** What a Pay state signs for its order, without its claims. */
-const signedOrderFields = [
-  "locale",
-  "orderId",
-  "bookedAt",
-  "holdExpiresAt",
-  "checkoutSessionId",
-  "submittedCode",
-  "submittedCodeDiscountId",
-  "requestedDiscountCode",
-  "referralCode",
-  "changedKeys",
-  "reservation",
-  "quote",
-] as const;
-const signedOrder = (state: SignedPayState) =>
-  Object.fromEntries(
-    signedOrderFields.flatMap((field) =>
-      state[field] === undefined ? [] : [[field, state[field]]]
-    )
-  );
+const signedOrder = ({
+  kid: _kid,
+  iat: _iat,
+  exp: _exp,
+  binding: _binding,
+  retriedAttemptId: _retriedAttemptId,
+  acceptedTotal: _acceptedTotal,
+  ...order
+}: SignedPayState) => order;
 
 /**
  * One of each outcome a Pay state can be reissued after, priced on `state`;
  * a new outcome kind fails to compile here until it is listed.
  */
 const everyReissueOutcome = (
-  state: PayStateWithHoldExpiry
+  state: ReturnType<typeof buildState>
 ): ReadonlyArray<PayStateReissue> => {
   const priced = { reservation: state.reservation, quote: baseQuote };
   const outcomes: {
@@ -734,7 +755,7 @@ describe("PayState.reissue", () => {
       },
     });
 
-    expect(continued).toEqual({
+    expect<unknown>(continued).toEqual({
       ...signedOrder(state),
       quote: baseQuote,
       submittedCode: undefined,
@@ -759,7 +780,7 @@ describe("PayState.reissue", () => {
       },
     });
 
-    expect(continued).toEqual({
+    expect<unknown>(continued).toEqual({
       ...signedOrder(state),
       quote: discountedQuote,
       submittedCode: enteredCode,
@@ -781,7 +802,7 @@ describe("PayState.reissue", () => {
       },
     });
 
-    expect(continued).toEqual({
+    expect<unknown>(continued).toEqual({
       ...signedOrder(state),
       quote: discountedQuote,
       requestedDiscountCode: enteredCode,
@@ -845,7 +866,7 @@ describe("PayState.reissue", () => {
       },
     });
 
-    expect(continued).toEqual({
+    expect<unknown>(continued).toEqual({
       ...signedOrder(state),
       quote: baseQuote,
       submittedCode: undefined,
@@ -866,7 +887,7 @@ describe("PayState.reissue", () => {
       },
     });
 
-    expect(continued).toEqual({
+    expect<unknown>(continued).toEqual({
       ...signedOrder(state),
       quote: baseQuote,
       submittedCode: undefined,
@@ -930,7 +951,7 @@ describe("PayState.reissue", () => {
     const error = run(
       Effect.flip(
         PayState.reissue(
-          { ...state, quote: { ...state.quote, fingerprint: 42 } } as never,
+          { ...state, quote: { ...state.quote, fingerprint: "" } },
           { kind: "reviewed" }
         )
       )
@@ -948,10 +969,10 @@ describe("PayState.issue", () => {
     locale: "en-US",
     reservation: baseReservation,
     quote: baseQuote,
-    orderId: "pay-state-test-order-id",
+    orderId,
     bookedAt: payStateBookedAt,
     holdExpiresAt: payStateHoldExpiresAt,
-    checkoutSessionId: "pay-state-test-checkout-session-id",
+    checkoutSessionId,
   } satisfies BuildSignedPayStateInput;
 
   test("returns the sealed token beside the order's Pay URL, with the token's expiry", () => {
@@ -964,6 +985,7 @@ describe("PayState.issue", () => {
       })
     );
     expect(issued.expiresAt).toBe(new Date(opened.exp * 1000).toISOString());
+    expect(opened.acceptedTotal).toEqual(fresh.quote.payment.expectedPrice);
     expect(signedOrder(opened)).toEqual(fresh);
   });
 
@@ -983,8 +1005,8 @@ describe("PayState.issue", () => {
       Effect.flip(
         PayState.issue({
           ...fresh,
-          quote: { ...fresh.quote, fingerprint: 42 },
-        } as never)
+          quote: { ...fresh.quote, fingerprint: "" },
+        })
       )
     );
 
@@ -1000,9 +1022,9 @@ describe("PayState.open on a page", () => {
       run(
         PayState.open(token(), { locale: "en-US", reservationKind: "cowork" })
       ).orderId
-    ).toBe("pay-state-test-order-id");
+    ).toBe(orderId);
     expect(run(PayState.open(token(), { locale: "en-US" })).orderId).toBe(
-      "pay-state-test-order-id"
+      orderId
     );
   });
 
@@ -1026,6 +1048,18 @@ const payStateRecord = makeLegacySealedState({
     Schema.Record(Schema.String, Schema.Unknown),
   ]),
   ttlMilliseconds: 10 * 60 * 1000,
+});
+
+test("rejects an authentic Pay state with a non-string quote fingerprint", () => {
+  const state = buildState();
+  const token = run(
+    payStateRecord.seal({
+      ...state,
+      quote: { ...state.quote, fingerprint: 42 },
+    })
+  );
+
+  expect(() => run(PayState.open(token))).toThrow("Invalid Pay state token");
 });
 
 describe("legacy signed Pay state with a retired customer message", () => {
@@ -1123,9 +1157,10 @@ describe("reservation phone in signed Pay state", () => {
         locale: "de-DE",
         reservation: { ...baseReservation, phone: "0151 23456789" },
         quote: buildCoworkReservationQuote(baseReservation),
-        orderId: "pay-state-test-order-id",
+        orderId,
         bookedAt: payStateBookedAt,
-        checkoutSessionId: "pay-state-test-checkout-session-id",
+        holdExpiresAt: payStateHoldExpiresAt,
+        checkoutSessionId,
         ttlMilliseconds: 10 * 60 * 1000,
       }),
       { keys: fixedKey, at: fixedNow }
@@ -1148,7 +1183,7 @@ describe("Pay state binding", () => {
         locale: "en-US",
         reservation: baseReservation,
         quote: buildCoworkReservationQuote(baseReservation),
-        orderId: "pay-state-test-order-id",
+        orderId,
         bookedAt: payStateBookedAt,
         holdExpiresAt: payStateHoldExpiresAt,
         binding: "order",
@@ -1175,7 +1210,7 @@ describe("Pay state binding", () => {
     expect(state.binding).toBeUndefined();
     expect(getPayStateBinding(state)).toEqual({
       kind: "session",
-      checkoutSessionId: "pay-state-test-checkout-session-id",
+      checkoutSessionId,
     });
     expect(isOrderBoundPayState(state)).toBe(false);
   });

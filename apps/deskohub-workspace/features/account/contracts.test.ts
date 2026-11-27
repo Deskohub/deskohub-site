@@ -97,8 +97,8 @@ describe("customer profile input", () => {
       phone: "call me maybe",
     });
 
-    expect(outcome).toHaveProperty("issues");
-    const issues = (outcome as { readonly issues: readonly unknown[] }).issues;
+    const { issues } = outcome;
+    if (!issues) throw new Error("Expected the phone to be rejected");
     expect(issues.length).toBeGreaterThan(0);
     expect(JSON.stringify(issues)).toContain("phone");
   });
@@ -109,10 +109,7 @@ describe("customer profile input", () => {
       phone: "   ",
     });
 
-    expect(outcome).toHaveProperty("value");
-    expect(
-      (outcome as { readonly value: { readonly phone?: string } }).value.phone
-    ).toBe("");
+    expect(savedPhone(outcome)).toBe("");
   });
 
   test.each([
@@ -122,10 +119,7 @@ describe("customer profile input", () => {
   ])("decodes %s phone format to its E.164 number", async (_, phone) => {
     const outcome = await validateProfileInput({ firstName: "Ada", phone });
 
-    expect(outcome).toHaveProperty("value");
-    expect(
-      (outcome as { readonly value: { readonly phone: string } }).value.phone
-    ).toBe("+420601123456");
+    expect(savedPhone(outcome)).toBe("+420601123456");
   });
 
   test("rejects a phone longer than 32 characters", async () => {

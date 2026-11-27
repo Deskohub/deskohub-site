@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Browser, chromium, type Page } from "@playwright/test";
+import { Schema } from "effect";
 import {
   addVirtualAuthenticator,
   type PageVirtualAuthenticator,
@@ -86,16 +87,27 @@ const answerOptions = async () => {
   );
 };
 
+const decodeVerification = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      response: Schema.Struct({
+        response: Schema.Struct({ clientDataJSON: Schema.String }),
+      }),
+    })
+  )
+);
+const decodeClientData = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ challenge: Schema.String }))
+);
+
 const answerVerification = async (request: Request) => {
   const cookie = new RegExp(`${challengeCookie}=([^;]+)`).exec(
     request.headers.get("cookie") ?? ""
   )?.[1];
-  const { response } = (await request.json()) as {
-    readonly response: { readonly response: { clientDataJSON: string } };
-  };
-  const clientData = JSON.parse(
+  const { response } = decodeVerification(await request.text());
+  const clientData = decodeClientData(
     Buffer.from(response.response.clientDataJSON, "base64url").toString()
-  ) as { readonly challenge: string };
+  );
   const matched =
     cookie !== undefined && challenges.get(cookie) === clientData.challenge;
   verifications.push({ cookie, matched });

@@ -5,6 +5,7 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { DateTime, Effect } from "effect";
 import { TestClock } from "effect/testing";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { digestVerificationKey, signInEmailLimit } from "./auth-options";
 import { reserveSignInEmail } from "./sign-in-code";
 
@@ -116,7 +117,7 @@ describe("reserveSignInEmail", () => {
 
     expect(refused).toEqual({
       admitted: false,
-      nextSignInEmailAt: expiries.at(-signInEmailLimit.max)!,
+      nextSignInEmailAt: requireValue(expiries.at(-signInEmailLimit.max)),
     });
   });
 

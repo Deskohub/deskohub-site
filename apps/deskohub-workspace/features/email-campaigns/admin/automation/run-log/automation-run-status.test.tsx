@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { automationRunSkipReasons } from "@deskohub/workspace-admin-api";
-import type { ReactElement } from "react";
+import { Schema } from "effect";
+import { isValidElement, type ReactNode } from "react";
 import { formatAdministrationDateTime } from "@/features/administration/components";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
-import type { StatusTone } from "@/shared/components/ui/status-badge";
+import { StatusBadge } from "@/shared/components/ui/status-badge";
 import { automationRunFixture } from "./automation-run.test-utils";
 import {
   AutomationRunStatus,
@@ -14,17 +16,22 @@ import {
 } from "./automation-run-status";
 
 const dueAt = "2026-10-06T07:30:00.000Z";
+const readBadgeProps = Schema.decodeUnknownSync(
+  Schema.Struct({ children: Schema.Unknown, tone: Schema.Unknown })
+);
 
 /** The badge a run renders: its tone and its label. */
 const badgeOf = (
   overrides: Parameters<typeof automationRunFixture>[0],
   locale: Locale = "en-US"
 ) => {
-  const badge = AutomationRunStatus({
+  const badge: ReactNode = AutomationRunStatus({
     locale,
     run: automationRunFixture(overrides),
-  }) as ReactElement<{ children: string; tone: StatusTone }>;
-  return { label: badge.props.children, tone: badge.props.tone };
+  });
+  assert(isValidElement(badge) && badge.type === StatusBadge);
+  const { children, tone } = readBadgeProps(badge.props);
+  return { label: children, tone };
 };
 
 const activeRun = { state: "active", outcome: null, endedAt: null } as const;

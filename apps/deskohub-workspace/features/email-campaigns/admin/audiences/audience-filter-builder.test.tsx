@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeAll, expect, mock, test } from "bun:test";
-import type {
-  AudienceFilterGroupOf,
-  AutomationConditionLeaf,
+import assert from "node:assert/strict";
+import {
+  AdministrationCampaignAudienceId,
+  type AudienceFilterGroupOf,
 } from "@deskohub/workspace-admin-api";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { m } from "@/features/administration/i18n";
@@ -12,16 +13,11 @@ import {
 } from "@/shared/testing/workspace-component-test-env";
 import type { AudienceValueOption } from "../audience-filter-summary";
 import { automationFlowFormErrors } from "../automation/builder/automation-flow-form.test-utils";
-import {
-  type AudienceBooleanWording,
-  type AudienceCountWording,
-  type AudienceDateWording,
-  type AudienceSetWording,
-  audienceAttributeWording,
-} from "./audience-attribute-wording";
+import { audienceAttributeWording } from "./audience-attribute-wording";
 import type { FilterErrorLookup } from "./audience-filter-builder";
 import {
   type AudienceFilterGroup,
+  type AudienceFilterLeaf,
   newCondition,
   newSavedAudienceMembership,
   unchosenSavedAudience,
@@ -31,13 +27,19 @@ beforeAll(registerWorkspaceComponentTestEnv);
 afterEach(cleanup);
 afterAll(unregisterWorkspaceComponentTestEnv);
 
-type ConditionGroup = AudienceFilterGroupOf<AutomationConditionLeaf>;
+type ConditionGroup = AudienceFilterGroupOf<AudienceFilterLeaf>;
 
 const conditionPath = "steps.0.filter";
 
+const coworkAudienceId = AdministrationCampaignAudienceId.make(
+  "01970000-0000-7000-8000-0000000000a1"
+);
+const meetingRoomAudienceId = AdministrationCampaignAudienceId.make(
+  "01970000-0000-7000-8000-0000000000a2"
+);
 const savedAudiences: readonly AudienceValueOption[] = [
-  { id: "01970000-0000-7000-8000-0000000000a1", name: "Regular coworkers" },
-  { id: "01970000-0000-7000-8000-0000000000a2", name: "Meeting room bookers" },
+  { id: coworkAudienceId, name: "Regular coworkers" },
+  { id: meetingRoomAudienceId, name: "Meeting room bookers" },
 ];
 
 const emptyGroup: AudienceFilterGroup = {
@@ -183,8 +185,8 @@ test("marks the audience picker invalid until an audience is chosen", async () =
   const chosen = await renderConditionBuilder(
     groupOf({
       ...newSavedAudienceMembership(),
-      audienceId: savedAudiences[0]?.id ?? "",
-    } as AutomationConditionLeaf)
+      audienceId: coworkAudienceId,
+    })
   );
   expect(audiencePicker(chosen).getAttribute("aria-invalid")).toBe("false");
   expect(audiencePicker(chosen).hasAttribute("aria-describedby")).toBe(false);
@@ -212,8 +214,8 @@ test("choosing an audience sets the leaf's audience and keeps its operator", asy
     groupOf({
       _tag: "InAudience",
       operator: "notIn",
-      audienceId: savedAudiences[1]?.id,
-    } as AutomationConditionLeaf)
+      audienceId: meetingRoomAudienceId,
+    })
   );
 });
 
@@ -246,22 +248,14 @@ const leafPickers = (view: BuilderView) =>
     ),
   });
 
-const countWording = audienceAttributeWording(
-  "campaignEmailCount",
-  "en-US"
-) as AudienceCountWording;
-const dateWording = audienceAttributeWording(
-  "accountCreated",
-  "en-US"
-) as AudienceDateWording;
-const setWording = audienceAttributeWording(
-  "locale",
-  "en-US"
-) as AudienceSetWording;
-const booleanWording = audienceAttributeWording(
-  "hasAccount",
-  "en-US"
-) as AudienceBooleanWording;
+const countWording = audienceAttributeWording("campaignEmailCount", "en-US");
+const dateWording = audienceAttributeWording("accountCreated", "en-US");
+const setWording = audienceAttributeWording("locale", "en-US");
+const booleanWording = audienceAttributeWording("hasAccount", "en-US");
+assert(countWording?.kind === "count");
+assert(dateWording?.kind === "date");
+assert(setWording?.kind === "set");
+assert(booleanWording?.kind === "boolean");
 
 test("renders each condition with its attribute kind's controls", async () => {
   const view = await renderSavedAudienceFilter(
@@ -332,8 +326,10 @@ test("switching a condition's attribute starts it over from that attribute's def
     savedAudienceGroupOf(newCondition("campaignEmailCount"), hasAccount),
     onChange
   );
+  const [firstPicker] = leafPickers(view);
+  assert(firstPicker);
   await act(async () => {
-    fireEvent.keyDown(leafPickers(view)[0] as HTMLElement, { key: "Enter" });
+    fireEvent.keyDown(firstPicker, { key: "Enter" });
   });
   await act(async () => {
     fireEvent.click(view.getByRole("option", { name: setWording.label }));

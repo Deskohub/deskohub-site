@@ -1,7 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { betterAuth } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
+import { requireTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type CapturedMagicLink,
   callHandler,
@@ -20,9 +22,24 @@ import {
   verifyMagicLink,
   workspaceLogs,
 } from "./auth-handler.test-utils";
+import { errorCode } from "./auth-response.test-utils";
 import type { ReviewAccountCredential } from "./review-account-credentials";
 
 const generatedPassword = () => `review-${crypto.randomUUID()}`;
+
+const decodeReviewSignIn = Schema.decodeUnknownSync(
+  Schema.Struct({ redirect: Schema.Boolean })
+);
+
+const decodeReviewSession = Schema.decodeUnknownSync(
+  Schema.Struct({
+    user: Schema.Struct({
+      id: Schema.String,
+      email: Schema.String,
+      emailVerified: Schema.Boolean,
+    }),
+  })
+);
 
 const reviewLogin = (label: string): ReviewAccountCredential => ({
   email: uniqueEmail(label),
@@ -54,9 +71,6 @@ const signInWithPassword = (
     password,
     callbackURL: "/en-US/auth/callback",
   });
-
-const errorCode = async (response: Response) =>
-  ((await response.json()) as { code?: string }).code;
 
 /** The review-account marker of a memory-backed instance. */
 const makeMemoryReviewAccounts = () => {
@@ -113,16 +127,14 @@ describe("review login password sign-in", () => {
 
     expect(response.status).toBe(200);
     // The page continues through its callback itself.
-    expect(((await response.json()) as { redirect: boolean }).redirect).toBe(
-      false
+    expect(decodeReviewSignIn(await response.json()).redirect).toBe(false);
+    const cookie = cookieJar(
+      requireValue(getSessionCookie(response), "session cookie")
     );
-    const cookie = cookieJar(getSessionCookie(response)!);
     const session = await callHandler(auth, "/get-session", {
       headers: { cookie },
     });
-    const { user } = (await session.json()) as {
-      user: { id: string; email: string; emailVerified: boolean };
-    };
+    const { user } = decodeReviewSession(await session.json());
     expect(user.email).toBe(login.email);
     expect(user.emailVerified).toBe(true);
     expect(reviewAccounts.marked.has(user.id)).toBe(true);
@@ -190,7 +202,10 @@ describe("review login password sign-in", () => {
     expect(store.user).toHaveLength(0);
 
     const cookie = cookieJar(
-      getSessionCookie(await signInWithPassword(auth, login))!
+      requireValue(
+        getSessionCookie(await signInWithPassword(auth, login)),
+        "session cookie"
+      )
     );
     for (const path of [
       "/request-password-reset",
@@ -235,7 +250,7 @@ describe("review login password sign-in", () => {
     expect((await signInWithPassword(auth, login)).status).toBe(200);
 
     expect(store.user).toHaveLength(1);
-    expect(credentialAccounts(store)).toEqual([first!]);
+    expect(credentialAccounts(store)).toEqual([requireValue(first)]);
     expect(reviewAccounts.marked.size).toBe(1);
   });
 
@@ -281,9 +296,14 @@ describe("review login password sign-in", () => {
     const store = makeMemoryAuthStore();
     const customer = makeReviewAuth([], { store, sentLinks });
     await signInForMagicLink(customer.auth, login.email);
-    expect((await verifyMagicLink(customer.auth, sentLinks[0]!)).status).toBe(
-      302
-    );
+    expect(
+      (
+        await verifyMagicLink(
+          customer.auth,
+          requireValue(sentLinks[0], "sent magic link")
+        )
+      ).status
+    ).toBe(302);
     store.session.length = 0;
     const { auth } = makeReviewAuth([login], { store });
     workspaceLogs.reset();
@@ -330,7 +350,9 @@ describe("review login password sign-in", () => {
     const retried = await signInWithPassword(auth, login);
     expect(retried.status).toBe(200);
     expect(store.user).toHaveLength(1);
-    expect(reviewAccounts.marked.has(store.user[0]!.id)).toBe(true);
+    expect(reviewAccounts.marked.has(requireValue(store.user[0]).id)).toBe(
+      true
+    );
     expect(credentialAccounts(store)).toHaveLength(1);
   });
 
@@ -388,7 +410,10 @@ describe("review login password sign-in", () => {
     const login = reviewLogin("review-passkey");
     const { auth, store } = makeReviewAuth([login]);
     const cookie = cookieJar(
-      getSessionCookie(await signInWithPassword(auth, login))!
+      requireValue(
+        getSessionCookie(await signInWithPassword(auth, login)),
+        "session cookie"
+      )
     );
 
     const options = await callHandler(
@@ -404,7 +429,8 @@ describe("review login password sign-in", () => {
 });
 
 const countRows = async (sql: string, values: readonly unknown[]) =>
-  (await testDatabase!.pool.query(sql, [...values])).rowCount ?? 0;
+  (await requireTestDatabase(testDatabase).pool.query(sql, [...values]))
+    .rowCount ?? 0;
 
 describe.skipIf(!testDatabase)(
   "review login password sign-in on the migrated disposable Postgres",
@@ -420,8 +446,8 @@ describe.skipIf(!testDatabase)(
       expect([first.status, second.status]).toEqual([200, 200]);
       expect((await signInWithPassword(auth, login)).status).toBe(200);
 
-      const userId = (await userIdForEmail(login.email))!;
-      const account = await testDatabase!.pool.query<{
+      const userId = requireValue(await userIdForEmail(login.email), "user ID");
+      const account = await requireTestDatabase(testDatabase).pool.query<{
         review: boolean;
         dotypos_customer_id: string | null;
       }>(
@@ -449,7 +475,10 @@ describe.skipIf(!testDatabase)(
       const login = reviewLogin("review-postgres-passkey");
       const auth = makeTestAuth({ reviewAccountCredentials: [login] });
       const cookie = cookieJar(
-        getSessionCookie(await signInWithPassword(auth, login))!
+        requireValue(
+          getSessionCookie(await signInWithPassword(auth, login)),
+          "session cookie"
+        )
       );
 
       const options = await callHandler(
@@ -467,13 +496,20 @@ describe.skipIf(!testDatabase)(
       const sentLinks: CapturedMagicLink[] = [];
       const customer = makeTestAuth({ sentLinks });
       await signInForMagicLink(customer, login.email);
-      expect((await verifyMagicLink(customer, sentLinks[0]!)).status).toBe(302);
+      expect(
+        (
+          await verifyMagicLink(
+            customer,
+            requireValue(sentLinks[0], "sent magic link")
+          )
+        ).status
+      ).toBe(302);
       const auth = makeTestAuth({ reviewAccountCredentials: [login] });
 
       const response = await signInWithPassword(auth, login);
 
       expect(response.status).toBe(401);
-      const userId = (await userIdForEmail(login.email))!;
+      const userId = requireValue(await userIdForEmail(login.email), "user ID");
       expect(
         await countRows(`select 1 from auth.account where user_id = $1`, [
           userId,

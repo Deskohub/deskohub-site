@@ -1,10 +1,14 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, test } from "bun:test";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { unzipSync } from "fflate";
+import { MarketingConsentUnavailable } from "@/features/legal/backend/marketing-consent-ledger";
+import { CustomerBookedReservationsUnreadableError } from "@/features/reservation/backend/customer-booked-reservations";
+import { ReservationAccessStorageError } from "@/features/reservation-access/backend/reservation-access.repository";
 import { ReadLimitExceededError } from "@/shared/backend/read-limit";
+import { decodeJson } from "@/shared/testing/json-file.test-utils";
 import {
   accountDataExportManifestPath,
   accountDataExportSchemaVersion,
@@ -27,8 +31,9 @@ import {
   exportDotyposReservationId,
   exportReservationId,
   fakeAccountDataExportSources,
-  SyntheticSourceFailure,
   syntheticExportSources,
+  unreadableExportProfile,
+  unreadableExportQuery,
 } from "./account-data-export.test-utils";
 
 // 22:30 UTC on 2026-09-01 is already 2026-09-02 in Prague.
@@ -138,13 +143,16 @@ const expectedReads = (
 
 const unzipJson = (bytes: Uint8Array) => {
   const files = unzipSync(bytes);
+  const readFile = (path: string) => {
+    const file = files[path];
+    if (file === undefined) throw new Error(`Missing export entry ${path}`);
+    return new TextDecoder().decode(file);
+  };
   return {
     names: Object.keys(files),
-    json: (path: string) =>
-      JSON.parse(new TextDecoder().decode(files[path])) as Record<
-        string,
-        never
-      >,
+    json: (path: string) => decodeJson(Schema.Json, readFile(path), path),
+    object: (path: string) =>
+      decodeJson(Schema.JsonObject, readFile(path), path),
   };
 };
 
@@ -173,7 +181,7 @@ describe("AccountDataExportService.download", () => {
       accountDataExportManifestPath,
       ...accountDataExportSections.map(({ path }) => path),
     ]);
-    const manifest = archive.json(accountDataExportManifestPath);
+    const manifest = archive.object(accountDataExportManifestPath);
     expect(manifest).toMatchObject({
       schemaVersion: accountDataExportSchemaVersion,
       generatedAt: now.toString(),
@@ -205,7 +213,7 @@ describe("AccountDataExportService.download", () => {
       accountUpdatedAt: "2026-01-05T09:00:00Z",
       deletionRequested: false,
     });
-    expect(Object.keys(archive.json("dotypos-profile.json")).sort()).toEqual([
+    expect(Object.keys(archive.object("dotypos-profile.json")).sort()).toEqual([
       "billing",
       "firstName",
       "lastName",
@@ -236,7 +244,7 @@ describe("AccountDataExportService.download", () => {
       latePaymentRecoveries: [],
     });
     expect(archive.json("discount-applications.json")).toHaveLength(1);
-    expect(Object.keys(archive.json("invoices.json")).sort()).toEqual([
+    expect(Object.keys(archive.object("invoices.json")).sort()).toEqual([
       "customerEmailDeliveries",
       "invoices",
     ]);
@@ -309,7 +317,7 @@ describe("AccountDataExportService refusals", () => {
       );
       expect(
         reads.filter(({ source }) =>
-          (sectionSources as readonly string[]).includes(source)
+          sectionSources.some((section) => section === source)
         )
       ).toEqual([]);
     });
@@ -348,11 +356,37 @@ describe("AccountDataExportService load failures", () => {
     withdrawals: "withdrawals",
   } as const satisfies Record<(typeof sectionSources)[number], string>;
 
+  const cause = new Error("synthetic owner read failure");
+  const unreadableQuery = Effect.fail(unreadableExportQuery(cause));
+  const failedRead = {
+    profile: Effect.fail(unreadableExportProfile(cause)),
+    workspaceReservations: unreadableQuery,
+    bookedReservations: Effect.fail(
+      new CustomerBookedReservationsUnreadableError({
+        reason: "malformed-reservation",
+      })
+    ),
+    payments: unreadableQuery,
+    latePaymentRecoveries: unreadableQuery,
+    discountApplications: unreadableQuery,
+    invoices: unreadableQuery,
+    invoiceDeliveries: unreadableQuery,
+    marketingConsent: Effect.fail(new MarketingConsentUnavailable({ cause })),
+    legalEvidenceEvents: unreadableQuery,
+    accessGrants: Effect.fail(
+      new ReservationAccessStorageError({
+        operation: "load",
+        message: cause.message,
+      })
+    ),
+    withdrawals: unreadableQuery,
+  } satisfies Pick<AccountDataExportSources, (typeof sectionSources)[number]>;
+
   for (const source of sectionSources) {
     test(`fails the whole archive when ${source} can't be read, reading nothing after it`, async () => {
       sources = {
         ...sources,
-        [source]: Effect.fail(new SyntheticSourceFailure()),
+        [source]: failedRead[source],
       };
 
       expect(await failureOf()).toEqual(

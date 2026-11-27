@@ -3,6 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, mock, test } from "bun:test";
 import {
   type GetNexiOrderInput,
+  NetworkError,
   NexiCorrelationIdSchema,
   NexiOperationIdSchema,
   type NexiOrder,
@@ -14,6 +15,7 @@ import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import type { ProviderPaymentAttempt } from "../repositories/payment-attempt.repository";
 import type {
   IPaymentRefundRepository,
@@ -22,14 +24,20 @@ import type {
 import { PaymentProvidersFromNexi } from "./payment-providers";
 
 const providerOrderId = NexiOrderIdSchema.make("provider-order-id");
+const reservationId = workspaceReservationIdSchema.make(
+  "01998e28-b000-7000-8000-000000000001"
+);
 
 const attempt: ProviderPaymentAttempt = {
   id: paymentAttemptIdSchema.make("attempt-id"),
-  workspaceReservationId: workspaceReservationIdSchema.make("reservation-id"),
+  orderId: standaloneReservationOrderId(reservationId),
+  workspaceReservationId: reservationId,
   provider: "nexi",
   providerOrderId,
   state: "paid",
   refundState: "required",
+  refundCheckedAt: null,
+  refundTargetValue: null,
   refundedAmountValue: null,
   refundedAt: null,
   amount: { value: 35_000, exponent: 2, currency: "CZK" },
@@ -216,7 +224,7 @@ describe("PaymentRefundService", () => {
       claimRefundChecks,
       getOrder: (input: GetNexiOrderInput) =>
         input.orderId === "failing-order-id"
-          ? Effect.fail(new Error("provider unavailable"))
+          ? Effect.fail(new NetworkError({ message: "provider unavailable" }))
           : Effect.succeed(refundedOrder),
       recordRefund,
     });
@@ -260,19 +268,19 @@ describe("PaymentRefundService", () => {
     const { PaymentRefundService } = await import("./payment-refund.service");
 
     let fetches = 0;
-    const unansweredFetch = ((
-      _input: RequestInfo | URL,
-      init?: RequestInit
-    ) => {
-      fetches += 1;
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener(
-          "abort",
-          () => reject(init.signal?.reason),
-          { once: true }
-        );
-      });
-    }) as typeof globalThis.fetch;
+    const unansweredFetch = Object.assign(
+      (_input: RequestInfo | URL, init?: RequestInit) => {
+        fetches += 1;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason),
+            { once: true }
+          );
+        });
+      },
+      { preconnect: globalThis.fetch.preconnect }
+    );
     const claimed: string[] = [];
     const claimRefundChecks: IPaymentRefundRepository["claimRefundChecks"] = (
       input

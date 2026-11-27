@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
@@ -36,10 +37,7 @@ import {
   type AudienceValueLookups,
   describeAudienceFilter,
 } from "../audience-filter-summary";
-import {
-  type AudienceCountWording,
-  audienceAttributeWording,
-} from "./audience-attribute-wording";
+import { audienceAttributeWording } from "./audience-attribute-wording";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
@@ -185,16 +183,13 @@ describe.skipIf(!testDatabase)(
       values: AudienceValueLookups,
       locale: Locale
     ) => {
+      const wording = audienceAttributeWording("campaignEmailCount", locale);
+      assert(wording?.kind === "count");
       const view = render(
         <RouteLocaleProvider locale={locale}>
           <CountConditionControls
             entry={audienceAttributeCatalogue.campaignEmailCount}
-            wording={
-              audienceAttributeWording(
-                "campaignEmailCount",
-                locale
-              ) as AudienceCountWording
-            }
+            wording={wording}
             value={condition}
             onChange={() => undefined}
             errorAt={() => undefined}

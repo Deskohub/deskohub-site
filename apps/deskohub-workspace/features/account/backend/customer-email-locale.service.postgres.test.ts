@@ -8,10 +8,14 @@ import {
 import { Effect, Layer } from "effect";
 import type { Locale } from "@/features/i18n";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { CustomerEmailLocaleService } from "./customer-email-locale.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 
 const uniqueId = () => crypto.randomUUID();
 
@@ -20,7 +24,7 @@ describe.skipIf(!testDatabase)(
   () => {
     // Read only inside tests: registration runs even when the suite is
     // skipped without a database.
-    const dbLayer = () => testDatabase!.layer;
+    const dbLayer = () => database().layer;
 
     const insertAccountWithLink = async (
       dotyposCustomerId: DotyposCustomerId,
@@ -30,7 +34,7 @@ describe.skipIf(!testDatabase)(
       } = {}
     ) => {
       const { accountId } = await Effect.runPromise(
-        workspaceFixtures(testDatabase!.db).account("locale", {
+        workspaceFixtures(database().db).account("locale", {
           verified: false,
           locale: options.locale,
           linkedCustomer: options.recordedOnAccount
@@ -39,7 +43,7 @@ describe.skipIf(!testDatabase)(
         })
       );
       if (!options.recordedOnAccount) {
-        await testDatabase!.pool.query(
+        await database().pool.query(
           `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
           [accountId, dotyposCustomerId]
         );

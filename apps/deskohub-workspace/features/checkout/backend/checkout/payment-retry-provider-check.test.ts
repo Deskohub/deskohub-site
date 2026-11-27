@@ -4,6 +4,8 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
 import {
   ExternalAPIError,
+  NetworkError,
+  NexiCorrelationIdSchema,
   type NexiOrder,
   NexiOrderIdSchema,
   NexiRuntimeConfig,
@@ -19,10 +21,11 @@ type RetryAttempt = Parameters<
   typeof PaymentRetryProviderCheck.Service.check
 >[0]["attempt"];
 const amount = { value: 29_000, exponent: 2, currency: "CZK" };
+const correlationId = NexiCorrelationIdSchema.make("correlation-id");
 const providerOrderId = NexiOrderIdSchema.make("provider-order-id");
 
 const check = (
-  order: Partial<NexiOrder> | Error,
+  order: Partial<NexiOrder> | ExternalAPIError | NetworkError,
   attempt: RetryAttempt = {
     provider: "nexi",
     providerOrderId,
@@ -34,7 +37,7 @@ const check = (
     Layer.mock(NexiService, {
       getOrder: () =>
         order instanceof Error
-          ? Effect.fail(order as never)
+          ? Effect.fail(order)
           : Effect.succeed({
               orderId: providerOrderId,
               operations: [],
@@ -56,7 +59,7 @@ const checkWithNexi = (nexi: Layer.Layer<NexiService>, attempt: RetryAttempt) =>
     Effect.flatMap((providerCheck) =>
       providerCheck.check({
         attempt,
-        reservation: { correlationId: "correlation-id" as never },
+        reservation: { correlationId },
       })
     ),
     Effect.provide(
@@ -92,8 +95,11 @@ const checkNexiResponse = (
             apiKey: "test-api-key",
             apiTimeout: 1000,
           }),
-          Layer.succeed(FetchHttpClient.Fetch, async () =>
-            Response.json(response)
+          Layer.succeed(
+            FetchHttpClient.Fetch,
+            Object.assign(async () => Response.json(response), {
+              preconnect: globalThis.fetch.preconnect,
+            })
           )
         )
       )
@@ -160,9 +166,11 @@ describe("PaymentRetryProviderCheck", () => {
   });
 
   test("fails as unavailable when the provider can't be asked", async () => {
-    expect(await check(new Error("network"))).toMatchObject({
-      failure: expect.any(PaymentRetryUnavailableError),
-    });
+    expect(await check(new NetworkError({ message: "network" }))).toMatchObject(
+      {
+        failure: expect.any(PaymentRetryUnavailableError),
+      }
+    );
   });
 
   test("allows a marked attempt only when Nexi reports no payment activity", async () => {
@@ -199,7 +207,7 @@ describe("PaymentRetryProviderCheck", () => {
     ],
     ["authorized amount", { authorizedAmount: "1" }],
     ["malformed captured amount", { capturedAmount: "unknown" }],
-    ["different order ID", { orderId: "other-order" as NexiOrder["orderId"] }],
+    ["different order ID", { orderId: NexiOrderIdSchema.make("other-order") }],
     ["different order amount", { amount: "1" }],
     ["different order currency", { currency: "USD" }],
   ] satisfies Array<[string, Partial<NexiOrder>]>)(
@@ -312,7 +320,7 @@ describe("PaymentRetryProviderCheck", () => {
   );
 
   test.each([
-    new Error("network"),
+    new NetworkError({ message: "network" }),
     new ExternalAPIError({
       service: "Nexi",
       operation: "getOrder",

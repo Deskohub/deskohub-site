@@ -16,7 +16,10 @@ import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type CustomerAccountId,
   customerAccountIdSchema,
@@ -33,6 +36,7 @@ import { testSessionProfile } from "./customer-authentication.test-utils";
 const avatarAddress = testEmailAddress("avatar");
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 
 /**
  * Provider-independent avatar concurrency coverage: the real advisory-lock
@@ -180,7 +184,7 @@ const uniqueDotyposCustomerId = () =>
 
 const insertAuthUser = (id: CustomerAccountId, email: string) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("avatar", {
+    workspaceFixtures(database().db).account("avatar", {
       id,
       email,
       verified: false,
@@ -188,7 +192,7 @@ const insertAuthUser = (id: CustomerAccountId, email: string) =>
   );
 
 const insertLink = async (account: string, dotyposCustomerId: string) => {
-  await testDatabase!.pool.query(
+  await database().pool.query(
     `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
     [account, dotyposCustomerId]
   );
@@ -290,7 +294,7 @@ describe.skipIf(!testDatabase)(
           // upload reaches Postgres and waits for that same advisory lock.
           yield* Deferred.await(uploadEntered);
           yield* Effect.promise(() =>
-            waitForAccountAdvisoryLockWait(testDatabase!.pool, account)
+            waitForAccountAdvisoryLockWait(database().pool, account)
           );
           expect(
             providerCalls.filter((call) => call === "upload")
@@ -304,19 +308,11 @@ describe.skipIf(!testDatabase)(
         }).pipe(Effect.provide(makeLayer()))
       );
 
-      const uploads = providerCalls.flatMap((call, index) =>
-        call === "upload" ? [index] : []
-      );
-      const renames = providerCalls.flatMap((call, index) =>
-        call === "rename" ? [index] : []
-      );
-      expect(uploads).toHaveLength(2);
-      expect(renames).toHaveLength(2);
-      expect(uploads[0]).toBeLessThan(renames[0]!);
-      expect(renames[0]).toBeLessThan(uploads[1]!);
-      expect(uploads[1]).toBeLessThan(renames[1]!);
+      expect(
+        providerCalls.filter((call) => call === "upload" || call === "rename")
+      ).toEqual(["upload", "rename", "upload", "rename"]);
       expect([...stored.keys()]).toEqual([`avatars/test/${account}`]);
-      const authImage = await testDatabase!.pool.query(
+      const authImage = await database().pool.query(
         `select image from auth."user" where id = $1`,
         [account]
       );
@@ -356,7 +352,7 @@ describe.skipIf(!testDatabase)(
             avatars.remove(account).pipe(Effect.orDie)
           );
           yield* Effect.promise(() =>
-            waitForAccountAdvisoryLockWait(testDatabase!.pool, account)
+            waitForAccountAdvisoryLockWait(database().pool, account)
           );
 
           yield* Deferred.succeed(releaseUpload, undefined);
@@ -413,7 +409,7 @@ describe.skipIf(!testDatabase)(
               .pipe(Effect.orDie)
           );
           yield* Effect.promise(() =>
-            waitForAccountAdvisoryLockWait(testDatabase!.pool, account)
+            waitForAccountAdvisoryLockWait(database().pool, account)
           );
 
           yield* Deferred.succeed(releaseUpload, undefined);
@@ -425,7 +421,7 @@ describe.skipIf(!testDatabase)(
       // Deletion finished last: no media of any kind survives and the
       // durable marker is in place.
       expect(stored.size).toBe(0);
-      const marker = await testDatabase!.pool.query(
+      const marker = await database().pool.query(
         `select deletion_requested_at from auth."user" where id = $1`,
         [account]
       );

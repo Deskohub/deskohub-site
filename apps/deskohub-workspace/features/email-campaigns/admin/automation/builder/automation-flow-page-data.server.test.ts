@@ -1,13 +1,21 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { OperationUnavailable } from "@deskohub/workspace-admin-api";
+import {
+  AdministrationCampaignAudienceId,
+  type CalendarExpressionType as CalendarExpression,
+  OperationUnavailable,
+} from "@deskohub/workspace-admin-api";
 import { Effect } from "effect";
 import { describeCampaignOperationFailure } from "../../campaign-operation-failure";
 import { stubCampaignPageQueries } from "../../campaign-operation-query.test-utils";
-import { automationFlowFixture } from "../activation/automation-detail.test-utils";
+import {
+  automationAudienceFixture,
+  automationFlowFixture,
+} from "../activation/automation-detail.test-utils";
 import { triggerPreviewKey } from "./automation-flow-editing";
 import {
+  type CalendarPreviewView,
   calendarPreviewFailureCopy,
   calendarPreviewView,
 } from "./calendar-preview";
@@ -27,18 +35,29 @@ const locale = "en-US";
 const inputsOf = (name: string) =>
   port.invoked.filter((call) => call.name === name).map(({ input }) => input);
 
+const retiredId = AdministrationCampaignAudienceId.make("retired");
 const audiences = [
-  { id: "regulars", title: "Regulars", archivedAt: null },
-  { id: "retired", title: "Retired", archivedAt: "2026-09-01T08:00:00.000Z" },
-  { id: "former", title: "Former", archivedAt: "2026-09-02T08:00:00.000Z" },
+  automationAudienceFixture(
+    AdministrationCampaignAudienceId.make("regulars"),
+    "Regulars"
+  ),
+  automationAudienceFixture(retiredId, "Retired", "2026-09-01T08:00:00.000Z"),
+  automationAudienceFixture(
+    AdministrationCampaignAudienceId.make("former"),
+    "Former",
+    "2026-09-02T08:00:00.000Z"
+  ),
 ];
 const preview = {
   description: "Synthetic calendar sentence",
   nextStarts: ["2026-11-06T07:00:00.000Z"],
   frequency: { maxFiresPerHour: 1, firesMoreThanHourly: false },
 };
-const triggerCalendar = { minutes: [0], hours: [9] };
-const waitCalendar = { hours: [10] };
+const triggerCalendar = {
+  minutes: [0],
+  hours: [9],
+} satisfies CalendarExpression;
+const waitCalendar = { hours: [10] } satisfies CalendarExpression;
 
 /**
  * A schedule flow whose nested condition checks the archived `retired`
@@ -67,7 +86,7 @@ const scheduleFlow = () =>
               filters: [
                 {
                   _tag: "InAudience",
-                  audienceId: "retired",
+                  audienceId: retiredId,
                   operator: "in",
                 },
               ],
@@ -170,7 +189,7 @@ describe("loadAutomationFlowBuilderData", () => {
         locale
       ),
       code: "calendar-never-occurs",
-    };
+    } satisfies CalendarPreviewView;
     expect(data.calendarPreviews).toEqual({
       [triggerPreviewKey]: failed,
       until: failed,

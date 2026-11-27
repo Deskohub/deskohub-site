@@ -1,8 +1,10 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -11,7 +13,7 @@ import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
 import { makeEmailProviderFake } from "@deskohub/email/testing";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { customerMarketingConsents } from "@/db/schema";
 import type { Locale } from "@/features/i18n";
@@ -21,7 +23,11 @@ import type {
   CampaignLocalizedContent,
   CampaignPurpose,
 } from "../body/campaign-content";
-import type { CampaignId, CampaignSendId } from "../campaign-identifiers";
+import {
+  type CampaignSendId,
+  campaignIdSchema,
+  campaignSendIdSchema,
+} from "../campaign-identifiers";
 import { CampaignDeliveryService } from "./campaign-delivery.service";
 import { campaignDeliveryTestLayer } from "./campaign-delivery.test-utils";
 import { CampaignEmailConfig } from "./campaign-email.config";
@@ -54,11 +60,19 @@ const pinnedPayloadHashes = {
 } as const;
 
 const sendIds = {
-  "one-off marketing": "019a5c55-0000-7000-8000-000000000001",
-  "one-off operational": "019a5c55-0000-7000-8000-000000000002",
-  "automated marketing": "019a5c55-0000-7000-8000-000000000003",
-  "automated operational": "019a5c55-0000-7000-8000-000000000004",
-} as const satisfies Record<keyof typeof pinnedPayloadHashes, string>;
+  "one-off marketing": campaignSendIdSchema.make(
+    "019a5c55-0000-7000-8000-000000000001"
+  ),
+  "one-off operational": campaignSendIdSchema.make(
+    "019a5c55-0000-7000-8000-000000000002"
+  ),
+  "automated marketing": campaignSendIdSchema.make(
+    "019a5c55-0000-7000-8000-000000000003"
+  ),
+  "automated operational": campaignSendIdSchema.make(
+    "019a5c55-0000-7000-8000-000000000004"
+  ),
+} as const satisfies Record<keyof typeof pinnedPayloadHashes, CampaignSendId>;
 
 const recipients: readonly {
   readonly dotyposCustomerId: DotyposCustomerId;
@@ -78,13 +92,13 @@ const profiles = recipients.map(
   ({ dotyposCustomerId }) =>
     ({
       id: dotyposCustomerId,
-      _cloudId: "cloud",
+      _cloudId: DotyposCloudIdSchema.make("cloud"),
       email: testEmailAddress(dotyposCustomerId),
       points: "0",
       flags: "0",
       display: true,
       deleted: false,
-    }) as DotyposCustomer
+    }) satisfies DotyposCustomer
 );
 
 const paragraph = (text: string) => ({
@@ -126,13 +140,14 @@ describe.skipIf(!testDatabase)(
 
     /** Removes the fixed rows, including any an interrupted run left. */
     const removePinnedRows = async () => {
-      const { rows } = await pool.query(
+      const { rows } = await pool.query<{ campaign_id: unknown }>(
         "select campaign_id from email_campaign_sends where id = any($1)",
         [Object.values(sendIds)]
       );
+      const decodeCampaignId = Schema.decodeUnknownSync(campaignIdSchema);
       await deleteAutomatedCampaigns(
         db,
-        rows.map(({ campaign_id }) => campaign_id as CampaignId)
+        rows.map(({ campaign_id }) => decodeCampaignId(campaign_id))
       );
       await pool.query(
         "delete from customer_marketing_consents where dotypos_customer_id = any($1)",
@@ -197,10 +212,12 @@ describe.skipIf(!testDatabase)(
       expect(requested.map(({ key, to }) => ({ key, to }))).toEqual([
         {
           key: `email-campaign:${sendId}:attempt-1:batch-0`,
-          to: profiles.map(({ email }) => email!),
+          to: profiles.map(({ email }) => email),
         },
       ]);
-      expect(sha256(requested[0]!.payload)).toBe(pinnedPayloadHashes[name]);
+      const [request] = requested;
+      assert(request, "Expected the pinned batch request");
+      expect(sha256(request.payload)).toBe(pinnedPayloadHashes[name]);
       const { rows: batches } = await pool.query(
         "select delivery_attempt, batch_index, payload_hash from email_campaign_delivery_batches where send_id = $1",
         [sendId]
@@ -221,7 +238,7 @@ describe.skipIf(!testDatabase)(
       async (purpose) => {
         const name = `one-off ${purpose}` as const;
         const { layer, requests } = deliveryLayer();
-        const sendId = sendIds[name] as CampaignSendId;
+        const sendId = sendIds[name];
         await seedCampaignSend(db, {
           sendId,
           purpose,
@@ -244,7 +261,7 @@ describe.skipIf(!testDatabase)(
       async (purpose) => {
         const name = `automated ${purpose}` as const;
         const { layer, requests } = deliveryLayer();
-        const sendId = sendIds[name] as CampaignSendId;
+        const sendId = sendIds[name];
         const campaignId = await seedAutomatedCampaign(db, { purpose });
         const versionId = await seedAutomationVersion(db, {
           campaignId,
@@ -258,7 +275,7 @@ describe.skipIf(!testDatabase)(
           purpose,
           recipients: [],
         });
-        const read = new Map(profiles.map((profile) => [profile.id!, profile]));
+        const read = new Map(profiles.map((profile) => [profile.id, profile]));
 
         await Effect.runPromise(
           Effect.gen(function* () {

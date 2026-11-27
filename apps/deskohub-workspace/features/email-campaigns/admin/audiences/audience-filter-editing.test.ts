@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   type AudienceAttribute,
   audienceAttributeCatalogue,
@@ -29,9 +30,9 @@ import {
 
 const decodeFilter = Schema.decodeUnknownSync(audienceFilterSchema);
 
-const attributes = Object.keys(
-  audienceAttributeCatalogue
-) as AudienceAttribute[];
+const attributes = Object.values(audienceAttributeCatalogue).map(
+  ({ attribute }) => attribute
+);
 
 const emptyRoot: AudienceFilterGroup = {
   _tag: "Group",
@@ -74,7 +75,8 @@ describe("nested groups", () => {
       appendFilter(emptyRoot, newCondition("locale")),
       newNestedGroup(emptyRoot)
     );
-    const nested = withGroup.filters[1] as AudienceFilterGroup;
+    const nested = withGroup.filters[1];
+    assert(nested?._tag === "Group");
     const filledNested = appendFilter(
       appendFilter(nested, tagged("coworker")),
       tagged("rpg")
@@ -88,9 +90,9 @@ describe("nested groups", () => {
     });
 
     const trimmed = replaceFilterAt(root, 1, removeFilterAt(filledNested, 0));
-    expect((trimmed.filters[1] as AudienceFilterGroup).filters).toEqual([
-      tagged("rpg"),
-    ]);
+    const trimmedNested = trimmed.filters[1];
+    assert(trimmedNested?._tag === "Group");
+    expect(trimmedNested.filters).toEqual([tagged("rpg")]);
     expect(removeFilterAt(trimmed, 1).filters).toEqual([
       newCondition("locale"),
     ]);

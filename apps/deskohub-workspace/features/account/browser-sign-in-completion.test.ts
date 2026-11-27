@@ -39,7 +39,7 @@ describe("browser sign-in completion", () => {
     localStorage.clear();
     replace.mockReset();
     replace.mockImplementation(() => undefined);
-    window.location.replace = replace as typeof window.location.replace;
+    window.location.replace = replace;
     analytics = observeSignInAnalytics();
   });
 
@@ -124,9 +124,9 @@ describe("browser sign-in completion", () => {
 
   test("keeps the pending email request when the browser blocks the navigation", () => {
     storePendingEmailSignInRequest();
-    window.location.replace = (() => {
+    window.location.replace = () => {
       throw new Error("navigation blocked");
-    }) as typeof window.location.replace;
+    };
 
     expect(completion.leaveForSignInDestination("/en-US/account")).toBe(false);
     expect(hasStoredEmailSignInRequest()).toBe(true);

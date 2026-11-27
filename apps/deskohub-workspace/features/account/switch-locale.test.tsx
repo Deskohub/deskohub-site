@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   act,
@@ -108,10 +109,10 @@ test("the header switcher and the profile language control switch through the sa
     "cs-CZ",
     "cs-CZ",
   ]);
-  const [[, header], [, profile]] = switchLocale.mock.calls as [
-    [Locale, LocalePreferenceSaving],
-    [Locale, LocalePreferenceSaving],
-  ];
+  const [headerCall, profileCall] = switchLocale.mock.calls;
+  assert(headerCall && profileCall, "Expected both language controls to save");
+  const [, header] = headerCall;
+  const [, profile] = profileCall;
   expect(header).toBe(headerPreference);
   // Both switches save through the one Server Action, and the profile's
   // customer is always signed in.

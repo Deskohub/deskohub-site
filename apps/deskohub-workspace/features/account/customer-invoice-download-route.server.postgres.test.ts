@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import { BigDecimal, Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
@@ -24,7 +25,10 @@ import {
   syntheticDotyposCustomerId,
   workspaceFixtures,
 } from "@/shared/testing/workspace-fixtures.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils";
 import { temporalInstantToPlainDate } from "@/shared/utils/temporal";
 import {
@@ -69,15 +73,16 @@ afterAll(() => postgres?.close());
  * the adapter fails the test if anything calls it.
  */
 const makeInvoiceService = (auth: TestAuth) => {
+  const { layer, databasePool } = requireTestDatabase(postgres);
   const storage = Layer.mergeAll(
-    postgres!.layer,
-    WorkspaceDatabaseAdvisoryLock.makeLayer(postgres!.databasePool),
+    layer,
+    WorkspaceDatabaseAdvisoryLock.makeLayer(databasePool),
     AccountingSnapshotKeyService.Default
   );
   const repositories = Layer.mergeAll(
     CustomerAccountLinkRepository.Default,
     ReviewAccounts.Default,
-    testAccountingStorage(postgres!.layer, AccountingSnapshotKeyService.Default)
+    testAccountingStorage(layer, AccountingSnapshotKeyService.Default)
   ).pipe(Layer.provideMerge(storage));
   const requestSession = Layer.unwrap(
     Effect.map(currentRequestHeaders, (headers) =>
@@ -110,12 +115,14 @@ const signIn = async (auth: TestAuth, sentLinks: CapturedMagicLink[]) => {
   const email = testEmailAddress(`invoice-downloads-${crypto.randomUUID()}`);
   const sent = sentLinks.length;
   await signInForMagicLink(auth, email);
-  const verified = await verifyMagicLink(auth, sentLinks[sent]!);
+  const link = sentLinks[sent];
+  assert(link, "Expected the sign-in request to send a magic link");
+  const verified = await verifyMagicLink(auth, link);
   const setCookie = getSessionCookie(verified);
-  expect(setCookie).toBeDefined();
-  const accountId = await userIdForEmail(email, postgres!);
-  expect(accountId).toBeDefined();
-  return { cookie: cookieJar(setCookie!), accountId: accountId! };
+  assert(setCookie, "Expected magic-link verification to set a session cookie");
+  const accountId = await userIdForEmail(email, requireTestDatabase(postgres));
+  assert(accountId, "Expected a customer account for the signed-in user");
+  return { cookie: cookieJar(setCookie), accountId };
 };
 
 const signInLinked = async (
@@ -125,7 +132,11 @@ const signInLinked = async (
 ) => {
   const session = await signIn(auth, sentLinks);
   const dotyposCustomerId = syntheticDotyposCustomerId(label);
-  await linkAccount(session.accountId, dotyposCustomerId, postgres!);
+  await linkAccount(
+    session.accountId,
+    dotyposCustomerId,
+    requireTestDatabase(postgres)
+  );
   return { ...session, dotyposCustomerId };
 };
 
@@ -140,8 +151,9 @@ const issueInvoice = async (
     readonly lines: readonly { description: string; price: string }[];
   }
 ) => {
+  const { db, layer } = requireTestDatabase(postgres);
   const issuer = await Effect.runPromise(
-    workspaceFixtures(postgres!.db).account("invoice-downloads-issuer")
+    workspaceFixtures(db).account("invoice-downloads-issuer")
   );
   const input = Schema.decodeUnknownSync(manualInvoiceInputSchema)({
     invoiceId: crypto.randomUUID(),
@@ -169,10 +181,7 @@ const issueInvoice = async (
       invoices.issueManual({ ...input, issuedBy: issuer })
     ).pipe(
       Effect.provide(
-        testAccountingStorage(
-          postgres!.layer,
-          AccountingSnapshotKeyService.Default
-        )
+        testAccountingStorage(layer, AccountingSnapshotKeyService.Default)
       )
     )
   );
@@ -184,10 +193,11 @@ const issueInvoice = async (
  * would, and then hides it from the administration's invoice list.
  */
 const cancelAndHideInvoice = async (invoiceId: InvoiceId) => {
-  const kit = makeInvoiceCancellationTestKit(postgres!);
+  const database = requireTestDatabase(postgres);
+  const kit = makeInvoiceCancellationTestKit(database);
   const actor = await kit.makeActor("invoice-downloads-canceller");
   const storage = Layer.mergeAll(
-    postgres!.layer,
+    database.layer,
     AccountingSnapshotKeyService.Default
   );
   const { record } = await Effect.runPromise(
@@ -285,7 +295,10 @@ describe.skipIf(!postgres)(
     // Built only inside tests: registration runs even when the suite is
     // skipped without a database.
     const setUp = async () => {
-      const auth = makeTestAuth({ postgres: postgres!, sentLinks });
+      const auth = makeTestAuth({
+        postgres: requireTestDatabase(postgres),
+        sentLinks,
+      });
       const service = makeInvoiceService(auth);
       const owner = await signInLinked(auth, sentLinks, "invoice-owner");
       const paid = await issueInvoice(owner.dotyposCustomerId, {
@@ -335,8 +348,10 @@ describe.skipIf(!postgres)(
       expect(response.headers.get("Cache-Control")).toBe("private, no-store");
       const [header, ...rows] = parseCsv(await response.text());
       expect(header).toHaveLength(7);
-      const byNumber = (left: string[], right: string[]) =>
-        left[0]!.localeCompare(right[0]!);
+      const byNumber = ([left]: string[], [right]: string[]) => {
+        assert(left && right, "Expected an invoice number in each CSV row");
+        return left.localeCompare(right);
+      };
       expect(rows.map(withExactTotal).toSorted(byNumber)).toEqual(
         [
           [

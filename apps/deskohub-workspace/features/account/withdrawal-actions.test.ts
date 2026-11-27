@@ -2,7 +2,7 @@ import { testEmailAddress } from "@deskohub/test-email";
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { m } from "@/features/i18n";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
@@ -11,7 +11,7 @@ import {
   WithdrawalService,
 } from "@/features/withdrawal/backend/withdrawal.service";
 import { WithdrawalReleaseGate } from "@/features/withdrawal/backend/withdrawal-release-gate";
-import type { WithdrawalId } from "@/features/withdrawal/withdrawal-identifiers";
+import { withdrawalIdSchema } from "@/features/withdrawal/withdrawal-identifiers";
 import { mockWorkspaceActionRequest } from "@/shared/testing/workspace-action-request.test-utils";
 
 await mockWorkspaceActionRequest();
@@ -68,6 +68,7 @@ mock.module(
 
 const calls: string[] = [];
 const contractKinds: string[] = [];
+const withdrawalId = Schema.decodeSync(withdrawalIdSchema)("withdrawal-1");
 // Whether the mocked profile has a name for the statement.
 let profileNamed = true;
 const paid = { value: 300_000, exponent: 2, currency: "CZK" };
@@ -91,27 +92,25 @@ Object.assign(WithdrawalService, {
         return makeQuote(input.contract.id);
       }),
     withdraw: (input) =>
-      Effect.suspend(() => {
+      Effect.gen(function* () {
         contractKinds.push(input.contract.kind);
         calls.push(
           `withdraw ${input.accountId} ${input.contract.id}${input.customerName === undefined ? "" : ` as ${input.customerName}`}`
         );
         if (input.refundTermsKey === "stale") {
-          return Effect.fail(
-            new WithdrawalRefundChangedError({
-              quote: makeQuote(input.contract.id),
-            })
-          );
+          return yield* new WithdrawalRefundChangedError({
+            quote: makeQuote(input.contract.id),
+          });
         }
         if (!profileNamed && !input.customerName?.trim()) {
-          return Effect.fail(new WithdrawalNameRequiredError());
+          return yield* new WithdrawalNameRequiredError();
         }
-        return Effect.succeed({
-          withdrawalId: "withdrawal-1" as WithdrawalId,
+        return {
+          withdrawalId,
           submittedAt: Temporal.Instant.from("2027-01-10T08:00:00Z"),
           refundAmount: paid,
           receiptEmail: testEmailAddress("customer"),
-        });
+        };
       }),
   }),
 });
@@ -173,7 +172,7 @@ describe("withdrawal actions", () => {
     expect(withdrawal.data).toEqual({
       status: "withdrawn",
       receipt: {
-        withdrawalId: "withdrawal-1",
+        withdrawalId,
         submittedAt: "2027-01-10T08:00:00Z",
         refundAmount: paid,
         receiptEmail: testEmailAddress("customer"),

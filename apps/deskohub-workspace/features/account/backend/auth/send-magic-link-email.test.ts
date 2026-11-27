@@ -3,7 +3,9 @@ import "@/shared/testing/workspace-test-environment";
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { EmailServiceError } from "@deskohub/email/backend/service";
 import { resendSimulatorAddress, testEmailAddress } from "@deskohub/test-email";
-import { ConfigProvider, Effect, Predicate } from "effect";
+import { ConfigProvider, Effect, Predicate, Schema } from "effect";
+import { decodeJson } from "@/shared/testing/json-file.test-utils";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
 
 mock.module("server-only", () => ({}));
@@ -128,14 +130,13 @@ const captureConsole = (): string[] & { restore: () => void } => {
     console[method] = capture;
   }
 
-  const captured = lines as string[] & { restore: () => void };
-  captured.restore = () => {
+  const restore = () => {
     consoleMethods.forEach((method, index) => {
       // biome-ignore lint/suspicious/noConsole: The test restores the captured console channels.
       console[method] = original[index] ?? console[method];
     });
   };
-  return captured;
+  return Object.assign(lines, { restore });
 };
 
 const previewE2ELines = (lines: readonly string[]) =>
@@ -225,12 +226,12 @@ describe("Synthetic Preview delivery through the shared Console provider", () =>
 
     const e2eLines = previewE2ELines(consoleLines);
     expect(e2eLines).toHaveLength(1);
-    const parsed = JSON.parse(e2eLines[0]!) as {
-      code?: unknown;
-      message?: unknown;
-      recipient?: unknown;
-      text?: unknown;
-    };
+    const line = requireValue(e2eLines[0], "preview E2E log");
+    const parsed = decodeJson(
+      Schema.Record(Schema.String, Schema.Unknown),
+      line,
+      "preview E2E log"
+    );
     expect(Object.keys(parsed).sort()).toEqual([
       "code",
       "message",
@@ -263,7 +264,11 @@ describe("Synthetic Preview delivery through the shared Console provider", () =>
     }
 
     const [line] = previewE2ELines(consoleLines);
-    const { text } = JSON.parse(line!) as { readonly text: string };
+    const { text } = decodeJson(
+      Schema.Struct({ text: Schema.String }),
+      requireValue(line, "preview E2E log"),
+      "preview E2E log"
+    );
     expect(text.split("\n").map((textLine) => textLine.trim())).toContain(
       "482913"
     );
@@ -358,7 +363,7 @@ describe("Local development delivery through the shared Console provider", () =>
     expect(resendSend).not.toHaveBeenCalled();
     const lines = developmentLines(consoleLines);
     expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!)).toEqual({
+    expect(JSON.parse(requireValue(lines[0]))).toEqual({
       code: magicLinkDevelopmentLogCode,
       recipient: request.email,
       message: "Development magic link; open the url to sign in.",
@@ -374,13 +379,15 @@ describe("Local development delivery through the shared Console provider", () =>
       { ...request, code: "482913" }
     );
 
-    expect(JSON.parse(developmentLines(consoleLines)[0]!)).toEqual({
-      code: magicLinkDevelopmentLogCode,
-      recipient: request.email,
-      message: "Development magic link; open the url to sign in.",
-      url: request.url,
-      signInCode: "482913",
-    });
+    expect(JSON.parse(requireValue(developmentLines(consoleLines)[0]))).toEqual(
+      {
+        code: magicLinkDevelopmentLogCode,
+        recipient: request.email,
+        message: "Development magic link; open the url to sign in.",
+        url: request.url,
+        signInCode: "482913",
+      }
+    );
   });
 
   test("emits the link for test recipients routed to Console with a Resend key", async () => {

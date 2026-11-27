@@ -9,7 +9,10 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
 import type { Locale } from "@/features/i18n";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type CustomerAccountId,
   customerAccountIdSchema,
@@ -20,6 +23,7 @@ import {
 } from "./reservation-author-directory.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 
 describe.skipIf(!testDatabase)(
   "ReservationAuthorDirectory on disposable Postgres",
@@ -27,7 +31,7 @@ describe.skipIf(!testDatabase)(
     // Read only inside tests: registration runs even when the suite is
     // skipped without a database.
     const query = (text: string, values: readonly unknown[]) =>
-      testDatabase!.pool.query(text, [...values]);
+      database().pool.query(text, [...values]);
 
     const insertAccount = async (options: {
       readonly identity?: boolean;
@@ -36,7 +40,7 @@ describe.skipIf(!testDatabase)(
       readonly deletionRequested?: boolean;
       readonly tombstoned?: boolean;
     }) => {
-      const fixtures = workspaceFixtures(testDatabase!.db);
+      const fixtures = workspaceFixtures(database().db);
       const accountId = customerAccountIdSchema.make(crypto.randomUUID());
       if (options.identity === false) {
         await Effect.runPromise(
@@ -68,7 +72,7 @@ describe.skipIf(!testDatabase)(
         ).pipe(
           Effect.provide(
             ReservationAuthorDirectory.Default.pipe(
-              Layer.provide(testDatabase!.layer)
+              Layer.provide(database().layer)
             )
           )
         )

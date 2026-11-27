@@ -3,7 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
 import { decodeStandardSchema } from "@deskohub/standard-schema";
 import { Effect, Layer } from "effect";
-import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import {
   makeMemoryQueue,
   unavailableQueue,
@@ -14,7 +14,7 @@ import {
   latePaymentRecoveryTopic,
 } from "./late-payment-recovery-queue.service";
 
-const paymentAttemptId = "attempt-id" as PaymentAttemptId;
+const paymentAttemptId = paymentAttemptIdSchema.make("attempt-id");
 
 const enqueue = (queue: Layer.Layer<QueuePublisher>) =>
   Effect.flatMap(LatePaymentRecoveryQueueService, (service) =>

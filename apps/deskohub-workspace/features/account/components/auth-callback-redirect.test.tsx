@@ -18,9 +18,9 @@ import {
 } from "@/shared/testing/workspace-component-test-env";
 
 const VALID_ATTEMPT_ID = "550e8400-e29b-41d4-a716-446655440000";
-const handOffReturn = mock((_options: { readonly attemptId: string }) =>
-  Promise.resolve(false)
-);
+const handOffReturn = mock<
+  typeof import("@/shared/browser/return-window").handOffReturn
+>(() => Promise.resolve(false));
 
 mock.module("@/shared/browser/return-window", () => ({ handOffReturn }));
 
@@ -45,10 +45,10 @@ const setAttempt = (attemptId?: string, error?: string, returnTo?: string) => {
   const search = new URLSearchParams();
   if (attemptId !== undefined) search.set("attempt", attemptId);
   if (returnTo !== undefined) {
-    search.set(
-      signInCallbackReturnParam,
-      encodeAuthCallbackReturn(returnTo) ?? returnTo
-    );
+    const encoded = encodeAuthCallbackReturn(returnTo);
+    if (encoded === undefined)
+      throw new Error("Expected an encoded return target");
+    search.set(signInCallbackReturnParam, encoded);
   }
   if (error !== undefined) search.set("error", error);
   const query = search.toString();
@@ -69,14 +69,13 @@ const setClosed = (closed: boolean) => {
 const codeRequestStorageKey = "deskohub:account-sign-in-code";
 
 const renderAndFlush = async (locale: "en-US" | "cs-CZ", returning = false) => {
-  let view: ReturnType<typeof render> | undefined;
-  await act(async () => {
-    view = render(
+  return await act(async () => {
+    const view = render(
       <AuthCallbackRedirect locale={locale} returning={returning} />
     );
     await Promise.resolve();
+    return view;
   });
-  return view!;
 };
 
 describe("AuthCallbackRedirect", () => {
@@ -117,8 +116,8 @@ describe("AuthCallbackRedirect", () => {
   ] as const)(
     "keeps the accessible busy status after replacing %s with the account page",
     async (locale, target, label, accountLabel) => {
-      const replace = mock((_href: string) => undefined);
-      window.location.replace = replace as typeof window.location.replace;
+      const replace = mock((_href: string | URL) => undefined);
+      window.location.replace = replace;
 
       const view = await renderAndFlush(locale);
       const status = view.getByRole("status", { name: label });
@@ -156,8 +155,8 @@ describe("AuthCallbackRedirect", () => {
   test.each(["en-US", "cs-CZ"] as const)(
     "says %s visitors can finish in this browser on the way back",
     async (locale) => {
-      const replace = mock((_href: string) => undefined);
-      window.location.replace = replace as typeof window.location.replace;
+      const replace = mock((_href: string | URL) => undefined);
+      window.location.replace = replace;
       setAttempt(VALID_ATTEMPT_ID, undefined, "/en-US/cowork?days=2");
 
       const view = await renderAndFlush(locale, true);
@@ -182,9 +181,9 @@ describe("AuthCallbackRedirect", () => {
     handOffReturn.mockResolvedValue(true);
     setClosed(false);
     const close = mock(() => setClosed(true));
-    window.close = close as typeof window.close;
-    const replace = mock((_href: string) => undefined);
-    window.location.replace = replace as typeof window.location.replace;
+    window.close = close;
+    const replace = mock((_href: string | URL) => undefined);
+    window.location.replace = replace;
 
     await renderAndFlush("en-US");
 
@@ -201,9 +200,9 @@ describe("AuthCallbackRedirect", () => {
     handOffReturn.mockResolvedValue(true);
     setClosed(false);
     const close = mock(() => undefined);
-    window.close = close as typeof window.close;
-    const replace = mock((_href: string) => undefined);
-    window.location.replace = replace as typeof window.location.replace;
+    window.close = close;
+    const replace = mock((_href: string | URL) => undefined);
+    window.location.replace = replace;
 
     await renderAndFlush("en-US");
 
@@ -220,13 +219,13 @@ describe("AuthCallbackRedirect", () => {
       JSON.stringify({ email: "synthetic", requestedAt: Date.now() })
     );
     const close = mock(() => undefined);
-    window.close = close as typeof window.close;
+    window.close = close;
     // The sign-in is recorded before the document goes.
     const recordedAtNavigation: unknown[] = [];
-    const replace = mock((_href: string) => {
+    const replace = mock((_href: string | URL) => {
       recordedAtNavigation.push(analytics.takeRecordedSignInMethod());
     });
-    window.location.replace = replace as typeof window.location.replace;
+    window.location.replace = replace;
 
     await renderAndFlush("en-US");
 
@@ -242,9 +241,9 @@ describe("AuthCallbackRedirect", () => {
     setAttempt(VALID_ATTEMPT_ID, "INVALID_TOKEN");
     sessionStorage.setItem(codeRequestStorageKey, "pending");
     const close = mock(() => undefined);
-    window.close = close as typeof window.close;
-    const replace = mock((_href: string) => undefined);
-    window.location.replace = replace as typeof window.location.replace;
+    window.close = close;
+    const replace = mock((_href: string | URL) => undefined);
+    window.location.replace = replace;
 
     await renderAndFlush("en-US");
 
@@ -256,17 +255,15 @@ describe("AuthCallbackRedirect", () => {
   });
 
   test("does not navigate after an unmounted handoff resolves", async () => {
-    let resolveHandoff!: (handled: boolean) => void;
-    handOffReturn.mockImplementationOnce(
-      () => new Promise<boolean>((resolve) => (resolveHandoff = resolve))
-    );
-    const replace = mock((_href: string) => undefined);
-    window.location.replace = replace as typeof window.location.replace;
+    const handoff = Promise.withResolvers<boolean>();
+    handOffReturn.mockImplementationOnce(() => handoff.promise);
+    const replace = mock((_href: string | URL) => undefined);
+    window.location.replace = replace;
 
     const view = await renderAndFlush("en-US");
     view.unmount();
     await act(async () => {
-      resolveHandoff(false);
+      handoff.resolve(false);
       await Promise.resolve();
     });
 
@@ -278,10 +275,10 @@ describe("AuthCallbackRedirect", () => {
       throw new Error("handoff unavailable");
     });
     const recordedAtNavigation: unknown[] = [];
-    const replace = mock((_href: string) => {
+    const replace = mock((_href: string | URL) => {
       recordedAtNavigation.push(analytics.takeRecordedSignInMethod());
     });
-    window.location.replace = replace as typeof window.location.replace;
+    window.location.replace = replace;
 
     await renderAndFlush("en-US");
 
@@ -291,9 +288,7 @@ describe("AuthCallbackRedirect", () => {
 
   test("keeps the code record of a typed code passing through", async () => {
     recordSignInCompletion("code");
-    window.location.replace = mock(
-      (_href: string) => undefined
-    ) as typeof window.location.replace;
+    window.location.replace = mock((_href: string | URL) => undefined);
 
     await renderAndFlush("en-US");
 
@@ -305,8 +300,8 @@ describe("AuthCallbackRedirect", () => {
 
     test("continues to it when no other tab takes the hand-off", async () => {
       setAttempt(VALID_ATTEMPT_ID, undefined, returnTo);
-      const replace = mock((_href: string) => undefined);
-      window.location.replace = replace as typeof window.location.replace;
+      const replace = mock((_href: string | URL) => undefined);
+      window.location.replace = replace;
 
       await renderAndFlush("en-US");
 
@@ -320,9 +315,9 @@ describe("AuthCallbackRedirect", () => {
       setAttempt(VALID_ATTEMPT_ID, undefined, returnTo);
       handOffReturn.mockResolvedValue(true);
       setClosed(false);
-      window.close = mock(() => undefined) as typeof window.close;
-      const replace = mock((_href: string) => undefined);
-      window.location.replace = replace as typeof window.location.replace;
+      window.close = mock(() => undefined);
+      const replace = mock((_href: string | URL) => undefined);
+      window.location.replace = replace;
 
       await renderAndFlush("en-US");
 
@@ -331,8 +326,8 @@ describe("AuthCallbackRedirect", () => {
 
     test("continues to it for a signed-in visitor on a reported error", async () => {
       setAttempt(VALID_ATTEMPT_ID, "INVALID_TOKEN", "/admin");
-      const replace = mock((_href: string) => undefined);
-      window.location.replace = replace as typeof window.location.replace;
+      const replace = mock((_href: string | URL) => undefined);
+      window.location.replace = replace;
 
       await renderAndFlush("en-US");
 
@@ -343,8 +338,8 @@ describe("AuthCallbackRedirect", () => {
       "ignores %p and continues to the account",
       async (unsafeReturnTo) => {
         setAttempt(VALID_ATTEMPT_ID, undefined, unsafeReturnTo);
-        const replace = mock((_href: string) => undefined);
-        window.location.replace = replace as typeof window.location.replace;
+        const replace = mock((_href: string | URL) => undefined);
+        window.location.replace = replace;
 
         await renderAndFlush("en-US");
 

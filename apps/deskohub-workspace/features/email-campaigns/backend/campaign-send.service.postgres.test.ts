@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
@@ -370,8 +371,9 @@ describe.skipIf(!testDatabase)(
       const exit = await send(campaign.id, mailedCode());
 
       expect(Exit.isSuccess(exit) && exit.value.recipientCount).toBe(2);
-      const sendId = Exit.isSuccess(exit) ? exit.value.sendId : undefined;
-      expect(enqueued).toEqual([{ sendId: sendId!, deliveryAttempt: 1 }]);
+      assert(Exit.isSuccess(exit), "Expected the campaign to send");
+      const { sendId } = exit.value;
+      expect(enqueued).toEqual([{ sendId: sendId, deliveryAttempt: 1 }]);
       expect(await storedStatus(campaign.id)).toBe("sending");
       const status = await sendStatus(campaign.id);
       expect(status.pipe(Option.getOrThrow)).toMatchObject({
@@ -453,7 +455,8 @@ describe.skipIf(!testDatabase)(
       const campaign = await createDraft();
       await testSend(campaign.id);
       const started = await send(campaign.id, mailedCode());
-      const sendId = Exit.isSuccess(started) ? started.value.sendId : undefined;
+      assert(Exit.isSuccess(started), "Expected the campaign to send");
+      const { sendId } = started.value;
       for (const [index, status] of statuses.entries()) {
         await testDatabase.pool.query(
           "update email_campaign_recipients set status = $1, skip_reason = case when $1 = 'skipped' then 'missing-email' end where send_id = $2 and dotypos_customer_id = $3",
@@ -472,10 +475,10 @@ describe.skipIf(!testDatabase)(
       const retried = await retry(campaign.id);
 
       expect(Exit.isSuccess(retried) && retried.value).toEqual({
-        sendId: sendId!,
+        sendId: sendId,
         retriedCount: 2,
       });
-      expect(enqueued.at(-1)).toEqual({ sendId: sendId!, deliveryAttempt: 2 });
+      expect(enqueued.at(-1)).toEqual({ sendId: sendId, deliveryAttempt: 2 });
       const { rows } = await testDatabase.pool.query(
         "select dotypos_customer_id, status, delivery_attempt from email_campaign_recipients where send_id = $1 order by dotypos_customer_id",
         [sendId]
@@ -502,7 +505,7 @@ describe.skipIf(!testDatabase)(
 
       expect(
         Exit.isSuccess(retriedUnconfirmed) && retriedUnconfirmed.value
-      ).toEqual({ sendId: sendId!, retriedCount: 3 });
+      ).toEqual({ sendId: sendId, retriedCount: 3 });
       const { rows: afterExplicitRetry } = await testDatabase.pool.query(
         "select status, delivery_attempt from email_campaign_recipients where send_id = $1 and status in ('pending', 'unconfirmed') order by dotypos_customer_id",
         [sendId]
@@ -689,11 +692,13 @@ describe.skipIf(!testDatabase)(
         content: englishOnlyContent,
         audienceFilter: englishOnlyFilter,
       });
+      const { audienceId } = campaign;
+      assert(audienceId !== null, "Expected the campaign audience");
       const updateAudienceFilter = (filter: AudienceFilter) =>
         runOk(
           CampaignAudienceService.pipe(
             Effect.flatMap((audiences) =>
-              audiences.update({ audienceId: campaign.audienceId!, filter })
+              audiences.update({ audienceId, filter })
             )
           )
         );

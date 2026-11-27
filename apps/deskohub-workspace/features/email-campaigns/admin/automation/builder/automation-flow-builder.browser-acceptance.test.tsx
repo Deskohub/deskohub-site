@@ -9,6 +9,7 @@ import {
   type Locator,
   type Page,
 } from "@playwright/test";
+import { Schema } from "effect";
 import { m } from "@/features/administration/i18n";
 import { browserModuleStubPlugin } from "@/shared/testing/browser-module-stubs.test-utils";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
@@ -160,10 +161,18 @@ const calendarPreview = (
   },
 });
 
-type CampaignOperationRequest = {
-  readonly operation: string;
-  readonly input: unknown;
-};
+const CampaignOperationRequest = Schema.Struct({
+  operation: Schema.String,
+  input: Schema.Unknown,
+});
+type CampaignOperationRequest = typeof CampaignOperationRequest.Type;
+const readCampaignOperationRequest = Schema.decodeUnknownSync(
+  CampaignOperationRequest
+);
+
+const readFlowInput = Schema.decodeUnknownSync(
+  Schema.Struct({ flow: Schema.Unknown })
+);
 
 /**
  * Mounts the builder on its own page. `respond` answers each campaign
@@ -187,7 +196,8 @@ const openBuilder = async ({
   let routeRefreshes = 0;
   await page.exposeFunction(
     "runCampaignOperation",
-    async (request: CampaignOperationRequest) => {
+    async (rawRequest: Schema.Json) => {
+      const request = readCampaignOperationRequest(rawRequest);
       requests.push(request);
       return { data: { _tag: "Success", output: await respond(request) } };
     }
@@ -487,7 +497,7 @@ test.skipIf(!chromiumAvailable)(
             return unexpectedOperation(request);
           }
           await saveSettled.promise;
-          const { flow } = request.input as { readonly flow: unknown };
+          const { flow } = readFlowInput(request.input);
           return { ...eventFlow, flow };
         },
       },

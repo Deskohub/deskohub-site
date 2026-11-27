@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { DotyposCustomer, DotyposCustomerId } from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
@@ -9,7 +10,7 @@ import {
 import { makeEmailProviderFake } from "@deskohub/email/testing";
 import { testEmailAddress } from "@deskohub/test-email";
 import { eq } from "drizzle-orm";
-import { Cause, Effect, Exit, Layer, Option } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Predicate } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
   emailCampaignAutomationVersions,
@@ -18,7 +19,7 @@ import {
 } from "@/db/schema";
 import type { WorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type { CampaignPurpose } from "../body/campaign-content";
-import type { CampaignId, CampaignSendId } from "../campaign-identifiers";
+import type { CampaignSendId } from "../campaign-identifiers";
 import {
   type BatchOutcome,
   type BatchRecipient,
@@ -140,7 +141,8 @@ export const makeBatchDeliveryHarness = (
             )
             .where(eq(emailCampaignSends.id, sendId))
     );
-    return { sendId, deliveryAttempt: 1, campaign: campaign! };
+    assert(campaign, "Expected a campaign for the seeded send");
+    return { sendId, deliveryAttempt: 1, campaign };
   };
 
   /**
@@ -154,7 +156,7 @@ export const makeBatchDeliveryHarness = (
   }) => {
     profiles = input.recipients;
     const recipients = input.recipients.map((profile) => ({
-      dotyposCustomerId: profile.id!,
+      dotyposCustomerId: profile.id,
     }));
     const { db } = database;
     if (input.kind === "one-off") {
@@ -163,7 +165,7 @@ export const makeBatchDeliveryHarness = (
         recipients,
       });
       return {
-        campaignId: campaignId as CampaignId,
+        campaignId,
         send: await deliveredAttempt(input.kind, sendId),
       };
     }
@@ -199,7 +201,7 @@ export const makeBatchDeliveryHarness = (
     /** Runs first in the persist's transaction. */
     readonly before?: Effect.Effect<void, unknown, WorkspaceDatabase>;
   }): Promise<PersistedTestBatch> => {
-    const read = new Map(profiles.map((profile) => [profile.id!, profile]));
+    const read = new Map(profiles.map((profile) => [profile.id, profile]));
     const persistPrepared = (prepared: PreparedBatch) =>
       Effect.flatMap(CampaignBatchDelivery, (batches) =>
         batches.persist({ prepared, at: Temporal.Now.instant() })
@@ -330,10 +332,17 @@ export const makeBatchDeliveryHarness = (
 };
 
 /** The tag of the failure an operation's exit ended with, if any. */
-export const failureTagOf = <A, E>(exit: Exit.Exit<A, E>) =>
-  Exit.isFailure(exit)
-    ? (Cause.squash(exit.cause) as { readonly _tag?: string })._tag
-    : undefined;
+export const failureTagOf = <A, E>(exit: Exit.Exit<A, E>) => {
+  if (Exit.isSuccess(exit)) return undefined;
+  const failure = Cause.squash(exit.cause);
+  if (
+    Predicate.hasProperty(failure, "_tag") &&
+    Predicate.isString(failure._tag)
+  ) {
+    return failure._tag;
+  }
+  return undefined;
+};
 
 /** The outcome an operation's exit succeeded with; throws on a failure. */
 export const outcomeOf = <A, E>(exit: Exit.Exit<A, E>): A => {

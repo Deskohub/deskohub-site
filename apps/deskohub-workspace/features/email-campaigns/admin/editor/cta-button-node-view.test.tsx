@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { DecorationSet } from "@tiptap/pm/view";
 import type { ReactNodeViewProps } from "@tiptap/react";
 import { createRef } from "react";
@@ -51,13 +52,17 @@ const selectButton = async (rendered: Rendered) => {
   act(() => {
     rendered.editor.commands.setNodeSelection(buttonPosition);
   });
-  await waitFor(() => expect(editButton(rendered)).not.toBeNull());
+  return waitFor(() => {
+    const button = editButton(rendered);
+    assert(button, "Expected the CTA edit button after selecting the node.");
+    return button;
+  });
 };
 
 const openEditing = async (rendered: Rendered) => {
-  await selectButton(rendered);
+  const button = await selectButton(rendered);
   await act(async () => {
-    fireEvent.click(editButton(rendered)!);
+    fireEvent.click(button);
   });
   return within(screen.getByRole("dialog"));
 };

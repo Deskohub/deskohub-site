@@ -1,22 +1,32 @@
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
 import type { Locale } from "@/features/i18n";
+import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { CurrentWorkspaceRequestHeaders } from "@/shared/backend/workspace-request-context";
-import type {
-  CustomerAccountAccessError,
-  CustomerAccountId,
+import {
+  type CustomerAccountAccessError,
+  customerAccountIdSchema,
 } from "../customer-account";
 import {
   type CustomerAccountSession,
   CustomerAuthentication,
 } from "./customer-authentication.service";
+import { testSessionProfile } from "./customer-authentication.test-utils";
 import { findSavedLocalePreference } from "./saved-locale-preference";
 
 /** The session cookie of the one synthetic signed-in customer. */
 export const syntheticSessionCookie =
   "better-auth.session_token=synthetic-token.signature";
 
-const syntheticAccountId = "synthetic-account" as CustomerAccountId;
+const syntheticAccountId = customerAccountIdSchema.make("synthetic-account");
+
+type SavedLocalePreferenceFixture = {
+  savedPreference: Locale | undefined;
+  deletionRequested: boolean;
+  sessionReadFailure: CustomerAccountAccessError | undefined;
+  /** The cookie header each session read saw. */
+  sessionReads: string[];
+};
 
 /**
  * The saved-preference reader over a fake session read. The fake session
@@ -26,12 +36,11 @@ const syntheticAccountId = "synthetic-account" as CustomerAccountId;
  * fields of `fake` between requests.
  */
 export const makeFakeSavedLocalePreference = () => {
-  const fake = {
-    savedPreference: undefined as Locale | undefined,
+  const fake: SavedLocalePreferenceFixture = {
+    savedPreference: undefined,
     deletionRequested: false,
-    sessionReadFailure: undefined as CustomerAccountAccessError | undefined,
-    /** The cookie header each session read saw. */
-    sessionReads: [] as string[],
+    sessionReadFailure: undefined,
+    sessionReads: [],
   };
 
   const authentication = Layer.succeed(
@@ -45,12 +54,15 @@ export const makeFakeSavedLocalePreference = () => {
         if (!cookie.includes(syntheticSessionCookie)) return null;
         return {
           accountId: syntheticAccountId,
-          email: testEmailAddress("synthetic-account"),
+          email: reservationCustomerEmailSchema.make(
+            testEmailAddress("synthetic-account")
+          ),
+          ...testSessionProfile,
           deletionRequested: fake.deletionRequested,
           ...(fake.savedPreference && {
             localePreference: fake.savedPreference,
           }),
-        } as CustomerAccountSession;
+        } satisfies CustomerAccountSession;
       }),
     })
   );

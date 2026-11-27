@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import { mapSupportedLocales } from "@deskohub/i18n/locale-registry";
 import type {
@@ -37,6 +38,7 @@ import type { Locale } from "@/features/i18n";
 import type { AudienceFilter } from "../audience-filter";
 import type { AutomationVersionId } from "../automation/automation-identifiers";
 import type {
+  CampaignLocaleContent,
   CampaignLocalizedContent,
   CampaignPurpose,
 } from "../body/campaign-content";
@@ -64,7 +66,7 @@ export const everyoneFilter: AudienceFilter = {
 /** Czech-only campaign content whose body is one paragraph of `text`. */
 export const campaignContentFixture = (
   text = "Ahoj"
-): CampaignLocalizedContent => ({
+): CampaignLocalizedContent & { readonly "cs-CZ": CampaignLocaleContent } => ({
   "cs-CZ": {
     subject: "Novinky",
     preheader: "Co je nového",
@@ -141,6 +143,7 @@ const insertSend = async (
       })
       .returning()
   );
+  assert(send, "Expected an inserted campaign send");
   if (input.recipients.length > 0) {
     await Effect.runPromise(
       db.insert(emailCampaignRecipients).values(
@@ -148,13 +151,13 @@ const insertSend = async (
           ...recipient,
           skipReason:
             recipient.status === "skipped" ? ("missing-email" as const) : null,
-          sendId: send!.id,
+          sendId: send.id,
           locale: recipient.locale ?? "cs-CZ",
         }))
       )
     );
   }
-  return send!.id;
+  return send.id;
 };
 
 /**
@@ -185,12 +188,13 @@ export const seedCampaignSend = async (
       })
       .returning()
   );
+  assert(campaign, "Expected an inserted campaign");
   const sendId = await insertSend(db, {
     ...input,
-    campaignId: campaign!.id,
+    campaignId: campaign.id,
     content,
   });
-  return { campaignId: campaign!.id, sendId };
+  return { campaignId: campaign.id, sendId };
 };
 
 /** Reusable 7-locale pass reminder Email Library document for tests. */
@@ -339,18 +343,20 @@ export const seedPublishedEmail = async (
       })
       .returning({ id: emails.id })
   );
+  assert(email, "Expected an inserted email");
   const [version] = await Effect.runPromise(
     db
       .insert(emailVersions)
       .values({
-        emailId: email!.id,
+        emailId: email.id,
         versionNumber: 1,
         document: published,
         requiredValueNames: [...requiredEmailValueNames(published)],
       })
       .returning({ id: emailVersions.id })
   );
-  return { emailId: email!.id, versionId: version!.id };
+  assert(version, "Expected an inserted email version");
+  return { emailId: email.id, versionId: version.id };
 };
 
 /**
@@ -381,7 +387,8 @@ export const seedAutomatedCampaign = async (
       })
       .returning({ id: emailCampaigns.id })
   );
-  return campaign!.id;
+  assert(campaign, "Expected an inserted automated campaign");
+  return campaign.id;
 };
 
 /**
@@ -442,7 +449,8 @@ export const seedAutomationVersion = async (
       })
       .returning({ id: emailCampaignAutomationVersions.id })
   );
-  return version!.id;
+  assert(version, "Expected an inserted automation version");
+  return version.id;
 };
 
 /**

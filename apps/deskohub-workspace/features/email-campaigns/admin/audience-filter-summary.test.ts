@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import type { AudienceCountOperatorType } from "@deskohub/workspace-admin-api";
 import type { Locale } from "@/features/i18n";
 import type { AudienceCondition, AudienceFilter } from "../audience-filter";
@@ -7,10 +8,7 @@ import {
   describeAudienceFilter,
   hasPeriodEndingAtEvaluation,
 } from "./audience-filter-summary";
-import {
-  type AudienceCountWording,
-  audienceAttributeWording,
-} from "./audiences/audience-attribute-wording";
+import { audienceAttributeWording } from "./audiences/audience-attribute-wording";
 import {
   reservationProductFamilyLabel,
   reservationProductPropertyLabel,
@@ -593,10 +591,9 @@ describe("reservation stay and payment phrasing", () => {
   test.each(["en-US", "cs-CZ"] as const)(
     "names the stay and payment after the product in %s",
     (locale) => {
-      const { choices } = audienceAttributeWording(
-        "reservationCount",
-        locale
-      ) as AudienceCountWording;
+      const wording = audienceAttributeWording("reservationCount", locale);
+      assert(wording?.kind === "count");
+      const { choices } = wording;
       const product = reservationProductFamilyLabel("cowork", locale);
       const day = choices.stay?.options.day ?? "";
       const individually = choices.payment?.options.individual ?? "";
@@ -620,10 +617,9 @@ describe("reservation stay and payment phrasing", () => {
   );
 
   test("names each stay, and neither qualifier when unset", () => {
-    const { choices } = audienceAttributeWording(
-      "reservationCount",
-      "en-US"
-    ) as AudienceCountWording;
+    const wording = audienceAttributeWording("reservationCount", "en-US");
+    assert(wording?.kind === "count");
+    const { choices } = wording;
     const overnight = describe_(
       reservations("eq", 1, { product: cowork, stay: "overnight" })
     );

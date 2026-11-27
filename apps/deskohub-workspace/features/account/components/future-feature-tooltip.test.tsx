@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { ok } from "node:assert/strict";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { m } from "@/features/i18n";
 import {
@@ -33,28 +34,28 @@ test.each(["en-US", "cs-CZ"] as const)(
     const child = view.getByRole("button", { name: "Disabled action" });
     const trigger = view.container.querySelector<HTMLElement>('[tabindex="0"]');
 
-    expect(trigger).not.toBeNull();
-    expect(trigger?.tagName).toBe("SPAN");
-    expect(trigger?.getAttribute("role")).toBe("group");
-    const childLabelId = trigger?.getAttribute("aria-labelledby");
+    ok(trigger instanceof HTMLSpanElement);
+    expect(trigger.getAttribute("role")).toBe("group");
+    const childLabelId = trigger.getAttribute("aria-labelledby");
     expect(childLabelId).not.toBeNull();
     expect(childLabelId).toBe(child.id);
     expect(document.getElementById(childLabelId ?? "")).toBe(child);
     expect(view.getByRole("group", { name: "Disabled action" })).toBe(trigger);
-    expect((child as HTMLButtonElement).disabled).toBe(true);
+    ok(child instanceof HTMLButtonElement);
+    expect(child.disabled).toBe(true);
     const tooltip = view.getByRole("tooltip", { hidden: true });
     expect(tooltip.hidden).toBe(true);
     expect(tooltip.textContent).toBe(message);
-    expect(trigger?.getAttribute("aria-describedby")).toBe(tooltip.id);
+    expect(trigger.getAttribute("aria-describedby")).toBe(tooltip.id);
     expect(
       view.getByRole("group", { description: message, name: "Disabled action" })
     ).toBe(trigger);
 
     fireEvent.click(child);
-    fireEvent.click(trigger as HTMLElement);
-    fireEvent.keyDown(trigger as HTMLElement, { key: "Enter" });
-    fireEvent.keyDown(trigger as HTMLElement, { key: " " });
-    expect((child as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(trigger);
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.keyDown(trigger, { key: " " });
+    expect(child.disabled).toBe(true);
     expect(activationCount).toBe(0);
   }
 );

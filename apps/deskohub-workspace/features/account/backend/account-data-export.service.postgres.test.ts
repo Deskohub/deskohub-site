@@ -49,7 +49,6 @@ import { testAccountingStorage } from "@/features/accounting/backend/accounting-
 import { InvoiceEmailDeliveryRepository } from "@/features/accounting/backend/invoice-email-delivery.repository";
 import { correctiveDocumentNumberSchema } from "@/features/accounting/corrective-document";
 import { invoiceNumberSchema } from "@/features/accounting/invoice";
-import type { PreparedCustomerQuote } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import { DiscountApplicationRepository } from "@/features/checkout/backend/repositories/discount-application.repository";
 import { LatePaymentRecoveryRepository } from "@/features/checkout/backend/repositories/late-payment-recovery.repository";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
@@ -61,6 +60,7 @@ import { MarketingConsentLedger } from "@/features/legal/backend/marketing-conse
 import { CustomerBookedReservations } from "@/features/reservation/backend/customer-booked-reservations";
 import { countedDotyposReservationReads } from "@/features/reservation/backend/reservation-visits.test-utils";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { ReservationAccessRepository } from "@/features/reservation-access/backend/reservation-access.repository";
 import { ReviewAccounts } from "@/features/review-accounts";
@@ -69,7 +69,10 @@ import {
   syntheticDotyposCustomerId,
   workspaceFixtures,
 } from "@/shared/testing/workspace-fixtures.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type { CustomerAccountId } from "../customer-account";
 import {
   type AccountDataExportFailureCode,
@@ -93,7 +96,7 @@ afterAll(() => postgres?.close());
 const dotypos = countedDotyposReservationReads([]);
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
-const database = () => postgres!.db;
+const database = () => requireTestDatabase(postgres).db;
 
 /**
  * Every value seeded into a column the export must never select: tokens,
@@ -168,8 +171,11 @@ const seedReservation = async (
       author,
     })
   );
+  if (row.dotyposReservationId === null) {
+    throw new Error("Fulfilled reservation fixture has no Dotypos ID");
+  }
   const dotyposReservationId = DotyposReservationIdSchema.make(
-    row.dotyposReservationId!
+    row.dotyposReservationId
   );
   if (inDotypos)
     addDotyposReservation(customer.customerId, dotyposReservationId);
@@ -239,7 +245,10 @@ const seedPayment = async (
       })
       .returning({ id: paymentAttempts.id })
   );
-  return row!.id;
+  if (!row) {
+    throw new Error("Payment attempt insert returned no row");
+  }
+  return row.id;
 };
 
 const seedLatePaymentRecovery = (
@@ -364,18 +373,21 @@ const seedSourceSnapshot = (
     locale: "en-US",
     prepared: {
       kind: "cowork",
-      reservation: {
+      reservation: Schema.decodeUnknownSync(
+        normalizedCoworkReservationOrderSchema
+      )({
         kind: "cowork",
         ...coworkOrder,
         date: "2026-09-01",
         name: sensitive("snapshot-name"),
         email: testEmailAddress("account-data-export-snapshot"),
         phone: "+420 700 000 000",
-      },
+      }),
       quote: buildCoworkReservationQuote(coworkOrder),
-    } as PreparedCustomerQuote,
+    },
   });
   const key = { id: sensitiveKeyId(), secret: sensitive("snapshot-key") };
+  const { layer } = requireTestDatabase(postgres);
   return Effect.flatMap(WorkspaceDatabase, ({ transaction }) =>
     transaction(
       recordAccountingDocumentSnapshot({
@@ -386,9 +398,9 @@ const seedSourceSnapshot = (
   ).pipe(
     Effect.provide(
       Layer.merge(
-        postgres!.layer,
+        layer,
         testAccountingStorage(
-          postgres!.layer,
+          layer,
           Layer.succeed(
             AccountingSnapshotKeyService,
             AccountingSnapshotKeyService.of({
@@ -435,12 +447,15 @@ const seedInvoice = async (
       })
       .returning({ id: invoices.id })
   );
+  if (!invoice) {
+    throw new Error("Invoice insert returned no row");
+  }
   await run(
     database()
       .insert(invoiceEmailDeliveries)
       .values([
         {
-          invoiceId: invoice!.id,
+          invoiceId: invoice.id,
           audience: "customer",
           state: "accepted",
           attemptCount: 1,
@@ -448,7 +463,7 @@ const seedInvoice = async (
           acceptedAt: issuedAt.add({ seconds: 30 }),
         },
         {
-          invoiceId: invoice!.id,
+          invoiceId: invoice.id,
           audience: "internal",
           state: "processing",
           attemptCount: 1,
@@ -482,7 +497,7 @@ const seedWithdrawal = (
       });
     }).pipe(
       Effect.provide(WithdrawalRepository.Default),
-      Effect.provide(postgres!.layer)
+      Effect.provide(requireTestDatabase(postgres).layer)
     )
   );
 };
@@ -501,6 +516,9 @@ const cancelAndHideSeededInvoice = async (invoiceNumber: string) => {
       .from(invoices)
       .where(eq(invoices.invoiceNumber, invoiceNumber))
   );
+  if (!invoice) {
+    throw new Error("Invoice to cancel and archive was not found");
+  }
   correctiveSequence += 1;
   const correctiveDocumentNumber = correctiveDocumentNumberSchema.make(
     `WS-OD-2026-${String(correctiveSequence).padStart(6, "0")}`
@@ -515,7 +533,7 @@ const cancelAndHideSeededInvoice = async (invoiceNumber: string) => {
     database()
       .insert(invoiceCancellations)
       .values({
-        invoiceId: invoice!.id,
+        invoiceId: invoice.id,
         cancelledAt,
         cause: "invoice_cancellation",
         ...actor,
@@ -525,7 +543,7 @@ const cancelAndHideSeededInvoice = async (invoiceNumber: string) => {
     database()
       .insert(correctiveDocuments)
       .values({
-        cancelledInvoiceId: invoice!.id,
+        cancelledInvoiceId: invoice.id,
         documentNumber: correctiveDocumentNumber,
         numberingYear: 2026,
         numberingSequence: correctiveSequence,
@@ -538,7 +556,7 @@ const cancelAndHideSeededInvoice = async (invoiceNumber: string) => {
     database()
       .insert(invoiceArchives)
       .values({
-        invoiceId: invoice!.id,
+        invoiceId: invoice.id,
         archivedAt: cancelledAt.add({ minutes: 5 }),
         ...actor,
       })
@@ -648,9 +666,10 @@ const exportService = (
   customer: SeededCustomer,
   limits: AccountDataExportLimits
 ) => {
+  const { layer, databasePool } = requireTestDatabase(postgres);
   const storage = Layer.mergeAll(
-    postgres!.layer,
-    WorkspaceDatabaseAdvisoryLock.makeLayer(postgres!.databasePool),
+    layer,
+    WorkspaceDatabaseAdvisoryLock.makeLayer(databasePool),
     AccountingSnapshotKeyService.Default,
     NodeCrypto.layer
   );
@@ -663,10 +682,7 @@ const exportService = (
     LatePaymentRecoveryRepository.Default,
     DiscountApplicationRepository.Default,
     LegalEvidenceEventRepository.Default,
-    testAccountingStorage(
-      postgres!.layer,
-      AccountingSnapshotKeyService.Default
-    ),
+    testAccountingStorage(layer, AccountingSnapshotKeyService.Default),
     InvoiceEmailDeliveryRepository.Default,
     MarketingConsentLedger.Default,
     ReservationAccessRepository.Default,
@@ -791,7 +807,10 @@ describe.skipIf(!postgres)("account data export over Postgres", () => {
   describe("two customers with rows in every section", () => {
     let a: SeededCustomer;
     let b: SeededCustomer;
-    let aReservations: SeededReservationRecords[];
+    let aReservations: readonly [
+      SeededReservationRecords,
+      SeededReservationRecords,
+    ];
     let bReservation: SeededReservationRecords;
     /** Made for customer B by customer A's account. */
     let authoredForB: SeededReservationRecords;
@@ -826,7 +845,7 @@ describe.skipIf(!postgres)("account data export over Postgres", () => {
         ...(await cancelAndHideSeededInvoice(aStandaloneInvoice)),
       };
       await seedMarketingConsent(a.customerId);
-      await seedWithdrawal(a, aReservations[0]!.id);
+      await seedWithdrawal(a, aReservations[0].id);
       await seedWithdrawal(b, bReservation.id);
       const bConsentHash = await seedMarketingConsent(b.customerId);
       unattributedDocumentHash = await seedLegalEvidenceEvent(null);
@@ -937,7 +956,7 @@ describe.skipIf(!postgres)("account data export over Postgres", () => {
       expect(aArchive.withdrawals).toEqual([
         {
           contractKind: "reservation",
-          contractId: aReservations[0]!.id,
+          contractId: aReservations[0].id,
           contractLabel: "Office · 10. 1. 2027",
           submittedAt: "2027-01-02T10:00:00Z",
           paidAmount: { value: 45_050, exponent: 2, currency: "CZK" },
@@ -1277,8 +1296,13 @@ describe.skipIf(!postgres)("account data export over Postgres", () => {
                 await seedReservation(customer, { inDotypos: false }),
                 await seedReservation(customer, { inDotypos: false }),
               ];
-        const reservationFor = (index: number) =>
-          reservations[index % reservations.length]!.id;
+        const reservationFor = (index: number) => {
+          const reservation = reservations[index % reservations.length];
+          if (!reservation) {
+            throw new Error("Bounded read fixture has no seeded reservation");
+          }
+          return reservation.id;
+        };
         const limits = { ...roomyLimits, [read.limit]: limit };
         for (let index = 0; index < limit; index += 1)
           await read.add(customer, reservationFor, index);

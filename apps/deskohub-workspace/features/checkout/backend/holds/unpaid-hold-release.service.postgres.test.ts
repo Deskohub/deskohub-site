@@ -1,7 +1,8 @@
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   type DotyposReservationId,
   DotyposReservationIdSchema,
@@ -17,6 +18,7 @@ import {
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   type ReservationFixtureInput,
   workspaceFixtures,
@@ -33,13 +35,16 @@ import {
 
 const postgresDatabase = await connectWorkspacePostgresTestDatabase();
 
-const dotyposUnavailable = (operation: string) =>
+const dotyposUnavailable = (operation: DotyposUnavailable["operation"]) =>
   new DotyposUnavailable({ operation, reason: "server" });
 
 describe.skipIf(!postgresDatabase)(
   "UnpaidHoldRelease.release on Postgres",
   () => {
-    const postgres = postgresDatabase as WorkspacePostgresTestDatabase;
+    let postgres: WorkspacePostgresTestDatabase;
+    beforeAll(() => {
+      postgres = requireValue(postgresDatabase, "Workspace test Postgres");
+    });
     const created: WorkspaceReservationId[] = [];
 
     afterEach(async () => {
@@ -81,7 +86,7 @@ describe.skipIf(!postgresDatabase)(
         .from(workspaceReservations)
         .where(eq(workspaceReservations.id, id))
         .pipe(Effect.runPromise);
-      return row!;
+      return requireValue(row, "reservation row");
     };
 
     const stateOf = (id: WorkspaceReservationId) =>
@@ -99,7 +104,9 @@ describe.skipIf(!postgresDatabase)(
       status: DotyposReservationStatus = "NEW"
     ) => {
       const calls: string[] = [];
-      const getReservationStatus = mock((_id: DotyposReservationId) =>
+      const getReservationStatus = mock<
+        typeof DotyposService.Service.getReservationStatus
+      >(() =>
         stateOf(reservationId).pipe(
           Effect.tap((state) =>
             Effect.sync(() => calls.push(`getReservationStatus while ${state}`))
@@ -107,7 +114,9 @@ describe.skipIf(!postgresDatabase)(
           Effect.as<DotyposReservationStatus>(status)
         )
       );
-      const cancelReservation = mock((_id: DotyposReservationId) =>
+      const cancelReservation = mock<
+        typeof DotyposService.Service.cancelReservation
+      >(() =>
         stateOf(reservationId).pipe(
           Effect.tap((state) =>
             Effect.sync(() => calls.push(`cancelReservation while ${state}`))
@@ -128,8 +137,8 @@ describe.skipIf(!postgresDatabase)(
               Layer.mergeAll(
                 reservationsLayer(),
                 Layer.mock(DotyposService, {
-                  getReservationStatus: dotypos.getReservationStatus as never,
-                  cancelReservation: dotypos.cancelReservation as never,
+                  getReservationStatus: dotypos.getReservationStatus,
+                  cancelReservation: dotypos.cancelReservation,
                 })
               )
             )
@@ -148,10 +157,8 @@ describe.skipIf(!postgresDatabase)(
     ) => {
       expect(outcome._tag).toBe("Success");
       const success = outcome._tag === "Success" ? outcome.success : undefined;
-      expect(success).toBeInstanceOf(HoldCancellationInProgress);
-      expect((success as HoldCancellationInProgress).staleAt.toString()).toBe(
-        staleAt.toString()
-      );
+      assert(success instanceof HoldCancellationInProgress);
+      expect(success.staleAt.toString()).toBe(staleAt.toString());
     };
 
     /** The current claim's stamp, as its claimant holds it. */
@@ -201,7 +208,10 @@ describe.skipIf(!postgresDatabase)(
     }): UnpaidHoldReleaseRequest => ({
       reason: "late_payment",
       reservationId: hold.id,
-      originalDotyposReservationId: hold.dotyposReservationId!,
+      originalDotyposReservationId: requireValue(
+        hold.dotyposReservationId,
+        "Dotypos hold ID"
+      ),
     });
 
     describe("for an expired hold", () => {
@@ -217,7 +227,10 @@ describe.skipIf(!postgresDatabase)(
           reason: "hold_expired",
           reservationId: hold.id,
           expectedHold: {
-            dotyposReservationId: hold.dotyposReservationId!,
+            dotyposReservationId: requireValue(
+              hold.dotyposReservationId,
+              "Dotypos hold ID"
+            ),
             reservationHoldExpiresAt: holdExpiresAt,
           },
           holdExpiredAt,
@@ -715,7 +728,10 @@ describe.skipIf(!postgresDatabase)(
         const settled = await newReservation({
           stage: { reservation: "held", payment: "paid" },
         });
-        const replacementId = settled.dotyposReservationId!;
+        const replacementId = requireValue(
+          settled.dotyposReservationId,
+          "replacement hold ID"
+        );
         const originalDotyposReservationId = DotyposReservationIdSchema.make(
           `original-hold-${crypto.randomUUID()}`
         );

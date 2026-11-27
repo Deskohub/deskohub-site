@@ -1,4 +1,5 @@
 import { testEmailAddress } from "@deskohub/test-email";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
@@ -12,7 +13,10 @@ import {
   authUser,
   authVerification,
 } from "@/db/schema/auth";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   postgresAuthHookServices,
   testAccountDeletion,
@@ -52,11 +56,12 @@ const SECRET_V1 = Buffer.alloc(48, 31).toString("base64url");
 const HOST = "workspace.test";
 
 const makeTestAuth = (sentMagicLinks: { url: string }[] = []) => {
+  const database = requireTestDatabase(testDatabase);
   const sendMagicLink: MagicLinkSendFunction = (data) => {
     sentMagicLinks.push({ url: data.url });
   };
   return makeWorkspaceAuth({
-    database: drizzleAdapter(makeAuthDatabase(testDatabase!.pool), {
+    database: drizzleAdapter(makeAuthDatabase(database.pool), {
       provider: "pg",
       schema: {
         user: authUser,
@@ -75,7 +80,7 @@ const makeTestAuth = (sentMagicLinks: { url: string }[] = []) => {
     httpsOnly: true,
     sendMagicLink,
     reviewAccountCredentials: [],
-    services: postgresAuthHookServices(testDatabase!, {
+    services: postgresAuthHookServices(database, {
       passkeyFlag: Effect.succeed(false),
     }),
     accountDeletion: testAccountDeletion(),
@@ -96,18 +101,19 @@ const callHandler = (
   auth: ReturnType<typeof makeTestAuth>,
   path: string,
   init: RequestInit = {}
-) =>
-  auth.handler(
-    new Request(`https://${HOST}/api/auth${path}`, {
-      ...init,
-      headers: {
-        origin: `https://${HOST}`,
-        host: HOST,
-        "x-vercel-forwarded-for": uniqueIp(),
-        ...((init.headers as Record<string, string>) ?? {}),
-      },
-    })
+) => {
+  const headers = new Headers({
+    origin: `https://${HOST}`,
+    host: HOST,
+    "x-vercel-forwarded-for": uniqueIp(),
+  });
+  for (const [key, value] of new Headers(init.headers)) {
+    headers.set(key, value);
+  }
+  return auth.handler(
+    new Request(`https://${HOST}/api/auth${path}`, { ...init, headers })
   );
+};
 
 const signInAndVerify = async (
   auth: ReturnType<typeof makeTestAuth>,
@@ -119,38 +125,43 @@ const signInAndVerify = async (
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email }),
   });
-  const verifyPath = sentMagicLinks[0]!.url.slice(
-    `https://${HOST}/api/auth`.length
-  );
+  const verifyPath = requireValue(
+    sentMagicLinks[0],
+    "sent magic link"
+  ).url.slice(`https://${HOST}/api/auth`.length);
   const verified = await callHandler(auth, verifyPath);
-  const cookie = verified.headers
+  const sessionCookie = verified.headers
     .getSetCookie()
-    .find((entry) => entry.includes("session_token="))!
-    .split(";")[0]!;
-  return cookie;
+    .find((entry) => entry.includes("session_token="));
+  return requireValue(
+    requireValue(sessionCookie, "session cookie").split(";")[0],
+    "session cookie pair"
+  );
 };
 
 const userIdForEmail = async (email: string) => {
-  const result = await testDatabase!.pool.query(
-    `select id from auth."user" where email = $1`,
-    [email]
-  );
-  return result.rows[0]?.id as string | undefined;
+  const result = await requireTestDatabase(testDatabase).pool.query<{
+    id: string;
+  }>(`select id from auth."user" where email = $1`, [email]);
+  return result.rows[0]?.id;
 };
 
 const sessionExpiresAt = async (email: string) => {
-  const result = await testDatabase!.pool.query(
-    `select expires_at from auth.session where user_id = $1`,
-    [await userIdForEmail(email)]
-  );
-  return new Date(result.rows[0]!.expires_at).getTime();
+  const result = await requireTestDatabase(testDatabase).pool.query<{
+    expires_at: string;
+  }>(`select expires_at from auth.session where user_id = $1`, [
+    await userIdForEmail(email),
+  ]);
+  return new Date(
+    requireValue(result.rows[0], "session row").expires_at
+  ).getTime();
 };
 
 const recordedSessionTokenSet = () =>
   cookieStoreSets.find((entry) => entry.name.endsWith("session_token"));
 
 const backdateSession = async (email: string) => {
-  await testDatabase!.pool.query(
+  await requireTestDatabase(testDatabase).pool.query(
     `update auth.session
         set expires_at = now() + interval '28 days'
       where user_id = (select id from auth."user" where email = $1)`,
@@ -183,8 +194,9 @@ describe.skipIf(!testDatabase)(
 
       const cleared = recordedSessionTokenSet();
       expect(cleared).toBeTruthy();
-      expect(cleared!.value).toBe("");
-      expect(cleared!.options?.maxAge).toBe(0);
+      const clearedCookie = requireValue(cleared, "cleared session cookie");
+      expect(clearedCookie.value).toBe("");
+      expect(clearedCookie.options?.maxAge).toBe(0);
     });
 
     test("defers the rolling refresh on RSC get-session reads that cannot write cookies", async () => {

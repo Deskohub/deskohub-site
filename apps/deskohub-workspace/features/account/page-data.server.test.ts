@@ -3,7 +3,14 @@ import { testEmailAddress } from "@deskohub/test-email";
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { Cause, Effect, Layer, Predicate } from "effect";
+import assert from "node:assert/strict";
+import { PostHogFeatureFlagEvaluationError } from "@deskohub/analytics-posthog/feature-flags/node";
+import { CloudinaryConfigError } from "@deskohub/cloudinary";
+import { DotyposUnavailable } from "@deskohub/dotypos";
+import { ReferralCode } from "@deskohub/workspace-customer-api/referral-code";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
+import { Cause, Effect, Layer, Predicate, Schema, SchemaIssue } from "effect";
+import { SqlError } from "effect/sql";
 import { redirect } from "next/navigation";
 import {
   AccountAvatarReleaseGate,
@@ -17,7 +24,10 @@ import {
   CustomerAuthentication,
 } from "@/features/account/backend/customer-authentication.service";
 import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
-import { CustomerAvatarService } from "@/features/account/backend/customer-avatar.service";
+import {
+  CustomerAvatarProviderError,
+  CustomerAvatarService,
+} from "@/features/account/backend/customer-avatar.service";
 import { CustomerProfileService } from "@/features/account/backend/customer-profile.service";
 import {
   CustomerReservationHistoryService,
@@ -26,19 +36,20 @@ import {
 import {
   CustomerAccountAccessError,
   type CustomerAccountId,
+  customerAccountIdSchema,
   customerAccountUnavailable,
 } from "@/features/account/customer-account";
 import type { CustomerAgentConnection } from "@/features/account/customer-agent-connections";
+import { promotionCodeIdSchema } from "@/features/discounts/persistence-contracts";
 import { WorkspaceFeatureFlagServiceMock } from "@/features/feature-flags/backend/workspace-feature-flag.service.mock";
-import {
-  getReferralShareUrl,
-  type ReferralCode,
-} from "@/features/referrals/client";
+import { getReferralShareUrl } from "@/features/referrals/client";
 import { ReferralError } from "@/features/referrals/contracts";
+import { ReferralService } from "@/features/referrals/referral.service";
 import { ReferralServiceMock } from "@/features/referrals/referral.service.mock";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
 import { ReferralSignupIntentRepository } from "@/features/referrals/signup-intent.repository";
+import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { ReviewAccountsMock } from "@/features/review-accounts/backend/review-accounts.repository.mock";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
@@ -47,14 +58,15 @@ import {
   type AccountPageLayers,
   accountPageCapabilities,
 } from "./account-page-capabilities.server";
+import type { CustomerReservationSummary } from "./contracts";
 import { loadAccountPageState } from "./page-data.server";
 
 const customerEmail = testEmailAddress("ada");
 
-const accountId = "auth-account-1" as CustomerAccountId;
+const accountId = Schema.decodeSync(customerAccountIdSchema)("auth-account-1");
 const activeSession = {
   accountId,
-  email: reservationCustomerEmailSchema.make(customerEmail),
+  email: Schema.decodeSync(reservationCustomerEmailSchema)(customerEmail),
   deletionRequested: false,
   ...testSessionProfile,
 } satisfies CustomerAccountSession;
@@ -98,36 +110,38 @@ let reviewMarker: "absent" | "unreadable";
 const standing = (
   spec: StandingSpec
 ): Effect.Effect<ResolvedStanding, CustomerAccountAccessError> =>
-  Effect.suspend(() => {
+  Effect.sync((): ResolvedStanding => {
     const facts = { session: activeSession, reviewMarker };
     switch (spec.kind) {
       case "signed-out":
       case "unverified":
-        return Effect.succeed({ kind: spec.kind });
+        return { kind: spec.kind };
       case "review":
-        return Effect.succeed({ kind: "review", session: activeSession });
+        return { kind: "review", session: activeSession };
       case "deletion-pending":
       case "profile-missing":
-        return Effect.succeed({ kind: spec.kind, ...facts });
+        return { kind: spec.kind, ...facts };
       case "support-required":
-        return Effect.succeed({ ...spec, ...facts });
+        return { ...spec, ...facts };
       case "unavailable":
-        return Effect.succeed({
+        return {
           kind: "unavailable",
           failure:
             spec.failure ?? customerAccountUnavailable("account-link.lock"),
           ...facts,
-        });
+        };
       case "linked":
-        return Effect.succeed({
+        return {
           kind: "linked",
           account: {
             accountId,
-            dotyposCustomerId: spec.customerId as DotyposCustomerId,
+            dotyposCustomerId: Schema.decodeSync(dotyposCustomerIdSchema)(
+              spec.customerId
+            ),
           },
           autoLinked: spec.autoLinked ?? false,
           ...facts,
-        });
+        };
     }
   });
 
@@ -148,45 +162,38 @@ const linkedProfile = Effect.succeed({
   phone: null,
   billing: null,
 });
-let profileLoadEffect: Effect.Effect<
-  Effect.Success<typeof linkedProfile>,
-  unknown
+let profileLoadEffect: ReturnType<CustomerProfileService["Service"]["load"]>;
+
+let historyEffect: ReturnType<
+  CustomerReservationHistoryService["Service"]["load"]
 >;
 
-let historyEffect: Effect.Effect<
-  | {
-      readonly kind: "available";
-      readonly groups: {
-        current: unknown[];
-        past: unknown[];
-        unavailable: unknown[];
-      };
-    }
-  | { readonly kind: "unavailable"; readonly reason: string },
-  unknown
->;
-
-let avatarLookupEffect: Effect.Effect<
-  { readonly url: string; readonly version?: number } | null,
-  unknown
->;
+let avatarLookupEffect: ReturnType<CustomerAvatarService["Service"]["lookup"]>;
 
 const referralSummary = {
-  code: "RFL12345",
+  code: Schema.decodeSync(ReferralCode)("RFL12345"),
   inviteeCount: 0,
   eligibleInviteeCount: 0,
   discount: "0",
   savings: [],
 } as const;
-let referralSummaryEffect: Effect.Effect<typeof referralSummary, unknown>;
+let referralSummaryEffect: ReturnType<
+  ReferralService["Service"]["getAccountSummary"]
+>;
 let referralSummaryCalls: Array<{
   readonly customerAccountId: CustomerAccountId;
-  readonly dotyposCustomerId: string;
+  readonly dotyposCustomerId: DotyposCustomerId;
 }> = [];
-let availableReferralCodeEffect: Effect.Effect<string | undefined, unknown>;
+let availableReferralCodeEffect: ReturnType<
+  ReferralService["Service"]["findAvailableCode"]
+>;
 let availableReferralCodeCalls: Array<{ readonly code: unknown }> = [];
-let acceptReferralEffect: Effect.Effect<unknown, ReferralError>;
-let settledReferralEffect: Effect.Effect<boolean, unknown>;
+let acceptReferralEffect: ReturnType<
+  ReferralService["Service"]["acceptReferral"]
+>;
+let settledReferralEffect: ReturnType<
+  ReferralService["Service"]["hasSettledReferral"]
+>;
 let settledReferralCalls: Array<{ readonly dotyposCustomerId: string }> = [];
 let acceptReferralCalls: Array<{
   readonly code: unknown;
@@ -196,7 +203,7 @@ let acceptReferralCalls: Array<{
 const accountReferrals = {
   summary: referralSummary,
   shareUrl: getReferralShareUrl(
-    referralSummary.code as ReferralCode,
+    referralSummary.code,
     Effect.runSync(getWorkspaceRuntimeCallbackOrigin)
   ),
   discountPerInvitee: "5",
@@ -204,14 +211,51 @@ const accountReferrals = {
   savingsCurrency: "CZK",
 };
 
-type StoredSignupIntent = {
-  readonly code: string;
-  readonly promotionCodeId: string;
-  readonly referrerDotyposCustomerId: string;
-  readonly outcome?: string | null;
-  readonly acknowledged?: boolean;
+type StoredSignupIntent = Effect.Success<
+  ReturnType<ReferralSignupIntentRepository["Service"]["find"]>
+>;
+const unsettledIntent = {
+  code: "RFLPENDING",
+  promotionCodeId: Schema.decodeSync(promotionCodeIdSchema)(
+    "@test/promotion-code-id"
+  ),
+  referrerDotyposCustomerId: Schema.decodeSync(dotyposCustomerIdSchema)(
+    "70001"
+  ),
+  outcome: null,
+  acknowledged: false,
+} satisfies StoredSignupIntent;
+let storedSignupIntent: StoredSignupIntent;
+
+const authoredReservation = {
+  id: "workspace-reservation-1",
+  party: { kind: "booked-for", customerName: "Karla Ukázková" },
+  product: { kind: "meeting-room" },
+  startsAt: "2026-10-15T09:00:00Z",
+  endsAt: "2026-10-15T10:00:00Z",
+  seats: 2,
+  status: "confirmed",
+} satisfies CustomerReservationSummary;
+
+const sqlFailure = (message: string) =>
+  new SqlError.SqlError({
+    reason: new SqlError.UnknownError({
+      cause: new Error(message),
+      message,
+      operation: "connect",
+    }),
+  });
+const databaseOutage = sqlFailure("synthetic database outage");
+const dotyposFailure = new DotyposUnavailable({
+  operation: "getReservationsByIds",
+  reason: "transport",
+  message: "dotypos down",
+});
+const profileFailure = customerAccountUnavailable("dotypos.customer-lookup");
+const acknowledgeSignupIntent = () => {
+  assert(storedSignupIntent, "Expected a stored signup intent");
+  storedSignupIntent = { ...storedSignupIntent, acknowledged: true };
 };
-let storedSignupIntent: StoredSignupIntent | undefined;
 
 let rememberedReferralCode: string | undefined;
 let rememberedReferralCodeReads = 0;
@@ -232,32 +276,28 @@ const accountPasskey = {
   provider: "Google Password Manager",
   createdAt: "2026-10-14T16:40:00.000Z",
 } as const;
-let passkeyListEffect: Effect.Effect<
-  readonly (typeof accountPasskey)[],
-  unknown
->;
+let passkeyListEffect: CustomerPasskeys["Service"]["list"];
 let passkeyListCalls = 0;
-let assistantListEffect: Effect.Effect<
-  readonly CustomerAgentConnection[],
-  unknown
->;
+let assistantListEffect: CustomerAgentConnections["Service"]["list"];
 let assistantListCalls = 0;
 
 /** Layers a test replaces, such as one whose build fails. */
 let layerOverrides: Partial<AccountPageLayers> = {};
 
-const flagValues = {
-  account_avatars: avatarsFlag,
-  login_passkeys: passkeysFlag,
-} as const;
-
 const flagEvaluation = WorkspaceFeatureFlagServiceMock({
   isEnabled: (key) =>
-    Effect.tryPromise(() =>
-      key in flagValues
-        ? flagValues[key as keyof typeof flagValues]()
-        : Promise.reject(new Error(`unexpected flag ${key}`))
-    ) as never,
+    Effect.tryPromise({
+      try: () => {
+        if (key === "account_avatars") return avatarsFlag();
+        if (key === "login_passkeys") return passkeysFlag();
+        throw new Error(`unexpected flag ${key}`);
+      },
+      catch: (cause) =>
+        new PostHogFeatureFlagEvaluationError({
+          cause,
+          message: "Synthetic flag evaluation failed",
+        }),
+    }),
 });
 
 /**
@@ -280,48 +320,48 @@ const pageLayer = () =>
     profile: Layer.mock(CustomerProfileService, {
       load: () => {
         profileLoadCalls += 1;
-        return profileLoadEffect as never;
+        return profileLoadEffect;
       },
     }),
     history: Layer.mock(CustomerReservationHistoryService, {
       load: (account) => {
         historyLoadCalls += 1;
         historyLoadAccounts.push(account);
-        return historyEffect as never;
+        return historyEffect;
       },
     }),
     avatar: Layer.mock(CustomerAvatarService, {
       lookup: () => {
         avatarLookupCalls += 1;
-        return avatarLookupEffect as never;
+        return avatarLookupEffect;
       },
     }),
     referrals: ReferralServiceMock({
       getAccountSummary: (input) => {
         referralSummaryCalls.push(input);
         events.push("summary");
-        return referralSummaryEffect as never;
+        return referralSummaryEffect;
       },
       acceptReferral: (input) => {
         acceptReferralCalls.push(input);
         events.push("accept");
-        return acceptReferralEffect as never;
+        return acceptReferralEffect;
       },
       findAvailableCode: (input) => {
         availableReferralCodeCalls.push(input);
-        return availableReferralCodeEffect as never;
+        return availableReferralCodeEffect;
       },
       hasSettledReferral: (input) => {
         settledReferralCalls.push(input);
         events.push("settled");
-        return settledReferralEffect as never;
+        return settledReferralEffect;
       },
     }),
     assistants: Layer.mock(CustomerAgentConnections, {
       list: Effect.suspend(() => {
         assistantListCalls += 1;
         return assistantListEffect;
-      }) as never,
+      }),
     }),
     passkeyRelease: PasskeyReleaseGate.Default.pipe(
       Layer.provide(flagEvaluation)
@@ -333,28 +373,25 @@ const pageLayer = () =>
       list: Effect.suspend(() => {
         passkeyListCalls += 1;
         return passkeyListEffect;
-      }) as never,
+      }),
     }),
     reviewAccounts: ReviewAccountsMock({
       isReviewAccount: () =>
         reviewMarker === "unreadable"
-          ? Effect.fail(new Error("database unavailable") as never)
+          ? Effect.fail(
+              new EffectDrizzleQueryError({
+                query: "select 1",
+                params: [],
+                cause: Cause.fail(databaseOutage),
+              })
+            )
           : Effect.succeed(false),
     }),
     signupIntents: Layer.mock(ReferralSignupIntentRepository, {
-      find: () =>
-        Effect.sync(() =>
-          storedSignupIntent
-            ? {
-                ...storedSignupIntent,
-                outcome: storedSignupIntent.outcome ?? null,
-                acknowledged: storedSignupIntent.acknowledged ?? false,
-              }
-            : undefined
-        ) as never,
+      find: () => Effect.sync(() => storedSignupIntent),
       settle: (_accountId, _promotionCodeId, outcome) =>
         Effect.sync(() => {
-          if (!storedSignupIntent || (storedSignupIntent.outcome ?? null)) {
+          if (!storedSignupIntent || storedSignupIntent.outcome !== null) {
             return false;
           }
           storedSignupIntent = { ...storedSignupIntent, outcome };
@@ -386,9 +423,9 @@ describe("loadAccountPageState", () => {
     avatarLookupEffect = Effect.succeed(null);
     referralSummaryEffect = Effect.succeed(referralSummary);
     referralSummaryCalls = [];
-    availableReferralCodeEffect = Effect.succeed("RFL12345");
+    availableReferralCodeEffect = Effect.succeed(referralSummary.code);
     availableReferralCodeCalls = [];
-    acceptReferralEffect = Effect.succeed({ status: "accepted" });
+    acceptReferralEffect = Effect.succeed({ kind: "accepted" });
     acceptReferralCalls = [];
     settledReferralEffect = Effect.succeed(false);
     settledReferralCalls = [];
@@ -458,20 +495,16 @@ describe("loadAccountPageState", () => {
       assistants: [],
       referralsEnabled: true,
       email: customerEmail,
-      referralCode: "RFL12345",
+      referralCode: referralSummary.code,
     });
     expect(availableReferralCodeCalls).toEqual([{ code: "RFL12345" }]);
   });
 
   test("shows the reservations an account authored before completing its profile", async () => {
     currentStanding = standing({ kind: "profile-missing" });
-    const authored = {
-      id: "workspace-reservation-1",
-      party: { kind: "booked-for", customerName: "Karla Ukázková" },
-    };
     historyEffect = Effect.succeed({
       kind: "available",
-      groups: { current: [authored], past: [], unavailable: [] },
+      groups: { current: [authoredReservation], past: [], unavailable: [] },
     });
 
     await expect(loadPageState()).resolves.toEqual({
@@ -482,7 +515,7 @@ describe("loadAccountPageState", () => {
       email: customerEmail,
       history: {
         kind: "available",
-        groups: { current: [authored], past: [], unavailable: [] },
+        groups: { current: [authoredReservation], past: [], unavailable: [] },
       },
     });
     expect(historyLoadAccounts).toEqual([{ accountId }]);
@@ -490,7 +523,7 @@ describe("loadAccountPageState", () => {
 
   test("keeps an unreadable authored history as a notice on the completion state", async () => {
     currentStanding = standing({ kind: "profile-missing" });
-    historyEffect = Effect.fail(new Error("dotypos down"));
+    historyEffect = Effect.fail(dotyposFailure);
 
     await expect(loadPageState()).resolves.toMatchObject({
       kind: "completion-required",
@@ -510,7 +543,7 @@ describe("loadAccountPageState", () => {
       email: customerEmail,
     });
 
-    availableReferralCodeEffect = Effect.fail(new Error("database down"));
+    availableReferralCodeEffect = Effect.fail(databaseOutage);
     await expect(loadPageState("RFL12345")).resolves.toEqual({
       kind: "completion-required",
       deletion: "offered",
@@ -553,11 +586,7 @@ describe("loadAccountPageState", () => {
   });
 
   test("retries the code a profile completion could not record yet, after resolution", async () => {
-    storedSignupIntent = {
-      code: "RFLPENDING",
-      promotionCodeId: "@test/promotion-code-id",
-      referrerDotyposCustomerId: "70001",
-    };
+    storedSignupIntent = unsettledIntent;
 
     const state = await loadPageState();
 
@@ -574,11 +603,7 @@ describe("loadAccountPageState", () => {
   });
 
   test("keeps showing a code settled as applied on later visits, without retrying, until acknowledged", async () => {
-    storedSignupIntent = {
-      code: "RFLPENDING",
-      promotionCodeId: "@test/promotion-code-id",
-      referrerDotyposCustomerId: "70001",
-    };
+    storedSignupIntent = unsettledIntent;
     acceptReferralEffect = Effect.fail(
       new ReferralError({ reason: "pending_payment" })
     );
@@ -589,7 +614,7 @@ describe("loadAccountPageState", () => {
     });
     expect(storedSignupIntent?.outcome ?? null).toBeNull();
 
-    acceptReferralEffect = Effect.succeed({ status: "accepted" });
+    acceptReferralEffect = Effect.succeed({ kind: "accepted" });
     // The visit that settles the code may never reach the browser.
     await loadPageState();
     expect(storedSignupIntent?.outcome).toBe("applied");
@@ -600,18 +625,14 @@ describe("loadAccountPageState", () => {
     });
     expect(acceptReferralCalls).toHaveLength(2);
 
-    storedSignupIntent = { ...storedSignupIntent!, acknowledged: true };
+    acknowledgeSignupIntent();
     const acknowledged = await loadPageState();
     expect(acknowledged.kind).toBe("linked");
     expect(acknowledged).not.toHaveProperty("signupReferral");
   });
 
   test("keeps showing a code settled as rejected after the first booking is paid, until acknowledged", async () => {
-    storedSignupIntent = {
-      code: "RFLPENDING",
-      promotionCodeId: "@test/promotion-code-id",
-      referrerDotyposCustomerId: "70001",
-    };
+    storedSignupIntent = unsettledIntent;
     acceptReferralEffect = Effect.fail(
       new ReferralError({ reason: "ineligible" })
     );
@@ -626,17 +647,13 @@ describe("loadAccountPageState", () => {
     });
     expect(acceptReferralCalls).toHaveLength(1);
 
-    storedSignupIntent = { ...storedSignupIntent!, acknowledged: true };
+    acknowledgeSignupIntent();
     expect(await loadPageState()).not.toHaveProperty("signupReferral");
   });
 
   test("leaves a stored code unsettled when the linked page cannot render", async () => {
-    storedSignupIntent = {
-      code: "RFLPENDING",
-      promotionCodeId: "@test/promotion-code-id",
-      referrerDotyposCustomerId: "70001",
-    };
-    profileLoadEffect = Effect.fail(new Error("provider down"));
+    storedSignupIntent = unsettledIntent;
+    profileLoadEffect = Effect.fail(profileFailure);
     await expect(loadPageState()).resolves.toMatchObject({
       kind: "authenticated-unavailable",
     });
@@ -713,11 +730,7 @@ describe("loadAccountPageState", () => {
       customerId: "60111",
       autoLinked: true,
     });
-    storedSignupIntent = {
-      code: "RFLPENDING",
-      promotionCodeId: "@test/promotion-code-id",
-      referrerDotyposCustomerId: "70001",
-    };
+    storedSignupIntent = unsettledIntent;
     settledReferralEffect = Effect.succeed(true);
 
     await expect(loadPageState("RFL12345")).resolves.toMatchObject({
@@ -739,7 +752,7 @@ describe("loadAccountPageState", () => {
     expect(open.kind).toBe("linked");
     expect(open).not.toHaveProperty("rememberedReferralCodeUsed");
 
-    settledReferralEffect = Effect.fail(new Error("dotypos down"));
+    settledReferralEffect = Effect.fail(dotyposFailure);
     const unknown = await loadPageState("RFL12345");
     expect(unknown).toMatchObject({
       kind: "linked",
@@ -792,13 +805,9 @@ describe("loadAccountPageState", () => {
   });
 
   test("shows the reservations an account authored while support resolves its profile", async () => {
-    const authored = {
-      id: "workspace-reservation-1",
-      party: { kind: "booked-for", customerName: "Karla Ukázková" },
-    };
     historyEffect = Effect.succeed({
       kind: "available",
-      groups: { current: [authored], past: [], unavailable: [] },
+      groups: { current: [authoredReservation], past: [], unavailable: [] },
     });
 
     for (const reason of ["ambiguous", "unusable", "claimed"] as const) {
@@ -810,7 +819,7 @@ describe("loadAccountPageState", () => {
         email: customerEmail,
         history: {
           kind: "available",
-          groups: { current: [authored], past: [], unavailable: [] },
+          groups: { current: [authoredReservation], past: [], unavailable: [] },
         },
       });
     }
@@ -823,7 +832,7 @@ describe("loadAccountPageState", () => {
 
   test("keeps an unreadable authored history as a notice on the support state", async () => {
     currentStanding = standing({ kind: "support-required", reason: "claimed" });
-    historyEffect = Effect.fail(new Error("dotypos down"));
+    historyEffect = Effect.fail(dotyposFailure);
 
     await expect(loadPageState()).resolves.toEqual({
       kind: "support-required",
@@ -838,7 +847,7 @@ describe("loadAccountPageState", () => {
     historyEffect = Effect.succeed({
       kind: "available",
       groups: {
-        current: [{ id: "workspace-reservation-1" }],
+        current: [authoredReservation],
         past: [],
         unavailable: [],
       },
@@ -951,13 +960,17 @@ describe("loadAccountPageState", () => {
       referrals: accountReferrals,
     });
     expect(referralSummaryCalls).toEqual([
-      { customerAccountId: accountId, dotyposCustomerId: "60111" },
+      {
+        customerAccountId: accountId,
+        dotyposCustomerId: Schema.decodeSync(dotyposCustomerIdSchema)("60111"),
+      },
     ]);
   });
 
   test("logs fixed, cause-free warnings when history and avatar degrade", async () => {
-    historyEffect = Effect.fail(new Error("dotypos down"));
-    avatarLookupEffect = Effect.fail(new Error("cloudinary down"));
+    historyEffect = Effect.fail(dotyposFailure);
+    const avatarFailure = new CustomerAvatarProviderError({});
+    avatarLookupEffect = Effect.fail(avatarFailure);
     const lines: string[] = [];
     const capture = (...args: unknown[]) => {
       lines.push(
@@ -986,7 +999,7 @@ describe("loadAccountPageState", () => {
     expect(output).toContain("account.reservation-history.unavailable");
     expect(output).toContain("account.avatar.unavailable");
     expect(output).not.toContain("dotypos down");
-    expect(output).not.toContain("cloudinary down");
+    expect(output).not.toContain(avatarFailure._tag);
   });
 
   test("keeps profile and history available while hiding avatars and skipping lookup when disabled", async () => {
@@ -1042,7 +1055,9 @@ describe("loadAccountPageState", () => {
 
   test("keeps the linked page with an unavailable passkey list", async () => {
     passkeysFlag.mockResolvedValue(true);
-    passkeyListEffect = Effect.fail(new Error("passkeys down"));
+    passkeyListEffect = Effect.fail(
+      customerAccountUnavailable("authentication.passkeys")
+    );
 
     await expect(loadPageState()).resolves.toMatchObject({
       kind: "linked",
@@ -1061,7 +1076,7 @@ describe("loadAccountPageState", () => {
   test("lists passkeys from the session in every signed-in state without a usable profile", async () => {
     passkeysFlag.mockResolvedValue(true);
     const passkeys = { accountId, passkeys: [accountPasskey] };
-    profileLoadEffect = Effect.fail(new Error("profile gone"));
+    profileLoadEffect = Effect.fail(profileFailure);
     await expect(loadPageState()).resolves.toEqual({
       kind: "authenticated-unavailable",
       deletion: "offered",
@@ -1114,7 +1129,7 @@ describe("loadAccountPageState", () => {
       assistants: [assistant],
     });
 
-    profileLoadEffect = Effect.fail(new Error("profile gone"));
+    profileLoadEffect = Effect.fail(profileFailure);
     await expect(loadPageState()).resolves.toEqual({
       kind: "authenticated-unavailable",
       deletion: "offered",
@@ -1152,7 +1167,9 @@ describe("loadAccountPageState", () => {
   });
 
   test("keeps the page with an unavailable assistant list", async () => {
-    assistantListEffect = Effect.fail(new Error("consents down"));
+    assistantListEffect = Effect.fail(
+      customerAccountUnavailable("authentication.agent-connections")
+    );
 
     await expect(loadPageState()).resolves.toMatchObject({
       kind: "linked",
@@ -1173,7 +1190,7 @@ describe("loadAccountPageState", () => {
   });
 
   test("renders the authenticated unavailable state when the profile read fails after a successful link", async () => {
-    profileLoadEffect = Effect.fail(new Error("profile gone"));
+    profileLoadEffect = Effect.fail(profileFailure);
 
     await expect(loadPageState()).resolves.toEqual({
       kind: "authenticated-unavailable",
@@ -1213,11 +1230,6 @@ describe("loadAccountPageState", () => {
         customerId: "60111",
         autoLinked: true,
       });
-      const unsettledIntent = {
-        code: "RFLPENDING",
-        promotionCodeId: "@test/promotion-code-id",
-        referrerDotyposCustomerId: "70001",
-      };
       storedSignupIntent = unsettledIntent;
       settledReferralEffect = Effect.succeed(true);
 
@@ -1266,17 +1278,26 @@ describe("loadAccountPageState", () => {
     });
   });
   describe("when a section's capabilities can't be built", () => {
-    /** A section layer whose construction fails, as on broken configuration. */
-    const unbuildable = () =>
-      Layer.effectDiscard(
-        Effect.fail(new Error("configuration broken"))
-      ) as never;
-
-    /** A section layer whose server module can't load. */
-    const unloadable = () =>
-      Layer.effectDiscard(
-        Effect.die(new Error("module failed to load"))
-      ) as never;
+    const configFailure = "configuration broken";
+    const invalidConfiguration = new Schema.SchemaError(
+      new SchemaIssue.InvalidType(Schema.Never.ast, configFailure, {
+        reportInput: true,
+      })
+    );
+    const failConfiguration = Effect.fail(invalidConfiguration);
+    const unbuildableAvatar = Layer.effect(
+      CustomerAvatarService,
+      Effect.fail(new CloudinaryConfigError({ message: configFailure }))
+    );
+    const unbuildableHistory = Layer.effect(
+      CustomerReservationHistoryService,
+      failConfiguration
+    );
+    const unbuildableReferrals = Layer.effect(
+      ReferralService,
+      failConfiguration
+    );
+    const unloadable = Effect.die(new Error("module failed to load"));
 
     const loadWithWarnings = async (remembered?: string) => {
       const lines: string[] = [];
@@ -1303,7 +1324,7 @@ describe("loadAccountPageState", () => {
       output.filter((line) => line.includes("WARN")).join("\n");
 
     test("degrades only the avatar when its media capability can't be built", async () => {
-      layerOverrides = { avatar: unbuildable() };
+      layerOverrides = { avatar: unbuildableAvatar };
 
       const { state, output } = await loadWithWarnings();
 
@@ -1331,7 +1352,7 @@ describe("loadAccountPageState", () => {
     });
 
     test("ignores a capability that can't be built while the page skips its section", async () => {
-      layerOverrides = { avatar: unbuildable() };
+      layerOverrides = { avatar: unbuildableAvatar };
       avatarsFlag.mockResolvedValue(false);
 
       const { state, output } = await loadWithWarnings();
@@ -1344,7 +1365,7 @@ describe("loadAccountPageState", () => {
     });
 
     test("degrades only the history when its capability can't be built", async () => {
-      layerOverrides = { history: unbuildable() };
+      layerOverrides = { history: unbuildableHistory };
 
       const { state, output } = await loadWithWarnings();
 
@@ -1362,7 +1383,7 @@ describe("loadAccountPageState", () => {
 
     test("degrades a review account's history alone when its capability can't be built", async () => {
       currentStanding = standing({ kind: "review" });
-      layerOverrides = { history: unbuildable() };
+      layerOverrides = { history: unbuildableHistory };
 
       await expect(loadPageState()).resolves.toEqual({
         kind: "review-account",
@@ -1375,7 +1396,9 @@ describe("loadAccountPageState", () => {
 
     test("keeps the session's sections when the profile capability can't be built", async () => {
       passkeysFlag.mockResolvedValue(true);
-      layerOverrides = { profile: unbuildable() };
+      layerOverrides = {
+        profile: Layer.effect(CustomerProfileService, failConfiguration),
+      };
 
       const { state, output } = await loadWithWarnings();
 
@@ -1390,7 +1413,12 @@ describe("loadAccountPageState", () => {
     });
 
     test("keeps the session's sections when the standing's links can't be built", async () => {
-      layerOverrides = { currentAccount: unbuildable() };
+      layerOverrides = {
+        currentAccount: Layer.effect(
+          CurrentCustomerAccount,
+          Effect.die(invalidConfiguration)
+        ),
+      };
 
       const { state, output } = await loadWithWarnings("RFL12345");
 
@@ -1413,12 +1441,8 @@ describe("loadAccountPageState", () => {
         customerId: "60111",
         autoLinked: true,
       });
-      storedSignupIntent = {
-        code: "RFLPENDING",
-        promotionCodeId: "@test/promotion-code-id",
-        referrerDotyposCustomerId: "70001",
-      };
-      layerOverrides = { referrals: unbuildable() };
+      storedSignupIntent = unsettledIntent;
+      layerOverrides = { referrals: unbuildableReferrals };
 
       const { state, output } = await loadWithWarnings("RFL12345");
 
@@ -1451,13 +1475,12 @@ describe("loadAccountPageState", () => {
       }
       expect(output.join("\n")).not.toContain("configuration broken");
       expect(acceptReferralCalls).toEqual([]);
-      expect(storedSignupIntent).toMatchObject({ code: "RFLPENDING" });
-      expect(storedSignupIntent).not.toHaveProperty("outcome");
+      expect(storedSignupIntent).toEqual(unsettledIntent);
     });
 
     test("offers profile completion without a prefill when the referral capability can't be built", async () => {
       currentStanding = standing({ kind: "profile-missing" });
-      layerOverrides = { referrals: unbuildable() };
+      layerOverrides = { referrals: unbuildableReferrals };
 
       const { state, output } = await loadWithWarnings("RFL12345");
 
@@ -1474,8 +1497,8 @@ describe("loadAccountPageState", () => {
     test("fails every account flag closed when the flag capability can't load", async () => {
       passkeysFlag.mockResolvedValue(true);
       layerOverrides = {
-        passkeyRelease: unloadable(),
-        avatarRelease: unloadable(),
+        passkeyRelease: Layer.effect(PasskeyReleaseGate, unloadable),
+        avatarRelease: Layer.effect(AccountAvatarReleaseGate, unloadable),
       };
 
       await expect(loadPageState()).resolves.toMatchObject({
@@ -1508,7 +1531,9 @@ describe("loadAccountPageState", () => {
 
     test("keeps a pending deletion whole when the assistants capability can't load", async () => {
       currentStanding = standing({ kind: "deletion-pending" });
-      layerOverrides = { assistants: unloadable() };
+      layerOverrides = {
+        assistants: Layer.effect(CustomerAgentConnections, unloadable),
+      };
 
       await expect(loadPageState()).resolves.toEqual({
         kind: "deletion-pending",
@@ -1517,7 +1542,10 @@ describe("loadAccountPageState", () => {
       });
     });
     test("degrades only the sections whose capabilities die while building", async () => {
-      layerOverrides = { avatar: unloadable(), history: unloadable() };
+      layerOverrides = {
+        avatar: Layer.effect(CustomerAvatarService, unloadable),
+        history: Layer.effect(CustomerReservationHistoryService, unloadable),
+      };
 
       const { state, output } = await loadWithWarnings();
 
@@ -1550,7 +1578,9 @@ describe("loadAccountPageState", () => {
     });
 
     test("keeps the session's sections when the profile capability dies while building", async () => {
-      layerOverrides = { profile: unloadable() };
+      layerOverrides = {
+        profile: Layer.effect(CustomerProfileService, unloadable),
+      };
 
       await expect(loadPageState()).resolves.toEqual({
         kind: "authenticated-unavailable",
@@ -1560,13 +1590,8 @@ describe("loadAccountPageState", () => {
       });
     });
     test("degrades the signup referral before reading a settled outcome when the referral capability can't be built", async () => {
-      storedSignupIntent = {
-        code: "RFLPENDING",
-        promotionCodeId: "@test/promotion-code-id",
-        referrerDotyposCustomerId: "70001",
-        outcome: "applied",
-      };
-      layerOverrides = { referrals: unbuildable() };
+      storedSignupIntent = { ...unsettledIntent, outcome: "applied" };
+      layerOverrides = { referrals: unbuildableReferrals };
 
       const { state, output } = await loadWithWarnings();
 
@@ -1576,7 +1601,7 @@ describe("loadAccountPageState", () => {
     });
 
     test("logs the auto-link acceptance as unavailable without an auto-link when the referral capability can't be built", async () => {
-      layerOverrides = { referrals: unbuildable() };
+      layerOverrides = { referrals: unbuildableReferrals };
 
       const { state, output } = await loadWithWarnings();
 
@@ -1600,17 +1625,17 @@ describe("loadAccountPageState", () => {
           })
         )
       );
-      const composite = Cause.combine(
-        Cause.fail(new Error("broken")),
-        Cause.die(redirectError)
-      );
+      const failBesideRedirect = <E>(failure: E) =>
+        Effect.failCause(
+          Cause.combine(Cause.fail(failure), Cause.die(redirectError))
+        );
       const loadExit = () =>
         Effect.runPromiseExit(
           loadAccountPageState.pipe(Effect.provide(pageLayer()))
         );
 
       test("keeps the control flow of a section read", async () => {
-        historyEffect = Effect.failCause(composite);
+        historyEffect = failBesideRedirect(databaseOutage);
 
         const exit = await loadExit();
 
@@ -1621,7 +1646,10 @@ describe("loadAccountPageState", () => {
 
       test("keeps the control flow of a capability that failed to build", async () => {
         layerOverrides = {
-          history: Layer.effectDiscard(Effect.failCause(composite)) as never,
+          history: Layer.effect(
+            CustomerReservationHistoryService,
+            failBesideRedirect(invalidConfiguration)
+          ),
         };
 
         const exit = await loadExit();
@@ -1632,7 +1660,7 @@ describe("loadAccountPageState", () => {
       });
 
       test("keeps the control flow of the resolution", async () => {
-        currentStanding = Effect.failCause(composite) as never;
+        currentStanding = failBesideRedirect(profileFailure);
 
         const exit = await loadExit();
 

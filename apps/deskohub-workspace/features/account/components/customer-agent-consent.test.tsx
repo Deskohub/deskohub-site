@@ -7,6 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import { ok } from "node:assert/strict";
 import { m } from "@/features/i18n";
 import {
   registerWorkspaceComponentTestEnv,
@@ -60,14 +61,17 @@ afterAll(unregisterWorkspaceComponentTestEnv);
 const buttons = (
   view: ReturnType<typeof render>,
   locale: (typeof locales)[number]
-) => ({
-  allow: view.getByRole("button", {
+) => {
+  const allow = view.getByRole("button", {
     name: m.customerAgentConsentAllow({}, { locale }),
-  }) as HTMLButtonElement,
-  deny: view.getByRole("button", {
+  });
+  const deny = view.getByRole("button", {
     name: m.customerAgentConsentDeny({}, { locale }),
-  }) as HTMLButtonElement,
-});
+  });
+  ok(allow instanceof HTMLButtonElement);
+  ok(deny instanceof HTMLButtonElement);
+  return { allow, deny };
+};
 
 describe("CustomerAgentConsent", () => {
   beforeEach(() => {

@@ -276,7 +276,8 @@ test.each(["en-US", "cs-CZ"] as const)(
       name: m.marketingPreferencesFormRowTitle({}, { locale }),
     });
     expect(marketingSwitch.getAttribute("aria-checked")).toBe("true");
-    expect((marketingSwitch as HTMLButtonElement).disabled).toBe(false);
+    expect(marketingSwitch).toBeInstanceOf(HTMLButtonElement);
+    expect(marketingSwitch.hasAttribute("disabled")).toBe(false);
 
     // The signed-in account's data export follows the preference group as
     // its own region, never inside it.
