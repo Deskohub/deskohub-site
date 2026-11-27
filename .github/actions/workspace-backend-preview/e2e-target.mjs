@@ -16,6 +16,11 @@ export function originFromE2EEvent(raw, environment) {
   return candidate.origin;
 }
 
+export async function readValidatedE2EOrigin(environment) {
+  const event = JSON.parse(await readFile(environment.GITHUB_EVENT_PATH, "utf8"));
+  return originFromE2EEvent(event, environment);
+}
+
 export function targetFromE2EEnvironment(environment) {
   const number = Number(environment.PR_NUMBER);
   if (!/^[1-9][0-9]*$/.test(environment.PR_NUMBER ?? "") || !Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(environment.TARGET_SHA ?? "")) {
@@ -38,8 +43,7 @@ async function main() {
       return;
     }
     case "deployment": {
-      const event = JSON.parse(await readFile(environment.GITHUB_EVENT_PATH, "utf8"));
-      const expectedOrigin = originFromE2EEvent(event, environment);
+      const expectedOrigin = await readValidatedE2EOrigin(environment);
       const { deploymentId } = await verifyVercel({
         ...target,
         expectedOrigin,

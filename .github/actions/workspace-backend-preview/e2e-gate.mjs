@@ -9,6 +9,8 @@ import {
   previewGenerationHeader,
   previewRuntimeGeneration,
 } from "../../../packages/workspace-cloud-run/src/preview-identity.mjs";
+import { readValidatedE2EOrigin } from "./e2e-target.mjs";
+import { pilotGenerationKey, pilotTargetKey } from "./run-proof.mjs";
 
 const immutableWorkspaceHost =
   /^deskohub-workspace(?:-site)?-[a-z0-9]{9}-[a-z0-9-]+\.vercel\.app$/;
@@ -46,7 +48,7 @@ export async function checkPreviewBinding(input, request = fetch) {
     redirect: "error",
     signal: AbortSignal.timeout(8_000),
   });
-  if (response.status === 503 && expectedBinding === undefined) {
+  if (response.status === 503 && expectedBinding === undefined && !input.revision && !input.generation) {
     await response.body?.cancel();
     return undefined;
   }
@@ -68,18 +70,22 @@ export async function checkPreviewBinding(input, request = fetch) {
     proof.cloudRunRevision !== revision ||
     proof.generation !== generation ||
     proof.workerTag !== workerTag ||
-    (expectedBinding !== undefined && (generation !== expectedBinding || revision !== input.revision))
+    (input.revision !== undefined && revision !== input.revision) ||
+    (input.generation !== undefined && generation !== input.generation) ||
+    (expectedBinding !== undefined && generation !== expectedBinding)
   ) {
     throw new Error("Workspace preview backend, worker, or Neon generation changed");
   }
-  return revision;
+  return { revision, generation };
 }
 
 async function run() {
   const mode = process.argv[2];
-  const origin = mode === "wait" && process.env.RUNNER_TEMP
-    ? await readFile(join(process.env.RUNNER_TEMP, "workspace-backend-preview-origin"), "utf8")
-    : process.env.WORKSPACE_E2E_BASE_URL;
+  const origin = mode === "confirm"
+    ? await readValidatedE2EOrigin(process.env)
+    : mode === "wait" && process.env.RUNNER_TEMP
+      ? await readFile(join(process.env.RUNNER_TEMP, "workspace-backend-preview-origin"), "utf8")
+      : process.env.WORKSPACE_E2E_BASE_URL;
   const input = {
     origin,
     bypass: process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
@@ -87,10 +93,16 @@ async function run() {
     ref: process.env.TARGET_REF,
     deploymentId: process.env.VERCEL_DEPLOYMENT_ID,
     revision: process.env.BACKEND_PREVIEW_REVISION,
+    generation: process.env.BACKEND_PREVIEW_GENERATION,
     databaseUrl: process.env.BACKEND_PREVIEW_DATABASE_URL,
   };
   if (mode === "verify") {
     if (!input.databaseUrl) throw new Error("A leased preview database is required");
+    await checkPreviewBinding(input);
+    return;
+  }
+  if (mode === "confirm") {
+    if (!input.revision || !input.generation) throw new Error("An exact tested backend generation is required");
     await checkPreviewBinding(input);
     return;
   }
@@ -100,9 +112,12 @@ async function run() {
 
   const deadline = Date.now() + 360_000;
   for (;;) {
-    const revision = await checkPreviewBinding(input);
-    if (revision) {
-      await appendFile(process.env.GITHUB_OUTPUT, `revision=${revision}\n`);
+    const binding = await checkPreviewBinding(input);
+    if (binding) {
+      const { revision, generation } = binding;
+      const target = pilotTargetKey(process.env.PR_NUMBER, input.sha, process.env.TARGET_URL_DIGEST);
+      const generationKey = pilotGenerationKey(input.deploymentId, revision, generation);
+      await appendFile(process.env.GITHUB_OUTPUT, `revision=${revision}\ngeneration=${generation}\nproof=${target}.${generationKey}\n`);
       return;
     }
     if (Date.now() >= deadline) throw new Error("The expected backend preview generation timed out");

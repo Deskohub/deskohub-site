@@ -38,13 +38,13 @@ const proof = ({ commitSha = input.sha, generation = expected, workerTag = "g-ab
   });
 
 test("checks the exact protected preview without following a redirect", async () => {
-  assert.equal(await checkPreviewBinding(input, async (url, options) => {
+  assert.deepEqual(await checkPreviewBinding(input, async (url, options) => {
     assert.equal(url.origin, input.origin);
     assert.equal(url.pathname, "/api/internal/backend-preview");
     assert.equal(options.redirect, "error");
     assert.equal(options.headers["x-vercel-protection-bypass"], input.bypass);
     return proof();
-  }), input.revision);
+  }), { revision: input.revision, generation: expected });
 });
 
 test("rejects an A revision, a different database, or another worker in B", async () => {
@@ -68,11 +68,21 @@ test("rejects a different Vercel deployment, branch, or ready revision at the sa
 
 test("only the gate outside the lease retries a missing generation", async () => {
   const unavailable = async () => new Response("Unavailable", { status: 503 });
-  assert.equal(await checkPreviewBinding({ ...input, databaseUrl: undefined }, unavailable), undefined);
+  assert.equal(await checkPreviewBinding({ ...input, databaseUrl: undefined, revision: undefined }, unavailable), undefined);
   await assert.rejects(checkPreviewBinding(input, unavailable), /no available backend/);
   await assert.rejects(checkPreviewBinding({ ...input, origin: "https://different.test" }, async () => {
     assert.fail("A foreign origin received the bypass secret");
   }), /protected exact-SHA preview/);
+});
+
+test("the trusted post-test check rejects a changed generation on the same preview", async () => {
+  const confirmed = { ...input, databaseUrl: undefined, generation: expected };
+  await assert.rejects(checkPreviewBinding(confirmed, async () => proof({ generation: "f".repeat(64) })), /generation changed/);
+  await assert.rejects(checkPreviewBinding(confirmed, async () => new Response(null, { status: 503 })), /no available backend/);
+  assert.deepEqual(await checkPreviewBinding(confirmed, async () => proof()), {
+    revision: input.revision,
+    generation: expected,
+  });
 });
 
 test("loads the protected origin from the event using the validated digest", () => {

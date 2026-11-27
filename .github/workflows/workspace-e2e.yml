@@ -619,16 +619,20 @@ jobs:
 
   resolve-backend-preview:
     needs: resolve-target
-    if: needs.resolve-target.outputs.backend_preview == 'true' && needs.resolve-target.outputs.deployment == 'success'
+    if: >-
+      github.repository_id == '1015951989' && github.ref == 'refs/heads/main' && github.ref_protected &&
+      needs.resolve-target.outputs.backend_preview == 'true' && needs.resolve-target.outputs.deployment == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 9
-    environment: workspace-checkout-e2e
+    environment: workspace-backend-preview-e2e
     permissions:
       contents: read
       deployments: read
     outputs:
       deployment_id: ${{ steps.deployment.outputs.deployment_id }}
       revision: ${{ steps.gate.outputs.revision }}
+      generation: ${{ steps.gate.outputs.generation }}
+      proof: ${{ steps.gate.outputs.proof }}
     env:
       TARGET_URL_DIGEST: ${{ needs.resolve-target.outputs.url_digest }}
       PR_NUMBER: ${{ needs.resolve-target.outputs.pr_number }}
@@ -654,6 +658,7 @@ jobs:
       - name: Wait for the expected backend revision
         id: gate
         env:
+          VERCEL_DEPLOYMENT_ID: ${{ steps.deployment.outputs.deployment_id }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: node .github/actions/workspace-backend-preview/e2e-gate.mjs wait
 
@@ -960,6 +965,7 @@ jobs:
           TARGET_REF: ${{ needs.resolve-target.outputs.head_ref }}
           VERCEL_DEPLOYMENT_ID: ${{ needs.resolve-backend-preview.outputs.deployment_id }}
           BACKEND_PREVIEW_REVISION: ${{ needs.resolve-backend-preview.outputs.revision }}
+          BACKEND_PREVIEW_GENERATION: ${{ needs.resolve-backend-preview.outputs.generation }}
           BACKEND_PREVIEW_DATABASE_URL: ${{ steps.preview-database.outputs.direct_url }}
           APPROVED_NEON_BRANCH_ID: ${{ vars.WORKSPACE_BACKEND_PREVIEW_NEON_BRANCH_ID }}
           RESOLVED_NEON_BRANCH_ID: ${{ steps.preview-database.outputs.branch_id }}
@@ -1212,8 +1218,40 @@ jobs:
             sleep "$POLL_SECONDS"
           done
 
+  confirm-backend-preview:
+    # GitHub records this name using only resolved, trusted job outputs. A
+    # runner with commit-status write access cannot create or rename the job.
+    name: Confirm Workspace preview ${{ needs.resolve-backend-preview.outputs.proof }}
+    needs: [resolve-target, resolve-backend-preview, test-e2e]
+    if: >-
+      github.repository_id == '1015951989' && github.ref == 'refs/heads/main' && github.ref_protected &&
+      needs.resolve-target.outputs.backend_preview == 'true' && needs.resolve-backend-preview.result == 'success' &&
+      needs.test-e2e.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    environment: workspace-backend-preview-e2e
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the reviewed backend gate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/workspace-backend-preview
+            packages/workspace-cloud-run/src
+      - name: Recheck the tested backend generation
+        env:
+          TARGET_URL_DIGEST: ${{ needs.resolve-target.outputs.url_digest }}
+          TARGET_SHA: ${{ needs.resolve-target.outputs.sha }}
+          BACKEND_PREVIEW_REVISION: ${{ needs.resolve-backend-preview.outputs.revision }}
+          BACKEND_PREVIEW_GENERATION: ${{ needs.resolve-backend-preview.outputs.generation }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: node .github/actions/workspace-backend-preview/e2e-gate.mjs confirm
+
   publish-final-status:
-    needs: [resolve-target, fill-bun-package-cache, test-e2e]
+    needs: [resolve-target, fill-bun-package-cache, resolve-backend-preview, test-e2e, confirm-backend-preview]
     if: always() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true' && needs.resolve-target.outputs.nightly != 'true'
     concurrency:
       group: workspace-e2e-status-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
@@ -1221,6 +1259,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
       deployments: read
       pull-requests: read
@@ -1242,6 +1281,7 @@ jobs:
         env:
           ALLOCATION_SHARD: ${{ needs.test-e2e.outputs.shard }}
           BACKEND_PREVIEW_REQUIRED: ${{ needs.resolve-target.outputs.backend_preview }}
+          BACKEND_PREVIEW_PROOF: ${{ needs.confirm-backend-preview.result == 'success' && needs.resolve-backend-preview.outputs.proof || '' }}
           ALLOCATION_DESCRIPTION: ${{ needs.fill-bun-package-cache.result != 'success' && 'Workspace E2E Bun package cache fill failed' || needs.test-e2e.outputs.shard == '' && 'Workspace E2E shard allocation failed' || needs.test-e2e.outputs.release_outcome == 'success' && 'Workspace E2E shard released' || 'Workspace E2E shard release failed' }}
           FLOWS: ${{ needs.resolve-target.outputs.flows }}
           FLOWS_PUBLISH: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/publish-status.mjs
@@ -1249,7 +1289,7 @@ jobs:
           PILOT_PR_NUMBER: ${{ vars.WORKSPACE_BACKEND_PREVIEW_PR }}
           PR_NUMBER: ${{ needs.resolve-target.outputs.pr_number }}
           PREVIEW_ENVIRONMENT: 'Preview – deskohub-workspace-site'
-          STATUS_STATE: ${{ needs.test-e2e.result == 'success' && 'success' || 'failure' }}
+          STATUS_STATE: ${{ needs.test-e2e.result == 'success' && (needs.resolve-target.outputs.backend_preview != 'true' || needs.confirm-backend-preview.result == 'success') && 'success' || 'failure' }}
           SUPERSEDED_DESCRIPTION: Superseded by a newer PR head before E2E finished
           TARGET_SHA: ${{ needs.resolve-target.outputs.sha }}
           TARGET_URL_DIGEST: ${{ needs.resolve-target.outputs.url_digest }}
@@ -1276,6 +1316,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
       deployments: read
       pull-requests: read
