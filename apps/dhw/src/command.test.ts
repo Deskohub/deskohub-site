@@ -1787,6 +1787,8 @@ describe("dhw mutation commands", () => {
         "0.01",
         "--product",
         "cowork",
+        "--product",
+        "table",
       ],
       layer
     ).pipe(Effect.runPromise);
@@ -1797,7 +1799,7 @@ describe("dhw mutation commands", () => {
         discount: {
           labels: { "cs-CZ": "Léto", "en-US": "Summer" },
           adjustment: { kind: "percentage", basisPoints: 1 },
-          products: [{ kind: "cowork" }],
+          products: [{ kind: "cowork" }, { kind: "table" }],
         },
       },
     ]);

@@ -23,6 +23,7 @@ import {
   type AdministrationReservationAccessMutationType,
   AdministrationReservationAuditQuery,
   type AdministrationReservationAuthorType,
+  AdministrationReservationFamily,
   AdministrationReservationListStatusFilter,
   type AdministrationReservationProductDetailsBackfillBatchType,
   AdministrationReservationQuery,
@@ -229,7 +230,7 @@ const reservationsListCommand = Command.make(
         "Reservation status. Use needs_attention for refunds owed or failing withdrawal settlements."
       )
     ),
-    type: Flag.Literals("type", ["cowork", "meeting-room", "office"]).pipe(
+    type: Flag.Literals("type", AdministrationReservationFamily.literals).pipe(
       Flag.optional,
       Flag.withDescription("Reservation type")
     ),
@@ -1653,6 +1654,7 @@ const discountDefinitionFlags = {
     ["cowork:reserved-desk", { kind: "cowork", tier: "reserved-desk" }],
     ["meeting-room", { kind: "meeting-room" }],
     ["office", { kind: "office" }],
+    ["table", { kind: "table" }],
   ] as const).pipe(
     Flag.atLeast(1),
     Flag.withDescription(
