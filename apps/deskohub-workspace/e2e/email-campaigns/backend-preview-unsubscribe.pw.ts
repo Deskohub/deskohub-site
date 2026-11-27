@@ -154,6 +154,11 @@ test("uses the expected backend revision for the synthetic unsubscribe GET and P
           .from(customerMarketingConsents)
           .where(
             eq(customerMarketingConsents.dotyposCustomerId, dotyposCustomerId)
+          )
+          .pipe(
+            Effect.mapError(() =>
+              failure("Could not read synthetic preview consent")
+            )
           );
 
         yield* runE2ECase({
@@ -169,13 +174,19 @@ test("uses the expected backend revision for the synthetic unsubscribe GET and P
                   response.headers.get("location") ?? "",
                   baseURL
                 );
+                const accessToken = location?.searchParams.get("token");
                 yield* Effect.promise(
                   () => response.body?.cancel() ?? Promise.resolve()
                 );
                 if (
                   response.status !== 303 ||
                   response.headers.get(backendRevisionHeader) !== commitSha ||
-                  !location?.pathname.endsWith("/marketing-preferences/access")
+                  location?.origin !== url.origin ||
+                  !location.pathname.endsWith(
+                    "/marketing-preferences/access"
+                  ) ||
+                  !accessToken ||
+                  accessToken === token
                 ) {
                   return yield* failure(
                     "The synthetic GET did not use the expected backend revision"
@@ -184,13 +195,7 @@ test("uses the expected backend revision for the synthetic unsubscribe GET and P
                 const [row] = yield* consent;
                 if (!row || row.withdrawnAt !== null)
                   return yield* failure("The synthetic GET changed consent");
-              }).pipe(
-                Effect.mapError(() =>
-                  failure(
-                    "Could not prove the synthetic GET against preview consent"
-                  )
-                )
-              ),
+              }),
             });
             yield* step({
               id: "withdraw-synthetic-consent-over-preview-rpc",
@@ -213,13 +218,7 @@ test("uses the expected backend revision for the synthetic unsubscribe GET and P
                   return yield* failure(
                     "The synthetic POST did not withdraw preview consent"
                   );
-              }).pipe(
-                Effect.mapError(() =>
-                  failure(
-                    "Could not prove the synthetic POST against preview consent"
-                  )
-                )
-              ),
+              }),
             });
           }),
         });
