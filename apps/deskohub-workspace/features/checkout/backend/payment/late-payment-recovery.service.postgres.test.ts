@@ -2,7 +2,11 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import {
+  DotyposReservationIdSchema,
+  DotyposService,
+  DotyposTableIdSchema,
+} from "@deskohub/dotypos";
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
@@ -10,19 +14,26 @@ import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   latePaymentRecoveries,
   paymentAttempts,
+  teamTableHoldClaims,
   workspaceReservations,
 } from "@/db/schema";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
+import { makeCoworkInvoiceDocument } from "@/features/accounting/invoice.test-utils";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { buildTableReservationQuote } from "@/features/checkout/reservation-quote-table";
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { dotyposHoldFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
+import { TeamTableHoldClaims } from "@/features/team-table/backend/team-table-hold-claims";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   holdPostgresTransaction,
   waitForAdvisoryLockWaiter,
 } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { instantStringSchema } from "@/shared/utils/temporal";
 import { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.service";
 import { UnpaidHoldRelease } from "../holds/unpaid-hold-release.service";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
@@ -250,6 +261,164 @@ describe.skipIf(!testDatabase)(
       for (const call of Object.values(dotypos)) {
         expect(call).not.toHaveBeenCalled();
       }
+    });
+
+    test("claims a confirmed Team Table replacement before POST and settles it after releasing date locks", async () => {
+      const row = await Effect.runPromise(
+        workspaceFixtures(testDatabase.db).reservation({
+          stage: { reservation: "cancelled" },
+          overrides: {
+            reservationDetails: {
+              kind: "table",
+              seats: 4,
+              durationMinutes: 15,
+            },
+            cancellationCause: "hold_expired",
+          },
+        })
+      );
+      reservationIds.push(row.id);
+      const paymentAttemptId = paymentAttemptIdSchema.make(
+        `late-team-${crypto.randomUUID()}`
+      );
+      await Effect.runPromise(
+        testDatabase.db.insert(paymentAttempts).values({
+          id: paymentAttemptId,
+          workspaceReservationId: row.id,
+          provider: "nexi",
+          providerOrderId: NexiOrderIdSchema.make(`order-${paymentAttemptId}`),
+          state: "expired",
+          failureCode: "payment_abandoned_after_provider_cutoff",
+          amountValue: 26_000,
+          amountExponent: 2,
+          currency: "CZK",
+        })
+      );
+      await Effect.runPromise(
+        testDatabase.db
+          .update(workspaceReservations)
+          .set({
+            activePaymentAttemptId: paymentAttemptId,
+            paymentState: "expired",
+          })
+          .where(eq(workspaceReservations.id, row.id))
+      );
+      await Effect.runPromise(
+        LatePaymentRecoveryRepository.pipe(
+          Effect.flatMap((repo) =>
+            repo.start({
+              paymentAttemptId,
+              workspaceReservationId: row.id,
+              providerStatus: "EXECUTED",
+              verifiedPaidAt: Temporal.Now.instant(),
+            })
+          ),
+          Effect.provide(repositories)
+        )
+      );
+      const reservation = {
+        kind: "table",
+        seats: 4,
+        startsAt: instantStringSchema.make("2030-01-03T09:00:00Z"),
+        endsAt: instantStringSchema.make("2030-01-03T09:15:00Z"),
+      } as const;
+      const quote = await Effect.runPromise(
+        buildTableReservationQuote(reservation)
+      );
+      const snapshot = {
+        ...makeCoworkInvoiceDocument("en-US").snapshot,
+        reservation,
+        quote,
+      };
+      const providerId = DotyposReservationIdSchema.make("late-team-confirmed");
+      const create = mock(
+        (
+          input: Parameters<DotyposService["Service"]["createReservation"]>[0]
+        ) =>
+          Effect.gen(function* () {
+            const [staged] = yield* testDatabase.db
+              .select()
+              .from(teamTableHoldClaims)
+              .where(eq(teamTableHoldClaims.reservationId, row.id));
+            expect(staged).toMatchObject({
+              purpose: "late_payment",
+              paymentAttemptId,
+              providerReservationIds: null,
+              seats: 4,
+            });
+            expect(input).toMatchObject({
+              status: "CONFIRMED",
+              tableId: "late-team",
+              singleAttempt: true,
+              seats: 4,
+            });
+            expect(input.note).toContain(
+              `Team Table hold: ${staged?.generation}`
+            );
+            return {
+              ...dotyposHoldFixture(providerId),
+              _customerId: input.customerId,
+              _tableId: input.tableId,
+              startDate: input.startDate.toISOString(),
+              endDate: input.endDate.toISOString(),
+              seats: String(input.seats),
+              status: input.status,
+              note: input.note,
+            };
+          })
+      );
+      const provider = Layer.mock(DotyposService, {
+        createReservation: create,
+      });
+      const fulfill = mock(() => Effect.void);
+      const layer = LatePaymentRecoveryService.Default.pipe(
+        Layer.provide(UnpaidHoldRelease.Default),
+        Layer.provide(
+          Layer.mergeAll(
+            repositories,
+            WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase.databasePool),
+            provider,
+            TeamTableHoldClaims.Default.pipe(
+              Layer.provide(Layer.merge(testDatabase.layer, provider))
+            ),
+            Layer.mock(OpenSpaceTableMoves, {
+              repackInCapacitySection: () => Effect.succeed(true),
+            }),
+            Layer.mock(WorkspaceAvailabilityService, {
+              getLiveTeamTablePlan: () =>
+                Effect.succeed({
+                  tableId: DotyposTableIdSchema.make("late-team"),
+                  moves: [],
+                }),
+            }),
+            Layer.mock(AccountingDocumentSnapshots, {
+              find: () => Effect.succeed(snapshot),
+            }),
+            Layer.mock(WorkspaceTableAssignmentService, {}),
+            Layer.mock(ReservationFulfillment, { run: fulfill })
+          )
+        )
+      );
+      const run = () =>
+        Effect.runPromise(
+          LatePaymentRecoveryService.pipe(
+            Effect.flatMap((service) => service.recover({ paymentAttemptId })),
+            Effect.provide(layer)
+          )
+        );
+      expect(await run()).toBe("recovered");
+      expect(await run()).toBe("recovered");
+      expect(create).toHaveBeenCalledTimes(1);
+      const [confirmed] = await Effect.runPromise(
+        testDatabase.db
+          .select()
+          .from(workspaceReservations)
+          .where(eq(workspaceReservations.id, row.id))
+      );
+      expect(confirmed).toMatchObject({
+        reservationState: "confirmed",
+        dotyposReservationId: providerId,
+      });
     });
 
     test("waits for the order's lock section before it claims the recovery", async () => {

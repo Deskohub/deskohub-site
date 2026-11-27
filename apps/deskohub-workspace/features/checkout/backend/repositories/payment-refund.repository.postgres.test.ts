@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { eq } from "drizzle-orm";
@@ -134,7 +135,9 @@ describe.skipIf(!testDatabase)(
       const { rows } = await testDatabase.pool.query<{ attempts: number }>(
         "select count(*)::int as attempts from payment_attempts"
       );
-      return rows[0]!.attempts;
+      const [row] = rows;
+      assert(row, "Expected payment attempt count");
+      return row.attempts;
     };
 
     test("checks refundable pass payments alongside reservation payments", async () => {
@@ -152,11 +155,12 @@ describe.skipIf(!testDatabase)(
           })
           .returning({ id: orders.id })
       );
+      assert(order, "Expected inserted pass order");
       const [attempt] = await Effect.runPromise(
         testDatabase.db
           .insert(paymentAttempts)
           .values({
-            orderId: order!.id,
+            orderId: order.id,
             provider: "nexi",
             providerOrderId: NexiOrderIdSchema.make(
               `order-${crypto.randomUUID()}`
@@ -169,15 +173,16 @@ describe.skipIf(!testDatabase)(
           })
           .returning({ id: paymentAttempts.id })
       );
+      assert(attempt, "Expected inserted pass payment attempt");
       const reservationAttempt = await insertCheckout({
         attemptState: "paid",
         refundState: "required",
       });
 
       expect(new Set(await claimedIds({ limit: 2 }))).toEqual(
-        new Set([attempt!.id, reservationAttempt])
+        new Set([attempt.id, reservationAttempt])
       );
-      expect((await readAttempt(attempt!.id))?.refundCheckedAt).not.toBeNull();
+      expect((await readAttempt(attempt.id))?.refundCheckedAt).not.toBeNull();
     });
 
     test("lists paid attempts awaiting a refund and recent paid attempts without a full refund", async () => {

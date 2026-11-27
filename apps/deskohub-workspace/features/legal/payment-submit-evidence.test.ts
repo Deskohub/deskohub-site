@@ -11,10 +11,10 @@ import {
 } from "./payment-submit-evidence";
 
 const termsHash =
-  "dc2faf8fc56123b6349d4acea6f59a94f45f71359e54962ce7eb9ec5e9acc08d";
+  "e62853f945ddd26fba13ce2741649a9c959869832bfd86599e1f221168db4834";
 const operatingRulesHash =
-  "05cefdd98d32159cfce228b230931f9cc257643d90f83f327589732476c8ba56";
-const acceptedAt = "2026-11-18T10:00:00Z";
+  "5f86f935f8d3f4d9bce7c5dc5fc966cf162a6da942a1ffcb0aeba5180d861cbf";
+const acceptedAt = "2026-12-01T10:00:00Z";
 
 // The payment evidence stored for the published documents.
 const expectedEvidence = (earlyPerformanceConsent: boolean) =>
@@ -157,6 +157,29 @@ describe("isCurrentPaymentSubmitLegalAcceptance", () => {
         {
           key: "terms-and-conditions",
           hash: "d56d9e83196b802aee01393512cff46d0fef6e01449c72b229db535b0bf095c6",
+        },
+        current[1],
+      ],
+    ],
+    [
+      "the previous membership branch's published documents",
+      [
+        {
+          key: "terms-and-conditions",
+          hash: "dc2faf8fc56123b6349d4acea6f59a94f45f71359e54962ce7eb9ec5e9acc08d",
+        },
+        {
+          key: "operating-rules",
+          hash: "05cefdd98d32159cfce228b230931f9cc257643d90f83f327589732476c8ba56",
+        },
+      ],
+    ],
+    [
+      "the Team Table terms before membership wording was integrated",
+      [
+        {
+          key: "terms-and-conditions",
+          hash: "9298a95d5fe754a935449cba7c97303412caafc1f180af96da5781b2ea93dcfb",
         },
         current[1],
       ],

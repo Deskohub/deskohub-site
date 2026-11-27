@@ -611,7 +611,7 @@ export function UnlimitedPassCheckout({
           activeStepKey={stage}
           label={m.unlimitedPassCheckoutSteps({}, { locale })}
           labels={{
-            chooseSpace: m.unlimitedPassCheckoutChoose({ days }, { locale }),
+            chooseSpace: m.unlimitedPassCheckoutChoose({}, { locale }),
             contact: m.unlimitedPassCheckoutHolder({}, { locale }),
           }}
           locale={locale}

@@ -1,7 +1,10 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+} from "@deskohub/dotypos";
 import { eq, inArray } from "drizzle-orm";
 import { Effect, Layer, Option } from "effect";
 import { customerAccounts, workspaceReservations } from "@/db/schema";
@@ -17,7 +20,10 @@ import {
 } from "@/features/checkout/checkout-identifiers";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { agentSelectionKeySchema } from "./booking-agent";
 import {
   type CreateWorkspaceReservationDraftInput,
@@ -27,7 +33,7 @@ import {
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
 describe.skipIf(!testDatabase)("Reservation authors on Postgres", () => {
-  const postgres = testDatabase!;
+  const postgres = requireTestDatabase(testDatabase);
   const reservationIds: WorkspaceReservationId[] = [];
   const accountIds: CustomerAccountId[] = [];
 
@@ -143,7 +149,9 @@ describe.skipIf(!testDatabase)("Reservation authors on Postgres", () => {
       .update(workspaceReservations)
       .set({
         reservationState: "cancelling",
-        dotyposReservationId: `dotypos-${crypto.randomUUID()}` as never,
+        dotyposReservationId: DotyposReservationIdSchema.make(
+          `dotypos-${crypto.randomUUID()}`
+        ),
       })
       .where(eq(workspaceReservations.id, superseded.id))
       .pipe(Effect.runPromise);
@@ -210,7 +218,9 @@ describe.skipIf(!testDatabase)("Reservation authors on Postgres", () => {
       .update(workspaceReservations)
       .set({
         reservationState: "cancelling",
-        dotyposReservationId: `dotypos-${crypto.randomUUID()}` as never,
+        dotyposReservationId: DotyposReservationIdSchema.make(
+          `dotypos-${crypto.randomUUID()}`
+        ),
       })
       .where(eq(workspaceReservations.id, superseded.id))
       .pipe(Effect.runPromise);
@@ -329,7 +339,9 @@ describe.skipIf(!testDatabase)("Reservation authors on Postgres", () => {
           .set({
             reservationState: input.reservationState,
             paymentState: input.paymentState,
-            dotyposReservationId: `dotypos-${crypto.randomUUID()}` as never,
+            dotyposReservationId: DotyposReservationIdSchema.make(
+              `dotypos-${crypto.randomUUID()}`
+            ),
             paidAt:
               input.paymentState === "paid" ? Temporal.Now.instant() : null,
           })

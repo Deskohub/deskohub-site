@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
 import { SqlError } from "effect/sql";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
+import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { CustomerAccountLinkRepository } from "./customer-account-link.repository";
 import {
   CustomerAccountSections,
@@ -86,6 +87,43 @@ describe("CustomerAccountSections.withOptionalAccount", () => {
       "section",
       "account-lock-released",
     ]);
+  });
+
+  test("rechecks account authority under a capacity section that already holds its key", async () => {
+    const { layer, events } = makeCustomerAccountSections({
+      session: {},
+      activityState: "active",
+    });
+    const combinedLock = {
+      withLocks: <A, E, R>(
+        _keys: readonly unknown[],
+        effect: Effect.Effect<A, E, R>
+      ) =>
+        Effect.sync(() => events.push("combined-lock-acquired")).pipe(
+          Effect.andThen(effect)
+        ),
+    };
+
+    const result = await runSections(layer, (sections) =>
+      WorkspaceLockSections.reservationCapacity(
+        [Temporal.PlainDate.from("2026-12-01")],
+        {
+          authorAccountId: sectionAccountId,
+        }
+      )(
+        sections.withActiveAccount(sectionAccountId, HeldCustomerAccount, {
+          recheck: "active",
+        })
+      ).pipe(
+        Effect.provide(Layer.mock(WorkspaceDatabaseAdvisoryLock, combinedLock))
+      )
+    );
+
+    expect(result).toMatchObject({
+      _tag: "Success",
+      success: { accountId: sectionAccountId },
+    });
+    expect(events).toEqual(["combined-lock-acquired", "account-activity"]);
   });
 
   test("provides the held account to the section", async () => {

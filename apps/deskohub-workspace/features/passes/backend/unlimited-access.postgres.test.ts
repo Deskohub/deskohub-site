@@ -455,7 +455,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         return passes.find((pass) => pass.orderId === original.orderId);
       };
       const renewalPath = `/en-US/passes/unlimited?renew=${original.orderId}`;
-      expect(await accountPass()).toMatchObject({ renewalPath });
+      const statusPath = `/en-US/reservation/status/${original.orderId}`;
+      expect(await accountPass()).toMatchObject({ renewalPath, statusPath });
       const reads: string[] = [];
       expect(
         await load(original.orderId, "open-space", buyer, afterCutoff, {
@@ -939,6 +940,48 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           }).pipe(Effect.andThen(issue())),
       });
       expect(access).toEqual({ state: "not-found" });
+    });
+
+    test("formats Czech Account Unlimited pass dates consistently with spaced dates", async () => {
+      const { orderId } = await seedPass("open-space", false, {
+        start: "2027-03-03",
+        end: "2027-04-02",
+      });
+      await database.pool.query(
+        "update orders set paid_at = '2026-11-26T12:00:00Z' where id = $1",
+        [orderId]
+      );
+
+      const passes = await Effect.runPromise(
+        loadAccountUnlimitedPasses("cs-CZ").pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              database.layer,
+              Layer.mock(AdvisoryAvailabilityInventory, {}),
+              Layer.mock(CurrentCustomerAccount, {
+                peek: Effect.succeed({
+                  kind: "unlinked",
+                  reviewMarker: "absent",
+                  session: {
+                    ...testSessionProfile,
+                    accountId: buyer,
+                    deletionRequested: false,
+                    email: testEmailAddress("pass-cs-viewer"),
+                  },
+                }),
+              })
+            )
+          ),
+          atInstant(Temporal.Instant.from("2026-11-27T10:00:00Z"))
+        )
+      );
+
+      expect(passes.find((pass) => pass.orderId === orderId)).toMatchObject({
+        status: "upcoming",
+        period: "3. 3. 2027 – 1. 4. 2027",
+        startsOn: "3. 3. 2027",
+        boughtOn: "26. 11. 2026",
+      });
     });
   }
 );

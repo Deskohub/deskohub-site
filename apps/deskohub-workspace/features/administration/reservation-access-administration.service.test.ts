@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
+import { AlgoPinSchema } from "@deskohub/igloohome";
 import { Context, Effect, Layer } from "effect";
 import { ReservationFulfillment } from "@/features/checkout/backend/fulfillment/reservation-fulfillment.service";
 import {
@@ -12,14 +13,15 @@ import {
   type ReservationAccessGrant,
   ReservationAccessService,
 } from "@/features/reservation-access";
+import { reservationAccessGrantIdSchema } from "@/features/reservation-access/reservation-access";
 import {
   ReservationAccessAdministration,
   ReservationAccessAdministrationError,
 } from "./reservation-access-administration.service";
 
 const reservationId = workspaceReservationIdSchema.make("reservation-id");
-const baseGrant = {
-  id: "grant-id",
+const baseGrant: ReservationAccessGrant = {
+  id: reservationAccessGrantIdSchema.make("grant-id"),
   reservationId,
   provider: "igloohome",
   credentialType: "algopin_hourly",
@@ -36,7 +38,7 @@ const baseGrant = {
   failureCode: "provider_request_rejected",
   createdAt: Temporal.Instant.from("2099-06-01T08:00:00Z"),
   updatedAt: Temporal.Instant.from("2099-06-01T08:00:00Z"),
-} as ReservationAccessGrant;
+};
 
 const reservation = {
   id: reservationId,
@@ -60,10 +62,10 @@ const runMutation = (
   const issueForReservation = mock(() =>
     Effect.succeed({
       grantId: grant.id,
-      accessCode: "1".repeat(7),
+      accessCode: AlgoPinSchema.make("1".repeat(7)),
       accessStartsAt: grant.accessStartsAt,
       accessEndsAt: grant.accessEndsAt,
-    } as never)
+    })
   );
   const fulfillPaidOrder = mock(() => fulfillment);
   const confirmProviderCredentialRemoved = mock(() =>

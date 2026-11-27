@@ -28,14 +28,17 @@ import { getLandingPageSaleBannerContent } from "./landing-page-sale-banner-cont
 const sources = (
   meetingRoomPublished: boolean,
   saleBanner?: LandingPageSaleBannerContent,
-  officePublished = true
+  officePublished = true,
+  teamTablePublished = false
 ): PublicPageMarkdownSources => ({
   isPublished: (pathname) =>
     !(
       (pathname === "/meeting-room" && !meetingRoomPublished) ||
-      (pathname === "/reservation/office" && !officePublished)
+      (pathname === "/reservation/office" && !officePublished) ||
+      (pathname === "/reservation/table" && !teamTablePublished)
     ),
   offerings: Effect.succeed([]),
+  teamTablePrices: Effect.succeed([]),
   saleBanner: Effect.succeed(saleBanner),
 });
 
@@ -43,16 +46,35 @@ const renderLandingPage = async (
   locale: (typeof locales)[number],
   meetingRoomPublished: boolean,
   saleBanner?: LandingPageSaleBannerContent,
-  officePublished = true
+  officePublished = true,
+  teamTablePublished = false
 ) =>
   serializeMarkdown(
     await Effect.runPromise(
       landingPageMarkdown(
         locale,
-        sources(meetingRoomPublished, saleBanner, officePublished)
+        sources(
+          meetingRoomPublished,
+          saleBanner,
+          officePublished,
+          teamTablePublished
+        )
       )
     )
   );
+
+test("links Team Table only while its booking page is published", async () => {
+  const url = "https://workspace.deskohub.cz/reservation/table";
+
+  expect(
+    markdownLinkUrls(await renderLandingPage("en-US", true))
+  ).not.toContain(url);
+  expect(
+    markdownLinkUrls(
+      await renderLandingPage("en-US", true, undefined, true, true)
+    )
+  ).toContain(url);
+});
 
 /** The banner the HTML page shows for a 20% sale on every cowork product. */
 const coworkSaleBanner = (locale: (typeof locales)[number]) =>

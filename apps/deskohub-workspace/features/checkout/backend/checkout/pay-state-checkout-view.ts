@@ -96,9 +96,9 @@ export const findCheckoutOfficePeople = Effect.fn(
 });
 
 /**
- * Reads the selection from a held office when the Pay token belongs to this
- * visitor. An order without an account author can be recovered with its
- * existing signed Pay token.
+ * Reads the attendees of a held Office or Team Table when the Pay token
+ * belongs to this visitor. An order without an account author can be
+ * recovered with its existing signed Pay token.
  */
 export const findCheckoutOfficeSelectionForVisitor = Effect.fn(
   "payState.findCheckoutOfficeSelectionForVisitor"
@@ -109,13 +109,14 @@ export const findCheckoutOfficeSelectionForVisitor = Effect.fn(
   const state = yield* PayState.open(input.payStateToken, {
     locale: input.locale,
   });
-  if (state.reservation.kind !== "office")
+  if (state.reservation.kind !== "office" && state.reservation.kind !== "table")
     return Option.none<CheckoutOfficeSelection>();
+  const { kind, seats } = state.reservation;
 
   const reservations = yield* WorkspaceReservationRepository;
   const reservation = yield* reservations.findById(state.orderId);
   if (
-    reservation?.reservationDetails.kind !== "office" ||
+    reservation?.reservationDetails.kind !== kind ||
     !isReservationSupersedable(reservation) ||
     !reservation.reservationHoldExpiresAt
   ) {
@@ -141,10 +142,9 @@ export const findCheckoutOfficeSelectionForVisitor = Effect.fn(
   // A null marker means the checkout never recorded a guest list. A list
   // that cannot be read must not silently become a seat-only checkout.
   if (reservation.officeContactAttends === null) {
-    return Option.some<CheckoutOfficeSelection>({
-      kind: "seats",
-      seats: state.reservation.seats,
-    });
+    return kind === "office"
+      ? Option.some<CheckoutOfficeSelection>({ kind: "seats", seats })
+      : Option.none<CheckoutOfficeSelection>();
   }
 
   const invitees = yield* ReservationInvitees;

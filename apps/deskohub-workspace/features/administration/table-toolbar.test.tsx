@@ -15,6 +15,8 @@ import {
   within,
 } from "@testing-library/react";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
+import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -25,11 +27,12 @@ beforeAll(() => {
   registerWorkspaceComponentTestEnv();
 });
 
-const originalFetch = globalThis.fetch;
+let fetchSpy: ReturnType<typeof stubFetch> | undefined;
 
 afterEach(() => {
   cleanup();
-  globalThis.fetch = originalFetch;
+  fetchSpy?.mockRestore();
+  fetchSpy = undefined;
 });
 
 afterAll(async () => {
@@ -126,9 +129,12 @@ describe("AdministrationTableToolbar", () => {
           />
         </RouteLocaleProvider>
       );
-      const rowElement = view.getByRole("region", {
-        name: "Table controls",
-      }).firstElementChild as HTMLElement;
+      const rowElement = elementOf(
+        view.getByRole("region", {
+          name: "Table controls",
+        }).firstElementChild,
+        HTMLElement
+      );
       const [countGroup, controlsGroup] = rowElement.children;
       const expectClasses = (
         element: Element | undefined,
@@ -206,7 +212,7 @@ describe("AdministrationTableToolbar", () => {
         { code: "administration_list_source_unavailable", error: "x" },
         { status: 503 }
       );
-    globalThis.fetch = (async () => unavailable()) as typeof fetch;
+    fetchSpy = stubFetch(async () => unavailable());
     const { AdministrationTableToolbar } = await import("./table-toolbar");
     const view = await act(async () =>
       render(
@@ -239,10 +245,12 @@ describe("AdministrationTableToolbar", () => {
     expect(region.lastElementChild).toBe(alert);
 
     let finish!: () => void;
-    globalThis.fetch = (() =>
-      new Promise<Response>((resolve) => {
-        finish = () => resolve(unavailable());
-      })) as typeof fetch;
+    fetchSpy = stubFetch(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = () => resolve(unavailable());
+        })
+    );
     fireEvent.click(link);
 
     await waitFor(() =>

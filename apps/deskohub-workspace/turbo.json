@@ -45,12 +45,10 @@
         "WORKSPACE_DEPLOYMENT_ID",
         "WORKSPACE_DEPLOYMENT_STAGE",
         "WORKSPACE_LOG_FORMAT",
-        "WORKSPACE_OTLP_ENDPOINT",
         "WORKSPACE_PUBLIC_ORIGIN",
         "WORKSPACE_REVISION_SHA",
         "WORKSPACE_RUNTIME_HOST",
         "WORKSPACE_SERVICE_ROLE",
-        "WORKSPACE_TRACE_PROJECT_ID",
         "WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER"
       ]
     },
@@ -70,12 +68,10 @@
         "WORKSPACE_DEPLOYMENT_ID",
         "WORKSPACE_DEPLOYMENT_STAGE",
         "WORKSPACE_LOG_FORMAT",
-        "WORKSPACE_OTLP_ENDPOINT",
         "WORKSPACE_PUBLIC_ORIGIN",
         "WORKSPACE_REVISION_SHA",
         "WORKSPACE_RUNTIME_HOST",
         "WORKSPACE_SERVICE_ROLE",
-        "WORKSPACE_TRACE_PROJECT_ID",
         "WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER"
       ]
     },
@@ -168,6 +164,7 @@
         "@deskohub/email-posthog#test",
         "@deskohub/email-resend#test",
         "@deskohub/google-calendar#test",
+        "@deskohub/google-oidc#test",
         "@deskohub/i18n#test",
         "@deskohub/igloohome#test",
         "@deskohub/nexi#test",
@@ -179,7 +176,11 @@
         "@deskohub/test-email#test",
         "@deskohub/tooltip#test",
         "@deskohub/workspace-admin-api#test",
+        "@deskohub/workspace-backend#test",
         "@deskohub/workspace-customer-api#test",
+        "@deskohub/workspace-domain#test",
+        "@deskohub/workspace-rpc#test",
+        "@deskohub/workspace-telemetry#test",
         "osm#test"
       ],
       "inputs": []

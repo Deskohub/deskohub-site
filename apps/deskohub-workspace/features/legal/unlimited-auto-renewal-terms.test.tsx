@@ -47,9 +47,17 @@ afterEach(() => {
 const collapseWhitespace = (value: string) => value.replace(/\s+/g, " ").trim();
 
 describe.each([
-  ["cs-CZ", "16. Automatické obnovování členství Unlimited"],
-  ["en-US", "16. Automatic renewal of Unlimited memberships"],
-] as const)("Unlimited renewal terms in %s", (locale, heading) => {
+  [
+    "cs-CZ",
+    "16. Automatické obnovování neomezeného členství",
+    "1. prosince 2026",
+  ],
+  [
+    "en-US",
+    "16. Automatic renewal of Unlimited memberships",
+    "1 December 2026",
+  ],
+] as const)("Unlimited renewal terms in %s", (locale, heading, updatedAt) => {
   test.each(membershipDocumentKeys)(
     "serves the same %s in site HTML, in-app HTML, Markdown and version evidence",
     (key) => {
@@ -60,11 +68,8 @@ describe.each([
       const canonical: CanonicalSections = JSON.parse(
         getCanonicalLegalDocument(served)
       );
-      if (key === documentKey) {
-        expect(served.updatedAt).toBe(published.updatedAt);
-      } else {
-        expect(served.updatedAt).not.toBe(published.updatedAt);
-      }
+      expect(published.updatedAt).toBe(updatedAt);
+      expect(served.updatedAt).toBe(updatedAt);
       expect(served.translationNotice).toBe(published.translationNotice);
       const site = renderToStaticMarkup(
         <LegalPage locale={locale} documentKey={key} />
@@ -113,6 +118,10 @@ describe.each([
   );
 
   test("links to the numbered renewal section and localized pricing", () => {
+    const published = markdownPlainText(
+      serializeMarkdown(legalPageMarkdown(locale, documentKey))
+    );
+    expect(published).not.toContain(heading);
     previewEnabled = true;
     const site = renderToStaticMarkup(
       <LegalPage locale={locale} documentKey={documentKey} />
@@ -135,6 +144,15 @@ describe.each([
     );
     const plainText = markdownPlainText(markdown);
     expect(plainText).not.toContain("16.11");
+    for (const clause of ["7.5 ", "7.6 ", "9.3 ", "9.8 "]) {
+      const publishedClause = published
+        .split("\n")
+        .find((line) => line.startsWith(clause));
+      expect(publishedClause).toBeString();
+      expect(
+        plainText.split("\n").find((line) => line.startsWith(clause))
+      ).toBe(publishedClause);
+    }
     expect(
       plainText.split("\n").find((line) => line.startsWith("9.7 "))
     ).toContain(
@@ -154,6 +172,24 @@ describe.each([
     expect(getOrderClause(getServedLegalDocument(locale, documentKey))).toBe(
       getOrderClause(getLegalDocument(locale, documentKey))
     );
+  });
+
+  test("keeps recurring payment references in privacy section 6 gated", () => {
+    const getRecipients = () => {
+      const canonical: CanonicalSections = JSON.parse(
+        getCanonicalLegalDocument(
+          getServedLegalDocument(locale, "privacy-policy")
+        )
+      );
+      return canonical.sections
+        .find(({ heading }) => heading.startsWith("6. "))
+        ?.body.join(" ");
+    };
+    const publishedRecipients = getRecipients();
+    expect(publishedRecipients).toBeString();
+    expect(publishedRecipients).not.toContain("Nexi");
+    previewEnabled = true;
+    expect(getRecipients()).toContain("Nexi");
   });
 
   test("records the served terms and house rules and rejects older acceptance", () => {

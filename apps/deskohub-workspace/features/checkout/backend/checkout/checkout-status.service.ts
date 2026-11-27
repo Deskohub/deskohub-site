@@ -2,6 +2,7 @@ import type { DotyposCustomer } from "@deskohub/dotypos";
 import {
   type DotyposReservationId,
   DotyposService,
+  type DotyposTable,
   getCustomerDisplayName,
 } from "@deskohub/dotypos";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
@@ -13,6 +14,7 @@ import {
 import type { FulfillmentState, PaymentState } from "@/db/schema";
 import { checkoutStatusTraits } from "@/features/checkout/checkout-status-kind";
 import { getPaymentAttemptAbandonmentCutoff } from "@/features/checkout/provider-order-abandonment";
+import { canAddOfficePerson } from "@/features/office/office-people";
 import { isEndedUnpaidPaymentState } from "@/features/order";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { SharedAvailabilityInventoryLive } from "@/features/reservation/backend/availability-inventory-cache.server";
@@ -24,10 +26,9 @@ import {
   getStoredRebookingSelection,
   type RebookingSelection,
 } from "@/features/reservation/backend/booking-selection";
-import {
-  type CustomerReservationPlacement,
-  getCustomerReservationPlacement,
-} from "@/features/reservation/backend/customer-reservation-placement";
+import type { CustomerReservationPlacement } from "@/features/reservation/backend/customer-reservation-placement";
+import { getCustomerReservationPlacement } from "@/features/reservation/backend/customer-reservation-placement";
+import { loadOpenSpaceTableExclusions } from "@/features/reservation/backend/open-space-table-exclusions";
 import type { ReservationRecord } from "@/features/reservation/backend/reservation-record";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
@@ -46,6 +47,7 @@ import {
   type WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
 import type { ReservationSelection } from "@/features/reservation/selection-path";
+import type { StoredTableReservationDetails } from "@/features/reservation/table-reservation";
 import {
   getBookedPeopleQuery,
   ReservationInvitees,
@@ -109,6 +111,9 @@ export type CheckoutMeetingRoomStatusSummary = CheckoutStatusSummaryBase &
 export type CheckoutOfficeStatusSummary = CheckoutStatusSummaryBase &
   StoredOfficeReservationDetails & { readonly seats: number };
 
+type CheckoutTableStatusSummary = CheckoutStatusSummaryBase &
+  StoredTableReservationDetails;
+
 type CheckoutStatusContactPrefill = {
   readonly name?: string;
   readonly email?: string;
@@ -167,6 +172,14 @@ type CheckoutOfficeStatusViewModel = CheckoutReservationStatusViewModelBase & {
   readonly people?: ReservationPeopleView;
 };
 
+type CheckoutTableStatusViewModel = CheckoutReservationStatusViewModelBase & {
+  readonly kind: "table";
+  readonly summary?: CheckoutTableStatusSummary;
+  readonly people?: ReservationPeopleView;
+  /** The exclusive end of the booking while the booker can add an invitee. */
+  readonly inviteeAdditionEndsAt?: Temporal.Instant;
+};
+
 type CheckoutStatusNotFoundViewModel = CheckoutStatusViewModelBase & {
   readonly status: "not_found";
   readonly summary?: undefined;
@@ -175,7 +188,8 @@ type CheckoutStatusNotFoundViewModel = CheckoutStatusViewModelBase & {
 type CheckoutReservationStatusViewModel =
   | CheckoutCoworkStatusViewModel
   | CheckoutMeetingRoomStatusViewModel
-  | CheckoutOfficeStatusViewModel;
+  | CheckoutOfficeStatusViewModel
+  | CheckoutTableStatusViewModel;
 
 export type CheckoutStatusViewModel =
   | CheckoutReservationStatusViewModel
@@ -193,11 +207,20 @@ type CheckoutStatusReservationReconstruction =
   | {
       readonly kind: "office";
       readonly summary?: CheckoutOfficeStatusSummary;
+    }
+  | {
+      readonly kind: "table";
+      readonly summary?: CheckoutTableStatusSummary;
     };
 
 type CheckoutStatusReconstruction = {
   readonly reservation: CheckoutStatusReservationReconstruction;
-  readonly placement?: CustomerReservationPlacement;
+  readonly placement?: {
+    readonly dotyposReservation: ReservationRecord;
+    readonly tables: readonly DotyposTable[];
+    readonly seatingMap: boolean;
+    readonly occupiedInterval: BookedReservation["occupiedInterval"];
+  };
   readonly bookedSelection?: RebookingSelection;
 };
 
@@ -282,6 +305,7 @@ const getEmptyCheckoutStatusReservation = (
       cowork: () => ({ kind: "cowork" as const }),
       "meeting-room": () => ({ kind: "meeting-room" as const }),
       office: () => ({ kind: "office" as const }),
+      table: () => ({ kind: "table" as const }),
     })
   );
 
@@ -336,6 +360,18 @@ const toStatusReservation = ({
           },
         };
       },
+      table: (details) => {
+        const seats = Option.getOrUndefined(booked.seats) ?? details.seats;
+        return {
+          kind: "table" as const,
+          summary: {
+            ...details,
+            ...timing,
+            price: attempt.amount,
+            ...(seats !== undefined && { seats }),
+          },
+        };
+      },
     })
   );
 
@@ -379,7 +415,7 @@ const implementation = Effect.gen(function* () {
   const invitees = yield* ReservationInvitees;
 
   // Who is coming is extra detail: a status still answers without it.
-  const loadOfficePeople = Effect.fnUntraced(function* (
+  const loadReservationPeople = Effect.fnUntraced(function* (
     reservation: WorkspaceReservation,
     loadDotyposReservation: Effect.Effect<ReservationRecord | undefined>
   ) {
@@ -392,15 +428,28 @@ const implementation = Effect.gen(function* () {
           }).pipe(Effect.as(Option.none()))
         )
       );
-    if (Option.isNone(booked)) return Option.none<ReservationPeopleView>();
-    const resendable =
+    if (Option.isNone(booked)) return undefined;
+    const confirmed =
       reservation.paymentState === "paid" &&
-      reservation.reservationState === "confirmed" &&
-      (yield* loadDotyposReservation)?.status === "CONFIRMED";
+      reservation.reservationState === "confirmed";
+    const record = confirmed ? yield* loadDotyposReservation : undefined;
+    const resendable = record?.status === "CONFIRMED";
     const now = yield* currentInstant;
-    return Option.some(
-      toReservationPeopleView(booked.value, { now, resendable })
-    );
+    const people = toReservationPeopleView(booked.value, { now, resendable });
+
+    if (reservation.reservationDetails.kind === "table" && resendable) {
+      const { interval, seats } = decodeBookedReservation(record);
+      if (
+        Option.isSome(interval) &&
+        Option.isSome(seats) &&
+        canAddOfficePerson(people, seats.value) &&
+        Temporal.Instant.compare(now, interval.value.endsAt) < 0
+      ) {
+        return { people, inviteeAdditionEndsAt: interval.value.endsAt };
+      }
+    }
+
+    return { people };
   });
 
   /** Shares the live reservation read between the status and its summary. */
@@ -527,17 +576,16 @@ const implementation = Effect.gen(function* () {
         "Checkout status summary Dotypos reservation loaded"
       );
 
-      const placement = getCustomerReservationPlacement({
-        reservationDetails: reservation.reservationDetails,
-        dotyposReservation,
-        tables,
-        seatingMap: seatingMapEnabled,
-      });
-
       const booked = decodeBookedReservation(
         dotyposReservation,
         reservation.reservationDetails
       );
+      const placement = {
+        dotyposReservation,
+        tables,
+        seatingMap: seatingMapEnabled,
+        occupiedInterval: booked.occupiedInterval,
+      };
       const timing = yield* getDotyposReservationTiming({
         reservationId: reservation.id,
         reservation: booked,
@@ -849,7 +897,7 @@ const implementation = Effect.gen(function* () {
           statusKind,
           paymentPageReopenable,
           supportContactPrefill,
-          people,
+          reservationPeople,
         },
         reconstruction,
         retrySelection,
@@ -857,26 +905,27 @@ const implementation = Effect.gen(function* () {
         Effect.all(
           [
             Effect.gen(function* () {
-              const [status, people] = yield* Effect.all(
+              const [status, reservationPeople] = yield* Effect.all(
                 [
                   resolveStatusKind(
                     reservation,
                     refreshed,
                     loadDotyposReservation
                   ),
-                  reservation.reservationDetails.kind === "office"
-                    ? loadOfficePeople(reservation, loadDotyposReservation)
-                    : Effect.succeed(Option.none()),
+                  reservation.reservationDetails.kind === "office" ||
+                  reservation.reservationDetails.kind === "table"
+                    ? loadReservationPeople(reservation, loadDotyposReservation)
+                    : Effect.undefined,
                 ],
                 { concurrency }
               );
               const supportContactPrefill =
                 (input.includeSupportContact ?? true) &&
                 (checkoutStatusTraits[status.statusKind].showsCustomerContact ||
-                  Option.isSome(people))
+                  reservationPeople !== undefined)
                   ? yield* loadSupportContactPrefill(reservation)
                   : undefined;
-              return { ...status, people, supportContactPrefill };
+              return { ...status, reservationPeople, supportContactPrefill };
             }),
             reconstructSummary(reservation, loadDotyposReservation).pipe(
               Effect.timeoutOrElse({
@@ -894,17 +943,51 @@ const implementation = Effect.gen(function* () {
         )
       );
 
+      // A cancelled reservation or one still in late-payment recovery has no
+      // place to show. A slow overlap read should leave the summary intact.
+      const source =
+        !latePaymentStatusKind && statusKind !== "reservation_cancelled"
+          ? reconstruction.placement
+          : undefined;
+      const openSpaceExcludedTableIds = source?.tables.length
+        ? yield* loadOpenSpaceTableExclusions(
+            [
+              {
+                id: reservation.id,
+                reservationDetails: reservation.reservationDetails,
+                occupiedInterval: source.occupiedInterval,
+              },
+            ],
+            { dotypos, reservations }
+          ).pipe(
+            Effect.timeout(summaryTimeout),
+            Effect.map((exclusions) => exclusions.get(reservation.id)),
+            Effect.tapError((cause) =>
+              Effect.logWarning(
+                "Checkout status Open Space table exclusions load failed",
+                {
+                  cause,
+                }
+              )
+            ),
+            Effect.orElseSucceed(() => undefined)
+          )
+        : undefined;
+      const placement =
+        source &&
+        getCustomerReservationPlacement({
+          ...source,
+          reservationDetails: reservation.reservationDetails,
+          openSpaceExcludedTableIds,
+        });
+
       const resultBase: CheckoutReservationStatusViewModelBase = {
         orderId: reservation.id,
         returnOutcome: input.returnOutcome,
         status: statusKind,
         paymentStatus: reservation.paymentState,
         fulfillmentStatus: reservation.fulfillmentState,
-        // A cancelled reservation or one still in late-payment recovery
-        // has no assigned place to show.
-        ...(!latePaymentStatusKind &&
-          statusKind !== "reservation_cancelled" &&
-          reconstruction.placement),
+        ...placement,
         supportContactPrefill,
         ...(paymentPageReopenable && { paymentPageReopenable: true as const }),
         // A late payment that settled takes over the status, and with it the
@@ -918,10 +1001,7 @@ const implementation = Effect.gen(function* () {
       const result: CheckoutReservationStatusViewModel = {
         ...resultBase,
         ...reconstruction.reservation,
-        ...Option.match(people, {
-          onNone: () => ({}),
-          onSome: (found) => ({ people: found }),
-        }),
+        ...reservationPeople,
       };
 
       yield* Effect.annotateLogsScoped({

@@ -142,6 +142,9 @@ export const getWorkspaceMeetingRoomProductTitle = (locale: Locale) =>
 export const getWorkspaceOfficeProductTitle = (locale: Locale) =>
   getWorkspaceProductMessage(m.reservationOfficeProductTitle, locale);
 
+export const getWorkspaceTableProductTitle = (locale: Locale) =>
+  getWorkspaceProductMessage(m.reservationTableProductTitle, locale);
+
 /** The catalog name of the product a stored reservation booked. */
 export const getReservationProductTitle = (
   details: StoredWorkspaceReservationDetails,
@@ -153,6 +156,7 @@ export const getReservationProductTitle = (
         getWorkspaceProductTierTitle(entryTier, locale),
       "meeting-room": () => getWorkspaceMeetingRoomProductTitle(locale),
       office: () => getWorkspaceOfficeProductTitle(locale),
+      table: () => getWorkspaceTableProductTitle(locale),
     })
   );
 

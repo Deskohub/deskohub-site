@@ -112,6 +112,8 @@ const isComplete = Match.type<StoredWorkspaceReservationDetails>().pipe(
   Match.discriminatorsExhaustive("kind")({
     // Cowork snapshots have no catalog identity to fill.
     cowork: () => true,
+    // Team Table writes its product details on every hold.
+    table: () => true,
     "meeting-room": ({ duration }) => duration !== undefined,
     office: ({ seats, dayCount }) =>
       seats !== undefined && dayCount !== undefined,

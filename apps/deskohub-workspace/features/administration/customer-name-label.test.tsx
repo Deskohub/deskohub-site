@@ -6,9 +6,9 @@ import {
   expect,
   test,
 } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { cleanup, render } from "@testing-library/react";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
-import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -20,7 +20,7 @@ import {
 } from "./customer-name-label";
 import { m } from "./i18n";
 
-const customerId = "customer-1" as DotyposCustomerId;
+const customerId = DotyposCustomerIdSchema.make("customer-1");
 
 const customer = (
   fields: Partial<AdministrationCustomerName>

@@ -6,6 +6,7 @@ import { Controller, useForm } from "react-hook-form";
 import {
   getWorkspaceMeetingRoomProductTitle,
   getWorkspaceOfficeProductTitle,
+  getWorkspaceTableProductTitle,
 } from "@/features/checkout/product-catalog.i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { Button } from "@/shared/components/ui/button";
@@ -427,6 +428,7 @@ export function ReservationsAdministrationFilterForm({
           <option value="office">
             {getWorkspaceOfficeProductTitle(locale)}
           </option>
+          <option value="table">{getWorkspaceTableProductTitle(locale)}</option>
         </AdministrationFilterSelect>
       </AdministrationFilterField>
       <Controller

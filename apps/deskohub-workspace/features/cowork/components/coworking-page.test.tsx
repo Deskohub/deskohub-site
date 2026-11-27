@@ -88,14 +88,23 @@ const renderPage = async (
     readonly visibleOnly?: boolean;
   } = {}
 ) => {
+  const renderErrors: unknown[] = [];
   const { prelude } = await prerender(
     <CoworkingPage locale={locale} offerings={offerings} photos={[]} />,
-    { signal }
+    {
+      signal,
+      onError(error) {
+        if (!signal?.aborted || error !== signal.reason) {
+          renderErrors.push(error);
+        }
+      },
+    }
   );
   const document = new DOMParser().parseFromString(
     await new Response(prelude).text(),
     "text/html"
   );
+  expect(renderErrors).toEqual([]);
   if (visibleOnly) {
     for (const element of document.querySelectorAll("[hidden], script")) {
       element.remove();

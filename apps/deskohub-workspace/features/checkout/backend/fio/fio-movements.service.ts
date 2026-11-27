@@ -37,6 +37,7 @@ export interface FioPeriod {
 export interface FioMovement {
   readonly movementId: string;
   readonly bookingDate: string;
+  readonly constantSymbol: string | null;
   readonly amount:
     | { readonly _tag: "CZK"; readonly minorUnits: number }
     | {
@@ -59,7 +60,7 @@ class FioUnavailable extends Data.TaggedError("FioUnavailable")<{
   readonly httpStatus?: number;
 }> {}
 
-class FioRejected extends Data.TaggedError("FioRejected")<{
+export class FioRejected extends Data.TaggedError("FioRejected")<{
   readonly reason:
     | "invalid-request"
     | "invalid-response"
@@ -70,14 +71,11 @@ class FioRejected extends Data.TaggedError("FioRejected")<{
   readonly httpStatus?: number;
 }> {}
 
-class FioHistoryAccessRequired extends Data.TaggedError(
+export class FioHistoryAccessRequired extends Data.TaggedError(
   "FioHistoryAccessRequired"
 ) {}
 
-export type FioReadFailure =
-  | FioUnavailable
-  | FioRejected
-  | FioHistoryAccessRequired;
+type FioReadFailure = FioUnavailable | FioRejected | FioHistoryAccessRequired;
 
 interface FioMovementsService {
   readonly readPeriod: (
@@ -256,6 +254,7 @@ const numericText = Schema.Union([
   Schema.instanceOf(JsonNumberLexeme),
 ]);
 const numericColumn = Schema.Struct({ value: numericText });
+const constantSymbolColumn = Schema.decodeUnknownOption(numericColumn);
 const referenceColumn = Schema.decodeUnknownOption(
   Schema.Struct({ value: Schema.NullOr(Schema.String) })
 );
@@ -264,6 +263,7 @@ const movement = Schema.Struct({
   column0: numericColumn,
   column1: numericColumn,
   column14: Schema.Struct({ value: Schema.String }),
+  column4: Schema.optionalKey(Schema.Unknown),
   column5: Schema.optionalKey(Schema.Unknown),
 });
 const statement = Schema.Struct({
@@ -399,6 +399,7 @@ function decodeMovement(row: typeof movement.Type): FioMovement | undefined {
     movementId,
     bookingDate: date,
     amount,
+    constantSymbol: decodeConstantSymbol(row),
     reference: decodeReference(row),
   };
 }
@@ -443,6 +444,16 @@ function decodeAmount(
   return BigDecimal.isInteger(scaled) && Number.isSafeInteger(minorUnits)
     ? { _tag: "CZK", minorUnits }
     : undefined;
+}
+
+function decodeConstantSymbol({
+  column4,
+}: Pick<typeof movement.Type, "column4">): FioMovement["constantSymbol"] {
+  const decoded = constantSymbolColumn(column4);
+  if (Option.isNone(decoded)) return null;
+
+  const digits = originalNumericText(decoded.value.value);
+  return /^\d{1,4}$/.test(digits) ? digits.padStart(4, "0") : null;
 }
 
 function decodeReference({

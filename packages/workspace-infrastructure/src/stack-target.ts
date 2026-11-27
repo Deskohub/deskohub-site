@@ -41,6 +41,11 @@ export class StateBucketUnreadable extends Data.TaggedError(
   readonly reason: string;
 }> {}
 
+type StackTarget = Pick<
+  WorkspaceStackConfig,
+  "stage" | "projectId" | "region" | "stateBucket"
+>;
+
 /**
  * Refuse to touch state unless the Alchemy stage, the effective GCP
  * project (credentials, profile or environment, as the provider resolves
@@ -66,7 +71,7 @@ export class StateBucketUnreadable extends Data.TaggedError(
  * the bucket's unless the stage's services actually run there.
  */
 export const verifyStackTarget = Effect.fn("WorkspaceStack.verifyStackTarget")(
-  function* (config: WorkspaceStackConfig) {
+  function* (config: StackTarget) {
     const stage = yield* Stage;
     const { project } = yield* GcpEnvironment.current;
     if (stage !== config.stage || project !== config.projectId) {
@@ -111,7 +116,7 @@ const noAnswerReasons = {
 } satisfies Record<GoogleApiNoAnswer, string>;
 
 const readStateBucketLocation = Effect.fnUntraced(function* (
-  config: WorkspaceStackConfig
+  config: StackTarget
 ) {
   const googleApi = yield* makeGoogleApi();
   const request = HttpClientRequest.get(

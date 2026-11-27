@@ -1,11 +1,16 @@
 import "@/shared/testing/workspace-test-env";
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
+  DotyposBranchIdSchema,
+  DotyposCloudIdSchema,
+  type DotyposReservation,
+  DotyposReservationIdSchema,
   type DotyposReservationInterval,
   DotyposService,
+  type DotyposTable,
+  DotyposTableIdSchema,
 } from "@deskohub/dotypos";
-import type { Reservation, Table } from "@deskohub/dotypos/generated";
 import { Effect, Layer } from "effect";
 import "@/shared/polyfills/temporal";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
@@ -16,8 +21,6 @@ import {
   type WorkspaceTableAssignmentReservation,
   WorkspaceTableAssignmentService,
 } from "./workspace-table-assignment.service";
-
-type DotyposAssignmentTestService = typeof DotyposService.Service;
 
 type MakeCoworkReservationInput =
   | {
@@ -118,7 +121,7 @@ const makeOfficeReservation = (
 });
 
 const makeTable = (input: {
-  readonly id?: string;
+  readonly id: string;
   readonly name: string;
   readonly tags?: string[];
   readonly seats?: string;
@@ -127,26 +130,27 @@ const makeTable = (input: {
   readonly locationName?: string;
   readonly display?: boolean;
   readonly enabled?: boolean;
-}): Table => ({
-  _cloudId: "cloud",
+}): DotyposTable => ({
+  _cloudId: DotyposCloudIdSchema.make("cloud"),
   display: true,
   enabled: true,
   seats: "1",
   ...input,
+  id: DotyposTableIdSchema.make(input.id),
 });
 
 const makeDotyposReservation = (input: {
   readonly id?: string;
   readonly tableId: string;
-  readonly status: Reservation["status"];
+  readonly status: DotyposReservation["status"];
   readonly seats?: string;
   readonly startDate?: string;
   readonly endDate?: string;
-}): Reservation => ({
-  _branchId: "branch",
-  _cloudId: "cloud",
-  id: input.id,
-  _tableId: input.tableId,
+}): DotyposReservation => ({
+  _branchId: DotyposBranchIdSchema.make("branch"),
+  _cloudId: DotyposCloudIdSchema.make("cloud"),
+  id: DotyposReservationIdSchema.make(input.id ?? crypto.randomUUID()),
+  _tableId: DotyposTableIdSchema.make(input.tableId),
   startDate: input.startDate ?? "2099-06-09T22:00:00Z",
   endDate: input.endDate ?? "2099-06-10T22:00:00Z",
   seats: input.seats ?? "1",
@@ -154,39 +158,32 @@ const makeDotyposReservation = (input: {
 });
 
 const makeAssignmentLayer = (
-  tables: readonly Table[],
-  dotyposReservations: readonly Reservation[],
+  tables: readonly DotyposTable[],
+  dotyposReservations: readonly DotyposReservation[],
   expiredHoldDotyposReservationIds: readonly string[],
   onReservationInterval?: (interval: DotyposReservationInterval) => void
 ) => {
-  const dotyposService: DotyposAssignmentTestService = {
-    createReservation: mock(() => Effect.die("createReservation not mocked")),
-    getReservation: mock(() => Effect.die("getReservation not mocked")),
-    getCustomer: mock(() => Effect.die("getCustomer not mocked")),
-    findCustomer: mock(() => Effect.die("findCustomer not mocked")),
-    findOrCreateCustomer: mock(() =>
-      Effect.die("findOrCreateCustomer not mocked")
-    ),
-    getTables: mock(() => Effect.succeed([...tables])),
-    listActiveReservationsOverlapping: mock((interval) => {
-      onReservationInterval?.(interval);
-      return Effect.succeed([...dotyposReservations]);
-    }),
-    listReservations: mock(() => Effect.succeed([...dotyposReservations])),
-    getProducts: mock(() => Effect.die("getProducts not mocked")),
-    getCategories: mock(() => Effect.die("getCategories not mocked")),
-  };
-
   return WorkspaceTableAssignmentService.Default.pipe(
     Layer.provide(
       Layer.mergeAll(
-        Layer.succeed(DotyposService, dotyposService),
-        Layer.succeed(WorkspaceReservationRepository, {
+        Layer.mock(DotyposService, {
+          getTables: () => Effect.succeed([...tables]),
+          listActiveReservationsOverlapping: (interval) => {
+            onReservationInterval?.(interval);
+            return Effect.succeed(dotyposReservations);
+          },
+          listReservations: () => Effect.succeed([...dotyposReservations]),
+        }),
+        Layer.mock(WorkspaceReservationRepository, {
+          selectLocalTableCapacity: () => Effect.succeed([]),
           selectPendingPassDayCapacity: () => Effect.succeed([]),
-          selectExpiredHoldDotyposReservationIds: mock(() =>
-            Effect.succeed([...expiredHoldDotyposReservationIds])
-          ),
-        } as never)
+          selectExpiredHoldDotyposReservationIds: () =>
+            Effect.succeed(
+              expiredHoldDotyposReservationIds.map((id) =>
+                DotyposReservationIdSchema.make(id)
+              )
+            ),
+        })
       )
     )
   );
@@ -194,8 +191,8 @@ const makeAssignmentLayer = (
 
 const assignTableId = (
   reservation: WorkspaceTableAssignmentReservation,
-  tables: readonly Table[],
-  dotyposReservations: readonly Reservation[] = [],
+  tables: readonly DotyposTable[],
+  dotyposReservations: readonly DotyposReservation[] = [],
   expiredHoldDotyposReservationIds: readonly string[] = [],
   onReservationInterval?: (interval: DotyposReservationInterval) => void
 ) =>
@@ -216,11 +213,11 @@ const assignTableId = (
 
 const getAssignedTableAvailability = (
   input: {
-    readonly reservation: Reservation;
+    readonly reservation: DotyposReservation;
     readonly kind: WorkspaceReservationKind;
   },
-  tables: readonly Table[],
-  dotyposReservations: readonly Reservation[] = [],
+  tables: readonly DotyposTable[],
+  dotyposReservations: readonly DotyposReservation[] = [],
   expiredHoldDotyposReservationIds: readonly string[] = [],
   onReservationInterval?: (interval: DotyposReservationInterval) => void
 ) =>
@@ -380,6 +377,28 @@ describe("WorkspaceTableAssignmentService", () => {
       _tag: "TableAssignmentUnavailableError",
       requiredTags: ["cowork:open-space"],
     });
+  });
+
+  test("uses ordinary Open Space before a Team Table with free seats", async () => {
+    const teamTable = makeTable({
+      id: "team-table",
+      name: "A Team Table",
+      tags: ["cowork:open-space", "reservation:table"],
+      seats: "4",
+    });
+    const openSpace = makeTable({
+      id: "open-space",
+      name: "Z Open Space",
+      tags: ["cowork:open-space"],
+    });
+
+    await expect(
+      assignTableId(
+        makeReservation({ entryTier: "open-space" }),
+        [teamTable, openSpace],
+        []
+      )
+    ).resolves.toBe(openSpace.id);
   });
 
   test("keeps the 17:00 half-open boundary parity on the assignment path", async () => {
@@ -834,11 +853,11 @@ describe("WorkspaceTableAssignmentService", () => {
       assignTableId(makeReservation({ entryTier: "basic" }), [
         makeTable({ id: "online", name: "Online reservation", tags: [] }),
         {
-          _cloudId: "cloud",
-          id: "missing-display-enabled",
+          _cloudId: DotyposCloudIdSchema.make("cloud"),
+          id: DotyposTableIdSchema.make("missing-display-enabled"),
           name: "0",
           tags: ["tier:basic"],
-        } satisfies Table,
+        } satisfies DotyposTable,
         makeTable({
           id: "hidden",
           name: "1",
@@ -1102,7 +1121,46 @@ describe("WorkspaceTableAssignmentService.getAssignedTableAvailability", () => {
       getAssignedTableAvailability(
         { reservation: restoredCowork, kind: "cowork" },
         [openSpace],
-        [sharing, { ...sharing, id: "sharing-2" }]
+        [
+          sharing,
+          { ...sharing, id: DotyposReservationIdSchema.make("sharing-2") },
+        ]
+      )
+    ).resolves.toBe("unavailable");
+  });
+
+  test("restores a Team Table only on an empty enabled table of the exact size", async () => {
+    const table = makeTable({
+      id: "team",
+      name: "Team",
+      seats: "4",
+      tags: ["cowork:open-space", "reservation:table"],
+    });
+    const restored = makeDotyposReservation({
+      id: "team-restoration",
+      tableId: "team",
+      status: "CANCELLED",
+      seats: "4",
+    });
+    const input = { reservation: restored, kind: "table" as const };
+    await expect(getAssignedTableAvailability(input, [table])).resolves.toBe(
+      "available"
+    );
+    await expect(
+      getAssignedTableAvailability(input, [{ ...table, seats: "6" }])
+    ).resolves.toBe("unavailable");
+    await expect(
+      getAssignedTableAvailability(
+        input,
+        [table],
+        [
+          makeDotyposReservation({
+            id: "other",
+            tableId: "team",
+            status: "CONFIRMED",
+            seats: "1",
+          }),
+        ]
       )
     ).resolves.toBe("unavailable");
   });

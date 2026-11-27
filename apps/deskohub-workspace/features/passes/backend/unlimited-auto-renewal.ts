@@ -7,7 +7,10 @@ import { getLegalDocumentPath } from "@/features/legal/legal-document-path";
 import { supportsUnlimitedAutoRenewalTerms } from "@/features/legal/unlimited-auto-renewal-terms";
 import { moneyEquals } from "@/shared/money/money";
 import { getUnlimitedPassPrice } from "../pass-offer";
-import { withPassPurchaseAddons } from "../pass-purchase-quote";
+import {
+  catalogCoffeeAmountMinor,
+  withPassPurchaseCoffee,
+} from "../pass-purchase-quote";
 import type {
   UnlimitedAutoRenewalAuthorization,
   UnlimitedAutoRenewalDisclosure,
@@ -31,9 +34,9 @@ export function readUnlimitedAutoRenewalDisclosure(
   }
 
   return {
-    amount: withPassPurchaseAddons(
+    amount: withPassPurchaseCoffee(
       getUnlimitedPassPrice({ kind: "unlimited", tier: purchase.tier }),
-      purchase.unlimitedCoffee
+      catalogCoffeeAmountMinor(purchase.unlimitedCoffee)
     ),
     nextRenewalOn: purchase.validUntil,
     termsHash: getLegalDocumentVersion(purchase.locale, "terms-and-conditions"),

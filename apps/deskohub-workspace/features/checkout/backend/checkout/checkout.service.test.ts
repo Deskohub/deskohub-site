@@ -4,7 +4,7 @@ import "@/shared/polyfills/temporal";
 import { withReservationPaymentHandlers } from "../payment/order-payment-handlers.test-utils";
 import "@/shared/testing/workspace-test-env";
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, setSystemTime, test } from "bun:test";
 import {
   DotyposService,
   dotyposApiTimeoutDefaultMilliseconds,
@@ -1398,36 +1398,34 @@ describe("CheckoutService", () => {
     ]);
   });
 
-  test("rejects checkout when the required early-performance request is missing", async () => {
-    const nearTermReservation = normalizedCoworkReservationOrderSchema.make({
-      ...reservationData,
-      date: Temporal.Now.zonedDateTimeISO(
-        workspaceSiteConstants.location.timeZone
-      )
-        .toPlainDate()
-        .add({ days: 1 })
-        .toString(),
-    });
-    const harness = await createCheckoutHarness({
-      orderId: "0198c1a2-77be-7a82-81e0-62a6cf125055",
-      earlyPerformanceConsent: false,
-      payStateToken: buildPayStateToken({
-        orderId: "0198c1a2-77be-7a82-81e0-62a6cf125055",
-        reservation: nearTermReservation,
-      }),
-    });
+  test("rejects checkout without early-performance consent on the extended withdrawal date", async () => {
+    setSystemTime(new Date("2026-11-28T12:00:00Z"));
+    try {
+      const orderId = "0198c1a2-77be-7a82-81e0-62a6cf125055";
+      const reservation = normalizedCoworkReservationOrderSchema.make({
+        ...reservationData,
+        date: "2026-12-14",
+      });
+      const harness = await createCheckoutHarness({
+        orderId,
+        earlyPerformanceConsent: false,
+        payStateToken: buildPayStateToken({ orderId, reservation }),
+      });
 
-    const error = await Effect.runPromise(Effect.flip(harness.effect));
+      const error = await Effect.runPromise(Effect.flip(harness.effect));
 
-    expect(error).toMatchObject({
-      code: "early_performance_consent_required",
-      message: "Early performance consent is required before checkout.",
-    });
-    expect(harness.confirm).toHaveBeenCalled();
-    expect(harness.affirm).toHaveBeenCalled();
-    expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
-    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
-    expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
+      expect(error).toMatchObject({
+        code: "early_performance_consent_required",
+        message: "Early performance consent is required before checkout.",
+      });
+      expect(harness.confirm).toHaveBeenCalled();
+      expect(harness.affirm).toHaveBeenCalled();
+      expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
+      expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
+    } finally {
+      setSystemTime();
+    }
   });
 
   describe("without the required early-performance request", () => {

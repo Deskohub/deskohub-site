@@ -1,3 +1,0 @@
-# The collector image needs only its config from the repository root.
-*
-!apps/deskohub-workspace/otel-collector.cloudrun.yaml

@@ -23,6 +23,8 @@ export const listHeldUnlimitedPasses = Effect.fn("listHeldUnlimitedPasses")(
         paidAt: orders.paidAt,
         grantedAt: orders.fulfilledAt,
         paymentState: orders.paymentState,
+        fulfillmentState: orders.fulfillmentState,
+        giftClaimedAt: passPurchases.giftClaimedAt,
         renewalOverlaps: hasUnlimitedRenewalOverlap,
         deskId: workspaceReservations.passDayTableId,
       })

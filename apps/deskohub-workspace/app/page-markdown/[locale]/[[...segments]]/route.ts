@@ -1,8 +1,8 @@
 import { Effect } from "effect";
 import { NextResponse } from "next/server";
+import { loadGlobalRelease } from "@/features/feature-flags/backend/global-release.server";
 import { getWorkspaceAlternates, type Locale } from "@/features/i18n";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
-import { CoworkPassesReleaseGateRequest } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { offersUnlimitedAutoRenewal } from "@/features/passes/backend/unlimited-auto-renewal";
 import { PublishedPublicPagesService } from "@/features/public-pages/backend";
 import {
@@ -65,21 +65,19 @@ export const GET = defineWorkspaceRoute(
         return notFound();
       }
 
-      const passesOpen =
-        page.pathname === "/pricing" &&
-        (yield* CoworkPassesReleaseGate.decision.pipe(
-          Effect.provide(CoworkPassesReleaseGateRequest)
-        ));
-      const markdown = yield* Effect.tryPromise(() =>
-        renderPublicPageMarkdown(page.locale, page.pathname, {
+      const markdown = yield* Effect.tryPromise(async () => {
+        const passesOpen =
+          page.pathname === "/pricing" &&
+          (await loadGlobalRelease(CoworkPassesReleaseGate.flag)) === "on";
+        return renderPublicPageMarkdown(page.locale, page.pathname, {
           ...releases,
           ...(passesOpen && {
             pricingPasses: {
               offersAutoRenewal: offersUnlimitedAutoRenewal(page.locale),
             },
           }),
-        })
-      );
+        });
+      });
       return new NextResponse(markdown, {
         headers: markdownHeaders(page.locale, page.pathname),
       });

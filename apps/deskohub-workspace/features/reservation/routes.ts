@@ -5,6 +5,7 @@ import type { ReservationOrderData } from "@/features/reservation/reservation-or
 
 export { coworkReservationPath };
 export const meetingRoomReservationPath = "/reservation/meeting-room";
+export const tableReservationPath = "/reservation/table";
 export const officeReservationPath = "/reservation/office";
 export const reservationAccessPath = "/reservation/access";
 export const reservationInvoicePath = "/reservation/invoice";
@@ -40,6 +41,7 @@ const getReservationPath = (kind: ReservationOrderData["kind"]) =>
       cowork: () => coworkReservationPath,
       "meeting-room": () => meetingRoomReservationPath,
       office: () => officeReservationPath,
+      table: () => tableReservationPath,
     })
   );
 

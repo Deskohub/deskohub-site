@@ -7,9 +7,15 @@ import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate
 
 const isMeetingRoomPageEnabled = mock();
 const isOfficePageEnabled = mock();
+const isTeamTablePageEnabled = mock();
 const isCustomerSignedIn = mock();
 const isCurrentAccountAdministrator = mock();
 const updateLocalePreference = mock();
+
+mock.module(
+  "@/features/public-pages/backend/team-table-public-release.server",
+  () => ({ isTeamTablePageEnabled })
+);
 
 mock.module("@/features/account/actions", () => ({
   updateLocalePreference,
@@ -50,10 +56,12 @@ describe("getSiteHeaderConfig", () => {
     isCurrentAccountAdministrator.mockReset();
     isMeetingRoomPageEnabled.mockReset();
     isOfficePageEnabled.mockReset();
+    isTeamTablePageEnabled.mockReset();
     isCustomerSignedIn.mockResolvedValue(false);
     isCurrentAccountAdministrator.mockResolvedValue(false);
     isMeetingRoomPageEnabled.mockResolvedValue(false);
     isOfficePageEnabled.mockResolvedValue(false);
+    isTeamTablePageEnabled.mockResolvedValue(false);
   });
 
   test("omits the Meeting Room item when its release flag is disabled", async () => {
@@ -77,6 +85,18 @@ describe("getSiteHeaderConfig", () => {
     expect(config.links).toContainEqual(
       expect.objectContaining({ id: "coworking", href: "/cs-CZ/coworking" })
     );
+  });
+
+  test("links Team Table only when its release flag is enabled", async () => {
+    const { getSiteHeaderConfig } = await import("./site-header-config");
+    const item = expect.objectContaining({
+      id: "teamTable",
+      href: "/cs-CZ/reservation/table",
+    });
+
+    expect((await getSiteHeaderConfig("cs-CZ")).links).not.toContainEqual(item);
+    isTeamTablePageEnabled.mockResolvedValue(true);
+    expect((await getSiteHeaderConfig("cs-CZ")).links).toContainEqual(item);
   });
 
   test("omits the Private Office link when its release flag is disabled", async () => {

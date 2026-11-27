@@ -17,6 +17,7 @@ import {
   type CustomerReservationPlacement,
   getCustomerReservationPlacement,
 } from "@/features/reservation/backend/customer-reservation-placement";
+import { loadOpenSpaceTableExclusions } from "@/features/reservation/backend/open-space-table-exclusions";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
 import {
   type WorkspaceReservation,
@@ -64,7 +65,8 @@ export type WorkspaceReservationDetails = Pick<
 
 export interface IWorkspaceReservationService {
   readonly getReservation: (
-    id: WorkspaceReservationId
+    id: WorkspaceReservationId,
+    options?: { readonly requireOpenSpaceTableNames: boolean }
   ) => Effect.Effect<
     WorkspaceReservationDetails,
     WorkspaceReservationDetailsError
@@ -160,7 +162,10 @@ export class WorkspaceReservationService extends Context.Service<
       });
 
       const buildDetails = Effect.fn("workspaceReservation.buildDetails")(
-        function* (reservation: WorkspaceReservation) {
+        function* (
+          reservation: WorkspaceReservation,
+          requireOpenSpaceTableNames: boolean
+        ) {
           const { dotyposReservationDetails, dotyposReservationId, tables } =
             yield* loadDotyposReservation(reservation);
           const booked = decodeBookedReservation(
@@ -181,10 +186,36 @@ export class WorkspaceReservationService extends Context.Service<
           }
           const seats = booked.seats.value;
 
+          const openSpaceExcludedTableIds = requireOpenSpaceTableNames
+            ? yield* loadOpenSpaceTableExclusions(
+                [
+                  {
+                    id: reservation.id,
+                    reservationDetails: reservation.reservationDetails,
+                    occupiedInterval: booked.occupiedInterval,
+                  },
+                ],
+                { dotypos, reservations }
+              ).pipe(
+                Effect.map((exclusions) => exclusions.get(reservation.id)),
+                Effect.mapError(
+                  (cause) =>
+                    new WorkspaceReservationDetailsError({
+                      reservationId: reservation.id,
+                      errorCode: "dotypos_reservation_load_failed",
+                      message:
+                        "Open Space table availability could not be loaded.",
+                      cause,
+                    })
+                )
+              )
+            : undefined;
+
           const placement = getCustomerReservationPlacement({
             reservationDetails: reservation.reservationDetails,
             dotyposReservation: dotyposReservationDetails.reservation,
             tables,
+            openSpaceExcludedTableIds,
             seatingMap: yield* seatingMap.isOpen,
           });
 
@@ -249,7 +280,7 @@ export class WorkspaceReservationService extends Context.Service<
           }
         ),
         getReservation: Effect.fn("workspaceReservation.getReservation")(
-          function* (id) {
+          function* (id, options) {
             const reservation = yield* loadReservation(id);
             if (!reservation) {
               return yield* new WorkspaceReservationDetailsError({
@@ -258,7 +289,10 @@ export class WorkspaceReservationService extends Context.Service<
                 message: "Workspace reservation was not found.",
               });
             }
-            return yield* buildDetails(reservation);
+            return yield* buildDetails(
+              reservation,
+              options?.requireOpenSpaceTableNames === true
+            );
           }
         ),
       };

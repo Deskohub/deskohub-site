@@ -770,10 +770,10 @@ export const verifyReservationStatusTransition = (
     return Effect.succeedSome(reservation);
   }
   if (
-    (!alreadyCancelled &&
-      (reservation.status === "CANCELLED" ||
-        (expectedCurrentStatus !== undefined &&
-          reservation.status !== expectedCurrentStatus))) ||
+    (!alreadyCancelled && reservation.status === "CANCELLED") ||
+    (expectedCurrentStatus !== undefined &&
+      reservation.status !== status &&
+      reservation.status !== expectedCurrentStatus) ||
     !matchesReservationBooking(reservation, {
       reservationId,
       expectedBooking: booking,

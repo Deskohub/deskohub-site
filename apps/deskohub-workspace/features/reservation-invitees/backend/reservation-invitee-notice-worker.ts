@@ -383,19 +383,25 @@ const makeNoticeWorker = Effect.gen(function* () {
           now,
           deadline - Date.now(),
           Effect.gen(function* () {
-            if (notice.explicitResend) {
+            if (notice.kind === "invitation") {
               const order = yield* orders.findById(reservationId);
               if (
-                order?.paymentState !== "paid" ||
-                order.reservationState !== "confirmed" ||
-                order.reservationDetails.kind !== "office"
-              )
-                return null;
-              const withdrawal = yield* withdrawals.findByContract({
-                kind: "reservation",
-                id: reservationId,
-              });
-              if (Option.isSome(withdrawal)) return null;
+                notice.explicitResend ||
+                order?.reservationDetails.kind === "table"
+              ) {
+                if (
+                  order?.paymentState !== "paid" ||
+                  order.reservationState !== "confirmed" ||
+                  (order.reservationDetails.kind !== "office" &&
+                    order.reservationDetails.kind !== "table")
+                )
+                  return null;
+                const withdrawal = yield* withdrawals.findByContract({
+                  kind: "reservation",
+                  id: reservationId,
+                });
+                if (Option.isSome(withdrawal)) return null;
+              }
             }
             const reservation =
               yield* reservations.getReservation(reservationId);
@@ -457,7 +463,24 @@ const makeNoticeWorker = Effect.gen(function* () {
     };
   });
 
-  return { drain, resendUnderNoticeLock };
+  // These notices were committed with their guests. Anything the request
+  // cannot dispatch remains due for the worker's next run.
+  const dispatchAddedInvitations = Effect.fn(
+    "reservationInviteeNotices.dispatchAdded"
+  )(function* (reservationId: WorkspaceReservationId, ids: readonly string[]) {
+    const now = yield* currentInstant;
+    const deadline = Date.now() + 8_000;
+    yield* Effect.forEach(
+      ids,
+      (id) =>
+        Date.now() >= deadline
+          ? Effect.void
+          : dispatch({ id, reservationId, now, deadline }),
+      { discard: true }
+    );
+  });
+
+  return { drain, dispatchAddedInvitations, resendUnderNoticeLock };
 });
 
 export class ReservationInviteeNoticeWorker extends Context.Service<

@@ -5,8 +5,6 @@ import type { WorkspaceDatabase } from "@/db/database.service";
 import { CustomerValues } from "@/features/emails/values/customer";
 import { syntheticEmailCustomer } from "@/features/emails/values/preparation/synthetic-email-customer";
 import { AnalyticsConsentLedger } from "@/features/legal/backend/analytics-consent-ledger";
-import { MarketingConsentLedger } from "@/features/legal/backend/marketing-consent-ledger";
-import { MarketingManagementService } from "@/features/legal/backend/marketing-management.service";
 import { CampaignBatchDelivery } from "./campaign-batch-delivery.service";
 import { CampaignDeliveryService } from "./campaign-delivery.service";
 import type { CampaignEmailConfig } from "./campaign-email.config";
@@ -44,14 +42,7 @@ export const campaignDeliveryTestLayer = <E, R>(
         CampaignRecipientAnalyticsIdentity.Default.pipe(
           Layer.provide(analyticsConsent)
         ),
-        CampaignUnsubscribeService.Default.pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              MarketingConsentLedger.Default,
-              MarketingManagementService.Default
-            )
-          )
-        )
+        CampaignUnsubscribeService.Default
       )
     )
   );

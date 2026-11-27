@@ -1,3 +1,4 @@
+import { WorkspaceServiceRole } from "@deskohub/workspace-cloud-run/service-role";
 import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -68,11 +69,7 @@ export type ServiceAccountEmail = typeof ServiceAccountEmail.Type;
  * A Secret Manager reference. It names a secret and pins one numeric
  * version; the value itself never enters configuration or Alchemy state.
  */
-export const WorkspaceWorkload = Schema.Literals([
-  "web",
-  "tasks-worker",
-  "scheduler-worker",
-]).annotate({
+export const WorkspaceWorkload = WorkspaceServiceRole.annotate({
   identifier: "WorkspaceWorkload",
   description: "One of the three Cloud Run services built from the image.",
 });
@@ -96,8 +93,13 @@ export type SecretReference = typeof SecretReference.Type;
 export const WorkspaceServiceAccounts = Schema.Struct({
   /** The GitHub Actions identity that applies the stack. */
   deployer: ServiceAccountEmail,
-  /** Runtime identity of the public web service. */
-  webRuntime: ServiceAccountEmail,
+  /** Runtime identity of the IAM-private API service. */
+  apiRuntime: ServiceAccountEmail,
+  /**
+   * The frontend identity (Vercel through workload identity federation)
+   * that may invoke the API service.
+   */
+  frontendInvoker: ServiceAccountEmail,
   /** Runtime identity of the private Cloud Tasks worker. */
   tasksWorkerRuntime: ServiceAccountEmail,
   /** Runtime identity of the private Cloud Scheduler worker. */
@@ -115,7 +117,7 @@ const positiveInt = (maximum: number) =>
   Schema.Int.check(Schema.isBetween({ minimum: 1, maximum }));
 
 export const WorkspaceCapacity = Schema.Struct({
-  webMaxInstances: positiveInt(100),
+  apiMaxInstances: positiveInt(100),
   workerMaxInstances: positiveInt(100),
   queueMaxConcurrentDispatches: positiveInt(1000),
   queueMaxDispatchesPerSecond: positiveInt(500),
@@ -158,84 +160,6 @@ export const GcpProjectNumber = Schema.String.check(
 );
 export type GcpProjectNumber = typeof GcpProjectNumber.Type;
 
-/** DNS size limits (RFC 1035) and the TCP port range of a host pattern. */
-const isWithinHostLimits = (host: string) => {
-  const separator = host.lastIndexOf(":");
-  const name = separator < 0 ? host : host.slice(0, separator);
-  const port = separator < 0 ? undefined : Number(host.slice(separator + 1));
-  return (
-    (port === undefined || (port >= 1 && port <= 65_535)) &&
-    name.length <= 253 &&
-    name.split(".").every((label) => label.length <= 63)
-  );
-};
-
-/**
- * A host pattern the edge's URL map routes, in Compute URL map syntax: a
- * lowercase host with an optional port, where `*` may lead and is then
- * followed by `-` or `.`, or stands alone for any host.
- */
-export const EdgeHost = Schema.String.check(
-  Schema.isPattern(
-    /^(?=.{1,255}$)(?:\*(?:[-.][a-z0-9-]+(?:\.[a-z0-9-]+)*)?|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*)(?::[0-9]{1,5})?$/
-  ),
-  Schema.makeFilter(
-    (host: string): boolean | string =>
-      isWithinHostLimits(host) ||
-      "DNS labels are at most 63 characters, names 253, ports 1-65535"
-  )
-).annotate({
-  identifier: "EdgeHost",
-  description:
-    "A URL map host pattern such as workspace.example.com, *.example.com or example.com:80.",
-});
-
-/**
- * A name a Google-managed certificate can cover: a plain DNS hostname, no
- * wildcard and no port.
- */
-const certificateDomain =
-  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
-
-/**
- * The only project whose sandbox edge may serve plain HTTP, for a hosted
- * proof without DNS.
- */
-export const plainHttpEdgeProject = "deskohub-workspace-sandbox";
-
-/**
- * The stage's external load balancer, Cloud Armor and token-route log
- * exclusion. The static asset paths are fixed by the declaration, never by
- * configuration, so no other route can reach Cloud CDN.
- */
-export const WorkspaceEdgeConfig = Schema.Struct({
-  /**
-   * Hostnames of the managed certificate and the URL map. Empty only
-   * while HTTPS is off, when any host matches.
-   */
-  domains: Schema.Array(EdgeHost),
-  /**
-   * HTTPS with a managed certificate and a port 80 redirect. Only the
-   * sandbox stage in `plainHttpEdgeProject` may turn it off.
-   */
-  enableHttps: Schema.Boolean.pipe(
-    Schema.withDecodingDefaultKey(Effect.succeed(true))
-  ),
-  /** Cloud CDN on the immutable static asset paths only. */
-  staticCdnEnabled: Schema.Boolean.pipe(
-    Schema.withDecodingDefaultKey(Effect.succeed(false))
-  ),
-  /** Preconfigured WAF rules only log until their matches are reviewed. */
-  wafPreview: Schema.Boolean.pipe(
-    Schema.withDecodingDefaultKey(Effect.succeed(true))
-  ),
-  /** Requests per minute per client IP to `/api/auth/` before throttling. */
-  authRateLimitPerMinute: Schema.Int.check(Schema.isGreaterThan(0)).pipe(
-    Schema.withDecodingDefaultKey(Effect.succeed(120))
-  ),
-}).annotate({ identifier: "WorkspaceEdgeConfig" });
-export type WorkspaceEdgeConfig = typeof WorkspaceEdgeConfig.Type;
-
 const BaseStackConfig = Schema.Struct({
   projectId: GcpProjectId,
   projectNumber: GcpProjectNumber,
@@ -255,17 +179,6 @@ const BaseStackConfig = Schema.Struct({
       Schema.isPattern(/^projects\/[a-z0-9-]+\/notificationChannels\/[0-9]+$/)
     )
   ),
-  /**
-   * The digest of the OpenTelemetry collector sidecar image in the stage's
-   * Workspace repository. When set, every Workspace service runs the
-   * collector beside the app; when absent, services run the app alone.
-   */
-  telemetryCollectorImage: Schema.optionalKey(ImageDigest),
-  /**
-   * The stage's edge. Absent, the stack declares none; once a stack has
-   * declared it, removing the key destroys it.
-   */
-  edge: Schema.optionalKey(WorkspaceEdgeConfig),
 });
 
 /**
@@ -310,7 +223,7 @@ export class WorkspaceStackConfigInvalid extends Data.TaggedError(
   "WorkspaceStackConfigInvalid"
 )<{
   readonly paths: ReadonlyArray<string>;
-  readonly reason: "schema" | "secret-material" | "identity" | "edge";
+  readonly reason: "schema" | "secret-material" | "identity";
 }> {
   override get message() {
     return `Workspace stack configuration is invalid (${this.reason}) at: ${this.paths.join(", ")}`;
@@ -434,42 +347,8 @@ export const decodeWorkspaceStackConfig = Effect.fn(
       reason: "identity",
     });
   }
-  const edgePaths = edgeProblems(config);
-  if (edgePaths.length > 0) {
-    return yield* new WorkspaceStackConfigInvalid({
-      paths: edgePaths,
-      reason: "edge",
-    });
-  }
   return config;
 });
-
-/**
- * Preview declares no web service for an edge to front (#1455). Plain HTTP
- * is a sandbox proof mode in its approved project only. An HTTPS edge needs
- * at least one hostname, each one its managed certificate can cover.
- */
-const edgeProblems = (config: WorkspaceStackConfig) => {
-  const edge = config.edge;
-  if (edge === undefined) {
-    return [];
-  }
-  if (config.stage === "preview") {
-    return ["edge"];
-  }
-  if (!edge.enableHttps) {
-    return config.stage === "sandbox" &&
-      config.projectId === plainHttpEdgeProject
-      ? []
-      : ["edge.enableHttps"];
-  }
-  if (edge.domains.length === 0) {
-    return ["edge.domains"];
-  }
-  return edge.domains.flatMap((host, index) =>
-    certificateDomain.test(host) ? [] : [`edge.domains.${index}`]
-  );
-};
 
 /**
  * Each role has its own service account, and every account lives in the

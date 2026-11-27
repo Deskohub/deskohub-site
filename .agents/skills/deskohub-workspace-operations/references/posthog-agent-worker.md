@@ -38,10 +38,10 @@ Commit and push `posthog/issue-<number>`. Open or update one pull request agains
 
 Branch protection on `main` requires no approval and doesn't apply to administrators, and a merge deploys production without a human stop. These conditions are the only gate on an agent-authored change, so enable auto-merge only when every one holds:
 
-- At most 100 changed non-generated lines across at most five source and test files.
 - A focused regression test or equivalent executable proof covers the failure.
+- The change is a fix or tweak with no material user-facing change or product judgment; changes that materially alter user-facing behavior need human approval.
 - The change doesn't touch migrations, data schemas, authentication, authorization, access codes, checkout, pricing, payments, accounting, external API contracts, dependencies, build or deployment configuration, CI workflows, or feature-flag policy.
-- Every required check passes on the current head, no review is unresolved, and the change needs no product judgment.
+- Every required check passes on the current head and no review is unresolved.
 
 Then merge `origin/main` as the last step, following the `deskohub-pr-review` skill, and run `gh pr merge --auto --merge`. Otherwise leave the pull request ready for human merge and explain which condition blocked auto-merge.
 

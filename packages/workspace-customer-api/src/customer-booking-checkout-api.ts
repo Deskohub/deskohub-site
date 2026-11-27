@@ -246,7 +246,7 @@ export type CustomerCheckoutSubmission = typeof CustomerCheckoutSubmission.Type;
 
 // Requests
 
-const RememberedReferralHeaders = Schema.Struct({
+export const RememberedReferralHeaders = Schema.Struct({
   [customerReferralCodeHeader]: Schema.optionalKey(
     Schema.String.check(Schema.isMaxLength(64))
   ),

@@ -6,11 +6,15 @@ import { useForm } from "react-hook-form";
 import type { SiteToolReservationForm } from "@/features/agent-tools/webmcp/use-prepare-reservation-site-tool";
 import { discountIdSchema } from "@/features/discounts/contracts";
 import { m } from "@/features/i18n";
+import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
+import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import { workspaceRouterRefresh } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import type { ReservationExistingCustomerForm } from "../reservation-existing-customer";
 import type { useReservationCheckout } from "./use-reservation-checkout";
 
@@ -186,7 +190,7 @@ function Harness({
       }}
       form={form}
       getReservation={({ email, name, phone }) =>
-        ({ email, name, phone }) as never
+        makeTestReservation({ email, name, phone })
       }
       locale="en-US"
       selectionSummary={selectionSummary}
@@ -201,16 +205,46 @@ function Harness({
   );
 }
 
+const makeTestReservation = ({
+  email,
+  name,
+  phone,
+}: {
+  readonly email: string;
+  readonly name: string;
+  readonly phone: string;
+}) => ({
+  kind: "cowork" as const,
+  date: plainDateStringSchema.make("2026-10-20"),
+  entryTier: "open-space" as const,
+  coffee: false,
+  email: reservationCustomerEmailSchema.make(email),
+  name,
+  phone,
+  billing: defaultReservationBillingSelection,
+});
+
+const querySubmitButton = (view: ReturnType<typeof render>) =>
+  view.container.querySelector("#reservation-submit");
+
 const getSubmitButton = (view: ReturnType<typeof render>) =>
-  view.container.querySelector("#reservation-submit") as HTMLButtonElement;
+  elementOf(querySubmitButton(view), HTMLButtonElement);
+
+const queryContinueButton = (view: ReturnType<typeof render>) =>
+  view.container.querySelector("#reservation-continue");
 
 const getContinueButton = (view: ReturnType<typeof render>) =>
-  view.container.querySelector("#reservation-continue") as HTMLButtonElement;
+  elementOf(queryContinueButton(view), HTMLButtonElement);
+
+const queryField = (
+  view: ReturnType<typeof render>,
+  name: "email" | "emailConfirmation" | "name" | "phone"
+) => view.container.querySelector(`input[name="${name}"]`);
 
 const getField = (
   view: ReturnType<typeof render>,
   name: "email" | "emailConfirmation" | "name" | "phone"
-) => view.container.querySelector(`input[name="${name}"]`) as HTMLInputElement;
+) => elementOf(queryField(view, name), HTMLInputElement);
 
 function RetryablePriceHarness() {
   const [price, setPrice] = useState({ isError: true, token: "stale-price" });
@@ -258,10 +292,8 @@ const existingCustomer: ReservationExistingCustomerForm = {
   },
 };
 
-const linked = (
-  overrides: Partial<ReservationExistingCustomerForm> = {}
-): CheckoutFormProps["checkoutCustomer"] => ({
-  status: "linked",
+const linked = (overrides: Partial<ReservationExistingCustomerForm> = {}) => ({
+  status: "linked" as const,
   existingCustomer: { ...existingCustomer, ...overrides },
   replacesTypedContact: false,
 });
@@ -302,14 +334,14 @@ describe("ReservationCheckoutForm", () => {
         (view.getByLabelText("Reservation date").closest("[hidden]") ??
           null) === null
       ).toBe(true);
-      expect(getSubmitButton(view)).toBeNull();
+      expect(querySubmitButton(view)).toBeNull();
       expect(view.queryByText("Open Space")).toBeNull();
 
       await act(async () => {
         fireEvent.click(getContinueButton(view));
       });
 
-      await waitFor(() => expect(getSubmitButton(view)).not.toBeNull());
+      await waitFor(() => expect(querySubmitButton(view)).not.toBeNull());
       expect(view.getByText("Open Space")).toBeDefined();
       expect(view.getByText("Tuesday, October 20, 2026")).toBeDefined();
       expect(
@@ -321,9 +353,10 @@ describe("ReservationCheckoutForm", () => {
           name: m.reservationSelectionChange({}, en),
         })
       );
-      expect(getContinueButton(view)).not.toBeNull();
+      expect(queryContinueButton(view)).not.toBeNull();
       expect(
-        (view.getByLabelText("Reservation date") as HTMLInputElement).value
+        elementOf(view.getByLabelText("Reservation date"), HTMLInputElement)
+          .value
       ).toBe("2026-10-20");
     });
 
@@ -335,8 +368,8 @@ describe("ReservationCheckoutForm", () => {
         fireEvent.click(getContinueButton(view));
       });
 
-      expect(getSubmitButton(view)).toBeNull();
-      expect(getContinueButton(view)).not.toBeNull();
+      expect(querySubmitButton(view)).toBeNull();
+      expect(queryContinueButton(view)).not.toBeNull();
     });
 
     test("blocks continuing and explains why when availability could not be confirmed", () => {
@@ -374,14 +407,14 @@ describe("ReservationCheckoutForm", () => {
         fireEvent.click(getContinueButton(view));
       });
 
-      expect(getSubmitButton(view)).toBeNull();
+      expect(querySubmitButton(view)).toBeNull();
       expect(document.activeElement).toBe(secondDate);
 
       fireEvent.change(secondDate, { target: { value: "10/21/2026" } });
       await act(async () => {
         fireEvent.click(getContinueButton(view));
       });
-      await waitFor(() => expect(getSubmitButton(view)).not.toBeNull());
+      await waitFor(() => expect(querySubmitButton(view)).not.toBeNull());
     });
 
     test("books without the hidden space's fields holding the booking up", async () => {
@@ -420,7 +453,7 @@ describe("ReservationCheckoutForm", () => {
         fireEvent.click(getSubmitButton(view));
       });
 
-      await waitFor(() => expect(getContinueButton(view)).not.toBeNull());
+      await waitFor(() => expect(queryContinueButton(view)).not.toBeNull());
       expect(startCheckout).not.toHaveBeenCalled();
     });
   });
@@ -491,7 +524,7 @@ describe("ReservationCheckoutForm", () => {
         view.getByRole("link", { name: "Sign in" }).getAttribute("href")
       ).toContain("/en-US/auth/sign-in?returnTo=");
 
-      fireEvent.click(getMarketingConsentCheckbox(view) as Element);
+      fireEvent.click(elementOf(getMarketingConsentCheckbox(view), Element));
       await act(async () => {
         fireEvent.click(getSubmitButton(view));
       });
@@ -690,9 +723,7 @@ describe("ReservationCheckoutForm", () => {
       const view = render(
         <Harness
           advertisedPrice={signedPrice}
-          checkoutCustomer={
-            { ...linked(), replacesTypedContact: true } as never
-          }
+          checkoutCustomer={{ ...linked(), replacesTypedContact: true }}
         />
       );
 
@@ -713,7 +744,7 @@ describe("ReservationCheckoutForm", () => {
     expect(
       view.getByText(m.reservationAccountUnavailableTitle({}, en))
     ).toBeDefined();
-    expect(getField(view, "email")).toBeNull();
+    expect(queryField(view, "email")).toBeNull();
     expect(getSubmitButton(view).disabled).toBe(true);
 
     await act(async () => {
@@ -740,7 +771,7 @@ describe("ReservationCheckoutForm", () => {
     expect(
       view.getByRole("button", { name: m.reservationSelectionChange({}, en) })
     ).toBeDefined();
-    expect(getField(view, "email")).toBeNull();
+    expect(queryField(view, "email")).toBeNull();
     expect(
       view.queryByRole("button", {
         name: m.reservationAccountUnavailableRetry({}, en),
@@ -751,7 +782,7 @@ describe("ReservationCheckoutForm", () => {
     ).toBeNull();
     expect(view.queryByRole("link", { name: "Privacy Policy" })).toBeNull();
     expect(getMarketingConsentCheckbox(view)).toBeNull();
-    expect(getSubmitButton(view)).toBeNull();
+    expect(querySubmitButton(view)).toBeNull();
   });
 
   describe("submission outcomes", () => {
@@ -772,7 +803,7 @@ describe("ReservationCheckoutForm", () => {
         />
       );
 
-      expect(await submit()).toBe(prepared as never);
+      expect<unknown>(await submit()).toBe(prepared);
       expect(clearSubmissionError).not.toHaveBeenCalled();
       expect(capturePrePaymentOutcome).not.toHaveBeenCalled();
       expect(startCheckout).not.toHaveBeenCalled();
@@ -792,7 +823,7 @@ describe("ReservationCheckoutForm", () => {
         fields: [{ name: "date", message: "Pick a date" }],
       });
       expect(capturePrePaymentOutcome.mock.calls).toEqual([["validation"]]);
-      expect(getContinueButton(view)).not.toBeNull();
+      expect(queryContinueButton(view)).not.toBeNull();
     });
 
     test("stays on the contact step for an invalid contact field", async () => {
@@ -804,7 +835,7 @@ describe("ReservationCheckoutForm", () => {
         status: "invalid",
         fields: [{ name: "name", message: "Enter a name" }],
       });
-      expect(getSubmitButton(view)).not.toBeNull();
+      expect(querySubmitButton(view)).not.toBeNull();
       expect(verifyEmail).not.toHaveBeenCalled();
     });
 
@@ -910,11 +941,11 @@ describe("ReservationCheckoutForm", () => {
             customer: "account",
             marketingConsent: true,
             marketingConsentSource: "site_tool",
-            reservation: {
+            reservation: makeTestReservation({
               email: adaEmail,
               name: "Ada Lovelace",
               phone: "+420777777777",
-            },
+            }),
           },
         ],
       ]);
@@ -931,11 +962,11 @@ describe("ReservationCheckoutForm", () => {
         advertisedPriceToken: "signed-price",
         customer: "account",
         marketingConsent: false,
-        reservation: {
+        reservation: makeTestReservation({
           email: adaEmail,
           name: "Ada Lovelace",
           phone: "+420777777777",
-        },
+        }),
       });
     });
 
@@ -956,7 +987,7 @@ describe("ReservationCheckoutForm", () => {
 
       expect(startCheckout.mock.calls[0]?.[0]).toEqual({
         advertisedPriceToken: "signed-price",
-        reservation: existingCustomer.otherContact,
+        reservation: makeTestReservation(existingCustomer.otherContact),
       });
     });
   });

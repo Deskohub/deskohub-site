@@ -38,6 +38,9 @@ export function OfficePeopleList({
   maximumSeats,
   onChange,
   locale,
+  fullMessage,
+  showPinNote = true,
+  minimumAttendees = 1,
 }: {
   readonly people: OfficePeople;
   /** None while the account can't be read: no You row, and no Add yourself. */
@@ -45,10 +48,14 @@ export function OfficePeopleList({
   readonly maximumSeats: Option.Option<number>;
   readonly onChange: (people: OfficePeople) => void;
   readonly locale: AppLocale;
+  readonly fullMessage?: string;
+  readonly showPinNote?: boolean;
+  /** Team Table can temporarily clear the draft to replace a sole attendee. */
+  readonly minimumAttendees?: 0 | 1;
 }) {
   const [typed, setTyped] = useState("");
   const [invalid, setInvalid] = useState(false);
-  const removable = canRemoveOfficePerson(people);
+  const removable = canRemoveOfficePerson(people, minimumAttendees);
   const roomLeft = canAddOfficePerson(people, maximumSeats);
   const you = Option.getOrUndefined(contact);
   const add = () => {
@@ -79,7 +86,7 @@ export function OfficePeopleList({
             you={m.booking_office_person_you({}, { locale })}
             action={removeButton(
               m.booking_office_person_remove_you({}, { locale }),
-              () => onChange(removeYou(people))
+              () => onChange(removeYou(people, minimumAttendees))
             )}
           />
         )}
@@ -89,7 +96,7 @@ export function OfficePeopleList({
             email={email}
             action={removeButton(
               m.booking_office_person_remove({ email }, { locale }),
-              () => onChange(removeInvitee(people, email))
+              () => onChange(removeInvitee(people, email, minimumAttendees))
             )}
           />
         ))}
@@ -142,20 +149,23 @@ export function OfficePeopleList({
         ) : (
           <View key="full" style={listRowLayout.row}>
             <Text variant="bodySmall" tone="muted" style={listRowLayout.text}>
-              {m.booking_office_people_full(
-                { count: officePeopleCount(people) },
-                { locale }
-              )}
+              {fullMessage ??
+                m.booking_office_people_full(
+                  { count: officePeopleCount(people) },
+                  { locale }
+                )}
             </Text>
           </View>
         )}
       </ListGroup>
-      <View style={styles.note}>
-        <Icon icon={Mail} size={16} color={color.ink2} />
-        <Text variant="hint" style={styles.noteText}>
-          {m.booking_office_people_pin_note({}, { locale })}
-        </Text>
-      </View>
+      {showPinNote && (
+        <View style={styles.note}>
+          <Icon icon={Mail} size={16} color={color.ink2} />
+          <Text variant="hint" style={styles.noteText}>
+            {m.booking_office_people_pin_note({}, { locale })}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }

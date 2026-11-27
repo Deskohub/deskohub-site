@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { Schema } from "effect";
+import { backendPreviewProofFixture } from "./shared/backend-preview-proof-fixture";
 import { runCommand } from "./shared/command";
 import { findStepByName, parseWorkflow } from "./shared/workflow-contract";
 import {
@@ -19,10 +20,14 @@ const flowsPublish = resolve(
   import.meta.dir,
   "../../../.github/actions/workspace-e2e-flows/publish-status.mjs"
 );
-const targetStep = findStepByName(
+const resolveTargetStep = findStepByName(
   workflow,
   "Resolve eligible PR and immutable preview"
 );
+const targetStep = resolveTargetStep && {
+  ...resolveTargetStep,
+  env: { ...resolveTargetStep.env, PILOT_PR_NUMBER: "" },
+};
 const statusStep = findStepByName(workflow, "Decide status without an E2E run");
 const finalStep = findStepByName(workflow, "Publish final commit status");
 const publishStep = findStepByName(
@@ -2056,17 +2061,66 @@ exit 1
     ).toEqual([]);
   });
 
-  test("reconciles a delayed metadata failure that raced with a concurrent fix to none", async () => {
-    const statefulGh = `#!/usr/bin/env bash
+  test.each([
+    {
+      fixedFlow: "none",
+      pilot: false,
+      initialBody: "## Summary\nMissing flows",
+      passingStatus: "Protected preview E2E skipped [flows: none]",
+    },
+    {
+      fixedFlow: "email-campaigns",
+      pilot: true,
+      initialBody: "## E2E flows\n- none\n",
+      passingStatus: "Protected preview E2E restored [flows: email-campaigns]",
+    },
+  ])(
+    "reconciles a delayed metadata failure that raced with a concurrent fix to $fixedFlow",
+    async ({ fixedFlow, pilot, initialBody, passingStatus }) => {
+      const repo = {
+        full_name: repository,
+        id: 1015951989,
+        owner: { id: 361691508 },
+      };
+      const headRef = pullRequest.head.ref;
+      const pr = {
+        ...pullRequest,
+        base: { ref: "main", repo, sha: sha("b") },
+        changed_files: 1,
+        head: { ...pullRequest.head, repo },
+        user: { ...pullRequest.user, type: "User" },
+      };
+      const proof = backendPreviewProofFixture(prNumber, targetSha, previewUrl);
+      const statuses = pilot
+        ? [
+            proof.status,
+            {
+              context: "Workspace E2E",
+              creator: { login: "github-actions[bot]" },
+              description:
+                "Protected preview E2E passed [flows: email-campaigns]",
+              state: "success",
+            },
+          ]
+        : [];
+      const statefulGh = `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
 state_file="$GH_FIXTURES/state.txt"
 [[ -f "$state_file" ]] || echo "invalid" > "$state_file"
+if [[ "$*" == *"/pulls/${prNumber}/files"* ]]; then
+  echo '[{"filename":"bun.lock","status":"modified"}]'
+  exit 0
+fi
+if [[ "$*" == *"/git/ref/heads/${headRef}"* ]]; then
+  echo '{"object":{"sha":"${targetSha}","type":"commit"},"ref":"refs/heads/${headRef}"}'
+  exit 0
+fi
 if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
   if [[ "$(cat "$state_file")" == "invalid" ]]; then
-    echo '{"head":{"sha":"${targetSha}"},"body":"## Summary\\nMissing flows"}'
+    cat "$GH_FIXTURES/initial.json"
   else
-    echo '{"head":{"sha":"${targetSha}"},"body":"## E2E flows\\n- none\\n"}'
+    cat "$GH_FIXTURES/fixed.json"
   fi
   exit 0
 fi
@@ -2079,7 +2133,15 @@ if [[ "$*" == *"/deployments"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"/commits/${targetSha}/statuses"* ]]; then
-  echo '[[]]'
+  cat "$GH_FIXTURES/statuses.json"
+  exit 0
+fi
+if [[ "$*" == *" repos/Deskohub/deskohub-site/${proof.jobsPath}?"* ]]; then
+  cat "$GH_FIXTURES/jobs.json"
+  exit 0
+fi
+if [[ "$*" == *" repos/Deskohub/deskohub-site/${proof.runPath}" ]]; then
+  cat "$GH_FIXTURES/run.json"
   exit 0
 fi
 if [[ "$*" == *"/statuses/${targetSha}"* ]]; then
@@ -2094,31 +2156,50 @@ fi
 echo "unexpected gh call: $*" >&2
 exit 1
 `;
-    const { calls, result } = await runStep(
-      publishStep,
-      {},
-      {
-        FLOWS_PUBLISH: flowsPublish,
-        PR_NUMBER: String(prNumber),
-        STATUS_DESCRIPTION:
-          "Invalid or missing ## E2E flows in PR description; list valid flows, all, or none",
-        STATUS_REASON: "invalid-pr-flows",
-        STATUS_STATE: "failure",
-        TARGET_SHA: targetSha,
-      },
-      { gh: statefulGh }
-    );
-    expect(result.exitCode).toBe(0);
-    const posts = calls.filter((call) =>
-      call.includes(`statuses/${targetSha}`)
-    );
-    expect(posts).toHaveLength(2);
-    expect(posts[0]).toContain("state=failure");
-    expect(posts[1]).toContain("state=success");
-    expect(posts[1]).toContain(
-      "description=Protected preview E2E skipped [flows: none]"
-    );
-  });
+      const { calls, result } = await runStep(
+        publishStep,
+        {
+          initial: { ...pr, body: initialBody },
+          fixed: { ...pr, body: `## E2E flows\n- ${fixedFlow}\n` },
+          statuses: [statuses],
+          run: proof.run,
+          jobs: proof.jobs,
+        },
+        {
+          FLOWS_PUBLISH: flowsPublish,
+          GH_TOKEN: "test-token",
+          PILOT_PR_NUMBER: pilot ? String(prNumber) : "",
+          PR_NUMBER: String(prNumber),
+          STATUS_DESCRIPTION:
+            "Invalid or missing ## E2E flows in PR description; list valid flows, all, or none",
+          STATUS_REASON: "invalid-pr-flows",
+          STATUS_STATE: "failure",
+          TARGET_SHA: targetSha,
+        },
+        { gh: statefulGh }
+      );
+      expect(result.exitCode).toBe(0);
+      const posts = calls.filter((call) =>
+        call.includes(`statuses/${targetSha}`)
+      );
+      if (pilot) {
+        expect(posts.length).toBeGreaterThan(0);
+        expect(posts.every((post) => post.includes("state=failure"))).toBe(
+          true
+        );
+        return;
+      }
+      expect(posts, calls.join("\n")).toHaveLength(2);
+      expect(posts[0]).toContain("state=failure");
+      expect(posts[1]).toContain("state=success");
+      expect(posts[1]).toContain(`description=${passingStatus}`);
+      expect(
+        calls
+          .slice(calls.indexOf(posts[0]) + 1, calls.indexOf(posts[1]))
+          .some((call) => call.endsWith(`/pulls/${prNumber}`))
+      ).toBe(true);
+    }
+  );
 
   test("strips head-failed flows from outgoing carried same-tree statuses", async () => {
     const carried = await runStep(

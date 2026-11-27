@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.42.0](https://github.com/totalolage/deskohub-site/compare/dhw-v1.41.0...dhw-v1.42.0) (2026-11-26)
+
+
+### Features
+
+* **email-campaigns:** pass acquisition emails and repeat-visit automation ([2678f6f](https://github.com/totalolage/deskohub-site/commit/2678f6f2d71464d65b2f24c3a66071b8bbfea9c9))
+
+
+### Bug Fixes
+
+* **dhw:** keep updates working after the Deskohub transfer ([cff8637](https://github.com/totalolage/deskohub-site/commit/cff8637e16d98c29418953d227b601d744794f9b))
+* **dhw:** preserve updates through the Deskohub GitHub transfer ([e7a420b](https://github.com/totalolage/deskohub-site/commit/e7a420bf627106a3c741c698dcce0b3aba224465))
+* **dhw:** remove LocalizedValues casts in campaign input and assert error severity in lint-rules ([de244ca](https://github.com/totalolage/deskohub-site/commit/de244cac6854b5a4ff1150f1e628736a035917b5))
+
 ## [1.41.0](https://github.com/totalolage/deskohub-site/compare/dhw-v1.40.1...dhw-v1.41.0) (2026-11-23)
 
 

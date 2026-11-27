@@ -1,19 +1,15 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Deferred, Effect, Schema } from "effect";
-import {
-  type ComponentProps,
-  isValidElement,
-  type ReactElement,
-  type ReactNode,
-} from "react";
+import { Deferred, Effect, Predicate, Schema } from "effect";
+import { isValidElement, type ReactNode } from "react";
 import type { PreloadedAdvertisedPrice } from "@/features/checkout/advertised-price";
 import { makeOfficePayRouteFixture } from "@/features/checkout/backend/checkout/office-pay-route.test-utils";
 import { checkoutSessionIdSchema } from "@/features/checkout/checkout-identifiers";
 import type { PublicPriceListOffering } from "@/features/checkout/public-offerings";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
+import { buildTableReservationQuote } from "@/features/checkout/reservation-quote-table";
 import type { CoworkCustomerPasses } from "@/features/cowork/backend/cowork-customer-passes";
-import type { CoworkReservationForm } from "@/features/cowork/components/cowork-reservation-form";
 import {
   getCoworkBookingPasses,
   noCoworkBookingPasses,
@@ -29,12 +25,19 @@ import {
   type NormalizedCoworkReservationOrder,
   normalizedCoworkReservationOrderSchema,
 } from "@/features/reservation/cowork-reservation";
+import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import type {
   CustomerLastReservationForKind,
   ReservationCheckoutAccount,
 } from "@/features/reservation/reservation-existing-customer";
+import { normalizedTableReservationOrderSchema } from "@/features/reservation/table-reservation";
 import type { PreloadedWorkspaceAvailability } from "@/features/reservation/workspace-availability";
 import { getOfficeAvailabilityQuery } from "@/features/reservation/workspace-availability";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
+import {
+  renderComponentElement,
+  requireElement,
+} from "@/shared/testing/route-element.test-utils";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { getSearchParam, type SearchParamsRecord } from "@/shared/utils";
 import {
@@ -87,6 +90,12 @@ mock.module("@/features/office/backend/office-release-gate.server", () => ({
     Effect.promise(isOfficePageEnabled)
   ),
 }));
+mock.module(
+  "@/features/public-pages/backend/team-table-public-release.server",
+  () => ({
+    TeamTableReleaseGateRequest: TeamTableReleaseGate.fromDecision(true),
+  })
+);
 beforeEach(() => {
   officePageEnabled = true;
   draftCookies.clear();
@@ -273,22 +282,13 @@ const createPreloadFreeFamily = () => ({
   preload: () => ({ advertisedPrices: [], availability: [] }),
 });
 
-type ReservationContentProps = {
-  readonly definition: unknown;
-  readonly searchParams: Promise<Record<string, string>>;
-};
-
 /** Renders the request-bound content the page shell suspends on. */
 const renderContent = async (page: ReactNode) => {
-  const content = (
-    page as ReactElement<{
-      readonly children: ReactElement<ReservationContentProps>;
-    }>
-  ).props.children;
-  const Content = content.type as (
-    props: ReservationContentProps
-  ) => Promise<ReactNode>;
-  return Content(content.props);
+  const { props } = requireElement(page);
+  assert(Predicate.hasProperty(props, "children"));
+  const { children } = props;
+  assert(Predicate.isObject(children) && isValidElement(children));
+  return renderComponentElement(children);
 };
 
 test("preserves a signed-out Entry pack link as the sign-in return path", async () => {
@@ -376,8 +376,6 @@ describe("the Cowork page's pass offers", () => {
   } satisfies HeldEntryPack;
   const bookingPasses = getCoworkBookingPasses([heldEntryPack], "2099-07-30");
 
-  type CoworkFormProps = ComponentProps<typeof CoworkReservationForm>;
-
   /** The props the page hands the Cowork form. */
   const renderCoworkFormProps = async () => {
     const { coworkReservationPage } = await import(
@@ -388,20 +386,20 @@ describe("the Cowork page's pass offers", () => {
       const page = await coworkReservationPage.Page({
         searchParams: Promise.resolve({}),
       });
-      const content = (await renderContent(page)) as ReactElement<{
-        readonly children: ReactNode;
-      }>;
-      const form = [content.props.children]
-        .flat()
-        .find((child) =>
-          isValidElement<CoworkFormProps>(child)
-            ? "passPurchaseOffered" in child.props
-            : false
-        );
-      if (!isValidElement<CoworkFormProps>(form)) {
-        throw new Error("Expected the Cowork form");
+      const { props } = requireElement(await renderContent(page));
+      assert(Predicate.hasProperty(props, "children"));
+      const children = [props.children].flat();
+      for (const child of children) {
+        if (
+          Predicate.isObject(child) &&
+          isValidElement(child) &&
+          Predicate.hasProperty(child.props, "passPurchaseOffered") &&
+          Predicate.hasProperty(child.props, "bookingPasses")
+        ) {
+          return child.props;
+        }
       }
-      return form.props;
+      throw new Error("Expected the Cowork form");
     } finally {
       coworkPassesOpen = false;
     }
@@ -510,19 +508,16 @@ test("renders the reservation shell before request-bound content resolves", asyn
   expect(family.fallback).toHaveBeenCalledWith("en-US");
   expect(isValidElement(page)).toBe(true);
 
-  const pageProps = (
-    page as ReactElement<{
-      readonly children: ReactNode;
-      readonly fallback: ReactNode;
-      readonly locale: string;
-    }>
-  ).props;
+  const pageProps = requireElement(page).props;
 
   expect(pageProps).toMatchObject({
     fallback: "loading reservation form",
     locale: "en-US",
   });
-  expect(isValidElement(pageProps.children)).toBe(true);
+  assert(Predicate.hasProperty(pageProps, "children"));
+  expect(
+    Predicate.isObject(pageProps.children) && isValidElement(pageProps.children)
+  ).toBe(true);
 });
 
 test("gates a page by its registry release gate inside its content, keeping the shell static", async () => {
@@ -855,6 +850,53 @@ test("restores the office people from Pay for its author only", async () => {
   expect(
     family.renderForm.mock.calls.at(-1)?.[0].checkoutOfficeSelection
   ).toBeUndefined();
+});
+
+test("starts a clean Team Table booking before an unverified Pay edit can carry its draft into sign-in", async () => {
+  const reservation = normalizedTableReservationOrderSchema.make({
+    kind: "table",
+    seats: 6,
+    startsAt: "2099-06-20T07:00:00Z",
+    endsAt: "2099-06-20T08:00:00Z",
+    name: "Ada Lovelace",
+    email: testEmailAddressForAda,
+    phone: "+420777000111",
+    billing: defaultReservationBillingSelection,
+  });
+  const token = await Effect.runPromise(
+    Effect.gen(function* () {
+      const quote = yield* buildTableReservationQuote(reservation);
+      const state = yield* buildSignedPayState({
+        locale: "en-US",
+        reservation,
+        quote,
+        orderId: "unverified-table-order",
+        bookedAt: payStateBookedAt,
+        holdExpiresAt: instantStringSchema.make("2099-06-01T10:08:00Z"),
+        checkoutSessionId: "table-session",
+      });
+      return yield* sealPayState(state);
+    }).pipe(Effect.provide(TestSealedStateKeys))
+  );
+  const family = {
+    ...createPreloadFreeFamily(),
+    kind: "table" as const,
+    pathname: "/reservation/table" as const,
+  };
+  const definition = createReservationPage(family);
+  const page = await definition.Page({
+    searchParams: Promise.resolve({
+      payState: token,
+      contact: "unverified-contact",
+      step: "contact",
+      seats: "4",
+    }),
+  });
+
+  await expect(renderContent(page)).rejects.toThrow(
+    "redirect to /en-US/reservation/table?seats=4"
+  );
+  expect(family.renderForm).not.toHaveBeenCalled();
 });
 
 describe("the reservation page recipe", () => {

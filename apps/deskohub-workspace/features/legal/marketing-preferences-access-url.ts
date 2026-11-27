@@ -1,32 +1,48 @@
 import { Effect } from "effect";
 import { appendVercelPreviewProtectionBypass } from "@/features/checkout/backend/checkout/vercel-preview-protection-bypass";
+import type { Locale } from "@/features/i18n";
+import { getLocalizedPagePath } from "@/features/i18n/routing";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
 
-const marketingPreferencesAccessUrl = (token: string, origin: URL): URL => {
-  const url = new URL("/marketing-preferences/access", origin);
+const marketingPreferencesAccessUrl = (
+  token: string,
+  origin: URL,
+  locale?: Locale
+): URL => {
+  const pathname =
+    locale === undefined
+      ? "/marketing-preferences/access"
+      : getLocalizedPagePath(locale, "/[locale]/marketing-preferences/access");
+  const url = new URL(pathname, origin);
   url.searchParams.set("token", token);
   return url;
 };
 
 /**
  * Absolute link that opens a customer's marketing preferences with a token
- * from `MarketingManagementService.issue`, as marketing emails carry it. It
- * carries no locale, so the proxy opens it in the recipient's language.
+ * from `MarketingManagementService.issue`. Links in email omit the locale so
+ * the proxy can choose the recipient's language.
  */
 export const getMarketingPreferencesAccessUrl = (
   token: string,
-  origin: URL
+  origin: URL,
+  locale?: Locale
 ): string => {
-  const url = marketingPreferencesAccessUrl(token, origin);
+  const url = marketingPreferencesAccessUrl(token, origin, locale);
   appendVercelPreviewProtectionBypass(url, { setBypassCookie: true });
 
   return url.href;
 };
 
 /** The marketing preferences link on the running deployment's origin. */
-export const getRuntimeMarketingPreferencesAccessUrl = (token: string) =>
+export const getRuntimeMarketingPreferencesAccessUrl = (
+  token: string,
+  locale?: Locale
+) =>
   getWorkspaceRuntimeCallbackOrigin.pipe(
-    Effect.map((origin) => getMarketingPreferencesAccessUrl(token, origin))
+    Effect.map((origin) =>
+      getMarketingPreferencesAccessUrl(token, origin, locale)
+    )
   );
 
 /**

@@ -68,9 +68,11 @@ import { ReservationAuthorizationService } from "@/features/reservation/backend/
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
+import { ReservationInviteeEmailKeys } from "@/features/reservation-invitees/backend/reservation-invitee-email-keys.service";
 import { ReservationInviteeNoticeWorker } from "@/features/reservation-invitees/backend/reservation-invitee-notice-worker";
 import { ReservationInvitees } from "@/features/reservation-invitees/backend/reservation-invitees.service";
 import { ReviewAccountsMock } from "@/features/review-accounts/backend/review-accounts.repository.mock";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { WithdrawalRepository } from "@/features/withdrawal/backend/withdrawal.repository";
 import { WithdrawalService } from "@/features/withdrawal/backend/withdrawal.service";
 import { WithdrawalReleaseGate } from "@/features/withdrawal/backend/withdrawal-release-gate";
@@ -263,17 +265,26 @@ const unusedAccountServices: CustomerAccountServiceLayers = {
   companyLookup: Layer.mock(CompanyLookupService, {}),
 };
 
+const unusedInvitationServices = Layer.mergeAll(
+  Layer.mock(WorkspaceDatabaseAdvisoryLock, {}),
+  Layer.mock(WorkspaceReservationRepository, {}),
+  Layer.mock(WorkspaceReservationService, {}),
+  Layer.mock(ReservationInvitees, {}),
+  Layer.mock(ReservationInviteeNoticeWorker, {}),
+  Layer.mock(WithdrawalRepository, {
+    findByContract: () => Effect.succeed(Option.none()),
+  })
+);
+
 const unusedReservationServices: CustomerReservationServiceLayers = {
   invitedReservations: () => Layer.mock(CustomerInvitedReservationsService, {}),
-  invitationResend: Layer.mergeAll(
-    Layer.mock(WorkspaceDatabaseAdvisoryLock, {}),
-    Layer.mock(WorkspaceReservationRepository, {}),
-    Layer.mock(WorkspaceReservationService, {}),
-    Layer.mock(ReservationInvitees, {}),
-    Layer.mock(ReservationInviteeNoticeWorker, {}),
-    Layer.mock(WithdrawalRepository, {
-      findByContract: () => Effect.succeed(Option.none()),
-    })
+  invitationResend: unusedInvitationServices,
+  invitationAdd: Layer.mergeAll(
+    unusedInvitationServices,
+    Layer.unwrap(
+      Effect.promise(async () => (await makeRecordingWorkspaceDatabase()).layer)
+    ),
+    ReservationInviteeEmailKeys.Live.pipe(Layer.provide(TestSealedStateKeys))
   ),
   currentAccount: Layer.mock(CurrentCustomerAccount, {}),
   history: () => Layer.mock(CustomerReservationHistoryWithAccessService, {}),
@@ -391,6 +402,7 @@ export const linkedAccountServices: CustomerAccountServiceLayers = {
 };
 
 const unusedBookingCatalog: CustomerBookingCatalogLayerSet = {
+  teamTableRelease: TeamTableReleaseGate.fromDecision(false),
   pricing: Layer.mock(CheckoutPricingService, {}),
   inventory: Layer.mock(AdvisoryAvailabilityInventory, {}),
   availability: Layer.mergeAll(

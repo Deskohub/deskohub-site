@@ -11,11 +11,7 @@ import {
 } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
-import {
-  passPurchases,
-  unlimitedPassDayMoves,
-  workspaceReservations,
-} from "@/db/schema";
+import { passPurchases, workspaceReservations } from "@/db/schema";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { getConsumerWithdrawalPeriodCutoff } from "@/features/legal/early-performance";
@@ -37,6 +33,7 @@ import {
   getUnlimitedPassEndDate,
   getUnlimitedPassWithdrawal,
 } from "../unlimited-pass";
+import { passDayMoveJournal } from "./pass-day-move-journal";
 import { getPassWithdrawalLabel } from "./pass-withdrawal-label";
 import {
   decodePassWithdrawalOrderId,
@@ -241,16 +238,14 @@ export class UnlimitedPassWithdrawals extends Context.Service<
               message: "The withdrawn Unlimited pass id is invalid.",
             });
           }
+          const moveJournal = passDayMoveJournal(db);
           const pendingMove = db
-            .select({ id: unlimitedPassDayMoves.generation })
-            .from(unlimitedPassDayMoves)
+            .select({ id: moveJournal.generation })
+            .from(moveJournal)
             .where(
               and(
-                eq(
-                  unlimitedPassDayMoves.reservationId,
-                  workspaceReservations.id
-                ),
-                isNull(unlimitedPassDayMoves.settledAt)
+                eq(moveJournal.reservationId, workspaceReservations.id),
+                isNull(moveJournal.settledAt)
               )
             );
           const pendingDays = db

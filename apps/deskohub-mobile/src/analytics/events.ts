@@ -9,7 +9,7 @@ export const signInMethods = ["link", "code", "passkey", "continue"] as const;
 export type SignInMethod = (typeof signInMethods)[number];
 
 /** The reservation families a booking can start in. */
-export type ReservationKind = "cowork" | "meeting_room" | "office";
+export type ReservationKind = "cowork" | "meeting_room" | "office" | "table";
 
 /**
  * The app's analytics events, one function each. Screens and features call

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { type DotyposTable, DotyposTableIdSchema } from "@deskohub/dotypos";
+import {
+  DotyposCloudIdSchema,
+  type DotyposTable,
+  DotyposTableIdSchema,
+} from "@deskohub/dotypos";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { getCustomerReservationPlacement } from "./customer-reservation-placement";
 
@@ -18,18 +22,20 @@ const reservedDesk: StoredWorkspaceReservationDetails = {
 
 const makeTable = (
   overrides: Partial<Omit<DotyposTable, "id">> & { readonly id?: string } = {}
-): DotyposTable =>
-  ({
-    _cloudId: "cloud",
-    id: "assigned-table",
+): DotyposTable => {
+  const { id = "assigned-table", ...rest } = overrides;
+  return {
+    _cloudId: DotyposCloudIdSchema.make("cloud"),
+    id: DotyposTableIdSchema.make(id),
     name: "12",
     display: true,
     enabled: true,
     locationName: "Main room",
     seats: "1",
     tags: ["cowork:reserved-desk"],
-    ...overrides,
-  }) as DotyposTable;
+    ...rest,
+  };
+};
 
 const assignedTo = (tableId: string) => ({
   _tableId: DotyposTableIdSchema.make(tableId),
@@ -46,6 +52,7 @@ const place = (input: {
     dotyposReservation:
       input.tableId === undefined ? {} : assignedTo(input.tableId),
     tables: input.tables,
+    openSpaceExcludedTableIds: new Set(),
     seatingMap: input.seatingMap ?? false,
   });
 
@@ -177,6 +184,33 @@ describe("getCustomerReservationPlacement", () => {
         ),
       }).table
     ).toEqual({ mode: "shared", name: "9-12, 15, 16, wallee, gromice" });
+  });
+
+  test("excludes tables held by Team Table bookings before compacting names", () => {
+    const placement = getCustomerReservationPlacement({
+      reservationDetails: openSpace,
+      dotyposReservation: assignedTo("open-9"),
+      tables: ["9", "10", "11", "12", "15"].map((name) =>
+        makeTable({ id: `open-${name}`, name, tags: ["cowork:open-space"] })
+      ),
+      seatingMap: false,
+      openSpaceExcludedTableIds: new Set([
+        DotyposTableIdSchema.make("open-12"),
+      ]),
+    });
+
+    expect(placement.table).toEqual({ mode: "shared", name: "9-11, 15" });
+  });
+
+  test("omits the shared table list when exclusions could not be loaded", () => {
+    expect(
+      getCustomerReservationPlacement({
+        reservationDetails: openSpace,
+        dotyposReservation: assignedTo("open-9"),
+        tables: [makeTable({ id: "open-9", tags: ["cowork:open-space"] })],
+        seatingMap: false,
+      })
+    ).toEqual({});
   });
 
   test("never names an Open Space reservation's assigned table, even by ID", () => {

@@ -1,3 +1,16 @@
+import {
+  makeOfficeSeatsSchema,
+  officeReservationDayCountSchema,
+  workspaceOfficeProductIdentitySchema,
+  type workspaceOfficeProductTargetSchema,
+} from "@deskohub/workspace-domain/features/reservation/office-reservation";
+
+export {
+  officeReservationDayCountSchema,
+  workspaceOfficeProductIdentitySchema,
+  workspaceOfficeProductTargetSchema,
+} from "@deskohub/workspace-domain/features/reservation/office-reservation";
+
 import { Schema, SchemaGetter } from "effect";
 import { m } from "@/features/i18n";
 import {
@@ -20,40 +33,18 @@ import {
   plainDateStringSchema,
 } from "@/shared/utils/temporal";
 
+export const officeSeatsSchema = makeOfficeSeatsSchema(
+  m.reservationValidationOfficeSeats()
+);
+
 const decodeInstant = Schema.decodeUnknownSync(instantStringSchema);
 const decodePlainDate = Schema.decodeUnknownSync(plainDateStringSchema);
 
 export const officeReservationMaximumDurationHours = 672;
 const millisecondsPerHour = 60 * 60 * 1000;
 
-export const officeSeatsSchema = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(1, {
-    message: m.reservationValidationOfficeSeats(),
-  })
-).annotate({
-  identifier: "OfficeSeats",
-  description: "Total number of seats reserved in the office.",
-});
-
-export const officeReservationDayCountSchema = Schema.Int.check(
-  Schema.isGreaterThan(0)
-).annotate({
-  identifier: "OfficeReservationDayCount",
-  description: "Inclusive number of whole calendar days reserved.",
-});
-
-export const workspaceOfficeProductIdentitySchema = Schema.Struct({
-  kind: Schema.Literal(officeReservationKind),
-  seats: officeSeatsSchema,
-  dayCount: officeReservationDayCountSchema,
-});
-
 export type WorkspaceOfficeProductIdentity =
   typeof workspaceOfficeProductIdentitySchema.Type;
-
-export const workspaceOfficeProductTargetSchema = Schema.Struct({
-  kind: workspaceOfficeProductIdentitySchema.fields.kind,
-});
 
 export type WorkspaceOfficeProductTarget =
   typeof workspaceOfficeProductTargetSchema.Type;

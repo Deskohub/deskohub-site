@@ -4,11 +4,14 @@ import {
   type CustomerCheckout,
   CustomerCheckoutUnavailable,
   CustomerQuoteExpired,
+  CustomerReservationOrderId,
   CustomerServiceUnavailable,
+  type CustomerTeamTableSelection,
   type ReferralCode,
 } from "@deskohub/workspace-customer-api";
 import { Effect, Option } from "effect";
 import { analytics } from "../../analytics/analytics";
+import { CustomerApi } from "../../customer-api/customer-api.service";
 import type { FakeRequestOutcome } from "../../customer-api/testing/fake-workspace";
 import { PaymentBrowserUnavailable } from "../payment-browser.service";
 import { fakeBookingCodes } from "../testing/fake-booking-api";
@@ -63,6 +66,80 @@ const createCommand = (
     referralCode,
   });
 };
+
+test("quotes and holds a Team Table, then reads its status after submitting", async () => {
+  const checkout = await harness();
+  const selection: CustomerTeamTableSelection = {
+    family: "table",
+    date: checkout.booking.dateIn(20),
+    startTime: "10:00",
+    endTime: "11:15",
+    seats: 4,
+  };
+  const { family: _family, ...quoteFields } = selection;
+  const quote = await checkout.inRuntime(
+    Effect.flatMap(CustomerApi, (api) =>
+      api.teamTable.getQuote({ query: { ...quoteFields, locale: "en-US" } })
+    )
+  );
+  const command = createCommand(checkout);
+  const result = await run(
+    checkout,
+    CheckoutCommand.CreateCheckout({
+      ...command,
+      request: {
+        ...command.request,
+        advertisedPriceToken: quote.advertisedPriceToken,
+        selection,
+        people: { contactAttends: true, invitees: [] },
+      },
+    })
+  );
+  const created = Option.getOrThrow(result);
+  expect(created).toMatchObject({
+    _tag: "CheckoutCreated",
+    start: {
+      status: "ready",
+      summary: { total: { value: 34_000 } },
+      people: { contactAttends: true, invitees: [] },
+    },
+  });
+  if (
+    created._tag !== "CheckoutCreated" ||
+    created.start.status === "payment_disabled"
+  ) {
+    throw new Error("Team Table checkout was not created");
+  }
+  const sharedSubmit = submitCommand(created.start);
+  const submitted = await run(
+    checkout,
+    CheckoutCommand.SubmitCheckout({
+      ...sharedSubmit,
+      request: {
+        ...sharedSubmit.request,
+        acceptedLegalDocuments: await currentDocuments(checkout),
+      },
+    })
+  );
+  expect(submitted).toMatchObject({
+    value: { _tag: "Submitted", submission: { status: "payment_required" } },
+  });
+  const status = await checkout.inRuntime(
+    Effect.flatMap(CustomerApi, (api) =>
+      api.teamTable.getStatus({
+        params: {
+          orderId: CustomerReservationOrderId.make(created.start.orderId),
+        },
+      })
+    )
+  );
+  expect(status).toMatchObject({
+    kind: "table",
+    status: "pending",
+    product: { seats: 4, durationMinutes: 75 },
+    total: { value: 34_000 },
+  });
+});
 
 /** Holds a checkout and returns its answer. */
 const hold = async (

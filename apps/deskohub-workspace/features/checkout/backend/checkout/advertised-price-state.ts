@@ -12,6 +12,10 @@ import {
   officeReservationQuoteSchema,
 } from "@/features/checkout/reservation-quote-office";
 import {
+  type TableReservationQuote,
+  tableReservationQuoteSchema,
+} from "@/features/checkout/reservation-quote-table";
+import {
   type CanonicalPromotionCode,
   canonicalPromotionCodeSchema,
   discountIdSchema,
@@ -29,6 +33,10 @@ import {
   type OfficeAdvertisedPriceReservation,
   officeAdvertisedPriceReservationSchema,
 } from "@/features/reservation/office-reservation";
+import {
+  type TableAdvertisedPriceReservation,
+  tableAdvertisedPriceReservationSchema,
+} from "@/features/reservation/table-reservation";
 import {
   makeLegacySealedState,
   type SealedStateIssueOptions,
@@ -82,6 +90,14 @@ const officeAdvertisedPriceStateSchema = Schema.Struct({
   ...requestedDiscountCodeSchemaField,
 });
 
+const tableAdvertisedPriceStateSchema = Schema.Struct({
+  ...workspaceCheckoutPriceStateSchema.fields,
+  kind: tableAdvertisedPriceReservationSchema.fields.kind,
+  reservation: tableAdvertisedPriceReservationSchema,
+  quote: tableReservationQuoteSchema,
+  ...requestedDiscountCodeSchemaField,
+});
+
 const advertisedPriceStateSchema = Schema.Union([
   Schema.Struct({
     ...coworkAdvertisedPriceStateSchema.fields,
@@ -105,6 +121,14 @@ const advertisedPriceStateSchema = Schema.Union([
   }),
   Schema.Struct({
     ...officeAdvertisedPriceStateSchema.fields,
+    ...submittedCodeMetadataSchema.fields,
+  }),
+  Schema.Struct({
+    ...tableAdvertisedPriceStateSchema.fields,
+    ...absentSubmittedCodeMetadataSchema.fields,
+  }),
+  Schema.Struct({
+    ...tableAdvertisedPriceStateSchema.fields,
     ...submittedCodeMetadataSchema.fields,
   }),
 ]).annotate({
@@ -146,6 +170,14 @@ type AdvertisedPriceStateInput = (
       readonly locale: Locale;
       readonly reservation: OfficeAdvertisedPriceReservation;
       readonly quote: OfficeReservationQuote;
+      readonly requestedDiscountCode?: CanonicalPromotionCode;
+      readonly ttlMilliseconds?: number;
+    }
+  | {
+      readonly kind: "table";
+      readonly locale: Locale;
+      readonly reservation: TableAdvertisedPriceReservation;
+      readonly quote: TableReservationQuote;
       readonly requestedDiscountCode?: CanonicalPromotionCode;
       readonly ttlMilliseconds?: number;
     }

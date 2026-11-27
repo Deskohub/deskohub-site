@@ -59,6 +59,10 @@ describe("reservationCount stay and payment", () => {
       { dateBasis: "visitEnd", stay: "week", product: cowork },
     ],
     ["an unknown payment", { dateBasis: "visit", payment: "pass" }],
+    [
+      "a Team Table campaign filter",
+      { dateBasis: "visit", product: { family: "table", properties: [] } },
+    ],
   ])("rejects %s", (_, params) => {
     expect(Result.isFailure(decode(reservationCount(params)))).toBe(true);
   });

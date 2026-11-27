@@ -76,8 +76,20 @@ export function UnlimitedReservationItem({ pass, locale }: PassProps) {
           </div>
         )}
       </div>
-      {pass.status === "active" && (
-        <UnlimitedDoorCodeLink href={pass.accessPath} locale={locale} />
+      {(pass.statusPath || pass.status === "active") && (
+        <div className="flex flex-wrap items-center gap-3">
+          {pass.statusPath && (
+            <GuardedLink
+              className={textLink({ className: "text-sm" })}
+              href={pass.statusPath}
+            >
+              {m.accountPassGiftOrderStatus({}, { locale })}
+            </GuardedLink>
+          )}
+          {pass.status === "active" && (
+            <UnlimitedDoorCodeLink href={pass.accessPath} locale={locale} />
+          )}
+        </div>
       )}
     </li>
   );
@@ -104,6 +116,57 @@ export function AccountUnlimitedRenewalUnavailable({
         }}
       />
     </p>
+  );
+}
+
+function UnlimitedPassCardFooter({
+  pass,
+  locale,
+  renewalPath,
+}: PassProps & { readonly renewalPath?: string }) {
+  const hasMetadata = Boolean(
+    pass.boughtForYou || pass.boughtOn || pass.statusPath
+  );
+  const hasActions = Boolean(renewalPath || pass.status === "active");
+  if (!hasMetadata && !hasActions) return null;
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3 @xl:px-6">
+      <div className="space-y-1">
+        {pass.boughtForYou && (
+          <p className="flex items-center gap-2 text-sm font-semibold">
+            <Gift aria-hidden="true" className="size-4 shrink-0" />
+            {m.accountPassBoughtForYou({}, { locale })}
+          </p>
+        )}
+        {pass.boughtOn && (
+          <p className="text-sm text-slate-600">
+            {m.accountPassBoughtOn({ date: pass.boughtOn }, { locale })}
+          </p>
+        )}
+        {pass.statusPath && (
+          <p className="text-sm">
+            <GuardedLink className={textLink()} href={pass.statusPath}>
+              {m.accountPassGiftOrderStatus({}, { locale })}
+            </GuardedLink>
+          </p>
+        )}
+      </div>
+      {hasActions && (
+        <div className="flex flex-wrap items-center gap-2">
+          {renewalPath && (
+            <Button asChild size="sm" variant="secondary" wrap>
+              <GuardedLink href={renewalPath}>
+                {m.unlimitedPassRenew({}, { locale })}
+              </GuardedLink>
+            </Button>
+          )}
+          {pass.status === "active" && (
+            <UnlimitedDoorCodeLink href={pass.accessPath} locale={locale} />
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -183,35 +246,11 @@ export function AccountUnlimitedPassCard({
           orderId={pass.orderId}
         />
       )}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3 @xl:px-6">
-        <div className="space-y-1">
-          {pass.boughtForYou && (
-            <p className="flex items-center gap-2 text-sm font-semibold">
-              <Gift aria-hidden="true" className="size-4 shrink-0" />
-              {m.accountPassBoughtForYou({}, { locale })}
-            </p>
-          )}
-          {pass.boughtOn && (
-            <p className="text-sm text-slate-600">
-              {m.accountPassBoughtOn({ date: pass.boughtOn }, { locale })}
-            </p>
-          )}
-        </div>
-        {(renewalPath || pass.status === "active") && (
-          <div className="flex flex-wrap items-center gap-2">
-            {renewalPath && (
-              <Button asChild size="sm" variant="secondary" wrap>
-                <GuardedLink href={renewalPath}>
-                  {m.unlimitedPassRenew({}, { locale })}
-                </GuardedLink>
-              </Button>
-            )}
-            {pass.status === "active" && (
-              <UnlimitedDoorCodeLink href={pass.accessPath} locale={locale} />
-            )}
-          </div>
-        )}
-      </div>
+      <UnlimitedPassCardFooter
+        locale={locale}
+        pass={pass}
+        renewalPath={renewalPath}
+      />
     </article>
   );
 }

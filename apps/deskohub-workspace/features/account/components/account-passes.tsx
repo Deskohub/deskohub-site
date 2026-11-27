@@ -1,4 +1,4 @@
-import { CalendarPlus, Gift, Ticket } from "lucide-react";
+import { CalendarPlus, Gift, InfinityIcon, Ticket } from "lucide-react";
 import { Suspense, use } from "react";
 import type {
   AccountBoughtPass,
@@ -16,7 +16,10 @@ import {
 import { AccountSectionPanel } from "@/features/account/components/shell/account-section-panel";
 import { type Locale, m } from "@/features/i18n";
 import { EntryPackMeter } from "@/features/passes/components/entry-pack-meter";
-import { entryPackCheckoutPath } from "@/features/passes/routes";
+import {
+  entryPackCheckoutPath,
+  unlimitedPassCheckoutPath,
+} from "@/features/passes/routes";
 import { GuardedLink } from "@/shared/components/guarded-link";
 import { Button } from "@/shared/components/ui/button";
 import { Skeleton } from "@/shared/components/ui/skeleton";
@@ -41,12 +44,20 @@ export function AccountPassesPanel({
     <AccountSectionPanel
       actions={
         purchasesEnabled && (
-          <Button asChild size="sm" variant="secondary" wrap>
-            <GuardedLink href={`/${locale}${entryPackCheckoutPath}`}>
-              <Ticket aria-hidden="true" className="size-4 shrink-0" />
-              {m.entryPackCheckoutTitle({}, { locale })}
-            </GuardedLink>
-          </Button>
+          <div className="flex flex-col items-start gap-2 @xl:flex-row">
+            <Button asChild size="sm" variant="secondary" wrap>
+              <GuardedLink href={`/${locale}${entryPackCheckoutPath}`}>
+                <Ticket aria-hidden="true" className="size-4 shrink-0" />
+                {m.entryPackCheckoutTitle({}, { locale })}
+              </GuardedLink>
+            </Button>
+            <Button asChild size="sm" variant="secondary" wrap>
+              <GuardedLink href={`/${locale}${unlimitedPassCheckoutPath}`}>
+                <InfinityIcon aria-hidden="true" className="size-4 shrink-0" />
+                {m.unlimitedPassCheckoutTitle({}, { locale })}
+              </GuardedLink>
+            </Button>
+          </div>
         )
       }
       title={m.accountSectionPasses({}, { locale })}
@@ -290,6 +301,7 @@ function AccountEntryPackCard({
     gift,
     lastUsableDay,
     status,
+    statusPath,
     tier,
   } = pack;
 
@@ -356,16 +368,11 @@ function AccountEntryPackCard({
           )}
         </div>
       </div>
-      {bookPath && (
-        <div className="flex justify-end border-t border-slate-200 bg-stone-50 px-4 py-3 sm:px-6">
-          <Button asChild size="sm" wrap>
-            <GuardedLink href={bookPath}>
-              <CalendarPlus aria-hidden="true" className="size-4 shrink-0" />
-              {m.accountPassBookDate({}, { locale })}
-            </GuardedLink>
-          </Button>
-        </div>
-      )}
+      <AccountEntryPackFooter
+        bookPath={bookPath}
+        locale={locale}
+        statusPath={statusPath}
+      />
     </>
   );
 
@@ -380,5 +387,38 @@ function AccountEntryPackCard({
     </FocusedGiftPassCard>
   ) : (
     <article className={cardClassName}>{contents}</article>
+  );
+}
+
+function AccountEntryPackFooter({
+  bookPath,
+  locale,
+  statusPath,
+}: {
+  readonly bookPath?: string;
+  readonly locale: Locale;
+  readonly statusPath?: string;
+}) {
+  if (!statusPath && !bookPath) return null;
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-stone-50 px-4 py-3 sm:px-6">
+      {statusPath && (
+        <GuardedLink
+          className={textLink({ className: "text-sm" })}
+          href={statusPath}
+        >
+          {m.accountPassGiftOrderStatus({}, { locale })}
+        </GuardedLink>
+      )}
+      {bookPath && (
+        <Button asChild className="ms-auto" size="sm" wrap>
+          <GuardedLink href={bookPath}>
+            <CalendarPlus aria-hidden="true" className="size-4 shrink-0" />
+            {m.accountPassBookDate({}, { locale })}
+          </GuardedLink>
+        </Button>
+      )}
+    </div>
   );
 }

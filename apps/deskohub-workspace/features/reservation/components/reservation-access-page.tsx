@@ -1,11 +1,17 @@
 import { KeyRound } from "lucide-react";
 import Link from "next/link";
 import { CheckoutFlowLayout } from "@/features/checkout/components/checkout-flow-layout";
-import { getWorkspaceOfficeProductTitle } from "@/features/checkout/product-catalog.i18n";
+import {
+  getWorkspaceOfficeProductTitle,
+  getWorkspaceTableProductTitle,
+} from "@/features/checkout/product-catalog.i18n";
 import type { Locale } from "@/features/i18n";
 import { m } from "@/features/i18n";
 import type { ReservationAccessViewModel } from "@/features/reservation/backend/reservation-access.service";
-import { formatReservationDisplayDateTime } from "@/features/reservation/reservation-date";
+import {
+  formatReservationDisplayDateTime,
+  formatReservationDisplayDateTimeRange,
+} from "@/features/reservation/reservation-date";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { Button } from "@/shared/components/ui/button";
 import { ReservationAccessAddress } from "./reservation-access-address";
@@ -28,6 +34,19 @@ function formatAccessWindow(
   access: Extract<ReservationAccessViewModel, { state: "available" }>,
   locale: Locale
 ) {
+  if (access.teamTable) {
+    return m.reservationAccessTeamTableBookedFor(
+      {
+        period: formatReservationDisplayDateTimeRange(
+          access.accessStartsAt,
+          access.accessEndsAt,
+          locale
+        ),
+      },
+      { locale }
+    );
+  }
+
   const days = access.accessDays;
   if (!days) {
     return m.reservationAccessLead(
@@ -61,6 +80,11 @@ export function ReservationAccessPage({
     access.state !== "invalid_link" && access.viewer === "invitee";
   const bookerName =
     access.state === "available" ? access.bookedBy?.name : undefined;
+  const teamTable =
+    access.state === "invalid_link" ? undefined : access.teamTable;
+  const product = teamTable
+    ? getWorkspaceTableProductTitle(locale)
+    : getWorkspaceOfficeProductTitle(locale);
   const title = {
     available: m.reservationAccessTitle({}, { locale }),
     invalid_link: m.reservationAccessInvalidLinkTitle({}, { locale }),
@@ -94,12 +118,18 @@ export function ReservationAccessPage({
                 {bookerName
                   ? m.reservationAccessGuestBookedBy(
                       {
-                        product: getWorkspaceOfficeProductTitle(locale),
+                        product,
                         name: bookerName,
                       },
                       { locale }
                     )
-                  : getWorkspaceOfficeProductTitle(locale)}
+                  : product}
+              </p>
+            )}
+            {teamTable?.name && (
+              <p className="mt-3 text-lg text-navy-blue/70 sm:text-xl">
+                {m.reservationAssignedTableLabel({}, { locale })}{" "}
+                <span className="font-semibold">{teamTable.name}</span>
               </p>
             )}
             {access.state === "invalid_link" && (

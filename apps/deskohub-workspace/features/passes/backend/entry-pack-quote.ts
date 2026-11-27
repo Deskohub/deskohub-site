@@ -9,10 +9,16 @@ import {
   getEntryPackPrice,
   getEntryPackValidity,
 } from "../pass-offer";
-import type { PassPurchaseQuote } from "../pass-purchase-quote";
+import {
+  catalogCoffeeAmountMinor,
+  type PassPurchaseQuote,
+} from "../pass-purchase-quote";
 
 /** The terms of a price the buyer has seen, independent of labels and timers. */
-export const getPassPurchasePriceFingerprint = (quote: PassPurchaseQuote) =>
+export const getPassPurchasePriceFingerprint = (
+  quote: PassPurchaseQuote,
+  coffeeAmountMinor = catalogCoffeeAmountMinor(quote.unlimitedCoffee)
+) =>
   createHash("sha256")
     .update(
       JSON.stringify([
@@ -21,7 +27,7 @@ export const getPassPurchasePriceFingerprint = (quote: PassPurchaseQuote) =>
         quote.discounts.map(({ discount, amount }) => [discount.id, amount]),
         quote.selection?.submittedCode,
         quote.selection?.referralCode,
-        ...(quote.unlimitedCoffee ? [true] : []),
+        ...(coffeeAmountMinor === null ? [] : [coffeeAmountMinor]),
       ])
     )
     .digest("hex");

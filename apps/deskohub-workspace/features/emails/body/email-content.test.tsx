@@ -403,7 +403,7 @@ describe("trigger values, conditional blocks, and dynamic button links", () => {
             { _tag: "Text", text: " starting " },
             { _tag: "Value", name: "pass", field: ["renewalStartsOn"] },
           ],
-          renew_label: [{ _tag: "Text", text: "Renew pass" }],
+          renew_label: [{ _tag: "Text", text: "Extend membership" }],
         },
       },
     },

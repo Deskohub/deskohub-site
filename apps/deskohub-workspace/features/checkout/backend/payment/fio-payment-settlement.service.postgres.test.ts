@@ -31,6 +31,7 @@ const accountKey = "settlement-test-account";
 const movement = {
   accountKey,
   movementId: "foreign-credit",
+  constantSymbol: null,
   variableSymbol: null,
   referenceStatus: "invalid",
   amount: { _tag: "OtherCurrency", currency: "EUR", decimalAmount: "100.2500" },
@@ -117,6 +118,54 @@ describe.skipIf(!database)("verified Fio movement ingress", () => {
     ]);
   });
 
+  test("keeps unmatched card payouts out of settlement evidence and the staff queue", async () => {
+    const ignoredPayouts = [
+      { movementId: "payout-unmatched", variableSymbol: "966220031" },
+      { movementId: "payout-absent", variableSymbol: null },
+      { movementId: "payout-invalid", variableSymbol: "invalid" },
+    ];
+    const otherTransfer = {
+      ...movement,
+      movementId: "unmatched-other-constant-symbol",
+      constantSymbol: "0308",
+      variableSymbol: "966220032",
+    };
+    const { accountRows, staffRows } = await runSettlement(
+      Effect.gen(function* () {
+        const settlements = yield* FioPaymentSettlementService;
+        yield* settlements.recordMovement(otherTransfer);
+        for (const payout of ignoredPayouts) {
+          yield* settlements.recordMovement({
+            accountKey,
+            ...payout,
+            constantSymbol: "0558",
+            amount: { _tag: "CZK", minorUnits: 10_000 },
+            bookingDate: movement.bookingDate,
+            observedAt: movement.observedAt,
+          });
+        }
+        const staffRepository = yield* FioPaymentSettlementRepository;
+        return {
+          accountRows: yield* settlements.listForAccount({ accountKey }),
+          staffRows: yield* staffRepository.listForStaff({ kind: "unmatched" }),
+        };
+      })
+    );
+
+    const recordedTransfer = expect.objectContaining({
+      movementId: otherTransfer.movementId,
+      discrepancyReason: "reference_unmatched",
+    });
+    for (const rows of [accountRows, staffRows]) {
+      expect(rows).toContainEqual(recordedTransfer);
+      for (const { movementId } of ignoredPayouts) {
+        expect(rows).not.toContainEqual(
+          expect.objectContaining({ movementId })
+        );
+      }
+    }
+  });
+
   test("ignores movements from an unconfigured receiving account", async () => {
     const unconfiguredAccount = "other-settlement-test-account";
     const rows = await runSettlement(
@@ -171,6 +220,7 @@ describe.skipIf(!database)("verified Fio movement ingress", () => {
     const credit = {
       accountKey,
       movementId: "winner-credit",
+      constantSymbol: "0558",
       variableSymbol,
       amount: { _tag: "CZK", minorUnits: 14_500 },
       bookingDate: movement.bookingDate,
@@ -239,6 +289,7 @@ describe.skipIf(!database)("verified Fio movement ingress", () => {
         yield* settlements.recordMovement({
           ...credit,
           movementId: "unknown-reference",
+          constantSymbol: null,
           variableSymbol: "1111111111",
         });
         const linked = yield* settlements.listForOrder(orderId);

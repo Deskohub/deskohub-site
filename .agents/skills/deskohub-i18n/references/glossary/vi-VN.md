@@ -59,6 +59,8 @@ Columns: concept ID(s) | Czech | English | Vietnamese | Notes and forbidden alte
 | P28 | Wi-Fi | Wi-Fi | **Wi-Fi** | Spelling stays: *mật khẩu Wi-Fi*. ✗ *wifi*, ✗ *mạng không dây* in labels. |
 | P30 | člen Workspace | Workspace member | **Thành viên Workspace** | `accountProfileScreenMemberFallback`. *Thành viên* is gender-neutral. |
 | P31, P32, P33 | Deskohub Workspace, Workspace, Deskohub | same | **Deskohub Workspace**, **Workspace**, **Deskohub** | Unchanged. `accountReferralsDiscountInfo` "ve Workspace" → *tại Workspace*. |
+| P34 | Neomezené členství | Unlimited membership | **Gói thành viên không giới hạn** | Use the name alone in titles. Put the 30-day period in the price cadence or validity and access details. |
+| P35 | Členství | Membership | **Gói thành viên** | Short label in purchase comparisons. |
 
 ### R: reservation and time
 

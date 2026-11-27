@@ -55,6 +55,7 @@ describe("app route tree", () => {
         "/book/meeting-room",
         "/book/office",
         "/book/profile",
+        "/book/table",
         "/dev/booking-components",
         "/dev/design-system",
         "/dev/effect-smoke",
@@ -112,6 +113,7 @@ describe("app route tree", () => {
       "(account)/book/meeting-room",
       "(account)/book/office",
       "(account)/book/profile",
+      "(account)/book/table",
     ]);
   });
 

@@ -7,11 +7,13 @@ import {
 import { coworkReservationQuoteSchema } from "@/features/checkout/reservation-quote-cowork";
 import { meetingRoomReservationQuoteSchema } from "@/features/checkout/reservation-quote-meeting-room";
 import { officeReservationQuoteSchema } from "@/features/checkout/reservation-quote-office";
+import { tableReservationQuoteSchema } from "@/features/checkout/reservation-quote-table";
 import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
 import { locales } from "@/features/i18n";
 import { coworkAdvertisedPriceReservationSchema } from "@/features/reservation/cowork-reservation";
 import { meetingRoomAdvertisedPriceReservationSchema } from "@/features/reservation/meeting-room-reservation";
 import { officeAdvertisedPriceReservationSchema } from "@/features/reservation/office-reservation";
+import { tableAdvertisedPriceReservationSchema } from "@/features/reservation/table-reservation";
 import type { Money } from "@/shared/money/money";
 
 const advertisedPriceRequestBaseSchema = Schema.Struct({
@@ -34,10 +36,16 @@ const officeAdvertisedPriceRequestSchema = Schema.Struct({
   reservation: officeAdvertisedPriceReservationSchema,
 });
 
+const tableAdvertisedPriceRequestSchema = Schema.Struct({
+  ...advertisedPriceRequestBaseSchema.fields,
+  reservation: tableAdvertisedPriceReservationSchema,
+});
+
 export const advertisedPriceRequestSchema = Schema.Union([
   coworkAdvertisedPriceRequestSchema,
   meetingRoomAdvertisedPriceRequestSchema,
   officeAdvertisedPriceRequestSchema,
+  tableAdvertisedPriceRequestSchema,
 ]).annotate({
   identifier: "AdvertisedPriceRequest",
   description: "Inputs for anonymous price advertisement.",
@@ -80,6 +88,13 @@ const officeAdvertisedPriceSchema = Schema.Struct({
   summary: checkoutSummarySchema,
 });
 
+const tableAdvertisedPriceSchema = Schema.Struct({
+  ...advertisedPriceBaseSchema.fields,
+  kind: tableAdvertisedPriceReservationSchema.fields.kind,
+  quote: tableReservationQuoteSchema,
+  summary: checkoutSummarySchema,
+});
+
 export type AdvertisedPriceRequest = typeof advertisedPriceRequestSchema.Type;
 export type CoworkAdvertisedPriceRequest =
   typeof coworkAdvertisedPriceRequestSchema.Type;
@@ -97,7 +112,8 @@ export type OfficeAdvertisedPrice = typeof officeAdvertisedPriceSchema.Type;
 export type AdvertisedPrice =
   | CoworkAdvertisedPrice
   | MeetingRoomAdvertisedPrice
-  | OfficeAdvertisedPrice;
+  | OfficeAdvertisedPrice
+  | typeof tableAdvertisedPriceSchema.Type;
 export type PreloadedAdvertisedPrice = {
   readonly request: AdvertisedPriceRequest;
   readonly advertisedPrice: AdvertisedPrice;

@@ -1,4 +1,3 @@
-import type { CustomerReservationFamily } from "@deskohub/workspace-customer-api";
 import { useAtomValue } from "@effect/atom-react";
 import { Option } from "effect";
 import { AsyncResult } from "effect/reactivity";
@@ -9,15 +8,20 @@ import CircleUser from "lucide-react-native/icons/circle-user";
 import DoorClosed from "lucide-react-native/icons/door-closed";
 import Laptop from "lucide-react-native/icons/laptop";
 import Presentation from "lucide-react-native/icons/presentation";
+import Users from "lucide-react-native/icons/users";
 import type { ComponentProps } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { reservationsAccess, tabGate } from "../account/account-gating";
 import { bookFamilyHref, bookHref } from "../booking/booking-routes";
 import { checkoutRequestAtom } from "../booking/checkout/checkout-flow";
-import { bookingOfferingsAtom } from "../booking/data/booking-queries";
+import {
+  bookingOfferingsAtom,
+  teamTableOfferingsAtom,
+} from "../booking/data/booking-queries";
 import { opensWithoutAccount } from "../booking/family/booking-family-view";
 import { spaceCards } from "../booking/family/space-chooser";
+import type { BookingFamily } from "../booking/selection/booking-selection";
 import { accountAtom } from "../customer-api/customer-data-runtime";
 import { useAppLocale } from "../i18n/locale-context";
 import { m } from "../i18n/messages";
@@ -97,14 +101,19 @@ function ProductLinks({
   onOpen,
 }: {
   readonly active?: SignedInDestination;
-  readonly onOpen: (family: CustomerReservationFamily) => void;
+  readonly onOpen: (family: BookingFamily) => void;
 }) {
   const locale = useAppLocale();
   const result = useAtomValue(bookingOfferingsAtom(locale));
-  return Option.match(AsyncResult.value(result), {
-    onNone: () => null,
-    onSome: ({ offerings }) =>
-      spaceCards(offerings).map(({ family, name }) => (
+  const table = useAtomValue(teamTableOfferingsAtom(locale));
+  return (
+    <>
+      {Option.getOrElse(
+        Option.map(AsyncResult.value(result), ({ offerings }) =>
+          spaceCards(offerings)
+        ),
+        () => []
+      ).map(({ family, name }) => (
         <RailLink
           key={family}
           product
@@ -115,8 +124,18 @@ function ProductLinks({
             m.booking_family_cowork_title({}, { locale })
           )}
         />
-      )),
-  });
+      ))}
+      {AsyncResult.isSuccess(table) && table.value.offerings.length > 0 && (
+        <RailLink
+          product
+          onPress={() => onOpen("table")}
+          active={active === "table"}
+          icon={Users}
+          label={m.booking_checkout_line_team_table({}, { locale })}
+        />
+      )}
+    </>
+  );
 }
 
 export function NavigationRail({
@@ -160,7 +179,7 @@ export function NavigationRail({
       router.navigate(href);
     }
   };
-  const openProduct = (family: CustomerReservationFamily) => {
+  const openProduct = (family: BookingFamily) => {
     if (group !== "book") {
       open(bookFamilyHref(family));
       return;

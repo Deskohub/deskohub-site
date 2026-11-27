@@ -5,6 +5,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Schema } from "effect";
 import { getOfficeEditPriceSummary } from "@/features/checkout/checkout-summary-office";
+import { getTableCheckoutSummary } from "@/features/checkout/checkout-summary-table";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import {
   affirmedDiscountAdvertisementQuoteCodec,
@@ -32,6 +33,10 @@ import {
   officeReservationOrderSchema,
 } from "@/features/reservation/office-reservation";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
+import {
+  getTableAdvertisedPriceReservation,
+  tableReservationOrderSchema,
+} from "@/features/reservation/table-reservation";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import type {
   CheckoutPricingService as CheckoutPricing,
@@ -172,6 +177,45 @@ const officeOrder = Schema.decodeUnknownSync(
   ...contact,
 });
 
+const tableOrder = Schema.decodeUnknownSync(tableReservationOrderSchema("CZ"))({
+  kind: "table",
+  seats: 4,
+  startsAt: "2099-06-20T08:00:00Z",
+  endsAt: "2099-06-20T09:30:00Z",
+  ...contact,
+});
+
+test("advertises and applies a Team Table discount to both charges", async () => {
+  const advertised = await advertise({
+    reservation: getTableAdvertisedPriceReservation(tableOrder),
+    locale: "en-US",
+  });
+  expect(advertised.kind).toBe("table");
+  if (advertised.kind !== "table")
+    throw new Error("expected Team Table pricing");
+
+  expect(advertised.quote.items).toMatchObject([
+    { type: "table-base", seats: 4, amount: { value: 24_000 } },
+    { type: "table-usage", durationMinutes: 90, amount: { value: 12_000 } },
+  ]);
+  expect(advertised.quote.payment).toMatchObject({
+    undiscountedPrice: { value: 36_000 },
+    expectedPrice: { value: 18_000 },
+  });
+  expect(getTableCheckoutSummary(advertised.quote).sections[0]).toMatchObject({
+    key: "order",
+    items: [
+      {
+        key: "product:table:4:90",
+        baseAmount: { value: 24_000 },
+        usageAmount: { value: 12_000 },
+        originalAmount: { value: 36_000 },
+        amount: { value: 18_000 },
+      },
+    ],
+  });
+});
+
 const families = [
   {
     kind: "cowork",
@@ -217,6 +261,20 @@ const families = [
     changedKeys: {
       sectionKeys: ["order", "total"],
       itemKeys: ["product:office:3:2", "total:final"],
+    },
+  },
+  {
+    kind: "table",
+    order: tableOrder,
+    otherOrder: { ...tableOrder, seats: 5 },
+    advertise: (locale: Locale) =>
+      advertise({
+        reservation: getTableAdvertisedPriceReservation(tableOrder),
+        locale,
+      }),
+    changedKeys: {
+      sectionKeys: ["order", "total"],
+      itemKeys: ["product:table:4:90", "total:final"],
     },
   },
 ] as const;

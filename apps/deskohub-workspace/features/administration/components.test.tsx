@@ -8,6 +8,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
@@ -18,8 +19,11 @@ import {
   within,
 } from "@testing-library/react";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { formatMoney } from "@/shared/money/money";
 import {
+  submittedActionInput,
+  type WorkspaceActionExecute,
   workspaceRouterPush,
   workspaceRouterRefresh,
   workspaceUseAction,
@@ -81,7 +85,7 @@ describe("administration reservation components", () => {
     workspaceUseAction.mockReturnValue({
       execute,
       isExecuting: false,
-    } as never);
+    });
 
     const view = render(
       <ReservationAccessAdministration
@@ -108,7 +112,7 @@ describe("administration reservation components", () => {
     workspaceUseAction.mockReturnValue({
       execute,
       isExecuting: false,
-    } as never);
+    });
     const retriesFrom = (state: typeof accessGrant.state) => {
       execute.mockClear();
       const view = render(
@@ -149,7 +153,7 @@ describe("administration reservation components", () => {
     workspaceUseAction.mockReturnValue({
       execute,
       isExecuting: false,
-    } as never);
+    });
 
     const view = render(
       <ReservationAccessAdministration
@@ -181,7 +185,7 @@ describe("administration reservation components", () => {
     workspaceUseAction.mockReturnValue({
       execute: mock(),
       isExecuting: false,
-    } as never);
+    });
 
     const fresh = render(
       <ReservationAccessAdministration
@@ -484,7 +488,7 @@ describe("administration reservation components", () => {
     workspaceUseAction.mockReturnValue({
       execute: mock(),
       isExecuting: false,
-    } as never);
+    });
 
     const view = render(
       <RouteLocaleProvider locale="cs-CZ">
@@ -508,13 +512,18 @@ describe("administration reservation components", () => {
   });
 
   test("looks up reservations in Czech and reports an unmatched ID", async () => {
-    const execute = mock();
-    let onSuccess:
-      | ((args: { readonly data?: { readonly reservationId: null } }) => void)
-      | undefined;
+    type Lookup = typeof import("./actions").getAdministrationReservation;
+    type LookupData = Awaited<ReturnType<Lookup>>["data"];
+    const execute = mock<WorkspaceActionExecute>();
+    let onSuccess: ((data: LookupData) => void) | undefined;
     workspaceUseAction.mockImplementation((_action, options) => {
-      onSuccess = (options as { onSuccess: typeof onSuccess }).onSuccess;
-      return { execute, isExecuting: false } as never;
+      onSuccess = (data) => {
+        void options.onSuccess?.({
+          data,
+          input: submittedActionInput(execute.mock.calls),
+        });
+      };
+      return { execute, isExecuting: false };
     });
 
     const view = render(
@@ -532,7 +541,13 @@ describe("administration reservation components", () => {
     ).toBeDefined();
     expect(execute).not.toHaveBeenCalled();
 
-    act(() => onSuccess?.({ data: { reservationId: null } }));
+    fireEvent.input(view.getByLabelText("ID rezervace nebo platby"), {
+      target: { value: "synthetic-missing-reservation" },
+    });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    act(() => onSuccess?.({ reservationId: null }));
     expect(
       view.getByText("Tomuto ID neodpovídá žádná rezervace.")
     ).toBeDefined();
@@ -645,32 +660,35 @@ describe("administration reservation components", () => {
     const [refundedRow, partiallyRefundedRow, paidRow] = within(table)
       .getAllByRole("row")
       .slice(1);
+    if (!refundedRow || !partiallyRefundedRow || !paidRow) {
+      throw new Error("Expected three reservation rows");
+    }
     const recordedAt = formatAdministrationDateTime(refundedAt, "en-US");
 
-    expect(refundedRow?.textContent).not.toContain("Paid");
+    expect(refundedRow.textContent).not.toContain("Paid");
     expect(
-      within(refundedRow as HTMLElement).getByText(`Refunded · ${recordedAt}`)
+      within(refundedRow).getByText(`Refunded · ${recordedAt}`)
     ).toBeDefined();
-    expect(readableText(refundedRow?.querySelector("del"))).toBe(
+    expect(readableText(refundedRow.querySelector("del"))).toBe(
       "CZK 275 refunded"
     );
 
-    expect(partiallyRefundedRow?.textContent).not.toContain("Paid");
+    expect(partiallyRefundedRow.textContent).not.toContain("Paid");
     expect(
-      within(partiallyRefundedRow as HTMLElement).getByText(
+      within(partiallyRefundedRow).getByText(
         `Partially refunded CZK 100 · ${recordedAt}`
       )
     ).toBeDefined();
-    expect(readableText(partiallyRefundedRow?.querySelector("del"))).toBe(
+    expect(readableText(partiallyRefundedRow.querySelector("del"))).toBe(
       "CZK 275 before refund"
     );
     expect(readableText(partiallyRefundedRow)).toContain(
       "CZK 175 after refund"
     );
 
-    expect(paidRow?.querySelector("del")).toBeNull();
+    expect(paidRow.querySelector("del")).toBeNull();
     expect(
-      within(paidRow as HTMLElement).getByText(
+      within(paidRow).getByText(
         `Paid · ${formatAdministrationDateTime(paid.latestPayment.updatedAt, "en-US")}`
       )
     ).toBeDefined();
@@ -994,7 +1012,7 @@ describe("administration reservation components", () => {
             { ...booking, seats: "3", status: "CANCELLED" },
             {
               ...booking,
-              id: `${booking.id}-unassigned` as typeof booking.id,
+              id: DotyposReservationIdSchema.make(`${booking.id}-unassigned`),
               customer: null,
               customerId: null,
               linkedReservation: null,
@@ -1061,22 +1079,20 @@ describe("administration reservation components", () => {
   });
 
   test("gets one reservation from any associated unique ID", async () => {
-    const execute = mock();
-    let onSuccess:
-      | ((result: {
-          readonly data?: { readonly reservationId: string | null };
-        }) => void)
-      | undefined;
+    type Lookup = typeof import("./actions").getAdministrationReservation;
+    type LookupData = Awaited<ReturnType<Lookup>>["data"];
+    const execute = mock<WorkspaceActionExecute>();
+    let onSuccess: ((data: LookupData) => void) | undefined;
     workspaceUseAction.mockImplementation((_action, options) => {
-      onSuccess = (
-        options as {
-          readonly onSuccess?: (result: {
-            readonly data?: { readonly reservationId: string | null };
-          }) => void;
-        }
-      ).onSuccess;
+      onSuccess = (data) => {
+        void options.onSuccess?.({
+          data,
+          input: submittedActionInput(execute.mock.calls),
+        });
+      };
       return { execute, isExecuting: false };
     });
+
     const { ReservationLookup } = await import("./reservation-lookup");
     const view = render(<ReservationLookup />);
 
@@ -1089,7 +1105,9 @@ describe("administration reservation components", () => {
     });
 
     expect(execute).toHaveBeenCalledWith({ identifier: "payment-123" });
-    onSuccess?.({ data: { reservationId: "reservation-456" } });
+    onSuccess?.({
+      reservationId: workspaceReservationIdSchema.make("reservation-456"),
+    });
     expect(workspaceRouterPush).toHaveBeenCalledWith(
       "/en-US/admin/reservations/reservation-456"
     );

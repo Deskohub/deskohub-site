@@ -1,3 +1,13 @@
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@deskohub/workspace-domain/features/reservation/persistence-contracts";
+
+export {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@deskohub/workspace-domain/features/reservation/persistence-contracts";
+
 import { Match, type Option, Schema } from "effect";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import type { NormalizedCoworkReservationOrder } from "@/features/reservation/cowork-reservation";
@@ -14,11 +24,16 @@ import {
   storedOfficeReservationDetailsSchema,
 } from "@/features/reservation/office-reservation";
 import type { ReservationOrderData } from "@/features/reservation/reservation-order";
+import {
+  getStoredTableReservationDetails,
+  storedTableReservationDetailsSchema,
+} from "@/features/reservation/table-reservation";
 
 export const storedWorkspaceReservationDetailsSchema = Schema.Union([
   storedCoworkReservationDetailsSchema,
   storedMeetingRoomReservationDetailsSchema,
   storedOfficeReservationDetailsSchema,
+  storedTableReservationDetailsSchema,
 ]).annotate({
   identifier: "StoredWorkspaceReservationDetails",
   description:
@@ -41,19 +56,9 @@ export const getStoredWorkspaceReservationDetails = (
       cowork: getStoredCoworkReservationDetails,
       "meeting-room": getStoredMeetingRoomReservationDetails,
       office: getStoredOfficeReservationDetails,
+      table: getStoredTableReservationDetails,
     })
   );
-
-export const workspaceReservationIdSchema = Schema.NonEmptyString.pipe(
-  Schema.brand("WorkspaceReservationId")
-).annotate({
-  identifier: "WorkspaceReservationId",
-  description: "Opaque identifier for a persisted workspace reservation.",
-});
-
-export type WorkspaceReservationId = Schema.Schema.Type<
-  typeof workspaceReservationIdSchema
->;
 
 /**
  * The ID of the order a standalone reservation is mirrored into, read from the

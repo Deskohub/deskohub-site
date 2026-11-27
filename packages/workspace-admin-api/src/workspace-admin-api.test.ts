@@ -585,6 +585,18 @@ describe("administration contract", () => {
     ).toEqual({ type: "office" });
     expect(
       Schema.decodeUnknownSync(AdministrationReservationQuery)({
+        type: "table",
+      })
+    ).toEqual({ type: "table" });
+    expect(
+      Schema.decodeUnknownSync(AdministrationReservationSummary)({
+        ...reservationInput,
+        type: "table",
+        typeLabel: "Team Table",
+      })
+    ).toMatchObject({ type: "table", typeLabel: "Team Table" });
+    expect(
+      Schema.decodeUnknownSync(AdministrationReservationQuery)({
         status: "needs_attention",
       })
     ).toEqual({ status: "needs_attention" });
@@ -729,7 +741,7 @@ describe("administration contract", () => {
       voucher: { credit: { value: 10_000 } },
     });
   });
-  test("accepts cowork tier targets but not mixed or repeated cowork targets", () => {
+  test("accepts Team Table and cowork tier targets and rejects invalid target combinations", () => {
     const decodeProducts = (
       products: ReadonlyArray<{ readonly kind: string; readonly tier?: string }>
     ) =>
@@ -753,6 +765,7 @@ describe("administration contract", () => {
         { kind: "office" },
       ],
       [{ kind: "cowork" }, { kind: "meeting-room" }],
+      [{ kind: "table" }],
     ]) {
       expect(decodeProducts(products)).toMatchObject({
         discount: { products },
@@ -767,6 +780,8 @@ describe("administration contract", () => {
       ],
       [{ kind: "cowork", tier: "basic" }],
       [{ kind: "office", tier: "open-space" }],
+      [{ kind: "table", tier: "open-space" }],
+      [{ kind: "table" }, { kind: "table" }],
     ]) {
       expect(() => decodeProducts(products)).toThrow();
     }

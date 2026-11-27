@@ -7,6 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { cleanup, render } from "@testing-library/react";
 import {
   registerWorkspaceComponentTestEnv,
@@ -28,13 +29,14 @@ mock.module("next/navigation", () => ({
 
 const { AdministrationCustomerDetail } = await import("./customer-detail");
 
-const customer = {
-  id: "dotypos-customer",
+const customer: AdministrationCustomer = {
+  id: DotyposCustomerIdSchema.make("dotypos-customer"),
   displayName: "Synthetic Customer",
   hasName: true,
+  lifecycle: "active",
   email: null,
   phone: null,
-} as AdministrationCustomer;
+};
 
 const reservations = loadFixtureReservations({
   customerId: "customer-alex",

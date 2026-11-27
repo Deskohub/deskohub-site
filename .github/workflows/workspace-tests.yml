@@ -113,8 +113,8 @@ jobs:
           DATABASE_URL: postgresql://workspace:workspace@127.0.0.1:5432/workspace
         run: |
           bun turbo db:generate --filter=deskohub-workspace
-          git add --intent-to-add -- apps/deskohub-workspace/db/migrations
-          git diff --exit-code -- apps/deskohub-workspace/db/migrations
+          git add --intent-to-add -- packages/workspace-backend/src/db/migrations
+          git diff --exit-code -- packages/workspace-backend/src/db/migrations
 
       - name: Validate Workspace E2E allocation bundle
         run: |
@@ -137,6 +137,20 @@ jobs:
       # shards skip it. The typecheck step above already covers its types.
       - name: Lint and test the Workspace infrastructure
         run: bun turbo lint test --filter=@deskohub/workspace-infrastructure
+
+      - name: Lint the Workspace API
+        run: bun turbo lint --filter=deskohub-workspace-api
+
+      - name: Test backend preview workflow validation
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          node --test .github/actions/workspace-backend-preview/*.test.mjs
+          python3 -m unittest discover -s .github/actions/workspace-backend-preview -p artifact_test.py
+
+      - name: Smoke test the Workspace API proof image under Node 24
+        timeout-minutes: 5
+        run: bash apps/deskohub-workspace-api/test-image.sh
 
   # A shard task's cache key covers its own inputs, its dependencies' and the
   # $TURBO_ROOT$ files it declares. futureFlags.affectedUsingTaskInputs in

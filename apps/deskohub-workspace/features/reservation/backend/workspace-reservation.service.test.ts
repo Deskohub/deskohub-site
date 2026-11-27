@@ -2,11 +2,20 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import assert from "node:assert/strict";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+  DotyposService,
+  DotyposUnavailable,
+} from "@deskohub/dotypos";
 import type { Customer, Reservation, Table } from "@deskohub/dotypos/generated";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Option } from "effect";
+import { workspaceReservations } from "@/db/schema";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
@@ -15,6 +24,7 @@ import {
   WorkspaceReservationDetailsError,
   WorkspaceReservationService,
 } from "./workspace-reservation.service";
+import { workspaceReservationFixture } from "./workspace-reservation.test-utils";
 
 const customer: Customer = {
   _cloudId: "cloud",
@@ -35,22 +45,25 @@ type TestWorkspaceReservation = Pick<
 >;
 
 const makeWorkspaceReservation = (
-  overrides: Partial<TestWorkspaceReservation> = {}
-): TestWorkspaceReservation => ({
-  id: "reservation-id",
-  dotyposCustomerId: "customer-id",
-  dotyposReservationId: " dotypos-reservation-id ",
-  reservationState: "confirmed",
-  paymentState: "paid",
-  reservationDetails: {
-    kind: "cowork",
-    entryTier: "profi",
-    coffee: true,
-    monitorOption: "2x27-qhd",
-  },
-  locale: "cs-CZ",
-  ...overrides,
-});
+  overrides: Partial<WorkspaceReservation> = {}
+): WorkspaceReservation =>
+  workspaceReservationFixture({
+    id: workspaceReservationIdSchema.make("reservation-id"),
+    dotyposCustomerId: DotyposCustomerIdSchema.make("customer-id"),
+    dotyposReservationId: DotyposReservationIdSchema.make(
+      "dotypos-reservation-id"
+    ),
+    reservationState: "confirmed",
+    paymentState: "paid",
+    reservationDetails: {
+      kind: "cowork",
+      entryTier: "profi",
+      coffee: true,
+      monitorOption: "2x27-qhd",
+    },
+    locale: "cs-CZ",
+    ...overrides,
+  });
 
 const makeDotyposReservation = (
   overrides: Partial<Reservation> = {}
@@ -81,18 +94,26 @@ const makeTable = (overrides: Partial<Table> = {}): Table => ({
 
 const detailsEffect = (input: {
   readonly seatingMapEnabled?: boolean;
-  readonly workspaceReservation?: TestWorkspaceReservation | null;
+  readonly workspaceReservation?: WorkspaceReservation | null;
   readonly dotyposReservation?: Reservation;
   readonly tables?: readonly Table[];
   readonly onProviderRead?: (provider: "getReservation" | "getTables") => void;
+  readonly activeReservations?: readonly Reservation[];
+  readonly teamTableIds?: readonly string[];
+  readonly overlapFailure?: DotyposUnavailable;
+  readonly requireOpenSpaceTableNames?: boolean;
 }) => {
   const repository = {
     findById: mock(() =>
       Effect.succeed(
-        (input.workspaceReservation === undefined
+        input.workspaceReservation === undefined
           ? makeWorkspaceReservation()
-          : input.workspaceReservation) as WorkspaceReservation | null
+          : input.workspaceReservation
       )
+    ),
+    selectExpiredHoldDotyposReservationIds: mock(() => Effect.succeed([])),
+    selectTeamTableDotyposReservationIds: mock((ids: readonly string[]) =>
+      Effect.succeed(ids.filter((id) => input.teamTableIds?.includes(id)))
     ),
   };
   const dotypos = {
@@ -109,11 +130,18 @@ const detailsEffect = (input: {
       input.onProviderRead?.("getTables");
       return Effect.succeed(input.tables ?? [makeTable()]);
     }),
+    listActiveReservationsOverlapping: mock(() =>
+      input.overlapFailure
+        ? Effect.fail(input.overlapFailure)
+        : Effect.succeed(input.activeReservations ?? [])
+    ),
   };
 
   return Effect.gen(function* () {
     const service = yield* WorkspaceReservationService;
-    return yield* service.getReservation("reservation-id");
+    return yield* service.getReservation("reservation-id", {
+      requireOpenSpaceTableNames: input.requireOpenSpaceTableNames ?? false,
+    });
   }).pipe(
     Effect.provide(
       WorkspaceReservationService.Default.pipe(
@@ -144,8 +172,7 @@ const accessTargetEffect = (input: {
             Layer.mock(WorkspaceReservationRepository, {
               findById: mock(() =>
                 Effect.succeed(
-                  (input.workspaceReservation ??
-                    makeWorkspaceReservation()) as WorkspaceReservation
+                  makeWorkspaceReservation(input.workspaceReservation)
                 )
               ),
             }),
@@ -170,8 +197,19 @@ const accessTargetEffect = (input: {
 
 describe("WorkspaceReservationService", () => {
   test("builds details from Dotypos reservation dates and table", async () => {
+    const database = await makeRecordingWorkspaceDatabase();
+    database.setRows([[[" dotypos-reservation-id "]]]);
+    const [legacy] = await Effect.runPromise(
+      database.db
+        .select({
+          dotyposReservationId: workspaceReservations.dotyposReservationId,
+        })
+        .from(workspaceReservations)
+    );
+    assert(legacy);
     const details = await Effect.runPromise(
       detailsEffect({
+        workspaceReservation: makeWorkspaceReservation(legacy),
         tables: [
           makeTable(),
           makeTable({ id: "neighbor-table", name: "11" }),
@@ -218,7 +256,7 @@ describe("WorkspaceReservationService", () => {
     ).toBe(true);
   });
 
-  test("places Open Space on its shared tables, not the assigned one", async () => {
+  test("places Open Space on shared tables that have no overlapping Team Table booking", async () => {
     const providerReads: Array<"getReservation" | "getTables"> = [];
     const details = await Effect.runPromise(
       detailsEffect({
@@ -237,15 +275,67 @@ describe("WorkspaceReservationService", () => {
             tags: ["cowork:open-space"],
           }),
         ],
+        activeReservations: [
+          makeDotyposReservation({ id: "team-booking", _tableId: "table-id" }),
+        ],
+        teamTableIds: ["team-booking"],
+        requireOpenSpaceTableNames: true,
         onProviderRead: (provider) => providerReads.push(provider),
       })
     );
 
     expect(details.placement.table).toEqual({
       mode: "shared",
-      name: "Assigned desk, Free desk",
+      name: "Free desk",
     });
     expect(providerReads.sort()).toEqual(["getReservation", "getTables"]);
+  });
+
+  test("fails Open Space confirmation details when the overlap read is unavailable", async () => {
+    const overlapFailure = new DotyposUnavailable({
+      operation: "listActiveReservationsOverlapping",
+      reason: "timeout",
+    });
+
+    const result = await Effect.runPromise(
+      detailsEffect({
+        workspaceReservation: makeWorkspaceReservation({
+          reservationDetails: {
+            kind: "cowork",
+            entryTier: "open-space",
+            coffee: false,
+          },
+        }),
+        overlapFailure,
+        requireOpenSpaceTableNames: true,
+      }).pipe(Effect.flip)
+    );
+
+    expect(result).toMatchObject({
+      errorCode: "dotypos_reservation_load_failed",
+      cause: overlapFailure,
+    });
+  });
+
+  test("loads ordinary Open Space details when the overlap provider is unavailable", async () => {
+    const details = await Effect.runPromise(
+      detailsEffect({
+        workspaceReservation: makeWorkspaceReservation({
+          reservationDetails: {
+            kind: "cowork",
+            entryTier: "open-space",
+            coffee: false,
+          },
+        }),
+        overlapFailure: new DotyposUnavailable({
+          operation: "listActiveReservationsOverlapping",
+          reason: "timeout",
+        }),
+      })
+    );
+
+    expect(details.placement.table).toBeUndefined();
+    expect(details.placement.tableMap).toBeDefined();
   });
 
   test("leaves the seating map out until it is released", async () => {

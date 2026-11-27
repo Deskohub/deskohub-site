@@ -45,6 +45,7 @@ import {
   CliSessionUnauthorized,
   CliStandaloneAccessCodeCleanupRequired,
   CliStandaloneAccessCodeReconciled,
+  dhwTeamTableHeader,
   dhwVersionHeader,
 } from "@deskohub/workspace-admin-api";
 import { Clock, Duration, Effect, Layer, Redacted, Schema } from "effect";
@@ -337,7 +338,7 @@ describe("WorkspaceAdminApiClient", () => {
       tableId: "table-1",
       tableName: "Focus room",
       tableLocation: "First floor",
-      linkedReservation: { id: "reservation-1", label: "Meeting room" },
+      linkedReservation: { id: "reservation-1", label: "Team Table" },
       createdAt: expiresAt,
       updatedAt: expiresAt,
     });
@@ -351,8 +352,8 @@ describe("WorkspaceAdminApiClient", () => {
       startsAt: expiresAt,
       endsAt: expiresAt,
       date: null,
-      type: "meeting-room" as const,
-      typeLabel: "Meeting room",
+      type: "table" as const,
+      typeLabel: "Team Table",
       purpose: "business" as const,
       status: { group: "complete" as const, label: "Complete" },
       statusNote: null,
@@ -387,6 +388,7 @@ describe("WorkspaceAdminApiClient", () => {
         const url = new URL(request.url);
         requests.push({ method: request.method, path: url.pathname });
         clientVersions.push(request.headers.get(dhwVersionHeader));
+        expect(request.headers.get(dhwTeamTableHeader)).toBe("1");
         if (url.pathname.endsWith("/auth")) {
           expect(await request.json()).toEqual({
             challenge,
@@ -710,7 +712,7 @@ describe("WorkspaceAdminApiClient", () => {
                   "cs-CZ": "Letní sleva",
                 },
                 adjustment: { kind: "percentage", basisPoints: 1000 },
-                products: [{ kind: "office" }],
+                products: [{ kind: "table" }],
                 codeCount: 1,
                 createdAt: expiresAt,
                 updatedAt: expiresAt,
@@ -813,6 +815,7 @@ describe("WorkspaceAdminApiClient", () => {
           reservation.id
         );
         expect(reservationDetail.reservation.purpose).toBe("business");
+        expect(reservationDetail.reservation.type).toBe("table");
         // A server that predates reservation authors omits the author.
         expect(reservationDetail.author).toBeNull();
         yield* client.mutateReservationAccess(
@@ -871,7 +874,12 @@ describe("WorkspaceAdminApiClient", () => {
           reservation.customerId,
           { page: 2 }
         );
-        yield* client.getDiscountDashboard(Redacted.make(accessToken));
+        const discountDashboard = yield* client.getDiscountDashboard(
+          Redacted.make(accessToken)
+        );
+        expect(discountDashboard.discounts[0]?.products).toEqual([
+          { kind: "table" },
+        ]);
         yield* client.getDiscountCode(
           Redacted.make(accessToken),
           AdministrationDiscountCodeId.make("code-1")

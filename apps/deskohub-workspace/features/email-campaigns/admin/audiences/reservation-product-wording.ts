@@ -1,6 +1,6 @@
+import type { ReservationProductFilterType } from "@deskohub/workspace-admin-api";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
-import type { WorkspaceReservationKind } from "@/features/reservation/reservation-kind";
 import type { ReservationProductPropertyIds } from "@/features/reservation/reservation-product-descriptor";
 import { nounInSentence } from "@/shared/utils/text-case";
 import type { AudienceMessage } from "./audience-attribute-wording";
@@ -11,8 +11,10 @@ type PropertyWording = {
   readonly unit?: AudienceMessage<{ readonly count: number }>;
 };
 
+type CampaignReservationFamily = ReservationProductFilterType["family"];
+
 const familyLabels: Readonly<
-  Record<WorkspaceReservationKind, AudienceMessage>
+  Record<CampaignReservationFamily, AudienceMessage>
 > = {
   cowork: m.emailCampaignsAudienceProductFamilyCowork,
   "meeting-room": m.emailCampaignsAudienceProductFamilyMeetingRoom,
@@ -20,7 +22,7 @@ const familyLabels: Readonly<
 };
 
 const propertyWordings: {
-  readonly [Family in WorkspaceReservationKind]: {
+  readonly [Family in CampaignReservationFamily]: {
     readonly [Property in ReservationProductPropertyIds[Family]]: PropertyWording;
   };
 } = {
@@ -45,20 +47,20 @@ const propertyWordings: {
 };
 
 const propertyWording = (
-  family: WorkspaceReservationKind,
+  family: CampaignReservationFamily,
   property: string
 ): PropertyWording | undefined =>
   Object.entries(propertyWordings[family]).find(([id]) => id === property)?.[1];
 
 /** A reservation product family as the Admin UI names it ("Meeting room"). */
 export const reservationProductFamilyLabel = (
-  family: WorkspaceReservationKind,
+  family: CampaignReservationFamily,
   locale: Locale
 ) => familyLabels[family]({}, { locale });
 
 /** A product property's Admin UI label ("Seats"), or its ID if unknown. */
 export const reservationProductPropertyLabel = (
-  family: WorkspaceReservationKind,
+  family: CampaignReservationFamily,
   property: string,
   locale: Locale
 ) => propertyWording(family, property)?.label({}, { locale }) ?? property;
@@ -68,7 +70,7 @@ export const reservationProductPropertyLabel = (
  * property has no unit.
  */
 export const reservationProductPropertyUnit = (
-  family: WorkspaceReservationKind,
+  family: CampaignReservationFamily,
   property: string,
   count: number,
   locale: Locale

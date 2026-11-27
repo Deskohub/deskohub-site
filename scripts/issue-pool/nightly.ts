@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isWorkspaceE2EDiagnosticCode } from "../../apps/deskohub-workspace/e2e/errors";
+import { isGitHubRepositorySlug } from "./github";
 import type { RunCommand } from "./sources";
 
 export type NightlySignal = Readonly<{
@@ -17,7 +18,6 @@ const weekMs = 7 * 24 * 60 * 60 * 1000;
 const githubActionsBot = "github-actions[bot]";
 const githubActionsBotId = 41898282;
 const annotationTitle = "Workspace E2E case failed";
-const repoPattern = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/;
 const annotationPattern =
   /^case=(?<caseId>[a-z][a-z0-9-]{0,95})(?:,step=(?<stepId>[a-z][a-z0-9-]{0,95}))?(?:,diagnostic_code=(?<diagnosticCode>[a-z][a-z0-9_]{0,127}))?,outcome=(?<outcome>failed|timed_out),failure_kind=(?<failureKind>error|defect|timeout)$/;
 
@@ -140,11 +140,7 @@ export async function collectNightlyE2E(
   run: RunCommand,
   repo: string
 ): Promise<NightlySignal[]> {
-  if (
-    !repoPattern.test(repo) ||
-    /\/(?:\.|\.\.)$/.test(repo) ||
-    repo.trim() !== repo
-  ) {
+  if (!isGitHubRepositorySlug(repo)) {
     throw new Error("Invalid repository for nightly E2E intake");
   }
   const since = encodeURIComponent(

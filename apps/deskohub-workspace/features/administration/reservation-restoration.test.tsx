@@ -8,7 +8,6 @@ import {
   mock,
   test,
 } from "bun:test";
-import { AdministrationWorkspaceReservationId } from "@deskohub/workspace-admin-api";
 import {
   act,
   cleanup,
@@ -16,15 +15,11 @@ import {
   render,
   within,
 } from "@testing-library/react";
-import { Schema } from "effect";
-import type {
-  FlattenedValidationErrors,
-  ValidationErrors,
-} from "next-safe-action";
-import type { SingleInputActionFn } from "next-safe-action/hooks";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import { formatMoney } from "@/shared/money/money";
 import {
+  type WorkspaceActionExecute,
+  workspaceActionCallbacks,
   workspaceRouterRefresh,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -36,40 +31,17 @@ import { m } from "./i18n";
 import type {
   ReservationRestorationAction,
   ReservationRestorationPreview,
-  ReservationRestorationRequest,
   ReservationRestorationResult,
 } from "./reservation-restoration";
 
-const execute = mock();
+const execute = mock<WorkspaceActionExecute>();
 const restoreReservation: ReservationRestorationAction = mock();
 
-type ActionOptions = {
-  readonly onSuccess: (args: {
-    readonly data?: ReservationRestorationResult;
-  }) => void;
-  readonly onError: (args: {
-    readonly error: { readonly serverError?: string };
-  }) => void;
-  readonly onTransportError: () => void;
-};
-
-// The restore Server Action has the shape every administration action has, so
-// the reservation detail can pass it straight to the component.
-const administrationRestorationSchema = Schema.toStandardSchemaV1(
-  Schema.Struct({
-    reservationId: AdministrationWorkspaceReservationId,
-    acknowledgeRefundedPayment: Schema.Boolean,
-    sendRestorationEmail: Schema.Boolean,
-  })
-);
-type AdministrationRestorationAction = SingleInputActionFn<
-  string,
-  typeof administrationRestorationSchema,
-  FlattenedValidationErrors<
-    ValidationErrors<typeof administrationRestorationSchema>
-  >,
-  ReservationRestorationResult
+type ActionOptions = ReturnType<
+  typeof workspaceActionCallbacks<ReservationRestorationResult | undefined>
 >;
+type AdministrationRestorationAction =
+  typeof import("./actions").restoreAdministrationReservation;
 
 type AcceptsAdministrationAction =
   AdministrationRestorationAction extends ReservationRestorationAction
@@ -91,7 +63,7 @@ beforeEach(() => {
   workspaceUseAction.mockReset();
   workspaceUseAction.mockImplementation((action, options) => {
     usedAction = action;
-    actionOptions = options as ActionOptions | undefined;
+    actionOptions = workspaceActionCallbacks(options, execute);
     return { execute, isExecuting: false, result: {} };
   });
 });
@@ -174,9 +146,6 @@ const statusMessages = (view: ReturnType<typeof render>) =>
     (notice) => notice.textContent
   );
 
-const submittedRequest = () =>
-  execute.mock.calls[0]?.[0] as ReservationRestorationRequest | undefined;
-
 const emailCheckbox = (dialog: ReturnType<typeof within>) =>
   dialog.queryByRole("checkbox", {
     name: m.administrationReservationRestorationSendEmail(
@@ -221,7 +190,7 @@ describe("ReservationRestoration", () => {
 
     expect(usedAction).toBe(restoreReservation);
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(submittedRequest()).toEqual({
+    expect(execute.mock.calls[0]?.[0]).toEqual({
       reservationId: fixtureReservationId,
       acknowledgeRefundedPayment: false,
       sendRestorationEmail: true,
@@ -237,7 +206,10 @@ describe("ReservationRestoration", () => {
     fireEvent.click(checkbox);
     await submitDialog(dialog);
 
-    expect(submittedRequest()?.sendRestorationEmail).toBe(false);
+    expect(execute.mock.calls[0]?.[0]).toHaveProperty(
+      "sendRestorationEmail",
+      false
+    );
   });
 
   test("offers no email without a recorded cancellation email", async () => {
@@ -250,7 +222,10 @@ describe("ReservationRestoration", () => {
     expect(emailCheckbox(dialog)).toBeNull();
     await submitDialog(dialog);
 
-    expect(submittedRequest()?.sendRestorationEmail).toBe(false);
+    expect(execute.mock.calls[0]?.[0]).toHaveProperty(
+      "sendRestorationEmail",
+      false
+    );
   });
 
   test("blocks a restoration over a refund until the operator acknowledges it", async () => {
@@ -285,7 +260,7 @@ describe("ReservationRestoration", () => {
     expect(submitButton(dialog).hasAttribute("disabled")).toBe(false);
     await submitDialog(dialog);
 
-    expect(submittedRequest()).toEqual({
+    expect(execute.mock.calls[0]?.[0]).toEqual({
       reservationId: fixtureReservationId,
       acknowledgeRefundedPayment: true,
       sendRestorationEmail: true,
@@ -594,7 +569,7 @@ describe("ReservationRestoration", () => {
     );
 
     act(() => {
-      actionOptions?.onSuccess({});
+      actionOptions?.onSuccess({ data: undefined });
     });
     expect(view.getByRole("dialog")).toBeDefined();
     expect(statusMessages(view)).toEqual([]);
@@ -698,6 +673,16 @@ describe("ReservationRestoration", () => {
         )
       )
     ).toBeDefined();
+
+    fireEvent.click(
+      dialog.getByRole("checkbox", {
+        name: m.administrationReservationRestorationRefundAcknowledgement(
+          {},
+          { locale }
+        ),
+      })
+    );
+    await submitDialog(dialog, locale);
 
     act(() => {
       actionOptions?.onSuccess({

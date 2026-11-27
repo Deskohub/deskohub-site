@@ -28,6 +28,8 @@ export type PriceLineSubject =
       readonly dailySeatRate?: Money;
     }
   | { readonly _tag: "Coffee" }
+  | { readonly _tag: "TeamTableBase" }
+  | { readonly _tag: "TeamTableUsage" }
   /** The monitor workstation, with the monitor setup it is configured with. */
   | {
       readonly _tag: "Workstation";
@@ -176,15 +178,38 @@ const earlySetupLines = ({
         },
       ];
 
-const itemLines = (item: CustomerCheckoutSummaryItem): PriceLine[] => [
-  ...(officeCharges(item) ?? [
+const teamTableCharges = ({
+  key,
+  baseAmount,
+  usageAmount,
+}: CustomerCheckoutSummaryItem): ReadonlyArray<PriceLine> | undefined => {
+  if (baseAmount === undefined || usageAmount === undefined) return undefined;
+  return [
     {
       _tag: "Charge",
-      key: item.key,
-      subject: summaryItemSubject(item),
-      amount: item.originalAmount ?? item.amount,
+      key: `${key}:base`,
+      subject: { _tag: "TeamTableBase" },
+      amount: baseAmount,
     },
-  ]),
+    {
+      _tag: "Charge",
+      key: `${key}:usage`,
+      subject: { _tag: "TeamTableUsage" },
+      amount: usageAmount,
+    },
+  ];
+};
+
+const itemLines = (item: CustomerCheckoutSummaryItem): PriceLine[] => [
+  ...(officeCharges(item) ??
+    teamTableCharges(item) ?? [
+      {
+        _tag: "Charge",
+        key: item.key,
+        subject: summaryItemSubject(item),
+        amount: item.originalAmount ?? item.amount,
+      },
+    ]),
   ...(item.discounts ?? []).map((discount) => discountLine(item.key, discount)),
   ...earlySetupLines(item),
 ];

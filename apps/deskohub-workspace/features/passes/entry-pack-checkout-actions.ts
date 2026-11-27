@@ -392,7 +392,10 @@ const makePayAction = (productKind: "entry-pack" | "unlimited") =>
           if (result.status === "pricing_changed") {
             return {
               status: result.status,
-              price: displayPassPurchasePrice(result.quote),
+              price: displayPassPurchasePrice(
+                result.quote,
+                result.coffeeAmountMinor
+              ),
             };
           }
           return result;

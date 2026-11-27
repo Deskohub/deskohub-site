@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { PostHogProjectId } from "@deskohub/analytics-posthog/identifiers";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
@@ -79,7 +79,9 @@ describe("PostHog reservation history", () => {
     });
     // A consenting author's events carry the account's distinct ID, so the
     // history finds every event of the reservation by its property alone.
-    const { query } = (capturedBody as { query: { query: string } }).query;
+    const { query } = Schema.decodeUnknownSync(
+      Schema.Struct({ query: Schema.Struct({ query: Schema.String }) })
+    )(capturedBody).query;
     expect(query).toContain(
       "WHERE properties.reservation_id = {reservationId}"
     );

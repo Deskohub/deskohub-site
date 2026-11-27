@@ -3,6 +3,7 @@ import type {
   CustomerBookingSelectionInvalid,
   CustomerOfferingUnavailable,
   CustomerSelectionUnavailable,
+  CustomerTeamTableUnavailable,
 } from "@deskohub/workspace-customer-api";
 import { Data, Match } from "effect";
 import {
@@ -11,12 +12,19 @@ import {
   toCustomerViewError,
 } from "../../customer-api/customer-view-error";
 
+/** The selected Team Table interval no longer has inventory. */
+export class TeamTableSlotUnavailable extends Data.TaggedError(
+  "TeamTableSlotUnavailable"
+)<Record<never, never>> {}
+
 /** Every failure a booking catalog read can end in. */
 export type BookingQueryFailure =
   | CustomerRequestFailure
   | CustomerBookingSelectionInvalid
   | CustomerBookingDateOutOfRange
   | CustomerOfferingUnavailable
+  | CustomerTeamTableUnavailable
+  | TeamTableSlotUnavailable
   | CustomerSelectionUnavailable;
 
 /** What a booking screen shows for a catalog failure of its own. */
@@ -25,9 +33,10 @@ export type BookingCatalogViewError = Data.TaggedEnum<{
   SelectionInvalid: { readonly field: string | undefined };
   /** The date can't be booked now; it must lie from `earliest` to `latest`. */
   DateOutOfRange: { readonly earliest: string; readonly latest: string };
+  SlotUnavailable: Record<never, never>;
   /** The family can't be booked now, such as while offices are closed. */
   OfferingUnavailable: {
-    readonly family: CustomerOfferingUnavailable["family"];
+    readonly family: CustomerOfferingUnavailable["family"] | "table";
   };
 }>;
 
@@ -53,6 +62,12 @@ export const toBookingQueryError = (
     ),
     Match.tag("CustomerOfferingUnavailable", ({ family }) =>
       BookingCatalogViewError.OfferingUnavailable({ family })
+    ),
+    Match.tag("CustomerTeamTableUnavailable", () =>
+      BookingCatalogViewError.OfferingUnavailable({ family: "table" })
+    ),
+    Match.tag("TeamTableSlotUnavailable", () =>
+      BookingCatalogViewError.SlotUnavailable()
     ),
     Match.tag("CustomerSelectionUnavailable", () =>
       BookingCatalogViewError.SelectionInvalid({ field: "funding" })

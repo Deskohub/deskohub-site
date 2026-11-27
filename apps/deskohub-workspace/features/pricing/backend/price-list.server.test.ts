@@ -111,6 +111,7 @@ describe("loadSharedPriceList", () => {
   test("lists the office and prices sales under gates that are the same for every visitor", async () => {
     constantFlags = {
       office_page: true,
+      team_table_page: false,
       calendar_sales: true,
       customer_discounts: false,
       discount_codes: false,
@@ -132,6 +133,7 @@ describe("loadSharedPriceList", () => {
   test("never keeps catalog fallback prices as long as advertised ones, and advertises the sale once the Calendar answers again", async () => {
     constantFlags = {
       office_page: true,
+      team_table_page: false,
       calendar_sales: true,
       customer_discounts: false,
       discount_codes: false,

@@ -59,7 +59,7 @@ const reviewText = (quote: CustomerPassPurchase) =>
     "Text"
   ).map(textOf);
 
-test("Unlimited Pay shows the chosen monitor setup and the daily door-code note", () => {
+test("Membership Pay shows the purchase terms, monitor setup and daily door code", () => {
   const text = reviewText(
     createQuote(
       {
@@ -69,6 +69,10 @@ test("Unlimited Pay shows the chosen monitor setup and the daily door-code note"
       },
       price
     )
+  );
+  expect(text).toContain("Unlimited membership, 30 days");
+  expect(text).toContain(
+    "One payment covers 30 days. Membership doesn’t renew automatically. Eligible members can extend it themselves."
   );
   expect(text).toContain(m.pass_purchase_monitors({}, { locale }));
   expect(text).toContain("2× 32″ 4K");

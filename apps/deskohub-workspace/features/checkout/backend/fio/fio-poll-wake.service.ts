@@ -11,7 +11,7 @@ import { FioAccountPollRepository } from "./fio-account-poll.repository";
 
 export const fioPollMaxWindowDays = 31;
 
-const pollJobSchema = Schema.Struct({
+export const fioPollJobSchema = Schema.Struct({
   accountKey: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
   deliveryId: Schema.String.check(Schema.isUUID(4)),
   windowDays: Schema.optionalKey(
@@ -24,7 +24,7 @@ const pollJobSchema = Schema.Struct({
   ),
 });
 
-export type FioPollJob = typeof pollJobSchema.Type;
+export type FioPollJob = typeof fioPollJobSchema.Type;
 
 // Redelivery backs off up to 15 minutes. After an extended lack of progress,
 // new demand can replace a lost job without clearing the checkpoint or gate.
@@ -34,7 +34,7 @@ export const fioPollDeliveryExpiry = (now: Temporal.Instant) =>
 export const fioPollTopic = defineQueueTopic({
   topic: "workspace-fio-account-poll",
   label: "Fio account polling",
-  message: Schema.toStandardSchemaV1(pollJobSchema),
+  message: Schema.toStandardSchemaV1(fioPollJobSchema),
   publish: ({
     job,
     delay,

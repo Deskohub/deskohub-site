@@ -5,6 +5,7 @@ import { meetingRoomSelectionLink } from "@/features/reservation/meeting-room-se
 import { officeSelectionLink } from "@/features/reservation/office-selection-link";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import type { ReservationSelection } from "@/features/reservation/selection-path";
+import { tableSelectionLink } from "@/features/reservation/table-selection-link";
 
 /**
  * The selection a stored reservation booked, as its family's reservation-page
@@ -39,6 +40,12 @@ export const getBookedSelection = ({
         return seats === undefined
           ? undefined
           : officeSelectionLink.fromStored({ ...office, ...timing, seats });
+      },
+      table: (table) => {
+        const seats = Option.getOrUndefined(booked.seats) ?? table.seats;
+        return seats === undefined
+          ? undefined
+          : tableSelectionLink.fromStored({ ...timing, seats });
       },
     })
   );

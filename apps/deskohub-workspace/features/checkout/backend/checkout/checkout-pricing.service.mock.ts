@@ -3,6 +3,7 @@ import type { CheckoutSummary } from "@/features/checkout/checkout-summary";
 import { coworkReservationQuoteSchema } from "@/features/checkout/reservation-quote-cowork";
 import { meetingRoomReservationQuoteSchema } from "@/features/checkout/reservation-quote-meeting-room";
 import { officeReservationQuoteSchema } from "@/features/checkout/reservation-quote-office";
+import { tableReservationQuoteSchema } from "@/features/checkout/reservation-quote-table";
 import {
   CheckoutPricingService,
   type CustomerQuoteInput,
@@ -37,6 +38,7 @@ type ReservationQuote = PaymentRepricingInput["quote"];
 const isCoworkQuote = Schema.is(coworkReservationQuoteSchema);
 const isMeetingRoomQuote = Schema.is(meetingRoomReservationQuoteSchema);
 const isOfficeQuote = Schema.is(officeReservationQuoteSchema);
+const isTableQuote = Schema.is(tableReservationQuoteSchema);
 
 /**
  * The quote a stub returned, when it is a quote of the family the input
@@ -132,6 +134,24 @@ export const paymentPricingFrom = <E extends PricingError>(
                   { quote: familyQuote, commitment },
                   PayState.summary({
                     reservation: office.reservation,
+                    quote: familyQuote,
+                  })
+                )
+              )
+            )
+          )
+        )
+      ),
+      Match.when({ reservation: { kind: "table" } }, (table) =>
+        reprice(table).pipe(
+          Effect.flatMap(({ quote, commitment }) =>
+            requireFamilyQuote(isTableQuote, quote).pipe(
+              Effect.map((familyQuote) =>
+                pricedPayment(
+                  table.reservation,
+                  { quote: familyQuote, commitment },
+                  PayState.summary({
+                    reservation: table.reservation,
                     quote: familyQuote,
                   })
                 )
@@ -250,6 +270,30 @@ export const customerQuotePricingFrom = <E extends PricingError>(
           quote(input).pipe(
             Effect.flatMap((customerQuote) =>
               requireFamilyQuote(isOfficeQuote, customerQuote)
+            ),
+            Effect.map((customerQuote) =>
+              customerQuoteVerdict({
+                quoted: input,
+                advertisedSummary: PayState.summary({
+                  reservation: priced.reservation,
+                  quote: priced.advertisedQuote,
+                }),
+                priced: {
+                  kind: priced.kind,
+                  reservation: priced.reservation,
+                  quote: customerQuote,
+                },
+                customerSummary: PayState.summary({
+                  reservation: priced.reservation,
+                  quote: customerQuote,
+                }),
+              })
+            )
+          ),
+        table: (priced) =>
+          quote(input).pipe(
+            Effect.flatMap((customerQuote) =>
+              requireFamilyQuote(isTableQuote, customerQuote)
             ),
             Effect.map((customerQuote) =>
               customerQuoteVerdict({

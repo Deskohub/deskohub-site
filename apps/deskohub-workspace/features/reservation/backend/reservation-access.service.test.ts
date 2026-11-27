@@ -2,11 +2,16 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { type DotyposReservation, DotyposService } from "@deskohub/dotypos";
+import {
+  DotyposCloudIdSchema,
+  type DotyposReservation,
+  DotyposService,
+  DotyposTableIdSchema,
+} from "@deskohub/dotypos";
 import { Effect, Layer, Option } from "effect";
 import {
+  type IWorkspaceCheckoutAccessCodeService,
   WorkspaceCheckoutAccessCodeService,
-  type WorkspaceCheckoutAccessCodeService as WorkspaceCheckoutAccessCodeServiceType,
 } from "@/features/checkout/backend/reservation/access-code.service";
 import type { Locale } from "@/features/i18n";
 import {
@@ -39,7 +44,11 @@ const resolvedAccess = {
 type ReservationOverrides = Partial<
   Pick<
     WorkspaceReservation,
-    "dotyposReservationId" | "locale" | "paymentState" | "reservationState"
+    | "dotyposReservationId"
+    | "locale"
+    | "paymentState"
+    | "reservationDetails"
+    | "reservationState"
   >
 >;
 
@@ -79,7 +88,7 @@ const makeReservation = (overrides: ReservationOverrides = {}) => ({
 });
 
 type ProviderReservationOverrides = Partial<
-  Pick<DotyposReservation, "endDate" | "startDate" | "status">
+  Pick<DotyposReservation, "_tableId" | "endDate" | "startDate" | "status">
 >;
 
 const makeProviderReservation = (
@@ -108,7 +117,8 @@ type HarnessOptions = {
     typeof makeProviderReservation
   > | null;
   readonly providerFails?: boolean;
-  readonly resolver?: WorkspaceCheckoutAccessCodeServiceType["resolveCustomerAccessCode"];
+  readonly tables?: ReturnType<DotyposService["Service"]["getTables"]>;
+  readonly resolver?: IWorkspaceCheckoutAccessCodeService["resolveCustomerAccessCode"];
   /**
    * Asks with this live provider record through `getAccessWithLiveRecord`
    * instead of letting `getAccess` read Dotypos.
@@ -155,7 +165,7 @@ const runAccess = async (options: HarnessOptions = {}) => {
   const resolveCustomerAccessCode = mock(
     options.resolver ?? (() => Effect.succeed(resolvedAccess))
   );
-  const accessCodes: WorkspaceCheckoutAccessCodeServiceType = {
+  const accessCodes: IWorkspaceCheckoutAccessCodeService = {
     resolveCustomerAccessCode,
   };
 
@@ -177,7 +187,10 @@ const runAccess = async (options: HarnessOptions = {}) => {
     Effect.provide(
       Layer.mergeAll(
         Layer.mock(WorkspaceReservationRepository, { findById }),
-        Layer.mock(DotyposService, { getReservation }),
+        Layer.mock(DotyposService, {
+          getReservation,
+          getTables: () => options.tables ?? Effect.succeed([]),
+        }),
         Layer.succeed(WorkspaceCheckoutAccessCodeService, accessCodes),
         Layer.succeed(ReservationAuthorizationService, {
           isAuthorized,
@@ -211,6 +224,52 @@ const createAccessToken = () =>
   }).pipe(Effect.runPromise);
 
 describe("ReservationAccessService", () => {
+  test("returns the assigned Team Table and its exact quarter-hour PIN window", async () => {
+    const tableId = DotyposTableIdSchema.make("team-table");
+    const startDate = "2026-06-20T08:15:00Z";
+    const endDate = "2026-06-20T08:45:00Z";
+    const accessStartsAt = Temporal.Instant.from(startDate);
+    const accessEndsAt = Temporal.Instant.from(endDate);
+    const { access, resolveCustomerAccessCode } = await runAccess({
+      authorized: true,
+      reservation: makeReservation({
+        reservationDetails: { kind: "table", seats: 2, durationMinutes: 30 },
+      }),
+      providerReservation: makeProviderReservation({
+        _tableId: tableId,
+        startDate,
+        endDate,
+      }),
+      tables: Effect.succeed([
+        {
+          id: tableId,
+          _cloudId: DotyposCloudIdSchema.make("fixture"),
+          name: "Team Table 12",
+          enabled: true,
+          display: true,
+          tags: [],
+          seats: "2",
+        },
+      ]),
+      resolver: () =>
+        Effect.succeed({ code: resolvedCode, accessStartsAt, accessEndsAt }),
+    });
+    expect(resolveCustomerAccessCode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reservedFrom: accessStartsAt,
+        reservedUntil: accessEndsAt,
+      })
+    );
+    expect(access).toEqual({
+      state: "available",
+      code: resolvedCode,
+      accessStartsAt,
+      accessEndsAt,
+      viewer: "customer",
+      teamTable: { name: "Team Table 12" },
+    });
+  });
+
   test("returns an invalid-link state without reads when the request is not authorized", async () => {
     const result = await runAccess({ authorized: false });
 
@@ -351,16 +410,24 @@ describe("ReservationAccessService", () => {
 
   test("fails closed when code resolution fails or returns an empty value", async () => {
     const accessToken = await createAccessToken();
-    const resolvers = [
-      () => Effect.fail(new Error("resolver unavailable")),
+    const resolvers: ReadonlyArray<
+      IWorkspaceCheckoutAccessCodeService["resolveCustomerAccessCode"]
+    > = [
+      () =>
+        Effect.fail(
+          new ReservationAccessIssuanceError({
+            reservationId: orderId,
+            outcome: "uncertain",
+            message: "resolver unavailable",
+          })
+        ),
       () => Effect.succeed({ ...resolvedAccess, code: "" }),
     ];
 
     for (const resolver of resolvers) {
       const result = await runAccess({
         accessToken,
-        resolver:
-          resolver as WorkspaceCheckoutAccessCodeServiceType["resolveCustomerAccessCode"],
+        resolver,
       });
 
       expect(result.access).toEqual({

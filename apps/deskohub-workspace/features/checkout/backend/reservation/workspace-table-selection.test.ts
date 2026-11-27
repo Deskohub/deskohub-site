@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import type { Table } from "@deskohub/dotypos/generated";
+import {
+  DotyposCloudIdSchema,
+  type DotyposTable,
+  DotyposTableIdSchema,
+} from "@deskohub/dotypos";
 import { Effect } from "effect";
 import {
   isDisplayableWorkspaceTable,
   isWorkspaceCoworkHistoricalTableCandidate,
   isWorkspaceCoworkTableCandidate,
+  selectOpenSpaceTableFromCandidates,
   selectWorkspaceTableFromCandidates as selectWorkspaceTableFromCandidatesEffect,
 } from "./workspace-table-selection";
 
@@ -27,12 +32,13 @@ const makeTable = (input: {
   readonly positionX?: string;
   readonly positionY?: string;
   readonly locationName?: string;
-}): Table => ({
-  _cloudId: "cloud",
+}): DotyposTable => ({
+  _cloudId: DotyposCloudIdSchema.make("cloud"),
   display: true,
   enabled: true,
   seats: "1",
   ...input,
+  id: DotyposTableIdSchema.make(input.id),
   tags: [...(input.tags ?? ["tier:basic"])],
 });
 
@@ -42,6 +48,7 @@ describe("selectWorkspaceTableFromCandidates", () => {
       ["cowork", ["tier:basic"]],
       ["meeting-room", ["reservation:meeting-room"]],
       ["office", ["reservation:office"]],
+      ["team-table", ["reservation:table"]],
     ] as const) {
       expect(
         isDisplayableWorkspaceTable(makeTable({ id, name: id, tags }))
@@ -75,7 +82,7 @@ describe("selectWorkspaceTableFromCandidates", () => {
       positionY: "0",
     });
     const tables = [occupied, halfway, far];
-    const occupancyByTableId = new Map([["occupied", 1]]);
+    const occupancyByTableId = new Map([[occupied.id, 1]]);
 
     expect(
       selectWorkspaceTableFromCandidates(tables, tables, occupancyByTableId)?.id
@@ -105,9 +112,9 @@ describe("selectWorkspaceTableFromCandidates", () => {
     });
     const tables = [reference, lightlyOccupied, heavilyOccupied];
     const occupancyByTableId = new Map([
-      ["reference", 1],
-      ["lightly-occupied", 1],
-      ["heavily-occupied", 2],
+      [reference.id, 1],
+      [lightlyOccupied.id, 1],
+      [heavilyOccupied.id, 2],
     ]);
 
     expect(
@@ -137,8 +144,8 @@ describe("selectWorkspaceTableFromCandidates", () => {
     });
     const tables = [occupiedReference, nearestUnoccupied, distantOccupied];
     const occupancyByTableId = new Map([
-      ["occupied-reference", 1],
-      ["distant-occupied", 1],
+      [occupiedReference.id, 1],
+      [distantOccupied.id, 1],
     ]);
 
     expect(
@@ -178,7 +185,7 @@ describe("selectWorkspaceTableFromCandidates", () => {
       selectWorkspaceTableFromCandidates(
         [office],
         [office],
-        new Map([["office", 1]]),
+        new Map([[office.id, 1]]),
         2,
         true
       )
@@ -229,7 +236,7 @@ describe("selectWorkspaceTableFromCandidates", () => {
       selectWorkspaceTableFromCandidates(
         [nearCandidate, farCandidate],
         [occupiedNonCandidate, nearCandidate, farCandidate],
-        new Map([["occupied-plus", 1]])
+        new Map([[occupiedNonCandidate.id, 1]])
       )?.id
     ).toBe("far-basic");
   });
@@ -262,55 +269,93 @@ describe("selectWorkspaceTableFromCandidates", () => {
       selectWorkspaceTableFromCandidates(
         [firstCandidate, farCandidate],
         [occupiedDifferentRoom, firstCandidate, farCandidate],
-        new Map([["occupied-plus", 1]])
+        new Map([[occupiedDifferentRoom.id, 1]])
       )?.id
     ).toBe("first-basic");
   });
 });
 
-describe("shared cowork offer table candidate predicate", () => {
-  const tags = (table: Table) => new Set(table.tags ?? []);
+test("assigns solo Open Space to ordinary tables, then occupied Team Tables", () => {
+  const reference = makeTable({
+    id: "reference",
+    name: "Reference",
+    positionX: "0",
+  });
+  const near = makeTable({ id: "near", name: "Near", positionX: "1" });
+  const far = makeTable({ id: "far", name: "Far", positionX: "4" });
+  const occupied = makeTable({
+    id: "occupied",
+    name: "Occupied",
+    positionX: "0",
+    seats: "2",
+    tags: ["cowork:open-space", "reservation:table"],
+  });
+  const empty = makeTable({
+    id: "empty",
+    name: "Empty",
+    positionX: "10",
+    tags: ["cowork:open-space", "reservation:table"],
+  });
+  const tables = [reference, near, far, occupied, empty];
+  const occupancy = new Map([
+    [reference.id, 1],
+    [occupied.id, 1],
+  ]);
 
-  const openSpaceTable: Table = {
+  expect(
+    Effect.runSync(
+      selectOpenSpaceTableFromCandidates(tables, tables, occupancy)
+    )?.id
+  ).toBe(far.id);
+  expect(
+    Effect.runSync(
+      selectOpenSpaceTableFromCandidates([empty, occupied], tables, occupancy)
+    )?.id
+  ).toBe(occupied.id);
+  expect(
+    Effect.runSync(
+      selectOpenSpaceTableFromCandidates(
+        [empty, occupied],
+        tables,
+        new Map([[occupied.id, 2]])
+      )
+    )?.id
+  ).toBe(empty.id);
+});
+
+describe("shared cowork offer table candidate predicate", () => {
+  const tags = (table: DotyposTable) => new Set(table.tags ?? []);
+
+  const openSpaceTable = makeTable({
     id: "os-1",
     name: "OS1",
-    enabled: true,
-    display: true,
     tags: ["cowork:open-space"],
-  } as never;
-  const openSpaceWithMonitor: Table = {
+  });
+  const openSpaceWithMonitor = makeTable({
     id: "os-2",
     name: "OS2",
-    enabled: true,
-    display: true,
     tags: ["cowork:open-space", "monitor:size:27"],
-  } as never;
-  const reservedDeskPlain: Table = {
+  });
+  const reservedDeskPlain = makeTable({
     id: "rd-1",
     name: "RD1",
-    enabled: true,
-    display: true,
     tags: ["cowork:reserved-desk"],
-  } as never;
-  const reservedDeskPartial: Table = {
+  });
+  const reservedDeskPartial = makeTable({
     id: "rd-2",
     name: "RD2",
-    enabled: true,
-    display: true,
     tags: ["cowork:reserved-desk", "monitor:count:2", "monitor:size:27"],
-  } as never;
-  const reservedDeskFullQhd: Table = {
+  });
+  const reservedDeskFullQhd = makeTable({
     id: "rd-3",
     name: "RD3",
-    enabled: true,
-    display: true,
     tags: [
       "cowork:reserved-desk",
       "monitor:count:2",
       "monitor:size:27",
       "monitor:resolution:qhd",
     ],
-  } as never;
+  });
 
   test("open-space requires the label and excludes monitor-tagged tables", () => {
     expect(
@@ -370,7 +415,7 @@ describe("shared cowork offer table candidate predicate", () => {
         tags({
           ...reservedDeskFullQhd,
           tags: [...(reservedDeskFullQhd.tags ?? []), "monitor:xyz"],
-        } as Table),
+        }),
         { entryTier: "reserved-desk", monitorOption: "2x27-qhd" }
       )
     ).toBe(false);
@@ -379,7 +424,7 @@ describe("shared cowork offer table candidate predicate", () => {
         tags({
           ...reservedDeskFullQhd,
           tags: ["cowork:reserved-desk", "monitor:count:2", "monitor:xyz"],
-        } as Table),
+        }),
         { entryTier: "reserved-desk", monitorOption: "2x27-qhd" }
       )
     ).toBe(false);
@@ -392,7 +437,7 @@ describe("shared cowork offer table candidate predicate", () => {
         "monitor:resolution:qhd",
         "monitor:resolution:4k",
       ],
-    } as Table);
+    });
     expect(
       isWorkspaceCoworkTableCandidate(contradictoryResolution, {
         entryTier: "reserved-desk",

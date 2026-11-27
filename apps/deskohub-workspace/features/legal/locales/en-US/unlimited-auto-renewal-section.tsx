@@ -4,7 +4,7 @@ import { contactEmail } from "../operator-details";
 export const unlimitedAutoRenewalSection: LegalSection = {
   heading: "16. Automatic renewal of Unlimited memberships",
   body: [
-    "16.1 Automatic renewal is available only to Clients buying Unlimited for their own use. Membership provides the agreed services in consecutive periods of 30 calendar days in the Europe/Prague time zone. With renewal selected, the contract continues indefinitely with no further minimum commitment. Without this choice, access ends when the paid period ends.",
+    "16.1 Automatic renewal is available only to Clients buying an Unlimited membership for their own use. Membership provides the agreed services in consecutive periods of 30 calendar days in the Europe/Prague time zone. With renewal selected, the contract continues indefinitely with no further minimum commitment. Without this choice, access ends when the paid period ends.",
     <>
       16.2 The current prices are listed on the{" "}
       <a
@@ -25,8 +25,9 @@ export const unlimitedAutoRenewalSection: LegalSection = {
     "16.4 The Client authorizes future card charges with a separate checkbox that starts unchecked. The authorization allows the Provider to charge the agreed amount every 30 calendar days until renewal is cancelled. The first card payment and any required authentication take place with Nexi. The Provider uses a payment reference for later charges. Confirmation on a durable medium includes the accepted terms, authorization, amount, dates, and cancellation instructions.",
     "16.5 Seven calendar days before each scheduled charge, the Provider emails the Client the charge date and amount, the next service period, the 00:00 Prague time cancellation deadline on the renewal date, and a direct link to manage renewal. This is a service message sent independently of marketing consent.",
     <>
-      16.6 The Client can stop renewal free of charge in the Passes section of
-      their Account or by sending an unequivocal notice to{" "}
+      16.6 The Client can stop renewal free of charge in the Packs and
+      memberships section of their Account or by sending an unequivocal notice
+      to{" "}
       <a
         className="text-burned-orange underline underline-offset-4"
         href={`mailto:${contactEmail}`}

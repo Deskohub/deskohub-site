@@ -6,6 +6,7 @@ import {
   expect,
   test,
 } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { cleanup, render, within } from "@testing-library/react";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import {
@@ -23,7 +24,7 @@ const customerSummary = (
   marketingConsent: AdministrationCustomerSummary["marketingConsent"] = "absent"
 ): AdministrationCustomerSummary => ({
   customer: null,
-  customerId: id as AdministrationCustomerSummary["customerId"],
+  customerId: DotyposCustomerIdSchema.make(id),
   lastActivityAt: "2026-08-14T12:00:00Z",
   marketingConsent,
   reservationCount,
@@ -128,7 +129,7 @@ describe("AdministrationCustomerTable", () => {
     ): AdministrationCustomerSummary => ({
       ...customerSummary(id, 1),
       customer: {
-        id: id as AdministrationCustomerSummary["customerId"],
+        id: DotyposCustomerIdSchema.make(id),
         displayName: lifecycle === "active" ? "Synthetic Person" : lifecycle,
         hasName: lifecycle === "active",
         lifecycle,

@@ -38,7 +38,7 @@ type OfficeStatusPeopleListProps = {
   /** The reservation's contact, listed first while they attend. */
   readonly contact?: { readonly name?: string; readonly email?: string };
   /** The prefilled contact page for asking staff to change the list. */
-  readonly changeHref: string;
+  readonly changeHref?: string;
   readonly locale: Locale;
   readonly orderId: string;
   readonly people: OfficeStatusPeople;
@@ -88,22 +88,24 @@ export function OfficeStatusPeopleList({
           />
         ))}
       </ul>
-      <p className="mt-3 text-sm leading-6 text-navy-blue/64">
-        <Interpolate
-          string={m.checkoutStatusPeopleChangeNote({}, { locale })}
-          mapping={{
-            link: (label) => (
-              <Link
-                className={textLink({ tone: "inherit" })}
-                href={changeHref}
-                prefetch={false}
-              >
-                {label}
-              </Link>
-            ),
-          }}
-        />
-      </p>
+      {changeHref && (
+        <p className="mt-3 text-sm leading-6 text-navy-blue/64">
+          <Interpolate
+            string={m.checkoutStatusPeopleChangeNote({}, { locale })}
+            mapping={{
+              link: (label) => (
+                <Link
+                  className={textLink({ tone: "inherit" })}
+                  href={changeHref}
+                  prefetch={false}
+                >
+                  {label}
+                </Link>
+              ),
+            }}
+          />
+        </p>
+      )}
     </div>
   );
 }

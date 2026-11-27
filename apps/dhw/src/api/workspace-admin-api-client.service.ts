@@ -127,6 +127,7 @@ import {
   CliSessionUnauthorized,
   CliStandaloneAccessCodeCleanupRequired,
   CliStandaloneAccessCodeReconciled,
+  dhwTeamTableHeader,
   dhwVersionHeader,
   type ExchangeCliGrantType,
   type GrantedCliSessionType,
@@ -806,6 +807,7 @@ const makeWorkspaceAdminApiClient = Effect.gen(function* () {
       transformClient: HttpClient.mapRequest(
         HttpClientRequest.setHeaders({
           ...requestHeaders,
+          [dhwTeamTableHeader]: "1",
           [dhwVersionHeader]: DHW_VERSION,
           ...(accessToken && {
             authorization: `Bearer ${Redacted.value(accessToken)}`,

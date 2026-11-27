@@ -1,3 +1,8 @@
+export {
+  type AccountingSnapshotKeyId,
+  accountingSnapshotKeyIdSchema,
+} from "@deskohub/workspace-domain/features/accounting/accounting-document-snapshot";
+
 import {
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -10,6 +15,7 @@ import type { PreparedCustomerQuote } from "@/features/checkout/backend/checkout
 import { coworkReservationQuoteSchema } from "@/features/checkout/reservation-quote-cowork";
 import { meetingRoomReservationQuoteSchema } from "@/features/checkout/reservation-quote-meeting-room";
 import { officeReservationQuoteSchema } from "@/features/checkout/reservation-quote-office";
+import { tableReservationQuoteSchema } from "@/features/checkout/reservation-quote-table";
 import { discountQuoteCodec } from "@/features/discounts/contracts";
 import type { Locale } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
@@ -28,6 +34,11 @@ import {
   getReservationInvoiceBuyer,
   reservationBillingSelectionSchema,
 } from "@/features/reservation/reservation-billing";
+import { getWorkspaceDate } from "@/features/reservation/reservation-date";
+import {
+  getTableReservationDetails,
+  tableReservationDetailsSchema,
+} from "@/features/reservation/table-reservation";
 import {
   vatStatuses,
   workspaceSiteConstants,
@@ -45,17 +56,6 @@ export {
   companyRegistrationIdSchema,
   vatRegistrationIdSchema,
 } from "./billing-identity";
-
-export const accountingSnapshotKeyIdSchema = Schema.NonEmptyString.check(
-  Schema.isPattern(/^[A-Z][A-Z0-9_]{2,31}$/)
-)
-  .pipe(Schema.brand("AccountingSnapshotKeyId"))
-  .annotate({
-    identifier: "AccountingSnapshotKeyId",
-    description: "Identifier selecting an accounting snapshot encryption key.",
-  });
-
-export type AccountingSnapshotKeyId = typeof accountingSnapshotKeyIdSchema.Type;
 
 const accountingBuyerAddressSchema = Schema.Struct({
   line1: Schema.optionalKey(Schema.NonEmptyString),
@@ -148,10 +148,19 @@ export const officeAccountingDocumentSnapshotSchema = Schema.Struct({
   quote: officeReservationQuoteSchema,
 });
 
+export const tableAccountingDocumentSnapshotSchema = Schema.Struct({
+  ...accountingDocumentIdentitySchema.fields,
+  billing: Schema.optionalKey(reservationBillingSelectionSchema),
+  delivery: Schema.optionalKey(accountingDocumentDeliverySchema),
+  reservation: tableReservationDetailsSchema,
+  quote: tableReservationQuoteSchema,
+});
+
 export const accountingDocumentSnapshotSchema = Schema.Union([
   coworkAccountingDocumentSnapshotSchema,
   meetingRoomAccountingDocumentSnapshotSchema,
   officeAccountingDocumentSnapshotSchema,
+  tableAccountingDocumentSnapshotSchema,
 ]).annotate({
   identifier: "AccountingDocumentSnapshot",
   description:
@@ -161,7 +170,7 @@ export const accountingDocumentSnapshotSchema = Schema.Union([
 export type AccountingDocumentSnapshot =
   typeof accountingDocumentSnapshotSchema.Type;
 
-export const passPurchaseAccountingSnapshotSchema = Schema.Struct({
+const passPurchaseAccountingSnapshotFacts = Schema.Struct({
   orderId: orderIdSchema,
   dotyposCustomerId: accountingDocumentIdentitySchema.fields.dotyposCustomerId,
   locale: accountingDocumentIdentitySchema.fields.locale,
@@ -170,9 +179,20 @@ export const passPurchaseAccountingSnapshotSchema = Schema.Struct({
   billing: reservationBillingSelectionSchema,
   delivery: accountingDocumentDeliverySchema,
   product: Schema.Union([entryPackProductSchema, unlimitedPassProductSchema]),
-  unlimitedCoffee: Schema.optionalKey(Schema.Literal(true)),
   serviceDate: plainDateStringSchema,
   quote: discountQuoteCodec,
+});
+
+export const storedPassPurchaseAccountingSnapshotSchema = Schema.Struct({
+  ...passPurchaseAccountingSnapshotFacts.fields,
+  unlimitedCoffee: Schema.optionalKey(Schema.Literal(true)),
+});
+
+export const passPurchaseAccountingSnapshotSchema = Schema.Struct({
+  ...passPurchaseAccountingSnapshotFacts.fields,
+  coffeeAmountMinor: Schema.optionalKey(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+  ),
 });
 
 export type PassPurchaseAccountingSnapshot =
@@ -191,6 +211,10 @@ export const getAccountingDocumentSnapshotFirstServiceDate = (
       cowork: (reservation) => reservation.date,
       "meeting-room": getMeetingRoomReservationDate,
       office: (reservation) => reservation.startsOn,
+      table: ({ startsAt }) =>
+        plainDateStringSchema.make(
+          getWorkspaceDate(Temporal.Instant.from(startsAt)).toString()
+        ),
     })
   );
 
@@ -258,6 +282,11 @@ export const makeAccountingDocumentSnapshot = (input: {
           startsAt: reservation.startsAt,
           endsAt: reservation.endsAt,
         },
+        quote,
+      }),
+      table: ({ quote, reservation }) => ({
+        ...identity,
+        reservation: getTableReservationDetails(reservation),
         quote,
       }),
       office: ({ quote, reservation }) => ({

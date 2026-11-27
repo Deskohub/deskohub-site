@@ -3,7 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { afterAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { sql } from "drizzle-orm";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Layer, Redacted, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import {
@@ -21,19 +21,28 @@ import {
   QueueMessageSendError,
   QueuePublisher,
 } from "@/shared/backend/queue/queue-publisher";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { FioAccountPollRepository } from "./fio-account-poll.repository";
 import { FioAccountPoller } from "./fio-account-poller.service";
 import { FioAccounts } from "./fio-accounts.service";
 import {
+  FioHistoryAccessRequired,
   type FioMovement,
   FioMovements,
   type FioPeriod,
-  type FioReadFailure,
+  FioRejected,
 } from "./fio-movements.service";
-import { type FioPollJob, FioPollWake } from "./fio-poll-wake.service";
+import {
+  type FioPollJob,
+  FioPollWake,
+  fioPollJobSchema,
+} from "./fio-poll-wake.service";
 
 const database = await createWorkspacePostgresSuiteDatabase("fio_account_poll");
 afterAll(() => database?.close());
@@ -41,7 +50,7 @@ afterAll(() => database?.close());
 const oldDate = "2025-01-01";
 
 const createHarness = () => {
-  const { layer: db, pool } = database!;
+  const { layer: db, pool } = requireTestDatabase(database);
   const accountKey = randomBytes(32).toString("hex");
   const account = { accountNumber: "1234567890", bankCode: "2010" };
   const readToken = Redacted.make("synthetic-fio-poll-token");
@@ -155,10 +164,12 @@ const createHarness = () => {
             const qrId = crypto.randomUUID();
             const cardId = crypto.randomUUID();
             const variableSymbol = yield* Effect.promise(async () => {
-              const { rows } = await pool.query(
+              const {
+                rows: [row],
+              } = await pool.query<{ readonly reference?: unknown }>(
                 "select nextval('qr_payment_references')::text as reference"
               );
-              return rows[0]!.reference as string;
+              return Schema.decodeUnknownSync(Schema.String)(row?.reference);
             });
             yield* db.execute(sql`insert into payment_attempts (id, order_id, workspace_reservation_id, provider, provider_order_id, state, amount_value, amount_exponent, currency) values
           (${qrId}, ${orderId}, ${reservation.id}, 'fio', ${variableSymbol}, 'pending', 12000, 2, 'CZK'),
@@ -192,7 +203,10 @@ const createHarness = () => {
           Effect.provide(worker)
         )
       ),
-    take: () => queue.take()!.message as FioPollJob,
+    take: () =>
+      Schema.decodeUnknownSync(fioPollJobSchema)(
+        requireValue(queue.take(), "queued Fio poll").message
+      ),
     setRead: (read: typeof readPeriod) => {
       readPeriod = read;
     },
@@ -243,6 +257,7 @@ const credit = (
 ): FioMovement => ({
   movementId,
   bookingDate,
+  constantSymbol: null,
   amount: { _tag: "CZK", minorUnits: 12000 },
   reference: { _tag: "VariableSymbol", value },
 });
@@ -342,10 +357,7 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     h.failDispatch(false);
     h.setRead(() => {
       expect(h.dispatchQueue.pending()).toHaveLength(1);
-      return Effect.fail({
-        _tag: "FioRejected",
-        reason: "period-too-large",
-      } as FioReadFailure);
+      return Effect.fail(new FioRejected({ reason: "period-too-large" }));
     });
     await h.consume(job);
     expect(h.reads).toHaveLength(2);
@@ -420,6 +432,23 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     expect((await h.state())?.covered_through).toBe(h.reads[0]?.to);
   });
 
+  test("advances account coverage past an ignored card payout", async () => {
+    const h = createHarness();
+    await h.start();
+    const job = h.take();
+    h.setRead(({ to }) =>
+      Effect.succeed([
+        { ...credit("card-payout", to, "966220033"), constantSymbol: "0558" },
+      ])
+    );
+
+    await h.consume(job);
+
+    expect(h.reads).toHaveLength(1);
+    expect((await h.state())?.covered_through).toBe(h.reads[0]?.to);
+    expect(await h.evidence()).toEqual([]);
+  });
+
   test("idle polls do no work or follow-up; new demand replays old references and preserves exact coverage on failure", async () => {
     const h = createHarness();
     const old = await h.start();
@@ -433,9 +462,7 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
 
     await h.start();
     const job = h.take();
-    h.setRead(() =>
-      Effect.fail({ _tag: "FioHistoryAccessRequired" } as FioReadFailure)
-    );
+    h.setRead(() => Effect.fail(new FioHistoryAccessRequired()));
     await expect(h.consume(job)).rejects.toMatchObject({
       reason: "inaccessible_history",
     });
@@ -510,7 +537,7 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     const stale = h.take();
     const delivery = h.consume(stale);
     try {
-      await waitForPostgresLockWaiter(database!.pool, {
+      await waitForPostgresLockWaiter(requireTestDatabase(database).pool, {
         condition: "locktype = 'transactionid'",
         description: "the poll to wait on uncommitted admission",
       });
@@ -539,10 +566,7 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     await h.start();
     await h.oldCheckpoint();
 
-    const tooLarge = {
-      _tag: "FioRejected",
-      reason: "period-too-large",
-    } as FioReadFailure;
+    const tooLarge = new FioRejected({ reason: "period-too-large" });
     h.setRead(({ from, to }) =>
       from === to ? Effect.succeed([]) : Effect.fail(tooLarge)
     );

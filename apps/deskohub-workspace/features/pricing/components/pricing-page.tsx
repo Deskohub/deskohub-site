@@ -24,6 +24,7 @@ import { getOfferingSale } from "../offering-sale";
 import { getPriceFamilies } from "../price-family";
 import { EntryPackPrices } from "./entry-pack-prices";
 import { PassPricesStructuredData } from "./pass-prices-structured-data";
+import { TeamTablePrices } from "./team-table-prices";
 import { UnlimitedPassPrices } from "./unlimited-pass-prices";
 
 type PricingPageProps = {
@@ -94,8 +95,14 @@ export function PricingPage({ locale }: PricingPageProps) {
  * visitor's own list stream in its place.
  */
 async function PriceLists({ locale }: PricingPageProps) {
-  const { offerings, variesByVisitor } = await loadSharedPriceList(locale);
-  const shared = <PriceList locale={locale} offerings={offerings} />;
+  const { offerings, teamTablePrices, variesByVisitor } =
+    await loadSharedPriceList(locale);
+  const shared = (
+    <>
+      <PriceList locale={locale} offerings={offerings} />
+      <TeamTablePrices locale={locale} prices={teamTablePrices} />
+    </>
+  );
 
   return (
     <>
@@ -113,9 +120,14 @@ async function PriceLists({ locale }: PricingPageProps) {
 
 async function VisitorPriceList({ locale }: PricingPageProps) {
   await connection();
-  const offerings = await loadVisitorPriceList(locale);
+  const { offerings, teamTablePrices } = await loadVisitorPriceList(locale);
 
-  return <PriceList locale={locale} offerings={offerings} />;
+  return (
+    <>
+      <PriceList locale={locale} offerings={offerings} />
+      <TeamTablePrices locale={locale} prices={teamTablePrices} />
+    </>
+  );
 }
 
 function PriceList({

@@ -566,7 +566,7 @@ describe("ReservationFulfillment.run", () => {
     });
   });
 
-  test("reuses one recovery idempotency key when a retry send itself fails", async () => {
+  test("reuses the Open Space table list and idempotency key after an uncertain send", async () => {
     const priorDeliveryId = EmailDeliveryIdSchema.make(
       "bounced-customer-email-delivery"
     );
@@ -590,14 +590,22 @@ describe("ReservationFulfillment.run", () => {
       ...claimed,
       reservationDetails: {
         kind: "cowork",
-        entryTier: "basic",
+        entryTier: "open-space",
         coffee: false,
       },
       customer: { email: testEmailAddressForCustomer },
       reservedFrom: Temporal.Instant.from("2026-07-01T08:00:00.000Z"),
       reservedUntil: Temporal.Instant.from("2026-07-02T08:00:00.000Z"),
-      placement: { table: { mode: "assigned", name: "12" } },
+      placement: { table: { mode: "shared", name: "12" } },
     };
+    let availableTableNames = "12";
+    let retainedTableNames: string | null = null;
+    const retainActiveCustomerEmailDeliveryOpenSpaceTables = mock(
+      (input: { readonly tableNames: string }) => {
+        retainedTableNames ??= input.tableNames;
+        return Effect.succeed(retainedTableNames);
+      }
+    );
     const sendFailure = new Error("synthetic email provider failure");
     const sendInputs: unknown[] = [];
     let sendAttempts = 0;
@@ -624,6 +632,7 @@ describe("ReservationFulfillment.run", () => {
           const first = yield* service
             .run("reservation-id")
             .pipe(Effect.result);
+          availableTableNames = "12–16";
           const second = yield* service
             .run("reservation-id")
             .pipe(Effect.result);
@@ -642,8 +651,13 @@ describe("ReservationFulfillment.run", () => {
                     Effect.succeed(input.locale)
                 ),
                 claimPaidFulfillment: mock(() =>
-                  Effect.succeed(claimed as never)
+                  Effect.succeed({
+                    ...claimed,
+                    activeCustomerEmailDeliveryOpenSpaceTables:
+                      retainedTableNames,
+                  } as never)
                 ),
+                retainActiveCustomerEmailDeliveryOpenSpaceTables,
                 markFulfilled,
                 markFulfillmentFailed,
               }),
@@ -654,8 +668,22 @@ describe("ReservationFulfillment.run", () => {
                 ),
               }),
               Layer.mock(WorkspaceReservationService, {
-                getReservation: mock(() =>
-                  Effect.succeed(emailReservation as never)
+                getReservation: mock(
+                  (
+                    _id: string,
+                    options?: { readonly requireOpenSpaceTableNames?: boolean }
+                  ) =>
+                    Effect.succeed({
+                      ...emailReservation,
+                      placement: options?.requireOpenSpaceTableNames
+                        ? {
+                            table: {
+                              mode: "shared",
+                              name: availableTableNames,
+                            },
+                          }
+                        : {},
+                    } as never)
                 ),
               } satisfies IWorkspaceReservationService),
               Layer.mock(WorkspaceReservationEmailService, {
@@ -698,6 +726,16 @@ describe("ReservationFulfillment.run", () => {
         createCustomerEmailRecoveryIdempotencyKey(priorDeliveryId),
     });
     expect(sendInputs[1]).toEqual(sendInputs[0]);
+    expect(
+      retainActiveCustomerEmailDeliveryOpenSpaceTables
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      retainActiveCustomerEmailDeliveryOpenSpaceTables
+    ).toHaveBeenCalledWith({
+      id: "reservation-id",
+      expectedActiveCustomerEmailDeliveryId: priorDeliveryId,
+      tableNames: "12",
+    });
     expect(sendInputs[0]).not.toEqual({
       reservation: emailReservation,
       customerEmailLocale: "en-US",

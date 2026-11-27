@@ -60,7 +60,7 @@ import { currentInstant } from "@/shared/utils/temporal";
 import { getEntryPackEndDate, isEntryPackQuoteExpired } from "../pass-offer";
 import {
   passPurchaseQuoteCodec,
-  withPassPurchaseAddons,
+  withPassPurchaseCoffee,
 } from "../pass-purchase-quote";
 import type { UnlimitedAutoRenewalDisclosure } from "../unlimited-auto-renewal";
 import { getUnlimitedPassEndDate } from "../unlimited-pass";
@@ -75,6 +75,7 @@ import {
   requireFullPassRefund,
   settlePassPurchase,
 } from "./entry-pack-settlement";
+import { readPassEarlyPerformanceConsent } from "./pass-withdrawal-payment";
 import {
   matchesUnlimitedAutoRenewalAuthorization,
   readUnlimitedAutoRenewalDisclosure,
@@ -276,7 +277,8 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       .select()
       .from(passPurchases)
       .where(eq(passPurchases.id, order.id));
-    const snapshotProduct = input.details.snapshot.product;
+    const { product: snapshotProduct, coffeeAmountMinor } =
+      input.details.snapshot;
     if (
       !pack ||
       pack.locale !== input.locale ||
@@ -290,12 +292,11 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       (snapshotProduct.kind === "entry-pack" &&
         snapshotProduct.size !== pack.entryCount) ||
       input.details.snapshot.serviceDate !== pack.validFrom ||
-      Boolean(input.details.snapshot.unlimitedCoffee) !==
-        Boolean(pack.unlimitedCoffee) ||
+      (coffeeAmountMinor !== undefined) !== Boolean(pack.unlimitedCoffee) ||
       !moneyEquals(
-        withPassPurchaseAddons(
+        withPassPurchaseCoffee(
           pack.quote.discountedSubtotal,
-          pack.unlimitedCoffee
+          coffeeAmountMinor
         ),
         input.amount
       )
@@ -334,8 +335,10 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           disclosure
         ) ||
         Option.isNone(storedQuote) ||
-        getPassPurchasePriceFingerprint(storedQuote.value) !==
-          renewal.quoteFingerprint
+        getPassPurchasePriceFingerprint(
+          storedQuote.value,
+          coffeeAmountMinor ?? null
+        ) !== renewal.quoteFingerprint
       ) {
         return yield* paymentError(
           order.id,
@@ -556,8 +559,15 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
             snapshot.product.kind === "unlimited"
               ? getUnlimitedPassEndDate(validFrom)
               : getEntryPackEndDate(validFrom, snapshot.product.size);
+          const earlyStartRequested =
+            (yield* readPassEarlyPerformanceConsent(
+              db,
+              orderId,
+              purchase.product
+            )) === true;
           yield* sendEntryPackPurchaseEmail({
             purchase: { ...purchase, holderAccountId, validFrom, validUntil },
+            price: snapshot,
             paymentAttemptId: activePaymentAttemptId,
             buyer: { email: buyer },
             holderEmail,
@@ -565,9 +575,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
             invitationSent,
             paidAt,
             invoiceRequested: snapshot.billing.invoice !== "none",
-            entryPackEarlyStartRequested:
-              snapshot.product.kind === "entry-pack" &&
-              snapshot.billing.purpose === "personal",
+            earlyStartRequested,
           }).pipe(Effect.provide(sendingServices));
         }
         // Confirmation settled. Any remaining work belongs to the invoice ledger.

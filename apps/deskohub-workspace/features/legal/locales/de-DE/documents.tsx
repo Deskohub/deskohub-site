@@ -23,7 +23,7 @@ const termsAndConditionsSections: LegalSection[] = [
         „Anbieter“), und des Kunden (nachfolgend „Kunde“), die im Zusammenhang
         mit der Erbringung von Leistungen durch den Anbieter entstehen.
       </>,
-      "1.2 Diese AGB gelten für den Coworking-Zutritt, für Online-Reservierungen des Meetingraums und des Privatbüros sowie für die kurzfristige Nutzung von Räumen für individuell vereinbarte Veranstaltungen.",
+      "1.2 Diese AGB gelten für den Coworking-Zutritt, für Online-Reservierungen des Meetingraums, des Privatbüros und eines Teamtisches sowie für die kurzfristige Nutzung von Räumen für individuell vereinbarte Veranstaltungen.",
       "1.3 Die Bestimmungen dieser AGB sind fester Bestandteil jedes zwischen dem Anbieter und dem Kunden geschlossenen Vertrags.",
       "1.4 Rechtsverhältnisse, die nicht durch diese AGB geregelt sind, richten sich nach der Rechtsordnung der Tschechischen Republik, insbesondere nach dem Gesetz Nr. 89/2012 Slg., Bürgerliches Gesetzbuch (Občanský zákoník).",
       "1.5 Ist der Kunde Verbraucher, werden durch diese AGB keine Rechte eingeschränkt, auf die er nach zwingenden Rechtsvorschriften nicht verzichten kann.",
@@ -34,22 +34,23 @@ const termsAndConditionsSections: LegalSection[] = [
     body: [
       "2.1 Kunde ist jede natürliche oder juristische Person, die Leistungen des Anbieters in Anspruch nimmt.",
       "2.2 Verbraucher ist ein Kunde, der außerhalb seiner unternehmerischen Tätigkeit handelt.",
-      "2.3 Räumlichkeiten sind die vom Anbieter betriebenen Coworking-Räume, der Meetingraum, das Privatbüro und die Veranstaltungsräume.",
+      "2.3 Räumlichkeiten sind die vom Anbieter betriebenen Coworking-Räume, der Meetingraum, das Privatbüro und die Veranstaltungsräume. Zu den Coworking-Räumen gehört auch der Open Space mit seinen Teamtischen.",
       "2.4 Leistungen sind die zeitlich begrenzte Ermöglichung der Nutzung der gewählten Räumlichkeiten sowie die in der Bestellung angegebenen damit verbundenen Leistungen.",
       "2.5 Tarif ist ein bestimmter Umfang von Coworking-Leistungen und der Bedingungen ihrer Inanspruchnahme gemäß der aktuellen Preisliste des Anbieters.",
       "2.6 Zugangs-PIN ist der jeweils aktuelle Code, der den Zutritt zu den Räumen des Anbieters ermöglicht.",
-      "2.7 Reservierung ist die Bestellung eines bestimmten Coworking-Zutritts, eines Termins für den Meetingraum oder eines Termins, einer Anzahl von Tagen und einer Anzahl von Plätzen im Privatbüro.",
+      "2.7 Reservierung ist die Bestellung eines bestimmten Coworking-Zutritts, eines Termins für den Meetingraum, eines Termins mit festgelegter Anzahl von Tagen und Plätzen im Privatbüro oder eines Termins und einer Tischgröße für den Teamtisch.",
     ],
   },
   {
     heading: "3. Vertragsgegenstand",
     body: [
-      "3.1 Der Anbieter erbringt dem Kunden Coworking-Leistungen, die in der vorübergehenden Ermöglichung der Nutzung eines gemeinsam genutzten Arbeitsorts in den Räumen des Anbieters bestehen, und zwar im Umfang des gewählten Tarifs. Ein gemeinsam genutzter Arbeitsort ist ein nicht ausschließlich zugewiesener Platz oder ein für gewöhnliche Arbeit bestimmter Teil der Coworking-Räume, ohne Garantie eines bestimmten Tisches oder Platzes, sofern beim jeweiligen Tarif nicht ausdrücklich etwas anderes angegeben ist.",
+      "3.1 Der Anbieter erbringt dem Kunden Coworking-Leistungen, die in der vorübergehenden Ermöglichung der Nutzung eines gemeinsam genutzten Arbeitsorts in den Räumen des Anbieters bestehen, und zwar im Umfang des gewählten Tarifs. Ein gemeinsam genutzter Arbeitsort ist ein nicht ausschließlich zugewiesener Platz oder ein für gewöhnliche Arbeit bestimmter Teil der Coworking-Räume, ohne Garantie eines bestimmten Tisches oder Platzes, sofern beim jeweiligen Tarif nicht ausdrücklich etwas anderes angegeben ist. Für die Reservierung eines Teamtisches gilt Ziffer 3.7.",
       "3.2 Die Reservierung des Meetingraums berechtigt den Kunden zur ausschließlichen Nutzung des gewählten Raums zum bestätigten Termin und im Umfang von einer Stunde, vier Stunden oder einem Prager Kalendertag. Eine ganztägige Reservierung dauert von Mitternacht des gewählten Tages bis Mitternacht des Folgetages in der Zeitzone Europe/Prague.",
       "3.3 Die Reservierung des Privatbüros berechtigt den Kunden zur ausschließlichen Nutzung des Büros mit der bestätigten Anzahl von Plätzen an den gesamten gewählten Kalendertagen. Jeder Tag dauert von Mitternacht bis zur folgenden Mitternacht in der Zeitzone Europe/Prague, und der letzte in der Bestätigung angegebene Tag ist in der Reservierung enthalten.",
-      "3.4 Die konkrete Kapazität, die Ausstattung, der Preis, der Termin und der Umfang der Reservierung sind auf der Reservierungsseite und in der Bestellübersicht angegeben. Der Kunde darf die bestätigte Kapazität nicht überschreiten und ist für seine Gäste und weitere Personen verantwortlich, denen er den Zutritt ermöglicht.",
+      "3.4 Die konkrete Kapazität, die Ausstattung, der Preis, der Termin und der Umfang der Reservierung sind auf der Reservierungsseite und in der Bestellübersicht angegeben. Der Kunde darf die bestätigte Kapazität nicht überschreiten und ist für seine Gäste und weitere Personen verantwortlich, denen er den Zutritt ermöglicht. Die Kapazität einer Teamtisch-Reservierung entspricht der Anzahl der Plätze an einem Tisch der gewählten Größe.",
       "3.5 Der Anbieter ermöglicht dem Kunden ferner die kurzfristige Nutzung von Räumen zur Durchführung von Veranstaltungen, und zwar stets auf der Grundlage einer individuellen Vereinbarung.",
       "3.6 Die Leistungen stellen eine kurzfristige Berechtigung zur Nutzung der bestimmten Räumlichkeiten und der damit verbundenen Leistungen dar; sie begründen weder ein Mietrecht noch einen Sitz, einen Standort oder ein sonstiges dingliches Recht an den Räumlichkeiten. Der Kunde darf die Adresse der Räumlichkeiten ohne gesonderte schriftliche Vereinbarung nicht als Sitz, Geschäftsort, Standort oder Zustellanschrift verwenden.",
+      "3.7 Die Reservierung eines Teamtisches berechtigt den Kunden, einen bestimmten zugewiesenen Tisch im gemeinsam genutzten Open Space für die bestätigte Dauer ausschließlich zu nutzen. Beginn und Ende der Reservierung liegen jeweils auf einer Viertelstundengrenze. Die Reservierung dauert mindestens 15 Minuten und höchstens 24 Stunden und muss vollständig innerhalb der Nutzungszeiten des Open Space liegen.",
     ],
   },
   {
@@ -70,6 +71,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "5.3 Der Preis des Privatbüros wird für jeden gewählten Tag als Tagespreis für das Büro zuzüglich des Tagespreises für jeden bestätigten Platz berechnet. Der Preis des Meetingraums entspricht dem gewählten einstündigen, vierstündigen oder ganztägigen Produkt.",
       "5.4 Rabatte werden nur gewährt, wenn sie in der Bestellübersicht angegeben sind. Ändert sich vor Beginn der Zahlung der Preis oder ein anwendbarer Rabatt, zeigt der Anbieter eine neue Übersicht an und holt eine neue Bestätigung des Kunden ein.",
       "5.5 Der Preis für Räume für eine individuell vereinbarte Veranstaltung wird im Angebot je nach Art der Veranstaltung festgelegt.",
+      "5.6 Der Preis für den Teamtisch setzt sich aus einem Grundpreis und einem zeitabhängigen Entgelt zusammen. Grundpreis und Stundensatz richten sich nach der Tischgröße. Das zeitabhängige Entgelt wird anteilig je 15 Minuten berechnet. Kaffee ist im Preis nicht enthalten.",
     ],
   },
   {
@@ -84,10 +86,12 @@ const termsAndConditionsSections: LegalSection[] = [
   {
     heading: "7. Zutritt und Nutzung der Leistungen",
     body: [
-      "7.1 Die Bestätigungs-E-Mail enthält einen sicheren Link zur Zugangsseite der Reservierung. Sobald die Reservierung bezahlt, bestätigt und in Echtzeit verifiziert ist und für sie eine Zugangs-PIN ausgestellt wurde, zeigt die geschützte Seite diese PIN zusammen mit den genau programmierten Gültigkeitsgrenzen des Codes an. Ob das Schließsystem den Code annimmt, bestimmen ausschließlich die programmierten Grenzen des AlgoPIN; die Anwendungen geben dafür keine eigene Uhrzeit vor. Die PIN ist nicht direkt in der Bestätigungs-E-Mail enthalten.",
+      "7.1 Die Bestätigungs-E-Mail enthält einen sicheren Link zur Zugangsseite der Reservierung. Sobald die Reservierung bezahlt, bestätigt und in Echtzeit verifiziert ist und für sie eine Zugangs-PIN ausgestellt wurde, zeigt die geschützte Seite diese PIN zusammen mit den genau programmierten Gültigkeitsgrenzen des Codes an. Ob das Schließsystem den Code annimmt, bestimmen ausschließlich die programmierten Grenzen des AlgoPIN; die Anwendungen geben dafür keine eigene Uhrzeit vor. Die PIN ist nicht direkt in der Bestätigungs-E-Mail enthalten. Für die auf der Zugangsseite des Teamtisches angezeigten Zeiten gilt Ziffer 7.5.",
       "7.2 Der Anbieter kann die Zugangs-PIN ändern; der Kunde verwendet den aktuell auf der Zugangsseite der Reservierung angezeigten Code. Die Anzeige der PIN verlängert die bestätigte Nutzungsdauer der Räumlichkeiten nicht und begründet kein Recht auf Zutritt außerhalb dieser Zeit oder zu anderen Räumen. Die Nutzung der Räumlichkeiten ist nur während der bestätigten Zeit der Reservierung möglich.",
       "7.3 Der Kunde darf die PIN nur Personen mitteilen, die zur Teilnahme an seiner Reservierung berechtigt sind, muss sie vor anderen Personen schützen und ist für ihre Verwendung durch seine Gäste verantwortlich. Einen Verdacht auf Missbrauch meldet er dem Anbieter unverzüglich.",
       "7.4 Der Kunde und seine Gäste sind verpflichtet, die Kapazität, den Zweck der Reservierung, die bestätigte Zeit und die Hausordnung einzuhalten. Der Kunde stellt sicher, dass die Gäste die Räumlichkeiten spätestens am Ende der Reservierung verlassen.",
+      "7.5 Für den Teamtisch nutzen der Kunde und seine Gäste eine gemeinsame Zugangs-PIN. Die Zugangsseite zeigt den genauen Beginn und das genaue Ende der Reservierung an. Das Schließsystem kann den Beginn der PIN-Gültigkeit auf volle Stunden abrunden und ihr Ende auf volle Stunden aufrunden. Die bestätigte Nutzungsdauer bleibt gleich.",
+      "7.6 Sobald die Reservierung eines Teamtisches bezahlt und bestätigt ist, kann der Kunde bis zu ihrem Ende auf der Statusseite der Reservierung eingeladene Personen hinzufügen. Die Gesamtzahl der Teilnehmenden einschließlich des Kunden, sofern er teilnimmt, darf die Platzkapazität des Tisches nicht überschreiten. Eingeladene Personen können die Zugangsseite über ihre Einladung öffnen. Sobald die Reservierung bezahlt und bestätigt ist, können eingeladene Personen nicht mehr entfernt werden, da sie Zugriff auf die gemeinsame PIN haben.",
     ],
   },
   {
@@ -114,7 +118,7 @@ const termsAndConditionsSections: LegalSection[] = [
     heading: "9. Widerrufsrecht des Verbrauchers",
     body: [
       "9.1 Der Verbraucher kann einen online geschlossenen Vertrag innerhalb von 14 Tagen ab seinem Abschluss ohne Angabe von Gründen widerrufen, es sei denn, das Widerrufsrecht ist im konkreten Fall gesetzlich ausgeschlossen oder bereits erloschen.",
-      "9.2 Soll die Leistung vor Ablauf dieser Frist beginnen, verlangt der Verbraucher im Rahmen der Bestätigung der Bestellung ausdrücklich, dass der Anbieter vor Ablauf der Frist mit der Erbringung beginnt, und nimmt zur Kenntnis, dass das Widerrufsrecht mit vollständiger Erbringung der Leistung erlischt. Widerruft er nach Beginn, aber vor vollständiger Erbringung der Leistung, zahlt er einen anteiligen Betrag des Preises für die bereits erbrachte Leistung, sofern die gesetzlichen Voraussetzungen erfüllt sind.",
+      "9.2 Soll die Leistung vor Ablauf dieser Frist beginnen, verlangt der Verbraucher im Rahmen der Bestätigung der Bestellung ausdrücklich, dass der Anbieter vor Ablauf der Frist mit der Erbringung beginnt, und nimmt zur Kenntnis, dass das Widerrufsrecht mit vollständiger Erbringung der Leistung erlischt. Widerruft er nach Beginn, aber vor vollständiger Erbringung der Leistung, zahlt er einen anteiligen Betrag des Preises für die bereits erbrachte Leistung, sofern die gesetzlichen Voraussetzungen erfüllt sind. Für den Teamtisch gilt Ziffer 9.8.",
       <>
         9.3 Der Widerruf kann durch eine eindeutige Erklärung an die Adresse des
         Sitzes des Anbieters oder per E-Mail an{" "}
@@ -127,16 +131,18 @@ const termsAndConditionsSections: LegalSection[] = [
         übermittelt werden. Die Frist ist gewahrt, wenn die Mitteilung vor ihrem
         Ablauf abgesendet wird. Der Widerruf kann auch online über die Funktion
         „Vertrag widerrufen“ bei der Buchung im Kundenkonto auf der Website oder
-        in der App oder auf der Statusseite der Passbestellung abgegeben und mit
-        der Schaltfläche „Widerruf bestätigen“ abgesendet werden. Der Anbieter
-        bestätigt den Eingang des Widerrufs unverzüglich per E-Mail an die
-        Adresse des Kontos, einschließlich des Inhalts der Erklärung sowie des
-        Datums und der Uhrzeit ihrer Absendung.
+        in der App oder auf der Statusseite der Bestellung eines Passes oder
+        einer Mitgliedschaft abgegeben und mit der Schaltfläche „Widerruf
+        bestätigen“ abgesendet werden. Der Anbieter bestätigt den Eingang des
+        Widerrufs unverzüglich per E-Mail an die Adresse des Kontos,
+        einschließlich des Inhalts der Erklärung sowie des Datums und der
+        Uhrzeit ihrer Absendung.
       </>,
       "9.4 Nach einem wirksamen Widerruf erstattet der Anbieter die erhaltenen Geldbeträge unverzüglich, spätestens innerhalb von 14 Tagen, auf demselben Weg, auf dem sie empfangen wurden, sofern die Parteien nicht etwas anderes vereinbaren, ohne dass dem Verbraucher dadurch weitere Kosten entstehen.",
       "9.5 Muster der Mitteilung: „Hiermit teile ich mit, dass ich den Vertrag über folgende Leistung widerrufe: [Beschreibung und Nummer der Reservierung], bestellt am [Datum]. Vor- und Nachname des Verbrauchers: [ergänzen]. Anschrift des Verbrauchers: [ergänzen]. Datum: [ergänzen]. Unterschrift nur bei Mitteilung in Papierform.“ Die Verwendung des Musters ist nicht verpflichtend.",
       "9.6 Die Rechte nach diesem Artikel stehen nur dem Verbraucher zu und gelten neben etwaigen günstigeren Stornierungsbedingungen, die in der Bestellübersicht oder im individuellen Angebot angegeben sind.",
       "9.7 Widerruft ein Verbraucher den Kauf eines Eintrittspakets wirksam, nachdem er die sofortige Nutzung verlangt hat, und sind die gesetzlichen Voraussetzungen für eine anteilige Zahlung erfüllt, wird der tatsächlich gezahlte Preis mit der Anzahl der ungenutzten Eintritte multipliziert und durch die Gesamtzahl der Eintritte im Paket geteilt. Die Erstattung wird auf volle tschechische Kronen abgerundet. Eintritte für vergangene Besuche und ein für den Tag des Widerrufs gebuchter Eintritt gelten als genutzt. Buchungen für spätere Tage werden storniert und diese Eintritte gelten als ungenutzt.",
+      "9.8 Für den Widerruf gilt die Reservierung eines Teamtisches als eine Einheit. Der Verbraucher kann die gesamte Reservierung innerhalb der in Ziffer 9.1 genannten Frist von 14 Tagen nur vor ihrem bestätigten Beginn widerrufen. Der Anbieter erstattet in diesem Fall den gesamten gezahlten Preis. Ab dem bestätigten Beginn ist auch ein Widerruf für den verbleibenden Teil der Reservierung ausgeschlossen.",
     ],
   },
   {
@@ -145,6 +151,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "10.1 Der Kunde ist verpflichtet, die Räumlichkeiten ordnungsgemäß, nur für den bestätigten Zweck und im Einklang mit diesen AGB, der Hausordnung, den Sicherheitsanweisungen und den Rechtsvorschriften zu nutzen.",
       "10.2 Der Kunde ist für das Verhalten seiner Gäste verantwortlich und haftet für Schäden, die er oder seine Gäste durch eine Pflichtverletzung verursachen. Gewöhnliche Abnutzung gilt nicht als Schaden. Einen Schaden oder Defekt meldet der Kunde unverzüglich.",
       "10.3 Der Anbieter kann die Erbringung der Leistung bei einem schwerwiegenden oder wiederholten Verstoß gegen die AGB oder die Hausordnung, bei Überschreitung der Kapazität, bei gefährlichem oder rechtswidrigem Verhalten oder bei Missbrauch des Zugangs angemessen einschränken oder beenden. Die Rechte des Kunden bleiben davon unberührt, falls die Maßnahme nicht berechtigt war.",
+      "10.4 Im Open Space müssen der Kunde und seine Gäste den Arbeitsbereich anderer Personen respektieren. Fordert der Anbieter sie auf, einen Tisch für eine Teamtisch-Reservierung freizugeben, wechseln sie an einen anderen Platz im Open Space.",
     ],
   },
   {
@@ -208,7 +215,7 @@ const termsAndConditionsSections: LegalSection[] = [
     body: [
       "15.1 Der Anbieter kann diese AGB für Verträge ändern, die nach dem Inkrafttreten der neuen Fassung geschlossen werden. Für eine bereits geschlossene Reservierung gilt die vom Kunden bei der Bestellung akzeptierte Fassung, es sei denn, eine spätere Änderung ist für den Kunden günstiger oder er akzeptiert sie ausdrücklich.",
       "15.2 Abweichende individuelle Vereinbarungen haben Vorrang vor diesen AGB. Die Ungültigkeit oder Unwirksamkeit einer Bestimmung berührt die übrigen Bestimmungen nicht.",
-      "15.3 Diese AGB treten am 12. August 2026 in Kraft.",
+      "15.3 Diese AGB treten am 1. Dezember 2026 in Kraft.",
     ],
   },
 ];
@@ -235,6 +242,7 @@ const operatingRulesSections: LegalSection[] = [
       "2.1 Der Nutzer ist verpflichtet, sich in den Räumen rücksichtsvoll und respektvoll gegenüber anderen Personen zu verhalten.",
       "2.2 In den gemeinsam genutzten und gemeinschaftlichen Räumen hält der Nutzer eine Lautstärke ein, die einer gewöhnlichen leisen Unterhaltung entspricht. Im Meetingraum oder im Privatbüro sorgt er dafür, dass der Lärm auf den reservierten Raum beschränkt bleibt.",
       "2.3 Der Nutzer darf andere Nutzer durch sein Verhalten nicht übermäßig stören oder sie in ihrer Nutzung der Räume einschränken. Der Kunde ist für das Verhalten seiner Gäste verantwortlich.",
+      "2.4 Im Open Space respektiert der Nutzer den Arbeitsbereich anderer Personen. Fordert der Betreiber ihn auf, einen Tisch für eine Teamtisch-Reservierung freizugeben, wechselt er an einen anderen Platz im Open Space.",
     ],
   },
   {
@@ -255,7 +263,7 @@ const operatingRulesSections: LegalSection[] = [
     heading: "4. Nutzung der Räume",
     body: [
       "4.1 Der Nutzer ist verpflichtet, die Räume ausschließlich für Zwecke zu nutzen, die ihrer Art und Bestimmung entsprechen.",
-      "4.2 Der Meetingraum und das Privatbüro dürfen nur während der bestätigten Zeit und mit der bestätigten Kapazität genutzt werden. Die Nutzer verlassen die Räume spätestens am Ende der Reservierung und nehmen ihre Sachen mit.",
+      "4.2 Der Meetingraum, das Privatbüro und der Teamtisch dürfen nur während der bestätigten Zeit und mit der bestätigten Kapazität genutzt werden. Die Nutzer verlassen den reservierten Bereich spätestens am Ende der Reservierung und nehmen ihre Sachen mit.",
       "4.3 Der Nutzer ist verpflichtet, Ordnung und Sauberkeit zu wahren und nach dem Ende der Nutzung den genutzten Platz und die gemeinsame Ausstattung in einen angemessenen Zustand zu versetzen.",
       "4.4 Der Nutzer darf ohne Zustimmung des Betreibers keine Ausstattung umstellen, keine Veränderungen vornehmen, keine Geräte installieren und nicht in die technischen Leitungen eingreifen.",
       "4.5 Der Nutzer verwendet audiovisuelle, Konferenz- und sonstige Ausstattung gemäß den Anweisungen und meldet einen Defekt unverzüglich. Nach dem Ende der Reservierung schaltet er die Geräte sicher aus, sofern ihre Art dies erfordert.",
@@ -301,14 +309,14 @@ const operatingRulesSections: LegalSection[] = [
     heading: "9. Schlussbestimmungen",
     body: [
       "9.1 Der Betreiber kann diese Hausordnung für künftige Reservierungen ändern. Für eine bereits bestätigte Reservierung ist die bei der Bestellung akzeptierte Fassung maßgeblich, sofern nicht aus Sicherheitsgründen oder aufgrund einer zwingenden Rechtsvorschrift sofortige Maßnahmen erforderlich sind.",
-      "9.2 Diese Hausordnung tritt am 12. August 2026 in Kraft.",
+      "9.2 Diese Hausordnung tritt am 1. Dezember 2026 in Kraft.",
     ],
   },
 ];
 
 const legalDocuments = {
   "privacy-policy": {
-    updatedAt: "18. November 2026",
+    updatedAt: "1. Dezember 2026",
     sections: [
       {
         heading: "1. Verantwortlicher",
@@ -347,9 +355,11 @@ const legalDocuments = {
           </>,
           <>
             Die E-Mail-Adresse einer eingeladenen Person erhalten wir von dem
-            Kunden, der das private Büro reserviert hat. Wir verwenden sie, um
-            die Einladung und Mitteilungen zu Änderungen der Reservierung zu
-            senden und der eingeladenen Person Zugang zum Büro zu ermöglichen.
+            Kunden, der ein privates Büro oder einen Teamtisch reserviert hat.
+            Wir verwenden die Adresse, um die Einladung und Mitteilungen zu
+            Änderungen der Reservierung, einschließlich ihrer Stornierung oder
+            Wiederherstellung, zu senden und der eingeladenen Person den
+            gemeinsamen Zutritt für diese Reservierung zu ermöglichen.
             Rechtsgrundlage ist unser berechtigtes Interesse daran, eingeladenen
             Personen die Nutzung der Reservierung zu ermöglichen und sie über
             deren Status zu informieren. Wir speichern die Adresse bis 30 Tage
@@ -823,7 +833,7 @@ const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "27. November 2026",
+    updatedAt: "1. Dezember 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {
@@ -944,7 +954,7 @@ const legalDocuments = {
     ],
   },
   "operating-rules": {
-    updatedAt: "12. August 2026",
+    updatedAt: "1. Dezember 2026",
     sections: operatingRulesSections,
   },
 } satisfies LegalDocumentBodies;

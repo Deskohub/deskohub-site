@@ -5,6 +5,7 @@ import { renderToReadableStream } from "react-dom/server";
 import { type Locale, m } from "@/features/i18n";
 import { MeetingRoomReleaseGate } from "@/features/meeting-room/backend/meeting-room-release-gate";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import { compileWorkspaceAppStyles } from "@/shared/testing/workspace-app-styles.test-utils";
 import {
@@ -55,6 +56,13 @@ mock.module("@/features/office/backend/office-release-gate.server", () => ({
   isOfficePageEnabled: async () => false,
   OfficeReleaseGateRequest: OfficeReleaseGate.fromDecision(false),
 }));
+mock.module(
+  "@/features/public-pages/backend/team-table-public-release.server",
+  () => ({
+    isTeamTablePageEnabled: async () => false,
+    TeamTableReleaseGateRequest: TeamTableReleaseGate.fromDecision(false),
+  })
+);
 // The page module also loads server code that imports more of these modules.
 const nextNavigation = await import("next/navigation");
 mock.module("next/navigation", () => ({

@@ -50,9 +50,20 @@ import {
   coworkReservationKind,
   meetingRoomReservationKind,
   officeReservationKind,
+  tableReservationKind,
   type WorkspaceReservationKind,
 } from "@/features/reservation/reservation-kind";
 import type { ReservationSelection } from "@/features/reservation/selection-path";
+import {
+  getTableAdvertisedPriceReservation,
+  type TableReservationDetails,
+} from "@/features/reservation/table-reservation";
+import {
+  getTableReservationInterval,
+  isTableReservationBookable,
+} from "@/features/reservation/table-reservation-time";
+import { loadAdvisoryTeamTableSeatCapacities } from "@/features/team-table/backend/team-table-advisory-capacity";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import {
   getPlainDatesBetween,
   type PlainDate,
@@ -70,10 +81,12 @@ export type BookingSelectionInput = {
   readonly date: PlainDate;
   /** Cowork or office only: the last date, inclusive. Defaults to `date`. */
   readonly endDate?: PlainDate;
-  /** Meeting room only: the Prague start time in HH:mm on the hour. */
+  /** The Prague start time for a meeting room or Team Table. */
   readonly startTime?: string;
+  /** Team Table only: the exclusive Prague-local end time in HH:mm. */
+  readonly endTime?: string;
   readonly duration?: MeetingRoomReservationDurationKey;
-  /** Office only. Defaults to 1. */
+  /** Office seats or Team Table capacity. Offices default to 1. */
   readonly seats?: number;
   readonly tier?: WorkspaceCoworkCurrentTier;
   /** Reserved Desk only: the stay. Defaults to a day stay. */
@@ -93,7 +106,8 @@ export type BookingSelectionRejection =
       readonly earliest: string;
       readonly latest: string;
     }
-  | { readonly kind: "office-closed" };
+  | { readonly kind: "office-closed" }
+  | { readonly kind: "table-closed" };
 
 /**
  * A selection the booking pages would not accept. Provider and capacity
@@ -145,7 +159,8 @@ export type SelectedReservation =
       readonly startsOn: string;
       readonly endsOn: string;
       readonly seats: number;
-    };
+    }
+  | TableReservationDetails;
 
 /** A complete selection as the price request, page link, and order it makes. */
 export type QuoteSelection = {
@@ -178,6 +193,7 @@ export const getRebookingSelection = (
       cowork: getCoworkRebooking,
       "meeting-room": getMeetingRoomRebooking,
       office: getOfficeRebooking,
+      table: getTableRebooking,
     }),
     Option.getOrUndefined
   );
@@ -212,6 +228,7 @@ export const resolveBookingQuoteSelection = (request: QuoteSelectionRequest) =>
     Match.when("cowork", () => getCoworkQuoteSelection(request)),
     Match.when("meeting-room", () => getMeetingRoomQuoteSelection(request)),
     Match.when("office", () => getOfficeQuoteSelection(request)),
+    Match.when("table", () => getTableQuoteSelection(request)),
     Match.exhaustive
   );
 
@@ -220,6 +237,17 @@ export const ensureOfficeOpen = OfficeReleaseGate.isOpen.pipe(
   Effect.filterOrFail(
     (enabled) => enabled,
     () => BookingSelectionRejected.officeClosed()
+  ),
+  Effect.asVoid
+);
+
+const ensureTeamTableOpen = TeamTableReleaseGate.isOpen.pipe(
+  Effect.filterOrFail(
+    (enabled) => enabled,
+    () =>
+      new BookingSelectionRejected({
+        reason: { kind: "table-closed" },
+      })
   ),
   Effect.asVoid
 );
@@ -607,6 +635,42 @@ const getOfficeQuoteSelection = Effect.fn(
   )
 );
 
+const getTableQuoteSelection = Effect.fn(
+  "bookingSelection.getTableQuoteSelection"
+)(function* ({ selection, now, locale }: QuoteSelectionRequest) {
+  yield* ensureTeamTableOpen;
+  const { date } = selection;
+  const seats = yield* requireField(selection.seats, "seats");
+  const startTime = yield* requireField(selection.startTime, "startTime");
+  const endTime = yield* requireField(selection.endTime, "endTime");
+  const interval = yield* requireField(
+    getTableReservationInterval(date, startTime, endTime),
+    "endTime"
+  );
+  if (!isTableReservationBookable(interval, now)) {
+    return yield* BookingSelectionRejected.dateOutOfRange(
+      getBookableDates(tableReservationKind, getCurrentWorkspaceDate(now))
+    );
+  }
+  const capacities = yield* loadAdvisoryTeamTableSeatCapacities;
+  if (!capacities.includes(seats))
+    return yield* BookingSelectionRejected.invalidField("seats");
+
+  const reservation: TableReservationDetails = {
+    kind: "table",
+    seats,
+    ...interval,
+  };
+  return {
+    request: {
+      locale,
+      reservation: getTableAdvertisedPriceReservation(reservation),
+    },
+    reservationSelection: { kind: "table", date, seats, startTime, endTime },
+    reservation,
+  } satisfies QuoteSelection;
+});
+
 /** The capacity lookup's own failure passes through untouched. */
 const ensureOfficeSeatsWithinCapacity = ({
   seats,
@@ -818,4 +882,22 @@ const getOfficeRebooking = ({
         })
       )
     )
+  );
+
+const getTableRebooking = ({
+  date,
+  startTime,
+  endTime,
+  seats,
+}: Extract<
+  ReservationSelection,
+  { readonly kind: "table" }
+>): Option.Option<RebookingSelection> =>
+  Option.all({
+    date: Option.flatMap(Option.fromUndefinedOr(date), decodePlainDate),
+    startTime: Option.fromUndefinedOr(startTime),
+    endTime: Option.fromUndefinedOr(endTime),
+    seats: Option.fromUndefinedOr(seats),
+  }).pipe(
+    Option.map((fields) => ({ selection: { family: "table", ...fields } }))
   );

@@ -8,6 +8,7 @@ import {
   test,
 } from "bun:test";
 import { cleanup, fireEvent, render } from "@testing-library/react";
+import { elementOf } from "@/shared/testing/dom-element.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -60,15 +61,18 @@ describe("ReservationTypeInput", () => {
         />
       </ReservationTypeInput>
     );
-    const openSpace = view.container.querySelector(
-      "#cowork-tier-open-space"
-    ) as HTMLInputElement;
-    const reservedDesk = view.container.querySelector(
-      "#cowork-tier-reserved-desk"
-    ) as HTMLInputElement;
-    const workstation = view.container.querySelector(
-      "#cowork-tier-workstation"
-    ) as HTMLInputElement;
+    const openSpace = elementOf(
+      view.container.querySelector("#cowork-tier-open-space"),
+      HTMLInputElement
+    );
+    const reservedDesk = elementOf(
+      view.container.querySelector("#cowork-tier-reserved-desk"),
+      HTMLInputElement
+    );
+    const workstation = elementOf(
+      view.container.querySelector("#cowork-tier-workstation"),
+      HTMLInputElement
+    );
 
     const radioGroup = view.getByRole("radiogroup");
     expect(radioGroup.getAttribute("data-reservation-type-presentation")).toBe(

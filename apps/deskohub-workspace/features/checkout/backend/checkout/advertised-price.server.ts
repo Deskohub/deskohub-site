@@ -6,7 +6,9 @@ import type {
 import { getCoworkCheckoutSummary } from "@/features/checkout/checkout-summary-cowork";
 import { getMeetingRoomCheckoutSummary } from "@/features/checkout/checkout-summary-meeting-room";
 import { getOfficeCheckoutSummary } from "@/features/checkout/checkout-summary-office";
+import { getTableCheckoutSummary } from "@/features/checkout/checkout-summary-table";
 import { ensureOfficeReservationsEnabled } from "@/features/office/backend/office-release-gate";
+import { ensureTeamTableReservationsEnabled } from "@/features/team-table/backend/team-table-release-gate";
 import {
   buildAdvertisedPriceState,
   sealAdvertisedPriceState,
@@ -20,6 +22,7 @@ export const buildAdvertisedPrice = Effect.fn("buildAdvertisedPrice")(
         cowork: () => Effect.void,
         "meeting-room": () => Effect.void,
         office: () => ensureOfficeReservationsEnabled,
+        table: () => ensureTeamTableReservationsEnabled,
       })
     );
 
@@ -37,6 +40,7 @@ export const buildAdvertisedPrice = Effect.fn("buildAdvertisedPrice")(
           getCoworkCheckoutSummary(reservation.details, quote),
         "meeting-room": ({ quote }) => getMeetingRoomCheckoutSummary(quote),
         office: ({ quote }) => getOfficeCheckoutSummary(quote),
+        table: ({ quote }) => getTableCheckoutSummary(quote),
       })
     );
 

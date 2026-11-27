@@ -1,12 +1,13 @@
+import { dotyposHoldFixture } from "./workspace-reservation.test-utils";
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import {
   type DotyposReservationId,
-  DotyposReservationIdSchema,
   type DotyposReservationStatus,
   DotyposService,
+  DotyposTableIdSchema,
 } from "@deskohub/dotypos";
 import { EmailRecipientDomainServiceMock } from "@deskohub/email/backend/recipient-domain.service.mock";
 import { testEmailAddress } from "@deskohub/test-email";
@@ -57,6 +58,8 @@ import { RememberedReferral } from "@/features/referrals/remembered-referral.ser
 import { meetingRoomAdvertisedPriceReservationSchema } from "@/features/reservation/meeting-room-reservation";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { ReviewAccounts, ReviewSandbox } from "@/features/review-accounts";
+import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import {
   syntheticDotyposCustomerId,
@@ -163,13 +166,8 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
    */
   const dotypos = {
     createReservation: mock(() =>
-      Effect.sync(
-        () =>
-          ({
-            id: DotyposReservationIdSchema.make(
-              `dotypos-hold-${crypto.randomUUID()}`
-            ),
-          }) as never
+      Effect.sync(() =>
+        dotyposHoldFixture(`dotypos-hold-${crypto.randomUUID()}`)
       )
     ),
     cancelReservation: mock((_id: DotyposReservationId) => Effect.void),
@@ -225,6 +223,8 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
   });
   const services = Layer.mergeAll(
     database.layer,
+    TeamTableReleaseGate.fromDecision(false),
+    Layer.mock(OpenSpaceTableMoves, {}),
     WorkspaceDatabaseAdvisoryLock.makeLayer(database.databasePool),
     makeCustomerAccountSections({ session: {}, activityState: "active" }).layer,
     Layer.mergeAll(
@@ -233,13 +233,13 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
       ReviewSandbox.Default
     ).pipe(Layer.provide(database.layer)),
     CheckoutPricingService.Default.pipe(Layer.provide(discounts)),
-    Layer.mock(DotyposService, dotypos as never),
+    Layer.mock(DotyposService, dotypos),
     Layer.mock(WorkspaceAvailabilityService, {
       ensureAvailable: () => Effect.void,
     }),
     Layer.mock(ReservationHoldCleanupScheduleService, {
       enqueueCleanup: () => Effect.void,
-    } as never),
+    }),
     Layer.mock(MarketingConsentLedger, {
       record: recordMarketingConsent,
     }),
@@ -249,7 +249,8 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
     currentAccount,
     contacts,
     WorkspaceTableAssignmentServiceMock({
-      assignTableId: () => Effect.succeed("table-id" as never),
+      assignTableId: () =>
+        Effect.succeed(DotyposTableIdSchema.make("table-id")),
     }),
     EmailRecipientDomainServiceMock({
       check: () => Effect.succeed("accepts_mail" as const),

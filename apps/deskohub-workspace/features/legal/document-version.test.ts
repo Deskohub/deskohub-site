@@ -16,17 +16,17 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "en-US",
     documentKey: "terms-and-conditions",
-    version: "dc2faf8fc56123b6349d4acea6f59a94f45f71359e54962ce7eb9ec5e9acc08d",
+    version: "e62853f945ddd26fba13ce2741649a9c959869832bfd86599e1f221168db4834",
   },
   {
     locale: "en-US",
     documentKey: "operating-rules",
-    version: "05cefdd98d32159cfce228b230931f9cc257643d90f83f327589732476c8ba56",
+    version: "5f86f935f8d3f4d9bce7c5dc5fc966cf162a6da942a1ffcb0aeba5180d861cbf",
   },
   {
     locale: "en-US",
     documentKey: "privacy-policy",
-    version: "3f36b29f196c659d2672472007e43f35dc08ff0b16a1ff09af1a50326c4dd3f8",
+    version: "7ca3873ddc2c9bd6977fb9aa3968098fffc64557c728b653b2ff029068bf4d92",
   },
   {
     locale: "en-US",
@@ -41,17 +41,17 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "cs-CZ",
     documentKey: "terms-and-conditions",
-    version: "c35d2e277087351dd91bfea0c7fa450d5701e7d539d25492043a22f626787ab2",
+    version: "963ca2e64cf125f6700e58d979bd7bee18e337d8dc3c74723f5db9c5ba217a77",
   },
   {
     locale: "cs-CZ",
     documentKey: "operating-rules",
-    version: "72c29525579c9f6bf1628e409da40b9bd6f620acfa9f2623198f7bbc73f4df77",
+    version: "020f57fb4244db86034bb0b56e583e5c618e885c4412ac1dbf6a8e3d31c6c199",
   },
   {
     locale: "cs-CZ",
     documentKey: "privacy-policy",
-    version: "06ef7eccee6ae782d255f20318a23487b3a6919d9abf6da1310aa0c4355ffaba",
+    version: "fbe427f73353085e6a227fae7031c61be1c99de52ecfe2a31dd0ec22d1fbddb8",
   },
   {
     locale: "cs-CZ",
@@ -66,17 +66,17 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "de-DE",
     documentKey: "terms-and-conditions",
-    version: "50deab5ed985d25c564cd2e2b8e190d63c93fce9c2d8e7df792bca32c9ecf5f8",
+    version: "932badf0d2beaa99250cee007d0d387e797ffa2f3a5b8a1a189f04c198d74365",
   },
   {
     locale: "de-DE",
     documentKey: "operating-rules",
-    version: "c62cfb615edfabaa1b46c687d360da01b0f84642e5870b80a79bbef152ec5b3c",
+    version: "48906c68b945ca70b60185a736546ce136e6f5d28a297d55925bf320252d41ab",
   },
   {
     locale: "de-DE",
     documentKey: "privacy-policy",
-    version: "12971bc012fa60f835e50ebfa162649dd15138ab5cdcb75f90c9f6cc0e439fb5",
+    version: "210b477d135610028fc1684644d53adc27cbaf96613f6ecf1e47a5f4d826a204",
   },
   {
     locale: "de-DE",
@@ -91,17 +91,17 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "uk-UA",
     documentKey: "terms-and-conditions",
-    version: "ddd55fcceba2162bcd4afdced6d52611feb59836fdadfc01efa7e8e08fc35476",
+    version: "749b159ecbf785020e3de2af1f3b96a130ef719f0fbc9d0b7a8292b04e24d893",
   },
   {
     locale: "uk-UA",
     documentKey: "operating-rules",
-    version: "3b2c23e4556ddab5fb207e6ba78163c9d784def6d4c4cedf61362db353729687",
+    version: "a7ad893c2a343f3cc8aeb5b6b995559ea8455066605354f6547fc544282a0c74",
   },
   {
     locale: "uk-UA",
     documentKey: "privacy-policy",
-    version: "5e2fb2f96c5600e33892e1a8d6b348fab61fcfc94c552529c2ab19466c6c932e",
+    version: "5b1da49fd89873cf665b7edf27a637b5280f118af6f6098ffca7591289259ca6",
   },
   {
     locale: "uk-UA",
@@ -116,17 +116,17 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "sk-SK",
     documentKey: "terms-and-conditions",
-    version: "1b91182101f690b7654a9a1bc6a203e458c44e1d92c8a43e7e360ea9ec78475f",
+    version: "fdc4088c4644251872ae54b6663ef1e20b18b6f2efa08250a96f71a34d3cf4ae",
   },
   {
     locale: "sk-SK",
     documentKey: "operating-rules",
-    version: "4bff1537e7e6a7903fecf5584178b37f52c9ef2d66076b4f2e55b057ca651852",
+    version: "aca4257908aa40ca6aa5c5eed35458a1e157c8ac0197f1b637fd5013e70224da",
   },
   {
     locale: "sk-SK",
     documentKey: "privacy-policy",
-    version: "b5f247ecb4e7311ee0847aaf5f141310cd1ff37a34b87e2ca6fc792b7d8f32a3",
+    version: "f464b6cbc710bdd8836f2e24a2ff06e7a06d79b08b18b86610db9a7c3654f610",
   },
   {
     locale: "sk-SK",
@@ -141,17 +141,17 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "vi-VN",
     documentKey: "terms-and-conditions",
-    version: "6d4806c814cc61879a0f14f5596619897eb437215d023b3d8515ec3cac5e4841",
+    version: "82e71e7dfe491bce3a382c828ed837534924653ffbb1d5ce2c9d5a418ae49080",
   },
   {
     locale: "vi-VN",
     documentKey: "operating-rules",
-    version: "2bfa7e9a4afa15bcea55db7daa0737e64c79f395606737bd76bd64f0a740784f",
+    version: "8bcdf0f34c29b578bf67e5e7485298a0b702e192be3667436709806dd9eddbe1",
   },
   {
     locale: "vi-VN",
     documentKey: "privacy-policy",
-    version: "b2a920b3aeca14d6321ef1bfa0f762076ccf365bb483664a19f8f26c753912fc",
+    version: "431ae005187d8f28439b3d0d61d994b20b599e91ad1634c92fa6833c673e9bb2",
   },
   {
     locale: "vi-VN",
@@ -166,17 +166,17 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "hi-IN",
     documentKey: "terms-and-conditions",
-    version: "a27c6478426893a67ca5c854a01bd2555ae792a6b048b29274b47822d00a2bf0",
+    version: "621a8733caf6a6eeaddb3113524b02c3b399b503ba9c2c712a30ca6bad916d22",
   },
   {
     locale: "hi-IN",
     documentKey: "operating-rules",
-    version: "635da5bf566a299b094ae7f8fc86235f9f551361b10d505e0d27f021ea7fbd31",
+    version: "7ac3b5ee911b9eeee34852fe739badce422bee7e9624a14737ee5d44f99ad483",
   },
   {
     locale: "hi-IN",
     documentKey: "privacy-policy",
-    version: "feeaa3947ca6aeca453a0c49ff09cff76c7d48fd381b5521ac3d51fa65614330",
+    version: "890971196d692443d93fa70acd612bdf695a3a1d19960a795426865b2e2f8526",
   },
   {
     locale: "hi-IN",

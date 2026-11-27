@@ -17,8 +17,14 @@ import type { Locale } from "@/features/i18n";
 import type { LandingPageSaleBannerContent } from "@/features/landing-page/components/landing-page-sale-banner";
 import { getLandingPageSaleBanner } from "@/features/landing-page/landing-page-sale-banner.server";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { loadTeamTablePriceList } from "@/features/pricing/backend/team-table-price-list.server";
+import type { TeamTablePrice } from "@/features/pricing/team-table-price";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
+import { SharedAvailabilityInventoryLive } from "@/features/reservation/backend/availability-inventory-cache.server";
+import { tableReservationPath } from "@/features/reservation/routes";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { readSharedSnapshot } from "@/shared/backend/shared-snapshot";
+import { catchRecoverableCause } from "@/shared/backend/workspace-effect";
 import {
   type MarkdownBlocks,
   serializeMarkdown,
@@ -67,6 +73,30 @@ const officeDecision = (releases: PublicPageMarkdownReleases) =>
   OfficeReleaseGate.fromDecision(
     releases.publishedPathnames.includes("/reservation/office")
   );
+
+const loadMarkdownTeamTablePrices = (
+  locale: Locale,
+  releases: PublicPageMarkdownReleases
+): Effect.Effect<Sourced<ReadonlyArray<TeamTablePrice>>> =>
+  releases.publishedPathnames.includes(tableReservationPath)
+    ? loadTeamTablePriceList(locale).pipe(
+        Effect.map(({ prices, complete }) => ({ value: prices, complete })),
+        Effect.provide(
+          Layer.mergeAll(
+            CheckoutPricingService.withDiscountReleaseGates(
+              releases.discountReleaseGates
+            ).pipe(Layer.provideMerge(ReferralReleaseGate.fromDecision(false))),
+            SharedAvailabilityInventoryLive,
+            TeamTableReleaseGate.fromDecision(true)
+          )
+        ),
+        catchRecoverableCause((cause) =>
+          Effect.logWarning("Team Table prices are unavailable for Markdown", {
+            cause,
+          }).pipe(Effect.as({ value: [], complete: false }))
+        )
+      )
+    : Effect.succeed({ value: [], complete: true });
 
 /** An offering without a quote advertises its catalog price. */
 const withCatalogAdvertisedPrice = (
@@ -147,7 +177,14 @@ const loadMarkdownSaleBanner = (
             Effect.map((value) => ({ value, complete }))
           )
         ),
-        Effect.provide(officeDecision(releases)),
+        Effect.provide(
+          Layer.mergeAll(
+            officeDecision(releases),
+            TeamTableReleaseGate.fromDecision(
+              releases.publishedPathnames.includes(tableReservationPath)
+            )
+          )
+        ),
         Effect.orElseSucceed(() => ({ value: undefined, complete: false }))
       )
     : Effect.succeed({ value: undefined, complete: true });
@@ -177,6 +214,9 @@ export const renderFromMarkdownSources = <A>(
     const value = yield* render({
       isPublished: (pathname) => releases.publishedPathnames.includes(pathname),
       offerings: yield* read(loadMarkdownOfferings(locale, releases)),
+      teamTablePrices: yield* read(
+        loadMarkdownTeamTablePrices(locale, releases)
+      ),
       saleBanner: yield* read(loadMarkdownSaleBanner(locale, releases)),
       pricingPasses: releases.pricingPasses,
     });

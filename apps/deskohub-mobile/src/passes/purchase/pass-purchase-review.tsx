@@ -85,12 +85,10 @@ export function PassPurchaseReview({
     entryPack ? product.tier : product.selection.tier,
     locale
   );
+  const days = daysBetween(validFrom, lastUsableDate) + 1;
   const units = entryPack
     ? passEntryLabel(product.size, locale)
-    : m.pass_purchase_days(
-        { count: String(daysBetween(validFrom, lastUsableDate) + 1) },
-        { locale }
-      );
+    : m.pass_purchase_days({ count: String(days) }, { locale });
   const monitors =
     product.kind === "unlimited" &&
     product.selection.tier === "reserved-desk-workstation"
@@ -147,6 +145,11 @@ export function PassPurchaseReview({
           last
         />
       </Card>
+      {!entryPack && (
+        <Text variant="bodySmall" tone="muted">
+          {m.pass_purchase_membership_terms({ days }, { locale })}
+        </Text>
+      )}
       <BookingSectionHeading title={m.pass_purchase_price({}, { locale })} />
       <Card padding="none">
         <ReviewRow

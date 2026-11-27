@@ -1,4 +1,3 @@
-import { cva } from "class-variance-authority";
 import { Match } from "effect";
 import { Undo2 } from "lucide-react";
 import Link from "next/link";
@@ -29,17 +28,25 @@ import {
   reservationAccessPath,
 } from "@/features/reservation/routes";
 import { getSelectionPath } from "@/features/reservation/selection-path";
+import { getTableCheckoutStatusSummary } from "@/features/team-table/components/table-checkout-status-summary";
 import { ReservationWithdrawalLink } from "@/features/withdrawal/components/reservation-withdrawal-link";
 import type { ContractWithdrawalEntry } from "@/features/withdrawal/withdrawal-read-model";
 import { Button } from "@/shared/components/ui/button";
 import { formatMoney } from "@/shared/money/money";
-import { cn } from "@/shared/utils";
 import { CheckoutFlowLayout } from "./checkout-flow-layout";
 import type { CheckoutQrPayment } from "./checkout-qr-payment-details";
+import {
+  type AddCheckoutStatusInvitee,
+  CheckoutStatusAddInviteeForm,
+} from "./checkout-status-add-invitee-form";
 import {
   type CheckoutStatusCopy,
   getCheckoutStatusCopy,
 } from "./checkout-status-copy";
+import {
+  CheckoutStatusAnnouncement,
+  CheckoutStatusHeadline,
+} from "./checkout-status-headline";
 import {
   CheckoutStatusPaymentMethods,
   type ContinueCheckoutPaymentAction,
@@ -49,6 +56,7 @@ import { CheckoutStatusPaymentRetry } from "./checkout-status-payment-retry";
 import { WorkspaceTableMapView } from "./workspace-table-map-view";
 
 type CheckoutStatusPageProps = {
+  readonly addInvitees?: AddCheckoutStatusInvitee;
   readonly locale: Locale;
   readonly paymentMethods?: {
     readonly continuePaymentAction: ContinueCheckoutPaymentAction;
@@ -66,26 +74,10 @@ type CheckoutStatusPageProps = {
   readonly withdrawal?: ContractWithdrawalEntry;
 };
 
-const statusIconWrapperVariants = cva(
-  "flex h-16 w-16 shrink-0 items-center justify-center rounded-full ring-8",
-  {
-    variants: {
-      tone: {
-        success:
-          "bg-aquamarine-green/14 text-aquamarine-ink ring-aquamarine-green/8",
-        pending: "bg-burned-orange/12 text-burned-orange ring-burned-orange/8",
-        warning: "bg-burned-orange/12 text-burned-orange ring-burned-orange/8",
-        failed: "bg-red-500/10 text-red-600 ring-red-500/8",
-        unknown: "bg-navy-blue/8 text-navy-blue/60 ring-navy-blue/6",
-      },
-    },
-  }
-);
-
 const getSummaryPresentation = (
   status: CheckoutStatusViewModel,
   locale: Locale,
-  officePeople?: ReactNode
+  reservationPeople?: ReactNode
 ): CheckoutStatusSummaryPresentation | undefined =>
   status.summary
     ? Match.value(status.summary).pipe(
@@ -94,7 +86,9 @@ const getSummaryPresentation = (
           "meeting-room": (summary) =>
             getMeetingRoomCheckoutStatusSummary(summary, locale),
           office: (summary) =>
-            getOfficeCheckoutStatusSummary(summary, locale, officePeople),
+            getOfficeCheckoutStatusSummary(summary, locale, reservationPeople),
+          table: (summary) =>
+            getTableCheckoutStatusSummary(summary, locale, reservationPeople),
         })
       )
     : undefined;
@@ -154,7 +148,7 @@ const getContactReservationDetails = (
   ].join("\n");
 
 const getSupportContactMessage = (
-  status: CheckoutStatusViewModel,
+  status: CheckoutReservationStatusViewModel,
   locale: Locale,
   summaryPresentation: CheckoutStatusSummaryPresentation | undefined,
   topic: NonNullable<
@@ -189,6 +183,10 @@ const getRepeatReservationSearchParams = (
           ...(monitorOption && { monitorOption }),
         }),
       "meeting-room": () => undefined,
+      table: ({ seats }) =>
+        seats === undefined
+          ? undefined
+          : new URLSearchParams({ seats: String(seats) }),
       office: ({ reservedFrom, reservedUntil, seats }) => {
         const selection = getOfficeReservationSelection({
           startsAt: reservedFrom,
@@ -243,14 +241,14 @@ const getReserveAgainLabel = (
 };
 
 const getSupportContactHref = (
-  status: CheckoutStatusViewModel,
+  status: CheckoutReservationStatusViewModel,
   locale: Locale,
-  summaryPresentation: CheckoutStatusSummaryPresentation | undefined
-) => {
-  const topic = checkoutStatusTraits[status.status].supportTopic;
-  if (!topic || status.status === "not_found") return undefined;
-
-  return getContactPageHref(locale, {
+  summaryPresentation: CheckoutStatusSummaryPresentation | undefined,
+  topic: NonNullable<
+    (typeof checkoutStatusTraits)[CheckoutStatusKind]["supportTopic"]
+  >
+) =>
+  getContactPageHref(locale, {
     ...status.supportContactPrefill,
     message: getSupportContactMessage(
       status,
@@ -259,7 +257,6 @@ const getSupportContactHref = (
       topic
     ),
   });
-};
 
 type CheckoutStatusPresentation = NonNullable<
   CheckoutStatusPageProps["presentation"]
@@ -280,6 +277,7 @@ const getReservationAccessHref = (
     : undefined;
 
 export function CheckoutStatusPage({
+  addInvitees,
   locale,
   paymentMethods,
   presentation = "page",
@@ -319,41 +317,66 @@ export function CheckoutStatusPage({
   const showReservationDetails = status.status !== "not_found";
   const withdrawalOffered =
     showReservationDetails && withdrawal?.status === "offered";
-  const officePeople = status.status !== "not_found" &&
-    status.kind === "office" &&
+  const reservationPeople = status.status !== "not_found" &&
+    (status.kind === "office" || status.kind === "table") &&
     status.people && (
-      <OfficeStatusPeopleList
-        changeHref={getPeopleChangeContactHref(status, locale)}
-        contact={status.supportContactPrefill}
-        locale={locale}
-        orderId={status.orderId}
-        people={{
-          contactAttends: status.people.contactAttends,
-          invitees: status.people.invitees.map(
-            ({ id, email, resendAvailableAt }) => ({
-              id,
-              email,
-              resendAvailableAt: withdrawn
-                ? undefined
-                : resendAvailableAt?.toString(),
-            })
-          ),
-        }}
-        resendInvitation={
-          !withdrawn && status.people.resendable ? resendInvitation : undefined
-        }
-      />
+      <>
+        <OfficeStatusPeopleList
+          changeHref={
+            status.kind === "office"
+              ? getPeopleChangeContactHref(status, locale)
+              : undefined
+          }
+          contact={status.supportContactPrefill}
+          locale={locale}
+          orderId={status.orderId}
+          people={{
+            contactAttends: status.people.contactAttends,
+            invitees: status.people.invitees.map(
+              ({ id, email, resendAvailableAt }) => ({
+                id,
+                email,
+                resendAvailableAt: withdrawn
+                  ? undefined
+                  : resendAvailableAt?.toString(),
+              })
+            ),
+          }}
+          resendInvitation={
+            !withdrawn && status.people.resendable
+              ? resendInvitation
+              : undefined
+          }
+        />
+        {!withdrawn && status.kind === "table" && status.people.resendable && (
+          <>
+            <p className="mt-3 text-sm font-normal leading-6 text-navy-blue/64">
+              {m.checkoutStatusTableInviteeRemovalNote({}, { locale })}
+            </p>
+            {addInvitees && (
+              <CheckoutStatusAddInviteeForm
+                addInvitees={addInvitees}
+                canAdd={status.inviteeAdditionEndsAt !== undefined}
+                locale={locale}
+                orderId={status.orderId}
+              />
+            )}
+          </>
+        )}
+      </>
     );
   const summaryPresentation = getSummaryPresentation(
     status,
     locale,
-    officePeople || undefined
+    reservationPeople || undefined
   );
-  const supportContactHref = getSupportContactHref(
-    status,
-    locale,
-    summaryPresentation
-  );
+  const supportTopic = checkoutStatusTraits[status.status].supportTopic;
+  const supportContactHref =
+    !canSwitchPayment?.qrPayment &&
+    supportTopic &&
+    status.status !== "not_found"
+      ? getSupportContactHref(status, locale, summaryPresentation, supportTopic)
+      : undefined;
   const offersRetry =
     checkoutStatusTraits[status.status].offersReservationRetry;
   const repeatReservationSearchParams =
@@ -368,27 +391,42 @@ export function CheckoutStatusPage({
   const paymentPageReopenable =
     status.status !== "not_found" && status.paymentPageReopenable;
 
+  const headline = (
+    <CheckoutStatusHeadline
+      copy={copy}
+      locale={locale}
+      reviewSandbox={!!reviewSandbox}
+      showSupportButton={!!supportContactHref}
+    />
+  );
   return (
     <CheckoutStatusFrame
       locale={locale}
       presentation={presentation}
       reserveAgainPath={offersNewReservation ? reserveAgainPath : undefined}
     >
-      <CheckoutStatusHeadline
-        copy={copy}
-        locale={locale}
-        reviewSandbox={!!reviewSandbox}
-        showSupportButton={!!supportContactHref}
-      />
-
-      {canSwitchPayment && (
+      <CheckoutStatusAnnouncement locale={locale} title={copy.title} />
+      {canSwitchPayment && status.status !== "not_found" ? (
         <CheckoutStatusPaymentMethods
           continuePaymentAction={canSwitchPayment.continuePaymentAction}
           expiresAt={canSwitchPayment.expiresAt}
+          headline={headline}
           locale={locale}
           orderId={status.orderId}
-          qrPayment={canSwitchPayment.qrPayment}
+          qrWait={
+            canSwitchPayment.qrPayment && {
+              payment: canSwitchPayment.qrPayment,
+              supportHref: getSupportContactHref(
+                status,
+                locale,
+                summaryPresentation,
+                "payment_pending"
+              ),
+            }
+          }
         />
+      ) : (
+        headline
       )}
 
       {!!supportContactHref && (
@@ -406,8 +444,8 @@ export function CheckoutStatusPage({
       {showReservationDetails && (
         <CheckoutStatusReservationDetails
           locale={locale}
-          officePeople={
-            summaryPresentation ? undefined : officePeople || undefined
+          reservationPeople={
+            summaryPresentation ? undefined : reservationPeople || undefined
           }
           status={status}
           summaryPresentation={summaryPresentation}
@@ -501,78 +539,25 @@ function CheckoutStatusFrame({
   );
 }
 
-function CheckoutStatusHeadline({
-  copy,
-  locale,
-  reviewSandbox,
-  showSupportButton,
-}: {
-  readonly copy: CheckoutStatusCopy;
-  readonly locale: Locale;
-  readonly reviewSandbox: boolean;
-  readonly showSupportButton: boolean;
-}) {
-  const Icon = copy.Icon;
-
-  return (
-    <>
-      <output className="sr-only" aria-live="polite" aria-atomic>
-        {m.checkoutStatusEyebrow({}, { locale })}: {copy.title}
-      </output>
-      <div className="flex flex-col gap-6 sm:flex-row sm:items-start">
-        <div className={statusIconWrapperVariants({ tone: copy.tone })}>
-          <Icon className="h-9 w-9" aria-hidden="true" />
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-burned-orange">
-            {m.checkoutStatusEyebrow({}, { locale })}
-          </p>
-          <h1 className="mt-4 text-balance text-4xl leading-none sm:text-5xl">
-            {copy.title}
-          </h1>
-          <p
-            className={cn(
-              "mt-5 text-lg leading-8 text-navy-blue/70",
-              showSupportButton &&
-                "after:content-['_↴'] after:text-4xl after:leading-0"
-            )}
-          >
-            {copy.lead}
-          </p>
-          {reviewSandbox && (
-            <p
-              className="mt-4 rounded-2xl border border-navy-blue/10 bg-navy-blue/3 px-4 py-3 text-sm leading-6 text-navy-blue/72"
-              id="checkout-status-review-sandbox"
-            >
-              {m.checkoutStatusReviewSandboxNotice({}, { locale })}
-            </p>
-          )}
-        </div>
-      </div>
-    </>
-  );
-}
-
 function CheckoutStatusReservationDetails({
   locale,
-  officePeople,
+  reservationPeople,
   status,
   summaryPresentation,
   withdrawalOffered,
 }: {
   readonly locale: Locale;
-  readonly officePeople?: ReactNode;
+  readonly reservationPeople?: ReactNode;
   readonly status: CheckoutReservationStatusViewModel;
   readonly summaryPresentation: CheckoutStatusSummaryPresentation | undefined;
   readonly withdrawalOffered: boolean;
 }) {
   const summaryRows = summaryPresentation?.rows ?? [];
-  const rows = officePeople
+  const rows = reservationPeople
     ? [
         {
           label: m.checkoutStatusPeopleLabel({}, { locale }),
-          value: officePeople,
+          value: reservationPeople,
         },
       ]
     : summaryRows;
@@ -608,7 +593,10 @@ function CheckoutStatusReservationDetails({
               <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-navy-blue/52">
                 {
                   {
-                    assigned: m.checkoutEmailTableNumberLabel({}, { locale }),
+                    assigned:
+                      status.kind === "table"
+                        ? m.reservationAssignedTableLabel({}, { locale })
+                        : m.checkoutEmailTableNumberLabel({}, { locale }),
                     shared: m.checkoutEmailTablesLabel({}, { locale }),
                   }[status.table.mode]
                 }

@@ -5,6 +5,7 @@ import type {
   FioSettlementDiscrepancyReason,
 } from "@/db/schema/fio-payment-settlements";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
+import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { OrderId } from "@/features/order/order";
 import { reservationIdForOrder } from "@/features/reservation/persistence-contracts";
 import type { Money } from "@/shared/money/money";
@@ -38,12 +39,20 @@ type FioMovementAmount =
 export interface VerifiedFioMovement {
   readonly accountKey: string;
   readonly movementId: string;
+  readonly constantSymbol: string | null;
   readonly variableSymbol: string | null;
   readonly referenceStatus?: "absent" | "invalid";
   readonly amount: FioMovementAmount;
   readonly bookingDate: Temporal.PlainDate;
   readonly observedAt: Temporal.Instant;
 }
+
+const unmatchedMovementFilters: readonly { readonly constantSymbol: string }[] =
+  [
+    // Card-acquirer payouts use this symbol on the shared Fio account.
+    // Exclude those payouts from the unmatched QR settlement queue.
+    { constantSymbol: "0558" },
+  ];
 
 type RecordMovementError =
   | DatabaseQueryError
@@ -84,6 +93,49 @@ export class FioPaymentSettlementService extends Context.Service<
       const lifecycle = yield* PaymentLifecycleRepository;
       const fulfillmentQueue = yield* PaidFulfillmentQueueService;
       const recoveryQueue = yield* LatePaymentRecoveryQueueService;
+
+      const claimSettlement = ({
+        movement,
+        variableSymbol,
+        reference,
+        discrepancyReason,
+      }: {
+        readonly movement: VerifiedFioMovement;
+        readonly variableSymbol: string | null;
+        readonly reference: {
+          orderId: OrderId;
+          attemptId: PaymentAttemptId;
+        } | null;
+        readonly discrepancyReason: FioSettlementDiscrepancyReason | null;
+      }) => {
+        const amount =
+          movement.amount._tag === "CZK"
+            ? {
+                currency: "CZK",
+                amountValue: movement.amount.minorUnits,
+                decimalAmount: null,
+              }
+            : {
+                currency: movement.amount.currency,
+                amountValue: null,
+                decimalAmount: movement.amount.decimalAmount,
+              };
+        // Exact credits claim the movement before acquiring the order lock.
+        // Adding foreign keys here would take locks in reverse order.
+        const discrepancyReference = discrepancyReason ? reference : null;
+        return settlements.claimMovement({
+          accountKey: movement.accountKey,
+          movementId: movement.movementId,
+          bookingDate: movement.bookingDate.toString({ calendarName: "never" }),
+          observedAt: movement.observedAt,
+          variableSymbol,
+          ...amount,
+          orderId: discrepancyReference?.orderId ?? null,
+          paymentAttemptId: discrepancyReference?.attemptId ?? null,
+          disposition: "discrepancy",
+          discrepancyReason: discrepancyReason ?? "reference_unmatched",
+        });
+      };
 
       const dispatchSettlement = Effect.fn("fioPaymentSettlement.dispatch")(
         function* (settlement: FioPaymentSettlement) {
@@ -143,39 +195,18 @@ export class FioPaymentSettlementService extends Context.Service<
                     variableSymbol,
                   })
                 : null;
+              if (!reference && isIgnoredUnmatchedMovement(movement)) {
+                return null;
+              }
+
               const discrepancyReason = reference
                 ? compareAmount(movement.amount, reference.amount)
                 : unresolvedReference(movement, variableSymbol);
-              const amount =
-                movement.amount._tag === "CZK"
-                  ? {
-                      currency: "CZK",
-                      amountValue: movement.amount.minorUnits,
-                      decimalAmount: null,
-                    }
-                  : {
-                      currency: movement.amount.currency,
-                      amountValue: null,
-                      decimalAmount: movement.amount.decimalAmount,
-                    };
-
-              const claim = yield* settlements.claimMovement({
-                accountKey: movement.accountKey,
-                movementId: movement.movementId,
-                bookingDate: movement.bookingDate.toString({
-                  calendarName: "never",
-                }),
-                observedAt: movement.observedAt,
+              const claim = yield* claimSettlement({
+                movement,
                 variableSymbol,
-                ...amount,
-                // Exact credits claim the movement before acquiring the order
-                // lock. Adding foreign keys here would take locks in reverse order.
-                orderId: discrepancyReason ? reference?.orderId : null,
-                paymentAttemptId: discrepancyReason
-                  ? reference?.attemptId
-                  : null,
-                disposition: "discrepancy",
-                discrepancyReason: discrepancyReason ?? "reference_unmatched",
+                reference,
+                discrepancyReason,
               });
               if (!claim.inserted || !reference || discrepancyReason)
                 return claim.settlement;
@@ -195,7 +226,7 @@ export class FioPaymentSettlementService extends Context.Service<
             })
           );
 
-          yield* dispatchSettlement(settlement);
+          if (settlement) yield* dispatchSettlement(settlement);
         }
       );
 
@@ -218,6 +249,11 @@ const dispositionsByDecision = {
 
 const validSymbol = (symbol: string | null) =>
   symbol && /^[0-9]{1,10}$/.test(symbol) ? symbol : null;
+
+const isIgnoredUnmatchedMovement = (movement: VerifiedFioMovement): boolean =>
+  unmatchedMovementFilters.some(
+    (filter) => filter.constantSymbol === movement.constantSymbol
+  );
 
 const unresolvedReference = (
   movement: VerifiedFioMovement,

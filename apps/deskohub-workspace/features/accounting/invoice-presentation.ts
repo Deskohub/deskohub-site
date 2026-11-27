@@ -94,6 +94,8 @@ type InvoiceCopy = {
   readonly workstation: string;
   readonly meetingRoom: string;
   readonly office: string;
+  readonly tableBase: string;
+  readonly tableUsage: (minutes: number) => string;
   readonly discount: string;
   readonly hour: (count: number) => string;
   readonly day: (count: number) => string;
@@ -133,6 +135,9 @@ const getInvoiceCopy = (locale: Locale): InvoiceCopy => ({
   workstation: m.invoiceWorkstationLineLabel({}, { locale }),
   meetingRoom: m.invoiceMeetingRoomLineLabel({}, { locale }),
   office: m.invoiceOfficeLineLabel({}, { locale }),
+  tableBase: m.invoiceTableBaseLineLabel({}, { locale }),
+  tableUsage: (minutes) =>
+    m.invoiceTableUsageLineLabel({ minutes }, { locale }),
   discount: m.invoiceDiscountLabel({}, { locale }),
   hour: (count) => m.reservationMeetingRoomDurationHours({ count }, { locale }),
   day: (count) =>
@@ -458,6 +463,16 @@ const getItemLine = (
           amount: formatMoney(amount, document.locale),
         };
       },
+      "table-base": ({ amount, seats }) => ({
+        kind: "item" as const,
+        description: `${copy.tableBase} · ${copy.seat(seats)}`,
+        amount: formatMoney(amount, document.locale),
+      }),
+      "table-usage": ({ amount, durationMinutes }) => ({
+        kind: "item" as const,
+        description: copy.tableUsage(durationMinutes),
+        amount: formatMoney(amount, document.locale),
+      }),
       office: ({ amount, dayCount, seats }) => ({
         kind: "item" as const,
         description: `${copy.office} · ${copy.day(dayCount)} · ${copy.seat(seats)}`,

@@ -1,11 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,23 +11,11 @@ const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const lintRoot = mkdtempSync(join(tmpdir(), "deskohub-mobile-import-ban-"));
 const mobileDirectory = "apps/deskohub-mobile/import-ban";
 
-// The cases sit at the repository's own relative paths under a copy of the root
-// configuration, so its path-scoped overrides apply unchanged. Only the plugin
-// paths are made absolute, and VCS is off because the copy is not a checkout.
-const repositoryConfig = JSON.parse(
-  readFileSync(join(repositoryRoot, "biome.json"), "utf8")
-) as { readonly plugins: readonly string[] };
-writeFileSync(
-  join(lintRoot, "biome.json"),
-  JSON.stringify({
-    ...repositoryConfig,
-    root: true,
-    vcs: { enabled: false },
-    plugins: repositoryConfig.plugins.map((plugin) =>
-      join(repositoryRoot, plugin)
-    ),
-  })
-);
+// Keep the configuration and plugin files in their original relative layout.
+cpSync(join(repositoryRoot, "biome.json"), join(lintRoot, "biome.json"));
+cpSync(join(repositoryRoot, "lint"), join(lintRoot, "lint"), {
+  recursive: true,
+});
 
 const banned = "lint/style/noRestrictedImports";
 
@@ -98,6 +80,7 @@ beforeAll(async () => {
       join(repositoryRoot, "node_modules/.bin/biome"),
       "lint",
       "apps",
+      "--vcs-enabled=false",
       "--reporter=json",
       "--max-diagnostics=none",
     ],
@@ -108,7 +91,7 @@ beforeAll(async () => {
     new Response(biome.stderr).text(),
     biome.exited,
   ]);
-  if (exitCode !== 0 && exitCode !== 1) {
+  if (stdout.trim() === "" || (exitCode !== 0 && exitCode !== 1)) {
     throw new Error(`Biome exited with ${exitCode}: ${stderr}`);
   }
   report = JSON.parse(stdout) as LintReport;

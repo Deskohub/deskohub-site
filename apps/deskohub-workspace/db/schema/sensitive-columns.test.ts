@@ -13,7 +13,8 @@
  * sensitive column. A static scan of the app's non-test modules flags those.
  * It errs on the strict side: a template that references a sensitive column
  * and binds any unmarked value is flagged even when the value belongs to
- * another column, so mark it or split the template. It resolves tables by
+ * another column, so mark it or split the template. It checks Workspace and
+ * the backend package. It resolves tables by
  * their schema export names and import renames, so it misses a table reached
  * through another binding, and it does not read relational-query filter
  * objects or written rows built away from their `values` or `set` call.
@@ -98,6 +99,10 @@ const nonSensitiveColumns = new Map([
     "customer email delivery locale",
   ],
   [
+    "public.workspace_reservations.active_customer_email_delivery_open_space_tables",
+    "Open Space table labels retained for email delivery retries",
+  ],
+  [
     "auth.oauth_client.token_endpoint_auth_method",
     "OAuth client authentication method name",
   ],
@@ -143,7 +148,7 @@ describe("sensitive schema columns", () => {
   });
 });
 
-const appRoot = resolve(import.meta.dir, "../..");
+const repositoryRoot = resolve(import.meta.dir, "../../../..");
 const scannedModule = /(?<!\.d)\.(?:ts|tsx)$/;
 const testModule = /\.test\.tsx?$/;
 const schemaModule = /(?:^|\/)schema(?:\/[\w-]+)?$/;
@@ -402,10 +407,20 @@ describe("sensitive column values bound outside the column encoder", () => {
     ).toEqual(["fixture.ts:3"]);
   });
 
-  test("are marked where the app binds them", async () => {
+  test("are marked where Workspace binds them", async () => {
     const listing = await commandOutput(
-      ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-      { cwd: appRoot }
+      [
+        "git",
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        "apps/deskohub-workspace",
+        "packages/workspace-backend/src",
+      ],
+      { cwd: repositoryRoot }
     );
     const paths = listing
       .split("\0")
@@ -414,7 +429,7 @@ describe("sensitive column values bound outside the column encoder", () => {
     const sources = await Promise.all(
       paths.map(async (path) => ({
         path,
-        text: await Bun.file(resolve(appRoot, path)).text(),
+        text: await Bun.file(resolve(repositoryRoot, path)).text(),
       }))
     );
     const findings = sources

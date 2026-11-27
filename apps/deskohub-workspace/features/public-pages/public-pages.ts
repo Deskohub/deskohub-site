@@ -32,6 +32,7 @@ export const publicPagePathnames = [
   "/reservation/cowork",
   "/reservation/meeting-room",
   "/reservation/office",
+  "/reservation/table",
 ] as const satisfies ReadonlyArray<
   "/" | LocalizedPagePathname<StaticLocalizedPageRoute>
 >;

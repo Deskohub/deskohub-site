@@ -3,6 +3,7 @@ import type {
   DotyposReservationId,
   DotyposReservationInterval,
 } from "@deskohub/dotypos";
+import { tableReservationSlotMinutes } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import {
   Array as Arr,
@@ -28,7 +29,7 @@ import {
   CoworkPassesReleaseGateForRun,
 } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
-  getBookingsWithPassDayIntents,
+  getBookingsWithCapacityClaims,
   observePassDayInventory,
 } from "@/features/passes/backend/pass-day-capacity-bookings";
 import { findMovablePassDays } from "@/features/passes/backend/pass-day-move-plan";
@@ -64,7 +65,18 @@ import {
   coworkReservationKind,
   meetingRoomReservationKind,
   officeReservationKind,
+  tableReservationKind,
 } from "@/features/reservation/reservation-kind";
+import type { TableReservationDetails } from "@/features/reservation/table-reservation";
+import { isTableReservationInterval } from "@/features/reservation/table-reservation-time";
+import {
+  evaluateTeamTableDay,
+  planAvailableTeamTable,
+} from "@/features/team-table/backend/team-table-availability";
+import { TeamTableInventory } from "@/features/team-table/backend/team-table-inventory";
+import type { TeamTablePlan } from "@/features/team-table/backend/team-table-plan";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
+import { TeamTableReleaseGateForRun } from "@/features/team-table/backend/team-table-release-gate-run";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
@@ -87,6 +99,9 @@ import {
   type MeetingRoomStartTimesQuery,
   type MeetingRoomUnavailableDates,
   type MeetingRoomUnavailableDatesQuery,
+  type TableSlotsAvailability,
+  type TableSlotsQuery,
+  type TableWorkspaceAvailabilityQuery,
   type WorkspaceAvailability,
   type WorkspaceAvailabilityNotice,
   type WorkspaceAvailabilityQuery,
@@ -109,6 +124,7 @@ import {
   GoogleCalendarWorkspaceLimitationsService,
   type WorkspaceCalendarLimitation as WorkspaceCalendarLimitationType,
 } from "./google-calendar-workspace-limitations.service";
+import { isTeamTableCapacityClaim } from "./open-space-move-capacity";
 import type { ReservationRecord } from "./reservation-record";
 import { WorkspaceReservationRepository } from "./workspace-reservation.repository";
 
@@ -120,6 +136,10 @@ export class AvailabilityQueryInvalid extends Data.TaggedError(
   "AvailabilityQueryInvalid"
 )<{ readonly message: string }> {}
 
+export class TeamTableAvailabilityClosed extends Data.TaggedError(
+  "TeamTableAvailabilityClosed"
+) {}
+
 /**
  * Why availability couldn't be computed: an invalid query, an inventory
  * read failure, or a Dotypos table without a valid seat capacity.
@@ -128,6 +148,7 @@ type AvailabilityError =
   | AvailabilityQueryInvalid
   | AvailabilityInventoryError
   | EffectDrizzleQueryError
+  | TeamTableAvailabilityClosed
   | InvalidDotyposTableSeats;
 
 export class WorkspaceTableUnavailableError extends Data.TaggedError(
@@ -171,7 +192,8 @@ export type AvailabilityReservation =
       MeetingRoomReservationDetails,
       "kind" | "startsAt" | "endsAt" | "earlySetup"
     >
-  | Pick<OfficeReservationDetails, "kind" | "startsOn" | "endsOn" | "seats">;
+  | Pick<OfficeReservationDetails, "kind" | "startsOn" | "endsOn" | "seats">
+  | TableReservationDetails;
 
 export interface IWorkspaceAvailabilityService {
   /**
@@ -191,6 +213,15 @@ export interface IWorkspaceAvailabilityService {
   readonly getMeetingRoomStartTimes: (
     input: MeetingRoomStartTimesRequest
   ) => Effect.Effect<MeetingRoomStartTimes, AvailabilityError>;
+  readonly getTableSlots: (
+    input: TableSlotsRequest
+  ) => Effect.Effect<TableSlotsAvailability, AvailabilityError>;
+  /** Check live inventory, optionally verifying one exact empty table. */
+  readonly getLiveTeamTablePlan: (
+    reservation: TableReservationDetails,
+    exactTableId?: TeamTablePlan["tableId"],
+    options?: TeamTablePlanOptions
+  ) => Effect.Effect<TeamTablePlan | undefined, AvailabilityError>;
   /**
    * Advisory meeting-room calendar: for each purchasable length the dates
    * without a free start of it, by the rules start times list them, from one
@@ -230,6 +261,16 @@ type MeetingRoomStartTimesRequest = {
   readonly occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion;
 };
 
+type TableSlotsRequest = {
+  readonly query: TableSlotsQuery;
+  readonly occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion;
+};
+
+type TeamTablePlanOptions = {
+  readonly displacedHoldIds?: readonly DotyposReservationId[];
+  readonly forExistingOrder?: true;
+};
+
 type MeetingRoomUnavailableDatesRequest = {
   readonly query: MeetingRoomUnavailableDatesQuery;
   readonly occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion;
@@ -240,6 +281,8 @@ const implementation = Effect.gen(function* () {
   const providerInventory = yield* makeProviderInventory;
   const workspaceReservations = yield* WorkspaceReservationRepository;
   const passGate = yield* Effect.serviceOption(CoworkPassesReleaseGate);
+  const teamTableGate = yield* Effect.serviceOption(TeamTableReleaseGate);
+  const teamTableInventory = yield* Effect.serviceOption(TeamTableInventory);
 
   const loadInventory = Effect.fn("workspaceAvailability.loadInventory")(
     function* (
@@ -248,7 +291,9 @@ const implementation = Effect.gen(function* () {
         /** The consecutive dates the inventory snapshot covers. */
         readonly dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>;
         readonly occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion;
+        readonly displacedHoldIds?: readonly DotyposReservationId[];
         readonly allowPassDayMove?: boolean;
+        readonly loadTeamTableBookings?: boolean;
       }
     ) {
       yield* Effect.logInfo("Workspace availability inventory load started");
@@ -256,15 +301,17 @@ const implementation = Effect.gen(function* () {
       const last = Arr.lastNonEmpty(input.dates);
       // The provider can list a hold as soon as it is attached. Read its
       // local intent first so it is visible on at least one side of the handover.
-      const passDayIntents =
-        yield* workspaceReservations.selectPendingPassDayCapacity({
-          first,
-          last,
-        });
+      const [passDayIntents, localTableClaims] = yield* Effect.all([
+        workspaceReservations.selectPendingPassDayCapacity({ first, last }),
+        workspaceReservations.selectLocalTableCapacity({ first, last }),
+      ]);
       // The shared snapshot omits notes and customer links. A live read is
       // needed to match these intents to provider holds without counting both.
       const reservationInventory =
-        passDayIntents.length > 0 ? providerInventory : inventory;
+        passDayIntents.length > 0 ||
+        localTableClaims.some((claim) => !isTeamTableCapacityClaim(claim))
+          ? providerInventory
+          : inventory;
       const readReservations: Effect.Effect<
         readonly (DotyposReservation | ReservationRecord)[],
         AvailabilityInventoryError
@@ -297,21 +344,19 @@ const implementation = Effect.gen(function* () {
       const expiredDotyposReservationIds =
         yield* Effect.fromResult(expiredIdsRead);
       const { reservations } = observations;
-      const replacementReservationId =
-        input.occupancyExclusion?.dotyposReservationId;
-      const replacementIsPending = reservations.some(
-        (reservation) =>
-          reservation.id === replacementReservationId &&
-          reservation.status === "NEW"
+      const requestedExclusions = new Set(input.displacedHoldIds);
+      if (input.occupancyExclusion)
+        requestedExclusions.add(input.occupancyExclusion.dotyposReservationId);
+      const pendingExclusions = new Set(
+        reservations
+          .filter(
+            ({ id, status }) => status === "NEW" && requestedExclusions.has(id)
+          )
+          .map(({ id }) => id)
       );
       const activeReservations = excludeDotyposReservationsById<
         DotyposReservation | ReservationRecord
-      >(reservations, [
-        ...expiredDotyposReservationIds,
-        ...(replacementIsPending && replacementReservationId
-          ? [replacementReservationId]
-          : []),
-      ]);
+      >(reservations, [...expiredDotyposReservationIds, ...pendingExclusions]);
       const movablePassDays =
         input.allowPassDayMove &&
         observations.passDayIntents.some(
@@ -338,12 +383,34 @@ const implementation = Effect.gen(function* () {
         })
       );
 
+      const capacityClaims = {
+        passDayIntents: observations.passDayIntents,
+        localTableClaims:
+          pendingExclusions.size > 0
+            ? localTableClaims.filter(
+                (claim) =>
+                  !isTeamTableCapacityClaim(claim) ||
+                  !claim.reservationId ||
+                  !pendingExclusions.has(claim.reservationId)
+              )
+            : localTableClaims,
+      };
+      const teamTableBookings =
+        input.loadTeamTableBookings && Option.isSome(teamTableInventory)
+          ? yield* teamTableInventory.value(
+              activeReservations,
+              capacityClaims,
+              yield* currentInstant
+            )
+          : [];
+
       return {
         tables,
-        bookings: getBookingsWithPassDayIntents(
+        bookings: getBookingsWithCapacityClaims(
           activeReservations,
-          observations.passDayIntents
+          capacityClaims
         ),
+        teamTableBookings,
         limitations,
         movablePassDays,
       };
@@ -397,7 +464,12 @@ const implementation = Effect.gen(function* () {
   )(
     function* (
       inventory: AvailabilityInventory,
-      input: WorkspaceAvailabilityRequest,
+      input: WorkspaceAvailabilityRequest & {
+        readonly query: Exclude<
+          WorkspaceAvailabilityQuery,
+          TableWorkspaceAvailabilityQuery
+        >;
+      },
       allowPassDayMove: boolean
     ) {
       const { query } = input;
@@ -480,11 +552,151 @@ const implementation = Effect.gen(function* () {
       )
   );
 
+  const requireTeamTable = Effect.fnUntraced(function* () {
+    if (
+      Option.isNone(teamTableGate) ||
+      Option.isNone(teamTableInventory) ||
+      !(yield* teamTableGate.value.isOpen)
+    )
+      return yield* new TeamTableAvailabilityClosed();
+  });
+
+  const loadTeamTableAvailability = Effect.fnUntraced(function* (
+    inventory: AvailabilityInventory,
+    dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>,
+    occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion,
+    displacedHoldIds?: readonly DotyposReservationId[]
+  ) {
+    const { tables, teamTableBookings, limitations } = yield* loadInventory(
+      inventory,
+      {
+        dates,
+        occupancyExclusion,
+        displacedHoldIds,
+        loadTeamTableBookings: true,
+      }
+    );
+    return {
+      tables,
+      bookings: teamTableBookings,
+      fullyOccupiedDates: getFullyOccupiedCalendarDates(limitations),
+      now: yield* currentInstant,
+      limitations,
+    };
+  });
+
+  const getTableCalendar = Effect.fn("workspaceAvailability.getTableCalendar")(
+    function* (
+      query: TableWorkspaceAvailabilityQuery,
+      occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion
+    ) {
+      yield* requireTeamTable();
+      const dates = yield* getCalendarDateRange(query);
+      const inventory = yield* loadTeamTableAvailability(
+        advisoryInventory,
+        getTeamTableInventoryDates(dates),
+        occupancyExclusion
+      );
+      const unavailableDates: string[] = [];
+      for (const date of dates) {
+        const result = yield* Effect.fromResult(
+          evaluateTeamTableDay(inventory, date, query.seats, true)
+        );
+        if (result.availableStarts.length === 0)
+          unavailableDates.push(date.toString());
+      }
+      return {
+        from: query.from,
+        to: query.to,
+        unavailableDates,
+        reservedDeskWorkstationRequiredDates: [],
+        unavailableCoworkTiers: [],
+        meetingRoomUnavailable: false,
+        officeUnavailable: false,
+        unavailableMonitorOptions: [],
+        notices: getCalendarNotices(inventory.limitations).filter(
+          ({ date }) => date >= query.from && date <= query.to
+        ),
+      } satisfies WorkspaceAvailability;
+    }
+  );
+
+  const getTableSlots = Effect.fn("workspaceAvailability.getTableSlots")(
+    function* ({ query, occupancyExclusion }: TableSlotsRequest) {
+      yield* requireTeamTable();
+      const date = yield* parsePlainDate(query.date);
+      const inventory = yield* loadTeamTableAvailability(
+        advisoryInventory,
+        getTeamTableInventoryDates([date]),
+        occupancyExclusion
+      );
+      const slots = yield* Effect.fromResult(
+        evaluateTeamTableDay(inventory, date, query.seats)
+      );
+      return {
+        date: query.date,
+        seats: query.seats,
+        slotMinutes: tableReservationSlotMinutes,
+        ...slots,
+      } satisfies TableSlotsAvailability;
+    }
+  );
+
+  const getLiveTeamTablePlan = Effect.fn(
+    "workspaceAvailability.getLiveTeamTablePlan"
+  )(function* (
+    reservation: TableReservationDetails,
+    exactTableId?: TeamTablePlan["tableId"],
+    options?: TeamTablePlanOptions
+  ) {
+    if (!options?.forExistingOrder) yield* requireTeamTable();
+    if (Option.isNone(teamTableInventory))
+      return yield* new TeamTableAvailabilityClosed();
+    if (!isTableReservationInterval(reservation)) {
+      return yield* new AvailabilityQueryInvalid({
+        message: "Invalid Team Table interval",
+      });
+    }
+    const { first, last } = getReservationDateBounds(reservation);
+    const dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate> = [
+      first,
+      ...getPlainDatesBetween(first.add({ days: 1 }), last),
+    ];
+    const inventory = yield* loadTeamTableAvailability(
+      providerInventory,
+      dates,
+      undefined,
+      options?.displacedHoldIds
+    );
+    return yield* Effect.fromResult(
+      planAvailableTeamTable(
+        exactTableId
+          ? {
+              ...inventory,
+              tables: inventory.tables.filter(({ id }) => id === exactTableId),
+            }
+          : inventory,
+        reservation,
+        reservation.seats
+      )
+    );
+  });
+
   const ensureAvailable = Effect.fn("workspaceAvailability.ensureAvailable")(
     function* (
       reservation: AvailabilityReservation,
       options?: { readonly allowPassDayMove: true }
     ) {
+      if (reservation.kind === tableReservationKind) {
+        const plan = yield* getLiveTeamTablePlan(reservation);
+        if (!plan) {
+          return yield* new WorkspaceTableUnavailableError({
+            date: getReservationDateBounds(reservation).first.toString(),
+            reservation: { kind: reservation.kind },
+          });
+        }
+        return;
+      }
       const query = yield* getAvailabilityEnsureQuery(reservation);
       yield* Effect.annotateLogsScoped(query);
       yield* Effect.logInfo("Workspace availability assurance started");
@@ -704,10 +916,18 @@ const implementation = Effect.gen(function* () {
   );
 
   return {
-    getAvailability: (input) =>
-      computeAvailability(advisoryInventory, input, true),
+    getAvailability: ({ query, occupancyExclusion }) =>
+      query.kind === tableReservationKind
+        ? getTableCalendar(query, occupancyExclusion)
+        : computeAvailability(
+            advisoryInventory,
+            { query, occupancyExclusion },
+            true
+          ),
     getMeetingRoomStartTimes,
     getMeetingRoomUnavailableDates,
+    getTableSlots,
+    getLiveTeamTablePlan,
     ensureAvailable,
   } satisfies IWorkspaceAvailabilityService;
 });
@@ -724,6 +944,10 @@ export class WorkspaceAvailabilityService extends Context.Service<
     Layer.provide(GoogleCalendarWorkspaceLimitationsService.Live),
     Layer.provide(WorkspaceDotyposLayer),
     Layer.provide(CoworkPassesReleaseGateForRun),
+    Layer.provide(TeamTableReleaseGateForRun),
+    Layer.provide(
+      TeamTableInventory.Default.pipe(Layer.provide(WorkspaceDatabase.Default))
+    ),
     Layer.provide(
       WorkspaceReservationRepository.Default.pipe(
         Layer.provide(WorkspaceDatabase.Default)
@@ -733,7 +957,9 @@ export class WorkspaceAvailabilityService extends Context.Service<
 }
 
 /** The occupancy query that decides whether a reservation is available. */
-const getAvailabilityEnsureQuery = (reservation: AvailabilityReservation) =>
+const getAvailabilityEnsureQuery = (
+  reservation: Exclude<AvailabilityReservation, TableReservationDetails>
+) =>
   Match.value(reservation).pipe(
     Match.discriminatorsExhaustive("kind")({
       cowork: (cowork) =>
@@ -961,7 +1187,7 @@ const getMeetingRoomInventoryDates = (
  * and for an overnight cowork stay through the date after its last arrival.
  */
 const getInventoryDates = (
-  query: WorkspaceAvailabilityQuery,
+  query: Exclude<WorkspaceAvailabilityQuery, TableWorkspaceAvailabilityQuery>,
   dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>
 ): Arr.NonEmptyReadonlyArray<Temporal.PlainDate> => {
   if (query.kind === coworkReservationKind) {
@@ -976,6 +1202,13 @@ const getInventoryDates = (
   );
   return meetingRoomDates.length > dates.length ? meetingRoomDates : dates;
 };
+
+const getTeamTableInventoryDates = (
+  dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>
+) =>
+  workspaceSiteConstants.openingHours.openSpaceUsableUntil == null
+    ? Arr.append(dates, Arr.lastNonEmpty(dates).add({ days: 1 }))
+    : dates;
 
 const getDateRangeReservationInterval = (
   dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>
@@ -1004,7 +1237,7 @@ const parsePlainDate = (date: string) =>
   });
 
 const getAvailabilityReservation = (
-  query: WorkspaceAvailabilityQuery
+  query: Exclude<WorkspaceAvailabilityQuery, TableWorkspaceAvailabilityQuery>
 ): Effect.Effect<ReservationInterval | undefined, AvailabilityQueryInvalid> =>
   Match.value(query).pipe(
     Match.discriminatorsExhaustive("kind")({

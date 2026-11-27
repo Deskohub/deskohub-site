@@ -1,7 +1,4 @@
-import type {
-  CustomerBookingSelection,
-  CustomerLegalDocument,
-} from "@deskohub/workspace-customer-api";
+import type { CustomerLegalDocument } from "@deskohub/workspace-customer-api";
 import Interpolate from "@doist/react-interpolate";
 import { DateTime, Option } from "effect";
 import CircleCheck from "lucide-react-native/icons/circle-check";
@@ -48,6 +45,10 @@ import {
   type ReviewState,
 } from "../checkout/checkout-state";
 import { usePaymentBrowserWarmUp } from "../payment-browser";
+import {
+  type BookingSelection,
+  isEntryPassBooking,
+} from "../selection/booking-selection";
 import type { CoworkOvernightStay } from "../selection/cowork-selection";
 import { type PragueDate, pragueMidnight } from "../selection/prague-date";
 import { BookingBar, type BookingBarAction } from "../ui/booking-bar";
@@ -95,7 +96,7 @@ export function ReviewStep({
   locale,
 }: Locale & {
   readonly review: ReviewState;
-  readonly selection: CustomerBookingSelection;
+  readonly selection: BookingSelection;
   /** An overnight Reserved Desk's times from the catalog. */
   readonly overnightStay?: CoworkOvernightStay | undefined;
   /** The total the selection screen quoted. */
@@ -218,7 +219,7 @@ export function ReviewStep({
                   />
                 </View>
               </Card>
-              {!view.retry && selection.funding?.kind !== "entry" && (
+              {!view.retry && !isEntryPassBooking(selection) && (
                 <View style={styles.code}>
                   <CodeRow code={view.code} send={send} locale={locale} />
                 </View>
@@ -266,7 +267,7 @@ export function ReviewStep({
  */
 const payAction = (
   view: ReviewView,
-  selection: CustomerBookingSelection,
+  selection: BookingSelection,
   send: Send,
   locale: AppLocale
 ): BookingBarAction => ({
@@ -279,13 +280,10 @@ const payAction = (
 
 const payLabel = (
   view: ReviewView,
-  selection: CustomerBookingSelection,
+  selection: BookingSelection,
   locale: AppLocale
 ) => {
-  if (
-    selection.funding?.kind === "entry" &&
-    view.price.breakdown.total.value === 0
-  ) {
+  if (isEntryPassBooking(selection) && view.price.breakdown.total.value === 0) {
     return m.booking_pass_redeem({}, { locale });
   }
   if (view.submitting) return m.booking_checkout_paying({}, { locale });
@@ -298,7 +296,7 @@ const payLabel = (
 };
 
 /** The booking's first day as a date tile. */
-const startDay = (selection: CustomerBookingSelection) => {
+const startDay = (selection: BookingSelection) => {
   const overview = bookingOverviewOf(selection, false);
   return overview._tag === "Office" ? overview.firstDate : overview.date;
 };
@@ -312,7 +310,7 @@ function BookingCard({
   invoice,
   locale,
 }: Locale & {
-  readonly selection: CustomerBookingSelection;
+  readonly selection: BookingSelection;
   /** The meeting room opens early for setup, as the customer chose. */
   readonly earlySetup: boolean;
   /** An overnight Reserved Desk's times from the catalog. */
@@ -359,7 +357,7 @@ function BookingCard({
   );
 }
 
-/** Who is coming to the office, read-only, and that each gets the PIN after paying. */
+/** Who is coming and when they get the door PIN. */
 function ReviewPeopleCard({
   people,
   locale,

@@ -8,7 +8,10 @@ import {
   unlimitedPassDays,
 } from "@/features/passes/pass-offer";
 import { formatPassDate } from "@/features/passes/pass-offer.i18n";
-import { withPassPurchaseAddons } from "@/features/passes/pass-purchase-quote";
+import {
+  catalogCoffeeAmountMinor,
+  withPassPurchaseCoffee,
+} from "@/features/passes/pass-purchase-quote";
 import { getUnlimitedPassChoosePath } from "@/features/passes/unlimited-pass-checkout";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
@@ -123,9 +126,9 @@ export const makeUnlimitedPassAutoRenewalCase = ({
   const lastDay = start.add({ days: unlimitedPassDays - 1 });
   const renewalDate = start.add({ days: unlimitedPassDays });
   const amount = formatMoney(
-    withPassPurchaseAddons(
+    withPassPurchaseCoffee(
       getUnlimitedPassPrice({ kind: "unlimited", tier }),
-      reviewLocale !== undefined
+      catalogCoffeeAmountMinor(reviewLocale !== undefined)
     ),
     locale
   );

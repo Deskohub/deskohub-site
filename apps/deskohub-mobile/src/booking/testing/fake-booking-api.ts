@@ -29,14 +29,19 @@ import {
   CustomerOfferingUnavailable,
   type CustomerOfficePeople,
   CustomerQuoteExpired,
+  CustomerReservationInviteeId,
+  CustomerReservationNotFound,
   CustomerReservationOrderId,
   type CustomerReservationSummary,
   CustomerSelectionUnavailable,
+  CustomerTeamTableInvitationRejected,
+  CustomerTeamTableUnavailable,
   customerReferralCodeHeader,
   type Money,
   ReferralCode,
   type SubmitCustomerCheckout,
   WorkspaceCustomerApi,
+  WorkspaceCustomerApiWithTeamTable,
 } from "@deskohub/workspace-customer-api";
 import { Effect, Match, Option } from "effect";
 import {
@@ -53,7 +58,10 @@ import {
   type SampleOrder,
   sampleInvoicePdf,
 } from "../../customer-api/testing/sample-fixtures";
-import { selectionKey } from "../selection/booking-selection";
+import {
+  type BookingSelection,
+  selectionKey,
+} from "../selection/booking-selection";
 import {
   addDays,
   addMonths,
@@ -66,12 +74,15 @@ import { issueFakePaymentPage } from "./fake-payment-gateway";
 import {
   inclusiveDays,
   pricedLines,
+  sampleBookableDates,
   sampleDiscountId,
   sampleEarlySetupStartsAt,
   sampleLegalDocuments,
   sampleOfferings,
   sampleOvernightStay,
   sampleSummary,
+  sampleTeamTableDuration,
+  sampleTeamTableOfferings,
 } from "./sample-booking-catalog";
 
 /**
@@ -140,7 +151,7 @@ export const fakeBookingCodes = {
 /** A held order as the fake keeps it. */
 export interface FakeBookingCheckout {
   readonly orderId: string;
-  readonly selection: CustomerBookingSelection;
+  readonly selection: BookingSelection;
   readonly locale: CustomerLocale;
   /** When the hold ends; no later step moves it. */
   readonly holdExpiresAt: Date;
@@ -164,6 +175,7 @@ const withdrawalPeriodDays = 14;
 
 /** The booking state and scripts of one fake Workspace. */
 export class FakeBookingApi {
+  tableSeats = [4, 6];
   /** Requests in arrival order, with what they sent. */
   readonly calls: FakeBookingCall[] = [];
   /** Dates nothing can be booked on. */
@@ -307,7 +319,7 @@ export class FakeBookingApi {
   }
 
   /** @internal Issues a quote token bound to the selection. */
-  issueQuoteToken(selection: CustomerBookingSelection) {
+  issueQuoteToken(selection: BookingSelection) {
     const key = selectionKey(selection);
     const token = `sq1.${fnv1a(key)}.${fnv1a(this.nextId("quote"))}`;
     this.quotes.set(token, key);
@@ -315,7 +327,7 @@ export class FakeBookingApi {
   }
 
   /** @internal Whether the token was issued for this selection. */
-  quoteMatches(token: string, selection: CustomerBookingSelection) {
+  quoteMatches(token: string, selection: BookingSelection) {
     return this.quotes.get(token) === selectionKey(selection);
   }
 
@@ -424,6 +436,203 @@ export class FakeBookingApi {
 const defaultChangedKeys: ChangedKeys = {
   sectionKeys: ["order", "total"],
   itemKeys: ["total:final"],
+};
+
+const sampleTableTimes = Array.from({ length: 33 }, (_, index) => {
+  const minute = 9 * 60 + index * 15;
+  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+});
+
+export const fakeTeamTableGroup = (workspace: FakeWorkspace) => {
+  const booking = fakeBooking(workspace);
+  const unavailable = () => new CustomerTeamTableUnavailable();
+  const requireSize = (seats: number) =>
+    Effect.suspend(() =>
+      booking.tableSeats.includes(seats)
+        ? Effect.void
+        : Effect.fail(unavailable())
+    );
+  const getOrder = (orderId: string) =>
+    Effect.suspend(() => {
+      const order = workspace.data.orders.get(orderId);
+      return order?.teamTable === undefined
+        ? Effect.fail(new CustomerReservationNotFound())
+        : Effect.succeed({ order, status: order.teamTable });
+    });
+  return HttpApiBuilder.group(
+    WorkspaceCustomerApiWithTeamTable,
+    "teamTable",
+    (handlers) =>
+      handlers
+        .handle("listOfferings", ({ query: { locale } }) =>
+          Effect.sync(() =>
+            sampleTeamTableOfferings(
+              locale,
+              booking.today(),
+              booking.tableSeats
+            )
+          )
+        )
+        .handle("getAvailability", ({ query: { seats, from, to } }) =>
+          requireSize(seats).pipe(
+            Effect.map(() => {
+              const { earliest, latest } = sampleBookableDates(
+                booking.today(),
+                "table"
+              );
+              return {
+                seats,
+                from: from ?? earliest,
+                to: to ?? latest,
+                unavailableDates: booking.unavailableDates,
+              };
+            })
+          )
+        )
+        .handle("getSlots", ({ query: { seats, date } }) =>
+          requireSize(seats).pipe(
+            Effect.map(() => {
+              const availableStarts = booking.unavailableDates.includes(date)
+                ? []
+                : sampleTableTimes.slice(0, -1);
+              return {
+                seats,
+                date,
+                slotMinutes: 15 as const,
+                usableFrom: "09:00",
+                usableUntil: "17:00",
+                availableStarts,
+                availableEndsByStart: availableStarts.map(
+                  (startTime, index) => ({
+                    startTime,
+                    endTimes: sampleTableTimes.slice(index + 1),
+                  })
+                ),
+              };
+            })
+          )
+        )
+        .handle("getQuote", ({ query: { locale: _locale, ...query } }) =>
+          requireSize(query.seats).pipe(
+            Effect.filterOrFail(
+              () => !booking.unavailableDates.includes(query.date),
+              () =>
+                new CustomerSelectionUnavailable({
+                  reason: "availability_changed",
+                })
+            ),
+            Effect.map(() => {
+              const selection = { family: "table" as const, ...query };
+              const summary = sampleSummary({ lines: pricedLines(selection) });
+              return {
+                family: "table" as const,
+                product: {
+                  kind: "table" as const,
+                  seats: query.seats,
+                  durationMinutes: sampleTeamTableDuration(selection),
+                },
+                total: summary.total,
+                regularPrice: summary.total,
+                discount: { ...summary.total, value: 0 },
+                quotedAt: booking.now().toISOString(),
+                summary,
+                advertisedPriceToken: booking.issueQuoteToken(selection),
+              };
+            })
+          )
+        )
+        .handle("createCheckout", ({ payload, request }) =>
+          requireSize(payload.selection.seats).pipe(
+            Effect.andThen(
+              createCheckout({
+                booking,
+                workspace,
+                payload,
+                remembered: request.headers[customerReferralCodeHeader],
+                scripted: undefined,
+              }).pipe(
+                Effect.catchTag("CustomerOfferingUnavailable", () =>
+                  Effect.fail(unavailable())
+                )
+              )
+            )
+          )
+        )
+        .handle("getStatus", ({ params: { orderId } }) =>
+          getOrder(orderId).pipe(Effect.map(({ status }) => status))
+        )
+        .handle("addInvitees", ({ params: { orderId }, payload: { emails } }) =>
+          Effect.gen(function* () {
+            const { order, status } = yield* getOrder(orderId);
+            if (status.status !== "fulfilled" || status.people === undefined) {
+              return yield* new CustomerTeamTableInvitationRejected({
+                reason: "not-confirmed",
+              });
+            }
+            const now = booking.now();
+            if (
+              status.endsAt === undefined ||
+              Date.parse(status.endsAt) <= now.getTime()
+            ) {
+              return yield* new CustomerTeamTableInvitationRejected({
+                reason: "ended",
+              });
+            }
+            const { contactAttends, invitees } = status.people;
+            const normalized = emails.map((email) =>
+              email.trim().toLowerCase()
+            );
+            const existing = [
+              workspace.data.account.email,
+              ...invitees.map(({ email }) => email),
+            ].map((email) => email.toLowerCase());
+            if (
+              normalized.some(
+                (email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+              )
+            ) {
+              return yield* new CustomerTeamTableInvitationRejected({
+                reason: "invalid-email",
+              });
+            }
+            if (
+              new Set([...existing, ...normalized]).size <
+              existing.length + normalized.length
+            ) {
+              return yield* new CustomerTeamTableInvitationRejected({
+                reason: "duplicate",
+              });
+            }
+            if (
+              Number(contactAttends) + invitees.length + normalized.length >
+              (status.product?.seats ?? 0)
+            ) {
+              return yield* new CustomerTeamTableInvitationRejected({
+                reason: "capacity",
+              });
+            }
+            const added = normalized.map((email, index) => ({
+              email,
+              id: CustomerReservationInviteeId.make(
+                `sample-added-${invitees.length + index}`
+              ),
+              invitationSentAt: now.toISOString(),
+            }));
+            const updated = {
+              ...status,
+              people: { ...status.people, invitees: [...invitees, ...added] },
+            };
+            workspace.data = {
+              ...workspace.data,
+              orders: new Map(workspace.data.orders).set(orderId, {
+                ...order,
+                teamTable: updated,
+              }),
+            };
+            return { added: added.length };
+          })
+        )
+  );
 };
 
 const states = new WeakMap<FakeWorkspace, FakeBookingApi>();
@@ -686,7 +895,9 @@ const answerCheckout = (
 interface CreateCheckoutInput {
   readonly workspace: FakeWorkspace;
   readonly booking: FakeBookingApi;
-  readonly payload: CreateCustomerCheckout;
+  readonly payload: Omit<CreateCustomerCheckout, "selection"> & {
+    readonly selection: BookingSelection;
+  };
   /** The `x-deskohub-referral-code` header, when sent. */
   readonly remembered: string | undefined;
   readonly scripted: OwnFlowScript | undefined;
@@ -1064,16 +1275,60 @@ const bookedReservation = (
   const { startsAt, endsAt } = bookedTimes(selection);
   const orderId = CustomerReservationOrderId.make(checkout.orderId);
   const fulfilled = status === "fulfilled";
+  const teamTable =
+    selection.family === "table"
+      ? {
+          kind: "table" as const,
+          seats: selection.seats,
+          durationMinutes: sampleTeamTableDuration(selection),
+        }
+      : undefined;
+  const timing = { orderId, ...bookedStates[status], startsAt, endsAt, total };
+  const tableName = "Sample table";
+  let product: CustomerReservationSummary["product"];
+  if (selection.family === "table") {
+    product = {
+      kind: "other",
+      family: "table",
+      ...(teamTable && { teamTable }),
+    };
+  } else if (selection.family === "cowork") {
+    product = { kind: "cowork", tier: selection.tier ?? "open-space" };
+  } else {
+    product = { kind: selection.family };
+  }
   return {
     order: {
       state: {
-        orderId,
-        kind: selection.family,
-        ...bookedStates[status],
-        startsAt,
-        endsAt,
-        total,
+        ...timing,
+        kind: selection.family === "table" ? "office" : selection.family,
       },
+      ...(teamTable === undefined
+        ? {}
+        : {
+            teamTable: {
+              ...timing,
+              kind: "table" as const,
+              product: teamTable,
+              ...(fulfilled && { tableName }),
+              ...(checkout.people === undefined
+                ? {}
+                : {
+                    people: {
+                      contactAttends: checkout.people.contactAttends,
+                      invitees: checkout.people.invitees.map(
+                        (email, index) => ({
+                          id: CustomerReservationInviteeId.make(
+                            `sample-invitee-${index}`
+                          ),
+                          email,
+                          invitationSentAt: null,
+                        })
+                      ),
+                    },
+                  }),
+            },
+          }),
       ...(fulfilled
         ? {
             access: {
@@ -1084,6 +1339,7 @@ const bookedReservation = (
               accessEndsAt: new Date(
                 Date.parse(endsAt) + accessMargin
               ).toISOString(),
+              ...(teamTable !== undefined && { tableName }),
             },
           }
         : {}),
@@ -1092,10 +1348,7 @@ const bookedReservation = (
     row: {
       id: `sample-reservation-${checkout.orderId}`,
       orderId,
-      product:
-        selection.family === "cowork"
-          ? { kind: "cowork", tier: selection.tier ?? "open-space" }
-          : { kind: selection.family },
+      product,
       startsAt,
       endsAt,
       seats:
@@ -1111,7 +1364,17 @@ const bookedReservation = (
  * day, else whole Prague days (23 or 25 hours across a daylight-saving
  * change) through the last booked date.
  */
-export const bookedTimes = (selection: CustomerBookingSelection) => {
+export const bookedTimes = (selection: BookingSelection) => {
+  if (selection.family === "table") {
+    const { date, startTime, endTime } = selection;
+    return {
+      startsAt: pragueInstant(date, startTime),
+      endsAt: pragueInstant(
+        endTime <= startTime ? addDays(date, 1) : date,
+        endTime
+      ),
+    };
+  }
   if (selection.family === "cowork" && selection.stay === "overnight") {
     return {
       startsAt: pragueInstant(selection.date, sampleOvernightStay.startTime),
@@ -1223,10 +1486,13 @@ const checkoutOf = (
 /** Checks a selection the way the booking pages accept it. */
 const checkedSelection = Effect.fn("FakeBooking.checkedSelection")(function* (
   booking: FakeBookingApi,
-  selection: CustomerBookingSelection
+  selection: BookingSelection
 ) {
   const today = booking.today();
-  const latest = addDays(today, selection.family === "office" ? 31 : 183);
+  const latest =
+    selection.family === "table"
+      ? sampleBookableDates(today, "table").latest
+      : addDays(today, selection.family === "office" ? 31 : 183);
   if (selection.family === "cowork" && selection.tier === undefined) {
     return yield* new CustomerBookingSelectionInvalid({ field: "tier" });
   }
@@ -1241,7 +1507,10 @@ const checkedSelection = Effect.fn("FakeBooking.checkedSelection")(function* (
   if (selection.family === "office" && booking.officeClosed) {
     return yield* new CustomerOfferingUnavailable({ family: "office" });
   }
-  const last = selection.endDate ?? selection.date;
+  const last =
+    selection.family === "table"
+      ? selection.date
+      : (selection.endDate ?? selection.date);
   if (selection.date < today || last > latest || last < selection.date) {
     return yield* new CustomerBookingDateOutOfRange({
       earliest: today,

@@ -11,7 +11,10 @@ import { type PublicPagePathname, publicPagePathnames } from "./public-pages";
 // modules.
 
 /** Release gate that decides whether production serves a gated page. */
-export type PublicPageReleaseGate = "meeting-room-page" | "office-page";
+export type PublicPageReleaseGate =
+  | "meeting-room-page"
+  | "office-page"
+  | "team-table-page";
 
 export interface PublicPageDefinition {
   /**
@@ -67,12 +70,12 @@ export const publicPageDefinitions: Readonly<
   "/": {
     title: m.landingMetadataTitle,
     description: m.landingMetadataDescription,
-    contentDate: "2026-11-18",
+    contentDate: "2026-11-27",
   },
   "/coworking": {
     title: m.coworkingMetadataTitle,
     description: m.coworkingMetadataDescription,
-    contentDate: "2026-10-25",
+    contentDate: "2026-11-27",
   },
   "/contact": {
     title: m.contactMetadataTitle,
@@ -82,7 +85,7 @@ export const publicPageDefinitions: Readonly<
   "/faq": {
     title: m.faqMetadataTitle,
     description: m.faqMetadataDescription,
-    contentDate: "2026-11-26",
+    contentDate: "2026-11-27",
   },
   "/ai-assistants": {
     title: m.aiAssistantsMetadataTitle,
@@ -97,7 +100,7 @@ export const publicPageDefinitions: Readonly<
   "/pricing": {
     title: m.pricingMetadataTitle,
     description: m.pricingMetadataDescription,
-    contentDate: "2026-11-26",
+    contentDate: "2026-11-27",
   },
   "/meeting-room": {
     title: m.meetingRoomMetadataTitle,
@@ -120,10 +123,10 @@ export const publicPageDefinitions: Readonly<
     description: m.ttrpgRoomMetadataDescription,
     contentDate: "2026-10-25",
   },
-  "/terms-and-conditions": legalPage("terms-and-conditions", "2026-11-27"),
-  "/privacy-policy": legalPage("privacy-policy", "2026-11-18"),
+  "/terms-and-conditions": legalPage("terms-and-conditions", "2026-12-01"),
+  "/privacy-policy": legalPage("privacy-policy", "2026-12-01"),
   "/cookie-policy": legalPage("cookie-policy", "2026-11-19"),
-  "/operating-rules": legalPage("operating-rules", "2026-08-12"),
+  "/operating-rules": legalPage("operating-rules", "2026-12-01"),
   "/marketing-communications": legalPage(
     "marketing-communications",
     "2026-08-05"
@@ -131,7 +134,7 @@ export const publicPageDefinitions: Readonly<
   "/reservation/cowork": {
     title: m.reservationCoworkMetadataTitle,
     description: m.reservationCoworkMetadataDescription,
-    contentDate: "2026-10-25",
+    contentDate: "2026-11-27",
   },
   "/reservation/meeting-room": {
     title: m.reservationMeetingRoomMetadataTitle,
@@ -143,6 +146,12 @@ export const publicPageDefinitions: Readonly<
     description: m.reservationOfficeMetadataDescription,
     contentDate: "2026-11-18",
     releaseGate: "office-page",
+  },
+  "/reservation/table": {
+    title: m.reservationTableProductTitle,
+    description: m.reservationTableMetadataDescription,
+    contentDate: "2026-11-27",
+    releaseGate: "team-table-page",
   },
 };
 

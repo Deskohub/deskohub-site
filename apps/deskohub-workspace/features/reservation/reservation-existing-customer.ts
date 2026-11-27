@@ -33,6 +33,10 @@ export type CustomerLastReservation =
       readonly kind: "office";
       readonly dayCount: number;
       readonly seats: number;
+    }
+  | {
+      readonly kind: "table";
+      readonly seats: number;
     };
 
 export type CustomerLastReservationForKind<

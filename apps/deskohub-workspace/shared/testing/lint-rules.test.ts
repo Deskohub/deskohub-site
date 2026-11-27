@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Schema } from "effect";
 import { commandOutput, runCommand } from "@/scripts/shared/command";
+import { biomeFixtureConfig, readBiomeConfig } from "./biome-config.test-utils";
 import { decodeJson, readJsonFile } from "./json-file.test-utils";
 
 const repositoryRoot = fileURLToPath(new URL("../../../..", import.meta.url));
@@ -26,25 +27,8 @@ const LintMessageReport = Schema.Struct({
   ),
 });
 
-// The fixture configs copy the repository's, so its other keys stay.
-const OpenRecord = Schema.Record(Schema.String, Schema.Unknown);
-
-const repositoryConfig = readJsonFile(
-  Schema.StructWithRest(
-    Schema.Struct({
-      plugins: Schema.Array(Schema.String),
-      overrides: Schema.Array(
-        Schema.StructWithRest(
-          Schema.Struct({ includes: Schema.Array(Schema.String) }),
-          [OpenRecord]
-        )
-      ),
-    }),
-    [OpenRecord]
-  ),
-  join(repositoryRoot, "biome.json"),
-  "Biome config"
-);
+const repositoryConfig = readBiomeConfig(repositoryRoot);
+const fixtureConfig = biomeFixtureConfig(repositoryRoot, repositoryConfig);
 
 // Every case lives in its own `case-<n>/` directory beside its siblings, so the
 // repository's path-scoped overrides gain one leading directory segment.
@@ -54,8 +38,8 @@ const caseScoped = (glob: string) =>
 // biome-ignore format: compact configuration literal.
 writeFileSync(config, JSON.stringify({
   linter: { enabled: true, rules: { style: { noNonNullAssertion: "off" } } },
-  plugins: repositoryConfig.plugins.map((plugin) => join(repositoryRoot, plugin)),
-  overrides: repositoryConfig.overrides.map((override) => ({ ...override, includes: override.includes.map(caseScoped) })),
+  plugins: fixtureConfig.plugins,
+  overrides: fixtureConfig.overrides.map((override) => ({ ...override, includes: override.includes.map(caseScoped) })),
 }));
 
 type Row = readonly [string, string, boolean, string?];
@@ -1184,7 +1168,6 @@ test("no-promise-matchers-in-browser-tests holds across Workspace browser tests"
 // The corpus above lints with Biome's default file set, so these cases lint a
 // copy of the repository layout with the production `files.includes` and run
 // a package's own `lint` script from its directory, the way Turbo runs it.
-const productionRoot = join(fixtureRoot, "production");
 const assertionProbe =
   "export const probe = (input?: string) => input! as string;\n";
 const productionProbes = [
@@ -1230,7 +1213,22 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/discounts/probe.fixture.ts",
   "apps/deskohub-workspace/features/passes/probe-fixture.ts",
   "apps/deskohub-workspace/features/referrals/backend/testing/probe.ts",
+  "apps/deskohub-workspace/features/reservation/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/administration/probe.test.tsx",
+  "apps/deskohub-workspace/features/administration/testing/probe.ts",
+  "apps/deskohub-workspace/features/reservation/backend/testing/probe.ts",
+  "apps/deskohub-workspace/features/account/backend/probe.ts",
+  "apps/deskohub-workspace/features/email-campaigns/automation/probe.ts",
   "apps/deskohub-workspace/features/checkout/product-catalog.ts",
+  "apps/deskohub-workspace/features/checkout/actions/probe.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/analytics/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/fio/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/repositories/probe.test-utils.ts",
+  "apps/deskohub-workspace/features/checkout/backend/repositories/testing/probe.ts",
+  "apps/deskohub-workspace/features/checkout/backend/reservation/probe.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/reservation/testing/probe.fixture.ts",
+  "apps/deskohub-workspace/features/checkout/checkout-quote.test.ts",
+  "apps/deskohub-workspace/features/checkout/workspace-table-map.test.ts",
 ];
 const generatedProbes = [
   "packages/standard-schema/generated/probe.mts",
@@ -1238,11 +1236,11 @@ const generatedProbes = [
 ];
 // Remaining large-feature tests, fixtures, testing helpers, generated files, and E2E may still assert.
 const workspaceExemptProbes = [
-  "apps/deskohub-workspace/features/reservation/probe.postgres.test.ts",
-  "apps/deskohub-workspace/features/reservation/backend/testing/probe.ts",
-  "apps/deskohub-workspace/features/administration/testing/probe.ts",
   "apps/deskohub-workspace/e2e/probe.ts",
   "apps/deskohub-workspace/features/checkout/probe.test.ts",
+  "apps/deskohub-workspace/features/checkout/components/probe.test.tsx",
+  "apps/deskohub-workspace/features/checkout/backend/payment/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/repositories/generated/probe.ts",
   "apps/deskohub-workspace/features/checkout/probe.postgres.test.ts",
   "apps/deskohub-workspace/features/checkout/probe.spec.ts",
   "apps/deskohub-workspace/features/checkout/probe.pw.ts",
@@ -1306,6 +1304,7 @@ const lintProduction = async (cwd: string, command: string) => {
 };
 
 const expectAssertionDiagnostics = (
+  productionRoot: string,
   byPath: Map<string, string[]>,
   rejected: readonly string[],
   exempt: readonly string[]
@@ -1335,65 +1334,68 @@ const expectAssertionDiagnostics = (
   }
 };
 
-test("production Biome config rejects package and Workspace production assertions from the root and from each lint script", async () => {
-  writeCase(
-    "production",
-    "biome.json",
-    JSON.stringify({
-      ...repositoryConfig,
-      vcs: { enabled: false },
-      plugins: repositoryConfig.plugins.map((plugin) =>
-        join(repositoryRoot, plugin)
-      ),
-    })
-  );
-  for (const probe of [
-    ...productionProbes,
-    ...generatedProbes,
-    ...workspaceProductionProbes,
-    ...workspaceExemptProbes,
-  ]) {
-    writeCase("production", probe, assertionProbe);
-  }
-  // The Workspace lint script resolves the root config through git.
-  await runCommand(["git", "init", "--quiet"], { cwd: productionRoot });
-  const packageManifest = readJsonFile(
-    Schema.Struct({ scripts: Schema.Struct({ lint: Schema.String }) }),
-    join(repositoryRoot, "packages/standard-schema/package.json"),
-    "package manifest"
-  );
+// Directory names above the checkout must not be treated as generated code.
+test.each([
+  "packages/generated/testing/production",
+  "apps/deskohub-workspace/paraglide/testing/production",
+])(
+  "production Biome config rejects assertions from the root and each lint script in %s",
+  async (productionFixture) => {
+    const productionRoot = join(fixtureRoot, productionFixture);
+    writeCase(productionFixture, "biome.json", JSON.stringify(fixtureConfig));
+    for (const probe of [
+      ...productionProbes,
+      ...generatedProbes,
+      ...workspaceProductionProbes,
+      ...workspaceExemptProbes,
+    ]) {
+      writeCase(productionFixture, probe, assertionProbe);
+    }
+    // The Workspace lint script resolves the root config through git.
+    await runCommand(["git", "init", "--quiet"], { cwd: productionRoot });
+    const packageManifest = readJsonFile(
+      Schema.Struct({ scripts: Schema.Struct({ lint: Schema.String }) }),
+      join(repositoryRoot, "packages/standard-schema/package.json"),
+      "package manifest"
+    );
 
-  const workspaceManifest = readJsonFile(
-    Schema.Struct({ scripts: Schema.Struct({ "lint:biome": Schema.String }) }),
-    join(repositoryRoot, "apps/deskohub-workspace/package.json"),
-    "package manifest"
-  );
+    const workspaceManifest = readJsonFile(
+      Schema.Struct({
+        scripts: Schema.Struct({ "lint:biome": Schema.String }),
+      }),
+      join(repositoryRoot, "apps/deskohub-workspace/package.json"),
+      "package manifest"
+    );
 
-  expectAssertionDiagnostics(
-    await lintProduction(
+    expectAssertionDiagnostics(
       productionRoot,
-      "biome lint packages apps/deskohub-workspace"
-    ),
-    [...productionProbes, ...workspaceProductionProbes],
-    [...generatedProbes, ...workspaceExemptProbes]
-  );
-  expectAssertionDiagnostics(
-    await lintProduction(
-      join(productionRoot, "packages/standard-schema"),
-      packageManifest.scripts.lint
-    ),
-    productionProbes,
-    generatedProbes
-  );
-  expectAssertionDiagnostics(
-    await lintProduction(
-      join(productionRoot, "apps/deskohub-workspace"),
-      workspaceManifest.scripts["lint:biome"]
-    ),
-    workspaceProductionProbes,
-    workspaceExemptProbes
-  );
-});
+      await lintProduction(
+        productionRoot,
+        "biome lint packages apps/deskohub-workspace"
+      ),
+      [...productionProbes, ...workspaceProductionProbes],
+      [...generatedProbes, ...workspaceExemptProbes]
+    );
+    expectAssertionDiagnostics(
+      productionRoot,
+      await lintProduction(
+        join(productionRoot, "packages/standard-schema"),
+        packageManifest.scripts.lint
+      ),
+      productionProbes,
+      generatedProbes
+    );
+    expectAssertionDiagnostics(
+      productionRoot,
+      await lintProduction(
+        join(productionRoot, "apps/deskohub-workspace"),
+        workspaceManifest.scripts["lint:biome"]
+      ),
+      workspaceProductionProbes,
+      workspaceExemptProbes
+    );
+  }
+);
 
 test("package lint scripts resolve the root Biome config by discovery", async () => {
   // A relative --config-path makes Biome 2.5 match override globs against
@@ -1447,8 +1449,9 @@ test("lint caches miss when the Biome config or a Grit plugin changes", () => {
   );
   // `lint/*.grit` covers a plugin only when it sits directly in `lint/`.
   expect(
-    repositoryConfig.plugins.filter(
-      (plugin) => !/^\.\/lint\/[^/]+\.grit$/.test(plugin)
-    )
+    [
+      ...repositoryConfig.plugins,
+      ...repositoryConfig.overrides.flatMap(({ plugins }) => plugins ?? []),
+    ].filter((plugin) => !/^\.\/lint\/[^/]+\.grit$/.test(plugin))
   ).toEqual([]);
 });

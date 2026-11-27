@@ -1,6 +1,7 @@
 import type {
   CustomerOrderState,
   CustomerOrderStatus,
+  CustomerTeamTableStatus,
 } from "@deskohub/workspace-customer-api";
 import { type Cause, Effect, Option, Queue, Ref, Result, Stream } from "effect";
 import { allowsAutomaticRefresh } from "../../customer-api/account-read-budget";
@@ -17,10 +18,12 @@ import {
   type StatusVisit,
 } from "./status-refresh-rules";
 
+export type ReservationOrder = CustomerOrderState | CustomerTeamTableStatus;
+
 /** What the status screen shows while it keeps an order up to date. */
 export interface StatusRefreshState {
   /** The order as last read. */
-  readonly order: CustomerOrderState;
+  readonly order: ReservationOrder;
   /** A read is under way. */
   readonly reading: boolean;
   /** When the screen reads the order again on its own, or why it stopped. */
@@ -37,7 +40,7 @@ export const canRefreshManually = (state: StatusRefreshState) =>
 
 export interface StatusRefreshInput<R> {
   /** One status read; each one refreshes the order and spends the budget. */
-  readonly read: Effect.Effect<CustomerOrderState, CustomerRequestFailure, R>;
+  readonly read: Effect.Effect<ReservationOrder, CustomerRequestFailure, R>;
   /** The advisory number of reads left. */
   readonly remainingBudget: Effect.Effect<number, never, R>;
   readonly visit: StatusVisit;
@@ -66,7 +69,7 @@ export interface StatusRefreshInput<R> {
 const stopReasonOf = (failure: CustomerViewError): AutomaticRefreshStop =>
   CustomerViewError.$is("RateLimited")(failure) ? "limited" : "failed";
 
-const firstState = (order: CustomerOrderState): StatusRefreshState => ({
+const firstState = (order: ReservationOrder): StatusRefreshState => ({
   order,
   reading: false,
   automatic: AutomaticRefresh.Stopped({ reason: "settled" }),

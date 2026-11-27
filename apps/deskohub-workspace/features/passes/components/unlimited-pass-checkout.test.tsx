@@ -174,7 +174,9 @@ test("auto renewal carries the choice through Details and requires each applicab
   expect(
     view.getByRole("link", { name: "auto-renewal terms" }).getAttribute("href")
   ).toBe(renewalDisclosure.termsPath);
-  const passesLink = view.getByRole("link", { name: /Account.*Passes/ });
+  const passesLink = view.getByRole("link", {
+    name: `Account → ${m.accountSectionPasses({}, { locale })}`,
+  });
   expect(passesLink.getAttribute("href")).toBe("/en-US/account/passes");
   expect(passesLink.getAttribute("target")).toBe("_blank");
   expect(passesLink.getAttribute("rel")).toBe("noreferrer");
@@ -436,8 +438,13 @@ test("Continue uses the selected tier's full-window starts and discards irreleva
     view.getByRole("switch", { name: /coffee for 30 days/i })
   ).toBeDefined();
   fireEvent.click(view.getByRole("switch"));
+  const reservedDesk = m.passTierReservedDesk({}, { locale });
+  const workstation = m.passTierWorkstation({}, { locale });
   fireEvent.click(
-    view.getByRole("radio", { name: /^reserved desk (?!\+ workstation)/i })
+    view.getByRole("radio", {
+      name: (name) =>
+        name.startsWith(reservedDesk) && !name.startsWith(workstation),
+    })
   );
   expect(view.queryByRole("switch")).toBeNull();
   expect(view.queryByText(/same monitor setup/i)).toBeNull();
@@ -447,7 +454,7 @@ test("Continue uses the selected tier's full-window starts and discards irreleva
   expect(continueButton.disabled).toBe(true);
 
   fireEvent.click(
-    view.getByRole("radio", { name: /reserved desk \+ workstation/i })
+    view.getByRole("radio", { name: (name) => name.startsWith(workstation) })
   );
   expect(continueButton.disabled).toBe(true);
   fireEvent.click(view.getByRole("button", { name: /November 1st, 2026/i }));
@@ -468,7 +475,7 @@ test("Continue uses the selected tier's full-window starts and discards irreleva
   fireEvent.click(view.getByRole("button", { name: /November 2nd, 2026/i }));
   expect(continueButton.disabled).toBe(false);
   fireEvent.click(continueButton);
-  expect(view.getByText("Reserved Desk + workstation")).toBeDefined();
+  expect(view.getByText(workstation)).toBeDefined();
 });
 
 test.each([false, true])(
@@ -741,7 +748,7 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
     );
     fireEvent.click(view.getByRole("button", { name: /continue/i }));
     const alert = await view.findByText(
-      "Your membership can’t cover Nov 2, 2026 in the renewal period."
+      "Your membership can’t cover Nov 2, 2026 during the extension."
     );
     expect(alert.getAttribute("role")).toBe("alert");
     const { searchParams } = checkoutUrl();
@@ -798,7 +805,7 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
     fireEvent.click(view.getByRole("button", { name: /continue/i }));
     await waitFor(() =>
       expect(
-        view.getByText(/membership can’t cover Nov 2, 2026/i)
+        view.getByText(/membership can’t cover these dates: Nov 2, 2026/i)
       ).toBeDefined()
     );
     expect(requests).toEqual([
@@ -1494,7 +1501,7 @@ test("Details cannot hand off another selection while Begin is creating holds", 
   fireEvent.click(submit);
   await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(1));
   expect(
-    view.queryByRole("button", { name: /choose your 30 days/i })
+    view.queryByRole("button", { name: /space and start date/i })
   ).toBeNull();
   expect(
     view.getByRole<HTMLButtonElement>("button", {
@@ -1511,7 +1518,7 @@ test("Details cannot hand off another selection while Begin is creating holds", 
   });
   await waitFor(() =>
     expect(
-      view.getByRole("button", { name: /choose your 30 days/i })
+      view.getByRole("button", { name: /space and start date/i })
     ).toBeDefined()
   );
 });
@@ -1721,7 +1728,7 @@ test("Refresh quote at the predecessor limit clears a voided draft and lets the 
   );
   cutoffReached = true;
   fireEvent.click(view.getByRole("button", { name: /continue/i }));
-  await view.findByText(/membership can’t cover Nov 1, 2026/i);
+  await view.findByText(/membership can’t cover these dates: Nov 1, 2026/i);
   expect(beginCheckout).toHaveBeenLastCalledWith(
     expect.objectContaining({ orderId, supersedeOrderIds: predecessorOrderIds })
   );

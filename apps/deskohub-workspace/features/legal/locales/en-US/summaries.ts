@@ -14,7 +14,7 @@ export const legalDocumentSummaries = {
   },
   "terms-and-conditions": {
     title: "General Terms and Conditions",
-    lead: "These General Terms and Conditions govern coworking entries and online meeting-room and private-office bookings at Deskohub Workspace.",
+    lead: "These General Terms and Conditions govern coworking entries and online bookings of the meeting room, private office, and Team Table at Deskohub Workspace.",
   },
   "cookie-policy": {
     title: "Cookie Policy",
@@ -22,6 +22,6 @@ export const legalDocumentSummaries = {
   },
   "operating-rules": {
     title: "House Rules",
-    lead: "These House Rules govern conduct and the use of Deskohub Workspace coworking spaces, meeting room, private office, and event spaces.",
+    lead: "These House Rules govern conduct and the use of Deskohub Workspace coworking spaces, meeting room, private office, and event spaces. They also cover how to share Open Space and when to move to another seat for a Team Table booking.",
   },
 } satisfies Record<LegalDocumentKey, LegalDocumentSummary>;

@@ -3,8 +3,7 @@ import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
 import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
-import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
-import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
+import { AccountingStorage } from "@/features/accounting/backend/accounting-storage";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
@@ -44,15 +43,6 @@ const availability = Layer.mergeAll(
 
 const begin = Layer.mergeAll(buyerCheckout, availability);
 
-const accountingSnapshots = AccountingDocumentSnapshots.Default.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      WorkspaceDatabase.Default,
-      AccountingSnapshotKeyService.Default
-    )
-  )
-);
-
 /** Purchase dependencies that use the authentication supplied by the caller. */
 export const customerPassPurchaseLayers = {
   begin,
@@ -61,7 +51,7 @@ export const customerPassPurchaseLayers = {
   availability,
   payment: Layer.mergeAll(
     buyerCheckout,
-    accountingSnapshots,
+    AccountingStorage.Live,
     OrderPaymentHandlers.Live,
     LatePaymentVerificationService.Live,
     LegalEvidenceEventRepository.Live,
@@ -71,7 +61,7 @@ export const customerPassPurchaseLayers = {
   ),
   status: Layer.mergeAll(
     WorkspaceDatabase.Default,
-    accountingSnapshots,
+    AccountingStorage.Live,
     WorkspaceFeatureFlagService.Default,
     ProviderPaymentFinalizationService.Live,
     LatePaymentVerificationService.Live

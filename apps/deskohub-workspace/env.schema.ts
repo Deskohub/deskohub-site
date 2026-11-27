@@ -19,7 +19,7 @@ import {
   vercelEnvironmentSchema,
 } from "./features/feature-flags/feature-flag-overrides.schema";
 import {
-  postHogLogsExportSchema,
+  postHogExportPolicySchema,
   workspaceLogFormatSchema,
   workspaceLogLevelSchema,
 } from "./shared/backend/observability/telemetry-policy";
@@ -67,26 +67,6 @@ const originSchema = urlStringSchema.check(
   Schema.makeFilter(
     (value) => URL.canParse(value) && new URL(value).origin === value,
     { expected: "an origin such as https://workspace.example, without a path" }
-  )
-);
-
-const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
-
-/**
- * A collector the process reaches over plain HTTP on its own host, such as
- * a Cloud Run sidecar. Spans leave unencrypted, so no other host qualifies.
- */
-const loopbackHttpUrlSchema = urlStringSchema.check(
-  Schema.makeFilter(
-    (value) => {
-      if (!URL.canParse(value)) return false;
-      const url = new URL(value);
-      return url.protocol === "http:" && loopbackHosts.has(url.hostname);
-    },
-    {
-      expected:
-        "an http:// URL on 127.0.0.1, localhost or [::1], such as http://127.0.0.1:4318",
-    }
   )
 );
 
@@ -345,7 +325,13 @@ export const workspaceServerEnvSchema = Schema.Struct({
   // default when unset) or "always". Set "always" as a branch-scoped Vercel
   // Preview variable to read one preview's logs in PostHog; it is read at
   // runtime, so a redeploy of that branch picks it up.
-  POSTHOG_LOGS_EXPORT: toEnvSchema(Schema.optional(postHogLogsExportSchema)),
+  POSTHOG_LOGS_EXPORT: toEnvSchema(Schema.optional(postHogExportPolicySchema)),
+  // Which deployments export server spans to PostHog's /i/v1/traces, through
+  // the span allowlist: "production-only" (the default when unset) or
+  // "always", set like POSTHOG_LOGS_EXPORT to trace one preview or sandbox.
+  POSTHOG_TRACES_EXPORT: toEnvSchema(
+    Schema.optional(postHogExportPolicySchema)
+  ),
   POSTHOG_PERSON_PRIVACY_API_KEY: optionalNonEmptyStringSchema,
   POSTHOG_PROJECT_ID: toEnvSchema(Schema.optional(PostHogProjectId)),
   PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: optionalStringSchema,
@@ -377,9 +363,6 @@ export const workspaceServerEnvSchema = Schema.Struct({
   WORKSPACE_LOG_LEVEL: toEnvSchema(Schema.optional(workspaceLogLevelSchema)),
   // "logfmt" (the default) or "cloud-logging-json" for a container host.
   WORKSPACE_LOG_FORMAT: toEnvSchema(Schema.optional(workspaceLogFormatSchema)),
-  // A loopback OTLP/HTTP collector, such as the Cloud Run sidecar at
-  // http://127.0.0.1:4318, that receives the server's allowlisted spans.
-  WORKSPACE_OTLP_ENDPOINT: toEnvSchema(Schema.optional(loopbackHttpUrlSchema)),
   WORKSPACE_PAYMENT_PROVIDER: toEnvSchema(
     Schema.optional(Schema.Literals(["nexi", "mock", "fallback"]))
   ),
@@ -400,8 +383,6 @@ export const workspaceServerEnvSchema = Schema.Struct({
   // Unset, a container host rejects every queue delivery.
   WORKSPACE_TASKS_AUDIENCE: toEnvSchema(Schema.optional(urlStringSchema)),
   WORKSPACE_TASKS_INVOKER_EMAIL: optionalEmailAddressSchema,
-  // The Google Cloud project whose traces structured logs link to.
-  WORKSPACE_TRACE_PROJECT_ID: optionalNonEmptyStringSchema,
   // The lowercase header the trusted ingress sets to the client address on a
   // container host. Unset, only Vercel's own header is trusted, on Vercel.
   WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER: toEnvSchema(

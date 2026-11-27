@@ -1,17 +1,11 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
-import { Data, Schema } from "effect";
+import type { CustomerAccountId } from "@deskohub/workspace-domain/features/account/customer-account";
+import { Data } from "effect";
 
-export const customerAccountIdSchema = Schema.Trim.check(
-  Schema.isNonEmpty(),
-  Schema.isMaxLength(255)
-)
-  .pipe(Schema.brand("CustomerAccountId"))
-  .annotate({
-    identifier: "CustomerAccountId",
-    description: "Opaque identifier assigned by Better Auth.",
-  });
-
-export type CustomerAccountId = typeof customerAccountIdSchema.Type;
+export {
+  type CustomerAccountId,
+  customerAccountIdSchema,
+} from "@deskohub/workspace-domain/features/account/customer-account";
 
 export type LinkedCustomerAccount = {
   readonly accountId: CustomerAccountId;

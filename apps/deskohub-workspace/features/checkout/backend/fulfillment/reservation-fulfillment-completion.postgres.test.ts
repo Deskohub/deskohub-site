@@ -140,6 +140,11 @@ describe.skipIf(!testDatabase)(
                   id,
                   dotyposReservationId: "dotypos-reservation-id",
                   dotyposCustomerId: "dotypos-customer-id",
+                  reservationDetails: {
+                    kind: "cowork",
+                    entryTier: "basic",
+                    coffee: false,
+                  },
                   reservedFrom: paidAt,
                   reservedUntil: paidAt.add({ hours: 2 }),
                   locale: "cs-CZ",

@@ -1,4 +1,10 @@
-import { DotyposService, DotyposUnavailable } from "@deskohub/dotypos";
+import {
+  DotyposCloudIdSchema,
+  type DotyposCustomer,
+  type DotyposCustomerId,
+  DotyposService,
+  DotyposUnavailable,
+} from "@deskohub/dotypos";
 import { Effect, Layer } from "effect";
 import { AdministrationCustomerDirectory } from "./customer-directory.service";
 
@@ -16,3 +22,16 @@ export const failedCustomerRead = () =>
   Effect.fail(
     new DotyposUnavailable({ operation: "getCustomer", reason: "server" })
   );
+
+export const dotyposCustomerFixture = (
+  id: DotyposCustomerId,
+  fields: Partial<DotyposCustomer> = {}
+): DotyposCustomer => ({
+  id,
+  _cloudId: DotyposCloudIdSchema.make("cloud-1"),
+  points: null,
+  flags: "0",
+  display: true,
+  deleted: false,
+  ...fields,
+});

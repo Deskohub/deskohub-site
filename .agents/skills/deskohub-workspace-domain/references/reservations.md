@@ -28,7 +28,7 @@ The [reservation product specification](../../../../apps/deskohub-workspace/docs
 
 ## Persistence
 
-Dotypos owns reservation facts. Local stored details for offices contain only the family discriminator, `{ kind: "office" }`. Meeting-room details add the optional purchased `duration` and the optional `earlySetup` flag, which says how to read the Dotypos interval (see [Meeting rooms](#meeting-rooms)). Project confirmed timing and seats from Dotypos. Transient signed checkout details carry duration and seats into pricing and hold creation. Don't persist them to duplicate provider state.
+Dotypos owns live reservation facts. `StoredOfficeReservationDetails` records the purchased office identity `{ kind: "office", seats, dayCount }`. The `seats` and `dayCount` fields are optional for older rows and rows the backfill could not resolve. Meeting-room details add the optional purchased `duration` and the optional `earlySetup` flag, which says how to read the Dotypos interval (see [Meeting rooms](#meeting-rooms)). Project live booked timing and seats from Dotypos. Transient signed checkout details carry duration and seats into pricing and hold creation.
 
 Keep historical and provider-owned projections structural, so current purchase limits never make older data undecodable. Historical cowork tiers stay decodable.
 
@@ -53,6 +53,15 @@ Read and write `workspace_reservations.reservation_details` and `review_account_
 - Source every visible office price from the advertised quote: `accessAmount` is the base price, and each seat choice is `getOfficeSeatsAmount` (`features/checkout/reservation-quote-office.ts`), one seat's `seatAmount` times the seats. The office summary item carries that total as `seatsAmount`, which the website and the customer API's quote show; never multiply it again at a caller. Never hard-code catalog amounts on the client.
 - Each family's bookable window comes from `getBookableDates` (`features/reservation/bookable-dates.ts`): the customer API's offerings advertise it and booking-selection resolution checks it, so change the window there and both follow. The app reads it from the offering and never computes it.
 - Exactly one assignable Dotypos table tagged `reservation:office` must exist. `getOfficeReservationSeatCapacity` (`features/office/backend/office-reservation-capacity.ts`) treats any other count as invalid configuration. Its seat capacity is the single source of the office seat maximum: the office page (`loadOfficeReservationSeatCapacity`) sets the form's seat choices and its page markdown from it, and `loadAdvisoryOfficeSeatCapacity` feeds the customer API offering's `maximumSeats` (which the app reads), booking-selection validation and the agent tools. Never hard-code the maximum in code, messages or the product catalog; copy takes it as a message parameter. Tests drive consumers with a capacity other than the live office's so a hard-coded value fails. The app's sample catalog mirrors the live value as `sampleOfficeMaximumSeats` for previews only.
+
+## Team Table (planned)
+
+The [Team Table product specification](../../../../apps/deskohub-workspace/docs/reservation-products.md#team-table-planned) defines customer eligibility, pricing, and placement. The [contract decision](https://github.com/Deskohub/deskohub-site/issues/1557#issuecomment-7205906093) defines the planned family contract.
+
+- Use `kind: "table"` with identity `{ kind: "table", seats, durationMinutes }`, key `table:${seats}:${durationMinutes}`, and a whole-family target `{ kind: "table" }`. Derive the purchased duration in minutes from the elapsed interval in `{ kind: "table", seats, startsAt, endsAt }`.
+- Store the purchased `seats` and `durationMinutes` as optional identity fields in `StoredTableReservationDetails`. Read live booked bounds from Dotypos.
+- Size discovery and exact-capacity assignment use enabled, visible tables with both `reservation:table` and `cowork:open-space` tags. Advertise distinct positive integer capacities in ascending order. Omit the offer when no tables qualify or a qualifying table has an invalid capacity.
+- Share one planner between advisory availability and live assignment. Execute reassignment under the affected Prague dates' capacity locks and verify the target against live inventory before holding it. Preserve each moved Workspace booking and its provider state with the [repacking journal](https://github.com/Deskohub/deskohub-site/issues/1556#issuecomment-7205860164).
 
 ## Cowork Reserved Desk stay
 

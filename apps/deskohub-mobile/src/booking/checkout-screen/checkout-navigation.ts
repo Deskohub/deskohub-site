@@ -1,4 +1,3 @@
-import type { CustomerBookingSelection } from "@deskohub/workspace-customer-api";
 import { Option } from "effect";
 import type { ImperativeRouter } from "expo-router";
 import {
@@ -9,6 +8,7 @@ import {
 } from "../booking-routes";
 import type { CheckoutFlowView } from "../checkout/checkout-flow";
 import type { ReviewState } from "../checkout/checkout-state";
+import type { BookingFamily } from "../selection/booking-selection";
 
 /**
  * Where a finished checkout leaves to, and how:
@@ -38,7 +38,7 @@ export type CheckoutDestination =
  */
 export const checkoutDestination = (
   view: CheckoutFlowView,
-  family: CustomerBookingSelection["family"],
+  family: BookingFamily,
   retriedOrderId?: string
 ): CheckoutDestination | undefined => {
   if (view._tag === "Starting") return undefined;

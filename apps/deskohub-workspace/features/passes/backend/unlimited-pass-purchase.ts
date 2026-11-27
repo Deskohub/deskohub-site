@@ -723,6 +723,7 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
     if (isGift && !holderEmail) return status;
     let billing: ReservationBillingSelection =
       defaultReservationBillingSelection;
+    let coffeeAmountMinor: number | null | undefined;
     if (priorPaymentAttemptId) {
       if (
         !isEndedUnpaidPaymentState(order.paymentState) ||
@@ -736,6 +737,7 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
       const snapshot = yield* documents.findPassPurchase(priorPaymentAttemptId);
       if (!snapshot) return status;
       billing = snapshot.billing;
+      coffeeAmountMinor = snapshot.coffeeAmountMinor ?? null;
     } else if (
       order.paymentState !== "not_started" ||
       hasUnlimitedPassFirstDayEnded(purchase, now)
@@ -750,7 +752,7 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
       kind: "pay" as const,
       payment: {
         billing,
-        price: displayPassPurchasePrice(quote),
+        price: displayPassPurchasePrice(quote, coffeeAmountMinor),
         disclosure: getUnlimitedPassPaymentDisclosure(
           purchase.locale,
           unlimitedPassRequiresEarlyStart(

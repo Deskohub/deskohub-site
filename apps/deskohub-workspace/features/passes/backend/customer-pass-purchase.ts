@@ -360,7 +360,10 @@ export const payPurchase = Effect.fn("passes.payPurchase")(
         result.status === "pricing_changed"
           ? {
               status: result.status,
-              price: displayPassPurchasePrice(result.quote),
+              price: displayPassPurchasePrice(
+                result.quote,
+                result.coffeeAmountMinor
+              ),
             }
           : result
       ),
@@ -396,6 +399,7 @@ export const purchaseStatus = Effect.fn("passes.purchaseStatus")(function* (
   if (!("priorPaymentAttemptId" in result) || !result.priorPaymentAttemptId) {
     return result;
   }
+  const { priorPaymentAttemptId } = result;
   const actor = yield* CurrentCustomerAccount;
   const { accountId } = yield* actor.requireActive;
   const product = result.entryCount === null ? "unlimited" : "entry-pack";
@@ -404,19 +408,19 @@ export const purchaseStatus = Effect.fn("passes.purchaseStatus")(function* (
     accountId,
     product
   );
-  if (current?.order.activePaymentAttemptId !== result.priorPaymentAttemptId) {
-    return {
-      orderId,
-      tier: result.tier,
-      entryCount: result.entryCount,
-      status: "checking" as const,
-    };
+  const checking = {
+    orderId,
+    tier: result.tier,
+    entryCount: result.entryCount,
+    status: "checking" as const,
+  };
+  if (current?.order.activePaymentAttemptId !== priorPaymentAttemptId) {
+    return checking;
   }
   const documents = yield* AccountingDocumentSnapshots;
-  const snapshot = yield* documents.findPassPurchase(
-    result.priorPaymentAttemptId
-  );
+  const snapshot = yield* documents.findPassPurchase(priorPaymentAttemptId);
   if (!snapshot) {
+    if (product === "unlimited") return checking;
     const { priorPaymentAttemptId: _, ...status } = result;
     return status;
   }
@@ -426,7 +430,7 @@ export const purchaseStatus = Effect.fn("passes.purchaseStatus")(function* (
   );
   return {
     ...result,
-    price: displayPassPurchasePrice(quote),
+    price: displayPassPurchasePrice(quote, snapshot.coffeeAmountMinor ?? null),
     disclosure: yield* readPaymentDisclosure(
       product,
       purchase.locale,

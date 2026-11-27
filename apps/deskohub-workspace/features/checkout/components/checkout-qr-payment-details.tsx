@@ -13,9 +13,11 @@ export interface CheckoutQrPayment {
 export function CheckoutQrPaymentDetails({
   locale,
   payment,
+  transferOnly = false,
 }: {
   readonly locale: Locale;
   readonly payment: CheckoutQrPayment;
+  readonly transferOnly?: boolean;
 }) {
   const terms = [
     [m.checkoutQrAmount({}, { locale }), payment.amount],
@@ -28,6 +30,19 @@ export function CheckoutQrPaymentDetails({
       </time>,
     ],
   ] as const;
+
+  const details = (
+    <dl className="grid gap-2 text-sm">
+      {terms.map(([label, value]) => (
+        <div className="grid gap-0.5" key={label}>
+          <dt className="text-navy-blue/70">{label}</dt>
+          <dd className="font-semibold tabular-nums">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+
+  if (transferOnly) return details;
 
   return (
     <div className="@container space-y-3 rounded-2xl border border-navy-blue/15 bg-white p-4">
@@ -43,14 +58,7 @@ export function CheckoutQrPaymentDetails({
           unoptimized
           width={176}
         />
-        <dl className="grid gap-2 text-sm">
-          {terms.map(([label, value]) => (
-            <div className="grid gap-0.5" key={label}>
-              <dt className="text-navy-blue/70">{label}</dt>
-              <dd className="font-semibold tabular-nums">{value}</dd>
-            </div>
-          ))}
-        </dl>
+        {details}
       </div>
     </div>
   );

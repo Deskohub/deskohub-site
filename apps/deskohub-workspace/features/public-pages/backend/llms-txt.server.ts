@@ -23,17 +23,26 @@ export async function renderLlmsTxt(
 
   return await readSharedMarkdown(
     "llmsTxt.render",
-    renderFromMarkdownSources(llmsTxtLocale, releases, ({ offerings }) =>
-      Effect.map(offerings, (loaded) =>
-        llmsTxtMarkdown({
-          pages: releases.publishedPathnames,
-          offerings: loaded,
-          agentInterfaces: {
-            ...customerAgentCatalog.published,
-            siteToolsRelease,
-          },
-        })
-      )
+    renderFromMarkdownSources(
+      llmsTxtLocale,
+      releases,
+      ({ offerings, teamTablePrices }) =>
+        Effect.map(
+          Effect.all(
+            { loaded: offerings, tablePrices: teamTablePrices },
+            { concurrency: "unbounded" }
+          ),
+          ({ loaded, tablePrices }) =>
+            llmsTxtMarkdown({
+              pages: releases.publishedPathnames,
+              offerings: loaded,
+              teamTablePrices: tablePrices,
+              agentInterfaces: {
+                ...customerAgentCatalog.published,
+                siteToolsRelease,
+              },
+            })
+        )
     )
   );
 }

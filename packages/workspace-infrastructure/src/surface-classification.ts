@@ -35,7 +35,7 @@ export const workspaceSurfaceClassification: ReadonlyArray<SurfaceItem> = [
     owner: alchemy("GCP.ArtifactRegistry.Repository"),
   },
   {
-    capability: "Cloud Run web service, revision and traffic",
+    capability: "Cloud Run API service, revision and traffic",
     owner: alchemy("GCP.Run.Service"),
   },
   {
@@ -43,7 +43,7 @@ export const workspaceSurfaceClassification: ReadonlyArray<SurfaceItem> = [
     owner: alchemy("GCP.Run.Service"),
   },
   {
-    capability: "Worker invoker and secret accessor IAM edges",
+    capability: "API and worker invoker and secret accessor IAM grants",
     owner: alchemy("GCP.IAM.Member"),
   },
   {
@@ -63,48 +63,8 @@ export const workspaceSurfaceClassification: ReadonlyArray<SurfaceItem> = [
     owner: alchemy("GCP.Monitoring.AlertPolicy"),
   },
   {
-    capability: "Edge global IP address",
-    owner: alchemy("GCP.Compute.GlobalAddress"),
-  },
-  {
-    capability: "Serverless NEG for the web service",
-    owner: alchemy("GCP.Compute.RegionNetworkEndpointGroup"),
-  },
-  {
-    capability: "Cloud Armor security policy and rules",
-    owner: alchemy("DeskohubWorkspace.EdgeSecurityPolicy"),
-  },
-  {
     capability:
-      "Edge backend services, Cloud CDN policy and Cloud Armor attachment",
-    owner: alchemy("DeskohubWorkspace.EdgeBackendService"),
-  },
-  {
-    capability: "Edge and HTTPS redirect URL maps",
-    owner: alchemy("GCP.Compute.UrlMap"),
-  },
-  {
-    capability: "Edge managed certificate",
-    owner: alchemy("GCP.Compute.SslCertificate"),
-  },
-  {
-    capability: "Edge HTTPS proxy",
-    owner: alchemy("GCP.Compute.TargetHttpsProxy"),
-  },
-  {
-    capability: "Edge HTTP redirect and plain HTTP proxies",
-    owner: alchemy("GCP.Compute.TargetHttpProxy"),
-  },
-  {
-    capability: "Edge forwarding rules",
-    owner: alchemy("GCP.Compute.GlobalForwardingRule"),
-  },
-  {
-    capability: "Log Router exclusions for token-bearing routes",
-    owner: alchemy("GCP.Logging.Exclusion"),
-  },
-  {
-    capability: "Workload identity pool, provider and service accounts",
+      "GitHub and Vercel workload identity pools, providers and service accounts",
     owner: bootstrap,
   },
   { capability: "Versioned Alchemy state bucket", owner: bootstrap },

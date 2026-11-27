@@ -13,7 +13,7 @@ import {
 test.each([
   [
     "unlimited-pass",
-    "Unlimited pass",
+    "Unlimited membership",
     { kind: "partial", unit: "day", unstarted: 28, total: 30 },
   ],
   [

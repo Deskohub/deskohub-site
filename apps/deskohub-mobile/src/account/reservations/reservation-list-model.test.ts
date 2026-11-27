@@ -78,6 +78,37 @@ describe("reservationGroups", () => {
 });
 
 describe("reservationRowView", () => {
+  test("a Team Table booked from Prague midnight shows both times and its seats", () => {
+    const table = row("table", {
+      product: {
+        kind: "other",
+        family: "table",
+        teamTable: { kind: "table", seats: 6, durationMinutes: 90 },
+      },
+      startsAt: "2026-11-08T23:00:00Z",
+      endsAt: "2026-11-09T00:30:00Z",
+      seats: 6,
+    });
+    const expected = m.reservations_time_range(
+      {
+        start: formatInstant(
+          DateTime.makeUnsafe(table.startsAt!),
+          "en-US",
+          "time"
+        ),
+        end: formatInstant(DateTime.makeUnsafe(table.endsAt!), "en-US", "time"),
+      },
+      { locale: "en-US" }
+    );
+    const compact = reservationRowView(table, "later", "en-US");
+    const featured = nextReservationView(table, now, "en-US");
+    expect(compact.detail).toContain(expected);
+    expect(compact.detail).toContain(
+      m.reservations_seats({ count: 6 }, { locale: "en-US" })
+    );
+    expect(featured.when).toContain(expected);
+  });
+
   test("a past booking says only that it was cancelled, else its time", () => {
     const cancelled = reservationRowView(
       row("c", { status: "cancelled" }),

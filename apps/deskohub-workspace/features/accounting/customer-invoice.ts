@@ -33,7 +33,8 @@ import {
 type InvoicedProduct =
   | { readonly kind: "cowork"; readonly tier: WorkspaceCoworkProductTier }
   | { readonly kind: "meeting-room" }
-  | { readonly kind: "office" };
+  | { readonly kind: "office" }
+  | { readonly kind: "table" };
 
 /**
  * What an invoiced reservation booked and the calendar span it invoices, as
@@ -117,6 +118,12 @@ export const getInvoicedReservation = (
         seats: null,
       })
     ),
+    Match.when({ reservation: { kind: "table" } }, ({ reservation }) => ({
+      product: { kind: "table" } as const,
+      startsAt: reservation.startsAt,
+      endsAt: reservation.endsAt,
+      seats: reservation.seats,
+    })),
     Match.when({ reservation: { kind: "office" } }, ({ reservation }) => ({
       product: { kind: "office" } as const,
       ...workspaceDays(reservation.startsOn, reservation.endsOn),

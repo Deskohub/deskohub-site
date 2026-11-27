@@ -126,8 +126,11 @@ test("guards both Fio detail and queue evidence for accounts without the role", 
   await expect(
     loadAdministrationFioQueue("unmatched", undefined)
   ).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+  if (!fioPendingRefund.orderId) {
+    throw new Error("Expected pending refund fixture to have an orderId");
+  }
   await expect(
-    loadAdministrationFioMovements(fioPendingRefund.orderId!)
+    loadAdministrationFioMovements(fioPendingRefund.orderId)
   ).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
   expect(listForStaff).not.toHaveBeenCalled();
   expect(listForOrder).not.toHaveBeenCalled();

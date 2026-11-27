@@ -26,6 +26,16 @@ describe("Unlimited pass terms", () => {
       unlimitedPassRequiresEarlyStart(date("2027-03-16"), agreedOn, "business")
     ).toBe(false);
   });
+
+  test("asks for early-start consent through the extended withdrawal date", () => {
+    const agreedOn = Temporal.PlainDate.from("2026-03-20");
+    expect(unlimitedPassRequiresEarlyStart(date("2026-04-07"), agreedOn)).toBe(
+      true
+    );
+    expect(unlimitedPassRequiresEarlyStart(date("2026-04-08"), agreedOn)).toBe(
+      false
+    );
+  });
   test("prices the approved offers and Open Space coffee", () => {
     expect(
       getUnlimitedPassPrice({ kind: "unlimited", tier: "open-space" })

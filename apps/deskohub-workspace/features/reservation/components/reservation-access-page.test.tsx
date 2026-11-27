@@ -7,7 +7,10 @@ import {
   test,
 } from "bun:test";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import { getWorkspaceOfficeProductTitle } from "@/features/checkout/product-catalog.i18n";
+import {
+  getWorkspaceOfficeProductTitle,
+  getWorkspaceTableProductTitle,
+} from "@/features/checkout/product-catalog.i18n";
 import { m } from "@/features/i18n";
 import {
   registerWorkspaceComponentTestEnv,
@@ -131,6 +134,43 @@ describe("ReservationAccessPage", () => {
         { locale: "en-US" }
       )
     );
+  });
+
+  test("shows Team Table invitees the named table and exact booked minutes", () => {
+    const view = render(
+      <ReservationAccessPage
+        access={{
+          state: "available",
+          code: "2468",
+          accessStartsAt: Temporal.Instant.from("2026-11-18T08:15:00Z"),
+          accessEndsAt: Temporal.Instant.from("2026-11-18T09:45:00Z"),
+          viewer: "invitee",
+          bookedBy: { name: "Alex Sample" },
+          teamTable: { name: "Open Space 4" },
+        }}
+        locale="en-US"
+        orderId="reservation-access-page"
+      />
+    );
+
+    expect(view.getByText(/Reserved table/).textContent).toBe(
+      "Reserved table Open Space 4"
+    );
+    expect(
+      view.getByText(/Team Table booked for Nov 18, 2026.*9:15.*10:45/)
+    ).toBeDefined();
+    expect(
+      view.getByText(
+        m.reservationAccessGuestBookedBy(
+          {
+            product: getWorkspaceTableProductTitle("en-US"),
+            name: "Alex Sample",
+          },
+          { locale: "en-US" }
+        )
+      )
+    ).toBeDefined();
+    expect(view.container.querySelector('a[href*="/reservation"]')).toBeNull();
   });
 
   test("shows an invited person the PIN, the booker, and the way there", async () => {

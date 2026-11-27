@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { collectNightlyE2E } from "./nightly";
 import type { RunCommand } from "./sources";
 
-const repo = "example/deskohub-site";
+const repo = "Deskohub/deskohub-site";
 const workflow = `repos/${repo}/actions/workflows/workspace-e2e.yml/runs`;
 const bot = "github-actions[bot]";
 
@@ -54,9 +54,13 @@ function githubFixture(runs: readonly unknown[]) {
   return { calls, responses, run };
 }
 
-test("groups nightly attempts by diagnosis and keeps their GitHub links", async () => {
+test("groups nightly attempts from the transferred repository and keeps canonical GitHub links", async () => {
   const { responses, run } = githubFixture([
-    { ...nightlyRun(33, 2, "20"), html_url: "https://preview.invalid/private" },
+    {
+      ...nightlyRun(33, 2, "20"),
+      head_repository: { full_name: "deskohub/deskohub-site" },
+      html_url: "https://preview.invalid/private",
+    },
     nightlyRun(27),
   ]);
   responses.set(`repos/${repo}/actions/runs/33/attempts/2/jobs`, [

@@ -48,6 +48,7 @@ import {
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { reservationStatusPath } from "@/features/reservation/routes";
+import { moneyWithValue } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
 import type { EntryPackCheckoutPrice } from "../entry-pack-checkout";
 import {
@@ -55,12 +56,12 @@ import {
   getEntryPackPrice,
   getUnlimitedPassPrice,
   isEntryPackQuoteExpired,
-  unlimitedPassCoffeePrice,
 } from "../pass-offer";
 import {
+  catalogCoffeeAmountMinor,
   type PassPurchaseQuote,
   passPurchaseQuoteCodec,
-  withPassPurchaseAddons,
+  withPassPurchaseCoffee,
 } from "../pass-purchase-quote";
 import type {
   UnlimitedAutoRenewalAuthorization,
@@ -115,18 +116,18 @@ const decodeBilling = Schema.decodeEffect(reservationBillingSelectionSchema, {
 const billingMatches = Schema.toEquivalence(reservationBillingSelectionSchema);
 
 export const displayPassPurchasePrice = (
-  quote: PassPurchaseQuote
+  quote: PassPurchaseQuote,
+  coffeeAmountMinor = catalogCoffeeAmountMinor(quote.unlimitedCoffee)
 ): EntryPackCheckoutPrice => ({
-  fingerprint: getPassPurchasePriceFingerprint(quote),
-  subtotal: withPassPurchaseAddons(
+  fingerprint: getPassPurchasePriceFingerprint(quote, coffeeAmountMinor),
+  subtotal: withPassPurchaseCoffee(
     quote.discountableSubtotal,
-    quote.unlimitedCoffee
+    coffeeAmountMinor
   ),
-  total: withPassPurchaseAddons(
-    quote.discountedSubtotal,
-    quote.unlimitedCoffee
-  ),
-  ...(quote.unlimitedCoffee && { coffeePrice: unlimitedPassCoffeePrice }),
+  total: withPassPurchaseCoffee(quote.discountedSubtotal, coffeeAmountMinor),
+  ...(coffeeAmountMinor !== null && {
+    coffeePrice: moneyWithValue(coffeeAmountMinor, quote.discountedSubtotal),
+  }),
   ...(quote.selection?.submittedCode !== undefined &&
     quote.discounts.some(
       ({ discount }) => discount.id === quote.submittedCodeDiscountId
@@ -776,37 +777,47 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       const accepted = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
         purchase.quote
       );
-      const acceptedFingerprint = getPassPurchasePriceFingerprint(accepted);
+      const snapshots = yield* AccountingDocumentSnapshots;
+      const frozen = order.activePaymentAttemptId
+        ? yield* snapshots.findPassPurchase(order.activePaymentAttemptId)
+        : undefined;
+      if (order.activePaymentAttemptId && !frozen) {
+        return yield* new EntryPackPurchaseError({ reason: "billing-changed" });
+      }
+      const coffeeAmountMinor = frozen
+        ? (frozen.coffeeAmountMinor ?? null)
+        : catalogCoffeeAmountMinor(purchase.unlimitedCoffee);
+      const acceptedFingerprint = getPassPurchasePriceFingerprint(
+        accepted,
+        coffeeAmountMinor
+      );
       const stalePrice =
         input.displayedPriceFingerprint !== undefined &&
         input.displayedPriceFingerprint !== acceptedFingerprint;
       if (stalePrice) {
-        return { status: "pricing_changed" as const, quote: accepted };
+        return {
+          status: "pricing_changed" as const,
+          quote: accepted,
+          coffeeAmountMinor,
+        };
       }
       const renewal = readUnlimitedAutoRenewalDisclosure(purchase);
       if (
         (purchase.autoRenew &&
           (!renewal ||
             purchase.buyerAccountId !== purchase.holderAccountId ||
-            withPassPurchaseAddons(
+            withPassPurchaseCoffee(
               accepted.discountedSubtotal,
-              purchase.unlimitedCoffee
+              coffeeAmountMinor
             ).value <= 0)) ||
         (!purchase.autoRenew && input.renewalAuthorization)
       ) {
         return yield* new EntryPackPurchaseError({ reason: "unavailable" });
       }
-      const snapshots = yield* AccountingDocumentSnapshots;
-      const frozen = order.activePaymentAttemptId
-        ? yield* snapshots.findPassPurchase(order.activePaymentAttemptId)
-        : undefined;
       const billing = yield* decodeBilling(
         input.billing ?? frozen?.billing ?? defaultReservationBillingSelection
       );
-      if (
-        order.activePaymentAttemptId &&
-        (!frozen || !billingMatches(frozen.billing, billing))
-      ) {
+      if (frozen && !billingMatches(frozen.billing, billing)) {
         return yield* new EntryPackPurchaseError({ reason: "billing-changed" });
       }
       const now = yield* currentInstant;
@@ -893,8 +904,10 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           submittedCodeDiscountId,
         }),
       };
-      const currentFingerprint =
-        getPassPurchasePriceFingerprint(refreshedQuote);
+      const currentFingerprint = getPassPurchasePriceFingerprint(
+        refreshedQuote,
+        coffeeAmountMinor
+      );
       if (acceptedFingerprint !== currentFingerprint) {
         // An ended attempt may still settle late at its original price.
         if (order.activePaymentAttemptId) {
@@ -903,7 +916,11 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           });
         }
         yield* savePassPurchaseQuote(purchase, refreshedQuote);
-        return { status: "pricing_changed" as const, quote: refreshedQuote };
+        return {
+          status: "pricing_changed" as const,
+          quote: refreshedQuote,
+          coffeeAmountMinor,
+        };
       }
 
       if (order.activePaymentAttemptId) {
@@ -960,9 +977,9 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         }) ?? { kind: "person" as const, legalName: contact.name };
       const admission = {
         orderId: order.id,
-        amount: withPassPurchaseAddons(
+        amount: withPassPurchaseCoffee(
           quote.discountedSubtotal,
-          purchase.unlimitedCoffee
+          coffeeAmountMinor
         ),
         locale: purchase.locale,
         details: {
@@ -992,7 +1009,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
             delivery: frozen?.delivery ?? { email: session.email },
             serviceDate: purchase.validFrom,
             product,
-            ...(purchase.unlimitedCoffee && { unlimitedCoffee: true as const }),
+            ...(coffeeAmountMinor !== null && { coffeeAmountMinor }),
             quote: frozen?.quote ?? quote,
           },
         },

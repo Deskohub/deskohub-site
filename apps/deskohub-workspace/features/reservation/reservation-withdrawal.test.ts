@@ -38,6 +38,11 @@ const office: ReservationServiceSchedule = {
   dayCount: 3,
 };
 
+const teamTable: ReservationServiceSchedule = {
+  kind: "table",
+  startsAt: prague("2027-01-10T09:15"),
+};
+
 const meetingRoom = (
   duration: Extract<
     ReservationServiceSchedule,
@@ -57,12 +62,13 @@ describe("assessReservationWithdrawal before the service starts", () => {
       office,
       meetingRoom({ unit: "hour", amount: 4 }),
       meetingRoom({ unit: "day", amount: 1 }),
+      teamTable,
     ]) {
       expect(assessReservationWithdrawal(facts(schedule), now)).toEqual({
         withdrawable: true,
         refundAmount: paid,
         refundBasis: { kind: "full" },
-        periodEndsAt: prague("2027-01-17T00:00"),
+        periodEndsAt: prague("2027-01-19T00:00"),
       });
     }
   });
@@ -83,6 +89,12 @@ describe("assessReservationWithdrawal before the service starts", () => {
 });
 
 describe("assessReservationWithdrawal after the service starts", () => {
+  test("counts the whole Team Table booking as supplied at its booked start", () => {
+    expect(
+      assessReservationWithdrawal(facts(teamTable), teamTable.startsAt)
+    ).toEqual({ withdrawable: false, reason: "performance_started" });
+  });
+
   test("counts a started cowork day as supplied, leaving nothing to withdraw", () => {
     expect(
       assessReservationWithdrawal(facts(coworkDay), prague("2027-01-10T00:00"))
@@ -96,7 +108,7 @@ describe("assessReservationWithdrawal after the service starts", () => {
       withdrawable: true,
       refundAmount: { ...paid, value: 66_667 },
       refundBasis: { kind: "partial", unit: "day", unstarted: 2, total: 3 },
-      periodEndsAt: prague("2027-01-17T00:00"),
+      periodEndsAt: prague("2027-01-19T00:00"),
     });
   });
 
@@ -163,17 +175,22 @@ describe("assessReservationWithdrawal eligibility", () => {
     }
   });
 
-  test("closes at the end of the fourteenth day after the contract day", () => {
+  test("closes at Prague midnight after the extended final day", () => {
     const later: ReservationServiceSchedule = {
       ...office,
       startsOn: Temporal.PlainDate.from("2027-02-10"),
     };
+    const cutoff = prague("2027-01-19T00:00");
     expect(
-      assessReservationWithdrawal(facts(later), prague("2027-01-16T23:59"))
-    ).toMatchObject({ withdrawable: true });
-    expect(
-      assessReservationWithdrawal(facts(later), prague("2027-01-17T00:00"))
-    ).toEqual({ withdrawable: false, reason: "period_ended" });
+      assessReservationWithdrawal(
+        facts(later),
+        cutoff.subtract({ milliseconds: 1 })
+      )
+    ).toMatchObject({ withdrawable: true, periodEndsAt: cutoff });
+    expect(assessReservationWithdrawal(facts(later), cutoff)).toEqual({
+      withdrawable: false,
+      reason: "period_ended",
+    });
   });
 
   test("keeps a contract concluded before 2027 withdrawable inside its period", () => {
@@ -193,7 +210,7 @@ describe("getReservationServiceSchedule", () => {
   test("reads a cowork day from its booked start", () => {
     expect(
       getReservationServiceSchedule(
-        { kind: "cowork", tier: "open-space" } as never,
+        { kind: "cowork", entryTier: "open-space", coffee: false },
         prague("2027-01-10T12:00"),
         prague("2027-01-11T12:00")
       )

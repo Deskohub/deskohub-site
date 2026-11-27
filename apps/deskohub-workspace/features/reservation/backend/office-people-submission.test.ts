@@ -39,6 +39,22 @@ const rejection = (
   );
 
 describe("validateSubmittedOfficePeople", () => {
+  test("Team Table reserves the selected capacity even when fewer people are coming", () => {
+    const table = { kind: "table", seats: 4, email: contact.email } as const;
+    const invitee = testEmailAddress("table-invitee");
+    expect(
+      Effect.runSync(
+        validateSubmittedOfficePeople(
+          { contactAttends: true, invitees: [invitee] },
+          table
+        )
+      )
+    ).toEqual({ contactAttends: true, invitees: [invitee] });
+    expect(
+      Effect.runSync(validateSubmittedOfficePeople(undefined, table))
+    ).toEqual({ contactAttends: true, invitees: [] });
+  });
+
   test("books seats alone when no people list is sent", () => {
     expect(
       Effect.runSync(validateSubmittedOfficePeople(undefined, office(3)))

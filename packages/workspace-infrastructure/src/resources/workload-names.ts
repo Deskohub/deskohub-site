@@ -4,12 +4,12 @@ import type {
   WorkspaceWorkload,
 } from "../config/stack-config";
 
-export const workspaceWebServiceId = "workspace-web";
+export const workspaceApiServiceId = "workspace-api";
 export const workspaceArtifactRepositoryId = "workspace";
 export const workspaceImageName = "workspace";
 
 export const workloadServiceIds = {
-  web: workspaceWebServiceId,
+  api: workspaceApiServiceId,
   "tasks-worker": "workspace-tasks-worker",
   "scheduler-worker": "workspace-scheduler-worker",
 } satisfies Record<WorkspaceWorkload, string>;
@@ -36,8 +36,8 @@ export const workloadRuntimeServiceAccount = (
   workload: WorkspaceWorkload
 ) => {
   switch (workload) {
-    case "web":
-      return config.serviceAccounts.webRuntime;
+    case "api":
+      return config.serviceAccounts.apiRuntime;
     case "tasks-worker":
       return config.serviceAccounts.tasksWorkerRuntime;
     case "scheduler-worker":

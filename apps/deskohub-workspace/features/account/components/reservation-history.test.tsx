@@ -221,11 +221,13 @@ describe("ReservationHistory", () => {
     ).toBeNull();
 
     const renewalPath = `/en-US/passes/unlimited?renew=${pass.orderId}`;
+    const statusPath = `/en-US/reservation/status/${pass.orderId}`;
+    expect(view.queryByRole("link", { name: "View order status" })).toBeNull();
     view.rerender(
       <UnsavedChangesProvider>
         <AccountUnlimitedPassCard
           locale="en-US"
-          pass={{ ...pass, renewalPath }}
+          pass={{ ...pass, renewalPath, statusPath }}
         />
       </UnsavedChangesProvider>
     );
@@ -236,6 +238,26 @@ describe("ReservationHistory", () => {
         })
         .getAttribute("href")
     ).toBe(renewalPath);
+    const statusLink = view.getByRole("link", { name: "View order status" });
+    expect(statusLink.getAttribute("href")).toBe(statusPath);
+    expect(statusLink.getAttribute("data-client-navigation")).toBe("true");
+
+    view.rerender(
+      <UnsavedChangesProvider>
+        <ReservationHistory
+          history={availableHistory}
+          locale="en-US"
+          unlimitedPasses={[{ ...pass, statusPath }, futurePass]}
+        />
+      </UnsavedChangesProvider>
+    );
+    const historyStatusLink = view.getByRole("link", {
+      name: "View order status",
+    });
+    expect(historyStatusLink.getAttribute("href")).toBe(statusPath);
+    expect(historyStatusLink.getAttribute("data-client-navigation")).toBe(
+      "true"
+    );
   });
 
   test("keeps ordinary history visible when the Unlimited lookup fails", () => {
@@ -247,7 +269,7 @@ describe("ReservationHistory", () => {
       />
     );
     expect(
-      view.getByText("Your Unlimited memberships are temporarily unavailable.")
+      view.getByText("Your Unlimited memberships couldn’t be loaded right now.")
     ).toBeDefined();
     expect(
       view.getByText(m.accountReservationsCurrentTitle({}, { locale: "en-US" }))

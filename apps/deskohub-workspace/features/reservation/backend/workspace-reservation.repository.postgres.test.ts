@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -31,7 +32,10 @@ import {
   type PaymentAttemptId,
   paymentAttemptIdSchema,
 } from "@/features/checkout/checkout-identifiers";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
 import { ReservationAccessService } from "@/features/reservation-access";
 import { ReservationAccessRepository } from "@/features/reservation-access/backend/reservation-access.repository";
 import { reservationInviteeKeyIdSchema } from "@/features/reservation-invitees/reservation-invitee";
@@ -206,7 +210,7 @@ describe.skipIf(!testDatabase)(
         expect(
           await run((repository) =>
             repository.findPaymentReturnTarget(
-              "missing-reservation" as WorkspaceReservationId
+              workspaceReservationIdSchema.make("missing-reservation")
             )
           )
         ).toBeUndefined();
@@ -222,6 +226,37 @@ describe.skipIf(!testDatabase)(
           )
         ).rejects.toThrow("workspace_reservations_payment_return_target_check");
       });
+    });
+
+    test("identifies only requested Dotypos IDs that belong to Team Table orders", async () => {
+      const providerId = () =>
+        DotyposReservationIdSchema.make(crypto.randomUUID());
+      const matching = providerId();
+      const matchingCowork = providerId();
+      const outsideCandidates = providerId();
+      for (const dotyposReservationId of [matching, outsideCandidates]) {
+        await insertReservation(
+          {},
+          {
+            dotyposReservationId,
+            reservationDetails: {
+              kind: "table",
+              seats: 4,
+              durationMinutes: 45,
+            },
+          }
+        );
+      }
+      await insertReservation({}, { dotyposReservationId: matchingCowork });
+
+      const found = await run((repository) =>
+        repository.selectTeamTableDotyposReservationIds([
+          matching,
+          matchingCowork,
+          providerId(),
+        ])
+      );
+      expect(found).toEqual([matching]);
     });
 
     describe("expired holds", () => {
@@ -399,16 +434,18 @@ describe.skipIf(!testDatabase)(
         });
 
       const expectedHoldOf = async (id: WorkspaceReservationId) => {
-        const row = (await readReservation(id))!;
+        const row = await readReservation(id);
+        assert(row?.dotyposReservationId && row.reservationHoldExpiresAt);
         return {
-          dotyposReservationId: row.dotyposReservationId!,
-          reservationHoldExpiresAt: row.reservationHoldExpiresAt!,
+          dotyposReservationId: row.dotyposReservationId,
+          reservationHoldExpiresAt: row.reservationHoldExpiresAt,
         };
       };
 
       test("claims a hold that still carries the expected hold, stamping the claim", async () => {
         const id = await expiredHold();
-        const before = (await readReservation(id))!;
+        const before = await readReservation(id);
+        assert(before);
         const expectedHold = await expectedHoldOf(id);
 
         const claimed = await run((repository) =>
@@ -420,7 +457,8 @@ describe.skipIf(!testDatabase)(
         );
 
         expect(claimed?.reservationState).toBe("cancelling");
-        const after = (await readReservation(id))!;
+        const after = await readReservation(id);
+        assert(after);
         expect(after.reservationState).toBe("cancelling");
         expect(claimed?.updatedAt.equals(after.updatedAt)).toBe(true);
         expect(after.updatedAt.equals(before.updatedAt)).toBe(false);
@@ -486,8 +524,9 @@ describe.skipIf(!testDatabase)(
 
         expect(freshTakeover).toBeNull();
         expect(staleTakeover?.reservationState).toBe("cancelling");
+        assert(staleTakeover);
         expect(
-          Temporal.Instant.compare(staleTakeover!.updatedAt, staleBefore)
+          Temporal.Instant.compare(staleTakeover.updatedAt, staleBefore)
         ).toBe(1);
       });
 
@@ -581,9 +620,11 @@ describe.skipIf(!testDatabase)(
             )
           )
         );
-        const [cancelledClaim, failedClaim] = claims.map(
-          (claim) => claim!.updatedAt
-        );
+        const [cancelledClaim, failedClaim] = claims.map((claim) => {
+          assert(claim);
+          return claim.updatedAt;
+        });
+        assert(cancelledClaim && failedClaim);
         const previousStamp = at(-60);
 
         const staleCancel = await runFailure((repository) =>
@@ -616,14 +657,14 @@ describe.skipIf(!testDatabase)(
         await run((repository) =>
           repository.markCancelled({
             id: cancelled,
-            claimedAt: cancelledClaim!,
+            claimedAt: cancelledClaim,
             cancelledAt: at(1),
           })
         );
         await run((repository) =>
           repository.markCancellationFailed({
             id: failed,
-            claimedAt: failedClaim!,
+            claimedAt: failedClaim,
             failureCode: "dotypos_cancel_failed",
           })
         );
@@ -1524,12 +1565,13 @@ describe.skipIf(!testDatabase)(
         );
         expect(claimed?.reservationState).toBe("cancelling");
         const cancelledAgainAt = at(40);
+        assert(claimed);
         await run((repository) =>
           repository.markAdministrationCancelled({
             audit,
             id,
             cancelledAt: cancelledAgainAt,
-            claimedAt: claimed!.updatedAt,
+            claimedAt: claimed.updatedAt,
             failureCode: null,
           })
         );
@@ -1610,13 +1652,14 @@ describe.skipIf(!testDatabase)(
         const retry = await runFailure((repository) =>
           repository.markReservationConfirmed({ id, confirmedAt: at(4) })
         );
+        assert(customerId);
         await Effect.runPromise(
           Effect.flatMap(WorkspaceDatabase, ({ transaction }) =>
             transaction(
               recordCustomerEvent({
                 kind: "reservation-booked",
                 occurredAt: at(4),
-                dotyposCustomerId: customerId!,
+                dotyposCustomerId: customerId,
                 workspaceReservationId: id,
               })
             )
@@ -1628,7 +1671,7 @@ describe.skipIf(!testDatabase)(
           {
             kind: "reservation-booked",
             occurredAt: at(3),
-            dotyposCustomerId: customerId!,
+            dotyposCustomerId: customerId,
           },
         ]);
       });
@@ -1678,12 +1721,13 @@ describe.skipIf(!testDatabase)(
         await cancel(confirmed);
         await cancel(unconfirmed);
 
+        const confirmedReservation = await readReservation(confirmed);
+        assert(confirmedReservation);
         expect(await readEvents(confirmed)).toEqual([
           {
             kind: "reservation-cancelled",
             occurredAt: at(6),
-            dotyposCustomerId: (await readReservation(confirmed))!
-              .dotyposCustomerId,
+            dotyposCustomerId: confirmedReservation.dotyposCustomerId,
           },
         ]);
         expect(await readEvents(unconfirmed)).toEqual([]);
@@ -1724,7 +1768,9 @@ describe.skipIf(!testDatabase)(
             .where(eq(workspaceReservations.id, id))
         );
         await cancel(at(9), at(8));
-        const customerId = (await readReservation(id))!.dotyposCustomerId;
+        const cancelledReservation = await readReservation(id);
+        assert(cancelledReservation);
+        const customerId = cancelledReservation.dotyposCustomerId;
         // A retried write of the second cancellation records nothing more.
         await Effect.runPromise(
           Effect.flatMap(WorkspaceDatabase, ({ transaction }) =>
@@ -1797,7 +1843,9 @@ describe.skipIf(!testDatabase)(
         });
         const replacementKey = crypto.randomUUID();
 
-        const claimedAt = (await readReservation(unpaid))!.updatedAt;
+        const unpaidReservation = await readReservation(unpaid);
+        assert(unpaidReservation);
+        const claimedAt = unpaidReservation.updatedAt;
         await run((repository) =>
           repository.markCancelled({
             id: unpaid,

@@ -54,6 +54,7 @@ Copy that doesn't come from these catalogs is out of scope here: email campaign 
 | Meeting room | zasedací místnost (formal), zasedačka (everyday) | Product name vs everyday word. Use the target's everyday word for both unless a natural pair exists. |
 | Office | (soukromá) kancelář | Private office product. |
 | Day pass | *no Czech term*: the product is the tier name "Basic Day Pass" | Don't invent a translated "day pass". |
+| Unlimited membership | Neomezené členství | Use the localized name in titles. Use Členství or the locale equivalent in purchase comparisons. Each payment covers 30 calendar days. Keep the duration in the price cadence and validity or access details. Open Space access follows its opening hours. Eligible holders can buy an extension separately. |
 | Desk / spot / workstation | místo, vyhrazené místo (reserved desk), pracovní stanice (workstation) | `místo` is the bookable seat. Keep the reserved-desk vs workstation distinction. |
 | Reservation | rezervace / rezervovat | Customer and admin: "reservation" family. Legal English says "Booking". Target legal text uses the same root as the UI, as a defined term. In admin, `rezervace stolu` = **booking** (the Dotypos table booking behind a reservation). It must be told apart from a reservation: by a different word (de *Tischbuchung*, uk *резервування столу*) or by a fixed qualified phrase that is never shortened (sk *rezervácia stola*). |
 | Access | přístupový kód (access code), PIN / PIN kód, klávesnice (keypad), dveře | Access code ≠ passkey. Keypad ≠ keyboard. |

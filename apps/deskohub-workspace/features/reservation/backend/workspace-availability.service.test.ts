@@ -1,6 +1,8 @@
+import assert from "node:assert/strict";
 import "@/shared/testing/workspace-test-env";
 import { describe, expect, mock, test } from "bun:test";
 import {
+  DotyposReservationIdSchema,
   type DotyposReservationInterval,
   DotyposService,
 } from "@deskohub/dotypos";
@@ -22,6 +24,8 @@ import {
   type MeetingRoomReservationDurationKey,
 } from "@/features/reservation/meeting-room-reservation-duration";
 import { getMeetingRoomDayStartTimes } from "@/features/reservation/meeting-room-reservation-time";
+import { TeamTableInventory } from "@/features/team-table/backend/team-table-inventory";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { expectScalarLogAnnotations } from "@/shared/testing/log-annotations.test-utils";
 import {
   getPlainDatesBetween,
@@ -33,8 +37,10 @@ import {
 } from "../workspace-availability";
 import {
   AdvisoryAvailabilityInventory,
+  type AvailabilityInventory,
   makeProviderInventory,
 } from "./availability-inventory";
+import { decodeBookedReservation } from "./booked-reservation";
 import {
   GoogleCalendarWorkspaceLimitationsService,
   WorkspaceCalendarLimitation,
@@ -132,6 +138,7 @@ const defaultTables = [
 const runWithInventory = async <A>(
   effect: Effect.Effect<A, unknown, WorkspaceAvailabilityService>,
   input: {
+    readonly teamTableOpen?: boolean;
     readonly tables?: readonly Table[];
     readonly reservations?: readonly Reservation[];
     /** Reservations in the shared snapshot; defaults to the live provider. */
@@ -157,6 +164,20 @@ const runWithInventory = async <A>(
         Layer.provide(makeAdvisoryInventory(input)),
         Layer.provide(
           Layer.mergeAll(
+            TeamTableReleaseGate.fromDecision(input.teamTableOpen ?? false),
+            Layer.succeed(TeamTableInventory, (records) =>
+              Effect.succeed(
+                records.flatMap((record) => {
+                  const tableId = record._tableId;
+                  const interval = Option.getOrUndefined(
+                    decodeBookedReservation(record).occupiedInterval
+                  );
+                  return tableId && interval
+                    ? [{ tableId, interval, kind: "unknown" as const }]
+                    : [];
+                })
+              )
+            ),
             Layer.succeed(DotyposService, {
               // The provider inventory builds this effect once and runs it
               // per read, so the read is counted when it runs.
@@ -189,7 +210,8 @@ const runWithInventory = async <A>(
                 return Effect.succeed([...(input.limitations ?? [])]);
               }),
             }),
-            Layer.succeed(WorkspaceReservationRepository, {
+            Layer.mock(WorkspaceReservationRepository, {
+              selectLocalTableCapacity: () => Effect.succeed([]),
               selectPendingPassDayCapacity: () => Effect.succeed([]),
               selectExpiredHoldDotyposReservationIds: mock(() => {
                 if (input.expiredHoldDotyposReservationIdsError) {
@@ -203,11 +225,13 @@ const runWithInventory = async <A>(
                   );
                 }
 
-                return Effect.succeed([
-                  ...(input.expiredHoldDotyposReservationIds ?? []),
-                ]);
+                return Effect.succeed(
+                  (input.expiredHoldDotyposReservationIds ?? []).map((id) =>
+                    DotyposReservationIdSchema.make(id)
+                  )
+                );
               }),
-            } as never)
+            })
           )
         )
       )
@@ -215,6 +239,64 @@ const runWithInventory = async <A>(
     Effect.runPromise
   );
 };
+
+test("Team Table slots require an exact empty table until the usable cutoff", async () => {
+  const { WorkspaceAvailabilityService } = await import(
+    "./workspace-availability.service"
+  );
+  const slots = Effect.flatMap(WorkspaceAvailabilityService, (service) =>
+    service.getTableSlots({
+      query: {
+        kind: "table",
+        mode: "table-slots",
+        date: plainDateStringSchema.make("2027-01-11"),
+        seats: 4,
+      },
+    })
+  );
+  const clock = Effect.andThen(
+    TestClock.setTime(
+      Temporal.Instant.from("2027-01-01T10:00:00Z").epochMilliseconds
+    ),
+    slots
+  ).pipe(Effect.provide(TestClock.layer()));
+  const result = await runWithInventory(clock, {
+    teamTableOpen: true,
+    tables: [
+      makeTable({
+        id: "table-4",
+        seats: "4",
+        tags: ["cowork:open-space", "reservation:table"],
+      }),
+      makeTable({
+        id: "table-6",
+        seats: "6",
+        tags: ["cowork:open-space", "reservation:table"],
+      }),
+    ],
+    reservations: [
+      makeReservation({
+        id: "occupied",
+        tableId: "table-4",
+        status: "CONFIRMED",
+        startDate: "2027-01-10T23:00:00Z",
+        endDate: "2027-01-11T15:30:00Z",
+      }),
+    ],
+  });
+  expect(result).toEqual({
+    date: "2027-01-11",
+    seats: 4,
+    slotMinutes: 15,
+    usableFrom: "00:00",
+    usableUntil: "17:00",
+    availableStarts: ["16:30", "16:45"],
+    availableEndsByStart: [
+      { startTime: "16:30", endTimes: ["16:45", "17:00"] },
+      { startTime: "16:45", endTimes: ["17:00"] },
+    ],
+  });
+});
 
 /** The shared snapshot under test, the live provider by default. */
 const makeAdvisoryInventory = ({
@@ -238,7 +320,23 @@ const makeAdvisoryInventory = ({
   return AdvisoryAvailabilityInventory.Provider;
 };
 
-type SharedSnapshots = Map<string, unknown>;
+type SharedSnapshots = {
+  tables?: Effect.Success<AdvisoryAvailabilityInventory["Service"]["tables"]>;
+  readonly reservations: Map<
+    string,
+    Effect.Success<
+      ReturnType<
+        AdvisoryAvailabilityInventory["Service"]["listActiveReservationsOverlapping"]
+      >
+    >
+  >;
+  readonly limitations: Map<
+    string,
+    Effect.Success<
+      ReturnType<AdvisoryAvailabilityInventory["Service"]["listLimitations"]>
+    >
+  >;
+};
 
 /**
  * Mirrors `SharedAvailabilityInventoryLive`: one cached entry per loader and
@@ -248,38 +346,58 @@ type SharedSnapshots = Map<string, unknown>;
 const makeSharedSnapshotInventory = (snapshots: SharedSnapshots) =>
   Layer.effect(
     AdvisoryAvailabilityInventory,
-    Effect.map(makeProviderInventory, (provider) => {
-      const fromSnapshot = <A, E>(
-        key: string,
-        load: () => Effect.Effect<A, E>
-      ) =>
-        Effect.suspend(() =>
-          snapshots.has(key)
-            ? Effect.succeed(snapshots.get(key) as A)
-            : load().pipe(
-                Effect.tap((value) =>
-                  Effect.sync(() => snapshots.set(key, value))
+    Effect.map(
+      makeProviderInventory,
+      (provider: AvailabilityInventory) =>
+        ({
+          tables: Effect.suspend(() =>
+            snapshots.tables !== undefined
+              ? Effect.succeed(snapshots.tables)
+              : provider.tables.pipe(
+                  Effect.tap((value) =>
+                    Effect.sync(() => {
+                      snapshots.tables = value;
+                    })
+                  )
                 )
-              )
-        );
-
-      return {
-        tables: fromSnapshot("loadSharedTables", () => provider.tables),
-        listActiveReservationsOverlapping: ({ startDate, endDate }) =>
-          fromSnapshot(
-            `loadSharedActiveReservations:${JSON.stringify({
+          ),
+          listActiveReservationsOverlapping: ({ startDate, endDate }) => {
+            const key = `loadSharedActiveReservations:${JSON.stringify({
               startsAt: startDate.toISOString(),
               endsAt: endDate.toISOString(),
-            })}`,
-            () =>
-              provider.listActiveReservationsOverlapping({ startDate, endDate })
-          ),
-        listLimitations: (query) =>
-          fromSnapshot(`loadSharedLimitations:${JSON.stringify(query)}`, () =>
-            provider.listLimitations(query)
-          ),
-      } satisfies Context.Service.Shape<typeof AdvisoryAvailabilityInventory>;
-    })
+            })}`;
+            return Effect.suspend(() => {
+              const cached = snapshots.reservations.get(key);
+              return cached !== undefined
+                ? Effect.succeed(cached)
+                : provider
+                    .listActiveReservationsOverlapping({ startDate, endDate })
+                    .pipe(
+                      Effect.tap((value) =>
+                        Effect.sync(() =>
+                          snapshots.reservations.set(key, value)
+                        )
+                      )
+                    );
+            });
+          },
+          listLimitations: (query) => {
+            const key = `loadSharedLimitations:${JSON.stringify(query)}`;
+            return Effect.suspend(() => {
+              const cached = snapshots.limitations.get(key);
+              return cached !== undefined
+                ? Effect.succeed(cached)
+                : provider
+                    .listLimitations(query)
+                    .pipe(
+                      Effect.tap((value) =>
+                        Effect.sync(() => snapshots.limitations.set(key, value))
+                      )
+                    );
+            });
+          },
+        }) satisfies Context.Service.Shape<typeof AdvisoryAvailabilityInventory>
+    )
   );
 
 type CapturedLog = {
@@ -718,7 +836,9 @@ describe("WorkspaceAvailabilityService", () => {
       ({ annotations }) => "tableCount" in annotations
     );
     expect(inventoryLogs).toHaveLength(1);
-    const [{ annotations }] = inventoryLogs as [CapturedLog];
+    const [inventoryLog] = inventoryLogs;
+    assert(inventoryLog);
+    const { annotations } = inventoryLog;
     expect(annotations).toMatchObject({
       activeReservationCount: 1,
       dateCount: 1,
@@ -1736,8 +1856,10 @@ describe("WorkspaceAvailabilityService meeting-room start times", () => {
           },
           ...(input.excludedDotyposReservationId && {
             occupancyExclusion: {
-              dotyposReservationId: input.excludedDotyposReservationId,
-            } as never,
+              dotyposReservationId: DotyposReservationIdSchema.make(
+                input.excludedDotyposReservationId
+              ),
+            },
           }),
         });
       }).pipe(Effect.provide(TestClock.layer())),
@@ -2237,7 +2359,10 @@ describe("WorkspaceAvailabilityService meeting-room start times", () => {
       (singleCheck) =>
         requestedRanges.map((range) => [singleCheck, range] as const)
     )) {
-      const sharedSnapshots: SharedSnapshots = new Map();
+      const sharedSnapshots: SharedSnapshots = {
+        reservations: new Map(),
+        limitations: new Map(),
+      };
       const loads: string[] = [];
       const onProviderRead = (read: string) => loads.push(read);
 
@@ -2350,8 +2475,10 @@ describe("WorkspaceAvailabilityService meeting-room unavailable dates", () => {
           query: { from: input.from ?? testDate, to: input.to ?? nextTestDate },
           ...(input.excludedDotyposReservationId && {
             occupancyExclusion: {
-              dotyposReservationId: input.excludedDotyposReservationId,
-            } as never,
+              dotyposReservationId: DotyposReservationIdSchema.make(
+                input.excludedDotyposReservationId
+              ),
+            },
           }),
         });
       }).pipe(Effect.provide(TestClock.layer())),

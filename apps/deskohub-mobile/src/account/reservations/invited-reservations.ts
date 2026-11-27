@@ -12,7 +12,10 @@ import { parseInstant } from "../../i18n/date-time-format";
 import { m } from "../../i18n/messages";
 import { bookingTimeLine } from "./booking-ticket-text";
 import { type DateTileParts, dateTileParts } from "./booking-time";
-import { reservationProductTitle } from "./reservation-labels";
+import {
+  isTeamTableProduct,
+  reservationProductTitle,
+} from "./reservation-labels";
 
 /**
  * GET /reservations/invitations: the orders someone else booked that
@@ -72,13 +75,21 @@ export const invitedReservationView = (
     detail: [
       Option.match(Option.all([start, end]), {
         onNone: () => m.reservations_value_unavailable({}, { locale }),
-        onSome: ([from, until]) => bookingTimeLine(from, until, locale),
+        onSome: ([from, until]) =>
+          bookingTimeLine(
+            from,
+            until,
+            locale,
+            undefined,
+            isTeamTableProduct(invited.product)
+          ),
       }),
       ...Option.toArray(
         Option.map(Option.fromNullishOr(invited.bookedBy.name), (name) =>
           m.reservations_booked_by_name({ name }, { locale })
         )
       ),
+      ...Option.toArray(Option.fromUndefinedOr(invited.todayAccess?.tableName)),
     ].join(" · "),
   };
 };

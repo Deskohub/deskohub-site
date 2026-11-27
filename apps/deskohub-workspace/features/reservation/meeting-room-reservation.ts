@@ -1,3 +1,13 @@
+import {
+  workspaceMeetingRoomProductIdentitySchema,
+  type workspaceMeetingRoomProductTargetSchema,
+} from "@deskohub/workspace-domain/features/reservation/meeting-room-reservation";
+
+export {
+  workspaceMeetingRoomProductIdentitySchema,
+  workspaceMeetingRoomProductTargetSchema,
+} from "@deskohub/workspace-domain/features/reservation/meeting-room-reservation";
+
 import { Effect, Schema, SchemaGetter, SchemaIssue } from "effect";
 import { workspaceMeetingRoomCatalog } from "@/features/checkout/product-catalog";
 import { m } from "@/features/i18n";
@@ -42,17 +52,8 @@ import {
 
 const decodePlainDate = Schema.decodeUnknownSync(plainDateStringSchema);
 
-export const workspaceMeetingRoomProductIdentitySchema = Schema.Struct({
-  kind: Schema.Literal(meetingRoomReservationKind),
-  duration: meetingRoomReservationDurationSchema,
-});
-
 export type WorkspaceMeetingRoomProductIdentity =
   typeof workspaceMeetingRoomProductIdentitySchema.Type;
-
-export const workspaceMeetingRoomProductTargetSchema = Schema.Struct({
-  kind: workspaceMeetingRoomProductIdentitySchema.fields.kind,
-});
 
 export type WorkspaceMeetingRoomProductTarget =
   typeof workspaceMeetingRoomProductTargetSchema.Type;

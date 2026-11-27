@@ -34,10 +34,8 @@ import {
   InviteeEmail,
   type ValidOfficePeople,
 } from "@/features/office/office-people";
-import type {
-  StoredWorkspaceReservationDetails,
-  WorkspaceReservationId,
-} from "@/features/reservation/persistence-contracts";
+import type { WorkspaceReservation } from "@/features/reservation/backend/workspace-reservation.repository";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import {
   getReservationInviteeRetainUntil,
   type ReservationInviteeId,
@@ -73,7 +71,7 @@ interface SealedInvitee {
 }
 
 /**
- * Who is coming to an office, sealed for the draft transaction that records
+ * Who is coming to a reservation, sealed for the transaction that records
  * it beside the reservation row: `contactAttends` goes on the reservation,
  * each invitee becomes a row.
  */
@@ -85,7 +83,7 @@ export interface SealedOfficePeople {
 
 /**
  * Seals a validated people list under the active key. `accessEndsAt` is the
- * end of the office's last booked day; the address is kept 30 days past it.
+ * end of the booking's access; the address is kept 30 days past it.
  */
 export const sealOfficePeople = Effect.fn("reservationInvitees.seal")(
   function* (people: ValidOfficePeople, accessEndsAt: Temporal.Instant) {
@@ -106,28 +104,30 @@ export const sealOfficePeople = Effect.fn("reservationInvitees.seal")(
 );
 
 /**
- * Inserts a draft's invitee rows in the caller's transaction, in list order.
+ * Inserts invitee rows in the caller's transaction, in list order.
  * The statement binds the address and its key, so it runs untraced and a
  * failure leaves with its parameters censored.
  */
 export const recordOfficeInvitees = Effect.fnUntraced(function* (
   reservationId: WorkspaceReservationId,
-  people: SealedOfficePeople
+  people: SealedOfficePeople,
+  firstPosition = 0
 ) {
-  if (people.invitees.length === 0) return;
+  if (people.invitees.length === 0) return [];
   const { db } = yield* WorkspaceTransaction;
-  yield* db
+  return yield* db
     .insert(reservationInvitees)
     .values(
       people.invitees.map((invitee, position) => ({
         workspaceReservationId: reservationId,
-        position,
+        position: firstPosition + position,
         keyId: invitee.keyId,
         encryptedEmail: invitee.encryptedEmail,
         emailLookupKey: invitee.emailLookupKey,
         retainUntil: people.retainUntil,
       }))
     )
+    .returning({ id: reservationInvitees.id })
     .pipe(
       Effect.withTracerEnabled(false),
       Effect.mapError(censorDatabaseQueryError)
@@ -171,24 +171,31 @@ export interface DueReservationInvitee {
   readonly paid: boolean;
 }
 
-/**
- * What `findBookedPeople` reads off a stored reservation: its stored
- * `office_contact_attends` and the seats its office snapshot booked.
- */
-export const getBookedPeopleQuery = (reservation: {
-  readonly id: WorkspaceReservationId;
-  readonly officeContactAttends: boolean | null;
-  readonly reservationDetails: StoredWorkspaceReservationDetails;
-}) => ({
-  id: reservation.id,
-  officeContactAttends: reservation.officeContactAttends,
-  seats:
-    reservation.reservationDetails.kind === "office"
-      ? reservation.reservationDetails.seats
-      : undefined,
-});
+/** The stored facts that determine how to read the booker's guest list. */
+export const getBookedPeopleQuery = (
+  reservation: Pick<
+    WorkspaceReservation,
+    | "id"
+    | "officeContactAttends"
+    | "reservationDetails"
+    | "paymentState"
+    | "reservationState"
+  >
+) => {
+  const details = reservation.reservationDetails;
+  return {
+    id: reservation.id,
+    officeContactAttends: reservation.officeContactAttends,
+    paidAndConfirmed:
+      reservation.paymentState === "paid" &&
+      reservation.reservationState === "confirmed",
+    ...(details.kind === "office" || details.kind === "table"
+      ? { kind: details.kind, seats: details.seats }
+      : { kind: undefined, seats: undefined }),
+  };
+};
 
-/** Who is coming to a booked office, as its booker sees them. */
+/** Who is coming to a reservation, as its booker sees them. */
 export interface BookedOfficePeople {
   readonly contactAttends: boolean;
   readonly invitees: ReadonlyArray<
@@ -198,16 +205,13 @@ export interface BookedOfficePeople {
 
 export interface IReservationInvitees {
   /**
-   * Who is coming to a reservation booked with a people list, from its
-   * stored `office_contact_attends`, booked `seats` and invitee rows. None
-   * for any other reservation, and once the retention purge reduced or
-   * deleted an invitee (`getBookedOfficePeople`).
+   * The recorded attendance choice and retained invitees. Office has a
+   * fixed head count. Confirmed Team Table guests may be added after booking,
+   * with capacity checked against the provider when they are added.
    */
-  readonly findBookedPeople: (reservation: {
-    readonly id: WorkspaceReservationId;
-    readonly officeContactAttends: boolean | null;
-    readonly seats: number | undefined;
-  }) => Effect.Effect<
+  readonly findBookedPeople: (
+    reservation: ReturnType<typeof getBookedPeopleQuery>
+  ) => Effect.Effect<
     Option.Option<BookedOfficePeople>,
     ReservationInviteeStorageError
   >;
@@ -436,18 +440,33 @@ export class ReservationInvitees extends Context.Service<
         );
 
       return ReservationInvitees.of({
-        findBookedPeople: ({ id, officeContactAttends, seats }) =>
-          officeContactAttends === null || seats === undefined
-            ? Effect.succeed(Option.none())
-            : listForReservation(id).pipe(
-                Effect.map((invitees) =>
-                  getBookedOfficePeople({
-                    contactAttends: officeContactAttends,
-                    seats,
-                    invitees,
-                  })
-                )
-              ),
+        findBookedPeople: Effect.fnUntraced(function* ({
+          id,
+          officeContactAttends,
+          seats,
+          kind,
+          paidAndConfirmed,
+        }) {
+          if (officeContactAttends === null) return Option.none();
+
+          if (kind === "table" && paidAndConfirmed) {
+            const invitees = yield* listForReservation(id);
+            return invitees.every(
+              (invitee): invitee is BookedOfficePeople["invitees"][number] =>
+                invitee.email !== null
+            )
+              ? Option.some({ contactAttends: officeContactAttends, invitees })
+              : Option.none();
+          }
+
+          if (seats === undefined) return Option.none();
+          return getBookedOfficePeople({
+            contactAttends: officeContactAttends,
+            seats,
+            invitees: yield* listForReservation(id),
+            kind,
+          });
+        }),
         listForReservation: (reservationId) =>
           listWhere(
             eq(reservationInvitees.workspaceReservationId, reservationId),

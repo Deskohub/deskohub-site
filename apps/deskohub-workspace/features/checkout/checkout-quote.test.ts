@@ -6,6 +6,7 @@ import type { WorkspaceProductMonitorOption } from "@/features/checkout/product-
 import { workspaceProductMonitorOptions } from "@/features/checkout/product-catalog";
 import type { AppliedDiscount, DiscountQuote } from "@/features/discounts";
 import { discountIdSchema } from "@/features/discounts/contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   buildCoworkCheckoutSummary,
   buildCoworkReservationQuote as buildCoworkPriceQuote,
@@ -122,7 +123,8 @@ describe("cowork reservation quotes", () => {
     expect(withWorkstation.summary.sections[0]?.items.slice(1)).toEqual([
       {
         key: "addon:workstation",
-        amount: withWorkstation.items[1]!.amount,
+        amount: requireValue(withWorkstation.items[1], "workstation quote item")
+          .amount,
         monitorOption: "2x27-qhd",
       },
     ]);

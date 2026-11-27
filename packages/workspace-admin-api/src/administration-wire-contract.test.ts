@@ -10,6 +10,7 @@ import {
   OpenApi,
 } from "effect/http-api";
 import {
+  dhwTeamTableHeader,
   dhwVersionHeader,
   MinimumDhwVersion,
   OutdatedDhwRefusal,
@@ -259,6 +260,7 @@ const wireContractOf = <
     },
   });
   return {
+    dhwTeamTableHeader,
     dhwVersionHeader,
     groups,
     components: {
@@ -287,6 +289,7 @@ type RecordedEndpoint = JsonObject & {
 };
 
 type RecordedContract = {
+  readonly dhwTeamTableHeader: Json;
   readonly dhwVersionHeader: Json;
   readonly groups: Readonly<
     Record<string, Readonly<Record<string, RecordedEndpoint>>>
@@ -577,6 +580,7 @@ const wireFormOf = (contract: RecordedContract) => {
     contract.components.schemas
   );
   return {
+    dhwTeamTableHeader: contract.dhwTeamTableHeader,
     dhwVersionHeader: contract.dhwVersionHeader,
     securitySchemes: contract.components.securitySchemes,
     groups: Object.fromEntries(

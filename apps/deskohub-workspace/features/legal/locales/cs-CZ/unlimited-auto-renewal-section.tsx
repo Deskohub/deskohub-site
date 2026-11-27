@@ -2,9 +2,9 @@ import type { LegalSection } from "../../legal-document-body";
 import { contactEmail } from "../operator-details";
 
 export const unlimitedAutoRenewalSection: LegalSection = {
-  heading: "16. Automatické obnovování členství Unlimited",
+  heading: "16. Automatické obnovování neomezeného členství",
   body: [
-    "16.1 Automatické obnovování si může zvolit pouze Klient, který si členství Unlimited kupuje pro sebe. Členství poskytuje sjednané služby v navazujících obdobích po 30 kalendářních dnech v časovém pásmu Europe/Prague. Smlouva při zvoleném obnovování trvá na dobu neurčitou bez dalšího minimálního závazku. Bez této volby přístup skončí s koncem zaplaceného období.",
+    "16.1 Automatické obnovování si může zvolit pouze Klient, který si neomezené členství kupuje pro sebe. Členství poskytuje sjednané služby v navazujících obdobích po 30 kalendářních dnech v časovém pásmu Europe/Prague. Smlouva při zvoleném obnovování trvá na dobu neurčitou bez dalšího minimálního závazku. Bez této volby přístup skončí s koncem zaplaceného období.",
     <>
       16.2 Aktuální ceny jsou uvedeny v{" "}
       <a
@@ -26,8 +26,8 @@ export const unlimitedAutoRenewalSection: LegalSection = {
     "16.4 Klient povoluje budoucí platby z karty samostatným zaškrtávacím políčkem, které je ve výchozím stavu prázdné. Souhlas umožňuje Poskytovateli strhávat sjednanou částku každých 30 kalendářních dnů do zrušení obnovování. První karetní platba a případné ověření probíhají u Nexi. Poskytovatel použije pro další platby platební referenci. Potvrzení na trvalém nosiči obsahuje přijaté podmínky, udělený souhlas, částku, termíny a postup zrušení.",
     "16.5 Sedm kalendářních dnů před každou plánovanou platbou Poskytovatel pošle Klientovi e-mail s datem a částkou platby, dalším obdobím služby, lhůtou pro zrušení do 00:00 pražského času v den obnovení a přímým odkazem na správu obnovování. Jde o provozní zprávu, jejíž zasílání nezávisí na souhlasu s marketingem.",
     <>
-      16.6 Klient může obnovování bezplatně zrušit v části Balíčky ve svém účtu
-      nebo jednoznačným oznámením na{" "}
+      16.6 Klient může obnovování bezplatně zrušit v části Balíčky a členství ve
+      svém účtu nebo jednoznačným oznámením na{" "}
       <a
         className="text-burned-orange underline underline-offset-4"
         href={`mailto:${contactEmail}`}
@@ -43,7 +43,7 @@ export const unlimitedAutoRenewalSection: LegalSection = {
       zrušení potvrdí bez zbytečného odkladu, po zrušení už nezahájí žádnou
       další platbu za obnovení a přístup trvá do konce zaplaceného období.
     </>,
-    "16.7 Poskytovatel před platbou zajistí kapacitu na celé další období. Pokud nemůže poskytnout sjednanou službu nebo konkrétní vyhrazené místo (Reserved Desk), požádá Klienta o souhlas s vhodnou alternativou nebo obnovování ukončí bez platby za další období. Jiná cena, změna pravidelného doplňku nebo podstatná změna služby vyžadují nový souhlas Klienta před platbou. Pokud si Klient pro sebe koupí další členství Unlimited, které pokrývá plánovaný den obnovení, původní členství se přestane obnovovat. Balíčky vstupů ani členství koupená jako dárek pro jinou osobu původní obnovování neukončí. Pokud přesto proběhne platba za obnovení původního členství, Poskytovatel duplicitní období zruší a platbu vrátí v plné výši bez zbytečného odkladu. Nové členství se obnovuje automaticky jen tehdy, když k tomu Klient při nákupu udělí samostatný souhlas.",
+    "16.7 Poskytovatel před platbou zajistí kapacitu na celé další období. Pokud nemůže poskytnout sjednanou službu nebo konkrétní vyhrazené místo (Reserved Desk), požádá Klienta o souhlas s vhodnou alternativou nebo obnovování ukončí bez platby za další období. Jiná cena, změna pravidelného doplňku nebo podstatná změna služby vyžadují nový souhlas Klienta před platbou. Pokud si Klient pro sebe koupí další neomezené členství, které pokrývá plánovaný den obnovení, původní členství se přestane obnovovat. Balíčky vstupů ani členství koupená jako dárek pro jinou osobu původní obnovování neukončí. Pokud přesto proběhne platba za obnovení původního členství, Poskytovatel duplicitní období zruší a platbu vrátí v plné výši bez zbytečného odkladu. Nové členství se obnovuje automaticky jen tehdy, když k tomu Klient při nákupu udělí samostatný souhlas.",
     <>
       16.8 Pokud se platba za obnovení nezdaří, Poskytovatel Klienta vyrozumí a
       nabídne mu novou objednávku. Neúspěšnou platbu nebude automaticky

@@ -9,7 +9,7 @@ import {
   type PaymentPageReopeningInput,
 } from "@/features/checkout/backend/checkout/checkout-payment-page.service";
 import { getReservationAccessCookieName } from "@/features/reservation/backend/reservation-access-cookie";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { mockWorkspaceActionRequest } from "@/shared/testing/workspace-action-request.test-utils";
 
 mock.module("server-only", () => ({}));
@@ -19,7 +19,7 @@ const { reopenPaymentPageForVisitor, reopenPaymentPageSchema } = await import(
   "./reopen-payment-page.server"
 );
 
-const orderId = "reservation-reopen-action" as WorkspaceReservationId;
+const orderId = workspaceReservationIdSchema.make("reservation-reopen-action");
 
 /** What a client may send, including fields the action must ignore. */
 type ClientInput = {
@@ -66,7 +66,9 @@ describe("reopening a payment page from the status page", () => {
 
   test("asks without a cookie when the visitor holds none for the order", async () => {
     request.setCookie(
-      getReservationAccessCookieName("another-order" as WorkspaceReservationId),
+      getReservationAccessCookieName(
+        workspaceReservationIdSchema.make("another-order")
+      ),
       "other-cookie"
     );
 

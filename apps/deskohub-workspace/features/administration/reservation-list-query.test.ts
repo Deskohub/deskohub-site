@@ -8,6 +8,7 @@ import {
   setSystemTime,
   test,
 } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { getSearchParamsRecord } from "@/shared/utils/search-params";
 import { reservationListQuery } from "./reservation-list-query";
 
@@ -35,7 +36,7 @@ describe("reservationListQuery", () => {
         type: "office",
       })
     ).toEqual({
-      customerId: "dotypos-customer-1" as never,
+      customerId: DotyposCustomerIdSchema.make("dotypos-customer-1"),
       direction: "asc",
       from: "2026-08-01",
       page: 3,
@@ -136,13 +137,15 @@ describe("reservationListQuery", () => {
   test("exports the list's filters and order without the page", () => {
     const query = reservationListQuery.parse({
       page: "2",
+      sort: "reservation",
       status: "cancelled",
       to: "2026-08-31",
+      type: "table",
     });
     const href = reservationListQuery.exportHref(query);
 
     expect(href).toBe(
-      "/admin/reservations/export?direction=desc&sort=created&status=cancelled&to=2026-08-31"
+      "/admin/reservations/export?direction=desc&sort=reservation&status=cancelled&to=2026-08-31&type=table"
     );
     const { page: _, ...withoutPage } = query;
     expect(reservationListQuery.parseExport(fromHref(href))).toEqual(

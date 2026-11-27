@@ -1,6 +1,7 @@
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { WorkspaceWorkload } from "../config/stack-config";
+import { workspaceApiServiceId } from "../resources/workload-names";
 import { ReleaseServiceReadback } from "./release-platform";
 import type { ReleaseRecord } from "./release-record";
 
@@ -27,7 +28,7 @@ export class ReleaseServicesReconciling extends Data.TaggedError(
 }> {}
 
 export const releaseWorkloads: ReadonlyArray<WorkspaceWorkload> = [
-  "web",
+  "api",
   "tasks-worker",
   "scheduler-worker",
 ];
@@ -43,7 +44,7 @@ export const observeReleaseServices = Effect.gen(function* () {
 });
 
 /**
- * Refuse a record without a serving release while the web service or
+ * Refuse a record without a serving release while the API service or
  * either worker exists. Callers run it on the record version they are about
  * to write over, so no newer record slips in between check and write.
  */
@@ -73,5 +74,45 @@ export const requireQuietReleaseServices = Effect.gen(function* () {
   );
   if (reconciling.length > 0) {
     return yield* new ReleaseServicesReconciling({ workloads: reconciling });
+  }
+});
+
+/**
+ * The record names revisions of another service: a record written before
+ * the web service became `workspace-api`. Cloud Run revisions belong to
+ * the service that created them, so the API service can never route to
+ * them. Nothing proceeds from it; an operator destroys the old stack and
+ * resets the record before the first API release.
+ */
+export class ReleaseRecordNamesOtherService extends Data.TaggedError(
+  "ReleaseRecordNamesOtherService"
+)<{
+  readonly revisions: ReadonlyArray<string>;
+}> {}
+
+/** Every revision name the record may declare or route traffic to. */
+const recordRevisions = (record: ReleaseRecord) => [
+  ...[
+    record.materialized,
+    record.active,
+    record.previous,
+    record.candidate,
+    record.pendingApply?.target ?? null,
+    ...record.compatible,
+  ].flatMap((deployment) => (deployment === null ? [] : [deployment.revision])),
+  ...(record.materialized?.template === undefined
+    ? []
+    : [record.materialized.template.revision]),
+];
+
+/** Refuse a record naming any revision outside the API service. */
+export const requireRecordNamesApiRevisions = Effect.fn(
+  "WorkspaceRelease.requireRecordNamesApiRevisions"
+)(function* (record: ReleaseRecord) {
+  const foreign = recordRevisions(record).filter(
+    (revision) => !revision.startsWith(`${workspaceApiServiceId}-`)
+  );
+  if (foreign.length > 0) {
+    return yield* new ReleaseRecordNamesOtherService({ revisions: foreign });
   }
 });

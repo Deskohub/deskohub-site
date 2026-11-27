@@ -273,7 +273,9 @@ const loadOpenSpaceReservationFromSyntheticSnapshot = async () => {
   } as WorkspaceReservation;
   const details = await Effect.gen(function* () {
     const service = yield* WorkspaceReservationService;
-    return yield* service.getReservation("reservation-id");
+    return yield* service.getReservation("reservation-id", {
+      requireOpenSpaceTableNames: true,
+    });
   }).pipe(
     Effect.provide(
       WorkspaceReservationService.Default.pipe(
@@ -281,6 +283,9 @@ const loadOpenSpaceReservationFromSyntheticSnapshot = async () => {
           Layer.mergeAll(
             Layer.mock(WorkspaceReservationRepository, {
               findById: mock(() => Effect.succeed(workspaceReservation)),
+              selectTeamTableDotyposReservationIds: () =>
+                Effect.succeed(["team-booking-12"]),
+              selectExpiredHoldDotyposReservationIds: () => Effect.succeed([]),
             }),
             Layer.mock(DotyposService, {
               getReservation: mock(() => {
@@ -296,6 +301,18 @@ const loadOpenSpaceReservationFromSyntheticSnapshot = async () => {
                 providerReads.push("getTables");
                 return Effect.succeed(tables);
               }),
+              listActiveReservationsOverlapping: () => {
+                providerReads.push("listActiveReservationsOverlapping");
+                return Effect.succeed([
+                  {
+                    ...dotyposReservation,
+                    id: "team-booking-12",
+                    _tableId: "synthetic-table-3",
+                    startDate: "2026-06-12T08:00:00.000Z",
+                    endDate: "2026-06-12T10:00:00.000Z",
+                  },
+                ]);
+              },
             }),
             SeatingMapReleaseGate.fromDecision(false)
           )
@@ -369,7 +386,7 @@ const getTextValueAfterLabel = (text: string, label: string) => {
 };
 
 describe("Open Space customer reservation emails", () => {
-  test("renders the eligible table names from loaded reservation details in HTML and text", async () => {
+  test("renders shared table names without the overlapping Team Table in HTML and text", async () => {
     const { details, providerReads } =
       await loadOpenSpaceReservationFromSyntheticSnapshot();
     const message = await sendPaidReservationEmail(details);
@@ -385,13 +402,17 @@ describe("Open Space customer reservation emails", () => {
           "https://workspace.deskohub.cz/en-US/reservation/invoice/preview",
         reservation: details,
       }).pipe(Effect.runPromise);
-    const expectedTableNames = "9-12, 15, 16, wallee, gromice";
+    const expectedTableNames = "9-11, 15, 16, wallee, gromice";
 
     expect(details.placement.table).toEqual({
       mode: "shared",
       name: expectedTableNames,
     });
-    expect(providerReads.toSorted()).toEqual(["getReservation", "getTables"]);
+    expect(providerReads.toSorted()).toEqual([
+      "getReservation",
+      "getTables",
+      "listActiveReservationsOverlapping",
+    ]);
     expect(message.html).toContain("Tables");
     expect(message.text).toContain("Tables");
     expect(getHtmlParagraphTexts(message.html)).toContain(expectedTableNames);
@@ -1315,8 +1336,8 @@ describe("sendPaidReservationEmails idempotent retry stability", () => {
     expect(secondCustomer?.idempotencyKey).toBe(idempotencyKey);
     expect(firstCustomer?.html).toContain("accessToken=");
     expect(firstCustomer?.text).toContain("accessToken=");
-    expect(firstCustomer?.html).toContain("9-12, 15, 16, wallee, gromice");
-    expect(firstCustomer?.text).toContain("9-12, 15, 16, wallee, gromice");
+    expect(firstCustomer?.html).toContain("9-11, 15, 16, wallee, gromice");
+    expect(firstCustomer?.text).toContain("9-11, 15, 16, wallee, gromice");
     expect(secondCustomer).toEqual(firstCustomer);
     expect(secondInternal).toEqual(firstInternal);
     const firstQr = firstCustomer?.attachments?.find(
