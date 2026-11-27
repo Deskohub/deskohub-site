@@ -35,10 +35,13 @@ beforeAll(() => {
 beforeEach(() => {
   requests = [];
   downloads = [];
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    requests.push(String(input));
-    return respond();
-  }) as typeof fetch;
+  globalThis.fetch = Object.assign(
+    (input: Parameters<typeof fetch>[0]) => {
+      requests.push(String(input));
+      return respond();
+    },
+    { preconnect: originalFetch.preconnect }
+  );
   URL.createObjectURL = (blob: Blob) => {
     const url = `blob:test-${blobs.size}`;
     blobs.set(url, blob);

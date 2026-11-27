@@ -130,22 +130,26 @@ describe("CustomerAgentConnectionsSection", () => {
     test(`lists each assistant with its host, date, and permissions (${locale})`, () => {
       const view = renderSection(locale, [assistant, unnamed]);
 
-      const list = view.container.querySelector<HTMLElement>(
-        assistantsStateSelectors.list
-      )!;
-      const [named, generic] =
-        list.querySelectorAll<HTMLElement>(":scope > li");
-      expect(named?.dataset.assistantConnectionId).toBe(assistant.id);
-      expect(named?.textContent).toContain("Synthetic Assistant");
-      expect(named?.textContent).toContain("assistant.invalid");
-      expect(named?.textContent).toContain(
+      const list = view.container.querySelector(assistantsStateSelectors.list);
+      if (!list) throw new Error("Missing the assistant connections list");
+      const [named, generic] = list.querySelectorAll(":scope > li");
+      if (
+        !(named instanceof HTMLLIElement) ||
+        !(generic instanceof HTMLLIElement)
+      ) {
+        throw new Error("Missing the named or unnamed assistant connection");
+      }
+      expect(named.dataset.assistantConnectionId).toBe(assistant.id);
+      expect(named.textContent).toContain("Synthetic Assistant");
+      expect(named.textContent).toContain("assistant.invalid");
+      expect(named.textContent).toContain(
         formatInstantDate({
           instant: Temporal.Instant.from(assistant.connectedAt),
           locale,
           timeZone: workspaceSiteConstants.location.timeZone,
         })
       );
-      const scopes = within(named!).getByRole("list");
+      const scopes = within(named).getByRole("list");
       expect(scopes.getAttribute("aria-label")).toContain(
         "Synthetic Assistant"
       );
@@ -156,10 +160,10 @@ describe("CustomerAgentConnectionsSection", () => {
       for (const item of scopeItems) expect(item.textContent).toBeTruthy();
       // An assistant that names nothing still shows under a fallback name,
       // so it can be disconnected.
-      expect(generic?.dataset.assistantConnectionId).toBe(unnamed.id);
-      expect(generic?.querySelector("p")?.textContent).toBeTruthy();
-      expect(within(generic!).getByRole("button")).toBeTruthy();
-      expect(within(generic!).queryByRole("list")).toBeNull();
+      expect(generic.dataset.assistantConnectionId).toBe(unnamed.id);
+      expect(generic.querySelector("p")?.textContent).toBeTruthy();
+      expect(within(generic).getByRole("button")).toBeTruthy();
+      expect(within(generic).queryByRole("list")).toBeNull();
     });
 
     test(`shows an empty state without assistants (${locale})`, () => {

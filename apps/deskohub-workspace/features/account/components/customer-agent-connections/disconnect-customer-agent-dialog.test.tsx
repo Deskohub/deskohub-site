@@ -44,10 +44,15 @@ const renderDialog = (
     }
     return element;
   };
-  const cancelButton = () =>
-    view.getByRole("button", {
+  const cancelButton = () => {
+    const element = view.getByRole("button", {
       name: m.accountAssistantDialogCancel({}, { locale }),
-    }) as HTMLButtonElement;
+    });
+    if (!(element instanceof HTMLButtonElement)) {
+      throw new Error("Missing the cancel button");
+    }
+    return element;
+  };
   const failureShown = () =>
     view.baseElement.textContent?.includes(
       m.accountAssistantDisconnectFailed({}, { locale })

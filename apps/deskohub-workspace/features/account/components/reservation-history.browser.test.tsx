@@ -101,7 +101,8 @@ afterAll(async () => {
 });
 
 const openHistory = async () => {
-  const page = await browser!.newPage({ viewport });
+  if (!browser) throw new Error("Chromium did not start");
+  const page = await browser.newPage({ viewport });
   const session = await page.context().newCDPSession(page);
   await session.send("Emulation.setSafeAreaInsetsOverride", {
     insets: { bottom: safeAreaBottom },
@@ -179,7 +180,8 @@ test.skipIf(!chromiumAvailable)(
 test.skipIf(!chromiumAvailable)(
   "keeps the Past reservations panel's padding unless the offer shows",
   async () => {
-    const page = await browser!.newPage({ viewport });
+    if (!browser) throw new Error("Chromium did not start");
+    const page = await browser.newPage({ viewport });
     const panelState = () =>
       page
         .locator('[data-account-reservation-group="past"]')
