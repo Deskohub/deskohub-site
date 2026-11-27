@@ -4,6 +4,7 @@ import {
   taggedCloudRunOrigin,
 } from "@deskohub/workspace-cloud-run/preview-generation";
 import {
+  canResumePreviewSeed,
   type PreviewServiceReadback,
   previewSnapshotFence,
   requireOwnedServices,
@@ -25,7 +26,7 @@ import {
 } from "./preview-services";
 
 const originFor = (role: PreviewRole) =>
-  `https://${previewServices[role]}-123.europe-west1.run.app`;
+  `https://${previewServices[role]}-759037106024.europe-west1.run.app`;
 
 const a: PreviewTarget = {
   pr: "8",
@@ -96,7 +97,30 @@ test("updates the branch tag from A to B without moving untagged traffic", () =>
     expect(() =>
       verifyPreviewRouting(role, readback(role, b), b)
     ).not.toThrow();
+    const [runtimeAccount] = service.template.serviceAccount.split("@");
+    expect(runtimeAccount?.length).toBeLessThanOrEqual(30);
   }
+  const worker = previewServiceProps("api", b).template.containers[0]?.env.find(
+    (item) => item.name === "WORKSPACE_PREVIEW_WORKER_ORIGIN"
+  );
+  expect(worker).toMatchObject({
+    value: `https://${previewWorkerTag(b)}---workspace-tasks-preview-759037106024.europe-west1.run.app`,
+  });
+});
+
+test("recovers an interrupted seed without replacing an active generation", () => {
+  const seed = previewServiceProps("api");
+  const services = new Map<PreviewRole, PreviewServiceReadback>([
+    [
+      "api",
+      {
+        template: seed.template,
+      },
+    ],
+  ]);
+  expect(canResumePreviewSeed(services)).toBe(true);
+  services.set("api", readback("api", a));
+  expect(canResumePreviewSeed(services)).toBe(false);
 });
 
 test("rejects a missing tag or a worker destination from a different generation", () => {

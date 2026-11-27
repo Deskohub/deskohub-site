@@ -9,6 +9,7 @@ import { flow } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
+  canResumePreviewSeed,
   PreviewServiceReadback,
   type PreviewSnapshot,
   previewSnapshotFence,
@@ -414,7 +415,9 @@ const deploy = async (pilot: Pilot) => {
     verifyPreviewRouting(role, deployed.get(role), target);
   }
   await checkPilotHead(pilot, "open");
-  process.stdout.write(`Preview commit ${pilot.sha} serves through ${previewRevision("api", target)} with worker tag ${previewWorkerTag(target)}\n`);
+  process.stdout.write(
+    `Preview commit ${pilot.sha} serves through ${previewRevision("api", target)} with worker tag ${previewWorkerTag(target)}\n`
+  );
 };
 
 const cleanup = async (pilot: Pilot) => {
@@ -442,10 +445,13 @@ const cleanup = async (pilot: Pilot) => {
 const main = async () => {
   const mode = process.argv[2];
   if (mode === "seed" && process.env.GITHUB_ACTIONS !== "true") {
-    if ((await readSnapshot()).size > 0) {
-      throw new Error("Preview services already exist");
+    if (!canResumePreviewSeed(await readSnapshot())) {
+      throw new Error(
+        "Preview services contain an active generation or are changing"
+      );
     }
     await applyStack("deploy");
+    await checkPrivateServices();
     process.stdout.write("Preview seed services were created\n");
     return;
   }
