@@ -1,6 +1,8 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
+import { requireTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   getAccountSignInPath,
   getAuthCallbackPath,
@@ -29,7 +31,7 @@ const expireMagicLink = async (link: CapturedMagicLink) => {
   const identifier = await digestVerificationKey(
     await digestVerificationKey(link.token)
   );
-  const expired = await testDatabase!.pool.query(
+  const expired = await requireTestDatabase(testDatabase).pool.query(
     `update auth.verification set expires_at = now() - interval '1 second' where identifier = $1`,
     [identifier]
   );
@@ -45,12 +47,12 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("sign-up-account");
       await signInForMagicLink(auth, email, getAuthCallbackPath("en-US"));
       const [link] = sentLinks;
-      const signedIn = await verifyMagicLink(auth, link!);
+      const signedIn = await verifyMagicLink(auth, requireValue(link));
       expect(getSessionCookie(signedIn)).toBeDefined();
 
       const accountId = await userIdForEmail(email);
       expect(accountId).toBeDefined();
-      const { rows } = await testDatabase!.pool.query(
+      const { rows } = await requireTestDatabase(testDatabase).pool.query(
         `select dotypos_customer_id, deleted_at from customer_accounts where id = $1`,
         [accountId]
       );
@@ -71,12 +73,12 @@ describe.skipIf(!testDatabase)(
       await signInForMagicLink(auth, expiringEmail, callbackURL);
       await signInForMagicLink(auth, uniqueEmail("used-link"), callbackURL);
       const [expiring, used] = sentLinks;
-      const firstUse = await verifyMagicLink(auth, used!);
+      const firstUse = await verifyMagicLink(auth, requireValue(used));
       expect(getSessionCookie(firstUse)).toBeDefined();
 
-      await expireMagicLink(expiring!);
-      const expired = await verifyMagicLink(auth, expiring!);
-      const replay = await verifyMagicLink(auth, used!);
+      await expireMagicLink(requireValue(expiring));
+      const expired = await verifyMagicLink(auth, requireValue(expiring));
+      const replay = await verifyMagicLink(auth, requireValue(used));
 
       expect(getSessionCookie(expired)).toBeUndefined();
       expect(getSessionCookie(replay)).toBeUndefined();

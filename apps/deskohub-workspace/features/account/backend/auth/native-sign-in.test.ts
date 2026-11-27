@@ -3,8 +3,10 @@ import "@/shared/testing/workspace-test-env";
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
 import { customerSignInLocaleHeader } from "@deskohub/workspace-customer-api/customer-locale";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
+import { requireTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type CapturedMagicLink,
   callHandler,
@@ -24,6 +26,7 @@ import {
   verifyMagicLink,
   workspaceLogs,
 } from "./auth-handler.test-utils";
+import { errorCode } from "./auth-response.test-utils";
 
 /**
  * Native app sign-in. A sign-in email the `/app/` page sends carries the
@@ -57,8 +60,16 @@ const signIn = async (auth: TestAuth) => {
   expect((await signInForMagicLink(sender, email, "/app/account")).status).toBe(
     200
   );
-  const verified = await verifyMagicLink(auth, sentLinks[0]!);
-  return { email, cookie: cookieJar(getSessionCookie(verified)!) };
+  const verified = await verifyMagicLink(
+    auth,
+    requireValue(sentLinks[0], "sent magic link")
+  );
+  return {
+    email,
+    cookie: cookieJar(
+      requireValue(getSessionCookie(verified), "session cookie")
+    ),
+  };
 };
 
 type MintBody = {
@@ -104,23 +115,34 @@ const exchange = (
     body: JSON.stringify(body),
   });
 
+const decodeNativeSignInRedirect = Schema.decodeUnknownSync(
+  Schema.Struct({ url: Schema.String })
+);
+
 const mintedCode = async (response: Response) => {
   expect(response.status).toBe(200);
-  const { url } = (await response.json()) as { url: string };
+  const { url } = decodeNativeSignInRedirect(await response.json());
   return new URL(url);
 };
 
-const errorCode = async (response: Response) =>
-  ((await response.json()) as { code?: string }).code;
+const decodeSessionEmail = Schema.decodeUnknownSync(
+  Schema.NullOr(
+    Schema.Struct({
+      user: Schema.optionalKey(Schema.Struct({ email: Schema.String })),
+    })
+  )
+);
+
+const readSessionEmail = async (response: Response) =>
+  decodeSessionEmail(await response.json())?.user?.email;
 
 const sessionEmail = async (auth: TestAuth, response: Response) => {
   const setCookie = getSessionCookie(response);
   expect(setCookie).toBeDefined();
   const session = await callNativeHandler(auth, "/get-session", {
-    headers: { cookie: cookieJar(setCookie!) },
+    headers: { cookie: cookieJar(requireValue(setCookie, "session cookie")) },
   });
-  return ((await session.json()) as { user?: { email: string } } | null)?.user
-    ?.email;
+  return readSessionEmail(session);
 };
 
 describe("magic-link App Link", () => {
@@ -138,7 +160,7 @@ describe("magic-link App Link", () => {
       body: JSON.stringify({ email: uniqueEmail("app-link"), ...body }),
     });
     expect(response.status).toBe(200);
-    return { auth, link: sentLinks[0]! };
+    return { auth, link: requireValue(sentLinks[0], "sent magic link") };
   };
 
   test("emails the App Link with only the token for the app callback", async () => {
@@ -177,7 +199,10 @@ describe("magic-link App Link", () => {
 
   test("lets the app verify its App Link token for JSON and the session cookie", async () => {
     const { auth, link } = await sendFor({ callbackURL: "/app/auth/callback" });
-    const token = new URL(link.url).searchParams.get("token")!;
+    const token = requireValue(
+      new URL(link.url).searchParams.get("token"),
+      "URL parameter"
+    );
 
     const verified = await callNativeHandler(
       auth,
@@ -199,7 +224,10 @@ describe("magic-link App Link", () => {
 
   test("answers an expired App Link token with JSON", async () => {
     const { auth, link } = await sendFor({ callbackURL: "/app/auth/callback" });
-    const token = new URL(link.url).searchParams.get("token")!;
+    const token = requireValue(
+      new URL(link.url).searchParams.get("token"),
+      "URL parameter"
+    );
     setSystemTime(new Date(Date.now() + 10 * 60 * 1000 + 1000));
 
     const expired = await callNativeHandler(
@@ -235,7 +263,12 @@ describe("magic-link App Link", () => {
           body: JSON.stringify({ email, callbackURL: "/app/auth/callback" }),
         });
         expect(sent.status).toBe(200);
-        return new URL(sentLinks.at(-1)!.url).searchParams.get("token")!;
+        return requireValue(
+          new URL(
+            requireValue(sentLinks.at(-1), "sent magic link").url
+          ).searchParams.get("token"),
+          "sent magic link"
+        );
       };
       const verify = (token: string, cookie?: string) =>
         callNativeHandler(
@@ -246,14 +279,15 @@ describe("magic-link App Link", () => {
       const signedIn = async (email: string) => {
         const verified = await verify(await sendLink(email));
         expect(verified.status).toBe(200);
-        return cookieJar(getSessionCookie(verified)!);
+        return cookieJar(
+          requireValue(getSessionCookie(verified), "session cookie")
+        );
       };
       const signedInEmail = async (cookie: string) => {
         const session = await callNativeHandler(auth, "/get-session", {
           headers: { cookie },
         });
-        return ((await session.json()) as { user?: { email: string } } | null)
-          ?.user?.email;
+        return readSessionEmail(session);
       };
       return { auth, store, sendLink, verify, signedIn, signedInEmail };
     };
@@ -283,7 +317,9 @@ describe("magic-link App Link", () => {
         const later = await app.verify(token);
         expect(later.status).toBe(200);
         expect(
-          await app.signedInEmail(cookieJar(getSessionCookie(later)!))
+          await app.signedInEmail(
+            cookieJar(requireValue(getSessionCookie(later), "session cookie"))
+          )
         ).toBe(other.toLowerCase());
       });
     }
@@ -309,7 +345,9 @@ describe("magic-link App Link", () => {
       const verified = await app.verify(await app.sendLink(current), cookie);
       expect(verified.status).toBe(200);
       expect(
-        await app.signedInEmail(cookieJar(getSessionCookie(verified)!))
+        await app.signedInEmail(
+          cookieJar(requireValue(getSessionCookie(verified), "session cookie"))
+        )
       ).toBe(current.toLowerCase());
     });
 
@@ -325,7 +363,7 @@ describe("magic-link App Link", () => {
           }),
       });
       const cookie = await app.signedIn(uniqueEmail("app-current"));
-      const original = app.store.session[0]!;
+      const original = requireValue(app.store.session[0]);
       const originalUpdatedAt = original.updatedAt.getTime();
       expect(signIns).toEqual([
         {
@@ -338,9 +376,9 @@ describe("magic-link App Link", () => {
       const unknown = await app.verify("unknown", cookie);
       expect(unknown.status).toBe(400);
       expect(await errorCode(unknown)).toBe("INVALID_TOKEN");
-      expect(app.store.session[0]!.updatedAt.getTime()).toBeGreaterThan(
-        originalUpdatedAt
-      );
+      expect(
+        requireValue(app.store.session[0]).updatedAt.getTime()
+      ).toBeGreaterThan(originalUpdatedAt);
       expect(signIns).toHaveLength(1);
     });
 
@@ -357,7 +395,11 @@ describe("magic-link App Link", () => {
       );
       expect(redirected.status).toBe(302);
       expect(
-        await app.signedInEmail(cookieJar(getSessionCookie(redirected)!))
+        await app.signedInEmail(
+          cookieJar(
+            requireValue(getSessionCookie(redirected), "session cookie")
+          )
+        )
       ).toBe(other.toLowerCase());
     });
   });
@@ -375,7 +417,9 @@ describe("magic-link App Link", () => {
       );
       expect(failed.status).toBe(302);
       expect(
-        new URL(failed.headers.get("location")!).searchParams.get("error")
+        new URL(
+          requireValue(failed.headers.get("location"), "redirect location")
+        ).searchParams.get("error")
       ).toBe("INVALID_TOKEN");
     }
   });
@@ -402,7 +446,7 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
       appReturnURI
     );
     expect(minted.searchParams.get("state")).toBe("app-state-1");
-    const code = minted.searchParams.get("code")!;
+    const code = requireValue(minted.searchParams.get("code"), "URL parameter");
     expect(code.length).toBeGreaterThanOrEqual(32);
 
     const redeemed = await exchange(auth, {
@@ -413,7 +457,9 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
     expect(redeemed.status).toBe(200);
     expect(await sessionEmail(auth, redeemed)).toBe(email.toLowerCase());
     // The app's session is its own; the browser keeps its session.
-    expect(cookieJar(getSessionCookie(redeemed)!)).not.toBe(cookie);
+    expect(
+      cookieJar(requireValue(getSessionCookie(redeemed), "session cookie"))
+    ).not.toBe(cookie);
 
     const replayed = await exchange(auth, {
       code,
@@ -429,20 +475,23 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
     const auth = makeTestAuth();
     const { cookie } = await signIn(auth);
     const pkce = makePkce();
-    const code = (
-      await mintedCode(
-        await mint(
-          auth,
-          {
-            code_challenge: pkce.challenge,
-            code_challenge_method: "S256",
-            state: "s",
-            return_uri: appReturnURI,
-          },
-          cookie
+    const code = requireValue(
+      (
+        await mintedCode(
+          await mint(
+            auth,
+            {
+              code_challenge: pkce.challenge,
+              code_challenge_method: "S256",
+              state: "s",
+              return_uri: appReturnURI,
+            },
+            cookie
+          )
         )
-      )
-    ).searchParams.get("code")!;
+      ).searchParams.get("code"),
+      "session cookie"
+    );
 
     workspaceLogs.reset();
     const wrong = await exchange(auth, {
@@ -471,20 +520,23 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
     const auth = makeTestAuth();
     const { cookie } = await signIn(auth);
     const pkce = makePkce();
-    const code = (
-      await mintedCode(
-        await mint(
-          auth,
-          {
-            code_challenge: pkce.challenge,
-            code_challenge_method: "S256",
-            state: "s",
-            return_uri: appLinkReturnURI,
-          },
-          cookie
+    const code = requireValue(
+      (
+        await mintedCode(
+          await mint(
+            auth,
+            {
+              code_challenge: pkce.challenge,
+              code_challenge_method: "S256",
+              state: "s",
+              return_uri: appLinkReturnURI,
+            },
+            cookie
+          )
         )
-      )
-    ).searchParams.get("code")!;
+      ).searchParams.get("code"),
+      "session cookie"
+    );
 
     for (const return_uri of [appReturnURI, "evil://auth/callback"]) {
       const refused = await exchange(auth, {
@@ -510,20 +562,23 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
     const auth = makeTestAuth();
     const { cookie } = await signIn(auth);
     const pkce = makePkce();
-    const code = (
-      await mintedCode(
-        await mint(
-          auth,
-          {
-            code_challenge: pkce.challenge,
-            code_challenge_method: "S256",
-            state: "s",
-            return_uri: appReturnURI,
-          },
-          cookie
+    const code = requireValue(
+      (
+        await mintedCode(
+          await mint(
+            auth,
+            {
+              code_challenge: pkce.challenge,
+              code_challenge_method: "S256",
+              state: "s",
+              return_uri: appReturnURI,
+            },
+            cookie
+          )
         )
-      )
-    ).searchParams.get("code")!;
+      ).searchParams.get("code"),
+      "session cookie"
+    );
 
     setSystemTime(new Date(Date.now() + 3 * 60 * 1000 + 1000));
     const expired = await exchange(auth, {
@@ -539,20 +594,23 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
     const auth = makeTestAuth();
     const { cookie } = await signIn(auth);
     const pkce = makePkce();
-    const code = (
-      await mintedCode(
-        await mint(
-          auth,
-          {
-            code_challenge: pkce.challenge,
-            code_challenge_method: "S256",
-            state: "s",
-            return_uri: appReturnURI,
-          },
-          cookie
+    const code = requireValue(
+      (
+        await mintedCode(
+          await mint(
+            auth,
+            {
+              code_challenge: pkce.challenge,
+              code_challenge_method: "S256",
+              state: "s",
+              return_uri: appReturnURI,
+            },
+            cookie
+          )
         )
-      )
-    ).searchParams.get("code")!;
+      ).searchParams.get("code"),
+      "session cookie"
+    );
 
     const results = await Promise.all(
       [0, 1, 2].map(() =>
@@ -706,20 +764,23 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
     const auth = makeTestAuth();
     const { cookie } = await signIn(auth);
     const pkce = makePkce();
-    const code = (
-      await mintedCode(
-        await mint(
-          auth,
-          {
-            code_challenge: pkce.challenge,
-            code_challenge_method: "S256",
-            state: "s",
-            return_uri: appReturnURI,
-          },
-          cookie
+    const code = requireValue(
+      (
+        await mintedCode(
+          await mint(
+            auth,
+            {
+              code_challenge: pkce.challenge,
+              code_challenge_method: "S256",
+              state: "s",
+              return_uri: appReturnURI,
+            },
+            cookie
+          )
         )
-      )
-    ).searchParams.get("code")!;
+      ).searchParams.get("code"),
+      "session cookie"
+    );
 
     expect(
       (
@@ -769,13 +830,18 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
         : await mint(auth, body, sessionCookie);
       if (minted.status !== 200) return { status: minted.status };
       const redeemed = await exchange(auth, {
-        code: (await mintedCode(minted)).searchParams.get("code")!,
+        code: requireValue(
+          (await mintedCode(minted)).searchParams.get("code"),
+          "URL parameter"
+        ),
         code_verifier: pkce.verifier,
         return_uri: appReturnURI,
       });
       return {
         status: redeemed.status,
-        cookie: cookieJar(getSessionCookie(redeemed)!),
+        cookie: cookieJar(
+          requireValue(getSessionCookie(redeemed), "session cookie")
+        ),
       };
     };
 
@@ -784,7 +850,7 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
     expect(app.status).toBe(200);
     expect(signIns).toHaveLength(1);
     const session = await callHandler(auth, "/get-session", {
-      headers: { cookie: app.cookie! },
+      headers: { cookie: requireValue(app.cookie, "session cookie") },
     });
     expect(await session.json()).toMatchObject({
       session: { signedInWithCredential: false },
@@ -793,7 +859,9 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
     // Ten minutes after the browser sign-in, the app's session is as stale
     // as the browser's, and minting from it can't make a fresh one.
     setSystemTime(new Date(signedInAt + 10 * 60 * 1000 + 1000));
-    expect((await handOff(app.cookie!, true)).status).toBe(403);
+    expect(
+      (await handOff(requireValue(app.cookie, "session cookie"), true)).status
+    ).toBe(403);
   });
 
   test("limits exchanges per client IP", async () => {
@@ -844,10 +912,13 @@ describe.skipIf(!testDatabase)("app sign-in locale", () => {
         body: JSON.stringify({ email, callbackURL }),
       });
       expect(sent.status).toBe(200);
-      return sentLinks.at(-1)!;
+      return requireValue(sentLinks.at(-1), "sent magic link");
     };
     const tokenOf = (link: CapturedMagicLink) =>
-      new URL(link.url).searchParams.get("token")!;
+      requireValue(
+        new URL(link.url).searchParams.get("token"),
+        "URL parameter"
+      );
     /** The native app verifying its App Link. */
     const verifyInApp = (link: CapturedMagicLink, locale?: string) =>
       callNativeHandler(
@@ -882,15 +953,14 @@ describe.skipIf(!testDatabase)("app sign-in locale", () => {
     const id = await userIdForEmail(email);
     expect(id).toBeDefined();
     return (
-      await testDatabase!.pool.query<{ locale: string | null }>(
-        `select locale from auth."user" where id = $1`,
-        [id]
-      )
+      await requireTestDatabase(testDatabase).pool.query<{
+        locale: string | null;
+      }>(`select locale from auth."user" where id = $1`, [id])
     ).rows[0]?.locale;
   };
 
   const insertAccountWithoutLocale = (email: string) =>
-    workspaceFixtures(testDatabase!.db)
+    workspaceFixtures(requireTestDatabase(testDatabase).db)
       .account("legacy", { email })
       .pipe(Effect.runPromise);
 

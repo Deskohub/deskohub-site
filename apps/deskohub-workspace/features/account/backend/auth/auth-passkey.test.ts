@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
+import { requireTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type CapturedMagicLink,
   callHandler,
@@ -19,6 +21,7 @@ import {
   verifyMagicLink,
 } from "./auth-handler.test-utils";
 import { resolvePasskeyRelyingParty } from "./auth-hosts";
+import { errorCode } from "./auth-response.test-utils";
 import { androidApkKeyHashOrigin, nativeApp } from "./native-app";
 import {
   anonymousAaguid,
@@ -51,31 +54,36 @@ const signInByEmail = async (auth: TestAuth, label: string) => {
   const email = uniqueEmail(label);
   const captureAuth = makeTestAuth({ sentLinks });
   await signInForMagicLink(captureAuth, email);
-  const verified = await verifyMagicLink(auth, sentLinks[0]!);
+  const verified = await verifyMagicLink(
+    auth,
+    requireValue(sentLinks[0], "sent magic link")
+  );
   return {
     email,
-    userId: (await userIdForEmail(email))!,
-    cookie: cookieJar(getSessionCookie(verified)!),
+    userId: requireValue(await userIdForEmail(email), "user ID"),
+    cookie: cookieJar(
+      requireValue(getSessionCookie(verified), "session cookie")
+    ),
   };
 };
 
 const ageSessions = (userId: string, minutes: number) =>
-  testDatabase!.pool.query(
+  requireTestDatabase(testDatabase).pool.query(
     `update auth.session set created_at = now() - make_interval(mins => $2) where user_id = $1`,
     [userId, minutes]
   );
 
 const passkeysOf = async (userId: string) =>
   (
-    await testDatabase!.pool.query<{ name: string | null; aaguid: string }>(
-      `select name, aaguid from auth.passkey where user_id = $1`,
-      [userId]
-    )
+    await requireTestDatabase(testDatabase).pool.query<{
+      name: string | null;
+      aaguid: string;
+    }>(`select name, aaguid from auth.passkey where user_id = $1`, [userId])
   ).rows;
 
 const sessionCountOf = async (userId: string) =>
   (
-    await testDatabase!.pool.query(
+    await requireTestDatabase(testDatabase).pool.query(
       `select id from auth.session where user_id = $1`,
       [userId]
     )
@@ -161,6 +169,21 @@ const assertPasskey = async (
   });
 };
 
+const decodeSessionUserId = Schema.decodeUnknownSync(
+  Schema.NullOr(
+    Schema.Struct({
+      user: Schema.optionalKey(Schema.Struct({ id: Schema.String })),
+    })
+  )
+);
+
+const decodeReauthenticationOptions = Schema.decodeUnknownSync(
+  Schema.Struct({
+    userVerification: Schema.String,
+    allowCredentials: Schema.Array(Schema.Struct({ id: Schema.String })),
+  })
+);
+
 const sessionUserId = async (
   auth: TestAuth,
   cookie: string,
@@ -169,12 +192,9 @@ const sessionUserId = async (
   const response = await client(auth, "/get-session", {
     headers: { cookie },
   });
-  const body = (await response.json()) as { user?: { id: string } } | null;
+  const body = decodeSessionUserId(await response.json());
   return body?.user?.id;
 };
-
-const errorCode = async (response: Response) =>
-  ((await response.json()) as { code?: string }).code;
 
 describe.skipIf(!testDatabase)(
   "Better Auth passkeys on the migrated disposable Postgres",
@@ -265,7 +285,9 @@ describe.skipIf(!testDatabase)(
       const signedIn = await assertPasskey(auth, authenticator);
 
       expect(signedIn.status).toBe(200);
-      const cookie = cookieJar(getSessionCookie(signedIn)!);
+      const cookie = cookieJar(
+        requireValue(getSessionCookie(signedIn), "session cookie")
+      );
       expect(await sessionUserId(auth, cookie)).toBe(customer.userId);
     });
 
@@ -283,7 +305,9 @@ describe.skipIf(!testDatabase)(
       const signedIn = await assertPasskey(providerDown, authenticator);
 
       expect(signedIn.status).toBe(200);
-      const cookie = cookieJar(getSessionCookie(signedIn)!);
+      const cookie = cookieJar(
+        requireValue(getSessionCookie(signedIn), "session cookie")
+      );
       expect(await sessionUserId(providerDown, cookie)).toBe(customer.userId);
 
       const refused = await requestRegistrationOptions(providerDown, cookie);
@@ -312,10 +336,9 @@ describe.skipIf(!testDatabase)(
           cookie.includes("better-auth-passkey=")
         )
       ).toBe(true);
-      const options = (await reauthentication.json()) as {
-        readonly userVerification: string;
-        readonly allowCredentials: readonly { readonly id: string }[];
-      };
+      const options = decodeReauthenticationOptions(
+        await reauthentication.json()
+      );
       expect(options.userVerification).toBe("required");
       expect(options.allowCredentials.map(({ id }) => id)).toEqual([
         authenticator.id,
@@ -337,7 +360,9 @@ describe.skipIf(!testDatabase)(
         cookie: customer.cookie,
       });
       expect(reauthenticated.status).toBe(200);
-      const freshCookie = cookieJar(getSessionCookie(reauthenticated)!);
+      const freshCookie = cookieJar(
+        requireValue(getSessionCookie(reauthenticated), "session cookie")
+      );
       expect(await sessionUserId(auth, freshCookie)).toBe(customer.userId);
 
       expect(
@@ -403,7 +428,7 @@ describe.skipIf(!testDatabase)(
         userVerified: false,
         client: async (auth, path, init) => {
           if (path === "/passkey/verify-authentication") {
-            await testDatabase!.pool.query(
+            await requireTestDatabase(testDatabase).pool.query(
               "update auth.session set expires_at = now() + interval '28 days' where user_id = $1",
               [customer.userId]
             );
@@ -412,7 +437,9 @@ describe.skipIf(!testDatabase)(
         },
       });
       expect(rejected.status).toBe(403);
-      const refreshed = await testDatabase!.pool.query<{ refresh: boolean }>(
+      const refreshed = await requireTestDatabase(testDatabase).pool.query<{
+        refresh: boolean;
+      }>(
         "select expires_at > now() + interval '29 days' as refresh from auth.session where user_id = $1",
         [customer.userId]
       );
@@ -435,7 +462,10 @@ describe.skipIf(!testDatabase)(
 
       expect(signedIn.status).toBe(200);
       expect(
-        await sessionUserId(auth, cookieJar(getSessionCookie(signedIn)!))
+        await sessionUserId(
+          auth,
+          cookieJar(requireValue(getSessionCookie(signedIn), "session cookie"))
+        )
       ).toBe(customer.userId);
     });
 
@@ -462,7 +492,9 @@ describe.skipIf(!testDatabase)(
       });
       expect(reauthenticated.status).toBe(200);
       const deleted = await deleteUser(
-        cookieJar(getSessionCookie(reauthenticated)!)
+        cookieJar(
+          requireValue(getSessionCookie(reauthenticated), "session cookie")
+        )
       );
 
       expect(deleted.status).toBe(200);
@@ -534,7 +566,7 @@ describe.skipIf(!testDatabase)(
       expect(
         await sessionUserId(
           auth,
-          cookieJar(getSessionCookie(signedIn)!),
+          cookieJar(requireValue(getSessionCookie(signedIn), "session cookie")),
           callNativeHandler
         )
       ).toBe(customer.userId);
@@ -575,7 +607,10 @@ describe.skipIf(!testDatabase)(
 
       expect(signedIn.status).toBe(200);
       expect(
-        await sessionUserId(auth, cookieJar(getSessionCookie(signedIn)!))
+        await sessionUserId(
+          auth,
+          cookieJar(requireValue(getSessionCookie(signedIn), "session cookie"))
+        )
       ).toBe(customer.userId);
     });
 
@@ -594,7 +629,7 @@ describe.skipIf(!testDatabase)(
       expect(
         await sessionUserId(
           auth,
-          cookieJar(getSessionCookie(signedIn)!),
+          cookieJar(requireValue(getSessionCookie(signedIn), "session cookie")),
           callNativeHandler
         )
       ).toBe(customer.userId);

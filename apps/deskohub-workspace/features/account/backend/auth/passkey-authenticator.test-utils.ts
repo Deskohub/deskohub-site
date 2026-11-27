@@ -5,6 +5,7 @@ import {
   sign,
 } from "node:crypto";
 import { isoBase64URL, isoCBOR } from "@simplewebauthn/server/helpers";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 
 /**
  * A software WebAuthn authenticator for handler tests: one ES256 credential
@@ -77,8 +78,8 @@ export const makeSoftwarePasskey = ({
       [1, 2],
       [3, -7],
       [-1, 1],
-      [-2, isoBase64URL.toBuffer(jwk.x!)],
-      [-3, isoBase64URL.toBuffer(jwk.y!)],
+      [-2, isoBase64URL.toBuffer(requireValue(jwk.x, "JWK coordinate"))],
+      [-3, isoBase64URL.toBuffer(requireValue(jwk.y, "JWK coordinate"))],
     ])
   );
   let counter = 0;

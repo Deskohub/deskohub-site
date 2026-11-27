@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 
 type LookupCallback = (
   error: Error | null,
@@ -40,13 +41,14 @@ describe("customer agent client metadata transport", () => {
     void fetchClientMetadataResource("https://agent.example/oauth/client.json");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(capturedLookup).toBeDefined();
+    const lookup = requireValue(capturedLookup, "pinned DNS lookup");
 
     const allAnswer = mock<LookupCallback>(() => undefined);
-    capturedLookup!("agent.example", { all: true }, allAnswer);
+    lookup("agent.example", { all: true }, allAnswer);
     expect(allAnswer).toHaveBeenCalledWith(null, [pinned]);
 
     const singleAnswer = mock<LookupCallback>(() => undefined);
-    capturedLookup!("agent.example", {}, singleAnswer);
+    lookup("agent.example", {}, singleAnswer);
     expect(singleAnswer).toHaveBeenCalledWith(
       null,
       pinned.address,

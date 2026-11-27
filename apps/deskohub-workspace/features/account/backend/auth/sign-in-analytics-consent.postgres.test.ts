@@ -4,6 +4,8 @@ import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { AnalyticsConsentUnavailable } from "@/features/legal/backend/analytics-consent-ledger";
 import { savedConsentCookie } from "@/shared/testing/consent-cookie.test-utils";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
+import { requireTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { getAuthCallbackPath } from "../../routes";
 import {
   type CapturedMagicLink,
@@ -32,7 +34,7 @@ const signInWithCookie = async (
 ) => {
   const email = uniqueEmail("sign-in-analytics-consent");
   await signInForMagicLink(auth, email, getAuthCallbackPath("cs-CZ"));
-  const link = sentLinks.at(-1)!;
+  const link = requireValue(sentLinks.at(-1), "sent magic link");
   const forwardedFor = uniqueIp();
   const headers = cookie
     ? { "x-vercel-forwarded-for": forwardedFor, cookie }
@@ -46,7 +48,12 @@ const signInWithCookie = async (
 };
 
 const decisionsOf = async (accountId: string | undefined) => {
-  const { rows } = await testDatabase!.pool.query(
+  const { rows } = await requireTestDatabase(testDatabase).pool.query<{
+    decision: string;
+    locale: string;
+    source: string;
+    decided_at: string;
+  }>(
     `select decision, locale, source, decided_at
        from account_analytics_consent_decisions
       where account_id = $1`,
@@ -54,7 +61,7 @@ const decisionsOf = async (accountId: string | undefined) => {
   );
   return rows.map((row) => ({
     ...row,
-    decided_at: new Date(row.decided_at as string).toISOString(),
+    decided_at: new Date(row.decided_at).toISOString(),
   }));
 };
 
