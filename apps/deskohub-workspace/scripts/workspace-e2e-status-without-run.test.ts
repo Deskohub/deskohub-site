@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { Schema } from "effect";
+import { backendPreviewProofFixture } from "./shared/backend-preview-proof-fixture";
 import { findStepByName, parseWorkflow } from "./shared/workflow-contract";
 import {
   createWorkflowStepRunner,
@@ -1855,17 +1855,10 @@ exit 1
         head: { ...pullRequest.head, repo },
         user: { ...pullRequest.user, type: "User" },
       };
-      const deploymentDigest = createHash("sha256")
-        .update(previewUrl)
-        .digest("hex");
+      const proof = backendPreviewProofFixture(prNumber, targetSha, previewUrl);
       const statuses = pilot
         ? [
-            {
-              context: "Workspace backend preview",
-              creator: { login: "github-actions[bot]" },
-              description: `Workspace backend preview E2E passed for PR #${prNumber} [${deploymentDigest}]`,
-              state: "success",
-            },
+            proof.status,
             {
               context: "Workspace E2E",
               creator: { login: "github-actions[bot]" },
@@ -1908,6 +1901,14 @@ if [[ "$*" == *"/commits/${targetSha}/statuses"* ]]; then
   cat "$GH_FIXTURES/statuses.json"
   exit 0
 fi
+if [[ "$*" == *" repos/Deskohub/deskohub-site/${proof.jobsPath}?"* ]]; then
+  cat "$GH_FIXTURES/jobs.json"
+  exit 0
+fi
+if [[ "$*" == *" repos/Deskohub/deskohub-site/${proof.runPath}" ]]; then
+  cat "$GH_FIXTURES/run.json"
+  exit 0
+fi
 if [[ "$*" == *"/statuses/${targetSha}"* ]]; then
   if [[ "$*" == *"state=failure"* ]]; then
     echo "fixed" > "$state_file"
@@ -1926,6 +1927,8 @@ exit 1
           initial: { ...pr, body: initialBody },
           fixed: { ...pr, body: `## E2E flows\n- ${fixedFlow}\n` },
           statuses: [statuses],
+          run: proof.run,
+          jobs: proof.jobs,
         },
         {
           FLOWS_PUBLISH: flowsPublish,
@@ -1944,7 +1947,7 @@ exit 1
       const posts = calls.filter((call) =>
         call.includes(`statuses/${targetSha}`)
       );
-      expect(posts).toHaveLength(2);
+      expect(posts, calls.join("\n")).toHaveLength(2);
       expect(posts[0]).toContain("state=failure");
       expect(posts[1]).toContain("state=success");
       expect(posts[1]).toContain(`description=${passingStatus}`);

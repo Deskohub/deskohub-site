@@ -7,6 +7,7 @@ const integer = /^[1-9][0-9]{0,14}$/;
 const hex32 = /^[0-9a-f]{32}$/;
 const hex40 = /^[0-9a-f]{40}$/;
 const hex64 = /^[0-9a-f]{64}$/;
+const workspaceRuns = "https://github.com/Deskohub/deskohub-site/actions/runs";
 
 const digest = (values) =>
   createHash("sha256").update(JSON.stringify(values)).digest("hex").slice(0, 32);
@@ -28,6 +29,8 @@ export function pilotGenerationKey(deploymentId, revision, generation) {
   }
   return digest([deploymentId, revision, generation]);
 }
+
+export const pilotRunUrl = (runId, attempt) => `${workspaceRuns}/${runId}/attempts/${attempt}`;
 
 export function verifyPilotRun({ targetUrl, target, generation, currentRun, read }) {
   const runUrl = /^https:\/\/github\.com\/Deskohub\/deskohub-site\/actions\/runs\/([1-9][0-9]{0,14})\/attempts\/([1-9][0-9]{0,14})$/.exec(targetUrl ?? "");

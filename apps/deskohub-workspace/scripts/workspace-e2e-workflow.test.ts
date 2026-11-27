@@ -370,13 +370,16 @@ describe("workspace E2E workflow", () => {
       },
       // Cancels only its own run, and runs no exact-SHA code.
       "cancel-superseded-run": { actions: "write", "pull-requests": "read" },
+      "confirm-backend-preview": { contents: "read" },
       "publish-final-status": {
+        actions: "read",
         contents: "read",
         deployments: "read",
         "pull-requests": "read",
         statuses: "write",
       },
       "publish-status-without-run": {
+        actions: "read",
         contents: "read",
         deployments: "read",
         "pull-requests": "read",
@@ -426,6 +429,8 @@ describe("workspace E2E workflow", () => {
   test("validates the backend generation in trusted code before the pilot migrates", () => {
     const gate = doc.jobs["resolve-backend-preview"];
     expect(gate?.needs).toBe("resolve-target");
+    expect(gate?.if).toContain("github.ref_protected");
+    expect(gate?.environment).toBe("workspace-backend-preview-e2e");
     expect(gate?.env?.PR_NUMBER).toBe(
       `\${{ needs.resolve-target.outputs.pr_number }}`
     );
@@ -451,6 +456,20 @@ describe("workspace E2E workflow", () => {
   });
 
   test("passes pilot proof only to the trusted status publishers", () => {
+    const confirmation = doc.jobs["confirm-backend-preview"];
+    expect(confirmation?.needs).toEqual([
+      "resolve-target",
+      "resolve-backend-preview",
+      "test-e2e",
+    ]);
+    expect(confirmation?.if).toContain("github.ref_protected");
+    expect(confirmation?.if).toContain("needs.test-e2e.result == 'success'");
+    expect(confirmation?.name).toContain(
+      "needs.resolve-backend-preview.outputs.proof"
+    );
+    expect(confirmation?.steps?.[0]?.with?.ref).toBe(
+      `\${{ github.workflow_sha }}`
+    );
     const final = stepByName("Publish final commit status");
     const withoutRun = stepByName("Publish status without an E2E run");
     for (const publisher of [final, withoutRun]) {
@@ -463,6 +482,9 @@ describe("workspace E2E workflow", () => {
     );
     expect(final.env?.TARGET_URL_DIGEST).toBe(
       `\${{ needs.resolve-target.outputs.url_digest }}`
+    );
+    expect(final.env?.BACKEND_PREVIEW_PROOF).toContain(
+      "needs.confirm-backend-preview.result == 'success'"
     );
     expect(withoutRun.env?.BACKEND_PREVIEW_REQUIRED).toBeUndefined();
     expect(JSON.stringify(testJob)).not.toContain("TARGET_URL_DIGEST");
@@ -831,7 +853,9 @@ describe("workspace E2E workflow", () => {
     expect(doc.jobs["publish-final-status"].needs).toEqual([
       "resolve-target",
       "fill-bun-package-cache",
+      "resolve-backend-preview",
       "test-e2e",
+      "confirm-backend-preview",
     ]);
     // A target E2E never ran against gets no final status.
     expect(doc.jobs["publish-final-status"].if).toContain(
@@ -1075,6 +1099,7 @@ describe("workspace E2E workflow", () => {
       "fill-bun-package-cache": "write",
       "test-e2e": "read",
       "cancel-superseded-run": "read",
+      "confirm-backend-preview": "read",
       "publish-final-status": "read",
       "publish-status-without-run": "read",
     });

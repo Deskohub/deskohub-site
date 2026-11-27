@@ -34,6 +34,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { classifyPullRequestTarget } from "../workspace-backend-preview/target.mjs";
+import { pilotRunUrl, pilotTargetKey, verifyPilotRun } from "../workspace-backend-preview/run-proof.mjs";
 import {
   classifyE2EStatusDescription,
   diffFlowIds,
@@ -86,7 +87,9 @@ const RECONCILABLE_NO_RUN_REASONS = new Set([
 const repoSlug = process.env.GITHUB_REPOSITORY ?? "";
 const repoApi = `repos/${repoSlug}`;
 const runUrl = `${process.env.GITHUB_SERVER_URL ?? ""}/${repoSlug}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
+const runAttemptUrl = pilotRunUrl(process.env.GITHUB_RUN_ID, process.env.GITHUB_RUN_ATTEMPT);
 const pilotPrNumber = process.env.PILOT_PR_NUMBER ?? "";
+let currentPilotProof;
 
 const appendSummary = (line) => {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -184,8 +187,13 @@ const previewUrlDigest = (url) =>
 
 const previewUrlTag = (url) => previewUrlDigest(url).slice(0, 8);
 
-const backendProofDescription = (deploymentDigest) =>
-  `Workspace backend preview E2E passed for PR #${pilotPrNumber} [${deploymentDigest}]`;
+const backendProofDescription = (generation) =>
+  `Workspace backend preview E2E passed for PR #${pilotPrNumber} [${generation}]`;
+
+const readPilotRun = (path) => {
+  const result = ghApiJson([path]);
+  return result.ok ? result.data : undefined;
+};
 
 const readBackendPreviewRequirement = async (prNumber, sha) => {
   if (!pilotPrNumber) return "not-required";
@@ -216,21 +224,27 @@ const readBackendPreviewRequirement = async (prNumber, sha) => {
   }
 };
 
-const hasBackendPreviewProof = ({ deployment, statusesOk, statuses }) => {
+const hasBackendPreviewProof = ({ deployment, statusesOk, statuses, requireCurrentPilotProof }, sha) => {
   if (deployment.state !== "success" || !statusesOk) return false;
-  const description = backendProofDescription(
-    previewUrlDigest(deployment.previewUrl)
-  );
-  const proof = statuses.find(
-    (status) =>
-      status?.context === BACKEND_PREVIEW_CONTEXT &&
-      status.description === description &&
-      status.creator?.login === "github-actions[bot]"
-  );
-  return proof?.state === "success";
+  const target = pilotTargetKey(pilotPrNumber, sha, previewUrlDigest(deployment.previewUrl));
+  const proof = currentPilotProof?.target === target
+    ? currentPilotProof.status
+    : requireCurrentPilotProof ? undefined : statuses.find(
+        (status) => status?.context === BACKEND_PREVIEW_CONTEXT
+      );
+  if (proof?.state !== "success" || proof.creator?.login !== "github-actions[bot]") return false;
+  const generation = /\[([0-9a-f]{32})\]$/.exec(proof.description ?? "")?.[1];
+  if (!generation || proof.description !== backendProofDescription(generation)) return false;
+  return verifyPilotRun({
+    targetUrl: proof.target_url,
+    target,
+    generation,
+    currentRun: currentPilotProof ? runAttemptUrl : undefined,
+    read: readPilotRun,
+  });
 };
 
-const backendPreviewBlock = (snapshot, parsedPr) => {
+const backendPreviewBlock = (snapshot, parsedPr, sha) => {
   if (snapshot.backendPreviewRequirement === "not-required") return null;
   if (snapshot.backendPreviewRequirement === "unavailable") {
     return BACKEND_PREVIEW_CLASSIFICATION_UNAVAILABLE;
@@ -241,7 +255,7 @@ const backendPreviewBlock = (snapshot, parsedPr) => {
   if (snapshot.deployment.state !== "success") {
     return BACKEND_PREVIEW_DEPLOYMENT_REQUIRED;
   }
-  return hasBackendPreviewProof(snapshot) ? null : BACKEND_PREVIEW_PROOF_REQUIRED;
+  return hasBackendPreviewProof(snapshot, sha) ? null : BACKEND_PREVIEW_PROOF_REQUIRED;
 };
 
 const PREVIEW_MISMATCH_TAG_PATTERN =
@@ -620,7 +634,8 @@ const publishWithCasReconcile = async ({
     if (backendPreviewRequirement === "pilot-owned") return { skipPost: true };
     const blocked = backendPreviewBlock(
       current,
-      parsePrBodyE2EFlows(String(snapshot.pr?.body ?? ""))
+      parsePrBodyE2EFlows(String(snapshot.pr?.body ?? "")),
+      sha
     );
     if (!blocked) return decision;
     return onBlockedSuccess ?? { state: "failure", description: blocked };
@@ -855,6 +870,7 @@ const runPublishFinalStatus = async () => {
     const statusesRes = fetchCommitStatuses(targetSha);
     const deployment = fetchDeploymentState(targetSha);
     return {
+      requireCurrentPilotProof: Boolean(pilotPrNumber && prNumber === pilotPrNumber),
       prOk: prRes.ok && Boolean(prRes.data),
       pr: prRes.ok ? prRes.data : null,
       statusesOk: statusesRes.ok && Array.isArray(statusesRes.data),
@@ -868,22 +884,37 @@ const runPublishFinalStatus = async () => {
   };
 
   if (statusState === "success") {
-    const deploymentDigest = process.env.BACKEND_PREVIEW_URL_DIGEST ?? "";
+    const deploymentDigest = process.env.TARGET_URL_DIGEST ?? "";
+    const binding = /^([0-9a-f]{32})\.([0-9a-f]{32})$/.exec(process.env.BACKEND_PREVIEW_PROOF ?? "");
     if (
       pilotPrNumber &&
       prNumber === pilotPrNumber &&
       process.env.BACKEND_PREVIEW_REQUIRED === "true" &&
       parsedRunFlows.selected.includes(BACKEND_PREVIEW_FLOW) &&
-      /^[0-9a-f]{64}$/.test(deploymentDigest)
+      /^[0-9a-f]{64}$/.test(deploymentDigest) &&
+      binding
     ) {
-      // Only the trusted final publisher of a completed backend E2E run can
-      // record this proof. A PR edit or status carried from another SHA cannot.
-      postCommitStatus(targetSha, {
-        context: BACKEND_PREVIEW_CONTEXT,
-        state: "success",
-        description: backendProofDescription(deploymentDigest),
-        targetUrl: runUrl,
-      });
+      const [, target, generation] = binding;
+      if (
+        target === pilotTargetKey(prNumber, targetSha, deploymentDigest) &&
+        verifyPilotRun({ targetUrl: runAttemptUrl, target, generation, currentRun: runAttemptUrl, read: readPilotRun })
+      ) {
+        const description = backendProofDescription(generation);
+        postCommitStatus(targetSha, {
+          context: BACKEND_PREVIEW_CONTEXT,
+          state: "success",
+          description,
+          targetUrl: runAttemptUrl,
+        });
+        // The list can lag a successful status write. Recheck the authenticated
+        // job directly while reconciling the current run's result.
+        currentPilotProof = { target, status: {
+          state: "success",
+          description,
+          creator: { login: "github-actions[bot]" },
+          target_url: runAttemptUrl,
+        } };
+      }
     }
     await publishWithCasReconcile({
       sha: targetSha,
@@ -1679,7 +1710,8 @@ const runSyncPrFlows = async () => {
       if (backendPreviewRequirement === "pilot-owned") return { skipPost: true };
       const previewBlock = backendPreviewBlock(
         { backendPreviewRequirement, deployment, statusesOk, statuses },
-        parsedPr
+        parsedPr,
+        headSha
       );
       const backendPreviewRequired = backendPreviewRequirement === "required";
       const missingBackendProof = previewBlock === BACKEND_PREVIEW_PROOF_REQUIRED;

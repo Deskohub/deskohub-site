@@ -111,6 +111,8 @@ Never put production Nexi, Dotypos, or database credentials in Preview. Never ad
 | `WORKSPACE_E2E_DOTYPOS_*` | Secrets | E2E Dotypos cloud; mapped to `DOTYPOS_*` per step. |
 | `VERCEL_AUTOMATION_BYPASS_SECRET`, `NEON_API_KEY`, `TURBO_TOKEN` | Secrets | Protection bypass, branch lookup, remote cache. |
 
+The optional backend preview pilot uses `workspace-backend-preview-e2e` for protected `main`. Its reviewed jobs verify the exact Vercel deployment and recheck the tested backend generation. They use the preview deployment metadata token and protection bypass. The candidate test job retains its existing preview fixtures. The trusted publisher requires GitHub's successful confirmation job for the exact run attempt and deployment before publishing pilot coverage.
+
 ### Runner variables
 
 `e2e/e2e-env.ts` selects, validates, and decodes these once and passes typed config to telemetry, Layers, and child processes. The `test:e2e` entry in the root `turbo.json` lists them in `passThroughEnv`.
