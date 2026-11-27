@@ -2,6 +2,7 @@ import { Context, Data, Effect, Layer, Option } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   holdCustomerAccountAndPassPurchase,
+  holdsCustomerAccountSection,
   WorkspaceLockSections,
 } from "@/db/workspace-locks";
 import type { OrderId } from "@/features/order";
@@ -183,7 +184,7 @@ export class CustomerAccountSections extends Context.Service<
 
             // A combined reservation-capacity section can hold the exact account
             // key already. Authority still needs its recheck on that hold.
-            return WorkspaceLockSections.holdsCustomerAccount(accountId).pipe(
+            return holdsCustomerAccountSection(accountId).pipe(
               Effect.flatMap((held) =>
                 held ? work : holdAccount(accountId, work)
               )

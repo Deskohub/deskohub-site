@@ -6,7 +6,10 @@ import {
 import { Data, Effect, Layer, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
-import { WorkspaceLockSections } from "@/db/workspace-locks";
+import {
+  holdWorkspaceReservationOrders,
+  WorkspaceLockSections,
+} from "@/db/workspace-locks";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
 import {
@@ -318,7 +321,7 @@ export const withTeamTablePaymentCapacity = <
         WorkspaceLockSections.reservationCapacity(plan.dates, {
           sourceAccountIds: plan.sourceAccountIds,
         })(Effect.suspend(() => work(plan)));
-      return yield* WorkspaceLockSections.reservationOrders(
+      return yield* holdWorkspaceReservationOrders(
         input.orderId,
         plan.orderIds
       )(

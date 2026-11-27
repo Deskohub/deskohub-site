@@ -20,7 +20,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { Effect, Fiber, Latch, Layer, Ref, Result, Schema } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { teamTableHoldClaims, workspaceReservations } from "@/db/schema";
-import { WorkspaceLockSections } from "@/db/workspace-locks";
+import { holdsCustomerAccountSection } from "@/db/workspace-locks";
 import { customerAgentClientIdSchema } from "@/features/account/backend/auth/customer-agent-authorization.service";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { recordCheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service.mock";
@@ -687,9 +687,8 @@ describe.skipIf(!postgresDatabase)(
       const replacement = {
         ...(await tableRequest("2099-06-11")),
         recheckTeamTableAuthority: Effect.all({
-          author: WorkspaceLockSections.holdsCustomerAccount(author),
-          sourceAuthor:
-            WorkspaceLockSections.holdsCustomerAccount(sourceAuthor),
+          author: holdsCustomerAccountSection(author),
+          sourceAuthor: holdsCustomerAccountSection(sourceAuthor),
         }).pipe(
           Effect.tap((held) =>
             Effect.sync(() =>
