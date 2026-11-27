@@ -68,7 +68,7 @@ type TeamTableOpenSpaceMove = OpenSpaceMoveSource &
     readonly status: VerifiedOpenSpaceHold["status"];
   };
 
-type TeamTablePlan = {
+export type TeamTablePlan = {
   readonly tableId: DotyposTableId;
   readonly moves: readonly TeamTableOpenSpaceMove[];
 };

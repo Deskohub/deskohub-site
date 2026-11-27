@@ -8,6 +8,7 @@ import type {
   MeetingRoomStartTimesQuery,
   MeetingRoomUnavailableDatesQuery,
   PreloadedWorkspaceAvailability,
+  TableSlotsQuery,
   WorkspaceAvailabilityQuery,
 } from "@/features/reservation/workspace-availability";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
@@ -97,6 +98,23 @@ export const loadMeetingRoomStartTimes = Effect.fn(
   const service = yield* WorkspaceAvailabilityService;
   return yield* service.getMeetingRoomStartTimes({ query, occupancyExclusion });
 });
+
+export const loadTableSlots = Effect.fn("workspaceAvailability.loadTableSlots")(
+  function* ({
+    query,
+    replacementToken,
+  }: {
+    readonly query: TableSlotsQuery;
+    readonly replacementToken?: string;
+  }) {
+    const occupancyExclusion = yield* verifyReplacementOccupancyExclusion({
+      kind: query.kind,
+      replacementToken,
+    }).pipe(recoverReplacementOccupancyExclusion);
+    const service = yield* WorkspaceAvailabilityService;
+    return yield* service.getTableSlots({ query, occupancyExclusion });
+  }
+);
 
 /**
  * Advisory meeting-room calendar for a date range, excluding a verified
