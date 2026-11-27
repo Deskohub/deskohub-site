@@ -24,6 +24,7 @@ import {
   type PaymentAttempt,
   PaymentAttemptRepository,
 } from "../repositories/payment-attempt.repository";
+import { paymentAbandonedAfterProviderCutoffFailureCode } from "../repositories/payment-lifecycle-state";
 import {
   CheckoutPaymentPageService,
   type PaymentPageReopeningInput,
@@ -90,12 +91,14 @@ const makeAttempt = (
 
 const recoveredDotyposReservationId =
   DotyposReservationIdSchema.make("dotypos-recovered");
+const attemptExpiredAt = providerOrderCreatedAt.add({ hours: 1 });
+const recoveryVerifiedAt = attemptExpiredAt.add({ minutes: 1 });
 const lateRecovery = (state: "pending" | "recovered") =>
   latePaymentRecoveryFixture({
     paymentAttemptId: attemptId,
     workspaceReservationId: input.orderId,
     originalDotyposReservationId: checkoutDotyposReservationId,
-    verifiedPaidAt: providerOrderCreatedAt,
+    verifiedPaidAt: recoveryVerifiedAt,
     ...(state === "recovered"
       ? {
           state,
@@ -414,10 +417,16 @@ describe("CheckoutPaymentPageService.reopen", () => {
 
   test("closes the page while a late payment of the order is reconciled", async () => {
     const harness = createHarness({
-      reservation: makeReservation({ paymentState: "expired" }),
+      now: recoveryVerifiedAt,
+      reservation: makeReservation({
+        paymentState: "expired",
+        failureCode: paymentAbandonedAfterProviderCutoffFailureCode,
+        updatedAt: attemptExpiredAt,
+      }),
       attempt: makeAttempt({
         state: "expired",
-        failureCode: "payment_expired",
+        failureCode: paymentAbandonedAfterProviderCutoffFailureCode,
+        updatedAt: attemptExpiredAt,
       }),
       latePaymentRecovery: lateRecovery("pending"),
     });
@@ -430,16 +439,25 @@ describe("CheckoutPaymentPageService.reopen", () => {
   });
 
   test("closes the page of a paid reservation after late payment recovery", async () => {
+    const recovery = lateRecovery("recovered");
+    const { completedAt } = recovery;
+    if (completedAt === null) throw new Error("Expected recovery completion");
     const harness = createHarness({
+      now: completedAt,
       reservation: makeReservation({
         dotyposReservationId: recoveredDotyposReservationId,
         reservationState: "confirmed",
-        reservationConfirmedAt: providerOrderCreatedAt,
+        reservationCreatedAt: completedAt,
+        reservationConfirmedAt: completedAt,
         paymentState: "paid",
-        paidAt: providerOrderCreatedAt,
+        paidAt: recovery.verifiedPaidAt,
+        updatedAt: completedAt,
       }),
-      attempt: makeAttempt({ state: "paid" }),
-      latePaymentRecovery: lateRecovery("recovered"),
+      attempt: makeAttempt({
+        state: "paid",
+        updatedAt: recovery.verifiedPaidAt,
+      }),
+      latePaymentRecovery: recovery,
     });
 
     expect(await harness.reopen()).toEqual({ state: "closed", reason: "paid" });
