@@ -32,6 +32,10 @@ export type ReservationServiceSchedule =
       readonly kind: "office";
       readonly startsOn: Temporal.PlainDate;
       readonly dayCount: number;
+    }
+  | {
+      readonly kind: "table";
+      readonly startsAt: Temporal.Instant;
     };
 
 /** What a reservation's withdrawal standing depends on. */
@@ -103,6 +107,10 @@ const getReservationServiceUnits = (
               ),
             }
           : { unit: "day" as const, starts: [startsAt] },
+      table: ({ startsAt }) => ({
+        unit: "hour" as const,
+        starts: [startsAt],
+      }),
       office: ({ startsOn, dayCount }) => ({
         unit: "day" as const,
         starts: Array.from({ length: dayCount }, (_, day) =>
@@ -137,6 +145,7 @@ export const getReservationServiceSchedule = (
         duration:
           duration ?? getBookedMeetingRoomDuration(reservedFrom, reservedUntil),
       }),
+      table: () => ({ kind: "table" as const, startsAt: reservedFrom }),
       office: ({ dayCount }) => ({
         kind: "office" as const,
         startsOn,

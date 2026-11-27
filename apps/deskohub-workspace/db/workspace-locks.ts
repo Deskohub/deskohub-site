@@ -9,6 +9,7 @@ import {
   holdSection,
   holdSections,
   type LockWait,
+  sectionHolds,
   type TransactionLockRequest,
   takeTransactionLock,
 } from "./workspace-lock-ledger";
@@ -209,6 +210,8 @@ export const WorkspaceLockSections = {
     }),
   customerAccount: (accountId: CustomerAccountId) =>
     holdSection(customerAccountSection(accountId)),
+  holdsCustomerAccount: (accountId: CustomerAccountId) =>
+    sectionHolds(customerAccountSection(accountId)),
   /** All local dates touched by a booking, and any order holds it is to move. */
   reservationCapacity: (
     dates: readonly Temporal.PlainDate[],

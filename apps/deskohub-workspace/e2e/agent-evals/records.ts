@@ -45,6 +45,14 @@ const toProduct = (
           ? {}
           : { dayCount: details.dayCount }),
       };
+    case "table":
+      return {
+        family: "table",
+        ...(details.seats === undefined ? {} : { seats: details.seats }),
+        ...(details.durationMinutes === undefined
+          ? {}
+          : { durationMinutes: details.durationMinutes }),
+      };
   }
 };
 

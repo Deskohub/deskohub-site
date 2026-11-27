@@ -286,6 +286,12 @@ const withLockTimeout = <A, E, R>(
  */
 type SectionRequest = Extract<Lock, { readonly pair: PostgresAdvisoryLockKey }>;
 
+/** Whether the current fiber is running under the requested session-held key. */
+export const sectionHolds = (request: SectionRequest) =>
+  HeldSections.pipe(
+    Effect.map((sections) => sections.some((held) => isSameKey(held, request)))
+  );
+
 /** Holds every requested key in order on one reserved connection. */
 export const holdSections =
   (requests: readonly [SectionRequest, ...SectionRequest[]]) =>

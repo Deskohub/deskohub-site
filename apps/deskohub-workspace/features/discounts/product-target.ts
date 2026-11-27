@@ -11,6 +11,7 @@ import {
 import { workspaceCoworkProductTargetSchema } from "@/features/reservation/cowork-reservation-product";
 import { workspaceMeetingRoomProductTargetSchema } from "@/features/reservation/meeting-room-reservation";
 import { workspaceOfficeProductTargetSchema } from "@/features/reservation/office-reservation";
+import { workspaceTableProductTargetSchema } from "@/features/reservation/table-reservation";
 
 const entryPackFamilyTarget = { kind: "entry-pack" } as const;
 const unlimitedFamilyTarget = { kind: "unlimited" } as const;
@@ -24,6 +25,7 @@ export const workspaceProductTargetSchema = Schema.Union([
   workspaceCoworkProductTargetSchema,
   workspaceMeetingRoomProductTargetSchema,
   workspaceOfficeProductTargetSchema,
+  workspaceTableProductTargetSchema,
   entryPackProductSchema,
   Schema.Struct({
     kind: Schema.Literal("entry-pack"),
@@ -45,6 +47,7 @@ const reservationProductTargets = [
   { kind: "cowork" },
   { kind: "meeting-room" },
   { kind: "office" },
+  { kind: "table" },
 ] as const satisfies readonly WorkspaceProductTarget[];
 
 const reservationProductFamilies = reservationProductTargets.map(
@@ -125,6 +128,8 @@ export const getWorkspaceProductTargetsCovering = (
         ] as const,
       office: () =>
         [workspaceOfficeProductTargetSchema.make({ kind: "office" })] as const,
+      table: () =>
+        [workspaceTableProductTargetSchema.make({ kind: "table" })] as const,
       "entry-pack": (product) => [entryPackFamilyTarget, product] as const,
       unlimited: (product) => [unlimitedFamilyTarget, product] as const,
     })

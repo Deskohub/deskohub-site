@@ -92,9 +92,20 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import type { ReservationPrePaymentOutcome } from "@/features/reservation/reservation-analytics";
 import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { getReservationCustomerProfile } from "@/features/reservation/reservation-customer-profile";
+import type { TableReservationDetails } from "@/features/reservation/table-reservation";
+import { isTableReservationBookable } from "@/features/reservation/table-reservation-time";
 import { ReservationInviteeEmailKeys } from "@/features/reservation-invitees/backend/reservation-invitee-email-keys.service";
 import { sealOfficePeople } from "@/features/reservation-invitees/backend/reservation-invitees.service";
 import { ReviewAccounts, ReviewSandbox } from "@/features/review-accounts";
+import {
+  type TeamTableBookingCapacity,
+  TeamTableBookingCapacityLive,
+  withTeamTableBookingCapacity,
+} from "@/features/team-table/backend/team-table-booking-capacity";
+import {
+  ensureTeamTableReservationsEnabled,
+  TeamTableReleaseGate,
+} from "@/features/team-table/backend/team-table-release-gate";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { catchRecoverableCause } from "@/shared/backend/workspace-effect";
@@ -104,6 +115,7 @@ import {
   instantStringSchema,
   temporalInstantToIsoString,
 } from "@/shared/utils/temporal";
+import { BookingSelectionRejected } from "./booking-selection";
 import { resolveEntryPackBooking } from "./entry-pack-booking";
 import {
   getOfficeAccessEndsAt,
@@ -171,6 +183,7 @@ const bookingCapabilities = [
   SealedStateKeys,
   ReferralReleaseGate,
   OfficeReleaseGate,
+  TeamTableReleaseGate,
   OvernightStayReleaseGate,
 ] as const;
 
@@ -187,6 +200,7 @@ type BookingCapabilities =
   | SealedStateKeys
   | ReferralReleaseGate
   | OfficeReleaseGate
+  | TeamTableReleaseGate
   | OvernightStayReleaseGate;
 
 /** Reservation submissions, booked into a hold and a Pay page. */
@@ -211,7 +225,7 @@ export class ReservationBooking extends Context.Service<
   );
 
   /**
-   * The live booking, with the referral, office and overnight-stay release gates left to the
+   * The live booking, with reservation release gates left to the
    * caller: a request that decides them once, such as the customer HTTP API,
    * passes the gates it built, so booking shares that request's decisions.
    */
@@ -716,13 +730,8 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
     // account section evaluates once it knows the account's customer.
     const carriesAccountReferral = yield* Ref.make(false);
 
-    // The full state-creating section runs inside the account advisory
-    // lock: authority is re-checked under the lock and the same lock is
-    // held until the section completes, so deletion cannot interleave
-    // between the check and the created state. Only a signed-in account
-    // books; a session-authority failure fails closed.
-    const result = yield* accountSections.withOptionalAccount(
-      Effect.fn(function* (accountId) {
+    const prepareForAccount = (teamTableCapacity?: TeamTableBookingCapacity) =>
+      Effect.fn(function* (accountId: CustomerAccountId | null) {
         if (!accountId) {
           return yield* new CustomerAccountAccessError({
             reason: "unauthenticated",
@@ -765,6 +774,7 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
               ),
             "meeting-room": () => Effect.void,
             office: () => ensureOfficeReservationsEnabled,
+            table: () => Effect.void,
           })
         );
         if (reviewAccount) {
@@ -1012,18 +1022,27 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
             )
           );
 
+        const peopleEndsAt = Match.value(reservation).pipe(
+          Match.discriminatorsExhaustive("kind")({
+            cowork: () => undefined,
+            "meeting-room": () => undefined,
+            office: getOfficeAccessEndsAt,
+            table: ({ endsAt }) => Temporal.Instant.from(endsAt),
+          })
+        );
         const sealedOfficePeople =
-          officePeople && reservation.kind === "office"
+          officePeople && peopleEndsAt
             ? {
                 valid: officePeople,
                 sealed: yield* sealOfficePeople(
                   officePeople,
-                  getOfficeAccessEndsAt(reservation)
+                  peopleEndsAt
                 ).pipe(Effect.provide(ReservationInviteeEmailKeys.Live)),
               }
             : undefined;
         const hold = yield* holds.holdForAttempt({
           ...(sealedOfficePeople && { officePeople: sealedOfficePeople }),
+          ...(teamTableCapacity && { teamTableCapacity }),
           ...(entryPackBooking && { entryPack: entryPackBooking.entryPack }),
           checkout: {
             sessionId: input.checkoutSessionId,
@@ -1073,8 +1092,46 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
               }),
           })
         );
-      })
+      });
+
+    // Team Table acquires the booker's account key with the sources and dates
+    // it may assign. Authority is rechecked inside that combined section.
+    const prepareTable = Effect.fn("prepareWorkspacePayState.teamTable")(
+      function* (reservation: TableReservationDetails) {
+        yield* ensureTeamTableReservationsEnabled;
+        const now = yield* currentInstant;
+        if (!isTableReservationBookable(reservation, now)) {
+          return yield* BookingSelectionRejected.invalidField("endTime");
+        }
+
+        const authorAccountId = yield* accountSections.currentAccountId;
+        if (!authorAccountId) {
+          return yield* new CustomerAccountAccessError({
+            reason: "unauthenticated",
+          });
+        }
+        const reviewAccount = yield* ReviewAccounts.pipe(
+          Effect.flatMap((accounts) =>
+            accounts.isReviewAccount(authorAccountId)
+          )
+        );
+        const prepare = (capacity?: TeamTableBookingCapacity) =>
+          accountSections.withActiveAccount(
+            authorAccountId,
+            prepareForAccount(capacity)(authorAccountId),
+            { recheck: "active" }
+          );
+
+        if (reviewAccount) return yield* prepare();
+        return yield* withTeamTableBookingCapacity(
+          { reservation, authorAccountId },
+          prepare
+        ).pipe(Effect.provide(TeamTableBookingCapacityLive));
+      }
     );
+    const result = yield* input.reservation.kind === "table"
+      ? prepareTable(input.reservation)
+      : accountSections.withOptionalAccount(prepareForAccount());
 
     // Checked after the account lock is released. Booking for someone else
     // checks the booker, never the friend.

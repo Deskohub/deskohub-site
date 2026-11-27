@@ -9,6 +9,7 @@ import {
   getShareableReservationStartPath,
 } from "@/features/reservation/routes";
 import type { LinkedSelection } from "@/features/reservation/selection-link";
+import { tableSelectionLink } from "@/features/reservation/table-selection-link";
 
 /**
  * A selection a reservation page link names, in any family. Parameters it
@@ -17,7 +18,8 @@ import type { LinkedSelection } from "@/features/reservation/selection-link";
 export type ReservationSelection =
   | LinkedSelection<typeof coworkSelectionLink>
   | LinkedSelection<typeof meetingRoomSelectionLink>
-  | LinkedSelection<typeof officeSelectionLink>;
+  | LinkedSelection<typeof officeSelectionLink>
+  | LinkedSelection<typeof tableSelectionLink>;
 
 const getSelectionSearchParams = (selection: ReservationSelection) => {
   const searchParams = new URLSearchParams();
@@ -28,6 +30,7 @@ const getSelectionSearchParams = (selection: ReservationSelection) => {
         cowork: coworkSelectionLink.write,
         "meeting-room": meetingRoomSelectionLink.write,
         office: officeSelectionLink.write,
+        table: tableSelectionLink.write,
       })
     )
   );

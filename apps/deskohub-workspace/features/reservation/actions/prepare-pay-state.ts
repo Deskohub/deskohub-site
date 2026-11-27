@@ -20,6 +20,7 @@ import {
   prepareWorkspacePayState,
   ReservationBooking,
 } from "@/features/reservation/backend/reservation-booking.service";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { defineWorkspaceAction } from "@/shared/backend/workspace-action";
 import { preparePayStateSchema } from "./prepare-pay-state.schema";
 import { getPreparePayStateDeadline } from "./prepare-pay-state-deadline";
@@ -77,6 +78,7 @@ const preparePayStateAction = defineWorkspaceAction(
               ReferralReleaseGateRequest,
               CoworkPassesReleaseGate.Live,
               OfficeReleaseGate.Live,
+              TeamTableReleaseGate.Live,
               OvernightStayReleaseGate.Live
             )
           ),

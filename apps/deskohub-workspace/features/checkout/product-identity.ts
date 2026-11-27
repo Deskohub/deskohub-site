@@ -21,11 +21,17 @@ import {
   workspaceOfficeProductIdentitySchema,
   workspaceOfficeProductKeySchema,
 } from "@/features/reservation/office-reservation";
+import {
+  getWorkspaceTableProductKey,
+  workspaceTableProductIdentitySchema,
+  workspaceTableProductKeySchema,
+} from "@/features/reservation/table-reservation";
 
 export const workspaceProductIdentitySchema = Schema.Union([
   workspaceCoworkProductIdentitySchema,
   workspaceMeetingRoomProductIdentitySchema,
   workspaceOfficeProductIdentitySchema,
+  workspaceTableProductIdentitySchema,
   entryPackProductSchema,
   unlimitedPassProductSchema,
 ]);
@@ -37,6 +43,7 @@ export const workspaceProductKeySchema = Schema.Union([
   workspaceCoworkProductKeySchema,
   workspaceMeetingRoomProductKeySchema,
   workspaceOfficeProductKeySchema,
+  workspaceTableProductKeySchema,
   entryPackProductKeySchema,
   unlimitedPassProductKeySchema,
 ]);
@@ -51,6 +58,7 @@ export const getWorkspaceProductKey = (
       cowork: getWorkspaceCoworkProductKey,
       "meeting-room": getWorkspaceMeetingRoomProductKey,
       office: getWorkspaceOfficeProductKey,
+      table: getWorkspaceTableProductKey,
       "entry-pack": getPassProductKey,
       unlimited: getPassProductKey,
     })
@@ -67,6 +75,11 @@ export const getCanonicalWorkspaceProductIdentity = (
         duration,
       }),
       office: ({ dayCount, kind, seats }) => ({ kind, seats, dayCount }),
+      table: ({ durationMinutes, kind, seats }) => ({
+        kind,
+        seats,
+        durationMinutes,
+      }),
       "entry-pack": ({ kind, size, tier }) => ({ kind, size, tier }),
       unlimited: ({ kind, tier }) => ({ kind, tier }),
     })

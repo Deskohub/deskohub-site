@@ -20,6 +20,7 @@ import {
   officeAccountingDocumentSnapshotSchema,
   type PassPurchaseAccountingSnapshot,
   passPurchaseAccountingSnapshotSchema,
+  tableAccountingDocumentSnapshotSchema,
   workspaceAccountingSupplier,
 } from "./accounting-document-snapshot";
 import type { InvoiceBuyer } from "./billing-identity";
@@ -133,6 +134,12 @@ const officeInvoiceDocumentSchema = Schema.Struct({
   quote: officeAccountingDocumentSnapshotSchema.fields.quote,
 });
 
+const tableInvoiceDocumentSchema = Schema.Struct({
+  ...invoiceIdentitySchema.fields,
+  reservation: tableAccountingDocumentSnapshotSchema.fields.reservation,
+  quote: tableAccountingDocumentSnapshotSchema.fields.quote,
+});
+
 const manualInvoiceDocumentIdentitySchema = Schema.Struct({
   documentKind: Schema.Literal("manual"),
   invoiceId: invoiceIdSchema,
@@ -199,6 +206,7 @@ export const invoiceDocumentSchema = Schema.Union([
   coworkInvoiceDocumentSchema,
   meetingRoomInvoiceDocumentSchema,
   officeInvoiceDocumentSchema,
+  tableInvoiceDocumentSchema,
   manualInvoiceDocumentSchema,
   entryPackInvoiceDocumentSchema,
 ]).annotate({

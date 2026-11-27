@@ -8,6 +8,7 @@ import { CoworkCheckoutSummaryItem } from "@/features/cowork/components/cowork-c
 import { type Locale, m } from "@/features/i18n";
 import { MeetingRoomCheckoutSummaryItem } from "@/features/meeting-room/components/meeting-room-checkout-summary-item";
 import { OfficeCheckoutSummaryItem } from "@/features/office/components/office-checkout-summary-item";
+import { TableCheckoutSummaryItem } from "@/features/team-table/components/table-checkout-summary-item";
 import { CheckoutSummaryLine } from "./checkout-summary-line";
 import {
   CheckoutSummarySection,
@@ -93,6 +94,14 @@ export function CheckoutSummary({
                       item={productItem}
                       locale={locale}
                       startDateLabel={officeStartDateLabel}
+                    />
+                  )),
+                  Match.when({ product: { kind: "table" } }, (productItem) => (
+                    <TableCheckoutSummaryItem
+                      key={productItem.key}
+                      changed={itemChanged}
+                      item={productItem}
+                      locale={locale}
                     />
                   )),
                   Match.exhaustive

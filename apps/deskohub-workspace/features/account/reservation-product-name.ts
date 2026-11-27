@@ -3,6 +3,7 @@ import {
   getWorkspaceMeetingRoomProductTitle,
   getWorkspaceOfficeProductTitle,
   getWorkspaceProductTierTitle,
+  getWorkspaceTableProductTitle,
 } from "@/features/checkout/product-catalog.i18n";
 import { type Locale, m } from "@/features/i18n";
 
@@ -21,6 +22,8 @@ export const getReservationProductName = (
       return getWorkspaceMeetingRoomProductTitle(locale);
     case "office":
       return getWorkspaceOfficeProductTitle(locale);
+    case "table":
+      return getWorkspaceTableProductTitle(locale);
     case "other":
       return m.accountReservationOtherProduct({}, { locale });
   }

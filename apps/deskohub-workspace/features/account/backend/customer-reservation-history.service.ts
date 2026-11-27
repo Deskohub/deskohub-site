@@ -124,6 +124,8 @@ const getReservationProduct = (
       return { kind: "meeting-room" };
     case "office":
       return { kind: "office" };
+    case "table":
+      return { kind: "table" };
   }
 };
 

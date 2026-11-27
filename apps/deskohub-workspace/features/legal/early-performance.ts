@@ -17,6 +17,7 @@ const getReservationServiceStart = (
       cowork: ({ date }) => getWorkspaceDateStart(date),
       "meeting-room": ({ startsAt }) => Temporal.Instant.from(startsAt),
       office: ({ startsOn }) => getWorkspaceDateStart(startsOn),
+      table: ({ startsAt }) => Temporal.Instant.from(startsAt),
     })
   );
 

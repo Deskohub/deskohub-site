@@ -6,6 +6,7 @@ import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate
 import { getShareableReservationUrl } from "@/features/reservation/backend/shareable-reservation-url";
 import type { MeetingRoomReservationDurationKey } from "@/features/reservation/meeting-room-reservation-duration";
 import { meetingRoomSelectionLink } from "@/features/reservation/meeting-room-selection-link";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { AdvisoryAvailabilityInventory } from "./availability-inventory";
@@ -50,15 +51,18 @@ const officeTable = Schema.decodeSync(DotyposTableSchema)({
 const makeServices = ({
   officeOpen = true,
   overnightStayOpen = false,
+  tableOpen = false,
   tables = [officeTable],
 }: {
   readonly officeOpen?: boolean;
   readonly overnightStayOpen?: boolean;
+  readonly tableOpen?: boolean;
   readonly tables?: readonly DotyposTable[];
 } = {}) =>
   Layer.mergeAll(
     OfficeReleaseGate.fromDecision(officeOpen),
     OvernightStayReleaseGate.fromDecision(overnightStayOpen),
+    TeamTableReleaseGate.fromDecision(tableOpen),
     Layer.succeed(AdvisoryAvailabilityInventory, {
       tables: Effect.succeed(tables),
       listActiveReservationsOverlapping: () => Effect.succeed([]),
@@ -87,6 +91,53 @@ const rejectQuote = (
       Effect.provide(services)
     )
   );
+
+describe("resolveBookingQuoteSelection Team Table", () => {
+  const selection = {
+    family: "table",
+    date: today,
+    seats: 6,
+    startTime: "15:15",
+    endTime: "15:30",
+  } as const satisfies BookingSelectionInput;
+
+  test("quotes a slot whose end is still in the future on an exact capacity", async () => {
+    const table = Schema.decodeSync(DotyposTableSchema)({
+      _cloudId: "cloud",
+      display: true,
+      enabled: true,
+      name: "table-6",
+      seats: "6",
+      id: "table-6",
+      tags: ["reservation:table", "cowork:open-space"],
+    });
+    const services = makeServices({ tableOpen: true, tables: [table] });
+
+    const selected = await quote(selection, services);
+    expect(selected.reservation).toEqual({
+      kind: "table",
+      seats: 6,
+      startsAt: "2099-07-30T13:15:00Z",
+      endsAt: "2099-07-30T13:30:00Z",
+    });
+    expect(selected.reservationSelection).toEqual({
+      kind: "table",
+      date: today,
+      seats: 6,
+      startTime: "15:15",
+      endTime: "15:30",
+    });
+    await expect(
+      rejectQuote({ ...selection, seats: 5 }, services)
+    ).resolves.toEqual({ kind: "invalid-field", field: "seats" });
+  });
+
+  test("refuses direct selections when the release is closed", async () => {
+    await expect(rejectQuote(selection)).resolves.toEqual({
+      kind: "table-closed",
+    });
+  });
+});
 
 describe("resolveBookingQuoteSelection overnight stays", () => {
   const reservedDesk = {

@@ -128,6 +128,10 @@ const propertyValues: {
     seats: integerAt(sql`${details}->'seats'`),
     days: integerAt(sql`${details}->'dayCount'`),
   },
+  table: {
+    seats: integerAt(sql`${details}->'seats'`),
+    durationMinutes: integerAt(sql`${details}->'durationMinutes'`),
+  },
 };
 
 type RowWithDetails = Pick<

@@ -40,6 +40,7 @@ import {
   type WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
+import type { NormalizedTableReservationOrder } from "@/features/reservation/table-reservation";
 import type { Money } from "@/shared/money/money";
 import {
   currentInstant,
@@ -61,7 +62,8 @@ import {
 type ReviewSandboxOrder =
   | NormalizedCoworkReservationOrder
   | NormalizedMeetingRoomReservationOrder
-  | NormalizedOfficeReservationOrder;
+  | NormalizedOfficeReservationOrder
+  | NormalizedTableReservationOrder;
 
 export type ReviewSandboxHoldRequest = {
   readonly accountId: CustomerAccountId;
@@ -398,6 +400,10 @@ const getSandboxSelection = (reservation: ReviewSandboxOrder) => {
       office: (office) => ({
         interval: getOfficeReservationIntervalInput(office),
         seats: office.seats,
+      }),
+      table: ({ startsAt, endsAt, seats }) => ({
+        interval: { startsAt, endsAt },
+        seats,
       }),
     })
   );

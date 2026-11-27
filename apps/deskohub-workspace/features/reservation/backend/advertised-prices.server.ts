@@ -10,6 +10,7 @@ import { buildAdvertisedPrice } from "@/features/checkout/backend/checkout/adver
 import { CheckoutPricingService } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import { OfficeReleaseGateRequest } from "@/features/office/backend/office-release-gate.server";
 import { ReferralReleaseGateRequest } from "@/features/referrals/referral-release-gate.server";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { pagePreload } from "./page-preload";
 
@@ -25,7 +26,9 @@ export const loadAdvertisedPrices = Effect.fn(
   const results = yield* Effect.all(
     uniqueRequests.map((request) =>
       buildAdvertisedPrice(request).pipe(
-        Effect.provide(OfficeReleaseGateRequest),
+        Effect.provide(
+          Layer.mergeAll(OfficeReleaseGateRequest, TeamTableReleaseGate.Live)
+        ),
         Effect.exit,
         Effect.flatMap(
           Exit.match({

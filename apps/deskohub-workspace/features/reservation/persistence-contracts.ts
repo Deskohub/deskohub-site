@@ -14,11 +14,16 @@ import {
   storedOfficeReservationDetailsSchema,
 } from "@/features/reservation/office-reservation";
 import type { ReservationOrderData } from "@/features/reservation/reservation-order";
+import {
+  getStoredTableReservationDetails,
+  storedTableReservationDetailsSchema,
+} from "@/features/reservation/table-reservation";
 
 export const storedWorkspaceReservationDetailsSchema = Schema.Union([
   storedCoworkReservationDetailsSchema,
   storedMeetingRoomReservationDetailsSchema,
   storedOfficeReservationDetailsSchema,
+  storedTableReservationDetailsSchema,
 ]).annotate({
   identifier: "StoredWorkspaceReservationDetails",
   description:
@@ -41,6 +46,7 @@ export const getStoredWorkspaceReservationDetails = (
       cowork: getStoredCoworkReservationDetails,
       "meeting-room": getStoredMeetingRoomReservationDetails,
       office: getStoredOfficeReservationDetails,
+      table: getStoredTableReservationDetails,
     })
   );
 

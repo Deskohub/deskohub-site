@@ -10,6 +10,7 @@ import { Effect, Option } from "effect";
 import type { AccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import { getCoworkCheckoutSummary } from "@/features/checkout/checkout-summary-cowork";
 import type { CheckoutDetails } from "@/features/checkout/schemas/checkout-details";
+import { getTableCheckoutDetails } from "@/features/checkout/schemas/checkout-details-table";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
 import { hasOpenSpaceMoveMarker } from "@/features/reservation/backend/open-space-move-marker";
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
@@ -54,6 +55,10 @@ type OfficeSnapshot = Extract<
   AccountingDocumentSnapshot,
   { readonly reservation: { readonly kind: "office" } }
 >;
+type TableSnapshot = Extract<
+  AccountingDocumentSnapshot,
+  { readonly reservation: { readonly kind: "table" } }
+>;
 
 const isCoworkSnapshot = (
   snapshot: AccountingDocumentSnapshot
@@ -65,6 +70,9 @@ const isMeetingRoomSnapshot = (
 const isOfficeSnapshot = (
   snapshot: AccountingDocumentSnapshot
 ): snapshot is OfficeSnapshot => snapshot.reservation.kind === "office";
+const isTableSnapshot = (
+  snapshot: AccountingDocumentSnapshot
+): snapshot is TableSnapshot => snapshot.reservation.kind === "table";
 
 /**
  * Rebuilds the order's reservation and checkout details from its stored
@@ -142,6 +150,17 @@ export const rebuildAcceptedReservation = (
           items: snapshot.quote.items,
         },
       },
+    };
+  }
+  if (isTableSnapshot(snapshot)) {
+    return {
+      reservation: snapshot.reservation,
+      checkoutDetails: getTableCheckoutDetails({
+        locale: snapshot.locale,
+        reservation: snapshot.reservation,
+        quote: snapshot.quote,
+        legalEvidence: {},
+      }),
     };
   }
   return null;

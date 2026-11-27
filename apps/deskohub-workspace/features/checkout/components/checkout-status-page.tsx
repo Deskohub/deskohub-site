@@ -28,6 +28,7 @@ import {
   reservationAccessPath,
 } from "@/features/reservation/routes";
 import { getSelectionPath } from "@/features/reservation/selection-path";
+import { getTableCheckoutStatusSummary } from "@/features/team-table/components/table-checkout-status-summary";
 import { ReservationWithdrawalLink } from "@/features/withdrawal/components/reservation-withdrawal-link";
 import type { ContractWithdrawalEntry } from "@/features/withdrawal/withdrawal-read-model";
 import { Button } from "@/shared/components/ui/button";
@@ -71,7 +72,7 @@ type CheckoutStatusPageProps = {
 const getSummaryPresentation = (
   status: CheckoutStatusViewModel,
   locale: Locale,
-  officePeople?: ReactNode
+  reservationPeople?: ReactNode
 ): CheckoutStatusSummaryPresentation | undefined =>
   status.summary
     ? Match.value(status.summary).pipe(
@@ -80,7 +81,9 @@ const getSummaryPresentation = (
           "meeting-room": (summary) =>
             getMeetingRoomCheckoutStatusSummary(summary, locale),
           office: (summary) =>
-            getOfficeCheckoutStatusSummary(summary, locale, officePeople),
+            getOfficeCheckoutStatusSummary(summary, locale, reservationPeople),
+          table: (summary) =>
+            getTableCheckoutStatusSummary(summary, locale, reservationPeople),
         })
       )
     : undefined;
@@ -175,6 +178,10 @@ const getRepeatReservationSearchParams = (
           ...(monitorOption && { monitorOption }),
         }),
       "meeting-room": () => undefined,
+      table: ({ seats }) =>
+        seats === undefined
+          ? undefined
+          : new URLSearchParams({ seats: String(seats) }),
       office: ({ reservedFrom, reservedUntil, seats }) => {
         const selection = getOfficeReservationSelection({
           startsAt: reservedFrom,
@@ -304,11 +311,15 @@ export function CheckoutStatusPage({
   const showReservationDetails = status.status !== "not_found";
   const withdrawalOffered =
     showReservationDetails && withdrawal?.status === "offered";
-  const officePeople = status.status !== "not_found" &&
-    status.kind === "office" &&
+  const reservationPeople = status.status !== "not_found" &&
+    (status.kind === "office" || status.kind === "table") &&
     status.people && (
       <OfficeStatusPeopleList
-        changeHref={getPeopleChangeContactHref(status, locale)}
+        changeHref={
+          status.kind === "office"
+            ? getPeopleChangeContactHref(status, locale)
+            : undefined
+        }
         contact={status.supportContactPrefill}
         locale={locale}
         orderId={status.orderId}
@@ -332,7 +343,7 @@ export function CheckoutStatusPage({
   const summaryPresentation = getSummaryPresentation(
     status,
     locale,
-    officePeople || undefined
+    reservationPeople || undefined
   );
   const supportTopic = checkoutStatusTraits[status.status].supportTopic;
   const supportContactHref =
@@ -408,8 +419,8 @@ export function CheckoutStatusPage({
       {showReservationDetails && (
         <CheckoutStatusReservationDetails
           locale={locale}
-          officePeople={
-            summaryPresentation ? undefined : officePeople || undefined
+          reservationPeople={
+            summaryPresentation ? undefined : reservationPeople || undefined
           }
           status={status}
           summaryPresentation={summaryPresentation}
@@ -505,23 +516,23 @@ function CheckoutStatusFrame({
 
 function CheckoutStatusReservationDetails({
   locale,
-  officePeople,
+  reservationPeople,
   status,
   summaryPresentation,
   withdrawalOffered,
 }: {
   readonly locale: Locale;
-  readonly officePeople?: ReactNode;
+  readonly reservationPeople?: ReactNode;
   readonly status: CheckoutReservationStatusViewModel;
   readonly summaryPresentation: CheckoutStatusSummaryPresentation | undefined;
   readonly withdrawalOffered: boolean;
 }) {
   const summaryRows = summaryPresentation?.rows ?? [];
-  const rows = officePeople
+  const rows = reservationPeople
     ? [
         {
           label: m.checkoutStatusPeopleLabel({}, { locale }),
-          value: officePeople,
+          value: reservationPeople,
         },
       ]
     : summaryRows;

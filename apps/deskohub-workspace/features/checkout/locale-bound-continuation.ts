@@ -15,6 +15,7 @@ import {
   meetingRoomReservationPath,
   officeReservationPath,
   reservationInvoicePath,
+  tableReservationPath,
 } from "@/features/reservation/routes";
 
 const checkoutPayPath = "/checkout/pay";
@@ -24,6 +25,7 @@ const restorationPages: Readonly<Record<string, ReservationOrderData["kind"]>> =
     [coworkReservationPath]: "cowork",
     [meetingRoomReservationPath]: "meeting-room",
     [officeReservationPath]: "office",
+    [tableReservationPath]: "table",
   };
 
 /**

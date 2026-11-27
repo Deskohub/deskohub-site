@@ -63,6 +63,7 @@ export type CustomerReservationProduct =
   | { readonly kind: "cowork"; readonly tier: WorkspaceCoworkProductTier }
   | { readonly kind: "meeting-room" }
   | { readonly kind: "office" }
+  | { readonly kind: "table" }
   | { readonly kind: "other" };
 
 /**
