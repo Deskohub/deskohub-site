@@ -35,3 +35,8 @@ applies, the refund is the price paid after discounts multiplied by the unused
 entries and divided by the total entries, rounded down to whole CZK. Past
 visits and a visit booked for the day of withdrawal count as used. Later
 bookings are cancelled and their entries count as unused.
+
+The 14-day period for withdrawing online starts the day after the buyer
+receives the purchase confirmation in Prague time. Under Czech Civil Code
+§607, if day 14 is a Saturday, Sunday, or Czech public holiday, the period
+runs through the end of the next Czech working day.

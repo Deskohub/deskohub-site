@@ -62,7 +62,7 @@ describe("assessReservationWithdrawal before the service starts", () => {
         withdrawable: true,
         refundAmount: paid,
         refundBasis: { kind: "full" },
-        periodEndsAt: prague("2027-01-17T00:00"),
+        periodEndsAt: prague("2027-01-19T00:00"),
       });
     }
   });
@@ -96,7 +96,7 @@ describe("assessReservationWithdrawal after the service starts", () => {
       withdrawable: true,
       refundAmount: { ...paid, value: 66_667 },
       refundBasis: { kind: "partial", unit: "day", unstarted: 2, total: 3 },
-      periodEndsAt: prague("2027-01-17T00:00"),
+      periodEndsAt: prague("2027-01-19T00:00"),
     });
   });
 
@@ -163,17 +163,22 @@ describe("assessReservationWithdrawal eligibility", () => {
     }
   });
 
-  test("closes at the end of the fourteenth day after the contract day", () => {
+  test("closes at Prague midnight after the extended final day", () => {
     const later: ReservationServiceSchedule = {
       ...office,
       startsOn: Temporal.PlainDate.from("2027-02-10"),
     };
+    const cutoff = prague("2027-01-19T00:00");
     expect(
-      assessReservationWithdrawal(facts(later), prague("2027-01-16T23:59"))
-    ).toMatchObject({ withdrawable: true });
-    expect(
-      assessReservationWithdrawal(facts(later), prague("2027-01-17T00:00"))
-    ).toEqual({ withdrawable: false, reason: "period_ended" });
+      assessReservationWithdrawal(
+        facts(later),
+        cutoff.subtract({ milliseconds: 1 })
+      )
+    ).toMatchObject({ withdrawable: true, periodEndsAt: cutoff });
+    expect(assessReservationWithdrawal(facts(later), cutoff)).toEqual({
+      withdrawable: false,
+      reason: "period_ended",
+    });
   });
 
   test("keeps a contract concluded before 2027 withdrawable inside its period", () => {

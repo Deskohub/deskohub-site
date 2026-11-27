@@ -5,15 +5,15 @@ import {
   type EmailRecipient,
   EmailServiceTag,
 } from "@deskohub/email";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import type { passPurchases } from "@/db/schema";
 import {
   EntryPackPurchaseEmail,
   entryPackPurchaseEmailSubject,
 } from "@/emails/entry-pack-purchase";
 import { env } from "@/env";
+import type { PassPurchaseAccountingSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
-import { discountQuoteCodec } from "@/features/discounts/contracts";
 import { getLegalDocumentPath } from "@/features/legal/legal-document-path";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
@@ -26,6 +26,10 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
   "sendEntryPackPurchaseEmail"
 )(function* (input: {
   readonly purchase: typeof passPurchases.$inferSelect;
+  readonly price: Pick<
+    PassPurchaseAccountingSnapshot,
+    "quote" | "coffeeAmountMinor"
+  >;
   readonly paidAt: Temporal.Instant;
   readonly paymentAttemptId: PaymentAttemptId;
   readonly buyer: EmailRecipient;
@@ -40,9 +44,6 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
   const origin = yield* getWorkspaceRuntimeCallbackOrigin;
   const mailer = yield* EmailServiceTag;
   const { defaultFrom } = yield* EmailConfigTag;
-  const quote = yield* Schema.decodeUnknownEffect(discountQuoteCodec)(
-    purchase.quote
-  );
   const accessUrl =
     purchase.product === "unlimited" &&
     !input.gift &&
@@ -61,7 +62,7 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
       holderEmail={input.holderEmail}
       gift={input.gift}
       invitationSent={input.invitationSent}
-      quote={quote}
+      quote={input.price.quote}
       paidAt={input.paidAt}
       statusUrl={
         new URL(`/${locale}${reservationStatusPath}/${id}`, origin).href
@@ -72,7 +73,7 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
       }
       invoiceRequested={input.invoiceRequested}
       earlyStartRequested={input.earlyStartRequested}
-      unlimitedCoffee={purchase.unlimitedCoffee === true}
+      coffeeAmountMinor={input.price.coffeeAmountMinor}
       accessUrl={accessUrl}
     />
   );

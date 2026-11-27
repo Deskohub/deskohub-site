@@ -155,7 +155,7 @@ export const accountingDocumentSnapshotSchema = Schema.Union([
 export type AccountingDocumentSnapshot =
   typeof accountingDocumentSnapshotSchema.Type;
 
-export const passPurchaseAccountingSnapshotSchema = Schema.Struct({
+const passPurchaseAccountingSnapshotFacts = Schema.Struct({
   orderId: orderIdSchema,
   dotyposCustomerId: accountingDocumentIdentitySchema.fields.dotyposCustomerId,
   locale: accountingDocumentIdentitySchema.fields.locale,
@@ -164,9 +164,20 @@ export const passPurchaseAccountingSnapshotSchema = Schema.Struct({
   billing: reservationBillingSelectionSchema,
   delivery: accountingDocumentDeliverySchema,
   product: Schema.Union([entryPackProductSchema, unlimitedPassProductSchema]),
-  unlimitedCoffee: Schema.optionalKey(Schema.Literal(true)),
   serviceDate: plainDateStringSchema,
   quote: discountQuoteCodec,
+});
+
+export const storedPassPurchaseAccountingSnapshotSchema = Schema.Struct({
+  ...passPurchaseAccountingSnapshotFacts.fields,
+  unlimitedCoffee: Schema.optionalKey(Schema.Literal(true)),
+});
+
+export const passPurchaseAccountingSnapshotSchema = Schema.Struct({
+  ...passPurchaseAccountingSnapshotFacts.fields,
+  coffeeAmountMinor: Schema.optionalKey(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+  ),
 });
 
 export type PassPurchaseAccountingSnapshot =

@@ -204,7 +204,7 @@ describe("sealed accounting JSON statements", () => {
     );
     expect(recording.statements).toEqual([
       {
-        sql: 'insert into "accounting_document_snapshots" ("payment_attempt_id", "workspace_reservation_id", "key_id", "encrypted_snapshot", "created_at") values ($1, $2, $3, pgp_sym_encrypt(/* deskohub:sensitive */ $4, /* deskohub:sensitive */ $5, $6), default)',
+        sql: 'insert into "accounting_document_snapshots" ("payment_attempt_id", "workspace_reservation_id", "key_id", "encrypted_snapshot", "coffee_amount_minor", "created_at") values ($1, $2, $3, pgp_sym_encrypt(/* deskohub:sensitive */ $4, /* deskohub:sensitive */ $5, $6), default, default)',
         params: [
           paymentAttemptId,
           snapshot.workspaceReservationId,

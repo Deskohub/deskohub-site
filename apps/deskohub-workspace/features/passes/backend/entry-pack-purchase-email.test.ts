@@ -73,6 +73,7 @@ test("emails the holder capability for a self-purchase and buyer status for a gi
     await Effect.runPromise(
       sendEntryPackPurchaseEmail({
         purchase: { ...purchase, holderAccountId },
+        price: { quote: purchase.quote },
         paidAt,
         paymentAttemptId: paymentAttemptIdSchema.make(
           "synthetic-payment-attempt"
