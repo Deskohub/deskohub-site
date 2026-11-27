@@ -11,13 +11,14 @@ export const backendGeneration = "e".repeat(64);
 export function backendPreviewProofFixture(
   pr: number,
   sha: string,
-  origin: string
+  origin: string,
+  runtimeGeneration = backendGeneration
 ) {
   const target = previewDigest(
     JSON.stringify([String(pr), sha, previewDigest(origin), "email-campaigns"])
   ).slice(0, 32);
   const generation = previewDigest(
-    JSON.stringify([backendDeploymentId, backendRevision, backendGeneration])
+    JSON.stringify([backendDeploymentId, backendRevision, runtimeGeneration])
   ).slice(0, 32);
   const binding = `${target}.${generation}`;
   const id = Number(workflowStepRunId);

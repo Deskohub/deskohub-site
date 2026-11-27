@@ -914,7 +914,19 @@ const runPublishCompletedPilot = async () => {
     } catch {
       // A changed or unavailable protected deployment cannot authorize a pass.
     }
-    return { ...snapshot, target, generation, liveGeneration, livePilotProof: liveGeneration === generation };
+    const { sourceFound, later } = readPilotStatusOrder(snapshot.statuses, sourceRun, selection.selected);
+    const laterGeneration = later?.state === "success" && liveGeneration
+      ? findPilotRunGeneration({ targetUrl: later.target_url, target, read: readPilotRun, followLatest: true })
+      : undefined;
+    const laterVerified = Boolean(laterGeneration && laterGeneration === liveGeneration);
+    return {
+      ...snapshot,
+      generation,
+      sourceFound,
+      later,
+      laterVerified,
+      livePilotProof: laterVerified || liveGeneration === generation,
+    };
   };
 
   const confirmed = await readSnapshot();
@@ -924,7 +936,7 @@ const runPublishCompletedPilot = async () => {
     sha,
     prNumber: pilotPrNumber,
     readSnapshot,
-    decide: ({ backendPreviewRequirement, prOk, pr, selection, livePilotProof, liveGeneration, target, generation, statusesOk, statuses }) => {
+    decide: ({ backendPreviewRequirement, prOk, pr, selection, livePilotProof, generation, statusesOk, statuses, sourceFound, later, laterVerified }) => {
       if (backendPreviewRequirement !== "required" || !prOk || !isEligibleInternalPr(pr) || pr.head.sha !== sha || generation !== confirmed.generation) {
         return { skipPost: true };
       }
@@ -944,7 +956,6 @@ const runPublishCompletedPilot = async () => {
           restorePendingTargetUrl: pending.targetUrl,
         };
       }
-      const { sourceFound, later } = readPilotStatusOrder(statuses, sourceRun, selection.selected);
       if (!sourceFound) return { skipPost: true };
       const failedProof = {
         state: "failure",
@@ -953,13 +964,7 @@ const runPublishCompletedPilot = async () => {
         verifyAfterPost: true,
       };
       if (later?.state === "success") {
-        const laterGeneration = findPilotRunGeneration({
-          targetUrl: later.target_url,
-          target,
-          read: readPilotRun,
-          followLatest: true,
-        });
-        if (laterGeneration && laterGeneration === liveGeneration) {
+        if (laterVerified) {
           return {
             skipPost: true,
             satisfiedSuccess: true,

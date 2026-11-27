@@ -256,13 +256,21 @@ const runCompletedPilotPublisher = ({
   statusesAfterWrite = [newerPending, sourcePending],
   laterSuccessVerified = false,
 } = {}) => {
+  const liveGeneration =
+    live === "changed" ? "1".repeat(64) : backendGeneration;
+  const laterProof = backendPreviewProofFixture(
+    prNumber,
+    headSha,
+    previewUrl,
+    liveGeneration
+  );
   const stubFetch = `
 const team = "team_MgMQ4MEWijWnYa1R48C2JU5e";
 const project = "prj_7FliQBcbBiBwGaO2JLrigicnXCRd";
 const origin = ${JSON.stringify(previewUrl)};
 const sha = ${JSON.stringify(headSha)};
 const revision = ${JSON.stringify(backendRevision)};
-const generation = ${JSON.stringify(live === "changed" ? "1".repeat(64) : backendGeneration)};
+const generation = ${JSON.stringify(liveGeneration)};
 let proofs = 0;
 globalThis.fetch = async (input) => {
   const url = new URL(input);
@@ -314,7 +322,7 @@ globalThis.fetch = async (input) => {
       },
       [`actions/runs/${laterSuccessfulRun}/attempts/2/jobs`]: {
         jobs: laterSuccessVerified
-          ? proofFixture.jobs.jobs.map((job) => ({
+          ? laterProof.jobs.jobs.map((job) => ({
               ...job,
               run_id: laterSuccessfulRun,
             }))
@@ -493,6 +501,31 @@ describe("Workspace E2E backend proof publishers", () => {
     const posts = statusPosts(calls);
     expect(posts).toHaveLength(2);
     expect(posts.every((post) => post.includes("state=failure"))).toBe(true);
+  });
+
+  test("preserves a newer verified result on a different live generation", async () => {
+    const { calls, result } = await runCompletedPilotPublisher({
+      live: "changed",
+      newerRunAfterWrite: true,
+      statusesAfterWrite: [laterSuccess, newerFailure, sourcePending],
+      laterSuccessVerified: true,
+    });
+    expect(result.exitCode).toBe(0);
+    const posts = statusPosts(calls);
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).toContain("state=failure -f context=Workspace E2E");
+    expect(posts[1]).toContain("state=success -f context=Workspace E2E");
+    expect(posts[1]).toContain(`target_url=${laterSuccess.target_url}`);
+  });
+
+  test("leaves a settled newer verified generation alone", async () => {
+    const { calls, result } = await runCompletedPilotPublisher({
+      live: "changed",
+      statuses: [laterSuccess, newerFailure, sourcePending],
+      laterSuccessVerified: true,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(statusPosts(calls)).toEqual([]);
   });
 
   test("restores ownership even when both failure status descriptions match", async () => {
