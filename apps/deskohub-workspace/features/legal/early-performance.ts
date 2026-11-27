@@ -1,10 +1,12 @@
 import { Match } from "effect";
+import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import type { ReservationOrderData } from "@/features/reservation/reservation-order";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
+import { isCzechWorkingDay } from "./czech-working-day";
 
 const consumerWithdrawalPeriodDays = 14;
 
-const getWorkspaceDateStart = (date: string) =>
+const getWorkspaceDateStart = (date: string | Temporal.PlainDate) =>
   Temporal.PlainDate.from(date)
     .toZonedDateTime(workspaceSiteConstants.location.timeZone)
     .toInstant();
@@ -22,27 +24,42 @@ const getReservationServiceStart = (
 
 export const getEarlyPerformanceRequestRequiredAt = (
   reservation: ReservationOrderData
-): Temporal.Instant =>
-  getReservationServiceStart(reservation)
-    .toZonedDateTimeISO(workspaceSiteConstants.location.timeZone)
-    .toPlainDate()
-    .subtract({ days: consumerWithdrawalPeriodDays })
-    .toZonedDateTime(workspaceSiteConstants.location.timeZone)
-    .toInstant();
+): Temporal.Instant => {
+  const serviceDate = getWorkspaceDate(getReservationServiceStart(reservation));
+  let precedingWorkingDay = serviceDate.subtract({ days: 1 });
+  while (!isCzechWorkingDay(precedingWorkingDay)) {
+    precedingWorkingDay = precedingWorkingDay.subtract({ days: 1 });
+  }
+
+  // Day 14 must fall after the preceding working day to reach the service date.
+  return getWorkspaceDateStart(
+    precedingWorkingDay
+      .add({ days: 1 })
+      .subtract({ days: consumerWithdrawalPeriodDays })
+  );
+};
 
 /**
- * The contract day is not counted. The 14-day period therefore runs through
- * the end of the fourteenth following Workspace-local calendar day.
+ * The contract date is excluded under §605. Under §607 the last day moves
+ * forward to a Czech working day if day 14 is a weekend or public holiday.
  */
+export function getLastConsumerWithdrawalDate(
+  contractDate: Temporal.PlainDate
+): Temporal.PlainDate {
+  let lastDate = contractDate.add({ days: consumerWithdrawalPeriodDays });
+  while (!isCzechWorkingDay(lastDate)) {
+    lastDate = lastDate.add({ days: 1 });
+  }
+  return lastDate;
+}
+
+/** The exclusive cutoff at Prague midnight after the last withdrawal date. */
 export const getConsumerWithdrawalPeriodCutoff = (
   contractAt: Temporal.Instant
 ): Temporal.Instant =>
-  contractAt
-    .toZonedDateTimeISO(workspaceSiteConstants.location.timeZone)
-    .toPlainDate()
-    .add({ days: consumerWithdrawalPeriodDays + 1 })
-    .toZonedDateTime(workspaceSiteConstants.location.timeZone)
-    .toInstant();
+  getWorkspaceDateStart(
+    getLastConsumerWithdrawalDate(getWorkspaceDate(contractAt)).add({ days: 1 })
+  );
 
 export const isEarlyPerformanceRequestRequired = (input: {
   readonly reservation: ReservationOrderData;

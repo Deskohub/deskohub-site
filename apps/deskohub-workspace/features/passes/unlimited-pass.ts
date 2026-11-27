@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { workspaceProductMonitorOptions } from "@/features/checkout/product-catalog";
+import { getLastConsumerWithdrawalDate } from "@/features/legal/early-performance";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -59,7 +60,12 @@ export function unlimitedPassRequiresEarlyStart(
   startDate: PlainDate,
   agreedOn: Temporal.PlainDate
 ) {
-  return Temporal.PlainDate.compare(startDate, agreedOn.add({ days: 14 })) <= 0;
+  return (
+    Temporal.PlainDate.compare(
+      startDate,
+      getLastConsumerWithdrawalDate(agreedOn)
+    ) <= 0
+  );
 }
 
 /** Withdrawal includes the current service date and releases later dates. */
