@@ -4,6 +4,7 @@ import type {
 } from "@deskohub/dotypos";
 import {
   type TableBooking,
+  toTableBookings,
   workspaceBookingSeatCount,
 } from "@/features/checkout/backend/reservation/workspace-table-occupancy";
 import { formatOpenSpaceMoveMarker } from "./open-space-move-marker";
@@ -21,27 +22,43 @@ export const getUnobservedOpenSpaceMoveBookings = (
   claims: readonly OpenSpaceMoveCapacityClaim[],
   records: readonly CapacityRecord[]
 ): readonly TableBooking[] => {
-  const activeRecords = records.filter(
-    ({ status }) => status === "NEW" || status === "CONFIRMED"
+  if (claims.length === 0) return [];
+  const byId = new Map(
+    claims.flatMap((claim) =>
+      claim.reservationId ? [[claim.reservationId, claim] as const] : []
+    )
   );
-  const ids = new Map(activeRecords.map(({ id, _tableId }) => [id, _tableId]));
-  const tablesByNoteLine = new Map<string, Set<CapacityRecord["_tableId"]>>();
-  for (const record of activeRecords) {
-    if (!record.note) continue;
-    for (const line of record.note.split("\n")) {
-      const tables = tablesByNoteLine.get(line);
-      if (tables) tables.add(record._tableId);
-      else tablesByNoteLine.set(line, new Set([record._tableId]));
+  const byMarker = new Map(
+    claims.flatMap((claim) =>
+      claim.generation
+        ? [[formatOpenSpaceMoveMarker(claim.generation), claim] as const]
+        : []
+    )
+  );
+  const observed = new Set<OpenSpaceMoveCapacityClaim>();
+  for (const record of records) {
+    const matchById = byId.get(record.id);
+    const matchByMarker =
+      record.note?.split("\n").flatMap((line) => byMarker.get(line) ?? []) ??
+      [];
+    const matches = matchById ? [matchById, ...matchByMarker] : matchByMarker;
+    if (matches.length === 0) continue;
+    const [booking] = toTableBookings([record]);
+    if (!booking) continue;
+    for (const claim of matches) {
+      if (
+        booking.tableId === claim.tableId &&
+        booking.startsAt === claim.startsAt &&
+        booking.endsAt === claim.endsAt
+      )
+        observed.add(claim);
     }
   }
 
-  return claims.flatMap(({ generation, reservationId, ...booking }) =>
-    (reservationId && ids.get(reservationId) === booking.tableId) ||
-    (generation &&
-      tablesByNoteLine
-        .get(formatOpenSpaceMoveMarker(generation))
-        ?.has(booking.tableId))
-      ? []
-      : [{ ...booking, seats: workspaceBookingSeatCount }]
-  );
+  return claims
+    .filter((claim) => !observed.has(claim))
+    .map(({ generation: _generation, reservationId: _id, ...booking }) => ({
+      ...booking,
+      seats: workspaceBookingSeatCount,
+    }));
 };

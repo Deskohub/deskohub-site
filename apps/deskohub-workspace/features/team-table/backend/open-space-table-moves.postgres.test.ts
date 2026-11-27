@@ -299,6 +299,17 @@ describe.skipIf(!database)("Open Space table moves", () => {
     expect(getUnobservedOpenSpaceMoveBookings(claims, [])).toMatchObject([
       { tableId: f.targetTable.id, seats: 1 },
     ]);
+    const staged = created[1];
+    if (!staged) throw new Error("Expected a staged replacement");
+    expect(getUnobservedOpenSpaceMoveBookings(claims, [staged])).toEqual([]);
+    expect(
+      getUnobservedOpenSpaceMoveBookings(claims, [
+        {
+          ...staged,
+          endDate: "2027-03-29T04:00:00Z",
+        },
+      ])
+    ).toMatchObject([{ tableId: f.targetTable.id, seats: 1 }]);
     await f.run(
       Effect.flatMap(OpenSpaceTableMoves, (service) => service.reconcile(10)),
       { createReservation }
@@ -307,8 +318,7 @@ describe.skipIf(!database)("Open Space table moves", () => {
       .dotypos_reservation_id;
     expect(replacement).toBe(second.sourceReservationId);
     expect(created).toHaveLength(2);
-    if (!created[1]) throw new Error("Expected a staged replacement");
-    expect(await f.read(created[1].id)).toMatchObject({
+    expect(await f.read(staged.id)).toMatchObject({
       status: "CANCELLED",
       _tableId: f.targetTable.id,
     });
