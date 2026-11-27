@@ -1,8 +1,9 @@
 import "@/shared/polyfills/temporal";
 
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import type { ReactNode } from "react";
 import { prerender } from "react-dom/static";
 import type { CheckoutStatusViewModel } from "@/features/checkout/backend/checkout";
@@ -11,6 +12,7 @@ import type { OrderKind } from "@/features/order";
 import { orderIdSchema } from "@/features/order";
 import type { EntryPackStatus } from "@/features/passes/backend/entry-pack-status";
 import { getReservationAccessCookieName } from "@/features/reservation/backend/reservation-access-cookie";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import type { ContractWithdrawalEntry } from "@/features/withdrawal/withdrawal-read-model";
 import { maskEmailAddress } from "@/shared/utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
@@ -305,12 +307,14 @@ mock.module("@/features/withdrawal/components/withdrawal-link", () => ({
 const { CheckoutStatusRoute } = await import("./checkout-status-route");
 const { getReservationStatusSignInPath } = signIn;
 
-const orderId = "reservation-route";
+const orderId = Schema.decodeSync(workspaceReservationIdSchema)(
+  "reservation-route"
+);
 
 const statusOf = (
   status: CheckoutStatusViewModel["status"]
 ): CheckoutStatusViewModel =>
-  (status === "not_found"
+  status === "not_found"
     ? { orderId, returnOutcome: "unknown", status }
     : {
         kind: "cowork",
@@ -319,7 +323,7 @@ const statusOf = (
         status,
         paymentStatus: "paid",
         fulfillmentStatus: "fulfilled",
-      }) as CheckoutStatusViewModel;
+      };
 
 const renderRoute = async ({
   order = orderId,
@@ -389,11 +393,7 @@ describe("CheckoutStatusRoute", () => {
 
     expect(errors).toEqual([]);
     expect(connections).toBe(1);
-    expect(readCookieNames).toEqual([
-      getReservationAccessCookieName(
-        orderId as Parameters<typeof getReservationAccessCookieName>[0]
-      ),
-    ]);
+    expect(readCookieNames).toEqual([getReservationAccessCookieName(orderId)]);
     expect(loadCalls).toEqual([
       {
         service: statusService,
@@ -473,13 +473,11 @@ describe("CheckoutStatusRoute", () => {
 
     expect(signedOutReads).toBe(1);
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toBeInstanceOf(RedirectSignal);
-    expect((errors[0] as RedirectSignal).location).toBe(
-      getReservationStatusSignInPath(
-        "en-US",
-        orderId as Parameters<typeof getReservationStatusSignInPath>[1],
-        "cancelled"
-      )
+    const [redirect] = errors;
+    expect(redirect).toBeInstanceOf(RedirectSignal);
+    assert(redirect instanceof RedirectSignal, "Expected the redirect signal");
+    expect(redirect.location).toBe(
+      getReservationStatusSignInPath("en-US", orderId, "cancelled")
     );
     expect(html).not.toContain("data-status=");
   });
@@ -697,10 +695,10 @@ describe("CheckoutStatusRoute", () => {
         entryCount,
         status: "paid",
         paidAt: Temporal.Instant.from("2027-01-01T10:00:00Z"),
-        validFrom: "2027-01-01",
-        validUntil: "2027-03-01",
+        validFrom: plainDateStringSchema.make("2027-01-01"),
+        validUntil: plainDateStringSchema.make("2027-03-01"),
         gift: false,
-      } as EntryPackStatus;
+      };
       passWithdrawal = { status: "offered" };
       const { errors, html } = await renderRoute({ order: passOrderId });
 
@@ -764,8 +762,10 @@ describe("CheckoutStatusRoute", () => {
 
     expect(loadCalls).toEqual([]);
     expect(errors).toHaveLength(1);
+    const [redirect] = errors;
+    assert(redirect instanceof RedirectSignal, "Expected the redirect signal");
     const location = new URL(
-      (errors[0] as RedirectSignal).location,
+      redirect.location,
       "https://workspace.example.invalid"
     );
     expect(location.pathname).toBe("/en-US/auth/sign-in");
