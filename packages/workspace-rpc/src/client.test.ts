@@ -52,12 +52,13 @@ const handlers = EmailPreferencesRpcs.of({
 });
 
 const makeTestServer = (
-  testHandlers = EmailPreferencesRpcs.toLayer(handlers)
+  testHandlers = EmailPreferencesRpcs.toLayer(handlers),
+  path: `/${string}` = "/rpc"
 ) =>
   HttpRouter.toWebHandler(
     RpcServer.layerHttp({
       group: EmailPreferencesRpcs,
-      path: "/rpc",
+      path,
       protocol: "http",
       disableFatalDefects: true,
     }).pipe(
@@ -83,9 +84,9 @@ const runClient = <A, E>(
     token: Redacted.Redacted<string>
   ) => Effect.Effect<void> = () => Effect.void,
   signal?: AbortSignal,
-  transportHeaders?: Pick<
+  transportOptions?: Pick<
     Parameters<typeof layerWorkspaceRpcProtocol>[0],
-    "requestHeaders" | "expectedResponseHeaders"
+    "path" | "requestHeaders" | "expectedResponseHeaders"
   >
 ) => {
   const fetchStub = Object.assign(
@@ -97,7 +98,7 @@ const runClient = <A, E>(
     url: "https://workspace.invalid/",
     authorization,
     invalidateAuthorization,
-    ...transportHeaders,
+    ...transportOptions,
   }).pipe(Layer.provide(FetchHttpClient.layer));
   return Effect.runPromise(
     makeWorkspaceRpcClient().pipe(
@@ -122,6 +123,7 @@ const previewHeaders = {
     [revisionHeader]: "synthetic-revision-a",
   },
 };
+const previewRpcPath = "/rpc/preview";
 
 const withPreviewProof = (response: Response) => {
   const headers = new Headers(response.headers);
@@ -135,11 +137,12 @@ const withPreviewProof = (response: Response) => {
 
 describe("Workspace RPC HTTP client", () => {
   test("accepts the RPC response when both preview headers match", async () => {
-    const server = makeTestServer();
+    const server = makeTestServer(undefined, previewRpcPath);
     try {
       const result = await runClient(
         (client) => client.openPreferences(payload),
         async (request) => {
+          expect(new URL(request.url).pathname).toBe(previewRpcPath);
           expect(request.headers.get(generationHeader)).toBe(
             previewHeaders.requestHeaders[generationHeader]
           );
@@ -149,7 +152,7 @@ describe("Workspace RPC HTTP client", () => {
         undefined,
         undefined,
         undefined,
-        previewHeaders
+        { ...previewHeaders, path: previewRpcPath }
       );
       expect(result).toEqual(grant);
     } finally {

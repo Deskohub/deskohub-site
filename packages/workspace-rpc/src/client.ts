@@ -28,6 +28,7 @@ import { WorkspaceRpcs } from "./workspace-rpcs";
 
 interface WorkspaceRpcProtocolOptions {
   readonly url: string;
+  readonly path?: `/${string}`;
   readonly requestHeaders?: Readonly<Record<string, string>>;
   /** A successful response must prove these exact headers before decoding. */
   readonly expectedResponseHeaders?: Readonly<Record<string, string>>;
@@ -70,6 +71,7 @@ export const layerWorkspaceRpcProtocol = (
     Effect.gen(function* () {
       const http = yield* HttpClient.HttpClient;
       const { contentType } = yield* RpcSerialization.RpcSerialization;
+      const url = `${options.url.replace(/\/+$/, "")}${options.path ?? "/rpc"}`;
       const expectedHeaders = Object.entries(
         options.expectedResponseHeaders ?? {}
       );
@@ -186,7 +188,7 @@ export const layerWorkspaceRpcProtocol = (
         HttpClient.mapRequest((request) =>
           HttpClientRequest.setUrl(
             HttpClientRequest.setHeaders(request, options.requestHeaders ?? {}),
-            `${options.url.replace(/\/+$/, "")}/rpc`
+            url
           )
         )
       );
