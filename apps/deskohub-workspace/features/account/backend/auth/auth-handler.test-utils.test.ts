@@ -1,19 +1,31 @@
 import { describe, expect, test } from "bun:test";
+import { Predicate, Schema } from "effect";
 import { testDatabase } from "./auth-handler.test-utils";
 
-type AuthHandlerTestUtils = typeof import("./auth-handler.test-utils");
+const decodeAddress = Schema.decodeUnknownSync(Schema.String);
+const decodeUniqueIpModule = Schema.decodeUnknownSync(
+  Schema.Struct({
+    uniqueIp: Schema.declare((value): value is () => unknown =>
+      Predicate.isFunction(value)
+    ),
+  })
+);
 
 /**
  * Loads a fresh instance of the helpers, as `bun test --parallel` gives each
  * test file, while every source of randomness returns the same value.
  */
 const loadInstance = async (label: string) =>
-  (await import(
-    `./auth-handler.test-utils.ts?instance=${label}-${crypto.randomUUID()}`
-  )) as AuthHandlerTestUtils;
+  decodeUniqueIpModule(
+    await import(
+      `./auth-handler.test-utils.ts?instance=${label}-${crypto.randomUUID()}`
+    )
+  );
 
-const takeAddresses = (utils: AuthHandlerTestUtils, count: number) =>
-  Array.from({ length: count }, () => utils.uniqueIp());
+const takeAddresses = (
+  utils: ReturnType<typeof decodeUniqueIpModule>,
+  count: number
+) => Array.from({ length: count }, () => decodeAddress(utils.uniqueIp()));
 
 describe.skipIf(!testDatabase)("uniqueIp on the shared test database", () => {
   test("helper instances of separate test files never share an address", async () => {

@@ -1,10 +1,10 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, setSystemTime, spyOn, test } from "bun:test";
-import { DotyposUncertain } from "@deskohub/dotypos";
+import { DotyposCustomerSchema, DotyposUncertain } from "@deskohub/dotypos";
 import { betterAuth } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
-import { Context, Deferred, Effect, Fiber, Layer, Option } from "effect";
+import { Context, Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
@@ -14,7 +14,9 @@ import {
 import { NoReservationInvitees } from "@/features/reservation-invitees/backend/reservation-invitees.test-utils";
 import { ReviewAccounts } from "@/features/review-accounts";
 import { BotDetectedError } from "@/shared/backend/bot-protection/bot-protection.service";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
+import { requireTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   encodeAuthCallbackReturn,
   getAuthCallbackPath,
@@ -39,7 +41,6 @@ import {
   callHandler,
   callNativeHandler,
   captureFailure,
-  cookieJar,
   getSessionCookie,
   HOST,
   linkAccount,
@@ -48,6 +49,8 @@ import {
   makeTestAuth,
   SECRET_V1,
   SECRET_V2,
+  sentMagicLink,
+  sessionCookieHeader,
   signInForMagicLink,
   type TestAuth,
   testAccountDeletion,
@@ -60,6 +63,22 @@ import {
   workspaceLogs,
 } from "./auth-handler.test-utils";
 import { betterAuthMagicLinkOptions } from "./auth-options";
+
+const database = () => requireTestDatabase(testDatabase);
+
+const SessionUser = Schema.Struct({ email: Schema.String });
+const decodeSessionEmail = Schema.decodeUnknownSync(
+  Schema.Struct({ user: SessionUser })
+);
+
+const decodeVerifiedSession = Schema.decodeUnknownSync(
+  Schema.Struct({
+    user: Schema.Struct({
+      ...SessionUser.fields,
+      emailVerified: Schema.Boolean,
+    }),
+  })
+);
 
 const makeFailingVerificationDatabase = (
   email: string,
@@ -88,19 +107,37 @@ const makeFailingVerificationDatabase = (
   };
 };
 
+type ExpireCustomer = Context.Service.Shape<
+  typeof CustomerDotyposAdapter
+>["expireCustomer"];
+
+const expireDotyposCustomer: ExpireCustomer = (customerId) =>
+  Effect.succeedSome(
+    Schema.decodeSync(DotyposCustomerSchema)({
+      id: customerId,
+      _cloudId: "cloud",
+      firstName: "Smazaná",
+      lastName: "Zákaznice",
+      points: "0",
+      flags: "0",
+      display: true,
+      deleted: true,
+    })
+  );
+
 const makeTestDeletionLayers = (
-  expireCustomer: () => Effect.Effect<Option.Option<never>, unknown>,
+  expireCustomer: ExpireCustomer,
   destroyAvatar: () => Effect.Effect<
     void,
     CustomerAvatarProviderError | CustomerAvatarUnavailableError
   > = () => Effect.void
 ) => {
-  const database = Layer.succeed(
+  const databaseLayer = Layer.succeed(
     WorkspaceDatabase,
-    WorkspaceDatabase.make(testDatabase!.db)
+    WorkspaceDatabase.make(database().db)
   );
   const links = CustomerAccountLinkRepository.Default.pipe(
-    Layer.provide(database)
+    Layer.provide(databaseLayer)
   );
   return CustomerAccountDeletionService.Default.pipe(
     Layer.provide(
@@ -109,16 +146,14 @@ const makeTestDeletionLayers = (
         Layer.mergeAll(
           CustomerAccountRepository.Default,
           ReviewAccounts.Default
-        ).pipe(Layer.provide(database)),
+        ).pipe(Layer.provide(databaseLayer)),
         // Deletion's section reads no session.
         CustomerAccountSections.Default.pipe(
           Layer.provide(
             Layer.mergeAll(
               links,
               Layer.mock(CustomerAuthentication, {}),
-              WorkspaceDatabaseAdvisoryLock.makeLayer(
-                testDatabase!.databasePool
-              )
+              WorkspaceDatabaseAdvisoryLock.makeLayer(database().databasePool)
             )
           )
         ),
@@ -209,7 +244,7 @@ test("stores neither the emailed magic-link token nor its plain digest", async (
 
   await signInForMagicLink(auth, uniqueEmail("token-storage"));
 
-  const rawToken = sentLinks[0]!.token;
+  const rawToken = sentMagicLink(sentLinks).token;
   const stored = store.verification.map(({ identifier }) => identifier);
   expect(stored).toHaveLength(1);
   // The token is hashed before the verification identifier is hashed again,
@@ -230,15 +265,24 @@ test("sends an expired link to the same rejected-link callback as a replayed one
   await signInForMagicLink(auth, uniqueEmail("expired-link"), callbackURL);
   await signInForMagicLink(auth, uniqueEmail("replayed-link"), callbackURL);
   const [expiring, replayed] = sentLinks;
-  const firstUse = await verifyMagicLink(auth, replayed!);
+  const firstUse = await verifyMagicLink(
+    auth,
+    requireValue(replayed, "replayed magic link")
+  );
   expect(getSessionCookie(firstUse)).toBeDefined();
 
   try {
     setSystemTime(
       new Date(Date.now() + (betterAuthMagicLinkOptions.expiresIn + 1) * 1000)
     );
-    const expired = await verifyMagicLink(auth, expiring!);
-    const replay = await verifyMagicLink(auth, replayed!);
+    const expired = await verifyMagicLink(
+      auth,
+      requireValue(expiring, "expiring magic link")
+    );
+    const replay = await verifyMagicLink(
+      auth,
+      requireValue(replayed, "replayed magic link")
+    );
 
     expect(getSessionCookie(expired)).toBeUndefined();
     expect(expired.status).toBe(302);
@@ -278,14 +322,14 @@ test("returns a magic-link sign-in the app started to the app with its session",
   ).toBe(200);
   // The customer opens the emailed link in a browser; the Expo plugin hands
   // the session cookie to the app in the scheme redirect.
-  const verified = await verifyMagicLink(auth, sentLinks[0]!);
+  const verified = await verifyMagicLink(auth, sentMagicLink(sentLinks));
 
   expect(verified.status).toBe(302);
   const location = verified.headers.get("location") ?? "";
   expect(location.startsWith("deskohub://account?")).toBe(true);
   expect(
     new URLSearchParams(location.slice(location.indexOf("?"))).get("cookie")
-  ).toContain(cookieJar(getSessionCookie(verified)!));
+  ).toContain(sessionCookieHeader(verified));
 });
 
 test("refuses a magic-link sign-in that returns to an untrusted app scheme", async () => {
@@ -309,13 +353,19 @@ test("returns a web app sign-in to its /app/ path without handing out the cookie
   }
   const [direct, throughSite] = sentLinks;
 
-  const directVerified = await verifyMagicLink(auth, direct!);
+  const directVerified = await verifyMagicLink(
+    auth,
+    requireValue(direct, "direct magic link")
+  );
   expect(directVerified.headers.get("location")).toBe(
     `https://${HOST}${returnTo}`
   );
   expect(getSessionCookie(directVerified)).toBeDefined();
 
-  const siteVerified = await verifyMagicLink(auth, throughSite!);
+  const siteVerified = await verifyMagicLink(
+    auth,
+    requireValue(throughSite, "site callback magic link")
+  );
   const location = new URL(
     siteVerified.headers.get("location") ?? "",
     `https://${HOST}`
@@ -351,17 +401,17 @@ test("lets the app verify an /app/ magic link itself, with no BotID check", asyn
   expect((await signInForMagicLink(sender, email, returnTo)).status).toBe(200);
   const verified = await callNativeHandler(
     appAuth,
-    sentLinks[0]!.url.slice(`https://${HOST}/api/auth`.length)
+    sentMagicLink(sentLinks).url.slice(`https://${HOST}/api/auth`.length)
   );
 
   expect(verified.status).toBe(302);
   expect(verified.headers.get("location")).toBe(`https://${HOST}${returnTo}`);
   const session = await callNativeHandler(appAuth, "/get-session", {
-    headers: { cookie: cookieJar(getSessionCookie(verified)!) },
+    headers: { cookie: sessionCookieHeader(verified) },
   });
-  expect(
-    ((await session.json()) as { user?: { email: string } } | null)?.user?.email
-  ).toBe(email.toLowerCase());
+  expect(decodeSessionEmail(await session.json()).user.email).toBe(
+    email.toLowerCase()
+  );
 });
 
 test("accepts an /app/ callback, direct or through the site callback, from the app", async () => {
@@ -380,7 +430,9 @@ test("accepts an /app/ callback, direct or through the site callback, from the a
     (
       await callNativeHandler(
         auth,
-        direct!.url.slice(`https://${HOST}/api/auth`.length)
+        requireValue(direct, "direct magic link").url.slice(
+          `https://${HOST}/api/auth`.length
+        )
       )
     ).headers.get("location")
   ).toBe(`https://${HOST}${returnTo}`);
@@ -388,7 +440,9 @@ test("accepts an /app/ callback, direct or through the site callback, from the a
     (
       await callNativeHandler(
         auth,
-        throughSite!.url.slice(`https://${HOST}/api/auth`.length)
+        requireValue(throughSite, "site callback magic link").url.slice(
+          `https://${HOST}/api/auth`.length
+        )
       )
     ).headers.get("location") ?? "",
     `https://${HOST}`
@@ -456,8 +510,8 @@ test("reads the session and revokes it on sign-out", async () => {
   const email = uniqueEmail("session-sign-out");
 
   await signInForMagicLink(auth, email);
-  const verified = await verifyMagicLink(auth, sentLinks[0]!);
-  const cookie = cookieJar(getSessionCookie(verified)!);
+  const verified = await verifyMagicLink(auth, sentMagicLink(sentLinks));
+  const cookie = sessionCookieHeader(verified);
 
   const session = await callHandler(auth, "/get-session", {
     headers: { cookie },
@@ -503,13 +557,13 @@ describe.skipIf(!testDatabase)(
       expect(sentLinks).toHaveLength(0);
       expect(workspaceLogs.records()).toHaveLength(0);
 
-      const verification = await testDatabase!.pool.query(
+      const verification = await database().pool.query(
         `select id from auth.verification where value like $1`,
         [`%${email}%`]
       );
       expect(verification.rows).toHaveLength(0);
 
-      const user = await testDatabase!.pool.query(
+      const user = await database().pool.query(
         `select id from auth."user" where email = $1`,
         [email]
       );
@@ -518,14 +572,14 @@ describe.skipIf(!testDatabase)(
 
     const localeOf = async (accountId: string) =>
       (
-        await testDatabase!.pool.query<{ locale: string | null }>(
+        await database().pool.query<{ locale: string | null }>(
           `select locale from auth."user" where id = $1`,
           [accountId]
         )
       ).rows[0]?.locale;
 
     const readCreatedUser = async (id: string) => {
-      const { rows } = await testDatabase!.pool.query<{
+      const { rows } = await database().pool.query<{
         id: string;
         locale: string | null;
         email_verified: boolean;
@@ -548,22 +602,22 @@ describe.skipIf(!testDatabase)(
       const createdLocaleFor = async (email: string) => {
         const userId = await userIdForEmail(email);
         expect(userId).toBeTruthy();
-        return localeOf(userId!);
+        return localeOf(requireValue(userId, "auth user ID"));
       };
 
       const emailEn = uniqueEmail("seed-en");
       await signInForMagicLink(auth, emailEn, "/en-US/account");
-      await verifyMagicLink(auth, sentLinks[0]!);
+      await verifyMagicLink(auth, sentMagicLink(sentLinks));
       expect(await createdLocaleFor(emailEn)).toBe("en-US");
 
       const emailCs = uniqueEmail("seed-cs");
       await signInForMagicLink(auth, emailCs, "/cs-CZ/account");
-      await verifyMagicLink(auth, sentLinks[1]!);
+      await verifyMagicLink(auth, sentMagicLink(sentLinks, 1));
       expect(await createdLocaleFor(emailCs)).toBe("cs-CZ");
 
       const emailDefault = uniqueEmail("seed-default");
       await signInForMagicLink(auth, emailDefault);
-      await verifyMagicLink(auth, sentLinks[2]!);
+      await verifyMagicLink(auth, sentMagicLink(sentLinks, 2));
       expect(await createdLocaleFor(emailDefault)).toBe("en-US");
     });
 
@@ -573,11 +627,11 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("account-sign-up");
 
       await signInForMagicLink(auth, email);
-      const verified = await verifyMagicLink(auth, sentLinks[0]!);
+      const verified = await verifyMagicLink(auth, sentMagicLink(sentLinks));
       expect(getSessionCookie(verified)).toBeTruthy();
 
-      const userId = (await userIdForEmail(email))!;
-      const { rows } = await testDatabase!.pool.query<{
+      const userId = requireValue(await userIdForEmail(email), "auth user ID");
+      const { rows } = await database().pool.query<{
         user_id: string;
         customer_account_id: string | null;
       }>(
@@ -600,14 +654,18 @@ describe.skipIf(!testDatabase)(
       const auth = makeTestAuth();
       const context = await auth.$context;
       const id = context.generateId({ model: "user" });
+      if (id === false) throw new Error("Expected a generated auth user ID");
       const { internalAdapter } = context;
-      const user = await internalAdapter.createUser({
-        id,
-        email: uniqueEmail("internal-account-locale"),
-        name: "",
-        emailVerified: false,
-        locale: "cs-CZ",
-      });
+      const user = await internalAdapter.createUser(
+        {
+          id,
+          email: uniqueEmail("internal-account-locale"),
+          name: "",
+          emailVerified: false,
+          locale: "cs-CZ",
+        },
+        { method: "internal" }
+      );
 
       expect(user.id).toBe(id);
       expect(await readCreatedUser(id)).toEqual({
@@ -622,13 +680,17 @@ describe.skipIf(!testDatabase)(
       const auth = makeTestAuth();
       const context = await auth.$context;
       const id = context.generateId({ model: "user" });
+      if (id === false) throw new Error("Expected a generated auth user ID");
       const { internalAdapter } = context;
-      const user = await internalAdapter.createUser({
-        id,
-        email: uniqueEmail("internal-account-default-locale"),
-        name: "",
-        emailVerified: false,
-      });
+      const user = await internalAdapter.createUser(
+        {
+          id,
+          email: uniqueEmail("internal-account-default-locale"),
+          name: "",
+          emailVerified: false,
+        },
+        { method: "internal" }
+      );
 
       expect(user.id).toBe(id);
       expect(await readCreatedUser(id)).toEqual({
@@ -643,23 +705,26 @@ describe.skipIf(!testDatabase)(
       const auth = makeTestAuth();
       const { internalAdapter } = await auth.$context;
       const email = uniqueEmail("internal-account-missing-id");
-      const before = await testDatabase!.pool.query<{ count: string }>(
+      const before = await database().pool.query<{ count: string }>(
         `select count(*)::text as count from customer_accounts`
       );
 
       await expect(
-        internalAdapter.createUser({
-          email,
-          name: "",
-          emailVerified: false,
-        })
+        internalAdapter.createUser(
+          {
+            email,
+            name: "",
+            emailVerified: false,
+          },
+          { method: "internal" }
+        )
       ).rejects.toThrow(/valid account identifier/);
 
-      const users = await testDatabase!.pool.query(
+      const users = await database().pool.query(
         `select id from auth."user" where email = $1`,
         [email]
       );
-      const after = await testDatabase!.pool.query<{ count: string }>(
+      const after = await database().pool.query<{ count: string }>(
         `select count(*)::text as count from customer_accounts`
       );
 
@@ -673,16 +738,20 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("seed-kept");
 
       await signInForMagicLink(auth, email, "/cs-CZ/account");
-      await verifyMagicLink(auth, sentLinks[0]!);
+      await verifyMagicLink(auth, sentMagicLink(sentLinks));
       await signInForMagicLink(auth, email, "/en-US/account");
-      const second = await verifyMagicLink(auth, sentLinks[1]!);
+      const second = await verifyMagicLink(auth, sentMagicLink(sentLinks, 1));
 
       expect(getSessionCookie(second)).toBeTruthy();
-      expect(await localeOf((await userIdForEmail(email))!)).toBe("cs-CZ");
+      expect(
+        await localeOf(
+          requireValue(await userIdForEmail(email), "auth user ID")
+        )
+      ).toBe("cs-CZ");
     });
 
     const insertLegacyAccount = (email: string) =>
-      workspaceFixtures(testDatabase!.db)
+      workspaceFixtures(database().db)
         .account("legacy", { email })
         .pipe(
           Effect.map(({ accountId }) => accountId),
@@ -696,12 +765,12 @@ describe.skipIf(!testDatabase)(
       const accountId = await insertLegacyAccount(email);
 
       await signInForMagicLink(auth, email, "/cs-CZ/account");
-      const first = await verifyMagicLink(auth, sentLinks[0]!);
+      const first = await verifyMagicLink(auth, sentMagicLink(sentLinks));
       expect(getSessionCookie(first)).toBeTruthy();
       expect(await localeOf(accountId)).toBe("cs-CZ");
 
       await signInForMagicLink(auth, email, "/en-US/account");
-      const second = await verifyMagicLink(auth, sentLinks[1]!);
+      const second = await verifyMagicLink(auth, sentMagicLink(sentLinks, 1));
       expect(getSessionCookie(second)).toBeTruthy();
       expect(await localeOf(accountId)).toBe("cs-CZ");
     });
@@ -713,7 +782,7 @@ describe.skipIf(!testDatabase)(
       const accountId = await insertLegacyAccount(email);
 
       await signInForMagicLink(auth, email);
-      const verified = await verifyMagicLink(auth, sentLinks[0]!);
+      const verified = await verifyMagicLink(auth, sentMagicLink(sentLinks));
 
       expect(getSessionCookie(verified)).toBeTruthy();
       expect(await localeOf(accountId)).toBeNull();
@@ -730,7 +799,7 @@ describe.skipIf(!testDatabase)(
 
       workspaceLogs.reset();
       await signInForMagicLink(auth, email, "/cs-CZ/account");
-      const verified = await verifyMagicLink(auth, sentLinks[0]!);
+      const verified = await verifyMagicLink(auth, sentMagicLink(sentLinks));
 
       expect(verified.status).toBe(302);
       expect(getSessionCookie(verified)).toBeTruthy();
@@ -748,8 +817,8 @@ describe.skipIf(!testDatabase)(
       const rawProfileSecret = `update-secret-${crypto.randomUUID()}`;
 
       await signInForMagicLink(auth, email);
-      const verified = await verifyMagicLink(auth, sentLinks[0]!);
-      const cookie = cookieJar(getSessionCookie(verified)!);
+      const verified = await verifyMagicLink(auth, sentMagicLink(sentLinks));
+      const cookie = sessionCookieHeader(verified);
 
       const publicUpdate = await callHandler(auth, "/update-user", {
         method: "POST",
@@ -773,7 +842,7 @@ describe.skipIf(!testDatabase)(
         })
       ).rejects.toMatchObject({ status: "BAD_REQUEST", statusCode: 400 });
 
-      const user = await testDatabase!.pool.query(
+      const user = await database().pool.query(
         `select name, image from auth."user" where email = $1`,
         [email]
       );
@@ -786,7 +855,7 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("once");
 
       await signInForMagicLink(auth, email, "/en-US/account");
-      const link = sentLinks[0]!;
+      const link = sentMagicLink(sentLinks);
 
       const [first, second] = await Promise.all([
         verifyMagicLink(auth, link),
@@ -796,7 +865,10 @@ describe.skipIf(!testDatabase)(
       const withSession = [first, second].filter((r) => getSessionCookie(r));
       expect(withSession).toHaveLength(1);
 
-      const successful = withSession[0]!;
+      const successful = requireValue(
+        withSession[0],
+        "response with a session"
+      );
       expect(successful.status).toBe(302);
       expect(successful.headers.get("location")).toBe(
         `https://${HOST}/en-US/account`
@@ -804,7 +876,7 @@ describe.skipIf(!testDatabase)(
 
       const userId = await userIdForEmail(email);
       expect(userId).toBeTruthy();
-      const sessions = await testDatabase!.pool.query(
+      const sessions = await database().pool.query(
         `select id from auth.session where user_id = $1`,
         [userId]
       );
@@ -839,7 +911,7 @@ describe.skipIf(!testDatabase)(
       expect(blockedOnSecondInstance.status).toBe(429);
       expect(blockedOnSecondInstance.headers.get("x-retry-after")).toBeTruthy();
 
-      const rateRows = await testDatabase!.pool.query(
+      const rateRows = await database().pool.query(
         `select key from auth.rate_limit where key = $1`,
         [`${ip}|/sign-in/magic-link`]
       );
@@ -860,8 +932,11 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("origin");
 
       await signInForMagicLink(auth, email);
-      const verifyResponse = await verifyMagicLink(auth, sentLinks[0]!);
-      const cookie = cookieJar(getSessionCookie(verifyResponse)!);
+      const verifyResponse = await verifyMagicLink(
+        auth,
+        sentMagicLink(sentLinks)
+      );
+      const cookie = sessionCookieHeader(verifyResponse);
 
       workspaceLogs.reset();
       const evilOrigin = await auth.handler(
@@ -887,7 +962,7 @@ describe.skipIf(!testDatabase)(
 
       const evilCallbackVerify = await callHandler(
         capturing,
-        `/magic-link/verify?token=${sentLinks[0]!.token}&callbackURL=${encodeURIComponent("https://evil.example/steal")}`
+        `/magic-link/verify?token=${sentMagicLink(sentLinks).token}&callbackURL=${encodeURIComponent("https://evil.example/steal")}`
       );
       expect(evilCallbackVerify.status).toBe(403);
       expect(workspaceLogs.records()).toHaveLength(0);
@@ -898,7 +973,7 @@ describe.skipIf(!testDatabase)(
       const auth = makeTestAuth({ sentLinks });
 
       await signInForMagicLink(auth, uniqueEmail("cookie"));
-      const response = await verifyMagicLink(auth, sentLinks[0]!);
+      const response = await verifyMagicLink(auth, sentMagicLink(sentLinks));
 
       const setCookie = getSessionCookie(response);
       expect(setCookie).toBeTruthy();
@@ -916,20 +991,21 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("authoritative");
 
       await signInForMagicLink(auth, email);
-      const verifyResponse = await verifyMagicLink(auth, sentLinks[0]!);
-      const cookie = cookieJar(getSessionCookie(verifyResponse)!);
+      const verifyResponse = await verifyMagicLink(
+        auth,
+        sentMagicLink(sentLinks)
+      );
+      const cookie = sessionCookieHeader(verifyResponse);
 
       const session = await callHandler(auth, "/get-session", {
         headers: { cookie },
       });
       expect(session.status).toBe(200);
-      const sessionBody = (await session.json()) as {
-        user: { email: string; emailVerified: boolean };
-      };
+      const sessionBody = decodeVerifiedSession(await session.json());
       expect(sessionBody.user.email).toBe(email);
       expect(sessionBody.user.emailVerified).toBe(true);
 
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `delete from auth.session where user_id = $1`,
         [await userIdForEmail(email)]
       );
@@ -946,8 +1022,11 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("rotation");
 
       await signInForMagicLink(before, email);
-      const verifyResponse = await verifyMagicLink(before, sentLinks[0]!);
-      const cookie = cookieJar(getSessionCookie(verifyResponse)!);
+      const verifyResponse = await verifyMagicLink(
+        before,
+        sentMagicLink(sentLinks)
+      );
+      const cookie = sessionCookieHeader(verifyResponse);
 
       expect(
         await (
@@ -969,9 +1048,9 @@ describe.skipIf(!testDatabase)(
 
     test("expires the linked Dotypos profile and cascades identity removal on fresh deletion", async () => {
       const calls: string[] = [];
-      const deletionLayers = makeTestDeletionLayers(() => {
+      const deletionLayers = makeTestDeletionLayers((customerId) => {
         calls.push("expire");
-        return Effect.succeed(Option.some({} as never));
+        return expireDotyposCustomer(customerId);
       });
 
       const sentLinks: CapturedMagicLink[] = [];
@@ -979,9 +1058,12 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("delete");
 
       await signInForMagicLink(auth, email);
-      const verifyResponse = await verifyMagicLink(auth, sentLinks[0]!);
-      const cookie = cookieJar(getSessionCookie(verifyResponse)!);
-      const userId = (await userIdForEmail(email))!;
+      const verifyResponse = await verifyMagicLink(
+        auth,
+        sentMagicLink(sentLinks)
+      );
+      const cookie = sessionCookieHeader(verifyResponse);
+      const userId = requireValue(await userIdForEmail(email), "auth user ID");
       await linkAccount(userId, uniqueDotyposCustomerId());
 
       const deleted = await callHandler(auth, "/delete-user", {
@@ -993,19 +1075,19 @@ describe.skipIf(!testDatabase)(
       expect(deleted.status).toBe(200);
       expect(calls).toEqual(["expire"]);
 
-      const user = await testDatabase!.pool.query(
+      const user = await database().pool.query(
         `select id from auth."user" where id = $1`,
         [userId]
       );
       expect(user.rows).toHaveLength(0);
 
-      const link = await testDatabase!.pool.query(
+      const link = await database().pool.query(
         `select dotypos_customer_id from customer_accounts where id = $1`,
         [userId]
       );
       expect(link.rows).toEqual([{ dotypos_customer_id: null }]);
 
-      const sessions = await testDatabase!.pool.query(
+      const sessions = await database().pool.query(
         `select id from auth.session where user_id = $1`,
         [userId]
       );
@@ -1027,9 +1109,12 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("retry");
 
       await signInForMagicLink(auth, email);
-      const verifyResponse = await verifyMagicLink(auth, sentLinks[0]!);
-      const cookie = cookieJar(getSessionCookie(verifyResponse)!);
-      const userId = (await userIdForEmail(email))!;
+      const verifyResponse = await verifyMagicLink(
+        auth,
+        sentMagicLink(sentLinks)
+      );
+      const cookie = sessionCookieHeader(verifyResponse);
+      const userId = requireValue(await userIdForEmail(email), "auth user ID");
       await linkAccount(userId, uniqueDotyposCustomerId());
 
       const failed = await callHandler(auth, "/delete-user", {
@@ -1039,14 +1124,16 @@ describe.skipIf(!testDatabase)(
       });
       expect(failed.status).toBe(500);
 
-      const user = await testDatabase!.pool.query(
+      const user = await database().pool.query(
         `select deletion_requested_at from auth."user" where id = $1`,
         [userId]
       );
       expect(user.rows).toHaveLength(1);
-      expect(user.rows[0]!.deletion_requested_at).not.toBeNull();
+      expect(
+        requireValue(user.rows[0], "auth user row").deletion_requested_at
+      ).not.toBeNull();
 
-      const link = await testDatabase!.pool.query(
+      const link = await database().pool.query(
         `select dotypos_customer_id from customer_accounts where id = $1`,
         [userId]
       );
@@ -1057,9 +1144,9 @@ describe.skipIf(!testDatabase)(
     test("refuses a direct deletion request from a review account and keeps its login", async () => {
       const calls: string[] = [];
       const deletionLayers = makeTestDeletionLayers(
-        () => {
+        (customerId) => {
           calls.push("expire");
-          return Effect.succeed(Option.some({} as never));
+          return expireDotyposCustomer(customerId);
         },
         () => {
           calls.push("destroy-avatar");
@@ -1072,10 +1159,13 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("delete-review");
 
       await signInForMagicLink(auth, email);
-      const verifyResponse = await verifyMagicLink(auth, sentLinks[0]!);
-      const cookie = cookieJar(getSessionCookie(verifyResponse)!);
-      const userId = (await userIdForEmail(email))!;
-      await testDatabase!.pool.query(
+      const verifyResponse = await verifyMagicLink(
+        auth,
+        sentMagicLink(sentLinks)
+      );
+      const cookie = sessionCookieHeader(verifyResponse);
+      const userId = requireValue(await userIdForEmail(email), "auth user ID");
+      await database().pool.query(
         `update customer_accounts set review = true where id = $1`,
         [userId]
       );
@@ -1091,19 +1181,19 @@ describe.skipIf(!testDatabase)(
       });
       expect(calls).toEqual([]);
 
-      const user = await testDatabase!.pool.query(
+      const user = await database().pool.query(
         `select deletion_requested_at from auth."user" where id = $1`,
         [userId]
       );
       expect(user.rows).toEqual([{ deletion_requested_at: null }]);
 
-      const account = await testDatabase!.pool.query(
+      const account = await database().pool.query(
         `select deleted_at from customer_accounts where id = $1`,
         [userId]
       );
       expect(account.rows).toEqual([{ deleted_at: null }]);
 
-      const sessions = await testDatabase!.pool.query(
+      const sessions = await database().pool.query(
         `select id from auth.session where user_id = $1`,
         [userId]
       );
@@ -1111,9 +1201,8 @@ describe.skipIf(!testDatabase)(
     });
 
     test("keeps the auth identity and link when avatar deletion has an unknown provider outcome", async () => {
-      const deletionLayers = makeTestDeletionLayers(
-        () => Effect.succeed(Option.some({} as never)),
-        () => Effect.fail(new CustomerAvatarProviderError({}))
+      const deletionLayers = makeTestDeletionLayers(expireDotyposCustomer, () =>
+        Effect.fail(new CustomerAvatarProviderError({}))
       );
 
       const sentLinks: CapturedMagicLink[] = [];
@@ -1121,9 +1210,12 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("avatar-delete-retry");
 
       await signInForMagicLink(auth, email);
-      const verifyResponse = await verifyMagicLink(auth, sentLinks[0]!);
-      const cookie = cookieJar(getSessionCookie(verifyResponse)!);
-      const userId = (await userIdForEmail(email))!;
+      const verifyResponse = await verifyMagicLink(
+        auth,
+        sentMagicLink(sentLinks)
+      );
+      const cookie = sessionCookieHeader(verifyResponse);
+      const userId = requireValue(await userIdForEmail(email), "auth user ID");
       await linkAccount(userId, uniqueDotyposCustomerId());
 
       const failed = await callHandler(auth, "/delete-user", {
@@ -1133,14 +1225,16 @@ describe.skipIf(!testDatabase)(
       });
       expect(failed.status).toBe(500);
 
-      const user = await testDatabase!.pool.query(
+      const user = await database().pool.query(
         `select deletion_requested_at from auth."user" where id = $1`,
         [userId]
       );
       expect(user.rows).toHaveLength(1);
-      expect(user.rows[0]!.deletion_requested_at).not.toBeNull();
+      expect(
+        requireValue(user.rows[0], "auth user row").deletion_requested_at
+      ).not.toBeNull();
 
-      const link = await testDatabase!.pool.query(
+      const link = await database().pool.query(
         `select dotypos_customer_id from customer_accounts where id = $1`,
         [userId]
       );
@@ -1162,11 +1256,14 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("stale");
 
       await signInForMagicLink(auth, email);
-      const verifyResponse = await verifyMagicLink(auth, sentLinks[0]!);
-      const cookie = cookieJar(getSessionCookie(verifyResponse)!);
-      const userId = (await userIdForEmail(email))!;
+      const verifyResponse = await verifyMagicLink(
+        auth,
+        sentMagicLink(sentLinks)
+      );
+      const cookie = sessionCookieHeader(verifyResponse);
+      const userId = requireValue(await userIdForEmail(email), "auth user ID");
 
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth.session set created_at = now() - interval '20 minutes' where user_id = $1`,
         [userId]
       );
@@ -1180,7 +1277,7 @@ describe.skipIf(!testDatabase)(
       expect(stale.status).toBe(400);
       expect(hookCalls).toBe(0);
 
-      const user = await testDatabase!.pool.query(
+      const user = await database().pool.query(
         `select id from auth."user" where id = $1`,
         [userId]
       );
@@ -1188,18 +1285,19 @@ describe.skipIf(!testDatabase)(
     });
 
     test("serializes deletion behind the account advisory lock", async () => {
-      const deletionLayers = makeTestDeletionLayers(() =>
-        Effect.succeed(Option.some({} as never))
-      );
+      const deletionLayers = makeTestDeletionLayers(expireDotyposCustomer);
 
       const sentLinks: CapturedMagicLink[] = [];
       const auth = makeTestAuth({ sentLinks, accountDeletion: deletionLayers });
       const email = uniqueEmail("locked");
 
       await signInForMagicLink(auth, email);
-      const verifyResponse = await verifyMagicLink(auth, sentLinks[0]!);
-      const cookie = cookieJar(getSessionCookie(verifyResponse)!);
-      const userId = (await userIdForEmail(email))!;
+      const verifyResponse = await verifyMagicLink(
+        auth,
+        sentMagicLink(sentLinks)
+      );
+      const cookie = sessionCookieHeader(verifyResponse);
+      const userId = requireValue(await userIdForEmail(email), "auth user ID");
       await linkAccount(userId, uniqueDotyposCustomerId());
 
       const lockKey: [string, string] = ["customer-account", userId];
@@ -1212,7 +1310,7 @@ describe.skipIf(!testDatabase)(
           const holdFiber = yield* Effect.forkChild(
             withPostgresAdvisoryLock(
               Context.get(
-                testDatabase!.databasePool.postgres,
+                database().databasePool.postgres,
                 SqlClient.SqlClient
               ),
               lockKey,
@@ -1231,14 +1329,13 @@ describe.skipIf(!testDatabase)(
           }).then((response) => response.status);
 
           yield* Effect.promise(() =>
-            waitForAccountAdvisoryLockWait(testDatabase!.pool, userId)
+            waitForAccountAdvisoryLockWait(database().pool, userId)
           );
 
           const stillThere = yield* Effect.promise(() =>
-            testDatabase!.pool.query(
-              `select id from auth."user" where id = $1`,
-              [userId]
-            )
+            database().pool.query(`select id from auth."user" where id = $1`, [
+              userId,
+            ])
           );
           expect(stillThere.rows).toHaveLength(1);
 
@@ -1249,7 +1346,7 @@ describe.skipIf(!testDatabase)(
         })
       );
 
-      const user = await testDatabase!.pool.query(
+      const user = await database().pool.query(
         `select id from auth."user" where id = $1`,
         [userId]
       );

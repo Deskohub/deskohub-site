@@ -16,8 +16,10 @@ import { Cause, Effect } from "effect";
 import * as SqlError from "effect/sql/SqlError";
 import { makeAuthDatabase } from "@/db/auth-database-client";
 import { drizzleAuthTables } from "@/db/schema/auth";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
   type WorkspacePostgresTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { captureWorkspaceLogs } from "@/shared/testing/workspace-telemetry.test-utils";
@@ -62,10 +64,15 @@ export interface CapturedMagicLink {
   readonly metadata?: SignInEmail["metadata"];
 }
 
+export const sentMagicLink = (links: readonly CapturedMagicLink[], index = 0) =>
+  requireValue(links[index], `sent magic link ${index + 1}`);
+
 export type TestAuth = ReturnType<typeof makeTestAuth>;
 
 /** The Postgres adapter, on the migrated disposable database by default. */
-export const buildDatabaseAdapter = (pool = testDatabase!.pool) =>
+export const buildDatabaseAdapter = (
+  pool = requireTestDatabase(testDatabase).pool
+) =>
   drizzleAdapter(makeAuthDatabase(pool), {
     provider: "pg",
     schema: drizzleAuthTables,
@@ -97,7 +104,9 @@ export type TestAuthOptions = AuthHookServiceOverrides & {
 export const realCreateCustomerAccount: NonNullable<
   TestAuthOptions["createCustomerAccount"]
 > = (accountId) =>
-  ensureCustomerAccount(accountId).pipe(Effect.provide(testDatabase!.layer));
+  ensureCustomerAccount(accountId).pipe(
+    Effect.provide(requireTestDatabase(testDatabase).layer)
+  );
 
 /** A database failure the sign-in capture sees. */
 export const captureFailure = () =>
@@ -121,7 +130,9 @@ export const makeTestAuth = (options: TestAuthOptions = {}) => {
   };
   const postgres = options.postgres ?? testDatabase;
   return makeWorkspaceAuth({
-    database: options.database ?? buildDatabaseAdapter(postgres!.pool),
+    database:
+      options.database ??
+      buildDatabaseAdapter(requireTestDatabase(postgres).pool),
     secrets: options.secrets ?? [{ version: 1, value: SECRET_V1 }],
     allowedHosts: [HOST],
     nativeAppLinkOrigin: options.nativeAppLinkOrigin ?? `https://${HOST}`,
@@ -197,17 +208,18 @@ export const callHandler = (
   auth: TestAuth,
   path: string,
   init: RequestInit = {}
-) =>
-  auth.handler(
-    new Request(`https://${HOST}/api/auth${path}`, {
-      ...init,
-      headers: {
-        origin: `https://${HOST}`,
-        "x-vercel-forwarded-for": "192.0.2.1",
-        ...((init.headers as Record<string, string>) ?? {}),
-      },
-    })
+) => {
+  const headers = new Headers(init.headers);
+  if (!headers.has("origin")) {
+    headers.set("origin", `https://${HOST}`);
+  }
+  if (!headers.has("x-vercel-forwarded-for")) {
+    headers.set("x-vercel-forwarded-for", "192.0.2.1");
+  }
+  return auth.handler(
+    new Request(`https://${HOST}/api/auth${path}`, { ...init, headers })
   );
+};
 
 /**
  * Calls the handler as the native app's Better Auth Expo client does: no
@@ -250,7 +262,7 @@ const allocateIpBlock = async () => {
   const { rows } = await testDatabase.pool.query<{ block: string }>(
     `select nextval('workspace_test_ip_block') % ${ipBlockCount} as block`
   );
-  return Number(rows[0]!.block);
+  return Number(requireValue(rows[0], "allocated IP block").block);
 };
 
 const ipBlock = await allocateIpBlock();
@@ -299,23 +311,27 @@ export const getSessionCookie = (response: Response) =>
     .getSetCookie()
     .find((cookie) => cookie.includes("session_token="));
 
-export const cookieJar = (setCookie: string) => setCookie.split(";")[0]!;
+export const cookieJar = (setCookie: string) =>
+  requireValue(setCookie.split(";")[0], "cookie name and value");
+
+export const sessionCookieHeader = (response: Response) =>
+  cookieJar(requireValue(getSessionCookie(response), "session cookie"));
 
 export const userIdForEmail = async (
   email: string,
-  postgres = testDatabase!
+  postgres = requireTestDatabase(testDatabase)
 ) => {
-  const result = await postgres.pool.query(
+  const result = await postgres.pool.query<{ id: string }>(
     `select id from auth."user" where email = $1`,
     [email]
   );
-  return (result.rows[0]?.id as string | undefined) ?? undefined;
+  return result.rows[0]?.id;
 };
 
 export const linkAccount = async (
   userId: string,
   dotyposCustomerId: string,
-  postgres = testDatabase!
+  postgres = requireTestDatabase(testDatabase)
 ) => {
   await postgres.pool.query(
     `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
