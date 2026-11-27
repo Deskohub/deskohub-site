@@ -577,6 +577,12 @@ const fakeRpcProbe = (args: ReadonlyArray<string>, world: FakeWorld) => {
       markerMatches: true,
       failDecoded: "ProbeRejected",
       countChunks: [0, 1, 2],
+      emailPreferences: {
+        opened: true,
+        rejected: "CampaignUnsubscribeRejected",
+        first: "withdrawn",
+        repeat: "unchanged",
+      },
       failures: world.rpcPrintsMarker === true ? [marker] : [],
       ...world.rpcVerdict,
     })

@@ -2,6 +2,9 @@
 // each SandboxProbeRpcs RPC over POST /rpc with SchemaBinary and reports one
 // verdict. Failures name the step and error tag only, and every remote string
 // in the verdict is redacted, so it never carries the token or the marker.
+
+import { SandboxProbeRpcs } from "@deskohub/workspace-cloud-run/sandbox-probe/rpcs";
+import { sha256Hex } from "@deskohub/workspace-cloud-run/sha256";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
@@ -13,8 +16,6 @@ import * as Result from "effect/Result";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { sha256Hex } from "../src/sha256";
-import { SandboxProbeRpcs } from "./probe-rpcs";
 
 export const schemaBinaryContentType =
   "application/vnd.effect.rpc+schema-binary";

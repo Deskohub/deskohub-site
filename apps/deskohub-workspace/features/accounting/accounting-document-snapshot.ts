@@ -1,3 +1,8 @@
+export {
+  type AccountingSnapshotKeyId,
+  accountingSnapshotKeyIdSchema,
+} from "@deskohub/workspace-domain/features/accounting/accounting-document-snapshot";
+
 import {
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -45,17 +50,6 @@ export {
   companyRegistrationIdSchema,
   vatRegistrationIdSchema,
 } from "./billing-identity";
-
-export const accountingSnapshotKeyIdSchema = Schema.NonEmptyString.check(
-  Schema.isPattern(/^[A-Z][A-Z0-9_]{2,31}$/)
-)
-  .pipe(Schema.brand("AccountingSnapshotKeyId"))
-  .annotate({
-    identifier: "AccountingSnapshotKeyId",
-    description: "Identifier selecting an accounting snapshot encryption key.",
-  });
-
-export type AccountingSnapshotKeyId = typeof accountingSnapshotKeyIdSchema.Type;
 
 const accountingBuyerAddressSchema = Schema.Struct({
   line1: Schema.optionalKey(Schema.NonEmptyString),

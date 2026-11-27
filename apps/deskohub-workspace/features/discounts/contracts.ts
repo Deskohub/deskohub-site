@@ -1,47 +1,27 @@
-import { Schema } from "effect";
 import {
-  type WorkspaceProductIdentity,
-  workspaceProductIdentitySchema,
-} from "@/features/checkout/product-identity";
+  type CanonicalPromotionCode,
+  type DiscountId,
+  discountQuoteCodec,
+} from "@deskohub/workspace-domain/features/discounts/contracts";
+
+export {
+  appliedDiscountCodec,
+  type CanonicalPromotionCode,
+  canonicalPromotionCodeSchema,
+  type DiscountId,
+  discountAdjustmentSchema,
+  discountBasisPointsSchema,
+  discountCodec,
+  discountIdSchema,
+  discountQuoteCodec,
+} from "@deskohub/workspace-domain/features/discounts/contracts";
+
+import { Schema } from "effect";
+import type { WorkspaceProductIdentity } from "@/features/checkout/product-identity";
 import type { WorkspaceProductTarget } from "@/features/discounts/product-target";
 import type { Locale } from "@/features/i18n";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
-import {
-  type Money,
-  nonNegativeMoneyCodec,
-  positiveMoneyCodec,
-} from "@/shared/money/money";
-import { instantStringSchema } from "@/shared/utils/temporal";
-
-export const discountIdSchema = Schema.NonEmptyString.pipe(
-  Schema.brand("DiscountId")
-).annotate({
-  identifier: "DiscountId",
-  description: "Deterministic opaque public discount identifier.",
-});
-
-export type DiscountId = Schema.Schema.Type<typeof discountIdSchema>;
-
-export const canonicalPromotionCodeSchema = Schema.String.check(
-  Schema.isPattern(/^[A-Z0-9][A-Z0-9_-]{2,63}$/)
-)
-  .pipe(Schema.brand("CanonicalPromotionCode"))
-  .annotate({
-    identifier: "CanonicalPromotionCode",
-    description:
-      "Canonical ASCII-uppercase promotion code accepted by Workspace checkout.",
-  });
-
-export type CanonicalPromotionCode = Schema.Schema.Type<
-  typeof canonicalPromotionCodeSchema
->;
-
-export const discountBasisPointsSchema = Schema.Int.check(
-  Schema.isBetween({ minimum: 1, maximum: 10_000 })
-).annotate({
-  identifier: "DiscountBasisPoints",
-  description: "An exact percentage discount measured in basis points.",
-});
+import type { Money } from "@/shared/money/money";
 
 export type DiscountAdjustment =
   | {
@@ -52,20 +32,6 @@ export type DiscountAdjustment =
       readonly kind: "fixed";
       readonly amount: Money;
     };
-
-export const discountAdjustmentSchema = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("percentage"),
-    basisPoints: discountBasisPointsSchema,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("fixed"),
-    amount: positiveMoneyCodec,
-  }),
-]).annotate({
-  identifier: "DiscountAdjustment",
-  description: "A valid percentage or fixed-money discount adjustment.",
-});
 
 export type Discount = {
   readonly id: DiscountId;
@@ -92,35 +58,12 @@ export type ActiveSaleDiscoveryInput = {
   readonly locale: Locale;
 };
 
-export const discountCodec = Schema.Struct({
-  id: discountIdSchema,
-  label: Schema.NonEmptyString,
-  staffLabel: Schema.optionalKey(Schema.NonEmptyString),
-  adjustment: discountAdjustmentSchema,
-  expiresAt: Schema.optionalKey(Schema.toEncoded(instantStringSchema)),
-  countdownStartsAt: Schema.optionalKey(Schema.toEncoded(instantStringSchema)),
-}).annotate({
-  identifier: "Discount",
-  description: "A source-neutral discount exposed to checkout consumers.",
-});
-
 export type AppliedDiscount = {
   readonly discount: Discount;
   readonly subtotalBefore: Money;
   readonly amount: Money;
   readonly subtotalAfter: Money;
 };
-
-export const appliedDiscountCodec = Schema.Struct({
-  discount: discountCodec,
-  subtotalBefore: nonNegativeMoneyCodec,
-  amount: positiveMoneyCodec,
-  subtotalAfter: nonNegativeMoneyCodec,
-}).annotate({
-  identifier: "AppliedDiscount",
-  description:
-    "An immutable discount application and its before, applied, and after amounts.",
-});
 
 export type DiscountQuote = {
   readonly product: WorkspaceProductIdentity;
@@ -129,17 +72,6 @@ export type DiscountQuote = {
   readonly totalDiscount: Money;
   readonly discountedSubtotal: Money;
 };
-
-export const discountQuoteCodec = Schema.Struct({
-  product: workspaceProductIdentitySchema,
-  discountableSubtotal: nonNegativeMoneyCodec,
-  discounts: Schema.Array(appliedDiscountCodec),
-  totalDiscount: nonNegativeMoneyCodec,
-  discountedSubtotal: nonNegativeMoneyCodec,
-}).annotate({
-  identifier: "DiscountQuote",
-  description: "A source-neutral discount calculation for one product.",
-});
 
 export const discountAdvertisementQuoteCodec = discountQuoteCodec
   .pipe(Schema.brand("DiscountAdvertisementQuote"))

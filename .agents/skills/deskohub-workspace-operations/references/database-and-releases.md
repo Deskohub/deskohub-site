@@ -2,7 +2,7 @@
 
 ## Generate migrations
 
-Generate Drizzle migrations, journals, and snapshots with Drizzle tooling. Never hand-write migration metadata or journal entries.
+Generate Drizzle migrations, journals, and snapshots with `bun run db:generate` from `apps/deskohub-workspace`. Drizzle reads the schema and writes migrations under `packages/workspace-backend/src/db`. Never hand-write migration metadata or journal entries.
 
 ## Database connections
 

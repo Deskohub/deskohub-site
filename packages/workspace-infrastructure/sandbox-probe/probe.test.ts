@@ -1,12 +1,19 @@
 import { describe, expect, test } from "bun:test";
+import {
+  type ProbeLogLine,
+  probeHandlers,
+  type ServiceRole,
+} from "@deskohub/workspace-cloud-run/sandbox-probe";
+import {
+  ProbeRejected,
+  SandboxProbeRpcs,
+} from "@deskohub/workspace-cloud-run/sandbox-probe/rpcs";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { HttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
 import { RpcClient, RpcSerialization, RpcTest } from "effect/rpc";
 import * as Stream from "effect/Stream";
-import { type ProbeLogLine, probeHandlers, type ServiceRole } from "./probe";
-import { ProbeRejected, SandboxProbeRpcs } from "./probe-rpcs";
 import {
   probeTestContext,
   probeVersion,
