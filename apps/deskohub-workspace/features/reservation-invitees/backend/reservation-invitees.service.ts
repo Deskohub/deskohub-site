@@ -191,7 +191,7 @@ export const getBookedPeopleQuery = (
       reservation.reservationState === "confirmed",
     ...(details.kind === "office" || details.kind === "table"
       ? { kind: details.kind, seats: details.seats }
-      : { seats: undefined }),
+      : { kind: undefined, seats: undefined }),
   };
 };
 
