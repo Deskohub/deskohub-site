@@ -205,7 +205,6 @@ export {
   dhwVersionHeader,
   MinimumDhwVersion,
   OutdatedDhwRefusal,
-  teamTableDhwVersion,
 } from "./dhw-version";
 export {
   type DiscountOperations,

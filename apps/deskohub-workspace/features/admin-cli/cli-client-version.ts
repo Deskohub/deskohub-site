@@ -8,7 +8,6 @@ import {
   dhwVersionHeader,
   MinimumDhwVersion,
   OutdatedDhwRefusal,
-  teamTableDhwVersion,
   WorkspaceAdminApi,
 } from "@deskohub/workspace-admin-api";
 import { Context, Effect, Layer, Match, Option, Schema } from "effect";
@@ -53,10 +52,7 @@ export const administrationCallerSupportsTeamTable = Effect.gen(function* () {
   const { channel } = yield* CurrentAdministrationCaller;
   if (channel._tag !== "CliSession") return true;
   const { headers } = yield* HttpServerRequest.HttpServerRequest;
-  return (
-    headers[dhwTeamTableHeader] === "1" ||
-    cliClientIsAtLeast(readCliClientVersion(headers), teamTableDhwVersion)
-  );
+  return headers[dhwTeamTableHeader] === "1";
 });
 
 /** An endpoint's annotations over its group's. */
