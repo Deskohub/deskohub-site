@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import type {
   ReservationProductFilterType,
   ReservationProductPropertyCondition,
@@ -143,7 +144,9 @@ describe("adding a property condition", () => {
     const view = renderControl(
       filterOf("cowork", { property: "coffee", operator: "is", value: true })
     );
-    await openMenu(addConditionButton(view) as HTMLElement);
+    const addCondition = addConditionButton(view);
+    assert(addCondition);
+    await openMenu(addCondition);
     expect(
       view.getAllByRole("menuitem").map((item) => item.textContent)
     ).toEqual([label("cowork", "tier"), label("cowork", "monitor")]);
@@ -183,7 +186,9 @@ describe("adding a property condition", () => {
     const onChange = changes();
     const existing = filterOf(family);
     const view = renderControl(existing, onChange);
-    await openMenu(addConditionButton(view) as HTMLElement);
+    const addCondition = addConditionButton(view);
+    assert(addCondition);
+    await openMenu(addCondition);
     await click(view.getByRole("menuitem", { name: label(family, property) }));
     expect(onChange.mock.calls).toEqual([[filterOf(family, added)]]);
   });
@@ -380,7 +385,8 @@ describe("enum property", () => {
       .find((item) =>
         item.textContent?.startsWith(historicalTier?.name(locale) ?? "-")
       );
-    await click(historical as HTMLElement);
+    assert(historical);
+    await click(historical);
     expect(onChange.mock.calls).toEqual([
       [
         filterOf("cowork", {
@@ -404,7 +410,9 @@ describe("enum property", () => {
         .getAllByRole("menuitemcheckbox")
         .map((item) => item.getAttribute("aria-checked"))
     ).toEqual(tiers.map(() => "false"));
-    await click(view.getAllByRole("menuitemcheckbox")[0] as HTMLElement);
+    const [firstOption] = view.getAllByRole("menuitemcheckbox");
+    assert(firstOption);
+    await click(firstOption);
     expect(onChange.mock.calls).toEqual([
       [
         filterOf("cowork", {
@@ -440,8 +448,11 @@ describe("enum property", () => {
 });
 
 describe("boolean property", () => {
-  const radio = (view: View, name: string) =>
-    view.getByRole("radio", { name }) as HTMLInputElement;
+  const radio = (view: View, name: string) => {
+    const input = view.getByRole("radio", { name });
+    assert(input instanceof HTMLInputElement);
+    return input;
+  };
   const withLabel = m.emailCampaignsAudienceProductWith({}, { locale });
   const withoutLabel = m.emailCampaignsAudienceProductWithout({}, { locale });
 
@@ -455,10 +466,7 @@ describe("boolean property", () => {
     ],
   ] as const)("shows %s", (_name, condition, withChecked) => {
     const view = renderControl(
-      filterOf("cowork", {
-        property: "coffee",
-        ...condition,
-      } as ReservationProductPropertyCondition)
+      filterOf("cowork", { property: "coffee", ...condition })
     );
     expect(radio(view, withLabel).checked).toBe(withChecked);
     expect(radio(view, withoutLabel).checked).toBe(!withChecked);
@@ -481,10 +489,13 @@ describe("boolean property", () => {
 });
 
 describe("number property", () => {
-  const seatsInput = (view: View) =>
-    view.getByRole("spinbutton", {
+  const seatsInput = (view: View) => {
+    const input = view.getByRole("spinbutton", {
       name: label("office", "seats"),
-    }) as HTMLInputElement;
+    });
+    assert(input instanceof HTMLInputElement);
+    return input;
+  };
 
   test("edits the count and keeps the operator", async () => {
     const onChange = changes();

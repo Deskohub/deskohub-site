@@ -2,13 +2,18 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Browser, chromium, type Locator } from "@playwright/test";
-import { Effect } from "effect";
+import {
+  type Browser,
+  chromium,
+  type Locator,
+  type Page,
+} from "@playwright/test";
+import { Effect, Schema } from "effect";
 import { m } from "@/features/administration/i18n";
 import { browserModuleStubPlugin } from "@/shared/testing/browser-module-stubs.test-utils";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import { compileWorkspaceAppStyles } from "@/shared/testing/workspace-app-styles.test-utils";
-import type { CampaignBodyNode } from "../../body/campaign-body-document";
+import { CampaignBodyNode } from "../../body/campaign-body-document";
 import { campaignBodyColumnWidth } from "../../body/campaign-image";
 import { renderCampaignEmailPreview } from "../../campaign-email";
 
@@ -58,7 +63,10 @@ afterAll(async () => {
 });
 
 const dimensions = (image: Locator) =>
-  image.evaluate(async (element: HTMLImageElement) => {
+  image.evaluate(async (element) => {
+    if (!(element instanceof HTMLImageElement)) {
+      throw new Error("Expected an image to measure.");
+    }
     // Editing attributes can replace the image with one still loading.
     await element.decode();
     const { width, height } = element.getBoundingClientRect();
@@ -67,6 +75,31 @@ const dimensions = (image: Locator) =>
 
 const cornerRadius = (image: Locator) =>
   image.evaluate((element) => getComputedStyle(element).borderTopLeftRadius);
+
+const setEditorBody = (page: Page, body: CampaignBodyNode) =>
+  page.locator("#editor-root").evaluate((element, value) => {
+    if (!(element instanceof HTMLElement)) {
+      throw new Error("Expected an HTML element for the editor root.");
+    }
+    element.dataset.document = JSON.stringify(value);
+  }, body);
+
+const setEmailPreview = (page: Page, html: string) =>
+  page
+    .getByTitle("Email preview", { exact: true })
+    .evaluate((element, value) => {
+      if (!(element instanceof HTMLIFrameElement)) {
+        throw new Error("Expected an iframe for the email preview.");
+      }
+      element.srcdoc = value;
+    }, html);
+
+const decodeBody = Schema.decodeUnknownSync(
+  Schema.fromJsonString(CampaignBodyNode)
+);
+
+const readEditorBody = async (page: Page) =>
+  decodeBody(await page.getByTestId("document").textContent());
 
 for (const { locale, initialWidth } of [
   { locale: "en-US", initialWidth: 1068 },
@@ -111,9 +144,7 @@ for (const { locale, initialWidth } of [
           return route.abort();
         });
         await page.goto(origin);
-        await page.locator("#editor-root").evaluate((element, value) => {
-          (element as HTMLElement).dataset.document = JSON.stringify(value);
-        }, doc);
+        await setEditorBody(page, doc);
         await page.addStyleTag({ content: styles });
         await page.addScriptTag({ path: bundle });
         const editorImage = page.locator(".ProseMirror img");
@@ -171,9 +202,7 @@ for (const { locale, initialWidth } of [
         expect(await input.inputValue()).toBe("180");
         expect(await corners.getAttribute("aria-checked")).toBe("false");
         expect(await cornerRadius(editorImage)).toBe("0px");
-        const saved: CampaignBodyNode = JSON.parse(
-          (await page.getByTestId("document").textContent()) ?? "null"
-        );
+        const saved = await readEditorBody(page);
         expect(saved.content?.[0]?.attrs).toMatchObject({
           width: 180,
           height: null,
@@ -200,11 +229,7 @@ for (const { locale, initialWidth } of [
         expect(htmlImage).toContain("height:auto");
         expect(htmlImage).toContain("max-width:100%");
         expect(htmlImage).toMatch(/border-radius:0(?:px)?[;"]/);
-        await page
-          .getByTitle("Email preview", { exact: true })
-          .evaluate((element, html) => {
-            (element as HTMLIFrameElement).srcdoc = html;
-          }, email.html);
+        await setEmailPreview(page, email.html);
         const previewImage = page
           .frameLocator('iframe[title="Email preview"]')
           .getByAltText("Synthetic image");
@@ -216,15 +241,9 @@ for (const { locale, initialWidth } of [
         expect(await cornerRadius(previewImage)).toBe("0px");
         // Maximum size must still fit the editor and rendered email on mobile.
         await input.fill(String(campaignBodyColumnWidth));
-        const wide: CampaignBodyNode = JSON.parse(
-          (await page.getByTestId("document").textContent()) ?? "null"
-        );
+        const wide = await readEditorBody(page);
         const wideEmail = await render(wide);
-        await page
-          .getByTitle("Email preview", { exact: true })
-          .evaluate((element, html) => {
-            (element as HTMLIFrameElement).srcdoc = html;
-          }, wideEmail.html);
+        await setEmailPreview(page, wideEmail.html);
         await page.setViewportSize({ width: 390, height: 844 });
         await previewImage.waitFor();
         for (const image of [editorImage, previewImage]) {
@@ -278,9 +297,7 @@ test.skipIf(!chromiumAvailable)(
           : route.abort()
       );
       await page.goto(origin);
-      await page.locator("#editor-root").evaluate((element, value) => {
-        (element as HTMLElement).dataset.document = JSON.stringify(value);
-      }, doc);
+      await setEditorBody(page, doc);
       await page.addStyleTag({ content: styles });
       await page.addScriptTag({ path: bundle });
       const card = page.locator("[data-pass-offer] [data-drag-handle]");
@@ -302,9 +319,7 @@ test.skipIf(!chromiumAvailable)(
         return page.getByRole("dialog");
       };
       const savedCards = async () => {
-        const saved: CampaignBodyNode = JSON.parse(
-          (await page.getByTestId("document").textContent()) ?? "null"
-        );
+        const saved = await readEditorBody(page);
         return (saved.content ?? []).filter(({ type }) => type === "passOffer");
       };
 

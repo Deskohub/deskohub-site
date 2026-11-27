@@ -8,6 +8,7 @@ import {
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
 import {
+  automatedCampaignFixture,
   automationDetailFixture,
   automationFlowFixture,
   fixtureCampaignId,
@@ -40,7 +41,7 @@ registerWorkspaceComponentTestEnv();
 const { AutomationRunPage } = await import("./automation-run-page");
 
 const automated: AutomatedCampaign = {
-  campaign: { id: fixtureCampaignId } as AutomatedCampaign["campaign"],
+  campaign: automatedCampaignFixture(),
   automation: automationDetailFixture(),
 };
 const runId = "run-1";

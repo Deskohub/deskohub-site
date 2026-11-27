@@ -77,14 +77,21 @@ registerWorkspaceComponentTestEnv();
 
 const { SentCampaignPage } = await import("./sent-campaign-page");
 
-const campaignOf = (status: OnceCampaignDetail["status"]): OnceCampaignDetail =>
-  ({
-    id: campaignId,
-    title: "Autumn newsletter",
-    delivery: "once",
-    status,
-    purpose: "marketing",
-  }) as OnceCampaignDetail;
+const campaignOf = (
+  status: OnceCampaignDetail["status"]
+): OnceCampaignDetail => ({
+  id: campaignId,
+  title: "Autumn newsletter",
+  delivery: "once",
+  status,
+  purpose: "marketing",
+  templateKey: "workspace",
+  audienceId: null,
+  locales: ["cs-CZ"],
+  createdAt: "2026-10-01T08:00:00Z",
+  updatedAt: "2026-10-01T08:00:00Z",
+  content: {},
+});
 
 const czechSpeakers: AudienceFilter = {
   _tag: "Condition",

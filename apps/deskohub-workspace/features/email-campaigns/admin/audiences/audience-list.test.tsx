@@ -6,7 +6,7 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
-import type { CampaignAudienceId } from "../../campaign-identifiers";
+import { campaignAudienceIdSchema } from "../../campaign-identifiers";
 
 mock.module("next/navigation", () => ({
   useParams: () => ({ locale: "cs-CZ" }),
@@ -28,7 +28,7 @@ test("shows the update time the server formatted for the locale", () => {
       <AudienceList
         audiences={[
           {
-            id: "synthetic-audience" as CampaignAudienceId,
+            id: campaignAudienceIdSchema.make("synthetic-audience"),
             title: "Synthetic regulars",
             summary: "Zákazníci, kteří mají účet ve Workspace",
             archived: false,

@@ -6,6 +6,7 @@ import {
   expect,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import type { AutomationRunTimelineEntry } from "@deskohub/workspace-admin-api";
 import { cleanup, render, within } from "@testing-library/react";
 import { formatAdministrationDateTime } from "@/features/administration/components";
@@ -44,8 +45,16 @@ const renderTimeline = (
   const timeline = view.getByRole("list", {
     name: m.emailAutomationRunsTimelineLabel({}, { locale }),
   });
-  const items = Array.from(timeline.children) as HTMLElement[];
-  return { timeline, items };
+  const items = Array.from(timeline.children, (item) => {
+    assert(item instanceof HTMLElement, "Expected an HTML timeline entry");
+    return item;
+  });
+  const itemAt = (index: number) => {
+    const item = items[index];
+    assert(item, `Expected timeline entry ${index}`);
+    return item;
+  };
+  return { timeline, items, itemAt };
 };
 
 const entriesOf = (
@@ -185,7 +194,7 @@ describe("AutomationRunTimeline", () => {
   );
 
   test("names the step an entry happened at, and none without a step", () => {
-    const { items } = renderTimeline(
+    const { items, itemAt } = renderTimeline(
       entriesOf([{ kind: "started" }, { kind: "woke", stepId: "pause" }])
     );
     const stepLabel = automationStepLabelOrId({
@@ -195,11 +204,11 @@ describe("AutomationRunTimeline", () => {
     });
 
     expect(items[0]?.querySelector("p")).toBeNull();
-    expect(within(items[1] as HTMLElement).getByText(stepLabel)).toBeDefined();
+    expect(within(itemAt(1)).getByText(stepLabel)).toBeDefined();
   });
 
   test("lists each failed clause of a condition", () => {
-    const { items } = renderTimeline(
+    const { itemAt } = renderTimeline(
       entriesOf([
         {
           kind: "condition-failed",
@@ -209,9 +218,7 @@ describe("AutomationRunTimeline", () => {
       ])
     );
 
-    expect(
-      within(items[0] as HTMLElement).getAllByRole("listitem")
-    ).toHaveLength(2);
+    expect(within(itemAt(0)).getAllByRole("listitem")).toHaveLength(2);
   });
 
   test("adds a detail line to unconfirmed, withdrawn and archived entries only", () => {
@@ -230,13 +237,12 @@ describe("AutomationRunTimeline", () => {
   });
 
   test("shows an event kind it doesn't know by its raw kind", () => {
-    const { items } = renderTimeline(
+    const { itemAt } = renderTimeline(
       entriesOf([{ kind: "teleported", stepId: "pause", detail: { to: "x" } }])
     );
 
     expect(
-      within(items[0] as HTMLElement).getByRole("heading", { level: 3 })
-        .textContent
+      within(itemAt(0)).getByRole("heading", { level: 3 }).textContent
     ).toBe(
       m.emailAutomationRunsEventUnknown(
         { kind: "teleported" },
@@ -254,13 +260,12 @@ describe("AutomationRunTimeline", () => {
   ])(
     "falls back to the generic entry for a $kind event it can't read",
     (entry) => {
-      const { items } = renderTimeline(
+      const { itemAt } = renderTimeline(
         entriesOf([{ ...entry, stepId: "send" }])
       );
 
       expect(
-        within(items[0] as HTMLElement).getByRole("heading", { level: 3 })
-          .textContent
+        within(itemAt(0)).getByRole("heading", { level: 3 }).textContent
       ).toBe(
         m.emailAutomationRunsEventUnknown(
           { kind: entry.kind },

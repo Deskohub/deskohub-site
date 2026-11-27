@@ -11,7 +11,10 @@ import {
   campaignAudienceIdSchema,
   campaignIdSchema,
 } from "../../campaign-identifiers";
-import { stubCampaignPageQueries } from "../campaign-operation-query.test-utils";
+import {
+  campaignAudienceFixture,
+  stubCampaignPageQueries,
+} from "../campaign-operation-query.test-utils";
 
 const port = stubCampaignPageQueries();
 
@@ -47,7 +50,9 @@ beforeEach(() => {
   port.invoked.length = 0;
   port.responses = {
     getCampaignSendStatus: Effect.succeed({ send }),
-    getCampaignAudience: Effect.succeed({ title: "Czech speakers" }),
+    getCampaignAudience: Effect.succeed(
+      campaignAudienceFixture(audienceId, "Czech speakers")
+    ),
   };
 });
 

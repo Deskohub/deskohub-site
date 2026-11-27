@@ -17,6 +17,7 @@ import {
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
 import {
+  automatedCampaignFixture,
   automationDetailFixture,
   automationFlowFixture,
   fixtureCampaignId,
@@ -48,7 +49,7 @@ registerWorkspaceComponentTestEnv();
 const { AutomationRunLogPage } = await import("./automation-run-log-page");
 
 const automated: AutomatedCampaign = {
-  campaign: { id: fixtureCampaignId } as AutomatedCampaign["campaign"],
+  campaign: automatedCampaignFixture(),
   automation: automationDetailFixture(),
 };
 const firstPageLabel = m.emailAutomationRunsFirstPage({}, { locale });
