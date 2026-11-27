@@ -161,9 +161,10 @@ describe("BookingForm", () => {
         locale,
         selection: { family: "table" },
       }),
-      offerings: [bookingTeamTableOffering],
+      offerings: [...bookingOfferings(), bookingTeamTableOffering],
     };
-    const { onFindTableTimes, onCheck, rerender } = renderForm({ start });
+    const { onFindTableTimes, onCheck, onTableDateOrSizeChange, rerender } =
+      renderForm({ start });
     const view = within(document.body);
     fireEvent.click(
       view.getByRole("button", {
@@ -221,6 +222,24 @@ describe("BookingForm", () => {
         end_time: "00:15",
       })
     );
+    fireEvent.click(
+      view.getByRole("radio", {
+        name: m.bookingWidgetFamilyCowork({}, { locale }),
+      })
+    );
+    fireEvent.change(
+      view.getByLabelText(m.bookingWidgetDateLabel({}, { locale })),
+      { target: { value: "2099-07-29" } }
+    );
+    fireEvent.click(
+      view.getByRole("radio", { name: bookingTeamTableOffering.name })
+    );
+    expect(onTableDateOrSizeChange).toHaveBeenCalledTimes(1);
+    expect(
+      view.queryByRole("combobox", {
+        name: m.bookingWidgetStartTimeLabel({}, { locale }),
+      })
+    ).toBeNull();
   });
 
   afterEach(() => {

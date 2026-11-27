@@ -285,16 +285,22 @@ function BookingSelectionFields({
 }) {
   const { locale } = start;
   const { form, family } = draft;
-  const slots =
+  const [date, tableSeats] = useWatch({
+    control: form.control,
+    name: ["date", "tableSeats"],
+  });
+  const slotResponse =
     AsyncResult.isSuccess(tableSlots) && !AsyncResult.isWaiting(tableSlots)
       ? tableSlots.value.table
       : undefined;
+  const slots =
+    slotResponse?.date === date && String(slotResponse.seats) === tableSeats
+      ? slotResponse
+      : undefined;
   const changeDateOrSize = () => {
-    if (family === "table") {
-      form.setValue("tableStartTime", "");
-      form.setValue("tableEndTime", "");
-      onTableDateOrSizeChange();
-    }
+    form.setValue("tableStartTime", "");
+    form.setValue("tableEndTime", "");
+    onTableDateOrSizeChange();
     onSelectionChange();
   };
   const checkSelection = (selection: BookingSelection) => {
@@ -348,7 +354,8 @@ function BookingSelectionFields({
         )}
         <ScheduleFields
           draft={draft}
-          onSelectionChange={changeDateOrSize}
+          onDateChange={changeDateOrSize}
+          onSelectionChange={onSelectionChange}
           start={start}
         />
         {family === "table" && (
@@ -474,10 +481,12 @@ function DurationField({ draft, locale, offerings }: DraftFieldProps) {
 /** The date and the family's time, length or seat fields. */
 function ScheduleFields({
   draft: { duration, family, form },
+  onDateChange,
   onSelectionChange,
   start,
 }: {
   readonly draft: BookingDraftForm;
+  readonly onDateChange: () => void;
   readonly onSelectionChange: () => void;
   readonly start: BookingStart;
 }) {
@@ -500,7 +509,7 @@ function ScheduleFields({
                 min={start.today}
                 onChange={(event) => {
                   field.onChange(event);
-                  onSelectionChange();
+                  onDateChange();
                 }}
                 className="bg-surface"
                 type="date"
@@ -627,6 +636,9 @@ function TeamTableSchedule({
                   onChangeSize();
                 }}
               >
+                <option disabled value="">
+                  {m.bookingWidgetTableSizeRequired({}, { locale })}
+                </option>
                 {getTeamTableOfferings(offerings).map(
                   ({ seats, advertised_price }) => (
                     <option key={seats} value={seats}>

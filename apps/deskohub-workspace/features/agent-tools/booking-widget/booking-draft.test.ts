@@ -39,6 +39,16 @@ describe("getBookingLocale", () => {
 });
 
 describe("getInitialDraft", () => {
+  test("requires a choice when an explicit Team Table size is unavailable", () => {
+    const table = { ...start, offerings: [bookingTeamTableOffering] };
+    expect(
+      getInitialDraft({ ...table, selection: { family: "table", seats: 3 } })
+        .tableSeats
+    ).toBe("");
+    expect(
+      getInitialDraft({ ...table, selection: { family: "table" } }).tableSeats
+    ).toBe("4");
+  });
   test("opens on the first family and options, today, one day and one seat", () => {
     expect(getInitialDraft(start)).toEqual({
       family: "cowork",

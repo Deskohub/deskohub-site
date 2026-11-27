@@ -115,9 +115,12 @@ export const getInitialDraft = ({
 }: BookingStart): BookingDraft => {
   const date = selection.date ?? today;
   const tableOfferings = getTeamTableOfferings(offerings);
-  const requestedTable = tableOfferings.find(
-    ({ seats }) => selection.family === "table" && seats === selection.seats
-  );
+  const requestedSeats =
+    selection.family === "table" ? selection.seats : undefined;
+  const initialTable =
+    requestedSeats === undefined
+      ? tableOfferings[0]
+      : tableOfferings.find(({ seats }) => seats === requestedSeats);
 
   return {
     family: getInitialFamily(offerings, selection.family),
@@ -130,7 +133,7 @@ export const getInitialDraft = ({
     tableEndTime: selection.end_time ?? "",
     dayCount: getInitialDayCount(date, selection.end_date),
     seats: String(selection.family === "table" ? 1 : (selection.seats ?? 1)),
-    tableSeats: String((requestedTable ?? tableOfferings[0])?.seats ?? ""),
+    tableSeats: String(initialTable?.seats ?? ""),
   };
 };
 

@@ -4,11 +4,13 @@ import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { CustomerTeamTableQuote } from "@deskohub/workspace-customer-api";
 import { Effect, Layer, Schema } from "effect";
+import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
 import {
   peeking,
   testPeekedStandings,
 } from "@/features/account/backend/current-customer-account.test-utils";
 import { CustomerReservationHistoryWithAccessService } from "@/features/account/backend/customer-reservation-history-with-access.service";
+import { workspaceReservationDetailsFixture } from "@/features/administration/administration-database.test-utils";
 import { CheckoutPricingService } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import {
   CheckoutStatusService,
@@ -26,6 +28,9 @@ import {
   WorkspaceAvailabilityService,
   WorkspaceTableUnavailableError,
 } from "@/features/reservation/backend/workspace-availability.service";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getTableReservationInterval } from "@/features/reservation/table-reservation-time";
@@ -33,9 +38,14 @@ import {
   getWorkspaceAvailabilityRange,
   tableSlotsAvailabilitySchema,
 } from "@/features/reservation/workspace-availability";
+import { ReservationInviteeEmailKeys } from "@/features/reservation-invitees/backend/reservation-invitee-email-keys.service";
+import { ReservationInviteeNoticeWorker } from "@/features/reservation-invitees/backend/reservation-invitee-notice-worker";
+import { ReservationInvitees } from "@/features/reservation-invitees/backend/reservation-invitees.service";
 import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
+import { WithdrawalRepository } from "@/features/withdrawal/backend/withdrawal.repository";
 import { moneyWithValue } from "@/shared/money/money";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
+import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import {
   answerInEachReleaseCohort,
   type CustomerApiCall,
@@ -590,6 +600,62 @@ describe("Team Table reservation management", () => {
     );
     expect(access.status).toBe(200);
     expect(await access.json()).toMatchObject({ tableName: "Table 4" });
+  });
+
+  test("adds an authorized invitee while the release gate is closed", async () => {
+    const database = await makeRecordingWorkspaceDatabase();
+    database.setRows([[["guest-row"]], [["notice-row"]]]);
+    const stored = workspaceReservationFixture({
+      id: orderId,
+      reservationDetails: tableProduct,
+      officeContactAttends: true,
+    });
+    const api = makeCustomerApiTestServer({
+      reservations: {
+        authorization: Layer.mock(ReservationAuthorizationService, {
+          authorize: (request) =>
+            Effect.succeed(
+              request.orderId === orderId &&
+                request.permission === "add-invitees"
+            ),
+        }),
+        invitationAdd: Layer.mergeAll(
+          database.layer,
+          makeRecordingAdvisoryLock().layer,
+          ReservationInviteeEmailKeys.Live.pipe(
+            Layer.provide(TestSealedStateKeys)
+          ),
+          Layer.mock(WorkspaceReservationRepository, {
+            findById: () => Effect.succeed(stored),
+          }),
+          Layer.mock(WorkspaceReservationService, {
+            getReservation: () =>
+              Effect.succeed(
+                workspaceReservationDetailsFixture({
+                  id: orderId,
+                  reservationDetails: tableProduct,
+                  seats: 4,
+                })
+              ),
+          }),
+          Layer.mock(WithdrawalRepository, {
+            findByContract: () => Effect.succeedNone,
+          }),
+          Layer.mock(ReservationInvitees, {
+            listForReservation: () => Effect.succeed([]),
+          }),
+          Layer.mock(ReservationInviteeNoticeWorker, {
+            dispatchAddedInvitations: () => Effect.void,
+          })
+        ),
+      },
+    });
+
+    const response = await api.handle(customerApiRequest(addInvitees));
+    expect({ status: response.status, body: await response.json() }).toEqual({
+      status: 200,
+      body: { added: 1 },
+    });
   });
 
   test("hides status and rejects adding invitees when the account lacks order permissions", async () => {
