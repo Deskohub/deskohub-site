@@ -281,15 +281,18 @@ describe("account components", () => {
     await unregisterWorkspaceComponentTestEnv();
   });
 
-  const passwordInput = (view: ReturnType<typeof render>) =>
-    view.container.querySelector("#account-sign-in-password");
+  const passwordInput = (view: ReturnType<typeof render>) => {
+    const field = view.container.querySelector("#account-sign-in-password");
+    assert(field === null || field instanceof HTMLInputElement);
+    return field;
+  };
 
   const submitPassword = async (
     view: ReturnType<typeof render>,
     password: string
   ) => {
     const input = passwordInput(view);
-    assert(input instanceof HTMLInputElement, "Expected a password input");
+    assert(input, "Expected a password input");
     fireEvent.change(input, { target: { value: password } });
     const form = view.container.querySelector("#account-sign-in-password-form");
     assert(

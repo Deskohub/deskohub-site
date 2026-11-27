@@ -235,6 +235,7 @@ test("does not navigate when sign-out fails", async () => {
   expect(dispatchBeforeUnload().defaultPrevented).toBe(true);
 
   const draft = view.getByLabelText("Dirty form");
+  assert(draft instanceof HTMLInputElement);
   await act(async () => {
     fireEvent.change(draft, { target: { value: "later draft" } });
   });
