@@ -1,7 +1,7 @@
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 import {
   type DotyposReservation,
   type DotyposReservationId,
@@ -13,7 +13,7 @@ import {
 } from "@deskohub/dotypos";
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { eq, inArray } from "drizzle-orm";
-import { Effect, Fiber, Layer } from "effect";
+import { Effect, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
@@ -24,27 +24,33 @@ import {
   teamTableHoldClaims,
   workspaceReservations,
 } from "@/db/schema";
+import { coworkAccountingDocumentSnapshotSchema } from "@/features/accounting/accounting-document-snapshot";
 import { makeCoworkInvoiceDocument } from "@/features/accounting/invoice.test-utils";
-import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
-import { getTableReservationQuote } from "@/features/checkout/reservation-quote-table";
+import {
+  type PaymentAttemptId,
+  paymentAttemptIdSchema,
+} from "@/features/checkout/checkout-identifiers";
+import { buildTableReservationQuote } from "@/features/checkout/reservation-quote-table";
 import { getTableCheckoutDetails } from "@/features/checkout/schemas/checkout-details-table";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
   WorkspaceAvailabilityService,
   WorkspaceTableUnavailableError,
 } from "@/features/reservation/backend/workspace-availability.service";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import {
-  type WorkspaceReservation,
-  WorkspaceReservationRepository,
-} from "@/features/reservation/backend/workspace-reservation.repository";
-import { dotyposHoldFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+  dotyposCreatedReservationFixture,
+  dotyposHoldFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getReservationHoldExpiresAt } from "@/features/reservation/reservation-hold-deadline";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
 import { reconcileTeamTableHolds } from "@/features/team-table/backend/reconcile-team-table-holds";
 import { loadTeamTableHoldCapacity } from "@/features/team-table/backend/team-table-hold-capacity";
 import { TeamTableHoldClaims } from "@/features/team-table/backend/team-table-hold-claims";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   holdPostgresTransaction,
@@ -72,13 +78,17 @@ import { UnpaidHoldRelease } from "./unpaid-hold-release.service";
 
 const postgresDatabase = await connectWorkspacePostgresTestDatabase();
 
+const coworkSnapshot = Schema.decodeUnknownSync(
+  coworkAccountingDocumentSnapshotSchema
+)(makeCoworkInvoiceDocument("en-US"));
+
 /** The accepted cowork reservation its last attempt priced, as a retry books it. */
 const recreated = (() => {
   const rebuilt = rebuildAcceptedReservation(
     {
       reservationDetails: { kind: "cowork", entryTier: "basic", coffee: true },
-    } as WorkspaceReservation,
-    makeCoworkInvoiceDocument("en-US") as never,
+    },
+    coworkSnapshot,
     undefined
   );
   if (!rebuilt) throw new Error("The cowork reservation must rebuild.");
@@ -90,7 +100,10 @@ const createdDotyposId = DotyposReservationIdSchema.make("dotypos-created");
 describe.skipIf(!postgresDatabase)(
   "PaymentRetryHoldService.secure on Postgres",
   () => {
-    const postgres = postgresDatabase as WorkspacePostgresTestDatabase;
+    let postgres: WorkspacePostgresTestDatabase;
+    beforeAll(() => {
+      postgres = requireValue(postgresDatabase, "Workspace test Postgres");
+    });
     const created: WorkspaceReservationId[] = [];
 
     afterEach(async () => {
@@ -127,12 +140,15 @@ describe.skipIf(!postgresDatabase)(
         .reservation({ stage: { reservation: input.reservation } })
         .pipe(Effect.runPromise);
       created.push(row.id);
-      const attemptId = `attempt-${crypto.randomUUID()}` as PaymentAttemptId;
+      const attemptId = paymentAttemptIdSchema.make(
+        `attempt-${crypto.randomUUID()}`
+      );
       await postgres.db
         .insert(paymentAttempts)
         .values({
           id: attemptId,
           workspaceReservationId: row.id,
+          orderId: standaloneReservationOrderId(row.id),
           provider: "nexi",
           providerOrderId: NexiOrderIdSchema.make(
             `order-${crypto.randomUUID()}`
@@ -163,13 +179,13 @@ describe.skipIf(!postgresDatabase)(
         .from(workspaceReservations)
         .where(eq(workspaceReservations.id, id))
         .pipe(Effect.runPromise);
-      return row!;
+      return requireValue(row, "reservation row");
     };
 
     const makeHarness = (
       options: {
         readonly status?: DotyposReservationStatus;
-        readonly overlapping?: readonly unknown[];
+        readonly overlapping?: readonly DotyposReservation[];
         readonly unavailable?: boolean;
         readonly coworkPassesEnabled?: boolean;
         /** Runs when the retry creates the new Dotypos reservation. */
@@ -192,21 +208,26 @@ describe.skipIf(!postgresDatabase)(
         ),
         cancelReservation: mock((_id: DotyposReservationId) => Effect.void),
         listActiveReservationsOverlapping: mock(() =>
-          Effect.succeed((options.overlapping ?? []) as never)
+          Effect.succeed(options.overlapping ?? [])
         ),
-        createReservation: mock(
-          (
-            input: Parameters<DotyposService["Service"]["createReservation"]>[0]
-          ) =>
+        createReservation: mock<
+          typeof DotyposService.Service.createReservation
+        >(
+          (input) =>
             options.create?.(input) ??
             Effect.promise(async () => {
               await options.onCreate?.();
-              return { id: createdDotyposId } as never;
+              return dotyposCreatedReservationFixture(createdDotyposId, input);
             })
         ),
         ensureAvailable: mock(() =>
           options.unavailable
-            ? Effect.fail(new WorkspaceTableUnavailableError({} as never))
+            ? Effect.fail(
+                new WorkspaceTableUnavailableError({
+                  date: coworkSnapshot.reservation.date,
+                  reservation: { kind: "cowork", entryTier: "basic" },
+                })
+              )
             : Effect.void
         ),
         enqueueCleanup: mock(() => Effect.void),
@@ -215,11 +236,11 @@ describe.skipIf(!postgresDatabase)(
         Layer.provide(postgres.layer)
       );
       const dotypos = Layer.mock(DotyposService, {
-        getReservationStatus: spies.getReservationStatus as never,
-        cancelReservation: spies.cancelReservation as never,
+        getReservationStatus: spies.getReservationStatus,
+        cancelReservation: spies.cancelReservation,
         listActiveReservationsOverlapping:
-          spies.listActiveReservationsOverlapping as never,
-        createReservation: spies.createReservation as never,
+          spies.listActiveReservationsOverlapping,
+        createReservation: spies.createReservation,
         ...options.reconciliationProvider,
       });
       const claims = TeamTableHoldClaims.Default.pipe(
@@ -250,7 +271,7 @@ describe.skipIf(!postgresDatabase)(
               repackInCapacitySection: () => Effect.succeed(true),
             }),
             Layer.mock(WorkspaceAvailabilityService, {
-              ensureAvailable: spies.ensureAvailable as never,
+              ensureAvailable: spies.ensureAvailable,
               getLiveTeamTablePlan: () =>
                 Effect.succeed({
                   tableId: DotyposTableIdSchema.make("team-table"),
@@ -258,10 +279,11 @@ describe.skipIf(!postgresDatabase)(
                 }),
             }),
             Layer.mock(WorkspaceTableAssignmentService, {
-              assignTableId: (() => Effect.succeed("table-id")) as never,
+              assignTableId: () =>
+                Effect.succeed(DotyposTableIdSchema.make("table-id")),
             }),
             Layer.mock(ReservationHoldCleanupScheduleService, {
-              enqueueCleanup: spies.enqueueCleanup as never,
+              enqueueCleanup: spies.enqueueCleanup,
             }),
             locks
           )
@@ -417,7 +439,10 @@ describe.skipIf(!postgresDatabase)(
       });
       expect(
         Temporal.Instant.compare(
-          after.reservationHoldExpiresAt!,
+          requireValue(
+            after.reservationHoldExpiresAt,
+            "replacement hold expiration"
+          ),
           Temporal.Now.instant()
         )
       ).toBe(1);
@@ -439,7 +464,7 @@ describe.skipIf(!postgresDatabase)(
         endsAt: instantStringSchema.make("2030-01-03T09:15:00Z"),
       } as const;
       const quote = await Effect.runPromise(
-        getTableReservationQuote(reservation)
+        buildTableReservationQuote(reservation)
       );
       const now = Temporal.Instant.from("2030-01-01T10:00:00Z");
       const deadline = getReservationHoldExpiresAt(now);
@@ -459,7 +484,8 @@ describe.skipIf(!postgresDatabase)(
             const [staged] = yield* postgres.db
               .select()
               .from(teamTableHoldClaims)
-              .where(eq(teamTableHoldClaims.reservationId, order.orderId));
+              .where(eq(teamTableHoldClaims.reservationId, order.orderId))
+              .pipe(Effect.orDie);
             expect(staged).toMatchObject({
               purpose: "payment_retry",
               paymentAttemptId: order.attemptId,
@@ -538,7 +564,7 @@ describe.skipIf(!postgresDatabase)(
         endsAt: instantStringSchema.make("2030-01-03T09:15:00Z"),
       } as const;
       const quote = await Effect.runPromise(
-        getTableReservationQuote(reservation)
+        buildTableReservationQuote(reservation)
       );
       const now = Temporal.Instant.from("2030-01-01T10:00:00Z");
       const deadline = getReservationHoldExpiresAt(now);
@@ -791,8 +817,9 @@ describe.skipIf(!postgresDatabase)(
       await postgres.db
         .insert(paymentAttempts)
         .values({
-          id: `attempt-${crypto.randomUUID()}` as PaymentAttemptId,
+          id: paymentAttemptIdSchema.make(`attempt-${crypto.randomUUID()}`),
           workspaceReservationId: order.orderId,
+          orderId: standaloneReservationOrderId(order.orderId),
           provider: "nexi",
           providerOrderId: NexiOrderIdSchema.make(
             `order-${crypto.randomUUID()}`
@@ -897,8 +924,7 @@ describe.skipIf(!postgresDatabase)(
       const harness = makeHarness({
         overlapping: [
           {
-            id: orphan,
-            status: "NEW",
+            ...dotyposHoldFixture(orphan),
             note: `Platební objednávka: ${order.orderId}`,
           },
         ],
@@ -992,8 +1018,7 @@ describe.skipIf(!postgresDatabase)(
         const harness = makeHarness({
           overlapping: [
             {
-              id: orphan,
-              status: "NEW",
+              ...dotyposHoldFixture(orphan),
               note: `Platební objednávka: ${order.orderId}`,
             },
           ],
