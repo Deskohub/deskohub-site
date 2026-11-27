@@ -15,7 +15,7 @@ import { Effect, Layer } from "effect";
 import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import type { IWorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import { payableReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import {
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
@@ -29,12 +29,19 @@ import {
 
 /** The deadline every cleanup below was scheduled for, before `checkedAt`. */
 const holdExpiresAt = Temporal.Instant.from("2026-06-02T09:50:00.000Z");
+const holdCreatedAt = holdExpiresAt.subtract({ minutes: 10 });
 /** The expired hold the cleanups below find on their order. */
 const dueHold = {
   dotyposReservationId: DotyposReservationIdSchema.make(
     "dotypos-reservation-id"
   ),
   reservationHoldExpiresAt: holdExpiresAt,
+};
+const storedHold = {
+  ...dueHold,
+  reservationCreatedAt: holdCreatedAt,
+  createdAt: holdCreatedAt,
+  updatedAt: holdCreatedAt,
 };
 const claimStamp = Temporal.Instant.from("2026-06-02T10:00:00.500Z");
 
@@ -86,13 +93,12 @@ describe("ReservationHoldCleanupService", () => {
       const reservations = {
         findById: mock(() =>
           Effect.succeed(
-            workspaceReservationFixture({
+            payableReservationFixture({
               id: orderId,
-              reservationState: "held",
               paymentState: "pending",
               activePaymentAttemptId:
                 window === "shared" ? qrAttemptId : attemptId,
-              ...dueHold,
+              ...storedHold,
             })
           )
         ),
@@ -193,12 +199,11 @@ describe("ReservationHoldCleanupService", () => {
       "attempt-cleanup-provider-pending"
     );
     const now = Temporal.Instant.from("2026-06-02T10:00:00.000Z");
-    const activeReservation = workspaceReservationFixture({
+    const activeReservation = payableReservationFixture({
       id: orderId,
-      reservationState: "held",
       paymentState: "pending",
       activePaymentAttemptId: attemptId,
-      ...dueHold,
+      ...storedHold,
     });
     const selectExpiredHolds = mock(() => Effect.succeed([activeReservation]));
     const recordHoldCleanupSkipped = mock(() => Effect.void);
@@ -291,13 +296,11 @@ describe("ReservationHoldCleanupService", () => {
     );
     const attemptId = paymentAttemptIdSchema.make("attempt-cleanup-abandoned");
     const checkedAt = Temporal.Instant.from("2026-06-02T10:00:00.000Z");
-    const claimed = workspaceReservationFixture({
+    const claimed = payableReservationFixture({
+      ...storedHold,
       id: orderId,
       reservationState: "cancelling",
       paymentState: "expired",
-      dotyposReservationId: DotyposReservationIdSchema.make(
-        "dotypos-reservation-id"
-      ),
       dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       updatedAt: claimStamp,
     });
@@ -339,12 +342,11 @@ describe("ReservationHoldCleanupService", () => {
               Layer.mock(WorkspaceReservationRepository, {
                 findById: mock(() =>
                   Effect.succeed(
-                    workspaceReservationFixture({
+                    payableReservationFixture({
                       id: orderId,
-                      reservationState: "held",
                       paymentState: "pending",
                       activePaymentAttemptId: attemptId,
-                      ...dueHold,
+                      ...storedHold,
                     })
                   )
                 ),
@@ -441,12 +443,11 @@ describe("ReservationHoldCleanupService", () => {
               Layer.mock(WorkspaceReservationRepository, {
                 findById: mock(() =>
                   Effect.succeed(
-                    workspaceReservationFixture({
+                    payableReservationFixture({
                       id: orderId,
-                      reservationState: "held",
                       paymentState: "pending",
                       activePaymentAttemptId: attemptId,
-                      ...dueHold,
+                      ...storedHold,
                     })
                   )
                 ),
@@ -497,14 +498,11 @@ describe("ReservationHoldCleanupService", () => {
     const holdOf = (id: string) =>
       DotyposReservationIdSchema.make(`dotypos-${id}`);
     const orderOf = (id: WorkspaceReservationId) =>
-      workspaceReservationFixture({
+      payableReservationFixture({
+        ...storedHold,
         id,
-        reservationState: "held",
-        paymentState: "not_started",
-        activePaymentAttemptId: null,
         dotyposReservationId: holdOf(id),
         dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
-        reservationHoldExpiresAt: holdExpiresAt,
         updatedAt: claimStamp,
       });
     const orders = statuses.map(([id]) =>
