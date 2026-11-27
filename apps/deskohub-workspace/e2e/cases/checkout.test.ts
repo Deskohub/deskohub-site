@@ -314,12 +314,14 @@ describe("Nexi sandbox payment restart", () => {
     initialProvider = "nexi",
     restarted = true,
     fellBack = true,
+    reuseRejectedAttempt = false,
   }: {
     readonly hostedPaymentFailures: Record<string, WorkspaceE2EError>;
     readonly mode?: WorkspaceE2EConfig["paymentProvider"];
     readonly initialProvider?: "nexi" | "mock";
     readonly restarted?: boolean;
     readonly fellBack?: boolean;
+    readonly reuseRejectedAttempt?: boolean;
   }) => {
     const hostedPaymentPermit = makeWorkspaceE2EHostedPaymentPermitRecorder();
     const stepIds: string[] = [];
@@ -363,7 +365,8 @@ describe("Nexi sandbox payment restart", () => {
             })
           ),
           read: paymentStep((id) => {
-            if (id.endsWith("-retry")) return Effect.succeed(retryRow);
+            if (id.endsWith("-retry"))
+              return Effect.succeed(reuseRejectedAttempt ? firstRow : retryRow);
             if (id.endsWith("-mock-fallback")) return Effect.succeed(mockRow);
             return Effect.succeed(
               initialProvider === "mock" ? mockRow : firstRow
@@ -534,7 +537,7 @@ describe("Nexi sandbox payment restart", () => {
     expect(stepIds.at(-1)).toBe("complete-hosted-payment");
   });
 
-  test("requires a fresh payment attempt and Nexi order", () => {
+  test("requires a fresh payment attempt and Nexi order", async () => {
     expect(() => assertFreshPaymentAttempt(firstRow, retryRow)).not.toThrow();
     expect(() =>
       assertFreshPaymentAttempt(firstRow, {
@@ -548,5 +551,13 @@ describe("Nexi sandbox payment restart", () => {
         provider_order_id: firstRow.provider_order_id,
       })
     ).toThrow("restarted payment reused the rejected provider order");
+    const { result, stepIds } = payWithSteps({
+      hostedPaymentFailures: { "complete-hosted-payment": sandboxRejection() },
+      reuseRejectedAttempt: true,
+    });
+    expect(failureOf(await result)).toMatchObject({
+      value: { operation: "assert fresh payment attempt" },
+    });
+    expect(stepIds.at(-1)).toBe("read-provider-session-row-retry");
   });
 });

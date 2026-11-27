@@ -470,14 +470,22 @@ const runHostedPaymentAttempt = (
       id: stepId("start-checkout-payment"),
       timeoutMs: config.timeouts.providerTransition,
     });
-    const row = yield* (steps.read ?? runStep)({
+    const readProviderSession = {
       execute: requireProviderSessionRowAfterRedirect(orderId, {
         onRow: (value) => {
           state.checkoutRow = value;
         },
         paymentProvider: checkout.provider,
         timeoutMs: config.timeouts.browserAction,
-      }).pipe(
+      }),
+      id: stepId("read-provider-session-row"),
+      timeoutMs: config.timeouts.datasource,
+    };
+    const row = yield* runStep({
+      ...readProviderSession,
+      execute: (
+        steps.read?.(readProviderSession) ?? readProviderSession.execute
+      ).pipe(
         Effect.tap((value) =>
           restart
             ? tryWorkspaceE2ESync("assert fresh payment attempt", () =>
@@ -486,8 +494,6 @@ const runHostedPaymentAttempt = (
             : Effect.void
         )
       ),
-      id: stepId("read-provider-session-row"),
-      timeoutMs: config.timeouts.datasource,
     });
 
     let authorizationRequested = false;
