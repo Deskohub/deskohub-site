@@ -10,6 +10,7 @@ import {
 } from "@deskohub/workspace-admin-api";
 import { Effect } from "effect";
 import type { AdministratorAccountActor } from "@/features/administrators/account-role";
+import { mockAdministrationActionRequest } from "@/shared/testing/workspace-action-request.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { richCampaignBodies } from "../body/campaign-body-document.test-utils";
@@ -189,16 +190,30 @@ describe.skipIf(!testDatabase)("campaign editor content", () => {
 
   test("refuses a document with an unknown format version", async () => {
     const { id } = await createDraft();
-    expect(
-      await refusal("updateCampaign", {
+    const { access } = await mockAdministrationActionRequest({
+      administrator: "campaign-editor-content",
+    });
+    access.actAs(administrator);
+    const { campaignOperationAction } = await import(
+      "../admin/campaign-operation-action.server"
+    );
+    const result = await campaignOperationAction({
+      operation: "updateCampaign",
+      input: {
         campaignId: id,
         content: {
           "en-US": {
-            bodyDocument: { ...english.bodyDocument, formatVersion: 2 as 1 },
+            bodyDocument: { ...english.bodyDocument, formatVersion: 2 },
           },
         },
-      })
-    ).toBe("input-invalid");
+      },
+    });
+    expect(result?.data).toMatchObject({
+      _tag: "Failure",
+      code: "input-invalid",
+    });
+    const saved = await invoke("getCampaignEditorContent", { campaignId: id });
+    expect(saved.content["en-US"]).toEqual(english);
   });
 
   test("refuses a document the content rules reject", async () => {

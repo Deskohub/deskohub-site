@@ -148,6 +148,7 @@
         "!apps/deskohub-workspace/features/email-campaigns/**/*.fixture.mts",
         "!apps/deskohub-workspace/features/email-campaigns/**/*.fixture.cts",
         "apps/deskohub-workspace/features/email-campaigns/admin/**",
+        "apps/deskohub-workspace/features/email-campaigns/backend/**",
         "!**/generated/**",
         "!**/paraglide/**"
       ],

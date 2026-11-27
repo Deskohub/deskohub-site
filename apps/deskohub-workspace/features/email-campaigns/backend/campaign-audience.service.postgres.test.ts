@@ -12,6 +12,7 @@ import type { AudienceFilterUses } from "../audience-filter-usage";
 import {
   type CampaignAudienceId,
   type CampaignId,
+  campaignAudienceIdSchema,
   campaignIdSchema,
 } from "../campaign-identifiers";
 import { CampaignService } from "./campaign.service";
@@ -254,7 +255,9 @@ describe.skipIf(!testDatabase)(
         "select audience_id from email_campaigns where id = $1",
         [campaignId]
       );
-      return rows[0]?.audience_id as CampaignAudienceId | null;
+      return Schema.decodeUnknownSync(
+        Schema.Struct({ audience_id: Schema.NullOr(campaignAudienceIdSchema) })
+      )(rows[0]).audience_id;
     };
 
     /** Holds `sql` uncommitted until `action` waits on its locks. */
@@ -294,7 +297,9 @@ describe.skipIf(!testDatabase)(
         },
         () => deleteAudience(audience.id)
       );
-      const draftId = heldRows[0].id as CampaignId;
+      const { id: draftId } = Schema.decodeUnknownSync(
+        Schema.Struct({ id: campaignIdSchema })
+      )(heldRows[0]);
       campaignIds.push(draftId);
 
       expect(failure(result)).toMatchObject({
@@ -656,11 +661,13 @@ describe.skipIf(!testDatabase)(
     });
 
     const countAudiencesTitled = async (title: string) => {
-      const result = (await testDatabase.pool.query(
+      const { rows } = await testDatabase.pool.query(
         "select count(*)::int as count from email_campaign_audiences where title = $1",
         [title]
-      )) as { rows: Array<{ count: number }> };
-      return result.rows[0]?.count;
+      );
+      return Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Int }))(
+        rows[0]
+      ).count;
     };
 
     /** Stores a filter the way only SQL can while writes reject it. */
@@ -668,11 +675,13 @@ describe.skipIf(!testDatabase)(
       title: string,
       filter: AudienceFilter
     ) => {
-      const result = (await testDatabase.pool.query(
+      const { rows } = await testDatabase.pool.query(
         "insert into email_campaign_audiences (title, filter) values ($1, $2::jsonb) returning id",
         [title, JSON.stringify(filter)]
-      )) as { rows: Array<{ id: CampaignAudienceId }> };
-      const id = result.rows[0]!.id;
+      );
+      const { id } = Schema.decodeUnknownSync(
+        Schema.Struct({ id: campaignAudienceIdSchema })
+      )(rows[0]);
       audienceIds.push(id);
       return id;
     };
@@ -945,7 +954,7 @@ describe.skipIf(!testDatabase)(
       const deletion = await run(
         CampaignAudienceService.pipe(
           Effect.flatMap((audiences) =>
-            audiences.delete("missing" as CampaignAudienceId)
+            audiences.delete(campaignAudienceIdSchema.make("missing"))
           )
         )
       );

@@ -173,7 +173,9 @@ type ShopperName = keyof typeof shoppers;
 const run = crypto.randomUUID().slice(0, 8);
 const customerOf = (name: ShopperName) =>
   DotyposCustomerIdSchema.make(`launch-${run}-${name}`);
-const names = Object.keys(shoppers) as ShopperName[];
+const names = Object.keys(shoppers).filter((name): name is ShopperName =>
+  Object.hasOwn(shoppers, name)
+);
 const visits = names.flatMap((name) =>
   shoppers[name].visits.map((visit: Visit, index) => ({
     ...visit,

@@ -8,13 +8,13 @@ import {
   unavailableQueue,
 } from "@/shared/backend/queue/memory-queue.test-utils";
 import type { QueuePublisher } from "@/shared/backend/queue/queue-publisher";
-import type { CampaignSendId } from "../campaign-identifiers";
+import { campaignSendIdSchema } from "../campaign-identifiers";
 import {
   CampaignSendQueueService,
   campaignSendTopic,
 } from "./campaign-send-queue.service";
 
-const sendId = "send-1" as CampaignSendId;
+const sendId = campaignSendIdSchema.make("send-1");
 
 const enqueue = (queue: Layer.Layer<QueuePublisher>, deliveryAttempt: number) =>
   Effect.flatMap(CampaignSendQueueService, (service) =>

@@ -6,6 +6,7 @@ import {
   DotyposCustomerIdSchema,
   type DotyposReservation,
   DotyposReservationIdSchema,
+  DotyposReservationSchema,
 } from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
@@ -14,7 +15,7 @@ import type {
   CampaignEmailSourceType,
   ReservationProductFilterType,
 } from "@deskohub/workspace-admin-api";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import type { ReservationStatusRead } from "@/features/administration/reservation-status-condition";
 import {
@@ -342,12 +343,16 @@ const seeded = [
 
 const visits: readonly DotyposReservation[] = bookings.map(
   ({ name, customer, startsAt }) =>
-    ({
+    Schema.decodeSync(DotyposReservationSchema)({
       id: reservationId(name),
+      _branchId: "resolver-branch",
+      _cloudId: "resolver-cloud",
       _customerId: customer,
       startDate: startsAt,
       endDate: Temporal.Instant.from(startsAt).add({ hours: 2 }).toString(),
-    }) as DotyposReservation
+      seats: "1",
+      status: "CONFIRMED",
+    })
 );
 
 const scoped = [firstVisitor, counterexample, mailed];
@@ -362,8 +367,10 @@ type ConditionFields = AudienceCondition extends infer Condition
     : never
   : never;
 
-const condition = (fields: ConditionFields) =>
-  ({ _tag: "Condition", ...fields }) as AudienceCondition;
+const condition = (fields: ConditionFields): AudienceCondition => ({
+  _tag: "Condition",
+  ...fields,
+});
 const group = (
   operator: "and" | "or",
   filters: readonly AudienceFilter[]

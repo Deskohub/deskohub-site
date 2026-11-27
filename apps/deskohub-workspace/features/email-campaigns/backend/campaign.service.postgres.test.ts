@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -126,7 +127,7 @@ describe.skipIf(!testDatabase)("CampaignService on disposable Postgres", () => {
     const content = campaignContentFixture();
     const withReason = {
       "cs-CZ": {
-        ...content["cs-CZ"]!,
+        ...content["cs-CZ"],
         operationalReason: "Měníme provozní dobu.",
       },
     };
@@ -154,7 +155,7 @@ describe.skipIf(!testDatabase)("CampaignService on disposable Postgres", () => {
           campaigns.update({
             campaignId: draft.id,
             content: {
-              "cs-CZ": { ...content["cs-CZ"]!, operationalReason: "  " },
+              "cs-CZ": { ...content["cs-CZ"], operationalReason: "  " },
             },
           })
         )
@@ -173,7 +174,7 @@ describe.skipIf(!testDatabase)("CampaignService on disposable Postgres", () => {
             campaignId: draft.id,
             content: {
               "cs-CZ": {
-                ...content["cs-CZ"]!,
+                ...content["cs-CZ"],
                 body: {
                   formatVersion: 1,
                   doc: { type: "doc", content: [{ type: "unknownNode" }] },
@@ -308,8 +309,10 @@ describe.skipIf(!testDatabase)("CampaignService on disposable Postgres", () => {
       "insert into email_campaign_audiences (title, filter) values ('Regulars', $1) returning id",
       [everyoneFilter]
     );
-    audienceIds.push(rows[0]!.id);
-    return rows[0]!.id;
+    const [audience] = rows;
+    assert(audience, "Expected an inserted audience");
+    audienceIds.push(audience.id);
+    return audience.id;
   };
 
   test("creates an automated draft with its automation row in one transaction", async () => {
@@ -437,7 +440,7 @@ describe.skipIf(!testDatabase)("CampaignService on disposable Postgres", () => {
 
   test("patches content as the CLI merges it", async () => {
     const draft = await createDraft();
-    const czech = campaignContentFixture()["cs-CZ"]!;
+    const czech = campaignContentFixture()["cs-CZ"];
     const patch = (
       changes: Omit<Parameters<ICampaignService["patch"]>[0], "campaignId">
     ) =>
@@ -533,7 +536,7 @@ describe.skipIf(!testDatabase)("CampaignService on disposable Postgres", () => {
       sources.map((source) => `![Obrázek](${source})`).join("\n\n");
 
     const czechWith = async (...sources: string[]) => ({
-      ...campaignContentFixture()["cs-CZ"]!,
+      ...campaignContentFixture()["cs-CZ"],
       body: await markdownCampaignBody(imageMarkdown(...sources)),
     });
 
