@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.43.0](https://github.com/Deskohub/deskohub-site/compare/dhw-v1.42.0...dhw-v1.43.0) (2026-11-27)
+
+
+### Features
+
+* **dhw:** accept Team Table reservations and discount targets ([488e5ee](https://github.com/Deskohub/deskohub-site/commit/488e5eeb4cf374a3ba4e96923f269fc1c679324e))
+
+
+### Bug Fixes
+
+* **dhw:** preserve released clients while Team Table rolls out ([107baf2](https://github.com/Deskohub/deskohub-site/commit/107baf22b52c38c65487af680be8a30117a7fe5e))
+
 ## [1.42.0](https://github.com/totalolage/deskohub-site/compare/dhw-v1.41.0...dhw-v1.42.0) (2026-11-26)
 
 
