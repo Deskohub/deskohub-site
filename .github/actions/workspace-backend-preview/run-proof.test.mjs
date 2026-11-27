@@ -75,4 +75,5 @@ test("rejects a status replay from a different PR, SHA, immutable deployment, or
     assert.equal(findPilotRunGeneration({ ...fixture(), target: key }), undefined);
   }
   assert.equal(findPilotRunGeneration({ ...fixture(), targetUrl: runUrl.split("/attempts")[0] }), undefined);
+  assert.equal(findPilotRunGeneration({ ...fixture(), targetUrl: runUrl.split("/attempts")[0], followLatest: true }), generation);
 });

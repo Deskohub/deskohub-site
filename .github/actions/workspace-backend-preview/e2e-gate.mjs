@@ -80,15 +80,14 @@ export async function checkPreviewBinding(input, request = fetch) {
   return { revision, generation };
 }
 
-export async function matchesCompletedPreviewGeneration(target, env, generationKey, request = fetch) {
+export async function readCompletedPreviewGeneration(target, env, request = fetch) {
   const { deploymentId } = await verifyVercel(target, env, request);
   const binding = await checkPreviewBinding({
     origin: target.expectedOrigin,
     sha: target.sha,
     bypass: env.VERCEL_AUTOMATION_BYPASS_SECRET,
   }, request);
-  return binding !== undefined &&
-    pilotGenerationKey(deploymentId, binding.revision, binding.generation) === generationKey;
+  return binding && pilotGenerationKey(deploymentId, binding.revision, binding.generation);
 }
 
 async function run() {
