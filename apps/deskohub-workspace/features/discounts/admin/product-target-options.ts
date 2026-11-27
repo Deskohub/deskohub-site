@@ -1,6 +1,9 @@
 import { Array as Arr, pipe } from "effect";
 import { m } from "@/features/administration/i18n";
-import { getWorkspaceProductTierTitle } from "@/features/checkout/product-catalog.i18n";
+import {
+  getWorkspaceProductTierTitle,
+  getWorkspaceTableProductTitle,
+} from "@/features/checkout/product-catalog.i18n";
 import {
   getWorkspaceProductTargetKey,
   type WorkspaceProductTarget,
@@ -35,9 +38,14 @@ export const getDiscountProductTargetLabel = (
       ? `${family} · ${tier} · ${siteMessages.passEntryCount({ count: target.size }, { locale })}`
       : `${family} · ${tier}`;
   }
-  return target.kind === "meeting-room"
-    ? m.discountsProductMeetingRoom({}, { locale })
-    : m.discountsProductPrivateOffice({}, { locale });
+  switch (target.kind) {
+    case "meeting-room":
+      return m.discountsProductMeetingRoom({}, { locale });
+    case "office":
+      return m.discountsProductPrivateOffice({}, { locale });
+    case "table":
+      return getWorkspaceTableProductTitle(locale);
+  }
 };
 
 /** Every target an operator can choose, with each cowork tier after cowork. */

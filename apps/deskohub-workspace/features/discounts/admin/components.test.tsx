@@ -1687,6 +1687,9 @@ describe("discount administration pages", () => {
       );
     assert(meetingRoom, "Expected Meeting room checkbox");
     fireEvent.click(meetingRoom);
+    fireEvent.click(
+      within(discountForm).getByRole("checkbox", { name: "Team Table" })
+    );
     fireEvent.submit(discountForm);
     const { execute: discountExecute } = captured("update-discount");
     await waitFor(() =>
@@ -1699,7 +1702,11 @@ describe("discount administration pages", () => {
             "en-US": "Summer discount",
           },
           adjustment: { kind: "percentage", basisPoints: 1000 },
-          products: [{ kind: "cowork" }, { kind: "meeting-room" }],
+          products: [
+            { kind: "cowork" },
+            { kind: "meeting-room" },
+            { kind: "table" },
+          ],
         },
       })
     );
