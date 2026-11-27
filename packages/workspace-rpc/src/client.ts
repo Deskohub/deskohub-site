@@ -28,6 +28,9 @@ import { WorkspaceRpcs } from "./workspace-rpcs";
 
 interface WorkspaceRpcProtocolOptions {
   readonly url: string;
+  readonly requestHeaders?: Readonly<Record<string, string>>;
+  /** A successful response must prove these exact headers before decoding. */
+  readonly expectedResponseHeaders?: Readonly<Record<string, string>>;
   readonly authorization: Effect.Effect<
     Redacted.Redacted<string>,
     BackendUnavailable
@@ -67,6 +70,9 @@ export const layerWorkspaceRpcProtocol = (
     Effect.gen(function* () {
       const http = yield* HttpClient.HttpClient;
       const { contentType } = yield* RpcSerialization.RpcSerialization;
+      const expectedHeaders = Object.entries(
+        options.expectedResponseHeaders ?? {}
+      );
 
       const send = (
         request: HttpClientRequest.HttpClientRequest,
@@ -113,19 +119,32 @@ export const layerWorkspaceRpcProtocol = (
             "successfulStatus",
             ({ response }) => response.status >= 200 && response.status < 300
           ),
+          Effect.let("matchesExpectedHeaders", ({ response }) =>
+            expectedHeaders.every(
+              ([name, value]) => response.headers[name.toLowerCase()] === value
+            )
+          ),
           Effect.flatMap(
             ({
               hasRpcContentType,
+              matchesExpectedHeaders,
               response,
               retryAuthentication,
               successfulStatus,
               token,
             }) => {
-              if (successfulStatus && hasRpcContentType) {
+              if (
+                successfulStatus &&
+                hasRpcContentType &&
+                matchesExpectedHeaders
+              ) {
                 return Effect.succeed(response);
               }
 
               const unauthorized = response.status === 401;
+              const successFailureReason = hasRpcContentType
+                ? "protocol"
+                : "content-type";
               return Effect.suspend(() =>
                 options.invalidateAuthorization(token)
               ).pipe(
@@ -141,7 +160,7 @@ export const layerWorkspaceRpcProtocol = (
                             response,
                             cause: new BackendUnavailable({
                               reason: successfulStatus
-                                ? "content-type"
+                                ? successFailureReason
                                 : "http-status",
                               status: response.status,
                             }),
@@ -164,8 +183,11 @@ export const layerWorkspaceRpcProtocol = (
           Effect.flatMap(request, (prepared) => send(prepared, true)),
         Effect.succeed
       ).pipe(
-        HttpClient.mapRequest(
-          HttpClientRequest.setUrl(`${options.url.replace(/\/+$/, "")}/rpc`)
+        HttpClient.mapRequest((request) =>
+          HttpClientRequest.setUrl(
+            HttpClientRequest.setHeaders(request, options.requestHeaders ?? {}),
+            `${options.url.replace(/\/+$/, "")}/rpc`
+          )
         )
       );
       const protocol = yield* RpcClient.makeProtocolHttp(client);

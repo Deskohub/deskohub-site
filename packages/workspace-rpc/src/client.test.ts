@@ -82,7 +82,11 @@ const runClient = <A, E>(
   invalidateAuthorization: (
     token: Redacted.Redacted<string>
   ) => Effect.Effect<void> = () => Effect.void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  transportHeaders?: Pick<
+    Parameters<typeof layerWorkspaceRpcProtocol>[0],
+    "requestHeaders" | "expectedResponseHeaders"
+  >
 ) => {
   const fetchStub = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) =>
@@ -93,6 +97,7 @@ const runClient = <A, E>(
     url: "https://workspace.invalid/",
     authorization,
     invalidateAuthorization,
+    ...transportHeaders,
   }).pipe(Layer.provide(FetchHttpClient.layer));
   return Effect.runPromise(
     makeWorkspaceRpcClient().pipe(
@@ -108,8 +113,98 @@ const runClient = <A, E>(
 };
 
 const rpcContentType = "application/vnd.effect.rpc+schema-binary";
+const generationHeader = "x-deskohub-preview-generation";
+const revisionHeader = "x-deskohub-backend-revision";
+const previewHeaders = {
+  requestHeaders: { [generationHeader]: "synthetic-generation-a" },
+  expectedResponseHeaders: {
+    [generationHeader]: "synthetic-generation-a",
+    [revisionHeader]: "synthetic-revision-a",
+  },
+};
 
 describe("Workspace RPC HTTP client", () => {
+  test("accepts the RPC response when both preview headers match", async () => {
+    const server = makeTestServer();
+    try {
+      const result = await runClient(
+        (client) => client.openPreferences(payload),
+        async (request) => {
+          expect(request.headers.get(generationHeader)).toBe(
+            previewHeaders.requestHeaders[generationHeader]
+          );
+          expect(request.headers.get(revisionHeader)).toBeNull();
+          const response = await server.handler(request);
+          const headers = new Headers(response.headers);
+          for (const [name, value] of Object.entries(
+            previewHeaders.expectedResponseHeaders
+          )) {
+            headers.set(name, value);
+          }
+          return new Response(response.body, {
+            status: response.status,
+            headers,
+          });
+        },
+        undefined,
+        undefined,
+        undefined,
+        previewHeaders
+      );
+      expect(result).toEqual(grant);
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  for (const responseHeaders of [
+    { [revisionHeader]: "synthetic-revision-a" },
+    {
+      ...previewHeaders.expectedResponseHeaders,
+      [generationHeader]: "synthetic-generation-b",
+    },
+    {
+      ...previewHeaders.expectedResponseHeaders,
+      [revisionHeader]: "synthetic-revision-b",
+    },
+    {
+      ...previewHeaders.expectedResponseHeaders,
+      [generationHeader]: "synthetic-generation-a, synthetic-generation-a",
+    },
+  ]) {
+    test(`rejects preview response headers ${JSON.stringify(responseHeaders)} before decoding`, async () => {
+      let cancelled = false;
+      let pulled = false;
+      const failure = await runClient(
+        (client) => Effect.flip(client.unsubscribeOneClick(payload)),
+        () =>
+          new Response(
+            new ReadableStream(
+              {
+                pull() {
+                  pulled = true;
+                },
+                cancel() {
+                  cancelled = true;
+                },
+              },
+              { highWaterMark: 0 }
+            ),
+            { headers: { "content-type": rpcContentType, ...responseHeaders } }
+          ),
+        undefined,
+        undefined,
+        undefined,
+        previewHeaders
+      );
+      expect(failure).toEqual(
+        new BackendUnavailable({ reason: "protocol", status: 200 })
+      );
+      expect(cancelled).toBe(true);
+      expect(pulled).toBe(false);
+    });
+  }
+
   test("sends a plain RPC URL and transports only validated caller metadata and token payloads", async () => {
     const server = makeTestServer();
     try {
