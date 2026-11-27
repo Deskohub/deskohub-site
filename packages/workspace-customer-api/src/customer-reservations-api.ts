@@ -196,6 +196,8 @@ export const CustomerReservationProduct = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("other"),
     /** Team Table uses the legacy fallback tag so older clients can read it. */
+    family: Schema.optionalKey(Schema.Literal("table")),
+    /** Absent when the booked size or interval cannot be reconstructed. */
     teamTable: Schema.optionalKey(CustomerTeamTableProduct),
   }),
 ]).annotate({ identifier: "CustomerReservationProduct" });

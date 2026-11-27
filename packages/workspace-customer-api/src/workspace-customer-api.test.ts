@@ -88,6 +88,7 @@ describe("WorkspaceCustomerApi", () => {
   test("carries Team Table details on the legacy-decodable history product", () => {
     const product = {
       kind: "other",
+      family: "table",
       teamTable: { kind: "table", seats: 4, durationMinutes: 75 },
     } as const;
     const legacyOther = Schema.Struct({ kind: Schema.Literal("other") });

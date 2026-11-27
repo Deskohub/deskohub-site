@@ -10,5 +10,13 @@ export const toCustomerCheckoutSummary = (
   summary: CheckoutSummary
 ): CustomerCheckoutSummary => ({
   ...summary,
+  sections: summary.sections.map((section) => ({
+    ...section,
+    items: section.items.map((item) =>
+      "product" in item && item.product.kind === "table"
+        ? { ...item, seats: item.product.seats }
+        : item
+    ),
+  })),
   vatStatus: workspaceSiteConstants.company.vatStatus,
 });
