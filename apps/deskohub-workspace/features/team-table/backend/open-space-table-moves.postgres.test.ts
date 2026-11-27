@@ -11,6 +11,7 @@ import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { Effect, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { orderIdSchema } from "@/features/order";
 import { formatPassDayMarker } from "@/features/passes/pass-day-marker";
 import { getUnobservedOpenSpaceMoveBookings } from "@/features/reservation/backend/open-space-move-capacity";
@@ -116,6 +117,8 @@ describe.skipIf(!database)("Open Space table moves", () => {
         reservationId,
         serviceDate,
         status,
+        startsAt: Temporal.Instant.from(startsAt),
+        endsAt: Temporal.Instant.from(endsAt),
         sourceReservationId: original.id,
         targetTableId: targetTable.id,
       };
@@ -462,7 +465,7 @@ describe.skipIf(!database)("Open Space table moves", () => {
     });
   });
 
-  test("holds both Prague capacity dates before moving any reservation", async () => {
+  test("holds the author account and both Prague dates before moving a reservation", async () => {
     const f = fixture();
     const move = await f.source("CONFIRMED");
     const crossMidnight = Schema.decodeUnknownSync(reservationIntervalSchema)({
@@ -470,6 +473,14 @@ describe.skipIf(!database)("Open Space table moves", () => {
       endsAt: "2027-03-28T22:15:00Z",
     });
     const key = ["reservation-capacity", nextDate] as const;
+    const row = await f.local(move.reservationId);
+    const authorAccountId = customerAccountIdSchema.make(row.author_account_id);
+    const accountKey = ["customer-account", authorAccountId] as const;
+    const accountHolder = await holdPostgresTransaction(
+      database.pool,
+      "select pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+      accountKey
+    );
     const holder = await holdPostgresTransaction(
       database.pool,
       "select pg_advisory_xact_lock(hashtext($1), hashtext($2))",
@@ -478,12 +489,17 @@ describe.skipIf(!database)("Open Space table moves", () => {
     const assignment = f.run(
       Effect.flatMap(OpenSpaceTableMoves, (service) =>
         service.repack(
-          f.plan([move], crossMidnight),
+          { ...f.plan([move], crossMidnight), authorAccountId },
           Effect.succeed("assigned")
         )
       )
     );
     try {
+      try {
+        await waitForAdvisoryLockWaiter(database.pool, accountKey);
+      } finally {
+        await accountHolder.commit();
+      }
       await waitForAdvisoryLockWaiter(database.pool, key);
       expect((await f.local(move.reservationId)).dotypos_reservation_id).toBe(
         move.sourceReservationId
@@ -492,6 +508,50 @@ describe.skipIf(!database)("Open Space table moves", () => {
       await holder.commit();
     }
     expect(await assignment).toEqual(Option.some("assigned"));
+  });
+
+  test("cron retires the old hold after checkout loses the cancellation response", async () => {
+    const f = fixture();
+    const move = await f.source("NEW");
+    const result = await f.run(
+      Effect.flatMap(OpenSpaceTableMoves, (service) =>
+        service
+          .repack(
+            f.plan([move]),
+            Effect.die("assignment before old hold retired")
+          )
+          .pipe(Effect.result)
+      ),
+      {
+        setReservationStatusIfMatches: () =>
+          new DotyposUncertain({
+            operation: "setReservationStatusIfMatches",
+            request: "reservation.patch",
+            reason: "timeout",
+          }),
+      }
+    );
+    expect(result._tag).toBe("Failure");
+    const working = Effect.flatMap(
+      WorkspaceReservationRepository,
+      (repository) => repository.hasAttachedOpenSpaceMove(move.reservationId)
+    );
+    expect(await f.run(working)).toBe(true);
+    const current = await f.local(move.reservationId);
+    expect(current.dotypos_reservation_id).not.toBe(move.sourceReservationId);
+    expect(await f.read(move.sourceReservationId)).toMatchObject({
+      status: "NEW",
+    });
+    await f.run(
+      Effect.flatMap(OpenSpaceTableMoves, (service) => service.reconcile(2))
+    );
+    expect(await f.run(working)).toBe(false);
+    expect(await f.read(move.sourceReservationId)).toMatchObject({
+      status: "CANCELLED",
+    });
+    expect(await f.read(current.dotypos_reservation_id)).toMatchObject({
+      status: "NEW",
+    });
   });
 
   test("moves an Unlimited Pass day with its pass identity and history", async () => {
@@ -561,6 +621,8 @@ describe.skipIf(!database)("Open Space table moves", () => {
               reservationId,
               serviceDate: date,
               status: "CONFIRMED",
+              startsAt: Temporal.Instant.from(fullDay.startsAt),
+              endsAt: Temporal.Instant.from(fullDay.endsAt),
               sourceReservationId: source.id,
               targetTableId: f.targetTable.id,
             },

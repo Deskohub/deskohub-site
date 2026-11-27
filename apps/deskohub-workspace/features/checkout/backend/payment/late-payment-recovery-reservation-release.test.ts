@@ -198,6 +198,7 @@ const makeRecoveryHarness = (options: {
           requireReview: spies.requireReview,
         }),
         Layer.mock(WorkspaceReservationRepository, {
+          hasAttachedOpenSpaceMove: () => Effect.succeed(false),
           findById: mock(() => Effect.sync(() => reservation as never)),
           claimCancellation: spies.claimCancellation,
           markCancelled: spies.markCancelled,

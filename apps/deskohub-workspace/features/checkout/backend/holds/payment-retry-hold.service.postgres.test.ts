@@ -15,6 +15,8 @@ import { TestClock } from "effect/testing";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   latePaymentRecoveries,
+  openSpaceTableMoveBatches,
+  openSpaceTableMoves,
   paymentAttempts,
   workspaceReservations,
 } from "@/db/schema";
@@ -258,6 +260,71 @@ describe.skipIf(!postgresDatabase)(
       expect(after.reservationState).toBe("held");
       expect(harness.spies.cancelReservation).not.toHaveBeenCalled();
       expect(harness.spies.createReservation).not.toHaveBeenCalled();
+    });
+
+    test("defers replacing a hold while a table move still owns its old provider hold", async () => {
+      const order = await retriedOrder({
+        reservation: "held",
+        overrides: {
+          reservationHoldExpiresAt: Temporal.Now.instant().subtract({
+            minutes: 5,
+          }),
+        },
+      });
+      const reservation = await rowOf(order.orderId);
+      const time = Temporal.Now.instant();
+      const serviceDate = "2030-01-03";
+      const batchId = crypto.randomUUID();
+      await postgres.pool.query(
+        "insert into open_space_table_move_batches values ($1, $2, $2, $3)",
+        [batchId, serviceDate, time.toString()]
+      );
+      await postgres.pool.query(
+        `insert into open_space_table_moves (
+          generation, batch_id, reservation_id, service_date, customer_id,
+          source_reservation_id, source_table_id, source_note_line,
+          target_reservation_id, target_table_id, status, starts_at, ends_at,
+          attempted_at, attached_at, checked_at
+        ) values (uuid_generate_v7(), $1, $2, $3, $4, 'synthetic-retiring-source',
+          'synthetic-source-table', $5, $6, 'synthetic-target-table', 'NEW',
+          '2030-01-02T23:00:00Z', '2030-01-03T16:00:00Z', $7, $7, $7)`,
+        [
+          batchId,
+          order.orderId,
+          serviceDate,
+          reservation.dotyposCustomerId,
+          `Platební objednávka: ${order.orderId}`,
+          reservation.dotyposReservationId,
+          time.toString(),
+        ]
+      );
+      const harness = makeHarness();
+      try {
+        expect(await harness.secure(order)).toEqual({
+          kind: "refused",
+          reason: "release_in_progress",
+        });
+        expect(harness.spies.cancelReservation).not.toHaveBeenCalled();
+        expect(
+          harness.spies.listActiveReservationsOverlapping
+        ).not.toHaveBeenCalled();
+        expect(harness.spies.createReservation).not.toHaveBeenCalled();
+        await postgres.db
+          .update(openSpaceTableMoves)
+          .set({ settledAt: time })
+          .where(eq(openSpaceTableMoves.batchId, batchId))
+          .pipe(Effect.runPromise);
+        expect((await harness.secure(order)).kind).toBe("reacquired");
+      } finally {
+        await postgres.db
+          .delete(openSpaceTableMoves)
+          .where(eq(openSpaceTableMoves.batchId, batchId))
+          .pipe(Effect.runPromise);
+        await postgres.db
+          .delete(openSpaceTableMoveBatches)
+          .where(eq(openSpaceTableMoveBatches.id, batchId))
+          .pipe(Effect.runPromise);
+      }
     });
 
     test("releases an expired hold and books the same reservation again for the same order", async () => {

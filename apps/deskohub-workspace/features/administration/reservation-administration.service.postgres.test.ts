@@ -153,14 +153,22 @@ const makeCancellation = (
         }),
         Layer.mock(WorkspaceReservationService, {
           getReservation: (id: WorkspaceReservationId) =>
-            Effect.succeed(
-              workspaceReservationDetailsFixture({
+            Effect.promise(async () => {
+              const [row] = await requireKit().query<{
+                dotypos_reservation_id: string;
+              }>(
+                "select dotypos_reservation_id from workspace_reservations where id = $1",
+                [id]
+              );
+              if (!row) throw new Error("Expected a booked reservation");
+              return workspaceReservationDetailsFixture({
                 id,
-                dotyposReservationId:
-                  DotyposReservationIdSchema.make("synthetic-dotypos"),
+                dotyposReservationId: DotyposReservationIdSchema.make(
+                  row.dotypos_reservation_id
+                ),
                 providerStatus: "CONFIRMED",
-              })
-            ),
+              });
+            }),
         })
       )
     )

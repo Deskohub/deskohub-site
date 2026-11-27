@@ -212,7 +212,10 @@ export const WorkspaceLockSections = {
   /** All local dates touched by a booking, and any order holds it is to move. */
   reservationCapacity: (
     dates: readonly Temporal.PlainDate[],
-    movedReservations: readonly WorkspaceReservationId[] = []
+    options?: {
+      readonly movedReservations?: readonly WorkspaceReservationId[];
+      readonly authorAccountId?: CustomerAccountId;
+    }
   ) => {
     const [first, ...rest] = Array.from(new Set(dates.map(String)))
       .sort(Order.String)
@@ -223,14 +226,17 @@ export const WorkspaceLockSections = {
       }));
     if (!first) throw new Error("Reservation capacity locks require a date");
     const [firstOrder, ...remainingOrders] = Array.from(
-      new Set(movedReservations)
+      new Set(options?.movedReservations)
     )
       .sort(Order.String)
       .map(reservationOrderSection);
+    const account = options?.authorAccountId
+      ? [customerAccountSection(options.authorAccountId)]
+      : [];
     return holdSections(
       firstOrder
-        ? [firstOrder, ...remainingOrders, first, ...rest]
-        : [first, ...rest]
+        ? [firstOrder, ...remainingOrders, ...account, first, ...rest]
+        : [...account, first, ...rest]
     );
   },
   unlimitedGiftCustomer: (holder: CustomerAccountId) =>

@@ -579,7 +579,18 @@ export class LatePaymentRecoveryService extends Context.Service<
       // section, so the attempt's checks below stay true for the hold work.
       const recoverClaimed = Effect.fnUntraced(function* (input: {
         readonly paymentAttemptId: PaymentAttemptId;
+        readonly workspaceReservationId: WorkspaceReservationId;
       }) {
+        if (
+          yield* reservations.hasAttachedOpenSpaceMove(
+            input.workspaceReservationId
+          )
+        ) {
+          return yield* retryLater(
+            input.paymentAttemptId,
+            "A table move is still retiring the original reservation hold."
+          );
+        }
         const claimed = yield* recoveries.claim({
           paymentAttemptId: input.paymentAttemptId,
           staleProcessingBefore:
@@ -624,7 +635,10 @@ export class LatePaymentRecoveryService extends Context.Service<
           if (settled) return settled;
           if (!current) return "ignored" as const;
 
-          return yield* recoverClaimed(input).pipe(
+          return yield* recoverClaimed({
+            ...input,
+            workspaceReservationId: current.workspaceReservationId,
+          }).pipe(
             WorkspaceLockSections.reservationOrder(
               current.workspaceReservationId
             ),

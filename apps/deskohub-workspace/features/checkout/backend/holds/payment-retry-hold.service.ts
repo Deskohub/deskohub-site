@@ -305,6 +305,9 @@ const secure = Effect.fn("PaymentRetryHoldService.secure")(
       now,
     });
     if (kept) return kept;
+    if (yield* reservations.hasAttachedOpenSpaceMove(order.id)) {
+      return refused("release_in_progress");
+    }
 
     const releaseRefusal = yield* releaseOwnHold(order);
     if (releaseRefusal) return releaseRefusal;

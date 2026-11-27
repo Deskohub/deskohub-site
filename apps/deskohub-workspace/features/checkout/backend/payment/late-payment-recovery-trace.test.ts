@@ -207,6 +207,7 @@ const recover = async (scenario: Scenario) => {
     requireReview: settleAs("review_required"),
   });
   const reservations = trace.recordCalls("reservations", {
+    hasAttachedOpenSpaceMove: () => Effect.succeed(false),
     findById: () =>
       Effect.sync(() =>
         findByIdSequence.length > 0

@@ -18,6 +18,7 @@ import {
   workspaceReservations,
 } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
+import type { CustomerAccountId } from "@/features/account/customer-account";
 import { noteNamesPaymentOrder } from "@/features/checkout/backend/reservation/order-reservation-note";
 import {
   getOccupancyWindow,
@@ -60,12 +61,15 @@ type MoveRequest = Pick<
   | "targetTableId"
   | "serviceDate"
   | "status"
+  | "startsAt"
+  | "endsAt"
 >;
 
 type RepackRequest = {
   readonly tableId: DotyposTableId;
   readonly interval: ReservationInterval;
   readonly moves: readonly MoveRequest[];
+  readonly authorAccountId?: CustomerAccountId;
 };
 
 const pending = (move: Pick<Move, "generation">) =>
@@ -261,6 +265,8 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
       !source.note?.split("\n").includes(note) ||
       !Option.contains(seats, workspaceBookingSeatCount) ||
       Option.isNone(interval) ||
+      !interval.value.startsAt.equals(request.startsAt) ||
+      !interval.value.endsAt.equals(request.endsAt) ||
       interval.value.startsAt.epochMilliseconds >= window.endsAt ||
       interval.value.endsAt.epochMilliseconds <= window.startsAt ||
       interval.value.startsAt.epochNanoseconds % 1_000_000n !== 0n ||
@@ -274,7 +280,6 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
       return undefined;
     return {
       ...request,
-      ...interval.value,
       batchId: batch.id,
       generation: crypto.randomUUID(),
       customerId: row.dotyposCustomerId,
@@ -656,9 +661,9 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
     );
 
   /**
-   * Enter before the account and capacity sections. The caller can validate
-   * the proposed plan again under all its locks. Assignment runs inside
-   * those same locks after the moves have settled.
+   * Enter before the account and capacity sections. The caller supplies
+   * the author if booking under its account lock. Plan validation and
+   * final assignment both run under the source, account, and date locks.
    */
   const repack = <A, E, R, CheckError = never, CheckServices = never>(
     input: RepackRequest,
@@ -726,7 +731,14 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
       });
       return yield* WorkspaceLockSections.reservationCapacity(
         datesForBatch(batch, input.moves),
-        input.moves.map(({ reservationId }) => reservationId)
+        {
+          movedReservations: input.moves.map(
+            ({ reservationId }) => reservationId
+          ),
+          ...(input.authorAccountId && {
+            authorAccountId: input.authorAccountId,
+          }),
+        }
       )(work).pipe(
         Effect.provideService(WorkspaceDatabaseAdvisoryLock, advisoryLock)
       );
@@ -789,7 +801,7 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
       });
       yield* WorkspaceLockSections.reservationCapacity(
         datesForBatch(batch, rows),
-        rows.map(({ reservationId }) => reservationId)
+        { movedReservations: rows.map(({ reservationId }) => reservationId) }
       )(work).pipe(
         Effect.provideService(WorkspaceDatabaseAdvisoryLock, advisoryLock),
         Effect.timeout("30 seconds"),

@@ -689,6 +689,9 @@ export interface IWorkspaceReservationRepository {
     readonly OpenSpaceMoveCapacityClaim[],
     EffectDrizzleQueryError
   >;
+  readonly hasAttachedOpenSpaceMove: (
+    id: WorkspaceReservationId
+  ) => Effect.Effect<boolean, EffectDrizzleQueryError>;
   /**
    * The Workspace reservations made for one Dotypos customer, oldest first,
    * as the customer may read them. Only rows whose reservation customer is
@@ -2441,6 +2444,21 @@ export class WorkspaceReservationRepository extends Context.Service<
         }),
         recordAmbiguousPassDayHolds: (holds) =>
           recordAmbiguousPassDayHolds(db, holds),
+        hasAttachedOpenSpaceMove: Effect.fn(
+          "workspaceReservations.hasAttachedOpenSpaceMove"
+        )(function* (id) {
+          const [pending] = yield* db
+            .select({ id: openSpaceTableMoves.generation })
+            .from(openSpaceTableMoves)
+            .where(
+              and(
+                eq(openSpaceTableMoves.reservationId, id),
+                isNotNull(openSpaceTableMoves.attachedAt),
+                isNull(openSpaceTableMoves.settledAt)
+              )
+            );
+          return pending !== undefined;
+        }),
         selectOpenSpaceMoveCapacity: Effect.fn(
           "workspaceReservations.selectOpenSpaceMoveCapacity"
         )(function* ({ first, last }) {

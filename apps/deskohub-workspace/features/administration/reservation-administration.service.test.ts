@@ -168,6 +168,7 @@ test("operator cancellation cancels Dotypos, records the result, and optionally 
     failureCode: null,
   });
   expect(claimAdministrationCancellation).toHaveBeenCalledWith({
+    expectedDotyposReservationId: details.dotyposReservationId,
     audit: expect.objectContaining({
       actorAccountId: testActor.administrator.accountId,
       source: testActor.source,
@@ -380,6 +381,7 @@ test("forced operator cancellation terminalizes a pending payment before cancell
     invoice: null,
   });
   expect(claimAdministrationCancellation).toHaveBeenCalledWith({
+    expectedDotyposReservationId: details.dotyposReservationId,
     audit: expect.objectContaining({
       actorAccountId: testActor.administrator.accountId,
       source: testActor.source,
@@ -709,6 +711,7 @@ test("resumes a stale cancellation after an interrupted request", async () => {
     invoice: null,
   });
   expect(claimAdministrationCancellation).toHaveBeenCalledWith({
+    expectedDotyposReservationId: details.dotyposReservationId,
     audit: expect.objectContaining({
       actorAccountId: testActor.administrator.accountId,
       source: testActor.source,
