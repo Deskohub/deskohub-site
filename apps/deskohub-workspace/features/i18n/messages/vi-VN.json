@@ -1455,6 +1455,8 @@
   "agentToolAvailabilityAdvisoryNote": "Tình trạng còn chỗ là ước tính từ dữ liệu gần đây. Kết quả chỉ được xác nhận khi đặt chỗ trên trang web.",
   "agentToolQuoteNote": "Đây là giá hiện tại cho lựa chọn này. Trang web sẽ xác nhận giá khi hoàn tất đặt chỗ.",
   "agentToolBookingHandoff": "Đặt chỗ được tạo trên trang web. Hãy mở liên kết đặt chỗ, chọn chi tiết và hoàn tất ở đó.",
+  "agentToolTeamTableDescription": "Một bàn riêng trong không gian mở cho nhóm của bạn.",
+  "agentToolTeamTableUsage": "Đặt bàn theo từng khoảng 15 phút, tối đa 24 giờ trong khung giờ đặt chỗ của không gian mở.",
   "agentToolErrorProfileIncomplete": "Hãy hoàn thiện hồ sơ trên trang web trước: bổ sung tên và số điện thoại trên trang tài khoản, sau đó thử lại.",
   "agentToolErrorSelectionUnavailable": "Lựa chọn này không còn trống. Hãy kiểm tra tình trạng còn chỗ và chọn phương án khác.",
   "agentToolErrorReservationConflict": "Hiện không thể bắt đầu đặt chỗ vì đặt chỗ này đang được xử lý. Hãy thử lại sau một phút.",

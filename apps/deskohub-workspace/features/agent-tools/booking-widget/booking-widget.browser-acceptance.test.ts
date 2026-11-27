@@ -24,10 +24,11 @@ import {
 import type { Schema } from "effect";
 import { type Locale, m } from "@/features/i18n";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
-import type { BookingMode } from "../show-booking.schema";
+import type { BookingMode, ShowBookingResult } from "../show-booking.schema";
 import {
   availabilityResult,
   bookingOfferings,
+  bookingTeamTableOffering,
   bookingToday,
   meetingRoomAvailabilityResult,
   quoteResult,
@@ -140,6 +141,7 @@ const openBookingView = async ({
   hostStyles,
   requestedLocale = locale,
   resultLocale = locale,
+  initialResult,
   answers = {},
   opensLinks = true,
   chatgptBridge = false,
@@ -155,6 +157,7 @@ const openBookingView = async ({
   /** The agent's `locale` argument; `null` when it sends none. */
   readonly requestedLocale?: Locale | null;
   readonly resultLocale?: Locale;
+  readonly initialResult?: ShowBookingResult;
   readonly answers?: ToolAnswers;
   /** Whether the host declares `openLinks`. */
   readonly opensLinks?: boolean;
@@ -233,7 +236,9 @@ const openBookingView = async ({
       },
       opensLinks,
       toolArguments: requestedLocale ? { locale: requestedLocale } : {},
-      toolResult: toolResult(showBookingResult({ mode, locale: resultLocale })),
+      toolResult: toolResult(
+        initialResult ?? showBookingResult({ mode, locale: resultLocale })
+      ),
     }
   );
   await page.addScriptTag({ path: harnessPath });
@@ -287,6 +292,84 @@ const checkAvailability = async (
 };
 
 describe.skipIf(!chromiumAvailable)("booking view", () => {
+  test("checks a Team Table overnight interval through the sandbox and opens its prefilled page", async () => {
+    const locale = "en-US";
+    const mode = "reservation_page";
+    const selection = {
+      family: "table",
+      date: bookingToday,
+      seats: 4,
+    } as const;
+    const exact = { ...selection, start_time: "23:45", end_time: "00:15" };
+    const reservationUrl = `https://workspace.deskohub.test/reservation/table?date=${bookingToday}&seats=4&startTime=23%3A45&endTime=00%3A15`;
+    const { page, view, calls, linkOpened } = await openBookingView({
+      locale,
+      mode,
+      initialResult: {
+        ...showBookingResult({ locale, mode, selection }),
+        offerings: [bookingTeamTableOffering],
+      },
+      answers: {
+        check_availability: ({ start_time }) =>
+          toolResult({
+            ...availabilityResult(true, locale),
+            family: "table",
+            reservation_url: reservationUrl,
+            ...(start_time === undefined && {
+              table: {
+                date: bookingToday,
+                seats: 4,
+                slotMinutes: 15,
+                usableFrom: "00:00",
+                usableUntil: null,
+                availableStarts: ["23:45"],
+                availableEndsByStart: [
+                  { startTime: "23:45", endTimes: ["00:15"] },
+                ],
+              },
+            }),
+          }),
+        get_quote: () =>
+          toolResult({
+            ...quoteResult(locale),
+            family: "table",
+            reservation_url: reservationUrl,
+          }),
+      },
+    });
+    try {
+      await view
+        .getByRole("button", { name: m.bookingWidgetFindTimes({}, { locale }) })
+        .click();
+      await view
+        .getByRole("combobox", {
+          name: m.bookingWidgetStartTimeLabel({}, { locale }),
+        })
+        .selectOption("23:45");
+      await view
+        .getByRole("combobox", {
+          name: m.bookingWidgetEndTimeLabel({}, { locale }),
+        })
+        .selectOption({
+          label: m.bookingWidgetNextDayTime({ time: "00:15" }, { locale }),
+        });
+      await checkAvailability(view, locale);
+      await view
+        .getByRole("link", {
+          name: m.bookingWidgetOpenReservationPage({}, { locale }),
+        })
+        .click();
+      expect(await linkOpened).toBe(reservationUrl);
+      expect(calls).toEqual([
+        { name: "check_availability", args: { ...selection, locale } },
+        { name: "check_availability", args: { ...exact, locale } },
+        { name: "get_quote", args: { ...exact, locale } },
+      ]);
+    } finally {
+      await page.close();
+    }
+  });
+
   for (const locale of supportedLocales) {
     test(`reserve mode in ${locale}: quotes, starts the booking, and opens the Pay page`, async () => {
       const { page, view, calls, linkOpened } = await openBookingView({

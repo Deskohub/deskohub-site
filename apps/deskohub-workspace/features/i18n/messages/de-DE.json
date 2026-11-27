@@ -1468,6 +1468,8 @@
   "agentToolAvailabilityAdvisoryNote": "Die Verfügbarkeit ist eine Schätzung auf Basis aktueller Daten. Bestätigt wird sie erst bei der Reservierung auf der Website.",
   "agentToolQuoteNote": "Das ist der aktuelle Preis für die Auswahl. Die Website bestätigt ihn beim Abschluss der Reservierung.",
   "agentToolBookingHandoff": "Die Reservierung wird auf der Website erstellt. Öffne den Reservierungslink, wähle die Details und schließ sie dort ab.",
+  "agentToolTeamTableDescription": "Ein ganzer Tisch im offenen Bereich für deine Gruppe.",
+  "agentToolTeamTableUsage": "Während der Buchungszeiten des offenen Bereichs in 15-Minuten-Schritten bis zu 24 Stunden buchbar.",
   "agentToolErrorProfileIncomplete": "Vervollständige zuerst dein Profil auf der Website: Ergänze auf der Kontoseite Namen und Telefonnummer und versuch es dann noch einmal.",
   "agentToolErrorSelectionUnavailable": "Diese Auswahl ist nicht mehr frei. Prüf die Verfügbarkeit und wähle eine andere Option.",
   "agentToolErrorReservationConflict": "Die Reservierung kann gerade nicht gestartet werden, weil sie schon verarbeitet wird. Versuch es in einer Minute noch einmal.",
