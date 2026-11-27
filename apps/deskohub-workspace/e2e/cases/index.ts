@@ -49,7 +49,6 @@ import {
   makeMeetingRoomE2ECases,
 } from "./meeting-room";
 import { makeOfficeE2ECases, type OfficeE2EPreparation } from "./office";
-import { makeTableE2ECases, type TableE2EPreparation } from "./table";
 import {
   assertPaymentTerminalPath,
   getPaymentTerminalScenarios,
@@ -59,6 +58,7 @@ import { makeReservationLinkE2ECases } from "./reservation-links";
 import { assertReservationReplacement } from "./reservation-reuse";
 import { makeReservationUrlStateE2ECases } from "./reservation-url-state";
 import { planSignedOutVerificationCase } from "./signed-out-verification";
+import { makeTableE2ECases, type TableE2EPreparation } from "./table";
 
 export type WorkspaceE2EPreparation = {
   readonly customerDiscountGroup: E2EDotyposDiscountGroup;

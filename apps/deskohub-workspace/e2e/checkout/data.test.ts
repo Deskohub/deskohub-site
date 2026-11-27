@@ -19,6 +19,20 @@ import {
 
 afterEach(() => setSystemTime());
 
+const makeMockHttpClientLayer = (
+  handler: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>
+) =>
+  FetchHttpClient.layer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        FetchHttpClient.Fetch,
+        Object.assign(mock(handler), {
+          preconnect: globalThis.fetch.preconnect,
+        })
+      )
+    )
+  );
+
 test("does not reuse checkout phone numbers in later monthly runs", () => {
   const makePhoneSet = (now: string) => {
     setSystemTime(new Date(now));
@@ -55,21 +69,13 @@ test("keeps generated emails valid for the longest checkout flow identifier", ()
 test("loads availability through the provided HTTP client", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   const requests: Request[] = [];
-  const fetchMock = mock(
+  const httpClientLayer = makeMockHttpClientLayer(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
       requests.push(request);
       return Response.json({ unavailableDates: [] });
     }
-  );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        fetchMock as unknown as typeof globalThis.fetch
-      )
-    )
   );
 
   const dates = await Effect.runPromise(
@@ -91,21 +97,13 @@ test("loads availability through the provided HTTP client", async () => {
 test("loads only the deterministic allocation shard through availability", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   const requests: Request[] = [];
-  const fetchMock = mock(
+  const httpClientLayer = makeMockHttpClientLayer(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
       requests.push(request);
       return Response.json({ unavailableDates: [] });
     }
-  );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        fetchMock as unknown as typeof globalThis.fetch
-      )
-    )
   );
 
   const dates = await Effect.runPromise(
@@ -141,14 +139,8 @@ test("spreads sparse availability across deterministic allocation shards", async
   const unavailableDates = candidateDates.filter(
     (date) => !availableDates.has(date)
   );
-  const fetchMock = mock(async () => Response.json({ unavailableDates }));
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        fetchMock as unknown as typeof globalThis.fetch
-      )
-    )
+  const httpClientLayer = makeMockHttpClientLayer(async () =>
+    Response.json({ unavailableDates })
   );
 
   const datesByShard = await Promise.all(
@@ -222,7 +214,7 @@ test("selects non-overlapping meeting-room slots for every duration", async () =
   const requests: Request[] = [];
   let activeRequestCount = 0;
   let maximumActiveRequestCount = 0;
-  const fetchMock = mock(
+  const httpClientLayer = makeMockHttpClientLayer(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
@@ -239,14 +231,6 @@ test("selects non-overlapping meeting-room slots for every duration", async () =
         unavailableDates: [],
       });
     }
-  );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        fetchMock as unknown as typeof globalThis.fetch
-      )
-    )
   );
 
   const slots = await Effect.runPromise(
@@ -293,19 +277,11 @@ test("selects non-overlapping meeting-room slots for every duration", async () =
 
 test("keeps meeting-room dates disjoint across allocation shards", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
-  const fetchMock = mock(async () =>
+  const httpClientLayer = makeMockHttpClientLayer(async () =>
     Response.json({
       meetingRoomUnavailable: false,
       unavailableDates: [],
     })
-  );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        fetchMock as unknown as typeof globalThis.fetch
-      )
-    )
   );
 
   const slotsByShard = await Promise.all(
@@ -329,7 +305,7 @@ test("keeps meeting-room dates disjoint across allocation shards", async () => {
 test("selects disjoint multi-day office ranges across allocation shards", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   const requests: Request[] = [];
-  const fetchMock = mock(
+  const httpClientLayer = makeMockHttpClientLayer(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
@@ -339,14 +315,6 @@ test("selects disjoint multi-day office ranges across allocation shards", async 
         unavailableDates: [],
       });
     }
-  );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        fetchMock as unknown as typeof globalThis.fetch
-      )
-    )
   );
 
   const slotsByShard = await Promise.all(
@@ -391,20 +359,13 @@ test("selects disjoint multi-day office ranges across allocation shards", async 
 test("skips an unavailable office range before selecting the next owned range", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   let requestCount = 0;
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        mock(async () => {
-          requestCount += 1;
-          return Response.json({
-            officeUnavailable: requestCount === 1,
-            unavailableDates: [],
-          });
-        }) as unknown as typeof globalThis.fetch
-      )
-    )
-  );
+  const httpClientLayer = makeMockHttpClientLayer(async () => {
+    requestCount += 1;
+    return Response.json({
+      officeUnavailable: requestCount === 1,
+      unavailableDates: [],
+    });
+  });
 
   const [slot] = await Effect.runPromise(
     selectAvailableOfficeSlots(makeConfig(), 1).pipe(
@@ -422,7 +383,7 @@ test("skips an unavailable office range before selecting the next owned range", 
 test("rejects meeting-room slots that touch an unavailable date", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   const requests: Request[] = [];
-  const fetchMock = mock(
+  const httpClientLayer = makeMockHttpClientLayer(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
@@ -435,14 +396,6 @@ test("rejects meeting-room slots that touch an unavailable date", async () => {
           requests.length === 1 ? [requestUrl.searchParams.get("to")] : [],
       });
     }
-  );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        fetchMock as unknown as typeof globalThis.fetch
-      )
-    )
   );
 
   const slots = await Effect.runPromise(
@@ -457,18 +410,11 @@ test("rejects meeting-room slots that touch an unavailable date", async () => {
 
 test("fails meeting-room shard exhaustion with capacity context", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        mock(() =>
-          Response.json({
-            meetingRoomUnavailable: false,
-            unavailableDates: [],
-          })
-        ) as unknown as typeof globalThis.fetch
-      )
-    )
+  const httpClientLayer = makeMockHttpClientLayer(async () =>
+    Response.json({
+      meetingRoomUnavailable: false,
+      unavailableDates: [],
+    })
   );
   const exit = await Effect.runPromiseExit(
     selectAvailableMeetingRoomSlots(
