@@ -7,7 +7,7 @@ export class TeamTableReleaseGate extends ReleaseGate<TeamTableReleaseGate>()(
   "team_table_page"
 ) {}
 
-export class TeamTableReservationsDisabledError extends Data.TaggedError(
+class TeamTableReservationsDisabledError extends Data.TaggedError(
   "TeamTableReservationsDisabledError"
 )<{
   readonly message: string;

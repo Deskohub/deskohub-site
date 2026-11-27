@@ -4,9 +4,7 @@ import {
   type MeetingRoomStartTimes,
   type MeetingRoomStartTimesQuery,
   parseMeetingRoomStartTimesResponse,
-  parseTableSlotsResponse,
   parseWorkspaceAvailabilityResponse,
-  type TableSlotsQuery,
   type WorkspaceAvailability,
   type WorkspaceAvailabilityQuery,
   workspaceAvailabilityKeys,
@@ -54,12 +52,6 @@ export const getWorkspaceAvailabilityUrl = (
 export const getMeetingRoomStartTimesUrl = (
   query: MeetingRoomStartTimesQuery
 ) => `/api/workspace/availability?${new URLSearchParams(query).toString()}`;
-
-export const getTableSlotsUrl = ({ seats, ...query }: TableSlotsQuery) =>
-  `/api/workspace/availability?${new URLSearchParams({
-    ...query,
-    seats: String(seats),
-  }).toString()}`;
 
 const fetchAvailability = async ({
   replacementToken,
@@ -161,31 +153,6 @@ export const meetingRoomStartTimesQueryOptions = ({
     queryFn: query
       ? ({ signal }) =>
           loadMeetingRoomStartTimes({ query, replacementToken, signal })
-      : skipToken,
-    ...availabilityQueryPolicy,
-  });
-
-export const tableSlotsQueryOptions = ({
-  query,
-  replacementToken,
-}: {
-  readonly query: TableSlotsQuery | undefined;
-  readonly replacementToken?: string;
-}) =>
-  queryOptions({
-    queryKey: [
-      ...workspaceAvailabilityKeys.tableSlots(query),
-      replacementToken ?? null,
-    ],
-    queryFn: query
-      ? async ({ signal }) =>
-          parseTableSlotsResponse(
-            await fetchAvailability({
-              replacementToken,
-              signal,
-              url: getTableSlotsUrl(query),
-            })
-          )
       : skipToken,
     ...availabilityQueryPolicy,
   });

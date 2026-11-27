@@ -308,7 +308,7 @@ export const runPassPurchaseReconciliation = Effect.fn(
         OpenSpaceTableMoves.Default,
         TeamTableHoldClaims.Default
       ).pipe(
-        Layer.provide(WorkspaceReservationRepository.Live),
+        Layer.provideMerge(WorkspaceReservationRepository.Live),
         Layer.provide(WorkspaceDatabase.Default),
         Layer.provide(WorkspaceDatabaseAdvisoryLock.Default),
         Layer.provide(WorkspaceDotyposLayer)

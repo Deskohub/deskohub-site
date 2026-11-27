@@ -176,8 +176,6 @@ export const workspaceAvailabilityKeys = {
     ["workspace-availability", query] as const,
   meetingRoomStartTimes: (query: MeetingRoomStartTimesQuery | undefined) =>
     ["workspace-availability", "meeting-room-start-times", query] as const,
-  tableSlots: (query: TableSlotsQuery | undefined) =>
-    ["workspace-availability", tableSlotsMode, query] as const,
 };
 
 const workspaceAvailabilityNoticeSchema = Schema.Struct({
@@ -585,17 +583,6 @@ export const parseTableSlotsQuery = (params: URLSearchParams) =>
       decodeTableSeatsParam(params.get("seats")?.trim())
     ),
   });
-
-const tableSlotsStandardSchema = Schema.toStandardSchemaV1(
-  tableSlotsAvailabilitySchema
-);
-
-export const parseTableSlotsResponse = <T>(value: T): TableSlotsAvailability =>
-  parseStandardSchema(
-    tableSlotsStandardSchema,
-    value,
-    "Invalid Team Table slots response"
-  );
 
 /**
  * The start-times query a request names, or none when its kind, date, or

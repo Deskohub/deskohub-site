@@ -241,7 +241,7 @@ export const ensureOfficeOpen = OfficeReleaseGate.isOpen.pipe(
   Effect.asVoid
 );
 
-export const ensureTeamTableOpen = TeamTableReleaseGate.isOpen.pipe(
+const ensureTeamTableOpen = TeamTableReleaseGate.isOpen.pipe(
   Effect.filterOrFail(
     (enabled) => enabled,
     () =>

@@ -514,23 +514,22 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
             assignedTeamTableId,
           })
         );
-        if (
-          Result.isFailure(posted) &&
-          posted.failure._tag !== "DotyposUncertain"
-        ) {
-          yield* claims.clear(claim.reservationId);
-          return yield* posted.failure;
+        if (Result.isFailure(posted)) {
+          const failure = posted.failure;
+          if (failure._tag !== "DotyposUncertain") {
+            yield* claims.clear(claim.reservationId);
+            return yield* failure;
+          }
+          const providerIds = failure.createdReservationIds;
+          if (providerIds?.length) {
+            yield* claims.remember(claim.reservationId, providerIds);
+          }
+        } else {
+          yield* claims.remember(claim.reservationId, [posted.success.id]);
+          if (matchesTeamTableHold(posted.success, claim, booking.customer)) {
+            return posted.success;
+          }
         }
-        const providerIds = Result.isSuccess(posted)
-          ? [posted.success.id]
-          : (posted.failure.createdReservationIds ?? []);
-        if (providerIds.length > 0)
-          yield* claims.remember(claim.reservationId, providerIds);
-        if (
-          Result.isSuccess(posted) &&
-          matchesTeamTableHold(posted.success, claim, booking.customer)
-        )
-          return posted.success;
         const recovered = yield* claims.recover(
           claim.reservationId,
           booking.customer

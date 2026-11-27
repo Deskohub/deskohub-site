@@ -100,8 +100,6 @@ export type CoworkAdvertisedPriceRequest =
   typeof coworkAdvertisedPriceRequestSchema.Type;
 export type MeetingRoomAdvertisedPriceRequest =
   typeof meetingRoomAdvertisedPriceRequestSchema.Type;
-export type TableAdvertisedPriceRequest =
-  typeof tableAdvertisedPriceRequestSchema.Type;
 export type OfficeAdvertisedPriceRequest =
   typeof officeAdvertisedPriceRequestSchema.Type;
 export const advertisedPriceRequestEquals = Schema.toEquivalence(
