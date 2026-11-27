@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "edb0ab0f-0254-4adb-a1eb-2dd41a009d01",
+  "id": "bfc33ed5-c2a8-4b45-a50b-9fbd0d376a3c",
   "prevIds": [
     "134b76fd-0055-40f0-8575-ed0bc0386291"
   ],
@@ -11280,6 +11280,19 @@
       "generated": null,
       "identity": null,
       "name": "payment_attempt_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "team_table_hold_claims"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "retry_expires_at",
       "entityType": "columns",
       "schema": "public",
       "table": "team_table_hold_claims"

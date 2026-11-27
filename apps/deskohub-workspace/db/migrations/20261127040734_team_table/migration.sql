@@ -45,6 +45,7 @@ CREATE TABLE "team_table_hold_claims" (
 	"generation" uuid,
 	"purpose" text DEFAULT 'checkout' NOT NULL,
 	"payment_attempt_id" text,
+	"retry_expires_at" timestamp with time zone,
 	"attached_at" timestamp with time zone,
 	"cancel_requested_at" timestamp with time zone,
 	"retired_at" timestamp with time zone,
