@@ -4,8 +4,17 @@ import { dev } from "astro";
 
 let server: Awaited<ReturnType<typeof dev>>;
 let origin: string;
+const testEnv = {
+  ASTRO_DISABLE_UPDATE_CHECK: "true",
+  ASTRO_TELEMETRY_DISABLED: "1",
+  VERCEL_ENV: "preview",
+};
+const originalEnv = Object.entries(testEnv).map(
+  ([name]) => [name, process.env[name]] as const
+);
 
 beforeAll(async () => {
+  Object.assign(process.env, testEnv);
   server = await dev({
     root: fileURLToPath(new URL("../../../", import.meta.url)),
     server: { host: "127.0.0.1", port: 0 },
@@ -15,7 +24,17 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(async () => {
-  await server?.stop();
+  try {
+    await server?.stop();
+  } finally {
+    for (const [name, value] of originalEnv) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
 });
 
 test.each(["/de-DE/", "/nonexistent"])(
