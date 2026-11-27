@@ -51,6 +51,19 @@ test("rejects an A revision, a different database, or another worker in B", asyn
   await assert.rejects(checkPreviewBinding(input, async () => proof({ workerTag: "g-1111111111111111" })), /generation changed/);
 });
 
+test("rejects a different Vercel deployment, branch, or ready revision at the same SHA", async () => {
+  for (const change of [
+    { deploymentId: "dpl_other" },
+    { ref: "test/other" },
+    { revision: "workspace-api-preview-g-1111111111111111" },
+  ]) {
+    await assert.rejects(
+      checkPreviewBinding({ ...input, ...change }, async () => proof()),
+      /generation changed/
+    );
+  }
+});
+
 test("only the gate outside the lease retries a missing generation", async () => {
   const unavailable = async () => new Response("Unavailable", { status: 503 });
   assert.equal(await checkPreviewBinding({ ...input, databaseUrl: undefined }, unavailable), undefined);
