@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { backendGenerationRequired } from "./paths.mjs";
 import {
+  classifyPullRequestTarget,
   dispatchTarget,
   pooledNeonUrl,
   pullRequestTarget,
@@ -249,6 +250,12 @@ test("requires a complete path list and counts both sides of renames", async () 
   );
 });
 
+test("classifies an eligible frontend-only preview without admitting a backend build", async () => {
+  const frontend = gitHub({ files: [[{ filename: "apps/deskohub-workspace/new.ts", status: "modified" }]] });
+  assert.deepEqual(await classifyPullRequestTarget(target, env, frontend), { headRef: ref, backendRequired: false });
+  assert.deepEqual(await classifyPullRequestTarget(target, env, gitHub()), { headRef: ref, backendRequired: true });
+});
+
 test("rejects stale, fork, draft and bot heads for deploy", async () => {
   for (const change of [
     { head: { ...pr.head, sha: "c".repeat(40) } },
@@ -323,7 +330,7 @@ function vercel({
     if (url.origin === "https://api.vercel.com") {
       assert.equal(url.searchParams.get("teamId"), teamId);
       assert.equal(options.headers.Authorization, `Bearer ${env.VERCEL_TOKEN}`);
-      if (url.pathname === `/v13/deployments/${deploymentId}`) {
+      if (url.pathname === `/v13/deployments/${deploymentId}` || url.pathname === `/v13/deployments/${host}`) {
         assert.equal(url.searchParams.get("withGitRepoInfo"), "true");
         return Response.json(record);
       }
@@ -425,6 +432,16 @@ test("matches the exact READY, protected Vercel Git preview by ID, project, repo
   await assert.rejects(
     verifyVercel(target, previewEnv, vercel({ registered: false })),
     /deployment record/,
+  );
+});
+
+test("looks up the E2E origin and confirms its exact deployment ID", async () => {
+  const originTarget = { sha, expectedOrigin: `https://${host}` };
+  const environment = { ...env, GIT_REF: ref };
+  assert.deepEqual(await verifyVercel(originTarget, environment, vercel()), { deploymentId });
+  await assert.rejects(
+    verifyVercel(originTarget, environment, vercel({ record: { ...deployment, url: "wrong-preview.vercel.app" } })),
+    /origin other than the exact E2E target/
   );
 });
 

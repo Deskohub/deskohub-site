@@ -197,7 +197,7 @@ async function* githubPages(path, token, request) {
   );
 }
 
-export async function pullRequestTarget(
+async function readPullRequestTarget(
   target,
   env,
   request = fetch,
@@ -229,6 +229,7 @@ export async function pullRequestTarget(
   };
 
   const pr = await readPull();
+  let backendRequired;
   if (checkPaths && target.operation === "deploy") {
     requireCondition(
       Number.isInteger(pr.changed_files) &&
@@ -273,10 +274,7 @@ export async function pullRequestTarget(
         current.changed_files === pr.changed_files,
       "The pull request changed while its file list was being checked.",
     );
-    requireCondition(
-      backendGenerationRequired(paths),
-      "This pull request has no backend changes.",
-    );
+    backendRequired = backendGenerationRequired(paths);
   }
 
   // A closed pull request can outlive its Git branch. Cleanup fences on the
@@ -291,7 +289,19 @@ export async function pullRequestTarget(
       "The Git branch no longer matches the requested head.",
     );
   }
-  return pr.head.ref;
+  return { headRef: pr.head.ref, backendRequired };
+}
+
+export async function pullRequestTarget(target, env, request = fetch, checkPaths = false) {
+  const result = await readPullRequestTarget(target, env, request, checkPaths);
+  if (checkPaths && target.operation === "deploy") {
+    requireCondition(result.backendRequired, "This pull request has no backend changes.");
+  }
+  return result.headRef;
+}
+
+export function classifyPullRequestTarget(target, env, request = fetch) {
+  return readPullRequestTarget(target, env, request, true);
 }
 
 function vercel(path, token, request) {
@@ -309,9 +319,23 @@ export async function verifyVercel(target, env, request = fetch) {
     env.VERCEL_TOKEN && env.GH_TOKEN,
     "Preview metadata credentials are missing.",
   );
+  const expectedOrigin = URL.canParse(target.expectedOrigin ?? "")
+    ? new URL(target.expectedOrigin)
+    : undefined;
+  requireCondition(
+    target.deploymentId !== undefined
+      ? deploymentPattern.test(target.deploymentId)
+      : expectedOrigin !== undefined &&
+          expectedOrigin.origin === target.expectedOrigin &&
+          expectedOrigin.protocol === "https:" &&
+          /^[a-z0-9-]+\.vercel\.app$/.test(expectedOrigin.hostname) &&
+          !expectedOrigin.hostname.includes("-git-"),
+    "Expected an immutable Vercel deployment ID or origin.",
+  );
+  const deploymentLookup = target.deploymentId ?? expectedOrigin.hostname;
   const [deployment, project] = await Promise.all([
     vercel(
-      `/v13/deployments/${target.deploymentId}?withGitRepoInfo=true`,
+      `/v13/deployments/${deploymentLookup}?withGitRepoInfo=true`,
       env.VERCEL_TOKEN,
       request,
     ).then((response) => readJson(response, "Vercel")),
@@ -320,7 +344,8 @@ export async function verifyVercel(target, env, request = fetch) {
     ),
   ]);
   requireCondition(
-    deployment.id === target.deploymentId &&
+    deploymentPattern.test(deployment.id) &&
+      (!target.deploymentId || deployment.id === target.deploymentId) &&
       deployment.projectId === projectId &&
       deployment.ownerId === teamId &&
       deployment.target === null &&
@@ -345,6 +370,10 @@ export async function verifyVercel(target, env, request = fetch) {
   );
 
   const origin = `https://${deployment.url}`;
+  requireCondition(
+    !target.expectedOrigin || origin === target.expectedOrigin,
+    "Vercel returned an origin other than the exact E2E target.",
+  );
   const aliasResponse = await vercel(
     `/v4/aliases/${deployment.url}`,
     env.VERCEL_TOKEN,
@@ -400,7 +429,7 @@ export async function verifyVercel(target, env, request = fetch) {
       latest?.state === "success" &&
       [origin, `${origin}/`].includes(latest.environment_url)
     )
-      return;
+      return { deploymentId: deployment.id };
   }
   throw new PreviewError(
     "The exact Vercel preview has no current successful GitHub deployment record.",

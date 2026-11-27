@@ -14,7 +14,7 @@ const immutableWorkspaceHost =
 const apiRevision = /^workspace-api-preview-(g-[0-9a-f]{16})$/;
 
 export async function checkPreviewBinding(input, request = fetch) {
-  const origin = URL.parse(input.origin ?? "");
+  const origin = URL.canParse(input.origin ?? "") ? new URL(input.origin) : undefined;
   if (
     !origin ||
     origin.origin !== input.origin ||
