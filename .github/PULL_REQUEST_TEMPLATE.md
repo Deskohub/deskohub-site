@@ -14,6 +14,7 @@ Valid flows:
 - `checkout-cowork` (cowork booking, replacement, signed-out verification, URL state)
 - `checkout-meeting-room` (meeting-room booking, replacement, reservation links, URL state)
 - `checkout-office` (office booking, URL state)
+- `checkout-table` (Team Table booking, invitee addition, access PIN, URL state)
 - `payments` (Nexi terminal states, late-payment recovery)
 - `discounts` (discount codes, vouchers, calendar sales, customer discounts)
 - `referrals` (referral flows and someone-else referral payment)

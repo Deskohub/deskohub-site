@@ -7,6 +7,7 @@ import {
   workspaceCoworkReservedDeskTableTag,
   workspaceMeetingRoomReservationTableTag,
   workspaceOfficeReservationTableTag,
+  workspaceTableReservationTableTag,
 } from "@/features/checkout/backend/reservation/workspace-table-selection";
 import {
   workspaceProductMonitorOptions,
@@ -21,6 +22,7 @@ import {
   workspaceE2EProviderHeadroomRuns,
 } from "./allocation";
 import { workspaceE2EOfficeReservationSeats } from "./office";
+import { workspaceE2ETableMinimumSeats } from "./table";
 
 const provisionedRunCapacity =
   workspaceE2EConcurrentRunTarget + workspaceE2EProviderHeadroomRuns;
@@ -121,6 +123,15 @@ const newSaleCapacityGroups: readonly CapacityGroup[] = [
     requiredSeatCount: workspaceE2EOfficeReservationSeats,
     requiredTableCount: 1,
     requiredTags: [workspaceOfficeReservationTableTag],
+  },
+  {
+    id: workspaceTableReservationTableTag,
+    requiredSeatCount: workspaceE2ETableMinimumSeats,
+    requiredTableCount: 1,
+    requiredTags: [
+      workspaceCoworkOpenSpaceTableTag,
+      workspaceTableReservationTableTag,
+    ],
   },
 ];
 

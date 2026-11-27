@@ -41,6 +41,7 @@ const signedOutCaseIds = [
   "reservation-url-state-meeting-room",
   "reservation-url-state-office",
   "reservation-url-state-office-starts-on-link",
+  "reservation-url-state-table",
 ] as const satisfies readonly WorkspaceE2ECaseId[];
 
 const ownIdentityCaseIds = [

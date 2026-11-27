@@ -9,9 +9,11 @@ import type { WorkspaceE2EConfig } from "../config";
 import { workspaceE2ETimeouts } from "../timeouts";
 import {
   makeCoworkCheckoutData,
+  makeTableCheckoutData,
   selectAvailableCoworkDates,
   selectAvailableMeetingRoomSlots,
   selectAvailableOfficeSlots,
+  selectAvailableTableSlots,
   selectCoworkDates,
 } from "./data";
 
@@ -488,6 +490,137 @@ test("fails meeting-room shard exhaustion with capacity context", async () => {
     expect(message).toContain("shard 1 of 3");
     expect(message).toContain("supported concurrency 3");
   }
+});
+
+test("selects disjoint Team Table slots across allocation shards and prefers 10:00-12:00", async () => {
+  setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
+  const requests: URL[] = [];
+  const fetchMock = mock(
+    async (input: URL | RequestInfo, init?: RequestInit) => {
+      const request =
+        input instanceof Request ? input : new Request(input, init);
+      const url = new URL(request.url);
+      requests.push(url);
+      if (url.searchParams.get("mode") === "table-slots") {
+        const date = url.searchParams.get("date") ?? "2099-07-31";
+        const seats = Number(url.searchParams.get("seats") ?? "4");
+        return Response.json({
+          availableEndsByStart: [
+            { startTime: "09:00", endTimes: ["10:00", "11:00"] },
+            { startTime: "10:00", endTimes: ["11:00", "12:00"] },
+          ],
+          availableStarts: ["09:00", "10:00"],
+          date,
+          seats,
+          slotMinutes: 15,
+          usableFrom: "08:00",
+          usableUntil: "20:00",
+        });
+      }
+      return Response.json({ unavailableDates: [] });
+    }
+  );
+  const httpClientLayer = FetchHttpClient.layer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        FetchHttpClient.Fetch,
+        fetchMock as unknown as typeof globalThis.fetch
+      )
+    )
+  );
+
+  const slotsByShard = await Promise.all(
+    Array.from({ length: 3 }, (_, shardIndex) =>
+      Effect.runPromise(
+        selectAvailableTableSlots(
+          makeConfig(),
+          4,
+          2,
+          makeWorkspaceE2EDateAllocation({
+            runId: `table-${shardIndex}`,
+            shardIndex,
+          })
+        ).pipe(Effect.provide(httpClientLayer))
+      )
+    )
+  );
+  const allSlots = slotsByShard.flat();
+
+  expect(new Set(allSlots.map(({ date }) => date)).size).toBe(6);
+  expect(
+    allSlots.every(
+      ({ endTime, seats, startTime }) =>
+        seats === 4 && startTime === "10:00" && endTime === "12:00"
+    )
+  ).toBe(true);
+  expect(
+    requests.some(
+      (url) =>
+        url.searchParams.get("kind") === "table" &&
+        url.searchParams.get("mode") === "table-slots" &&
+        url.searchParams.get("seats") === "4"
+    )
+  ).toBe(true);
+
+  const checkout = makeTableCheckoutData(
+    "https://workspace.example.com",
+    allSlots[0]!
+  );
+  expect(checkout.expectedReservationDetails).toEqual({
+    durationMinutes: 120,
+    kind: "table",
+    seats: 4,
+  });
+  expect(checkout.table?.checkoutInvitees).toHaveLength(1);
+});
+
+test("falls back to an open >=60-minute Team Table slot when 10:00-12:00 is unavailable", async () => {
+  setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
+  const fetchMock = mock(
+    async (input: URL | RequestInfo, init?: RequestInit) => {
+      const request =
+        input instanceof Request ? input : new Request(input, init);
+      const url = new URL(request.url);
+      if (url.searchParams.get("mode") === "table-slots") {
+        const date = url.searchParams.get("date") ?? "2099-07-31";
+        return Response.json({
+          availableEndsByStart: [
+            { startTime: "13:00", endTimes: ["13:30", "14:00"] },
+          ],
+          availableStarts: ["13:00"],
+          date,
+          seats: 2,
+          slotMinutes: 15,
+          usableFrom: "08:00",
+          usableUntil: "20:00",
+        });
+      }
+      return Response.json({ unavailableDates: [] });
+    }
+  );
+  const httpClientLayer = FetchHttpClient.layer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        FetchHttpClient.Fetch,
+        fetchMock as unknown as typeof globalThis.fetch
+      )
+    )
+  );
+
+  const [slot] = await Effect.runPromise(
+    selectAvailableTableSlots(makeConfig(), 2, 1).pipe(
+      Effect.provide(httpClientLayer)
+    )
+  );
+  expect(slot).toMatchObject({
+    endTime: "14:00",
+    seats: 2,
+    startTime: "13:00",
+  });
+  expect(
+    makeTableCheckoutData("https://workspace.example.com", slot!).table
+      ?.checkoutInvitees
+  ).toEqual([]);
 });
 
 const makeConfig = (): WorkspaceE2EConfig => ({

@@ -75,6 +75,14 @@ export type PrefilledReservation = PrefilledContact &
         readonly seats: number;
         readonly startsOn: string;
       }
+    | {
+        readonly attendeeCount: number;
+        readonly date: string;
+        readonly endTime: string;
+        readonly kind: "table";
+        readonly seats: number;
+        readonly startTime: string;
+      }
   );
 
 export const toPrefilledReservation = (
@@ -120,6 +128,23 @@ export const toPrefilledReservation = (
       startsOn: data.office.startsOn,
     };
   }
+  if (details.kind === "table") {
+    if (!data.table) {
+      throw new Error("Team Table backfill assertions require slot data");
+    }
+    return {
+      ...contact,
+      attendeeCount:
+        officePeople === "restored"
+          ? 1 + data.table.checkoutInvitees.length
+          : 1,
+      date: data.table.date,
+      endTime: data.table.endTime,
+      kind: "table",
+      seats: data.table.seats,
+      startTime: data.table.startTime,
+    };
+  }
   return {
     ...contact,
     ...getCoworkSwitchExpectations(details.entryTier, data.locale),
@@ -143,6 +168,7 @@ export const isPrefilledReservation = (
   const value = (selector: string) => {
     const element = document.querySelector(selector);
     return element instanceof HTMLInputElement ||
+      element instanceof HTMLSelectElement ||
       element instanceof HTMLTextAreaElement
       ? element.value
       : null;
@@ -243,6 +269,19 @@ export const isPrefilledReservation = (
               "",
             10
           ) === expected.seats
+        );
+      case "table":
+        return (
+          checkedValue('input[name="seats"]:checked') ===
+            String(expected.seats) &&
+          value('input[name="date"]') === expected.date &&
+          value('select[name="startTime"]') === expected.startTime &&
+          value('select[name="endTime"]') === expected.endTime &&
+          Number.parseInt(
+            document.querySelector("[data-office-people-count]")?.textContent ??
+              "",
+            10
+          ) === expected.attendeeCount
         );
     }
   };

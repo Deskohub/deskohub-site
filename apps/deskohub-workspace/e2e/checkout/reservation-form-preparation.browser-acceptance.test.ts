@@ -21,7 +21,9 @@ import {
   makeCoworkCheckoutData,
   makeMeetingRoomCheckoutData,
   makeOfficeCheckoutData,
+  makeTableCheckoutData,
   type OfficeCheckoutSlot,
+  type TableCheckoutSlot,
 } from "./data";
 import {
   preparedReservationForm,
@@ -552,6 +554,115 @@ describe("office reservation preparation in Chromium", () => {
         dayCount: "2",
         email: "",
         people: getWorkspaceE2EOfficeInvitees(officeSlot.seats),
+      });
+    }
+  );
+});
+
+const tableSlot: TableCheckoutSlot = {
+  date: "2099-09-02",
+  endsAt: "2099-09-02T10:00:00Z" as TableCheckoutSlot["endsAt"],
+  endTime: "12:00",
+  seats: 4,
+  startsAt: "2099-09-02T08:00:00Z" as TableCheckoutSlot["startsAt"],
+  startTime: "10:00",
+};
+
+describe("Team Table reservation preparation in Chromium", () => {
+  test.skipIf(!chromiumAvailable)(
+    "selects size, date, async start and end times, and checkout invitees",
+    async () => {
+      const data = makeTableCheckoutData(origin, tableSlot);
+      const html = `
+        <form>
+          <label><input id="team-table-size-2" name="seats" type="radio" value="2" checked /></label>
+          <label><input id="team-table-size-4" name="seats" type="radio" value="4" /></label>
+          <div>
+            <input name="date" value="2099-09-01" />
+            <button aria-haspopup="dialog" id="date-trigger" type="button"></button>
+          </div>
+          <div id="calendar"></div>
+          <select name="startTime" disabled>
+            <option value="">Start time</option>
+          </select>
+          <select name="endTime" disabled>
+            <option value="">End time</option>
+          </select>
+          <ul data-office-people><li>You</li></ul>
+          <span data-office-people-count>1 of 4</span>
+          <input data-office-invitee-email type="email" value="" />
+          <button data-office-invitee-add type="button">Add</button>
+          <button id="reservation-continue" type="button" disabled></button>
+        </form>
+        <script>
+          const dateInput = document.querySelector('input[name="date"]');
+          const startSelect = document.querySelector('select[name="startTime"]');
+          const endSelect = document.querySelector('select[name="endTime"]');
+          const submit = document.querySelector("#reservation-continue");
+          document.querySelector("#date-trigger").addEventListener("click", () => {
+            document.querySelector("#calendar").innerHTML =
+              '<div data-day="2099-09-02"><button type="button"></button></div>';
+            document.querySelector('[data-day="2099-09-02"] button').addEventListener("click", () => {
+              dateInput.value = "2099-09-02";
+              setTimeout(() => {
+                startSelect.disabled = false;
+                startSelect.innerHTML =
+                  '<option value="">Start time</option><option value="10:00">10:00 AM</option>';
+              }, 40);
+            });
+          });
+          startSelect.addEventListener("change", () => {
+            setTimeout(() => {
+              endSelect.disabled = false;
+              endSelect.innerHTML =
+                '<option value="">End time</option><option value="12:00">12:00 PM</option>';
+            }, 40);
+          });
+          endSelect.addEventListener("change", () => {
+            submit.disabled = false;
+          });
+          document.querySelector("[data-office-invitee-add]").addEventListener("click", () => {
+            const input = document.querySelector("[data-office-invitee-email]");
+            const person = document.createElement("li");
+            person.textContent = input.value;
+            document.querySelector("[data-office-people]").append(person);
+            input.value = "";
+            const count = document.querySelectorAll("[data-office-people] li").length;
+            document.querySelector("[data-office-people-count]").textContent = count + " of 4";
+          });
+        </script>
+      `;
+
+      expect(
+        await prepareOn(
+          html,
+          withWaits(toReservationSelectionPreparation(data), 2_000)
+        )
+      ).toBe("about:blank");
+      expect(
+        await getPage().evaluate(() => ({
+          date: document.querySelector<HTMLInputElement>('input[name="date"]')
+            ?.value,
+          endTime: document.querySelector<HTMLSelectElement>(
+            'select[name="endTime"]'
+          )?.value,
+          people: Array.from(
+            document.querySelectorAll("[data-office-people] li"),
+            (person) => person.textContent
+          ).slice(1),
+          seats: document.querySelector<HTMLInputElement>(
+            'input[name="seats"]:checked'
+          )?.value,
+          startTime: document.querySelector<HTMLSelectElement>(
+            'select[name="startTime"]'
+          )?.value,
+        }))
+      ).toEqual({
+        date: "2099-09-02",
+        endTime: "12:00",
+        people: data.table?.checkoutInvitees,
+        seats: "4",
+        startTime: "10:00",
       });
     }
   );

@@ -32,6 +32,12 @@ test("accepts snapshots carrying the identity each checkout flow expects", () =>
       { kind: "office", seats: 4, dayCount: 2 }
     )
   ).toBe(true);
+  expect(
+    matchesExpectedReservationDetails(
+      { kind: "table", seats: 4, durationMinutes: 120 },
+      { kind: "table", seats: 4, durationMinutes: 120 }
+    )
+  ).toBe(true);
 });
 
 test("rejects snapshots that contradict the expected identity", () => {
@@ -69,6 +75,18 @@ test("rejects snapshots that contradict the expected identity", () => {
     matchesExpectedReservationDetails(
       { kind: "office" },
       { kind: "meeting-room" }
+    )
+  ).toBe(false);
+  expect(
+    matchesExpectedReservationDetails(
+      { kind: "table", seats: 2, durationMinutes: 120 },
+      { kind: "table", seats: 4, durationMinutes: 120 }
+    )
+  ).toBe(false);
+  expect(
+    matchesExpectedReservationDetails(
+      { kind: "table", seats: 4, durationMinutes: 60 },
+      { kind: "table", seats: 4, durationMinutes: 120 }
     )
   ).toBe(false);
 });

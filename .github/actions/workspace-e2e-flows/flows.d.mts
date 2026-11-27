@@ -2,6 +2,7 @@ export declare const WORKSPACE_E2E_FLOW_IDS: readonly [
   "checkout-cowork",
   "checkout-meeting-room",
   "checkout-office",
+  "checkout-table",
   "payments",
   "discounts",
   "referrals",

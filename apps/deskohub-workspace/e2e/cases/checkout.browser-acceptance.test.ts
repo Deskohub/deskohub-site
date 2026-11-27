@@ -21,6 +21,12 @@ import {
   findFulfillmentSupportLinkProblem,
   isFreshReservationFormSettled,
 } from "./checkout";
+import {
+  findTableInviteeRemovalControlProblem,
+  hasReservationAccessCode,
+  hasTeamTableStatusAttendees,
+  selectWorkspaceE2ETableSeats,
+} from "./table";
 
 const chromiumAvailable = await playwrightChromiumAvailable();
 let browser: Browser | undefined;
@@ -283,4 +289,51 @@ test.skipIf(!chromiumAvailable)(
     ]);
   },
   60_000
+);
+
+test("selects Team Table E2E seat size preferring 4 seats and falling back to largest >= 2", () => {
+  expect(selectWorkspaceE2ETableSeats([2, 4, 6])).toBe(4);
+  expect(selectWorkspaceE2ETableSeats([2])).toBe(2);
+  expect(selectWorkspaceE2ETableSeats([2, 6])).toBe(6);
+  expect(() => selectWorkspaceE2ETableSeats([1])).toThrow(
+    "No Team Table with at least 2 seats"
+  );
+});
+
+test.skipIf(!chromiumAvailable)(
+  "checks Team Table status attendees, add-only invariant, and access code",
+  async () => {
+    const firstInvitee = testEmailAddress("table-status-first");
+    const addedInvitee = testEmailAddress("table-status-added");
+
+    await requirePage().setContent(
+      `<main>
+        <div data-office-status-people>
+          <ul>
+            <li><span>You</span></li>
+            <li><span>${firstInvitee}</span><button type="button">Resend invitation</button></li>
+            <li><span>${addedInvitee}</span></li>
+          </ul>
+        </div>
+        <section data-reservation-access=""><output data-reservation-access-code="">123456</output></section>
+      </main>`
+    );
+    expect(
+      await requirePage().evaluate(findTableInviteeRemovalControlProblem)
+    ).toBeNull();
+    expect(
+      await requirePage().evaluate(hasTeamTableStatusAttendees, {
+        count: 3,
+        invitees: [firstInvitee, addedInvitee],
+      })
+    ).toBe(true);
+    expect(await requirePage().evaluate(hasReservationAccessCode)).toBe(true);
+
+    await requirePage().setContent(
+      `<div data-office-status-people><ul><li><span>${firstInvitee}</span><button type="button">Remove</button></li></ul></div>`
+    );
+    expect(
+      await requirePage().evaluate(findTableInviteeRemovalControlProblem)
+    ).toBe("Team Table status rendered an unexpected invitee removal control");
+  }
 );

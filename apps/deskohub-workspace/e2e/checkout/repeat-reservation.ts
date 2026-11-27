@@ -31,6 +31,12 @@ export type RepeatReservation =
       readonly kind: "meeting-room";
       readonly oldDate: string;
       readonly query: readonly (readonly [string, string])[];
+    }
+  | {
+      readonly kind: "table";
+      readonly oldDate: string;
+      readonly query: readonly (readonly [string, string])[];
+      readonly seats: number;
     };
 
 export const toRepeatReservation = (data: CheckoutData): RepeatReservation => {
@@ -64,6 +70,17 @@ export const toRepeatReservation = (data: CheckoutData): RepeatReservation => {
         ["seats", String(data.office.seats)],
       ],
       seats: data.office.seats,
+    };
+  }
+  if (data.expectedReservationDetails.kind === "table") {
+    if (!data.table) {
+      throw new Error("Team Table repeat assertions require slot data");
+    }
+    return {
+      kind: "table",
+      oldDate: data.table.date,
+      query: [["seats", String(data.table.seats)]],
+      seats: data.table.seats,
     };
   }
   return { kind: "meeting-room", oldDate: data.date, query: [] };
@@ -179,6 +196,23 @@ export const findRepeatReservationProblem = (
         if (startDateTime === null) return "start date";
         if (startDateTime.slice(0, 10) === expected.oldDate)
           return "fresh meeting-room date";
+        break;
+      }
+      case "table": {
+        const date = value('input[name="date"]');
+        if (date === null) return "date";
+        if (date === expected.oldDate) return "fresh table date";
+        const size = document.querySelector('input[name="seats"]:checked');
+        if (
+          !(size instanceof HTMLInputElement) ||
+          size.value !== String(expected.seats)
+        )
+          return "seats";
+        const peopleCount = document.querySelector(
+          "[data-office-people-count]"
+        );
+        if (Number.parseInt(peopleCount?.textContent ?? "", 10) !== 1)
+          return "people";
         break;
       }
     }

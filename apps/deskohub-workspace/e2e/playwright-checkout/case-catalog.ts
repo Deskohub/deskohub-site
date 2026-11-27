@@ -33,6 +33,7 @@ export const workspaceE2ENonPaymentCaseIds = [
   "reservation-url-state-office-starts-on-link",
   "referral-profile-completion-unusable-link",
   "reservation-url-state-office",
+  "reservation-url-state-table",
   "reservation-url-state-meeting-room",
   "contact-form",
 ] as const;
@@ -50,6 +51,7 @@ const workspaceE2EPaidCaseIds = [
   "checkout-cowork-basic",
   "checkout-all-discounts",
   "checkout-office-paid-multi-day",
+  "checkout-table-paid",
   "payment-late-recovery-refund-required",
   "checkout-voucher-full-usage",
   "checkout-discount-code",
@@ -92,6 +94,18 @@ const workspaceE2EOfficeCaseIds = [
 
 export const isWorkspaceE2EOfficeCaseId = (value: string) =>
   (workspaceE2EOfficeCaseIds as readonly string[]).includes(value);
+
+/**
+ * Cases that need the Team Table page. A preview with `team_table_page`
+ * disabled plans none of them.
+ */
+const workspaceE2ETableCaseIds = [
+  "checkout-table-paid",
+  "reservation-url-state-table",
+] as const satisfies readonly WorkspaceE2ECaseId[];
+
+export const isWorkspaceE2ETableCaseId = (value: string) =>
+  (workspaceE2ETableCaseIds as readonly string[]).includes(value);
 
 /**
  * Cases too slow for the per-PR gate. They run only when the run opts into

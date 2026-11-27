@@ -84,11 +84,12 @@ test("the actual ownership reader requires complete case, owner, run and pre-cre
         laneId: ownerId,
       });
     }
-    // These cases are not admitted by this ordinary run without office slots.
+    // These cases are not admitted by this ordinary run without office or Team Table slots.
     for (const owner of workspaceE2ECheckoutJournalOwners) {
       if (
         (owner.caseId ?? owner.ownerId) === "automation-reservation-booked" ||
-        (owner.caseId ?? owner.ownerId).startsWith("checkout-office-")
+        (owner.caseId ?? owner.ownerId).startsWith("checkout-office-") ||
+        (owner.caseId ?? owner.ownerId).startsWith("checkout-table-")
       )
         await rm(join(directory, `account-journals/${owner.ownerId}.json`));
     }

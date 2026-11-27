@@ -36,6 +36,16 @@ export type ReservationSelection =
       readonly seats: number;
       readonly startsOn: string;
       readonly waitTimeoutMs: number;
+    }
+  | {
+      readonly date: string;
+      readonly endTime: string;
+      /** The people added by email beside the contact during Step 1. */
+      readonly invitees: ReadonlyArray<string>;
+      readonly kind: "table";
+      readonly seats: number;
+      readonly startTime: string;
+      readonly waitTimeoutMs: number;
     };
 
 /**
@@ -120,6 +130,19 @@ export const toReservationSelection = (
         kind: "office",
         seats: data.office.seats,
         startsOn: data.office.startsOn,
+        waitTimeoutMs,
+      };
+    case "table":
+      if (!data.table) {
+        throw new Error("Team Table reservation submission requires slot data");
+      }
+      return {
+        date: data.table.date,
+        endTime: data.table.endTime,
+        invitees: data.table.checkoutInvitees,
+        kind: "table",
+        seats: data.table.seats,
+        startTime: data.table.startTime,
         waitTimeoutMs,
       };
   }
@@ -761,6 +784,201 @@ export const prepareReservationForm = ({
     return location.href;
   };
 
+  const selectTable = async (
+    expected: Extract<ReservationSelection, { kind: "table" }>
+  ) => {
+    const { waitTimeoutMs } = expected;
+    const setSelect = (select: HTMLSelectElement, value: string) => {
+      select.focus();
+      const descriptor = Object.getOwnPropertyDescriptor(
+        HTMLSelectElement.prototype,
+        "value"
+      );
+      descriptor?.set?.call(select, value);
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+
+    const sizeSelector = `#team-table-size-${expected.seats}`;
+    let sizeInput: HTMLInputElement | undefined;
+    await waitUntil(
+      () => {
+        const candidate = document.querySelector(sizeSelector);
+        if (candidate instanceof HTMLInputElement && !candidate.disabled) {
+          sizeInput = candidate;
+          return true;
+        }
+        return false;
+      },
+      `Team Table size ${expected.seats} control not found`,
+      waitTimeoutMs
+    );
+    if (sizeInput && !sizeInput.checked) {
+      (sizeInput.closest("label") ?? sizeInput).click();
+      await waitUntil(
+        () => {
+          const current = document.querySelector(sizeSelector);
+          return current instanceof HTMLInputElement && current.checked;
+        },
+        `Team Table size ${expected.seats} was not selected`,
+        waitTimeoutMs
+      );
+    }
+
+    const dateInput = document.querySelector('input[name="date"]');
+    if (!(dateInput instanceof HTMLInputElement)) {
+      throw new Error("Team Table reservation date input not found");
+    }
+    if (dateInput.value !== expected.date) {
+      const dateTrigger = dateInput.parentElement?.querySelector(
+        'button[aria-haspopup="dialog"]'
+      );
+      if (!(dateTrigger instanceof HTMLButtonElement)) {
+        throw new Error("Team Table reservation date control not found");
+      }
+      dateTrigger.click();
+      const dateButton = await findCalendarDateButton(
+        expected.date,
+        "Team Table reservation date",
+        waitTimeoutMs
+      );
+      dateButton.click();
+      await waitUntil(
+        () => dateInput.value === expected.date,
+        "Team Table reservation date did not update",
+        waitTimeoutMs
+      );
+    }
+
+    const findEnabledOption = (select: HTMLSelectElement, value: string) =>
+      [...select.options].find(
+        (option) => option.value === value && !option.disabled
+      );
+
+    let startSelect: HTMLSelectElement | undefined;
+    await waitUntil(
+      () => {
+        const candidate = document.querySelector('select[name="startTime"]');
+        if (
+          candidate instanceof HTMLSelectElement &&
+          !candidate.disabled &&
+          findEnabledOption(candidate, expected.startTime)
+        ) {
+          startSelect = candidate;
+          return true;
+        }
+        return false;
+      },
+      `Team Table start time ${expected.startTime} was not available`,
+      waitTimeoutMs
+    );
+    if (startSelect && startSelect.value !== expected.startTime) {
+      setSelect(startSelect, expected.startTime);
+      await waitUntil(
+        () => {
+          const current = document.querySelector('select[name="startTime"]');
+          return (
+            current instanceof HTMLSelectElement &&
+            current.value === expected.startTime
+          );
+        },
+        `Team Table start time ${expected.startTime} was not selected`,
+        waitTimeoutMs
+      );
+    }
+
+    let endSelect: HTMLSelectElement | undefined;
+    await waitUntil(
+      () => {
+        const candidate = document.querySelector('select[name="endTime"]');
+        if (
+          candidate instanceof HTMLSelectElement &&
+          !candidate.disabled &&
+          findEnabledOption(candidate, expected.endTime)
+        ) {
+          endSelect = candidate;
+          return true;
+        }
+        return false;
+      },
+      `Team Table end time ${expected.endTime} was not available`,
+      waitTimeoutMs
+    );
+    if (endSelect && endSelect.value !== expected.endTime) {
+      setSelect(endSelect, expected.endTime);
+      await waitUntil(
+        () => {
+          const current = document.querySelector('select[name="endTime"]');
+          return (
+            current instanceof HTMLSelectElement &&
+            current.value === expected.endTime
+          );
+        },
+        `Team Table end time ${expected.endTime} was not selected`,
+        waitTimeoutMs
+      );
+    }
+
+    for (const invitee of expected.invitees) {
+      setField("[data-office-invitee-email]", invitee);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const addInvitee = document.querySelector("[data-office-invitee-add]");
+      if (!(addInvitee instanceof HTMLButtonElement)) {
+        throw new Error("Team Table invitee Add button not found");
+      }
+      addInvitee.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+
+    const expectedAttendees = 1 + expected.invitees.length;
+    let priceRetryAttempted = false;
+    await waitUntil(
+      () => {
+        const currentSize = document.querySelector(sizeSelector);
+        const currentDate = document.querySelector('input[name="date"]');
+        const currentStart = document.querySelector('select[name="startTime"]');
+        const currentEnd = document.querySelector('select[name="endTime"]');
+        const peopleCount = document.querySelector(
+          "[data-office-people-count]"
+        );
+        const submit = document.querySelector(actionSelector);
+        const priceRetry = document.querySelector(
+          "#reservation-advertised-price-retry"
+        );
+        if (
+          !priceRetryAttempted &&
+          priceRetry instanceof HTMLButtonElement &&
+          !priceRetry.disabled
+        ) {
+          priceRetryAttempted = true;
+          priceRetry.click();
+        }
+        return (
+          currentSize instanceof HTMLInputElement &&
+          currentSize.checked &&
+          currentDate instanceof HTMLInputElement &&
+          currentDate.value === expected.date &&
+          currentStart instanceof HTMLSelectElement &&
+          currentStart.value === expected.startTime &&
+          currentEnd instanceof HTMLSelectElement &&
+          currentEnd.value === expected.endTime &&
+          peopleCount instanceof HTMLElement &&
+          Number.parseInt(peopleCount.textContent ?? "", 10) ===
+            expectedAttendees &&
+          submit instanceof HTMLButtonElement &&
+          !submit.disabled
+        );
+      },
+      () =>
+        describeUnreadyAction(
+          "Team Table availability or advertised price did not become ready",
+          priceRetryAttempted
+        ),
+      waitTimeoutMs
+    );
+    return location.href;
+  };
+
   const select = (selection: ReservationSelection) => {
     switch (selection.kind) {
       case "cowork":
@@ -769,6 +987,8 @@ export const prepareReservationForm = ({
         return selectMeetingRoom(selection);
       case "office":
         return selectOffice(selection);
+      case "table":
+        return selectTable(selection);
     }
   };
 

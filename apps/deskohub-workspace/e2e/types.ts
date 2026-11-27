@@ -81,10 +81,7 @@ export type CheckoutData = {
   readonly checkoutUrl: string;
   readonly date: string;
   readonly email: string;
-  readonly expectedReservationDetails: Exclude<
-    StoredWorkspaceReservationDetails,
-    { readonly kind: "table" }
-  >;
+  readonly expectedReservationDetails: StoredWorkspaceReservationDetails;
   readonly locale: Locale;
   readonly meetingRoom?: {
     readonly duration: MeetingRoomReservationDuration;
@@ -98,6 +95,15 @@ export type CheckoutData = {
     readonly seats: number;
     readonly startsAt: ReservationInterval["startsAt"];
     readonly startsOn: string;
+  };
+  readonly table?: {
+    readonly checkoutInvitees: readonly string[];
+    readonly date: string;
+    readonly endsAt: ReservationInterval["endsAt"];
+    readonly endTime: string;
+    readonly seats: number;
+    readonly startsAt: ReservationInterval["startsAt"];
+    readonly startTime: string;
   };
   readonly name: string;
   readonly orderIdHint: string;

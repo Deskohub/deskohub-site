@@ -27,7 +27,7 @@ checkout-setup (teardown: checkout-cleanup)
 
 - Keep the global worker ceiling at six. It bounds whole cases, replacing the old reservation-start permit pool.
 - Dependency phases are barriers: every phase boundary stops all workers and starts new ones. Prepare the run in the one `checkout-setup` test, never in separate dependency projects, because each extra preparation project delays the case phase. Every case-phase project depends on `checkout-setup`, and `checkout-cleanup` reconciles as its teardown.
-- Inside `checkout-setup`, write the run context first. Run preview readiness, then seed fixtures. Start cowork, meeting-room, and office availability preparation after seeding because Calendar availability reads the seeded definitions. Provider preparation overlaps these phases. Build and verify the plan last.
+- Inside `checkout-setup`, write the run context first. Run preview readiness, then seed fixtures. Start cowork, meeting-room, office, and Team Table availability preparation after seeding because Calendar availability reads the seeded definitions. Provider preparation overlaps these phases. Build and verify the plan last.
 - Register every checkout case statically in `e2e/playwright-checkout/case-catalog.ts`. `checkout-setup` asserts the prepared plan matches `workspaceE2ECaseIds`.
 - Paid and non-payment cases share the one `checkout-cases` pool. The [hosted-payment permit](#hosted-payment-permit) bounds hosted sessions.
 - Referral cases are non-payment pool cases. `cases.pw.ts` binds them and the paid `checkout-referral-someone-else` to their run-scoped identities through `registerWorkspaceE2ECases`' `bindCase`; see [referral cases](referral-lane.md).

@@ -56,6 +56,7 @@ const bind = (id: string, secrets: string | undefined) =>
 
 test("signs in every submitting case that does not own its identities", () => {
   expect(workspaceE2ECheckoutBookerCaseIds).toContain("checkout-cowork-basic");
+  expect(workspaceE2ECheckoutBookerCaseIds).toContain("checkout-table-paid");
   expect(workspaceE2ECheckoutBookerCaseIds).toContain(
     "payment-meeting-room-cancelled"
   );
@@ -64,6 +65,7 @@ test("signs in every submitting case that does not own its identities", () => {
     "locale-switch",
     "locale-smoke-de-de",
     "reservation-url-state-cowork",
+    "reservation-url-state-table",
     "checkout-referral-someone-else",
     "checkout-signed-out-verification",
   ]) {

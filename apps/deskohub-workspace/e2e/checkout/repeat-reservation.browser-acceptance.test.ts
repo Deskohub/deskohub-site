@@ -9,6 +9,7 @@ import {
   makeCoworkCheckoutData,
   makeMeetingRoomCheckoutData,
   makeOfficeCheckoutData,
+  makeTableCheckoutData,
 } from "./data";
 import {
   findRepeatReservationProblem,
@@ -122,6 +123,21 @@ test.skipIf(!chromiumAvailable)(
           <input name="dayCount" value="2" />
           <span data-office-people-count>1 of 6</span>`,
         path: "/en-US/reservation/office?dayCount=2&seats=2",
+      },
+      {
+        data: makeTableCheckoutData(origin, {
+          date: "2099-09-01",
+          endsAt: "2099-09-01T10:00:00Z" as never,
+          endTime: "12:00",
+          seats: 4,
+          startsAt: "2099-09-01T08:00:00Z" as never,
+          startTime: "10:00",
+        }),
+        html: `
+          <input name="date" value="2099-08-27" />
+          <input checked name="seats" type="radio" value="4" />
+          <span data-office-people-count>1 of 4</span>`,
+        path: "/en-US/reservation/table?seats=4",
       },
     ];
 

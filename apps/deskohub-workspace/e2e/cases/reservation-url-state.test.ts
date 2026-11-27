@@ -5,6 +5,7 @@ import { getMeetingRoomReservationInterval } from "@/features/reservation/meetin
 import type { DatasourceConfig, WorkspaceE2EConfig } from "../config";
 import {
   isWorkspaceE2EOfficeCaseId,
+  isWorkspaceE2ETableCaseId,
   workspaceE2ENonPaymentCaseIds,
 } from "../playwright-checkout/case-catalog";
 import { workspaceE2ETimeouts } from "../timeouts";
@@ -108,7 +109,7 @@ test("rejects a dropped preserved parameter or a changed path", () => {
   );
 });
 
-const makeCases = (withOffice: boolean) =>
+const makeCases = (withOffice: boolean, withTable = withOffice) =>
   Effect.runPromise(
     makeReservationUrlStateE2ECases({
       allocation: {
@@ -161,6 +162,26 @@ const makeCases = (withOffice: boolean) =>
               },
             }
           : undefined,
+        table: withTable
+          ? {
+              slot: {
+                date: "2099-08-06",
+                endsAt: "2099-08-06T10:00:00.000Z" as never,
+                endTime: "12:00",
+                seats: 4,
+                startsAt: "2099-08-06T08:00:00.000Z" as never,
+                startTime: "10:00",
+              },
+              urlStateSlot: {
+                date: "2099-08-12",
+                endsAt: "2099-08-12T10:00:00.000Z" as never,
+                endTime: "12:00",
+                seats: 4,
+                startsAt: "2099-08-12T08:00:00.000Z" as never,
+                startTime: "10:00",
+              },
+            }
+          : undefined,
       },
     })
   );
@@ -185,8 +206,8 @@ test("plans every URL-state case as a catalogued non-payment case holding nothin
   ).toBe(true);
 });
 
-test("plans no office case when the office page is disabled", async () => {
-  const cases = await makeCases(false);
+test("plans no office or Team Table case when those pages are disabled", async () => {
+  const cases = await makeCases(false, false);
 
   expect(cases.map(({ id }) => id).toSorted()).toEqual([
     "reservation-url-state-cowork",
@@ -196,5 +217,10 @@ test("plans no office case when the office page is disabled", async () => {
     workspaceE2ENonPaymentCaseIds
       .filter((caseId) => caseId.startsWith("reservation-url-state-office"))
       .every(isWorkspaceE2EOfficeCaseId)
+  ).toBe(true);
+  expect(
+    workspaceE2ENonPaymentCaseIds
+      .filter((caseId) => caseId.startsWith("reservation-url-state-table"))
+      .every(isWorkspaceE2ETableCaseId)
   ).toBe(true);
 });

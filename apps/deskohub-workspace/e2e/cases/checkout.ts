@@ -7,6 +7,7 @@ import { isMeetingRoomWholeDayReservationDuration } from "@/features/reservation
 import {
   formatReservationDisplayDate,
   formatReservationDisplayDateRange,
+  formatReservationDisplayDateTimeRange,
   formatReservationDisplayTimeRange,
 } from "@/features/reservation/reservation-date";
 import { isSingleDayReservationInterval } from "@/features/reservation/reservation-interval-domain";
@@ -124,7 +125,8 @@ export const executeCheckoutFlow = ({
   // Checks on the fulfilled reservation beyond the status page, before any
   // post-fulfillment path changes it.
   afterFulfillment?: (
-    orderId: CheckoutRow["reservation_id"]
+    orderId: CheckoutRow["reservation_id"],
+    dotyposReservation: ValidatedDotyposReservation
   ) => Effect.Effect<void, WorkspaceE2EError, E2EDatabase>;
   // The reserve-again restart, the fulfillment-failed support path, and the
   // reservation status isolation that starts from that support path do not
@@ -243,7 +245,7 @@ export const executeCheckoutFlow = ({
       id: "assert-fulfilled-status-page",
       timeoutMs: config.timeouts.uiTransition,
     });
-    if (afterFulfillment) yield* afterFulfillment(orderId);
+    if (afterFulfillment) yield* afterFulfillment(orderId, dotyposReservation);
     if (verifyPostFulfillmentPaths) {
       yield* runStep({
         execute: restartReservationAfterFulfillment({
@@ -784,6 +786,21 @@ export const assertFulfilledStatusPage = ({
             expectedPaymentPrice,
           ];
         }
+        if (data.table) {
+          return [
+            "Team Table",
+            ...(dotyposReservation.assignedTableName
+              ? [dotyposReservation.assignedTableName]
+              : []),
+            formatReservationDisplayDateTimeRange(
+              dotyposReservation.reservedFrom,
+              dotyposReservation.reservedUntil,
+              data.locale
+            ),
+            "Who is coming",
+            expectedPaymentPrice,
+          ];
+        }
         if (!data.meetingRoom) return [];
 
         const interval = {
@@ -824,13 +841,22 @@ export const assertFulfilledStatusPage = ({
       session: browser,
       timeoutMs: config.timeouts.uiTransition,
     });
+    const expectedPeople =
+      expectedOfficeInvitees === undefined
+        ? undefined
+        : data.office
+          ? { count: data.office.seats, invitees: expectedOfficeInvitees }
+          : data.table
+            ? {
+                count: 1 + expectedOfficeInvitees.length,
+                invitees: expectedOfficeInvitees,
+              }
+            : undefined;
     yield* assertPageCheck(
       browser,
       "assert fulfilled checkout status page",
       findFulfilledStatusPageProblem,
-      data.office && expectedOfficeInvitees !== undefined
-        ? { count: data.office.seats, invitees: expectedOfficeInvitees }
-        : undefined,
+      expectedPeople,
       { timeoutMs: config.timeouts.browserAction }
     );
     log("Checkout status page validated");
