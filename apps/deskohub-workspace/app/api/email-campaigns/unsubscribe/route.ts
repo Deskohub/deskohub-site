@@ -1,8 +1,9 @@
+import { backendRevisionHeader } from "@deskohub/workspace-cloud-run/preview-generation";
 import {
   CampaignUnsubscribeRejected,
   CampaignUnsubscribeToken,
 } from "@deskohub/workspace-rpc";
-import { Config, Effect, Match, Schema } from "effect";
+import { Effect, Match, Schema } from "effect";
 import { NextResponse } from "next/server";
 import { CampaignUnsubscribeService } from "@/features/email-campaigns/backend/campaign-unsubscribe.service";
 import { getRuntimeMarketingPreferencesAccessUrl } from "@/features/legal/marketing-preferences-access-url";
@@ -11,6 +12,7 @@ import {
   defineWorkspaceRoute,
   WorkspaceRouteFailure,
 } from "@/shared/backend/workspace-route";
+import { emailPreferencesBackend } from "@/shared/rpc/workspace-backend-preview.server";
 import {
   withWorkspaceRpcClient,
   workspaceRpcCaller,
@@ -25,10 +27,16 @@ const invalidLink = () =>
 const linkToken = (request: Request) =>
   new URL(request.url).searchParams.get("token") ?? "";
 
-const emailPreferencesTransport = Config.schema(
-  Schema.Literals(["local", "rpc"]),
-  "WORKSPACE_EMAIL_PREFERENCES_TRANSPORT"
-).pipe(Config.withDefault("local"));
+const previewUnavailable = () =>
+  new WorkspaceRouteFailure({
+    statusCode: 503,
+    publicMessage: "Email preferences are temporarily unavailable.",
+  });
+
+const revisionHeaders = (backendRevision: string | undefined): HeadersInit =>
+  backendRevision === undefined
+    ? {}
+    : { [backendRevisionHeader]: backendRevision };
 
 const decodeRpcToken = Schema.decodeEffect(
   CampaignUnsubscribeToken.check(Schema.makeFilter(hasSignedClaimsEncoding))
@@ -43,39 +51,49 @@ const unsubscribe = Effect.fn("emailPreferences.unsubscribe")(function* (
   request: Request
 ) {
   const token = linkToken(request);
-  if ((yield* emailPreferencesTransport) === "local") {
-    return yield* CampaignUnsubscribeService.pipe(
+  const { transport, preview } = yield* emailPreferencesBackend;
+  if (transport === "local") {
+    const outcome = yield* CampaignUnsubscribeService.pipe(
       Effect.flatMap((service) => service.unsubscribe(token)),
       Effect.provide(CampaignUnsubscribeService.Live)
     );
+    return { outcome, backendRevision: undefined };
   }
 
   const validated = yield* rpcToken(token);
-  return yield* withWorkspaceRpcClient(workspaceRpcCaller(request), (client) =>
-    client.unsubscribeOneClick({ token: validated })
+  const outcome = yield* withWorkspaceRpcClient(
+    workspaceRpcCaller(request),
+    preview,
+    (client) => client.unsubscribeOneClick({ token: validated })
   );
+  return { outcome, backendRevision: preview?.commitSha };
 });
 
 const preferencesUrl = Effect.fn("emailPreferences.preferencesUrl")(function* (
   request: Request
 ) {
   const token = linkToken(request);
-  if ((yield* emailPreferencesTransport) === "local") {
-    return yield* CampaignUnsubscribeService.pipe(
+  const { transport, preview } = yield* emailPreferencesBackend;
+  if (transport === "local") {
+    const url = yield* CampaignUnsubscribeService.pipe(
       Effect.flatMap((service) => service.preferencesUrl(token)),
       Effect.provide(CampaignUnsubscribeService.Live)
     );
+    return { url, backendRevision: undefined };
   }
 
   const validated = yield* rpcToken(token);
   const caller = workspaceRpcCaller(request);
-  const { accessToken } = yield* withWorkspaceRpcClient(caller, (client) =>
-    client.openPreferences({ token: validated })
+  const { accessToken } = yield* withWorkspaceRpcClient(
+    caller,
+    preview,
+    (client) => client.openPreferences({ token: validated })
   );
-  return yield* getRuntimeMarketingPreferencesAccessUrl(
+  const url = yield* getRuntimeMarketingPreferencesAccessUrl(
     accessToken,
     caller.locale
   );
+  return { url, backendRevision: preview?.commitSha };
 });
 
 /**
@@ -93,10 +111,15 @@ export const POST = defineWorkspaceRoute(
   },
   (request) =>
     unsubscribe(request).pipe(
-      Effect.tap((outcome) =>
+      Effect.tap(({ outcome }) =>
         Effect.logInfo("Campaign unsubscribe processed", { outcome })
       ),
-      Effect.as(NextResponse.json({ status: "unsubscribed" })),
+      Effect.map(({ backendRevision }) =>
+        NextResponse.json(
+          { status: "unsubscribed" },
+          { headers: revisionHeaders(backendRevision) }
+        )
+      ),
       Effect.mapError((error) =>
         Match.value(error).pipe(
           Match.tag(
@@ -104,6 +127,7 @@ export const POST = defineWorkspaceRoute(
             "CampaignUnsubscribeRejected",
             invalidLink
           ),
+          Match.tag("PreviewBackendUnavailable", previewUnavailable),
           Match.orElse(
             WorkspaceRouteFailure.internal(
               "Unsubscribe could not be processed."
@@ -128,7 +152,12 @@ export const GET = defineWorkspaceRoute(
   },
   (request) =>
     preferencesUrl(request).pipe(
-      Effect.map((url) => NextResponse.redirect(url, 303)),
+      Effect.map(({ url, backendRevision }) =>
+        NextResponse.redirect(url, {
+          status: 303,
+          headers: revisionHeaders(backendRevision),
+        })
+      ),
       Effect.mapError((error) =>
         Match.value(error).pipe(
           Match.tag(
@@ -136,6 +165,7 @@ export const GET = defineWorkspaceRoute(
             "CampaignUnsubscribeRejected",
             invalidLink
           ),
+          Match.tag("PreviewBackendUnavailable", previewUnavailable),
           Match.orElse(
             WorkspaceRouteFailure.internal(
               "Marketing preferences could not be opened."

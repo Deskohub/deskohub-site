@@ -219,6 +219,7 @@
         "@deskohub/tooltip": "workspace:*",
         "@deskohub/workspace-admin-api": "workspace:*",
         "@deskohub/workspace-backend": "workspace:*",
+        "@deskohub/workspace-cloud-run": "workspace:*",
         "@deskohub/workspace-customer-api": "workspace:*",
         "@deskohub/workspace-domain": "workspace:*",
         "@deskohub/workspace-rpc": "workspace:*",
