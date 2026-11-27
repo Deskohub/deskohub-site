@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import { Effect } from "effect";
 import { orderIdSchema } from "@/features/order";
 import {
@@ -56,7 +57,7 @@ test("uses membership copy for the gift purchase and invitation", async () => {
   const validFrom = plainDateStringSchema.make("2026-11-18");
   const gift = {
     entryCount: null,
-    holderEmail: "recipient@example.com",
+    holderEmail: testEmailAddress("recipient"),
     locale: "en-US",
     tier: product.tier,
     validUntil: getUnlimitedPassEndDate(validFrom),
