@@ -203,7 +203,7 @@ const assertStatusPage = (
       locale: "en-US",
       ...(office ? { office: { seats: office.seats } } : { meetingRoom: {} }),
     } as CheckoutData,
-    expectedOfficeInvitees: office?.invitees,
+    expectedReservationInvitees: office?.invitees,
     dotyposReservation: {
       reservedFrom: Temporal.Instant.from("2026-08-25T08:00:00Z"),
       reservedUntil: Temporal.Instant.from("2026-08-25T12:00:00Z"),

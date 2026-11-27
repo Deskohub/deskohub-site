@@ -267,10 +267,7 @@ export const makeReservationUrlStateE2ECases = ({
       cases.push({
         checkoutStates: [],
         execute: ({ openSession, runStep }) =>
-          assertTableUrlState(
-            { config, openSession, runStep },
-            tableData
-          ).pipe(
+          assertTableUrlState({ config, openSession, runStep }, tableData).pipe(
             Effect.mapError((cause) =>
               toWorkspaceE2EError("run Team Table URL-state e2e case", cause)
             )

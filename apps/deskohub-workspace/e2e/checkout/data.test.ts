@@ -495,8 +495,8 @@ test("fails meeting-room shard exhaustion with capacity context", async () => {
 test("selects disjoint Team Table slots across allocation shards and prefers 10:00-12:00", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
   const requests: URL[] = [];
-  const fetchMock = mock(
-    async (input: URL | RequestInfo, init?: RequestInit) => {
+  const fetchMock = Object.assign(
+    mock(async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
       const url = new URL(request.url);
@@ -518,15 +518,11 @@ test("selects disjoint Team Table slots across allocation shards and prefers 10:
         });
       }
       return Response.json({ unavailableDates: [] });
-    }
+    }),
+    { preconnect: globalThis.fetch.preconnect }
   );
   const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        fetchMock as unknown as typeof globalThis.fetch
-      )
-    )
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
   );
 
   const slotsByShard = await Promise.all(
@@ -576,8 +572,8 @@ test("selects disjoint Team Table slots across allocation shards and prefers 10:
 
 test("falls back to an open >=60-minute Team Table slot when 10:00-12:00 is unavailable", async () => {
   setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
-  const fetchMock = mock(
-    async (input: URL | RequestInfo, init?: RequestInit) => {
+  const fetchMock = Object.assign(
+    mock(async (input: URL | RequestInfo, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
       const url = new URL(request.url);
@@ -596,15 +592,11 @@ test("falls back to an open >=60-minute Team Table slot when 10:00-12:00 is unav
         });
       }
       return Response.json({ unavailableDates: [] });
-    }
+    }),
+    { preconnect: globalThis.fetch.preconnect }
   );
   const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        fetchMock as unknown as typeof globalThis.fetch
-      )
-    )
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
   );
 
   const [slot] = await Effect.runPromise(
@@ -621,6 +613,50 @@ test("falls back to an open >=60-minute Team Table slot when 10:00-12:00 is unav
     makeTableCheckoutData("https://workspace.example.com", slot!).table
       ?.checkoutInvitees
   ).toEqual([]);
+});
+
+test("fails Team Table shard exhaustion with capacity context", async () => {
+  setSystemTime(new Date("2099-07-17T09:48:00.000Z"));
+  const fetchMock = Object.assign(
+    mock(async (input: URL | RequestInfo, init?: RequestInit) => {
+      const request =
+        input instanceof Request ? input : new Request(input, init);
+      const url = new URL(request.url);
+      if (url.searchParams.get("mode") === "table-slots") {
+        return Response.json({
+          availableEndsByStart: [],
+          availableStarts: [],
+          date: url.searchParams.get("date") ?? "2099-08-03",
+          seats: 4,
+          slotMinutes: 15,
+          usableFrom: "08:00",
+          usableUntil: "20:00",
+        });
+      }
+      return Response.json({ unavailableDates: [] });
+    }),
+    { preconnect: globalThis.fetch.preconnect }
+  );
+  const httpClientLayer = FetchHttpClient.layer.pipe(
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
+  );
+
+  const exit = await Effect.runPromiseExit(
+    selectAvailableTableSlots(makeConfig(), 4, 2, {
+      fromOffsetDays: 14,
+      shardCount: 3,
+      shardIndex: 0,
+      toOffsetDays: 20,
+    }).pipe(Effect.provide(httpClientLayer))
+  );
+
+  expect(Exit.isFailure(exit)).toBe(true);
+  if (Exit.isFailure(exit)) {
+    const message = String(Cause.squash(exit.cause));
+    expect(message).toContain("reservation:table slots for 4 seats");
+    expect(message).toContain("shard 1 of 3");
+    expect(message).toContain("supported concurrency 3");
+  }
 });
 
 const makeConfig = (): WorkspaceE2EConfig => ({

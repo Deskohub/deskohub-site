@@ -352,6 +352,7 @@ test("reports only aggregate capacity for every saleable offer pool", () => {
   ).toMatchObject({
     assignableTableCount: 1,
     meetsRequiredCapacity: true,
+    requiredMinimumSeatsPerTable: 2,
     requiredSeatCount: 2,
     requiredTableCount: 1,
     requiredTags: ["cowork:open-space", "reservation:table"],
@@ -565,6 +566,51 @@ test("ignores cancelled reservations in capacity accounting", () => {
     availableSeatCount: 32,
     meetsRequiredCapacity: true,
     peakActiveReservationSeatCount: 0,
+  });
+});
+
+test("fails reservation:table capacity when no single table has at least 2 seats", () => {
+  const twoOneSeatTables = makeWorkspaceE2ECapacityReport({
+    from: new Date("2099-08-01T00:00:00.000Z"),
+    reservations: [],
+    tables: [
+      makeTable("solo-table-1", ["cowork:open-space", "reservation:table"], 1),
+      makeTable("solo-table-2", ["cowork:open-space", "reservation:table"], 1),
+    ],
+    to: new Date("2099-09-01T00:00:00.000Z"),
+  });
+
+  expect(
+    twoOneSeatTables.groups.find(({ id }) => id === "reservation:table")
+  ).toMatchObject({
+    assignableTableCount: 2,
+    meetsRequiredCapacity: false,
+    requiredMinimumSeatsPerTable: 2,
+    seatCounts: [1, 1],
+    totalSeatCount: 2,
+  });
+
+  const oneTwoSeatTable = makeWorkspaceE2ECapacityReport({
+    from: new Date("2099-08-01T00:00:00.000Z"),
+    reservations: [],
+    tables: [
+      makeTable(
+        "two-seat-table",
+        ["cowork:open-space", "reservation:table"],
+        2
+      ),
+    ],
+    to: new Date("2099-09-01T00:00:00.000Z"),
+  });
+
+  expect(
+    oneTwoSeatTable.groups.find(({ id }) => id === "reservation:table")
+  ).toMatchObject({
+    assignableTableCount: 1,
+    meetsRequiredCapacity: true,
+    requiredMinimumSeatsPerTable: 2,
+    seatCounts: [2],
+    totalSeatCount: 2,
   });
 });
 

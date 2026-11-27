@@ -138,6 +138,7 @@ The synthetic `replay-payment-webhook` step confirms the Dotypos hold and sends 
 | `cowork:reserved-desk` plus exactly one monitor option's `monitor:` tags, per option | 4 seats | 2 seats |
 | `reservation:meeting-room` | 4 tables | 1 table |
 | `reservation:office` | 1 table, 2 seats | Not checked |
+| `cowork:open-space`, `reservation:table` | 1 table with at least 2 seats | Not checked |
 
 Groups count only enabled, displayed tables with an ID and a positive seat count, and use the same candidate predicate as table assignment. Legacy `tier:basic`, `tier:plus`, and `tier:profi` tags are report-only and satisfy no group, so inventory tagged only with legacy tiers fails.
 

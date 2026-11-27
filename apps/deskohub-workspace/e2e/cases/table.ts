@@ -33,7 +33,7 @@ import {
   type WorkspaceE2EError,
 } from "../errors";
 import {
-  loadDotyposTableSeatCapacities,
+  loadDotyposTableSeatInventory,
   type ValidatedDotyposReservation,
 } from "../integrations/dotypos";
 import { pollUntil } from "../polling";
@@ -54,6 +54,8 @@ import type {
 import { executeCheckoutFlow } from "./checkout";
 
 export type TableE2EPreparation = {
+  /** Whether only one assignable table exists for `slot.seats`, so holding it makes the slot unavailable. */
+  readonly exclusiveForSingleTable?: boolean;
   // Held by the paid Team Table checkout.
   readonly slot: TableCheckoutSlot;
   // Never held: the reservation URL-state case only opens and edits the form
@@ -105,10 +107,10 @@ export const prepareTableE2E = (
       return undefined;
     }
 
-    const capacities = yield* loadDotyposTableSeatCapacities(datasourceConfig);
+    const inventory = yield* loadDotyposTableSeatInventory(datasourceConfig);
     const seats = yield* tryWorkspaceE2ESync(
       "select Team Table seat size",
-      () => selectWorkspaceE2ETableSeats(capacities)
+      () => selectWorkspaceE2ETableSeats(inventory.capacities)
     );
     const [slot, urlStateSlot] = yield* selectAvailableTableSlots(
       config,
@@ -116,10 +118,18 @@ export const prepareTableE2E = (
       2,
       allocation
     );
-    return yield* tryWorkspaceE2ESync("assign Team Table checkout slots", () => {
-      assert(slot && urlStateSlot, "Team Table checkout slots missing");
-      return { slot, urlStateSlot };
-    });
+    return yield* tryWorkspaceE2ESync(
+      "assign Team Table checkout slots",
+      () => {
+        assert(slot && urlStateSlot, "Team Table checkout slots missing");
+        return {
+          exclusiveForSingleTable:
+            (inventory.tableCountBySeats[seats] ?? 0) === 1,
+          slot,
+          urlStateSlot,
+        };
+      }
+    );
   });
 
 export const makeTableE2ECases = ({
@@ -159,7 +169,7 @@ export const makeTableE2ECases = ({
             config,
             data,
             datasourceConfig,
-            expectedOfficeInvitees: checkoutInvitees,
+            expectedReservationInvitees: checkoutInvitees,
             flow: {
               id: "table-paid",
               toReservationPreparation: toReservationStep,
@@ -170,13 +180,20 @@ export const makeTableE2ECases = ({
                 id: "assert-table-pay-summary",
                 timeoutMs: config.timeouts.uiTransition,
               },
-              {
-                execute: assertHeldTableSlotUnavailable(config, data).pipe(
-                  Effect.provideService(HttpClient.HttpClient, httpClient)
-                ),
-                id: "assert-held-table-slot-unavailable",
-                timeoutMs: config.timeouts.datasource,
-              },
+              ...(preparation.exclusiveForSingleTable === false
+                ? []
+                : [
+                    {
+                      execute: assertHeldTableSlotUnavailable(
+                        config,
+                        data
+                      ).pipe(
+                        Effect.provideService(HttpClient.HttpClient, httpClient)
+                      ),
+                      id: "assert-held-table-slot-unavailable",
+                      timeoutMs: config.timeouts.datasource,
+                    },
+                  ]),
             ],
             afterFulfillment: (orderId, dotyposReservation) =>
               assertTeamTablePostFulfillment({
@@ -308,9 +325,13 @@ const assertTeamTablePostFulfillment = ({
             .locator(`${addFormSelector} input[type="email"]`)
             .fill(addedInvitee, { timeout: config.timeouts.browserAction })
         );
-        yield* activateElement(browser, `${addFormSelector} button[type="submit"]`, {
-          timeoutMs: config.timeouts.browserAction,
-        });
+        yield* activateElement(
+          browser,
+          `${addFormSelector} button[type="submit"]`,
+          {
+            timeoutMs: config.timeouts.browserAction,
+          }
+        );
         yield* waitForPageText({
           description: "Team Table added invitee confirmation",
           matches: (text) =>
@@ -372,7 +393,9 @@ const assertTeamTablePostFulfillment = ({
             ? [dotyposReservation.assignedTableName]
             : []),
           `Team Table booked for ${expectedAccessPeriod}.`,
-        ].map((text) => normalizeBrowserText(text).toLocaleLowerCase(data.locale));
+        ].map((text) =>
+          normalizeBrowserText(text).toLocaleLowerCase(data.locale)
+        );
         yield* waitForPageText({
           description: "Team Table access details",
           matches: (text) => {

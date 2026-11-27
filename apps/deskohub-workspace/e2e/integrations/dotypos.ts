@@ -29,7 +29,7 @@ import {
 } from "@/features/checkout/backend/reservation/workspace-table-selection";
 import { defaultPhoneRegion } from "@/features/i18n/phone-region";
 import { getOfficeReservationSeatCapacity } from "@/features/office/backend/office-reservation-capacity";
-import { getTeamTableSeatCapacities } from "@/features/team-table/backend/team-table-capacity";
+import { decodeTeamTableCandidates } from "@/features/team-table/backend/team-table-capacity";
 import type { DatasourceConfig } from "../config";
 import {
   toWorkspaceE2EError,
@@ -203,11 +203,7 @@ export const validateDotypos = (
           "Dotypos customer mismatch"
         );
         assert(result.reservation._tableId, "Dotypos table id missing");
-        const expectedSeats = data.office
-          ? data.office.seats
-          : data.table
-            ? data.table.seats
-            : 1;
+        const expectedSeats = data.office?.seats ?? data.table?.seats ?? 1;
         assert(
           result.reservation.seats === String(expectedSeats),
           "Dotypos reservation seats do not match the checkout"
@@ -667,16 +663,32 @@ export const loadDotyposOfficeSeatCapacity = (
     )
   );
 
+export interface E2EDotyposTableSeatInventory {
+  readonly capacities: readonly number[];
+  readonly tableCountBySeats: Readonly<Record<number, number>>;
+}
+
 /**
- * The Team Table seat sizes the reservation page offers, read through the
- * same table-capacity helper the page loader uses.
+ * The Team Table seat sizes and per-size table counts the reservation page
+ * offers, read through the same candidate decoder the page loader uses.
  */
-export const loadDotyposTableSeatCapacities = (
+export const loadDotyposTableSeatInventory = (
   config: DatasourceConfig
-): Effect.Effect<readonly number[], WorkspaceE2EError> =>
+): Effect.Effect<E2EDotyposTableSeatInventory, WorkspaceE2EError> =>
   Effect.gen(function* () {
     const dotypos = yield* DotyposService;
-    return yield* getTeamTableSeatCapacities(yield* dotypos.getTables());
+    const candidates = yield* Effect.fromResult(
+      decodeTeamTableCandidates(yield* dotypos.getTables())
+    );
+    const tableCountBySeats: Record<number, number> = {};
+    for (const { seatCapacity } of candidates) {
+      tableCountBySeats[seatCapacity] =
+        (tableCountBySeats[seatCapacity] ?? 0) + 1;
+    }
+    const capacities = Object.keys(tableCountBySeats)
+      .map(Number)
+      .sort((left, right) => left - right);
+    return { capacities, tableCountBySeats };
   }).pipe(
     Effect.provide(getDotyposLayer(config)),
     Effect.mapError((cause) =>

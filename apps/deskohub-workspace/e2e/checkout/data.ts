@@ -428,33 +428,14 @@ export const loadAvailableCoworkDates = (
     const to = getWorkspaceE2ECandidateDate(allocation.toOffsetDays);
     const params = new URLSearchParams({ entryTier, from, to });
     if (monitorOption) params.set("monitorOption", monitorOption);
-    const httpClient = yield* HttpClient.HttpClient;
-    const request = HttpClientRequest.get(
-      `${config.baseUrl}/api/workspace/availability?${params}`
-    ).pipe(
-      HttpClientRequest.setHeaders(
-        config.bypassSecret
-          ? { "x-vercel-protection-bypass": config.bypassSecret }
-          : {}
-      )
-    );
-    const response = yield* httpClient.execute(request).pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("fetch workspace availability dates", cause)
-      ),
-      Effect.filterOrFail(
-        ({ status }) => status >= 200 && status < 300,
-        ({ status }) =>
-          workspaceE2EError(`availability check failed with ${status}`, {
-            operation: "fetch workspace availability dates",
-          })
-      )
-    );
-
-    const availability = (yield* response.json.pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("read workspace availability response", cause)
-      )
+    const availability = (yield* fetchWorkspaceAvailabilityJson(
+      config,
+      params,
+      {
+        fetchOperation: "fetch workspace availability dates",
+        readOperation: "read workspace availability response",
+        statusMessage: (status) => `availability check failed with ${status}`,
+      }
     )) as {
       readonly unavailableDates?: unknown;
     };
@@ -738,32 +719,15 @@ export const loadOfficeAvailability = (
       endsAt: slot.endsAt,
       seats: String(slot.seats),
     });
-    const httpClient = yield* HttpClient.HttpClient;
-    const request = HttpClientRequest.get(
-      `${config.baseUrl}/api/workspace/availability?${params}`
-    ).pipe(
-      HttpClientRequest.setHeaders(
-        config.bypassSecret
-          ? { "x-vercel-protection-bypass": config.bypassSecret }
-          : {}
-      )
-    );
-    const response = yield* httpClient.execute(request).pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("fetch office availability", cause)
-      ),
-      Effect.filterOrFail(
-        ({ status }) => status >= 200 && status < 300,
-        ({ status }) =>
-          workspaceE2EError(`office availability check failed with ${status}`, {
-            operation: "fetch office availability",
-          })
-      )
-    );
-    const availability = (yield* response.json.pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("read office availability response", cause)
-      )
+    const availability = (yield* fetchWorkspaceAvailabilityJson(
+      config,
+      params,
+      {
+        fetchOperation: "fetch office availability",
+        readOperation: "read office availability response",
+        statusMessage: (status) =>
+          `office availability check failed with ${status}`,
+      }
     )) as {
       readonly officeUnavailable?: unknown;
       readonly unavailableDates?: unknown;
@@ -822,33 +786,15 @@ export const loadMeetingRoomAvailability = (
       startsAt: slot.startsAt,
       endsAt: slot.endsAt,
     });
-    const httpClient = yield* HttpClient.HttpClient;
-    const request = HttpClientRequest.get(
-      `${config.baseUrl}/api/workspace/availability?${params}`
-    ).pipe(
-      HttpClientRequest.setHeaders(
-        config.bypassSecret
-          ? { "x-vercel-protection-bypass": config.bypassSecret }
-          : {}
-      )
-    );
-    const response = yield* httpClient.execute(request).pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("fetch meeting-room availability", cause)
-      ),
-      Effect.filterOrFail(
-        ({ status }) => status >= 200 && status < 300,
-        ({ status }) =>
-          workspaceE2EError(
-            `meeting-room availability check failed with ${status}`,
-            { operation: "fetch meeting-room availability" }
-          )
-      )
-    );
-    const availability = (yield* response.json.pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("read meeting-room availability response", cause)
-      )
+    const availability = (yield* fetchWorkspaceAvailabilityJson(
+      config,
+      params,
+      {
+        fetchOperation: "fetch meeting-room availability",
+        readOperation: "read meeting-room availability response",
+        statusMessage: (status) =>
+          `meeting-room availability check failed with ${status}`,
+      }
     )) as {
       readonly meetingRoomUnavailable?: unknown;
       readonly unavailableDates?: unknown;
@@ -993,20 +939,20 @@ const pickTableSlotFromAvailability = (
   return fallback;
 };
 
-const loadTableUnavailableDates = (
+const fetchWorkspaceAvailabilityJson = (
   config: WorkspaceE2EConfig,
-  seats: number,
-  allocation: WorkspaceE2EDateAllocation
-): Effect.Effect<ReadonlySet<string>, WorkspaceE2EError, HttpClient.HttpClient> =>
+  params: URLSearchParams,
+  {
+    fetchOperation,
+    readOperation,
+    statusMessage,
+  }: {
+    readonly fetchOperation: string;
+    readonly readOperation: string;
+    readonly statusMessage: (status: number) => string;
+  }
+): Effect.Effect<unknown, WorkspaceE2EError, HttpClient.HttpClient> =>
   Effect.gen(function* () {
-    const from = getWorkspaceE2ECandidateDate(allocation.fromOffsetDays);
-    const to = getWorkspaceE2ECandidateDate(allocation.toOffsetDays);
-    const params = new URLSearchParams({
-      kind: "table",
-      from,
-      to,
-      seats: String(seats),
-    });
     const httpClient = yield* HttpClient.HttpClient;
     const request = HttpClientRequest.get(
       `${config.baseUrl}/api/workspace/availability?${params}`
@@ -1018,34 +964,62 @@ const loadTableUnavailableDates = (
       )
     );
     const response = yield* httpClient.execute(request).pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("fetch Team Table availability dates", cause)
-      ),
+      Effect.mapError((cause) => toWorkspaceE2EError(fetchOperation, cause)),
       Effect.filterOrFail(
         ({ status }) => status >= 200 && status < 300,
         ({ status }) =>
-          workspaceE2EError(
-            `Team Table availability check failed with ${status}`,
-            { operation: "fetch Team Table availability dates" }
-          )
+          workspaceE2EError(statusMessage(status), {
+            operation: fetchOperation,
+          })
       )
     );
-    const availability = (yield* response.json.pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("read Team Table availability response", cause)
-      )
-    )) as { readonly unavailableDates?: unknown };
-    return yield* tryWorkspaceE2ESync("parse Team Table availability dates", () => {
-      assert(
-        Array.isArray(availability.unavailableDates),
-        "Team Table availability response missing unavailableDates"
-      );
-      return new Set(
-        availability.unavailableDates.filter(
-          (date): date is string => typeof date === "string"
-        )
-      );
+    return yield* response.json.pipe(
+      Effect.mapError((cause) => toWorkspaceE2EError(readOperation, cause))
+    );
+  });
+
+const loadTableUnavailableDates = (
+  config: WorkspaceE2EConfig,
+  seats: number,
+  allocation: WorkspaceE2EDateAllocation
+): Effect.Effect<
+  ReadonlySet<string>,
+  WorkspaceE2EError,
+  HttpClient.HttpClient
+> =>
+  Effect.gen(function* () {
+    const from = getWorkspaceE2ECandidateDate(allocation.fromOffsetDays);
+    const to = getWorkspaceE2ECandidateDate(allocation.toOffsetDays);
+    const params = new URLSearchParams({
+      kind: "table",
+      from,
+      to,
+      seats: String(seats),
     });
+    const availability = (yield* fetchWorkspaceAvailabilityJson(
+      config,
+      params,
+      {
+        fetchOperation: "fetch Team Table availability dates",
+        readOperation: "read Team Table availability response",
+        statusMessage: (status) =>
+          `Team Table availability check failed with ${status}`,
+      }
+    )) as { readonly unavailableDates?: unknown };
+    return yield* tryWorkspaceE2ESync(
+      "parse Team Table availability dates",
+      () => {
+        assert(
+          Array.isArray(availability.unavailableDates),
+          "Team Table availability response missing unavailableDates"
+        );
+        return new Set(
+          availability.unavailableDates.filter(
+            (date): date is string => typeof date === "string"
+          )
+        );
+      }
+    );
   });
 
 export const loadTableSlots = (
@@ -1064,33 +1038,11 @@ export const loadTableSlots = (
       date,
       seats: String(seats),
     });
-    const httpClient = yield* HttpClient.HttpClient;
-    const request = HttpClientRequest.get(
-      `${config.baseUrl}/api/workspace/availability?${params}`
-    ).pipe(
-      HttpClientRequest.setHeaders(
-        config.bypassSecret
-          ? { "x-vercel-protection-bypass": config.bypassSecret }
-          : {}
-      )
-    );
-    const response = yield* httpClient.execute(request).pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("fetch Team Table slots", cause)
-      ),
-      Effect.filterOrFail(
-        ({ status }) => status >= 200 && status < 300,
-        ({ status }) =>
-          workspaceE2EError(`Team Table slots check failed with ${status}`, {
-            operation: "fetch Team Table slots",
-          })
-      )
-    );
-    const body = yield* response.json.pipe(
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("read Team Table slots response", cause)
-      )
-    );
+    const body = yield* fetchWorkspaceAvailabilityJson(config, params, {
+      fetchOperation: "fetch Team Table slots",
+      readOperation: "read Team Table slots response",
+      statusMessage: (status) => `Team Table slots check failed with ${status}`,
+    });
     return yield* tryWorkspaceE2ESync("parse Team Table slots", () =>
       parseTableSlotsResponse(body)
     );
