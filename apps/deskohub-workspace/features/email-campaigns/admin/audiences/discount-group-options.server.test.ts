@@ -1,12 +1,22 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { Effect, Layer } from "effect";
+import {
+  type DotyposDiscountGroup,
+  DotyposDiscountGroupSchema,
+  type DotyposReadFailure,
+  DotyposRejected,
+} from "@deskohub/dotypos";
+import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
+import { Effect, Schema } from "effect";
 import { mockAdministratorAccess } from "@/features/administrators/server/administrator-access.test-utils";
 
 const access = mockAdministratorAccess("discount-group-options");
 
-let discountGroupsResult: Effect.Effect<unknown, unknown> = Effect.succeed([]);
+let discountGroupsResult: Effect.Effect<
+  readonly DotyposDiscountGroup[],
+  DotyposReadFailure
+> = Effect.succeed([]);
 mock.module("next/server", () => ({
   after: () => undefined,
   connection: () => Promise.resolve(),
@@ -16,12 +26,9 @@ mock.module("@/features/i18n/server/request-locale", () => ({
 }));
 const getDiscountGroups = mock(() => discountGroupsResult);
 mock.module("@/shared/backend/config/dotypos.config", () => ({
-  WorkspaceDotyposLayer: Layer.succeed(DotyposService, {
-    getDiscountGroups,
-  } as never),
+  WorkspaceDotyposLayer: DotyposServiceMock({ getDiscountGroups }),
 }));
 
-const { DotyposRejected, DotyposService } = await import("@deskohub/dotypos");
 const { loadDiscountGroupOptions } = await import(
   "./discount-group-options.server"
 );
@@ -37,13 +44,15 @@ beforeEach(() => {
 
 describe("loadDiscountGroupOptions", () => {
   test("maps active groups, supplies blank names, drops incomplete entries, and sorts by name", async () => {
-    discountGroupsResult = Effect.succeed([
-      { id: "10", name: " Zulu ", deleted: false, discountPercent: "10" },
-      { id: "2", name: "   ", deleted: false, discountPercent: null },
-      { id: "3", name: "Alpha", deleted: false, discountPercent: "5" },
-      { name: "No ID", deleted: false, discountPercent: null },
-      { id: "4", name: "Deleted", deleted: true, discountPercent: "2" },
-    ]);
+    discountGroupsResult = Effect.succeed(
+      Schema.decodeUnknownSync(Schema.Array(DotyposDiscountGroupSchema))([
+        { id: "10", name: " Zulu ", deleted: false, discountPercent: "10" },
+        { id: "2", name: "   ", deleted: false, discountPercent: null },
+        { id: "3", name: "Alpha", deleted: false, discountPercent: "5" },
+        { name: "No ID", deleted: false, discountPercent: null },
+        { id: "4", name: "Deleted", deleted: true, discountPercent: "2" },
+      ])
+    );
 
     const result = await loadDiscountGroupOptions();
 
