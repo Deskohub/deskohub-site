@@ -508,7 +508,7 @@ const answerReservationProduct = (
   const { product } = reservation;
   if (product.kind === "table") {
     const teamTable = teamTableProduct(reservation);
-    return { kind: "other", ...(teamTable && { teamTable }) };
+    return { kind: "other", family: "table", ...(teamTable && { teamTable }) };
   }
   const stay = getReservationSummaryStay(reservation);
   return product.kind === "cowork" && stay ? { ...product, stay } : product;
