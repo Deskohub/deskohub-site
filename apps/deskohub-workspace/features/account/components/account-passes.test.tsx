@@ -6,6 +6,7 @@ import type {
   AccountEntryPack,
 } from "@/features/account/account-passes.server";
 import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
+import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import "@/shared/testing/workspace-component-module-mocks";
 import { UnsavedChangesProvider } from "@/shared/components/unsaved-changes-guard";
@@ -116,10 +117,10 @@ test("presents the buyer's order separately from passes they can use", async () 
   expect(markup).not.toContain("Book a date");
   expect(markup).not.toContain("/reservation/access/");
   expect(markup).not.toContain("Day 1 of 30");
-  expect(markup).not.toContain("You don’t have any passes yet.");
+  expect(markup).not.toContain(m.accountPassesEmpty({}, { locale: "en-US" }));
 });
 
-test("renders a held Unlimited pass with its assigned desk and purchase date", async () => {
+test("renders a held Unlimited membership with its assigned desk and purchase date", async () => {
   const orderId = orderIdSchema.make(crypto.randomUUID());
   const pass: AccountUnlimitedPass = {
     orderId,
@@ -154,7 +155,7 @@ test("renders a held Unlimited pass with its assigned desk and purchase date", a
   expect(markup).not.toContain("View order status");
 });
 
-test("links a buyer's Unlimited pass cards to their pass order status pages", async () => {
+test("links a buyer's Unlimited membership cards to their order status pages", async () => {
   const activeOrderId = orderIdSchema.make(crypto.randomUUID());
   const upcomingOrderId = orderIdSchema.make(crypto.randomUUID());
   const activeStatusPath = `/en-US/reservation/status/${activeOrderId}`;
@@ -250,7 +251,7 @@ test("shows a lookup failure when Entry Packs loaded empty and Unlimited did not
   expect(markup).toContain(
     "Your Unlimited memberships couldn’t be loaded right now."
   );
-  expect(markup).not.toContain("You don’t have any passes yet.");
+  expect(markup).not.toContain(m.accountPassesEmpty({}, { locale: "en-US" }));
 });
 
 test("shows generic gift attribution when there is no buyer name", async () => {
