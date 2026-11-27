@@ -1,10 +1,11 @@
-import { Effect, Schema } from "effect";
+import { Effect, Match, Schema } from "effect";
 import type { AdvertisedPrice } from "@/features/checkout/advertised-price";
 import { buildAdvertisedPrice } from "@/features/checkout/backend/checkout/advertised-price.server";
 import { getReservationQuoteDiscount } from "@/features/checkout/reservation-quote-schema";
 import { m } from "@/features/i18n";
 import type { QuoteSelection } from "@/features/reservation/backend/booking-selection";
 import { getShareableReservationUrl } from "@/features/reservation/backend/shareable-reservation-url";
+import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import { getFirstInvalidFieldPath } from "@/shared/utils/schema-issue";
 import { currentInstant } from "@/shared/utils/temporal";
 import {
@@ -44,7 +45,7 @@ const quoteToolDefinition = {
   name: "get_quote",
   title: "Quote a Deskohub Workspace booking",
   description:
-    "Prices a complete selection anonymously. For a Team Table, provide the date, offered seat count, and exact start and end times. The total includes any public sale, and the reservation link opens the booking page with the selection filled in. Use check_availability to check whether it is free.",
+    "Prices a complete selection anonymously. A Team Table quote checks the date, offered seat count, and exact start and end times before pricing. The total includes any public sale, and the reservation link opens the booking page with the selection filled in. Use check_availability to find free dates and times.",
   readOnly: true,
   unavailableCode: "quote_unavailable",
   input: inputSchema,
@@ -61,6 +62,26 @@ const resolveSelection = (input: GetQuoteInput) =>
 const quoteOrdinaryBooking = Effect.fn("agentTools.getQuote")(
   (input: GetQuoteInput) =>
     resolveSelection(input).pipe(
+      Effect.tap(({ selection: { reservation } }) =>
+        reservation.kind === "table"
+          ? WorkspaceAvailabilityService.pipe(
+              Effect.flatMap((service) => service.ensureAvailable(reservation)),
+              Effect.mapError((cause) =>
+                Match.value(cause).pipe(
+                  Match.tag(
+                    "WorkspaceTableUnavailableError",
+                    AgentToolError.refused("selection_unavailable")
+                  ),
+                  Match.tag(
+                    "TeamTableAvailabilityClosed",
+                    AgentToolError.unsupportedFamily
+                  ),
+                  Match.orElse(AgentToolError.unavailable("quote_unavailable"))
+                )
+              )
+            )
+          : Effect.void
+      ),
       Effect.bind("pricing", priceQuoteSelection),
       Effect.map(toQuoteResult)
     )

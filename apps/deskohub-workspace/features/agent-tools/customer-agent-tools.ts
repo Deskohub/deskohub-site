@@ -19,12 +19,11 @@ import { TeamTableReleaseGateForRun } from "@/features/team-table/backend/team-t
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 
 /**
- * The services customer tools read through. Public tools read availability
- * and office capacity only from the shared advisory snapshots, never from
- * Dotypos directly. Signed-in tools book live and read the customer's own
- * reservations from the shared reservation records, which protects the
- * Dotypos quota bookings share; browser pages read those live. An agent's
- * tool call has no browser, so it remembers no referral code.
+ * Public availability and Office capacity use shared advisory snapshots. A
+ * complete Team Table quote rechecks its interval with the provider. Signed-in
+ * tools book live and read the customer's own reservations from the shared
+ * reservation records. An agent's tool call has no browser, so it remembers
+ * no referral code.
  */
 export const CustomerAgentToolsLive = Layer.mergeAll(
   CoworkPassesReleaseGateForRun,

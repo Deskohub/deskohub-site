@@ -1,4 +1,5 @@
 import {
+  type DotyposReservation,
   DotyposReservationIdSchema,
   DotyposService,
   type DotyposTable,
@@ -218,9 +219,8 @@ const discoverTestDiscounts =
   };
 
 /**
- * The services agent tools read through, with availability served only from
- * a fixed advisory snapshot. Dotypos is unreachable: every request it would
- * make is recorded in `dotyposRequests` and dies.
+ * The services agent tools read through. Calls are recorded, and live
+ * inventory reads require an explicit fixture.
  */
 export const makeAgentToolTestServices = ({
   tables = agentToolTestTables,
@@ -228,6 +228,7 @@ export const makeAgentToolTestServices = ({
   officeEnabled = true,
   teamTableEnabled = false,
   teamTableSizes = [],
+  liveReservations,
   saleBasisPoints,
 }: {
   readonly tables?: readonly DotyposTable[];
@@ -235,41 +236,55 @@ export const makeAgentToolTestServices = ({
   readonly officeEnabled?: boolean;
   readonly teamTableEnabled?: boolean;
   readonly teamTableSizes?: readonly number[];
+  readonly liveReservations?: readonly DotyposReservation[];
   readonly saleBasisPoints?: number;
 } = {}) => {
   const dotyposRequests: string[] = [];
   const snapshotReads: string[] = [];
-  // Every Dotypos operation dies when it runs, and is recorded.
-  const unreachableDotypos = Layer.effect(
+  const availableTables = [
+    ...tables,
+    ...teamTableSizes.map((seats, index) =>
+      makeTestTable({
+        id: `table-${index}`,
+        tags: ["cowork:open-space", "reservation:table"],
+        seats: String(seats),
+      })
+    ),
+  ];
+  const dotypos = Layer.effect(
     DotyposService,
     Effect.gen(function* () {
       const unimplemented = yield* DotyposService;
       return new Proxy(unimplemented, {
         get: (_target, operation) => () =>
-          Effect.suspend(() => {
-            dotyposRequests.push(String(operation));
-            return Effect.die(
-              new Error(
-                `Agent tools must not call Dotypos ${String(operation)}`
-              )
-            );
-          }),
+          Effect.suspend(
+            (): Effect.Effect<
+              readonly (DotyposTable | DotyposReservation)[]
+            > => {
+              dotyposRequests.push(String(operation));
+              if (liveReservations && operation === "getTables") {
+                return Effect.succeed(availableTables);
+              }
+              if (
+                liveReservations &&
+                operation === "listActiveReservationsOverlapping"
+              ) {
+                return Effect.succeed(liveReservations);
+              }
+              return Effect.die(
+                new Error(
+                  `Agent tools must not call Dotypos ${String(operation)}`
+                )
+              );
+            }
+          ),
       });
     })
   ).pipe(Layer.provide(Layer.mock(DotyposService, {})));
   const advisoryInventory = Layer.succeed(AdvisoryAvailabilityInventory, {
     tables: Effect.sync(() => {
       snapshotReads.push("tables");
-      return [
-        ...tables,
-        ...teamTableSizes.map((seats, index) =>
-          makeTestTable({
-            id: `table-${index}`,
-            tags: ["cowork:open-space", "reservation:table"],
-            seats: String(seats),
-          })
-        ),
-      ];
+      return availableTables;
     }),
     listActiveReservationsOverlapping: () =>
       Effect.sync(() => {
@@ -296,7 +311,7 @@ export const makeAgentToolTestServices = ({
               ...getUnclassifiedTeamTableBookings(records, claims),
             ])
           ),
-          unreachableDotypos,
+          dotypos,
           Layer.succeed(GoogleCalendarWorkspaceLimitationsService, {
             listLimitations: () => Effect.succeed([]),
           }),
