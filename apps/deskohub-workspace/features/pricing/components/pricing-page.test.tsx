@@ -101,10 +101,18 @@ const saleOnOpenSpace = (locale: Locale) => {
 };
 
 const renderPage = async (locale: Locale, signal?: AbortSignal) => {
+  const renderErrors: unknown[] = [];
   const { prelude } = await prerender(<PricingPage locale={locale} />, {
     signal,
+    onError(error) {
+      if (!signal?.aborted || error !== signal.reason) {
+        renderErrors.push(error);
+      }
+    },
   });
-  return new Response(prelude).text();
+  const html = await new Response(prelude).text();
+  expect(renderErrors).toEqual([]);
+  return html;
 };
 
 /**
