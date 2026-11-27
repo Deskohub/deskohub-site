@@ -144,6 +144,13 @@ jobs:
       - name: Test the Workspace API preview generation guard
         run: bun test apps/deskohub-workspace-api/src/routes.test.ts
 
+      - name: Test backend preview workflow validation
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          node --test .github/actions/workspace-backend-preview/*.test.mjs
+          python3 -m unittest discover -s .github/actions/workspace-backend-preview -p artifact_test.py
+
       - name: Smoke test the Workspace API proof image under Node 24
         timeout-minutes: 5
         run: bash apps/deskohub-workspace-api/test-image.sh
