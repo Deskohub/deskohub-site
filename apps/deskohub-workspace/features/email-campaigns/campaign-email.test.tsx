@@ -18,9 +18,9 @@ import {
   renderCampaignEmailPreview,
 } from "./campaign-email";
 import { campaignEmailKind } from "./campaign-email-kind";
-import type {
-  CampaignConfirmationCode,
-  CampaignSendId,
+import {
+  campaignConfirmationCodeSchema,
+  campaignSendIdSchema,
 } from "./campaign-identifiers";
 
 const cloudinaryImage =
@@ -115,10 +115,10 @@ const sender = {
   replyTo: { email: testEmailAddress("hello") },
 };
 const recipient = {
-  sendId: "send-1" as CampaignSendId,
+  sendId: campaignSendIdSchema.make("send-1"),
   dotyposCustomerId: DotyposCustomerIdSchema.make("42"),
 };
-const code = "ABCD-EFGH" as CampaignConfirmationCode;
+const code = campaignConfirmationCodeSchema.make("ABCD-EFGH");
 
 const message = (
   occasion: CampaignEmailOccasion,

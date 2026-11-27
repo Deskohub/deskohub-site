@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
-  type AutomationFlowType as AutomationFlow,
+  AutomationFlow,
   AutomationStepId,
 } from "@deskohub/workspace-admin-api";
-import { Predicate } from "effect";
-import type { AudienceFilter } from "../audience-filter";
-import type {
-  CampaignLocalizedContent,
+import { Option, Predicate, Schema } from "effect";
+import { type AudienceFilter, audienceFilterSchema } from "../audience-filter";
+import {
+  type CampaignLocalizedContent,
+  CampaignPurpose,
   CampaignTemplateKey,
+  campaignLocalizedContent,
 } from "../body/campaign-content";
 import { campaignAudienceIdSchema } from "../campaign-identifiers";
 import {
@@ -73,17 +75,31 @@ const copy: AutomationPublishableCopy = {
   audienceFilter,
 };
 
+const publishableCopy = Schema.Struct({
+  purpose: CampaignPurpose,
+  templateKey: CampaignTemplateKey,
+  content: campaignLocalizedContent(Option.none()),
+  flow: AutomationFlow,
+  audienceFilter: audienceFilterSchema,
+});
+
+const isJsonArray = (value: Schema.Json): value is Schema.JsonArray =>
+  Array.isArray(value);
+
+const isJsonObject = (value: Schema.Json): value is Schema.JsonObject =>
+  Predicate.isObject(value);
+
 /** The same value with every object's keys in reverse order. */
-const reverseKeys = <Value>(value: Value): Value => {
-  if (Array.isArray(value)) {
-    return value.map(reverseKeys) as Value;
+const reverseKeys = (value: Schema.Json): Schema.Json => {
+  if (isJsonArray(value)) {
+    return value.map(reverseKeys);
   }
-  if (Predicate.isObject(value)) {
+  if (isJsonObject(value)) {
     return Object.fromEntries(
       Object.entries(value)
         .reverse()
         .map(([key, entry]) => [key, reverseKeys(entry)])
-    ) as Value;
+    );
   }
   return value;
 };
@@ -94,9 +110,11 @@ describe("hashAutomationDraft", () => {
   });
 
   test("ignores key order", () => {
-    expect(hashAutomationDraft(reverseKeys(copy))).toBe(
-      hashAutomationDraft(copy)
-    );
+    const reordered = reverseKeys(copy);
+    if (!Schema.is(publishableCopy)(reordered)) {
+      throw new Error("Reordered copy no longer matches the campaign schema");
+    }
+    expect(hashAutomationDraft(reordered)).toBe(hashAutomationDraft(copy));
   });
 
   test("ignores the order of calendar values", () => {
@@ -112,7 +130,7 @@ describe("hashAutomationDraft", () => {
     );
   });
 
-  test.each<[string, AutomationPublishableCopy]>([
+  test.each<[string, Parameters<typeof hashAutomationDraft>[0]]>([
     [
       "the flow",
       {
@@ -163,8 +181,7 @@ describe("hashAutomationDraft", () => {
       },
     ],
     ["the purpose", { ...copy, purpose: "operational" }],
-    // Only one template exists yet; any other key must change the hash.
-    ["the template", { ...copy, templateKey: "other" as CampaignTemplateKey }],
+    ["the template", { ...copy, templateKey: "other" }],
     [
       "the audience filter",
       {

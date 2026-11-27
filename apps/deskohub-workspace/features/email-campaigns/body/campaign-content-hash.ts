@@ -11,7 +11,9 @@ export { CampaignContentHash } from "@deskohub/workspace-domain/features/email-c
  * template and purpose. Key order does not affect the hash.
  */
 export function hashCampaignContent(
-  content: CampaignContent
+  content: Omit<CampaignContent, "templateKey"> & {
+    readonly templateKey: string;
+  }
 ): CampaignContentHash {
   return CampaignContentHash.make(
     createHash("sha256")

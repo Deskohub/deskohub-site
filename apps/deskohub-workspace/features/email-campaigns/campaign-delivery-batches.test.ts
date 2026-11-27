@@ -4,9 +4,9 @@ import {
   campaignDeliveryBatchIdempotencyKey,
   campaignDeliveryPayloadHash,
 } from "./campaign-delivery-batches";
-import type { CampaignSendId } from "./campaign-identifiers";
+import { campaignSendIdSchema } from "./campaign-identifiers";
 
-const sendId = "send-1" as CampaignSendId;
+const sendId = campaignSendIdSchema.make("send-1");
 
 describe("campaign delivery batches", () => {
   test("hashes equal payloads alike and any change differently", () => {
@@ -59,7 +59,7 @@ describe("campaign delivery batches", () => {
           batchIndex: 0,
         }),
         campaignDeliveryBatchIdempotencyKey({
-          sendId: "send-2" as CampaignSendId,
+          sendId: campaignSendIdSchema.make("send-2"),
           deliveryAttempt: 1,
           batchIndex: 0,
         }),
