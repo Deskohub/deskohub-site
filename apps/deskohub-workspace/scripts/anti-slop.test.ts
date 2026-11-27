@@ -61,7 +61,7 @@ void result;
 void parenthesizedResult;
 void payload;
 `,
-    "apps/deskohub-workspace/features/checkout",
+    "apps/deskohub-workspace/features/email-campaigns",
     "probe.test.ts"
   );
 
