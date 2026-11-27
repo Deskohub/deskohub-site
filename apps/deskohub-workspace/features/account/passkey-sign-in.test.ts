@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
 
 /**
@@ -210,11 +211,13 @@ describe("passkey sign-in attempts", () => {
 
     requests[0]?.resolve(options);
     await expect(older).resolves.toEqual(cancelled);
-    requests[1]?.resolve(options);
+    const newerOptions = requests[1];
+    assert(newerOptions, "Expected the newer attempt to request options");
+    newerOptions.resolve(options);
     await flush();
 
     expect(startedPaths()).toEqual([optionsPath, optionsPath, "conditional"]);
-    expect(lastRequest("conditional").signal).toBe(requests[1]!.signal);
+    expect(lastRequest("conditional").signal).toBe(newerOptions.signal);
     lastRequest("conditional").resolve({ id: "credential" });
     await flush();
     lastRequest(verifyPath).resolve(signedIn);

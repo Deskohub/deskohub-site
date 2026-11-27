@@ -969,15 +969,15 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects Workspace top-level module assertions", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/probe.config.ts"],
       ["permits Workspace as const", "export const codes = [0, 2] as const;\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.ts"],
       ["permits Workspace const angle-bracket assertions", "export const codes = <const>[0, 2];\n", false, "apps/deskohub-workspace/features/reservation/backend/probe.ts"],
-      ["permits Workspace large-feature tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/checkout/backend/probe.postgres.test.ts"],
-      ["permits Workspace large-feature specs", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/checkout/probe.spec.ts"],
-      ["permits Workspace large-feature Playwright tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/checkout/probe.pw.ts"],
-      ["permits Workspace large-feature test utilities", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/checkout/probe.test-utils.ts"],
-      ["permits Workspace large-feature browser harnesses", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/checkout/probe.browser-harness.tsx"],
-      ["permits Workspace large-feature fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/checkout/probe-fixture.ts"],
-      ["permits Workspace large-feature dotted fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/checkout/probe.fixture.ts"],
-      ["permits Workspace large-feature testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/checkout/testing/probe.ts"],
-      ["permits Workspace large-feature nested testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/checkout/backend/testing/probe.ts"],
+      ["permits Workspace large-feature tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/backend/probe.postgres.test.ts"],
+      ["permits Workspace large-feature specs", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.spec.ts"],
+      ["permits Workspace large-feature Playwright tests", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.pw.ts"],
+      ["permits Workspace large-feature test utilities", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.test-utils.ts"],
+      ["permits Workspace large-feature browser harnesses", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.browser-harness.tsx"],
+      ["permits Workspace large-feature fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe-fixture.ts"],
+      ["permits Workspace large-feature dotted fixtures", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.fixture.ts"],
+      ["permits Workspace large-feature testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/testing/probe.ts"],
+      ["permits Workspace large-feature nested testing modules", "export const value = input as Settled;\n", false, "apps/deskohub-workspace/features/email-campaigns/backend/testing/probe.ts"],
       ["rejects Workspace shared testing modules", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/shared/testing/probe.ts"],
       ["rejects Workspace shared tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/shared/utils/probe.test.ts"],
       ["rejects Workspace app tests", "export const value = input as Settled;\n", true, "apps/deskohub-workspace/app/probe.test.tsx"],
@@ -1006,7 +1006,7 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects Workspace future-directory test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/lib/future.test.ts"],
       ["rejects Workspace small-feature test non-null assertions", "export const first = values[0]!;\n", true, "apps/deskohub-workspace/features/emails/probe.test.ts"],
       ["permits Workspace E2E non-null assertions", "export const first = values[0]!;\n", false, "apps/deskohub-workspace/e2e/probe.ts"],
-      ["permits Workspace large-feature test non-null assertions", "export const first = values[0]!;\n", false, "apps/deskohub-workspace/features/checkout/probe.test.ts"],
+      ["permits Workspace large-feature test non-null assertions", "export const first = values[0]!;\n", false, "apps/deskohub-workspace/features/email-campaigns/probe.test.ts"],
     ],
   },
   {
@@ -1218,6 +1218,8 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/administration/testing/probe.ts",
   "apps/deskohub-workspace/features/reservation/backend/testing/probe.ts",
   "apps/deskohub-workspace/features/account/backend/probe.ts",
+  "apps/deskohub-workspace/features/account/probe.test.ts",
+  "apps/deskohub-workspace/features/account/probe.fixture.ts",
   "apps/deskohub-workspace/features/email-campaigns/automation/probe.ts",
   "apps/deskohub-workspace/features/checkout/product-catalog.ts",
   "apps/deskohub-workspace/features/checkout/actions/probe.test.ts",
@@ -1239,16 +1241,7 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/checkout/components/probe.browser.test.tsx",
   "apps/deskohub-workspace/features/checkout/components/testing/probe.fixture.ts",
   "apps/deskohub-workspace/features/checkout/workspace-table-map.test.ts",
-];
-const generatedProbes = [
-  "packages/standard-schema/generated/probe.mts",
-  "packages/standard-schema/generated/probe.cts",
-];
-// Remaining large-feature tests, fixtures, testing helpers, generated files, and E2E may still assert.
-const workspaceExemptProbes = [
-  "apps/deskohub-workspace/e2e/probe.ts",
   "apps/deskohub-workspace/features/checkout/probe.test.ts",
-  "apps/deskohub-workspace/features/checkout/backend/repositories/generated/probe.ts",
   "apps/deskohub-workspace/features/checkout/probe.postgres.test.ts",
   "apps/deskohub-workspace/features/checkout/probe.spec.ts",
   "apps/deskohub-workspace/features/checkout/probe.pw.ts",
@@ -1258,6 +1251,27 @@ const workspaceExemptProbes = [
   "apps/deskohub-workspace/features/checkout/probe.fixture.ts",
   "apps/deskohub-workspace/features/checkout/testing/probe.ts",
   "apps/deskohub-workspace/features/checkout/backend/testing/probe.ts",
+];
+const generatedProbes = [
+  "packages/standard-schema/generated/probe.mts",
+  "packages/standard-schema/generated/probe.cts",
+];
+// Remaining large-feature tests, fixtures, testing helpers, generated files, and E2E may still assert.
+const workspaceExemptProbes = [
+  "apps/deskohub-workspace/e2e/probe.ts",
+  "apps/deskohub-workspace/features/account/backend/probe.test.ts",
+  "apps/deskohub-workspace/features/account/components/probe.test.tsx",
+  "apps/deskohub-workspace/features/email-campaigns/probe.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/repositories/generated/probe.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.spec.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.pw.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.test-utils.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.browser-harness.tsx",
+  "apps/deskohub-workspace/features/email-campaigns/probe-fixture.ts",
+  "apps/deskohub-workspace/features/email-campaigns/probe.fixture.ts",
+  "apps/deskohub-workspace/features/email-campaigns/testing/probe.ts",
+  "apps/deskohub-workspace/features/email-campaigns/backend/testing/probe.ts",
   "apps/deskohub-workspace/features/generated/probe.ts",
   "apps/deskohub-workspace/features/i18n/paraglide/probe.ts",
 ];
