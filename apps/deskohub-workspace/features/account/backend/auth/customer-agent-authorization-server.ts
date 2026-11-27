@@ -157,6 +157,9 @@ export const makeCustomerAgentAuthorizationPlugins = ({
     refreshTokenReuseInterval: customerAgentRefreshTokenReuseSeconds,
     scopes,
     clientRegistrationDefaultScopes: scopes,
+    // Every token check looks the resource up for its audience. The row only
+    // changes through the provider's admin endpoints, which clear the cache.
+    cachedResources: new Set([resource]),
   });
   const provider = {
     ...mcpProvider,

@@ -25,6 +25,7 @@ import {
   getSessionCookie,
   HOST,
   makeTestAuth,
+  observedPool,
   realCreateCustomerAccount,
   signInForMagicLink,
   type TestAuth,
@@ -920,6 +921,31 @@ describe.skipIf(!testDatabase)(
       expect(
         await failureReasonOf(authorityOver(auth), tokens.access_token)
       ).toBe("invalid-token");
+    });
+
+    // The provider looks the MCP resource up for every token's audience; the
+    // resource row stays cached so a warm instance doesn't read it per check.
+    test("checks a warm token without looking its resource up again", async () => {
+      const agent = makeAgent();
+      const sentLinks: CapturedMagicLink[] = [];
+      const database = observedPool(testDatabase!.pool);
+      const auth = makeTestAuth({
+        sentLinks,
+        clientMetadataTransport: agent.clientMetadataTransport,
+        postgres: { ...testDatabase!, pool: database.pool },
+      });
+      const customer = await signIn(auth, sentLinks);
+      const tokens = await connectSignedIn(auth, customer.cookie, agent);
+      const checked = database.observed.queries.length;
+
+      expect(
+        await failureReasonOf(authorityOver(auth), tokens.access_token)
+      ).toBe("Success");
+      expect(
+        database.observed.queries
+          .slice(checked)
+          .filter((sql) => /oauth_resource"? where .*"identifier" = /.test(sql))
+      ).toEqual([]);
     });
 
     test("answers a repeated refresh inside the reuse window, and ends the assistant's tokens on reuse after it", async () => {

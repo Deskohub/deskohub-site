@@ -31,7 +31,7 @@ When an exact Cloudinary public ID returns 404, verify the full Cloudinary accou
 
 ## Retry database reads at the repository boundary
 
-For Workspace database read instability, wrap idempotent reads in `retryDatabaseRead` from `apps/deskohub-workspace/db/retry-database-read.ts`. State-changing operations need their own idempotency boundary before they retry.
+For Workspace database read instability, wrap idempotent reads in `retryDatabaseRead` from `apps/deskohub-workspace/db/retry-database-read.ts`. It retries transient faults of both the Effect SQL pool and Better Auth's node-postgres pool (query or connection timeouts, dropped connections, class 08 and other transient SQLSTATE or socket codes), never a permanent database error. State-changing operations need their own idempotency boundary before they retry.
 
 Batch workflows that issue concurrent database reads need a numeric concurrency limit that leaves headroom in the process pool.
 
