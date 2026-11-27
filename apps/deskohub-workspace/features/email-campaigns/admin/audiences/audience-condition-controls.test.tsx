@@ -1,6 +1,8 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
   AdministrationCampaignId,
+  AdministrationCampaignLocale,
   audienceAttributeCatalogue,
 } from "@deskohub/workspace-admin-api";
 import { Result, Schema } from "effect";
@@ -17,17 +19,16 @@ import {
   audienceFilterSchema,
 } from "../../audience-filter";
 import type { AudienceFilterHolder } from "../../audience-filter-usage";
+import type { DatePeriod } from "../../date-period";
 import type {
   AudienceCampaignOption,
   AudienceValueLookups,
 } from "../audience-filter-summary";
 import {
-  type AudienceCountWording,
-  type AudienceDateWording,
   type AudienceSetWording,
   audienceAttributeWording,
 } from "./audience-attribute-wording";
-import { newCondition } from "./audience-filter-editing";
+import { newCondition, newConditionFrom } from "./audience-filter-editing";
 import { reservationProductFamilyLabel } from "./reservation-product-wording";
 
 registerWorkspaceComponentTestEnv();
@@ -52,11 +53,17 @@ const formErrors = (input: AudienceCondition) => {
     issues.find(({ path }) => (path ?? []).join(".") === field)?.message;
 };
 
-const campaignEmailCountWording = (locale: Locale) =>
-  audienceAttributeWording(
-    "campaignEmailCount",
-    locale
-  ) as AudienceCountWording;
+const campaignEmailCountWording = (locale: Locale) => {
+  const wording = audienceAttributeWording("campaignEmailCount", locale);
+  assert(wording?.kind === "count");
+  return wording;
+};
+
+const reservationCountWording = () => {
+  const wording = audienceAttributeWording("reservationCount", "en-US");
+  assert(wording?.kind === "count");
+  return wording;
+};
 
 describe("CountConditionControls", () => {
   test.each([
@@ -426,8 +433,10 @@ describe("campaign picker with a chosen campaign", () => {
     await openCampaignPicker(picker);
     const options = view.getAllByRole("option");
     expect(options).toHaveLength(campaigns.length + 2);
-    expect(options[1]?.textContent).toBe(sourceWording?.unknown);
-    fireEvent.click(options[1] as HTMLElement);
+    const unknownOption = options[1];
+    assert(unknownOption);
+    expect(unknownOption.textContent).toBe(sourceWording?.unknown);
+    fireEvent.click(unknownOption);
     expect(onChange).not.toHaveBeenCalled();
     expect(picker.getAttribute("aria-expanded")).toBe("false");
   });
@@ -449,10 +458,7 @@ describe("campaign picker with a chosen campaign", () => {
 });
 
 describe("ChoiceParamControl", () => {
-  const wording = audienceAttributeWording(
-    "reservationCount",
-    "en-US"
-  ) as AudienceCountWording;
+  const wording = reservationCountWording();
   const renderReservationCount = (
     condition: AudienceCondition,
     onChange: (condition: AudienceCondition) => void
@@ -482,7 +488,10 @@ describe("ChoiceParamControl", () => {
     expect(
       within(group)
         .getAllByRole("radio")
-        .map((radio) => (radio as HTMLInputElement).checked)
+        .map((radio) => {
+          assert(radio instanceof HTMLInputElement);
+          return radio.checked;
+        })
     ).toEqual([true, false, false]);
     fireEvent.click(
       within(group).getByRole("radio", {
@@ -510,12 +519,14 @@ describe("ChoiceParamControl", () => {
 
   test("an optional select unsets its value", async () => {
     const onChange = mock((_condition: AudienceCondition) => undefined);
-    const condition = newCondition("reservationCount");
+    const condition = newConditionFrom(
+      audienceAttributeCatalogue.reservationCount
+    );
     const view = renderReservationCount(
       {
         ...condition,
         params: { ...condition.params, status: "complete" },
-      } as AudienceCondition,
+      },
       onChange
     );
     await choose(view, status?.label ?? "", status?.absent ?? "");
@@ -524,10 +535,7 @@ describe("ChoiceParamControl", () => {
 });
 
 describe("reservation stay and payment", () => {
-  const wording = audienceAttributeWording(
-    "reservationCount",
-    "en-US"
-  ) as AudienceCountWording;
+  const wording = reservationCountWording();
   const stay = wording.choices.stay;
   const payment = wording.choices.payment;
   const cowork = { family: "cowork", properties: [] } as const;
@@ -536,11 +544,13 @@ describe("reservation stay and payment", () => {
       Extract<AudienceCondition, { attribute: "reservationCount" }>["params"]
     >
   ) => {
-    const condition = newCondition("reservationCount");
+    const condition = newConditionFrom(
+      audienceAttributeCatalogue.reservationCount
+    );
     return {
       ...condition,
       params: { ...condition.params, ...params },
-    } as AudienceCondition;
+    };
   };
   const renderReservationCount = (
     condition: AudienceCondition,
@@ -680,8 +690,11 @@ describe("reservation stay and payment", () => {
 });
 
 describe("DateConditionControls", () => {
-  const wording = (attribute: "lastVisit" | "accountCreated") =>
-    audienceAttributeWording(attribute, "en-US") as AudienceDateWording;
+  const wording = (attribute: "lastVisit" | "accountCreated") => {
+    const result = audienceAttributeWording(attribute, "en-US");
+    assert(result?.kind === "date");
+    return result;
+  };
   const { label } = wording("lastVisit");
   const subject = { subject: label };
   const en = { locale: "en-US" } as const;
@@ -712,12 +725,22 @@ describe("DateConditionControls", () => {
     );
 
   const lastVisit = (
-    fields: Partial<
-      Extract<AudienceCondition, { readonly attribute: "lastVisit" }>
-    > = {}
-  ): AudienceCondition =>
-    ({ ...newCondition("lastVisit"), ...fields }) as AudienceCondition;
-  const range = { _tag: "Range", from: "2026-01-01", to: "2026-02-01" };
+    fields: {
+      readonly params?: Extract<
+        AudienceCondition,
+        { readonly attribute: "lastVisit" }
+      >["params"];
+      readonly value?: DatePeriod;
+    } = {}
+  ) => ({
+    ...newConditionFrom(audienceAttributeCatalogue.lastVisit),
+    ...fields,
+  });
+  const range: DatePeriod = {
+    _tag: "Range",
+    from: "2026-01-01",
+    to: "2026-02-01",
+  };
   const operatorSelect = m.emailCampaignsAudienceDateConditionLabel(
     subject,
     en
@@ -829,7 +852,8 @@ describe("DateConditionControls", () => {
     const period = { _tag: tag, date: "2026-03-01" };
     const view = renderDate(lastVisit({ value: period }), { onChange });
     const date = view.getByLabelText(dateLabel);
-    expect((date as HTMLInputElement).value).toBe(period.date);
+    assert(date instanceof HTMLInputElement);
+    expect(date.value).toBe(period.date);
     expect(date.getAttribute("min")).toBeNull();
     expect(date.getAttribute("max")).toBeNull();
     expect(
@@ -849,7 +873,7 @@ describe("DateConditionControls", () => {
     ).not.toBeNull();
     cleanup();
     expect(
-      renderDate({ ...newCondition("accountCreated") } as AudienceCondition, {
+      renderDate(newCondition("accountCreated"), {
         attribute: "accountCreated",
       }).queryByRole("combobox", { name: productSelect })
     ).toBeNull();
@@ -880,8 +904,16 @@ describe("DateConditionControls", () => {
 });
 
 describe("SetConditionControls", () => {
-  const setWording = (attribute: "locale" | "dotyposTags" | "discountGroup") =>
-    audienceAttributeWording(attribute, "en-US") as AudienceSetWording;
+  const setWording = (
+    attribute: "locale" | "dotyposTags" | "discountGroup"
+  ) => {
+    const wording = audienceAttributeWording(attribute, "en-US");
+    assert(wording?.kind === "set");
+    return wording;
+  };
+  const decodeLocales = Schema.decodeUnknownSync(
+    Schema.Array(AdministrationCampaignLocale)
+  );
 
   const renderSet = (
     attribute: "locale" | "dotyposTags" | "discountGroup",
@@ -903,7 +935,17 @@ describe("SetConditionControls", () => {
         <SetConditionControls
           entry={audienceAttributeCatalogue[attribute]}
           wording={wording}
-          value={{ ...newCondition(attribute), value } as AudienceCondition}
+          value={
+            attribute === "locale"
+              ? {
+                  ...newConditionFrom(audienceAttributeCatalogue.locale),
+                  value: decodeLocales(value),
+                }
+              : {
+                  ...newConditionFrom(audienceAttributeCatalogue[attribute]),
+                  value,
+                }
+          }
           onChange={onChange}
           errorAt={(field) =>
             invalid && field === "value" ? "empty" : undefined
@@ -973,22 +1015,24 @@ describe("SetConditionControls", () => {
       const onChange = mock((_condition: AudienceCondition) => undefined);
       const view = renderSet("dotyposTags", ["regular"], { onChange });
       const input = view.getByRole("textbox", { name: tagEntry.add });
+      assert(input instanceof HTMLInputElement);
       fireEvent.change(input, { target: { value: "  vip " } });
       fireEvent.keyDown(input, key);
       expect(valuesOf(onChange)).toEqual([["regular", "vip"]]);
-      expect((input as HTMLInputElement).value).toBe("");
+      expect(input.value).toBe("");
     });
 
     test("adds the draft on blur, but not a blank or repeated one", () => {
       const onChange = mock((_condition: AudienceCondition) => undefined);
       const view = renderSet("dotyposTags", ["regular"], { onChange });
       const input = view.getByRole("textbox", { name: tagEntry.add });
+      assert(input instanceof HTMLInputElement);
       fireEvent.keyDown(input, { key: "a" });
       fireEvent.change(input, { target: { value: "   " } });
       fireEvent.blur(input);
       fireEvent.change(input, { target: { value: "regular" } });
       fireEvent.keyDown(input, { key: "Enter" });
-      expect((input as HTMLInputElement).value).toBe("");
+      expect(input.value).toBe("");
       fireEvent.change(input, { target: { value: "new" } });
       fireEvent.blur(input);
       expect(valuesOf(onChange)).toEqual([["regular", "new"]]);
@@ -1077,8 +1121,10 @@ describe("SetConditionControls", () => {
         "true",
         "false",
       ]);
+      const students = items[1];
+      assert(students);
       await act(async () => {
-        fireEvent.click(items[1] as HTMLElement);
+        fireEvent.click(students);
       });
       expect(valuesOf(onChange)).toEqual([["1", "2"]]);
       expect(view.getAllByRole("menuitemcheckbox")).toHaveLength(2);
