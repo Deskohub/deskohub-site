@@ -8,11 +8,14 @@ import { useEffect } from "react";
 import { trackBookingStarted } from "../../analytics/events";
 import { bookingPreselectionOf } from "../booking-preselection";
 import type { CheckoutRestartReason } from "../checkout/booking-problem";
-import { reservationKindOf } from "../selection/booking-selection";
+import {
+  type BookingFamily,
+  reservationKindOf,
+} from "../selection/booking-selection";
 import { useRestartReasonInView } from "./restart-reason";
 
 /** Reports the booking started once, when the family's screen opens. */
-export const useBookingStarted = (family: CustomerReservationFamily) => {
+export const useBookingStarted = (family: BookingFamily) => {
   useEffect(() => {
     trackBookingStarted(reservationKindOf(family));
   }, [family]);

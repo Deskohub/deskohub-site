@@ -40,6 +40,13 @@ export default function BookLayout() {
         }}
       />
       <Stack.Screen
+        name="table"
+        options={{
+          header: renderChooseHeader,
+          title: m.booking_checkout_line_team_table({}, { locale }),
+        }}
+      />
+      <Stack.Screen
         name="checkout"
         options={{ title: m.booking_stack_checkout_title({}, { locale }) }}
       />

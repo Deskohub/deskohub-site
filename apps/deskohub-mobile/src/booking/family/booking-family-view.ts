@@ -4,6 +4,7 @@ import type {
   CustomerBookingSelection,
   CustomerLocale,
   CustomerOfficePeople,
+  CustomerTeamTableQuote,
 } from "@deskohub/workspace-customer-api";
 import { Cause, Option } from "effect";
 import { AsyncResult } from "effect/reactivity";
@@ -20,6 +21,7 @@ import {
   type BookingQueryViewError,
   toBookingQueryError,
 } from "../data/booking-query-error";
+import type { BookingSelection } from "../selection/booking-selection";
 import type { CoworkOvernightStay } from "../selection/cowork-selection";
 
 /** One booking catalog read as a selection screen shows it. */
@@ -95,6 +97,7 @@ export const isRetryableBookingQueryError = (error: BookingQueryViewError) =>
   !(
     error._tag === "SelectionInvalid" ||
     error._tag === "DateOutOfRange" ||
+    error._tag === "SlotUnavailable" ||
     error._tag === "OfferingUnavailable"
   ) && isRetryableViewError(error);
 
@@ -121,7 +124,7 @@ export const quotableSelection = (
  * What Continue hands the checkout: only a complete, available selection
  * with its quote, whose token checkout starts from.
  */
-export const checkoutRequestOf = ({
+export const checkoutRequestOf = <Selection extends BookingSelection>({
   locale,
   selection,
   blockers,
@@ -131,16 +134,16 @@ export const checkoutRequestOf = ({
   people,
 }: {
   readonly locale: CustomerLocale;
-  readonly selection: Option.Option<CustomerBookingSelection>;
+  readonly selection: Option.Option<Selection>;
   readonly blockers: ReadonlyArray<unknown>;
-  readonly quote: Option.Option<CustomerBookingQuote>;
+  readonly quote: Option.Option<CustomerBookingQuote | CustomerTeamTableQuote>;
   /** Meeting room only. */
   readonly earlySetup?: boolean;
   /** Overnight Reserved Desk only: the stay's times from the catalog. */
   readonly overnightStay?: CoworkOvernightStay;
-  /** Office only: who is coming. */
+  /** Office and Team Table: who is coming. */
   readonly people?: CustomerOfficePeople;
-}): Option.Option<BookingRequest> =>
+}): Option.Option<BookingRequest & { readonly selection: Selection }> =>
   blockers.length > 0
     ? Option.none()
     : Option.flatMap(selection, (current) =>

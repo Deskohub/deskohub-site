@@ -1,7 +1,11 @@
-import type { CustomerReservationFamily } from "@deskohub/workspace-customer-api";
+import type {
+  CustomerReservationFamily,
+  CustomerTeamTableOfferings,
+} from "@deskohub/workspace-customer-api";
 import { Option } from "effect";
+import { AsyncResult } from "effect/reactivity";
 import type { ReactNode } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Image, Pressable, StyleSheet, View } from "react-native";
 import type { AppLocale } from "../../i18n/app-locale";
 import { m } from "../../i18n/messages";
 import { formatMoney } from "../../i18n/money-format";
@@ -9,6 +13,7 @@ import { Skeleton, SkeletonGroup } from "../../ui/skeleton";
 import { Text } from "../../ui/text";
 import { brandText, color, radius, shadow, space } from "../../ui/tokens";
 import { contentColumnWidth, useViewport, wideGutter } from "../../ui/viewport";
+import type { BookingFamily } from "../selection/booking-selection";
 import { SpaceIllustration } from "../ui/space-illustration";
 import { familyTitle } from "./booking-family-copy";
 import {
@@ -19,6 +24,11 @@ import {
   spaceColumnsFit,
   spaceRows,
 } from "./space-chooser";
+import {
+  teamTableCapacities,
+  teamTableCapacityLabel,
+  teamTableRateLabel,
+} from "./team-table-offerings";
 
 /** The board's picture heights: a half-width and a full-width card. */
 const pictureHeight = { half: 104, full: 148 } as const;
@@ -103,11 +113,16 @@ export function SpaceCards({
   locale,
   onOpen,
   afterCowork,
+  teamTable,
 }: {
   readonly cards: ReadonlyArray<SpaceCard>;
   readonly locale: AppLocale;
-  readonly onOpen: (family: CustomerReservationFamily) => void;
+  readonly onOpen: (family: BookingFamily) => void;
   readonly afterCowork?: ReactNode;
+  readonly teamTable?: AsyncResult.AsyncResult<
+    CustomerTeamTableOfferings,
+    unknown
+  >;
 }) {
   const { isWide, pair, expanded } = useSpaceGrid();
   const rows = spaceRows(cards, pair, expanded);
@@ -123,7 +138,62 @@ export function SpaceCards({
           afterCowork={afterCowork}
         />
       ))}
+      {teamTable !== undefined && AsyncResult.isSuccess(teamTable) && (
+        <TeamTableCard
+          offerings={teamTable.value.offerings}
+          locale={locale}
+          onOpen={() => onOpen("table")}
+        />
+      )}
     </View>
+  );
+}
+
+function TeamTableCard({
+  offerings,
+  locale,
+  onOpen,
+}: {
+  readonly offerings: CustomerTeamTableOfferings["offerings"];
+  readonly locale: AppLocale;
+  readonly onOpen: () => void;
+}) {
+  const capacities = teamTableCapacities(offerings);
+  const name = capacities[0]?.name;
+  if (name === undefined) return null;
+  const rates = capacities.map((offering) => ({
+    seats: offering.product.seats,
+    label: teamTableCapacityLabel(offering.product.seats, locale),
+    rate: teamTableRateLabel(offering, locale),
+  }));
+  return (
+    <Pressable
+      role="link"
+      accessibilityLabel={[
+        name,
+        ...rates.map(({ label, rate }) => `${label}, ${rate}`),
+      ].join(", ")}
+      onPress={onOpen}
+      style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+    >
+      <Image
+        aria-hidden
+        source={require("../../../assets/images/booking/open-space.webp")}
+        resizeMode="cover"
+        style={styles.teamTablePicture}
+      />
+      <View style={styles.teamTableText}>
+        <Text tone="default" style={styles.fullTitle}>
+          {name}
+        </Text>
+        {rates.map(({ seats, label, rate }) => (
+          <View key={seats} style={styles.teamTableRate}>
+            <Text variant="hint">{label}</Text>
+            <Text variant="bodyStrong">{rate}</Text>
+          </View>
+        ))}
+      </View>
+    </Pressable>
   );
 }
 
@@ -386,6 +456,15 @@ const styles = StyleSheet.create({
   // The name keeps at least 40% of the row; a price that no longer fits
   // beside it, with long names or large text, moves under it.
   fullName: { flexGrow: 1, flexShrink: 1, gap: space.xxs, minWidth: "40%" },
+  teamTablePicture: { height: pictureHeight.full, width: "100%" },
+  teamTableText: { gap: space.xs, padding: space.lg },
+  teamTableRate: {
+    alignItems: "baseline",
+    columnGap: space.md,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+  },
   // Off the type scale, as the board sizes it: between headline and title.
   fullTitle: brandText(18, 24, 600),
   price: { alignItems: "flex-start" },

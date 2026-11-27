@@ -53,6 +53,7 @@ import {
   type SaveCustomerAnalyticsPreference,
   type SyncCustomerAnalyticsConsent,
   WorkspaceCustomerApi,
+  WorkspaceCustomerApiWithTeamTable,
 } from "@deskohub/workspace-customer-api";
 import { Clock, Effect, Layer, Stream } from "effect";
 import {
@@ -71,7 +72,10 @@ import {
   type HttpApiEndpoint,
   type HttpApiGroup,
 } from "effect/http-api";
-import { fakeBookingGroup } from "../../booking/testing/fake-booking-api";
+import {
+  fakeBookingGroup,
+  fakeTeamTableGroup,
+} from "../../booking/testing/fake-booking-api";
 import {
   type FakeWorkspaceData,
   type SampleAccountKind,
@@ -104,13 +108,16 @@ export type FakeRequestOutcome =
    */
   | "session-not-fresh";
 
-type EndpointName = HttpApiEndpoint.Identifier<
-  | HttpApiGroup.Endpoints<typeof CustomerAccountApi>
-  | HttpApiGroup.Endpoints<typeof CustomerReservationsApi>
-  | HttpApiGroup.Endpoints<typeof CustomerInvoicesApi>
-  | HttpApiGroup.Endpoints<typeof CustomerCompaniesApi>
-  | HttpApiGroup.Endpoints<typeof CustomerAuthEndpoints>
->;
+type EndpointName =
+  | "getStatus"
+  | "addInvitees"
+  | HttpApiEndpoint.Identifier<
+      | HttpApiGroup.Endpoints<typeof CustomerAccountApi>
+      | HttpApiGroup.Endpoints<typeof CustomerReservationsApi>
+      | HttpApiGroup.Endpoints<typeof CustomerInvoicesApi>
+      | HttpApiGroup.Endpoints<typeof CustomerCompaniesApi>
+      | HttpApiGroup.Endpoints<typeof CustomerAuthEndpoints>
+    >;
 
 const requestOutcomes: ReadonlyArray<FakeRequestOutcome> = [
   "session-required",
@@ -805,7 +812,11 @@ const serverLayer = (workspace: FakeWorkspace) => {
           })
         )
         .handle("getReservationStatus", ({ params }) =>
-          Effect.map(order(params.orderId), (found) => found.state)
+          Effect.flatMap(order(params.orderId), (found) =>
+            found.teamTable === undefined
+              ? Effect.succeed(found.state)
+              : Effect.fail(new CustomerReservationNotFound())
+          )
         )
         .handle("getReservationAccess", ({ params }) =>
           Effect.flatMap(order(params.orderId), (found) =>
@@ -995,6 +1006,7 @@ const serverLayer = (workspace: FakeWorkspace) => {
   );
 
   const booking = fakeBookingGroup(workspace);
+  const teamTable = fakeTeamTableGroup(workspace);
 
   const passesUnavailable = () => Effect.fail(new CustomerPassesUnavailable());
   const passes = HttpApiBuilder.group(
@@ -1164,7 +1176,7 @@ const serverLayer = (workspace: FakeWorkspace) => {
   );
 
   return Layer.mergeAll(
-    HttpApiBuilder.layer(WorkspaceCustomerApi).pipe(
+    HttpApiBuilder.layer(WorkspaceCustomerApiWithTeamTable).pipe(
       Layer.provide(
         Layer.mergeAll(
           account,
@@ -1172,7 +1184,8 @@ const serverLayer = (workspace: FakeWorkspace) => {
           invoices,
           companies,
           booking,
-          passes
+          passes,
+          teamTable
         )
       ),
       Layer.provide(customerMiddleware)

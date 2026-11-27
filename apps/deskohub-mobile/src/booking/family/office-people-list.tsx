@@ -38,6 +38,8 @@ export function OfficePeopleList({
   maximumSeats,
   onChange,
   locale,
+  fullMessage,
+  showPinNote = true,
 }: {
   readonly people: OfficePeople;
   /** None while the account can't be read: no You row, and no Add yourself. */
@@ -45,6 +47,8 @@ export function OfficePeopleList({
   readonly maximumSeats: Option.Option<number>;
   readonly onChange: (people: OfficePeople) => void;
   readonly locale: AppLocale;
+  readonly fullMessage?: string;
+  readonly showPinNote?: boolean;
 }) {
   const [typed, setTyped] = useState("");
   const [invalid, setInvalid] = useState(false);
@@ -142,20 +146,23 @@ export function OfficePeopleList({
         ) : (
           <View key="full" style={listRowLayout.row}>
             <Text variant="bodySmall" tone="muted" style={listRowLayout.text}>
-              {m.booking_office_people_full(
-                { count: officePeopleCount(people) },
-                { locale }
-              )}
+              {fullMessage ??
+                m.booking_office_people_full(
+                  { count: officePeopleCount(people) },
+                  { locale }
+                )}
             </Text>
           </View>
         )}
       </ListGroup>
-      <View style={styles.note}>
-        <Icon icon={Mail} size={16} color={color.ink2} />
-        <Text variant="hint" style={styles.noteText}>
-          {m.booking_office_people_pin_note({}, { locale })}
-        </Text>
-      </View>
+      {showPinNote && (
+        <View style={styles.note}>
+          <Icon icon={Mail} size={16} color={color.ink2} />
+          <Text variant="hint" style={styles.noteText}>
+            {m.booking_office_people_pin_note({}, { locale })}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }

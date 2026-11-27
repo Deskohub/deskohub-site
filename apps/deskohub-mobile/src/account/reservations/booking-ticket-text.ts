@@ -251,14 +251,15 @@ export const bookingTimeLine = (
   start: DateTime.DateTime,
   end: DateTime.DateTime,
   locale: AppLocale,
-  date?: string
+  date?: string,
+  exact = false
 ): string => {
   const last = DateTime.isGreaterThan(end, start)
     ? DateTime.subtract(end, { milliseconds: 1 })
     : start;
   const endTime = formatInstant(end, locale, "time");
-  if (dayOf(start) !== dayOf(last)) {
-    if (isMidnight(start) && isMidnight(end)) {
+  if (dayOf(start) !== dayOf(exact ? end : last)) {
+    if (!exact && isMidnight(start) && isMidnight(end)) {
       return m.reservations_time_until(
         { time: shortDate(last, locale) },
         { locale }
@@ -280,7 +281,7 @@ export const bookingTimeLine = (
       ? range
       : m.reservations_date_time({ date, time: range }, { locale });
   }
-  if (isMidnight(start)) {
+  if (!exact && isMidnight(start)) {
     if (isMidnight(end)) {
       return date ?? shortDate(start, locale);
     }

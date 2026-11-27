@@ -1,6 +1,5 @@
 import type {
   CustomerBookingQuote,
-  CustomerBookingSelection,
   CustomerCheckout,
   CustomerLocale,
   CustomerOffering,
@@ -36,6 +35,10 @@ import {
 } from "../data/booking-services-layer";
 import { RememberedReferralCode } from "../remembered-referral.service";
 import {
+  type BookingSelection,
+  isEntryPassBooking,
+} from "../selection/booking-selection";
+import {
   type CoworkOvernightStay,
   coworkOvernightStay,
 } from "../selection/cowork-selection";
@@ -62,7 +65,7 @@ export type CheckoutRequest = BookingRequest | PaymentRetryRequest;
 export interface BookingRequest {
   readonly _tag: "Booking";
   readonly locale: CustomerLocale;
-  readonly selection: CustomerBookingSelection;
+  readonly selection: BookingSelection;
   readonly advertisedPriceToken: string;
   /**
    * The same quote's price, which the booking bar shows until checkout holds
@@ -71,7 +74,7 @@ export interface BookingRequest {
   readonly quote: Pick<CustomerBookingQuote, "summary" | "regularPrice">;
   /** Meeting room only. */
   readonly earlySetup?: boolean;
-  /** Office only: who is coming, one seat each. */
+  /** Office and Team Table: who is coming, one seat each. */
   readonly people?: CustomerOfficePeople;
   /**
    * Overnight Reserved Desk only: the stay's times from the catalog, which
@@ -88,7 +91,7 @@ export interface PaymentRetryRequest {
   readonly _tag: "PaymentRetry";
   readonly locale: CustomerLocale;
   /** The order's booked selection. */
-  readonly selection: CustomerBookingSelection;
+  readonly selection: BookingSelection;
   readonly earlySetup?: boolean;
   readonly checkout: CustomerCheckout;
   /** Who the order is for and its invoice, as the server kept them. */
@@ -257,7 +260,7 @@ export const checkoutFlowAtom = (
         get.registry.refresh(reservationHistoryAtom);
         if (
           request._tag === "Booking" &&
-          request.selection.funding?.kind === "entry"
+          isEntryPassBooking(request.selection)
         ) {
           get.registry.refresh(heldPassesAtom(request.locale));
         }

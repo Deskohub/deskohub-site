@@ -50,6 +50,7 @@ import {
   type ReviewState,
 } from "../checkout/checkout-state";
 import { bookingOfferingsAtom } from "../data/booking-queries";
+import { isEntryPassBooking } from "../selection/booking-selection";
 import { quotedBarSummary } from "../ui/booking-summary";
 import { HoldChip, HoldEndedDialog } from "../ui/hold-timer";
 import { retryMessage } from "./checkout-copy";
@@ -457,7 +458,7 @@ function DetailsWithProfile({
         linked ? Option.some(() => router.push(bookProfileHref)) : Option.none()
       }
       draft={draft}
-      holderOnly={request.selection.funding?.kind === "entry"}
+      holderOnly={isEntryPassBooking(request.selection)}
       onDraftChange={setDraft}
       notice={notice}
       busy={busy}
@@ -538,7 +539,8 @@ function FinishedNotice({
   const router = useRouter();
   const destination = checkoutDestination(
     { _tag: "Running", state, now: 0 },
-    request.selection.family
+    request.selection.family,
+    request._tag === "PaymentRetry" ? request.checkout.orderId : undefined
   );
   const done = state._tag === "Done";
   return (
@@ -553,9 +555,10 @@ function FinishedNotice({
         destination === undefined
           ? undefined
           : {
-              label: done
-                ? m.booking_checkout_show_status({}, { locale })
-                : m.booking_checkout_back_to_booking({}, { locale }),
+              label:
+                destination._tag === "Status"
+                  ? m.booking_checkout_show_status({}, { locale })
+                  : m.booking_checkout_back_to_booking({}, { locale }),
               onPress: () => leaveCheckout(router, destination),
               disabled: false,
             }

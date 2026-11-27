@@ -7,15 +7,21 @@ import { Match } from "effect";
 import type { AppLocale } from "../../i18n/app-locale";
 import { m } from "../../i18n/messages";
 
+/** Team Table keeps the legacy history tag, even when its size is unknown. */
+export const isTeamTableProduct = (product: CustomerReservationProduct) =>
+  product.kind === "other" &&
+  (product.family === "table" || product.teamTable !== undefined);
+
 /** The catalog name of a kind of space, as an order's summary names it. */
 export const reservationKindTitle = (
-  kind: CustomerReservationKind,
+  kind: CustomerReservationKind | "table",
   locale: AppLocale
 ) =>
   ({
     cowork: m.reservations_product_cowork,
     "meeting-room": m.reservations_product_meeting_room,
     office: m.reservations_product_office,
+    table: m.booking_checkout_line_team_table,
   })[kind]({}, { locale });
 
 const coworkTierTitle = (tier: CustomerCoworkTier, locale: AppLocale) =>
@@ -37,6 +43,9 @@ export const reservationProductTitle = (
       cowork: ({ tier }) => coworkTierTitle(tier, locale),
       "meeting-room": () => reservationKindTitle("meeting-room", locale),
       office: () => reservationKindTitle("office", locale),
-      other: () => m.reservations_product_other({}, { locale }),
+      other: (other) =>
+        isTeamTableProduct(other)
+          ? reservationKindTitle("table", locale)
+          : m.reservations_product_other({}, { locale }),
     })
   );

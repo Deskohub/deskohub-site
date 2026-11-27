@@ -1,5 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { CustomerReservationFamily } from "@deskohub/workspace-customer-api";
+import type {
+  CustomerReservationFamily,
+  CustomerTeamTableOfferings,
+} from "@deskohub/workspace-customer-api";
+import { Option } from "effect";
+import { AsyncResult } from "effect/reactivity";
 import { Pressable } from "react-native";
 import { m } from "../../i18n/messages";
 import { formatMoney } from "../../i18n/money-format";
@@ -10,6 +15,7 @@ import {
   hostTree,
   textOf,
 } from "../../ui/testing/element-tree";
+import type { BookingFamily } from "../selection/booking-selection";
 import {
   czk,
   sampleOfferings,
@@ -20,9 +26,94 @@ import { spaceCards } from "./space-chooser";
 
 const catalog = sampleOfferings("en-US", "2026-11-10").offerings;
 
+const teamTableCatalog = {
+  advertisedOn: "2026-11-10",
+  bookableDates: { earliest: "2026-11-10", latest: "2027-05-10" },
+  offerings: [
+    {
+      product: { kind: "table", seats: 4, durationMinutes: 60 },
+      name: "Team Table",
+      price: czk(320),
+      advertisedPrice: { price: czk(280), discount: czk(40) },
+    },
+    {
+      product: { kind: "table", seats: 2, durationMinutes: 60 },
+      name: "Team Table",
+      price: czk(160),
+      advertisedPrice: { price: czk(160), discount: czk(0) },
+    },
+  ],
+} satisfies CustomerTeamTableOfferings;
+
+describe("Team Table space", () => {
+  const locale = "en-US";
+  const renderChooser = (
+    teamTable: AsyncResult.AsyncResult<CustomerTeamTableOfferings, unknown>,
+    onOpen = mock((_: BookingFamily) => undefined)
+  ) => {
+    const tree = hostTree(
+      elementTree(SpaceCards, {
+        cards: spaceCards(catalog),
+        locale,
+        onOpen,
+        teamTable,
+      })
+    );
+    return { links: findAll(tree, "Pressable"), onOpen };
+  };
+
+  test("keeps the other links available during Team Table loading, release gating and errors", () => {
+    const previous = AsyncResult.success(teamTableCatalog);
+    for (const read of [
+      AsyncResult.initial(),
+      AsyncResult.success({ ...teamTableCatalog, offerings: [] }),
+      AsyncResult.failWithPrevious("request failed", {
+        previous: Option.some(previous),
+      }),
+    ]) {
+      const { links } = renderChooser(read);
+      expect(links).toHaveLength(3);
+    }
+  });
+
+  test("opens Team Table from one link that shows distinct per-size base and hourly rates", () => {
+    const { links, onOpen } = renderChooser(
+      AsyncResult.success({
+        ...teamTableCatalog,
+        offerings: [
+          ...teamTableCatalog.offerings,
+          ...teamTableCatalog.offerings,
+        ],
+      })
+    );
+    expect(links).toHaveLength(4);
+    const table = links.find(({ props }) =>
+      String(props.accessibilityLabel).includes("Team Table")
+    );
+    if (table === undefined) throw new Error("No Team Table card");
+    (table.props.onPress as () => void)();
+    expect(onOpen).toHaveBeenCalledWith("table");
+    const prices = findAll(table, "Text").map(textOf);
+    for (const [base, hourly] of [
+      [120, 40],
+      [240, 80],
+    ] as const) {
+      expect(prices).toContain(
+        m.booking_team_table_rate(
+          {
+            base: formatMoney(czk(base), locale),
+            hourly: formatMoney(czk(hourly), locale),
+          },
+          { locale }
+        )
+      );
+    }
+  });
+});
+
 const render = (
   families: ReadonlyArray<CustomerReservationFamily>,
-  onOpen = mock((_: CustomerReservationFamily) => undefined)
+  onOpen = mock((_: BookingFamily) => undefined)
 ) => {
   const tree = hostTree(
     elementTree(SpaceCards, {

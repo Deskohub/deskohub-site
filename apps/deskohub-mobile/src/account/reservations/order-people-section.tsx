@@ -1,5 +1,4 @@
 import type {
-  CustomerOrderState,
   CustomerReservationInviteeId,
   CustomerReservationPeople,
 } from "@deskohub/workspace-customer-api";
@@ -47,9 +46,12 @@ import {
   reservationHistoryAtom,
   reservationsListAtom,
 } from "./reservations-list-state";
+import type { ReservationOrder } from "./status-refresh";
+import { TeamTableInviteeForm } from "./team-table-invitee-form";
+import { teamTableInviteeAdditionEndsAt } from "./team-table-invitees";
 
 /** The booking's day or days, as the change request names them. */
-const bookedDaysText = (order: CustomerOrderState, locale: AppLocale) =>
+const bookedDaysText = (order: ReservationOrder, locale: AppLocale) =>
   Option.getOrUndefined(
     Option.map(
       accessWindowOf({
@@ -72,9 +74,13 @@ const bookedDaysText = (order: CustomerOrderState, locale: AppLocale) =>
 export function OrderPeopleSection({
   order,
   people,
+  refreshing,
+  onTeamTableChanged,
 }: {
-  readonly order: CustomerOrderState;
+  readonly order: ReservationOrder;
   readonly people: CustomerReservationPeople;
+  readonly refreshing: boolean;
+  readonly onTeamTableChanged: () => void;
 }) {
   const locale = useAppLocale();
   const toast = useToast();
@@ -89,19 +95,19 @@ export function OrderPeopleSection({
   const historyFresh = Option.exists(AsyncResult.value(history), (list) =>
     Option.isNone(list.savedAt)
   );
-  const orderContact = orderContactOf(
-    historyFresh ? reservation : Option.none()
-  );
+  const freshRow = historyFresh ? reservation : Option.none();
+  const orderContact = orderContactOf(freshRow);
   const needsContact =
     people.contactAttends && OrderContact.$is("Unknown")(orderContact);
+  const needsBooker = order.kind === "table" && Option.isNone(freshRow);
   const [reread, setReread] = useState(false);
   // A recent checkout can be missing from the history fetched before payment.
   useEffect(() => {
-    if (historyFresh && needsContact && !reread) {
+    if (historyFresh && (needsContact || needsBooker) && !reread) {
       setReread(true);
       rereadHistory();
     }
-  }, [historyFresh, needsContact, reread, rereadHistory]);
+  }, [historyFresh, needsBooker, needsContact, reread, rereadHistory]);
   const resend = useAtomSet(resendInvitationAtom(order.orderId), {
     mode: "promiseExit",
   });
@@ -246,15 +252,24 @@ export function OrderPeopleSection({
             {failure}
           </Text>
         )}
-        <View style={styles.note}>
-          <Icon icon={CircleUserRound} size={16} color={color.ink2} />
-          <Text variant="hint" style={styles.noteText}>
-            <Interpolate
-              string={m.reservations_people_change({}, { locale })}
-              mapping={{ contact: contactLink }}
-            />
-          </Text>
-        </View>
+        {order.kind === "table" ? (
+          <TeamTableInviteeForm
+            orderId={order.orderId}
+            endsAt={teamTableInviteeAdditionEndsAt(order, freshRow)}
+            refreshing={refreshing}
+            onRefresh={onTeamTableChanged}
+          />
+        ) : (
+          <View style={styles.note}>
+            <Icon icon={CircleUserRound} size={16} color={color.ink2} />
+            <Text variant="hint" style={styles.noteText}>
+              <Interpolate
+                string={m.reservations_people_change({}, { locale })}
+                mapping={{ contact: contactLink }}
+              />
+            </Text>
+          </View>
+        )}
       </View>
     </View>
   );

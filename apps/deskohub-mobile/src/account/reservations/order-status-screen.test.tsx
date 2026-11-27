@@ -177,24 +177,33 @@ test("the attending contact uses the booked-for customer only after history answ
       savedAt: saved ? Option.some(at) : Option.none(),
     };
     const tree = withoutNativeWarnings(() =>
-      elementTree(OrderPeopleSection, { order, people }, (node) => (
-        <AppLocaleProvider locale="en-US">
-          <RegistryProvider
-            initialValues={[
-              Atom.initialValue(
-                accountAtom,
-                AsyncResult.success(sample.account)
-              ),
-              Atom.initialValue(
-                reservationsListAtom,
-                AsyncResult.success(list)
-              ),
-            ]}
-          >
-            <ToastProvider>{node}</ToastProvider>
-          </RegistryProvider>
-        </AppLocaleProvider>
-      ))
+      elementTree(
+        OrderPeopleSection,
+        {
+          order,
+          people,
+          refreshing: false,
+          onTeamTableChanged: () => undefined,
+        },
+        (node) => (
+          <AppLocaleProvider locale="en-US">
+            <RegistryProvider
+              initialValues={[
+                Atom.initialValue(
+                  accountAtom,
+                  AsyncResult.success(sample.account)
+                ),
+                Atom.initialValue(
+                  reservationsListAtom,
+                  AsyncResult.success(list)
+                ),
+              ]}
+            >
+              <ToastProvider>{node}</ToastProvider>
+            </RegistryProvider>
+          </AppLocaleProvider>
+        )
+      )
     );
     return findAll(tree, PersonRow).map(({ props }) => props.name);
   };
@@ -251,6 +260,32 @@ test.each(["pending", "paid"] as const)(
     );
   }
 );
+
+test("offers payment retry for a Team Table without a legacy booked selection", () => {
+  const state: StatusRefreshState = {
+    order: {
+      orderId: sampleOrderIds.teamTable,
+      kind: "table",
+      status: "payment_failed",
+      paymentStatus: "failed",
+      fulfillmentStatus: "not_started",
+      startsAt: "2099-06-20T08:00:00Z",
+      endsAt: "2099-06-20T09:15:00Z",
+      product: { kind: "table", seats: 4, durationMinutes: 75 },
+    },
+    reading: false,
+    automatic: AutomaticRefresh.Stopped({ reason: "settled" }),
+    attempt: 0,
+    failure: Option.none(),
+  };
+  const tree = hostTree(
+    <OrderStatusScreen orderId={state.order.orderId} visit="normal" />,
+    (screen) => withCustomerData(screen, state)
+  );
+  expect(findAll(tree, "Text").map(textOf)).toContain(
+    m.booking_checkout_retry_pay({}, { locale: "cs-CZ" })
+  );
+});
 
 test.each([
   ["fulfilled", true, true],

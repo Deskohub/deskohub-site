@@ -1,5 +1,6 @@
 import type { CustomerBookingSelection } from "@deskohub/workspace-customer-api";
 import { Data, Option } from "effect";
+import type { BookingSelection } from "../selection/booking-selection";
 import type { CoworkOvernightStay } from "../selection/cowork-selection";
 import {
   addDays,
@@ -50,6 +51,13 @@ export type BookingOverview = Data.TaggedEnum<{
     readonly lastDate: PragueDate;
     readonly seats: number;
   };
+  TeamTable: {
+    readonly date: PragueDate;
+    readonly start: string;
+    readonly end: string;
+    readonly endDate: PragueDate;
+    readonly seats: number;
+  };
 }>;
 export const BookingOverview = Data.taggedEnum<BookingOverview>();
 
@@ -92,7 +100,7 @@ const meetingRoomTime = (
  * and an overnight stay's times are the catalog's.
  */
 export const bookingOverviewOf = (
-  selection: CustomerBookingSelection,
+  selection: BookingSelection,
   earlySetup: boolean,
   overnightStay?: CoworkOvernightStay
 ): BookingOverview => {
@@ -121,6 +129,17 @@ export const bookingOverviewOf = (
         firstDate: selection.date,
         lastDate: selection.endDate ?? selection.date,
         seats: selection.seats ?? 1,
+      });
+    case "table":
+      return BookingOverview.TeamTable({
+        date: selection.date,
+        start: selection.startTime,
+        end: selection.endTime,
+        endDate:
+          selection.endTime <= selection.startTime
+            ? addDays(selection.date, 1)
+            : selection.date,
+        seats: selection.seats,
       });
   }
 };

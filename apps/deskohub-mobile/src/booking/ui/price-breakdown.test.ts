@@ -22,6 +22,49 @@ const signedTotal = (lines: ReadonlyArray<PriceLine>) =>
   lines.reduce((sum, line) => sum + priceLineAmount(line).value, 0);
 
 describe("priceBreakdown", () => {
+  test("splits Team Table fees before subtracting the sale", () => {
+    const summary: CustomerCheckoutSummary = {
+      ...officeSixSeatsDiscounted.summary,
+      total: czk(272),
+      sections: [
+        {
+          key: "order",
+          total: czk(272),
+          items: [
+            {
+              key: "product:table:4:75",
+              amount: czk(272),
+              originalAmount: czk(340),
+              baseAmount: czk(240),
+              usageAmount: czk(100),
+              discounts: [
+                {
+                  amount: czk(68),
+                  discount: {
+                    id: "table-sale",
+                    label: "Sale",
+                    adjustment: { kind: "percentage", basisPoints: 2000 },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const { lines } = priceBreakdown(summary);
+    expect(
+      lines.map((line) => [
+        line._tag === "Charge" ? line.subject._tag : line._tag,
+        priceLineAmount(line).value,
+      ])
+    ).toEqual([
+      ["TeamTableBase", 24_000],
+      ["TeamTableUsage", 10_000],
+      ["Reduction", -6800],
+    ]);
+    expect(signedTotal(lines)).toBe(27_200);
+  });
   test.each(["not-vat-payer", "vat-payer"] as const)(
     "keeps the response's %s VAT status for the total's tax note",
     (vatStatus) => {

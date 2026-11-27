@@ -1,7 +1,3 @@
-import type {
-  CustomerBookedSelection,
-  CustomerOrderState,
-} from "@deskohub/workspace-customer-api";
 import { useAtom, useAtomSet } from "@effect/atom-react";
 import { Cause, Exit, Option } from "effect";
 import { useFocusEffect, useNavigation, useRouter } from "expo-router";
@@ -9,6 +5,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { bookCheckoutHref } from "../../booking/booking-routes";
 import { checkoutRequestAtom } from "../../booking/checkout/checkout-flow";
 import { retryMessage } from "../../booking/checkout-screen/checkout-copy";
+import type { BookingSelection } from "../../booking/selection/booking-selection";
 import { useAppLocale } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
 import type { PaymentRecovery } from "./booking-ticket-model";
@@ -19,6 +16,7 @@ import {
   reopenPaymentPageAtom,
   retryPaymentAtom,
 } from "./payment-recovery";
+import type { ReservationOrder } from "./status-refresh";
 
 /**
  * The booking ticket's ways to still pay an unpaid order: open its payment
@@ -29,9 +27,14 @@ import {
  * it refuses isn't offered again on this visit.
  */
 export const usePaymentRecovery = (
-  order: CustomerOrderState,
+  order: ReservationOrder,
   /** What the order books, from the order or its reservation in the list. */
-  booked: CustomerBookedSelection | undefined,
+  booked:
+    | {
+        readonly selection: BookingSelection;
+        readonly earlySetup?: boolean | undefined;
+      }
+    | undefined,
   {
     onCheckAgain,
     onPaymentPageLeft,
@@ -81,7 +84,7 @@ export const usePaymentRecovery = (
   });
   // The read the page was refused on; a fresh read decides again.
   const [pageClosedOn, setPageClosedOn] = useState<
-    CustomerOrderState | undefined
+    ReservationOrder | undefined
   >(undefined);
   const [retryRefused, setRetryRefused] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);

@@ -11,6 +11,7 @@ import { CustomerApi } from "../../customer-api/customer-api.service";
 import { customerDataRuntime } from "../../customer-api/customer-data-runtime";
 import { customerRead } from "../../customer-api/customer-request";
 import {
+  type BookingSelection,
   selectionKey,
   withoutAbsentOptions,
 } from "../selection/booking-selection";
@@ -19,6 +20,7 @@ import {
   type PragueDate,
   pragueMidnight,
 } from "../selection/prague-date";
+import { TeamTableSlotUnavailable } from "./booking-query-error";
 
 /**
  * What the booking selection and review screens read before checkout, on the
@@ -28,8 +30,9 @@ import {
  * apps/deskohub-workspace/features/customer-api/customer-request-budget.ts):
  * offerings, availability, meeting-room start times and quotes are
  * `catalog-read`, with their own per-account budget beside the general one,
- * and legal documents are `workspace-only`. Neither shares the account read
- * budget, so neither spends the app's advisory `AccountReadBudget`. Each
+ * Team Table quotes are `dotypos-read`, and legal documents are
+ * `workspace-only`. These endpoints do not spend the app's advisory
+ * `AccountReadBudget`. Each
  * catalog read stays cached for its `catalogIdleTTL` after the last screen
  * showing it leaves. Errors stay typed; screens map them with
  * `toBookingQueryError`.
@@ -70,8 +73,8 @@ export const catalogIdleTTL = {
 } as const;
 
 /**
- * Offerings, availability, start times and quotes spend the server's
- * `catalog-read` budget, not the account read budget.
+ * Each catalog endpoint, including Team Table quotes, declares its own
+ * server budget outside the account read budget.
  */
 const catalogRead = customerRead({ accountRead: false });
 /** The legal documents' versions are Workspace data. */
@@ -80,6 +83,11 @@ const workspaceRead = customerRead({ accountRead: false });
 const bookingApi = Effect.map(
   Effect.service(CustomerApi),
   (api) => api.booking
+);
+
+const teamTableApi = Effect.map(
+  Effect.service(CustomerApi),
+  (api) => api.teamTable
 );
 
 /**
@@ -146,6 +154,61 @@ export interface BookingAvailabilityRequest {
 const replacementHeaders = (token: string | undefined) =>
   token === undefined ? {} : { [customerAvailabilityReplacementHeader]: token };
 
+export const teamTableOfferingsAtom = Atom.family((locale: CustomerLocale) =>
+  customerDataRuntime
+    .atom((get) =>
+      Effect.flatMap(teamTableApi, (api) =>
+        api.listOfferings({ query: { locale } })
+      ).pipe(
+        catalogRead,
+        Effect.tap(({ advertisedOn }) =>
+          refreshOfferingsAfter(get, advertisedOn)
+        )
+      )
+    )
+    .pipe(Atom.setIdleTTL(catalogIdleTTL.offerings))
+);
+
+type TeamTableCalendarRequest = {
+  readonly seats: number;
+  readonly replacingPayStateToken?: string;
+};
+
+export const teamTableCalendarAtom = Atom.family(
+  ({ seats, replacingPayStateToken }: TeamTableCalendarRequest) =>
+    customerDataRuntime
+      .atom((get) =>
+        Effect.flatMap(teamTableApi, (api) =>
+          api.getAvailability({
+            query: { seats },
+            headers: replacementHeaders(replacingPayStateToken),
+          })
+        ).pipe(
+          catalogRead,
+          Effect.tap(({ from }) => refreshOfferingsAfter(get, from))
+        )
+      )
+      .pipe(Atom.setIdleTTL(catalogIdleTTL.availability))
+);
+
+type TeamTableSlotsRequest = TeamTableCalendarRequest & {
+  readonly date: PragueDate;
+};
+
+export const teamTableSlotsAtom = Atom.family(
+  ({ seats, date, replacingPayStateToken }: TeamTableSlotsRequest) =>
+    customerDataRuntime
+      .atom(
+        Effect.flatMap(teamTableApi, (api) =>
+          api.getSlots({
+            query: { seats, date },
+            headers: replacementHeaders(replacingPayStateToken),
+          })
+        ).pipe(catalogRead)
+      )
+      .pipe(Atom.setIdleTTL(catalogIdleTTL.availability))
+);
+
 /**
  * Advisory availability for a query; checkout checks again. Keyed by the
  * request's structure, so equal queries share one read.
@@ -205,7 +268,7 @@ export class BookingQuoteRequest implements Equal.Equal {
   readonly key: string;
 
   constructor(
-    readonly selection: CustomerBookingSelection,
+    readonly selection: BookingSelection,
     readonly locale: CustomerLocale,
     readonly earlySetup = false
   ) {
@@ -232,7 +295,11 @@ export class BookingQuoteRequest implements Equal.Equal {
 export const quoteRefreshInterval = Duration.minutes(4);
 
 /** The selection as a quote's query string carries it. */
-const quoteQuery = ({ selection, locale, earlySetup }: BookingQuoteRequest) => {
+const quoteQuery = (
+  selection: CustomerBookingSelection,
+  locale: CustomerLocale,
+  earlySetup: boolean
+) => {
   const { coffee, funding, ...fields } = withoutAbsentOptions(selection);
   return {
     ...fields,
@@ -250,10 +317,8 @@ const quoteQuery = ({ selection, locale, earlySetup }: BookingQuoteRequest) => {
  * or a refetch interrupts the wait. A read that falls due while no screen
  * shows the quote reads nothing and only marks it stale.
  *
- * The read isn't gated on a budget. Quotes spend the general and
- * `catalog-read` budgets (120 per 10 minutes each), which the app doesn't
- * track; one mounted quote reads at most three times in that window. Once
- * the server answers 429 the quote fails as CustomerRateLimited, and a
+ * The server budgets quote reads by endpoint class. Once it answers 429
+ * the quote fails as CustomerRateLimited, and a
  * failed read schedules nothing, so automatic reads stop until the quote is
  * read again (a selection change or the screen's retry).
  */
@@ -263,12 +328,30 @@ const refreshQuoteLater = (get: Atom.AtomContext) =>
     Effect.forkScoped
   );
 
+const readQuote = ({ selection, locale, earlySetup }: BookingQuoteRequest) =>
+  Effect.gen(function* () {
+    const api = yield* CustomerApi;
+    if (selection.family === "table") {
+      const { date, seats, startTime, endTime } = selection;
+      return yield* api.teamTable
+        .getQuote({
+          query: { date, seats, startTime, endTime, locale },
+        })
+        .pipe(
+          Effect.catchTag("CustomerSelectionUnavailable", () =>
+            Effect.fail(new TeamTableSlotUnavailable())
+          )
+        );
+    }
+    return yield* api.booking.getQuote({
+      query: quoteQuery(selection, locale, earlySetup),
+    });
+  });
+
 const quoteReadFamily = Atom.family((request: BookingQuoteRequest) =>
   customerDataRuntime
     .atom((get) =>
-      Effect.flatMap(bookingApi, (booking) =>
-        booking.getQuote({ query: quoteQuery(request) })
-      ).pipe(
+      readQuote(request).pipe(
         catalogRead,
         Effect.tap(() => refreshQuoteLater(get))
       )
@@ -292,7 +375,7 @@ const quoteFamily = Atom.family((request: BookingQuoteRequest) =>
  * early setup the customer asked for.
  */
 export const bookingQuoteAtom = (
-  selection: CustomerBookingSelection,
+  selection: BookingSelection,
   locale: CustomerLocale,
   { earlySetup = false }: { readonly earlySetup?: boolean } = {}
 ) => quoteFamily(new BookingQuoteRequest(selection, locale, earlySetup));
