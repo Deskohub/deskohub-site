@@ -87,13 +87,17 @@ import {
   type ReservationHold,
   ReservationHolds,
 } from "@/features/reservation/backend/reservation-holds.service";
-import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
+import {
+  WorkspaceAvailabilityService,
+  WorkspaceTableUnavailableError,
+} from "@/features/reservation/backend/workspace-availability.service";
 import type { WorkspaceReservation } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { ReservationPrePaymentOutcome } from "@/features/reservation/reservation-analytics";
 import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { getReservationCustomerProfile } from "@/features/reservation/reservation-customer-profile";
+import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import type { TableReservationDetails } from "@/features/reservation/table-reservation";
 import { isTableReservationBookable } from "@/features/reservation/table-reservation-time";
 import { ReservationInviteeEmailKeys } from "@/features/reservation-invitees/backend/reservation-invitee-email-keys.service";
@@ -118,7 +122,6 @@ import {
   instantStringSchema,
   temporalInstantToIsoString,
 } from "@/shared/utils/temporal";
-import { BookingSelectionRejected } from "./booking-selection";
 import { resolveEntryPackBooking } from "./entry-pack-booking";
 import {
   getOfficeAccessEndsAt,
@@ -1111,7 +1114,12 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
         yield* ensureTeamTableReservationsEnabled;
         const now = yield* currentInstant;
         if (!isTableReservationBookable(reservation, now)) {
-          return yield* BookingSelectionRejected.invalidField("endTime");
+          return yield* new WorkspaceTableUnavailableError({
+            date: getWorkspaceDate(
+              Temporal.Instant.from(reservation.startsAt)
+            ).toString(),
+            reservation: { kind: "table" },
+          });
         }
 
         const authorAccountId = yield* accountSections.currentAccountId;
