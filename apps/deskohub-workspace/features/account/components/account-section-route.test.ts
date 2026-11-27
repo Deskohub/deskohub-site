@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { ok } from "node:assert/strict";
 import { Schema } from "effect";
 import { isValidElement, type ReactElement, Suspense } from "react";
+import {
+  renderComponentElement,
+  requireElement,
+} from "@/shared/testing/route-element.test-utils";
 
 const events: string[] = [];
 const notFound = mock(() => {
@@ -80,14 +84,12 @@ const isProps = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 const renderSuspended = (boundary: ReactElement) => {
   ok(boundary.type === Suspense && isProps(boundary.props));
   const { children, fallback } = boundary.props;
-  ok(isValidElement(children) && children.type instanceof Function);
-  const { props, type } = children;
+  ok(isValidElement(children));
   return {
     fallback,
     content: async () => {
-      const output: unknown = await Reflect.apply(type, undefined, [props]);
-      ok(output === null || isValidElement(output));
-      return output;
+      const output = await renderComponentElement(children);
+      return output === null ? null : requireElement<unknown>(output);
     },
   };
 };
