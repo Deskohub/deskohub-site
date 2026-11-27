@@ -32,7 +32,10 @@ export const taggedCloudRunOrigin = (serviceOrigin: string, tag: string) => {
   ) {
     return undefined;
   }
-  return `https://${tag}---${url.hostname}`;
+  const hostname = `${tag}---${url.hostname}`;
+  return hostname.split(".").every((label) => label.length <= 63)
+    ? `https://${hostname}`
+    : undefined;
 };
 
 export const PreviewRuntimeBinding = Schema.Struct({

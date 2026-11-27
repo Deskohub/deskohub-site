@@ -840,9 +840,12 @@ proof_pattern() {
 proof_residuals() {
   local class="$1" pattern="$2" file="$3"
   case "$class" in
-    run-services | run-revisions)
+    run-services)
       # The backend preview pilot has its own Alchemy state and teardown.
-      grep -E "$pattern" "$file" | grep -Ev '^workspace-(api|tasks-worker|scheduler-worker)-preview(-|$)'
+      grep -E "$pattern" "$file" | grep -Ev '^workspace-(api|tasks|scheduler)-preview$'
+      ;;
+    run-revisions)
+      grep -E "$pattern" "$file" | grep -Ev '^workspace-(api|tasks|scheduler)-preview-(seed|g-[a-f0-9]{16})$'
       ;;
     *) grep -E "$pattern" "$file" ;;
   esac
