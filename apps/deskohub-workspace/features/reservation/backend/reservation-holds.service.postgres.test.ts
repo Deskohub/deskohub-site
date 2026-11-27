@@ -578,150 +578,214 @@ describe.skipIf(!postgresDatabase)(
       }
     );
 
-    test("locks the superseded Team Table's day before cancellation and replans for the replacement", async () => {
-      const author = await newAuthor();
-      const sourceAuthor = await newAuthor();
-      const sourceOrder = await Effect.runPromise(
-        workspaceFixtures(postgres.db).reservation({
-          stage: { reservation: "held" },
-          overrides: { authorAccountId: sourceAuthor },
-        })
-      );
-      const dotypos = makeDotypos();
-      const tableId = DotyposTableIdSchema.make("own-table");
-      const move = {
-        reservationId: sourceOrder.id,
-        sourceReservationId: requireValue(
-          (await rowOf(sourceOrder.id))?.dotyposReservationId,
-          "source provider hold"
-        ),
-        status: "NEW" as const,
-        serviceDate: plainDateStringSchema.make("2099-06-11"),
-        startsAt: Temporal.Instant.from("2099-06-11T00:00:00Z"),
-        endsAt: Temporal.Instant.from("2099-06-11T15:00:00Z"),
-        targetTableId: DotyposTableIdSchema.make("open-space-destination"),
-      };
-      const records = new Map<
-        DotyposReservationId,
-        ReturnType<typeof dotyposHoldFixture>
-      >();
-      let oldProviderId: DotyposReservationId | undefined;
-      let lookahead = false;
-      dotypos.createReservation.mockImplementation((input) =>
-        Effect.sync(() => {
-          const id = DotyposReservationIdSchema.make(`table-${records.size}`);
-          const record = {
-            ...dotyposHoldFixture(id),
-            _tableId: input.tableId,
-            _customerId: input.customerId,
-            startDate: input.startDate.toISOString(),
-            endDate: input.endDate.toISOString(),
-            seats: String(input.seats),
-            note: input.note,
-          };
-          records.set(id, record);
-          return record;
-        })
-      );
-      dotypos.cancelReservation.mockImplementation((id) =>
-        Effect.sync(() => {
-          const current = records.get(id);
-          if (current) records.set(id, { ...current, status: "CANCELLED" });
-        })
-      );
-      const holds = makeHolds({
-        dotypos,
-        providerReads: {
-          listActiveReservationsOverlapping: () =>
-            Effect.sync(() =>
-              [...records.values()].filter((record) => record.status === "NEW")
-            ),
-          getReservationWithoutCustomer: (id) =>
-            Effect.sync(() => requireValue(records.get(id), "provider hold")),
-        },
-        teamPlan: (_reservation, exactTable, options) =>
-          Effect.sync(() => {
-            if (!oldProviderId || exactTable) return { tableId, moves: [] };
-            if (records.get(oldProviderId)?.status === "CANCELLED") {
-              return { tableId, moves: [move] };
-            }
-            if (!options?.displacedHoldIds?.includes(oldProviderId))
-              return undefined;
-            lookahead = true;
-            return { tableId, moves: [move] };
-          }),
-      });
-      const base = holdRequest({ author });
-      const tableRequest = async (date: string) => {
-        const ordered = Schema.decodeUnknownSync(
-          reservationOrderIssuanceSchema("CZ")
-        )({
-          ...reservation,
-          kind: "table",
-          seats: 4,
-          startsAt: `${date}T09:00:00Z`,
-          endsAt: `${date}T09:15:00Z`,
-        });
-        if (ordered.kind !== "table") throw new Error("Expected a Team Table");
-        const quote = await Effect.runPromise(
-          getTableReservationQuote(ordered)
+    test.each(["original", "rotated"] as const)(
+      "protects the superseded Team Table in the %s session until the replacement is available under lock",
+      async (session) => {
+        const author = await newAuthor();
+        const sourceAuthor = await newAuthor();
+        const sourceOrder = await Effect.runPromise(
+          workspaceFixtures(postgres.db).reservation({
+            stage: { reservation: "held" },
+            overrides: { authorAccountId: sourceAuthor },
+          })
         );
-        return {
-          ...base,
-          checkout: { ...base.checkout, attemptId: newAttemptId() },
-          reservation: ordered,
-          checkoutDetails: getTableCheckoutDetails({
-            locale: "en-US",
-            reservation: ordered,
-            quote,
-            legalEvidence: {},
-          }),
-        } satisfies HoldRequest;
-      };
-      await holds.holdForAttempt({
-        ...(await tableRequest("2099-06-10")),
-        teamTableCapacity: { assignTableId: Effect.succeed(tableId) },
-      });
-      oldProviderId =
-        (await rowsOf(author))[0]?.dotyposReservationId ?? undefined;
-      const replacement = {
-        ...(await tableRequest("2099-06-11")),
-        recheckTeamTableAuthority: Effect.all({
-          author: holdsCustomerAccountSection(author),
-          sourceAuthor: holdsCustomerAccountSection(sourceAuthor),
-        }).pipe(
-          Effect.tap((held) =>
-            Effect.sync(() =>
-              expect(held).toEqual({ author: true, sourceAuthor: true })
-            )
+        const dotypos = makeDotypos();
+        const tableId = DotyposTableIdSchema.make("own-table");
+        const move = {
+          reservationId: sourceOrder.id,
+          sourceReservationId: requireValue(
+            (await rowOf(sourceOrder.id))?.dotyposReservationId,
+            "source provider hold"
           ),
-          Effect.asVoid
-        ),
-      };
-      const key = ["reservation-capacity", "2099-06-10"] as const;
-      const blocked = await holdPostgresTransaction(
-        postgres.pool,
-        "select pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-        key
-      );
-      const waiting = Effect.runFork(holds.hold(replacement));
-      try {
-        await waitForAdvisoryLockWaiter(postgres.pool, key);
-        expect(lookahead).toBe(true);
+          status: "NEW" as const,
+          serviceDate: plainDateStringSchema.make("2099-06-11"),
+          startsAt: Temporal.Instant.from("2099-06-11T00:00:00Z"),
+          endsAt: Temporal.Instant.from("2099-06-11T15:00:00Z"),
+          targetTableId: DotyposTableIdSchema.make("open-space-destination"),
+        };
+        const records = new Map<
+          DotyposReservationId,
+          ReturnType<typeof dotyposHoldFixture>
+        >();
+        let oldProviderId: DotyposReservationId | undefined;
+        let lookahead = false;
+        let replacementAvailable = true;
+        dotypos.createReservation.mockImplementation((input) =>
+          Effect.sync(() => {
+            const id = DotyposReservationIdSchema.make(`table-${records.size}`);
+            const record = {
+              ...dotyposHoldFixture(id),
+              _tableId: input.tableId,
+              _customerId: input.customerId,
+              startDate: input.startDate.toISOString(),
+              endDate: input.endDate.toISOString(),
+              seats: String(input.seats),
+              note: input.note,
+            };
+            records.set(id, record);
+            return record;
+          })
+        );
+        dotypos.cancelReservation.mockImplementation((id) =>
+          Effect.sync(() => {
+            const current = records.get(id);
+            if (current) records.set(id, { ...current, status: "CANCELLED" });
+          })
+        );
+        const holds = makeHolds({
+          dotypos,
+          providerReads: {
+            listActiveReservationsOverlapping: () =>
+              Effect.sync(() =>
+                [...records.values()].filter(
+                  (record) => record.status === "NEW"
+                )
+              ),
+            getReservationWithoutCustomer: (id) =>
+              Effect.sync(() => requireValue(records.get(id), "provider hold")),
+          },
+          teamPlan: (_reservation, exactTable, options) =>
+            Effect.sync(() => {
+              if (!oldProviderId || exactTable) return { tableId, moves: [] };
+              if (!replacementAvailable) return undefined;
+              if (records.get(oldProviderId)?.status === "CANCELLED") {
+                return { tableId, moves: [move] };
+              }
+              if (!options?.displacedHoldIds?.includes(oldProviderId))
+                return undefined;
+              lookahead = true;
+              return { tableId, moves: [move] };
+            }),
+        });
+        const base = holdRequest({ author });
+        const tableRequest = async (date: string) => {
+          const ordered = Schema.decodeUnknownSync(
+            reservationOrderIssuanceSchema("CZ")
+          )({
+            ...reservation,
+            kind: "table",
+            seats: 4,
+            startsAt: `${date}T09:00:00Z`,
+            endsAt: `${date}T09:15:00Z`,
+          });
+          if (ordered.kind !== "table")
+            throw new Error("Expected a Team Table");
+          const quote = await Effect.runPromise(
+            getTableReservationQuote(ordered)
+          );
+          return {
+            ...base,
+            checkout:
+              session === "rotated"
+                ? base.checkout
+                : { ...base.checkout, attemptId: newAttemptId() },
+            reservation: ordered,
+            checkoutDetails: getTableCheckoutDetails({
+              locale: "en-US",
+              reservation: ordered,
+              quote,
+              legalEvidence: {},
+            }),
+          } satisfies HoldRequest;
+        };
+        let originalOrderId: string | undefined;
+        if (session === "rotated") {
+          await holds.holdForAttempt({
+            ...(await tableRequest("2099-06-09")),
+            teamTableCapacity: { assignTableId: Effect.succeed(tableId) },
+          });
+          originalOrderId = requireValue((await rowsOf(author))[0]).id;
+          await setPaymentState(originalOrderId, "pending");
+        }
+        const previous = await holds.holdForAttempt({
+          ...(await tableRequest("2099-06-10")),
+          recheckTeamTableAuthority: Effect.void,
+        });
+        if (session === "rotated") {
+          expect(previous).toMatchObject({
+            kind: "created",
+            checkoutSessionId: promoteCheckoutAttemptToSessionId(
+              base.checkout.attemptId
+            ),
+          });
+        }
+        if (previous.kind !== "created") throw new Error("Expected a new hold");
+        oldProviderId = requireValue(
+          (await rowOf(previous.reservationId))?.dotyposReservationId,
+          "prior provider hold"
+        );
+        const replacement = {
+          ...(await tableRequest("2099-06-11")),
+          recheckTeamTableAuthority: Effect.all({
+            author: holdsCustomerAccountSection(author),
+            sourceAuthor: holdsCustomerAccountSection(sourceAuthor),
+          }).pipe(
+            Effect.tap((held) =>
+              Effect.sync(() =>
+                expect(held).toEqual({ author: true, sourceAuthor: true })
+              )
+            ),
+            Effect.asVoid
+          ),
+        };
+        replacementAvailable = false;
+        expect(
+          (
+            await holds.holdFailure({
+              ...replacement,
+              recheckTeamTableAuthority: Effect.void,
+            })
+          )._tag
+        ).toBe("WorkspaceTableUnavailableError");
         expect(dotypos.cancelReservation).not.toHaveBeenCalled();
-      } finally {
-        await blocked.commit();
+        expect(await rowOf(previous.reservationId)).toMatchObject({
+          reservationState: "held",
+          dotyposReservationId: oldProviderId,
+        });
+        expect(records.get(oldProviderId)?.status).toBe("NEW");
+
+        replacementAvailable = true;
+        const key = ["reservation-capacity", "2099-06-10"] as const;
+        const blocked = await holdPostgresTransaction(
+          postgres.pool,
+          "select pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+          key
+        );
+        const waiting = holds.holdFailure(replacement);
+        try {
+          await waitForAdvisoryLockWaiter(postgres.pool, key);
+          expect(lookahead).toBe(true);
+          expect(dotypos.cancelReservation).not.toHaveBeenCalled();
+          replacementAvailable = false;
+        } finally {
+          await blocked.commit();
+        }
+        expect((await waiting)._tag).toBe("WorkspaceTableUnavailableError");
+        expect(dotypos.cancelReservation).not.toHaveBeenCalled();
+        expect(await rowOf(previous.reservationId)).toMatchObject({
+          reservationState: "held",
+          dotyposReservationId: oldProviderId,
+        });
+
+        replacementAvailable = true;
+        expect(await holds.holdForAttempt(replacement)).toMatchObject({
+          kind: "created",
+        });
+        expect(dotypos.cancelReservation).toHaveBeenCalledWith(oldProviderId);
+        const rows = await rowsOf(author);
+        expect(
+          rows
+            .filter(({ id }) => id !== originalOrderId)
+            .map((row) => row.reservationState)
+        ).toEqual(["cancelled", "held"]);
+        if (originalOrderId) {
+          expect(await rowOf(originalOrderId)).toMatchObject({
+            reservationState: "held",
+            paymentState: "pending",
+          });
+        }
       }
-      expect(await Effect.runPromise(Fiber.join(waiting))).toMatchObject({
-        kind: "created",
-      });
-      expect(dotypos.cancelReservation).toHaveBeenCalledWith(oldProviderId);
-      const rows = await rowsOf(author);
-      expect(rows.map((row) => row.reservationState)).toEqual([
-        "cancelled",
-        "held",
-      ]);
-    });
+    );
 
     const rowsOf = (author: CustomerAccountId) =>
       postgres.db

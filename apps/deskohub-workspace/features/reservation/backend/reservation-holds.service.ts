@@ -308,18 +308,14 @@ const lookupTeamTableDisplacedHolds = Effect.fnUntraced(function* (
   const repository = yield* WorkspaceReservationRepository;
   const checkout = yield* selectCheckoutAttempt(request);
   if (checkout.kind !== "attempt") return [];
-  const session = yield* deriveCheckoutSessionKeys(checkout.checkoutSessionId);
-  const attempt = yield* deriveCheckoutAttemptKeys({
+  const current = yield* findSessionHoldToSupersede(repository, {
     checkoutSessionId: checkout.checkoutSessionId,
     checkoutAttemptId: checkout.checkoutAttemptId,
     reservation: request.reservation,
     people: request.officePeople?.valid,
+    entryPack: request.entryPack,
+    authorAccountId: request.booking.author,
   });
-  const ownAttempt = yield* repository.findByAttemptKeys(attempt.accepted);
-  const current = yield* repository.findCurrentByCheckoutSessionKey(
-    (yield* repository.findStoredCheckoutSessionKey(session.accepted)) ??
-      session.current
-  );
   const rotated =
     checkout.supersedeRotated && request.booking.agent
       ? yield* findRotatedAgentHolds({
@@ -329,9 +325,7 @@ const lookupTeamTableDisplacedHolds = Effect.fnUntraced(function* (
         })
       : [];
   const prior =
-    !ownAttempt &&
-    current?.authorAccountId === request.booking.author &&
-    !mustRotateCheckoutSession(current)
+    current && !rotated.some(({ id }) => id === current.id)
       ? [current, ...rotated]
       : rotated;
   const holds = yield* Effect.forEach(prior, readDisplacedTeamTableHold);
@@ -397,11 +391,14 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
     checkout.supersedeRotated &&
     booking.agent
   ) {
-    yield* supersedeRotatedAgentHolds({
-      authorAccountId: booking.author,
-      agentClientId: booking.agent.clientId,
-      agentCheckoutSessionId: request.checkout.sessionId,
-    });
+    yield* supersedeRotatedAgentHolds(
+      {
+        authorAccountId: booking.author,
+        agentClientId: booking.agent.clientId,
+        agentCheckoutSessionId: request.checkout.sessionId,
+      },
+      request.teamTableCapacity
+    );
   }
   if (checkout.kind === "payment_pending") {
     return {
@@ -419,6 +416,9 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
     checkoutSessionId: checkout.checkoutSessionId,
     checkoutAttemptId: checkout.checkoutAttemptId,
     reservation,
+    ...(request.teamTableCapacity && {
+      teamTableCapacity: request.teamTableCapacity,
+    }),
     ...(request.entryPack && { entryPack: request.entryPack }),
     ...(request.officePeople && { people: request.officePeople.valid }),
     draft: {
@@ -1028,6 +1028,7 @@ type ReservationDraftRequest = {
   readonly reservation: PreparePayStateInput["reservation"];
   readonly entryPack?: EntryPackRedemption;
   readonly people?: ValidOfficePeople;
+  readonly teamTableCapacity?: TeamTableBookingCapacity;
   readonly draft: Omit<
     CreateWorkspaceReservationInput,
     "checkoutSessionKey" | "checkoutAttemptKey"
@@ -1106,6 +1107,89 @@ const rotateCheckoutSession = (input: {
           input.checkoutAttemptId
         ),
       } satisfies ReservationDraftStep);
+
+const getSessionReservationAction = (
+  reservation: WorkspaceReservation,
+  authorAccountId: CustomerAccountId | null
+) => {
+  if (
+    reservation.reservationState === "draft" &&
+    reservation.failureCode === entryPackUnavailableFailureCode
+  )
+    return "rotate";
+  if (isSessionReservationPending(reservation)) return "wait";
+  if (
+    mustRotateCheckoutSession(reservation) ||
+    isAnotherAccountsReservation(reservation, authorAccountId)
+  )
+    return "rotate";
+  return "supersede";
+};
+
+type DraftAttemptSelection = Pick<
+  ReservationDraftRequest,
+  "checkoutAttemptId" | "reservation" | "people" | "entryPack"
+>;
+
+const getDraftAttemptKeys = (
+  request: DraftAttemptSelection,
+  checkoutSessionId: CheckoutSessionId
+) =>
+  deriveCheckoutAttemptKeys({
+    checkoutSessionId,
+    checkoutAttemptId: request.checkoutAttemptId,
+    reservation: request.reservation,
+    people: request.people,
+    ...(request.entryPack && { entryPackId: request.entryPack.passId }),
+  });
+
+const readCurrentDraftSession = Effect.fnUntraced(function* (
+  reservations: IWorkspaceReservationRepository,
+  checkoutSessionId: CheckoutSessionId
+) {
+  const sessionKeys = yield* deriveCheckoutSessionKeys(checkoutSessionId);
+  // Keep using the session key stored by its first row across Pay-state key rotations.
+  const sessionKey =
+    (yield* reservations.findStoredCheckoutSessionKey(sessionKeys.accepted)) ??
+    sessionKeys.current;
+  const current =
+    yield* reservations.findCurrentByCheckoutSessionKey(sessionKey);
+  return { sessionKeys, sessionKey, current };
+});
+
+/** Follows draft preparation's session rotation without settling or cancelling any row. */
+const findSessionHoldToSupersede = Effect.fnUntraced(function* (
+  reservations: IWorkspaceReservationRepository,
+  input: DraftAttemptSelection & {
+    readonly checkoutSessionId: CheckoutSessionId;
+    readonly authorAccountId: CustomerAccountId;
+  }
+) {
+  let checkoutSessionId = input.checkoutSessionId;
+  while (true) {
+    const attemptKeys = yield* getDraftAttemptKeys(input, checkoutSessionId);
+    if (yield* reservations.findByAttemptKeys(attemptKeys.accepted)) return;
+
+    const { current } = yield* readCurrentDraftSession(
+      reservations,
+      checkoutSessionId
+    );
+    if (!current) return;
+
+    const action = getSessionReservationAction(current, input.authorAccountId);
+    if (action === "supersede") return current;
+    if (action === "wait")
+      return yield* new CheckoutAttemptUnavailableError({
+        reservation: current,
+      });
+    const rotated = yield* rotateCheckoutSession({
+      checkoutSessionId,
+      checkoutAttemptId: input.checkoutAttemptId,
+      reservation: current,
+    });
+    checkoutSessionId = rotated.checkoutSessionId;
+  }
+});
 
 /** The attempt's own reservation, once no hold transition is in flight. */
 const attachTeamTableCheckoutHold = Effect.fn(
@@ -1314,6 +1398,9 @@ const supersedeSessionReservation = Effect.fnUntraced(function* (input: {
 }) {
   const { reservations, availability } = input.services;
   const { checkoutSessionId, request } = input;
+  yield* request.teamTableCapacity?.assertCanDisplace?.(
+    input.currentReservation
+  ) ?? Effect.void;
   const claimed = yield* reservations.claimSupersessionCancellation(
     input.currentReservation.id
   );
@@ -1388,18 +1475,12 @@ const resolveSessionReservation = Effect.fnUntraced(function* (input: {
   readonly checkoutSessionKey: CheckoutSessionKeys["current"];
   readonly checkoutAttemptKey: CheckoutAttemptKeys["current"];
 }) {
-  const { checkoutSessionId, currentReservation } = input;
-  if (
-    currentReservation.reservationState === "draft" &&
-    currentReservation.failureCode === entryPackUnavailableFailureCode
-  ) {
-    return yield* rotateCheckoutSession({
-      checkoutSessionId,
-      checkoutAttemptId: input.request.checkoutAttemptId,
-      reservation: currentReservation,
-    });
-  }
-  if (isSessionReservationPending(currentReservation)) {
+  const { checkoutSessionId, currentReservation, request } = input;
+  const action = getSessionReservationAction(
+    currentReservation,
+    request.draft.authorAccountId
+  );
+  if (action === "wait") {
     if (input.request.reservation.kind === "table")
       return yield* new CheckoutAttemptUnavailableError({
         reservation: currentReservation,
@@ -1411,21 +1492,17 @@ const resolveSessionReservation = Effect.fnUntraced(function* (input: {
     );
   }
 
-  if (
-    mustRotateCheckoutSession(currentReservation) ||
-    isAnotherAccountsReservation(
-      currentReservation,
-      input.request.draft.authorAccountId
-    )
-  ) {
-    yield* Effect.logInfo(
-      "Checkout session rotated before reservation creation",
-      {
-        previousReservationId: currentReservation.id,
-        previousReservationState: currentReservation.reservationState,
-        previousPaymentState: currentReservation.paymentState,
-      }
-    );
+  if (action === "rotate") {
+    if (currentReservation.reservationState !== "draft") {
+      yield* Effect.logInfo(
+        "Checkout session rotated before reservation creation",
+        {
+          previousReservationId: currentReservation.id,
+          previousReservationState: currentReservation.reservationState,
+          previousPaymentState: currentReservation.paymentState,
+        }
+      );
+    }
     return yield* rotateCheckoutSession({
       checkoutSessionId,
       checkoutAttemptId: input.request.checkoutAttemptId,
@@ -1484,15 +1561,10 @@ const prepareDraftInSession = Effect.fnUntraced(function* (
   checkoutSessionId: CheckoutSessionId
 ) {
   const { reservations } = services;
-  const checkoutSessionKeys =
-    yield* deriveCheckoutSessionKeys(checkoutSessionId);
-  const checkoutAttemptKeys = yield* deriveCheckoutAttemptKeys({
-    checkoutSessionId,
-    checkoutAttemptId: request.checkoutAttemptId,
-    reservation: request.reservation,
-    people: request.people,
-    ...(request.entryPack && { entryPackId: request.entryPack.passId }),
-  });
+  const checkoutAttemptKeys = yield* getDraftAttemptKeys(
+    request,
+    checkoutSessionId
+  );
 
   const existingAttempt = yield* findSettledAttemptReservation(
     reservations,
@@ -1506,14 +1578,11 @@ const prepareDraftInSession = Effect.fnUntraced(function* (
     );
   }
 
-  // Rows of one session keep the key stored by its first row, so a
-  // session that spans a Pay-state key rotation still groups as one.
-  const checkoutSessionKey =
-    (yield* reservations.findStoredCheckoutSessionKey(
-      checkoutSessionKeys.accepted
-    )) ?? checkoutSessionKeys.current;
-  const currentReservation =
-    yield* reservations.findCurrentByCheckoutSessionKey(checkoutSessionKey);
+  const {
+    sessionKeys: checkoutSessionKeys,
+    sessionKey: checkoutSessionKey,
+    current: currentReservation,
+  } = yield* readCurrentDraftSession(reservations, checkoutSessionId);
   if (currentReservation) {
     return yield* resolveSessionReservation({
       services,
@@ -1606,12 +1675,13 @@ const findRotatedAgentHolds = Effect.fnUntraced(function* (
 
 const supersedeRotatedAgentHolds = Effect.fn(
   "preparePayState.supersedeRotatedAgentHolds"
-)(function* (input: AgentHoldScope) {
+)(function* (input: AgentHoldScope, capacity?: TeamTableBookingCapacity) {
   const rotatedHolds = yield* findRotatedAgentHolds(input);
   const unpaidHoldRelease = yield* UnpaidHoldRelease;
   yield* Effect.forEach(
     rotatedHolds,
     Effect.fn(function* (hold) {
+      yield* capacity?.assertCanDisplace?.(hold) ?? Effect.void;
       const dotyposReleaseFailed = (cause: DotyposWriteFailure) =>
         Effect.logError("Checkout supersession Dotypos cancellation failed", {
           reservationId: hold.id,

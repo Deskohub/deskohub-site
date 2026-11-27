@@ -41,9 +41,14 @@ type AssignmentError =
     >
   | WorkspaceTableUnavailableError;
 
+type DisplacedOrder = Pick<WorkspaceReservation, "id" | "dotyposReservationId">;
+
 /** A capacity assignment that can only run inside the enclosing booking section. */
 export type TeamTableBookingCapacity = {
   readonly assignTableId: Effect.Effect<DotyposTableId, AssignmentError>;
+  readonly assertCanDisplace?: (
+    order: DisplacedOrder
+  ) => Effect.Effect<void, WorkspaceTableUnavailableError>;
 };
 
 export const TeamTableBookingCapacityLive = Layer.mergeAll(
@@ -61,8 +66,7 @@ export const TeamTableBookingCapacityLive = Layer.mergeAll(
   )
 );
 
-type DisplacedHold = {
-  readonly id: WorkspaceReservationId;
+type DisplacedHold = DisplacedOrder & {
   readonly providerId?: DotyposReservationId;
   readonly dates: readonly Temporal.PlainDate[];
 };
@@ -92,8 +96,10 @@ export const readDisplacedTeamTableHold = Effect.fnUntraced(function* (
       : null;
   return {
     id: order.id,
+    dotyposReservationId: order.dotyposReservationId,
     providerId:
       record?.status === "NEW" &&
+      record.id === order.dotyposReservationId &&
       record._customerId === order.dotyposCustomerId &&
       dates
         ? record.id
@@ -183,7 +189,9 @@ const discoverCapacity = Effect.fnUntraced(function* <E, R>(input: {
         (hold) =>
           !prior.some(
             (first) =>
-              first.id === hold.id && first.providerId === hold.providerId
+              first.id === hold.id &&
+              first.dotyposReservationId === hold.dotyposReservationId &&
+              first.providerId === hold.providerId
           ) || hold.dates.some((date) => !lockedDates.has(date.toString()))
       )
     )
@@ -227,7 +235,24 @@ const discoverCapacity = Effect.fnUntraced(function* <E, R>(input: {
     return fresh.tableId;
   });
 
-  return { dates, orderIds, sourceAccountIds, validate, assignTableId };
+  // Draft preparation can retry or rotate again after validation. It may
+  // only cancel a hold that the locked plan already accounted for.
+  const assertCanDisplace = (order: DisplacedOrder) =>
+    prior.some(
+      ({ id, dotyposReservationId }) =>
+        id === order.id && dotyposReservationId === order.dotyposReservationId
+    )
+      ? Effect.void
+      : Effect.fail(unavailableFor(reservation));
+
+  return {
+    dates,
+    orderIds,
+    sourceAccountIds,
+    validate,
+    assignTableId,
+    assertCanDisplace,
+  };
 });
 
 const retryDiscovery = <A, E, R>(
