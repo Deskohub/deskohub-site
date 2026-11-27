@@ -204,6 +204,9 @@ const toStartReservationError = (
     Match.tag("OfficeReservationsDisabledError", () =>
       AgentToolError.unsupportedFamily()
     ),
+    Match.tag("TeamTableReservationsDisabledError", () =>
+      AgentToolError.unsupportedFamily()
+    ),
     Match.tag("OvernightStayUnavailableError", () =>
       AgentToolError.rejectedSelection(
         BookingSelectionRejected.invalidField("stay")

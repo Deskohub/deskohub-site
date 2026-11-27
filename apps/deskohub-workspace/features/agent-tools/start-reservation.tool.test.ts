@@ -211,6 +211,35 @@ describe("start_reservation", () => {
     ]);
   });
 
+  test.each([
+    ["WorkspaceTableUnavailableError", "selection_unavailable"],
+    ["TeamTableReservationsDisabledError", "unsupported_family"],
+  ])("maps %s after a Team Table quote", async (_tag, code) => {
+    prepared = { fail: { _tag } };
+
+    const result = await start(
+      {
+        family: "table",
+        date: workspaceDateFromToday(2),
+        seats: 4,
+        start_time: "09:15",
+        end_time: "10:45",
+      },
+      {
+        services: makeAgentToolTestServices({
+          teamTableEnabled: true,
+          teamTableSizes: [4],
+        }),
+      }
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { details: { code } },
+    });
+  });
+
   test("passes a repeated selection the same way and another selection as its own", async () => {
     await start(cowork());
     await start(cowork());
