@@ -24,21 +24,37 @@ import { matchesUnlimitedPassDayHold } from "./unlimited-pass-dotypos-holds";
 type CapacityReservation = ReservationRecord &
   Pick<DotyposReservation, "_customerId" | "note">;
 
-export const getBookingsWithCapacityClaims = (
+export const getCapacityInventory = (
   records: readonly CapacityReservation[],
   claims: {
     readonly passDayIntents: readonly PendingPassDayCapacity[];
     readonly openSpaceMoveClaims: readonly OpenSpaceMoveCapacityClaim[];
   },
   supersedeOrderId?: OrderId
-): readonly TableBooking[] => [
-  ...getBookingsWithPassDayIntents(
+) => {
+  const passDays = getPassDayCapacityInventory(
     records,
     claims.passDayIntents,
     supersedeOrderId
-  ),
-  ...getUnobservedOpenSpaceMoveBookings(claims.openSpaceMoveClaims, records),
-];
+  );
+  return {
+    records: passDays.records,
+    unobservedBookings: [
+      ...passDays.unobservedBookings,
+      ...getUnobservedOpenSpaceMoveBookings(
+        claims.openSpaceMoveClaims,
+        records
+      ),
+    ],
+  };
+};
+
+export const getBookingsWithCapacityClaims = (
+  ...input: Parameters<typeof getCapacityInventory>
+): readonly TableBooking[] => {
+  const { records, unobservedBookings } = getCapacityInventory(...input);
+  return [...toTableBookings(records), ...unobservedBookings];
+};
 
 const providerHold = ({
   passId,
@@ -122,11 +138,11 @@ export const observePassDayInventory = <
   );
 
 /** A creating pass day already holds capacity, even before Dotypos lists it. */
-export const getBookingsWithPassDayIntents = (
+const getPassDayCapacityInventory = (
   reservations: readonly CapacityReservation[],
   intents: readonly PendingPassDayCapacity[],
   supersedeOrderId?: OrderId
-): readonly TableBooking[] => {
+) => {
   const passDayIds = new Set(
     reservations.flatMap((record) =>
       record.unlimitedPassDay || readPassDayMarkers(record.note).length > 0
@@ -172,13 +188,20 @@ export const getBookingsWithPassDayIntents = (
         : []
     )
   );
-  const providerBookings = toTableBookings(
-    activeReservations.filter((record) => !excluded.has(record.id))
-  );
   const localBookings = claims.flatMap((claim) =>
     claim.visible || (claim.passId === supersedeOrderId && claim.canSupersede)
       ? []
       : [claim.booking]
   );
-  return [...providerBookings, ...localBookings];
+  return {
+    records: activeReservations.filter((record) => !excluded.has(record.id)),
+    unobservedBookings: localBookings,
+  };
+};
+
+export const getBookingsWithPassDayIntents = (
+  ...input: Parameters<typeof getPassDayCapacityInventory>
+): readonly TableBooking[] => {
+  const { records, unobservedBookings } = getPassDayCapacityInventory(...input);
+  return [...toTableBookings(records), ...unobservedBookings];
 };

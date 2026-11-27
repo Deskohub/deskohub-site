@@ -3,6 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
   DotyposService,
   DotyposTableSchema,
   DotyposUncertain,
@@ -329,6 +330,113 @@ describe.skipIf(!database)("Open Space table moves", () => {
       status: "NEW",
     });
   });
+
+  test("retires a staged hold after payment retry attaches a fresh hold", async () => {
+    const f = fixture();
+    const move = await f.source("NEW");
+    let staged: Awaited<ReturnType<typeof f.read>> | undefined;
+    const result = await f.run(
+      Effect.flatMap(OpenSpaceTableMoves, (service) =>
+        service
+          .repack(f.plan([move]), Effect.die("unexpected assignment"))
+          .pipe(Effect.result)
+      ),
+      {
+        createReservation: (input) =>
+          f.provider.service.createReservation(input).pipe(
+            Effect.flatMap((record) => {
+              staged = record;
+              return new DotyposUncertain({
+                operation: "createReservation",
+                request: "reservation.create",
+                reason: "timeout",
+              });
+            })
+          ),
+      }
+    );
+    expect(result._tag).toBe("Failure");
+    if (!staged) throw new Error("Expected a staged replacement");
+    await Effect.runPromise(
+      f.provider.service.cancelReservation(move.sourceReservationId)
+    );
+    const original = await f.read(move.sourceReservationId);
+    const fresh = await Effect.runPromise(
+      f.provider.service.createReservation({
+        customerId: DotyposCustomerIdSchema.make("3"),
+        tableId: f.sourceTable.id,
+        startDate: new Date(move.startsAt.epochMilliseconds),
+        endDate: new Date(move.endsAt.epochMilliseconds),
+        seats: 1,
+        status: "NEW",
+        note: original.note ?? "",
+      })
+    );
+    await database.pool.query(
+      "update workspace_reservations set dotypos_reservation_id = $2 where id = $1",
+      [move.reservationId, fresh.id]
+    );
+    await f.run(
+      Effect.flatMap(OpenSpaceTableMoves, (service) => service.reconcile(2))
+    );
+
+    expect(await f.read(staged.id)).toMatchObject({ status: "CANCELLED" });
+    expect(await f.read(fresh.id)).toMatchObject({ status: "NEW" });
+    expect(await f.local(move.reservationId)).toMatchObject({
+      dotypos_reservation_id: fresh.id,
+    });
+    const { rows } = await database.pool.query(
+      "select settled_at is not null as settled, ambiguous_at is not null as ambiguous from open_space_table_moves where reservation_id = $1",
+      [move.reservationId]
+    );
+    expect(rows).toEqual([{ settled: true, ambiguous: false }]);
+  });
+
+  test.each([0, 500])(
+    "checks the destination at a %d microsecond overlap",
+    async (microseconds) => {
+      const f = fixture();
+      const move = await f.source("CONFIRMED");
+      const original = await f.read(move.sourceReservationId);
+      let reads = 0;
+      const result = await f.run(
+        Effect.flatMap(OpenSpaceTableMoves, (service) =>
+          service.repack(f.plan([move]), Effect.succeed("assigned"))
+        ),
+        {
+          listActiveReservationsOverlapping: (window) =>
+            f.provider.service.listActiveReservationsOverlapping(window).pipe(
+              Effect.map((records) =>
+                ++reads === 1
+                  ? records
+                  : [
+                      ...records,
+                      {
+                        ...original,
+                        id: DotyposReservationIdSchema.make(
+                          "synthetic-capacity-blocker"
+                        ),
+                        _tableId: f.targetTable.id,
+                        seats: "3",
+                        startDate: move.startsAt
+                          .subtract({ hours: 1 })
+                          .toString(),
+                        endDate: move.startsAt.add({ microseconds }).toString(),
+                      },
+                    ]
+              )
+            ),
+        }
+      );
+      expect(reads).toBeGreaterThanOrEqual(2);
+      expect(result).toEqual(
+        microseconds === 0 ? Option.some("assigned") : Option.none()
+      );
+      expect(await f.read(move.sourceReservationId)).toMatchObject({
+        status: microseconds === 0 ? "CANCELLED" : "CONFIRMED",
+      });
+    }
+  );
 
   test("moves an unexpired NEW hold and leaves it payable", async () => {
     const f = fixture();

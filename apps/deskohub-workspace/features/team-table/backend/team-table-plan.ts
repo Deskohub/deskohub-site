@@ -251,6 +251,7 @@ export const planTeamTable = ({
     })
     .sort(
       (left, right) =>
+        left.blockers.length - right.blockers.length ||
         Number(right.alreadyBooked) - Number(left.alreadyBooked) ||
         left.tableId.localeCompare(right.tableId)
     );

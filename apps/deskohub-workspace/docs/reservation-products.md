@@ -126,7 +126,7 @@ Team Table becomes bookable when its reservation flow is complete and its releas
 
 Workspace assigns Open Space bookings to tables outside the Team Table pool first. Within the Team Table pool, it fills tables already in use before assigning an empty table. An active Team Table hold or confirmed booking blocks all Open Space and Team Table use of its table for the booked interval.
 
-For Team Table, Workspace prefers a table that needs no moves. Among equally suitable tables, it prefers one with a non-overlapping Team Table booking on a Prague date the request touches, before using a table with no Team Table bookings on those dates.
+For Team Table, Workspace chooses a table that needs the fewest moves. When tables need the same number of moves, it prefers one with a non-overlapping Team Table booking on a Prague date the request touches.
 
 To make room on a future Prague date, Workspace can reassign unseated Open Space holds for paid single-day bookings, Entry Pack visits, and Unlimited Pass days. Each hold needs room at a different Open Space table for its entire reserved interval. Workspace can move several holds to free one table. Today's bookings, Reserved Desk bookings, and bookings without a matching Workspace record stay in place.
 

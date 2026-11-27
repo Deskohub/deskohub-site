@@ -2,11 +2,12 @@ import type {
   DotyposReservation,
   DotyposReservationId,
 } from "@deskohub/dotypos";
+import { Option } from "effect";
 import {
   type TableBooking,
-  toTableBookings,
   workspaceBookingSeatCount,
 } from "@/features/checkout/backend/reservation/workspace-table-occupancy";
+import { decodeBookedReservation } from "./booked-reservation";
 import { formatOpenSpaceMoveMarker } from "./open-space-move-marker";
 import type { ReservationRecord } from "./reservation-record";
 
@@ -43,13 +44,16 @@ export const getUnobservedOpenSpaceMoveBookings = (
       [];
     const matches = matchById ? [matchById, ...matchByMarker] : matchByMarker;
     if (matches.length === 0) continue;
-    const [booking] = toTableBookings([record]);
-    if (!booking) continue;
+    if (record.status !== "NEW" && record.status !== "CONFIRMED") continue;
+    const { interval } = decodeBookedReservation(record);
+    if (Option.isNone(interval)) continue;
     for (const claim of matches) {
       if (
-        booking.tableId === claim.tableId &&
-        booking.startsAt === claim.startsAt &&
-        booking.endsAt === claim.endsAt
+        record._tableId === claim.tableId &&
+        interval.value.startsAt.epochNanoseconds ===
+          BigInt(claim.startsAt) * 1_000_000n &&
+        interval.value.endsAt.epochNanoseconds ===
+          BigInt(claim.endsAt) * 1_000_000n
       )
         observed.add(claim);
     }

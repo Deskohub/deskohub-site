@@ -30,7 +30,7 @@ import {
   isWorkspaceCoworkTableCandidate,
 } from "@/features/checkout/backend/reservation/workspace-table-selection";
 import { movablePassDay } from "@/features/passes/backend/movable-pass-day";
-import { getBookingsWithCapacityClaims } from "@/features/passes/backend/pass-day-capacity-bookings";
+import { getCapacityInventory } from "@/features/passes/backend/pass-day-capacity-bookings";
 import { formatPassDayMarker } from "@/features/passes/pass-day-marker";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
 import {
@@ -89,17 +89,10 @@ const booking = (move: Move, tableId: DotyposTableId) => ({
   endDate: temporalInstantToDate(move.endsAt),
 });
 
-const matchesHold = (
-  record: DotyposReservation,
-  move: Move,
-  tableId: DotyposTableId,
-  noteLine: string
-) => {
+const matchesBooking = (record: DotyposReservation, move: Move) => {
   const { interval, seats } = decodeBookedReservation(record);
   return (
-    record._tableId === tableId &&
     record._customerId === move.customerId &&
-    record.note?.split("\n").includes(noteLine) === true &&
     Option.contains(seats, workspaceBookingSeatCount) &&
     Option.exists(
       interval,
@@ -108,6 +101,16 @@ const matchesHold = (
     )
   );
 };
+
+const matchesHold = (
+  record: DotyposReservation,
+  move: Move,
+  tableId: DotyposTableId,
+  noteLine: string
+) =>
+  record._tableId === tableId &&
+  record.note?.split("\n").includes(noteLine) === true &&
+  matchesBooking(record, move);
 
 const datesForBatch = (batch: Batch, moves: readonly MoveRequest[]) => [
   ...getPlainDatesBetween(
@@ -363,19 +366,31 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
 
   const retireTarget = Effect.fnUntraced(function* (move: Move) {
     const [row] = yield* readLocal(move);
-    const source = yield* readHold(move.sourceReservationId);
-    if (
-      !row ||
-      row.dotyposReservationId === move.targetReservationId ||
-      (row.reservationState !== "cancelled" &&
-        row.reservationState !== "hold_expired" &&
-        (row.dotyposReservationId !== move.sourceReservationId ||
-          !source ||
-          (source.status !== "NEW" && source.status !== "CONFIRMED") ||
-          !matchesHold(source, move, move.sourceTableId, move.sourceNoteLine)))
-    ) {
+    if (!row || row.dotyposReservationId === move.targetReservationId) {
       yield* ambiguous(move);
       return;
+    }
+    if (
+      row.reservationState !== "cancelled" &&
+      row.reservationState !== "hold_expired"
+    ) {
+      const current = row.dotyposReservationId
+        ? yield* readHold(row.dotyposReservationId)
+        : undefined;
+      const ownsLiveHold =
+        row.dotyposCustomerId === move.customerId &&
+        current &&
+        (current.status === "NEW" || current.status === "CONFIRMED") &&
+        (current.id === move.sourceReservationId
+          ? matchesHold(current, move, move.sourceTableId, move.sourceNoteLine)
+          : !row.passId &&
+            current._tableId !== undefined &&
+            noteNamesPaymentOrder(current.note, row.id) &&
+            matchesBooking(current, move));
+      if (!ownsLiveHold) {
+        yield* ambiguous(move);
+        return;
+      }
     }
     yield* retire(move, "target");
   });
@@ -442,26 +457,45 @@ const makeOpenSpaceTableMoves = Effect.gen(function* () {
 
     const ignored = new Set([...expired, move.targetReservationId]);
     const observed = records.filter(({ id }) => !ignored.has(id));
-    const startsAndEnds: Array<{ time: number; seats: number }> = [];
-    const addOccupancy = (startsAt: number, endsAt: number, seats: number) => {
-      if (startsAt < window.endsAt && endsAt > window.startsAt) {
+    const startsAndEnds: Array<{ time: bigint; seats: number }> = [];
+    const first = move.startsAt.epochNanoseconds;
+    const last = move.endsAt.epochNanoseconds;
+    const addOccupancy = (startsAt: bigint, endsAt: bigint, seats: number) => {
+      if (startsAt < last && endsAt > first) {
         startsAndEnds.push(
-          { time: Math.max(startsAt, window.startsAt), seats },
-          { time: Math.min(endsAt, window.endsAt), seats: -seats }
+          { time: startsAt < first ? first : startsAt, seats },
+          { time: endsAt > last ? last : endsAt, seats: -seats }
         );
       }
     };
-    const bookings = getBookingsWithCapacityClaims(observed, {
+    const inventory = getCapacityInventory(observed, {
       passDayIntents: claims,
       openSpaceMoveClaims: pendingTargets.filter(
         ({ generation }) => generation !== move.generation
       ),
     });
-    for (const booked of bookings) {
-      if (booked.tableId === move.targetTableId)
-        addOccupancy(booked.startsAt, booked.endsAt, booked.seats);
+    for (const record of inventory.records) {
+      if (record._tableId !== move.targetTableId) continue;
+      const { interval, seats } = decodeBookedReservation(record);
+      if (Option.isNone(interval)) return false;
+      addOccupancy(
+        interval.value.startsAt.epochNanoseconds,
+        interval.value.endsAt.epochNanoseconds,
+        Option.getOrElse(seats, () => workspaceBookingSeatCount)
+      );
     }
-    startsAndEnds.sort((a, b) => a.time - b.time || a.seats - b.seats);
+    for (const booked of inventory.unobservedBookings) {
+      if (booked.tableId === move.targetTableId)
+        addOccupancy(
+          BigInt(booked.startsAt) * 1_000_000n,
+          BigInt(booked.endsAt) * 1_000_000n,
+          booked.seats
+        );
+    }
+    startsAndEnds.sort((a, b) => {
+      if (a.time === b.time) return a.seats - b.seats;
+      return a.time < b.time ? -1 : 1;
+    });
     let occupied = workspaceBookingSeatCount;
     return (
       startsAndEnds.every(({ seats }) => {

@@ -260,6 +260,22 @@ test("avoids all moves before preferring to reuse an already-booked Team Table",
       moves: [{ reservationId: "move-from-booked" }],
     },
   });
+
+  bookings.push(moveSource(booked, "second-move-from-booked", window));
+  expect(
+    planTeamTable({
+      tables: [booked, clean, destination],
+      bookings,
+      window,
+      now,
+      seats: 4,
+    })
+  ).toMatchObject({
+    success: {
+      tableId: clean.id,
+      moves: [{ reservationId: "move-from-clean" }],
+    },
+  });
 });
 
 test("keeps unverified, expired and non-future blockers on their original table", () => {
