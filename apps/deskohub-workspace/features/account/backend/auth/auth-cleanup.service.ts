@@ -29,7 +29,7 @@ type DeletedAuthRowCounts = {
  * Fixed, non-PII cleanup failure. Raw database errors never cross this
  * boundary, so operator logs stay free of table payloads.
  */
-export class AuthCleanupFailure extends Data.TaggedError("AuthCleanupFailure")<{
+class AuthCleanupFailure extends Data.TaggedError("AuthCleanupFailure")<{
   readonly code: "account.cleanup.unavailable";
 }> {}
 
