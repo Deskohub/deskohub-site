@@ -6,7 +6,6 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
-import type { CampaignBodyNode } from "../../body/campaign-body-document";
 import {
   campaignBodyOf,
   loadCampaignBodyEditorHarness,
@@ -45,7 +44,7 @@ const blockTypes = (rendered: Rendered) =>
   (rendered.editor.getJSON().content ?? []).map(({ type }) => type);
 
 const firstBlock = (rendered: Rendered) =>
-  rendered.editor.getJSON().content?.[0] as CampaignBodyNode | undefined;
+  rendered.editor.getJSON().content?.[0];
 
 const labels = {
   bold: m.emailCampaignsEditorBold({}, { locale }),

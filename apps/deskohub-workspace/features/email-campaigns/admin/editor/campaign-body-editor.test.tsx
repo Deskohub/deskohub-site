@@ -7,6 +7,7 @@ import {
   spyOn,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import type { Editor } from "@tiptap/core";
 import { Effect, Option } from "effect";
 import { m } from "@/features/administration/i18n";
@@ -87,26 +88,30 @@ const cloudinaryImage =
   "https://res.cloudinary.com/cloud/image/upload/v1/campaigns/autumn.jpg";
 
 /** A paragraph, then at position 8 an image with these attributes. */
-const bodyWithImage = (
-  attrs: CampaignBodyNode["attrs"] = { width: 480 }
-): CampaignBodyNode => ({
-  type: "doc",
-  content: [
-    { type: "paragraph", content: [{ type: "text", text: "Podzim" }] },
-    {
-      type: "image",
-      attrs: { src: cloudinaryImage, alt: "Zasedačka", title: null, ...attrs },
-    },
-  ],
-});
+const bodyWithImage = (attrs: CampaignBodyNode["attrs"] = { width: 480 }) =>
+  ({
+    type: "doc",
+    content: [
+      { type: "paragraph", content: [{ type: "text", text: "Podzim" }] },
+      {
+        type: "image",
+        attrs: {
+          src: cloudinaryImage,
+          alt: "Zasedačka",
+          title: null,
+          ...attrs,
+        },
+      },
+    ] as const,
+  }) satisfies CampaignBodyNode;
 
-const alignmentLabels = [
-  m.emailCampaignsImageAlignLeft({}, { locale }),
-  m.emailCampaignsImageAlignCenter({}, { locale }),
-  m.emailCampaignsImageAlignRight({}, { locale }),
-];
+const alignmentLabels = {
+  left: m.emailCampaignsImageAlignLeft({}, { locale }),
+  center: m.emailCampaignsImageAlignCenter({}, { locale }),
+  right: m.emailCampaignsImageAlignRight({}, { locale }),
+};
 
-const renderEditor = async (value = bodyWithImage()) => {
+const renderEditor = async (value: CampaignBodyNode = bodyWithImage()) => {
   const changes: CampaignBodyNode[] = [];
   const view = render(
     <CampaignBodyEditor
@@ -124,8 +129,12 @@ const renderEditor = async (value = bodyWithImage()) => {
     return element.editor;
   });
   const alignmentButtons = () =>
-    alignmentLabels.flatMap((name) => view.queryAllByRole("button", { name }));
-  return { view, editor, changes, alignmentButtons };
+    Object.values(alignmentLabels).flatMap((name) =>
+      view.queryAllByRole("button", { name })
+    );
+  const alignmentButton = (alignment: keyof typeof alignmentLabels) =>
+    view.getByRole("button", { name: alignmentLabels[alignment] });
+  return { view, editor, changes, alignmentButton, alignmentButtons };
 };
 
 type CampaignBodyPart =
@@ -315,13 +324,14 @@ test("shows the alignment controls only while an image is selected", async () =>
 });
 
 test("aligns the selected image and keeps its width", async () => {
-  const { editor, changes, alignmentButtons } = await renderEditor();
+  const { editor, changes, alignmentButton, alignmentButtons } =
+    await renderEditor();
 
   act(() => {
     editor.commands.setNodeSelection(8);
   });
   await waitFor(() => expect(alignmentButtons()).toHaveLength(3));
-  fireEvent.click(alignmentButtons()[2]!);
+  fireEvent.click(alignmentButton("right"));
 
   expect(changes.at(-1)?.content?.[1]?.attrs).toMatchObject({
     align: "right",
@@ -371,7 +381,9 @@ test("resizes the selected image, keeps input focus, and reopens the emitted doc
     fireEvent.change(input, { target: { value: "180" } });
   });
   expect(document.activeElement).toBe(input);
-  const saved = structuredClone(changes.at(-1)!);
+  const edited = changes.at(-1);
+  assert(edited, "Expected the editor to emit the resized body.");
+  const saved = structuredClone(edited);
   expect(saved.content?.[1]?.attrs).toMatchObject({
     width: 180,
     height: null,
@@ -440,7 +452,7 @@ test("drops an invalid width draft when selecting another image of the same size
   const body = bodyWithImage();
   const { editor, view } = await renderEditor({
     ...body,
-    content: [...body.content!, body.content![1]!],
+    content: [...body.content, body.content[1]],
   });
   act(() => editor.commands.setNodeSelection(8));
   fireEvent.change(await view.findByRole("spinbutton"), {
@@ -451,9 +463,9 @@ test("drops an invalid width draft when selecting another image of the same size
 });
 
 const chooseImage = (view: ReturnType<typeof render>, file: File) => {
-  const input =
-    view.container.querySelector<HTMLInputElement>('input[type="file"]');
-  fireEvent.change(input!, { target: { files: [file] } });
+  const input = view.container.querySelector('input[type="file"]');
+  assert(input instanceof HTMLInputElement, "Expected an image file input.");
+  fireEvent.change(input, { target: { files: [file] } });
 };
 
 const insertButton = (view: ReturnType<typeof render>) =>
@@ -701,9 +713,8 @@ test("uploads nothing when the upload isn't authorized", async () => {
 });
 
 test("aligns an image saved without a width at its natural width", async () => {
-  const { view, editor, changes, alignmentButtons } = await renderEditor(
-    bodyWithImage({})
-  );
+  const { view, editor, changes, alignmentButton, alignmentButtons } =
+    await renderEditor(bodyWithImage({}));
   const picture = view.container.querySelector(".ProseMirror img");
   Object.defineProperty(picture, "naturalWidth", { value: 800 });
 
@@ -714,7 +725,7 @@ test("aligns an image saved without a width at its natural width", async () => {
   expect(
     alignmentButtons().map((button) => button.getAttribute("aria-pressed"))
   ).toEqual(["false", "true", "false"]);
-  fireEvent.click(alignmentButtons()[0]!);
+  fireEvent.click(alignmentButton("left"));
 
   expect(changes.at(-1)?.content?.[1]?.attrs).toMatchObject({
     align: "left",
@@ -723,15 +734,14 @@ test("aligns an image saved without a width at its natural width", async () => {
 });
 
 test("aligns an image that hasn't loaded without guessing its width", async () => {
-  const { editor, changes, alignmentButtons } = await renderEditor(
-    bodyWithImage({})
-  );
+  const { editor, changes, alignmentButton, alignmentButtons } =
+    await renderEditor(bodyWithImage({}));
 
   act(() => {
     editor.commands.setNodeSelection(8);
   });
   await waitFor(() => expect(alignmentButtons()).toHaveLength(3));
-  fireEvent.click(alignmentButtons()[2]!);
+  fireEvent.click(alignmentButton("right"));
 
   expect(changes.at(-1)?.content?.[1]?.attrs).toMatchObject({
     align: "right",
