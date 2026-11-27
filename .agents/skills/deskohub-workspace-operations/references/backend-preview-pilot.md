@@ -21,6 +21,6 @@ The preview binds a worker destination for each generation. VS#1 uses synchronou
 
 ## Tear down the pilot
 
-Close the PR and dispatch `operation=cleanup` from the reviewed `main` workflow. Set `pr_number` and `head_sha` to the exact closed PR head and leave `vercel_deployment_id` empty. The workflow verifies the pilot and its generation before removing its dedicated services, tags and revisions, database secret versions, and pilot images. Verify that the integration removed its obsolete Neon branch.
+Close the PR and dispatch `operation=cleanup` from the reviewed `main` workflow. Set `pr_number` to the pilot number and `head_sha` to the full final commit SHA. Leave `vercel_deployment_id` empty. The workflow verifies the pilot and its generation before removing its dedicated services, tags and revisions, database secret versions, and pilot images. Verify that the integration removed its obsolete Neon branch.
 
 Read back the preview inventory and compare the sandbox proof inventory with its baseline. Remove pilot-only Vercel and GitHub configuration after cleanup. Retire the preview federation and accounts, signing and database secrets, preview registry repository, and the state bucket and its noncurrent objects. Record the gross and credited spend against the pilot cap and teardown date.
