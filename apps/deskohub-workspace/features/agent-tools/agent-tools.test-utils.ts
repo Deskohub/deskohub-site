@@ -292,7 +292,9 @@ export const makeAgentToolTestServices = ({
           advisoryInventory,
           tableGate,
           Layer.succeed(TeamTableInventory, (records, claims) =>
-            Effect.succeed(getUnclassifiedTeamTableBookings(records, claims))
+            Effect.succeed([
+              ...getUnclassifiedTeamTableBookings(records, claims),
+            ])
           ),
           unreachableDotypos,
           Layer.succeed(GoogleCalendarWorkspaceLimitationsService, {
