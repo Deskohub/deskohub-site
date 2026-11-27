@@ -22,7 +22,7 @@ import { temporalInstantToDate } from "@/shared/utils/temporal";
 export type TeamTableHoldClaim = typeof teamTableHoldClaims.$inferSelect;
 type HoldClaim = TeamTableHoldClaim;
 type ClaimKey = Pick<HoldClaim, "reservationId" | "generation">;
-export type TeamTableClaimOwner =
+type TeamTableClaimOwner =
   | { readonly purpose: "checkout" }
   | {
       readonly purpose: "payment_retry" | "late_payment";
