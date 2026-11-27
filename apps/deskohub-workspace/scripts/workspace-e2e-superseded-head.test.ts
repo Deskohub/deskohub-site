@@ -397,7 +397,7 @@ exit 1
     expect(guardJob?.needs).toBe("resolve-target");
     // A nightly target has no PR head to supersede.
     expect(guardJob?.if).toBe(
-      `${testJob?.if} && needs.resolve-target.outputs.nightly != 'true'`
+      `${workflow.jobs["fill-bun-package-cache"].if} && needs.resolve-target.outputs.nightly != 'true'`
     );
     expect(guardJob?.permissions).toEqual({
       actions: "write",

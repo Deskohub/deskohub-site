@@ -3,6 +3,7 @@ import { Option } from "effect";
 import "@/shared/polyfills/temporal";
 import {
   formatInstantDate,
+  formatInstantDateRange,
   formatInstantDateTime,
   formatInstantDateTimeRange,
   formatNumericPlainDate,
@@ -102,6 +103,77 @@ describe("date-time formatting", () => {
         locale: "en-US",
       })
     ).toBe("Jun 20 – 21, 2099");
+  });
+
+  test("formats Czech medium date ranges with standard spaced dates matching single dates", () => {
+    const start = Temporal.PlainDate.from("2027-03-03");
+    const end = Temporal.PlainDate.from("2027-04-01");
+
+    expect(formatPlainDateRange({ start, end, locale: "cs-CZ" })).toBe(
+      "3. 3. 2027 – 1. 4. 2027"
+    );
+    expect(
+      formatPlainDateRange({
+        start,
+        end: Temporal.PlainDate.from("2027-03-15"),
+        locale: "cs-CZ",
+      })
+    ).toBe("3. 3. 2027 – 15. 3. 2027");
+    expect(
+      formatPlainDateRange({
+        start: Temporal.PlainDate.from("2027-12-20"),
+        end: Temporal.PlainDate.from("2028-01-19"),
+        locale: "cs-CZ",
+      })
+    ).toBe("20. 12. 2027 – 19. 1. 2028");
+    expect(formatPlainDateRange({ start, end: start, locale: "cs-CZ" })).toBe(
+      "3. 3. 2027"
+    );
+    expect(formatPlainDateRange({ start, end, locale: "cs" })).toBe(
+      "3. 3. 2027 – 1. 4. 2027"
+    );
+    expect(
+      formatInstantDateRange({
+        start: Temporal.Instant.from("2027-03-03T10:00:00Z"),
+        end: Temporal.Instant.from("2027-04-01T10:00:00Z"),
+        locale: "cs-CZ",
+        timeZone: "Europe/Prague",
+      })
+    ).toBe("3. 3. 2027 – 1. 4. 2027");
+    expect(
+      formatInstantDateRange({
+        start: Temporal.Instant.from("2027-03-03T23:30:00Z"),
+        end: Temporal.Instant.from("2027-03-04T10:00:00Z"),
+        locale: "cs-CZ",
+        timeZone: "Europe/Prague",
+      })
+    ).toBe("4. 3. 2027");
+    expect(
+      withPlainSpaces(
+        formatPlainDateRange({ start, end, locale: "cs-CZ", dateStyle: "long" })
+      )
+    ).toBe("3. 3. – 1. 4. 2027");
+    expect(
+      withPlainSpaces(
+        formatPlainDateRange({ start, end, locale: "cs-CZ", dateStyle: "full" })
+      )
+    ).toBe("středa 3. 3. – čtvrtek 1. 4. 2027");
+    expect(
+      withPlainSpaces(
+        formatPlainDateRange({
+          start,
+          end,
+          locale: "cs-CZ",
+          dateStyle: "short",
+        })
+      )
+    ).toBe("03.03.27 – 01.04.27");
+    expect(
+      withPlainSpaces(formatPlainDateRange({ start, end, locale: "de-DE" }))
+    ).toBe("03.03. – 01.04.2027");
+    expect(
+      withPlainSpaces(formatPlainDateRange({ start, end, locale: "sk-SK" }))
+    ).toBe("3. 3. 2027 – 1. 4. 2027");
   });
 
   test("names ISO weekdays from Monday to Sunday in the locale", () => {
