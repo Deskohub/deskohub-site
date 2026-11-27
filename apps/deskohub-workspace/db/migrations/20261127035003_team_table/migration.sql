@@ -42,8 +42,19 @@ CREATE TABLE "team_table_hold_claims" (
 	"seats" integer NOT NULL,
 	"provider_reservation_ids" text[],
 	"checked_at" timestamp with time zone,
+	"generation" uuid,
+	"purpose" text DEFAULT 'checkout' NOT NULL,
+	"payment_attempt_id" text,
+	"attached_at" timestamp with time zone,
+	"cancel_requested_at" timestamp with time zone,
+	"retired_at" timestamp with time zone,
 	CONSTRAINT "team_table_hold_claims_interval" CHECK ("starts_at" < "ends_at"),
-	CONSTRAINT "team_table_hold_claims_seats" CHECK ("seats" > 0)
+	CONSTRAINT "team_table_hold_claims_seats" CHECK ("seats" > 0),
+	CONSTRAINT "team_table_hold_claims_owner" CHECK (
+      ("purpose" = 'checkout' and "payment_attempt_id" is null)
+      or ("purpose" in ('payment_retry', 'late_payment') and
+        "payment_attempt_id" is not null and "generation" is not null)
+    )
 );
 --> statement-breakpoint
 ALTER TABLE "workspace_reservations" ADD COLUMN "active_customer_email_delivery_open_space_tables" text;--> statement-breakpoint
