@@ -140,11 +140,8 @@ describe("AccountDataExport", () => {
   });
 
   test("shows the download as pending, then hands the archive to the browser under its own name", async () => {
-    let finish!: () => void;
-    respond = () =>
-      new Promise((resolve) => {
-        finish = () => resolve(archiveResponse());
-      });
+    const archive = Promise.withResolvers<Response>();
+    respond = () => archive.promise;
     const { action, container, status } = renderExport();
     const statusRegion = status();
 
@@ -161,7 +158,7 @@ describe("AccountDataExport", () => {
     fireEvent.click(action());
     expect(requests).toEqual([exportHref]);
 
-    finish();
+    archive.resolve(archiveResponse());
 
     await waitFor(() =>
       expect(container().getAttribute("data-state")).toBe("delivered")
