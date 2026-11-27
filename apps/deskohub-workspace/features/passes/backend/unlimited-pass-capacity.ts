@@ -93,9 +93,9 @@ const loadUnlimitedInventory = Effect.fn("loadUnlimitedInventory")(function* (
   const last = Arr.lastNonEmpty(dates);
   // Read intents before the provider list so a concurrent attach cannot
   // disappear between a stale provider list and a later local-state read.
-  const [intents, openSpaceMoveClaims] = yield* Effect.all([
+  const [intents, localTableClaims] = yield* Effect.all([
     workspaceReservations.selectPendingPassDayCapacity({ first, last }),
-    workspaceReservations.selectOpenSpaceMoveCapacity({ first, last }),
+    workspaceReservations.selectLocalTableCapacity({ first, last }),
   ]);
 
   const reads = yield* Effect.all(
@@ -137,7 +137,7 @@ const loadUnlimitedInventory = Effect.fn("loadUnlimitedInventory")(function* (
     ),
     bookings: getBookingsWithCapacityClaims(
       excludeDotyposReservationsById(observations.reservations, expiredIds),
-      { passDayIntents: observations.passDayIntents, openSpaceMoveClaims },
+      { passDayIntents: observations.passDayIntents, localTableClaims },
       supersedeOrderId
     ),
   };

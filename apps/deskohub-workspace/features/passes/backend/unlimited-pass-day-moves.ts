@@ -279,9 +279,9 @@ const makePassDayMoves = Effect.gen(function* () {
   ) {
     const { day } = expectedHold(key, move, "target");
     const dates = { first: day.serviceDate, last: day.serviceDate };
-    const [claims, openSpaceMoveClaims] = yield* Effect.all([
+    const [claims, localTableClaims] = yield* Effect.all([
       reservations.selectPendingPassDayCapacity(dates),
-      reservations.selectOpenSpaceMoveCapacity(dates),
+      reservations.selectLocalTableCapacity(dates),
     ]);
     const window = getOccupancyWindow(day.interval);
     const { tables, records, expired } = yield* Effect.all({
@@ -334,7 +334,7 @@ const makePassDayMoves = Effect.gen(function* () {
               claim.holdGeneration === move.generation
             )
         ),
-        openSpaceMoveClaims,
+        localTableClaims,
       }
     );
     return hasCandidateCapacity(

@@ -100,7 +100,7 @@ const capacityLayer = (input: {
     }),
     Layer.mock(WorkspaceReservationRepository, {
       selectExpiredHoldDotyposReservationIds: () => Effect.succeed([]),
-      selectOpenSpaceMoveCapacity: () => Effect.succeed([]),
+      selectLocalTableCapacity: () => Effect.succeed([]),
       selectPendingPassDayCapacity: () => Effect.succeed(input.intents ?? []),
     }),
     Layer.succeed(GoogleCalendarWorkspaceLimitationsService, {

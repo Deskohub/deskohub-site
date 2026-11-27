@@ -36,6 +36,8 @@ import { providerOrderAbandonmentTimeoutMinutes } from "@/features/checkout/prov
 import { endedUnpaidPaymentStates } from "@/features/order";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
+import { reconcileTeamTableHolds } from "@/features/team-table/backend/reconcile-team-table-holds";
+import { TeamTableHoldClaims } from "@/features/team-table/backend/team-table-hold-claims";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { reconcilePassChanges } from "../admin/complete-pass-change";
 import { entryPackGiftInvitationDue } from "./entry-pack-gift";
@@ -284,6 +286,10 @@ export const runPassPurchaseReconciliation = Effect.fn(
     const openSpaceMoveBatchesChecked = yield* tableMoves.reconcile(
       Math.min(input.limit, 2)
     );
+    yield* reconcileTeamTableHolds({
+      ...input,
+      limit: Math.min(input.limit, 2),
+    });
     const changesChecked = yield* reconcilePassChanges(
       Math.min(input.limit, 2)
     );
@@ -297,7 +303,11 @@ export const runPassPurchaseReconciliation = Effect.fn(
   },
   Effect.provide(
     Layer.mergeAll(
-      Layer.merge(PassDayMoves.Default, OpenSpaceTableMoves.Default).pipe(
+      Layer.mergeAll(
+        PassDayMoves.Default,
+        OpenSpaceTableMoves.Default,
+        TeamTableHoldClaims.Default
+      ).pipe(
         Layer.provide(WorkspaceReservationRepository.Live),
         Layer.provide(WorkspaceDatabase.Default),
         Layer.provide(WorkspaceDatabaseAdvisoryLock.Default),

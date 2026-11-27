@@ -126,6 +126,7 @@ import {
   GoogleCalendarWorkspaceLimitationsService,
   type WorkspaceCalendarLimitation as WorkspaceCalendarLimitationType,
 } from "./google-calendar-workspace-limitations.service";
+import { isTeamTableCapacityClaim } from "./open-space-move-capacity";
 import type { ReservationRecord } from "./reservation-record";
 import { WorkspaceReservationRepository } from "./workspace-reservation.repository";
 
@@ -295,14 +296,15 @@ const implementation = Effect.gen(function* () {
       const last = Arr.lastNonEmpty(input.dates);
       // The provider can list a hold as soon as it is attached. Read its
       // local intent first so it is visible on at least one side of the handover.
-      const [passDayIntents, openSpaceMoveClaims] = yield* Effect.all([
+      const [passDayIntents, localTableClaims] = yield* Effect.all([
         workspaceReservations.selectPendingPassDayCapacity({ first, last }),
-        workspaceReservations.selectOpenSpaceMoveCapacity({ first, last }),
+        workspaceReservations.selectLocalTableCapacity({ first, last }),
       ]);
       // The shared snapshot omits notes and customer links. A live read is
       // needed to match these intents to provider holds without counting both.
       const reservationInventory =
-        passDayIntents.length > 0 || openSpaceMoveClaims.length > 0
+        passDayIntents.length > 0 ||
+        localTableClaims.some((claim) => !isTeamTableCapacityClaim(claim))
           ? providerInventory
           : inventory;
       const readReservations: Effect.Effect<
@@ -380,7 +382,13 @@ const implementation = Effect.gen(function* () {
 
       const capacityClaims = {
         passDayIntents: observations.passDayIntents,
-        openSpaceMoveClaims,
+        localTableClaims: replacementIsPending
+          ? localTableClaims.filter(
+              (claim) =>
+                !isTeamTableCapacityClaim(claim) ||
+                claim.reservationId !== replacementReservationId
+            )
+          : localTableClaims,
       };
       const teamTableBookings =
         input.loadTeamTableBookings && Option.isSome(teamTableInventory)

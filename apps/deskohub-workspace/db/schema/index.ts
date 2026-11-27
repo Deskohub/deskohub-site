@@ -171,6 +171,7 @@ export {
   type StandaloneAccessCodeAttemptEventRow,
   standaloneAccessCodeAttemptEvents,
 } from "./standalone-access-code-attempt-events";
+export { teamTableHoldClaims } from "./team-table-hold-claims";
 export { unlimitedPassDayMoves } from "./unlimited-pass-day-moves";
 export { unlimitedPassSupersessions } from "./unlimited-pass-supersessions";
 export {

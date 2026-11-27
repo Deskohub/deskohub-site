@@ -415,11 +415,8 @@ export const isDisplayableWorkspaceTable = (table: DotyposTable) => {
   if (table.enabled !== true || table.display !== true) return false;
 
   const tableTags = new Set(table.tags ?? []);
-  return (
-    tableTags.has(workspaceTableReservationTableTag) ||
-    workspaceReservationKindSchema.literals.some((kind) =>
-      hasWorkspaceReservationTableTag(tableTags, kind)
-    )
+  return workspaceReservationKindSchema.literals.some((kind) =>
+    hasWorkspaceReservationTableTag(tableTags, kind)
   );
 };
 
@@ -440,6 +437,7 @@ const hasWorkspaceReservationTableTag = (
       "meeting-room": () =>
         tableTags.has(workspaceMeetingRoomReservationTableTag),
       office: () => tableTags.has(workspaceOfficeReservationTableTag),
+      table: () => tableTags.has(workspaceTableReservationTableTag),
     })
   );
 

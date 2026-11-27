@@ -276,7 +276,7 @@ export const makeAgentToolTestServices = ({
             listLimitations: () => Effect.succeed([]),
           }),
           Layer.mock(WorkspaceReservationRepository, {
-            selectOpenSpaceMoveCapacity: () => Effect.succeed([]),
+            selectLocalTableCapacity: () => Effect.succeed([]),
             selectPendingPassDayCapacity: () => Effect.succeed([]),
             selectExpiredHoldDotyposReservationIds: () => Effect.succeed([]),
           })

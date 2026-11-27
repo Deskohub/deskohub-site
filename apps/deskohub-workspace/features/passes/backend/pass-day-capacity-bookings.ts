@@ -9,7 +9,8 @@ import {
 import type { OrderId } from "@/features/order";
 import {
   getUnobservedOpenSpaceMoveBookings,
-  type OpenSpaceMoveCapacityClaim,
+  isTeamTableCapacityClaim,
+  type LocalTableCapacityClaim,
 } from "@/features/reservation/backend/open-space-move-capacity";
 import type { ReservationRecord } from "@/features/reservation/backend/reservation-record";
 import type {
@@ -28,7 +29,7 @@ export const getCapacityInventory = (
   records: readonly CapacityReservation[],
   claims: {
     readonly passDayIntents: readonly PendingPassDayCapacity[];
-    readonly openSpaceMoveClaims: readonly OpenSpaceMoveCapacityClaim[];
+    readonly localTableClaims: readonly LocalTableCapacityClaim[];
   },
   supersedeOrderId?: OrderId
 ) => {
@@ -39,10 +40,13 @@ export const getCapacityInventory = (
   );
   return {
     records: passDays.records,
+    exclusiveBookings: claims.localTableClaims.filter(isTeamTableCapacityClaim),
     unobservedBookings: [
       ...passDays.unobservedBookings,
       ...getUnobservedOpenSpaceMoveBookings(
-        claims.openSpaceMoveClaims,
+        claims.localTableClaims.filter(
+          (claim) => !isTeamTableCapacityClaim(claim)
+        ),
         records
       ),
     ],
@@ -52,8 +56,13 @@ export const getCapacityInventory = (
 export const getBookingsWithCapacityClaims = (
   ...input: Parameters<typeof getCapacityInventory>
 ): readonly TableBooking[] => {
-  const { records, unobservedBookings } = getCapacityInventory(...input);
-  return [...toTableBookings(records), ...unobservedBookings];
+  const { records, unobservedBookings, exclusiveBookings } =
+    getCapacityInventory(...input);
+  return [
+    ...toTableBookings(records),
+    ...unobservedBookings,
+    ...exclusiveBookings,
+  ];
 };
 
 const providerHold = ({
