@@ -11,8 +11,10 @@ import {
   test,
 } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { buildCoworkCheckoutSummary } from "@/features/checkout/checkout-quote.test-utils";
 import { m } from "@/features/i18n";
 import {
+  type WorkspaceActionExecute,
   workspaceRouterPush,
   workspaceUseAction,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -20,6 +22,9 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { checkoutPaymentActionCallbacks } from "./checkout-payment.test-utils";
+import { openTestPaymentWindow } from "./payment-window-fixture";
+import type { StartCheckoutPaymentAction } from "./use-checkout-pay-submission";
 
 mock.module("server-only", () => ({}));
 const submitReservationActions = await import(
@@ -34,18 +39,11 @@ const { useCheckoutPaySubmission } = await import(
   "./use-checkout-pay-submission"
 );
 
-type ActionState = {
-  readonly isExecuting: boolean;
-  readonly result: { readonly data?: { readonly status: string } };
-};
+type ActionState = NonNullable<ReturnType<typeof workspaceUseAction>>;
 
-type ActionOptions = {
-  readonly onSuccess: (result: { readonly data?: unknown }) => void;
-  readonly onError: (result: {
-    readonly error: { readonly serverError?: string };
-  }) => void;
-  readonly onTransportError: () => void;
-};
+type PaymentActionData = Awaited<
+  ReturnType<StartCheckoutPaymentAction>
+>["data"];
 
 const submitError = m.checkoutPaySubmitError({}, { locale: "en-US" });
 const statusUrl = "/en-US/reservation/status/reservation-hook";
@@ -60,15 +58,8 @@ const renderSubmission = ({
   readonly earlyPerformanceRequestRequired?: boolean;
   readonly payStateToken?: string;
 } = {}) => {
-  const execute = mock(
-    (_input: {
-      readonly locale: string;
-      readonly payStateToken: string;
-      readonly legalConsent: boolean;
-      readonly earlyPerformanceConsent?: boolean;
-    }) => undefined
-  );
-  workspaceUseAction.mockReturnValue({ execute, ...actionState } as never);
+  const execute = mock<WorkspaceActionExecute>();
+  workspaceUseAction.mockReturnValue({ ...actionState, execute });
   const hook = renderHook(() =>
     useCheckoutPaySubmission({
       earlyPerformanceRequestRequired,
@@ -76,11 +67,16 @@ const renderSubmission = ({
       payStateToken,
     })
   );
-  const options = workspaceUseAction.mock.calls.at(-1)?.[1] as
-    | ActionOptions
-    | undefined;
-  if (!options) throw new Error("Checkout action options missing");
-  return { execute, hook, options };
+  const options = checkoutPaymentActionCallbacks<PaymentActionData>(execute);
+  const submitPayment = () => {
+    act(() => {
+      hook.result.current.setLegalConsent(true);
+    });
+    act(() => {
+      hook.result.current.submit("card");
+    });
+  };
+  return { execute, hook, options, submitPayment };
 };
 
 describe("useCheckoutPaySubmission", () => {
@@ -105,11 +101,21 @@ describe("useCheckoutPaySubmission", () => {
 
   test("sends the tab to the fresh Pay page after a price change", () => {
     const openWindow = spyOn(window, "open");
-    const { hook, options } = renderSubmission();
+    const { hook, options, submitPayment } = renderSubmission();
+    submitPayment();
 
     act(() => {
       options.onSuccess({
-        data: { status: "pricing_changed", freshPayUrl: "/en-US/fresh-pay" },
+        data: {
+          status: "pricing_changed",
+          message: "",
+          freshPayUrl: "/en-US/fresh-pay",
+          changedKeys: { sectionKeys: ["total"], itemKeys: [] },
+          freshSummary: buildCoworkCheckoutSummary({
+            entryTier: "basic",
+            coffee: false,
+          }),
+        },
       });
     });
 
@@ -119,15 +125,16 @@ describe("useCheckoutPaySubmission", () => {
   });
 
   test.each([
-    ["a checkout already in progress", { status: "in_progress" }],
+    ["a checkout already in progress", { status: "in_progress", message: "" }],
     [
       "a redirect without a gateway URL",
-      { status: "redirect", redirectUrl: "" },
+      { status: "redirect", redirectUrl: "", message: "" },
     ],
     ["no result", undefined],
-  ])("shows the submit error for %s", (_name, data) => {
+  ] as const)("shows the submit error for %s", (_name, data) => {
     const openWindow = spyOn(window, "open");
-    const { hook, options } = renderSubmission();
+    const { hook, options, submitPayment } = renderSubmission();
+    submitPayment();
 
     act(() => {
       options.onSuccess({ data });
@@ -139,16 +146,18 @@ describe("useCheckoutPaySubmission", () => {
   });
 
   test("opens the gateway in an owned payment tab and sends this tab to status", () => {
-    const paymentWindow = { opener: window };
+    const paymentWindow = openTestPaymentWindow();
     const openWindow = spyOn(window, "open").mockImplementation(
-      () => paymentWindow as Window
+      () => paymentWindow
     );
-    const { options } = renderSubmission();
+    const { options, submitPayment } = renderSubmission();
+    submitPayment();
 
     act(() => {
       options.onSuccess({
         data: {
           status: "redirect",
+          message: "",
           redirectUrl: "https://payments.example.test/checkout",
           statusUrl,
         },
@@ -166,12 +175,14 @@ describe("useCheckoutPaySubmission", () => {
 
   test("sends this tab straight to a gateway URL without a status page", () => {
     const openWindow = spyOn(window, "open");
-    const { options } = renderSubmission();
+    const { options, submitPayment } = renderSubmission();
+    submitPayment();
 
     act(() => {
       options.onSuccess({
         data: {
           status: "redirect",
+          message: "",
           redirectUrl: `${statusUrl}?outcome=success`,
         },
       });
@@ -185,12 +196,14 @@ describe("useCheckoutPaySubmission", () => {
 
   test("navigates this tab to the gateway when the browser blocks the payment tab", () => {
     const openWindow = spyOn(window, "open").mockImplementation(() => null);
-    const { options } = renderSubmission();
+    const { options, submitPayment } = renderSubmission();
+    submitPayment();
 
     act(() => {
       options.onSuccess({
         data: {
           status: "redirect",
+          message: "",
           redirectUrl: "https://payments.example.test/checkout",
           statusUrl,
         },
@@ -208,7 +221,8 @@ describe("useCheckoutPaySubmission", () => {
   });
 
   test("shows the server's error message, or the submit error without one", () => {
-    const { hook, options } = renderSubmission();
+    const { hook, options, submitPayment } = renderSubmission();
+    submitPayment();
 
     act(() => {
       options.onError({ error: { serverError: "Server refused." } });
@@ -222,22 +236,18 @@ describe("useCheckoutPaySubmission", () => {
   });
 
   test("submits the consent with the early-performance request when it is required", () => {
-    const { execute, hook, options } = renderSubmission();
+    const { execute, hook, options, submitPayment } = renderSubmission();
+    submitPayment();
 
     act(() => {
       options.onTransportError();
     });
     expect(hook.result.current.errorMessage).toBe(submitError);
 
-    act(() => {
-      hook.result.current.setLegalConsent(true);
-    });
-    act(() => {
-      hook.result.current.submit("card");
-    });
+    submitPayment();
 
     expect(hook.result.current.errorMessage).toBeNull();
-    expect(execute).toHaveBeenCalledWith({
+    expect(execute).toHaveBeenLastCalledWith({
       locale: "en-US",
       payStateToken: "signed-summary",
       legalConsent: true,

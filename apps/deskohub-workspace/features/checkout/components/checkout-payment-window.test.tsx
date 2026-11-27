@@ -18,6 +18,7 @@ import {
   CheckoutPaymentWindowCoordinator,
   openCheckoutPaymentWindow,
 } from "./checkout-payment-window";
+import { openTestPaymentWindow } from "./payment-window-fixture";
 
 type LockRequestCallback = (lock: Lock | null) => Promise<void> | void;
 
@@ -176,9 +177,9 @@ describe("openCheckoutPaymentWindow", () => {
   });
 
   test("opens the gateway in a detached tab and claims the status page's return", () => {
-    const paymentWindow = { opener: window };
+    const paymentWindow = openTestPaymentWindow();
     const openWindow = spyOn(window, "open").mockImplementation(
-      () => paymentWindow as Window
+      () => paymentWindow
     );
 
     expect(
@@ -194,8 +195,8 @@ describe("openCheckoutPaymentWindow", () => {
   });
 
   test("leaves the return to a status page that already holds it", () => {
-    const paymentWindow = { opener: window };
-    spyOn(window, "open").mockImplementation(() => paymentWindow as Window);
+    const paymentWindow = openTestPaymentWindow();
+    spyOn(window, "open").mockImplementation(() => paymentWindow);
 
     expect(openCheckoutPaymentWindow(gatewayUrl)).toBe(true);
 
