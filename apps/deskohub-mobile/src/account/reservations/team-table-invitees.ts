@@ -2,26 +2,18 @@ import type {
   CustomerReservationOrderId,
   CustomerTeamTableStatus,
 } from "@deskohub/workspace-customer-api";
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 import { Atom } from "effect/reactivity";
 import { CustomerApi } from "../../customer-api/customer-api.service";
 import { customerDataRuntime } from "../../customer-api/customer-data-runtime";
 import { customerWrite } from "../../customer-api/customer-request";
 import type { AppLocale } from "../../i18n/app-locale";
-import type { ReservationListRow } from "./reservation-list-model";
-
-/** A fresh history row identifies the booker. The server verifies the write. */
+/** The status proves eligibility. The write endpoint authorizes the viewer. */
 export const teamTableInviteeAdditionEndsAt = (
-  order: CustomerTeamTableStatus,
-  freshRow: Option.Option<ReservationListRow>
+  order: CustomerTeamTableStatus
 ): number | undefined => {
-  const booker = Option.exists(
-    freshRow,
-    ({ party }) => party === undefined || party.kind === "booked-for"
-  );
   const { people, product, endsAt } = order;
   if (
-    !booker ||
     order.paymentStatus !== "paid" ||
     order.reservationCancelled === true ||
     order.withdrawal !== undefined ||

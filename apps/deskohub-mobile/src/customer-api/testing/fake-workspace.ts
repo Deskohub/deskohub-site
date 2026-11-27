@@ -110,6 +110,8 @@ export type FakeRequestOutcome =
 
 type EndpointName =
   | "getAvailability"
+  | "getSlots"
+  | "getQuote"
   | "getStatus"
   | "addInvitees"
   | HttpApiEndpoint.Identifier<

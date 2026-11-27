@@ -99,15 +99,14 @@ export function OrderPeopleSection({
   const orderContact = orderContactOf(freshRow);
   const needsContact =
     people.contactAttends && OrderContact.$is("Unknown")(orderContact);
-  const needsBooker = order.kind === "table" && Option.isNone(freshRow);
   const [reread, setReread] = useState(false);
   // A recent checkout can be missing from the history fetched before payment.
   useEffect(() => {
-    if (historyFresh && (needsContact || needsBooker) && !reread) {
+    if (historyFresh && needsContact && !reread) {
       setReread(true);
       rereadHistory();
     }
-  }, [historyFresh, needsBooker, needsContact, reread, rereadHistory]);
+  }, [historyFresh, needsContact, reread, rereadHistory]);
   const resend = useAtomSet(resendInvitationAtom(order.orderId), {
     mode: "promiseExit",
   });
@@ -255,7 +254,7 @@ export function OrderPeopleSection({
         {order.kind === "table" ? (
           <TeamTableInviteeForm
             orderId={order.orderId}
-            endsAt={teamTableInviteeAdditionEndsAt(order, freshRow)}
+            endsAt={teamTableInviteeAdditionEndsAt(order)}
             refreshing={refreshing}
             onRefresh={onTeamTableChanged}
           />

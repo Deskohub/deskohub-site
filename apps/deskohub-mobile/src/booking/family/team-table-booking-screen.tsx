@@ -7,7 +7,7 @@ import { Option } from "effect";
 import { AsyncResult } from "effect/reactivity";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import RotateCcw from "lucide-react-native/icons/rotate-ccw";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { accountAtom } from "../../customer-api/customer-data-runtime";
 import { useAppLocale } from "../../i18n/locale-context";
@@ -180,17 +180,19 @@ function TeamTableSelectionStep({
   const dates = teamTableDates(calendar, draft.seats);
   const today = pragueToday(now);
   const date = draft.date;
-  const canReadSlots =
-    offering !== undefined &&
-    date !== undefined &&
-    date >= today &&
-    dates !== undefined &&
-    isTeamTableDateAvailable(date, dates);
-  const slotsAtom = canReadSlots
+  const hasDateToCheck =
+    offering !== undefined && date !== undefined && date >= today;
+  const selectedSlotsAtom = hasDateToCheck
     ? teamTableSlotsAtom({ seats: draft.seats, date })
     : unneededReadAtom;
-  const slotsRead = bookingReadOf(useAtomValue(slotsAtom));
-  const refreshSlots = useAtomRefresh(slotsAtom);
+  const canReadSlots =
+    hasDateToCheck &&
+    dates !== undefined &&
+    isTeamTableDateAvailable(date, dates);
+  const slotsRead = bookingReadOf(
+    useAtomValue(canReadSlots ? selectedSlotsAtom : unneededReadAtom)
+  );
+  const refreshSlots = useAtomRefresh(selectedSlotsAtom);
   const model = teamTableSelection(
     draft,
     calendar,
@@ -200,29 +202,52 @@ function TeamTableSelectionStep({
   const selection = Option.fromNullishOr(model.selection);
   const quoteKey = model.selection && selectionKey(model.selection);
   const [settledQuoteKey, setSettledQuoteKey] = useState<string>();
+  const [refreshQuoteOnReady, setRefreshQuoteOnReady] = useState(restarting);
+  const lastRejectedSlot = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (quoteKey === undefined) return;
     // Team Table quotes query live inventory and spend its read budget.
     const timer = setTimeout(() => setSettledQuoteKey(quoteKey), 250);
     return () => clearTimeout(timer);
   }, [quoteKey]);
+  const availabilityIsFresh =
+    Option.isSome(freshValue(catalog)) &&
+    Option.isSome(freshValue(calendarRead)) &&
+    Option.isSome(freshValue(slotsRead));
   const quoteAtom =
-    model.selection === undefined || quoteKey !== settledQuoteKey
+    !availabilityIsFresh ||
+    model.selection === undefined ||
+    quoteKey !== settledQuoteKey
       ? unneededReadAtom
       : bookingQuoteAtom(model.selection, locale);
   const quoteRead = bookingReadOf(useAtomValue(quoteAtom));
   const refreshQuote = useAtomRefresh(quoteAtom);
+  const cachedQuote =
+    (quoteRead.kind === "loaded" && !quoteRead.refreshing) ||
+    (quoteRead.kind === "failed" && !quoteRead.retrying);
+  useEffect(() => {
+    if (!refreshQuoteOnReady || quoteAtom === unneededReadAtom) return;
+    if (cachedQuote) refreshQuote();
+    setRefreshQuoteOnReady(false);
+  }, [cachedQuote, quoteAtom, refreshQuote, refreshQuoteOnReady]);
+  const slotRejected =
+    quoteRead.kind === "failed" && quoteRead.error._tag === "SlotUnavailable";
+  useEffect(() => {
+    if (
+      quoteKey === undefined ||
+      !slotRejected ||
+      lastRejectedSlot.current === quoteKey
+    )
+      return;
+    lastRejectedSlot.current = quoteKey;
+    refreshSlots();
+  }, [quoteKey, refreshSlots, slotRejected]);
   const quote = Option.map(selection, () => quoteRead);
   const checkout = checkoutRequestOf({
     locale,
     selection,
     blockers: [],
-    quote:
-      Option.isSome(freshValue(catalog)) &&
-      Option.isSome(freshValue(calendarRead)) &&
-      Option.isSome(freshValue(slotsRead))
-        ? freshValue(quoteRead)
-        : Option.none(),
+    quote: refreshQuoteOnReady ? Option.none() : freshValue(quoteRead),
     people: draft.people,
   });
   const name = initialOffering.name;
@@ -284,7 +309,8 @@ function TeamTableSelectionStep({
           refreshCatalog();
           refreshCalendar();
           refreshSlots();
-          refreshQuote();
+          lastRejectedSlot.current = undefined;
+          setRefreshQuoteOnReady(true);
         }}
       />
       <Notice
@@ -491,7 +517,11 @@ function TeamTableRestartNotice({
 }: {
   readonly onReread: () => void;
 }) {
-  return <RestartNotice reason={useRestartReason(onReread)} />;
+  return (
+    <RestartNotice
+      reason={useRestartReason(onReread, { refreshOnOpen: true })}
+    />
+  );
 }
 
 const styles = StyleSheet.create({

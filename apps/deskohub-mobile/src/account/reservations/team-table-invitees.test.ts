@@ -5,7 +5,7 @@ import {
   CustomerReservationOrderId,
   type CustomerTeamTableStatus,
 } from "@deskohub/workspace-customer-api";
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 import {
   fakeCustomerDataLayer,
   makeFakeDevice,
@@ -13,7 +13,6 @@ import {
 import { FakeWorkspace } from "../../customer-api/testing/fake-workspace";
 import { sampleOrderIds } from "../../customer-api/testing/sample-fixtures";
 import { readOrderStatus } from "./order-status-state";
-import type { ReservationListRow } from "./reservation-list-model";
 import {
   addTeamTableInvitee,
   teamTableInviteeAdditionEndsAt,
@@ -41,46 +40,31 @@ const order: CustomerTeamTableStatus = {
   },
 };
 
-const row: ReservationListRow = {
-  id: order.orderId,
-  orderId: order.orderId,
-  product: { kind: "other", family: "table" },
-  startsAt: order.startsAt ?? null,
-  endsAt: order.endsAt ?? null,
-  seats: 2,
-  status: "confirmed",
-};
-
-test("a confirmed booker can add an invitee until the booked end if a seat remains", () => {
-  const end = Date.parse("2026-11-30T10:00:00Z");
-  expect(teamTableInviteeAdditionEndsAt(order, Option.some(row))).toBe(end);
+test("the status allows adding guests until the booked end if a seat remains", () => {
+  expect(teamTableInviteeAdditionEndsAt(order)).toBe(
+    Date.parse("2026-11-30T10:00:00Z")
+  );
   expect(
-    teamTableInviteeAdditionEndsAt(
-      order,
-      Option.some({ ...row, party: { kind: "booked-for", customerName: null } })
-    )
-  ).toBe(end);
-  expect(
-    teamTableInviteeAdditionEndsAt(
-      { ...order, people: { ...order.people!, contactAttends: true } },
-      Option.some(row)
-    )
+    teamTableInviteeAdditionEndsAt({
+      ...order,
+      people: { ...order.people!, contactAttends: true },
+    })
   ).toBeUndefined();
 });
 
-test("add invitee requires a confirmed reservation and fresh booker history", () => {
-  expect(teamTableInviteeAdditionEndsAt(order, Option.none())).toBeUndefined();
+test("invitee addition requires live confirmation and a paid reservation", () => {
   expect(
-    teamTableInviteeAdditionEndsAt(
-      order,
-      Option.some({ ...row, party: { kind: "booked-by", authorName: null } })
-    )
+    teamTableInviteeAdditionEndsAt({
+      ...order,
+      people: { ...order.people!, resendable: false },
+    })
   ).toBeUndefined();
   expect(
-    teamTableInviteeAdditionEndsAt(
-      { ...order, status: "pending", paymentStatus: "pending" },
-      Option.some(row)
-    )
+    teamTableInviteeAdditionEndsAt({
+      ...order,
+      status: "pending",
+      paymentStatus: "pending",
+    })
   ).toBeUndefined();
 });
 

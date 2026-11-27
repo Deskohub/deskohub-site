@@ -124,10 +124,12 @@ const invoiceFailureMessage = (
 function MoreActions({
   order,
   event,
+  invoiceAllowed,
   withdrawn = false,
   announce,
 }: {
   readonly order: ReservationOrder;
+  readonly invoiceAllowed: boolean;
   /** Withdrawn from already: no second withdrawal. */
   readonly withdrawn?: boolean;
   /** The booking as a calendar event; none while its times are unknown. */
@@ -156,7 +158,7 @@ function MoreActions({
             onPress={() => shareEvent(event)}
           />
         )}
-        {offersInvoice(order) && (
+        {invoiceAllowed && offersInvoice(order) && (
           <ListRow
             kind="action"
             icon={FileText}
@@ -352,6 +354,9 @@ function OrderTicket({
   const { order } = state;
   const reservation = useAtomValue(reservationOfOrderAtom(order.orderId));
   const row = Option.getOrUndefined(reservation);
+  // Saved history strips party details. The endpoints authorize unknown viewers.
+  const customerActionsAllowed =
+    order.kind !== "table" || row?.party?.kind !== "booked-for";
   const booked =
     order.kind === "table" ? undefined : bookedSelectionOf(order, reservation);
   const tableSelection =
@@ -434,9 +439,7 @@ function OrderTicket({
           model={model}
           order={order}
           rebookingHref={rebookingHref}
-          accessAllowed={
-            order.kind !== "table" || row?.party?.kind !== "booked-for"
-          }
+          accessAllowed={customerActionsAllowed}
           accessHint={view.accessHint}
           checking={state.reading}
           onCheckAgain={onCheckAgain}
@@ -470,6 +473,7 @@ function OrderTicket({
       {model.followUp === "more-actions" && (
         <MoreActions
           order={order}
+          invoiceAllowed={customerActionsAllowed}
           event={view.event}
           withdrawn={withdrawn}
           announce={announce}

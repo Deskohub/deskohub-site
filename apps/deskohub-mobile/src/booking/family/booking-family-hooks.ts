@@ -26,10 +26,11 @@ export const useBookingStarted = (family: BookingFamily) => {
  * while the screen is in view (see `useRestartReasonInView`).
  */
 export const useRestartReason = (
-  reread: () => void
+  reread: () => void,
+  { refreshOnOpen = false }: { readonly refreshOnOpen?: boolean } = {}
 ): Option.Option<CheckoutRestartReason> => {
   const { restart } = useLocalSearchParams<{ restart?: string }>();
-  return useRestartReasonInView(restart, useIsFocused(), reread);
+  return useRestartReasonInView(restart, useIsFocused(), reread, refreshOnOpen);
 };
 
 /**

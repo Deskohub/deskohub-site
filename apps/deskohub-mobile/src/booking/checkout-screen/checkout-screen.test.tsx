@@ -145,7 +145,7 @@ const silenceNativeWarnings = () => {
 
 const showTeamTable = (
   checkout: Awaited<ReturnType<typeof makeFakeCheckout>>,
-  checkingOut = false
+  { checkingOut = false, restarting = false } = {}
 ) => {
   const href = teamTableBookAgainHref({
     family: "table",
@@ -154,12 +154,14 @@ const showTeamTable = (
     startTime: "10:00",
     endTime: "10:15",
   });
+  const query = new URLSearchParams(href.split("?")[1]);
+  if (restarting) query.set("restart", "hold_expired");
   return root.render(
     <RegistryContext.Provider value={checkout.registry}>
       <AppLocaleProvider locale={language.locale}>
         <ToastProvider>
           <RouteContext.Provider
-            value={{ focused: true, search: href.split("?")[1] ?? "" }}
+            value={{ focused: true, search: query.toString() }}
           >
             {checkingOut ? <Checkout /> : <TeamTable />}
           </RouteContext.Provider>
@@ -210,7 +212,7 @@ test("a contact can book the only Team Table seat for an invitee", async () => {
       _tag: "Some",
       value: { people: { contactAttends: false, invitees: [guest] } },
     });
-    await showTeamTable(checkout, true);
+    await showTeamTable(checkout, { checkingOut: true });
     await press(m.booking_details_continue({}, language));
     await waitFor(
       () =>
@@ -219,6 +221,65 @@ test("a contact can book the only Team Table seat for an invitee", async () => {
       "guest in checkout review"
     );
     expect(root.container().textContent).toContain("Alex Sample");
+  } finally {
+    await root.render(null);
+    checkout.dispose();
+    warnings.mockRestore();
+  }
+});
+
+test("Team Table restart refreshes the concrete availability and quote from shared caches", async () => {
+  const checkout = await makeFakeCheckout();
+  checkout.booking.tableSeats = [1];
+  const warnings = silenceNativeWarnings();
+  const ready = () =>
+    button(m.booking_continue({}, language))?.disabled === false || undefined;
+  try {
+    await showTeamTable(checkout);
+    await waitFor(ready, "initial quote");
+    await root.render(null);
+    const before = checkout.workspace.calls.length;
+    await showTeamTable(checkout, { restarting: true });
+    await waitFor(
+      () =>
+        checkout.workspace.calls.slice(before).includes("getQuote") ||
+        undefined,
+      "fresh quote after restart"
+    );
+    await waitFor(ready, "continue after a fresh quote");
+    expect(checkout.workspace.calls.slice(before)).toEqual(
+      expect.arrayContaining(["getAvailability", "getSlots", "getQuote"])
+    );
+  } finally {
+    await root.render(null);
+    checkout.dispose();
+    warnings.mockRestore();
+  }
+});
+
+test("a Team Table quote that loses its slot refreshes the shown times", async () => {
+  const checkout = await makeFakeCheckout();
+  checkout.booking.tableSeats = [1];
+  const warnings = silenceNativeWarnings();
+  try {
+    await showTeamTable(checkout);
+    await waitFor(
+      () => button(m.booking_team_table_start({}, language)),
+      "initial slots"
+    );
+    checkout.booking.unavailableDates = [checkout.booking.dateIn(20)];
+    await waitFor(
+      () =>
+        root
+          .container()
+          .textContent?.includes(m.booking_team_table_no_times({}, language)) ||
+        undefined,
+      "updated unavailable times"
+    );
+    expect(
+      checkout.workspace.calls.filter((call) => call === "getSlots")
+    ).toHaveLength(2);
+    expect(button(m.booking_continue({}, language))?.disabled).toBe(true);
   } finally {
     await root.render(null);
     checkout.dispose();
