@@ -1220,6 +1220,8 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/account/backend/probe.ts",
   "apps/deskohub-workspace/features/account/probe.test.ts",
   "apps/deskohub-workspace/features/account/probe.fixture.ts",
+  "apps/deskohub-workspace/features/account/components/probe.test.tsx",
+  "apps/deskohub-workspace/features/account/components/passkeys/testing/probe.fixture.mts",
   "apps/deskohub-workspace/features/email-campaigns/automation/probe.ts",
   "apps/deskohub-workspace/features/email-campaigns/admin/probe.test.tsx",
   "apps/deskohub-workspace/features/email-campaigns/admin/automation/builder/testing/probe.fixture.mts",
@@ -1263,7 +1265,6 @@ const generatedProbes = [
 const workspaceExemptProbes = [
   "apps/deskohub-workspace/e2e/probe.ts",
   "apps/deskohub-workspace/features/account/backend/probe.test.ts",
-  "apps/deskohub-workspace/features/account/components/probe.test.tsx",
   "apps/deskohub-workspace/features/email-campaigns/backend/probe.test.ts",
   "apps/deskohub-workspace/features/email-campaigns/automation/testing/probe.fixture.mts",
   "apps/deskohub-workspace/features/email-campaigns/probe.test.ts",
