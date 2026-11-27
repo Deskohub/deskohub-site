@@ -2,8 +2,10 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import {
+  backendDeploymentId,
+  backendGeneration,
   backendPreviewProofFixture,
-  previewDigest,
+  backendRevision,
 } from "./shared/backend-preview-proof-fixture";
 import { findStepByName, parseWorkflow } from "./shared/workflow-contract";
 import {
@@ -21,6 +23,13 @@ const workflow = parseWorkflow(
 const e2eWorkflow = parseWorkflow(
   resolve(import.meta.dir, "../../../.github/workflows/workspace-e2e.yml")
 );
+const completionWorkflow = parseWorkflow(
+  resolve(
+    import.meta.dir,
+    "../../../.github/workflows/workspace-backend-preview-e2e-status.yml"
+  )
+);
+const completionJob = completionWorkflow.jobs["publish-pilot-status"];
 const flowsCli = resolve(
   import.meta.dir,
   "../../../.github/actions/workspace-e2e-flows/cli.mjs"
@@ -44,7 +53,7 @@ const prNumber = 42;
 const headSha = "a".repeat(40);
 const earlierSha = "b".repeat(40);
 const headRef = "feat/example";
-const previewUrl = "https://deskohub-workspace-site-abc123-team.vercel.app";
+const previewUrl = "https://deskohub-workspace-site-abc123def-team.vercel.app";
 
 const { cleanup, runStep } = createWorkflowStepRunner("workspace-e2e-pr-sync-");
 afterAll(cleanup);
@@ -180,12 +189,10 @@ const runPilotPublisher = (
     env = {},
     statuses = [],
     deployment,
-    runProof = {},
   }: {
     readonly env?: Readonly<Record<string, string>>;
     readonly statuses?: readonly object[];
     readonly deployment?: GhFixtures;
-    readonly runProof?: GhFixtures;
   }
 ) =>
   runStep(
@@ -202,7 +209,6 @@ const runPilotPublisher = (
         ])),
       [`commits/${headSha}/statuses`]: statuses,
       [`statuses/${headSha}`]: {},
-      ...runProof,
     },
     {
       ...pilotEnv,
@@ -215,34 +221,109 @@ const runPilotPublisher = (
     }
   );
 
+const runCompletedPilotPublisher = ({
+  conclusion = "success",
+  jobs = proofFixture.jobs.jobs,
+  live = "current",
+} = {}) => {
+  const stubFetch = `
+const team = "team_MgMQ4MEWijWnYa1R48C2JU5e";
+const project = "prj_7FliQBcbBiBwGaO2JLrigicnXCRd";
+const origin = ${JSON.stringify(previewUrl)};
+const sha = ${JSON.stringify(headSha)};
+const revision = ${JSON.stringify(backendRevision)};
+const generation = ${JSON.stringify(live === "changed" ? "1".repeat(64) : backendGeneration)};
+let proofs = 0;
+globalThis.fetch = async (input) => {
+  const url = new URL(input);
+  if (url.origin === origin && url.pathname === "/api/internal/backend-preview") {
+    if (${live === "gone"} || (${live === "moves"} && ++proofs === 3)) return new Response(null, { status: 503 });
+    return Response.json({ commitSha: sha, cloudRunRevision: revision, generation, workerTag: "g-0123456789abcdef" }, { headers: {
+      "x-deskohub-backend-revision": sha,
+      "x-deskohub-cloud-run-revision": revision,
+      "x-deskohub-preview-generation": generation,
+    } });
+  }
+  if (url.origin === "https://api.vercel.com") {
+    if (url.pathname.startsWith("/v13/deployments/")) return Response.json({
+      id: ${JSON.stringify(backendDeploymentId)}, projectId: project, ownerId: team, target: null, public: false,
+      readyState: "READY", url: new URL(origin).hostname,
+      gitSource: { type: "github", repoId: 1015951989, prId: ${prNumber}, ref: ${JSON.stringify(headRef)}, sha },
+    });
+    if (url.pathname.startsWith("/v9/projects/")) return Response.json({ id: project, accountId: team, ssoProtection: { deploymentType: "preview" } });
+    if (url.pathname.startsWith("/v4/aliases/")) return new Response(null, { status: 404 });
+  }
+  if (url.origin === "https://api.github.com") {
+    const creator = { login: "vercel[bot]" };
+    if (url.pathname.endsWith("/deployments")) return Response.json([{ id: 11, creator, sha, environment: "Preview – deskohub-workspace-site" }]);
+    if (url.pathname.endsWith("/deployments/11/statuses")) return Response.json([{ id: 12, creator, state: "success", created_at: "2026-11-27T00:00:00Z", environment_url: origin }]);
+  }
+  throw new Error("Unexpected request to mock provider");
+};`;
+  return runStep(
+    findStepByName(completionWorkflow, "Publish the verified completed pilot"),
+    {
+      ...pilotFixtures(campaignFlows),
+      ...deploymentFixtures([
+        {
+          description: "Deployment has completed",
+          environment_url: previewUrl,
+          state: "success",
+        },
+      ]),
+      [proofFixture.runPath]: {
+        ...proofFixture.run,
+        status: conclusion === "in_progress" ? "in_progress" : "completed",
+        conclusion: conclusion === "in_progress" ? null : conclusion,
+      },
+      [proofFixture.jobsPath]: { jobs },
+      [`statuses/${headSha}`]: {},
+    },
+    {
+      ...pilotEnv,
+      FLOWS_PUBLISH: flowsPublish,
+      NODE_OPTIONS: `--import=data:text/javascript;base64,${Buffer.from(stubFetch).toString("base64")}`,
+      PILOT_SOURCE_RUN_ID: String(proofFixture.run.id),
+      PILOT_SOURCE_RUN_ATTEMPT: "1",
+      VERCEL_TOKEN: "synthetic-vercel-fixture",
+      VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-preview-fixture",
+    }
+  );
+};
+
 describe("Workspace E2E backend proof publishers", () => {
-  test("records the verified backend run before publishing an exact pilot pass", async () => {
+  test("the completion workflow checks out only protected main code", () => {
+    expect(completionJob?.if).toContain("github.ref_protected");
+    expect(completionJob?.if).toContain(
+      "github.event.workflow_run.conclusion == 'success'"
+    );
+    expect(completionJob?.environment).toBe("workspace-backend-preview-e2e");
+    expect(completionJob?.steps?.[0]?.with?.ref).toBe(
+      `\${{ github.workflow_sha }}`
+    );
+    expect(completionJob?.permissions).toEqual({
+      actions: "read",
+      contents: "read",
+      deployments: "read",
+      "pull-requests": "read",
+      statuses: "write",
+    });
+  });
+  test("defers pilot green until a separate consumer can verify the completed run", async () => {
     const { calls, result } = await runPilotPublisher(
       "Publish final commit status",
       {
         env: {
           BACKEND_PREVIEW_REQUIRED: "true",
-          BACKEND_PREVIEW_PROOF: proofFixture.binding,
-          TARGET_URL_DIGEST: previewDigest(previewUrl),
-        },
-        runProof: {
-          [proofFixture.runPath]: {
-            ...proofFixture.run,
-            status: "in_progress",
-            conclusion: null,
-          },
+          ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
         },
       }
     );
     expect(result.exitCode).toBe(0);
     const posts = statusPosts(calls);
+    expect(posts).toHaveLength(1);
     expect(posts[0]).toContain(
-      "state=success -f context=Workspace backend preview"
-    );
-    expect(posts[0]).toContain(`description=${backendProof().description}`);
-    expect(posts[1]).toContain("state=success -f context=Workspace E2E");
-    expect(posts[1]).toContain(
-      "Protected preview E2E passed [flows: email-campaigns]"
+      "state=success -f context=Workspace E2E allocation"
     );
   });
 
@@ -264,27 +345,54 @@ describe("Workspace E2E backend proof publishers", () => {
     );
   });
 
-  test("the final publisher rejects a matching mutable status without a trusted success job", async () => {
-    const { calls, result } = await runPilotPublisher(
-      "Publish final commit status",
-      {
-        env: {
-          BACKEND_PREVIEW_REQUIRED: "true",
-          BACKEND_PREVIEW_PROOF: proofFixture.binding,
-          TARGET_URL_DIGEST: previewDigest(previewUrl),
-        },
-        runProof: { [proofFixture.jobsPath]: { jobs: [] } },
-        statuses: [backendProof(), localCampaignPass],
-      }
-    );
+  test("publishes pilot coverage for a successful completed run and its exact current generation", async () => {
+    const { calls, result } = await runCompletedPilotPublisher();
     expect(result.exitCode).toBe(0);
     const posts = statusPosts(calls);
-    expect(
-      posts.some((post) =>
-        post.includes("state=success -f context=Workspace backend preview")
-      )
-    ).toBe(false);
-    expect(posts[0]).toContain("state=failure -f context=Workspace E2E");
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).toContain(
+      "Protected preview E2E passed [flows: email-campaigns]"
+    );
+    expect(posts[1]).toContain(
+      "state=success -f context=Workspace backend preview"
+    );
+    expect(posts[1]).toContain(`description=${backendProof().description}`);
+  });
+
+  test.each(["failure", "cancelled", "in_progress"])(
+    "rejects a successful confirmation job from a %s workflow run",
+    async (conclusion) => {
+      const { calls, result } = await runCompletedPilotPublisher({
+        conclusion,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(statusPosts(calls)).toHaveLength(0);
+    }
+  );
+
+  test.each(["gone", "changed"])(
+    "blocks completed success while the live backend generation is %s",
+    async (live) => {
+      const { calls, result } = await runCompletedPilotPublisher({ live });
+      expect(result.exitCode).toBe(0);
+      expect(statusPosts(calls)).toHaveLength(2);
+      expect(
+        statusPosts(calls).every((post) => post.includes("state=failure"))
+      ).toBe(true);
+    }
+  );
+
+  test("repairs a tentative success if the backend disappears during status publication", async () => {
+    const { calls, result } = await runCompletedPilotPublisher({
+      live: "moves",
+    });
+    expect(result.exitCode).toBe(0);
+    const posts = statusPosts(calls);
+    expect(posts[0]).toContain("state=success -f context=Workspace E2E");
+    expect(posts[1]).toContain("state=failure -f context=Workspace E2E");
+    expect(posts[2]).toContain(
+      "state=failure -f context=Workspace backend preview"
+    );
   });
 
   test("rejects a successful same-tree fallback for a skipped pilot deployment", async () => {
@@ -524,7 +632,7 @@ describe("Workspace E2E PR flows sync step", () => {
     expect(workflowDispatches(calls)[0]).toContain("flows=email-campaigns");
   });
 
-  test("restores exact head coverage when the current proof is present", async () => {
+  test("requires a fresh pilot run when reconciling historical proof at the same deployment", async () => {
     const { calls, result } = await runSync({
       body: campaignFlows,
       env: pilotEnv,
@@ -541,9 +649,8 @@ describe("Workspace E2E PR flows sync step", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(statusPosts(calls)).toHaveLength(1);
-    expect(statusPosts(calls)[0]).toContain("state=success");
-    expect(statusPosts(calls)[0]).toContain("Protected preview E2E restored");
-    expect(workflowDispatches(calls)).toEqual([]);
+    expect(statusPosts(calls)[0]).toContain("state=failure");
+    expect(workflowDispatches(calls)).toHaveLength(1);
   });
 
   test("rejects replay of trusted proof after a new deployment of the same SHA", async () => {

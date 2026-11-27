@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pilotGenerationKey, pilotTargetKey, verifyPilotRun } from "./run-proof.mjs";
+import { findPilotRunGeneration, pilotGenerationKey, pilotTargetKey } from "./run-proof.mjs";
 
 const runUrl = "https://github.com/Deskohub/deskohub-site/actions/runs/42/attempts/2";
 const runPath = "repos/Deskohub/deskohub-site/actions/runs/42";
 const sha = "a".repeat(40);
 const originDigest = "b".repeat(64);
-const target = pilotTargetKey("8", sha, originDigest);
+const flows = "email-campaigns";
+const target = pilotTargetKey("8", sha, originDigest, flows);
 const generation = pilotGenerationKey("dpl_previewB", "workspace-api-preview-g-1234567890123456", "c".repeat(64));
 const run = {
   id: 42,
@@ -30,7 +31,6 @@ const job = {
 const fixture = (changedRun = run, jobs = [job]) => ({
   targetUrl: runUrl,
   target,
-  generation,
   read(path) {
     if (path === runPath) return changedRun;
     assert.equal(path, `${runPath}/attempts/2/jobs?per_page=100`);
@@ -39,7 +39,7 @@ const fixture = (changedRun = run, jobs = [job]) => ({
 });
 
 test("requires a successful matching job from the current attempt on the reviewed main workflow", () => {
-  assert.equal(verifyPilotRun(fixture()), true);
+  assert.equal(findPilotRunGeneration(fixture()), generation);
   for (const invalid of [
     { run_attempt: 3 },
     { head_branch: "feat/pilot" },
@@ -49,8 +49,10 @@ test("requires a successful matching job from the current attempt on the reviewe
     { repository: { ...run.repository, owner: { id: 1 } } },
     { head_repository: { id: 17 } },
     { conclusion: "failure" },
+    { conclusion: "cancelled" },
+    { status: "in_progress", conclusion: null },
   ]) {
-    assert.equal(verifyPilotRun(fixture({ ...run, ...invalid })), false);
+    assert.equal(findPilotRunGeneration(fixture({ ...run, ...invalid })), undefined);
   }
   for (const invalid of [
     [],
@@ -59,25 +61,18 @@ test("requires a successful matching job from the current attempt on the reviewe
     [{ ...job, head_sha: sha }],
     [{ ...job, conclusion: "skipped" }],
   ]) {
-    assert.equal(verifyPilotRun(fixture(run, invalid)), false);
+    assert.equal(findPilotRunGeneration(fixture(run, invalid)), undefined);
   }
 });
 
-test("rejects a status replay from a different PR, SHA, immutable deployment, or backend generation", () => {
+test("rejects a status replay from a different PR, SHA, immutable deployment, or flow selection", () => {
   for (const key of [
-    pilotTargetKey("17", sha, originDigest),
-    pilotTargetKey("8", "0".repeat(40), originDigest),
-    pilotTargetKey("8", sha, "0".repeat(64)),
+    pilotTargetKey("17", sha, originDigest, flows),
+    pilotTargetKey("8", "0".repeat(40), originDigest, flows),
+    pilotTargetKey("8", sha, "0".repeat(64), flows),
+    pilotTargetKey("8", sha, originDigest, "all"),
   ]) {
-    assert.equal(verifyPilotRun({ ...fixture(), target: key }), false);
+    assert.equal(findPilotRunGeneration({ ...fixture(), target: key }), undefined);
   }
-  assert.equal(verifyPilotRun({ ...fixture(), generation: pilotGenerationKey("dpl_previewA", "workspace-api-preview-g-1111111111111111", "f".repeat(64)) }), false);
-  assert.equal(verifyPilotRun({ ...fixture(), targetUrl: runUrl.split("/attempts")[0] }), false);
-});
-
-test("only the current trusted final publisher can read an in-progress run", () => {
-  const active = fixture({ ...run, event: "workflow_dispatch", status: "in_progress", conclusion: null });
-  assert.equal(verifyPilotRun(active), false);
-  assert.equal(verifyPilotRun({ ...active, currentRun: runUrl }), true);
-  assert.equal(verifyPilotRun({ ...active, currentRun: `${runUrl}0` }), false);
+  assert.equal(findPilotRunGeneration({ ...fixture(), targetUrl: runUrl.split("/attempts")[0] }), undefined);
 });

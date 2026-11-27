@@ -1947,6 +1947,13 @@ exit 1
       const posts = calls.filter((call) =>
         call.includes(`statuses/${targetSha}`)
       );
+      if (pilot) {
+        expect(posts.length).toBeGreaterThan(0);
+        expect(posts.every((post) => post.includes("state=failure"))).toBe(
+          true
+        );
+        return;
+      }
       expect(posts, calls.join("\n")).toHaveLength(2);
       expect(posts[0]).toContain("state=failure");
       expect(posts[1]).toContain("state=success");
