@@ -1090,7 +1090,7 @@
   "booking_gate_unavailable_body": "आपके खाते में कुछ नहीं बदला है। थोड़ी देर में फिर कोशिश करें।",
   "reservations_load_failed_title": "बुकिंग लोड नहीं हो सकीं",
   "booking_checkout_line_team_table": "टीम टेबल",
-  "booking_team_table_for_seats": "{seats} लोगों की टेबल",
+  "booking_team_table_for_seats": "सीटों की संख्या: {seats}",
   "booking_team_table_size": "टेबल का आकार",
   "booking_team_table_rate": "{base} + {hourly}/घंटा",
   "booking_team_table_start": "शुरू होने का समय",
@@ -1109,5 +1109,6 @@
   "booking_team_table_date_unavailable": "इस तारीख़ को इस आकार की कोई टेबल खाली नहीं है।",
   "booking_team_table_no_times": "इस तारीख़ को कोई समय खाली नहीं है।",
   "booking_team_table_people_over_capacity": "टेबल पर सभी के लिए जगह नहीं है। आगे बढ़ने के लिए सूची से किसी को हटाएँ।",
-  "booking_team_table_times_unavailable": "शुरू और समाप्त होने के उपलब्ध समय चुनें।"
+  "booking_team_table_times_unavailable": "शुरू और समाप्त होने के उपलब्ध समय चुनें।",
+  "booking_team_table_attendee_required": "कम से कम एक व्यक्ति जोड़ें।"
 }

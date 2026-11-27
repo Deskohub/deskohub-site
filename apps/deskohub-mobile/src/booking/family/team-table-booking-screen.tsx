@@ -232,7 +232,9 @@ function TeamTableSelectionStep({
   const checkingTimes =
     model.starts.length > 0 && model.selection === undefined;
   let reason: string | undefined;
-  if (!model.withinCapacity) {
+  if (!model.hasAttendee) {
+    reason = m.booking_team_table_attendee_required({}, { locale });
+  } else if (!model.withinCapacity) {
     reason = m.booking_team_table_people_over_capacity({}, { locale });
   } else if (checkingTimes) {
     reason = m.booking_team_table_times_unavailable({}, { locale });
@@ -293,7 +295,11 @@ function TeamTableSelectionStep({
             : undefined
         }
       />
-      <BookingReadView read={catalog} onRetry={refreshCatalog}>
+      <BookingReadView
+        read={catalog}
+        onRetry={refreshCatalog}
+        retryOnRefreshFailure
+      >
         {() => (
           <>
             <BookingSectionHeading first title={sizeLabel} />
@@ -331,6 +337,7 @@ function TeamTableSelectionStep({
                   <BookingReadView
                     read={calendarRead}
                     onRetry={refreshCalendar}
+                    retryOnRefreshFailure
                   >
                     {() =>
                       dates !== undefined && (
@@ -387,7 +394,11 @@ function TeamTableSelectionStep({
                 </View>
                 <View style={[styles.details, tracks && chooseStyles.track]}>
                   {canReadSlots && (
-                    <BookingReadView read={slotsRead} onRetry={refreshSlots}>
+                    <BookingReadView
+                      read={slotsRead}
+                      onRetry={refreshSlots}
+                      retryOnRefreshFailure
+                    >
                       {() =>
                         model.starts.length === 0 ? (
                           <Notice
@@ -460,6 +471,7 @@ function TeamTableSelectionStep({
                           )
                     }
                     showPinNote={false}
+                    minimumAttendees={0}
                     onChange={(people) =>
                       setDraft((previous) => ({ ...previous, people }))
                     }

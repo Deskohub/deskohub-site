@@ -14,6 +14,10 @@ import { AppLocaleProvider } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
 import { clientRoot } from "../../testing/client-root";
 import { expoRouterStandIn } from "../../testing/expo-router-stand-in";
+import { emailWithBreak } from "../../ui/email-with-break";
+import { teamTableBookAgainHref } from "../booking-preselection";
+import { checkoutRequestAtom } from "../checkout/checkout-flow";
+import { teamTableCalendarAtom } from "../data/booking-queries";
 import { fakeHoldDuration } from "../testing/fake-booking-api";
 import { makeFakeCheckout } from "../testing/fake-checkout";
 import { detailsDraftAtom } from "./details-draft";
@@ -81,6 +85,9 @@ mock.module("react-native", () => ({
 
 const { default: Book } = await import("../../../app/(account)/(tabs)/book");
 const { default: Cowork } = await import("../../../app/(account)/book/cowork");
+const { default: TeamTable } = await import(
+  "../../../app/(account)/book/table"
+);
 const { default: Checkout } = await import(
   "../../../app/(account)/book/checkout"
 );
@@ -122,6 +129,102 @@ const fill = async (label: string, value: string) => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 };
+
+const silenceNativeWarnings = () => {
+  const { error } = console;
+  return spyOn(console, "error").mockImplementation((...args) => {
+    if (
+      !/incorrect casing|does not recognize the|non-boolean attribute|unrecognized in this browser|Unknown event handler property/.test(
+        String(args[0])
+      )
+    ) {
+      error(...args);
+    }
+  });
+};
+
+const showTeamTable = (
+  checkout: Awaited<ReturnType<typeof makeFakeCheckout>>,
+  checkingOut = false
+) => {
+  const href = teamTableBookAgainHref({
+    family: "table",
+    seats: 1,
+    date: checkout.booking.dateIn(20),
+    startTime: "10:00",
+    endTime: "10:15",
+  });
+  return root.render(
+    <RegistryContext.Provider value={checkout.registry}>
+      <AppLocaleProvider locale={language.locale}>
+        <ToastProvider>
+          <RouteContext.Provider
+            value={{ focused: true, search: href.split("?")[1] ?? "" }}
+          >
+            {checkingOut ? <Checkout /> : <TeamTable />}
+          </RouteContext.Provider>
+        </ToastProvider>
+      </AppLocaleProvider>
+    </RegistryContext.Provider>
+  );
+};
+
+test("a failed Team Table calendar refresh can be retried before checkout", async () => {
+  const checkout = await makeFakeCheckout();
+  checkout.booking.tableSeats = [1];
+  const continueLabel = m.booking_continue({}, language);
+  const warnings = silenceNativeWarnings();
+  try {
+    await showTeamTable(checkout);
+    await waitFor(
+      () => button(continueLabel)?.disabled === false || undefined,
+      "available preselection"
+    );
+    checkout.workspace.fail("getAvailability", "service-unavailable");
+    await act(async () =>
+      checkout.registry.refresh(teamTableCalendarAtom({ seats: 1 }))
+    );
+    await press(m.account_retry({}, language));
+    await press(continueLabel);
+    expect(router.push).toHaveBeenLastCalledWith("/book/checkout");
+  } finally {
+    await root.render(null);
+    checkout.dispose();
+    warnings.mockRestore();
+  }
+});
+
+test("a contact can book the only Team Table seat for an invitee", async () => {
+  const checkout = await makeFakeCheckout();
+  checkout.booking.tableSeats = [1];
+  const guest = testEmailAddress("solo-team-guest");
+  const warnings = silenceNativeWarnings();
+  try {
+    await showTeamTable(checkout);
+    await press(m.booking_office_person_remove_you({}, language));
+    expect(button(m.booking_continue({}, language))?.disabled).toBe(true);
+    await fill(m.booking_office_person_email_label({}, language), guest);
+    await press(m.booking_office_person_add({}, language));
+    await press(m.booking_continue({}, language));
+    expect(checkout.registry.get(checkoutRequestAtom)).toMatchObject({
+      _tag: "Some",
+      value: { people: { contactAttends: false, invitees: [guest] } },
+    });
+    await showTeamTable(checkout, true);
+    await press(m.booking_details_continue({}, language));
+    await waitFor(
+      () =>
+        root.container().textContent?.includes(emailWithBreak(guest)) ||
+        undefined,
+      "guest in checkout review"
+    );
+    expect(root.container().textContent).toContain("Alex Sample");
+  } finally {
+    await root.render(null);
+    checkout.dispose();
+    warnings.mockRestore();
+  }
+});
 
 test("an expired hold keeps the review visible and offers the selection or Book", async () => {
   const checkout = await makeFakeCheckout();
@@ -214,17 +317,7 @@ test("an expired hold keeps the review visible and offers the selection or Book"
     return overReview;
   };
 
-  const { error } = console;
-  const warnings = spyOn(console, "error").mockImplementation((...args) => {
-    // The shared native stand-ins render host names and native props.
-    if (
-      !/incorrect casing|does not recognize the|non-boolean attribute|unrecognized in this browser|Unknown event handler property/.test(
-        String(args[0])
-      )
-    ) {
-      error(...args);
-    }
-  });
+  const warnings = silenceNativeWarnings();
   try {
     await show("/book/cowork");
     const calendar = await waitFor(

@@ -1109,5 +1109,6 @@
   "booking_team_table_date_unavailable": "No table of this size is available on this date.",
   "booking_team_table_no_times": "No times are available on this date.",
   "booking_team_table_people_over_capacity": "There aren’t enough seats for everyone. Remove someone to continue.",
-  "booking_team_table_times_unavailable": "Choose an available start and end time."
+  "booking_team_table_times_unavailable": "Choose an available start and end time.",
+  "booking_team_table_attendee_required": "Add at least one attendee."
 }

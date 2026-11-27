@@ -79,13 +79,20 @@ export const addOfficePerson = (
   });
 };
 
-/** Whether a person can be taken off: someone must stay on the list. */
-export const canRemoveOfficePerson = (people: OfficePeople): boolean =>
-  officePeopleCount(people) > 1;
+/** Whether the draft can keep enough attendees after taking someone off. */
+export const canRemoveOfficePerson = (
+  people: OfficePeople,
+  minimumAttendees: 0 | 1 = 1
+): boolean => officePeopleCount(people) > minimumAttendees;
 
-/** The list without You, while someone else stays on it. */
-export const removeYou = (people: OfficePeople): OfficePeople =>
-  canRemoveOfficePerson(people) ? { ...people, contactAttends: false } : people;
+/** The list without You, while it can still meet the draft minimum. */
+export const removeYou = (
+  people: OfficePeople,
+  minimumAttendees: 0 | 1 = 1
+): OfficePeople =>
+  canRemoveOfficePerson(people, minimumAttendees)
+    ? { ...people, contactAttends: false }
+    : people;
 
 /** The list with You back on it, when a seat is free. */
 export const addYou = (
@@ -99,9 +106,10 @@ export const addYou = (
 /** The list without the invited address, while someone else stays on it. */
 export const removeInvitee = (
   people: OfficePeople,
-  email: string
+  email: string,
+  minimumAttendees: 0 | 1 = 1
 ): OfficePeople =>
-  canRemoveOfficePerson(people)
+  canRemoveOfficePerson(people, minimumAttendees)
     ? {
         ...people,
         invitees: people.invitees.filter((invitee) => invitee !== email),

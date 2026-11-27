@@ -28,6 +28,7 @@ export function BookingReadView<A>({
   onRetry,
   loading,
   failedTitle,
+  retryOnRefreshFailure = false,
   children,
 }: {
   readonly read: BookingRead<A>;
@@ -36,6 +37,8 @@ export function BookingReadView<A>({
   readonly loading?: ReactNode;
   /** What a first load that failed names as not loaded, over its cause. */
   readonly failedTitle?: string;
+  /** Retry a refresh when the screen needs fresh data before continuing. */
+  readonly retryOnRefreshFailure?: boolean;
   readonly children: (value: A) => ReactNode;
 }) {
   const locale = useAppLocale();
@@ -46,7 +49,7 @@ export function BookingReadView<A>({
       : undefined;
   const retryState =
     read.kind === "failed" &&
-    Option.isNone(shown) &&
+    (Option.isNone(shown) || retryOnRefreshFailure) &&
     isRetryableBookingQueryError(read.error);
   return (
     <>

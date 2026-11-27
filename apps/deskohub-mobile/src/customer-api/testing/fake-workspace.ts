@@ -109,6 +109,7 @@ export type FakeRequestOutcome =
   | "session-not-fresh";
 
 type EndpointName =
+  | "getAvailability"
   | "getStatus"
   | "addInvitees"
   | HttpApiEndpoint.Identifier<

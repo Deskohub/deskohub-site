@@ -1100,5 +1100,6 @@
   "booking_team_table_date_unavailable": "Ngày này không còn bàn trống cỡ này.",
   "booking_team_table_no_times": "Ngày này không còn khung giờ trống.",
   "booking_team_table_people_over_capacity": "Bàn không đủ chỗ cho tất cả mọi người. Hãy bỏ bớt một người khỏi danh sách để tiếp tục.",
-  "booking_team_table_times_unavailable": "Hãy chọn giờ bắt đầu và kết thúc còn trống."
+  "booking_team_table_times_unavailable": "Hãy chọn giờ bắt đầu và kết thúc còn trống.",
+  "booking_team_table_attendee_required": "Hãy thêm ít nhất một người tham dự."
 }

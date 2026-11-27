@@ -1127,5 +1127,6 @@
   "booking_team_table_date_unavailable": "На цю дату немає вільного столу такого розміру.",
   "booking_team_table_no_times": "На цю дату немає вільного часу.",
   "booking_team_table_people_over_capacity": "За столом бракує місць для всіх. Щоб продовжити, вилучіть когось зі списку.",
-  "booking_team_table_times_unavailable": "Виберіть доступний час початку й завершення."
+  "booking_team_table_times_unavailable": "Виберіть доступний час початку й завершення.",
+  "booking_team_table_attendee_required": "Додайте щонайменше одну людину."
 }

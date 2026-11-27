@@ -46,6 +46,24 @@ const teamTableCatalog = {
 } satisfies CustomerTeamTableOfferings;
 
 describe("Team Table space", () => {
+  test("the Hindi card renders a grammatical one-seat capacity label", () => {
+    const offering = teamTableCatalog.offerings[0];
+    if (offering === undefined) throw new Error("Missing sample Team Table");
+    const tree = hostTree(
+      elementTree(SpaceCards, {
+        cards: spaceCards(catalog),
+        locale: "hi-IN",
+        onOpen: () => undefined,
+        teamTable: AsyncResult.success({
+          ...teamTableCatalog,
+          offerings: [
+            { ...offering, product: { ...offering.product, seats: 1 } },
+          ],
+        }),
+      })
+    );
+    expect(findAll(tree, "Text").map(textOf)).toContain("सीटों की संख्या: 1");
+  });
   const locale = "en-US";
   const renderChooser = (
     teamTable: AsyncResult.AsyncResult<CustomerTeamTableOfferings, unknown>,

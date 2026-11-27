@@ -1109,5 +1109,6 @@
   "booking_team_table_date_unavailable": "An diesem Tag ist kein Tisch dieser Größe frei.",
   "booking_team_table_no_times": "An diesem Tag sind keine Zeiten mehr frei.",
   "booking_team_table_people_over_capacity": "Am Tisch ist zu wenig Platz für alle. Entferne jemanden aus der Liste, um fortzufahren.",
-  "booking_team_table_times_unavailable": "Wähle einen freien Beginn und ein freies Ende."
+  "booking_team_table_times_unavailable": "Wähle einen freien Beginn und ein freies Ende.",
+  "booking_team_table_attendee_required": "Füge mindestens eine Person hinzu."
 }

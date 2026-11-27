@@ -1118,5 +1118,6 @@
   "booking_team_table_date_unavailable": "V tento den není stůl této velikosti volný.",
   "booking_team_table_no_times": "Na tento den už nejsou volné časy.",
   "booking_team_table_people_over_capacity": "U stolu není dost místa pro všechny. Pokud chceš pokračovat, odeber někoho ze seznamu.",
-  "booking_team_table_times_unavailable": "Vyber volný začátek a konec rezervace."
+  "booking_team_table_times_unavailable": "Vyber volný začátek a konec rezervace.",
+  "booking_team_table_attendee_required": "Přidej alespoň jednoho účastníka."
 }

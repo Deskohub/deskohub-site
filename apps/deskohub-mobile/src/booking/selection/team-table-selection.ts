@@ -82,14 +82,25 @@ export const teamTableSelection = (
           liveEnd(startTime, end)
         )
       : [];
-  const withinCapacity = officePeopleCount(people) <= seats;
+  const attendees = officePeopleCount(people);
+  const hasAttendee = attendees > 0;
+  const withinCapacity = attendees <= seats;
   const selection: CustomerTeamTableSelection | undefined =
     date !== undefined &&
     startTime !== undefined &&
     endTime !== undefined &&
     ends.includes(endTime) &&
-    withinCapacity
+    withinCapacity &&
+    hasAttendee
       ? { family: "table", seats, date, startTime, endTime }
       : undefined;
-  return { dates, dateAvailable, starts, ends, withinCapacity, selection };
+  return {
+    dates,
+    dateAvailable,
+    starts,
+    ends,
+    withinCapacity,
+    hasAttendee,
+    selection,
+  };
 };
