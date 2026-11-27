@@ -901,7 +901,12 @@ const runPublishCompletedPilot = async () => {
         return { skipPost: true };
       }
       if (!statusesOk) {
-        return { state: "failure", description: STATUSES_UNAVAILABLE_DESCRIPTION, targetUrl: sourceRun };
+        return {
+          state: "failure",
+          description: STATUSES_UNAVAILABLE_DESCRIPTION,
+          targetUrl: sourceRun,
+          verifyAfterPost: true,
+        };
       }
       const pending = findForeignActiveRun(summarizeCommitStatuses(statuses), selection.selected, sourceRun);
       if (pending) {
@@ -919,6 +924,7 @@ const runPublishCompletedPilot = async () => {
         state: "failure",
         description: BACKEND_PREVIEW_PROOF_REQUIRED,
         targetUrl: sourceRun,
+        verifyAfterPost: true,
       };
     },
   });

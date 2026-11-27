@@ -239,6 +239,7 @@ const runCompletedPilotPublisher = ({
   live = "current",
   statuses = [sourcePending],
   newerRunAfterWrite = false,
+  statusesInitiallyUnavailable = false,
 } = {}) => {
   const stubFetch = `
 const team = "team_MgMQ4MEWijWnYa1R48C2JU5e";
@@ -251,7 +252,7 @@ let proofs = 0;
 globalThis.fetch = async (input) => {
   const url = new URL(input);
   if (url.origin === origin && url.pathname === "/api/internal/backend-preview") {
-    if (${live === "gone"} || (${live === "moves"} && ++proofs === 3)) return new Response(null, { status: 503 });
+    if (${live === "gone"} || (${live === "moves"} && ++proofs >= 3)) return new Response(null, { status: 503 });
     return Response.json({ commitSha: sha, cloudRunRevision: revision, generation, workerTag: "g-0123456789abcdef" }, { headers: {
       "x-deskohub-backend-revision": sha,
       "x-deskohub-cloud-run-revision": revision,
@@ -309,8 +310,12 @@ globalThis.fetch = async (input) => {
           "gh-fixture-api": fakeGh,
           gh: `#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == *"/statuses/${headSha} -f state=success -f context=Workspace E2E -f "* ]]; then
+if [[ ${statusesInitiallyUnavailable ? "true" : "false"} == true && "$*" == *"/commits/${headSha}/statuses?"* && ! -e "$GH_FIXTURES/pending-arrived" ]]; then
+  exit 1
+fi
+if [[ "$*" == *"/statuses/${headSha} -f state="*" -f context=Workspace E2E -f "* ]]; then
   cp "$GH_FIXTURES/newer-pending.json" "$GH_FIXTURES/commits_${headSha}_statuses.json"
+  touch "$GH_FIXTURES/pending-arrived"
 fi
 exec gh-fixture-api "$@"`,
         }
@@ -396,17 +401,42 @@ describe("Workspace E2E backend proof publishers", () => {
     expect(statusPosts(calls)).toEqual([]);
   });
 
-  test("restores the newer run's pending status if it appears after a pilot pass write", async () => {
-    const { calls, result } = await runCompletedPilotPublisher({
-      newerRunAfterWrite: true,
-    });
-    expect(result.exitCode).toBe(0);
-    const posts = statusPosts(calls);
-    expect(posts).toHaveLength(2);
-    expect(posts[0]).toContain("state=success -f context=Workspace E2E");
-    expect(posts[1]).toContain("state=pending -f context=Workspace E2E");
-    expect(posts[1]).toContain(`target_url=${newerPending.target_url}`);
-  });
+  test.each([
+    {
+      caseName: "success",
+      live: "current",
+      statusesInitiallyUnavailable: false,
+      state: "success",
+    },
+    {
+      caseName: "missing generation",
+      live: "gone",
+      statusesInitiallyUnavailable: false,
+      state: "failure",
+    },
+    {
+      caseName: "unavailable status history",
+      live: "current",
+      statusesInitiallyUnavailable: true,
+      state: "failure",
+    },
+  ])(
+    "restores the newer pending owner when it interleaves with $caseName",
+    async ({ live, statusesInitiallyUnavailable, state }) => {
+      const { calls, result } = await runCompletedPilotPublisher({
+        newerRunAfterWrite: true,
+        live,
+        statusesInitiallyUnavailable,
+      });
+      expect(result.exitCode).toBe(0);
+      const posts = statusPosts(calls);
+      expect(posts).toHaveLength(2);
+      expect(posts[0]).toContain(`state=${state} -f context=Workspace E2E`);
+      expect(posts[1]).toContain("state=pending -f context=Workspace E2E");
+      expect(posts[1]).toContain(`description=${newerPending.description}`);
+      expect(posts[1]).toContain(`target_url=${newerPending.target_url}`);
+    }
+  );
 
   test.each(["failure", "cancelled", "in_progress"])(
     "rejects a successful confirmation job from a %s workflow run",
