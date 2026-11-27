@@ -839,6 +839,7 @@ export class LatePaymentRecoveryService extends Context.Service<
                   Layer.mergeAll(
                     Layer.succeed(WorkspaceDatabaseAdvisoryLock, advisoryLock),
                     Layer.succeed(WorkspaceAvailabilityService, availability),
+                    Layer.succeed(WorkspaceReservationRepository, reservations),
                     Layer.succeed(DotyposService, dotypos),
                     Layer.succeed(OpenSpaceTableMoves, moves)
                   )

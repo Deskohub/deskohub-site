@@ -229,6 +229,7 @@ export const WorkspaceLockSections = {
     options?: {
       readonly movedReservations?: readonly WorkspaceReservationId[];
       readonly authorAccountId?: CustomerAccountId;
+      readonly sourceAccountIds?: readonly CustomerAccountId[];
     }
   ) => {
     const [first, ...rest] = Array.from(new Set(dates.map(String)))
@@ -244,20 +245,26 @@ export const WorkspaceLockSections = {
     )
       .sort(Order.String)
       .map(reservationOrderSection);
-    const account = options?.authorAccountId
-      ? customerAccountSection(options.authorAccountId)
-      : undefined;
+    const accounts = Array.from(
+      new Set([
+        ...(options?.authorAccountId ? [options.authorAccountId] : []),
+        ...(options?.sourceAccountIds ?? []),
+      ])
+    )
+      .sort(Order.String)
+      .map(customerAccountSection);
     if (firstOrder) {
       return holdSections([
         firstOrder,
         ...remainingOrders,
-        ...(account ? [account] : []),
+        ...accounts,
         first,
         ...rest,
       ]);
     }
+    const [account, ...remainingAccounts] = accounts;
     return account
-      ? holdSections([account, first, ...rest])
+      ? holdSections([account, ...remainingAccounts, first, ...rest])
       : holdSections([first, ...rest]);
   },
   unlimitedGiftCustomer: (holder: CustomerAccountId) =>

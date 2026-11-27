@@ -74,6 +74,7 @@ import {
   requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { workspaceReservationIdSchema } from "../persistence-contracts";
 import { AdvisoryAvailabilityInventory } from "./availability-inventory";
 import { agentSelectionKeySchema, type BookingAgent } from "./booking-agent";
@@ -579,8 +580,27 @@ describe.skipIf(!postgresDatabase)(
 
     test("locks the superseded Team Table's day before cancellation and replans for the replacement", async () => {
       const author = await newAuthor();
+      const sourceAuthor = await newAuthor();
+      const sourceOrder = await Effect.runPromise(
+        workspaceFixtures(postgres.db).reservation({
+          stage: { reservation: "held" },
+          overrides: { authorAccountId: sourceAuthor },
+        })
+      );
       const dotypos = makeDotypos();
       const tableId = DotyposTableIdSchema.make("own-table");
+      const move = {
+        reservationId: sourceOrder.id,
+        sourceReservationId: requireValue(
+          (await rowOf(sourceOrder.id))?.dotyposReservationId,
+          "source provider hold"
+        ),
+        status: "NEW" as const,
+        serviceDate: plainDateStringSchema.make("2099-06-11"),
+        startsAt: Temporal.Instant.from("2099-06-11T00:00:00Z"),
+        endsAt: Temporal.Instant.from("2099-06-11T15:00:00Z"),
+        targetTableId: DotyposTableIdSchema.make("open-space-destination"),
+      };
       const records = new Map<
         DotyposReservationId,
         ReturnType<typeof dotyposHoldFixture>
@@ -619,17 +639,16 @@ describe.skipIf(!postgresDatabase)(
           getReservationWithoutCustomer: (id) =>
             Effect.sync(() => requireValue(records.get(id), "provider hold")),
         },
-        teamPlan: (_reservation, _exactTable, options) =>
+        teamPlan: (_reservation, exactTable, options) =>
           Effect.sync(() => {
-            if (
-              !oldProviderId ||
-              records.get(oldProviderId)?.status === "CANCELLED"
-            )
-              return { tableId, moves: [] };
+            if (!oldProviderId || exactTable) return { tableId, moves: [] };
+            if (records.get(oldProviderId)?.status === "CANCELLED") {
+              return { tableId, moves: [move] };
+            }
             if (!options?.displacedHoldIds?.includes(oldProviderId))
               return undefined;
             lookahead = true;
-            return { tableId, moves: [] };
+            return { tableId, moves: [move] };
           }),
       });
       const base = holdRequest({ author });
@@ -667,10 +686,16 @@ describe.skipIf(!postgresDatabase)(
         (await rowsOf(author))[0]?.dotyposReservationId ?? undefined;
       const replacement = {
         ...(await tableRequest("2099-06-11")),
-        recheckTeamTableAuthority: WorkspaceLockSections.holdsCustomerAccount(
-          author
-        ).pipe(
-          Effect.tap((held) => Effect.sync(() => expect(held).toBe(true))),
+        recheckTeamTableAuthority: Effect.all({
+          author: WorkspaceLockSections.holdsCustomerAccount(author),
+          sourceAuthor:
+            WorkspaceLockSections.holdsCustomerAccount(sourceAuthor),
+        }).pipe(
+          Effect.tap((held) =>
+            Effect.sync(() =>
+              expect(held).toEqual({ author: true, sourceAuthor: true })
+            )
+          ),
           Effect.asVoid
         ),
       };

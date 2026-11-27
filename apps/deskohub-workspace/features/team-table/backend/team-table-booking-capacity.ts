@@ -126,6 +126,31 @@ const discoverCapacity = Effect.fnUntraced(function* <E, R>(input: {
   const lookup = input.lookupDisplacedHolds ?? Effect.succeed([]);
   const prior = yield* lookup;
   const discovered = yield* getPlan(prior);
+  const getSourceAccounts = Effect.fnUntraced(function* (
+    plan: TeamTablePlan | undefined
+  ) {
+    const sources = plan?.moves.filter(({ status }) => status === "NEW") ?? [];
+    if (sources.length === 0) return [];
+    const repository = yield* Effect.serviceOption(
+      WorkspaceReservationRepository
+    );
+    if (Option.isNone(repository)) return yield* unavailableFor(reservation);
+    return yield* Effect.forEach(
+      sources,
+      Effect.fnUntraced(function* ({ reservationId }) {
+        const source = yield* repository.value
+          .findById(reservationId)
+          .pipe(
+            Effect.catchTag("WorkspaceReservationDetailsMalformedError", () =>
+              Effect.fail(unavailableFor(reservation))
+            )
+          );
+        if (!source) return yield* unavailableFor(reservation);
+        return source.authorAccountId;
+      })
+    );
+  });
+  const sourceAccountIds = yield* getSourceAccounts(discovered);
   const { first, last } = getReservationDateBounds(reservation);
   const dates = [
     ...getPlainDatesBetween(first, last),
@@ -140,6 +165,7 @@ const discoverCapacity = Effect.fnUntraced(function* <E, R>(input: {
   ];
   const lockedDates = new Set(dates.map(String));
   const lockedOrders = new Set(orderIds);
+  const lockedAccounts = new Set(sourceAccountIds);
   const needsMoreLocks = (plan: TeamTablePlan | undefined) =>
     plan?.moves.some(
       ({ reservationId, serviceDate }) =>
@@ -160,7 +186,11 @@ const discoverCapacity = Effect.fnUntraced(function* <E, R>(input: {
     )
       return yield* new TeamTableCapacityChanged();
     const fresh = yield* getPlan(current);
-    if (needsMoreLocks(fresh)) return yield* new TeamTableCapacityChanged();
+    if (
+      needsMoreLocks(fresh) ||
+      (yield* getSourceAccounts(fresh)).some((id) => !lockedAccounts.has(id))
+    )
+      return yield* new TeamTableCapacityChanged();
     if (current.length > 0 && !fresh && !forExistingOrder)
       return yield* unavailableFor(reservation);
   });
@@ -169,7 +199,11 @@ const discoverCapacity = Effect.fnUntraced(function* <E, R>(input: {
   // it before assignment, while holding its order key and service dates.
   const assignTableId = Effect.gen(function* () {
     const fresh = yield* getPlan();
-    if (!fresh || needsMoreLocks(fresh))
+    if (
+      !fresh ||
+      needsMoreLocks(fresh) ||
+      (yield* getSourceAccounts(fresh)).some((id) => !lockedAccounts.has(id))
+    )
       return yield* unavailableFor(reservation);
     const moved = yield* moves
       .repackInCapacitySection({
@@ -190,7 +224,7 @@ const discoverCapacity = Effect.fnUntraced(function* <E, R>(input: {
     return fresh.tableId;
   });
 
-  return { dates, orderIds, validate, assignTableId };
+  return { dates, orderIds, sourceAccountIds, validate, assignTableId };
 });
 
 const retryDiscovery = <A, E, R>(
@@ -234,6 +268,7 @@ export const withTeamTableBookingCapacity = <
       return yield* WorkspaceLockSections.reservationCapacity(plan.dates, {
         authorAccountId: input.authorAccountId,
         movedReservations: plan.orderIds,
+        sourceAccountIds: plan.sourceAccountIds,
       })(
         plan.validate.pipe(Effect.andThen(Effect.suspend(() => section(plan))))
       );
@@ -280,9 +315,9 @@ export const withTeamTablePaymentCapacity = <
         ),
       });
       const withCapacity: TeamTablePaymentCapacity["withCapacity"] = (work) =>
-        WorkspaceLockSections.reservationCapacity(plan.dates)(
-          Effect.suspend(() => work(plan))
-        );
+        WorkspaceLockSections.reservationCapacity(plan.dates, {
+          sourceAccountIds: plan.sourceAccountIds,
+        })(Effect.suspend(() => work(plan)));
       return yield* WorkspaceLockSections.reservationOrders(
         input.orderId,
         plan.orderIds
