@@ -57,6 +57,7 @@ interface Row {
 type Step = () => Effect.Effect<unknown, unknown>;
 
 interface Scenario {
+  readonly attachedTableMove?: boolean;
   /** The recovery's stored state; null when no recovery exists. */
   readonly recoveryState?: string | null;
   readonly claimed?: boolean;
@@ -207,7 +208,8 @@ const recover = async (scenario: Scenario) => {
     requireReview: settleAs("review_required"),
   });
   const reservations = trace.recordCalls("reservations", {
-    hasAttachedOpenSpaceMove: () => Effect.succeed(false),
+    hasAttachedOpenSpaceMove: () =>
+      Effect.succeed(scenario.attachedTableMove ?? false),
     findById: () =>
       Effect.sync(() =>
         findByIdSequence.length > 0
@@ -374,6 +376,16 @@ describe("LatePaymentRecoveryService.recover settled recoveries", () => {
     `);
   });
 
+  test("waits for an attached table move before claiming a recovery", async () => {
+    const { outcome, trace } = await recover({ attachedTableMove: true });
+    expect(outcome).toBe(
+      "fail: A table move is still retiring the original reservation hold."
+    );
+    expect(trace).not.toContain(
+      "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)"
+    );
+  });
+
   test("retries a recovery another run is processing", async () => {
     const { outcome, trace } = await recover({ claimed: false });
 
@@ -382,6 +394,7 @@ describe("LatePaymentRecoveryService.recover settled recoveries", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
       ]
     `);
@@ -397,6 +410,7 @@ describe("LatePaymentRecoveryService.recover settled recoveries", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
       ]
@@ -413,6 +427,7 @@ describe("LatePaymentRecoveryService.recover settled recoveries", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.requireRefund(paymentAttemptId=attempt-id, workspaceReservationId=reservation-id, failureCode=late_payment_superseded_attempt, completedAt=<Instant>)",
@@ -433,6 +448,7 @@ describe("LatePaymentRecoveryService.recover settled recoveries", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.requireRefund(paymentAttemptId=attempt-id, workspaceReservationId=reservation-id, failureCode=late_payment_after_administration_cancellation, completedAt=<Instant>)",
@@ -450,6 +466,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -471,6 +488,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -532,6 +550,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -618,6 +637,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -651,6 +671,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -681,6 +702,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -716,6 +738,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -736,6 +759,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -768,6 +792,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -795,6 +820,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -818,6 +844,7 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -862,6 +889,7 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -889,6 +917,7 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -909,6 +938,7 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -956,6 +986,7 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -976,6 +1007,7 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -998,6 +1030,7 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1021,6 +1054,7 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1073,6 +1107,7 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1102,6 +1137,7 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1152,6 +1188,7 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1212,6 +1249,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1362,6 +1400,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1392,6 +1431,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1421,6 +1461,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1454,6 +1495,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1492,6 +1534,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1530,6 +1573,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1568,6 +1612,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1607,6 +1652,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1681,6 +1727,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1718,6 +1765,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1753,6 +1801,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1801,6 +1850,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1875,6 +1925,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",
@@ -1923,6 +1974,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       [
         "span latePaymentRecovery.recover",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
+        "call reservations.hasAttachedOpenSpaceMove(reservation-id)",
         "call recoveries.claim(paymentAttemptId=attempt-id, staleProcessingBefore=<Instant>)",
         "call reservations.findById(reservation-id)",
         "call recoveries.hasNewerActiveReservation(reservation-id)",

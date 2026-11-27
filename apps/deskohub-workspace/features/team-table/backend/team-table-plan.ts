@@ -62,10 +62,11 @@ export type TeamTableBooking = { readonly tableId: DotyposTableId } & (
   | { readonly kind: "unknown"; readonly interval?: InstantInterval }
 );
 
-type TeamTableOpenSpaceMove = OpenSpaceMoveSource & {
-  readonly targetTableId: DotyposTableId;
-  readonly status: VerifiedOpenSpaceHold["status"];
-};
+type TeamTableOpenSpaceMove = OpenSpaceMoveSource &
+  InstantInterval & {
+    readonly targetTableId: DotyposTableId;
+    readonly status: VerifiedOpenSpaceHold["status"];
+  };
 
 type TeamTablePlan = {
   readonly tableId: DotyposTableId;
@@ -192,6 +193,7 @@ const placeOpenSpaceBookings = (
     for (const { table, previous } of ranked) {
       assigned.set(table.id, [...previous, { ...blocker, tableId: table.id }]);
       moves.push({
+        ...blocker.interval,
         reservationId,
         sourceReservationId,
         serviceDate,

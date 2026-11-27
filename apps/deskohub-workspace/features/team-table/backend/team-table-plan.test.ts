@@ -176,6 +176,7 @@ test("backtracks to fit every source over its entire interval and preserves NEW"
       tableId: target.id,
       moves: [
         {
+          ...late,
           reservationId: "a",
           sourceReservationId: "a",
           targetTableId: second.id,
@@ -183,6 +184,7 @@ test("backtracks to fit every source over its entire interval and preserves NEW"
           status: "CONFIRMED",
         },
         {
+          ...early,
           reservationId: "b",
           sourceReservationId: "b",
           targetTableId: first.id,
@@ -190,6 +192,7 @@ test("backtracks to fit every source over its entire interval and preserves NEW"
           status: "CONFIRMED",
         },
         {
+          ...early,
           reservationId: "c",
           sourceReservationId: "c",
           targetTableId: third.id,
