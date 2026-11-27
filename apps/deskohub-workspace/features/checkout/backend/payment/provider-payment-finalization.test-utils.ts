@@ -1,11 +1,6 @@
 import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
-import {
-  NexiOperationIdSchema,
-  NexiOrderIdSchema,
-  type NexiService,
-} from "@deskohub/nexi";
-import type { Effect } from "effect";
+import { NexiOrderIdSchema } from "@deskohub/nexi";
 import type { FulfillmentState } from "@/db/schema";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { orderIdSchema } from "@/features/order";
@@ -20,7 +15,6 @@ export const orderId = orderIdSchema.make(
 export const reservationId = reservationIdForOrder(orderId);
 export const paymentAttemptId = paymentAttemptIdSchema.make("attempt-id");
 export const providerOrderId = NexiOrderIdSchema.make("provider-order-id");
-const providerOperationId = NexiOperationIdSchema.make("operation-id");
 export const attemptCreatedAt = Temporal.Instant.from("2026-06-01T10:00:00Z");
 
 export const pendingReservation = workspaceReservationFixture({
@@ -101,28 +95,3 @@ export const unattachedAttempt = {
   providerRedirectUrl: null,
   providerOrderCreatedAt: null,
 } satisfies PaymentAttempt;
-
-export type NexiVerification = Effect.Success<
-  ReturnType<typeof NexiService.Service.verifyPaymentOutcome>
->;
-
-export const buildVerification = (
-  status: NexiVerification["status"],
-  provider: Partial<NexiVerification["provider"]> = {},
-  mismatches: NexiVerification["mismatches"] = []
-): NexiVerification => ({
-  status,
-  provider: {
-    orderId: providerOrderId,
-    operationId: providerOperationId,
-    operationCount: 1,
-    amount: "35000",
-    currency: "CZK",
-    authorizedAmount: undefined,
-    capturedAmount: undefined,
-    orderStatus: status === "failure" ? "DECLINED" : "EXECUTED",
-    captureExecuted: status === "success",
-    ...provider,
-  },
-  mismatches,
-});

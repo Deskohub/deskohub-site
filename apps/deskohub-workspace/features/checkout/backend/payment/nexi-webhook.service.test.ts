@@ -26,6 +26,8 @@ import type { ILatePaymentRecoveryQueueService } from "./late-payment-recovery-q
 import {
   type NexiVerification,
   nexiVerificationFixture,
+} from "./nexi-verification.test-utils";
+import {
   nexiWebhookAttemptFixture,
   nexiWebhookEventFixture,
   nexiWebhookRecoveryFixture,

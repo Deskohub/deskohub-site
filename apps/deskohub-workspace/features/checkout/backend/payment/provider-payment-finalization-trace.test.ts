@@ -10,6 +10,7 @@ import {
   recordEffectTrace,
   startEffectTrace,
 } from "@/shared/testing/effect-trace.test-utils";
+import { nexiVerificationFixture } from "./nexi-verification.test-utils";
 import { withReservationPaymentHandlers } from "./order-payment-handlers.test-utils";
 import {
   type PaymentProviderAdapter,
@@ -20,7 +21,6 @@ import { PaymentProvidersFromNexi } from "./payment-providers";
 import type { IProviderPaymentFinalizationService } from "./provider-payment-finalization.service";
 import {
   attemptCreatedAt,
-  buildVerification,
   orderId,
   paidReservation,
   paymentAttemptId,
@@ -141,7 +141,7 @@ const verifyingCollaborators = (
     ...overrides.paymentLifecycle,
   },
   nexi: {
-    verifyPaymentOutcome: succeed(buildVerification("success")),
+    verifyPaymentOutcome: succeed(nexiVerificationFixture("success")),
     ...overrides.nexi,
   },
   paidFulfillmentQueue: {
@@ -724,7 +724,7 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
       verifyingCollaborators({
         nexi: {
           verifyPaymentOutcome: succeed(
-            buildVerification("success", {}, ["amount", "securityToken"])
+            nexiVerificationFixture("success", {}, ["amount", "securityToken"])
           ),
         },
       })
@@ -822,7 +822,7 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
       verifyingCollaborators({
         nexi: {
           verifyPaymentOutcome: succeed(
-            buildVerification("success", { orderStatus: undefined })
+            nexiVerificationFixture("success", { orderStatus: undefined })
           ),
         },
       })
@@ -947,7 +947,9 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
   test("marks a declined payment failed and captures the failure", async () => {
     const { outcome, trace } = await finalize(
       verifyingCollaborators({
-        nexi: { verifyPaymentOutcome: succeed(buildVerification("failure")) },
+        nexi: {
+          verifyPaymentOutcome: succeed(nexiVerificationFixture("failure")),
+        },
       }),
       { paymentAttemptId, webhookEventId: "webhook-event-id" }
     );
@@ -980,7 +982,7 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
       verifyingCollaborators({
         nexi: {
           verifyPaymentOutcome: succeed(
-            buildVerification("failure", { orderStatus: "CANCELED" })
+            nexiVerificationFixture("failure", { orderStatus: "CANCELED" })
           ),
         },
         paymentLifecycle: {
@@ -1017,7 +1019,7 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
       verifyingCollaborators({
         nexi: {
           verifyPaymentOutcome: succeed(
-            buildVerification("failure", { orderStatus: "EXPIRED" })
+            nexiVerificationFixture("failure", { orderStatus: "EXPIRED" })
           ),
         },
         paymentLifecycle: {
@@ -1052,7 +1054,9 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
   test("skips the terminal capture when the attempt was already terminal", async () => {
     const { outcome, trace } = await finalize(
       verifyingCollaborators({
-        nexi: { verifyPaymentOutcome: succeed(buildVerification("failure")) },
+        nexi: {
+          verifyPaymentOutcome: succeed(nexiVerificationFixture("failure")),
+        },
         paymentLifecycle: {
           markTerminal: succeed(lifecycleTransition(false, "failed")),
         },
@@ -1084,7 +1088,9 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
   test("returns not_pending when the attempt changed before it could be marked terminal", async () => {
     const { outcome, trace } = await finalize(
       verifyingCollaborators({
-        nexi: { verifyPaymentOutcome: succeed(buildVerification("failure")) },
+        nexi: {
+          verifyPaymentOutcome: succeed(nexiVerificationFixture("failure")),
+        },
         paymentLifecycle: { markTerminal: fail(lifecycleStateError) },
       })
     );
@@ -1114,7 +1120,9 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
   test("fails when marking terminal fails to persist", async () => {
     const { outcome, trace } = await finalize(
       verifyingCollaborators({
-        nexi: { verifyPaymentOutcome: succeed(buildVerification("failure")) },
+        nexi: {
+          verifyPaymentOutcome: succeed(nexiVerificationFixture("failure")),
+        },
         paymentLifecycle: { markTerminal: fail(queryFailure) },
       })
     );
@@ -1142,7 +1150,9 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
   test("returns pending for a pending provider order with payment activity", async () => {
     const { outcome, trace } = await finalize(
       verifyingCollaborators({
-        nexi: { verifyPaymentOutcome: succeed(buildVerification("pending")) },
+        nexi: {
+          verifyPaymentOutcome: succeed(nexiVerificationFixture("pending")),
+        },
       }),
       { paymentAttemptId, abandonmentCheckedAt: afterCutoff }
     );
@@ -1172,7 +1182,7 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
       verifyingCollaborators({
         nexi: {
           verifyPaymentOutcome: succeed(
-            buildVerification("pending", emptyPendingProvider)
+            nexiVerificationFixture("pending", emptyPendingProvider)
           ),
         },
       })
@@ -1203,7 +1213,7 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
       verifyingCollaborators({
         nexi: {
           verifyPaymentOutcome: succeed(
-            buildVerification("pending", emptyPendingProvider)
+            nexiVerificationFixture("pending", emptyPendingProvider)
           ),
         },
       }),
@@ -1238,7 +1248,7 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
       verifyingCollaborators({
         nexi: {
           verifyPaymentOutcome: succeed(
-            buildVerification("pending", emptyPendingProvider)
+            nexiVerificationFixture("pending", emptyPendingProvider)
           ),
         },
       }),

@@ -13,13 +13,15 @@ import {
   type IPaymentLifecycleRepository,
   PaymentLifecycleRepository,
 } from "../repositories/payment-lifecycle.repository";
+import {
+  type NexiVerification,
+  nexiVerificationFixture,
+} from "./nexi-verification.test-utils";
 import { withReservationPaymentHandlers } from "./order-payment-handlers.test-utils";
 import { PaymentProvidersFromNexi } from "./payment-providers";
 import type { ProviderPaymentFinalizationResult } from "./provider-payment-finalization.service";
 import {
   attemptCreatedAt,
-  buildVerification,
-  type NexiVerification,
   orderId,
   paidReservation,
   paymentAttemptId,
@@ -47,7 +49,7 @@ const paidFulfillmentLayer = (
     Effect.die("not used")
 ) => Layer.mock(ReservationFulfillment, { run: fulfillPaidOrder });
 
-const emptyPendingVerification = buildVerification("pending", {
+const emptyPendingVerification = nexiVerificationFixture("pending", {
   operationId: undefined,
   operationCount: 0,
   authorizedAmount: "0",
@@ -289,7 +291,7 @@ describe("ProviderPaymentFinalizationService", () => {
       };
       const nexi = {
         verifyPaymentOutcome: mock(() =>
-          Effect.succeed(buildVerification(scenario.verificationStatus))
+          Effect.succeed(nexiVerificationFixture(scenario.verificationStatus))
         ),
       };
 
@@ -510,7 +512,7 @@ describe("ProviderPaymentFinalizationService", () => {
                 Layer.provide(
                   Layer.mock(NexiService, {
                     verifyPaymentOutcome: mock(() =>
-                      Effect.succeed(buildVerification("success"))
+                      Effect.succeed(nexiVerificationFixture("success"))
                     ),
                   })
                 )

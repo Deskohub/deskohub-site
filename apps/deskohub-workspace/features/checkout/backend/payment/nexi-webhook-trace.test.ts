@@ -18,6 +18,8 @@ import {
 import {
   type NexiVerification,
   nexiVerificationFixture,
+} from "./nexi-verification.test-utils";
+import {
   nexiWebhookAttemptFixture,
   nexiWebhookEventFixture,
   nexiWebhookRecoveryFixture,

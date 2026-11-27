@@ -1,10 +1,4 @@
 import { DotyposReservationIdSchema } from "@deskohub/dotypos";
-import {
-  NexiOperationIdSchema,
-  NexiOrderIdSchema,
-  type NexiService,
-} from "@deskohub/nexi";
-import type { Effect } from "effect";
 import type { LatePaymentRecovery, WebhookEvent } from "@/db/schema";
 import {
   paymentAttemptIdSchema,
@@ -22,31 +16,6 @@ const reservationId = workspaceReservationIdSchema.make(
 const attemptId = paymentAttemptIdSchema.make("attempt-id");
 const storedEventId = storedWebhookEventIdSchema.make("webhook-row-id");
 const dotyposReservationId = DotyposReservationIdSchema.make("dotypos-id");
-
-export type NexiVerification = Effect.Success<
-  ReturnType<typeof NexiService.Service.verifyPaymentOutcome>
->;
-
-export const nexiVerificationFixture = (
-  status: NexiVerification["status"],
-  overrides: Partial<NexiVerification["provider"]> = {},
-  mismatches: NexiVerification["mismatches"] = []
-): NexiVerification => ({
-  status,
-  provider: {
-    orderId: NexiOrderIdSchema.make("provider-order-id"),
-    operationId: NexiOperationIdSchema.make("operation-id"),
-    operationCount: 1,
-    amount: "35000",
-    currency: "CZK",
-    authorizedAmount: undefined,
-    capturedAmount: undefined,
-    orderStatus: status === "failure" ? "DECLINED" : "EXECUTED",
-    captureExecuted: status === "success",
-    ...overrides,
-  },
-  mismatches,
-});
 
 export const nexiWebhookAttemptFixture = (): PaymentAttemptWithOrderKind => ({
   orderId: standaloneReservationOrderId(reservationId),
