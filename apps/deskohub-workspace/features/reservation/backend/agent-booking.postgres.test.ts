@@ -58,6 +58,8 @@ import { RememberedReferral } from "@/features/referrals/remembered-referral.ser
 import { meetingRoomAdvertisedPriceReservationSchema } from "@/features/reservation/meeting-room-reservation";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { ReviewAccounts, ReviewSandbox } from "@/features/review-accounts";
+import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import {
   syntheticDotyposCustomerId,
@@ -221,6 +223,8 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
   });
   const services = Layer.mergeAll(
     database.layer,
+    TeamTableReleaseGate.fromDecision(false),
+    Layer.mock(OpenSpaceTableMoves, {}),
     WorkspaceDatabaseAdvisoryLock.makeLayer(database.databasePool),
     makeCustomerAccountSections({ session: {}, activityState: "active" }).layer,
     Layer.mergeAll(

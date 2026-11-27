@@ -852,11 +852,13 @@ describe("CheckoutStatusService", () => {
   });
 
   test.each([
-    ["readable", "3", 3],
-    ["unreadable", "abc", undefined],
+    ["office", "readable", "3", 3],
+    ["office", "unreadable", "abc", undefined],
+    ["table", "readable", "4", 4],
+    ["table", "unreadable", "abc", 4],
   ] as const)(
-    "reconstructs office dates and seats from Dotypos with %s seats",
-    async (_readability, seats, expectedSeats) => {
+    "reconstructs %s dates and seats with %s Dotypos seats",
+    async (kind, _readability, seats, expectedSeats) => {
       const { CheckoutStatusService } = await import(
         "./checkout-status.service"
       );
@@ -874,7 +876,10 @@ describe("CheckoutStatusService", () => {
         findById: mock(() =>
           Effect.succeed(
             makeReservation({
-              reservationDetails: { kind: "office" },
+              reservationDetails:
+                kind === "table"
+                  ? { kind, seats: 4, durationMinutes: 45 }
+                  : { kind },
               productTier: null,
               productCoffee: false,
               productMonitorOption: null,
@@ -892,14 +897,18 @@ describe("CheckoutStatusService", () => {
       const finalization: ProviderPaymentFinalizationServiceType = {
         finalizePendingProviderPayment: mock(() => Effect.die("not used")),
       };
+      const startsAt =
+        kind === "table" ? "2026-06-12T09:15:00Z" : "2026-06-11T22:00:00Z";
+      const endsAt =
+        kind === "table" ? "2026-06-12T10:00:00Z" : "2026-06-14T22:00:00Z";
       const dotypos = makeDotypos({
         getReservationWithoutCustomer: mock(() =>
           Effect.succeed({
             id: "dotypos-reservation-id",
             _customerId: "customer-id",
-            _tableId: "office-table",
-            startDate: "2026-06-11T22:00:00.000Z",
-            endDate: "2026-06-14T22:00:00.000Z",
+            _tableId: `${kind}-table`,
+            startDate: startsAt,
+            endDate: endsAt,
             seats,
             status: "CONFIRMED",
           })
@@ -934,26 +943,22 @@ describe("CheckoutStatusService", () => {
         Effect.runPromise
       );
 
-      expect(status.kind).toBe("office");
+      expect(status.kind).toBe(kind);
       if (expectedSeats === undefined) {
         expect(status.summary).toBeUndefined();
         return;
       }
       expect(status).toMatchObject({
-        kind: "office",
+        kind,
         status: "fulfilled",
         summary: {
-          kind: "office",
+          kind,
           seats: expectedSeats,
           price: { value: 55_000, exponent: 2, currency: "CZK" },
         },
       });
-      expect(status.summary?.reservedFrom.toString()).toBe(
-        "2026-06-11T22:00:00Z"
-      );
-      expect(status.summary?.reservedUntil.toString()).toBe(
-        "2026-06-14T22:00:00Z"
-      );
+      expect(status.summary?.reservedFrom.toString()).toBe(startsAt);
+      expect(status.summary?.reservedUntil.toString()).toBe(endsAt);
     }
   );
 

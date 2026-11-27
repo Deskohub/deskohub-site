@@ -15,6 +15,7 @@ import {
   WorkspaceDatabase,
   type WorkspaceDatabaseClient,
 } from "@/db/database.service";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   CustomerAccountAccessError,
   CustomerAccountContactService,
@@ -86,6 +87,7 @@ import {
   type ReservationHold,
   ReservationHolds,
 } from "@/features/reservation/backend/reservation-holds.service";
+import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import type { WorkspaceReservation } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
@@ -97,6 +99,7 @@ import { isTableReservationBookable } from "@/features/reservation/table-reserva
 import { ReservationInviteeEmailKeys } from "@/features/reservation-invitees/backend/reservation-invitee-email-keys.service";
 import { sealOfficePeople } from "@/features/reservation-invitees/backend/reservation-invitees.service";
 import { ReviewAccounts, ReviewSandbox } from "@/features/review-accounts";
+import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
 import {
   type TeamTableBookingCapacity,
   TeamTableBookingCapacityLive,
@@ -185,6 +188,9 @@ const bookingCapabilities = [
   OfficeReleaseGate,
   TeamTableReleaseGate,
   OvernightStayReleaseGate,
+  WorkspaceAvailabilityService,
+  WorkspaceDatabaseAdvisoryLock,
+  OpenSpaceTableMoves,
 ] as const;
 
 type BookingCapabilities =
@@ -201,7 +207,10 @@ type BookingCapabilities =
   | ReferralReleaseGate
   | OfficeReleaseGate
   | TeamTableReleaseGate
-  | OvernightStayReleaseGate;
+  | OvernightStayReleaseGate
+  | WorkspaceAvailabilityService
+  | WorkspaceDatabaseAdvisoryLock
+  | OpenSpaceTableMoves;
 
 /** Reservation submissions, booked into a hold and a Pay page. */
 export class ReservationBooking extends Context.Service<
@@ -233,6 +242,7 @@ export class ReservationBooking extends Context.Service<
     Layer.provide(
       Layer.mergeAll(
         ReservationHolds.Live,
+        TeamTableBookingCapacityLive,
         WorkspaceDatabase.Default,
         Layer.mergeAll(
           MarketingConsentLedger.Default,
@@ -1126,7 +1136,7 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
         return yield* withTeamTableBookingCapacity(
           { reservation, authorAccountId },
           prepare
-        ).pipe(Effect.provide(TeamTableBookingCapacityLive));
+        );
       }
     );
     const result = yield* input.reservation.kind === "table"
