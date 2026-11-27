@@ -1,9 +1,10 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import type {
-  AutomationFlow,
-  CalendarExpression,
+import {
+  type AutomationFlow,
+  AutomationStepId,
+  type CalendarExpression,
 } from "@deskohub/workspace-admin-api";
 import { eq, isNull } from "drizzle-orm";
 import { Data, Effect, Layer } from "effect";
@@ -21,7 +22,6 @@ import {
   seedAutomationVersion,
 } from "../../backend/email-campaigns.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
-import type { AutomationStepId } from "../automation-identifiers";
 import {
   makeEngineDotypos,
   makeEngineFixtures,
@@ -50,9 +50,11 @@ const noFires: ScheduleFirePlan = {
 
 /** Every hour on the hour. */
 const hourly: CalendarExpression = { minutes: [0] };
+const sendStep = AutomationStepId.make("send");
+
 const scheduleFlow = (calendar: CalendarExpression): AutomationFlow => ({
   trigger: { _tag: "Schedule", calendar },
-  steps: [{ _tag: "Send", id: "send" as AutomationStepId }],
+  steps: [{ _tag: "Send", id: sendStep }],
 });
 
 type PlannedFires = {

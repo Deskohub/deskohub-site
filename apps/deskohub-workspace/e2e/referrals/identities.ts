@@ -1,8 +1,8 @@
-import type {
-  DotyposCustomerId,
-  DotyposReservationId,
+import {
+  type DotyposCustomerId,
+  DotyposReservationIdSchema,
 } from "@deskohub/dotypos";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import {
   makeWorkspaceE2ECaseIdentities,
   type WorkspaceE2ECaseAccount,
@@ -15,7 +15,11 @@ import {
 } from "../account/referral-fixture";
 import type { WorkspaceE2ESessionSigningSecret } from "../account/seeded-session";
 import type { DatasourceConfig } from "../config";
-import { type WorkspaceE2EError, workspaceE2EError } from "../errors";
+import {
+  toWorkspaceE2EError,
+  type WorkspaceE2EError,
+  workspaceE2EError,
+} from "../errors";
 import type { E2EDatabase } from "../integrations/database.service";
 import type { WorkspaceE2EReferralCaseId } from "../playwright-checkout/case-catalog";
 import { addRedaction } from "../redaction";
@@ -85,9 +89,16 @@ export const makeWorkspaceE2EReferralIdentities = <
         );
       }
       yield* record({ dotyposReservationIds: [reservationId] });
+      const providerId = yield* Schema.decodeEffect(DotyposReservationIdSchema)(
+        reservationId
+      ).pipe(
+        Effect.mapError((cause) =>
+          toWorkspaceE2EError("read past visit provider ID", cause)
+        )
+      );
       return {
         endedAt: new Date(Number(reservation.endsAt.epochMilliseconds)),
-        reservationId: reservationId as DotyposReservationId,
+        reservationId: providerId,
       };
     }),
 

@@ -4,7 +4,7 @@ import type {
   CalendarExpressionType as CalendarExpression,
 } from "@deskohub/workspace-admin-api";
 import { Option } from "effect";
-import type { AutomationVersionId } from "./automation-identifiers";
+import { automationVersionIdSchema } from "./automation-identifiers";
 import {
   type AutomationVersionActivation,
   nextFireAfter,
@@ -28,7 +28,7 @@ const version = (
   activatedAt: string,
   trigger: AutomationTrigger
 ): AutomationVersionActivation => ({
-  id: id as AutomationVersionId,
+  id: automationVersionIdSchema.make(id),
   activatedAt: prague(activatedAt),
   trigger,
 });
@@ -113,11 +113,11 @@ describe("nextFireAfter", () => {
         Option.map(versionInForce(versions, fire), ({ id }) => id)
       )
     ).toEqual([
-      Option.some("v1"),
-      Option.some("v1"),
-      Option.some("v2"),
-      Option.some("v2"),
-    ] as Option.Option<AutomationVersionId>[]);
+      Option.some(v1.id),
+      Option.some(v1.id),
+      Option.some(v2.id),
+      Option.some(v2.id),
+    ]);
   });
 
   test("gives a fire at the activation instant to the new version", () => {

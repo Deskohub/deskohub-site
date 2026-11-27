@@ -26,7 +26,7 @@ const imageIssuePaths = (attrs: CampaignBodyNode["attrs"]) =>
     {
       type: "doc",
       content: [{ type: "image", attrs: { src: cloudinaryImage, ...attrs } }],
-    } as CampaignBodyNode,
+    },
     Option.some("cloud")
   ).map((issue) => [issue._tag, issue.path.at(-1)]);
 

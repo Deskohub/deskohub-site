@@ -91,50 +91,74 @@ import type {
 } from "../types";
 import { isExpectedCheckoutStatusUrl, makeUrl, setSearchParams } from "../urls";
 
-export const executeCheckoutFlow = ({
-  config,
-  data,
-  datasourceConfig,
-  flow,
-  openSeparateSession,
-  openSession,
-  runStep,
-  state,
-  payPageSteps,
-  beforeReservationSubmit,
-  expectedDiscounts,
-  expectedReservationInvitees,
-  afterFulfillment,
-  verifyPostFulfillmentPaths = false,
-}: {
-  config: WorkspaceE2EConfig;
-  data: CheckoutData;
-  datasourceConfig: DatasourceConfig;
-  flow: CheckoutFlowStart;
-  openSeparateSession: WorkspaceE2ECaseContext["openSeparateSession"];
-  openSession: OpenE2EBrowserSession;
-  runStep: WorkspaceE2EStepRunner;
-  state: CheckoutFlowState;
-  payPageSteps?: (
-    orderId: CheckoutRow["reservation_id"]
-  ) => readonly WorkspaceE2EStep<void, E2EDatabase>[];
-  beforeReservationSubmit?: Effect.Effect<void, WorkspaceE2EError>;
-  expectedDiscounts?: readonly ExpectedDiscountApplication[];
-  /** Present for an office or Team Table booked with an attendee list, even with no invitees. */
-  expectedReservationInvitees?: readonly string[];
-  // Checks on the fulfilled reservation beyond the status page, before any
-  // post-fulfillment path changes it.
-  afterFulfillment?: (
-    orderId: CheckoutRow["reservation_id"],
-    dotyposReservation: ValidatedDotyposReservation
-  ) => Effect.Effect<void, WorkspaceE2EError, E2EDatabase>;
-  // The reserve-again restart, the fulfillment-failed support path, and the
-  // reservation status isolation that starts from that support path do not
-  // depend on the product, so one paid case opts in instead of every case.
-  // The support path marks fulfillment failed, so it runs after every other
-  // assertion on the fulfilled reservation.
-  verifyPostFulfillmentPaths?: boolean;
-}): Effect.Effect<
+// A focused case test can supply a result only for a step with that result
+// type. The regular runner remains the default for every step.
+export type CheckoutStepRunner<A> = <R>(
+  step: WorkspaceE2EStep<A, R>
+) => Effect.Effect<A, WorkspaceE2EError, R>;
+
+type CheckoutFlowSteps = {
+  readonly preparePayPage?: CheckoutStepRunner<CheckoutRow["reservation_id"]>;
+  readonly checkoutRow?: CheckoutStepRunner<CheckoutRow>;
+  readonly dotyposReservation?: CheckoutStepRunner<ValidatedDotyposReservation>;
+  readonly check?: CheckoutStepRunner<unknown>;
+  readonly replayWebhook?: (
+    step: WorkspaceE2EStep<void, never, "provider-verification">
+  ) => Effect.Effect<
+    void,
+    WorkspaceE2EError,
+    WorkspaceE2EProviderVerificationPermitService
+  >;
+  readonly hostedPayment?: HostedCheckoutPaymentSteps;
+};
+
+export const executeCheckoutFlow = (
+  {
+    config,
+    data,
+    datasourceConfig,
+    flow,
+    openSeparateSession,
+    openSession,
+    runStep,
+    state,
+    payPageSteps,
+    beforeReservationSubmit,
+    expectedDiscounts,
+    expectedReservationInvitees,
+    afterFulfillment,
+    verifyPostFulfillmentPaths = false,
+  }: {
+    config: WorkspaceE2EConfig;
+    data: CheckoutData;
+    datasourceConfig: DatasourceConfig;
+    flow: CheckoutFlowStart;
+    openSeparateSession: WorkspaceE2ECaseContext["openSeparateSession"];
+    openSession: OpenE2EBrowserSession;
+    runStep: WorkspaceE2EStepRunner;
+    state: CheckoutFlowState;
+    payPageSteps?: (
+      orderId: CheckoutRow["reservation_id"]
+    ) => readonly WorkspaceE2EStep<void, E2EDatabase>[];
+    beforeReservationSubmit?: Effect.Effect<void, WorkspaceE2EError>;
+    expectedDiscounts?: readonly ExpectedDiscountApplication[];
+    /** Present for an office or Team Table booked with an attendee list, even with no invitees. */
+    expectedReservationInvitees?: readonly string[];
+    // Checks on the fulfilled reservation beyond the status page, before any
+    // post-fulfillment path changes it.
+    afterFulfillment?: (
+      orderId: CheckoutRow["reservation_id"],
+      dotyposReservation: ValidatedDotyposReservation
+    ) => Effect.Effect<void, WorkspaceE2EError, E2EDatabase>;
+    // The reserve-again restart, the fulfillment-failed support path, and the
+    // reservation status isolation that starts from that support path do not
+    // depend on the product, so one paid case opts in instead of every case.
+    // The support path marks fulfillment failed, so it runs after every other
+    // assertion on the fulfilled reservation.
+    verifyPostFulfillmentPaths?: boolean;
+  },
+  steps: CheckoutFlowSteps = {}
+): Effect.Effect<
   void,
   WorkspaceE2EError,
   | E2EDatabase
@@ -144,6 +168,7 @@ export const executeCheckoutFlow = ({
 > =>
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;
+    const check = steps.check ?? runStep;
     state.startedAt = new Date();
     const agentIntent =
       "startReservation" in flow
@@ -152,7 +177,7 @@ export const executeCheckoutFlow = ({
     const orderId =
       "startReservation" in flow
         ? yield* flow.startReservation
-        : yield* runStep({
+        : yield* (steps.preparePayPage ?? runStep)({
             execute: Effect.gen(function* () {
               const browser = yield* openSession;
               yield* openPage(browser, config, data.checkoutUrl, {
@@ -174,20 +199,23 @@ export const executeCheckoutFlow = ({
           });
     yield* recordReservationResult(agentIntent, { orderId });
     if (payPageSteps) {
-      for (const step of payPageSteps(orderId)) yield* runStep(step);
+      for (const step of payPageSteps(orderId)) yield* check(step);
     }
-    const providerSessionRow = yield* completeHostedCheckoutPayment({
-      config,
-      data,
-      orderId,
-      runStep,
-      openSession,
-      state,
-    });
+    const providerSessionRow = yield* completeHostedCheckoutPayment(
+      {
+        config,
+        data,
+        orderId,
+        runStep,
+        openSession,
+        state,
+      },
+      steps.hostedPayment
+    );
     state.orderId = orderId;
 
     // The deployed webhook handler verifies the selected provider's state.
-    yield* runStep({
+    yield* (steps.replayWebhook ?? runStep)({
       permit: "provider-verification",
       execute: replayPaymentWebhook(config, providerSessionRow).pipe(
         Effect.provideService(HttpClient.HttpClient, httpClient)
@@ -195,12 +223,12 @@ export const executeCheckoutFlow = ({
       id: "replay-payment-webhook",
       timeoutMs: config.timeouts.providerTransition,
     });
-    yield* runStep({
+    yield* check({
       execute: markPreviewFulfillmentDeliveredForE2E(datasourceConfig, orderId),
       id: "complete-test-fulfillment",
       timeoutMs: config.timeouts.datasource,
     });
-    const checkoutRow = yield* runStep({
+    const checkoutRow = yield* (steps.checkoutRow ?? runStep)({
       execute: validatePostgres(
         {
           ...datasourceConfig,
@@ -217,7 +245,7 @@ export const executeCheckoutFlow = ({
     });
     state.checkoutRow = checkoutRow;
     if (expectedDiscounts) {
-      yield* runStep({
+      yield* check({
         execute: validateDiscountApplications(
           datasourceConfig,
           orderId,
@@ -227,12 +255,12 @@ export const executeCheckoutFlow = ({
         timeoutMs: config.timeouts.datasource,
       });
     }
-    const dotyposReservation = yield* runStep({
+    const dotyposReservation = yield* (steps.dotyposReservation ?? runStep)({
       execute: validateDotypos(datasourceConfig, data, checkoutRow),
       id: "validate-dotypos-reservation",
       timeoutMs: config.timeouts.datasource,
     });
-    yield* runStep({
+    yield* check({
       execute: assertFulfilledStatusPage({
         checkoutRow,
         config,
@@ -247,7 +275,7 @@ export const executeCheckoutFlow = ({
     });
     if (afterFulfillment) yield* afterFulfillment(orderId, dotyposReservation);
     if (verifyPostFulfillmentPaths) {
-      yield* runStep({
+      yield* check({
         execute: restartReservationAfterFulfillment({
           config,
           data,
@@ -261,7 +289,7 @@ export const executeCheckoutFlow = ({
       data.meetingRoom &&
       isMeetingRoomWholeDayReservationDuration(data.meetingRoom.duration)
     ) {
-      yield* runStep({
+      yield* check({
         execute: assertWholeDayMeetingRoomEmailPreviews({
           checkoutRow,
           data,
@@ -276,7 +304,7 @@ export const executeCheckoutFlow = ({
         config,
         data,
         orderId,
-        runStep,
+        runStep: check,
         openSession,
       });
       const customerId = yield* tryWorkspaceE2ESync(
@@ -289,7 +317,7 @@ export const executeCheckoutFlow = ({
           return checkoutRow.dotypos_customer_id;
         }
       );
-      yield* runStep(
+      yield* check(
         reservationStatusIsolationStep({
           config,
           customerId,
@@ -331,22 +359,44 @@ export type HostedCheckoutPaymentOptions = {
   readonly state: CheckoutFlowState;
 };
 
+type HostedPaymentRejection = {
+  readonly authorizationRequested: boolean;
+  readonly error: WorkspaceE2EError;
+  readonly rejection: NexiSandboxRejection;
+  readonly row: HostedProviderSessionRow;
+};
+
+type OpenedHostedCheckout = {
+  readonly provider: E2EPaymentProvider;
+  readonly complete: (
+    onAuthorizationRequested: () => void
+  ) => Effect.Effect<void, WorkspaceE2EError>;
+  readonly restart: (
+    rejected: HostedPaymentRejection,
+    fallback?: boolean
+  ) => Effect.Effect<boolean, WorkspaceE2EError, E2EDatabase>;
+};
+
 type HostedPaymentAttempt =
   | { readonly kind: "completed"; readonly row: HostedProviderSessionRow }
-  | {
-      readonly authorizationRequested: boolean;
-      readonly error: WorkspaceE2EError;
-      readonly hostedPaymentPage: HostedPaymentPage;
+  | (HostedPaymentRejection & {
       readonly kind: "sandbox-rejected";
-      readonly rejection: NexiSandboxRejection;
-      readonly row: HostedProviderSessionRow;
-    };
+      readonly checkout: OpenedHostedCheckout;
+    });
+
+export type HostedCheckoutPaymentSteps = {
+  readonly open?: CheckoutStepRunner<OpenedHostedCheckout>;
+  readonly read?: CheckoutStepRunner<HostedProviderSessionRow>;
+  readonly check?: CheckoutStepRunner<unknown>;
+  readonly restart?: CheckoutStepRunner<boolean>;
+};
 
 // Drives the selected hosted page. The shared Nexi sandbox sometimes rejects a
 // payment on its own side; when that happened before Nexi could authorize
 // anything, the runner restarts the attempt once within the hosted-payment permit.
 export const completeHostedCheckoutPayment = (
-  options: HostedCheckoutPaymentOptions
+  options: HostedCheckoutPaymentOptions,
+  steps: HostedCheckoutPaymentSteps = {}
 ): Effect.Effect<
   HostedProviderSessionRow,
   WorkspaceE2EError,
@@ -361,11 +411,15 @@ export const completeHostedCheckoutPayment = (
         const paymentProvider = initialE2EPaymentProvider(
           config.paymentProvider
         );
-        const first = yield* runHostedPaymentAttempt(options, paymentProvider);
+        const first = yield* runHostedPaymentAttempt(
+          options,
+          steps,
+          paymentProvider
+        );
         if (first.kind === "completed") return first.row;
 
-        const restarted = yield* runStep({
-          execute: restartSandboxRejectedPayment(options, first),
+        const restarted = yield* (steps.restart ?? runStep)({
+          execute: first.checkout.restart(first),
           id: "restart-sandbox-rejected-payment",
           timeoutMs:
             options.config.timeouts.datasource +
@@ -374,15 +428,15 @@ export const completeHostedCheckoutPayment = (
         });
         if (!restarted) return yield* first.error;
 
-        const retry = yield* runHostedPaymentAttempt(options, "nexi", {
+        const retry = yield* runHostedPaymentAttempt(options, steps, "nexi", {
           row: first.row,
           suffix: "-retry",
         });
         if (retry.kind === "completed") return retry.row;
         if (config.paymentProvider !== "fallback") return yield* retry.error;
 
-        const fellBack = yield* runStep({
-          execute: restartSandboxRejectedPayment(options, retry, true),
+        const fellBack = yield* (steps.restart ?? runStep)({
+          execute: retry.checkout.restart(retry, true),
           id: "restart-sandbox-rejected-payment-with-mock",
           timeoutMs:
             config.timeouts.datasource +
@@ -391,7 +445,7 @@ export const completeHostedCheckoutPayment = (
         });
         if (!fellBack) return yield* retry.error;
 
-        const mock = yield* runHostedPaymentAttempt(options, "mock", {
+        const mock = yield* runHostedPaymentAttempt(options, steps, "mock", {
           row: retry.row,
           suffix: "-mock-fallback",
         });
@@ -401,15 +455,8 @@ export const completeHostedCheckoutPayment = (
   });
 
 const runHostedPaymentAttempt = (
-  {
-    outcome,
-    config,
-    data,
-    orderId,
-    runStep,
-    openSession,
-    state,
-  }: HostedCheckoutPaymentOptions,
+  options: HostedCheckoutPaymentOptions,
+  steps: HostedCheckoutPaymentSteps,
   paymentProvider: E2EPaymentProvider,
   restart?: {
     readonly row: CheckoutRow;
@@ -417,30 +464,30 @@ const runHostedPaymentAttempt = (
   }
 ): Effect.Effect<HostedPaymentAttempt, WorkspaceE2EError, E2EDatabase> =>
   Effect.gen(function* () {
+    const { config, orderId, runStep, openSession, state } = options;
+    const check = steps.check ?? runStep;
     const stepId = (id: string) => `${id}${restart?.suffix ?? ""}`;
-    const hostedPaymentPage = yield* runStep({
-      execute: Effect.flatMap(openSession, (browser) => {
-        const launch = submitPaymentAndWaitForHostedPage({
-          config,
-          paymentProvider,
-          session: browser,
-        });
-        return config.paymentProvider === "fallback" &&
-          restart?.suffix === "-retry"
-          ? observeNexiHostedNavigation(browser, launch)
-          : launch;
-      }),
+    const checkout = yield* (steps.open ?? runStep)({
+      execute: openHostedCheckout(options, paymentProvider, restart?.suffix),
       id: stepId("start-checkout-payment"),
       timeoutMs: config.timeouts.providerTransition,
     });
-    const row = yield* runStep({
+    const readProviderSession = {
       execute: requireProviderSessionRowAfterRedirect(orderId, {
         onRow: (value) => {
           state.checkoutRow = value;
         },
-        paymentProvider: hostedPaymentPage.provider,
+        paymentProvider: checkout.provider,
         timeoutMs: config.timeouts.browserAction,
-      }).pipe(
+      }),
+      id: stepId("read-provider-session-row"),
+      timeoutMs: config.timeouts.datasource,
+    };
+    const row = yield* runStep({
+      ...readProviderSession,
+      execute: (
+        steps.read?.(readProviderSession) ?? readProviderSession.execute
+      ).pipe(
         Effect.tap((value) =>
           restart
             ? tryWorkspaceE2ESync("assert fresh payment attempt", () =>
@@ -449,38 +496,27 @@ const runHostedPaymentAttempt = (
             : Effect.void
         )
       ),
-      id: stepId("read-provider-session-row"),
-      timeoutMs: config.timeouts.datasource,
     });
 
     let authorizationRequested = false;
-    const rejected = yield* runStep({
-      execute: Effect.flatMap(openSession, (browser) =>
-        completeHostedPayment({
-          config,
-          data,
-          hostedPaymentPage,
-          ...(outcome === undefined ? {} : { outcome }),
-          onNexiAuthorizationRequested: () => {
-            authorizationRequested = true;
-          },
-          session: browser,
-        })
-      ),
+    const rejected = yield* check({
+      execute: checkout.complete(() => {
+        authorizationRequested = true;
+      }),
       id: stepId("complete-hosted-payment"),
       timeoutMs: config.timeouts.hostedPayment,
     }).pipe(
       Effect.as(undefined),
       Effect.catch((error) => {
         const rejection =
-          hostedPaymentPage?.provider === "nexi"
+          checkout.provider === "nexi"
             ? classifyNexiSandboxRejection(error)
             : undefined;
-        return rejection && hostedPaymentPage
+        return rejection
           ? Effect.succeed({
               authorizationRequested,
               error,
-              hostedPaymentPage,
+              checkout,
               kind: "sandbox-rejected" as const,
               rejection,
               row,
@@ -490,13 +526,52 @@ const runHostedPaymentAttempt = (
     );
     if (rejected) return rejected;
 
-    yield* runStep({
+    yield* check({
       execute: waitForCheckoutStatusPage(config, openSession),
       id: stepId("reach-checkout-status-page"),
       timeoutMs: config.timeouts.providerTransition,
     });
     return { kind: "completed", row };
   });
+
+const openHostedCheckout = (
+  options: HostedCheckoutPaymentOptions,
+  paymentProvider: E2EPaymentProvider,
+  suffix: "-retry" | "-mock-fallback" | undefined
+): Effect.Effect<OpenedHostedCheckout, WorkspaceE2EError> => {
+  const { config, data, openSession, outcome } = options;
+  return Effect.flatMap(openSession, (browser) => {
+    const launch = submitPaymentAndWaitForHostedPage({
+      config,
+      paymentProvider,
+      session: browser,
+    });
+    return config.paymentProvider === "fallback" && suffix === "-retry"
+      ? observeNexiHostedNavigation(browser, launch)
+      : launch;
+  }).pipe(
+    Effect.map((hostedPaymentPage) => ({
+      provider: hostedPaymentPage.provider,
+      complete: (onNexiAuthorizationRequested) =>
+        Effect.flatMap(openSession, (session) =>
+          completeHostedPayment({
+            config,
+            data,
+            hostedPaymentPage,
+            ...(outcome === undefined ? {} : { outcome }),
+            onNexiAuthorizationRequested,
+            session,
+          })
+        ),
+      restart: (rejected, fallback) =>
+        restartSandboxRejectedPayment(
+          options,
+          { ...rejected, hostedPaymentPage },
+          fallback
+        ),
+    }))
+  );
+};
 
 export const assertFreshPaymentAttempt = (
   rejectedRow: Pick<CheckoutRow, "payment_attempt_id" | "provider_order_id">,
@@ -516,7 +591,9 @@ export const assertFreshPaymentAttempt = (
 // retries the payment from the order's status page, whose Pay page starts a fresh attempt and Nexi order.
 const restartSandboxRejectedPayment = (
   { config, orderId, openSession, state }: HostedCheckoutPaymentOptions,
-  rejected: Extract<HostedPaymentAttempt, { kind: "sandbox-rejected" }>,
+  rejected: HostedPaymentRejection & {
+    readonly hostedPaymentPage: HostedPaymentPage;
+  },
   fallback = false
 ): Effect.Effect<boolean, WorkspaceE2EError, E2EDatabase> =>
   Effect.gen(function* () {
@@ -721,14 +798,28 @@ export const assertFulfilledStatusPage = ({
   orderId,
   openSession,
 }: {
-  checkoutRow: CheckoutRow;
+  checkoutRow: Pick<
+    CheckoutRow,
+    "amount_value" | "amount_exponent" | "currency"
+  >;
   config: WorkspaceE2EConfig;
-  data: CheckoutData;
-  dotyposReservation: ValidatedDotyposReservation;
+  data: {
+    readonly locale: CheckoutData["locale"];
+    readonly meetingRoom?: Pick<
+      NonNullable<CheckoutData["meetingRoom"]>,
+      "duration"
+    >;
+    readonly office?: Pick<NonNullable<CheckoutData["office"]>, "seats">;
+    readonly table?: Pick<NonNullable<CheckoutData["table"]>, "seats">;
+  };
+  dotyposReservation: Pick<
+    ValidatedDotyposReservation,
+    "assignedTableName" | "reservedFrom" | "reservedUntil"
+  >;
   expectedReservationInvitees?: readonly string[];
   orderId: CheckoutRow["reservation_id"];
   openSession: OpenE2EBrowserSession;
-}): Effect.Effect<void, WorkspaceE2EError, E2EDatabase> =>
+}): Effect.Effect<void, WorkspaceE2EError> =>
   Effect.gen(function* () {
     const expectedPaymentPrice = yield* tryWorkspaceE2ESync(
       "read checkout payment amount for status assertion",
@@ -1031,7 +1122,7 @@ const assertFulfillmentFailedSupportPath = ({
   config: WorkspaceE2EConfig;
   data: CheckoutData;
   orderId: CheckoutRow["reservation_id"];
-  runStep: WorkspaceE2EStepRunner;
+  runStep: CheckoutStepRunner<unknown>;
   openSession: OpenE2EBrowserSession;
 }): Effect.Effect<void, WorkspaceE2EError, E2EDatabase> =>
   Effect.gen(function* () {

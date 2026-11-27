@@ -1,20 +1,27 @@
 import "@/shared/polyfills/temporal";
 
 import { describe, expect, test } from "bun:test";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+} from "@deskohub/dotypos";
 import type { Customer } from "@deskohub/dotypos/generated";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Cause, Effect, Exit, Layer, Option } from "effect";
 import { FetchHttpClient } from "effect/http";
-import type { WorkspaceE2EStepRunner } from "../case-runner";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { instantStringSchema } from "@/shared/utils/temporal";
+import { makeCoworkCheckoutData } from "../checkout/data";
 import { preparedReservationForm } from "../checkout/reservation-form-preparation";
-import type { DatasourceConfig, WorkspaceE2EConfig } from "../config";
+import { getDatasourceConfig, type WorkspaceE2EConfig } from "../config";
 import { makeWorkspaceE2EHostedPaymentPermitRecorder } from "../coordination/hosted-payment-permit.service.mock";
+import { WorkspaceE2EProviderVerificationPermitServiceMock } from "../coordination/provider-verification-permit.service.mock";
+import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import {
   type WorkspaceE2EError,
   workspaceE2EError,
   workspaceE2ETimeoutError,
 } from "../errors";
-import { E2EDatabase } from "../integrations/database.service";
 import { workspaceE2ETimeouts } from "../timeouts";
 import type { CheckoutData, CheckoutFlowState, CheckoutRow } from "../types";
 import {
@@ -22,6 +29,15 @@ import {
   completeHostedCheckoutPayment,
   executeCheckoutFlow,
 } from "./checkout";
+import {
+  fixtureStep,
+  hostedCheckoutRow,
+  type ObservedStep,
+} from "./checkout.test-utils";
+import {
+  makeTestE2EConfig,
+  unopenedE2EDatabase,
+} from "./e2e-fixtures.test-utils";
 
 // The step contract tests fake every step, so no step may open a browser.
 const unopenedBrowserSession = Effect.fail(
@@ -30,6 +46,7 @@ const unopenedBrowserSession = Effect.fail(
 
 const customer: Customer = {
   _cloudId: "customer-id",
+  id: "customer-id",
   firstName: "Ada",
   lastName: "Lovelace",
   companyName: null,
@@ -42,28 +59,33 @@ const customer: Customer = {
 };
 
 const checkoutRow = {
-  dotypos_customer_id: "dotypos-customer-id",
-  dotypos_reservation_id: "dotypos-reservation-id",
+  dotypos_customer_id: DotyposCustomerIdSchema.make("dotypos-customer-id"),
+  dotypos_reservation_id: DotyposReservationIdSchema.make(
+    "dotypos-reservation-id"
+  ),
   locale: "en-US",
   reservation_details: {
     kind: "meeting-room",
     duration: { unit: "day", amount: 1 },
   },
-  reservation_id: "workspace-reservation-id",
-} as CheckoutRow;
+  reservation_id: workspaceReservationIdSchema.make("workspace-reservation-id"),
+};
 
-const wholeDayData = {
+const wholeDayData: Pick<
+  CheckoutData,
+  "expectedReservationDetails" | "meetingRoom"
+> = {
   expectedReservationDetails: {
     kind: "meeting-room",
     duration: { unit: "day", amount: 1 },
   },
   meetingRoom: {
     duration: { unit: "day", amount: 1 },
-    startsAt: "2027-03-27T23:00:00Z",
-    endsAt: "2027-03-28T22:00:00Z",
+    startsAt: instantStringSchema.make("2027-03-27T23:00:00Z"),
+    endsAt: instantStringSchema.make("2027-03-28T22:00:00Z"),
     startDateTime: "2027-03-28T00:00",
   },
-} as Pick<CheckoutData, "expectedReservationDetails" | "meetingRoom">;
+};
 
 describe("whole-day meeting-room checkout proof", () => {
   test("renders both shared email detail projections from the confirmed DST calendar day", async () => {
@@ -121,35 +143,20 @@ const runCheckoutFlowSteps = async (
     readonly hosted: boolean;
     readonly id: string;
   }> = [];
-  const orderId = "019f70bd-0131-7f30-9f8a-48e768f00292";
-  const checkoutRow = {
-    dotypos_customer_id: "dotypos-customer-paid",
-    provider: "nexi",
-  } as CheckoutRow;
-  const runStep = ((step) => {
-    observedSteps.push({
-      permit: step.permit,
-      hosted: hostedPaymentPermit.isHolding(),
-      id: step.id,
-    });
-    if (step.id === "prepare-checkout-pay-page") {
-      return Effect.succeed(orderId);
-    }
-    if (step.id === "start-checkout-payment") {
-      return Effect.succeed({ provider: "nexi" });
-    }
-    if (
-      step.id === "read-provider-session-row" ||
-      step.id === "validate-postgres-state"
-    ) {
-      return Effect.succeed(checkoutRow);
-    }
-    if (step.id === "validate-dotypos-reservation") {
-      return Effect.succeed({});
-    }
-    return Effect.void;
-  }) as WorkspaceE2EStepRunner;
-  const data = {} as CheckoutData;
+  const orderId = workspaceReservationIdSchema.make(
+    "019f70bd-0131-7f30-9f8a-48e768f00292"
+  );
+  const row = hostedCheckoutRow("checkout-attempt", "nexi-order", "nexi", {
+    reservation_id: orderId,
+    dotypos_customer_id: DotyposCustomerIdSchema.make("dotypos-customer-paid"),
+  });
+  const observe = ({ id, permit }: ObservedStep) => {
+    observedSteps.push({ permit, hosted: hostedPaymentPermit.isHolding(), id });
+  };
+  const check = fixtureStep(observe, () => Effect.void);
+  const read = fixtureStep(observe, () => Effect.succeed(row));
+  const config = makeTestE2EConfig("https://workspace.example.test");
+  const data = makeCoworkCheckoutData(config.baseUrl, "2099-09-01");
   const state: CheckoutFlowState = { data };
   const httpClientLayer = FetchHttpClient.layer.pipe(
     Layer.provide(
@@ -167,32 +174,63 @@ const runCheckoutFlowSteps = async (
   );
 
   await Effect.runPromise(
-    executeCheckoutFlow({
-      ...options,
-      config: {
-        paymentProvider: "nexi",
-        timeouts: workspaceE2ETimeouts,
-      } as WorkspaceE2EConfig,
-      data,
-      datasourceConfig: {} as DatasourceConfig,
-      flow: {
-        id: "checkout-capacity-contract",
-        toReservationPreparation: () => preparedReservationForm,
-      },
-      payPageSteps: () => [
-        {
-          execute: Effect.void,
-          id: "pay-page-assertion",
-          timeoutMs: workspaceE2ETimeouts.uiTransition,
+    executeCheckoutFlow(
+      {
+        ...options,
+        config,
+        data,
+        datasourceConfig: getDatasourceConfig(makeTestE2EEnvironment()),
+        flow: {
+          id: "checkout-capacity-contract",
+          toReservationPreparation: () => preparedReservationForm,
         },
-      ],
-      openSeparateSession: () => unopenedBrowserSession,
-      openSession: unopenedBrowserSession,
-      runStep,
-      state,
-    }).pipe(
-      Effect.provide(Layer.mergeAll(httpClientLayer, hostedPaymentPermit.layer))
-    ) as Effect.Effect<void>
+        payPageSteps: () => [
+          {
+            execute: Effect.void,
+            id: "pay-page-assertion",
+            timeoutMs: workspaceE2ETimeouts.uiTransition,
+          },
+        ],
+        openSeparateSession: () => unopenedBrowserSession,
+        openSession: unopenedBrowserSession,
+        runStep: (step) => step.execute,
+        state,
+      },
+      {
+        check,
+        checkoutRow: read,
+        dotyposReservation: fixtureStep(observe, () =>
+          Effect.succeed({
+            customer,
+            reservedFrom: Temporal.Instant.from("2099-09-01T08:00:00Z"),
+            reservedUntil: Temporal.Instant.from("2099-09-01T12:00:00Z"),
+          })
+        ),
+        hostedPayment: {
+          check,
+          open: fixtureStep(observe, () =>
+            Effect.succeed({
+              provider: "nexi" as const,
+              complete: () => Effect.void,
+              restart: () =>
+                Effect.die(new Error("unexpected checkout restart")),
+            })
+          ),
+          read,
+        },
+        preparePayPage: fixtureStep(observe, () => Effect.succeed(orderId)),
+        replayWebhook: check,
+      }
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          httpClientLayer,
+          hostedPaymentPermit.layer,
+          unopenedE2EDatabase,
+          WorkspaceE2EProviderVerificationPermitServiceMock
+        )
+      )
+    )
   );
   return observedSteps;
 };
@@ -261,28 +299,9 @@ test("runs the post-fulfillment paths only for an opted-in case, after every ful
 });
 
 describe("Nexi sandbox payment restart", () => {
-  const firstRow = {
-    payment_attempt_id: "first-attempt",
-    provider: "nexi",
-    provider_order_id: "first-nexi-order",
-  } as CheckoutRow;
-  const retryRow = {
-    payment_attempt_id: "retry-attempt",
-    provider: "nexi",
-    provider_order_id: "retry-nexi-order",
-  } as CheckoutRow;
-  const mockRow = {
-    payment_attempt_id: "mock-attempt",
-    provider: "mock",
-    provider_order_id: "mock-order",
-  } as CheckoutRow;
-  const hostedPaymentPage = {
-    checkoutPageUrl: "https://workspace.test/en-US/reservation/order-id",
-    checkoutPage: {} as never,
-    page: {} as never,
-    provider: "nexi" as const,
-    url: "https://xpay.nexigroup.com/hpp/nexi/",
-  };
+  const firstRow = hostedCheckoutRow("first-attempt", "first-nexi-order");
+  const retryRow = hostedCheckoutRow("retry-attempt", "retry-nexi-order");
+  const mockRow = hostedCheckoutRow("mock-attempt", "mock-order", "mock");
   const sandboxRejection = () =>
     workspaceE2EError("Nexi rejected the card-data save", {
       diagnosticCode: "nexi_hosted_continue_card_submission_rejected",
@@ -295,56 +314,74 @@ describe("Nexi sandbox payment restart", () => {
     initialProvider = "nexi",
     restarted = true,
     fellBack = true,
+    reuseRejectedAttempt = false,
   }: {
     readonly hostedPaymentFailures: Record<string, WorkspaceE2EError>;
     readonly mode?: WorkspaceE2EConfig["paymentProvider"];
     readonly initialProvider?: "nexi" | "mock";
     readonly restarted?: boolean;
     readonly fellBack?: boolean;
+    readonly reuseRejectedAttempt?: boolean;
   }) => {
     const hostedPaymentPermit = makeWorkspaceE2EHostedPaymentPermitRecorder();
     const stepIds: string[] = [];
     const stepsOutsidePermit: string[] = [];
-    const runStep = ((step) => {
-      stepIds.push(step.id);
-      if (!hostedPaymentPermit.isHolding()) stepsOutsidePermit.push(step.id);
-      const failure = hostedPaymentFailures[step.id];
-      if (failure) return Effect.fail(failure);
-      if (step.id.startsWith("start-checkout-payment")) {
-        return Effect.succeed({
-          ...hostedPaymentPage,
-          provider: step.id.endsWith("-mock-fallback")
-            ? "mock"
-            : initialProvider,
-        });
-      }
-      if (step.id === "read-provider-session-row")
-        return Effect.succeed(initialProvider === "mock" ? mockRow : firstRow);
-      if (step.id === "read-provider-session-row-retry")
-        return Effect.succeed(retryRow);
-      if (step.id === "read-provider-session-row-mock-fallback")
-        return Effect.succeed(mockRow);
-      if (step.id === "restart-sandbox-rejected-payment")
-        return Effect.succeed(restarted);
-      if (step.id === "restart-sandbox-rejected-payment-with-mock")
-        return Effect.succeed(fellBack);
-      return Effect.void;
-    }) as WorkspaceE2EStepRunner;
-    const data = {} as CheckoutData;
+    const observe = ({ id }: { readonly id: string }) => {
+      stepIds.push(id);
+      if (!hostedPaymentPermit.isHolding()) stepsOutsidePermit.push(id);
+    };
+    const paymentStep = <A>(
+      execute: (id: string) => Effect.Effect<A, WorkspaceE2EError>
+    ) =>
+      fixtureStep(observe, (id) => {
+        const failure = hostedPaymentFailures[id];
+        return failure ? Effect.fail(failure) : execute(id);
+      });
+    const config = {
+      ...makeTestE2EConfig("https://workspace.example.test"),
+      paymentProvider: mode,
+    };
+    const data = makeCoworkCheckoutData(config.baseUrl, "2099-09-01");
     const result = Effect.runPromiseExit(
-      completeHostedCheckoutPayment({
-        config: {
-          paymentProvider: mode,
-          timeouts: workspaceE2ETimeouts,
-        } as WorkspaceE2EConfig,
-        data,
-        orderId: "order-id" as CheckoutRow["reservation_id"],
-        openSession: unopenedBrowserSession,
-        runStep,
-        state: { data },
-      }).pipe(
-        Effect.provideService(E2EDatabase, E2EDatabase.of({ db: {} as never })),
-        Effect.provide(hostedPaymentPermit.layer)
+      completeHostedCheckoutPayment(
+        {
+          config,
+          data,
+          orderId: workspaceReservationIdSchema.make("order-id"),
+          openSession: unopenedBrowserSession,
+          runStep: (step) => step.execute,
+          state: { data },
+        },
+        {
+          check: paymentStep(() => Effect.void),
+          open: paymentStep((id) =>
+            Effect.succeed({
+              provider: id.endsWith("-mock-fallback")
+                ? "mock"
+                : initialProvider,
+              complete: () => Effect.void,
+              restart: (_, fallback) =>
+                Effect.succeed(fallback ? fellBack : restarted),
+            })
+          ),
+          read: paymentStep((id) => {
+            if (id.endsWith("-retry"))
+              return Effect.succeed(reuseRejectedAttempt ? firstRow : retryRow);
+            if (id.endsWith("-mock-fallback")) return Effect.succeed(mockRow);
+            return Effect.succeed(
+              initialProvider === "mock" ? mockRow : firstRow
+            );
+          }),
+          restart: (step) => {
+            observe(step);
+            const failure = hostedPaymentFailures[step.id];
+            return failure ? Effect.fail(failure) : step.execute;
+          },
+        }
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(unopenedE2EDatabase, hostedPaymentPermit.layer)
+        )
       )
     );
     return { result, stepIds, stepsOutsidePermit };
@@ -500,7 +537,7 @@ describe("Nexi sandbox payment restart", () => {
     expect(stepIds.at(-1)).toBe("complete-hosted-payment");
   });
 
-  test("requires a fresh payment attempt and Nexi order", () => {
+  test("requires a fresh payment attempt and Nexi order", async () => {
     expect(() => assertFreshPaymentAttempt(firstRow, retryRow)).not.toThrow();
     expect(() =>
       assertFreshPaymentAttempt(firstRow, {
@@ -514,5 +551,13 @@ describe("Nexi sandbox payment restart", () => {
         provider_order_id: firstRow.provider_order_id,
       })
     ).toThrow("restarted payment reused the rejected provider order");
+    const { result, stepIds } = payWithSteps({
+      hostedPaymentFailures: { "complete-hosted-payment": sandboxRejection() },
+      reuseRejectedAttempt: true,
+    });
+    expect(failureOf(await result)).toMatchObject({
+      value: { operation: "assert fresh payment attempt" },
+    });
+    expect(stepIds.at(-1)).toBe("read-provider-session-row-retry");
   });
 });

@@ -47,23 +47,28 @@ const lint = async (
   }
 };
 
-// Workspace code forbids every assertion outside the remaining large-feature
-// test directories, so independent ones stay allowed only in those tests.
-test("anti-slop allows independent assertions in remaining large-feature Workspace tests and parsed unknown values", async () => {
+test("anti-slop allows independent assertions in Workspace E2E", async () => {
   const result = await lint(
     `
 declare const input: unknown;
 declare function parse(value: string): number;
 const result = parse(input as string) as number;
 const parenthesizedResult = (parse(input as string)) as number;
-const payload: unknown = JSON.parse("{}");
 void result;
 void parenthesizedResult;
-void payload;
 `,
-    "apps/deskohub-workspace/features/email-campaigns",
+    "apps/deskohub-workspace/e2e",
     "probe.test.ts"
   );
+
+  expect(result.exitCode).toBe(0);
+});
+
+test("anti-slop allows parsed unknown values in Workspace scripts", async () => {
+  const result = await lint(`
+const payload: unknown = JSON.parse("{}");
+void payload;
+`);
 
   expect(result.exitCode).toBe(0);
 });

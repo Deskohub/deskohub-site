@@ -8,6 +8,7 @@ import {
   Latch,
 } from "effect";
 import { TestClock } from "effect/testing";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import type { AutomationWorkUnitId } from "../automation-identifiers";
 import { AutomationPlanner } from "./automation-planner.service";
 import {
@@ -121,12 +122,15 @@ export const makeAutomationEngineSimulation = (input: {
   const schedule = (at: number, event: SimulationEvent) => {
     const entry = { at, sequence: sequence++, event };
     let index = events.length;
-    while (
-      index > 0 &&
-      (events[index - 1]!.at > at ||
-        (events[index - 1]!.at === at &&
-          events[index - 1]!.sequence > entry.sequence))
-    ) {
+    while (index > 0) {
+      const previous = requireValue(
+        events[index - 1],
+        "previous scheduled event"
+      );
+      const isLater =
+        previous.at > at ||
+        (previous.at === at && previous.sequence > entry.sequence);
+      if (!isLater) break;
       index -= 1;
     }
     events.splice(index, 0, entry);

@@ -391,7 +391,7 @@ const consentScopeLabels = {
  * authorize endpoint, the consent page names the agent and what it asks
  * for in the customer's locale, and the customer allows or denies it.
  */
-const answerAgentConsent = ({
+const answerAgentConsent = Effect.fn(function* ({
   answer,
   booking,
   locale,
@@ -401,82 +401,81 @@ const answerAgentConsent = ({
   readonly booking: AgentBookingContext;
   readonly locale: Locale;
   readonly server: CustomerAgentAuthorizationServer;
-}) =>
-  Effect.gen(function* () {
-    const { config } = booking;
-    const request = yield* startCustomerAgentAuthorization({
-      clientId: customerAgentTestClientMetadata.client_id,
-      config,
-      server,
-    });
-    const browser = yield* booking.openSession;
-    yield* openPage(browser, config, request.authorizationUrl, {
+}) {
+  const { config } = booking;
+  const request = yield* startCustomerAgentAuthorization({
+    clientId: customerAgentTestClientMetadata.client_id,
+    config,
+    server,
+  });
+  const browser = yield* booking.openSession;
+  yield* openPage(browser, config, request.authorizationUrl, {
+    timeoutMs: config.timeouts.browserNavigation,
+  });
+  const consentUrl = yield* waitForPageUrl({
+    description: "customer agent consent page",
+    matches: (url) => isCustomerAgentConsentUrl(url, config.baseUrl),
+    session: browser,
+    timeoutMs: config.timeouts.uiTransition,
+  });
+  const localizedConsentUrl = localizeCustomerAgentConsentUrl(
+    consentUrl,
+    locale
+  );
+  if (localizedConsentUrl !== consentUrl) {
+    yield* openPage(browser, config, localizedConsentUrl, {
       timeoutMs: config.timeouts.browserNavigation,
     });
-    const consentUrl = yield* waitForPageUrl({
-      description: "customer agent consent page",
-      matches: (url) => isCustomerAgentConsentUrl(url, config.baseUrl),
-      session: browser,
-      timeoutMs: config.timeouts.uiTransition,
-    });
-    const localizedConsentUrl = localizeCustomerAgentConsentUrl(
-      consentUrl,
-      locale
+  }
+  yield* onCasePage(booking, `${answer} agent consent`, async (page) => {
+    requireSinglePage(page);
+    expect(new URL(page.url()).pathname).toBe(
+      new URL(localizedConsentUrl).pathname
     );
-    if (localizedConsentUrl !== consentUrl) {
-      yield* openPage(browser, config, localizedConsentUrl, {
-        timeoutMs: config.timeouts.browserNavigation,
-      });
-    }
-    yield* onCasePage(booking, `${answer} agent consent`, async (page) => {
-      requireSinglePage(page);
-      expect(new URL(page.url()).pathname).toBe(
-        new URL(localizedConsentUrl).pathname
-      );
-      await expect(
-        page.getByRole("heading", {
-          exact: true,
-          level: 1,
-          name: m.customerAgentConsentTitle(
-            { client: customerAgentTestClientMetadata.client_name },
-            { locale }
-          ),
-        })
-      ).toBeVisible({ timeout: config.timeouts.uiTransition });
-      for (const scope of customerAgentRequestedScopes) {
-        await expect(
-          page.getByRole("listitem").filter({
-            hasText: consentScopeLabels[scope]({}, { locale }),
-          })
-        ).toBeVisible({ timeout: config.timeouts.browserAction });
-      }
-      const button = page.getByRole("button", {
+    await expect(
+      page.getByRole("heading", {
         exact: true,
-        name:
-          answer === "allow"
-            ? m.customerAgentConsentAllow({}, { locale })
-            : m.customerAgentConsentDeny({}, { locale }),
-      });
-      await waitForReactClickHandler(page, button);
-      await button.click({ timeout: config.timeouts.browserAction });
+        level: 1,
+        name: m.customerAgentConsentTitle(
+          { client: customerAgentTestClientMetadata.client_name },
+          { locale }
+        ),
+      })
+    ).toBeVisible({ timeout: config.timeouts.uiTransition });
+    for (const scope of customerAgentRequestedScopes) {
+      await expect(
+        page.getByRole("listitem").filter({
+          hasText: consentScopeLabels[scope]({}, { locale }),
+        })
+      ).toBeVisible({ timeout: config.timeouts.browserAction });
+    }
+    const button = page.getByRole("button", {
+      exact: true,
+      name:
+        answer === "allow"
+          ? m.customerAgentConsentAllow({}, { locale })
+          : m.customerAgentConsentDeny({}, { locale }),
     });
-    const callbackUrl = yield* waitForPageUrl({
-      description: `agent redirect after ${answer}`,
-      matches: (url) => {
-        if (!isCustomerAgentCallbackUrl(url)) return false;
-        // Registered before any log line can carry the URL.
-        addRedaction(parseUrl(url)?.searchParams.get("code") ?? "", true);
-        return true;
-      },
-      session: browser,
-      timeoutMs: config.timeouts.uiTransition,
-    });
-    const callback = yield* tryWorkspaceE2ESync(
-      "read agent authorization response",
-      () => readCustomerAgentCallback(callbackUrl, request.state)
-    );
-    return { callback, request };
+    await waitForReactClickHandler(page, button);
+    await button.click({ timeout: config.timeouts.browserAction });
   });
+  const callbackUrl = yield* waitForPageUrl({
+    description: `agent redirect after ${answer}`,
+    matches: (url) => {
+      if (!isCustomerAgentCallbackUrl(url)) return false;
+      // Registered before any log line can carry the URL.
+      addRedaction(parseUrl(url)?.searchParams.get("code") ?? "", true);
+      return true;
+    },
+    session: browser,
+    timeoutMs: config.timeouts.uiTransition,
+  });
+  const callback = yield* tryWorkspaceE2ESync(
+    "read agent authorization response",
+    () => readCustomerAgentCallback(callbackUrl, request.state)
+  );
+  return { callback, request };
+});
 
 /**
  * Drives the case's active page natively, once its browser holds only the
@@ -519,7 +518,7 @@ const viewLinkSchema = Schema.Struct({
  * The signed-in agent's booking view starts bookings itself, and the view
  * it links reads back as an MCP Apps document.
  */
-const verifyAgentBookingView = ({
+const verifyAgentBookingView = Effect.fn(function* ({
   config,
   locale,
   mcp,
@@ -527,37 +526,36 @@ const verifyAgentBookingView = ({
   readonly config: AgentBookingContext["config"];
   readonly locale: Locale;
   readonly mcp: Client;
-}) =>
-  Effect.gen(function* () {
-    yield* callCustomerMcpTool({
-      arguments: { family: "cowork", locale },
-      client: mcp,
-      config,
-      name: "show_booking",
-      schema: reserveBookingViewSchema,
-    });
-    const view = yield* tryWorkspaceE2EPromise(
-      "read agent booking view",
-      async () => {
-        const { tools } = await mcp.listTools(undefined, {
-          timeout: config.timeouts.customerMcpRequest,
-        });
-        const { ui } = Schema.decodeUnknownSync(viewLinkSchema)(
-          tools.find(({ name }) => name === "show_booking")?._meta
-        );
-        return mcp.readResource(
-          { uri: ui.resourceUri },
-          { timeout: config.timeouts.customerMcpRequest }
-        );
-      }
-    );
-    yield* tryWorkspaceE2ESync("check agent booking view", () =>
-      assert(
-        view.contents[0]?.mimeType === "text/html;profile=mcp-app",
-        "The booking view isn't an MCP Apps document"
-      )
-    );
+}) {
+  yield* callCustomerMcpTool({
+    arguments: { family: "cowork", locale },
+    client: mcp,
+    config,
+    name: "show_booking",
+    schema: reserveBookingViewSchema,
   });
+  const view = yield* tryWorkspaceE2EPromise(
+    "read agent booking view",
+    async () => {
+      const { tools } = await mcp.listTools(undefined, {
+        timeout: config.timeouts.customerMcpRequest,
+      });
+      const { ui } = Schema.decodeUnknownSync(viewLinkSchema)(
+        tools.find(({ name }) => name === "show_booking")?._meta
+      );
+      return mcp.readResource(
+        { uri: ui.resourceUri },
+        { timeout: config.timeouts.customerMcpRequest }
+      );
+    }
+  );
+  yield* tryWorkspaceE2ESync("check agent booking view", () =>
+    assert(
+      view.contents[0]?.mimeType === "text/html;profile=mcp-app",
+      "The booking view isn't an MCP Apps document"
+    )
+  );
+});
 
 const startedReservationSchema = Schema.Struct({
   order_id: workspaceReservationIdSchema,
@@ -569,76 +567,75 @@ const startedReservationSchema = Schema.Struct({
  * The agent starts the planned reservation over MCP, and the customer opens
  * the Pay link it returns in the signed-in browser.
  */
-const startAgentReservation = ({
+const startAgentReservation = Effect.fn(function* ({
   booking: { config, openSession, runStep, state },
   mcp,
 }: {
   readonly booking: AgentBookingContext;
   readonly mcp: Client;
-}) =>
-  Effect.gen(function* () {
-    const started = yield* runStep({
-      execute: callCustomerMcpTool({
-        arguments: {
-          coffee: false,
-          date: state.data.date,
-          family: "cowork",
-          locale: state.data.locale,
-          tier: "open-space",
-        },
-        client: mcp,
-        config,
-        name: "start_reservation",
-        schema: startedReservationSchema,
-      }).pipe(
-        Effect.tap(({ order_id, pay_url }) =>
-          Effect.sync(() => {
-            state.orderId = order_id;
-            addRedaction(
-              parseUrl(pay_url)?.searchParams.get("payState") ?? "",
-              true
-            );
-          })
-        )
-      ),
-      id: "start-agent-reservation",
-      timeoutMs: config.timeouts.customerMcpRequest,
-    });
-    return yield* runStep({
-      execute: Effect.gen(function* () {
-        yield* tryWorkspaceE2ESync("read agent Pay link", () => {
-          const payUrl = parseUrl(started.pay_url);
-          assert(
-            payUrl?.origin === new URL(config.baseUrl).origin &&
-              payUrl.pathname === `/${state.data.locale}/checkout/pay` &&
-              payUrl.searchParams.get("orderId") === started.order_id,
-            "The agent's Pay link is not this order's pay page"
+}) {
+  const started = yield* runStep({
+    execute: callCustomerMcpTool({
+      arguments: {
+        coffee: false,
+        date: state.data.date,
+        family: "cowork",
+        locale: state.data.locale,
+        tier: "open-space",
+      },
+      client: mcp,
+      config,
+      name: "start_reservation",
+      schema: startedReservationSchema,
+    }).pipe(
+      Effect.tap(({ order_id, pay_url }) =>
+        Effect.sync(() => {
+          state.orderId = order_id;
+          addRedaction(
+            parseUrl(pay_url)?.searchParams.get("payState") ?? "",
+            true
           );
-          assert(
-            Date.parse(started.pay_url_expires_at) > Date.now(),
-            "The agent's Pay link has already expired"
-          );
-        });
-        const browser = yield* openSession;
-        yield* openPage(browser, config, started.pay_url, {
-          timeoutMs: config.timeouts.browserNavigation,
-        });
-        const orderId = yield* waitForReservationPayPage({
-          session: browser,
-          timeouts: config.timeouts,
-        });
-        yield* tryWorkspaceE2ESync("match agent pay page order", () =>
-          assert(
-            orderId === started.order_id,
-            "The Pay link opened another order"
-          )
-        );
-        return orderId;
-      }),
-      id: "open-agent-pay-page",
-      timeoutMs: config.timeouts.checkoutStart,
-    });
+        })
+      )
+    ),
+    id: "start-agent-reservation",
+    timeoutMs: config.timeouts.customerMcpRequest,
   });
+  return yield* runStep({
+    execute: Effect.gen(function* () {
+      yield* tryWorkspaceE2ESync("read agent Pay link", () => {
+        const payUrl = parseUrl(started.pay_url);
+        assert(
+          payUrl?.origin === new URL(config.baseUrl).origin &&
+            payUrl.pathname === `/${state.data.locale}/checkout/pay` &&
+            payUrl.searchParams.get("orderId") === started.order_id,
+          "The agent's Pay link is not this order's pay page"
+        );
+        assert(
+          Date.parse(started.pay_url_expires_at) > Date.now(),
+          "The agent's Pay link has already expired"
+        );
+      });
+      const browser = yield* openSession;
+      yield* openPage(browser, config, started.pay_url, {
+        timeoutMs: config.timeouts.browserNavigation,
+      });
+      const orderId = yield* waitForReservationPayPage({
+        session: browser,
+        timeouts: config.timeouts,
+      });
+      yield* tryWorkspaceE2ESync("match agent pay page order", () =>
+        assert(
+          orderId === started.order_id,
+          "The Pay link opened another order"
+        )
+      );
+      return orderId;
+    }),
+    id: "open-agent-pay-page",
+    timeoutMs: config.timeouts.checkoutStart,
+  });
+});
 
 const reservationStatusSchema = Schema.Struct({
   order_id: Schema.String,

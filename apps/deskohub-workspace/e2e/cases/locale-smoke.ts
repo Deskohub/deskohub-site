@@ -31,8 +31,18 @@ export type LocaleSmokeLocale = (typeof localeSmokeLocales)[number];
  * A smoke locale's case ID. IDs are lowercase because the CI failure
  * annotation drops any identifier that isn't.
  */
+const localeSmokeCaseIds = {
+  "de-DE": "locale-smoke-de-de",
+  "uk-UA": "locale-smoke-uk-ua",
+  "sk-SK": "locale-smoke-sk-sk",
+  "vi-VN": "locale-smoke-vi-vn",
+  "hi-IN": "locale-smoke-hi-in",
+} as const satisfies {
+  readonly [L in LocaleSmokeLocale]: `locale-smoke-${Lowercase<L>}`;
+};
+
 export const localeSmokeCaseId = (locale: LocaleSmokeLocale) =>
-  `locale-smoke-${locale.toLowerCase() as Lowercase<LocaleSmokeLocale>}` as const;
+  localeSmokeCaseIds[locale];
 
 /**
  * Per smoke locale: the Accept-Language values a first-time visitor's

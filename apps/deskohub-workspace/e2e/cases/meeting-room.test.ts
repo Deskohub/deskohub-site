@@ -101,14 +101,14 @@ const assertPublicMeetingRoomAvailability = ({
     unit: "hour",
     amount: 1,
   });
-  expect(interval).toBeDefined();
+  if (!interval) throw new Error("synthetic meeting-room interval is invalid");
   const data = makeMeetingRoomCheckoutData(
     "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
     {
       date: "2099-09-01",
       duration: { unit: "hour", amount: 1 },
       startDateTime: "2099-09-01T10:00",
-      ...interval!,
+      ...interval,
     }
   );
   const config: WorkspaceE2EConfig = {
@@ -216,12 +216,12 @@ const makeReservationLinkPreparationSlot = (index: number) => {
     unit: "hour",
     amount: 1,
   });
-  expect(interval).toBeDefined();
+  if (!interval) throw new Error("synthetic meeting-room interval is invalid");
   return {
     date,
     duration: { unit: "hour", amount: 1 } as const,
     startDateTime,
-    ...interval!,
+    ...interval,
   };
 };
 

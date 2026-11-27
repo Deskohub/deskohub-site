@@ -33,7 +33,7 @@ const referralCaseIdsWithoutCheckout = [
  * journals, and teardown treat them like any other case. The lane spec binds every planned
  * case to its seeded synthetic identities before it runs.
  */
-export const planWorkspaceE2EReferralCases = ({
+export const planWorkspaceE2EReferralCases = Effect.fn(function* ({
   allocation,
   availableBasicDates,
   config,
@@ -47,47 +47,46 @@ export const planWorkspaceE2EReferralCases = ({
   readonly trackCheckoutState: (
     data: CheckoutFlowState["data"]
   ) => CheckoutFlowState;
-}) =>
-  Effect.gen(function* () {
-    const dates = yield* selectCoworkDates(
-      availableBasicDates,
-      workspaceE2EReferralCheckoutCaseIds.length,
-      {
-        allocation,
-        excludedDates,
-        // Each case books for its own customer, so the unpaid checkouts can
-        // share one open-space date.
-        maximumReservationsPerDate:
-          workspaceE2EMaximumSameDateCoworkReservations["open-space"],
-        selectionLabel: "referral lane checkout",
-      }
+}) {
+  const dates = yield* selectCoworkDates(
+    availableBasicDates,
+    workspaceE2EReferralCheckoutCaseIds.length,
+    {
+      allocation,
+      excludedDates,
+      // Each case books for its own customer, so the unpaid checkouts can
+      // share one open-space date.
+      maximumReservationsPerDate:
+        workspaceE2EMaximumSameDateCoworkReservations["open-space"],
+      selectionLabel: "referral lane checkout",
+    }
+  );
+  const unbound = (id: WorkspaceE2EReferralCaseId) => () =>
+    Effect.fail(
+      workspaceE2EError(
+        `Referral case ${id} must be bound to its seeded identities by the case pool`,
+        { operation: "bind referral case" }
+      )
     );
-    const unbound = (id: WorkspaceE2EReferralCaseId) => () =>
-      Effect.fail(
-        workspaceE2EError(
-          `Referral case ${id} must be bound to its seeded identities by the case pool`,
-          { operation: "bind referral case" }
-        )
-      );
-    const cases: WorkspaceE2ECase[] = [];
-    for (const [index, id] of workspaceE2EReferralCheckoutCaseIds.entries()) {
-      const date = yield* requireCheckoutDate(dates, index);
-      cases.push({
-        checkoutStates: [
-          trackCheckoutState(makeCoworkCheckoutData(config.baseUrl, date, id)),
-        ],
-        execute: unbound(id),
-        id,
-        timeoutMs: config.timeouts.checkoutCase,
-      });
-    }
-    for (const id of referralCaseIdsWithoutCheckout) {
-      cases.push({
-        checkoutStates: [],
-        execute: unbound(id),
-        id,
-        timeoutMs: config.timeouts.checkoutCase,
-      });
-    }
-    return { cases, dates: [...new Set(dates)] };
-  });
+  const cases: WorkspaceE2ECase[] = [];
+  for (const [index, id] of workspaceE2EReferralCheckoutCaseIds.entries()) {
+    const date = yield* requireCheckoutDate(dates, index);
+    cases.push({
+      checkoutStates: [
+        trackCheckoutState(makeCoworkCheckoutData(config.baseUrl, date, id)),
+      ],
+      execute: unbound(id),
+      id,
+      timeoutMs: config.timeouts.checkoutCase,
+    });
+  }
+  for (const id of referralCaseIdsWithoutCheckout) {
+    cases.push({
+      checkoutStates: [],
+      execute: unbound(id),
+      id,
+      timeoutMs: config.timeouts.checkoutCase,
+    });
+  }
+  return { cases, dates: [...new Set(dates)] };
+});

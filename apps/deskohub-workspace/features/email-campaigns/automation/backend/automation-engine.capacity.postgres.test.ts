@@ -8,7 +8,6 @@ import {
   DotyposCustomerIdSchema,
   type DotyposIdReadOptions,
   type DotyposReadFailure,
-  type DotyposReservation,
   DotyposReservationIdSchema,
   DotyposService,
   DotyposUnavailable,
@@ -21,11 +20,15 @@ import type {
 import { Effect, Fiber, Layer, Option, References, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   type ReservationFixtureInput,
   workspaceFixtures,
 } from "@/shared/testing/workspace-fixtures.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { nextStartWithinHorizon } from "@/shared/utils/calendar-expression";
 import {
   everyoneFilter,
@@ -121,7 +124,7 @@ const seedActiveWithPreTickSchedule = async (
     readonly at: Temporal.Instant;
   }
 ) => {
-  const { db } = database!;
+  const { db } = requireTestDatabase(database);
   const flow = scheduleFlow(calendar);
   const campaignId = await seedAutomatedCampaign(db, { purpose: "marketing" });
   scenario.kit.campaignIds.push(campaignId);
@@ -176,11 +179,16 @@ type FireRow = {
   readonly chunks_total: number;
 };
 
+const requiredInstant = (
+  value: Parameters<typeof databaseInstant>[0],
+  label: string
+) => requireValue(databaseInstant(value), label);
+
 /** A fire's T: from its creation to its last chunk's commit. */
 const fireSeconds = (fire: FireRow) =>
   secondsBetween(
-    databaseInstant(fire.created_at)!,
-    databaseInstant(fire.settled_at)!
+    requiredInstant(fire.created_at, "fire creation time"),
+    requiredInstant(fire.settled_at, "fire settlement time")
   );
 
 describe("engine Dotypos transport batches", () => {
@@ -289,7 +297,10 @@ describe("engine Dotypos transport batches", () => {
         })
       );
       expect(recovered).toEqual([failure]);
-      expect(records).toEqual([...ids.slice(0, 100), ids[200]!]);
+      expect(records).toEqual([
+        ...ids.slice(0, 100),
+        requireValue(ids[200], "final batch ID"),
+      ]);
       expect(fake.calls[method]).toBe(3);
     });
   }
@@ -413,14 +424,14 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
           });
           scenario.dotypos.reservations.set(dotyposId, {
             id: dotyposId,
-            _branchId: "capacity-branch",
-            _cloudId: "capacity-cloud",
+            _branchId: DotyposBranchIdSchema.make("capacity-branch"),
+            _cloudId: DotyposCloudIdSchema.make("capacity-cloud"),
             _customerId: id,
             startDate: visitedAt.toString(),
             endDate: visitedAt.add({ hours: 2 }).toString(),
             seats: "1",
             status: "CONFIRMED",
-          } as DotyposReservation);
+          });
         }
       }
       seeded.push(...ids);
@@ -528,14 +539,18 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
     query<{ entered: number }>(
       "select count(*)::int as entered from email_campaign_automation_schedule_fires where campaign_id = $1 and status = 'entered'",
       [campaignId]
-    ).pipe(Effect.map(([row]) => row!.entered >= count));
+    ).pipe(
+      Effect.map(
+        ([row]) => requireValue(row, "entered fire count").entered >= count
+      )
+    );
 
   /** Claimed units right now, in total and of the deliver kind. */
   const claimedUnits = query<{ claimed: number; deliver: number }>(
     `select count(*)::int as claimed,
             (count(*) filter (where kind = 'deliver'))::int as deliver
      from email_campaign_automation_work_units where status = 'claimed'`
-  ).pipe(Effect.map(([row]) => row!));
+  ).pipe(Effect.map(([row]) => requireValue(row, "claimed work unit counts")));
 
   /** The most units, and deliver units, claimed at once; `track` samples after an event. */
   const claimedPeak = () => {
@@ -573,19 +588,28 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
           const id = DotyposReservationIdSchema.make(`capacity-sweep-${index}`);
           scenario.dotypos.reservations.set(id, {
             id,
-            _branchId: "capacity-branch",
-            _cloudId: "capacity-cloud",
-            _customerId: `capacity-sweep-customer-${index}`,
+            _branchId: DotyposBranchIdSchema.make("capacity-branch"),
+            _cloudId: DotyposCloudIdSchema.make("capacity-cloud"),
+            _customerId: DotyposCustomerIdSchema.make(
+              `capacity-sweep-customer-${index}`
+            ),
             startDate: start.subtract({ hours: 1 }).toString(),
             endDate: start.add({ hours: 1 }).toString(),
             seats: "1",
             status: "CONFIRMED",
-          } as DotyposReservation);
+          });
         }
         const sweptUntil = () =>
           query<{ swept_until: string }>(
             "select swept_until from customer_event_sweeps where source = 'reservation-activity'"
-          ).pipe(Effect.map(([row]) => databaseInstant(row!.swept_until)!));
+          ).pipe(
+            Effect.map(([row]) =>
+              requiredInstant(
+                requireValue(row, "activity sweep row").swept_until,
+                "sweep cursor"
+              )
+            )
+          );
         const claimed = claimedPeak();
 
         await simulate(
@@ -665,7 +689,11 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
                 [burst]
               ),
             ]).pipe(
-              Effect.map(([entered, [row]]) => entered && row!.open === 0)
+              Effect.map(
+                ([entered, [row]]) =>
+                  entered &&
+                  requireValue(row, "unprocessed event count").open === 0
+              )
             ),
             afterEvent: claimed.track,
           })
@@ -687,7 +715,11 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
         const intakeDone = Math.max(
           ...deliveries
             .filter((delivery) => intakeUnits.has(delivery.unitId))
-            .map((delivery) => delivery.settledAt!.epochMilliseconds)
+            .map(
+              (delivery) =>
+                requireValue(delivery.settledAt, "delivery settlement time")
+                  .epochMilliseconds
+            )
         );
         const firstChunk = Math.min(
           ...deliveries
@@ -738,19 +770,32 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
         );
         expect(replayed.every((fire) => fire.status === "entered")).toBe(true);
         // One at a time, in order: each fire is created once its predecessor entered.
-        for (let index = 1; index < replayed.length; index++) {
+        for (const [index, fire] of replayed.slice(1).entries()) {
+          const previous = requireValue(
+            replayed[index],
+            "previous replayed fire"
+          );
           expect(
             Temporal.Instant.compare(
-              databaseInstant(replayed[index]!.created_at)!,
-              databaseInstant(replayed[index - 1]!.settled_at)!
+              requiredInstant(fire.created_at, "replayed fire creation time"),
+              requiredInstant(
+                previous.settled_at,
+                "previous replayed fire settlement time"
+              )
             )
           ).toBeGreaterThanOrEqual(0);
         }
         const runs = await readRuns(campaignId);
         expect(runs).toHaveLength(120);
+        const firstFireAt = requireValue(
+          fireAts[0],
+          "first expected trigger time"
+        );
         expect(
           runs.every((run) =>
-            databaseInstant(run.trigger_at)!.equals(fireAts[0]!)
+            requiredInstant(run.trigger_at, "run trigger time").equals(
+              firstFireAt
+            )
           )
         ).toBe(true);
         const receipts = new Map(
@@ -810,7 +855,9 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
           ]).pipe(
             Effect.map(
               ([visitsEntered, [open], sendsEntered]) =>
-                visitsEntered && sendsEntered && open!.open === 0
+                visitsEntered &&
+                sendsEntered &&
+                requireValue(open, "open send run count").open === 0
             )
           ),
           afterEvent: claimed.track,
@@ -822,16 +869,22 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
       expect(claimed.peak.deliver).toBe(1);
 
       const chunks = await readUnits("fire-chunk");
-      const solo = chunks.find(
-        (unit) => unit.subject.customerIds?.[0] === customers[0]
-      )!;
+      const soloCustomer = requireValue(customers[0], "800-booking customer");
+      const sharedCustomer = requireValue(customers[1], "600-booking customer");
+      const solo = requireValue(
+        chunks.find((unit) => unit.subject.customerIds?.[0] === soloCustomer),
+        "solo fire chunk"
+      );
       // The 800-booking customer: 1 + ⌈800/100⌉ = 9 requests, alone.
       expect(solo).toMatchObject({ request_cost: 9 });
-      expect(solo.subject.customerIds).toEqual([customers[0]]);
+      expect(solo.subject.customerIds).toEqual([soloCustomer]);
       // The 600-booking one shares a chunk: 600 + 50 × 2 = 700 bookings, 8 requests.
-      const shared = chunks.find((unit) =>
-        unit.subject.customerIds?.includes(customers[1]!)
-      )!;
+      const shared = requireValue(
+        chunks.find((unit) =>
+          unit.subject.customerIds?.includes(sharedCustomer)
+        ),
+        "shared fire chunk"
+      );
       expect(shared.request_cost).toBe(8);
       expect(shared.subject.customerIds).toHaveLength(51);
 
@@ -850,7 +903,10 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
         expect(delivery.requests).toBeLessThanOrEqual(8);
         // At most 8 × 30 s: inside the 270 s deadline.
         expect(
-          secondsBetween(delivery.deliveredAt, delivery.settledAt!)
+          secondsBetween(
+            delivery.deliveredAt,
+            requireValue(delivery.settledAt, "delivery settlement time")
+          )
         ).toBeLessThanOrEqual(270);
       }
 
@@ -913,24 +969,39 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
         );
 
         const [first, second] = await readUnits("fire-chunk");
-        const firstDeliveries = deliveriesOf(simulation, first!.id);
+        const firstDeliveries = deliveriesOf(
+          simulation,
+          requireValue(first, "first fire chunk").id
+        );
         expect(firstDeliveries.map((delivery) => delivery.outcome)).toEqual([
           "redelivered",
           "done",
         ]);
+        const failedDelivery = requireValue(
+          firstDeliveries[0],
+          "failed delivery"
+        );
+        const retry = requireValue(firstDeliveries[1], "retried delivery");
         expect(
           secondsBetween(
-            firstDeliveries[0]!.settledAt!,
-            firstDeliveries[1]!.deliveredAt
+            requireValue(
+              failedDelivery.settledAt,
+              "failed delivery settlement time"
+            ),
+            retry.deliveredAt
           )
         ).toBe(60);
         expect(first).toMatchObject({ attempts: 2, status: "done" });
         // The slot stayed with the failed unit: the other chunk started only after it settled.
-        const [secondDelivery] = deliveriesOf(simulation, second!.id);
+        const [secondDelivery] = deliveriesOf(
+          simulation,
+          requireValue(second, "second fire chunk").id
+        );
         expect(
           Temporal.Instant.compare(
-            secondDelivery!.deliveredAt,
-            firstDeliveries[1]!.settledAt!
+            requireValue(secondDelivery, "delivery of the second fire chunk")
+              .deliveredAt,
+            requireValue(retry.settledAt, "retry settlement time")
           )
         ).toBeGreaterThanOrEqual(0);
         const receipts = await readReceipts(campaignId);
@@ -971,7 +1042,10 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
         );
 
         const [first] = await readUnits("fire-chunk");
-        const firstDeliveries = deliveriesOf(simulation, first!.id);
+        const firstDeliveries = deliveriesOf(
+          simulation,
+          requireValue(first, "first fire chunk").id
+        );
         expect(firstDeliveries.map((delivery) => delivery.outcome)).toEqual([
           "killed",
           "done",
@@ -979,8 +1053,10 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
         // The claim (330 s) expires before the planner's reaper requeues it.
         expect(
           secondsBetween(
-            firstDeliveries[0]!.deliveredAt,
-            firstDeliveries[1]!.deliveredAt
+            requireValue(firstDeliveries[0], "interrupted delivery")
+              .deliveredAt,
+            requireValue(firstDeliveries[1], "delivery after claim expiry")
+              .deliveredAt
           )
         ).toBeGreaterThanOrEqual(330);
         expect(first).toMatchObject({
@@ -1032,15 +1108,16 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
         // Lag grows 1 − I/T = 1 − 60/95 ≈ 0.37 min per elapsed minute.
         const lagOf = (fire: FireRow) =>
           secondsBetween(
-            databaseInstant(fire.fire_at)!,
-            databaseInstant(fire.created_at)!
+            requiredInstant(fire.fire_at, "scheduled fire time"),
+            requiredInstant(fire.created_at, "fire creation time")
           );
-        const [firstFire, lastFire] = [entered[0]!, entered.at(-1)!];
+        const firstFire = requireValue(entered[0], "first entered fire");
+        const lastFire = requireValue(entered.at(-1), "last entered fire");
         expectNearModel(
           (lagOf(lastFire) - lagOf(firstFire)) /
             secondsBetween(
-              databaseInstant(firstFire.created_at)!,
-              databaseInstant(lastFire.created_at)!
+              requiredInstant(firstFire.created_at, "first fire creation time"),
+              requiredInstant(lastFire.created_at, "last fire creation time")
             ),
           1 - 60 / 95
         );
@@ -1049,11 +1126,15 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
         const automation = health.automations.find(
           (entry) => entry.campaignId === campaignId
         );
-        expect(automation?.lastFire).toMatchObject({
+        const lastFireHealth = requireValue(
+          automation?.lastFire,
+          "last fire health"
+        );
+        expect(lastFireHealth).toMatchObject({
           fallingBehind: true,
           intervalSeconds: 60,
         });
-        expectNearModel(automation!.lastFire!.durationSeconds, 95);
+        expectNearModel(lastFireHealth.durationSeconds, 95);
       }
     );
 
@@ -1084,7 +1165,7 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
         const [fire] = await readFires(campaignId);
         expect(fire).toMatchObject({ status: "entered", chunks_total: 18 });
         expect(await readRuns(campaignId)).toHaveLength(1800);
-        expectNearModel(fireSeconds(fire!), 35);
+        expectNearModel(fireSeconds(requireValue(fire, "entered fire")), 35);
       }
     );
 
@@ -1114,14 +1195,19 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
          from email_campaign_automations a where a.campaign_id = $1`,
           [campaignId]
         ).pipe(
-          Effect.map(
-            ([row]) =>
-              row!.entering === 0 &&
+          Effect.map(([row]) => {
+            const automation = requireValue(row, "automation schedule row");
+            return (
+              automation.entering === 0 &&
               Temporal.Instant.compare(
-                databaseInstant(row!.next_fire_at)!,
+                requiredInstant(
+                  automation.next_fire_at,
+                  "next scheduled fire time"
+                ),
                 simulation.now()
               ) > 0
-          )
+            );
+          })
         );
 
         const drained = await simulate(
@@ -1142,19 +1228,29 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
         );
         const fires = await readFires(campaignId);
         expect(fires.every((fire) => fire.status === "entered")).toBe(true);
-        expect(databaseInstant(fires[0]!.fire_at)).toEqual(
-          start.subtract({ minutes: 59 })
-        );
-        for (let index = 1; index < fires.length; index++) {
+        expect(
+          databaseInstant(requireValue(fires[0], "first missed fire").fire_at)
+        ).toEqual(start.subtract({ minutes: 59 }));
+        for (const [index, fire] of fires.slice(1).entries()) {
+          const previous = requireValue(
+            fires[index],
+            "previous scheduled fire"
+          );
           expect(
-            databaseInstant(fires[index]!.fire_at)!.equals(
-              databaseInstant(fires[index - 1]!.fire_at)!.add({ minutes: 1 })
+            requiredInstant(fire.fire_at, "scheduled fire time").equals(
+              requiredInstant(
+                previous.fire_at,
+                "previous scheduled fire time"
+              ).add({ minutes: 1 })
             )
           ).toBe(true);
           expect(
             Temporal.Instant.compare(
-              databaseInstant(fires[index]!.created_at)!,
-              databaseInstant(fires[index - 1]!.settled_at)!
+              requiredInstant(fire.created_at, "fire creation time"),
+              requiredInstant(
+                previous.settled_at,
+                "previous fire settlement time"
+              )
             )
           ).toBeGreaterThanOrEqual(0);
         }
@@ -1196,7 +1292,10 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
       ).pipe(
         Effect.flatMap(([row]) =>
           Effect.sync(() => {
-            maxEntering = Math.max(maxEntering, row!.entering);
+            maxEntering = Math.max(
+              maxEntering,
+              requireValue(row, "maximum entering fire count").entering
+            );
           })
         )
       );
@@ -1245,10 +1344,13 @@ describe.skipIf(!database)("engine capacity (§5.12) on Postgres", () => {
         entered.reduce((total, fire) => total + fireSeconds(fire), 0) /
         entered.length;
       // Least-squares slope of the sampled lag against elapsed time.
+      const firstEntered = requireValue(entered[0], "first entered fire");
+      const settledAt = requiredInstant(
+        firstEntered.settled_at,
+        "first fire settlement time"
+      );
       const samples = lagSamples.filter(
-        ({ at }) =>
-          at >=
-          databaseInstant(entered[0]!.settled_at)!.epochMilliseconds / 1000
+        ({ at }) => at >= settledAt.epochMilliseconds / 1000
       );
       const meanAt =
         samples.reduce((total, { at }) => total + at, 0) / samples.length;

@@ -3,6 +3,7 @@ import {
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
 } from "@deskohub/dotypos";
+import { automationTriggerKinds } from "@deskohub/workspace-admin-api";
 import { Option } from "effect";
 import type { ReservationVisit } from "@/features/reservation/backend/reservation-visits.service";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
@@ -108,24 +109,24 @@ const rules = {
   "reservation-cancelled": readsNoVisit,
   schedule: readsNoVisit,
   "account-created": readsNoVisit,
+  "entry-pack-expiring": readsNoVisit,
+  "unlimited-ending": readsNoVisit,
 } satisfies Record<AutomationTriggerKind, TriggerRule>;
 
 describe("trigger verification per kind", () => {
-  test.each(Object.entries(rules) as [AutomationTriggerKind, TriggerRule][])(
-    "%s",
-    (kind, rule) => {
-      expect(readsTriggeringVisit(kind)).toBe(rule.readsVisit);
-      expect(withdrawnByCancellation(kind)).toBe(rule.withdrawnByCancellation);
-      expect(
-        Object.fromEntries(
-          Object.entries(visits).map(([name, visit]) => [
-            name,
-            triggeringVisitVerdict({ kind, visit, asOf }),
-          ])
-        )
-      ).toEqual(rule.verdicts);
-    }
-  );
+  test.each(automationTriggerKinds)("%s", (kind) => {
+    const rule = rules[kind];
+    expect(readsTriggeringVisit(kind)).toBe(rule.readsVisit);
+    expect(withdrawnByCancellation(kind)).toBe(rule.withdrawnByCancellation);
+    expect(
+      Object.fromEntries(
+        Object.entries(visits).map(([name, visit]) => [
+          name,
+          triggeringVisitVerdict({ kind, visit, asOf }),
+        ])
+      )
+    ).toEqual(rule.verdicts);
+  });
 });
 
 describe("withdrawal by the reservation's Workspace cancellation", () => {
@@ -162,17 +163,14 @@ describe("withdrawal by the reservation's Workspace cancellation", () => {
     },
     schedule: neverWithdrawn,
     "account-created": neverWithdrawn,
+    "entry-pack-expiring": neverWithdrawn,
+    "unlimited-ending": neverWithdrawn,
   } satisfies Record<
     AutomationTriggerKind,
     Record<keyof typeof states, boolean>
   >;
 
-  test.each(
-    Object.entries(expected) as [
-      AutomationTriggerKind,
-      Record<keyof typeof states, boolean>,
-    ][]
-  )("%s", (kind, withdrawals) => {
+  test.each(automationTriggerKinds)("%s", (kind) => {
     const hasReservation = kind.startsWith("reservation-");
     expect(
       Object.fromEntries(
@@ -188,6 +186,6 @@ describe("withdrawal by the reservation's Workspace cancellation", () => {
           ),
         ])
       )
-    ).toEqual(withdrawals);
+    ).toEqual(expected[kind]);
   });
 });

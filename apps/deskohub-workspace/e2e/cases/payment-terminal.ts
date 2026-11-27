@@ -46,11 +46,15 @@ import type {
   PaymentTerminalScenario,
 } from "../types";
 import { makeUrl, setSearchParams } from "../urls";
-import { completeHostedCheckoutPayment } from "./checkout";
+import {
+  type CheckoutStepRunner,
+  completeHostedCheckoutPayment,
+  type HostedCheckoutPaymentSteps,
+} from "./checkout";
 
 export const getPaymentTerminalScenarios = (
   provider: E2EPaymentProvider = "nexi"
-): readonly PaymentTerminalScenario[] => {
+): readonly [PaymentTerminalScenario, PaymentTerminalScenario] => {
   return [
     {
       id: "payment-authentication-failed",
@@ -83,30 +87,41 @@ const paymentTerminalContract = (
         providerStatus: provider === "nexi" ? "CANCELLED" : "cancelled",
       };
 
-export const assertPaymentTerminalPath = ({
-  config,
-  data,
-  runStep,
-  scenario,
-  openSession,
-  state,
-  preparation,
-}: {
-  config: WorkspaceE2EConfig;
-  data: CheckoutData;
-  runStep: WorkspaceE2EStepRunner;
-  scenario: PaymentTerminalScenario;
-  openSession: OpenE2EBrowserSession;
-  state: CheckoutFlowState;
-  preparation: ReservationFormPreparation;
-}): Effect.Effect<
+type PaymentTerminalSteps = {
+  readonly preparePayPage?: CheckoutStepRunner<WorkspaceReservationId>;
+  readonly startHostedPayment?: CheckoutStepRunner<E2EPaymentProvider>;
+  readonly check?: CheckoutStepRunner<unknown>;
+  readonly hostedPayment?: HostedCheckoutPaymentSteps;
+};
+
+export const assertPaymentTerminalPath = (
+  {
+    config,
+    data,
+    runStep,
+    scenario,
+    openSession,
+    state,
+    preparation,
+  }: {
+    config: WorkspaceE2EConfig;
+    data: CheckoutData;
+    runStep: WorkspaceE2EStepRunner;
+    scenario: PaymentTerminalScenario;
+    openSession: OpenE2EBrowserSession;
+    state: CheckoutFlowState;
+    preparation: ReservationFormPreparation;
+  },
+  steps: PaymentTerminalSteps = {}
+): Effect.Effect<
   void,
   WorkspaceE2EError,
   E2EDatabase | WorkspaceE2EHostedPaymentPermitService
 > =>
   Effect.gen(function* () {
+    const check = steps.check ?? runStep;
     state.startedAt = new Date();
-    const orderId = yield* runStep({
+    const orderId = yield* (steps.preparePayPage ?? runStep)({
       execute: Effect.gen(function* () {
         const browser = yield* openSession;
         return yield* prepareCheckoutPaymentAttempt({
@@ -124,17 +139,20 @@ export const assertPaymentTerminalPath = ({
     });
     state.orderId = orderId;
     if (scenario.trigger === "hosted_failure") {
-      const failed = yield* completeHostedCheckoutPayment({
-        outcome: "declined",
-        config,
-        data,
-        orderId,
-        runStep,
-        openSession,
-        state,
-      });
+      const failed = yield* completeHostedCheckoutPayment(
+        {
+          outcome: "declined",
+          config,
+          data,
+          orderId,
+          runStep,
+          openSession,
+          state,
+        },
+        steps.hostedPayment
+      );
       // Assert reconciliation through the ordinary hosted return.
-      yield* runStep({
+      yield* check({
         execute: Effect.flatMap(openSession, (browser) =>
           assertReturnedTerminalStatusPage({
             orderId,
@@ -146,7 +164,7 @@ export const assertPaymentTerminalPath = ({
         id: `assert-${scenario.state}-status-page`,
         timeoutMs: config.timeouts.uiTransition,
       });
-      yield* runStep({
+      yield* check({
         execute: validateReconciledTerminalRow({
           orderId,
           paymentProvider: failed.provider,
@@ -160,15 +178,18 @@ export const assertPaymentTerminalPath = ({
         timeoutMs: config.timeouts.datasource,
       });
     } else {
-      yield* injectPaymentTerminalState({
-        config,
-        orderId,
-        runStep,
-        scenario,
-        openSession,
-        state,
-      });
-      yield* runStep({
+      yield* injectPaymentTerminalState(
+        {
+          config,
+          orderId,
+          runStep,
+          scenario,
+          openSession,
+          state,
+        },
+        steps
+      );
+      yield* check({
         execute: Effect.flatMap(openSession, (browser) =>
           assertTerminalStatusPage({
             config,
@@ -187,7 +208,7 @@ export const assertPaymentTerminalPath = ({
       scenario.trigger === "hosted_failure"
         ? capturePaymentRetryReview
         : () => Effect.void;
-    yield* runStep({
+    yield* check({
       execute: Effect.flatMap(openSession, (browser) =>
         captureReview({
           orderId,
@@ -216,14 +237,17 @@ export const assertPaymentTerminalPath = ({
     });
     if (scenario.trigger === "hosted_failure") {
       const failedAttemptId = state.checkoutRow?.payment_attempt_id ?? null;
-      const retried = yield* completeHostedCheckoutPayment({
-        config,
-        data,
-        orderId,
-        runStep,
-        openSession,
-        state,
-      });
+      const retried = yield* completeHostedCheckoutPayment(
+        {
+          config,
+          data,
+          orderId,
+          runStep,
+          openSession,
+          state,
+        },
+        steps.hostedPayment
+      );
       state.checkoutRow = yield* runStep({
         execute: waitForRetriedPayment({
           failedAttemptId,
@@ -239,21 +263,24 @@ export const assertPaymentTerminalPath = ({
     log(`Payment ${scenario.state} status e2e passed for order ${orderId}`);
   });
 
-const injectPaymentTerminalState = ({
-  config,
-  orderId,
-  runStep,
-  scenario,
-  openSession,
-  state,
-}: {
-  config: WorkspaceE2EConfig;
-  orderId: WorkspaceReservationId;
-  runStep: WorkspaceE2EStepRunner;
-  scenario: PaymentTerminalScenario;
-  openSession: OpenE2EBrowserSession;
-  state: CheckoutFlowState;
-}): Effect.Effect<
+const injectPaymentTerminalState = (
+  {
+    config,
+    orderId,
+    runStep,
+    scenario,
+    openSession,
+    state,
+  }: {
+    config: WorkspaceE2EConfig;
+    orderId: WorkspaceReservationId;
+    runStep: WorkspaceE2EStepRunner;
+    scenario: PaymentTerminalScenario;
+    openSession: OpenE2EBrowserSession;
+    state: CheckoutFlowState;
+  },
+  steps: PaymentTerminalSteps
+): Effect.Effect<
   void,
   WorkspaceE2EError,
   E2EDatabase | WorkspaceE2EHostedPaymentPermitService
@@ -264,7 +291,7 @@ const injectPaymentTerminalState = ({
     yield* hostedPaymentPermit.withPermit(
       "hosted payment terminal state",
       Effect.gen(function* () {
-        const paymentProvider = yield* runStep({
+        const paymentProvider = yield* (steps.startHostedPayment ?? runStep)({
           execute: Effect.gen(function* () {
             const browser = yield* openSession;
             const { checkoutPage, provider } =
@@ -279,7 +306,7 @@ const injectPaymentTerminalState = ({
           timeoutMs: config.timeouts.providerTransition,
         });
         log(`Started hosted payment attempt for order ${orderId}`);
-        yield* runStep({
+        yield* (steps.check ?? runStep)({
           execute: preparePaymentTerminalState({
             orderId,
             paymentProvider,

@@ -15,6 +15,7 @@ import {
   type CampaignId,
   campaignAudienceIdSchema,
 } from "@/features/email-campaigns/campaign-identifiers";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type AutomationRunId,
@@ -81,23 +82,19 @@ const endings: readonly {
   { ending: { outcome: "archived" }, reason: null, detail: {} },
 ];
 
-type OpenState = "active/ready" | "active/waiting" | "sending";
+const expectations = [
+  [
+    "active/ready",
+    { status: "active", stepId: waitStep, phase: "ready", workUnitId: unit },
+  ],
+  [
+    "active/waiting",
+    { status: "active", stepId: waitStep, phase: "waiting", workUnitId: null },
+  ],
+  ["sending", { status: "sending", stepId: sendStep }],
+] as const satisfies readonly (readonly [string, AutomationRunExpectation])[];
 
-const expectations = {
-  "active/ready": {
-    status: "active",
-    stepId: waitStep,
-    phase: "ready",
-    workUnitId: unit,
-  },
-  "active/waiting": {
-    status: "active",
-    stepId: waitStep,
-    phase: "waiting",
-    workUnitId: null,
-  },
-  sending: { status: "sending", stepId: sendStep },
-} satisfies Record<OpenState, AutomationRunExpectation>;
+type OpenState = (typeof expectations)[number][0];
 
 describe.skipIf(!testDatabase)(
   "automation run transitions on disposable Postgres",
@@ -153,12 +150,13 @@ describe.skipIf(!testDatabase)(
           sendId,
         ]
       );
+      const runId = requireValue(run, "inserted run").id;
       await Effect.runPromise(
         Effect.flatMap(WorkspaceDatabase, ({ transaction }) =>
           transaction(
             appendAutomationRunProgress([
               {
-                runId: run!.id,
+                runId,
                 kind: "started",
                 stepId: AutomationStepId.make("condition-1"),
                 at: Temporal.Instant.from("2026-10-19T08:00:00Z"),
@@ -167,7 +165,7 @@ describe.skipIf(!testDatabase)(
           )
         ).pipe(Effect.provide(testDatabase.layer))
       );
-      return run!.id;
+      return runId;
     };
 
     const end = (
@@ -207,15 +205,13 @@ describe.skipIf(!testDatabase)(
       return rows;
     };
 
-    for (const state of Object.keys(expectations) as OpenState[]) {
+    for (const [state, expectation] of expectations) {
       for (const { ending, reason, detail } of endings) {
         test(`ends a ${state} run ${ending.outcome} with one timeline entry`, async () => {
           const runId = await seedRun(state);
           const stepId = state === "sending" ? sendStep : waitStep;
 
-          expect(await end([runId], expectations[state], ending)).toEqual([
-            runId,
-          ]);
+          expect(await end([runId], expectation, ending)).toEqual([runId]);
 
           const run = await storedRun(runId);
           expect(run).toMatchObject({
@@ -302,10 +298,11 @@ describe.skipIf(!testDatabase)(
         [campaignId, versionId, nextCustomer(), waitStep]
       );
 
-      expect(await end([run!.id], { status: "active" })).toEqual([run!.id]);
+      const runId = requireValue(run, "inserted run").id;
+      expect(await end([runId], { status: "active" })).toEqual([runId]);
 
       expect(
-        (await timeline(run!.id)).map(({ sequence, kind }) => [sequence, kind])
+        (await timeline(runId)).map(({ sequence, kind }) => [sequence, kind])
       ).toEqual([[1, "sent"]]);
     });
   }

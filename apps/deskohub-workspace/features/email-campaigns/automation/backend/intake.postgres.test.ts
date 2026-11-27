@@ -1,8 +1,11 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import type { AutomationFlow } from "@deskohub/workspace-admin-api";
-import { Effect } from "effect";
+import {
+  type AutomationFlow,
+  AutomationStepId,
+} from "@deskohub/workspace-admin-api";
+import { Effect, Schema } from "effect";
 import {
   holdPostgresTransaction,
   waitForPostgresLockWaiter,
@@ -17,7 +20,6 @@ import {
 } from "../../backend/email-campaigns.test-utils";
 import type { CampaignPurpose } from "../../body/campaign-content";
 import type { CampaignId } from "../../campaign-identifiers";
-import type { AutomationStepId } from "../automation-identifiers";
 import {
   entryEngineLayer,
   makeEngineDotypos,
@@ -41,10 +43,20 @@ afterAll(() => database?.close());
 const now = Temporal.Instant.from("2026-10-19T10:00:00Z");
 const prefix = `intake-${crypto.randomUUID()}`;
 
+const sendStep = AutomationStepId.make("send");
+
 const finishedFlow: AutomationFlow = {
   trigger: { _tag: "ReservationFinished" },
-  steps: [{ _tag: "Send", id: "send" as AutomationStepId }],
+  steps: [{ _tag: "Send", id: sendStep }],
 };
+const decodeReceipt = Schema.decodeUnknownSync(
+  Schema.Struct({
+    dedup_key: Schema.String,
+    disposition: Schema.String,
+    run_id: Schema.NullOr(Schema.String),
+  })
+);
+
 const triggeredBy = (trigger: AutomationFlow["trigger"]): AutomationFlow => ({
   ...finishedFlow,
   trigger,
@@ -106,11 +118,10 @@ describe.skipIf(!database)("intake units on Postgres", () => {
         "select dedup_key, disposition, run_id from email_campaign_automation_trigger_receipts where campaign_id = $1 order by dedup_key",
         [campaignId]
       )
-    ).rows.map((row) => ({
-      key: row.dedup_key as string,
-      disposition: row.disposition as string,
-      run: row.run_id !== null,
-    }));
+    ).rows.map((row) => {
+      const { dedup_key, disposition, run_id } = decodeReceipt(row);
+      return { key: dedup_key, disposition, run: run_id !== null };
+    });
 
   const runsOf = async (campaignId: CampaignId) =>
     (
@@ -808,7 +819,7 @@ describe.skipIf(!database)("intake units on Postgres", () => {
             value: 1,
           },
         ],
-      } as AudienceFilter,
+      },
     });
     const customer = await fixtures.addCustomer("grown");
     const visit = await finishedVisit({

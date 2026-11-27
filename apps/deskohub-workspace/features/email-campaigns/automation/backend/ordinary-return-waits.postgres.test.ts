@@ -10,6 +10,7 @@ import {
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Option } from "effect";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
 import { evaluateStep } from "../automation-step-evaluation";
@@ -38,6 +39,11 @@ const returnOfferFlow = automationFlowFixture({
   ],
 });
 
+const calendarWait = requireValue(
+  returnOfferFlow.steps[1],
+  "calendar wait step"
+);
+
 // The planner reads whole tables; every case cleans its own synthetic data.
 const database = await createWorkspacePostgresSuiteDatabase("return_waits");
 afterAll(() => database?.close());
@@ -62,7 +68,7 @@ describe.skipIf(!database)(
     const runOf = async (campaignId: CampaignId) => {
       const runs = await scenario.read.runs(campaignId);
       expect(runs).toHaveLength(1);
-      return runs[0]!;
+      return requireValue(runs[0], "stored return-offer run");
     };
 
     /** Run the real preview service and queued preview handler on the same facts. */
@@ -128,7 +134,9 @@ describe.skipIf(!database)(
         customer,
         reservationId,
         previewId: preview.previewId,
-        previewSendAt: iso(rows[0]!.send_at),
+        previewSendAt: iso(
+          requireValue(rows[0], "stored automation unit").send_at
+        ),
       };
     };
 
@@ -259,7 +267,7 @@ describe.skipIf(!database)(
       expect(active.previewSendAt).toBe(dueAt.toString());
       expect(
         evaluateStep({
-          step: returnOfferFlow.steps[1]!,
+          step: calendarWait,
           phase: "waiting",
           at: lateAt,
           stepEnteredAt: calendarEntryAt,
@@ -315,7 +323,7 @@ describe.skipIf(!database)(
       // Dry runs do not replay pauses. Compare the resumed live state with their evaluator.
       expect(active.previewSendAt).toBe(dueAt.toString());
       const evaluated = evaluateStep({
-        step: returnOfferFlow.steps[1]!,
+        step: calendarWait,
         phase: "waiting",
         at: resumedAt,
         stepEnteredAt: calendarEntryAt,

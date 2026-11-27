@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import "@/shared/polyfills/temporal";
 import { Effect } from "effect";
 import { getMeetingRoomReservationInterval } from "@/features/reservation/meeting-room-reservation-time";
-import type { DatasourceConfig, WorkspaceE2EConfig } from "../config";
+import { getTableReservationInterval } from "@/features/reservation/table-reservation-time";
+import { getDatasourceConfig, type WorkspaceE2EConfig } from "../config";
+import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import {
   isWorkspaceE2EOfficeCaseId,
   isWorkspaceE2ETableCaseId,
@@ -125,7 +127,7 @@ const makeCases = (withOffice: boolean, withTable = withOffice) =>
         paymentProvider: "nexi",
         timeouts: workspaceE2ETimeouts,
       } satisfies WorkspaceE2EConfig,
-      datasourceConfig: {} as DatasourceConfig,
+      datasourceConfig: getDatasourceConfig(makeTestE2EEnvironment()),
       preparation: {
         discounts: {
           availableBasicDates: ["2099-08-03"],
@@ -163,24 +165,37 @@ const makeCases = (withOffice: boolean, withTable = withOffice) =>
             }
           : undefined,
         table: withTable
-          ? {
-              slot: {
-                date: "2099-08-06",
-                endsAt: "2099-08-06T10:00:00.000Z" as never,
-                endTime: "12:00",
-                seats: 4,
-                startsAt: "2099-08-06T08:00:00.000Z" as never,
-                startTime: "10:00",
-              },
-              urlStateSlot: {
-                date: "2099-08-12",
-                endsAt: "2099-08-12T10:00:00.000Z" as never,
-                endTime: "12:00",
-                seats: 4,
-                startsAt: "2099-08-12T08:00:00.000Z" as never,
-                startTime: "10:00",
-              },
-            }
+          ? (() => {
+              const slotInterval = getTableReservationInterval(
+                "2099-08-06",
+                "10:00",
+                "12:00"
+              );
+              const urlStateInterval = getTableReservationInterval(
+                "2099-08-12",
+                "10:00",
+                "12:00"
+              );
+              if (!slotInterval || !urlStateInterval) {
+                throw new Error("Team Table interval is invalid");
+              }
+              return {
+                slot: {
+                  date: "2099-08-06",
+                  ...slotInterval,
+                  endTime: "12:00",
+                  seats: 4,
+                  startTime: "10:00",
+                },
+                urlStateSlot: {
+                  date: "2099-08-12",
+                  ...urlStateInterval,
+                  endTime: "12:00",
+                  seats: 4,
+                  startTime: "10:00",
+                },
+              };
+            })()
           : undefined,
       },
     })

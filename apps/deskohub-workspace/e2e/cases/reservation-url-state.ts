@@ -670,9 +670,7 @@ const assertOfficeStartsOnLink = (
       timeoutMs: config.timeouts.uiTransition,
     });
     yield* tryWorkspaceE2ESync("compare linked and selected office", () => {
-      for (const field of Object.keys(linkedDisplay) as Array<
-        keyof OfficeSelectionDisplay
-      >) {
+      for (const field of ["basePrice", "seatPrice", "startDate"] as const) {
         assert(
           linkedDisplay[field] === selectedDisplay[field],
           `linked office ${field} differs from the form selection`
