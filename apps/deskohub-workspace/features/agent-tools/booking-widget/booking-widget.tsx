@@ -11,6 +11,7 @@ import {
   bookingLocaleAtom,
   bookingReserveAtom,
   bookingStartAtom,
+  bookingTableSlotsAtom,
 } from "./booking-atoms";
 import type { BookingStart } from "./booking-draft";
 import { BookingForm } from "./booking-form";
@@ -54,6 +55,7 @@ function BookingWidget() {
 function BookingSession({ start }: { readonly start: BookingStart }) {
   const [check, setCheck] = useAtom(bookingCheckAtom);
   const [reservation, setReservation] = useAtom(bookingReserveAtom);
+  const [tableSlots, setTableSlots] = useAtom(bookingTableSlotsAtom);
   const [link, openLink] = useAtom(bookingLinkAtom);
   // A changed or invalid selection makes earlier results stale.
   const clearResults = () => {
@@ -70,12 +72,17 @@ function BookingSession({ start }: { readonly start: BookingStart }) {
         setCheck({ selection, start });
       }}
       onOpenLink={openLink}
+      onFindTableTimes={(selection) =>
+        setTableSlots({ selection, locale: start.locale })
+      }
+      onTableDateOrSizeChange={() => setTableSlots(Atom.Reset)}
       onReserve={(selection, earlySetup) =>
         setReservation({ selection, earlySetup, locale: start.locale })
       }
       onSelectionChange={clearResults}
       reservation={reservation}
       start={start}
+      tableSlots={tableSlots}
     />
   );
 }

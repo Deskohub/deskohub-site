@@ -72,11 +72,13 @@ export const resolveQuoteSelection = ({
 const toBookingSelectionInput = ({
   end_date,
   start_time,
+  end_time,
   monitor_option,
   ...selection
 }: CompleteSelection): BookingSelectionInput => ({
   ...selection,
   endDate: end_date,
   startTime: start_time,
+  endTime: end_time,
   monitorOption: monitor_option,
 });

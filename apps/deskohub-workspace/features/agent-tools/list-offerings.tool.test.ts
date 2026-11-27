@@ -24,6 +24,36 @@ const listOfferings = (
 const czk = (amount: number) => ({ amount, currency: "CZK" });
 
 describe("list_offerings", () => {
+  test("lists one one-hour Team Table price per offered size only while enabled", async () => {
+    const tableOfferings = (teamTableEnabled: boolean) =>
+      listOfferings(
+        {},
+        makeAgentToolTestServices({
+          teamTableEnabled,
+          teamTableSizes: [8, 4, 4],
+        })
+      );
+
+    expect((await tableOfferings(false)).offerings).not.toContainEqual(
+      expect.objectContaining({ family: "table" })
+    );
+    const { offerings } = await tableOfferings(true);
+    expect(offerings.filter(({ family }) => family === "table")).toEqual([
+      expect.objectContaining({
+        seats: 4,
+        duration_minutes: 60,
+        price: czk(320),
+        advertised_price: czk(320),
+      }),
+      expect.objectContaining({
+        seats: 8,
+        duration_minutes: 60,
+        price: czk(640),
+        advertised_price: czk(640),
+      }),
+    ]);
+  });
+
   test("lists every product at its catalog and advertised price with its reservation page", async () => {
     const services = makeAgentToolTestServices();
     const result = await listOfferings({}, services);

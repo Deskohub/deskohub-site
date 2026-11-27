@@ -28,9 +28,11 @@ import {
   type BookingDraftSchema,
   type BookingSelection,
   type BookingStart,
+  type BookingTableSlotSelection,
   getBookingFamilies,
   getFamilyOfferings,
   getInitialDraft,
+  getTeamTableOfferings,
   makeBookingDraftSchema,
 } from "./booking-draft";
 import type { BookingRequestFailed, BookingToolFailed } from "./booking-host";
@@ -48,6 +50,10 @@ type BookingFailure = BookingToolFailed | BookingRequestFailed;
 type BookingFormProps = {
   readonly start: BookingStart;
   readonly check: AsyncResult.AsyncResult<BookingCheck, BookingFailure>;
+  readonly tableSlots: AsyncResult.AsyncResult<
+    CheckAvailabilityResult,
+    BookingFailure
+  >;
   readonly reservation: AsyncResult.AsyncResult<
     StartReservationResult,
     BookingFailure
@@ -58,6 +64,8 @@ type BookingFormProps = {
   readonly onSelectionChange: () => void;
   /** Called with the tool arguments when the selection is valid. */
   readonly onCheck: (selection: BookingSelection) => void;
+  readonly onFindTableTimes: (selection: BookingTableSlotSelection) => void;
+  readonly onTableDateOrSizeChange: () => void;
   /** Called with the quoted selection and the customer's early-setup choice. */
   readonly onReserve: (
     selection: BookingSelection,
@@ -142,8 +150,11 @@ export function BookingForm({
   linkFailed,
   onSelectionChange,
   onCheck,
+  onFindTableTimes,
+  onTableDateOrSizeChange,
   onReserve,
   onOpenLink,
+  tableSlots,
 }: BookingFormProps) {
   const { locale } = start;
   const draft = useBookingDraftForm(start, onSelectionChange);
@@ -160,8 +171,11 @@ export function BookingForm({
         check={check}
         draft={draft}
         onCheck={onCheck}
+        onFindTableTimes={onFindTableTimes}
         onSelectionChange={onSelectionChange}
+        onTableDateOrSizeChange={onTableDateOrSizeChange}
         start={start}
+        tableSlots={tableSlots}
       />
       <BookingCheckStatus
         check={check}
@@ -173,6 +187,7 @@ export function BookingForm({
       />
       <BookingAlerts
         check={check}
+        tableSlots={draft.family === "table" ? tableSlots : undefined}
         linkFailed={linkFailed}
         locale={locale}
         reservation={reservation}
@@ -253,17 +268,59 @@ function BookingSelectionFields({
   check,
   draft,
   onCheck,
+  onFindTableTimes,
   onSelectionChange,
+  onTableDateOrSizeChange,
   start,
+  tableSlots,
 }: {
   readonly check: BookingCheckResult;
   readonly draft: BookingDraftForm;
   readonly onCheck: BookingFormProps["onCheck"];
+  readonly onFindTableTimes: BookingFormProps["onFindTableTimes"];
   readonly onSelectionChange: () => void;
+  readonly onTableDateOrSizeChange: () => void;
   readonly start: BookingStart;
+  readonly tableSlots: BookingFormProps["tableSlots"];
 }) {
   const { locale } = start;
   const { form, family } = draft;
+  const slots =
+    AsyncResult.isSuccess(tableSlots) && !AsyncResult.isWaiting(tableSlots)
+      ? tableSlots.value.table
+      : undefined;
+  const changeDateOrSize = () => {
+    if (family === "table") {
+      form.setValue("tableStartTime", "");
+      form.setValue("tableEndTime", "");
+      onTableDateOrSizeChange();
+    }
+    onSelectionChange();
+  };
+  const checkSelection = (selection: BookingSelection) => {
+    if (selection.family === "table") {
+      const start = slots?.availableEndsByStart.find(
+        ({ startTime }) => startTime === selection.start_time
+      );
+      if (!start) {
+        form.setError(
+          "tableStartTime",
+          { message: m.bookingWidgetStartTimeRequired({}, { locale }) },
+          { shouldFocus: true }
+        );
+        return;
+      }
+      if (!start.endTimes.includes(selection.end_time)) {
+        form.setError(
+          "tableEndTime",
+          { message: m.bookingWidgetEndTimeRequired({}, { locale }) },
+          { shouldFocus: true }
+        );
+        return;
+      }
+    }
+    onCheck(selection);
+  };
   return (
     // Not a form element: hosts sandbox the view without `allow-forms`, so
     // the browser blocks a submission before its submit event.
@@ -291,19 +348,30 @@ function BookingSelectionFields({
         )}
         <ScheduleFields
           draft={draft}
-          onSelectionChange={onSelectionChange}
+          onSelectionChange={changeDateOrSize}
           start={start}
         />
-        <Button
-          onClick={form.handleSubmit(
-            (selection) => onCheck(selection),
-            () => onSelectionChange()
-          )}
-          pending={AsyncResult.isWaiting(check)}
-          type="button"
-        >
-          {m.bookingWidgetCheck({}, { locale })}
-        </Button>
+        {family === "table" && (
+          <TeamTableSchedule
+            draft={draft}
+            onChangeTime={onSelectionChange}
+            onChangeSize={changeDateOrSize}
+            onFindTimes={onFindTableTimes}
+            slots={slots}
+            slotsPending={AsyncResult.isWaiting(tableSlots)}
+            start={start}
+          />
+        )}
+        {(family !== "table" ||
+          (slots && slots.availableStarts.length > 0)) && (
+          <Button
+            onClick={form.handleSubmit(checkSelection, onSelectionChange)}
+            pending={AsyncResult.isWaiting(check)}
+            type="button"
+          >
+            {m.bookingWidgetCheck({}, { locale })}
+          </Button>
+        )}
       </div>
     </Form>
   );
@@ -335,11 +403,14 @@ function FamilyField({ draft, locale, offerings }: DraftFieldProps) {
             }}
             options={getBookingFamilies(offerings).map((value) => ({
               value,
-              label: {
-                cowork: m.bookingWidgetFamilyCowork,
-                "meeting-room": m.bookingWidgetFamilyMeetingRoom,
-                office: m.bookingWidgetFamilyOffice,
-              }[value]({}, { locale }),
+              label:
+                value === "table"
+                  ? (getFamilyOfferings(offerings, value)[0]?.name ?? value)
+                  : {
+                      cowork: m.bookingWidgetFamilyCowork,
+                      "meeting-room": m.bookingWidgetFamilyMeetingRoom,
+                      office: m.bookingWidgetFamilyOffice,
+                    }[value]({}, { locale }),
             }))}
             value={field.value}
           />
@@ -504,6 +575,172 @@ function ScheduleFields({
   );
 }
 
+function TeamTableSchedule({
+  draft: { form },
+  start: { locale, offerings },
+  onChangeSize,
+  onChangeTime,
+  onFindTimes,
+  slots,
+  slotsPending,
+}: {
+  readonly draft: BookingDraftForm;
+  readonly start: BookingStart;
+  readonly onChangeSize: () => void;
+  readonly onChangeTime: () => void;
+  readonly onFindTimes: BookingFormProps["onFindTableTimes"];
+  readonly slots: CheckAvailabilityResult["table"];
+  readonly slotsPending: boolean;
+}) {
+  const starts = slots?.availableStarts ?? [];
+  const startTime = useWatch({ control: form.control, name: "tableStartTime" });
+  const ends =
+    slots?.availableEndsByStart.find((entry) => entry.startTime === startTime)
+      ?.endTimes ?? [];
+  const findTimes = async () => {
+    if (!(await form.trigger(["date", "tableSeats"], { shouldFocus: true })))
+      return;
+    onChangeTime();
+    onFindTimes({
+      family: "table",
+      date: form.getValues("date"),
+      seats: Number(form.getValues("tableSeats")),
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      <FormField
+        control={form.control}
+        name="tableSeats"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>
+              {m.bookingWidgetTableSizeLabel({}, { locale })}
+            </FormLabel>
+            <FormControl>
+              <select
+                {...field}
+                className="h-10 w-full rounded-md border border-input bg-surface px-3"
+                onChange={(event) => {
+                  field.onChange(event);
+                  onChangeSize();
+                }}
+              >
+                {getTeamTableOfferings(offerings).map(
+                  ({ seats, advertised_price }) => (
+                    <option key={seats} value={seats}>
+                      {seats} ·{" "}
+                      {m.bookingWidgetPriceForOneHour(
+                        { price: formatMoney(advertised_price, locale) },
+                        { locale }
+                      )}
+                    </option>
+                  )
+                )}
+              </select>
+            </FormControl>
+            <FieldMessage />
+          </FormItem>
+        )}
+      />
+      <Button
+        onClick={() => void findTimes()}
+        pending={slotsPending}
+        type="button"
+        variant="secondary"
+      >
+        {m.bookingWidgetFindTimes({}, { locale })}
+      </Button>
+      <div className="text-sm" role="status">
+        {slotsPending && m.bookingWidgetChecking({}, { locale })}
+        {slots &&
+          !slotsPending &&
+          starts.length === 0 &&
+          m.bookingWidgetNotAvailable({}, { locale })}
+      </div>
+      {starts.length > 0 && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <TableTimeField
+            draft={form}
+            label={m.bookingWidgetStartTimeLabel({}, { locale })}
+            name="tableStartTime"
+            onChange={() => {
+              form.setValue("tableEndTime", "");
+              onChangeTime();
+            }}
+            placeholder={m.bookingWidgetStartTimeRequired({}, { locale })}
+            times={starts}
+          />
+          <TableTimeField
+            draft={form}
+            label={m.bookingWidgetEndTimeLabel({}, { locale })}
+            name="tableEndTime"
+            onChange={onChangeTime}
+            placeholder={m.bookingWidgetEndTimeRequired({}, { locale })}
+            timeLabel={(time) =>
+              time <= startTime
+                ? m.bookingWidgetNextDayTime({ time }, { locale })
+                : time
+            }
+            times={ends}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TableTimeField({
+  draft,
+  label,
+  name,
+  onChange,
+  placeholder,
+  timeLabel,
+  times,
+}: {
+  readonly draft: BookingDraftForm["form"];
+  readonly label: string;
+  readonly name: "tableStartTime" | "tableEndTime";
+  readonly onChange: () => void;
+  readonly placeholder: string;
+  readonly timeLabel?: (time: string) => string;
+  readonly times: readonly string[];
+}) {
+  return (
+    <FormField
+      control={draft.control}
+      name={name}
+      render={({ field }) => (
+        <FormItem>
+          <FormLabel>{label}</FormLabel>
+          <FormControl>
+            <select
+              {...field}
+              className="h-10 w-full rounded-md border border-input bg-surface px-3"
+              disabled={times.length === 0}
+              onChange={(event) => {
+                field.onChange(event);
+                onChange();
+              }}
+              value={times.includes(field.value) ? field.value : ""}
+            >
+              <option value="">{placeholder}</option>
+              {times.map((time) => (
+                <option key={time} value={time}>
+                  {timeLabel?.(time) ?? time}
+                </option>
+              ))}
+            </select>
+          </FormControl>
+          <FieldMessage />
+        </FormItem>
+      )}
+    />
+  );
+}
+
 /** Announces the running and finished check and booking. */
 function BookingCheckStatus({
   check,
@@ -572,16 +809,21 @@ function BookingAlerts({
   linkFailed,
   locale,
   reservation,
+  tableSlots,
 }: {
   readonly check: BookingCheckResult;
   readonly linkFailed: boolean;
   readonly locale: Locale;
   readonly reservation: BookingReservationResult;
+  readonly tableSlots: BookingFormProps["tableSlots"] | undefined;
 }) {
   return (
     <div className="space-y-2 text-sm text-burned-orange-ink" role="alert">
       {AsyncResult.isFailure(check) && (
         <p>{getFailureMessage(check.cause, locale)}</p>
+      )}
+      {tableSlots && AsyncResult.isFailure(tableSlots) && (
+        <p>{getFailureMessage(tableSlots.cause, locale)}</p>
       )}
       {AsyncResult.isFailure(reservation) && (
         <>

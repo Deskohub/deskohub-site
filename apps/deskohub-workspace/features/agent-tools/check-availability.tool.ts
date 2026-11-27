@@ -1,4 +1,4 @@
-import { Effect, Match, Schema } from "effect";
+import { Effect, Match, Option, Schema } from "effect";
 import {
   type WorkspaceCoworkCurrentTier,
   workspaceCoworkCurrentTiers,
@@ -27,11 +27,14 @@ import {
   getMeetingRoomAvailabilityQuery,
   getMeetingRoomStartTimesQuery,
   getOfficeAvailabilityQuery,
+  getTableSlotsQuery,
+  getWorkspaceAvailabilityRange,
   isCoworkOfferAvailable,
   isMeetingRoomAvailable,
   type WorkspaceAvailability,
   type WorkspaceAvailabilityQuery,
 } from "@/features/reservation/workspace-availability";
+import { ensureTeamTableReservationsEnabled } from "@/features/team-table/backend/team-table-release-gate";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
   currentInstant,
@@ -49,6 +52,7 @@ import {
 } from "./check-availability.schema";
 import {
   coworkStayArgument,
+  quarterHourTimePattern,
   reservationSelectionFields,
 } from "./reservation-selection";
 
@@ -75,7 +79,7 @@ export const checkAvailabilityTool = defineAgentTool({
   name: "check_availability",
   title: "Check Deskohub Workspace availability",
   description:
-    "Checks whether a Deskohub Workspace product looks free: cowork desks for a date or date range, the meeting room for a start time and duration, or the office for a date range and seats. Answers are advisory, from a cache refreshed every minute; availability is confirmed when the customer books on the website.",
+    "Checks whether a Deskohub Workspace product looks free. For a Team Table, pass the date and an offered seat count to see available starts and ends, or include both times to check an exact interval. Answers are advisory; availability is confirmed when the customer books.",
   access: "public",
   readOnly: true,
   unavailableCode: "availability_unavailable",
@@ -126,8 +130,70 @@ const checkSelectionAvailability = (selection: AvailabilitySelection) =>
     Match.when("cowork", () => checkCowork(selection)),
     Match.when("meeting-room", () => checkMeetingRoom(selection)),
     Match.when("office", () => checkOffice(selection)),
+    Match.when("table", () => checkTable(selection)),
     Match.exhaustive
   );
+
+const checkTable = Effect.fn("agentTools.checkTableAvailability")(function* ({
+  input: { date, seats, start_time: startTime, end_time: endTime },
+  now,
+}: AvailabilitySelection) {
+  yield* ensureTeamTableReservationsEnabled.pipe(
+    Effect.mapError(AgentToolError.unsupportedFamily)
+  );
+  if (seats === undefined) {
+    return yield* AgentToolError.invalidInput("seats");
+  }
+  if (startTime !== undefined && !quarterHourTimePattern.test(startTime)) {
+    return yield* AgentToolError.invalidInput("start_time");
+  }
+  if ((startTime === undefined) !== (endTime === undefined)) {
+    return yield* AgentToolError.invalidInput(
+      startTime === undefined ? "start_time" : "end_time"
+    );
+  }
+  const range = getWorkspaceAvailabilityRange(
+    getCurrentWorkspaceDate(now).toString()
+  );
+  if (date < range.from || date > range.to) {
+    return yield* AgentToolError.dateOutOfRange({
+      earliest: range.from,
+      latest: range.to,
+    });
+  }
+
+  const query = Option.getOrUndefined(getTableSlotsQuery({ date, seats }));
+  if (query === undefined) {
+    return yield* AgentToolError.invalidInput("seats");
+  }
+  const service = yield* WorkspaceAvailabilityService;
+  const table = yield* service
+    .getTableSlots({
+      query,
+    })
+    .pipe(
+      Effect.mapError(AgentToolError.unavailable("availability_unavailable"))
+    );
+  const interval =
+    startTime !== undefined && endTime !== undefined
+      ? { startTime, endTime }
+      : undefined;
+  const available = interval
+    ? table.availableEndsByStart.some(
+        ({ startTime, endTimes }) =>
+          startTime === interval.startTime &&
+          endTimes.includes(interval.endTime)
+      )
+    : table.availableStarts.length > 0;
+
+  return {
+    family: "table",
+    available,
+    days: [{ date, available }],
+    ...(!interval && { table }),
+    reservationSelection: { kind: "table", date, seats, ...interval },
+  } satisfies AvailabilityResult;
+});
 
 const checkCowork = Effect.fn("agentTools.checkCoworkAvailability")(
   (selection: AvailabilitySelection) =>

@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect";
+import type { AdvertisedPrice } from "@/features/checkout/advertised-price";
 import { buildAdvertisedPrice } from "@/features/checkout/backend/checkout/advertised-price.server";
 import { getReservationQuoteDiscount } from "@/features/checkout/reservation-quote-schema";
 import { m } from "@/features/i18n";
@@ -43,7 +44,7 @@ const quoteToolDefinition = {
   name: "get_quote",
   title: "Quote a Deskohub Workspace booking",
   description:
-    "Prices a complete selection anonymously: a cowork tier and date, a meeting-room start time and duration, or office dates and seats. The total includes any public sale running at the moment of the quote, and the reservation link opens the booking page prefilled. The website confirms the price when the customer books; this tool does not check availability.",
+    "Prices a complete selection anonymously. For a Team Table, provide the date, offered seat count, and exact start and end times. The total includes any public sale, and the reservation link opens the booking page with the selection filled in. Use check_availability to check whether it is free.",
   readOnly: true,
   unavailableCode: "quote_unavailable",
   input: inputSchema,
@@ -141,12 +142,7 @@ const toQuoteResult = ({
   readonly locale: ReturnType<typeof getAgentToolLocale>;
   readonly now: Temporal.Instant;
   readonly pricing: {
-    readonly advertised: {
-      readonly quote: Pick<
-        Effect.Success<ReturnType<typeof buildAdvertisedPrice>>["quote"],
-        "payment"
-      >;
-    };
+    readonly advertised: AdvertisedPrice;
     readonly reservationUrl: string;
   };
 }): GetQuoteResult => {
@@ -159,6 +155,20 @@ const toQuoteResult = ({
     discount: toAgentToolMoney(
       getReservationQuoteDiscount(advertised.quote.payment)
     ),
+    ...(advertised.kind === "table" && {
+      lines: [
+        {
+          type: "table-base",
+          seats: advertised.quote.items[0].seats,
+          amount: toAgentToolMoney(advertised.quote.items[0].amount),
+        },
+        {
+          type: "table-usage",
+          duration_minutes: advertised.quote.items[1].durationMinutes,
+          amount: toAgentToolMoney(advertised.quote.items[1].amount),
+        },
+      ],
+    }),
     quoted_at: now.toString(),
     note: m.agentToolQuoteNote({}, { locale }),
     reservation_url: reservationUrl,

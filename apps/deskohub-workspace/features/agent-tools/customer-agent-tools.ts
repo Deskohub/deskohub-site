@@ -15,6 +15,7 @@ import { WorkspaceAvailabilityService } from "@/features/reservation/backend/wor
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { ReservationInvitees } from "@/features/reservation-invitees/backend/reservation-invitees.service";
 import { ReviewSandbox } from "@/features/review-accounts";
+import { TeamTableReleaseGateForRun } from "@/features/team-table/backend/team-table-release-gate-run";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 
 /**
@@ -35,6 +36,7 @@ export const CustomerAgentToolsLive = Layer.mergeAll(
       Layer.mergeAll(
         ReferralReleaseGateRequest,
         OfficeReleaseGate.Live,
+        TeamTableReleaseGateForRun,
         OvernightStayReleaseGate.Live
       )
     )

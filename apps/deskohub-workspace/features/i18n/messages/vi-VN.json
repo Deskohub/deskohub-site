@@ -1530,9 +1530,14 @@
   "bookingWidgetTierLabel": "Loại chỗ ngồi",
   "bookingWidgetDateLabel": "Ngày",
   "bookingWidgetStartTimeLabel": "Giờ bắt đầu",
+  "bookingWidgetEndTimeLabel": "Giờ kết thúc",
+  "bookingWidgetTableSizeLabel": "Kích cỡ bàn",
+  "bookingWidgetFindTimes": "Tìm giờ còn trống",
+  "bookingWidgetNextDayTime": "{time} ngày hôm sau",
   "bookingWidgetFirstDayLabel": "Ngày đầu tiên",
   "bookingWidgetPricePerDay": "{price} mỗi ngày",
   "bookingWidgetPricePerBooking": "{price} mỗi lần đặt chỗ",
+  "bookingWidgetPriceForOneHour": "{price} cho một giờ đặt bàn",
   "bookingWidgetCheck": "Kiểm tra chỗ trống và giá",
   "bookingWidgetChecking": "Đang kiểm tra tình trạng còn chỗ và giá.",
   "bookingWidgetAvailable": "Có vẻ vẫn còn chỗ.",
@@ -1561,6 +1566,8 @@
   "bookingWidgetDateRequired": "Hãy chọn ngày.",
   "bookingWidgetDatePassed": "Hãy chọn hôm nay hoặc một ngày sau đó.",
   "bookingWidgetStartTimeRequired": "Hãy chọn giờ bắt đầu.",
+  "bookingWidgetEndTimeRequired": "Hãy chọn giờ kết thúc.",
+  "bookingWidgetTableSizeRequired": "Hãy chọn kích cỡ bàn được cung cấp.",
   "bookingWidgetDayCountRange": [
     {
       "declarations": ["input max", "local maxPlural = max: plural"],

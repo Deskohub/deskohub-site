@@ -19,6 +19,21 @@ export const bookingToday = "2099-07-28";
  */
 export const bookingOfficeSeats = 4;
 
+export const bookingTeamTableOffering: AgentOffering = {
+  family: "table",
+  seats: 4,
+  duration_minutes: 60,
+  name: "Team Table",
+  description: "An exclusive table in Open Space.",
+  usage: "Book in 15-minute increments.",
+  price: czk(320),
+  price_unit: "booking",
+  advertised_price: czk(320),
+  discount: czk(0),
+  add_ons: [],
+  reservation_url: `${siteOrigin}/reservation/table?seats=4`,
+};
+
 /** Synthetic offerings shaped like `list_offerings`, one per option. */
 export const bookingOfferings = (): ReadonlyArray<AgentOffering> => [
   {

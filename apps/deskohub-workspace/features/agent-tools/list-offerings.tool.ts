@@ -129,6 +129,17 @@ const toAgentOffering = (offering: PublicOffering) =>
             add_ons: [],
             reservation_url: reservationUrl,
           }),
+          table: (table): AgentOffering => ({
+            family: "table",
+            seats: table.seats,
+            duration_minutes: table.durationMinutes,
+            ...getOfferingCopy(table),
+            price: toAgentToolMoney(table.price),
+            price_unit: "booking",
+            ...getAdvertisedPrice(table),
+            add_ons: [],
+            reservation_url: reservationUrl,
+          }),
         })
       )
     )

@@ -13,18 +13,44 @@ const { makeShowBookingTool } = await import("./show-booking.tool");
 const showBooking = (
   args: Schema.Json,
   callable: ReadonlyArray<string> = ["show_booking"],
-  admitsCheckout = true
+  admitsCheckout = true,
+  services = makeAgentToolTestServices()
 ) =>
   makeShowBookingTool({ admitsCheckout })
     .call(args)
     .pipe(
       Effect.provideService(CallableAgentTools, new Set(callable)),
-      Effect.provide(makeAgentToolTestServices().layer),
+      Effect.provide(services.layer),
       Effect.runPromise
     )
     .then(agentToolResultOf(showBookingResultSchema));
 
 describe("show_booking", () => {
+  test("prefills an exact Team Table selection only while enabled", async () => {
+    const selection = {
+      family: "table",
+      date: "2099-07-30",
+      seats: 4,
+      start_time: "09:15",
+      end_time: "10:45",
+    };
+    await expect(showBooking(selection)).rejects.toMatchObject({
+      details: { code: "unsupported_family" },
+    });
+
+    const result = await showBooking(
+      selection,
+      ["show_booking"],
+      false,
+      makeAgentToolTestServices({ teamTableEnabled: true, teamTableSizes: [4] })
+    );
+    expect(result.selection).toEqual(selection);
+    expect(result.offerings).toContainEqual(
+      expect.objectContaining({ family: "table", seats: 4 })
+    );
+    expect(result.booking_mode).toBe("reservation_page");
+  });
+
   test("lets the view start a booking when the caller may call start_reservation", async () => {
     const result = await showBooking({}, ["show_booking", "start_reservation"]);
 

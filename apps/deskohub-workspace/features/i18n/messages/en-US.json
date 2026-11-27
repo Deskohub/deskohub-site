@@ -1543,9 +1543,14 @@
   "bookingWidgetTierLabel": "Desk",
   "bookingWidgetDateLabel": "Date",
   "bookingWidgetStartTimeLabel": "Start time",
+  "bookingWidgetEndTimeLabel": "End time",
+  "bookingWidgetTableSizeLabel": "Table size",
+  "bookingWidgetFindTimes": "Find available times",
+  "bookingWidgetNextDayTime": "{time} next day",
   "bookingWidgetFirstDayLabel": "First day",
   "bookingWidgetPricePerDay": "{price} per day",
   "bookingWidgetPricePerBooking": "{price} per booking",
+  "bookingWidgetPriceForOneHour": "{price} for a 1-hour booking",
   "bookingWidgetCheck": "Check availability and price",
   "bookingWidgetChecking": "Checking availability and the price.",
   "bookingWidgetAvailable": "It looks available.",
@@ -1574,6 +1579,8 @@
   "bookingWidgetDateRequired": "Choose a date.",
   "bookingWidgetDatePassed": "Choose today or a later date.",
   "bookingWidgetStartTimeRequired": "Choose a start time.",
+  "bookingWidgetEndTimeRequired": "Choose an end time.",
+  "bookingWidgetTableSizeRequired": "Choose an offered table size.",
   "bookingWidgetDayCountRange": [
     {
       "declarations": ["input max", "local maxPlural = max: plural"],

@@ -1569,9 +1569,14 @@
   "bookingWidgetTierLabel": "Тип місця",
   "bookingWidgetDateLabel": "Дата",
   "bookingWidgetStartTimeLabel": "Час початку",
+  "bookingWidgetEndTimeLabel": "Час завершення",
+  "bookingWidgetTableSizeLabel": "Розмір стола",
+  "bookingWidgetFindTimes": "Знайти вільний час",
+  "bookingWidgetNextDayTime": "{time} наступного дня",
   "bookingWidgetFirstDayLabel": "Перший день",
   "bookingWidgetPricePerDay": "{price} за день",
   "bookingWidgetPricePerBooking": "{price} за бронювання",
+  "bookingWidgetPriceForOneHour": "{price} за годину бронювання",
   "bookingWidgetCheck": "Перевірити наявність і ціну",
   "bookingWidgetChecking": "Перевіряємо наявність вільних місць і ціну.",
   "bookingWidgetAvailable": "Схоже, вільно.",
@@ -1600,6 +1605,8 @@
   "bookingWidgetDateRequired": "Оберіть дату.",
   "bookingWidgetDatePassed": "Оберіть сьогоднішню або пізнішу дату.",
   "bookingWidgetStartTimeRequired": "Оберіть час початку.",
+  "bookingWidgetEndTimeRequired": "Оберіть час завершення.",
+  "bookingWidgetTableSizeRequired": "Оберіть розмір стола з запропонованих.",
   "bookingWidgetDayCountRange": [
     {
       "declarations": ["input max", "local maxPlural = max: plural"],
