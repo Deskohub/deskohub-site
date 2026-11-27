@@ -2,16 +2,18 @@ import "../../shared/polyfills/temporal";
 
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { loadCampaignSigningKeys } from "@deskohub/workspace-backend/features/email-campaigns/backend/campaign-signing-keys";
+import { MarketingConsentLedger } from "@deskohub/workspace-backend/features/legal/backend/marketing-consent-ledger";
 import { backendRevisionHeader } from "@deskohub/workspace-cloud-run/preview-generation";
 import { eq } from "drizzle-orm";
-import { ConfigProvider, Effect } from "effect";
+import { ConfigProvider, Effect, Layer } from "effect";
+import { WorkspaceDatabase } from "@/db/database.service";
 import {
   customerMarketingConsents,
   customerMarketingManagementTokens,
   emailCampaignSends,
   emailCampaigns,
 } from "@/db/schema";
-import { seedCampaignSend } from "@/features/email-campaigns/backend/email-campaigns.test-utils";
+import { insertCampaignSendFixture } from "@/features/email-campaigns/backend/email-campaigns.test-utils";
 import { signCampaignUnsubscribeToken } from "@/features/email-campaigns/campaign-unsubscribe-token";
 import { runE2ECase } from "../case-runner";
 import { isWorkspaceDeploymentOrigin } from "../config";
@@ -22,6 +24,10 @@ import { workspaceE2ETimeouts } from "../timeouts";
 
 const operation = "prove backend preview email preferences";
 const failure = (message: string) => workspaceE2EError(message, { operation });
+const previewFixtureDatabase = Layer.effect(
+  WorkspaceDatabase,
+  Effect.map(E2EDatabase, ({ db }) => WorkspaceDatabase.make(db))
+);
 
 test("uses the expected backend revision for the synthetic unsubscribe GET and POST", async ({
   baseURL,
@@ -50,72 +56,67 @@ test("uses the expected backend revision for the synthetic unsubscribe GET and P
   await runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const { db } = yield* E2EDatabase;
+        const { db, transaction } = yield* WorkspaceDatabase;
         const dotyposCustomerId = DotyposCustomerIdSchema.make(
           `preview-unsubscribe-${runContext.runId}`
         );
         const { sendId } = yield* Effect.acquireRelease(
-          db
-            .transaction(
-              Effect.fn(function* (transaction) {
-                const campaign = yield* Effect.tryPromise({
-                  try: () =>
-                    seedCampaignSend(transaction, {
-                      purpose: "marketing",
-                      status: "sent",
-                      recipients: [{ dotyposCustomerId, status: "delivered" }],
-                    }),
-                  catch: () =>
-                    failure("Could not seed a synthetic campaign recipient"),
-                });
-                yield* transaction.insert(customerMarketingConsents).values({
-                  dotyposCustomerId,
+          transaction(
+            Effect.gen(function* () {
+              const campaign = yield* insertCampaignSendFixture(db, {
+                purpose: "marketing",
+                status: "sent",
+                recipients: [{ dotyposCustomerId, status: "delivered" }],
+              });
+              yield* MarketingConsentLedger.use((ledger) =>
+                ledger.record({
+                  customerId: dotyposCustomerId,
+                  choice: "grant",
+                  mode: "initial",
+                  channel: "link",
                   documentHash: "synthetic-preview-proof",
                   locale: "en-US",
-                  grantedAt: Temporal.Now.instant(),
-                });
-                return campaign;
-              })
-            )
-            .pipe(
-              Effect.mapError(() =>
-                failure("Could not seed synthetic preview consent")
-              )
-            ),
-          ({ campaignId }) =>
-            db
-              .transaction(
-                Effect.fn(function* (transaction) {
-                  yield* transaction
-                    .delete(emailCampaignSends)
-                    .where(eq(emailCampaignSends.campaignId, campaignId));
-                  yield* transaction
-                    .delete(emailCampaigns)
-                    .where(eq(emailCampaigns.id, campaignId));
-                  yield* transaction
-                    .delete(customerMarketingManagementTokens)
-                    .where(
-                      eq(
-                        customerMarketingManagementTokens.dotyposCustomerId,
-                        dotyposCustomerId
-                      )
-                    );
-                  yield* transaction
-                    .delete(customerMarketingConsents)
-                    .where(
-                      eq(
-                        customerMarketingConsents.dotyposCustomerId,
-                        dotyposCustomerId
-                      )
-                    );
                 })
-              )
-              .pipe(
-                Effect.mapError(() =>
-                  failure("Could not remove synthetic preview proof data")
-                ),
-                Effect.orDie
-              )
+              ).pipe(Effect.provide(MarketingConsentLedger.Default));
+              return campaign;
+            })
+          ).pipe(
+            Effect.mapError(() =>
+              failure("Could not seed synthetic preview consent")
+            )
+          ),
+          ({ campaignId }) =>
+            transaction(
+              Effect.gen(function* () {
+                yield* db
+                  .delete(emailCampaignSends)
+                  .where(eq(emailCampaignSends.campaignId, campaignId));
+                yield* db
+                  .delete(emailCampaigns)
+                  .where(eq(emailCampaigns.id, campaignId));
+                yield* db
+                  .delete(customerMarketingManagementTokens)
+                  .where(
+                    eq(
+                      customerMarketingManagementTokens.dotyposCustomerId,
+                      dotyposCustomerId
+                    )
+                  );
+                yield* db
+                  .delete(customerMarketingConsents)
+                  .where(
+                    eq(
+                      customerMarketingConsents.dotyposCustomerId,
+                      dotyposCustomerId
+                    )
+                  );
+              })
+            ).pipe(
+              Effect.mapError(() =>
+                failure("Could not remove synthetic preview proof data")
+              ),
+              Effect.orDie
+            )
         );
 
         const signingKeys = yield* loadCampaignSigningKeys(
@@ -223,6 +224,6 @@ test("uses the expected backend revision for the synthetic unsubscribe GET and P
           }),
         });
       })
-    )
+    ).pipe(Effect.provide(previewFixtureDatabase))
   );
 });

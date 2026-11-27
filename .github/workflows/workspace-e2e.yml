@@ -311,7 +311,7 @@ jobs:
             fi
 
             resolved_flows="$(jq -r '.flows' <<<"$parsed_flows")"
-            if [[ -n "$PILOT_PR_NUMBER" && "$pr_number" == "$PILOT_PR_NUMBER" ]]; then
+            if [[ "$pr_number" == "${PILOT_PR_NUMBER:-}" ]]; then
               backend_preview="$(PR_NUMBER="$pr_number" node \
                 .workspace-e2e-flows/.github/actions/workspace-backend-preview/e2e-target.mjs classify)" || \
                 fail 'Could not classify the pilot PR paths' 'Workspace E2E could not verify backend preview eligibility' backend-preview-paths
@@ -623,11 +623,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 9
     environment: workspace-checkout-e2e
+    permissions:
+      contents: read
+      deployments: read
     outputs:
       deployment_id: ${{ steps.deployment.outputs.deployment_id }}
       revision: ${{ steps.gate.outputs.revision }}
     env:
       TARGET_URL_DIGEST: ${{ needs.resolve-target.outputs.url_digest }}
+      PR_NUMBER: ${{ needs.resolve-target.outputs.pr_number }}
       TARGET_SHA: ${{ needs.resolve-target.outputs.sha }}
       TARGET_REF: ${{ needs.resolve-target.outputs.head_ref }}
     steps:
@@ -643,7 +647,7 @@ jobs:
         id: deployment
         env:
           GH_TOKEN: ${{ github.token }}
-          VERCEL_TOKEN: ${{ secrets.WORKSPACE_E2E_VERCEL_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.WORKSPACE_BACKEND_PREVIEW_VERCEL_TOKEN }}
         run: node .github/actions/workspace-backend-preview/e2e-target.mjs deployment
       # Deployment also takes the preview database lease. Wait before E2E
       # acquires it, then recheck under the lease before touching the database.
@@ -1209,7 +1213,7 @@ jobs:
           done
 
   publish-final-status:
-    needs: [resolve-target, fill-bun-package-cache, resolve-backend-preview, test-e2e]
+    needs: [resolve-target, fill-bun-package-cache, test-e2e]
     if: always() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true' && needs.resolve-target.outputs.nightly != 'true'
     concurrency:
       group: workspace-e2e-status-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
@@ -1235,7 +1239,7 @@ jobs:
         if: always()
         env:
           ALLOCATION_SHARD: ${{ needs.test-e2e.outputs.shard }}
-          ALLOCATION_DESCRIPTION: ${{ needs.resolve-target.outputs.backend_preview == 'true' && needs.resolve-backend-preview.result != 'success' && 'Workspace backend preview generation was unavailable' || needs.fill-bun-package-cache.result != 'success' && 'Workspace E2E Bun package cache fill failed' || needs.test-e2e.outputs.shard == '' && 'Workspace E2E shard allocation failed' || needs.test-e2e.outputs.release_outcome == 'success' && 'Workspace E2E shard released' || 'Workspace E2E shard release failed' }}
+          ALLOCATION_DESCRIPTION: ${{ needs.fill-bun-package-cache.result != 'success' && 'Workspace E2E Bun package cache fill failed' || needs.test-e2e.outputs.shard == '' && 'Workspace E2E shard allocation failed' || needs.test-e2e.outputs.release_outcome == 'success' && 'Workspace E2E shard released' || 'Workspace E2E shard release failed' }}
           FLOWS: ${{ needs.resolve-target.outputs.flows }}
           FLOWS_PUBLISH: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/publish-status.mjs
           GH_TOKEN: ${{ github.token }}

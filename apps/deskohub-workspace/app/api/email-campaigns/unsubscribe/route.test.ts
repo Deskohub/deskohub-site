@@ -2,11 +2,17 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import { eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { customerMarketingConsents } from "@/db/schema";
+import { WorkspaceDatabase } from "@/db/database.service";
+import {
+  customerMarketingConsents,
+  emailCampaignRecipients,
+} from "@/db/schema";
 import { loadCampaignSigningKeys } from "@/features/email-campaigns/backend/campaign-signing-keys";
 import {
   deleteCampaigns,
+  insertCampaignSendFixture,
   seedCampaignSend,
 } from "@/features/email-campaigns/backend/email-campaigns.test-utils";
 import { campaignSendIdSchema } from "@/features/email-campaigns/campaign-identifiers";
@@ -38,6 +44,40 @@ describe.skipIf(!testDatabase)(
   "/api/email-campaigns/unsubscribe on disposable Postgres",
   () => {
     if (!testDatabase) return;
+
+    test("rolls the campaign fixture back when later consent setup fails", async () => {
+      const dotyposCustomerId = DotyposCustomerIdSchema.make(
+        `unsubscribe-${run}-rollback`
+      );
+      const failedSetup = "Synthetic consent setup failed";
+      const rejected = await Effect.runPromise(
+        Effect.gen(function* () {
+          const { db, transaction } = yield* WorkspaceDatabase;
+          return yield* transaction(
+            insertCampaignSendFixture(db, {
+              purpose: "marketing",
+              status: "sent",
+              recipients: [{ dotyposCustomerId, status: "delivered" }],
+            }).pipe(Effect.andThen(Effect.fail(failedSetup)))
+          ).pipe(Effect.flip);
+        }).pipe(
+          Effect.provideService(
+            WorkspaceDatabase,
+            WorkspaceDatabase.make(testDatabase.db)
+          )
+        )
+      );
+      expect(rejected).toBe(failedSetup);
+      const rows = await Effect.runPromise(
+        testDatabase.db
+          .select()
+          .from(emailCampaignRecipients)
+          .where(
+            eq(emailCampaignRecipients.dotyposCustomerId, dotyposCustomerId)
+          )
+      );
+      expect(rows).toHaveLength(0);
+    });
     const campaignIds: string[] = [];
     const customerIds: string[] = [];
 

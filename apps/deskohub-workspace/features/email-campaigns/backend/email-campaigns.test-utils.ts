@@ -111,7 +111,7 @@ type SeededRecipient = {
 };
 
 /** Inserts a send of `campaignId` with its frozen recipients. */
-const insertSend = async (
+const insertSend = Effect.fn("insertCampaignFixtureSend")(function* (
   db: WorkspaceDatabaseClient,
   input: {
     /** A fixed send ID; generated when absent. */
@@ -123,58 +123,56 @@ const insertSend = async (
     readonly deliveryAttempt?: number;
     readonly recipients: readonly SeededRecipient[];
   }
-): Promise<CampaignSendId> => {
-  const [send] = await Effect.runPromise(
-    db
-      .insert(emailCampaignSends)
-      .values({
-        id: input.sendId,
-        campaignId: input.campaignId,
-        automationVersionId: input.automationVersionId,
-        audienceFilter: everyoneFilter,
-        contentHash: hashCampaignContent({
-          purpose: input.purpose,
-          templateKey: "workspace",
-          locales: input.content,
-        }),
-        deliveryAttempt: input.deliveryAttempt ?? 1,
-      })
-      .returning()
-  );
+) {
+  const [send] = yield* db
+    .insert(emailCampaignSends)
+    .values({
+      id: input.sendId,
+      campaignId: input.campaignId,
+      automationVersionId: input.automationVersionId,
+      audienceFilter: everyoneFilter,
+      contentHash: hashCampaignContent({
+        purpose: input.purpose,
+        templateKey: "workspace",
+        locales: input.content,
+      }),
+      deliveryAttempt: input.deliveryAttempt ?? 1,
+    })
+    .returning();
+  if (!send)
+    return yield* Effect.die("Campaign fixture send insert returned no row");
   if (input.recipients.length > 0) {
-    await Effect.runPromise(
-      db.insert(emailCampaignRecipients).values(
-        input.recipients.map((recipient) => ({
-          ...recipient,
-          skipReason:
-            recipient.status === "skipped" ? ("missing-email" as const) : null,
-          sendId: send!.id,
-          locale: recipient.locale ?? "cs-CZ",
-        }))
-      )
+    yield* db.insert(emailCampaignRecipients).values(
+      input.recipients.map((recipient) => ({
+        ...recipient,
+        skipReason:
+          recipient.status === "skipped" ? ("missing-email" as const) : null,
+        sendId: send.id,
+        locale: recipient.locale ?? "cs-CZ",
+      }))
     );
   }
-  return send!.id;
-};
+  return send.id;
+});
 
 /**
  * Inserts a campaign in `status` with its frozen send and recipients, as a
  * confirmed send leaves them, and returns their IDs.
  */
-export const seedCampaignSend = async (
-  db: WorkspaceDatabaseClient,
-  input: {
-    readonly sendId?: CampaignSendId;
-    readonly purpose: CampaignPurpose;
-    readonly status?: CampaignStatus;
-    readonly deliveryAttempt?: number;
-    readonly content?: CampaignLocalizedContent;
-    readonly recipients: readonly SeededRecipient[];
-  }
-) => {
-  const content = input.content ?? campaignContentFixture();
-  const [campaign] = await Effect.runPromise(
-    db
+export const insertCampaignSendFixture = Effect.fn("insertCampaignSendFixture")(
+  function* (
+    db: WorkspaceDatabaseClient,
+    input: {
+      readonly sendId?: CampaignSendId;
+      readonly purpose: CampaignPurpose;
+      readonly status?: CampaignStatus;
+      readonly deliveryAttempt?: number;
+      readonly content?: CampaignLocalizedContent;
+      readonly recipients: readonly SeededRecipient[];
+    }
+  ) {
+    const content = input.content ?? campaignContentFixture();
+    const [campaign] = yield* db
       .insert(emailCampaigns)
       .values({
         title: "Autumn news",
@@ -183,15 +181,21 @@ export const seedCampaignSend = async (
         content,
         status: input.status ?? "sending",
       })
-      .returning()
-  );
-  const sendId = await insertSend(db, {
-    ...input,
-    campaignId: campaign!.id,
-    content,
-  });
-  return { campaignId: campaign!.id, sendId };
-};
+      .returning();
+    if (!campaign)
+      return yield* Effect.die("Campaign fixture insert returned no row");
+    const sendId = yield* insertSend(db, {
+      ...input,
+      campaignId: campaign.id,
+      content,
+    });
+    return { campaignId: campaign.id, sendId };
+  }
+);
+
+export const seedCampaignSend = (
+  ...args: Parameters<typeof insertCampaignSendFixture>
+) => Effect.runPromise(insertCampaignSendFixture(...args));
 
 /** Reusable 7-locale pass reminder Email Library document for tests. */
 export const passReminderEmailDocumentFixture = (
@@ -489,11 +493,13 @@ export const seedAutomatedSend = (
     readonly recipients: readonly SeededRecipient[];
   }
 ) =>
-  insertSend(db, {
-    ...input,
-    automationVersionId: input.versionId,
-    content: campaignContentFixture(input.text ?? "Verze"),
-  });
+  Effect.runPromise(
+    insertSend(db, {
+      ...input,
+      automationVersionId: input.versionId,
+      content: campaignContentFixture(input.text ?? "Verze"),
+    })
+  );
 
 /**
  * Deletes campaigns with their automation rows, receipts, claims, runs, units,

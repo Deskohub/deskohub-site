@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { targetFromE2EEnvironment } from "./e2e-target.mjs";
 import { backendGenerationRequired } from "./paths.mjs";
 import {
   classifyPullRequestTarget,
@@ -436,7 +437,8 @@ test("matches the exact READY, protected Vercel Git preview by ID, project, repo
 });
 
 test("looks up the E2E origin and confirms its exact deployment ID", async () => {
-  const originTarget = { sha, expectedOrigin: `https://${host}` };
+  assert.throws(() => targetFromE2EEnvironment({ TARGET_SHA: sha }), /validated pilot PR/);
+  const originTarget = { ...targetFromE2EEnvironment({ TARGET_SHA: sha, PR_NUMBER: "45" }), expectedOrigin: `https://${host}` };
   const environment = { ...env, GIT_REF: ref };
   assert.deepEqual(await verifyVercel(originTarget, environment, vercel()), { deploymentId });
   await assert.rejects(

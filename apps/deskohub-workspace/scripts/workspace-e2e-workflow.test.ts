@@ -359,6 +359,7 @@ describe("workspace E2E workflow", () => {
       )
     ).toEqual({
       "resolve-target": undefined,
+      "resolve-backend-preview": { contents: "read", deployments: "read" },
       // Reads the exact-SHA checkout and saves the Bun package cache.
       "fill-bun-package-cache": { contents: "read" },
       "test-e2e": {
@@ -406,7 +407,11 @@ describe("workspace E2E workflow", () => {
       (step) => step.name === "Run checkout E2E"
     );
 
-    expect(testJob.needs).toEqual(["resolve-target", "fill-bun-package-cache"]);
+    expect(testJob.needs).toEqual([
+      "resolve-target",
+      "fill-bun-package-cache",
+      "resolve-backend-preview",
+    ]);
     expect(resolveIndex).toBeGreaterThanOrEqual(0);
     expect(migrateIndex).toBeGreaterThan(resolveIndex);
     expect(staleCleanupIndex).toBeGreaterThan(migrateIndex);
@@ -416,6 +421,33 @@ describe("workspace E2E workflow", () => {
     // A failed migration must stop the run instead of testing a stale schema.
     expect(migration.if).toBeUndefined();
     expect(migration["continue-on-error"]).toBeUndefined();
+  });
+
+  test("validates the backend generation in trusted code before the pilot migrates", () => {
+    const gate = doc.jobs["resolve-backend-preview"];
+    expect(gate?.needs).toBe("resolve-target");
+    expect(gate?.env?.PR_NUMBER).toBe(
+      `\${{ needs.resolve-target.outputs.pr_number }}`
+    );
+    const steps = gate?.steps ?? [];
+    expect(steps[0]?.with?.ref).toBe(`\${{ github.workflow_sha }}`);
+    expect(steps[1]?.env?.VERCEL_TOKEN).toBe(
+      `\${{ secrets.WORKSPACE_BACKEND_PREVIEW_VERCEL_TOKEN }}`
+    );
+    expect(JSON.stringify(testJob)).not.toContain(
+      "WORKSPACE_BACKEND_PREVIEW_VERCEL_TOKEN"
+    );
+    expect(JSON.stringify(gate)).not.toContain("WORKSPACE_E2E_BASE_URL");
+    const testSteps = testJob?.steps ?? [];
+    const binding = testSteps.indexOf(
+      stepByName("Verify the backend generation under the preview lease")
+    );
+    expect(binding).toBeGreaterThan(
+      testSteps.indexOf(stepByName("Resolve Neon branch backing the preview"))
+    );
+    expect(binding).toBeLessThan(
+      testSteps.indexOf(stepByName("Migrate preview database"))
+    );
   });
 
   test("classifies the synthetic main account only after a failed E2E run", () => {
@@ -914,7 +946,10 @@ describe("workspace E2E workflow", () => {
     // The fill job finishes before test-e2e starts.
     expect(testJob?.needs).toContain("fill-bun-package-cache");
     expect(fillJob?.needs).toBe("resolve-target");
-    expect(fillJob?.if).toBe(testJob?.if);
+    expect(testJob?.if).toContain(fillJob?.if ?? "");
+    expect(testJob?.if).toContain(
+      "needs.resolve-backend-preview.result == 'success'"
+    );
     expect(steps.indexOf(install)).toBeGreaterThan(steps.indexOf(restore));
     // The fill installs outside the checkout, so this install always starts
     // from an empty tree and runs every lifecycle script.
@@ -1018,6 +1053,7 @@ describe("workspace E2E workflow", () => {
       )
     ).toEqual({
       "resolve-target": "read",
+      "resolve-backend-preview": "read",
       "fill-bun-package-cache": "write",
       "test-e2e": "read",
       "cancel-superseded-run": "read",

@@ -16,12 +16,20 @@ export function originFromE2EEvent(raw, environment) {
   return candidate.origin;
 }
 
-async function main() {
-  const target = {
+export function targetFromE2EEnvironment(environment) {
+  const number = Number(environment.PR_NUMBER);
+  if (!/^[1-9][0-9]*$/.test(environment.PR_NUMBER ?? "") || !Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(environment.TARGET_SHA ?? "")) {
+    throw new Error("Expected the validated pilot PR and its full head SHA");
+  }
+  return {
     operation: "deploy",
-    number: Number(process.env.PR_NUMBER),
-    sha: process.env.TARGET_SHA,
+    number,
+    sha: environment.TARGET_SHA,
   };
+}
+
+async function main() {
+  const target = targetFromE2EEnvironment(process.env);
   const environment = { ...process.env, GIT_REF: process.env.TARGET_REF };
   switch (process.argv[2]) {
     case "classify": {
