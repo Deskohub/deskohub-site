@@ -247,6 +247,7 @@ describe("useCheckoutPaySubmission", () => {
     submitPayment();
 
     expect(hook.result.current.errorMessage).toBeNull();
+    expect(execute).toHaveBeenCalledTimes(2);
     expect(execute).toHaveBeenLastCalledWith({
       locale: "en-US",
       payStateToken: "signed-summary",
