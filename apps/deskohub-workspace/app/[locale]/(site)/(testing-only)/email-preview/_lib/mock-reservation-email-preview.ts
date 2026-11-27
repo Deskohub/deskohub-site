@@ -110,6 +110,8 @@ export const createWorkspaceOpenSpaceReservationEmailPreviewReservation = (
   placement: getCustomerReservationPlacement({
     reservationDetails: previewOpenSpaceReservationDetails,
     dotyposReservation: { _tableId: DotyposTableIdSchema.make("open-12") },
+    // Simulate an overlapping Team Table booking on open-12.
+    openSpaceExcludedTableIds: new Set([DotyposTableIdSchema.make("open-12")]),
     tables: ["9", "10", "11", "12", "15", "16", "wallee", "gromice"].map(
       (name, index) =>
         makePreviewTable({

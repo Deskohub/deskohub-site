@@ -3,6 +3,9 @@ import { Context, Option, Schema } from "effect";
 /** The request header that carries the calling `dhw` binary's version. */
 export const dhwVersionHeader = "x-dhw-version";
 
+/** Sent by dhw builds that decode Team Table in administration responses. */
+export const dhwTeamTableHeader = "x-dhw-team-table";
+
 /**
  * A `dhw` version: a semantic version, with build metadata on development
  * and pull-request builds (`1.20.0+pr.12.abc123`).

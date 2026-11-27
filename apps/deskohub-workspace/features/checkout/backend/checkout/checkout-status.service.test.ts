@@ -3,7 +3,7 @@ import { NoReservationInvitees } from "@/features/reservation-invitees/backend/r
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import { DotyposService, DotyposUnavailable } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Duration, Effect, Fiber, Layer, Option } from "effect";
 import { TestClock } from "effect/testing";
@@ -527,7 +527,7 @@ describe("CheckoutStatusService", () => {
     expect(getTables).toHaveBeenCalledTimes(3);
   });
 
-  test("uses the shared Open Space table list instead of its assigned table", async () => {
+  test("uses the Open Space table list with overlapping Team Tables removed", async () => {
     const { CheckoutStatusService } = await import("./checkout-status.service");
     const { ProviderPaymentFinalizationService } = await import(
       "../payment/provider-payment-finalization.service"
@@ -556,6 +556,9 @@ describe("CheckoutStatusService", () => {
           })
         )
       ),
+      selectTeamTableDotyposReservationIds: () =>
+        Effect.succeed(["synthetic-team-booking"]),
+      selectExpiredHoldDotyposReservationIds: () => Effect.succeed([]),
     };
     const paymentAttempts = {
       findDisplayableForReservation: mock(() =>
@@ -565,6 +568,7 @@ describe("CheckoutStatusService", () => {
     const finalization: ProviderPaymentFinalizationServiceType = {
       finalizePendingProviderPayment: mock(() => Effect.die("not used")),
     };
+    let overlapAvailable = true;
     const dotypos = makeDotypos({
       getReservationWithoutCustomer: mock(() =>
         Effect.succeed({
@@ -577,6 +581,25 @@ describe("CheckoutStatusService", () => {
           status: "CONFIRMED",
         })
       ),
+      listActiveReservationsOverlapping: () =>
+        overlapAvailable
+          ? Effect.succeed([
+              {
+                _cloudId: "cloud-id",
+                _branchId: "branch-id",
+                id: "synthetic-team-booking",
+                _tableId: "open-space-12",
+                status: "CONFIRMED",
+                startDate: "2026-06-20T08:00:00.000Z",
+                endDate: "2026-06-20T10:00:00.000Z",
+              },
+            ])
+          : Effect.fail(
+              new DotyposUnavailable({
+                operation: "listActiveReservationsOverlapping",
+                reason: "timeout",
+              })
+            ),
       getTables: mock(() =>
         Effect.succeed([
           {
@@ -655,38 +678,40 @@ describe("CheckoutStatusService", () => {
       ),
     });
 
-    const status = await Effect.gen(function* () {
-      const service = yield* CheckoutStatusService;
-      return yield* service.getStatus({
-        orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
-        returnOutcome: "success",
-      });
-    }).pipe(
-      Effect.provide(
-        CheckoutStatusService.Default.pipe(
-          Layer.provide(testReservationPaymentWindow()),
-          Layer.provide(NoReservationInvitees),
-          Layer.provide(observePaymentPagesAs("unknown").layer),
-          Layer.provide(
-            Layer.mergeAll(
-              Layer.mock(ProviderPaymentFinalizationService, finalization),
-              Layer.mock(WorkspaceReservationRepository, reservations),
-              Layer.mock(PaymentAttemptRepository, paymentAttempts),
-              reviewSandboxLayer,
-              dotyposLayer(dotypos),
-              noLatePaymentLayer(),
-              SeatingMapReleaseGate.fromDecision(false)
+    const loadStatus = () =>
+      Effect.gen(function* () {
+        const service = yield* CheckoutStatusService;
+        return yield* service.getStatus({
+          orderId: "0198c1a2-cc76-7c23-83b3-0a10457ef2cb",
+          returnOutcome: "success",
+        });
+      }).pipe(
+        Effect.provide(
+          CheckoutStatusService.Default.pipe(
+            Layer.provide(testReservationPaymentWindow()),
+            Layer.provide(NoReservationInvitees),
+            Layer.provide(observePaymentPagesAs("unknown").layer),
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.mock(ProviderPaymentFinalizationService, finalization),
+                Layer.mock(WorkspaceReservationRepository, reservations),
+                Layer.mock(PaymentAttemptRepository, paymentAttempts),
+                reviewSandboxLayer,
+                dotyposLayer(dotypos),
+                noLatePaymentLayer(),
+                SeatingMapReleaseGate.fromDecision(false)
+              )
             )
           )
-        )
-      ),
-      Effect.runPromise
-    );
+        ),
+        Effect.runPromise
+      );
 
+    const status = await loadStatus();
     expect(status).toMatchObject({
       kind: "cowork",
       status: "fulfilled",
-      table: { mode: "shared", name: "9-12, 15, 16" },
+      table: { mode: "shared", name: "9-11, 15, 16" },
       summary: {
         kind: "cowork",
         entryTier: "open-space",
@@ -695,6 +720,14 @@ describe("CheckoutStatusService", () => {
     });
     expect(status.table?.name).not.toContain("Assigned-only sentinel");
     expect(status.table?.name).not.toContain("Monitored sentinel");
+
+    overlapAvailable = false;
+    const degraded = await loadStatus();
+    expect(degraded).toMatchObject({
+      status: status.status,
+      summary: status.summary,
+    });
+    expect(degraded.table).toBeUndefined();
   });
 
   const getMeetingRoomStatus = async ({
@@ -852,11 +885,13 @@ describe("CheckoutStatusService", () => {
   });
 
   test.each([
-    ["readable", "3", 3],
-    ["unreadable", "abc", undefined],
+    ["office", "readable", "3", 3],
+    ["office", "unreadable", "abc", undefined],
+    ["table", "readable", "4", 4],
+    ["table", "unreadable", "abc", 4],
   ] as const)(
-    "reconstructs office dates and seats from Dotypos with %s seats",
-    async (_readability, seats, expectedSeats) => {
+    "reconstructs %s dates and seats with %s Dotypos seats",
+    async (kind, _readability, seats, expectedSeats) => {
       const { CheckoutStatusService } = await import(
         "./checkout-status.service"
       );
@@ -874,7 +909,10 @@ describe("CheckoutStatusService", () => {
         findById: mock(() =>
           Effect.succeed(
             makeReservation({
-              reservationDetails: { kind: "office" },
+              reservationDetails:
+                kind === "table"
+                  ? { kind, seats: 4, durationMinutes: 45 }
+                  : { kind },
               productTier: null,
               productCoffee: false,
               productMonitorOption: null,
@@ -892,14 +930,18 @@ describe("CheckoutStatusService", () => {
       const finalization: ProviderPaymentFinalizationServiceType = {
         finalizePendingProviderPayment: mock(() => Effect.die("not used")),
       };
+      const startsAt =
+        kind === "table" ? "2026-06-12T09:15:00Z" : "2026-06-11T22:00:00Z";
+      const endsAt =
+        kind === "table" ? "2026-06-12T10:00:00Z" : "2026-06-14T22:00:00Z";
       const dotypos = makeDotypos({
         getReservationWithoutCustomer: mock(() =>
           Effect.succeed({
             id: "dotypos-reservation-id",
             _customerId: "customer-id",
-            _tableId: "office-table",
-            startDate: "2026-06-11T22:00:00.000Z",
-            endDate: "2026-06-14T22:00:00.000Z",
+            _tableId: `${kind}-table`,
+            startDate: startsAt,
+            endDate: endsAt,
             seats,
             status: "CONFIRMED",
           })
@@ -934,26 +976,22 @@ describe("CheckoutStatusService", () => {
         Effect.runPromise
       );
 
-      expect(status.kind).toBe("office");
+      expect(status.kind).toBe(kind);
       if (expectedSeats === undefined) {
         expect(status.summary).toBeUndefined();
         return;
       }
       expect(status).toMatchObject({
-        kind: "office",
+        kind,
         status: "fulfilled",
         summary: {
-          kind: "office",
+          kind,
           seats: expectedSeats,
           price: { value: 55_000, exponent: 2, currency: "CZK" },
         },
       });
-      expect(status.summary?.reservedFrom.toString()).toBe(
-        "2026-06-11T22:00:00Z"
-      );
-      expect(status.summary?.reservedUntil.toString()).toBe(
-        "2026-06-14T22:00:00Z"
-      );
+      expect(status.summary?.reservedFrom.toString()).toBe(startsAt);
+      expect(status.summary?.reservedUntil.toString()).toBe(endsAt);
     }
   );
 
@@ -1205,6 +1243,76 @@ describe("CheckoutStatusService", () => {
           people: { resendable, invitees: [{ email }] },
         });
         expect(dotypos.getCustomer).not.toHaveBeenCalled();
+      }
+    );
+
+    test.each([
+      { offset: -1, contactAttends: true, seats: 3, canAdd: true },
+      { offset: 0, contactAttends: true, seats: 3, canAdd: false },
+      { offset: -1, contactAttends: true, seats: 2, canAdd: false },
+      { offset: -1, contactAttends: false, seats: 2, canAdd: true },
+    ])(
+      "checks Team Table add eligibility at end offset $offset with $seats live seats and contact attending $contactAttends",
+      async ({ offset, contactAttends, seats, canAdd }) => {
+        const start = testInstant("2026-06-20T12:15:00Z");
+        const end = testInstant("2026-06-20T12:45:00Z");
+        const dotypos = makeDotypos({
+          getReservationWithoutCustomer: mock(() =>
+            Effect.succeed({
+              id: "dotypos-reservation-id",
+              _customerId: "customer-id",
+              startDate: start.toString(),
+              endDate: end.toString(),
+              seats: String(seats),
+              status: "CONFIRMED",
+            })
+          ),
+        });
+        const email = InviteeEmail.make(testEmailAddress("status-table-guest"));
+        const invitees = Layer.mock(ReservationInvitees, {
+          findBookedPeople: ({ id }) =>
+            Effect.succeed(
+              Option.some({
+                contactAttends,
+                invitees: [
+                  {
+                    id: reservationInviteeIdSchema.make("table-guest"),
+                    reservationId: id,
+                    position: 0,
+                    email,
+                    lastInvitationSentAt: paidAt,
+                    invitationSendCount: 1,
+                  },
+                ],
+              })
+            ),
+        });
+        const status = await getPaidStatus(
+          end.add({ milliseconds: offset }),
+          {
+            reservationDetails: {
+              kind: "table",
+              seats: 4,
+              durationMinutes: 30,
+            },
+            officeContactAttends: contactAttends,
+            reservationState: "confirmed",
+            fulfillmentState: "fulfilled",
+            fulfilledAt: paidAt,
+          },
+          { dotypos, invitees, webAuthorized: true, refreshedAs: "terminal" }
+        );
+
+        expect(status).toMatchObject({
+          kind: "table",
+          people: { contactAttends, resendable: true, invitees: [{ email }] },
+        });
+        if (status.status === "not_found" || status.kind !== "table") {
+          throw new Error("Expected the Team Table status");
+        }
+        expect(status.inviteeAdditionEndsAt?.toString()).toBe(
+          canAdd ? end.toString() : undefined
+        );
       }
     );
 

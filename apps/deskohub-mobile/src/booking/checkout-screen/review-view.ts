@@ -273,7 +273,7 @@ export interface ReviewView {
   readonly retry: boolean;
   /** For whom. */
   readonly party: ReviewParty;
-  /** An office's people; none for other spaces or an order booked without a list. */
+  /** Attendees for an Office or Team Table booking with an attendee list. */
   readonly people: Option.Option<ReviewPeople>;
   /** A meeting room booked with early setup: the room opens before the start. */
   readonly earlySetup: boolean;

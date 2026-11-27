@@ -1,4 +1,4 @@
-import { DotyposService } from "@deskohub/dotypos";
+import { type DotyposReservationId, DotyposService } from "@deskohub/dotypos";
 import { Context, Data, Effect, Layer } from "effect";
 import { administrationForcedPaymentCancellationFailureCode } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import type { EntryPackWithdrawalCancellation } from "@/features/passes/backend/entry-pack-redemption";
@@ -92,6 +92,7 @@ export class ReservationCancellation extends Context.Service<
 
       const claimCancellation = Effect.fnUntraced(function* (
         current: WorkspaceReservation,
+        expectedDotyposReservationId: DotyposReservationId,
         cause: RequestedCancellationCause,
         forcedPendingPayment: boolean,
         entryPackWithdrawal: EntryPackWithdrawalCancellation | undefined
@@ -103,6 +104,7 @@ export class ReservationCancellation extends Context.Service<
         const claimed = yield* reservations
           .claimRequestedCancellation({
             id: current.id,
+            expectedDotyposReservationId,
             cause,
             entryPackWithdrawal,
             ...(pendingPaymentCancellation && {
@@ -290,6 +292,7 @@ export class ReservationCancellation extends Context.Service<
             if (refusal) return yield* refusal;
             const claimed = yield* claimCancellation(
               current,
+              details.dotyposReservationId,
               input.cause,
               forcedPendingPayment,
               input.entryPackWithdrawal

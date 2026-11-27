@@ -2,6 +2,7 @@ import { Context, Data, Effect, Layer, Option } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   holdCustomerAccountAndPassPurchase,
+  holdsCustomerAccountSection,
   WorkspaceLockSections,
 } from "@/db/workspace-locks";
 import type { OrderId } from "@/features/order";
@@ -57,6 +58,11 @@ type OptionalAccountSection<A, E, R> = (
 ) => Effect.Effect<A, E, R>;
 
 interface ICustomerAccountSections {
+  /** The current session's account, before a section acquires its locks. */
+  readonly currentAccountId: Effect.Effect<
+    CustomerAccountId | null,
+    CustomerAccountAccessError
+  >;
   /**
    * Runs `section` holding the account lock on its own connection, after the
    * recheck, with `HeldCustomerAccount` provided. Enter it outside every
@@ -141,6 +147,13 @@ export class CustomerAccountSections extends Context.Service<
           return { accountId, email: activity.email };
         });
 
+      const currentAccountId = authentication.currentUser.pipe(
+        Effect.catchIf(isAuthenticationNotConfigured, () =>
+          Effect.succeed(null)
+        ),
+        Effect.map((session) => session?.accountId ?? null)
+      );
+
       const withActiveAccount: ICustomerAccountSections["withActiveAccount"] = (
         accountId,
         section,
@@ -148,24 +161,35 @@ export class CustomerAccountSections extends Context.Service<
       ) =>
         Effect.flatMap(
           Effect.serviceOption(HeldCustomerAccount),
-          (enclosing) =>
-            !options?.passPurchaseOrderId &&
-            Option.isSome(enclosing) &&
-            enclosing.value.accountId === accountId
-              ? Effect.provideService(
-                  section,
-                  HeldCustomerAccount,
-                  enclosing.value
-                )
-              : holdAccount(
-                  accountId,
-                  recheck(accountId, options?.recheck ?? "session").pipe(
-                    Effect.flatMap((held) =>
-                      Effect.provideService(section, HeldCustomerAccount, held)
-                    )
-                  ),
-                  options?.passPurchaseOrderId
-                )
+          (enclosing) => {
+            if (
+              !options?.passPurchaseOrderId &&
+              Option.isSome(enclosing) &&
+              enclosing.value.accountId === accountId
+            ) {
+              return Effect.provideService(
+                section,
+                HeldCustomerAccount,
+                enclosing.value
+              );
+            }
+
+            const work = recheck(accountId, options?.recheck ?? "session").pipe(
+              Effect.flatMap((held) =>
+                Effect.provideService(section, HeldCustomerAccount, held)
+              )
+            );
+            if (options?.passPurchaseOrderId)
+              return holdAccount(accountId, work, options.passPurchaseOrderId);
+
+            // A combined reservation-capacity section can hold the exact account
+            // key already. Authority still needs its recheck on that hold.
+            return holdsCustomerAccountSection(accountId).pipe(
+              Effect.flatMap((held) =>
+                held ? work : holdAccount(accountId, work)
+              )
+            );
+          }
         );
 
       /**
@@ -194,22 +218,18 @@ export class CustomerAccountSections extends Context.Service<
 
       const withOptionalAccount: ICustomerAccountSections["withOptionalAccount"] =
         (section) =>
-          authentication.currentUser.pipe(
-            Effect.catchIf(isAuthenticationNotConfigured, () =>
-              Effect.succeed(null)
-            ),
-            Effect.flatMap((session) =>
-              session
-                ? withActiveAccount(
-                    session.accountId,
-                    section(session.accountId),
-                    { recheck: "active" }
-                  )
+          currentAccountId.pipe(
+            Effect.flatMap((accountId) =>
+              accountId
+                ? withActiveAccount(accountId, section(accountId), {
+                    recheck: "active",
+                  })
                 : section(null)
             )
           );
 
       return {
+        currentAccountId,
         withActiveAccount,
         withOptionalAccount,
       } satisfies ICustomerAccountSections;

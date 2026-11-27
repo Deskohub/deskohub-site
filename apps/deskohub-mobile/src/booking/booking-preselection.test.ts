@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { CustomerBookedSelection } from "@deskohub/workspace-customer-api";
 import { Option } from "effect";
-import { bookAgainHref, bookingPreselectionOf } from "./booking-preselection";
+import {
+  bookAgainHref,
+  bookingPreselectionOf,
+  teamTableBookAgainHref,
+  teamTablePreselectionOf,
+} from "./booking-preselection";
 
 /** The params expo-router hands a screen opened on `href`. */
 const paramsOf = (href: string) =>
@@ -14,6 +19,23 @@ const roundTrip = (booked: CustomerBookedSelection) =>
   );
 
 describe("booking preselection", () => {
+  test("Team Table restores the exact size and overnight span", () => {
+    const selection = {
+      family: "table",
+      date: "2026-12-02",
+      startTime: "23:45",
+      endTime: "00:15",
+      seats: 4,
+    } as const;
+    const href = teamTableBookAgainHref(selection);
+    expect(href.startsWith("/book/table?")).toBe(true);
+    expect(teamTablePreselectionOf(paramsOf(href))).toEqual(
+      Option.some(selection)
+    );
+    expect(
+      teamTablePreselectionOf({ ...paramsOf(href), startTime: "23:40" })
+    ).toEqual(Option.none());
+  });
   test("a booked cowork selection opens its screen on the same selection", () => {
     const openSpace: CustomerBookedSelection = {
       selection: {

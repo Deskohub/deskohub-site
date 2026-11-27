@@ -1,14 +1,17 @@
 import type {
   CustomerBookableDates,
   CustomerBookingOfferings,
-  CustomerBookingSelection,
   CustomerCheckoutSummary,
   CustomerLegalDocument,
   CustomerLocale,
   CustomerMonitorOption,
   CustomerOffering,
+  CustomerTeamTableOfferings,
+  CustomerTeamTableSelection,
   Money,
 } from "@deskohub/workspace-customer-api";
+import { m } from "../../i18n/messages";
+import type { BookingSelection } from "../selection/booking-selection";
 import type { CoworkOvernightStay } from "../selection/cowork-selection";
 import {
   addMonths,
@@ -43,6 +46,8 @@ export const samplePrices = {
   meetingRoom: { "hour:1": 400, "hour:4": 1200, "day:1": 2400 },
   officeDay: 1200,
   officeSeat: 250,
+  tableBasePerSeat: 60,
+  tableHourPerSeat: 20,
 } as const;
 
 /** When the sample Reserved Desk's overnight stay starts and ends. */
@@ -76,10 +81,30 @@ export const sampleOfficeMaximumDurationHours = 672;
  */
 export const sampleBookableDates = (
   advertisedOn: PragueDate,
-  family: CustomerOffering["family"]
+  family: BookingSelection["family"]
 ): CustomerBookableDates => ({
   earliest: advertisedOn,
   latest: addMonths(advertisedOn, family === "office" ? 1 : 6),
+});
+
+export const sampleTeamTableOfferings = (
+  locale: CustomerLocale,
+  advertisedOn: PragueDate,
+  seats: ReadonlyArray<number>
+): CustomerTeamTableOfferings => ({
+  advertisedOn,
+  bookableDates: sampleBookableDates(advertisedOn, "table"),
+  offerings: seats.map((capacity) => {
+    const price = czk(
+      capacity * (samplePrices.tableBasePerSeat + samplePrices.tableHourPerSeat)
+    );
+    return {
+      product: { kind: "table", seats: capacity, durationMinutes: 60 },
+      name: m.booking_checkout_line_team_table({}, { locale }),
+      price,
+      advertisedPrice: { price, ...noSale },
+    };
+  }),
 });
 
 export const sampleOfferings = (
@@ -225,6 +250,8 @@ interface PricedLine {
   readonly accessCrowns?: number;
   /** One office seat for the days booked, before discounts. */
   readonly seatCrowns?: number;
+  readonly tableBaseCrowns?: number;
+  readonly tableUsageCrowns?: number;
   /** A workstation line's monitor setup. */
   readonly monitorOption?: CustomerMonitorOption;
 }
@@ -234,7 +261,7 @@ interface PricedLine {
  * minutes before its start, as the Workspace sets it.
  */
 export const sampleEarlySetupStartsAt = (
-  selection: CustomerBookingSelection
+  selection: BookingSelection
 ): string | undefined => {
   if (selection.family !== "meeting-room" || selection.startTime === undefined)
     return undefined;
@@ -252,8 +279,23 @@ export const inclusiveDays = (from: PragueDate, to: PragueDate) =>
 
 /** The summary lines a complete selection is priced with, in crowns. */
 export const pricedLines = (
-  selection: CustomerBookingSelection
+  selection: BookingSelection
 ): ReadonlyArray<PricedLine> => {
+  if (selection.family === "table") {
+    const minutes = sampleTeamTableDuration(selection);
+    const tableBaseCrowns = selection.seats * samplePrices.tableBasePerSeat;
+    const tableUsageCrowns =
+      (selection.seats * samplePrices.tableHourPerSeat * minutes) / 60;
+    return [
+      {
+        key: `product:table:${selection.seats}:${minutes}`,
+        crowns: tableBaseCrowns + tableUsageCrowns,
+        seats: selection.seats,
+        tableBaseCrowns,
+        tableUsageCrowns,
+      },
+    ];
+  }
   if (selection.family === "cowork") {
     const tier = selection.tier ?? "open-space";
     const price =
@@ -307,6 +349,17 @@ export const pricedLines = (
   ];
 };
 
+const clockMinutes = (time: string) =>
+  Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+
+export const sampleTeamTableDuration = ({
+  startTime,
+  endTime,
+}: CustomerTeamTableSelection) => {
+  const minutes = clockMinutes(endTime) - clockMinutes(startTime);
+  return minutes > 0 ? minutes : minutes + 1440;
+};
+
 /** The id of the one discount a sample summary lists. */
 export const sampleDiscountId = "sample-code";
 
@@ -355,6 +408,16 @@ export const sampleSummary = ({
         : {}),
       ...(line.dayCount === undefined ? {} : { dayCount: line.dayCount }),
       ...(line.seats === undefined ? {} : { seats: line.seats }),
+      ...(line.tableBaseCrowns === undefined
+        ? {}
+        : {
+            baseAmount: czk(
+              line.tableBaseCrowns + (index === 0 ? surcharge : 0)
+            ),
+          }),
+      ...(line.tableUsageCrowns === undefined
+        ? {}
+        : { usageAmount: czk(line.tableUsageCrowns) }),
       ...(line.accessCrowns === undefined
         ? {}
         : { accessAmount: czk(line.accessCrowns) }),

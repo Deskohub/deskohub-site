@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type CustomerOrderState,
   CustomerReservationOrderId,
+  type CustomerTeamTableStatus,
 } from "@deskohub/workspace-customer-api";
 import { DateTime, Option } from "effect";
 import { monitorOptionName } from "../../booking/ui/price-line-description";
@@ -11,6 +12,7 @@ import { bookingTimeLine } from "./booking-ticket-text";
 import { dateTileParts } from "./booking-time";
 import { orderTicketView } from "./order-ticket-view";
 import type { ReservationListRow } from "./reservation-list-model";
+import type { ReservationOrder } from "./status-refresh";
 
 const locale = "en-US";
 
@@ -67,7 +69,7 @@ const listed: ReservationListRow = {
 };
 
 const viewOf = (
-  order: CustomerOrderState,
+  order: ReservationOrder,
   reservation: Option.Option<ReservationListRow>
 ) =>
   orderTicketView({
@@ -80,6 +82,36 @@ const viewOf = (
   });
 
 describe("orderTicketView", () => {
+  test("a booked Team Table names the assigned table and keeps the midnight start", () => {
+    const table = {
+      ...failedOrder,
+      kind: "table",
+      status: "fulfilled",
+      paymentStatus: "paid",
+      fulfillmentStatus: "fulfilled",
+      startsAt: "2026-11-14T23:00:00Z",
+      endsAt: "2026-11-15T00:30:00Z",
+      tableName: "Table Oak",
+      product: { kind: "table", seats: 6, durationMinutes: 90 },
+    } satisfies CustomerTeamTableStatus;
+    const view = viewOf(table, Option.none());
+    expect(view.meta.find(({ key }) => key === "table")?.detail).toBe(
+      "Table Oak"
+    );
+    expect(view.lines).toEqual([
+      bookingTimeLine(
+        DateTime.makeUnsafe(table.startsAt),
+        DateTime.makeUnsafe(table.endsAt),
+        locale,
+        undefined,
+        true
+      ),
+    ]);
+    expect(view.date).toEqual(
+      dateTileParts(DateTime.makeUnsafe(table.startsAt), locale)
+    );
+  });
+
   test("lists the workstation once, with its monitor setup under it", () => {
     const workstation = metaOf(reservedDesk("2x27-qhd")).filter(
       (line) => line.key === "monitor"

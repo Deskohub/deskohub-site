@@ -40,6 +40,7 @@ const toHistoryProduct = (
         kind: "meeting-room",
       }),
       office: (): CustomerReservationProduct => ({ kind: "office" }),
+      table: (): CustomerReservationProduct => ({ kind: "table" }),
     })
   );
 
@@ -152,6 +153,11 @@ export const toReviewSandboxStatus = (
       office: (details): CheckoutStatusViewModel => ({
         ...view,
         kind: "office",
+        summary: { ...summary, ...details, seats: reservation.seats },
+      }),
+      table: (details): CheckoutStatusViewModel => ({
+        ...view,
+        kind: "table",
         summary: { ...summary, ...details, seats: reservation.seats },
       }),
     })

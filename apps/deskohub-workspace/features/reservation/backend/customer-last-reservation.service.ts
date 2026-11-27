@@ -57,9 +57,7 @@ export class CustomerLastReservationService extends Context.Service<
       const { db } = yield* WorkspaceDatabase;
       const dotypos = yield* DotyposService;
 
-      // None when the row has no Dotypos reservation or Dotypos lost it. Both
-      // families then give no last reservation, as does an unreadable
-      // interval, and for offices unreadable seats.
+      // None when the row has no Dotypos reservation or Dotypos lost it.
       const readBooked = ({
         dotyposReservationId,
         reservationDetails,
@@ -171,6 +169,19 @@ export class CustomerLastReservationService extends Context.Service<
                       Option.getOrNull
                     )
                   )
+                ),
+              table: (details) =>
+                readBooked(booking).pipe(
+                  Effect.map((booked): CustomerLastReservation | null => {
+                    const seats =
+                      booked.pipe(
+                        Option.flatMap((reservation) => reservation.seats),
+                        Option.getOrUndefined
+                      ) ?? details.seats;
+                    return seats === undefined
+                      ? null
+                      : { kind: "table", seats };
+                  })
                 ),
             })
           );

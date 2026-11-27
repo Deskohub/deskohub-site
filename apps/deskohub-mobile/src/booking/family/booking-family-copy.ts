@@ -34,6 +34,9 @@ export const bookingQueryMessage = (
     Match.tag("OfferingUnavailable", () =>
       m.booking_error_offering_unavailable({}, { locale })
     ),
+    Match.tag("SlotUnavailable", () =>
+      m.booking_restart_availability_changed({}, { locale })
+    ),
     Match.orElse(
       (shared) =>
         sharedViewErrorMessage(shared, locale) ??

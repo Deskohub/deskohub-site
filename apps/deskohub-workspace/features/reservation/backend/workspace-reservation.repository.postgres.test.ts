@@ -228,6 +228,37 @@ describe.skipIf(!testDatabase)(
       });
     });
 
+    test("identifies only requested Dotypos IDs that belong to Team Table orders", async () => {
+      const providerId = () =>
+        DotyposReservationIdSchema.make(crypto.randomUUID());
+      const matching = providerId();
+      const matchingCowork = providerId();
+      const outsideCandidates = providerId();
+      for (const dotyposReservationId of [matching, outsideCandidates]) {
+        await insertReservation(
+          {},
+          {
+            dotyposReservationId,
+            reservationDetails: {
+              kind: "table",
+              seats: 4,
+              durationMinutes: 45,
+            },
+          }
+        );
+      }
+      await insertReservation({}, { dotyposReservationId: matchingCowork });
+
+      const found = await run((repository) =>
+        repository.selectTeamTableDotyposReservationIds([
+          matching,
+          matchingCowork,
+          providerId(),
+        ])
+      );
+      expect(found).toEqual([matching]);
+    });
+
     describe("expired holds", () => {
       test("selects unpaid expired holds and queues holds with skipped cleanup behind fresh ones", async () => {
         const skippedCleanup = await insertReservation(

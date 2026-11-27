@@ -20,6 +20,7 @@ import {
   CustomerReservationInviteeId,
   CustomerReservationOrderId,
   type CustomerReservationSummary,
+  type CustomerTeamTableStatus,
   type ReferralAccountOverview,
   ReferralCode,
 } from "@deskohub/workspace-customer-api";
@@ -37,6 +38,7 @@ export type { SampleAccountKind };
 
 export interface SampleOrder {
   readonly state: CustomerOrderState;
+  readonly teamTable?: CustomerTeamTableStatus;
   readonly access?: CustomerReservationAccess;
   /** The issued invoice PDF; absent until issued. */
   readonly invoice?: Uint8Array;
@@ -173,6 +175,7 @@ export const sampleOrderIds = {
   // invited to: reachable by deep link, not listed in the history.
   officePeople: CustomerReservationOrderId.make("sample-order-office-people"),
   officeInvited: CustomerReservationOrderId.make("sample-order-office-invited"),
+  teamTable: CustomerReservationOrderId.make("sample-order-team-table"),
 } as const;
 
 const hour = 60 * 60 * 1000;
@@ -609,6 +612,7 @@ const sampleOrders = (now: Date): ReadonlyMap<string, SampleOrder> =>
         invoice: sampleInvoicePdf(),
       },
     ],
+    [sampleOrderIds.teamTable, sampleTeamTableOrder(now)],
     [
       sampleOrderIds.officePeople,
       {
@@ -887,7 +891,13 @@ const asReviewSandbox = (
   orders: new Map(
     [...orders].map(([orderId, order]) => [
       orderId,
-      { ...order, state: { ...order.state, reviewSandbox: true as const } },
+      {
+        ...order,
+        state: { ...order.state, reviewSandbox: true as const },
+        ...(order.teamTable && {
+          teamTable: { ...order.teamTable, reviewSandbox: true as const },
+        }),
+      },
     ])
   ),
 });
@@ -976,6 +986,68 @@ export const sampleOfficePeopleReservation = (
   seats: 2,
   status: "confirmed",
 });
+
+const sampleTeamTableStatus = (now: Date) => {
+  const tomorrow = pragueDayStart(now, 1);
+  return {
+    orderId: sampleOrderIds.teamTable,
+    kind: "table",
+    status: "fulfilled",
+    paymentStatus: "paid",
+    fulfillmentStatus: "fulfilled",
+    startsAt: at(tomorrow, 9 * hour),
+    endsAt: at(tomorrow, 10.5 * hour),
+    product: { kind: "table", seats: 3, durationMinutes: 90 },
+    tableName: "Oak",
+    total: { value: 42_000, exponent: 2, currency: "CZK" },
+    people: {
+      contactAttends: true,
+      resendable: true,
+      invitees: [
+        {
+          id: CustomerReservationInviteeId.make("sample-team-table-invitee"),
+          email: testEmailAddress("team.table.guest"),
+          invitationSentAt: now.toISOString(),
+        },
+      ],
+    },
+  } satisfies CustomerTeamTableStatus;
+};
+
+const sampleTeamTableOrder = (now: Date): SampleOrder => {
+  const teamTable = sampleTeamTableStatus(now);
+  const { kind: _kind, product: _product, tableName, ...state } = teamTable;
+  return {
+    state: { ...state, kind: "meeting-room" },
+    teamTable,
+    access: {
+      code: "2351679",
+      accessStartsAt: state.startsAt,
+      accessEndsAt: state.endsAt,
+      tableName,
+    },
+  };
+};
+
+/** A Team Table history row as the legacy history endpoint represents it. */
+export const sampleTeamTableReservation = (
+  now: Date
+): CustomerReservationSummary => {
+  const { startsAt, endsAt, product } = sampleTeamTableStatus(now);
+  return {
+    id: "sample-reservation-team-table",
+    orderId: sampleOrderIds.teamTable,
+    product: {
+      kind: "other",
+      family: "table",
+      teamTable: product,
+    },
+    startsAt,
+    endsAt,
+    seats: product.seats,
+    status: "confirmed",
+  };
+};
 
 /** The office the sample account is invited to, from tomorrow for three days. */
 export const sampleInvitedReservations = (

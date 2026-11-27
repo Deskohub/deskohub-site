@@ -1,6 +1,9 @@
 import { expect, mock, spyOn, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import { CustomerReservationOrderId } from "@deskohub/workspace-customer-api";
 import { RegistryContext } from "@effect/atom-react";
+import { Effect, Option } from "effect";
+import { AsyncResult } from "effect/reactivity";
 import type { NativeStackNavigationOptions } from "expo-router";
 import {
   type AriaAttributes,
@@ -9,7 +12,7 @@ import {
   type ReactElement,
   useEffect,
 } from "react";
-import type { PressableProps, ViewProps } from "react-native";
+import type { PressableProps, TextInputProps, ViewProps } from "react-native";
 import * as ReactNative from "react-native";
 import {
   orderStatusHref,
@@ -21,10 +24,15 @@ import {
   settle,
 } from "../../customer-api/testing/customer-data-test-registry";
 import { FakeWorkspace } from "../../customer-api/testing/fake-workspace";
+import {
+  sampleOrderIds,
+  sampleTeamTableReservation,
+} from "../../customer-api/testing/sample-fixtures";
 import { withSampleHistory } from "../../customer-api/testing/sample-history";
 import { AppLocaleProvider } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
 import { clientRoot } from "../../testing/client-root";
+import { eventually } from "../../testing/eventually";
 import { expoRouterStandIn } from "../../testing/expo-router-stand-in";
 import { TestWindowDimensions } from "../../testing/window-dimensions";
 import { elementTree, find } from "../../ui/testing/element-tree";
@@ -48,6 +56,10 @@ mock.module("expo-router", () => ({
     useFocusEffect: (effect: () => undefined | (() => void)) =>
       useEffect(() => (runFocusEffects ? effect() : undefined), [effect]),
     useLocalSearchParams: () => params,
+    useNavigation: () => ({
+      getState: () => ({ routes: [] }),
+      isFocused: () => runFocusEffects,
+    }),
     useRouter: () => router,
   }),
   Stack: Object.assign(() => activeRoute, {
@@ -99,6 +111,13 @@ mock.module("react-native", () => ({
         ? children({ pressed: false, hovered: false })
         : children
     ),
+  TextInput: ({ value, onChangeText, "aria-label": label }: TextInputProps) => (
+    <input
+      aria-label={label}
+      value={value}
+      onInput={(event) => onChangeText?.(event.currentTarget.value)}
+    />
+  ),
 }));
 
 const { default: ReservationsRoute } = await import(
@@ -375,6 +394,87 @@ test("a linked detail and its selected row survive the split breakpoint at 200% 
     await screen.dispose();
   }
 });
+
+test.each(["author", "customer", "missing history"] as const)(
+  "Team Table guest additions and actions for %s",
+  async (viewer) => {
+    const screen = await fixture("upcoming");
+    const { registry, workspace } = screen;
+    const orderId = sampleOrderIds.teamTable;
+    const email = testEmailAddress("new-table-guest");
+    const row = sampleTeamTableReservation(new Date());
+    const party =
+      viewer === "author"
+        ? { kind: "booked-for" as const, customerName: null }
+        : { kind: "booked-by" as const, authorName: null };
+    workspace.data = {
+      ...workspace.data,
+      history: {
+        ...workspace.data.history,
+        current: viewer === "missing history" ? [] : [{ ...row, party }],
+      },
+    };
+    registry.refresh(reservationHistoryAtom);
+    await settle(registry, reservationHistoryAtom);
+    const addLabel = m.reservations_table_add_invitee({}, { locale: "en-US" });
+    const addButton = () =>
+      Array.from(pressables()).find(
+        (button) => button.textContent === addLabel
+      );
+    params = { orderId };
+    runFocusEffects = true;
+    try {
+      await screen.render(360, <ReservationStatusRoute />, 2);
+      await act(async () => {
+        await settle(registry, orderStatusAtoms.status(orderId));
+      });
+      const { textContent } = root.container();
+      const locale = { locale: "en-US" } as const;
+      expect(
+        textContent?.includes(m.reservations_invoice_row({}, locale))
+      ).toBe(viewer !== "author");
+      expect(textContent?.includes(m.reservationShowPinCode({}, locale))).toBe(
+        viewer !== "author"
+      );
+      const input = root.container().querySelector("input");
+      if (!input) throw new Error("Expected the invitee email field");
+      await act(async () => {
+        input.value = email;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      const submit = addButton();
+      if (!submit) throw new Error("Expected Add invitee");
+      await act(async () => {
+        submit.click();
+        await Effect.runPromise(
+          eventually(() =>
+            Option.exists(
+              AsyncResult.value(registry.get(orderStatusAtoms.status(orderId))),
+              ({ order }) =>
+                order.people?.invitees.some(
+                  (invitee) => invitee.email === email
+                ) === true
+            )
+          )
+        );
+      });
+      expect(
+        workspace.calls.filter((call) => call === "addInvitees")
+      ).toHaveLength(1);
+      expect(
+        workspace.calls.filter((call) => call === "getStatus")
+      ).toHaveLength(2);
+      expect(
+        workspace.calls.filter((call) => call === "getReservationStatus")
+      ).toHaveLength(1);
+      expect(root.container().textContent).toContain(email);
+      expect(addButton()).toBeUndefined();
+    } finally {
+      runFocusEffects = false;
+      await screen.dispose();
+    }
+  }
+);
 
 test("selecting another wide booking replaces the route and payment return closes to Reservations", async () => {
   const screen = await fixture("upcoming");

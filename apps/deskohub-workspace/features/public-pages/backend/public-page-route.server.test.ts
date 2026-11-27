@@ -4,6 +4,7 @@ import { ReleaseGateUnavailableError } from "@/features/feature-flags/backend/re
 import { type Locale, locales } from "@/features/i18n";
 import { MeetingRoomReleaseGate } from "@/features/meeting-room/backend/meeting-room-release-gate";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { publicSiteShareImage } from "../page-metadata";
 import {
@@ -62,6 +63,11 @@ mock.module("@/features/office/backend/office-release-gate.server", () => ({
     decisionOf("office-page")
   ),
 }));
+mock.module("./team-table-public-release.server", () => ({
+  TeamTableReleaseGateRequest: TeamTableReleaseGate.fromEvaluation(
+    decisionOf("team-table-page")
+  ),
+}));
 
 const { publicPageMetadata, requirePublishedPublicPage } = await import(
   "./public-page-route.server"
@@ -97,7 +103,10 @@ describe("public page metadata", () => {
     for (const locale of locales) {
       test(`${pathname} in ${locale} is indexable with self-canonical and hreflang alternates and a share card`, async () => {
         requestLocale = locale;
-        openGates.add("meeting-room-page").add("office-page");
+        openGates
+          .add("meeting-room-page")
+          .add("office-page")
+          .add("team-table-page");
         const metadata = await pageMetadata(pathname);
         const documentTitle = `${title({}, { locale })} | ${workspaceSiteConstants.brand.name}`;
 

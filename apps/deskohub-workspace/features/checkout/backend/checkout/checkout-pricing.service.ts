@@ -64,61 +64,89 @@ import {
   officeCheckoutPricing,
 } from "./office-checkout-pricing";
 import { getPriceVerdictChangedKeys, type PriceVerdict } from "./price-verdict";
+import {
+  type TableAdvertisementAffirmation,
+  type TableAdvertisementAffirmationInput,
+  type TableAdvertisementQuote,
+  type TableAdvertisementQuoteInput,
+  type TableCheckoutPricingError,
+  type TableCustomerQuote,
+  type TableCustomerQuoteInput,
+  type TableDiscountCodeClearInput,
+  type TableDiscountCodeClearResult,
+  type TableDiscountCodePriceInput,
+  type TableDiscountCodeVerdict,
+  type TablePaymentPriceAffirmation,
+  type TablePaymentPriceAffirmationInput,
+  type TablePaymentRepricingInput,
+  tableCheckoutPricing,
+} from "./table-checkout-pricing";
 
 type CheckoutPricingError =
   | CoworkCheckoutPricingError
   | MeetingRoomCheckoutPricingError
-  | OfficeCheckoutPricingError;
+  | OfficeCheckoutPricingError
+  | TableCheckoutPricingError;
 
 type AdvertisementQuoteInput =
   | CoworkAdvertisementQuoteInput
   | MeetingRoomAdvertisementQuoteInput
-  | OfficeAdvertisementQuoteInput;
+  | OfficeAdvertisementQuoteInput
+  | TableAdvertisementQuoteInput;
 
 type AdvertisementQuote =
   | CoworkAdvertisementQuote
   | MeetingRoomAdvertisementQuote
-  | OfficeAdvertisementQuote;
+  | OfficeAdvertisementQuote
+  | TableAdvertisementQuote;
 
 export type PreparedCustomerQuote =
   | CoworkCustomerQuote
   | MeetingRoomCustomerQuote
-  | OfficeCustomerQuote;
+  | OfficeCustomerQuote
+  | TableCustomerQuote;
 
 export type PaymentRepricingInput =
   | CoworkPaymentRepricingInput
   | MeetingRoomPaymentRepricingInput
-  | OfficePaymentRepricingInput;
+  | OfficePaymentRepricingInput
+  | TablePaymentRepricingInput;
 
 export type PaymentPriceAffirmationInput =
   | CoworkPaymentPriceAffirmationInput
   | MeetingRoomPaymentPriceAffirmationInput
-  | OfficePaymentPriceAffirmationInput;
+  | OfficePaymentPriceAffirmationInput
+  | TablePaymentPriceAffirmationInput;
 
 export type PaymentPriceAffirmation =
   | CoworkPaymentPriceAffirmation
   | MeetingRoomPaymentPriceAffirmation
-  | OfficePaymentPriceAffirmation;
+  | OfficePaymentPriceAffirmation
+  | TablePaymentPriceAffirmation;
 
 type DiscountCodePriceInput =
   | CoworkDiscountCodePriceInput
   | MeetingRoomDiscountCodePriceInput
-  | OfficeDiscountCodePriceInput;
+  | OfficeDiscountCodePriceInput
+  | TableDiscountCodePriceInput;
 
 type DiscountCodeVerdict =
   | CoworkDiscountCodeVerdict
   | MeetingRoomDiscountCodeVerdict
-  | OfficeDiscountCodeVerdict;
+  | OfficeDiscountCodeVerdict
+  | TableDiscountCodeVerdict;
 
 type DiscountCodeClearInput =
   | CoworkDiscountCodeClearInput
   | MeetingRoomDiscountCodeClearInput
-  | OfficeDiscountCodeClearInput;
+  | OfficeDiscountCodeClearInput
+  | TableDiscountCodeClearInput;
 
 type DiscountCodeClearResult =
   | CoworkDiscountCodeClearResult
   | MeetingRoomDiscountCodeClearResult
-  | OfficeDiscountCodeClearResult;
+  | OfficeDiscountCodeClearResult
+  | TableDiscountCodeClearResult;
 
 /**
  * A submitted reservation with the advertisement snapshot its page issued.
@@ -129,7 +157,8 @@ type AdvertisementAffirmationInput = {
   readonly reservation:
     | CoworkAdvertisementAffirmationInput["reservation"]
     | MeetingRoomAdvertisementAffirmationInput["reservation"]
-    | OfficeAdvertisementAffirmationInput["reservation"];
+    | OfficeAdvertisementAffirmationInput["reservation"]
+    | TableAdvertisementAffirmationInput["reservation"];
   readonly locale: Locale;
   /** Moment the reservation is submitted and its price is locked. */
   readonly bookedAt: Temporal.Instant;
@@ -138,13 +167,15 @@ type AdvertisementAffirmationInput = {
 export type AdvertisementAffirmation =
   | CoworkAdvertisementAffirmation
   | MeetingRoomAdvertisementAffirmation
-  | OfficeAdvertisementAffirmation;
+  | OfficeAdvertisementAffirmation
+  | TableAdvertisementAffirmation;
 
 /** A submitted reservation's customer, with the advertisement's verdict. */
 export type CustomerQuoteInput = Omit<
   | CoworkCustomerQuoteInput
   | MeetingRoomCustomerQuoteInput
-  | OfficeCustomerQuoteInput,
+  | OfficeCustomerQuoteInput
+  | TableCustomerQuoteInput,
   "advertisement"
 > & {
   readonly advertisement: PriceVerdict<AdvertisementAffirmation>;
@@ -263,6 +294,7 @@ export class CheckoutPricingService extends Context.Service<
       const cowork = yield* coworkCheckoutPricing;
       const meetingRoom = yield* meetingRoomCheckoutPricing;
       const office = yield* officeCheckoutPricing;
+      const table = yield* tableCheckoutPricing;
 
       const quoteAdvertisement = Effect.fn(
         "CheckoutPricingService.quoteAdvertisement"
@@ -278,6 +310,9 @@ export class CheckoutPricingService extends Context.Service<
           ),
           Match.when({ reservation: { kind: "office" } }, (officeInput) =>
             office.quoteAdvertisement(officeInput)
+          ),
+          Match.when({ reservation: { kind: "table" } }, (tableInput) =>
+            table.quoteAdvertisement(tableInput)
           ),
           Match.exhaustive
         )
@@ -324,6 +359,18 @@ export class CheckoutPricingService extends Context.Service<
                   })
                 )
               ),
+            table: (reservation) =>
+              requireAdvertisedPriceStateKind(reservation.kind)(
+                input.advertisement
+              ).pipe(
+                Effect.flatMap((advertisement) =>
+                  table.affirmAdvertisement({
+                    ...input,
+                    advertisement,
+                    reservation,
+                  })
+                )
+              ),
           })
         )
       );
@@ -341,6 +388,11 @@ export class CheckoutPricingService extends Context.Service<
               }),
             "meeting-room": (priced) =>
               meetingRoom.quoteForCustomer({
+                ...input,
+                advertisement: { ...advertisement, priced },
+              }),
+            table: (priced) =>
+              table.quoteForCustomer({
                 ...input,
                 advertisement: { ...advertisement, priced },
               }),
@@ -377,6 +429,9 @@ export class CheckoutPricingService extends Context.Service<
           Match.when({ reservation: { kind: "office" } }, (officeInput) =>
             office.repriceForPayment(officeInput)
           ),
+          Match.when({ reservation: { kind: "table" } }, (tableInput) =>
+            table.repriceForPayment(tableInput)
+          ),
           Match.exhaustive
         )
       );
@@ -394,6 +449,9 @@ export class CheckoutPricingService extends Context.Service<
           ),
           Match.when({ reservation: { kind: "office" } }, (officeInput) =>
             office.affirmForPayment(officeInput)
+          ),
+          Match.when({ reservation: { kind: "table" } }, (tableInput) =>
+            table.affirmForPayment(tableInput)
           ),
           Match.exhaustive
         )
@@ -414,6 +472,9 @@ export class CheckoutPricingService extends Context.Service<
           Match.when({ reservation: { kind: "office" } }, (officeInput) =>
             office.applyDiscountCode(officeInput)
           ),
+          Match.when({ reservation: { kind: "table" } }, (tableInput) =>
+            table.applyDiscountCode(tableInput)
+          ),
           Match.exhaustive
         )
       );
@@ -432,6 +493,9 @@ export class CheckoutPricingService extends Context.Service<
           ),
           Match.when({ reservation: { kind: "office" } }, (officeInput) =>
             office.clearDiscountCode(officeInput)
+          ),
+          Match.when({ reservation: { kind: "table" } }, (tableInput) =>
+            table.clearDiscountCode(tableInput)
           ),
           Match.exhaustive
         )

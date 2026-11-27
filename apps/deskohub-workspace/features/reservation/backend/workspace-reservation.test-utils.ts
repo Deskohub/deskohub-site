@@ -46,6 +46,7 @@ export const workspaceReservationFixture = (
     activePaymentAttemptId: null,
     activeCustomerEmailDeliveryId: null,
     activeCustomerEmailDeliveryLocale: null,
+    activeCustomerEmailDeliveryOpenSpaceTables: null,
     reservationDetails: {
       kind: "cowork",
       entryTier: "open-space",

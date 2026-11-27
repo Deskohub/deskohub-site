@@ -43,7 +43,7 @@ type OfficePeopleFieldProps = {
 };
 
 /**
- * Who is coming to a private office: the contact's "You" row while they
+ * Who is coming to an Office or Team Table: the contact's "You" row while they
  * attend, the people added by email address, and the address input. Each
  * person takes one seat, up to the office's `seatCapacity`.
  */
@@ -64,7 +64,8 @@ export function OfficePeopleField({
   const contactEmail = contact?.email.trim().toLowerCase() || undefined;
   const removable = canRemoveOfficePerson(people);
   const hasRoom = canAddOfficePerson(people, seatCapacity);
-  const replacesAttendee = seatCapacity === 1 && !hasRoom;
+  const replacesAttendee =
+    seatCapacity === 1 && getOfficePeopleSeats(people) === 1;
 
   const add = () => {
     const added = addOfficeInvitee(

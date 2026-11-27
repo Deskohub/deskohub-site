@@ -125,6 +125,7 @@ const makeHarness = (options: {
         ReservationRecords.Provider.pipe(
           Layer.provideMerge(
             Layer.mock(DotyposService, {
+              listActiveReservationsOverlapping: () => Effect.succeed([]),
               getReservationWithoutCustomer: mock((id) =>
                 Effect.succeed({
                   id,

@@ -16,6 +16,7 @@ import {
   getWorkspaceOfficeProductTitle,
   getWorkspaceProductMonitorTitle,
   getWorkspaceProductTierTitle,
+  getWorkspaceTableProductTitle,
 } from "@/features/checkout/product-catalog.i18n";
 import type { CheckoutDetails } from "@/features/checkout/schemas/checkout-details";
 import { getMeetingRoomSetupStart } from "@/features/reservation/meeting-room-early-setup";
@@ -33,6 +34,7 @@ import {
   getPlainDatesBetween,
   temporalInstantToDate,
 } from "@/shared/utils/temporal";
+import { formatPaymentOrderLine } from "./order-reservation-note";
 import {
   getWorkspaceReservationInterval,
   getWorkspaceReservationSeats,
@@ -71,6 +73,7 @@ export interface CreateWorkspaceDotyposReservationInput {
   readonly reservation: WorkspaceTableAssignmentReservation;
   readonly status: DotyposReservationStatus;
   readonly allowPassDayMove?: true;
+  readonly assignedTeamTableId?: DotyposTableId;
 }
 
 export const createWorkspaceDotyposReservation: (
@@ -95,11 +98,14 @@ export const createWorkspaceDotyposReservation: (
     const { startsAt, endsAt } = yield* getWorkspaceReservationInterval(
       input.reservation
     );
-    const tableId: DotyposTableId = yield* input.allowPassDayMove
-      ? tableAssignments.assignTableId(input.reservation, {
-          allowPassDayMove: true,
-        })
-      : tableAssignments.assignTableId(input.reservation);
+    const tableId =
+      input.reservation.kind === "table" && input.assignedTeamTableId
+        ? input.assignedTeamTableId
+        : yield* input.allowPassDayMove
+            ? tableAssignments.assignTableId(input.reservation, {
+                allowPassDayMove: true,
+              })
+            : tableAssignments.assignTableId(input.reservation);
     const seats = getWorkspaceReservationSeats(input.reservation);
 
     const reservationInput: CreateDotyposReservationInput = {
@@ -110,6 +116,7 @@ export const createWorkspaceDotyposReservation: (
       tableId,
       status: input.status,
       note: formatWorkspaceReservationNote(input),
+      ...(input.reservation.kind === "table" && { singleAttempt: true }),
     };
     // Not the input itself: its note holds checkout details.
     yield* Effect.annotateLogsScoped({
@@ -145,30 +152,6 @@ export const createWorkspaceDotyposReservation: (
       })
     )
 );
-
-/**
- * The note line naming the payment order. Late-payment recovery finds the
- * Dotypos reservations a payment order created by it.
- */
-const formatPaymentOrderLine = (paymentOrderId: WorkspaceReservationId) =>
-  `Platební objednávka: ${paymentOrderId}`;
-
-/** Notes written before staff notes were Czech name the order in English. */
-const formatLegacyPaymentOrderLine = (paymentOrderId: WorkspaceReservationId) =>
-  `Payment order: ${paymentOrderId}`;
-
-/** Whether a Dotypos reservation note names the given payment order. */
-export const noteNamesPaymentOrder = (
-  note: string | null | undefined,
-  paymentOrderId: WorkspaceReservationId
-) => {
-  const lines = note?.split("\n") ?? [];
-
-  return (
-    lines.includes(formatPaymentOrderLine(paymentOrderId)) ||
-    lines.includes(formatLegacyPaymentOrderLine(paymentOrderId))
-  );
-};
 
 /**
  * The note staff read on the Dotypos reservation. It is written in the staff
@@ -229,6 +212,10 @@ export const formatWorkspaceReservationNote = (
           `Počet míst: ${officeReservation.seats}`,
         ],
       }),
+      table: ({ startsAt, endsAt, seats }) => ({
+        productLabel: getWorkspaceTableProductTitle(staffLocale),
+        reservationRows: [`Čas: ${startsAt}-${endsAt}`, `Počet míst: ${seats}`],
+      }),
     })
   );
   const lines = [
@@ -270,5 +257,6 @@ const getReservationLogAnnotations = (
         endsOn: officeReservation.endsOn,
         seats: officeReservation.seats,
       }),
+      table: ({ startsAt, endsAt, seats }) => ({ startsAt, endsAt, seats }),
     })
   );

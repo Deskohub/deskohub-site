@@ -1,6 +1,6 @@
 # Agent booking view (MCP Apps)
 
-The customer MCP server (`app/api/mcp/route.ts`) serves an MCP Apps view, `ui://dh-workspace/booking-v2.html`, that hosts such as ChatGPT, Claude, and VS Code render beside the conversation. `show_booking` is the only tool linked to it. Paths below are relative to `apps/deskohub-workspace/features/agent-tools/`.
+The customer MCP server (`app/api/mcp/route.ts`) serves an MCP Apps view, `ui://dh-workspace/booking-v3.html`, that hosts such as ChatGPT, Claude, and VS Code render beside the conversation. `show_booking` is the only tool linked to it. Paths below are relative to `apps/deskohub-workspace/features/agent-tools/`.
 
 ## Tool metadata and resources
 
@@ -28,6 +28,7 @@ In `reservation_page` mode the view starts no booking and never shows the Pay li
 
 - `booking-draft.ts` holds the pure state: locale choice, prefill, the required Reserved Desk workstation, and `makeBookingDraftSchema`, an Effect Schema union keyed by `family` that validates only the chosen family's fields, with messages in the view's locale, and decodes them to tool arguments. `booking-form.tsx` keeps the selection in React Hook Form with `effectSchemaResolver`; the Check button calls `handleSubmit` from its click, and switching the family or duration clears field errors. `booking-host.ts` is the `BookingHost` service over ext-apps `App`, and `booking-atoms.ts` runs its Effects through an Effect Atom runtime. The view has no `Effect.run*` and no `@deskohub/next-effect`, which would bundle `next/navigation`.
 - Every tool call goes through the host's `tools/call` (`app.callServerTool`). `/api/mcp` rejects the sandbox's foreign origin. Results decode with the tools' own `*.schema.ts` result schemas plus `agentToolErrorResultSchema`. Keep those schema modules browser-safe: no server imports.
+- For a Team Table, the view reads the offered sizes from the listing. A separate availability call with the date and seat count supplies the starts and the valid ends for each start. Changing the date or table size clears those choices. The check, quote, and continuation reuse the exact selection. An end at or before the displayed start time is on the next day.
 - Tool `note` fields and error `message`s are written for the agent. The view renders only its own catalog copy, in the site's informal Czech ("ty"): facts such as prices, the discount, and the expiry come from the results, and errors are worded from their `code`.
 - Locale order: the agent's `locale` argument, then `hostContext.locale`, then ChatGPT's `window.openai.locale` (each host value goes through `matchSupportedLocale`), then the registry's `baseLocale`. `BookingHost.locale` resolves it once the tool input or result arrives, apart from `start`, so loading and startup failures use it too. A view whose locale differs from the result's lists the offerings again in its own locale. Copy comes from the customer Inlang catalogs, called with `{ locale }`.
 - Hosts sandbox the view without `allow-forms`: the browser blocks a form submission before its submit event fires, so actions are `type="button"` clicks.

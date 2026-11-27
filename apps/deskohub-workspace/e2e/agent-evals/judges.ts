@@ -26,6 +26,11 @@ export type AgentEvalReservationRecord = {
         readonly family: "office";
         readonly seats?: number;
         readonly dayCount?: number;
+      }
+    | {
+        readonly family: "table";
+        readonly seats?: number;
+        readonly durationMinutes?: number;
       };
   /** Dotypos interval as ISO instants; absent before a hold exists. */
   readonly startsAt?: string;

@@ -277,23 +277,23 @@ export const loadRestoredReservation = Effect.fn(
   // The token opens only for this family; another family restores nothing.
   if (!isReservationForKind(reservation, kind)) return undefined;
 
-  const officeSelection =
-    payState.reservation.kind === "office"
-      ? Option.getOrUndefined(
-          yield* findCheckoutOfficeSelectionForVisitor({
-            payStateToken: token,
-            locale,
-          }).pipe(
-            Effect.provide(checkoutOfficeSelectionForVisitorServices),
-            Effect.orElseSucceed(() => Option.none())
-          )
+  const usesPeopleSelection =
+    payState.reservation.kind === "office" ||
+    payState.reservation.kind === "table";
+  const officeSelection = usesPeopleSelection
+    ? Option.getOrUndefined(
+        yield* findCheckoutOfficeSelectionForVisitor({
+          payStateToken: token,
+          locale,
+        }).pipe(
+          Effect.provide(checkoutOfficeSelectionForVisitorServices),
+          Effect.orElseSucceed(() => Option.none())
         )
-      : undefined;
+      )
+    : undefined;
 
-  // Opening a new form without a verified selection keeps it from replacing
-  // an office hold whose guest list is unreadable or belongs to someone else.
-  if (payState.reservation.kind === "office" && !officeSelection)
-    return undefined;
+  // A new form cannot replace a hold whose guest list it cannot verify.
+  if (usesPeopleSelection && !officeSelection) return undefined;
 
   return {
     checkoutSessionId: payState.checkoutSessionId,
@@ -360,10 +360,11 @@ const getCheckoutSelectionPath = (
   locale: Locale,
   pathname: PublicPagePathname,
   searchParams: SearchParamsRecord,
-  keepCheckoutContact = false
+  { keepCheckoutContact = false, keepPayState = true } = {}
 ) => {
   const params = toURLSearchParams(searchParams);
   if (!keepCheckoutContact) params.delete(checkoutContactQueryParam);
+  if (!keepPayState) params.delete(payStateTokenQueryParam);
   params.delete(reservationCheckoutStepQueryParam);
   const search = params.toString();
   return `/${locale}${pathname}${search ? `?${search}` : ""}`;
@@ -435,6 +436,10 @@ async function ReservationPageRequestContent<
   const resolvedSearchParams = await searchParams;
 
   return runWithRequestLocale(async (locale) => {
+    const payStateToken = getSearchParam(
+      resolvedSearchParams,
+      payStateTokenQueryParam
+    );
     const checkoutContactToken = getSearchParam(
       resolvedSearchParams,
       checkoutContactQueryParam
@@ -451,11 +456,9 @@ async function ReservationPageRequestContent<
     // The restore, contact, account, and page data loads are independent.
     const [restoredReservation, checkoutContact, checkoutAccount, pageData] =
       await Promise.all([
-        loadRestoredReservation(
-          getSearchParam(resolvedSearchParams, payStateTokenQueryParam),
-          locale,
-          definition.kind
-        ).pipe(runWorkspaceEffect(`reservation.${definition.kind}.load-state`)),
+        loadRestoredReservation(payStateToken, locale, definition.kind).pipe(
+          runWorkspaceEffect(`reservation.${definition.kind}.load-state`)
+        ),
         loadCheckoutContact(checkoutContactToken, locale).pipe(
           runWorkspaceEffect(`reservation.${definition.kind}.load-contact`)
         ),
@@ -463,18 +466,36 @@ async function ReservationPageRequestContent<
         definition.loadPageData(),
       ]);
 
+    if (definition.kind === "table" && payStateToken && !restoredReservation) {
+      // A fresh form must not carry an unverified hold through sign-in.
+      redirect(
+        getCheckoutSelectionPath(
+          locale,
+          definition.pathname,
+          resolvedSearchParams,
+          {
+            keepPayState: false,
+          }
+        )
+      );
+    }
+
     const contactMatchesAccount =
       checkoutContact !== undefined &&
       getCheckoutAccountEmail(checkoutAccount)?.toLowerCase() ===
         checkoutContact.email.toLowerCase();
+    const usesPeopleSelection =
+      definition.kind === "office" || definition.kind === "table";
     let checkoutOfficeSelection: CheckoutOfficeSelection | undefined;
     if (checkoutContact?.officeSelectionId) {
-      if (definition.kind === "office" && contactMatchesAccount) {
+      if (usesPeopleSelection && contactMatchesAccount) {
         checkoutOfficeSelection = await loadCheckoutOfficeSelection(
           checkoutContact.officeSelectionId
         ).pipe(
           Effect.provide(SealedStateKeys.Default),
-          runWorkspaceEffect("reservation.office.load-checkout-selection")
+          runWorkspaceEffect(
+            `reservation.${definition.kind}.load-checkout-selection`
+          )
         );
       }
       if (!checkoutOfficeSelection) {
@@ -488,7 +509,7 @@ async function ReservationPageRequestContent<
         );
       }
     } else if (
-      definition.kind === "office" &&
+      usesPeopleSelection &&
       checkoutContactToken &&
       (!contactMatchesAccount ||
         getReservationCheckoutStep(
@@ -504,7 +525,7 @@ async function ReservationPageRequestContent<
           locale,
           definition.pathname,
           resolvedSearchParams,
-          contactMatchesAccount
+          { keepCheckoutContact: contactMatchesAccount }
         )
       );
     }
@@ -639,13 +660,15 @@ const loadReservationPageContent = Effect.fn("reservationPage.loadContent")(
       });
     const checkoutCustomer =
       seededCustomer.status === "profile-missing" &&
-      definition.kind === "office" &&
+      (definition.kind === "office" || definition.kind === "table") &&
       !request.checkoutOfficeSelection
         ? { ...seededCustomer, continuesCheckout: false }
         : seededCustomer;
 
+    // A Team Table hold can still be replaced after its slot has ended.
+    // Clearing the old time must keep the hold's verified attendees.
     const restoredOfficeSelection =
-      selection.kind === "restored"
+      selection.kind === "restored" || definition.kind === "table"
         ? restoredReservation?.officeSelection
         : undefined;
     const heldOfficePrice =

@@ -1,6 +1,5 @@
 import type {
   CustomerEstablishment,
-  CustomerOrderState,
   CustomerReservationOrderId,
 } from "@deskohub/workspace-customer-api";
 import { Array as Arr, type DateTime, Option } from "effect";
@@ -36,6 +35,7 @@ import {
 } from "./reservation-labels";
 import type { ReservationListRow } from "./reservation-list-model";
 import { reservationsListAtom } from "./reservations-list-state";
+import type { ReservationOrder } from "./status-refresh";
 
 /**
  * The order's entry in the reservations list the app already holds (fresh
@@ -87,7 +87,7 @@ const timesOf = (booking: {
  * whose payment ended unpaid carries no times, while the list keeps them.
  */
 const bookedTimesOf = (
-  order: CustomerOrderState,
+  order: ReservationOrder,
   reservation: Option.Option<ReservationListRow>
 ) => Option.orElse(timesOf(order), () => Option.flatMap(reservation, timesOf));
 
@@ -96,26 +96,31 @@ const bookedTimesOf = (
  * order (its tier), else the tier the order would book again, else its kind.
  */
 const orderTitle = (
-  order: CustomerOrderState,
+  order: ReservationOrder,
   reservation: Option.Option<ReservationListRow>,
   locale: AppLocale
 ) =>
-  Option.match(reservation, {
-    onSome: (row) => reservationProductTitle(row.product, locale),
-    onNone: () => {
-      const tier = order.bookedSelection?.selection.tier;
-      return tier === undefined
-        ? reservationKindTitle(order.kind, locale)
-        : reservationProductTitle({ kind: "cowork", tier }, locale);
-    },
-  });
+  order.kind === "table"
+    ? reservationKindTitle("table", locale)
+    : Option.match(reservation, {
+        onSome: (row) => reservationProductTitle(row.product, locale),
+        onNone: () => {
+          const tier = order.bookedSelection?.selection.tier;
+          return tier === undefined
+            ? reservationKindTitle(order.kind, locale)
+            : reservationProductTitle({ kind: "cowork", tier }, locale);
+        },
+      });
 
 /** The booking's extras: early setup, a monitor workstation, office seats. */
 const extras = (
-  order: CustomerOrderState,
+  order: ReservationOrder,
   locale: AppLocale
 ): ReadonlyArray<TicketMetaLine> => {
-  const selection = order.bookedSelection?.selection;
+  const selection =
+    order.kind === "table" ? undefined : order.bookedSelection?.selection;
+  const seats =
+    order.kind === "table" ? order.product?.seats : selection?.seats;
   return [
     ...Option.toArray(
       Option.map(instantOf(order.setupStartsAt), (setup) => ({
@@ -137,12 +142,23 @@ const extras = (
             detail: monitorOptionName(selection.monitorOption),
           },
         ]),
-    ...(order.kind === "office" && selection?.seats !== undefined
+    ...((order.kind === "office" || order.kind === "table") &&
+    seats !== undefined
       ? [
           {
             key: "seats",
             icon: Armchair,
-            text: m.reservations_seats({ count: selection.seats }, { locale }),
+            text: m.reservations_seats({ count: seats }, { locale }),
+          },
+        ]
+      : []),
+    ...(order.kind === "table" && order.tableName !== undefined
+      ? [
+          {
+            key: "table",
+            icon: Armchair,
+            text: m.reservations_table_assigned({}, { locale }),
+            detail: order.tableName,
           },
         ]
       : []),
@@ -157,7 +173,7 @@ export const orderTicketView = ({
   now,
   locale,
 }: {
-  readonly order: CustomerOrderState;
+  readonly order: ReservationOrder;
   readonly model: BookingTicketModel;
   readonly reservation: Option.Option<ReservationListRow>;
   readonly establishment: Option.Option<CustomerEstablishment>;
@@ -198,7 +214,14 @@ export const orderTicketView = ({
     lines: [
       Option.match(times, {
         onNone: () => m.reservations_value_unavailable({}, { locale }),
-        onSome: ([start, end]) => bookingTimeLine(start, end, locale),
+        onSome: ([start, end]) =>
+          bookingTimeLine(
+            start,
+            end,
+            locale,
+            undefined,
+            order.kind === "table"
+          ),
       }),
     ],
     meta: [

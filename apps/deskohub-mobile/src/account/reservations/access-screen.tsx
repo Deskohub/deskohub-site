@@ -74,7 +74,7 @@ import {
   accessDateTimeText,
   accessWindowSpanOf,
 } from "./access-window-text";
-import { shortDate } from "./booking-ticket-text";
+import { bookingTimeLine, shortDate } from "./booking-ticket-text";
 import { calendarShareAtom } from "./calendar-event";
 import {
   establishmentAddressLines,
@@ -85,9 +85,14 @@ import {
 import { invitedReservationOfOrderAtom } from "./invited-reservations";
 import { orderStatusAtoms } from "./order-status-state";
 import { reservationOfOrderAtom } from "./order-ticket-view";
-import { reservationProductTitle } from "./reservation-labels";
+import {
+  isTeamTableProduct,
+  reservationKindTitle,
+  reservationProductTitle,
+} from "./reservation-labels";
 import type { ReservationListRow } from "./reservation-list-model";
 import { reservationsListAtom } from "./reservations-list-state";
+import { teamTableRebookingHref } from "./team-table-rebooking";
 
 /** The PIN the loading state holds room for: the shortest the lock issues. */
 const placeholderGroups = accessPinGroups("0000000");
@@ -287,13 +292,28 @@ function AccessDetails({
     )
   );
   const ended = chip?._tag === "Ended";
+  const found = Option.getOrUndefined(booking);
+  const product = found?.product;
+  const teamTable =
+    access.tableName !== undefined ||
+    (product !== undefined && isTeamTableProduct(product));
+  const bookAgain = teamTable
+    ? teamTableRebookingHref({
+        product: product?.kind === "other" ? product.teamTable : undefined,
+        startsAt: found?.startsAt,
+        endsAt: found?.endsAt,
+      })
+    : bookKindHref(product?.kind);
   return (
     <AccessLayout
       refreshing={refreshing}
       onRefresh={onRefresh}
       hero={
         <PinHero
-          name={name}
+          name={
+            name ??
+            (teamTable ? reservationKindTitle("table", locale) : undefined)
+          }
           chip={chip}
           action={
             ended ? undefined : <CopyPin orderId={orderId} code={access.code} />
@@ -307,18 +327,16 @@ function AccessDetails({
         <Button
           icon={RotateCcw}
           label={m.reservations_book_again({}, { locale })}
-          onPress={() =>
-            router.push(
-              bookKindHref(
-                Option.getOrUndefined(
-                  Option.map(booking, (found) => found.product.kind)
-                )
-              )
-            )
-          }
+          onPress={() => router.push(bookAgain)}
         />
       ) : (
-        <WindowAndPlace orderId={orderId} window={window} booking={booking} />
+        <WindowAndPlace
+          orderId={orderId}
+          window={window}
+          booking={booking}
+          teamTable={teamTable}
+          tableName={access.tableName}
+        />
       )}
     </AccessLayout>
   );
@@ -540,10 +558,14 @@ function WindowAndPlace({
   orderId,
   window,
   booking,
+  teamTable,
+  tableName,
 }: {
   readonly orderId: CustomerReservationOrderId;
   readonly window: Option.Option<AccessWindow>;
   readonly booking: Option.Option<AccessBooking>;
+  readonly teamTable: boolean;
+  readonly tableName: string | undefined;
 }) {
   const locale = useAppLocale();
   const { isWide } = useViewport();
@@ -573,8 +595,12 @@ function WindowAndPlace({
       onNone: () => [],
       onSome: (parsed) =>
         AccessWindowSpan.$match(
-          isWide &&
-            !Option.exists(booking, ({ product }) => product.kind === "office")
+          teamTable ||
+            (isWide &&
+              !Option.exists(
+                booking,
+                ({ product }) => product.kind === "office"
+              ))
             ? AccessWindowSpan.Times({
                 from: parsed.startsAt,
                 until: parsed.endsAt,
@@ -613,6 +639,31 @@ function WindowAndPlace({
           }
         ),
     }),
+    ...(teamTable &&
+    event !== undefined &&
+    !Option.exists(
+      window,
+      ({ startsAt, endsAt }) =>
+        DateTime.toEpochMillis(startsAt) ===
+          DateTime.toEpochMillis(event.start) &&
+        DateTime.toEpochMillis(endsAt) === DateTime.toEpochMillis(event.end)
+    )
+      ? [
+          [
+            m.reservations_access_for({}, { locale }),
+            bookingTimeLine(
+              event.start,
+              event.end,
+              locale,
+              shortDate(event.start, locale),
+              true
+            ),
+          ] as const,
+        ]
+      : []),
+    ...(tableName === undefined
+      ? []
+      : [[m.reservations_table_assigned({}, { locale }), tableName] as const]),
     ...Option.match(establishment, {
       onNone: () => [],
       onSome: (place) => [

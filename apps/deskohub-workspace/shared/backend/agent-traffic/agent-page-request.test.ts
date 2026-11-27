@@ -5,6 +5,7 @@ test.each([
   ["/en-US", "/"],
   ["/cs-CZ/", "/"],
   ["/en-US/reservation/cowork", "/reservation/cowork"],
+  ["/cs-CZ/reservation/table", "/reservation/table"],
   ["/en-US/passes/unlimited", "/passes/unlimited"],
   ["/en-US/account/profile", "/account/[section]"],
   ["/en-US/account/deleted", "/account/deleted"],

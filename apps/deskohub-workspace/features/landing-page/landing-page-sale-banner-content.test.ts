@@ -17,6 +17,9 @@ const meetingRoomProduct = {
 const officeProduct = {
   kind: "office",
 } as const satisfies WorkspaceProductTarget;
+const teamTableProduct = {
+  kind: "table",
+} as const satisfies WorkspaceProductTarget;
 
 const bookableWithoutOffice = workspaceReservationProductFamilies.filter(
   (family) => family !== "office"
@@ -71,7 +74,12 @@ const locales = ["en-US", "cs-CZ"] as const satisfies readonly Locale[];
 describe("getLandingPageSaleBannerLabel", () => {
   test("describes a sale on every product without clarification", () => {
     expect(
-      formatLabel([coworkProduct, meetingRoomProduct, officeProduct])
+      formatLabel([
+        coworkProduct,
+        meetingRoomProduct,
+        officeProduct,
+        teamTableProduct,
+      ])
     ).toEqual(summerFocusLabel(bannerTemplate(m.landingSaleBannerAllProducts)));
   });
 
@@ -79,7 +87,7 @@ describe("getLandingPageSaleBannerLabel", () => {
     "describes a sale on every bookable product as all products in %s while offices are switched off",
     (locale) => {
       expect(
-        formatLabel([coworkProduct, meetingRoomProduct], {
+        formatLabel([coworkProduct, meetingRoomProduct, teamTableProduct], {
           bookableProducts: bookableWithoutOffice,
           locale,
         })
@@ -96,9 +104,12 @@ describe("getLandingPageSaleBannerLabel", () => {
     "describes a sale on every product as all products in %s while offices are bookable",
     (locale) => {
       expect(
-        formatLabel([coworkProduct, meetingRoomProduct, officeProduct], {
-          locale,
-        })
+        formatLabel(
+          [coworkProduct, meetingRoomProduct, officeProduct, teamTableProduct],
+          {
+            locale,
+          }
+        )
       ).toEqual(
         summerFocusLabel(
           bannerTemplate(m.landingSaleBannerAllProducts, locale),

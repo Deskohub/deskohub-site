@@ -6,11 +6,13 @@ import {
 import { workspaceCoworkProductTargetSchema } from "../reservation/cowork-reservation-product";
 import { workspaceMeetingRoomProductTargetSchema } from "../reservation/meeting-room-reservation";
 import { workspaceOfficeProductTargetSchema } from "../reservation/office-reservation";
+import { workspaceTableProductTargetSchema } from "../reservation/table-reservation-product";
 
 export const workspaceProductTargetSchema = Schema.Union([
   workspaceCoworkProductTargetSchema,
   workspaceMeetingRoomProductTargetSchema,
   workspaceOfficeProductTargetSchema,
+  workspaceTableProductTargetSchema,
   entryPackProductSchema,
   Schema.Struct({
     kind: Schema.Literal("entry-pack"),

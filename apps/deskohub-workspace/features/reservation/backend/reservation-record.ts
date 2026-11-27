@@ -1,5 +1,6 @@
 import type { DotyposReservation } from "@deskohub/dotypos";
 import { readPassDayMarkers } from "@/features/passes/pass-day-marker";
+import { hasOpenSpaceMoveMarker } from "./open-space-move-marker";
 
 /**
  * The Dotypos reservation fields Workspace reads to show, place, and check a
@@ -11,6 +12,7 @@ export type ReservationRecord = Pick<
   "id" | "status" | "_tableId" | "startDate" | "endDate" | "seats"
 > & {
   readonly unlimitedPassDay?: true;
+  readonly openSpaceMoveReplacement?: true;
 };
 
 /** Drops customer links and free-text notes before sharing a reservation. */
@@ -31,4 +33,5 @@ export const toReservationRecord = ({
   endDate,
   seats,
   ...(readPassDayMarkers(note).length > 0 && { unlimitedPassDay: true }),
+  ...(hasOpenSpaceMoveMarker(note) && { openSpaceMoveReplacement: true }),
 });

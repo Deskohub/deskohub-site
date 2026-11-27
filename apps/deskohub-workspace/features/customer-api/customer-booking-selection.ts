@@ -4,6 +4,8 @@ import {
   CustomerBookingSelectionInvalid,
   CustomerOfferingUnavailable,
   CustomerSelectionUnavailable,
+  type CustomerTeamTableSelection,
+  CustomerTeamTableUnavailable,
 } from "@deskohub/workspace-customer-api";
 import { Effect, Match, Option, Schema } from "effect";
 import { EntryPackUnavailableError } from "@/features/passes/backend/entry-pack-redemption";
@@ -13,6 +15,11 @@ import {
   type BookingSelectionRejection,
   type QuoteSelection,
 } from "@/features/reservation/backend/booking-selection";
+import {
+  TeamTableAvailabilityClosed,
+  WorkspaceTableUnavailableError,
+} from "@/features/reservation/backend/workspace-availability.service";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import {
   answerSessionApiFailure,
@@ -21,19 +28,21 @@ import {
 
 const decodePlainDate = Schema.decodeUnknownOption(plainDateStringSchema);
 
+export const requireCustomerTeamTableRelease = TeamTableReleaseGate.isOpen.pipe(
+  Effect.filterOrFail(
+    (open) => open,
+    () => new CustomerTeamTableUnavailable()
+  ),
+  Effect.asVoid
+);
+
 /**
  * The selection a client sent, as the booking domain resolves it: its dates
  * as calendar dates, which the contract checks only for their format.
  */
-export const toBookingSelectionInput = ({
-  date,
-  endDate,
-  funding: _funding,
-  ...selection
-}: CustomerBookingSelection): Effect.Effect<
-  BookingSelectionInput,
-  BookingSelectionRejected
-> =>
+export const toBookingSelectionInput = (
+  selection: CustomerBookingSelection | CustomerTeamTableSelection
+): Effect.Effect<BookingSelectionInput, BookingSelectionRejected> =>
   Effect.gen(function* () {
     const plainDate = (field: "date" | "endDate", value: string) =>
       Option.match(decodePlainDate(value), {
@@ -41,9 +50,13 @@ export const toBookingSelectionInput = ({
         onSome: Effect.succeed,
       });
 
+    const date = yield* plainDate("date", selection.date);
+    if (selection.family === "table") return { ...selection, date };
+
+    const { endDate, funding: _funding, ...fields } = selection;
     return {
-      ...selection,
-      date: yield* plainDate("date", date),
+      ...fields,
+      date,
       ...(endDate !== undefined && {
         endDate: yield* plainDate("endDate", endDate),
       }),
@@ -54,15 +67,18 @@ export const entryPackUnavailableAnswer = () =>
   new CustomerSelectionUnavailable({ reason: "availability_changed" });
 
 /** The public error a selection the booking pages wouldn't accept answers with. */
-const toSelectionRejectionAnswer = (reason: BookingSelectionRejection) =>
+const toSelectionRejectionAnswer = <Unavailable>(
+  reason: BookingSelectionRejection,
+  offeringUnavailable: () => Unavailable
+) =>
   Match.value(reason).pipe(
     Match.discriminatorsExhaustive("kind")({
       "invalid-field": ({ field }) =>
         new CustomerBookingSelectionInvalid({ field }),
       "date-out-of-range": ({ earliest, latest }) =>
         new CustomerBookingDateOutOfRange({ earliest, latest }),
-      "office-closed": () =>
-        new CustomerOfferingUnavailable({ family: "office" }),
+      "office-closed": offeringUnavailable,
+      "table-closed": offeringUnavailable,
     })
   );
 
@@ -79,8 +95,8 @@ const isSelectionInvalid = <E>(
  * retried, never answered as a changed price. Every endpoint that resolves a
  * booking selection ends in it.
  */
-export const answerBookingSelectionFailure =
-  (operation: string) =>
+const answerSelectionFailure =
+  <Unavailable>(operation: string, offeringUnavailable: () => Unavailable) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.catch(
@@ -88,7 +104,8 @@ export const answerBookingSelectionFailure =
           failure
         ): Effect.Effect<
           never,
-          | ReturnType<typeof toSelectionRejectionAnswer>
+          | ReturnType<typeof toSelectionRejectionAnswer<Unavailable>>
+          | Unavailable
           | CustomerSelectionUnavailable
           | Extract<E, CustomerBookingSelectionInvalid>
           | CustomerSessionApiFailure<
@@ -97,18 +114,39 @@ export const answerBookingSelectionFailure =
                 | BookingSelectionRejected
                 | CustomerBookingSelectionInvalid
                 | EntryPackUnavailableError
+                | TeamTableAvailabilityClosed
+                | WorkspaceTableUnavailableError
               >
             >
         > => {
           if (failure instanceof BookingSelectionRejected)
-            return Effect.fail(toSelectionRejectionAnswer(failure.reason));
+            return Effect.fail(
+              toSelectionRejectionAnswer(failure.reason, offeringUnavailable)
+            );
           if (failure instanceof EntryPackUnavailableError)
             return Effect.fail(entryPackUnavailableAnswer());
+          if (failure instanceof TeamTableAvailabilityClosed)
+            return Effect.fail(offeringUnavailable());
+          if (failure instanceof WorkspaceTableUnavailableError)
+            return Effect.fail(
+              new CustomerSelectionUnavailable({
+                reason: "availability_changed",
+              })
+            );
           if (isSelectionInvalid(failure)) return Effect.fail(failure);
           return Effect.fail(failure).pipe(answerSessionApiFailure(operation));
         }
       )
     );
+
+export const answerBookingSelectionFailure = (operation: string) =>
+  answerSelectionFailure(
+    operation,
+    () => new CustomerOfferingUnavailable({ family: "office" })
+  );
+
+export const answerTeamTableSelectionFailure = (operation: string) =>
+  answerSelectionFailure(operation, () => new CustomerTeamTableUnavailable());
 
 /**
  * Adds the early setup a meeting-room booking asked for, at no cost, as

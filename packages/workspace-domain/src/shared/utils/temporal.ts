@@ -1,5 +1,23 @@
 import { Clock, Effect, Option, Schema, SchemaGetter } from "effect";
 
+export type InstantInterval = {
+  readonly startsAt: Temporal.Instant;
+  readonly endsAt: Temporal.Instant;
+};
+
+export const isIncreasingInstantInterval = ({
+  startsAt,
+  endsAt,
+}: InstantInterval) => Temporal.Instant.compare(startsAt, endsAt) < 0;
+
+/** Whether two nonempty half-open instant intervals overlap. */
+export const instantIntervalsOverlap = (
+  left: InstantInterval,
+  right: InstantInterval
+) =>
+  Temporal.Instant.compare(left.startsAt, right.endsAt) < 0 &&
+  Temporal.Instant.compare(right.startsAt, left.endsAt) < 0;
+
 export const unixTimestampSecondsSchema = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0)
 ).annotate({

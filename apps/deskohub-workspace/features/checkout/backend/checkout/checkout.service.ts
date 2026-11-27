@@ -178,6 +178,13 @@ const ensureReservationHasNotEnded = Effect.fn(
           message: "Meeting-room reservation has already ended.",
         });
       },
+      table: (reservation) => {
+        if (!hasReservationIntervalEnded(reservation)) return;
+        return new CheckoutError({
+          code: "table_reservation_ended",
+          message: "Team Table reservation has already ended.",
+        });
+      },
       office: (officeReservation) => {
         if (!hasOfficeReservationEnded(officeReservation)) return;
         return new CheckoutError({

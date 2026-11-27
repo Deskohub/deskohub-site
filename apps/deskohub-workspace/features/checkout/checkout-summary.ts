@@ -11,6 +11,10 @@ import {
   officeCheckoutSummaryDiscountedProductItemSchema,
   officeCheckoutSummaryProductItemSchema,
 } from "@/features/checkout/checkout-summary-office-item";
+import {
+  tableCheckoutSummaryDiscountedProductItemSchema,
+  tableCheckoutSummaryProductItemSchema,
+} from "@/features/checkout/checkout-summary-table-item";
 import { workspaceProductMonitorOptions } from "@/features/checkout/product-catalog";
 import { moneyEquals, nonNegativeMoneyCodec } from "@/shared/money/money";
 
@@ -43,6 +47,8 @@ export const checkoutSummaryOrderItemSchema = Schema.Union([
   coworkCheckoutSummaryProductItemSchema,
   officeCheckoutSummaryDiscountedProductItemSchema,
   officeCheckoutSummaryProductItemSchema,
+  tableCheckoutSummaryDiscountedProductItemSchema,
+  tableCheckoutSummaryProductItemSchema,
   checkoutSummaryCoffeeItemSchema,
   checkoutSummaryWorkstationItemSchema,
 ]);
@@ -103,6 +109,8 @@ const getCanonicalSummaryItem = (item: CheckoutSummaryItem) => ({
   ...("accessAmount" in item && { accessAmount: item.accessAmount }),
   ...("seatAmount" in item && { seatAmount: item.seatAmount }),
   ...("seatsAmount" in item && { seatsAmount: item.seatsAmount }),
+  ...("baseAmount" in item && { baseAmount: item.baseAmount }),
+  ...("usageAmount" in item && { usageAmount: item.usageAmount }),
   ...("monitorOption" in item && { monitorOption: item.monitorOption }),
   ...("originalAmount" in item && {
     originalAmount: item.originalAmount,

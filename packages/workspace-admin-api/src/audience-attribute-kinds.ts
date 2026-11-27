@@ -2,7 +2,6 @@ import { Schema, Struct } from "effect";
 import { AdministrationCampaignId } from "./campaign-identifiers";
 import type { AdministrationCampaignLocale } from "./campaign-locale-and-purpose";
 import { DatePeriod } from "./date-period";
-import { AdministrationReservationFamily } from "./workspace-admin-api";
 
 /** How a count attribute compares with the condition's number. */
 export const AudienceCountOperator = Schema.Literals([
@@ -94,12 +93,19 @@ export const ReservationProductPropertyCondition = Schema.Union([
 export type ReservationProductPropertyCondition =
   typeof ReservationProductPropertyCondition.Type;
 
+/** Families a released campaign audience or automation can store. */
+export const CampaignReservationFamily = Schema.Literals([
+  "cowork",
+  "meeting-room",
+  "office",
+]);
+
 /**
  * Limits reservation-based attributes to one product family, and optionally
  * to reservations whose catalog properties all meet their conditions.
  */
 export const ReservationProductFilter = Schema.Struct({
-  family: AdministrationReservationFamily,
+  family: CampaignReservationFamily,
   properties: Schema.Array(ReservationProductPropertyCondition),
 }).annotate({
   identifier: "ReservationProductFilter",

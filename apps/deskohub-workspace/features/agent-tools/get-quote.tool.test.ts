@@ -73,6 +73,89 @@ const advertisedTotal = (
   );
 
 describe("get_quote", () => {
+  test("quotes the exact Team Table duration with separate base and usage charges", async () => {
+    const date = workspaceDateFromToday(1);
+    const selection = {
+      family: "table",
+      date,
+      seats: 4,
+      start_time: "09:15",
+      end_time: "10:45",
+    };
+    const result = await quote(
+      selection,
+      makeAgentToolTestServices({
+        teamTableEnabled: true,
+        teamTableSizes: [4],
+        liveReservations: [],
+      })
+    );
+
+    expect(result).toMatchObject({
+      family: "table",
+      total: { amount: 360, currency: "CZK" },
+      lines: [
+        {
+          type: "table-base",
+          seats: 4,
+          amount: { amount: 240, currency: "CZK" },
+        },
+        {
+          type: "table-usage",
+          duration_minutes: 90,
+          amount: { amount: 120, currency: "CZK" },
+        },
+      ],
+    });
+    const link = new URL(result.reservation_url);
+    expect(link.pathname).toBe("/reservation/table");
+    expect(Object.fromEntries(link.searchParams)).toMatchObject({
+      date,
+      seats: "4",
+      startTime: "09:15",
+      endTime: "10:45",
+    });
+    await expect(quote(selection)).rejects.toMatchObject({
+      details: { code: "unsupported_family" },
+    });
+  });
+
+  test("declines a Team Table quote when the live interval is occupied", async () => {
+    const date = workspaceDateFromToday(1);
+    const services = makeAgentToolTestServices({
+      teamTableEnabled: true,
+      teamTableSizes: [4],
+      liveReservations: [
+        {
+          id: "occupied-table-reservation",
+          _cloudId: "synthetic-cloud",
+          _branchId: "synthetic-branch",
+          _tableId: "table-0",
+          startDate: `${date}T00:00:00Z`,
+          endDate: `${date}T16:00:00Z`,
+          status: "CONFIRMED",
+          seats: "1",
+        },
+      ],
+    });
+
+    const failure = await quoteFailure(
+      {
+        family: "table",
+        date,
+        seats: 4,
+        start_time: "09:15",
+        end_time: "10:45",
+      },
+      services
+    );
+
+    expect(failure.details).toEqual({ code: "selection_unavailable" });
+    expect(services.dotyposRequests).toContain(
+      "listActiveReservationsOverlapping"
+    );
+  });
+
   test("quotes a cowork day exactly as the advertised price, sale included", async () => {
     const date = workspaceDateFromToday(3);
     const services = makeAgentToolTestServices({ saleBasisPoints: 5000 });

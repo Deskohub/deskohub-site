@@ -16,6 +16,7 @@ import {
   coworkReservationKind,
   meetingRoomReservationKind,
   officeReservationKind,
+  tableReservationKind,
   type WorkspaceReservationKind,
 } from "@/features/reservation/reservation-kind";
 
@@ -131,6 +132,24 @@ export const reservationProductFamilies = {
         id: "days",
         label: "Days",
         unit: { one: "day", other: "days" },
+      },
+    ],
+  },
+  [tableReservationKind]: {
+    id: tableReservationKind,
+    label: "Team Table",
+    properties: [
+      {
+        kind: "number",
+        id: "seats",
+        label: "Seats",
+        unit: { one: "seat", other: "seats" },
+      },
+      {
+        kind: "number",
+        id: "durationMinutes",
+        label: "Duration",
+        unit: { one: "minute", other: "minutes" },
       },
     ],
   },

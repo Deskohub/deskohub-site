@@ -24,6 +24,8 @@ import {
   type MeetingRoomReservationDurationKey,
 } from "@/features/reservation/meeting-room-reservation-duration";
 import { getMeetingRoomDayStartTimes } from "@/features/reservation/meeting-room-reservation-time";
+import { TeamTableInventory } from "@/features/team-table/backend/team-table-inventory";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { expectScalarLogAnnotations } from "@/shared/testing/log-annotations.test-utils";
 import {
   getPlainDatesBetween,
@@ -38,6 +40,7 @@ import {
   type AvailabilityInventory,
   makeProviderInventory,
 } from "./availability-inventory";
+import { decodeBookedReservation } from "./booked-reservation";
 import {
   GoogleCalendarWorkspaceLimitationsService,
   WorkspaceCalendarLimitation,
@@ -135,6 +138,7 @@ const defaultTables = [
 const runWithInventory = async <A>(
   effect: Effect.Effect<A, unknown, WorkspaceAvailabilityService>,
   input: {
+    readonly teamTableOpen?: boolean;
     readonly tables?: readonly Table[];
     readonly reservations?: readonly Reservation[];
     /** Reservations in the shared snapshot; defaults to the live provider. */
@@ -160,6 +164,20 @@ const runWithInventory = async <A>(
         Layer.provide(makeAdvisoryInventory(input)),
         Layer.provide(
           Layer.mergeAll(
+            TeamTableReleaseGate.fromDecision(input.teamTableOpen ?? false),
+            Layer.succeed(TeamTableInventory, (records) =>
+              Effect.succeed(
+                records.flatMap((record) => {
+                  const tableId = record._tableId;
+                  const interval = Option.getOrUndefined(
+                    decodeBookedReservation(record).occupiedInterval
+                  );
+                  return tableId && interval
+                    ? [{ tableId, interval, kind: "unknown" as const }]
+                    : [];
+                })
+              )
+            ),
             Layer.succeed(DotyposService, {
               // The provider inventory builds this effect once and runs it
               // per read, so the read is counted when it runs.
@@ -193,6 +211,7 @@ const runWithInventory = async <A>(
               }),
             }),
             Layer.mock(WorkspaceReservationRepository, {
+              selectLocalTableCapacity: () => Effect.succeed([]),
               selectPendingPassDayCapacity: () => Effect.succeed([]),
               selectExpiredHoldDotyposReservationIds: mock(() => {
                 if (input.expiredHoldDotyposReservationIdsError) {
@@ -220,6 +239,64 @@ const runWithInventory = async <A>(
     Effect.runPromise
   );
 };
+
+test("Team Table slots require an exact empty table until the usable cutoff", async () => {
+  const { WorkspaceAvailabilityService } = await import(
+    "./workspace-availability.service"
+  );
+  const slots = Effect.flatMap(WorkspaceAvailabilityService, (service) =>
+    service.getTableSlots({
+      query: {
+        kind: "table",
+        mode: "table-slots",
+        date: plainDateStringSchema.make("2027-01-11"),
+        seats: 4,
+      },
+    })
+  );
+  const clock = Effect.andThen(
+    TestClock.setTime(
+      Temporal.Instant.from("2027-01-01T10:00:00Z").epochMilliseconds
+    ),
+    slots
+  ).pipe(Effect.provide(TestClock.layer()));
+  const result = await runWithInventory(clock, {
+    teamTableOpen: true,
+    tables: [
+      makeTable({
+        id: "table-4",
+        seats: "4",
+        tags: ["cowork:open-space", "reservation:table"],
+      }),
+      makeTable({
+        id: "table-6",
+        seats: "6",
+        tags: ["cowork:open-space", "reservation:table"],
+      }),
+    ],
+    reservations: [
+      makeReservation({
+        id: "occupied",
+        tableId: "table-4",
+        status: "CONFIRMED",
+        startDate: "2027-01-10T23:00:00Z",
+        endDate: "2027-01-11T15:30:00Z",
+      }),
+    ],
+  });
+  expect(result).toEqual({
+    date: "2027-01-11",
+    seats: 4,
+    slotMinutes: 15,
+    usableFrom: "00:00",
+    usableUntil: "17:00",
+    availableStarts: ["16:30", "16:45"],
+    availableEndsByStart: [
+      { startTime: "16:30", endTimes: ["16:45", "17:00"] },
+      { startTime: "16:45", endTimes: ["17:00"] },
+    ],
+  });
+});
 
 /** The shared snapshot under test, the live provider by default. */
 const makeAdvisoryInventory = ({

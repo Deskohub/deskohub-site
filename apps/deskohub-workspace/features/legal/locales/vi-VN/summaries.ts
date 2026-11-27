@@ -14,7 +14,7 @@ export const legalDocumentSummaries = {
   },
   "terms-and-conditions": {
     title: "Điều kiện Giao dịch Chung",
-    lead: "Điều kiện Giao dịch Chung này điều chỉnh các lượt vào coworking và việc đặt chỗ trực tuyến phòng họp và văn phòng riêng tại Deskohub Workspace.",
+    lead: "Điều kiện Giao dịch Chung này quy định về các lượt vào coworking và việc đặt chỗ trực tuyến phòng họp, văn phòng riêng và Bàn nhóm tại Deskohub Workspace.",
   },
   "cookie-policy": {
     title: "Chính sách cookie",
@@ -22,6 +22,6 @@ export const legalDocumentSummaries = {
   },
   "operating-rules": {
     title: "Nội quy",
-    lead: "Nội quy này quy định việc ứng xử và sử dụng không gian coworking, phòng họp, văn phòng riêng và không gian sự kiện của Deskohub Workspace.",
+    lead: "Nội quy này quy định việc ứng xử và sử dụng không gian coworking, phòng họp, văn phòng riêng và không gian sự kiện của Deskohub Workspace. Nội quy cũng quy định cách tôn trọng không gian làm việc của người khác và khi nào cần đổi chỗ trong Open Space để nhường bàn cho một lượt đặt Bàn nhóm.",
   },
 } satisfies Record<LegalDocumentKey, LegalDocumentSummary>;

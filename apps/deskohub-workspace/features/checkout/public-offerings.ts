@@ -276,7 +276,11 @@ export const getPublicOpeningHours = (
 ) =>
   joinSentences(
     alwaysOpen && m.publicOfferingAlwaysOpen({}, { locale }),
-    m.publicOfferingOpenSpaceHours({ until: openSpaceUsableUntil }, { locale })
+    openSpaceUsableUntil != null &&
+      m.publicOfferingOpenSpaceHours(
+        { until: openSpaceUsableUntil },
+        { locale }
+      )
   );
 
 const getCoworkOffering = (

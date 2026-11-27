@@ -99,6 +99,10 @@ const nonSensitiveColumns = new Map([
     "customer email delivery locale",
   ],
   [
+    "public.workspace_reservations.active_customer_email_delivery_open_space_tables",
+    "Open Space table labels retained for email delivery retries",
+  ],
+  [
     "auth.oauth_client.token_endpoint_auth_method",
     "OAuth client authentication method name",
   ],

@@ -73,6 +73,9 @@ describe("reservation presentation", () => {
       getAdministrationReservationProductTitle({ kind: "office" }, "cs-CZ")
     ).toBe("Soukromá kancelář");
     expect(
+      getAdministrationReservationProductTitle({ kind: "table" }, "cs-CZ")
+    ).toBe("Týmový stůl");
+    expect(
       getAdministrationReservationProductTitle(
         { kind: "meeting-room" },
         "en-US"

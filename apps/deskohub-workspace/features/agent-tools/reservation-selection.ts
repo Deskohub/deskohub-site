@@ -11,6 +11,8 @@ const workspaceDateArgument = (description: string) =>
     .check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/), isPlainDateString())
     .pipe(Schema.brand("PlainDate"));
 
+export const quarterHourTimePattern = /^(?:[01]\d|2[0-3]):(?:00|15|30|45)$/;
+
 /**
  * The Reserved Desk stay an availability, quote, or booking tool takes. The
  * selection is rejected on `stay` while overnight stays are not offered.
@@ -24,7 +26,7 @@ export const coworkStayArgument = coworkStaySchema.annotate({
 export const reservationSelectionFields = {
   family: workspaceReservationKindSchema.annotate({
     description:
-      "Reservation family: cowork (a desk for a day), meeting-room, or office (a private office for whole days).",
+      "Reservation family: cowork (a desk for a day), meeting-room, office (a private office for whole days), or table (an exclusive Team Table in Open Space).",
   }),
   date: workspaceDateArgument(
     "Prague calendar date in YYYY-MM-DD format. For an office or a cowork range, the first date."
@@ -37,8 +39,14 @@ export const reservationSelectionFields = {
   start_time: Schema.optionalKey(
     Schema.String.annotate({
       description:
-        "Meeting room only: Prague start time in HH:mm on the hour, such as 09:00; the booking must end after the current time (a booking already in progress is allowed). Not used for the whole-day booking.",
+        "Prague start time in HH:mm, on the hour for the meeting room or on a quarter hour for a Team Table. A booking may start before now if it ends in the future. Omit both times when checking a Team Table's free slots. Omit for a whole-day meeting room booking.",
     }).check(Schema.isPattern(/^\d{2}:\d{2}$/))
+  ),
+  end_time: Schema.optionalKey(
+    Schema.String.annotate({
+      description:
+        "Team Table only: exclusive Prague end time in HH:mm on a quarter hour. A time at or before the start ends the next day, where allowed. Provide both times to quote or book.",
+    }).check(Schema.isPattern(quarterHourTimePattern))
   ),
   duration: Schema.optionalKey(
     meetingRoomReservationDurationKeySchema.annotate({
@@ -48,7 +56,8 @@ export const reservationSelectionFields = {
   ),
   seats: Schema.optionalKey(
     Schema.Int.annotate({
-      description: "Office only: number of seats. Defaults to 1.",
+      description:
+        "Number of seats. Required for Team Table and must match an offered table size. Defaults to 1 for an office.",
     }).check(Schema.isGreaterThanOrEqualTo(1))
   ),
 };

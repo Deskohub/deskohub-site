@@ -42,6 +42,7 @@ export const getReservationAvailabilityUnavailableMessage = (input: {
         m.reservationMeetingRoomUnavailable({}, { locale: input.locale }),
       office: () =>
         m.reservationOfficeUnavailable({}, { locale: input.locale }),
+      table: () => m.reservationTableUnavailable({}, { locale: input.locale }),
     })
   );
 

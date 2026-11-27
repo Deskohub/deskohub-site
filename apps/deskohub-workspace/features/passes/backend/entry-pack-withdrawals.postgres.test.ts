@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import { type DotyposReservationId, DotyposService } from "@deskohub/dotypos";
 import {
   EmailConfigTag,
   EmailServiceTag,
@@ -49,21 +49,28 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
   const providerStatuses = new Map<string, string>();
   const providerFailures = new Set<string>();
   const providerCalls: string[] = [];
-  const providerTimings = new Map<
+  const providerReservations = new Map<
     string,
     {
-      readonly dotyposReservationId: string;
-      readonly reservedFrom: Temporal.Instant;
-      readonly reservedUntil: Temporal.Instant;
+      readonly dotyposReservationId: DotyposReservationId;
+      readonly reservedFrom?: Temporal.Instant;
+      readonly reservedUntil?: Temporal.Instant;
     }
   >();
+  const getProviderReservation = (id: string) => {
+    const reservation = providerReservations.get(id);
+    if (!reservation) throw new Error(`Missing provider reservation for ${id}`);
+    return reservation;
+  };
   const reservationDetails = Layer.mock(WorkspaceReservationService, {
-    getReservation: (id) =>
-      Effect.succeed({
-        dotyposReservationId: id,
-        providerStatus: providerStatuses.get(id) ?? "CONFIRMED",
-        ...providerTimings.get(id),
-      }),
+    getReservation: (id) => {
+      const reservation = getProviderReservation(id);
+      return Effect.succeed({
+        ...reservation,
+        providerStatus:
+          providerStatuses.get(reservation.dotyposReservationId) ?? "CONFIRMED",
+      });
+    },
   });
   const storage = Layer.mergeAll(
     database.layer,
@@ -194,18 +201,23 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
       "insert into pass_entry_claims (reservation_id, pass_id, date, status) values ($1,$2,$3,$4)",
       [reservation.id, pack.id, date, status]
     );
-    if (pack.tier !== "open-space") {
-      const { startsAt, endsAt } = getCoworkReservationInterval(
-        pack.tier,
-        date,
-        stay
+    const { dotyposReservationId } = reservation;
+    if (!dotyposReservationId) {
+      throw new Error(
+        "An Entry Pack claim fixture requires a provider reservation"
       );
-      providerTimings.set(reservation.id, {
-        dotyposReservationId: reservation.dotyposReservationId,
-        reservedFrom: instant(startsAt),
-        reservedUntil: instant(endsAt),
-      });
     }
+    const interval =
+      pack.tier === "open-space"
+        ? undefined
+        : getCoworkReservationInterval(pack.tier, date, stay);
+    providerReservations.set(reservation.id, {
+      dotyposReservationId,
+      ...(interval && {
+        reservedFrom: instant(interval.startsAt),
+        reservedUntil: instant(interval.endsAt),
+      }),
+    });
     return reservation.id;
   };
 
@@ -299,7 +311,10 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
     const future = await addClaim(pack, "2027-03-29", "consumed");
     const retry = await addClaim(pack, "2027-03-30", "consumed");
     const reserved = await addClaim(pack, "2027-03-31", "reserved");
-    providerFailures.add(retry);
+    const futureProviderId =
+      getProviderReservation(future).dotyposReservationId;
+    const retryProviderId = getProviderReservation(retry).dotyposReservationId;
+    providerFailures.add(retryProviderId);
 
     expect(Option.isNone(await find(pack.id, pack.holder))).toBe(true);
     const localized = Option.getOrThrow(
@@ -345,7 +360,9 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
         status: "consumed",
         reservation_state: "confirmed",
       });
-      expect(providerCalls).not.toContain(id);
+      expect(providerCalls).not.toContain(
+        getProviderReservation(id).dotyposReservationId
+      );
     }
     for (const id of [future, retry, reserved]) {
       expect(await claim(id)).toEqual({
@@ -354,8 +371,12 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
         cancellation_cause: "customer_withdrawal",
       });
     }
-    expect(providerCalls.filter((id) => id === future)).toHaveLength(1);
-    expect(providerCalls.filter((id) => id === retry)).toHaveLength(2);
+    expect(providerCalls.filter((id) => id === futureProviderId)).toHaveLength(
+      1
+    );
+    expect(providerCalls.filter((id) => id === retryProviderId)).toHaveLength(
+      2
+    );
   });
 
   test("opens on verified delivery and closes after the extended final day", async () => {
@@ -527,7 +548,9 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
       status: "reserved",
       reservation_state: "held",
     });
-    expect(providerCalls).not.toContain(reservationId);
+    expect(providerCalls).not.toContain(
+      getProviderReservation(reservationId).dotyposReservationId
+    );
     await run(
       attachPaymentProviderSession({
         id: attempt,

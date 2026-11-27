@@ -1,3 +1,4 @@
+import { noteNamesPaymentOrder } from "./order-reservation-note";
 import "@/shared/polyfills/temporal";
 
 import {
@@ -9,7 +10,9 @@ import { Effect, Option } from "effect";
 import type { AccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import { getCoworkCheckoutSummary } from "@/features/checkout/checkout-summary-cowork";
 import type { CheckoutDetails } from "@/features/checkout/schemas/checkout-details";
+import { getTableCheckoutDetails } from "@/features/checkout/schemas/checkout-details-table";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
+import { hasOpenSpaceMoveMarker } from "@/features/reservation/backend/open-space-move-marker";
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import type { WorkspaceReservation } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { CoworkReservationDetails } from "@/features/reservation/cowork-reservation";
@@ -31,10 +34,7 @@ import {
   plainDateStringSchema,
   temporalInstantToDate,
 } from "@/shared/utils/temporal";
-import {
-  createWorkspaceDotyposReservation,
-  noteNamesPaymentOrder,
-} from "./dotypos-reservation.adapter";
+import { createWorkspaceDotyposReservation } from "./dotypos-reservation.adapter";
 import type { WorkspaceTableAssignmentReservation } from "./workspace-table-assignment.service";
 
 /** An order's accepted reservation, rebuilt for a new Dotypos reservation. */
@@ -55,6 +55,10 @@ type OfficeSnapshot = Extract<
   AccountingDocumentSnapshot,
   { readonly reservation: { readonly kind: "office" } }
 >;
+type TableSnapshot = Extract<
+  AccountingDocumentSnapshot,
+  { readonly reservation: { readonly kind: "table" } }
+>;
 
 const isCoworkSnapshot = (
   snapshot: AccountingDocumentSnapshot
@@ -66,6 +70,9 @@ const isMeetingRoomSnapshot = (
 const isOfficeSnapshot = (
   snapshot: AccountingDocumentSnapshot
 ): snapshot is OfficeSnapshot => snapshot.reservation.kind === "office";
+const isTableSnapshot = (
+  snapshot: AccountingDocumentSnapshot
+): snapshot is TableSnapshot => snapshot.reservation.kind === "table";
 
 /**
  * Rebuilds the order's reservation and checkout details from its stored
@@ -145,6 +152,17 @@ export const rebuildAcceptedReservation = (
       },
     };
   }
+  if (isTableSnapshot(snapshot)) {
+    return {
+      reservation: snapshot.reservation,
+      checkoutDetails: getTableCheckoutDetails({
+        locale: snapshot.locale,
+        reservation: snapshot.reservation,
+        quote: snapshot.quote,
+        legalEvidence: {},
+      }),
+    };
+  }
   return null;
 };
 
@@ -188,8 +206,8 @@ export const getOrderCoworkStay = (
 
 /**
  * The order's active (NEW or CONFIRMED) Dotypos reservations overlapping the
- * interval. Every Dotypos reservation an order creates, its original booking
- * hold and each one recreated for it, names the order in its note.
+ * interval. The hold and each one recreated for payment names the order in
+ * its note. A table-move replacement is settled by its own journal.
  */
 export const findOrderDotyposReservations = Effect.fnUntraced(
   function* (input: {
@@ -204,8 +222,10 @@ export const findOrderDotyposReservations = Effect.fnUntraced(
       endDate: temporalInstantToDate(
         Temporal.Instant.from(input.interval.endsAt)
       ),
-    })).filter((candidate) =>
-      noteNamesPaymentOrder(candidate.note, input.orderId)
+    })).filter(
+      (candidate) =>
+        !hasOpenSpaceMoveMarker(candidate.note) &&
+        noteNamesPaymentOrder(candidate.note, input.orderId)
     );
   }
 );

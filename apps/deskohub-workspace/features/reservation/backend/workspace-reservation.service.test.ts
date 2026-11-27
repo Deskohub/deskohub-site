@@ -7,6 +7,7 @@ import {
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
   DotyposService,
+  DotyposUnavailable,
 } from "@deskohub/dotypos";
 import type { Customer, Reservation, Table } from "@deskohub/dotypos/generated";
 import { testEmailAddress } from "@deskohub/test-email";
@@ -97,6 +98,10 @@ const detailsEffect = (input: {
   readonly dotyposReservation?: Reservation;
   readonly tables?: readonly Table[];
   readonly onProviderRead?: (provider: "getReservation" | "getTables") => void;
+  readonly activeReservations?: readonly Reservation[];
+  readonly teamTableIds?: readonly string[];
+  readonly overlapFailure?: DotyposUnavailable;
+  readonly requireOpenSpaceTableNames?: boolean;
 }) => {
   const repository = {
     findById: mock(() =>
@@ -105,6 +110,10 @@ const detailsEffect = (input: {
           ? makeWorkspaceReservation()
           : input.workspaceReservation
       )
+    ),
+    selectExpiredHoldDotyposReservationIds: mock(() => Effect.succeed([])),
+    selectTeamTableDotyposReservationIds: mock((ids: readonly string[]) =>
+      Effect.succeed(ids.filter((id) => input.teamTableIds?.includes(id)))
     ),
   };
   const dotypos = {
@@ -121,11 +130,18 @@ const detailsEffect = (input: {
       input.onProviderRead?.("getTables");
       return Effect.succeed(input.tables ?? [makeTable()]);
     }),
+    listActiveReservationsOverlapping: mock(() =>
+      input.overlapFailure
+        ? Effect.fail(input.overlapFailure)
+        : Effect.succeed(input.activeReservations ?? [])
+    ),
   };
 
   return Effect.gen(function* () {
     const service = yield* WorkspaceReservationService;
-    return yield* service.getReservation("reservation-id");
+    return yield* service.getReservation("reservation-id", {
+      requireOpenSpaceTableNames: input.requireOpenSpaceTableNames ?? false,
+    });
   }).pipe(
     Effect.provide(
       WorkspaceReservationService.Default.pipe(
@@ -240,7 +256,7 @@ describe("WorkspaceReservationService", () => {
     ).toBe(true);
   });
 
-  test("places Open Space on its shared tables, not the assigned one", async () => {
+  test("places Open Space on shared tables that have no overlapping Team Table booking", async () => {
     const providerReads: Array<"getReservation" | "getTables"> = [];
     const details = await Effect.runPromise(
       detailsEffect({
@@ -259,15 +275,67 @@ describe("WorkspaceReservationService", () => {
             tags: ["cowork:open-space"],
           }),
         ],
+        activeReservations: [
+          makeDotyposReservation({ id: "team-booking", _tableId: "table-id" }),
+        ],
+        teamTableIds: ["team-booking"],
+        requireOpenSpaceTableNames: true,
         onProviderRead: (provider) => providerReads.push(provider),
       })
     );
 
     expect(details.placement.table).toEqual({
       mode: "shared",
-      name: "Assigned desk, Free desk",
+      name: "Free desk",
     });
     expect(providerReads.sort()).toEqual(["getReservation", "getTables"]);
+  });
+
+  test("fails Open Space confirmation details when the overlap read is unavailable", async () => {
+    const overlapFailure = new DotyposUnavailable({
+      operation: "listActiveReservationsOverlapping",
+      reason: "timeout",
+    });
+
+    const result = await Effect.runPromise(
+      detailsEffect({
+        workspaceReservation: makeWorkspaceReservation({
+          reservationDetails: {
+            kind: "cowork",
+            entryTier: "open-space",
+            coffee: false,
+          },
+        }),
+        overlapFailure,
+        requireOpenSpaceTableNames: true,
+      }).pipe(Effect.flip)
+    );
+
+    expect(result).toMatchObject({
+      errorCode: "dotypos_reservation_load_failed",
+      cause: overlapFailure,
+    });
+  });
+
+  test("loads ordinary Open Space details when the overlap provider is unavailable", async () => {
+    const details = await Effect.runPromise(
+      detailsEffect({
+        workspaceReservation: makeWorkspaceReservation({
+          reservationDetails: {
+            kind: "cowork",
+            entryTier: "open-space",
+            coffee: false,
+          },
+        }),
+        overlapFailure: new DotyposUnavailable({
+          operation: "listActiveReservationsOverlapping",
+          reason: "timeout",
+        }),
+      })
+    );
+
+    expect(details.placement.table).toBeUndefined();
+    expect(details.placement.tableMap).toBeDefined();
   });
 
   test("leaves the seating map out until it is released", async () => {

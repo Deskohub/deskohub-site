@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { formatCurrencyAmount } from "@deskohub/i18n/currency";
-import { Cause, Exit } from "effect";
+import { Cause, Exit, Schema } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import type { ComponentProps } from "react";
 import { type Locale, m } from "@/features/i18n";
@@ -9,6 +9,7 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { checkAvailabilityResultSchema } from "../check-availability.schema";
 import type { BookingMode } from "../show-booking.schema";
 import { BookingRequestFailed, BookingToolFailed } from "./booking-host";
 import {
@@ -16,6 +17,7 @@ import {
   bookingOfferings,
   bookingOfficeSeats,
   bookingStart,
+  bookingTeamTableOffering,
   bookingToday,
   meetingRoomAvailabilityResult,
   quoteResult,
@@ -64,6 +66,10 @@ const renderForm = ({
       (_selection: Parameters<FormProps["onCheck"]>[0]) => undefined
     ),
     onSelectionChange: mock(() => undefined),
+    onFindTableTimes: mock(
+      (_selection: Parameters<FormProps["onFindTableTimes"]>[0]) => undefined
+    ),
+    onTableDateOrSizeChange: mock(() => undefined),
     onReserve: mock(
       (
         _selection: Parameters<FormProps["onReserve"]>[0],
@@ -77,6 +83,7 @@ const renderForm = ({
       check={AsyncResult.initial()}
       linkFailed={false}
       reservation={AsyncResult.initial()}
+      tableSlots={AsyncResult.initial()}
       start={start}
       {...handlers}
       {...results}
@@ -146,6 +153,95 @@ const reserve = () =>
   );
 
 describe("BookingForm", () => {
+  test("finds Team Table slots, offers ends for the chosen start, and checks the exact interval", async () => {
+    const locale = "en-US";
+    const start = {
+      ...bookingStart({
+        mode: "reservation_page",
+        locale,
+        selection: { family: "table" },
+      }),
+      offerings: [...bookingOfferings(), bookingTeamTableOffering],
+    };
+    const { onFindTableTimes, onCheck, onTableDateOrSizeChange, rerender } =
+      renderForm({ start });
+    const view = within(document.body);
+    fireEvent.click(
+      view.getByRole("button", {
+        name: m.bookingWidgetFindTimes({}, { locale }),
+      })
+    );
+    await waitFor(() =>
+      expect(onFindTableTimes).toHaveBeenCalledWith({
+        family: "table",
+        date: bookingToday,
+        seats: 4,
+      })
+    );
+
+    const slots = Schema.decodeUnknownSync(checkAvailabilityResultSchema)({
+      ...availabilityResult(true, locale),
+      family: "table",
+      table: {
+        date: bookingToday,
+        seats: 4,
+        slotMinutes: 15,
+        usableFrom: "00:00",
+        usableUntil: null,
+        availableStarts: ["09:15", "23:45"],
+        availableEndsByStart: [
+          { startTime: "09:15", endTimes: ["09:30", "10:45"] },
+          { startTime: "23:45", endTimes: ["00:15"] },
+        ],
+      },
+    });
+    rerender({ start, tableSlots: AsyncResult.success(slots) });
+    const starts = view.getByRole("combobox", {
+      name: m.bookingWidgetStartTimeLabel({}, { locale }),
+    });
+    const ends = view.getByRole("combobox", {
+      name: m.bookingWidgetEndTimeLabel({}, { locale }),
+    });
+    fireEvent.change(starts, { target: { value: "23:45" } });
+    expect(
+      within(ends).getByRole("option", {
+        name: m.bookingWidgetNextDayTime({ time: "00:15" }, { locale }),
+      })
+    ).toBeDefined();
+    expect(within(ends).queryByRole("option", { name: "10:45" })).toBeNull();
+    fireEvent.change(ends, { target: { value: "00:15" } });
+    fireEvent.click(
+      view.getByRole("button", { name: m.bookingWidgetCheck({}, { locale }) })
+    );
+    await waitFor(() =>
+      expect(onCheck).toHaveBeenCalledWith({
+        family: "table",
+        date: bookingToday,
+        seats: 4,
+        start_time: "23:45",
+        end_time: "00:15",
+      })
+    );
+    fireEvent.click(
+      view.getByRole("radio", {
+        name: m.bookingWidgetFamilyCowork({}, { locale }),
+      })
+    );
+    fireEvent.change(
+      view.getByLabelText(m.bookingWidgetDateLabel({}, { locale })),
+      { target: { value: "2099-07-29" } }
+    );
+    fireEvent.click(
+      view.getByRole("radio", { name: bookingTeamTableOffering.name })
+    );
+    expect(onTableDateOrSizeChange).toHaveBeenCalledTimes(1);
+    expect(
+      view.queryByRole("combobox", {
+        name: m.bookingWidgetStartTimeLabel({}, { locale }),
+      })
+    ).toBeNull();
+  });
+
   afterEach(() => {
     cleanup();
   });

@@ -38,6 +38,9 @@ mock.module("@/features/checkout/backend/checkout/public-offerings", () => ({
       };
     }),
 }));
+mock.module("@/features/pricing/backend/team-table-price-list.server", () => ({
+  loadTeamTablePriceList: () => Effect.succeed({ prices: [], complete: true }),
+}));
 
 // The service's own tests cover release-gate evaluation; here it reports
 // which pages are published.
@@ -101,6 +104,9 @@ describe("/llms.txt", () => {
     expect(markdownLinkUrls(body)).toContain(
       "https://workspace.deskohub.cz/reservation/office"
     );
+    expect(markdownLinkUrls(body)).toContain(
+      "https://workspace.deskohub.cz/reservation/table"
+    );
   });
 
   test("leaves out gated pages production does not serve, and their offers", async () => {
@@ -119,6 +125,7 @@ describe("/llms.txt", () => {
 
     expect(listed).not.toContain("/meeting-room");
     expect(listed).not.toContain("/reservation/office");
+    expect(listed).not.toContain("/reservation/table");
     expect(listed).toContain("/reservation/meeting-room");
     expect(body).not.toContain(office?.name ?? "office offer");
   });

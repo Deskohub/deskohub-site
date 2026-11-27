@@ -20,6 +20,21 @@ describe("getPublicOpeningHours", () => {
     }
   });
 
+  test("omits a daily cutoff when Open Space is available around the clock", () => {
+    const hours = {
+      alwaysOpen: true,
+      overnightStayChangeover: openingHours.overnightStayChangeover,
+    };
+
+    for (const locale of locales) {
+      const alwaysOpen = m.publicOfferingAlwaysOpen({}, { locale });
+      expect(getPublicOpeningHours(locale, hours)).toBe(alwaysOpen);
+      expect(
+        getPublicOpeningHours(locale, { ...hours, openSpaceUsableUntil: null })
+      ).toBe(alwaysOpen);
+    }
+  });
+
   test("adds the always-open statement only while the space is always open", () => {
     for (const locale of locales) {
       const alwaysOpen = getPublicOpeningHours(locale, {

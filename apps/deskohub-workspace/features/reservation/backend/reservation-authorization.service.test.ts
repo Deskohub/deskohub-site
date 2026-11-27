@@ -526,9 +526,15 @@ describe("invited people", () => {
       invitee: { id: inviteeId },
       input: { invitationToken: token, permission: "view-status" },
     });
+    const addInvitees = await runViewer({
+      owner: "signed-out",
+      invitee: { id: inviteeId },
+      input: { invitationToken: token, permission: "add-invitees" },
+    });
 
     expect(accessCode).toEqual(Option.some("invitee"));
     expect(status).toEqual(Option.none());
+    expect(addInvitees).toEqual(Option.none());
   });
 
   test("a personal invitation works even when the visitor's account cannot be read", async () => {

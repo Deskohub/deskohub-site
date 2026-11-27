@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { CustomerBookingQuote } from "@deskohub/workspace-customer-api";
+import { testEmailAddress } from "@deskohub/test-email";
+import type {
+  CustomerBookingQuote,
+  CustomerTeamTableQuote,
+  CustomerTeamTableSelection,
+} from "@deskohub/workspace-customer-api";
 import { Option } from "effect";
 import { CustomerViewError } from "../../customer-api/customer-view-error";
 import { m } from "../../i18n/messages";
@@ -17,6 +22,7 @@ import {
   sampleOfferings,
 } from "../testing/sample-booking-catalog";
 import { openSpaceWithCoffee } from "../ui/testing/price-fixtures";
+import { checkoutRequestOf, freshValue } from "./booking-family-view";
 import { coworkBookingModel } from "./cowork-booking-model";
 import { selectionBar } from "./selection-bar";
 
@@ -44,6 +50,93 @@ const bar = (overrides: Partial<Parameters<typeof selectionBar>[0]> = {}) =>
   });
 
 describe("selectionBar", () => {
+  test("uses the current Team Table quote for the sale, fees and checkout", () => {
+    const table: CustomerTeamTableSelection = {
+      family: "table",
+      date: "2026-11-28",
+      seats: 4,
+      startTime: "23:30",
+      endTime: "00:30",
+    };
+    const tableQuote: CustomerTeamTableQuote = {
+      ...quote,
+      family: "table",
+      product: { kind: "table", seats: 4, durationMinutes: 60 },
+      total: czk(280),
+      regularPrice: czk(320),
+      discount: czk(40),
+      advertisedPriceToken: "table-quote",
+      summary: {
+        ...summary,
+        total: czk(280),
+        sections: [
+          {
+            key: "order",
+            total: czk(280),
+            items: [
+              {
+                key: "product:table:4:60",
+                amount: czk(280),
+                originalAmount: czk(320),
+                baseAmount: czk(240),
+                usageAmount: czk(80),
+                discounts: [
+                  {
+                    amount: czk(40),
+                    discount: {
+                      id: "table-sale",
+                      label: "Sale",
+                      adjustment: { kind: "percentage", basisPoints: 1250 },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const people = {
+      contactAttends: false,
+      invitees: [testEmailAddress("guest")],
+    };
+    const read = {
+      kind: "loaded",
+      value: tableQuote,
+      refreshing: false,
+    } as const;
+    const checkout = checkoutRequestOf({
+      locale: "en-US",
+      selection: Option.some(table),
+      blockers: [],
+      quote: freshValue(read),
+      people,
+    });
+    expect(Option.getOrThrow(checkout)).toMatchObject({
+      selection: table,
+      people,
+      advertisedPriceToken: "table-quote",
+    });
+
+    const shown = bar({
+      from: { title: "Team Table", amount: czk(320) },
+      selection: Option.some(table),
+      quote: Option.some(read),
+      canContinue: Option.isSome(checkout),
+    });
+    expect(shown).toMatchObject({ action: "continue", disabled: false });
+    const { price } = shown.summary;
+    expect(price).toMatchObject({ kind: "quoted", was: czk(320) });
+    if (price.kind !== "quoted") throw new Error("No Team Table quote");
+    expect(
+      price.breakdown.lines.map(({ _tag, amount }) => [_tag, amount])
+    ).toEqual([
+      ["Charge", czk(240)],
+      ["Charge", czk(80)],
+      ["Reduction", czk(40)],
+    ]);
+  });
+
   test("before a date: the from-price, Continue off with the reason", () => {
     const shown = bar({
       selection: Option.none(),
@@ -73,6 +166,19 @@ describe("selectionBar", () => {
       kind: "from",
       amount: from.amount,
     });
+  });
+
+  test("does not show a from-price when the offering has no minimum", () => {
+    const shown = bar({
+      from: { title: "Team Table" },
+      selection: Option.none(),
+    });
+
+    expect(shown.summary).toEqual({
+      title: "Team Table",
+      price: { kind: "none" },
+    });
+    expect(shown.disabled).toBe(true);
   });
 
   test("while quoting: the selection and Updating price", () => {

@@ -8,6 +8,7 @@ import { ReleaseGateUnavailableError } from "@/features/feature-flags/backend/re
 import { WorkspaceFeatureFlagServiceMock } from "@/features/feature-flags/backend/workspace-feature-flag.service.mock";
 import { MeetingRoomReleaseGate } from "@/features/meeting-room/backend/meeting-room-release-gate";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { publicPages } from "../public-page-definitions";
 import { PublishedPublicPagesService } from "./published-public-pages.service";
 
@@ -20,7 +21,8 @@ const listPublishedPathnames = (
   // The list is stored in pages and the sitemap, so it reads each gate's
   // decision for stored output, never its fail-closed answer.
   const decision = mock((key: FlagKey) => {
-    const lookup = flags[key];
+    const lookup =
+      flags[key] ?? (key === "team_table_page" ? "off" : undefined);
     if (lookup === undefined) {
       return Effect.die(`Unexpected lookup of ${key}`);
     }
@@ -42,7 +44,8 @@ const listPublishedPathnames = (
         Layer.provide(
           Layer.mergeAll(
             MeetingRoomReleaseGate.Default,
-            OfficeReleaseGate.Default
+            OfficeReleaseGate.Default,
+            TeamTableReleaseGate.Default
           )
         ),
         Layer.provide(WorkspaceFeatureFlagServiceMock({ decision }))
@@ -67,7 +70,11 @@ const ungatedPathnames = publicPages
 describe("PublishedPublicPagesService", () => {
   test("lists every public page while every release gate is on", async () => {
     await expect(
-      published({ meeting_room_page: "on", office_page: "on" })
+      published({
+        meeting_room_page: "on",
+        office_page: "on",
+        team_table_page: "on",
+      })
     ).resolves.toEqual(publicPages.map(({ pathname }) => pathname));
   });
 
@@ -78,6 +85,7 @@ describe("PublishedPublicPagesService", () => {
     });
 
     expect(pathnames).not.toContain("/reservation/office");
+    expect(pathnames).not.toContain("/reservation/table");
     expect(pathnames).toContain("/meeting-room");
     expect(pathnames).toEqual(expect.arrayContaining(ungatedPathnames));
   });

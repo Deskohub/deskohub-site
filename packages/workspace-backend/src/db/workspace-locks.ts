@@ -9,6 +9,7 @@ import {
   holdSection,
   holdSections,
   type LockWait,
+  sectionHolds,
   type TransactionLockRequest,
   takeTransactionLock,
 } from "./workspace-lock-ledger";
@@ -46,6 +47,12 @@ const passPurchaseFulfillmentSection = (orderId: OrderId) => ({
   name: "passPurchaseFulfillment",
   rank: 30,
   pair: ["pass-purchase-fulfillment", orderId] as const,
+});
+
+const reservationOrderSection = (orderId: WorkspaceReservationId) => ({
+  name: "reservationOrder",
+  rank: 5,
+  pair: ["reservation-order", orderId] as const,
 });
 
 /** Takes two existing section keys together without another pool permit. */
@@ -167,6 +174,22 @@ export const WorkspaceLocks = {
     }),
 } as const;
 
+/** Holds the target and discovered source reservations in order by ID. */
+export const holdWorkspaceReservationOrders = (
+  target: WorkspaceReservationId,
+  sources: readonly WorkspaceReservationId[]
+) => {
+  const others = [...new Set(sources)].filter((id) => id !== target);
+  const first = reservationOrderSection(target);
+  const ordered = [...others.map(reservationOrderSection), first].sort(
+    (left, right) => Order.String(left.pair[1], right.pair[1])
+  );
+  return holdSections([ordered[0] ?? first, ...ordered.slice(1)]);
+};
+
+export const holdsCustomerAccountSection = (accountId: CustomerAccountId) =>
+  sectionHolds(customerAccountSection(accountId));
+
 /**
  * Session-held sections on a dedicated connection, for a lock held across
  * non-transactional work. They never provide `WorkspaceTransaction`; enter
@@ -194,11 +217,7 @@ export const WorkspaceLockSections = {
    * inside this one.
    */
   reservationOrder: (orderId: WorkspaceReservationId) =>
-    holdSection({
-      name: "reservationOrder",
-      rank: 5,
-      pair: ["reservation-order", orderId],
-    }),
+    holdSection(reservationOrderSection(orderId)),
   unlimitedPassRecovery: (orderId: OrderId) =>
     holdSection({
       name: "unlimitedPassRecovery",
@@ -207,8 +226,15 @@ export const WorkspaceLockSections = {
     }),
   customerAccount: (accountId: CustomerAccountId) =>
     holdSection(customerAccountSection(accountId)),
-  /** All local dates touched by a booking, inside its account section if any. */
-  reservationCapacity: (dates: readonly Temporal.PlainDate[]) => {
+  /** All local dates touched by a booking, and any order holds it is to move. */
+  reservationCapacity: (
+    dates: readonly Temporal.PlainDate[],
+    options?: {
+      readonly movedReservations?: readonly WorkspaceReservationId[];
+      readonly authorAccountId?: CustomerAccountId;
+      readonly sourceAccountIds?: readonly CustomerAccountId[];
+    }
+  ) => {
     const [first, ...rest] = Array.from(new Set(dates.map(String)))
       .sort(Order.String)
       .map((date) => ({
@@ -217,7 +243,32 @@ export const WorkspaceLockSections = {
         pair: ["reservation-capacity", date] as const,
       }));
     if (!first) throw new Error("Reservation capacity locks require a date");
-    return holdSections([first, ...rest]);
+    const [firstOrder, ...remainingOrders] = Array.from(
+      new Set(options?.movedReservations)
+    )
+      .sort(Order.String)
+      .map(reservationOrderSection);
+    const accounts = Array.from(
+      new Set([
+        ...(options?.authorAccountId ? [options.authorAccountId] : []),
+        ...(options?.sourceAccountIds ?? []),
+      ])
+    )
+      .sort(Order.String)
+      .map(customerAccountSection);
+    if (firstOrder) {
+      return holdSections([
+        firstOrder,
+        ...remainingOrders,
+        ...accounts,
+        first,
+        ...rest,
+      ]);
+    }
+    const [account, ...remainingAccounts] = accounts;
+    return account
+      ? holdSections([account, ...remainingAccounts, first, ...rest])
+      : holdSections([first, ...rest]);
   },
   unlimitedGiftCustomer: (holder: CustomerAccountId) =>
     holdSection({

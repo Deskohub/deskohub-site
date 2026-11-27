@@ -1162,6 +1162,7 @@ export const AdministrationReservationFamily = Schema.Literals([
   "cowork",
   "meeting-room",
   "office",
+  "table",
 ]);
 export type AdministrationReservationFamily =
   typeof AdministrationReservationFamily.Type;
@@ -2334,6 +2335,7 @@ export const AdministrationWorkspaceProductTarget = Schema.Union([
   }),
   Schema.Struct({ kind: Schema.Literal("meeting-room") }),
   Schema.Struct({ kind: Schema.Literal("office") }),
+  Schema.Struct({ kind: Schema.Literal("table") }),
 ]);
 export type AdministrationWorkspaceProductTarget =
   typeof AdministrationWorkspaceProductTarget.Type;

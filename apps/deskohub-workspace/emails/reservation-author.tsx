@@ -58,6 +58,7 @@ export const reservationAuthorEmailSubject = (
 export function ReservationAuthorEmail(props: ReservationAuthorEmailProps) {
   const { locale, reservation, statusUrl } = props;
   const { table } = reservation.placement;
+  const { reservationDetails } = reservation;
 
   return (
     <WorkspaceEmailLayout
@@ -86,6 +87,10 @@ export function ReservationAuthorEmail(props: ReservationAuthorEmailProps) {
           url: statusUrl,
         }}
         locale={locale}
+        openSpace={
+          reservationDetails.kind === "cowork" &&
+          reservationDetails.entryTier === "open-space"
+        }
         {...(table && { table })}
       />
       <ReservationEmailLocationPanel locale={locale} />

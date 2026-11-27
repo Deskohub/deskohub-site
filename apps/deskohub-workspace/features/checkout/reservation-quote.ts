@@ -6,6 +6,7 @@ import { reservationQuoteItemSchema } from "@/features/checkout/reservation-quot
 import { getMeetingRoomReservationQuote } from "@/features/checkout/reservation-quote-meeting-room";
 import { getOfficeReservationQuote } from "@/features/checkout/reservation-quote-office";
 import { makeReservationQuoteSchema } from "@/features/checkout/reservation-quote-schema";
+import { getTableReservationQuote } from "@/features/checkout/reservation-quote-table";
 import type { DiscountQuote } from "@/features/discounts/contracts";
 import type { ReservationOrderData } from "@/features/reservation/reservation-order";
 
@@ -39,6 +40,8 @@ export const buildReservationQuote = Effect.fn("buildReservationQuote")(
           getOfficeReservationQuote(officeReservation, {
             discountQuote: options.discountQuote,
           }),
+        table: (tableReservation) =>
+          getTableReservationQuote(tableReservation, options),
       })
     );
     const fingerprint = getReservationQuoteFingerprint(

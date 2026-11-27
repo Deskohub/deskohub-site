@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from "effect";
 import type { ReleaseGateUnavailableError } from "@/features/feature-flags/backend/release-gate";
 import { MeetingRoomReleaseGate } from "@/features/meeting-room/backend/meeting-room-release-gate";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import {
   type PublicPage,
   type PublicPageReleaseGate,
@@ -36,9 +37,11 @@ export class PublishedPublicPagesService extends Context.Service<
     Effect.gen(function* () {
       const meetingRoomPage = yield* MeetingRoomReleaseGate;
       const officePage = yield* OfficeReleaseGate;
+      const teamTablePage = yield* TeamTableReleaseGate;
       const releaseGates = {
         "meeting-room-page": meetingRoomPage.decision,
         "office-page": officePage.decision,
+        "team-table-page": teamTablePage.decision,
       } satisfies Record<
         PublicPageReleaseGate,
         Effect.Effect<boolean, ReleaseGateUnavailableError>
@@ -64,7 +67,11 @@ export class PublishedPublicPagesService extends Context.Service<
 
   static Live = this.Default.pipe(
     Layer.provide(
-      Layer.mergeAll(MeetingRoomReleaseGate.Live, OfficeReleaseGate.Live)
+      Layer.mergeAll(
+        MeetingRoomReleaseGate.Live,
+        OfficeReleaseGate.Live,
+        TeamTableReleaseGate.Live
+      )
     )
   );
 }

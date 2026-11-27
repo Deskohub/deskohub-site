@@ -95,6 +95,7 @@ export {
   booleanAttribute,
   CampaignEmailSource,
   type CampaignEmailSource as CampaignEmailSourceType,
+  CampaignReservationFamily,
   campaignSourceParam,
   choiceParam,
   countAttribute,
@@ -200,6 +201,7 @@ export {
 export {
   DhwVersion,
   type DhwVersion as DhwVersionType,
+  dhwTeamTableHeader,
   dhwVersionHeader,
   MinimumDhwVersion,
   OutdatedDhwRefusal,

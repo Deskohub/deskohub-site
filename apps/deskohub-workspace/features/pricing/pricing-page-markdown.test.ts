@@ -15,11 +15,18 @@ import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { pricingPageMarkdown } from "./pricing-page-markdown";
+import type { TeamTablePrice } from "./team-table-price";
 
 const renderPricingPage = async (
   locale: Locale,
   offerings: ReadonlyArray<PublicOffering>,
-  coworkPassesPublished = false
+  {
+    coworkPassesPublished = false,
+    teamTablePrices = [],
+  }: {
+    readonly coworkPassesPublished?: boolean;
+    readonly teamTablePrices?: ReadonlyArray<TeamTablePrice>;
+  } = {}
 ) =>
   serializeMarkdown(
     await Effect.runPromise(
@@ -27,6 +34,7 @@ const renderPricingPage = async (
         coworkPassesPublished,
         isPublished: () => true,
         offerings: Effect.succeed(offerings),
+        teamTablePrices: Effect.succeed(teamTablePrices),
         saleBanner: Effect.succeed(undefined),
       })
     )
@@ -37,6 +45,36 @@ const headings = (markdown: string, depth: number) =>
     .split("\n")
     .filter((line) => line.startsWith(`${"#".repeat(depth)} `))
     .map((line) => line.slice(depth + 1));
+
+test("prints Team Table rates and a booking link alongside Unlimited membership", async () => {
+  const locale = "en-US";
+  const offerings = advertisedCatalogOfferings({ locale });
+  const markdown = await renderPricingPage(locale, offerings, {
+    coworkPassesPublished: true,
+    teamTablePrices: [
+      {
+        seats: 4,
+        base: currencyCZK(24_000),
+        hourly: currencyCZK(8_000),
+        advertisedPrice: {
+          price: currencyCZK(25_600),
+          discount: currencyCZK(6_400),
+        },
+      },
+      { seats: 6, base: currencyCZK(36_000), hourly: currencyCZK(12_000) },
+    ],
+  });
+  const text = markdownPlainText(markdown);
+
+  expect(headings(markdown, 2)).toContain(m.passUnlimited({}, { locale }));
+  expect(text).toContain("Table for 4 · CZK 240 to reserve + CZK 80/hour");
+  expect(text).toContain("Table for 6 · CZK 360 to reserve + CZK 120/hour");
+  expect(text).toContain("CZK 256 (regular price CZK 320)");
+  expect(markdown).toContain("https://workspace.deskohub.cz/reservation/table");
+  expect(await renderPricingPage(locale, offerings)).not.toContain(
+    "Team Table"
+  );
+});
 
 describe.each(locales)("pricingPageMarkdown in %s", (locale) => {
   test("lists the opening hours, every price by family, and the address", async () => {
@@ -85,7 +123,7 @@ describe.each(locales)("pricingPageMarkdown in %s", (locale) => {
     const markdown = await renderPricingPage(
       locale,
       advertisedCatalogOfferings({ locale }),
-      true
+      { coworkPassesPublished: true }
     );
     const text = markdownPlainText(markdown);
 

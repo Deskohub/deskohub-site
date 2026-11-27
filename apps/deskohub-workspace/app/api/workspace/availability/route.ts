@@ -4,11 +4,14 @@ import { AvailabilityQueryInvalid } from "@/features/reservation/backend/workspa
 import {
   loadAvailability,
   loadMeetingRoomStartTimes,
+  loadTableSlots,
   WorkspaceAvailabilityLoaderLive,
 } from "@/features/reservation/backend/workspace-availability-loader";
 import {
   isMeetingRoomStartTimesRequest,
+  isTableSlotsRequest,
   parseMeetingRoomStartTimesQuery,
+  parseTableSlotsQuery,
   parseWorkspaceAvailabilityQuery,
 } from "@/features/reservation/workspace-availability";
 import { workspaceAvailabilityReplacementHeader } from "@/features/reservation/workspace-availability-request";
@@ -20,6 +23,17 @@ const loadWorkspaceAvailabilityRequest = Effect.fn(
   const { searchParams } = new URL(request.url);
   const replacementToken =
     request.headers.get(workspaceAvailabilityReplacementHeader) ?? undefined;
+
+  if (isTableSlotsRequest(searchParams)) {
+    const query = parseTableSlotsQuery(searchParams);
+    if (Option.isNone(query)) {
+      return yield* new AvailabilityQueryInvalid({
+        message:
+          "Team Table slots need kind=table, a YYYY-MM-DD date, and a positive whole seat count.",
+      });
+    }
+    return yield* loadTableSlots({ query: query.value, replacementToken });
+  }
 
   if (isMeetingRoomStartTimesRequest(searchParams)) {
     const query = yield* Option.match(
@@ -48,7 +62,9 @@ const loadWorkspaceAvailabilityRequest = Effect.fn(
         Effect.fail(
           new AvailabilityQueryInvalid({
             message:
-              "Meeting-room availability needs startsAt and endsAt of one meeting-room booking of 1 hour, 4 hours, or a whole day.",
+              searchParams.get("kind")?.trim() === "table"
+                ? "Team Table availability needs a positive whole seat count."
+                : "Meeting-room availability needs startsAt and endsAt of one meeting-room booking of 1 hour, 4 hours, or a whole day.",
           })
         ),
       onSome: Effect.succeed,
@@ -68,9 +84,7 @@ export const GET = defineWorkspaceRoute(
   },
   (request) =>
     loadWorkspaceAvailabilityRequest(request).pipe(
-      Effect.tap((result) =>
-        Effect.logInfo("Workspace availability response ready", { result })
-      ),
+      Effect.tap(() => Effect.logInfo("Workspace availability response ready")),
       Effect.map((result) =>
         NextResponse.json(result, {
           headers: { "Cache-Control": "private, no-store" },
@@ -80,6 +94,14 @@ export const GET = defineWorkspaceRoute(
       Effect.catchTag("AvailabilityQueryInvalid", (error) =>
         Effect.succeed(
           NextResponse.json({ error: error.message }, { status: 400 })
+        )
+      ),
+      Effect.catchTag("TeamTableAvailabilityClosed", () =>
+        Effect.succeed(
+          NextResponse.json(
+            { error: "Team Table is unavailable" },
+            { status: 404 }
+          )
         )
       ),
       Effect.catch(

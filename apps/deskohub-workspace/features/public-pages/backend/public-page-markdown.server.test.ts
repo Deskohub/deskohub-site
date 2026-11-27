@@ -1,6 +1,11 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  DotyposCloudIdSchema,
+  type DotyposTable,
+  DotyposTableIdSchema,
+} from "@deskohub/dotypos";
 import { GoogleCalendarEventIdSchema } from "@deskohub/google-calendar";
 import { GoogleCalendarServiceMock } from "@deskohub/google-calendar/backend/service.mock";
 import { Effect, Layer } from "effect";
@@ -12,6 +17,10 @@ import { classifiedConstancy } from "@/features/feature-flags/backend/feature-fl
 import { m } from "@/features/i18n";
 import { publicPages } from "@/features/public-pages/public-page-definitions";
 import { salesCalendarIdSchema } from "@/shared/backend/config/calendar-resource.config";
+import {
+  markdownLinkUrls,
+  markdownPlainText,
+} from "@/shared/markdown/markdown.test-utils";
 import { recordNextCache } from "@/shared/testing/next-cache-recorder.test-utils";
 
 // Outside a Next.js render there is no cache; record what each render asks
@@ -84,7 +93,7 @@ mock.module("@/features/discounts/calendar-discount-source.server", () => ({
                   id: discountId,
                   labels: { "en-US": "Summer sale", "cs-CZ": "Letní akce" },
                   adjustment: { kind: "percentage", basisPoints: 2000 },
-                  products: [{ kind: "cowork" }],
+                  products: [{ kind: "cowork" }, { kind: "table" }],
                 }),
             })
           )
@@ -93,9 +102,19 @@ mock.module("@/features/discounts/calendar-discount-source.server", () => ({
       ),
 }));
 
-// Markdown shows no seat maximum, so it must never read the availability
-// inventory. Count the reads a source would make.
+// Only the published Team Table offer needs the advisory table inventory.
 let inventoryReads = 0;
+let inventory: DotyposTable[] = [];
+let inventoryUnavailable = false;
+const teamTable = (seats: string): DotyposTable => ({
+  id: DotyposTableIdSchema.make(seats),
+  _cloudId: DotyposCloudIdSchema.make("synthetic-cloud"),
+  name: seats,
+  seats,
+  enabled: true,
+  display: true,
+  tags: ["reservation:table", "cowork:open-space"],
+});
 const countInventoryRead = <A>(value: A) =>
   Effect.sync(() => {
     inventoryReads += 1;
@@ -114,7 +133,11 @@ mock.module(
     SharedAvailabilityInventoryLive: Layer.succeed(
       AdvisoryAvailabilityInventory,
       {
-        tables: countInventoryRead([]),
+        tables: Effect.suspend(() =>
+          inventoryUnavailable
+            ? Effect.die("Dotypos is unavailable")
+            : countInventoryRead(inventory)
+        ),
         listActiveReservationsOverlapping: () => countInventoryRead([]),
         listLimitations: () => countInventoryRead([]),
       }
@@ -133,11 +156,14 @@ const allGatesReleased: DiscountReleaseGates = {
   discountCodes: true,
 };
 
-// The office stays closed unless a test opens it.
+// The office and Team Table stay closed unless a test opens them.
 const releases = (discountReleaseGates = allGatesReleased) => ({
   publishedPathnames: publicPages
     .map(({ pathname }) => pathname)
-    .filter((pathname) => pathname !== "/reservation/office"),
+    .filter(
+      (pathname) =>
+        pathname !== "/reservation/office" && pathname !== "/reservation/table"
+    ),
   discountReleaseGates,
 });
 
@@ -147,11 +173,66 @@ const unshared = { cacheLife: { expire: 0 } } as const;
 beforeEach(() => {
   calendarAnswers = true;
   inventoryReads = 0;
+  inventory = [];
+  inventoryUnavailable = false;
   nextCache.clear();
   headers.mockClear();
 });
 
 describe("renderPublicPageMarkdown", () => {
+  test("advertises live Team Table sizes and the current Calendar sale while published", async () => {
+    inventory = [teamTable("6"), teamTable("4")];
+    const open = {
+      ...releases(),
+      publishedPathnames: [
+        ...releases().publishedPathnames,
+        "/reservation/table" as const,
+      ],
+    };
+    const pricing = await renderPublicPageMarkdown("en-US", "/pricing", open);
+    const booking = await renderPublicPageMarkdown(
+      "en-US",
+      "/reservation/table",
+      open
+    );
+
+    for (const page of [pricing, booking]) {
+      const text = markdownPlainText(page);
+      expect(text).toContain("Table for 4 · CZK 240 to reserve + CZK 80/hour");
+      expect(text).toContain("Table for 6 · CZK 360 to reserve + CZK 120/hour");
+      expect(text).toContain("CZK 256 (regular price CZK 320)");
+      expect(text).toContain("CZK 384 (regular price CZK 480)");
+    }
+    expect(markdownLinkUrls(pricing)).toContain(
+      "https://workspace.deskohub.cz/reservation/table"
+    );
+    expect(inventoryReads).toBe(2);
+    expect(nextCache.calls).toEqual([shared, shared]);
+
+    const closedPricing = await renderPublicPageMarkdown(
+      "en-US",
+      "/pricing",
+      releases()
+    );
+    expect(closedPricing).not.toContain("Team Table");
+    expect(inventoryReads).toBe(2);
+  });
+
+  test("omits Team Table prices without sharing the fallback when the inventory fails", async () => {
+    inventoryUnavailable = true;
+    const open = {
+      ...releases(),
+      publishedPathnames: [
+        ...releases().publishedPathnames,
+        "/reservation/table" as const,
+      ],
+    };
+    const markdown = await renderPublicPageMarkdown("en-US", "/pricing", open);
+
+    expect(markdown).not.toContain("Team Table");
+    expect(nextCache.calls).toEqual([unshared]);
+  });
+
   test("prices a sale under the request's gate decisions without reading the request", async () => {
     const saleMarkdown = await renderPublicPageMarkdown(
       "en-US",
@@ -234,7 +315,10 @@ describe("renderPublicPageMarkdown", () => {
       );
       const officeOpen = (discountReleaseGates = allGatesReleased) => ({
         ...releases(discountReleaseGates),
-        publishedPathnames: publicPages.map(({ pathname }) => pathname),
+        publishedPathnames: [
+          ...releases().publishedPathnames,
+          "/reservation/office" as const,
+        ],
       });
       const saleMarkdown = await renderPublicPageMarkdown(
         locale,

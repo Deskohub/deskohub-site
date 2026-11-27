@@ -72,7 +72,7 @@ export const startReservationTool = defineSignedInAgentTool({
   name: "start_reservation",
   title: "Start a Deskohub Workspace booking",
   description:
-    "Holds a complete selection for the signed-in customer, with the same arguments as get_quote plus early_setup for a meeting room, and returns a pay_url. Give the pay_url to the customer: they check the order, accept the terms, and pay on the website before the link expires; this tool can't pay. The customer's account profile is the contact. Calling again with the same selection returns the same held order and pay_url until the link expires; a different selection replaces the unpaid hold you made before. A hold whose payment has started is kept, and holds made by other assistants are not affected.",
+    "Holds a complete selection for the signed-in customer and returns a pay_url. Accepts the same selection as get_quote, including exact start and end times and the seat count for a Team Table. A meeting room also accepts early_setup. Give the pay_url to the customer so they can check the order, accept the terms, and pay on the website before the link expires. The customer's account profile is the contact. Calling again with the same selection returns the same held order and pay_url until the link expires; a different selection replaces your previous unpaid hold unless payment has started. Holds from other assistants stay in place.",
   scope: "reservations:create",
   scopeWhenArgument: passFundingScope,
   accountBudget: startReservationAccountBudget,
@@ -183,6 +183,9 @@ const toStartReservationError = (
     Match.tag("WorkspaceTableUnavailableError", (cause) =>
       AgentToolError.refused("selection_unavailable")(cause)
     ),
+    Match.tag("TableAssignmentUnavailableError", (cause) =>
+      AgentToolError.refused("selection_unavailable")(cause)
+    ),
     Match.tag("EntryPackUnavailableError", (cause) =>
       AgentToolError.refused("selection_unavailable")(cause)
     ),
@@ -202,6 +205,12 @@ const toStartReservationError = (
       AgentToolError.refused("account_unavailable")(cause)
     ),
     Match.tag("OfficeReservationsDisabledError", () =>
+      AgentToolError.unsupportedFamily()
+    ),
+    Match.tag("TeamTableReservationsDisabledError", () =>
+      AgentToolError.unsupportedFamily()
+    ),
+    Match.tag("TeamTableAvailabilityClosed", () =>
       AgentToolError.unsupportedFamily()
     ),
     Match.tag("OvernightStayUnavailableError", () =>

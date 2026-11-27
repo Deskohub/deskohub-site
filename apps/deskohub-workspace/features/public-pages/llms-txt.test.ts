@@ -4,11 +4,13 @@ import { customerAgentCatalog } from "@/features/agent-tools/customer-agent-cata
 import { getPublicOpeningHours } from "@/features/checkout/public-offerings";
 import { advertisedCatalogOfferings } from "@/features/checkout/public-offerings.test-utils";
 import { locales, m } from "@/features/i18n";
+import type { TeamTablePrice } from "@/features/pricing/team-table-price";
 import { serializeMarkdown } from "@/shared/markdown/markdown";
 import {
   markdownLinkUrls,
   markdownPlainText,
 } from "@/shared/markdown/markdown.test-utils";
+import { currencyCZK } from "@/shared/money/currencies";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { llmsTxtMarkdown } from "./llms-txt";
 import { publicPageDefinitions } from "./public-page-definitions";
@@ -20,7 +22,8 @@ const locale = "en-US";
 
 const renderLlmsTxt = (
   pages: ReadonlyArray<PublicPagePathname> = allPages,
-  officeOpen = true
+  officeOpen = true,
+  teamTablePrices: ReadonlyArray<TeamTablePrice> = []
 ) =>
   serializeMarkdown(
     llmsTxtMarkdown({
@@ -29,6 +32,7 @@ const renderLlmsTxt = (
         locale,
         ...(officeOpen && { office: {} }),
       }),
+      teamTablePrices,
       agentInterfaces: {
         ...customerAgentCatalog.published,
         siteToolsRelease: "on",
@@ -50,6 +54,21 @@ const headings = (markdown: string, depth: number) =>
     .map((line) => line.slice(depth + 1));
 
 describe("llmsTxtMarkdown", () => {
+  test("lists the Team Table booking page once and publishes its configured size prices", () => {
+    const markdown = renderLlmsTxt(allPages, true, [
+      { seats: 4, base: currencyCZK(24_000), hourly: currencyCZK(8_000) },
+    ]);
+    const teamTable = "/reservation/table";
+    const teamTableLinks = sitePagePaths(markdownLinkUrls(markdown)).filter(
+      (path) => path === teamTable
+    );
+
+    expect(teamTableLinks).toEqual([teamTable]);
+    expect(markdownPlainText(markdown)).toContain(
+      "Team Table · Table for 4 · CZK 240 to reserve + CZK 80/hour"
+    );
+  });
+
   test("opens with the business name, a summary and the opening hours", () => {
     const markdown = renderLlmsTxt();
     const [title, summary, openingHours] = markdown.split("\n\n");

@@ -183,6 +183,7 @@ const selectionArgumentNames = {
   date: "date",
   endDate: "end_date",
   startTime: "start_time",
+  endTime: "end_time",
   duration: "duration",
   seats: "seats",
   tier: "tier",
@@ -222,6 +223,7 @@ export class AgentToolError extends Data.TaggedError("AgentToolError")<{
         "date-out-of-range": ({ earliest, latest }) =>
           AgentToolError.dateOutOfRange({ earliest, latest }),
         "office-closed": () => AgentToolError.unsupportedFamily(),
+        "table-closed": () => AgentToolError.unsupportedFamily(),
       })
     );
 

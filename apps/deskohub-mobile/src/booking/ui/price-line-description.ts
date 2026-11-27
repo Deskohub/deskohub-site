@@ -1,5 +1,4 @@
 import type {
-  CustomerBookingSelection,
   CustomerDiscountAdjustment,
   CustomerMonitorOption,
   Money,
@@ -12,6 +11,7 @@ import { formatMoney } from "../../i18n/money-format";
 import { formatBasisPoints } from "../../i18n/percent-format";
 import { bookingOverviewOf } from "../checkout-screen/booking-overview";
 import { productLabel } from "../checkout-screen/checkout-copy";
+import type { BookingSelection } from "../selection/booking-selection";
 import { formatPragueTimeAt } from "./prague-date-format";
 import type { PriceLine, PriceLineSubject } from "./price-breakdown";
 
@@ -37,13 +37,13 @@ export const monitorOptionName = (option: CustomerMonitorOption): string =>
  * hours with their times, or its whole day.
  */
 const productDetail = (
-  selection: CustomerBookingSelection,
+  selection: BookingSelection,
   locale: AppLocale
 ): string | undefined => {
   const overview = bookingOverviewOf(selection, false);
   switch (overview._tag) {
     case "Cowork":
-      return selection.stay === "overnight"
+      return selection.family === "cowork" && selection.stay === "overnight"
         ? m.booking_cowork_stay_overnight({}, { locale })
         : m.booking_price_line_days({ count: 1 }, { locale });
     case "MeetingRoom":
@@ -52,7 +52,8 @@ const productDetail = (
         onSome: (time) =>
           time._tag === "WholeDay"
             ? m.booking_checkout_overview_whole_day({}, { locale })
-            : (selection.duration === "hour:4"
+            : (selection.family === "meeting-room" &&
+                selection.duration === "hour:4"
                 ? m.booking_price_line_four_hours
                 : m.booking_price_line_one_hour)(
                 { start: time.start, end: time.end },
@@ -60,6 +61,7 @@ const productDetail = (
               ),
       });
     case "Office":
+    case "TeamTable":
       return undefined;
   }
 };
@@ -112,6 +114,10 @@ const chargeDescription = (
       };
     case "Coffee":
       return { label: m.booking_checkout_line_coffee({}, { locale }) };
+    case "TeamTableBase":
+      return { label: m.booking_team_table_base_fee({}, { locale }) };
+    case "TeamTableUsage":
+      return { label: m.booking_team_table_usage_fee({}, { locale }) };
     case "Workstation":
       return {
         label: m.booking_checkout_line_workstation({}, { locale }),
@@ -168,7 +174,7 @@ const reductionDescription = (
  */
 export const describePriceLine =
   (
-    selection: CustomerBookingSelection,
+    selection: BookingSelection,
     locale: AppLocale,
     /** The catalog's name for the product, where the screen has it. */
     productName: string = productLabel(selection, locale)

@@ -25,10 +25,12 @@ export function ReservationEmailActionPanel({
   action,
   table,
   locale,
+  openSpace,
 }: {
   readonly action: { readonly button: string; readonly url: string };
   readonly table?: CustomerReservationPlacement["table"];
   readonly locale: Locale;
+  readonly openSpace?: boolean;
 }) {
   return (
     <Section className="mt-6 overflow-hidden rounded-[22px] border border-[#d8d9e4]">
@@ -83,6 +85,11 @@ export function ReservationEmailActionPanel({
             {table.name}
           </Text>
         </Section>
+      )}
+      {openSpace && (
+        <Text className="m-0 px-5 py-4 text-[14px] leading-[22px] text-navy">
+          {m.reservationOpenSpaceEtiquette({}, { locale })}
+        </Text>
       )}
     </Section>
   );

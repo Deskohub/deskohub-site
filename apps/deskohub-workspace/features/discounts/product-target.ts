@@ -1,4 +1,5 @@
 import type { WorkspaceProductTarget } from "@deskohub/workspace-domain/features/discounts/product-target";
+import { workspaceTableProductTargetSchema } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 
 export {
   type WorkspaceProductTarget,
@@ -31,6 +32,7 @@ const reservationProductTargets = [
   { kind: "cowork" },
   { kind: "meeting-room" },
   { kind: "office" },
+  { kind: "table" },
 ] as const satisfies readonly WorkspaceProductTarget[];
 
 const reservationProductFamilies = reservationProductTargets.map(
@@ -111,6 +113,8 @@ export const getWorkspaceProductTargetsCovering = (
         ] as const,
       office: () =>
         [workspaceOfficeProductTargetSchema.make({ kind: "office" })] as const,
+      table: () =>
+        [workspaceTableProductTargetSchema.make({ kind: "table" })] as const,
       "entry-pack": (product) => [entryPackFamilyTarget, product] as const,
       unlimited: (product) => [unlimitedFamilyTarget, product] as const,
     })

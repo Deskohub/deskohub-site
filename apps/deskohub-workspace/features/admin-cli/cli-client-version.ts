@@ -2,7 +2,9 @@ import {
   CliClientCompatibility,
   CliInputInvalid,
   CliServiceUnavailable,
+  CurrentAdministrationCaller,
   DhwVersion,
+  dhwTeamTableHeader,
   dhwVersionHeader,
   MinimumDhwVersion,
   OutdatedDhwRefusal,
@@ -44,6 +46,14 @@ export const cliClientIsAtLeast = (
   clientVersion: CliClientVersion,
   since: DhwVersion
 ): boolean => Option.exists(clientVersion, (version) => gte(version, since));
+
+/** Assistants derive their tools from the current contract. CLI binaries ship theirs. */
+export const administrationCallerSupportsTeamTable = Effect.gen(function* () {
+  const { channel } = yield* CurrentAdministrationCaller;
+  if (channel._tag !== "CliSession") return true;
+  const { headers } = yield* HttpServerRequest.HttpServerRequest;
+  return headers[dhwTeamTableHeader] === "1";
+});
 
 /** An endpoint's annotations over its group's. */
 const endpointAnnotations = (

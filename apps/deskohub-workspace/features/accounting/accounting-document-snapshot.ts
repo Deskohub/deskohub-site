@@ -15,6 +15,7 @@ import type { PreparedCustomerQuote } from "@/features/checkout/backend/checkout
 import { coworkReservationQuoteSchema } from "@/features/checkout/reservation-quote-cowork";
 import { meetingRoomReservationQuoteSchema } from "@/features/checkout/reservation-quote-meeting-room";
 import { officeReservationQuoteSchema } from "@/features/checkout/reservation-quote-office";
+import { tableReservationQuoteSchema } from "@/features/checkout/reservation-quote-table";
 import { discountQuoteCodec } from "@/features/discounts/contracts";
 import type { Locale } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
@@ -33,6 +34,11 @@ import {
   getReservationInvoiceBuyer,
   reservationBillingSelectionSchema,
 } from "@/features/reservation/reservation-billing";
+import { getWorkspaceDate } from "@/features/reservation/reservation-date";
+import {
+  getTableReservationDetails,
+  tableReservationDetailsSchema,
+} from "@/features/reservation/table-reservation";
 import {
   vatStatuses,
   workspaceSiteConstants,
@@ -142,10 +148,19 @@ export const officeAccountingDocumentSnapshotSchema = Schema.Struct({
   quote: officeReservationQuoteSchema,
 });
 
+export const tableAccountingDocumentSnapshotSchema = Schema.Struct({
+  ...accountingDocumentIdentitySchema.fields,
+  billing: Schema.optionalKey(reservationBillingSelectionSchema),
+  delivery: Schema.optionalKey(accountingDocumentDeliverySchema),
+  reservation: tableReservationDetailsSchema,
+  quote: tableReservationQuoteSchema,
+});
+
 export const accountingDocumentSnapshotSchema = Schema.Union([
   coworkAccountingDocumentSnapshotSchema,
   meetingRoomAccountingDocumentSnapshotSchema,
   officeAccountingDocumentSnapshotSchema,
+  tableAccountingDocumentSnapshotSchema,
 ]).annotate({
   identifier: "AccountingDocumentSnapshot",
   description:
@@ -196,6 +211,10 @@ export const getAccountingDocumentSnapshotFirstServiceDate = (
       cowork: (reservation) => reservation.date,
       "meeting-room": getMeetingRoomReservationDate,
       office: (reservation) => reservation.startsOn,
+      table: ({ startsAt }) =>
+        plainDateStringSchema.make(
+          getWorkspaceDate(Temporal.Instant.from(startsAt)).toString()
+        ),
     })
   );
 
@@ -263,6 +282,11 @@ export const makeAccountingDocumentSnapshot = (input: {
           startsAt: reservation.startsAt,
           endsAt: reservation.endsAt,
         },
+        quote,
+      }),
+      table: ({ quote, reservation }) => ({
+        ...identity,
+        reservation: getTableReservationDetails(reservation),
         quote,
       }),
       office: ({ quote, reservation }) => ({

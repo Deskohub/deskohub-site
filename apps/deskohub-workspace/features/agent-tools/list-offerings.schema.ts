@@ -12,6 +12,14 @@ export const agentOfferingSchema = Schema.Struct({
   tier: Schema.optionalKey(Schema.Literals(workspaceCoworkCurrentTiers)),
   duration: Schema.optionalKey(meetingRoomReservationDurationKeySchema),
   duration_label: Schema.optionalKey(Schema.String),
+  seats: Schema.optionalKey(
+    Schema.Int.annotate({ description: "Exact Team Table capacity." })
+  ),
+  duration_minutes: Schema.optionalKey(
+    Schema.Int.annotate({
+      description: "Duration used to price a Team Table offering.",
+    })
+  ),
   name: Schema.String,
   description: Schema.String,
   usage: Schema.String,
@@ -21,7 +29,7 @@ export const agentOfferingSchema = Schema.Struct({
   price_unit: Schema.Literals(["day", "booking"]),
   advertised_price: agentToolMoneySchema.annotate({
     description:
-      "Price the reservation page advertises for a booking on advertised_on, including any public sale: one cowork day without add-ons that cost extra, one meeting-room booking of the duration, or one office day with one seat.",
+      "Price on advertised_on including any public sale: a cowork day, a meeting-room booking of the listed duration, an office day with one seat, or a Team Table booking of the listed size and duration.",
   }),
   discount: agentToolMoneySchema.annotate({
     description:

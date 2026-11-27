@@ -121,6 +121,10 @@ export {
   mockPaymentOutcomes,
   mockPaymentSessions,
 } from "./mock-payment-sessions";
+export {
+  openSpaceTableMoveBatches,
+  openSpaceTableMoves,
+} from "./open-space-table-moves";
 export { type NewOrder, type Order, orders } from "./orders";
 export { passAdministrationChanges } from "./pass-administration-changes";
 export { passEntryClaims } from "./pass-entry-claims";
@@ -167,6 +171,7 @@ export {
   type StandaloneAccessCodeAttemptEventRow,
   standaloneAccessCodeAttemptEvents,
 } from "./standalone-access-code-attempt-events";
+export { teamTableHoldClaims } from "./team-table-hold-claims";
 export { unlimitedPassDayMoves } from "./unlimited-pass-day-moves";
 export { unlimitedPassSupersessions } from "./unlimited-pass-supersessions";
 export {

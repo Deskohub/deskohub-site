@@ -1,7 +1,7 @@
-import type { CustomerBookingSelection } from "@deskohub/workspace-customer-api";
 import type { AppLocale } from "../../i18n/app-locale";
 import { m } from "../../i18n/messages";
 import type { CheckoutRetryKind } from "../checkout/booking-problem";
+import type { BookingSelection } from "../selection/booking-selection";
 
 /** What went wrong that the customer can retry, as one sentence. */
 export const retryMessage = (kind: CheckoutRetryKind, locale: AppLocale) =>
@@ -19,7 +19,7 @@ export const retryMessage = (kind: CheckoutRetryKind, locale: AppLocale) =>
 
 /** The booked product's name, as the site's summary names it. */
 export const productLabel = (
-  selection: CustomerBookingSelection,
+  selection: BookingSelection,
   locale: AppLocale
 ) => {
   switch (selection.family) {
@@ -31,5 +31,7 @@ export const productLabel = (
       return m.booking_checkout_line_meeting_room({}, { locale });
     case "office":
       return m.booking_checkout_line_office({}, { locale });
+    case "table":
+      return m.booking_checkout_line_team_table({}, { locale });
   }
 };

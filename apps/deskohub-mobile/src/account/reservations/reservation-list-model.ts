@@ -22,7 +22,10 @@ import {
   type DateTileParts,
   dateTileParts,
 } from "./booking-time";
-import { reservationProductTitle } from "./reservation-labels";
+import {
+  isTeamTableProduct,
+  reservationProductTitle,
+} from "./reservation-labels";
 import type {
   SavedReservation,
   SavedReservationHistory,
@@ -98,7 +101,13 @@ const timeLineOf = (
   Option.match(Option.all([instantOf(row.startsAt), instantOf(row.endsAt)]), {
     onNone: () => m.reservations_value_unavailable({}, { locale }),
     onSome: ([start, end]) =>
-      bookingTimeLine(start, end, locale, date?.(start)),
+      bookingTimeLine(
+        start,
+        end,
+        locale,
+        date?.(start),
+        isTeamTableProduct(row.product)
+      ),
   });
 
 /** A later or past reservation as its compact row shows it. */
@@ -107,7 +116,7 @@ export interface ReservationRowView {
   /** Its day's tile; none when its time can't be read. */
   readonly date: Option.Option<DateTileParts>;
   /**
-   * The time (with seats for an office), or for a past cancelled one only
+   * The time (with seats for an office or Team Table), or for a past cancelled one only
    * that it was cancelled. Always shown, the badge beside it.
    */
   readonly detail: string;
@@ -116,7 +125,8 @@ export interface ReservationRowView {
 }
 
 const seatsOf = (row: ReservationListRow, locale: AppLocale) =>
-  row.product.kind === "office" && row.seats !== null
+  (row.product.kind === "office" || isTeamTableProduct(row.product)) &&
+  row.seats !== null
     ? Option.some(m.reservations_seats({ count: row.seats }, { locale }))
     : Option.none();
 
@@ -125,8 +135,10 @@ const rowTimeLineOf = (row: ReservationListRow, locale: AppLocale): string =>
   Option.match(Option.all([instantOf(row.startsAt), instantOf(row.endsAt)]), {
     onNone: () => m.reservations_value_unavailable({}, { locale }),
     onSome: ([start, end]) =>
-      bookingDateRange(start, end, locale) ??
-      bookingTimeLine(start, end, locale),
+      isTeamTableProduct(row.product)
+        ? bookingTimeLine(start, end, locale, undefined, true)
+        : (bookingDateRange(start, end, locale) ??
+          bookingTimeLine(start, end, locale)),
   });
 
 export const reservationRowView = (
@@ -149,6 +161,9 @@ export const reservationRowView = (
         : [
             rowTimeLineOf(row, locale),
             ...Option.toArray(seatsOf(row, locale)),
+            ...Option.toArray(
+              Option.fromUndefinedOr(row.todayAccess?.tableName)
+            ),
           ].join(" · "),
     badge:
       place === "later" && (badge === "pending" || badge === "attention")
@@ -230,6 +245,7 @@ export const nextReservationView = (
           : shortDate(start, locale)
       ),
       ...Option.toArray(seatsOf(row, locale)),
+      ...Option.toArray(Option.fromUndefinedOr(row.todayAccess?.tableName)),
     ].join(" · "),
     access: access(),
   };

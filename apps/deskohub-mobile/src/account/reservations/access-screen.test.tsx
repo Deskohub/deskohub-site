@@ -9,6 +9,7 @@ import { reservationsHref } from "../../booking/booking-routes";
 import {
   sampleOfficePeopleReservation,
   sampleOrderIds,
+  sampleTeamTableReservation,
   sampleWorkspaceData,
 } from "../../customer-api/testing/sample-fixtures";
 import { AppLocaleProvider } from "../../i18n/locale-context";
@@ -18,6 +19,7 @@ import { findAll, hostTree, textOf } from "../../ui/testing/element-tree";
 import { reservationAccessAtom } from "./access-screen-state";
 import { invitedReservationsAtom } from "./invited-reservations";
 import { orderStatusAtoms } from "./order-status-state";
+import { reservationProductTitle } from "./reservation-labels";
 import { reservationGroups } from "./reservation-list-model";
 import { reservationsListAtom } from "./reservations-list-state";
 import { AutomaticRefresh } from "./status-refresh-rules";
@@ -32,6 +34,7 @@ const { accessStackHeader, ReservationAccessScreen } = await import(
   "./access-screen"
 );
 const { StackHeader } = await import("../../ui/navigation");
+const { ToastProvider } = await import("../../ui/toast");
 const navigation = await import("expo-router");
 
 describe("accessStackHeader", () => {
@@ -44,6 +47,66 @@ describe("accessStackHeader", () => {
     const expanded = accessStackHeader.paperWide({} as NativeStackHeaderProps);
     expect(expanded.props.contentWidth).toBe("wide");
   });
+});
+
+test("an invitee sees the assigned Team Table and its shared PIN controls", () => {
+  const now = new Date();
+  const sample = sampleWorkspaceData("linked", now);
+  const orderId = sampleOrderIds.teamTable;
+  const access = sample.orders.get(orderId)?.access;
+  if (access?.tableName === undefined)
+    throw new Error("Expected sample Team Table access and an assigned table");
+  const row = sampleTeamTableReservation(now);
+  const registry = AtomRegistry.make({
+    initialValues: [
+      Atom.initialValue(
+        reservationAccessAtom(orderId),
+        AsyncResult.success(access)
+      ),
+      Atom.initialValue(
+        invitedReservationsAtom,
+        AsyncResult.success({
+          current: [
+            {
+              orderId,
+              product: row.product,
+              status: "confirmed",
+              accessStartsAt: row.startsAt,
+              accessEndsAt: row.endsAt,
+              bookedBy: { name: "Sam Example" },
+            },
+          ],
+          past: [],
+        })
+      ),
+    ],
+  });
+  try {
+    const locale = "en-US";
+    const tree = hostTree(
+      <ReservationAccessScreen orderId={orderId} />,
+      (node) => (
+        <RegistryContext.Provider value={registry}>
+          <AppLocaleProvider locale={locale}>
+            <ToastProvider>{node}</ToastProvider>
+          </AppLocaleProvider>
+        </RegistryContext.Provider>
+      )
+    );
+    const labels = findAll(tree, "Text").map(textOf);
+    expect(labels).toContain(reservationProductTitle(row.product, locale));
+    expect(labels).toContain(access.tableName);
+    expect(labels).toContain("Sam Example");
+    expect(
+      findAll(tree, "Pressable").some(
+        (button) =>
+          button.props["aria-label"] ===
+          m.reservations_access_copy({}, { locale })
+      )
+    ).toBe(true);
+  } finally {
+    registry.dispose();
+  }
 });
 
 test.each([

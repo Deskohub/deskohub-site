@@ -1,4 +1,8 @@
 import type { workspaceProductIdentitySchema } from "@deskohub/workspace-domain/features/checkout/product-identity";
+import {
+  getWorkspaceTableProductKey,
+  workspaceTableProductKeySchema,
+} from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 
 export { workspaceProductIdentitySchema } from "@deskohub/workspace-domain/features/checkout/product-identity";
 
@@ -28,6 +32,7 @@ export const workspaceProductKeySchema = Schema.Union([
   workspaceCoworkProductKeySchema,
   workspaceMeetingRoomProductKeySchema,
   workspaceOfficeProductKeySchema,
+  workspaceTableProductKeySchema,
   entryPackProductKeySchema,
   unlimitedPassProductKeySchema,
 ]);
@@ -42,6 +47,7 @@ export const getWorkspaceProductKey = (
       cowork: getWorkspaceCoworkProductKey,
       "meeting-room": getWorkspaceMeetingRoomProductKey,
       office: getWorkspaceOfficeProductKey,
+      table: getWorkspaceTableProductKey,
       "entry-pack": getPassProductKey,
       unlimited: getPassProductKey,
     })
@@ -58,6 +64,11 @@ export const getCanonicalWorkspaceProductIdentity = (
         duration,
       }),
       office: ({ dayCount, kind, seats }) => ({ kind, seats, dayCount }),
+      table: ({ durationMinutes, kind, seats }) => ({
+        kind,
+        seats,
+        durationMinutes,
+      }),
       "entry-pack": ({ kind, size, tier }) => ({ kind, size, tier }),
       unlimited: ({ kind, tier }) => ({ kind, tier }),
     })

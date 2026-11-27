@@ -13,6 +13,7 @@ import type {
   CustomerQuoteExpired,
   CustomerSelectionUnavailable,
   CustomerServiceUnavailable,
+  CustomerTeamTableUnavailable,
 } from "@deskohub/workspace-customer-api";
 import { Data, Match, Option } from "effect";
 import type { PaymentBrowserUnavailable } from "../payment-browser.service";
@@ -40,6 +41,7 @@ export type CheckoutFailure =
   | CustomerBookingSelectionInvalid
   | CustomerBookingDateOutOfRange
   | CustomerOfferingUnavailable
+  | CustomerTeamTableUnavailable
   | CustomerCheckoutDetailsInvalid
   | CustomerSelectionUnavailable
   | CustomerQuoteExpired
@@ -133,6 +135,7 @@ export const bookingProblem = (failure: CheckoutFailure): BookingProblem =>
     CustomerBookingSelectionInvalid: () => restart("selection_invalid"),
     CustomerBookingDateOutOfRange: () => restart("date_out_of_range"),
     CustomerOfferingUnavailable: () => restart("offering_unavailable"),
+    CustomerTeamTableUnavailable: () => restart("offering_unavailable"),
     CustomerCheckoutDetailsInvalid: ({ field }) =>
       BookingProblem.DetailsInvalid({ field: Option.fromUndefinedOr(field) }),
     CustomerSelectionUnavailable: ({ reason }) => restart(reason),

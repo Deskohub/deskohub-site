@@ -19,6 +19,7 @@ export type TableBooking = {
   readonly startsAt: number;
   readonly endsAt: number;
   readonly seats: number;
+  readonly exclusive?: true;
 };
 
 /** Epoch-millisecond bounds of an occupancy query, end exclusive. */
@@ -71,6 +72,10 @@ export const getTableBookingOccupancyById = (
 
   for (const booking of bookings) {
     if (booking.startsAt < window.endsAt && booking.endsAt > window.startsAt) {
+      if (booking.exclusive) {
+        occupancyByTableId.set(booking.tableId, Number.POSITIVE_INFINITY);
+        continue;
+      }
       occupancyByTableId.set(
         booking.tableId,
         (occupancyByTableId.get(booking.tableId) ?? 0) + booking.seats

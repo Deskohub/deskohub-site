@@ -5,6 +5,7 @@ import {
 } from "@/features/reservation/cowork-reservation";
 import { meetingRoomReservationOrderSchema } from "@/features/reservation/meeting-room-reservation";
 import { officeReservationOrderSchema } from "@/features/reservation/office-reservation";
+import { tableReservationOrderSchema } from "@/features/reservation/table-reservation";
 
 /** A reservation order a customer submits, phone read in `defaultPhoneRegion`. */
 export const reservationOrderSchema = (defaultPhoneRegion: string) =>
@@ -12,9 +13,10 @@ export const reservationOrderSchema = (defaultPhoneRegion: string) =>
     coworkReservationOrderSchema(defaultPhoneRegion),
     meetingRoomReservationOrderSchema(defaultPhoneRegion),
     officeReservationOrderSchema(defaultPhoneRegion),
+    tableReservationOrderSchema(defaultPhoneRegion),
   ]).annotate({
     identifier: "ReservationOrder",
-    description: "Validated cowork or meeting-room reservation order.",
+    description: "Validated workspace reservation order.",
   });
 
 export type ReservationOrderData = ReturnType<
@@ -31,6 +33,7 @@ export const reservationOrderIssuanceSchema = (defaultPhoneRegion: string) =>
     coworkCurrentReservationOrderSchema(defaultPhoneRegion),
     meetingRoomReservationOrderSchema(defaultPhoneRegion),
     officeReservationOrderSchema(defaultPhoneRegion),
+    tableReservationOrderSchema(defaultPhoneRegion),
   ]).annotate({
     identifier: "ReservationOrderIssuance",
     description: "Publicly issuable reservation order.",

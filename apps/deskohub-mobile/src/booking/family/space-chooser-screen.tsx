@@ -8,6 +8,7 @@ import { passCatalogAtom } from "../../passes/pass-reads";
 import { Masthead } from "../../ui/masthead";
 import { ScrollScreen } from "../../ui/scroll-screen";
 import { bookFamilyHref } from "../booking-routes";
+import { teamTableOfferingsAtom } from "../data/booking-queries";
 import { defaultCoworkDraft } from "../selection/cowork-selection";
 import { BookingGate } from "./booking-gate";
 import { BookingOfferingsView } from "./booking-offerings-view";
@@ -23,6 +24,7 @@ export function SpaceChooserScreen() {
   const locale = useAppLocale();
   const router = useRouter();
   const passes = useAtomValue(passCatalogAtom);
+  const teamTable = useAtomValue(teamTableOfferingsAtom(locale));
   return (
     <ScrollScreen
       contentWidth="wide"
@@ -45,6 +47,7 @@ export function SpaceChooserScreen() {
               cards={spaceCards(catalog.offerings)}
               locale={locale}
               onOpen={(family) => router.push(bookFamilyHref(family))}
+              teamTable={teamTable}
               afterCowork={
                 AsyncResult.isSuccess(passes) ? (
                   <EntryPackOfferLink

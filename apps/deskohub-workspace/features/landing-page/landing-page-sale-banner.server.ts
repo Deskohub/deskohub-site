@@ -9,6 +9,7 @@ import {
 import type { Locale } from "@/features/i18n";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
 import type { ReservationOrderData } from "@/features/reservation/reservation-order";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import type { LandingPageSaleBannerContent } from "./components/landing-page-sale-banner";
 import { getLandingPageSaleBannerContent } from "./landing-page-sale-banner-content";
 
@@ -38,20 +39,25 @@ export const getActiveLandingPageSaleBanner = Effect.fn(
  * product visitors can book, or none.
  */
 export const getLandingPageSaleBanner = Effect.fn("LandingPage.getSaleBanner")(
-  (input: {
+  function* (input: {
     readonly activeSales: readonly ActiveSale[];
     readonly locale: Locale;
-  }) => {
+  }) {
+    if (input.activeSales.length === 0) return;
+    const teamTableOpen = yield* TeamTableReleaseGate.isOpen;
+    const releasedProducts = workspaceReservationProductFamilies.filter(
+      (kind) => kind !== "table" || teamTableOpen
+    );
     const activeSales = input.activeSales.filter(({ products }) =>
-      products.some(({ kind }) =>
-        workspaceReservationProductFamilies.includes(kind)
-      )
+      products.some(({ kind }) => releasedProducts.includes(kind))
     );
-    return logAmbiguousActiveSales({ activeSales }).pipe(
-      Effect.andThen(
-        getEligibleLandingPageSaleBanner({ activeSales, locale: input.locale })
-      )
-    );
+
+    yield* logAmbiguousActiveSales({ activeSales });
+    return yield* getEligibleLandingPageSaleBanner({
+      activeSales,
+      locale: input.locale,
+      releasedProducts,
+    });
   }
 );
 
@@ -60,12 +66,16 @@ const getEligibleLandingPageSaleBanner = Effect.fn(
 )(function* (input: {
   readonly activeSales: readonly ActiveSale[];
   readonly locale: Locale;
+  readonly releasedProducts: readonly WorkspaceProductFamily[];
 }) {
   if (input.activeSales.length !== 1) return undefined;
 
   const sale = input.activeSales[0];
   if (!sale) return undefined;
-  const bookableProducts = yield* getBookableProducts();
+  const officeOpen = yield* OfficeReleaseGate.isOpen;
+  const bookableProducts = input.releasedProducts.filter(
+    (kind) => kind !== "office" || officeOpen
+  );
   const products = sale.products.filter(({ kind }) =>
     bookableProducts.includes(kind)
   );
@@ -77,18 +87,6 @@ const getEligibleLandingPageSaleBanner = Effect.fn(
     sale: { ...sale, products },
   });
 });
-
-/** The product families visitors can reserve; offices only while switched on. */
-const getBookableProducts = Effect.fn("LandingPage.getBookableProducts")(
-  function* () {
-    if (yield* OfficeReleaseGate.isOpen)
-      return workspaceReservationProductFamilies;
-
-    return workspaceReservationProductFamilies.filter(
-      (family) => family !== "office"
-    );
-  }
-);
 
 const logAmbiguousActiveSales = (input: {
   readonly activeSales: readonly ActiveSale[];
@@ -126,5 +124,7 @@ const getBannerReservationKind = (
   if (sale.products.some(({ kind }) => kind === "meeting-room")) {
     return "meeting-room";
   }
-  return "office";
+  return sale.products.some(({ kind }) => kind === "office")
+    ? "office"
+    : "table";
 };

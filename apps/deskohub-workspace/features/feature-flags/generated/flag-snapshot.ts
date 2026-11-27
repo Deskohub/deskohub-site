@@ -2,10 +2,10 @@ import type { PostHogFeatureFlagSnapshot } from "@deskohub/analytics-posthog/fea
 
 /** Generated from PostHog feature flag definitions. Do not edit manually. */
 export const postHogFeatureFlagSnapshot = {
-  generatedAt: "2026-11-18T19:31:13.874Z",
+  generatedAt: "2026-11-27T10:35:28.491Z",
   constantValues: {
     "account_avatars": null,
-    "agent_booking": false,
+    "agent_booking": true,
     "calendar_sales": true,
     "cowork_passes": false,
     "customer_discounts": false,
@@ -15,9 +15,10 @@ export const postHogFeatureFlagSnapshot = {
     "meeting_room_page": true,
     "office_page": false,
     "online_withdrawal": false,
-    "overnight_stays": false,
+    "overnight_stays": true,
     "referrals": false,
     "seating_map": false,
-    "webmcp_site_tools": false,
+    "team_table_page": false,
+    "webmcp_site_tools": true,
   },
 } as const satisfies PostHogFeatureFlagSnapshot;

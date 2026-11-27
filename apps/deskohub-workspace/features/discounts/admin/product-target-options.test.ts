@@ -22,6 +22,7 @@ describe("discount product target labels", () => {
       "Reserved Desk only",
       "Meeting room",
       "Private office",
+      "Team Table",
     ]);
     expect(labels("cs-CZ")).toEqual([
       "Všechny úrovně coworku",
@@ -29,6 +30,7 @@ describe("discount product target labels", () => {
       "Pouze Vyhrazené místo",
       "Zasedačka",
       "Soukromá kancelář",
+      "Týmový stůl",
     ]);
   });
 
