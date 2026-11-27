@@ -30,6 +30,10 @@ import {
   overnightCoworkStayTier,
 } from "@/features/reservation/cowork-stay";
 import {
+  getOpenSpaceServiceDay,
+  isOpenSpaceDayCutoffReached,
+} from "@/features/reservation/open-space-hours";
+import {
   defaultReservationBillingSelection,
   normalizedReservationBillingSelectionSchema,
   reservationBillingSelectionInputSchema,
@@ -39,10 +43,7 @@ import {
   normalizedReservationCustomerSchema,
   reservationCustomerSchema,
 } from "@/features/reservation/reservation-contact";
-import {
-  getCurrentWorkspaceDate,
-  isTodayOrFutureWorkspaceDate,
-} from "@/features/reservation/reservation-date";
+import { isTodayOrFutureWorkspaceDate } from "@/features/reservation/reservation-date";
 import type {
   ReservationInterval,
   ReservationIntervalInput,
@@ -61,17 +62,10 @@ const decodeLocalDateTime = Schema.decodeUnknownSync(localDateTimeSchema);
 const decodePlainDate = Schema.decodeUnknownSync(plainDateStringSchema);
 const decodeInstant = Schema.decodeSync(instantStringSchema);
 
-// Read on call, not at load: the server build loads this module without the
-// polyfill, and client code must not bundle the installer.
-const getOpenSpaceExclusiveEndHour = () =>
-  Temporal.PlainTime.from(
-    workspaceSiteConstants.openingHours.openSpaceUsableUntil
-  ).hour;
-
 /**
  * Shared tier-aware cowork interval constructor used by availability,
- * assignment/hold creation, and recovery. Open Space spans Prague-local
- * 00:00 until 17:00 exclusive on the reserved date; every other tier spans
+ * assignment/hold creation, and recovery. Open Space uses the configured
+ * service-day hours; every other tier spans
  * Prague midnight to the next midnight (DST-correct calendar day). An
  * overnight Reserved Desk stay spans wall-clock noon on the arrival date to
  * noon on the next date; the stay is ignored for every other tier.
@@ -122,12 +116,7 @@ const getCoworkLocalInterval = (
   }
 
   if (tier === "open-space") {
-    return {
-      startsAt: decodeLocalDateTime(`${date}T00:00`),
-      endsAt: decodeLocalDateTime(
-        `${date}T${getOpenSpaceExclusiveEndHour()}:00`
-      ),
-    };
+    return getOpenSpaceServiceDay(Temporal.PlainDate.from(date));
   }
 
   return {
@@ -149,33 +138,15 @@ const dateSchema = Schema.String.check(
 
 /**
  * Same-day cutoff for Open Space: submission and final new payment
- * initiation fail when the current Prague time is at or after 17:00 on the
- * reserved date. Future dates are never blocked.
+ * initiation fail at the configured closing time on the reserved Prague date.
  */
 export const isCoworkOpenSpaceDayCutoffReached = (input: {
   readonly entryTier: WorkspaceCoworkProductTier;
   readonly date: string;
   readonly now?: Temporal.Instant;
-}) => {
-  if (input.entryTier !== "open-space") return false;
-
-  const now = input.now ?? Temporal.Now.instant();
-  const today = getCurrentWorkspaceDate(now);
-  if (input.date !== today.toString()) return false;
-
-  const cutoff = today
-    .toZonedDateTime(workspaceSiteConstants.location.timeZone)
-    .with({
-      hour: getOpenSpaceExclusiveEndHour(),
-      minute: 0,
-      second: 0,
-      millisecond: 0,
-      microsecond: 0,
-      nanosecond: 0,
-    });
-
-  return Temporal.Instant.compare(now, cutoff.toInstant()) >= 0;
-};
+}) =>
+  input.entryTier === "open-space" &&
+  isOpenSpaceDayCutoffReached(input.date, input.now);
 
 const getCoworkReservationDateIssues = (data: {
   readonly entryTier: WorkspaceCoworkProductTier;

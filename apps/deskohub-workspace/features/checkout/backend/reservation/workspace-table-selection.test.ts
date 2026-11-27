@@ -9,6 +9,7 @@ import {
   isDisplayableWorkspaceTable,
   isWorkspaceCoworkHistoricalTableCandidate,
   isWorkspaceCoworkTableCandidate,
+  selectOpenSpaceTableFromCandidates,
   selectWorkspaceTableFromCandidates as selectWorkspaceTableFromCandidatesEffect,
 } from "./workspace-table-selection";
 
@@ -47,6 +48,7 @@ describe("selectWorkspaceTableFromCandidates", () => {
       ["cowork", ["tier:basic"]],
       ["meeting-room", ["reservation:meeting-room"]],
       ["office", ["reservation:office"]],
+      ["team-table", ["reservation:table"]],
     ] as const) {
       expect(
         isDisplayableWorkspaceTable(makeTable({ id, name: id, tags }))
@@ -271,6 +273,54 @@ describe("selectWorkspaceTableFromCandidates", () => {
       )?.id
     ).toBe("first-basic");
   });
+});
+
+test("assigns solo Open Space to ordinary tables, then occupied Team Tables", () => {
+  const reference = makeTable({
+    id: "reference",
+    name: "Reference",
+    positionX: "0",
+  });
+  const near = makeTable({ id: "near", name: "Near", positionX: "1" });
+  const far = makeTable({ id: "far", name: "Far", positionX: "4" });
+  const occupied = makeTable({
+    id: "occupied",
+    name: "Occupied",
+    positionX: "0",
+    seats: "2",
+    tags: ["cowork:open-space", "reservation:table"],
+  });
+  const empty = makeTable({
+    id: "empty",
+    name: "Empty",
+    positionX: "10",
+    tags: ["cowork:open-space", "reservation:table"],
+  });
+  const tables = [reference, near, far, occupied, empty];
+  const occupancy = new Map([
+    [reference.id, 1],
+    [occupied.id, 1],
+  ]);
+
+  expect(
+    Effect.runSync(
+      selectOpenSpaceTableFromCandidates(tables, tables, occupancy)
+    )?.id
+  ).toBe(far.id);
+  expect(
+    Effect.runSync(
+      selectOpenSpaceTableFromCandidates([empty, occupied], tables, occupancy)
+    )?.id
+  ).toBe(occupied.id);
+  expect(
+    Effect.runSync(
+      selectOpenSpaceTableFromCandidates(
+        [empty, occupied],
+        tables,
+        new Map([[occupied.id, 2]])
+      )
+    )?.id
+  ).toBe(empty.id);
 });
 
 describe("shared cowork offer table candidate predicate", () => {

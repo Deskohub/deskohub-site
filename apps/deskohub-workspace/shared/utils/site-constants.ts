@@ -12,8 +12,8 @@ export interface WorkspacePaymentAccount {
 export interface WorkspaceOpeningHours {
   /** The space is open around the clock, every day. */
   readonly alwaysOpen: boolean;
-  /** Open Space desks are usable from midnight until this local time, exclusive. */
-  readonly openSpaceUsableUntil: string;
+  /** The exclusive Prague-local end of the Open Space service day, if any. */
+  readonly openSpaceUsableUntil?: string | null;
   /**
    * An overnight Reserved Desk stay runs from this local time on the arrival
    * date until the same local time on the next date.

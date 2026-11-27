@@ -179,6 +179,34 @@ test("Open Space changes tables by date and keeps the local DST interval", async
   );
 });
 
+test("Open Space pass days preserve empty Team Tables for exclusive bookings", async () => {
+  const occupiedTeamTable = makeTable(
+    "8",
+    ["cowork:open-space", "reservation:table"],
+    "2"
+  );
+  const emptyTeamTable = makeTable("7", [
+    "cowork:open-space",
+    "reservation:table",
+  ]);
+  const { services } = capacityLayer({
+    tables: [openTable, occupiedTeamTable, emptyTeamTable],
+    providerBookings: [
+      providerBooking("10", openTable, startDate),
+      { ...providerBooking("11", occupiedTeamTable, startDate), seats: "1" },
+    ],
+  });
+  const plan = await withUnlimitedPassCapacity(
+    { startDate, selection: { tier: "open-space" } },
+    Effect.succeed
+  ).pipe(Effect.provide(services), Effect.runPromise);
+
+  expect(plan.days.slice(0, 2).map(({ tableId }) => tableId)).toEqual([
+    occupiedTeamTable.id,
+    openTable.id,
+  ]);
+});
+
 test("Reserved Desk excludes a window with free seats every day but no common desk", async () => {
   const { services } = capacityLayer({
     tables: [firstDesk, otherDesk],

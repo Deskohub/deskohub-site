@@ -15,6 +15,7 @@ import { workspaceBookingSeatCount } from "./workspace-table-occupancy";
 export const workspaceMeetingRoomReservationTableTag =
   "reservation:meeting-room";
 export const workspaceOfficeReservationTableTag = "reservation:office";
+export const workspaceTableReservationTableTag = "reservation:table";
 export const workspaceCoworkOpenSpaceTableTag = "cowork:open-space";
 export const workspaceCoworkReservedDeskTableTag = "cowork:reserved-desk";
 
@@ -227,18 +228,44 @@ export const selectWorkspaceTableFromCandidates = (
     )
   );
 
+/** Preserve whole tables for Team Table bookings where solo seating allows. */
+export const selectOpenSpaceTableFromCandidates = (
+  candidates: readonly DotyposTable[],
+  allTables: readonly DotyposTable[],
+  occupancyByTableId: ReadonlyMap<DotyposTableId, number>
+) =>
+  decodeWorkspaceTableCandidates(candidates).pipe(
+    Effect.map((decodedCandidates) =>
+      selectDecodedWorkspaceTableFromCandidates(
+        decodedCandidates,
+        allTables,
+        occupancyByTableId,
+        occupancyByTableId,
+        workspaceBookingSeatCount,
+        false,
+        (table) => {
+          if (!table.tags?.includes(workspaceTableReservationTableTag))
+            return 0;
+          return (occupancyByTableId.get(table.id) ?? 0) > 0 ? 1 : 2;
+        }
+      )
+    )
+  );
+
 const selectDecodedWorkspaceTableFromCandidates = (
   candidates: readonly WorkspaceTableCandidate[],
   allTables: readonly DotyposTable[],
   occupancyByTableId: ReadonlyMap<DotyposTableId, number>,
   rankingOccupancyByTableId: ReadonlyMap<DotyposTableId, number>,
   seats: number,
-  requireEmpty: boolean
+  requireEmpty: boolean,
+  getPriority: (table: DotyposTable) => number = () => 0
 ) => {
   const scoringTablesByRoom = getWorkspaceScoringTablesByRoom(allTables);
   const maxDistanceByRoom =
     getWorkspaceTableMaxDistanceByRoom(scoringTablesByRoom);
   let selectedTable: DotyposTable | undefined;
+  let selectedPriority = Number.POSITIVE_INFINITY;
   let selectedScore = Number.NEGATIVE_INFINITY;
 
   for (const candidate of candidates) {
@@ -254,6 +281,9 @@ const selectDecodedWorkspaceTableFromCandidates = (
       continue;
     }
 
+    const priority = getPriority(table);
+    if (priority > selectedPriority) continue;
+
     const score = scoreWorkspaceTableCandidate(
       table,
       scoringTablesByRoom.get(getWorkspaceTableRoomKey(table)) ?? [],
@@ -264,11 +294,13 @@ const selectDecodedWorkspaceTableFromCandidates = (
 
     if (
       !selectedTable ||
+      priority < selectedPriority ||
       scoreComparison > 0 ||
       (scoreComparison === 0 &&
         compareWorkspaceTables(table, selectedTable) < 0)
     ) {
       selectedTable = table;
+      selectedPriority = priority;
       selectedScore = score;
     }
   }
@@ -356,8 +388,11 @@ export const isDisplayableWorkspaceTable = (table: DotyposTable) => {
   if (table.enabled !== true || table.display !== true) return false;
 
   const tableTags = new Set(table.tags ?? []);
-  return workspaceReservationKindSchema.literals.some((kind) =>
-    hasWorkspaceReservationTableTag(tableTags, kind)
+  return (
+    tableTags.has(workspaceTableReservationTableTag) ||
+    workspaceReservationKindSchema.literals.some((kind) =>
+      hasWorkspaceReservationTableTag(tableTags, kind)
+    )
   );
 };
 
