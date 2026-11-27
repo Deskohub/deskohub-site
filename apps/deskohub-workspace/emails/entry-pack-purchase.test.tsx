@@ -103,3 +103,35 @@ test("uses membership copy for the gift purchase and invitation", async () => {
   expect(invitation.text).not.toContain("Entry pack");
   expect(invitation.text).not.toContain("one day at a time");
 });
+
+test("renders the paid coffee price for a pass bought before catalog repricing", async () => {
+  const product = { kind: "unlimited", tier: "open-space" } as const;
+  const { text } = await Effect.runPromise(
+    renderWorkspaceEmail(
+      <EntryPackPurchaseEmail
+        orderId={orderIdSchema.make("019ac0e6-f461-77de-9492-26af32cc74a3")}
+        paidAt={Temporal.Instant.from("2026-11-18T09:30:00Z")}
+        tier={product.tier}
+        entryCount={null}
+        validFrom={plainDateStringSchema.make("2026-11-18")}
+        validUntil={plainDateStringSchema.make("2026-12-18")}
+        locale="en-US"
+        quote={{
+          product,
+          discountableSubtotal: currencyCZK(350_000),
+          discountedSubtotal: currencyCZK(350_000),
+          totalDiscount: currencyCZK(0),
+          discounts: [],
+        }}
+        holderEmail={null}
+        invoiceRequested={false}
+        statusUrl="https://example.com/status"
+        termsUrl="https://example.com/terms"
+        coffeeAmountMinor={53_000}
+      />
+    )
+  );
+
+  expect(text).toMatch(/Coffee\s+CZK\s+530/u);
+  expect(text).toMatch(/4,030/u);
+});

@@ -358,27 +358,24 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
     expect(providerCalls.filter((id) => id === retry)).toHaveLength(2);
   });
 
-  test("opens on verified delivery and closes at the Prague day cutoff", async () => {
-    const pack = await seed();
+  test("opens on verified delivery and closes after the extended final day", async () => {
+    const delivery = instant("2027-03-27T08:00:00Z");
+    const cutoff = instant("2027-04-12T22:00:00Z");
+    const pack = await seed({ delivery: delivery.toString() });
     const contract = Option.getOrThrow(await find(pack.id, pack.buyer));
-    expect(
-      contract.assess(instant(delivered).subtract({ nanoseconds: 1 }))
-    ).toEqual({
+    expect(contract.assess(delivery.subtract({ nanoseconds: 1 }))).toEqual({
       withdrawable: false,
       reason: "not_withdrawable",
     });
-    const assessment = contract.assess(instant(delivered));
-    expect(assessment).toMatchObject({
+    expect(contract.assess(delivery)).toMatchObject({
       withdrawable: true,
       refundAmount: currencyCZK(100_119),
+      periodEndsAt: cutoff,
     });
-    if (!assessment.withdrawable)
-      throw new Error("Expected delivery to start the window");
     expect(
-      contract.assess(assessment.periodEndsAt.subtract({ nanoseconds: 1 }))
-        .withdrawable
+      contract.assess(cutoff.subtract({ milliseconds: 1 })).withdrawable
     ).toBe(true);
-    expect(contract.assess(assessment.periodEndsAt)).toEqual({
+    expect(contract.assess(cutoff)).toEqual({
       withdrawable: false,
       reason: "period_ended",
     });

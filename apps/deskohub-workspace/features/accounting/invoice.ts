@@ -10,11 +10,10 @@ export {
 
 import { Schema } from "effect";
 import { m } from "@/features/i18n";
-import { unlimitedPassCoffeePrice } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
-import { withPassPurchaseAddons } from "@/features/passes/pass-purchase-quote";
+import { withPassPurchaseCoffee } from "@/features/passes/pass-purchase-quote";
 import { workspaceCurrencyCodeSchema } from "@/shared/money/currencies";
-import { moneyToDecimalString } from "@/shared/money/money";
+import { moneyToDecimalString, moneyWithValue } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
   instantStringSchema,
@@ -349,7 +348,7 @@ export const makePassPurchaseInvoiceDocument = (input: {
   readonly paidAt: Temporal.Instant;
 }): EntryPackInvoiceDocument => {
   const { source, invoiceNumber } = input;
-  const { locale, quote, product } = source;
+  const { locale, quote, product, coffeeAmountMinor } = source;
   const issuedAt = instantStringSchema.make(
     temporalInstantToIsoString(input.issuedAt)
   );
@@ -396,17 +395,19 @@ export const makePassPurchaseInvoiceDocument = (input: {
         description: discount.label,
         price: moneyToDecimalString({ ...amount, value: -amount.value }),
       })),
-      ...(source.unlimitedCoffee
+      ...(coffeeAmountMinor !== undefined
         ? [
             {
               description: m.checkoutSummaryItemCoffee({}, { locale }),
-              price: moneyToDecimalString(unlimitedPassCoffeePrice),
+              price: moneyToDecimalString(
+                moneyWithValue(coffeeAmountMinor, quote.discountedSubtotal)
+              ),
             },
           ]
         : []),
     ],
     total: moneyToDecimalString(
-      withPassPurchaseAddons(quote.discountedSubtotal, source.unlimitedCoffee)
+      withPassPurchaseCoffee(quote.discountedSubtotal, coffeeAmountMinor)
     ),
     provenance: getInvoiceGenerationProvenance(issuedAt),
   });

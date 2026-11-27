@@ -10,7 +10,6 @@ import {
   canonicalPromotionCodeSchema,
   discountIdSchema,
 } from "@/features/discounts/contracts";
-import { getEarlyPerformanceRequestRequiredAt } from "@/features/legal/early-performance";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { instantStringSchema } from "@/shared/utils/temporal";
@@ -25,7 +24,7 @@ const reservation = {
   kind: "cowork" as const,
   entryTier: "basic" as const,
   coffee: false,
-  date: "2026-08-04",
+  date: "2026-12-14",
   name: "Ada Lovelace",
   email: testEmailAddress("ada"),
   phone: "+420777000111",
@@ -121,21 +120,22 @@ describe("getPayStateCheckoutView", () => {
     );
   });
 
-  test("asks for early-performance consent from the instant the Pay page does", async () => {
+  test("asks for early-performance consent from the start of the extended window", async () => {
     const state = await buildState();
-    const requiredAt = getEarlyPerformanceRequestRequiredAt(state.reservation);
-    const before = requiredAt.subtract({ seconds: 1 });
+    const requiredFrom = "2026-11-27T23:00:00.000Z";
+    const requiredAt = Temporal.Instant.from(requiredFrom);
+    const before = requiredAt.subtract({ milliseconds: 1 });
 
     const early = getPayStateCheckoutView(state, before);
     const due = getPayStateCheckoutView(state, requiredAt);
 
     expect(early.earlyPerformanceConsent).toEqual({
       required: false,
-      requiredFrom: requiredAt.toString({ smallestUnit: "millisecond" }),
+      requiredFrom,
     });
     expect(due.earlyPerformanceConsent).toEqual({
       required: true,
-      requiredFrom: requiredAt.toString({ smallestUnit: "millisecond" }),
+      requiredFrom,
     });
   });
 });

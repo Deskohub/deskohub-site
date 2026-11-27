@@ -3,10 +3,9 @@ import type { DiscountQuote } from "@/features/discounts/contracts";
 import { type Locale, m } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
 import type { EntryPackSize, PassTier } from "@/features/passes/pass-offer";
-import { unlimitedPassCoffeePrice } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
-import { withPassPurchaseAddons } from "@/features/passes/pass-purchase-quote";
-import { formatMoney } from "@/shared/money/money";
+import { withPassPurchaseCoffee } from "@/features/passes/pass-purchase-quote";
+import { formatMoney, moneyWithValue } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils";
 import {
   formatInstantDateTime,
@@ -38,7 +37,7 @@ export type EntryPackPurchaseEmailProps = {
   readonly locale: Locale;
   readonly statusUrl: string;
   readonly accessUrl?: string;
-  readonly unlimitedCoffee?: boolean;
+  readonly coffeeAmountMinor?: number;
   readonly termsUrl: string;
 };
 
@@ -52,7 +51,8 @@ export const entryPackPurchaseEmailSubject = ({
     : m.passEmailSubject({}, { locale });
 
 export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
-  const { locale, orderId, paidAt, quote, holderEmail } = props;
+  const { locale, orderId, paidAt, quote, holderEmail, coffeeAmountMinor } =
+    props;
   const options = { locale };
   const title = entryPackPurchaseEmailSubject(props);
   const unlimited = props.entryCount === null;
@@ -76,9 +76,9 @@ export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
   });
   const money = (amount: DiscountQuote["discountedSubtotal"]) =>
     formatMoney(amount, locale);
-  const total = withPassPurchaseAddons(
+  const total = withPassPurchaseCoffee(
     quote.discountedSubtotal,
-    props.unlimitedCoffee
+    coffeeAmountMinor
   );
 
   return (
@@ -149,11 +149,13 @@ export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
             label: discount.label,
             value: `−${money(amount)}`,
           })),
-          ...(props.unlimitedCoffee
+          ...(coffeeAmountMinor !== undefined
             ? [
                 {
                   label: m.checkoutSummaryItemCoffee({}, options),
-                  value: money(unlimitedPassCoffeePrice),
+                  value: money(
+                    moneyWithValue(coffeeAmountMinor, quote.discountedSubtotal)
+                  ),
                 },
               ]
             : []),

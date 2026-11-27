@@ -457,18 +457,19 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
     });
   });
 
-  test("starts the withdrawal period when the buyer receives the confirmation", async () => {
+  test("counts from confirmation delivery through the extended final day", async () => {
     const pass = await seedPass(amount, defaultReservationBillingSelection, {
       acceptedAt: "2027-03-20T09:00:00Z",
-      deliveredAt: "2027-03-25T20:00:00Z",
+      deliveredAt: "2027-03-27T20:00:00Z",
     });
     const contract = Option.getOrThrow(await find(pass.id, pass.buyer));
-    // Prague midnight after the fourteenth following calendar day.
-    const cutoff = Temporal.Instant.from("2027-04-08T22:00:00Z");
-    expect(contract.assess(cutoff.subtract({ seconds: 1 }))).toMatchObject({
-      withdrawable: true,
-      periodEndsAt: cutoff,
-    });
+    const cutoff = Temporal.Instant.from("2027-04-12T22:00:00Z");
+    expect(contract.assess(cutoff.subtract({ milliseconds: 1 }))).toMatchObject(
+      {
+        withdrawable: true,
+        periodEndsAt: cutoff,
+      }
+    );
     expect(contract.assess(cutoff)).toEqual({
       withdrawable: false,
       reason: "period_ended",

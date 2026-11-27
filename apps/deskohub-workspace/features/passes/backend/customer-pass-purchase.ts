@@ -4,6 +4,7 @@ import { Effect, Option, Schema } from "effect";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import type { CustomerAccountSession } from "@/features/account/backend/customer-authentication.service";
 import type { CustomerProfileSave } from "@/features/account/contracts";
+import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import type { CanonicalPromotionCode } from "@/features/discounts/contracts";
 import { normalizeSubmittedPromotionCode } from "@/features/discounts/promotion-code";
 import type { Locale } from "@/features/i18n";
@@ -354,7 +355,10 @@ export const payPurchase = Effect.fn("passes.payPurchase")(
         result.status === "pricing_changed"
           ? {
               status: result.status,
-              price: displayPassPurchasePrice(result.quote),
+              price: displayPassPurchasePrice(
+                result.quote,
+                result.coffeeAmountMinor
+              ),
             }
           : result
       ),
@@ -387,6 +391,7 @@ export const purchaseStatus = Effect.fn("passes.purchaseStatus")(function* (
   if (!("priorPaymentAttemptId" in result) || !result.priorPaymentAttemptId) {
     return result;
   }
+  const { priorPaymentAttemptId } = result;
   const actor = yield* CurrentCustomerAccount;
   const { accountId } = yield* actor.requireActive;
   const product = result.entryCount === null ? "unlimited" : "entry-pack";
@@ -395,7 +400,15 @@ export const purchaseStatus = Effect.fn("passes.purchaseStatus")(function* (
     accountId,
     product
   );
-  if (current?.order.activePaymentAttemptId !== result.priorPaymentAttemptId) {
+  const ownsAttempt =
+    current?.order.activePaymentAttemptId === priorPaymentAttemptId;
+  const snapshot =
+    product === "unlimited" && ownsAttempt
+      ? yield* AccountingDocumentSnapshots.use((snapshots) =>
+          snapshots.findPassPurchase(priorPaymentAttemptId)
+        )
+      : null;
+  if (!ownsAttempt || (product === "unlimited" && !snapshot)) {
     return {
       orderId,
       tier: result.tier,
@@ -409,7 +422,7 @@ export const purchaseStatus = Effect.fn("passes.purchaseStatus")(function* (
   );
   return {
     ...result,
-    price: displayPassPurchasePrice(quote),
+    price: displayPassPurchasePrice(quote, snapshot?.coffeeAmountMinor ?? null),
     disclosure: yield* readPaymentDisclosure(
       product,
       purchase.locale,
