@@ -1,11 +1,17 @@
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { Effect, Exit, Layer } from "effect";
 import { mockAdministrationActionRequest } from "@/shared/testing/workspace-action-request.test-utils";
+import type { ICampaignService } from "../backend/campaign.service";
+import type { ICampaignAudienceService } from "../backend/campaign-audience.service";
 import { automationServiceStubs } from "../backend/campaign-operations.test-utils";
 import type { ICampaignSendService } from "../backend/campaign-send.service";
+import type { CampaignBodyNode } from "../body/campaign-body-document";
 import {
+  type CampaignAudienceId,
+  type CampaignId,
   campaignAudienceIdSchema,
   campaignIdSchema,
 } from "../campaign-identifiers";
@@ -43,48 +49,35 @@ const archivedAudience = {
   archivedAt: syntheticInstant,
   createdAt: syntheticInstant,
   updatedAt: syntheticInstant,
-};
-const archiveAudience = mock((_audienceId: string) =>
-  Effect.succeed(archivedAudience)
+} satisfies Effect.Success<ReturnType<ICampaignAudienceService["archive"]>>;
+const archiveAudience = mock(
+  (
+    _audienceId: CampaignAudienceId
+  ): ReturnType<ICampaignAudienceService["archive"]> =>
+    Effect.succeed(archivedAudience)
 );
 
 let holdsGrant = true;
-let sendResult: Effect.Effect<unknown, unknown> = Effect.succeed({});
-let deleteResult: Effect.Effect<unknown, unknown> = Effect.void;
-const deleteCampaign = mock((_campaignId: string) => deleteResult);
+let sendResult: ReturnType<ICampaignSendService["send"]> = Effect.die(
+  "Unexpected campaign send"
+);
+let deleteResult: ReturnType<ICampaignService["delete"]> = Effect.void;
+const deleteCampaign = mock((_campaignId: CampaignId) => deleteResult);
 const send = mock(
   (_input: Parameters<ICampaignSendService["send"]>[0]) => sendResult
 );
 
 const stubbedDomain = Layer.mergeAll(
-  Layer.succeed(
-    grantsModule.AccountRoleGrants,
-    grantsModule.AccountRoleGrants.of({
-      has: () => Effect.succeed(holdsGrant),
-    } as never)
-  ),
-  Layer.succeed(
-    audienceModule.CampaignAudienceService,
-    audienceModule.CampaignAudienceService.of({
-      archive: archiveAudience,
-    } as never)
-  ),
-  Layer.succeed(
-    campaignModule.CampaignService,
-    campaignModule.CampaignService.of({ delete: deleteCampaign } as never)
-  ),
-  Layer.succeed(
-    recipientModule.CampaignRecipientService,
-    recipientModule.CampaignRecipientService.of({} as never)
-  ),
-  Layer.succeed(
-    sendModule.CampaignSendService,
-    sendModule.CampaignSendService.of({ send } as never)
-  ),
-  Layer.succeed(
-    sendStatusModule.CampaignSendStatusService,
-    sendStatusModule.CampaignSendStatusService.of({} as never)
-  ),
+  Layer.mock(grantsModule.AccountRoleGrants, {
+    has: () => Effect.succeed(holdsGrant),
+  }),
+  Layer.mock(audienceModule.CampaignAudienceService, {
+    archive: archiveAudience,
+  }),
+  Layer.mock(campaignModule.CampaignService, { delete: deleteCampaign }),
+  Layer.mock(recipientModule.CampaignRecipientService, {}),
+  Layer.mock(sendModule.CampaignSendService, { send }),
+  Layer.mock(sendStatusModule.CampaignSendStatusService, {}),
   automationServiceStubs()
 );
 
@@ -101,6 +94,9 @@ mock.module("../backend/campaign-operations.service", () => ({
 }));
 
 const { runCampaignOperation } = await import("./campaign-operations.actions");
+const { campaignOperationAction } = await import(
+  "./campaign-operation-action.server"
+);
 const { CurrentAdministrator } = await import(
   "@/features/administrators/backend/current-administrator"
 );
@@ -114,7 +110,7 @@ const { toCampaignPreviewInput } = await import(
 beforeEach(() => {
   access.set("administrator");
   holdsGrant = true;
-  sendResult = Effect.succeed({});
+  sendResult = Effect.die("Unexpected campaign send");
   deleteResult = Effect.void;
   deleteCampaign.mockClear();
   send.mockClear();
@@ -198,7 +194,7 @@ describe("runCampaignOperation", () => {
 
   test("doesn't revalidate after a failed mutation", async () => {
     deleteResult = Effect.fail(
-      new CampaignReadOnly({ campaignId, status: "sent" } as never)
+      new CampaignReadOnly({ campaignId, status: "sent" })
     );
 
     const result = await runCampaignOperation({
@@ -252,9 +248,9 @@ describe("runCampaignOperation", () => {
   });
 
   test("returns input the port rejects as an invalid-input failure", async () => {
-    const result = await runCampaignOperation({
+    const result = await campaignOperationAction({
       operation: "deleteCampaign",
-      input: { campaignId, unexpected: true } as never,
+      input: { campaignId, unexpected: true },
     });
 
     expect(result?.data).toMatchObject({
@@ -267,12 +263,9 @@ describe("runCampaignOperation", () => {
 
   test("refuses a campaign ID that isn't text before the handler runs", async () => {
     // A client can send any payload; this one arrives with a numeric ID.
-    const input = { campaignId };
-    Object.assign(input, { campaignId: 42 });
-
-    const result = await runCampaignOperation({
+    const result = await campaignOperationAction({
       operation: "deleteCampaign",
-      input,
+      input: { campaignId: 42 },
     });
 
     expect(result?.data).toMatchObject({
@@ -305,7 +298,13 @@ describe("runCampaignOperation", () => {
     archiveAudience.mockImplementationOnce(() =>
       Effect.succeed({
         ...archivedAudience,
-        filter: { ...archivedAudience.filter, operator: "xor" },
+        filter: {
+          _tag: "Condition",
+          attribute: "reservationCount",
+          params: { dateBasis: "visit", period: { _tag: "AnyTime" } },
+          operator: "eq",
+          value: -1,
+        },
       })
     );
 
@@ -322,8 +321,8 @@ describe("runCampaignOperation", () => {
   });
 
   test("rejects an operation the registry doesn't know", async () => {
-    const result = await runCampaignOperation({
-      operation: "dropAllCampaigns" as never,
+    const result = await campaignOperationAction({
+      operation: "dropAllCampaigns",
       input: {},
     });
 
@@ -350,7 +349,7 @@ describe("composer preview", () => {
       )
     );
 
-  const link = (href: string | null) => ({
+  const link = (href: string | null): CampaignBodyNode => ({
     type: "paragraph",
     content: [
       { type: "text", text: "Visit " },
@@ -362,7 +361,7 @@ describe("composer preview", () => {
     ],
   });
 
-  const previewInput = (...content: ReadonlyArray<object>) =>
+  const previewInput = (...content: readonly CampaignBodyNode[]) =>
     toCampaignPreviewInput({
       templateKey: "workspace",
       purpose: "operational",
@@ -370,15 +369,18 @@ describe("composer preview", () => {
       fields: {
         subject: " Synthetic news ",
         preheader: "Synthetic preheader",
-        body: { type: "doc", content } as never,
+        body: { type: "doc", content },
         operationalReason: "",
       },
     });
 
-  const strict = (input: ReturnType<typeof previewInput>) => ({
-    ...input,
-    preview: { ...input.preview, _tag: "Content" as const },
-  });
+  const strict = (input: ReturnType<typeof previewInput>) => {
+    assert(input.preview._tag === "UnfinishedContent");
+    return {
+      ...input,
+      preview: { ...input.preview, _tag: "Content" as const },
+    };
+  };
 
   test("renders unfinished buttons and links as the port does", async () => {
     const input = previewInput(
