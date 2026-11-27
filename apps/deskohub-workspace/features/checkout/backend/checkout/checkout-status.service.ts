@@ -27,7 +27,7 @@ import {
 } from "@/features/reservation/backend/booking-selection";
 import type { CustomerReservationPlacement } from "@/features/reservation/backend/customer-reservation-placement";
 import { getCustomerReservationPlacement } from "@/features/reservation/backend/customer-reservation-placement";
-import { loadOpenSpaceExcludedTableIds } from "@/features/reservation/backend/open-space-table-exclusions";
+import { loadOpenSpaceTableExclusions } from "@/features/reservation/backend/open-space-table-exclusions";
 import type { ReservationRecord } from "@/features/reservation/backend/reservation-record";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
@@ -934,14 +934,18 @@ const implementation = Effect.gen(function* () {
           ? reconstruction.placement
           : undefined;
       const openSpaceExcludedTableIds = source?.tables.length
-        ? yield* loadOpenSpaceExcludedTableIds(
-            {
-              reservationDetails: reservation.reservationDetails,
-              occupiedInterval: source.occupiedInterval,
-            },
+        ? yield* loadOpenSpaceTableExclusions(
+            [
+              {
+                id: reservation.id,
+                reservationDetails: reservation.reservationDetails,
+                occupiedInterval: source.occupiedInterval,
+              },
+            ],
             { dotypos, reservations }
           ).pipe(
             Effect.timeout(summaryTimeout),
+            Effect.map((exclusions) => exclusions.get(reservation.id)),
             Effect.tapError((cause) =>
               Effect.logWarning(
                 "Checkout status Open Space table exclusions load failed",

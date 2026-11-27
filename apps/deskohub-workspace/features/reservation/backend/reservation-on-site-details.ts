@@ -15,7 +15,7 @@ import {
   type CustomerReservationPlacement,
   getCustomerReservationPlacement,
 } from "./customer-reservation-placement";
-import { loadOpenSpaceExcludedTableIds } from "./open-space-table-exclusions";
+import { loadOpenSpaceTableExclusions } from "./open-space-table-exclusions";
 import { WorkspaceReservationRepository } from "./workspace-reservation.repository";
 
 /**
@@ -79,33 +79,39 @@ export class ReservationOnSite extends Context.Service<
               ),
               Effect.orElseSucceed(() => [])
             );
+            const exclusions = yield* loadOpenSpaceTableExclusions(
+              bookings.map(
+                ({ id, reservationDetails, dotyposReservation }) => ({
+                  id,
+                  reservationDetails,
+                  occupiedInterval: decodeBookedReservation(
+                    dotyposReservation,
+                    reservationDetails
+                  ).occupiedInterval,
+                })
+              ),
+              { dotypos, reservations }
+            ).pipe(
+              Effect.tapError((cause) =>
+                Effect.logWarning(
+                  "Reservation on-site Open Space table exclusions load failed",
+                  { cause }
+                )
+              ),
+              Effect.orElseSucceed(() => undefined)
+            );
             const details = yield* Effect.forEach(
               bookings,
-              Effect.fnUntraced(function* (reservation) {
-                const { id, reservationDetails, dotyposReservation } =
-                  reservation;
-                const { occupiedInterval } = decodeBookedReservation(
-                  dotyposReservation,
-                  reservationDetails
-                );
-                const openSpaceExcludedTableIds =
-                  yield* loadOpenSpaceExcludedTableIds(
-                    { reservationDetails, occupiedInterval },
-                    { dotypos, reservations }
-                  ).pipe(
-                    Effect.tapError((cause) =>
-                      Effect.logWarning(
-                        "Reservation on-site Open Space table exclusions load failed",
-                        { cause }
-                      )
-                    ),
-                    Effect.orElseSucceed(() => undefined)
-                  );
+              Effect.fnUntraced(function* ({
+                id,
+                reservationDetails,
+                dotyposReservation,
+              }) {
                 const { table } = getCustomerReservationPlacement({
                   reservationDetails,
                   dotyposReservation,
                   tables,
-                  openSpaceExcludedTableIds,
+                  openSpaceExcludedTableIds: exclusions?.get(id),
                   seatingMap: false,
                 });
                 const network = yield* networks.resolveCustomerNetworkDetails({

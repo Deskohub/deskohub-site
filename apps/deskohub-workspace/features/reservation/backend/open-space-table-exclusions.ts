@@ -6,7 +6,10 @@ import {
   getTableBookingOccupancyById,
   toTableBookings,
 } from "@/features/checkout/backend/reservation/workspace-table-occupancy";
-import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
+import type {
+  StoredWorkspaceReservationDetails,
+  WorkspaceReservationId,
+} from "@/features/reservation/persistence-contracts";
 import { currentInstant } from "@/shared/utils/temporal";
 import type { BookedInterval } from "./booked-reservation";
 import { hasSharedSeating } from "./customer-reservation-placement";
@@ -25,54 +28,70 @@ type OpenSpacePlacementReads = {
 };
 
 /** A Team Table is identified locally, but its current table comes from Dotypos. */
-export const loadOpenSpaceExcludedTableIds = Effect.fn(
-  "loadOpenSpaceExcludedTableIds"
+export const loadOpenSpaceTableExclusions = Effect.fn(
+  "loadOpenSpaceTableExclusions"
 )(function* (
-  input: {
+  bookings: readonly {
+    readonly id: WorkspaceReservationId;
     readonly reservationDetails: StoredWorkspaceReservationDetails;
     readonly occupiedInterval: Option.Option<BookedInterval>;
-  },
+  }[],
   { dotypos, reservations }: OpenSpacePlacementReads
 ) {
-  if (
-    !hasSharedSeating(input.reservationDetails) ||
-    Option.isNone(input.occupiedInterval)
-  ) {
-    return undefined;
-  }
+  const windows = bookings.flatMap(
+    ({ id, reservationDetails, occupiedInterval }) =>
+      hasSharedSeating(reservationDetails) && Option.isSome(occupiedInterval)
+        ? [
+            {
+              id,
+              startsAt: occupiedInterval.value.startsAt.epochMilliseconds,
+              endsAt: occupiedInterval.value.endsAt.epochMilliseconds,
+            },
+          ]
+        : []
+  );
+  const exclusions = new Map<
+    WorkspaceReservationId,
+    ReadonlySet<DotyposTableId>
+  >();
+  const first = windows[0];
+  if (!first) return exclusions;
 
-  const { startsAt, endsAt } = input.occupiedInterval.value;
-  const window = {
-    startsAt: startsAt.epochMilliseconds,
-    endsAt: endsAt.epochMilliseconds,
-  };
+  const bounds = windows.reduce(
+    (span, window) => ({
+      startsAt: Math.min(span.startsAt, window.startsAt),
+      endsAt: Math.max(span.endsAt, window.endsAt),
+    }),
+    { startsAt: first.startsAt, endsAt: first.endsAt }
+  );
   const observed = yield* dotypos.listActiveReservationsOverlapping(
-    getOccupancyWindowDates(window)
+    getOccupancyWindowDates(bounds)
   );
   const candidateIds = observed.flatMap(({ id, _tableId }) =>
     id && _tableId ? [id] : []
   );
-  if (candidateIds.length === 0) return new Set<DotyposTableId>();
-
   const teamTableIds = new Set(
-    yield* reservations.selectTeamTableDotyposReservationIds(candidateIds)
+    candidateIds.length
+      ? yield* reservations.selectTeamTableDotyposReservationIds(candidateIds)
+      : []
   );
-  if (teamTableIds.size === 0) return new Set<DotyposTableId>();
+  const expiredIds = teamTableIds.size
+    ? yield* reservations.selectExpiredHoldDotyposReservationIds({
+        now: yield* currentInstant,
+      })
+    : [];
+  const activeTeamTables = toTableBookings(
+    excludeDotyposReservationsById(
+      observed.filter(({ id }) => id && teamTableIds.has(id)),
+      expiredIds
+    )
+  );
 
-  const expiredIds = yield* reservations.selectExpiredHoldDotyposReservationIds(
-    {
-      now: yield* currentInstant,
-    }
-  );
-  const activeTeamTables = excludeDotyposReservationsById(
-    observed.filter(({ id }) => id && teamTableIds.has(id)),
-    expiredIds
-  );
-
-  return new Set(
-    getTableBookingOccupancyById(
-      toTableBookings(activeTeamTables),
-      window
-    ).keys()
-  );
+  for (const window of windows) {
+    exclusions.set(
+      window.id,
+      new Set(getTableBookingOccupancyById(activeTeamTables, window).keys())
+    );
+  }
+  return exclusions;
 });

@@ -17,7 +17,7 @@ import {
   type CustomerReservationPlacement,
   getCustomerReservationPlacement,
 } from "@/features/reservation/backend/customer-reservation-placement";
-import { loadOpenSpaceExcludedTableIds } from "@/features/reservation/backend/open-space-table-exclusions";
+import { loadOpenSpaceTableExclusions } from "@/features/reservation/backend/open-space-table-exclusions";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
 import {
   type WorkspaceReservation,
@@ -187,13 +187,17 @@ export class WorkspaceReservationService extends Context.Service<
           const seats = booked.seats.value;
 
           const openSpaceExcludedTableIds = requireOpenSpaceTableNames
-            ? yield* loadOpenSpaceExcludedTableIds(
-                {
-                  reservationDetails: reservation.reservationDetails,
-                  occupiedInterval: booked.occupiedInterval,
-                },
+            ? yield* loadOpenSpaceTableExclusions(
+                [
+                  {
+                    id: reservation.id,
+                    reservationDetails: reservation.reservationDetails,
+                    occupiedInterval: booked.occupiedInterval,
+                  },
+                ],
                 { dotypos, reservations }
               ).pipe(
+                Effect.map((exclusions) => exclusions.get(reservation.id)),
                 Effect.mapError(
                   (cause) =>
                     new WorkspaceReservationDetailsError({

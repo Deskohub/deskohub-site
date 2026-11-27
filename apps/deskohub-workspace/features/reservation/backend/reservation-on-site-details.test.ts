@@ -1,7 +1,7 @@
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
-import { expect, test } from "bun:test";
+import { expect, mock, test } from "bun:test";
 import {
   type DotyposReservation,
   type DotyposReservationId,
@@ -64,11 +64,12 @@ const providerBooking = (
 const network = { ssid: "Test Wi-Fi", password: "test-password" };
 
 const loadOnSite = (
-  readInterval: DotyposService["Service"]["listActiveReservationsOverlapping"]
+  readInterval: DotyposService["Service"]["listActiveReservationsOverlapping"],
+  bookings: readonly OnSiteReservation[] = [reservation]
 ) =>
   Effect.gen(function* () {
     const onSite = yield* ReservationOnSite;
-    return yield* onSite.forReservations([reservation]);
+    return yield* onSite.forReservations(bookings);
   }).pipe(
     Effect.provide(
       ReservationOnSite.Default.pipe(
@@ -129,4 +130,38 @@ test("on-site details keep the network when the Open Space table check fails", a
   );
 
   expect(details.get(reservation.id)).toEqual({ network });
+});
+
+test("batches on-site overlap reads and excludes tables only within each booking", async () => {
+  const afternoon: OnSiteReservation = {
+    ...reservation,
+    id: workspaceReservationIdSchema.make("afternoon-booking"),
+    dotyposReservation: {
+      ...reservation.dotyposReservation,
+      startDate: "2026-06-12T11:00:00Z",
+      endDate: "2026-06-12T15:00:00Z",
+    },
+  };
+  const readInterval = mock(() =>
+    Effect.succeed([
+      providerBooking("morning-team", "12", "10:00", "11:00"),
+      providerBooking("afternoon-team", "13", "11:00", "12:00"),
+    ])
+  );
+
+  const details = await loadOnSite(readInterval, [reservation, afternoon]);
+
+  expect(readInterval).toHaveBeenCalledTimes(1);
+  expect(readInterval).toHaveBeenCalledWith({
+    startDate: new Date("2026-06-12T07:00:00Z"),
+    endDate: new Date("2026-06-12T15:00:00Z"),
+  });
+  expect(details.get(reservation.id)?.table).toEqual({
+    mode: "shared",
+    name: "9-11, 13, 14",
+  });
+  expect(details.get(afternoon.id)?.table).toEqual({
+    mode: "shared",
+    name: "9-12, 14",
+  });
 });
