@@ -1,8 +1,12 @@
 import "@/shared/testing/workspace-test-env";
 
-import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import {
+  DotyposCloudIdSchema,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import {
@@ -61,6 +65,7 @@ import {
 import { EmailPreparationRetry } from "@/features/emails/values/preparation";
 import type { Locale } from "@/features/i18n";
 import { analyticsConsentLedgerOf } from "@/features/legal/backend/analytics-consent-ledger.test-utils";
+import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
@@ -94,7 +99,16 @@ const invite =
   "https://workspace.deskohub.cz/en-US/reservation/cowork?entryTier=open-space";
 const sender = testEmailAddress("campaigns");
 const adminInbox = testEmailAddress("admin");
-const primary = ["first", "second"] as const;
+const decodeResendBatch = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        to: Schema.Union([Schema.String, Schema.Array(Schema.String)]),
+        html: Schema.String,
+      })
+    )
+  )
+);
 
 const bookingCode = (message: Pick<EmailMessage, "html"> | undefined) => {
   const href = message?.html?.match(
@@ -159,18 +173,22 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
     } = {}
   ) => {
     const now = Temporal.Now.instant();
-    const recipients = [...primary, "withdrawn", "untranslated"].map(
-      (name) => ({
-        dotyposCustomerId: DotyposCustomerIdSchema.make(`${tag}-${name}`),
-        email: testEmailAddress(`${tag}-${name}`),
-        locale: (name === "untranslated" ? "hi-IN" : "en-US") satisfies Locale,
-      })
-    );
+    const recipient = (name: string, locale: Locale = "en-US") => ({
+      dotyposCustomerId: DotyposCustomerIdSchema.make(`${tag}-${name}`),
+      email: testEmailAddress(`${tag}-${name}`),
+      locale,
+    });
+    const recipients = [
+      recipient("first"),
+      recipient("second"),
+      recipient("withdrawn"),
+      recipient("untranslated", "hi-IN"),
+    ] as const;
     const dotypos = makeInMemoryDotypos({
       customers: recipients.map(({ dotyposCustomerId, email }) => ({
         id: dotyposCustomerId,
         email,
-        _cloudId: "test",
+        _cloudId: DotyposCloudIdSchema.make("test"),
         display: true,
         flags: "0",
         points: "0",
@@ -598,7 +616,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
     );
     await pool.query(
       "update customer_marketing_consents set withdrawn_at = now() where dotypos_customer_id = $1",
-      [recipients[2]!.dotyposCustomerId]
+      [recipients[2].dotyposCustomerId]
     );
     const issuanceIdentity = async () => {
       const { rows } = await pool.query(
@@ -620,7 +638,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
         customerValuesAvailable = available;
       },
       moveFirstRecipient: () => {
-        const id = recipients[0]!.dotyposCustomerId;
+        const id = recipients[0].dotyposCustomerId;
         const customer = dotypos.customers.get(id);
         if (!customer) throw new Error("Missing synthetic customer");
         dotypos.customers.set(id, {
@@ -640,7 +658,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
             change === "withdraw"
               ? "update customer_marketing_consents set withdrawn_at = now() where dotypos_customer_id = $1"
               : "update discount_codes set enabled = false where id in (select code_id from discount_code_customers where dotypos_customer_id = $1)",
-            [recipients[0]!.dotyposCustomerId]
+            [recipients[0].dotyposCustomerId]
           );
         };
       },
@@ -648,7 +666,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
         afterFirstRecipientRequest = () =>
           pool.query(
             "update discount_codes set enabled = false where id in (select code_id from discount_code_customers where dotypos_customer_id = $1)",
-            [recipients[0]!.dotyposCustomerId]
+            [recipients[0].dotyposCustomerId]
           );
       },
       interruptBeforeAdmission: () => {
@@ -730,12 +748,14 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
         const existingDraft = await duplicate();
         expect(existingDraft.locales).toEqual(["en-US", "cs-CZ"]);
         if (!campaign.emailId) throw new Error("Missing linked email");
+        const czech = draft.translations?.["cs-CZ"];
+        assert(czech, "Expected the Czech draft translation");
         await Effect.runPromise(
           writeEmailDraft({
             emailId: campaign.emailId,
             draft: {
               ...draft,
-              translations: { "cs-CZ": draft.translations["cs-CZ"]! },
+              translations: { "cs-CZ": czech },
             },
             publish: true,
           }).pipe(Effect.provide(sending))
@@ -801,8 +821,9 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
     for (const [index, message] of (first?.messages ?? []).entries()) {
       const code = bookingCode(message);
       if (!code) throw new Error("The booking link did not contain a code");
-      const owner = run.recipients[index]!.dotyposCustomerId;
-      const other = run.recipients[1 - index]!.dotyposCustomerId;
+      const owner = run.recipients[index]?.dotyposCustomerId;
+      const other = run.recipients[1 - index]?.dotyposCustomerId;
+      assert(owner && other, "Expected a pair of campaign recipients");
       expect(Exit.isSuccess(await validatesAtCheckout(code, owner, now))).toBe(
         true
       );
@@ -949,7 +970,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
         Exit.isSuccess(
           await validatesAtCheckout(
             code,
-            run.recipients[1]!.dotyposCustomerId,
+            run.recipients[1].dotyposCustomerId,
             Temporal.Now.instant()
           )
         )
@@ -959,7 +980,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
       ).toBe(1);
       const { rows } = await pool.query(
         "select status, skip_reason from email_campaign_recipients where send_id = $1 and dotypos_customer_id = $2",
-        [run.sendId, run.recipients[0]!.dotyposCustomerId]
+        [run.sendId, run.recipients[0].dotyposCustomerId]
       );
       expect(rows).toEqual([
         change === "withdraw"
@@ -1067,10 +1088,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
         key: string | null;
         body: string;
       }[] = [];
-      const fetching = spyOn(globalThis, "fetch").mockImplementation((async (
-        url: RequestInfo | URL,
-        init?: RequestInit
-      ) => {
+      const fetching = stubFetch(async (url, init) => {
         const body = String(init?.body);
         resendRequests.push({
           url: String(url),
@@ -1078,11 +1096,11 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
           body,
         });
         return Response.json({
-          data: (JSON.parse(body) as unknown[]).map((_, index) => ({
+          data: decodeResendBatch(body).map((_, index) => ({
             id: `synthetic-resend-${status}-${index}`,
           })),
         });
-      }) as typeof fetch);
+      });
       try {
         expect(Exit.isSuccess(await run.deliver())).toBe(true);
         expect(postHogRequests).toBe(postHogAttempts);
@@ -1096,28 +1114,27 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
       }
       const [first, second] = run.recipients;
       const [request] = resendRequests;
-      expect(request?.url.endsWith("/emails/batch")).toBe(true);
-      const sent = JSON.parse(request?.body ?? "[]") as {
-        readonly to: string | string[];
-        readonly html: string;
-      }[];
+      assert(request, "Expected the Resend fallback request");
+      expect(request.url.endsWith("/emails/batch")).toBe(true);
+      const sent = decodeResendBatch(request.body);
       expect(sent.length).toBe(1);
-      expect([sent[0]?.to].flat().join() === second!.email).toBe(true);
+      expect([sent[0]?.to].flat().join() === second.email).toBe(true);
 
       expect(pinned.length).toBe(1);
       expect(await persistedBatches()).toEqual(pinned);
       const [batch] = pinned;
-      const eligible = batch!.dotypos_customer_ids.indexOf(`${tag}-second`);
+      assert(batch, "Expected a persisted delivery batch");
+      const eligible = batch.dotypos_customer_ids.indexOf(`${tag}-second`);
       const subset = createHash("sha256")
         .update(`1:${eligible}`)
         .digest("hex")
         .slice(0, 16);
       const batchKey = campaignDeliveryBatchIdempotencyKey({
-        sendId: batch!.send_id,
-        deliveryAttempt: batch!.delivery_attempt,
-        batchIndex: batch!.batch_index,
+        sendId: batch.send_id,
+        deliveryAttempt: batch.delivery_attempt,
+        batchIndex: batch.batch_index,
       });
-      expect(request?.key).toBe(`${batchKey}:fallback:${subset}`);
+      expect(request.key).toBe(`${batchKey}:fallback:${subset}`);
 
       const { rows } = await pool.query(
         `select r.status, r.provider_message_id, p.delivery_outcome
@@ -1125,7 +1142,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
          join email_preparations p on p.send_id = r.send_id and p.dotypos_customer_id = r.dotypos_customer_id
          where r.send_id = $1 and r.dotypos_customer_id in ($2, $3)
          order by r.dotypos_customer_id`,
-        [run.sendId, first!.dotyposCustomerId, second!.dotyposCustomerId]
+        [run.sendId, first.dotyposCustomerId, second.dotyposCustomerId]
       );
       // The withdrawn recipient keeps the uncertainty of its PostHog request.
       expect(rows).toEqual([
@@ -1146,21 +1163,22 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
         [run.sendId]
       );
       const [withdrawnCode, eligibleCode] = issued.rows.map(({ code }) => code);
-      expect(request?.body.includes(withdrawnCode!)).toBe(false);
-      expect(request?.body.includes(first!.email)).toBe(false);
+      assert(withdrawnCode && eligibleCode, "Expected both issued codes");
+      expect(request.body.includes(withdrawnCode)).toBe(false);
+      expect(request.body.includes(first.email)).toBe(false);
       expect(bookingCode(sent[0]) === eligibleCode).toBe(true);
       expect((await run.issued()).rows.map(({ enabled }) => enabled)).toEqual([
         true,
         true,
       ]);
-      const artifacts = `${request?.key}${run.logged.join("")}${JSON.stringify(rows)}`;
+      const artifacts = `${request.key}${run.logged.join("")}${JSON.stringify(rows)}`;
       const privateValues = [
-        first!.email,
-        second!.email,
-        first!.dotyposCustomerId,
-        second!.dotyposCustomerId,
-        withdrawnCode!,
-        eligibleCode!,
+        first.email,
+        second.email,
+        first.dotyposCustomerId,
+        second.dotyposCustomerId,
+        withdrawnCode,
+        eligibleCode,
       ];
       expect(privateValues.some((value) => artifacts.includes(value))).toBe(
         false
@@ -1210,7 +1228,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
     expect(Exit.isFailure(await run.deliver())).toBe(true);
     await pool.query(
       "update discount_codes set enabled = false where id in (select code_id from discount_code_customers where dotypos_customer_id = $1)",
-      [run.recipients[0]!.dotyposCustomerId]
+      [run.recipients[0].dotyposCustomerId]
     );
     run.answerWith("accept");
     expect(Exit.isSuccess(await run.deliver())).toBe(true);

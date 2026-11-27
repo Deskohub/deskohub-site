@@ -1,6 +1,8 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Effect, Layer, Option } from "effect";
 import { ingestDeliveryReport } from "@/shared/backend/email/delivery-reports";
 import {
@@ -11,6 +13,7 @@ import {
   syntheticWebhookSecret,
 } from "@/shared/backend/email/delivery-reports.test-utils";
 import { ResendWebhookConfig } from "@/shared/backend/email/resend-webhook.config";
+import { campaignSendIdSchema } from "../campaign-identifiers";
 import { campaignDeliveryReports } from "./campaign-delivery-reports";
 import {
   CampaignDeliveryStatusService,
@@ -91,11 +94,13 @@ describe("campaign delivery reports", () => {
         type: Option.some(type),
         providerMessageId: "resend-campaign-email-id",
         recipient: Option.some({
-          campaignSendId: "campaign-send-id",
-          dotyposCustomerId: "dotypos-customer-id",
+          campaignSendId: campaignSendIdSchema.make("campaign-send-id"),
+          dotyposCustomerId: DotyposCustomerIdSchema.make(
+            "dotypos-customer-id"
+          ),
         }),
         occurredAt: Temporal.Instant.from("2026-01-01T12:05:00.000Z"),
-      } as never);
+      });
       expect(spanNames).toContain(campaignSpan);
     }
   );
@@ -193,10 +198,14 @@ describe("campaign delivery reports", () => {
   );
 
   test("maps a failed status update to a retryable webhook error", async () => {
-    const cause = new Error("synthetic campaign update failure");
+    const cause = new EffectDrizzleQueryError({
+      query: "update email_campaign_recipients",
+      params: [],
+      cause: new Error("synthetic campaign update failure"),
+    });
     const { eventId, result } = ingest({
       payload: campaignEvent("email.bounced"),
-      record: () => Effect.fail(cause as never),
+      record: () => Effect.fail(cause),
     });
 
     const error = await Effect.runPromise(Effect.flip(result));

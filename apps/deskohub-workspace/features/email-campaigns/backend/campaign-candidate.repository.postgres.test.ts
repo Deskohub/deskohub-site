@@ -7,7 +7,7 @@ import {
   DotyposReservationIdSchema,
 } from "@deskohub/dotypos";
 import {
-  type AudienceCountCondition,
+  type AudienceConditionOf,
   audienceAttributeCatalogue,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Option } from "effect";
@@ -16,11 +16,7 @@ import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { temporalInstantToDate } from "@/shared/utils/temporal";
-import {
-  type AudienceCondition,
-  audienceFactKey,
-  countFactRequest,
-} from "../audience-filter";
+import { audienceFactKey, countFactRequest } from "../audience-filter";
 import type { CampaignId } from "../campaign-identifiers";
 import type { DatePeriodBounds } from "../date-period";
 import { evaluateAudienceFilter } from "./audience-evaluation";
@@ -412,7 +408,9 @@ describe.skipIf(!testDatabase)(
     });
 
     test("treats an abandoned checkout as no reservation", async () => {
-      const condition = (operator: "gt" | "eq"): AudienceCondition => ({
+      const condition = (
+        operator: "gt" | "eq"
+      ): AudienceConditionOf<"reservationCount"> => ({
         attribute: "reservationCount",
         _tag: "Condition",
         params: { dateBasis: "booking", period: { _tag: "AnyTime" } },
@@ -425,7 +423,7 @@ describe.skipIf(!testDatabase)(
             audienceFactKey(
               countFactRequest(
                 audienceAttributeCatalogue.reservationCount,
-                condition("gt") as AudienceCountCondition,
+                condition("gt"),
                 context
               )
             ),

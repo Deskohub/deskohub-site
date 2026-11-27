@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
+  DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -44,17 +45,16 @@ const facts = (
 const customer = (
   id: string,
   overrides: Partial<DotyposCustomer> = {}
-): DotyposCustomer =>
-  ({
-    id,
-    _cloudId: "cloud",
-    email: testEmailAddress(`customer-${id}`),
-    points: "0",
-    flags: "0",
-    display: true,
-    deleted: false,
-    ...overrides,
-  }) as DotyposCustomer;
+): DotyposCustomer => ({
+  id: customerId(id),
+  _cloudId: DotyposCloudIdSchema.make("cloud"),
+  email: testEmailAddress(`customer-${id}`),
+  points: "0",
+  flags: "0",
+  display: true,
+  deleted: false,
+  ...overrides,
+});
 
 const everyone: AudienceFilter = {
   _tag: "Group",
@@ -78,24 +78,16 @@ const resolve = async (input: {
   const countReceivedCampaignEmails = mock(() =>
     Effect.succeed(input.receivedEmails ?? new Map())
   );
-  const getCustomers = mock((ids: readonly DotyposCustomerId[]) =>
-    Effect.succeed(
-      (input.customers ?? []).filter(
-        ({ id }) => id !== undefined && ids.includes(id)
+  const getCustomers = mock((ids: Iterable<DotyposCustomerId>) => {
+    const requested = new Set(ids);
+    return Effect.succeed(
+      new Map(
+        (input.customers ?? [])
+          .filter(({ id }) => requested.has(id))
+          .map((customer) => [customer.id, customer])
       )
-    ).pipe(
-      Effect.map(
-        (customers) =>
-          new Map(
-            customers.flatMap((customer) =>
-              customer.id === undefined
-                ? []
-                : [[customer.id, customer] as const]
-            )
-          )
-      )
-    )
-  );
+    );
+  });
   const exit = await Effect.runPromiseExit(
     CampaignRecipientService.pipe(
       Effect.flatMap((service) =>
@@ -210,9 +202,9 @@ describe("CampaignRecipientService.resolve", () => {
         locale,
       ])
     ).toEqual([
-      ["1", "en-US"],
-      ["2", "en-US"],
-      ["3", "cs-CZ"],
+      [customerId("1"), "en-US"],
+      [customerId("2"), "en-US"],
+      [customerId("3"), "cs-CZ"],
     ]);
   });
 
@@ -228,12 +220,12 @@ describe("CampaignRecipientService.resolve", () => {
       },
     });
     expect(getCustomers).toHaveBeenCalledTimes(1);
-    expect(getCustomers.mock.calls[0]?.[0]).toEqual(["1"]);
+    expect(getCustomers.mock.calls[0]?.[0]).toEqual([customerId("1")]);
     expect(
       resolution(exit).recipients.map(
         ({ dotyposCustomerId }) => dotyposCustomerId
       )
-    ).toEqual(["1"]);
+    ).toEqual([customerId("1")]);
   });
 
   test("delegates the full survivor selection to the sequential ID read", async () => {
@@ -246,7 +238,9 @@ describe("CampaignRecipientService.resolve", () => {
         customer(dotyposCustomerId)
       ),
     });
-    expect(getCustomers.mock.calls.map(([ids]) => ids.length)).toEqual([250]);
+    expect(
+      getCustomers.mock.calls.map(([ids]) => Array.from(ids).length)
+    ).toEqual([250]);
   });
 
   test("applies Dotypos tag and discount-group conditions after hydration", async () => {
@@ -292,7 +286,7 @@ describe("CampaignRecipientService.resolve", () => {
       resolution(exit).recipients.map(
         ({ dotyposCustomerId }) => dotyposCustomerId
       )
-    ).toEqual(["1", "2"]);
+    ).toEqual([customerId("1"), customerId("2")]);
   });
 
   test("uses fetched profiles for tags and excludes customers absent from Dotypos", async () => {
@@ -348,7 +342,7 @@ describe("CampaignRecipientService.resolve", () => {
     ]);
     expect(
       recipients.map(({ dotyposCustomerId }) => dotyposCustomerId)
-    ).toEqual(["5"]);
+    ).toEqual([customerId("5")]);
   });
 
   test("keeps a reachable address outside the test domain, so a preview send refuses the whole list", async () => {
@@ -451,8 +445,11 @@ describe("CampaignRecipientService.resolve", () => {
       resolution((await pending).exit).recipients.map(
         ({ dotyposCustomerId }) => dotyposCustomerId
       );
-    expect(await ids(receivedEmails("eq", 0))).toEqual(["3"]);
-    expect(await ids(receivedEmails("lt", 2))).toEqual(["2", "3"]);
+    expect(await ids(receivedEmails("eq", 0))).toEqual([customerId("3")]);
+    expect(await ids(receivedEmails("lt", 2))).toEqual([
+      customerId("2"),
+      customerId("3"),
+    ]);
   });
 
   test("fails the whole resolution with a retryable error when Dotypos fails", async () => {
