@@ -42,14 +42,17 @@ const databaseUrl =
   "postgresql://synthetic:synthetic@ep-preview-pooler.eu-central-1.aws.neon.tech/workspace";
 const commitSha = "a".repeat(40);
 const deploymentId = "dpl_synthetic";
-const generation = previewRuntimeGeneration(
-  PreviewRuntimeBinding.make({
-    commitSha,
-    deploymentId,
-    branchTag,
-    databaseEndpoint: previewDatabaseEndpoint(databaseUrl) ?? "",
-  })
-);
+const binding = PreviewRuntimeBinding.make({
+  commitSha,
+  deploymentId,
+  branchTag,
+  databaseEndpoint: previewDatabaseEndpoint(databaseUrl) ?? "",
+});
+const generation = previewRuntimeGeneration(binding);
+const staleGeneration = previewRuntimeGeneration({
+  ...binding,
+  deploymentId: "dpl_previousPreview",
+});
 const workerTag = "g-0123456789abcdef";
 const cloudRunRevision = `workspace-api-preview-${workerTag}`;
 const proofHeaders = {
@@ -73,7 +76,7 @@ const { GET: probe } = await import("./route");
 let withdrawals = 0;
 let requests: Request[] = [];
 let unexpectedResponse: Response | undefined;
-let proofResponse = () =>
+let proofResponse: (request: Request) => Response = () =>
   Response.json(
     {
       commitSha,
@@ -86,11 +89,12 @@ let proofResponse = () =>
   );
 let rpcProofHeaders: HeadersInit = proofHeaders;
 let lastMintAudience: string | undefined;
+let mintRequests = 0;
 
 const rpcServer = HttpRouter.toWebHandler(
   RpcServer.layerHttp({
     group: EmailPreferencesRpcs,
-    path: "/rpc",
+    path: "/rpc/preview",
     protocol: "http",
     disableFatalDefects: true,
   }).pipe(
@@ -156,12 +160,13 @@ beforeAll(() => {
         case "https://iamcredentials.googleapis.com": {
           const mint = await request.json();
           lastMintAudience = mint.audience;
+          mintRequests += 1;
           return Response.json({ token: idToken });
         }
         case taggedOrigin: {
           requests.push(request.clone());
           if (url.pathname === "/api/internal/backend-preview") {
-            return proofResponse();
+            return proofResponse(request);
           }
           if (unexpectedResponse) {
             return unexpectedResponse;
@@ -234,7 +239,7 @@ test("routes GET and POST to the tagged revision and relays the verified SHA", a
   expect(lastMintAudience).toBe(previewApiOrigin);
   expect(requests).toHaveLength(2);
   for (const request of requests) {
-    expect(request.url).toBe(`${taggedOrigin}/rpc`);
+    expect(request.url).toBe(`${taggedOrigin}/rpc/preview`);
     expect(request.headers.get(previewGenerationHeader)).toBe(generation);
   }
   for (const response of [getResponse, postResponse]) {
@@ -246,7 +251,10 @@ test("routes GET and POST to the tagged revision and relays the verified SHA", a
 
 test.each([
   ["missing", {}],
-  ["stale generation", { ...proofHeaders, [previewGenerationHeader]: "stale" }],
+  [
+    "stale generation",
+    { ...proofHeaders, [previewGenerationHeader]: staleGeneration },
+  ],
   ["wrong SHA", { ...proofHeaders, [backendRevisionHeader]: "b".repeat(40) }],
 ] satisfies [string, HeadersInit][])(
   "returns 503 and omits revision proof for %s RPC headers",
@@ -335,11 +343,58 @@ test("returns only matching proof and headers from the protected probe", async (
   expect(requests).toHaveLength(1);
   const [request] = requests;
   expect(request.url).toBe(`${taggedOrigin}/api/internal/backend-preview`);
+  expect(request.cache).toBe("no-store");
   expect(request.redirect).toBe("manual");
   expect(request.headers.get("authorization")).toBe(`Bearer ${idToken}`);
   expect(request.headers.get(previewGenerationHeader)).toBe(generation);
   expect(request.headers.has("x-vercel-protection-bypass")).toBeFalse();
 });
+
+test("evicts a rejected Google token so the next probe can recover", async () => {
+  expect((await probe(probeRequest(authorizedHeaders))).status).toBe(200);
+  const matchingProof = proofResponse;
+  const cachedMintCount = mintRequests;
+  proofResponse = () => new Response(null, { status: 401 });
+  try {
+    expect((await probe(probeRequest(authorizedHeaders))).status).toBe(503);
+    expect(mintRequests).toBe(cachedMintCount);
+  } finally {
+    proofResponse = matchingProof;
+  }
+
+  expect((await probe(probeRequest(authorizedHeaders))).status).toBe(200);
+  expect(mintRequests).toBe(cachedMintCount + 1);
+  expect(requests).toHaveLength(3);
+});
+
+test("returns 503 and aborts an upstream response whose body stalls", async () => {
+  const matchingProof = proofResponse;
+  let aborted = false;
+  proofResponse = ({ signal }) =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          signal.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              controller.error(signal.reason);
+            },
+            { once: true }
+          );
+        },
+      }),
+      { headers: proofHeaders }
+    );
+  try {
+    const response = await probe(probeRequest(authorizedHeaders));
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(aborted).toBeTrue();
+  } finally {
+    proofResponse = matchingProof;
+  }
+}, 8000);
 
 test.each([
   [
@@ -350,7 +405,7 @@ test.each([
     "stale proof",
     () =>
       Response.json(
-        { commitSha, cloudRunRevision, generation: "stale", workerTag },
+        { commitSha, cloudRunRevision, generation: staleGeneration, workerTag },
         { headers: proofHeaders }
       ),
   ],

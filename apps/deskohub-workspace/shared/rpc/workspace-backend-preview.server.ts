@@ -107,6 +107,7 @@ export const previewBackendTarget = (
   const requestHeaders = { [previewGenerationHeader]: preview.generation };
   return Effect.succeed({
     url,
+    path: "/rpc/preview" as const,
     requestHeaders,
     expectedResponseHeaders: {
       ...requestHeaders,
