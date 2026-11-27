@@ -1,10 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
+  DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
   type DotyposReservation,
   DotyposReservationIdSchema,
+  DotyposReservationSchema,
+  type ReservationListOptions,
 } from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import {
@@ -12,7 +15,7 @@ import {
   audienceAttributeCatalogue,
   type ReservationProductFilterType,
 } from "@deskohub/workspace-admin-api";
-import { Cause, Effect, Exit, Layer, Option } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import type { ReservationVisit } from "@/features/reservation/backend/reservation-visits.service";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
@@ -48,15 +51,14 @@ import {
 const customerId = (value: string) => DotyposCustomerIdSchema.make(value);
 const reservationId = (value: string) => DotyposReservationIdSchema.make(value);
 const instant = (value: string) => Temporal.Instant.from(value);
-const customerProfile = (id: string): DotyposCustomer =>
-  ({
-    id: customerId(id),
-    _cloudId: "cloud",
-    points: "0",
-    flags: "0",
-    display: true,
-    deleted: false,
-  }) as DotyposCustomer;
+const customerProfile = (id: string): DotyposCustomer => ({
+  id: customerId(id),
+  _cloudId: DotyposCloudIdSchema.make("cloud"),
+  points: "0",
+  flags: "0",
+  display: true,
+  deleted: false,
+});
 
 /** 12:00 in Prague (CEST). */
 const now = instant("2026-10-15T10:00:00Z");
@@ -66,12 +68,15 @@ const visit = (
   startsAt: string,
   status: "NEW" | "CANCELLED" = "NEW"
 ): DotyposReservation =>
-  ({
+  Schema.decodeSync(DotyposReservationSchema)({
     id: reservationId(id),
+    _branchId: "branch",
+    _cloudId: "cloud",
     startDate: startsAt,
     endDate: instant(startsAt).add({ hours: 1 }).toString(),
+    seats: "1",
     status,
-  }) as DotyposReservation;
+  });
 
 const reservationVisit = (
   id: string,
@@ -157,34 +162,31 @@ const resolveFacts = async (input: {
         )
       )
   );
-  const listReservations = mock(
-    (options: {
-      readonly startsAtOrAfter?: string;
-      readonly startsBefore?: string;
-    }) => {
-      const visits = input.visits ?? [];
-      return Effect.succeed(
-        input.respectVisitBounds
-          ? visits.filter(({ startDate }) => {
-              const startsAt = instant(startDate);
-              return (
-                (!options.startsAtOrAfter ||
-                  Temporal.Instant.compare(
-                    startsAt,
-                    instant(options.startsAtOrAfter)
-                  ) >= 0) &&
-                (!options.startsBefore ||
-                  Temporal.Instant.compare(
-                    startsAt,
-                    instant(options.startsBefore)
-                  ) < 0)
-              );
-            })
-          : visits
-      );
-    }
+  const listReservations = mock((options: ReservationListOptions = {}) => {
+    const visits = input.visits ?? [];
+    return Effect.succeed(
+      input.respectVisitBounds
+        ? visits.filter(({ startDate }) => {
+            const startsAt = instant(startDate);
+            return (
+              (!options.startsAtOrAfter ||
+                Temporal.Instant.compare(
+                  startsAt,
+                  instant(options.startsAtOrAfter)
+                ) >= 0) &&
+              (!options.startsBefore ||
+                Temporal.Instant.compare(
+                  startsAt,
+                  instant(options.startsBefore)
+                ) < 0)
+            );
+          })
+        : visits
+    );
+  });
+  const getCustomersByIds = mock(() =>
+    Effect.succeed(new Map<DotyposCustomerId, DotyposCustomer>())
   );
-  const getCustomers = mock(() => Effect.succeed([]));
   const evaluationTime = input.now ?? now;
   const factsLayer = AudienceFactsService.Default.pipe(
     Layer.provide(
@@ -215,7 +217,7 @@ const resolveFacts = async (input: {
               : input.earliestReservationAt
           ),
         }),
-        DotyposServiceMock({ listReservations, getCustomers } as never)
+        DotyposServiceMock({ listReservations, getCustomersByIds })
       )
     )
   );
@@ -231,14 +233,15 @@ const resolveFacts = async (input: {
       });
     }).pipe(Effect.provide(factsLayer), Effect.provide(TestClock.layer()))
   );
+  const { profileCustomers } = input;
   const profileExit =
-    input.profileCustomers === undefined
+    profileCustomers === undefined
       ? undefined
       : await Effect.runPromiseExit(
           Effect.gen(function* () {
             const service = yield* AudienceFactsService;
             return yield* service.profiles({
-              customers: input.profileCustomers,
+              customers: profileCustomers,
               ...(input.facts && { facts: input.facts }),
             });
           }).pipe(Effect.provide(factsLayer))
@@ -251,7 +254,7 @@ const resolveFacts = async (input: {
     accountCreations,
     listBookedReservations,
     listReservations,
-    getCustomers,
+    getCustomersByIds,
   };
 };
 
@@ -628,7 +631,7 @@ describe("AudienceFactsService evaluation time", () => {
       listReservations,
       dates: facts(exit).dates,
     }));
-    expect(listReservations.mock.calls[0]?.[0].startsBefore).toBe(
+    expect(listReservations.mock.calls[0]?.[0]?.startsBefore).toBe(
       "2026-10-15T10:00:00.001Z"
     );
     expect(dates.get(lastVisitKey(lastDay))).toEqual({
@@ -731,7 +734,10 @@ describe("AudienceFactsService product filters", () => {
 
 describe("AudienceFactsService fetched facts", () => {
   test("resolves the same scoped visit and booking facts as live reads", async () => {
-    const ids = [customerId("a"), customerId("b"), customerId("c")];
+    const customerA = customerId("a");
+    const customerB = customerId("b");
+    const customerC = customerId("c");
+    const ids = [customerA, customerB, customerC];
     const scope = AudienceScope.Customers({ ids });
     const recent = { _tag: "Last", count: 30, unit: "day" } as const;
     const history = {
@@ -742,19 +748,19 @@ describe("AudienceFactsService fetched facts", () => {
     const booked: CampaignBookedReservation[] = [
       {
         dotyposReservationId: reservationId("a-cancelled"),
-        dotyposCustomerId: ids[0]!,
+        dotyposCustomerId: customerA,
       },
       {
         dotyposReservationId: reservationId("a-recent"),
-        dotyposCustomerId: ids[0]!,
+        dotyposCustomerId: customerA,
       },
       {
         dotyposReservationId: reservationId("b-old"),
-        dotyposCustomerId: ids[1]!,
+        dotyposCustomerId: customerB,
       },
       {
         dotyposReservationId: reservationId("c-future"),
-        dotyposCustomerId: ids[2]!,
+        dotyposCustomerId: customerC,
       },
     ];
     const dotyposVisits = [
@@ -768,7 +774,7 @@ describe("AudienceFactsService fetched facts", () => {
       readonly ReservationVisit[]
     >([
       [
-        ids[0]!,
+        customerA,
         [
           reservationVisit(
             "a-cancelled",
@@ -779,8 +785,8 @@ describe("AudienceFactsService fetched facts", () => {
           reservationVisit("a-recent", "a", "2026-10-10T08:00:00Z"),
         ],
       ],
-      [ids[1]!, [reservationVisit("b-old", "b", "2026-08-20T08:00:00Z")]],
-      [ids[2]!, [reservationVisit("c-future", "c", "2026-10-20T08:00:00Z")]],
+      [customerB, [reservationVisit("b-old", "b", "2026-08-20T08:00:00Z")]],
+      [customerC, [reservationVisit("c-future", "c", "2026-10-20T08:00:00Z")]],
     ]);
     const filter = group(
       reservations({ dateBasis: "visit", period: recent }),
@@ -825,21 +831,21 @@ describe("AudienceFactsService fetched facts", () => {
       liveFacts.counts.get(
         reservationsKey({ dateBasis: "visit", period: recent })
       )
-    ).toEqual(new Map([[ids[0]!, 2]]));
+    ).toEqual(new Map([[customerA, 2]]));
     expect(
       liveFacts.counts.get(
         reservationsKey({ dateBasis: "booking", period: { _tag: "AnyTime" } })
       )
     ).toEqual(
       new Map([
-        [ids[0]!, 2],
-        [ids[1]!, 1],
-        [ids[2]!, 1],
+        [customerA, 2],
+        [customerB, 1],
+        [customerC, 1],
       ])
     );
     expect(liveFacts.dates.get(lastVisitKey(history))).toEqual({
-      withValue: new Set([ids[0]!, ids[1]!]),
-      inPeriod: new Set([ids[1]!]),
+      withValue: new Set([customerA, customerB]),
+      inPeriod: new Set([customerB]),
     });
     expect(
       liveFacts.dates.get(
@@ -850,8 +856,8 @@ describe("AudienceFactsService fetched facts", () => {
         })
       )
     ).toEqual({
-      withValue: new Set([ids[0]!, ids[1]!]),
-      inPeriod: new Set([ids[0]!, ids[1]!]),
+      withValue: new Set([customerA, customerB]),
+      inPeriod: new Set([customerA, customerB]),
     });
     expect(
       live.countReservations.mock.calls.map(([selection]) => selection)
@@ -863,7 +869,7 @@ describe("AudienceFactsService fetched facts", () => {
       ],
     });
     expect(fetched.listReservations).not.toHaveBeenCalled();
-    expect(fetched.getCustomers).not.toHaveBeenCalled();
+    expect(fetched.getCustomersByIds).not.toHaveBeenCalled();
   });
 
   test("dies when a last-visit resolver reads visits that were not fetched", async () => {
@@ -902,7 +908,7 @@ describe("AudienceFactsService fetched facts", () => {
   });
 
   test("returns only requested fetched profiles and an empty map when absent", async () => {
-    const requested = [customerId("a"), customerId("b")];
+    const requested = [customerId("a"), customerId("b")] as const;
     const fetchedProfiles = new Map<DotyposCustomerId, DotyposCustomer>([
       [customerId("a"), customerProfile("a")],
       [customerId("outside-scope"), customerProfile("outside-scope")],
@@ -934,8 +940,8 @@ describe("AudienceFactsService fetched facts", () => {
     }
     expect([...available.profileExit.value.keys()]).toEqual([requested[0]]);
     expect(missing.profileExit.value).toEqual(new Map());
-    expect(available.getCustomers).not.toHaveBeenCalled();
-    expect(missing.getCustomers).not.toHaveBeenCalled();
+    expect(available.getCustomersByIds).not.toHaveBeenCalled();
+    expect(missing.getCustomersByIds).not.toHaveBeenCalled();
     expect(available.listReservations).not.toHaveBeenCalled();
     expect(missing.listReservations).not.toHaveBeenCalled();
   });
@@ -1043,11 +1049,11 @@ describe("visit-end reservation counts", () => {
       visit("future", "2026-10-16T08:00:00Z"),
     ];
     const booked = visits.map(({ id }) => ({
-      dotyposReservationId: id!,
+      dotyposReservationId: id,
       dotyposCustomerId: customerId("a"),
     }));
     const fetched = visits.map(({ id, startDate, endDate, status }) => ({
-      ...reservationVisit(id!, "a", startDate),
+      ...reservationVisit(id, "a", startDate),
       endsAt: instant(endDate),
       status:
         status === "CANCELLED" ? ("cancelled" as const) : ("active" as const),

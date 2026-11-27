@@ -10,7 +10,7 @@ import {
 import { join } from "node:path";
 import { testEmailAddress } from "@deskohub/test-email";
 import React from "react";
-import type { CustomerProfileInput } from "@/features/account/contracts";
+import type * as AccountActions from "@/features/account/actions";
 import { accountSectionLabel } from "@/features/account/sections";
 import { type Locale, m } from "@/features/i18n";
 import {
@@ -59,10 +59,9 @@ mock.module("@/shared/components/guarded-link", () => ({
   }) => <a href={href}>{children}</a>,
 }));
 
-const updateCustomerProfile = mock((input: CustomerProfileInput) => {
-  void input;
-  return Promise.resolve({ data: { status: "updated" } });
-});
+const updateCustomerProfile = mock<typeof AccountActions.updateCustomerProfile>(
+  () => Promise.resolve({ data: { status: "updated" } })
+);
 
 let legalScreenMountCount = 0;
 
@@ -134,35 +133,39 @@ mock.module("@/features/account/components/referral-screen", () => ({
   ReferralScreen: () => <div data-testid="referral-screen-mock" />,
 }));
 
+type ActionResult<Data> = {
+  readonly data?: Data;
+  readonly serverError?: string;
+  readonly validationErrors?: unknown;
+};
+
 mock.module("@/shared/utils/use-workspace-action", () => ({
-  useWorkspaceAction: (
-    action: (input: CustomerProfileInput) => Promise<unknown>,
+  useWorkspaceAction: <Input, Data>(
+    action: (input: Input) => Promise<ActionResult<Data> | undefined>,
     options?: {
-      readonly onSuccess?: (args: { readonly data?: unknown }) => void;
+      readonly onSuccess?: (args: {
+        readonly data: Data | undefined;
+        readonly input: Input;
+      }) => void;
     }
   ) => {
-    const [result, setResult] = React.useState<{
-      readonly data?: { readonly status?: string };
-      readonly serverError?: string;
-      readonly validationErrors?: unknown;
-    }>({});
+    const [result, setResult] = React.useState<ActionResult<Data>>({});
     const [isExecuting, setExecuting] = React.useState(false);
 
     return {
       result,
       isExecuting,
-      execute: (input: CustomerProfileInput) => {
+      execute: (input: Input) => {
         setExecuting(true);
         void action(input).then((outcome) => {
           setExecuting(false);
-          const nextResult = (outcome ?? {}) as {
-            readonly data?: { readonly status?: string };
-            readonly serverError?: string;
-            readonly validationErrors?: unknown;
-          };
+          const nextResult: ActionResult<Data> = outcome ?? {};
           setResult(nextResult);
-          if (!nextResult.serverError && !nextResult.validationErrors) {
-            options?.onSuccess?.({ data: nextResult.data });
+          if (
+            nextResult.serverError === undefined &&
+            nextResult.validationErrors === undefined
+          ) {
+            options?.onSuccess?.({ data: nextResult.data, input });
           }
         });
       },
@@ -582,7 +585,7 @@ describe("SignedInAccount for a linked account", () => {
       });
       const firstName = view.getByLabelText(
         m.accountProfileFirstNameLabel({}, { locale })
-      ) as HTMLInputElement;
+      );
 
       fireEvent.click(
         sectionNavigation.getByRole("link", {
@@ -592,7 +595,7 @@ describe("SignedInAccount for a linked account", () => {
 
       expect(confirmDiscardChanges).toHaveBeenCalledTimes(1);
       expect(workspaceRouterPush).not.toHaveBeenCalled();
-      expect(firstName.value).toBe("Grace");
+      expect(firstName).toHaveProperty("value", "Grace");
       expect(
         sectionNavigation
           .getByRole("link", { name: accountSectionLabel("profile", locale) })
@@ -609,7 +612,7 @@ describe("SignedInAccount for a linked account", () => {
 
       expect(confirmDiscardChanges).toHaveBeenCalledTimes(2);
       expect(workspaceRouterPush).toHaveBeenCalledWith("/en-US/account/legal");
-      expect(firstName.value).toBe("Grace");
+      expect(firstName).toHaveProperty("value", "Grace");
     } finally {
       window.confirm = originalConfirm;
     }
@@ -633,12 +636,12 @@ describe("SignedInAccount for a linked account", () => {
     const sectionNavigation = getDesktopSectionNavigation(view);
     const firstName = view.getByLabelText(
       m.accountProfileFirstNameLabel({}, { locale })
-    ) as HTMLInputElement;
+    );
 
     await act(async () => {
       fireEvent.input(firstName, { target: { value: "Grace" } });
     });
-    expect(firstName.value).toBe("Grace");
+    expect(firstName).toHaveProperty("value", "Grace");
 
     workspacePathname = "/en-US/account/billing";
     await act(async () => {
@@ -649,7 +652,7 @@ describe("SignedInAccount for a linked account", () => {
         .getByRole("link", { name: accountSectionLabel("billing", locale) })
         .getAttribute("aria-current")
     ).toBe("page");
-    expect(firstName.value).toBe("Grace");
+    expect(firstName).toHaveProperty("value", "Grace");
 
     workspacePathname = "/en-US/account/legal";
     await act(async () => {
@@ -660,7 +663,7 @@ describe("SignedInAccount for a linked account", () => {
         .getByRole("link", { name: accountSectionLabel("legal", locale) })
         .getAttribute("aria-current")
     ).toBe("page");
-    expect(firstName.value).toBe("Grace");
+    expect(firstName).toHaveProperty("value", "Grace");
 
     workspacePathname = "/en-US/account/profile";
     await act(async () => {
@@ -671,7 +674,7 @@ describe("SignedInAccount for a linked account", () => {
         .getByRole("link", { name: accountSectionLabel("profile", locale) })
         .getAttribute("aria-current")
     ).toBe("page");
-    expect(firstName.value).toBe("Grace");
+    expect(firstName).toHaveProperty("value", "Grace");
     expect(updateCustomerProfile).not.toHaveBeenCalled();
   });
 
@@ -768,12 +771,8 @@ describe("SignedInAccount for a linked account", () => {
       )?.parentElement;
       expect(profilePanel?.hidden).toBe(true);
       expect(
-        (
-          view.getByLabelText(
-            m.accountProfileFirstNameLabel({}, { locale })
-          ) as HTMLInputElement
-        ).value
-      ).toBe("Grace");
+        view.getByLabelText(m.accountProfileFirstNameLabel({}, { locale }))
+      ).toHaveProperty("value", "Grace");
 
       const beforeUnload = new Event("beforeunload", { cancelable: true });
       window.dispatchEvent(beforeUnload);

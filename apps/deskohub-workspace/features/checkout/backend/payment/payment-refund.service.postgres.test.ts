@@ -18,6 +18,8 @@ import {
   paymentAttemptIdSchema,
 } from "@/features/checkout/checkout-identifiers";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { PaymentRefundRepository } from "../repositories/payment-refund.repository";
@@ -119,6 +121,7 @@ describe.skipIf(!testDatabase)(
         await Effect.runPromise(
           testDatabase.db.insert(paymentAttempts).values({
             id,
+            orderId: standaloneReservationOrderId(reservationId),
             workspaceReservationId: reservationId,
             provider: "nexi",
             providerOrderId: NexiOrderIdSchema.make(`order-${id}`),
@@ -151,6 +154,10 @@ describe.skipIf(!testDatabase)(
         { refundState: "not_required" },
         { refundState: "required" },
       ]);
+      const refundableAttemptId = requireValue(
+        attemptIds[1],
+        "refundable attempt ID"
+      );
       const getOrder = mock((input: GetNexiOrderInput) =>
         Effect.succeed(refundedOrder(input.orderId))
       );
@@ -160,7 +167,7 @@ describe.skipIf(!testDatabase)(
       expect(result.error).toBeNull();
       expect(getOrder).toHaveBeenCalledTimes(1);
       expect(getOrder.mock.calls[0]?.[0].orderId).toBe(
-        NexiOrderIdSchema.make(`order-${attemptIds[1]}`)
+        NexiOrderIdSchema.make(`order-${refundableAttemptId}`)
       );
       expect(result.attempts).toEqual([
         {
@@ -180,7 +187,7 @@ describe.skipIf(!testDatabase)(
           state: "paid",
         },
       ]);
-      const refunded = await readAttempt(attemptIds[1] as PaymentAttemptId);
+      const refunded = await readAttempt(refundableAttemptId);
       expect(refunded?.refundedAt).toEqual(
         Temporal.Instant.from("2026-10-05T08:30:00Z")
       );

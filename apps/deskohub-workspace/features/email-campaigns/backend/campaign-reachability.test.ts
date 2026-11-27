@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { DotyposCustomer } from "@deskohub/dotypos";
+import {
+  DotyposCloudIdSchema,
+  type DotyposCustomer,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
 import { resendSimulatorAddress, testEmailAddress } from "@deskohub/test-email";
 import { Option, Result } from "effect";
 import {
@@ -8,16 +12,16 @@ import {
 } from "./campaign-reachability";
 
 const customer = (overrides: Partial<DotyposCustomer> = {}) =>
-  Option.some({
-    id: "1",
-    _cloudId: "cloud",
+  Option.some<DotyposCustomer>({
+    id: DotyposCustomerIdSchema.make("1"),
+    _cloudId: DotyposCloudIdSchema.make("cloud"),
     email: testEmailAddress("customer"),
     points: "0",
     flags: "0",
     display: true,
     deleted: false,
     ...overrides,
-  } as DotyposCustomer);
+  });
 
 const outsideAddress = resendSimulatorAddress("delivered");
 

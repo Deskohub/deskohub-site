@@ -1,17 +1,29 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+  DotyposService,
+} from "@deskohub/dotypos";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
 import { env, getAccountingDocumentSnapshotSecret } from "@/env";
 import { ReservationInvoiceService } from "@/features/accounting/backend/reservation-invoice.service";
-import type { IWorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import type { Locale } from "@/features/i18n";
+import { dotyposCustomerFixture } from "@/shared/testing/dotypos-customer.test-utils";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import type { IFulfillmentLedger } from "./fulfillment-ledger.repository";
+import {
+  customerAccessCodeFixture,
+  fulfillmentDetailsFixture,
+  fulfillmentOrderFixture,
+  fulfillmentQueryFailure,
+  fulfillmentReservationId,
+} from "./reservation-fulfillment.test-utils";
 import type { IWorkspaceReservationEmailService } from "./workspace-reservation-email.service";
-
-const testEmailAddressForCustomer = testEmailAddress("customer");
 
 mock.module("server-only", () => ({}));
 
@@ -48,16 +60,13 @@ const {
 const { WorkspaceReservationStateError } = await import(
   "@/features/reservation/backend/workspace-reservation.repository"
 );
-const { workspaceReservationIdSchema } = await import(
-  "@/features/reservation/persistence-contracts"
-);
 const { WorkspaceReservationService } = await import(
   "@/features/reservation/backend/workspace-reservation.service"
 );
 const { CustomerEmailLocaleService, ReservationAuthorDirectory } = await import(
   "@/features/account"
 );
-// Reservations here are authorless unless a test provides its own authors.
+// The directory returns no author details unless a test provides them.
 const noReservationAuthors = Layer.mock(ReservationAuthorDirectory, {
   describe: () => Effect.succeed(new Map()),
 });
@@ -67,33 +76,27 @@ const { recordCheckoutAnalytics } = await import(
 
 describe("ReservationFulfillment.run production email acceptance", () => {
   test("records the accepted delivery id and leaves fulfillment awaiting the webhook", async () => {
-    const order = {
-      id: "reservation-id",
-      activePaymentAttemptId: "payment-attempt-id",
+    const order = fulfillmentOrderFixture({
+      activePaymentAttemptId: paymentAttemptIdSchema.make("payment-attempt-id"),
       paymentState: "paid",
       fulfillmentState: "not_started",
-    };
-    const claimed = {
+    });
+    const claimed = fulfillmentOrderFixture({
       ...order,
       reservationState: "confirmed",
       fulfillmentState: "processing",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       activeCustomerEmailDeliveryLocale: null,
       locale: "en-US",
-    };
-    const emailReservation = {
-      ...claimed,
-      reservationDetails: {
-        kind: "cowork",
-        entryTier: "basic",
-        coffee: false,
-      },
-      customer: { email: testEmailAddressForCustomer },
+    });
+    const emailReservation = fulfillmentDetailsFixture(claimed, {
       reservedFrom: Temporal.Instant.from("2026-07-01T08:00:00.000Z"),
       reservedUntil: Temporal.Instant.from("2026-07-02T08:00:00.000Z"),
       placement: { table: { mode: "assigned", name: "12" } },
-    };
+    });
     const customerEmailDeliveryId = EmailDeliveryIdSchema.make(
       "accepted-production-email-delivery"
     );
@@ -110,7 +113,7 @@ describe("ReservationFulfillment.run production email acceptance", () => {
 
     const result = await Effect.gen(function* () {
       const service = yield* ReservationFulfillment;
-      return yield* service.run("reservation-id").pipe(Effect.result);
+      return yield* service.run(fulfillmentReservationId).pipe(Effect.result);
     }).pipe(
       Effect.provide(
         ReservationFulfillment.Default.pipe(
@@ -118,16 +121,17 @@ describe("ReservationFulfillment.run production email acceptance", () => {
             Layer.mergeAll(
               noReservationAuthors,
               Layer.mock(WorkspaceReservationRepository, {
-                findById: mock(() => Effect.succeed(order as never)),
+                findById: mock(() => Effect.succeed(order)),
               }),
               Layer.mock(FulfillmentLedger, {
                 retainActiveCustomerEmailDeliveryLocale: mock(
-                  (input: { readonly locale: "en-US" | "cs-CZ" }) =>
-                    Effect.succeed(input.locale)
+                  (
+                    input: Parameters<
+                      IFulfillmentLedger["retainActiveCustomerEmailDeliveryLocale"]
+                    >[0]
+                  ) => Effect.succeed(input.locale)
                 ),
-                claimPaidFulfillment: mock(() =>
-                  Effect.succeed(claimed as never)
-                ),
+                claimPaidFulfillment: mock(() => Effect.succeed(claimed)),
                 markAwaitingCustomerEmailDelivery,
                 markFulfilled,
                 markFulfillmentFailed: mock(() =>
@@ -137,20 +141,18 @@ describe("ReservationFulfillment.run production email acceptance", () => {
               Layer.mock(DotyposService, {}),
               Layer.mock(CustomerEmailLocaleService, {
                 byDotyposCustomer: mock(() =>
-                  Effect.succeed({ kind: "guest" })
+                  Effect.succeed({ kind: "guest" } as const)
                 ),
               }),
               Layer.mock(WorkspaceReservationService, {
-                getReservation: mock(() =>
-                  Effect.succeed(emailReservation as never)
-                ),
-              } satisfies IWorkspaceReservationService),
+                getReservation: mock(() => Effect.succeed(emailReservation)),
+              }),
               Layer.mock(WorkspaceReservationEmailService, {
                 sendPaidReservationEmails,
-              } satisfies IWorkspaceReservationEmailService),
+              }),
               Layer.mock(WorkspaceCheckoutAccessCodeService, {
-                resolveCustomerAccessCode: mock(() =>
-                  Effect.succeed("access-code")
+                resolveCustomerAccessCode: mock((input) =>
+                  Effect.succeed(customerAccessCodeFixture(input))
                 ),
               }),
               recordCheckoutAnalytics().layer,
@@ -184,32 +186,29 @@ describe("ReservationFulfillment.run production email acceptance", () => {
   });
 
   test("completes a synthetic booking on Console acceptance without awaiting a webhook", async () => {
-    const order = {
-      id: "reservation-id",
-      activePaymentAttemptId: "payment-attempt-id",
+    const order = fulfillmentOrderFixture({
+      activePaymentAttemptId: paymentAttemptIdSchema.make("payment-attempt-id"),
       paymentState: "paid",
       fulfillmentState: "not_started",
       locale: "en-US",
-    };
-    const claimed = {
+    });
+    const claimed = fulfillmentOrderFixture({
       ...order,
       reservationState: "confirmed",
       fulfillmentState: "processing",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
-    };
-    const emailReservation = {
-      ...claimed,
-      reservationDetails: {
-        kind: "cowork",
-        entryTier: "basic",
-        coffee: false,
-      },
-      customer: { email: testEmailAddress("delivered+cowork-basic-1") },
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
+    });
+    const emailReservation = fulfillmentDetailsFixture(claimed, {
+      customer: dotyposCustomerFixture(claimed.dotyposCustomerId, {
+        email: testEmailAddress("delivered+cowork-basic-1"),
+      }),
       reservedFrom: Temporal.Instant.from("2026-07-01T08:00:00.000Z"),
       reservedUntil: Temporal.Instant.from("2026-07-02T08:00:00.000Z"),
       placement: { table: { mode: "assigned", name: "12" } },
-    };
+    });
     const customerEmailDeliveryId = EmailDeliveryIdSchema.make(
       "console-production-email-delivery"
     );
@@ -224,7 +223,7 @@ describe("ReservationFulfillment.run production email acceptance", () => {
 
     const result = await Effect.gen(function* () {
       const service = yield* ReservationFulfillment;
-      return yield* service.run("reservation-id").pipe(Effect.result);
+      return yield* service.run(fulfillmentReservationId).pipe(Effect.result);
     }).pipe(
       Effect.provide(
         ReservationFulfillment.Default.pipe(
@@ -232,16 +231,17 @@ describe("ReservationFulfillment.run production email acceptance", () => {
             Layer.mergeAll(
               noReservationAuthors,
               Layer.mock(WorkspaceReservationRepository, {
-                findById: mock(() => Effect.succeed(order as never)),
+                findById: mock(() => Effect.succeed(order)),
               }),
               Layer.mock(FulfillmentLedger, {
                 retainActiveCustomerEmailDeliveryLocale: mock(
-                  (input: { readonly locale: "en-US" | "cs-CZ" }) =>
-                    Effect.succeed(input.locale)
+                  (
+                    input: Parameters<
+                      IFulfillmentLedger["retainActiveCustomerEmailDeliveryLocale"]
+                    >[0]
+                  ) => Effect.succeed(input.locale)
                 ),
-                claimPaidFulfillment: mock(() =>
-                  Effect.succeed(claimed as never)
-                ),
+                claimPaidFulfillment: mock(() => Effect.succeed(claimed)),
                 markAwaitingCustomerEmailDelivery,
                 markFulfilled,
                 markFulfillmentFailed: mock(() =>
@@ -251,20 +251,18 @@ describe("ReservationFulfillment.run production email acceptance", () => {
               Layer.mock(DotyposService, {}),
               Layer.mock(CustomerEmailLocaleService, {
                 byDotyposCustomer: mock(() =>
-                  Effect.succeed({ kind: "guest" })
+                  Effect.succeed({ kind: "guest" } as const)
                 ),
               }),
               Layer.mock(WorkspaceReservationService, {
-                getReservation: mock(() =>
-                  Effect.succeed(emailReservation as never)
-                ),
-              } satisfies IWorkspaceReservationService),
+                getReservation: mock(() => Effect.succeed(emailReservation)),
+              }),
               Layer.mock(WorkspaceReservationEmailService, {
                 sendPaidReservationEmails,
-              } satisfies IWorkspaceReservationEmailService),
+              }),
               Layer.mock(WorkspaceCheckoutAccessCodeService, {
-                resolveCustomerAccessCode: mock(() =>
-                  Effect.succeed("access-code")
+                resolveCustomerAccessCode: mock((input) =>
+                  Effect.succeed(customerAccessCodeFixture(input))
                 ),
               }),
               recordCheckoutAnalytics().layer,
@@ -304,34 +302,28 @@ describe("ReservationFulfillment.run production email acceptance", () => {
     const priorDeliveryId = EmailDeliveryIdSchema.make(
       "bounced-customer-email-delivery"
     );
-    const order = {
-      id: "reservation-id",
-      activePaymentAttemptId: "payment-attempt-id",
+    const order = fulfillmentOrderFixture({
+      activePaymentAttemptId: paymentAttemptIdSchema.make("payment-attempt-id"),
       paymentState: "paid",
       fulfillmentState: "failed",
       activeCustomerEmailDeliveryId: priorDeliveryId,
-    };
-    const claimed = {
+    });
+    const claimed = fulfillmentOrderFixture({
       ...order,
       reservationState: "confirmed",
       fulfillmentState: "processing",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       activeCustomerEmailDeliveryLocale: null,
       locale: "en-US",
-    };
-    const emailReservation = {
-      ...claimed,
-      reservationDetails: {
-        kind: "cowork",
-        entryTier: "basic",
-        coffee: false,
-      },
-      customer: { email: testEmailAddressForCustomer },
+    });
+    const emailReservation = fulfillmentDetailsFixture(claimed, {
       reservedFrom: Temporal.Instant.from("2026-07-01T08:00:00.000Z"),
       reservedUntil: Temporal.Instant.from("2026-07-02T08:00:00.000Z"),
       placement: { table: { mode: "assigned", name: "12" } },
-    };
+    });
     const recoveredDeliveryId = EmailDeliveryIdSchema.make(
       "recovered-customer-email-delivery"
     );
@@ -347,23 +339,26 @@ describe("ReservationFulfillment.run production email acceptance", () => {
       Effect.provide(
         Effect.gen(function* () {
           const service = yield* ReservationFulfillment;
-          return yield* service.run("reservation-id").pipe(Effect.result);
+          return yield* service
+            .run(fulfillmentReservationId)
+            .pipe(Effect.result);
         }),
         ReservationFulfillment.Default.pipe(
           Layer.provide(
             Layer.mergeAll(
               noReservationAuthors,
               Layer.mock(WorkspaceReservationRepository, {
-                findById: mock(() => Effect.succeed(order as never)),
+                findById: mock(() => Effect.succeed(order)),
               }),
               Layer.mock(FulfillmentLedger, {
                 retainActiveCustomerEmailDeliveryLocale: mock(
-                  (input: { readonly locale: "en-US" | "cs-CZ" }) =>
-                    Effect.succeed(input.locale)
+                  (
+                    input: Parameters<
+                      IFulfillmentLedger["retainActiveCustomerEmailDeliveryLocale"]
+                    >[0]
+                  ) => Effect.succeed(input.locale)
                 ),
-                claimPaidFulfillment: mock(() =>
-                  Effect.succeed(claimed as never)
-                ),
+                claimPaidFulfillment: mock(() => Effect.succeed(claimed)),
                 markAwaitingCustomerEmailDelivery,
                 markFulfilled,
                 markFulfillmentFailed: mock(() =>
@@ -373,20 +368,18 @@ describe("ReservationFulfillment.run production email acceptance", () => {
               Layer.mock(DotyposService, {}),
               Layer.mock(CustomerEmailLocaleService, {
                 byDotyposCustomer: mock(() =>
-                  Effect.succeed({ kind: "guest" })
+                  Effect.succeed({ kind: "guest" } as const)
                 ),
               }),
               Layer.mock(WorkspaceReservationService, {
-                getReservation: mock(() =>
-                  Effect.succeed(emailReservation as never)
-                ),
-              } satisfies IWorkspaceReservationService),
+                getReservation: mock(() => Effect.succeed(emailReservation)),
+              }),
               Layer.mock(WorkspaceReservationEmailService, {
                 sendPaidReservationEmails,
-              } satisfies IWorkspaceReservationEmailService),
+              }),
               Layer.mock(WorkspaceCheckoutAccessCodeService, {
-                resolveCustomerAccessCode: mock(() =>
-                  Effect.succeed("access-code")
+                resolveCustomerAccessCode: mock((input) =>
+                  Effect.succeed(customerAccessCodeFixture(input))
                 ),
               }),
               recordCheckoutAnalytics().layer,
@@ -418,48 +411,42 @@ describe("ReservationFulfillment.run production email acceptance", () => {
   });
 
   test("keeps the retained locale for an accepted-but-unrecorded send when the preference changes", async () => {
-    const order = {
-      id: "reservation-id",
-      activePaymentAttemptId: "payment-attempt-id",
+    const order = fulfillmentOrderFixture({
+      activePaymentAttemptId: paymentAttemptIdSchema.make("payment-attempt-id"),
       paymentState: "paid",
       fulfillmentState: "not_started",
-    };
-    const initialClaimed = {
+    });
+    const initialClaimed = fulfillmentOrderFixture({
       ...order,
       locale: "en-US",
       reservationState: "confirmed",
       fulfillmentState: "processing",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       activeCustomerEmailDeliveryLocale: null,
-    };
+    });
     // The first accepted send recorded its delivery attachment failure, so the
     // generation stays open with its retained locale.
-    const retainedClaimed = {
+    const retainedClaimed = fulfillmentOrderFixture({
       ...initialClaimed,
       activeCustomerEmailDeliveryLocale: "cs-CZ" as const,
-    };
-    const emailReservation = {
-      ...retainedClaimed,
-      reservationDetails: {
-        kind: "cowork",
-        entryTier: "basic",
-        coffee: false,
-      },
-      customer: { email: testEmailAddressForCustomer },
+    });
+    const emailReservation = fulfillmentDetailsFixture(retainedClaimed, {
       reservedFrom: Temporal.Instant.from("2026-07-01T08:00:00.000Z"),
       reservedUntil: Temporal.Instant.from("2026-07-02T08:00:00.000Z"),
       placement: { table: { mode: "assigned", name: "12" } },
-    };
+    });
     const claims = [initialClaimed, retainedClaimed];
     const claimPaidFulfillment = mock(() =>
-      Effect.succeed(claims.shift() as never)
+      Effect.succeed(claims.shift() ?? null)
     );
     // The customer changed the saved preference between the two attempts.
-    const preferenceLocales = ["cs-CZ", "en-US"];
+    const preferenceLocales: Locale[] = ["cs-CZ", "en-US"];
     const byDotyposCustomer = mock(() => {
-      const locale = preferenceLocales.shift();
-      return Effect.succeed({ kind: "account", locale } as never);
+      const locale = requireValue(preferenceLocales.shift(), "fixture locale");
+      return Effect.succeed({ kind: "account", locale } as const);
     });
     const retainInputs: Parameters<
       IFulfillmentLedger["retainActiveCustomerEmailDeliveryLocale"]
@@ -474,7 +461,8 @@ describe("ReservationFulfillment.run production email acceptance", () => {
         return Effect.succeed(input.locale);
       }
     );
-    const attachmentFailure = new Error(
+    const attachmentFailure = fulfillmentQueryFailure(
+      "update reservations",
       "synthetic delivery attachment failure before commit"
     );
     let attachAttempts = 0;
@@ -503,10 +491,10 @@ describe("ReservationFulfillment.run production email acceptance", () => {
         Effect.gen(function* () {
           const service = yield* ReservationFulfillment;
           const first = yield* service
-            .run("reservation-id")
+            .run(fulfillmentReservationId)
             .pipe(Effect.result);
           const second = yield* service
-            .run("reservation-id")
+            .run(fulfillmentReservationId)
             .pipe(Effect.result);
           return { first, second };
         }),
@@ -515,7 +503,7 @@ describe("ReservationFulfillment.run production email acceptance", () => {
             Layer.mergeAll(
               noReservationAuthors,
               Layer.mock(WorkspaceReservationRepository, {
-                findById: mock(() => Effect.succeed(order as never)),
+                findById: mock(() => Effect.succeed(order)),
               }),
               Layer.mock(FulfillmentLedger, {
                 claimPaidFulfillment,
@@ -533,16 +521,14 @@ describe("ReservationFulfillment.run production email acceptance", () => {
                 byDotyposCustomer,
               }),
               Layer.mock(WorkspaceReservationService, {
-                getReservation: mock(() =>
-                  Effect.succeed(emailReservation as never)
-                ),
-              } satisfies IWorkspaceReservationService),
+                getReservation: mock(() => Effect.succeed(emailReservation)),
+              }),
               Layer.mock(WorkspaceReservationEmailService, {
                 sendPaidReservationEmails,
-              } satisfies IWorkspaceReservationEmailService),
+              }),
               Layer.mock(WorkspaceCheckoutAccessCodeService, {
-                resolveCustomerAccessCode: mock(() =>
-                  Effect.succeed("access-code")
+                resolveCustomerAccessCode: mock((input) =>
+                  Effect.succeed(customerAccessCodeFixture(input))
                 ),
               }),
               recordCheckoutAnalytics().layer,
@@ -569,7 +555,7 @@ describe("ReservationFulfillment.run production email acceptance", () => {
     expect(byDotyposCustomer).toHaveBeenCalledTimes(1);
     expect(retainInputs).toEqual([
       {
-        id: "reservation-id",
+        id: fulfillmentReservationId,
         locale: "cs-CZ",
         expectedActiveCustomerEmailDeliveryId: null,
       },
@@ -586,40 +572,34 @@ describe("ReservationFulfillment.run production email acceptance", () => {
   });
 
   test("treats a recording superseded by a newer delivery generation as a no-op without failing fulfillment", async () => {
-    const order = {
-      id: "reservation-id",
-      activePaymentAttemptId: "payment-attempt-id",
+    const order = fulfillmentOrderFixture({
+      activePaymentAttemptId: paymentAttemptIdSchema.make("payment-attempt-id"),
       paymentState: "paid",
       fulfillmentState: "not_started",
-    };
-    const claimed = {
+    });
+    const claimed = fulfillmentOrderFixture({
       ...order,
       reservationState: "confirmed",
       fulfillmentState: "processing",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       activeCustomerEmailDeliveryLocale: null,
       locale: "en-US",
-    };
-    const emailReservation = {
-      ...claimed,
-      reservationDetails: {
-        kind: "cowork",
-        entryTier: "basic",
-        coffee: false,
-      },
-      customer: { email: testEmailAddressForCustomer },
+    });
+    const emailReservation = fulfillmentDetailsFixture(claimed, {
       reservedFrom: Temporal.Instant.from("2026-07-01T08:00:00.000Z"),
       reservedUntil: Temporal.Instant.from("2026-07-02T08:00:00.000Z"),
       placement: { table: { mode: "assigned", name: "12" } },
-    };
+    });
     // A newer recovery generation already recorded its delivery, so this
     // old-generation recording is rejected by the repository's generation
     // guard instead of clobbering the newer generation.
     const supersededError =
       new WorkspaceReservationDeliveryGenerationSupersededError({
         operation: "workspaceReservations.markAwaitingCustomerEmailDelivery",
-        reservationId: workspaceReservationIdSchema.make("reservation-id"),
+        reservationId: fulfillmentReservationId,
         expectedActiveCustomerEmailDeliveryId: null,
         activeCustomerEmailDeliveryId: EmailDeliveryIdSchema.make(
           "newer-generation-delivery"
@@ -636,23 +616,26 @@ describe("ReservationFulfillment.run production email acceptance", () => {
       Effect.provide(
         Effect.gen(function* () {
           const service = yield* ReservationFulfillment;
-          return yield* service.run("reservation-id").pipe(Effect.result);
+          return yield* service
+            .run(fulfillmentReservationId)
+            .pipe(Effect.result);
         }),
         ReservationFulfillment.Default.pipe(
           Layer.provide(
             Layer.mergeAll(
               noReservationAuthors,
               Layer.mock(WorkspaceReservationRepository, {
-                findById: mock(() => Effect.succeed(order as never)),
+                findById: mock(() => Effect.succeed(order)),
               }),
               Layer.mock(FulfillmentLedger, {
                 retainActiveCustomerEmailDeliveryLocale: mock(
-                  (input: { readonly locale: "en-US" | "cs-CZ" }) =>
-                    Effect.succeed(input.locale)
+                  (
+                    input: Parameters<
+                      IFulfillmentLedger["retainActiveCustomerEmailDeliveryLocale"]
+                    >[0]
+                  ) => Effect.succeed(input.locale)
                 ),
-                claimPaidFulfillment: mock(() =>
-                  Effect.succeed(claimed as never)
-                ),
+                claimPaidFulfillment: mock(() => Effect.succeed(claimed)),
                 markAwaitingCustomerEmailDelivery,
                 markFulfilled: mock(() =>
                   Effect.die(
@@ -664,22 +647,20 @@ describe("ReservationFulfillment.run production email acceptance", () => {
               Layer.mock(DotyposService, {}),
               Layer.mock(CustomerEmailLocaleService, {
                 byDotyposCustomer: mock(() =>
-                  Effect.succeed({ kind: "guest" })
+                  Effect.succeed({ kind: "guest" } as const)
                 ),
               }),
               Layer.mock(WorkspaceReservationService, {
-                getReservation: mock(() =>
-                  Effect.succeed(emailReservation as never)
-                ),
-              } satisfies IWorkspaceReservationService),
+                getReservation: mock(() => Effect.succeed(emailReservation)),
+              }),
               Layer.mock(WorkspaceReservationEmailService, {
                 sendPaidReservationEmails: mock(() =>
                   Effect.succeed(EmailDeliveryIdSchema.make("stale-delivery"))
                 ),
-              } satisfies IWorkspaceReservationEmailService),
+              }),
               Layer.mock(WorkspaceCheckoutAccessCodeService, {
-                resolveCustomerAccessCode: mock(() =>
-                  Effect.succeed("access-code")
+                resolveCustomerAccessCode: mock((input) =>
+                  Effect.succeed(customerAccessCodeFixture(input))
                 ),
               }),
               recordCheckoutAnalytics().layer,
@@ -699,39 +680,33 @@ describe("ReservationFulfillment.run production email acceptance", () => {
   });
 
   test("fails fulfillment when the delivery recording rejects for a non-supersession reason", async () => {
-    const order = {
-      id: "reservation-id",
-      activePaymentAttemptId: "payment-attempt-id",
+    const order = fulfillmentOrderFixture({
+      activePaymentAttemptId: paymentAttemptIdSchema.make("payment-attempt-id"),
       paymentState: "paid",
       fulfillmentState: "not_started",
-    };
-    const claimed = {
+    });
+    const claimed = fulfillmentOrderFixture({
       ...order,
       reservationState: "confirmed",
       fulfillmentState: "processing",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       activeCustomerEmailDeliveryLocale: null,
       locale: "en-US",
-    };
-    const emailReservation = {
-      ...claimed,
-      reservationDetails: {
-        kind: "cowork",
-        entryTier: "basic",
-        coffee: false,
-      },
-      customer: { email: testEmailAddressForCustomer },
+    });
+    const emailReservation = fulfillmentDetailsFixture(claimed, {
       reservedFrom: Temporal.Instant.from("2026-07-01T08:00:00.000Z"),
       reservedUntil: Temporal.Instant.from("2026-07-02T08:00:00.000Z"),
       placement: { table: { mode: "assigned", name: "12" } },
-    };
+    });
     // The reservation is no longer claimable for recording even though the
     // delivery generation still matches, so this is a real invalid-state
     // failure, not a superseded generation.
     const stateError = new WorkspaceReservationStateError({
       operation: "workspaceReservations.markAwaitingCustomerEmailDelivery",
-      reservationId: workspaceReservationIdSchema.make("reservation-id"),
+      reservationId: fulfillmentReservationId,
       message:
         "Only processing paid reservations can await customer email delivery.",
     });
@@ -744,23 +719,26 @@ describe("ReservationFulfillment.run production email acceptance", () => {
       Effect.provide(
         Effect.gen(function* () {
           const service = yield* ReservationFulfillment;
-          return yield* service.run("reservation-id").pipe(Effect.result);
+          return yield* service
+            .run(fulfillmentReservationId)
+            .pipe(Effect.result);
         }),
         ReservationFulfillment.Default.pipe(
           Layer.provide(
             Layer.mergeAll(
               noReservationAuthors,
               Layer.mock(WorkspaceReservationRepository, {
-                findById: mock(() => Effect.succeed(order as never)),
+                findById: mock(() => Effect.succeed(order)),
               }),
               Layer.mock(FulfillmentLedger, {
                 retainActiveCustomerEmailDeliveryLocale: mock(
-                  (input: { readonly locale: "en-US" | "cs-CZ" }) =>
-                    Effect.succeed(input.locale)
+                  (
+                    input: Parameters<
+                      IFulfillmentLedger["retainActiveCustomerEmailDeliveryLocale"]
+                    >[0]
+                  ) => Effect.succeed(input.locale)
                 ),
-                claimPaidFulfillment: mock(() =>
-                  Effect.succeed(claimed as never)
-                ),
+                claimPaidFulfillment: mock(() => Effect.succeed(claimed)),
                 markAwaitingCustomerEmailDelivery,
                 markFulfilled: mock(() =>
                   Effect.die(
@@ -772,24 +750,22 @@ describe("ReservationFulfillment.run production email acceptance", () => {
               Layer.mock(DotyposService, {}),
               Layer.mock(CustomerEmailLocaleService, {
                 byDotyposCustomer: mock(() =>
-                  Effect.succeed({ kind: "guest" })
+                  Effect.succeed({ kind: "guest" } as const)
                 ),
               }),
               Layer.mock(WorkspaceReservationService, {
-                getReservation: mock(() =>
-                  Effect.succeed(emailReservation as never)
-                ),
-              } satisfies IWorkspaceReservationService),
+                getReservation: mock(() => Effect.succeed(emailReservation)),
+              }),
               Layer.mock(WorkspaceReservationEmailService, {
                 sendPaidReservationEmails: mock(() =>
                   Effect.succeed(
                     EmailDeliveryIdSchema.make("accepted-delivery")
                   )
                 ),
-              } satisfies IWorkspaceReservationEmailService),
+              }),
               Layer.mock(WorkspaceCheckoutAccessCodeService, {
-                resolveCustomerAccessCode: mock(() =>
-                  Effect.succeed("access-code")
+                resolveCustomerAccessCode: mock((input) =>
+                  Effect.succeed(customerAccessCodeFixture(input))
                 ),
               }),
               recordCheckoutAnalytics().layer,

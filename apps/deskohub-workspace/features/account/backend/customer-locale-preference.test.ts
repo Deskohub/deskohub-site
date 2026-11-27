@@ -1,10 +1,11 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
-import { Effect, Layer, Result } from "effect";
-import { SqlError } from "effect/sql";
+import { Effect, Layer, Result, Stream } from "effect";
+import { type SqlConnection, SqlError } from "effect/sql";
 import { WorkspaceDatabase } from "@/db/database.service";
 import type { Locale } from "@/features/i18n";
+import { makeTestDatabaseClient } from "@/shared/testing/workspace-recording-database.test-utils";
 import type {
   CustomerAccountAccessError,
   CustomerAccountId,
@@ -17,7 +18,7 @@ import {
 import { saveAccountLocalePreference } from "./customer-locale-preference";
 import { CustomerLocalePreference } from "./customer-locale-preference.service";
 
-const save = (
+const save = async (
   fixture: CustomerAccountSectionsFixture,
   options: {
     readonly writeFails?: boolean;
@@ -32,31 +33,45 @@ const save = (
     >;
   } = {}
 ) => {
-  const writes: string[] = [];
   const sections = makeCustomerAccountSections(fixture);
-  const fakeDb = {
-    update: () => ({
-      set: (values: { locale: string }) => ({
-        where: () =>
-          options.writeFails
-            ? Effect.fail(
-                new SqlError.SqlError({
-                  reason: new SqlError.ConnectionError({
-                    cause: new Error("write failed"),
-                    message: "write failed",
-                    operation: "execute",
-                  }),
-                })
-              )
-            : Effect.sync(() => {
-                sections.events.push("write");
-                writes.push(values.locale);
-              }),
-      }),
-    }),
+  const writes: (readonly unknown[])[] = [];
+  const execute = (_sql: string, params: readonly unknown[]) =>
+    options.writeFails
+      ? Effect.fail(
+          new SqlError.SqlError({
+            reason: new SqlError.ConnectionError({
+              cause: new Error("write failed"),
+              message: "write failed",
+              operation: "execute",
+            }),
+          })
+        )
+      : Effect.sync(() => {
+          sections.events.push("write");
+          writes.push(params);
+          return [];
+        });
+  const unexpected = Effect.die(new Error("Unexpected locale write query"));
+  const connection: SqlConnection.Connection = {
+    execute,
+    executeUnprepared: execute,
+    executeValues: execute,
+    executeValuesUnprepared: execute,
+    executeRaw: (sql, params) =>
+      Effect.map(execute(sql, params), (rows) => ({
+        command: "UPDATE",
+        rowCount: 1,
+        oid: 0,
+        rows,
+        fields: [],
+      })),
+    executeStream: () => Stream.fromEffect(unexpected),
   };
+  const db = await Effect.runPromise(
+    makeTestDatabaseClient(Effect.succeed(connection))
+  );
   const dependencies = Layer.mergeAll(
-    Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(fakeDb as never)),
+    Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(db)),
     sections.layer
   );
   const run = (
@@ -77,10 +92,12 @@ const save = (
 
 describe("saveAccountLocalePreference", () => {
   test("writes after rechecking the session under the account lock", async () => {
-    const { run, writes, events } = save({ session: {} });
+    const { run, writes, events } = await save({ session: {} });
 
     expect(Result.isSuccess(await run)).toBe(true);
-    expect(writes).toEqual(["en-US"]);
+    expect(writes).toEqual([
+      expect.arrayContaining(["en-US", sectionAccountId]),
+    ]);
     expect(events).toEqual([
       "account-lock-acquired",
       "account-session",
@@ -91,7 +108,7 @@ describe("saveAccountLocalePreference", () => {
   });
 
   test("never writes for a session gone by the time the lock is held", async () => {
-    const { run, writes } = save({ session: null });
+    const { run, writes } = await save({ session: null });
 
     const outcome = await run;
     expect(Result.isFailure(outcome) && outcome.failure.reason).toBe(
@@ -101,7 +118,7 @@ describe("saveAccountLocalePreference", () => {
   });
 
   test("maps a lock failure to the account lock cause without writing", async () => {
-    const { run, writes } = save({ session: {}, lockUnavailable: true });
+    const { run, writes } = await save({ session: {}, lockUnavailable: true });
 
     const outcome = await run;
     expect(Result.isFailure(outcome) && outcome.failure.cause?.code).toBe(
@@ -111,7 +128,7 @@ describe("saveAccountLocalePreference", () => {
   });
 
   test("maps a failed write to the locale preference write cause", async () => {
-    const { run } = save({ session: {} }, { writeFails: true });
+    const { run } = await save({ session: {} }, { writeFails: true });
 
     const outcome = await run;
     expect(Result.isFailure(outcome) && outcome.failure.cause?.code).toBe(
@@ -129,14 +146,16 @@ describe("CustomerLocalePreference", () => {
     });
 
   test("saves through the account's section", async () => {
-    const { run, writes } = saveThroughService({ session: {} });
+    const { run, writes } = await saveThroughService({ session: {} });
 
     expect(Result.isSuccess(await run)).toBe(true);
-    expect(writes).toEqual(["en-US"]);
+    expect(writes).toEqual([
+      expect.arrayContaining(["en-US", sectionAccountId]),
+    ]);
   });
 
   test("refuses a deletion-marked account without writing", async () => {
-    const { run, writes } = saveThroughService({
+    const { run, writes } = await saveThroughService({
       session: {},
       activityState: "deletion-requested",
     });

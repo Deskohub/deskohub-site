@@ -6,9 +6,11 @@ import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
-  type CustomerAccountAccessError,
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
   type CustomerAccountId,
   customerAccountIdSchema,
 } from "../customer-account";
@@ -26,6 +28,7 @@ import {
 } from "./customer-locale-preference";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 
 /**
  * The under-lock session recheck sees this mutable holder, so each test
@@ -36,7 +39,7 @@ let currentTestSession: CustomerAccountSession | null = null;
 const makeRepositoryLayer = () => {
   const testDatabaseLayer = Layer.succeed(
     WorkspaceDatabase,
-    WorkspaceDatabase.make(testDatabase!.db)
+    WorkspaceDatabase.make(database().db)
   );
 
   // The section must see the disposable test database and its advisory-lock
@@ -73,7 +76,7 @@ const makeRepositoryLayer = () => {
           Layer.mergeAll(
             testLinkRepository,
             testAuthenticationLayer,
-            WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase!.databasePool)
+            WorkspaceDatabaseAdvisoryLock.makeLayer(database().databasePool)
           )
         )
       )
@@ -84,7 +87,7 @@ const makeRepositoryLayer = () => {
 
 const insertAuthUser = (id: CustomerAccountId, email: string) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("locale-preference", {
+    workspaceFixtures(database().db).account("locale-preference", {
       id,
       email,
       verified: false,
@@ -95,7 +98,7 @@ const uniqueId = () => crypto.randomUUID();
 
 const savedLocaleOf = async (accountId: string) =>
   (
-    await testDatabase!.pool.query<{ locale: string }>(
+    await database().pool.query<{ locale: string }>(
       `select locale from auth."user" where id = $1`,
       [accountId]
     )
@@ -157,7 +160,7 @@ describe.skipIf(!testDatabase)(
       const account = customerAccountIdSchema.make(uniqueId());
       await insertAuthUser(account, testEmailAddress(`pref-f-${account}`));
       setSessionAccount(account);
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth."user" set deletion_requested_at = $2 where id = $1`,
         [account, new Date("2026-09-01T00:00:00.000Z")]
       );
@@ -171,7 +174,7 @@ describe.skipIf(!testDatabase)(
 
       expect(write._tag).toBe("Failure");
       if (write._tag === "Failure") {
-        const failure = write.failure as CustomerAccountAccessError;
+        const { failure } = write;
         expect(failure.reason).toBe("link-required");
         expect(failure.linkReason).toBe("deletion-requested");
       }
@@ -181,7 +184,7 @@ describe.skipIf(!testDatabase)(
     test("capture fills only a missing locale, and the lookup resolves the magic-link delivery locale", async () => {
       const dbLayer = Layer.succeed(
         WorkspaceDatabase,
-        WorkspaceDatabase.make(testDatabase!.db)
+        WorkspaceDatabase.make(database().db)
       );
       const verifiedEmail = testEmailAddress(`lookup-${crypto.randomUUID()}`);
       const unverifiedEmail = testEmailAddress(
@@ -189,7 +192,7 @@ describe.skipIf(!testDatabase)(
       );
       const captureAccount = customerAccountIdSchema.make(uniqueId());
       await Effect.runPromise(
-        workspaceFixtures(testDatabase!.db).account("locale-preference", {
+        workspaceFixtures(database().db).account("locale-preference", {
           id: captureAccount,
           email: verifiedEmail,
         })

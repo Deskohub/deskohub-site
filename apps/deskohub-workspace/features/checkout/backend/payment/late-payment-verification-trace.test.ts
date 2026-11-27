@@ -1,9 +1,11 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
-import { NexiService, type PaymentVerificationResult } from "@deskohub/nexi";
+import { NetworkError, NexiService } from "@deskohub/nexi";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Cause, type Duration, Effect, Exit, Layer, Predicate } from "effect";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { unavailableQueue } from "@/shared/backend/queue/memory-queue.test-utils";
 import {
   type EffectTrace,
   recordEffectTrace,
@@ -13,94 +15,64 @@ import { LatePaymentRecoveryRepository } from "../repositories/late-payment-reco
 import { PaymentAttemptRepository } from "../repositories/payment-attempt.repository";
 import { LatePaymentRecoveryQueueService } from "./late-payment-recovery-queue.service";
 import { LatePaymentVerificationService } from "./late-payment-verification.service";
+import {
+  expiredAttempt,
+  expiredReservation,
+  orderId,
+  recoveryFixture,
+  verification,
+} from "./late-payment-verification.test-utils";
 import { withReservationPaymentHandlers } from "./order-payment-handlers.test-utils";
 import { PaymentProvidersFromNexi } from "./payment-providers";
 
-type Methods = Record<
-  string,
-  (...args: never[]) => Effect.Effect<unknown, unknown>
->;
-
 interface Collaborators {
-  readonly reservations?: Methods;
-  readonly paymentAttempts?: Methods;
-  readonly recoveries?: Methods;
-  readonly recoveryQueue?: Methods;
-  readonly nexi?: Methods;
+  readonly reservations: Pick<
+    WorkspaceReservationRepository["Service"],
+    "findById"
+  >;
+  readonly paymentAttempts: Pick<
+    PaymentAttemptRepository["Service"],
+    "findById"
+  >;
+  readonly recoveries: Pick<
+    LatePaymentRecoveryRepository["Service"],
+    "findByPaymentAttemptId" | "start"
+  >;
+  readonly recoveryQueue: Layer.Layer<LatePaymentRecoveryQueueService>;
+  readonly nexi: Pick<NexiService["Service"], "verifyPaymentOutcome">;
 }
-
-const expiredReservation = {
-  id: "reservation-id",
-  correlationId: "correlation-id",
-  paymentState: "expired",
-  activePaymentAttemptId: "attempt-id",
-};
-
-const expiredAttempt = {
-  orderId: "reservation-id",
-  id: "attempt-id",
-  workspaceReservationId: "reservation-id",
-  provider: "nexi",
-  providerOrderId: "provider-order-id",
-  state: "expired",
-  amount: { value: 29_000, exponent: 2, currency: "CZK" },
-  securityToken: "security-token",
-};
-
-const verification = (
-  status: PaymentVerificationResult["status"],
-  mismatches: PaymentVerificationResult["mismatches"] = []
-): PaymentVerificationResult => ({
-  status,
-  provider: {
-    orderId: "provider-order-id",
-    operationId: "operation-id",
-    operationCount: 1,
-    amount: "29000",
-    currency: "CZK",
-    orderStatus: status === "success" ? "EXECUTED" : "DECLINED",
-    captureExecuted: status === "success",
-  },
-  mismatches,
-});
 
 const succeed =
   <A>(value: A) =>
   () =>
-    Effect.succeed(value as never);
-const fail =
-  <E>(error: E) =>
-  () =>
-    Effect.fail(error as never);
+    Effect.succeed(value);
+
+const databaseUnavailable = new EffectDrizzleQueryError({
+  query: "late payment verification",
+  params: [],
+  cause: new Error("db down"),
+});
 
 const minutesAgo = (minutes: number) =>
   Temporal.Now.instant().subtract({ minutes });
 
 /** Collaborators of a verification that reaches Nexi and starts recovery. */
 const settledCollaborators = (
-  overrides: Collaborators = {}
+  overrides: Partial<Omit<Collaborators, "recoveries">> & {
+    readonly recoveries?: Partial<Collaborators["recoveries"]>;
+  } = {}
 ): Collaborators => ({
+  reservations: { findById: succeed(expiredReservation) },
+  paymentAttempts: { findById: succeed(expiredAttempt) },
+  recoveryQueue: Layer.mock(LatePaymentRecoveryQueueService, {
+    enqueue: () => Effect.void,
+  }),
+  nexi: { verifyPaymentOutcome: succeed(verification("success")) },
   ...overrides,
-  reservations: {
-    findById: succeed(expiredReservation),
-    ...overrides.reservations,
-  },
-  paymentAttempts: {
-    findById: succeed(expiredAttempt),
-    ...overrides.paymentAttempts,
-  },
   recoveries: {
     findByPaymentAttemptId: succeed(null),
-    start: succeed({}),
+    start: (input) => Effect.succeed(recoveryFixture(input)),
     ...overrides.recoveries,
-  },
-  recoveryQueue: {
-    enqueue: succeed(undefined),
-    ...overrides.recoveryQueue,
-  },
-  nexi: {
-    verifyPaymentOutcome: succeed(verification("success")),
-    ...overrides.nexi,
   },
 });
 
@@ -118,14 +90,12 @@ const startRecoveryIfSettled = async (
   input: { readonly verificationDeadline?: Duration.Input } = {}
 ) => {
   const trace: EffectTrace = startEffectTrace();
-  const record = (service: string, methods: Methods | undefined) =>
-    trace.recordCalls(service, methods ?? {});
   const exit = await Effect.gen(function* () {
     const service = yield* LatePaymentVerificationService;
     return yield* recordEffectTrace(
       trace,
       service.startRecoveryIfSettled({
-        orderId: "reservation-id" as never,
+        orderId,
         ...input,
       })
     );
@@ -136,23 +106,31 @@ const startRecoveryIfSettled = async (
           Layer.mergeAll(
             Layer.mock(
               WorkspaceReservationRepository,
-              record("reservations", collaborators.reservations)
+              trace.recordCalls("reservations", collaborators.reservations)
             ),
             Layer.mock(
               PaymentAttemptRepository,
-              record("paymentAttempts", collaborators.paymentAttempts)
+              trace.recordCalls(
+                "paymentAttempts",
+                collaborators.paymentAttempts
+              )
             ),
             Layer.mock(
               LatePaymentRecoveryRepository,
-              record("recoveries", collaborators.recoveries)
+              trace.recordCalls("recoveries", collaborators.recoveries)
             ),
-            Layer.mock(
+            Layer.effect(
               LatePaymentRecoveryQueueService,
-              record("recoveryQueue", collaborators.recoveryQueue)
-            ),
+              Effect.map(LatePaymentRecoveryQueueService, ({ enqueue }) =>
+                trace.recordCalls("recoveryQueue", { enqueue })
+              )
+            ).pipe(Layer.provide(collaborators.recoveryQueue)),
             PaymentProvidersFromNexi.pipe(
               Layer.provide(
-                Layer.mock(NexiService, record("nexi", collaborators.nexi))
+                Layer.mock(
+                  NexiService,
+                  trace.recordCalls("nexi", collaborators.nexi)
+                )
               )
             )
           ).pipe(withReservationPaymentHandlers)
@@ -168,7 +146,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
   test("reports not verifiable when the reservation can't be loaded", async () => {
     const { outcome, trace } = await startRecoveryIfSettled(
       settledCollaborators({
-        reservations: { findById: fail(new Error("db down")) },
+        reservations: { findById: () => Effect.fail(databaseUnavailable) },
       })
     );
 
@@ -176,8 +154,8 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
-        "Error Late-payment verification failed (cause=<Error>) {orderId} in latePaymentVerification.startRecoveryIfSettled",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
+        "Error Late-payment verification failed (cause=<EffectDrizzleQueryError>) {orderId} in latePaymentVerification.startRecoveryIfSettled",
       ]
     `);
   });
@@ -191,7 +169,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
       ]
     `);
   });
@@ -212,7 +190,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
       ]
     `);
   });
@@ -230,12 +208,12 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
       ]
     `);
   });
 
-  for (const paymentState of ["failed", "cancelled"]) {
+  for (const paymentState of ["failed", "cancelled"] as const) {
     test(`verifies a ${paymentState} reservation`, async () => {
       const { outcome } = await startRecoveryIfSettled(
         settledCollaborators({
@@ -256,10 +234,12 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     const { outcome, trace } = await startRecoveryIfSettled(
       settledCollaborators({
         recoveries: {
-          findByPaymentAttemptId: succeed({
-            state: "pending",
-            createdAt: minutesAgo(5),
-          }),
+          findByPaymentAttemptId: succeed(
+            recoveryFixture({
+              state: "pending",
+              createdAt: minutesAgo(5),
+            })
+          ),
         },
       })
     );
@@ -268,7 +248,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call recoveryQueue.enqueue(paymentAttemptId=attempt-id)",
       ]
@@ -279,10 +259,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     const { outcome, trace } = await startRecoveryIfSettled(
       settledCollaborators({
         recoveries: {
-          findByPaymentAttemptId: succeed({
-            state: "pending",
-            createdAt: Temporal.Now.instant(),
-          }),
+          findByPaymentAttemptId: succeed(recoveryFixture()),
         },
       })
     );
@@ -291,7 +268,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
       ]
     `);
@@ -301,10 +278,12 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     const { outcome, trace } = await startRecoveryIfSettled(
       settledCollaborators({
         recoveries: {
-          findByPaymentAttemptId: succeed({
-            state: "processing",
-            createdAt: minutesAgo(5),
-          }),
+          findByPaymentAttemptId: succeed(
+            recoveryFixture({
+              state: "processing",
+              createdAt: minutesAgo(5),
+            })
+          ),
         },
       })
     );
@@ -313,7 +292,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
       ]
     `);
@@ -323,12 +302,16 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     const { outcome, trace } = await startRecoveryIfSettled(
       settledCollaborators({
         recoveries: {
-          findByPaymentAttemptId: succeed({
-            state: "pending",
-            createdAt: minutesAgo(5),
-          }),
+          findByPaymentAttemptId: succeed(
+            recoveryFixture({
+              state: "pending",
+              createdAt: minutesAgo(5),
+            })
+          ),
         },
-        recoveryQueue: { enqueue: fail(new Error("queue down")) },
+        recoveryQueue: LatePaymentRecoveryQueueService.Default.pipe(
+          Layer.provide(unavailableQueue())
+        ),
       })
     );
 
@@ -336,10 +319,11 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call recoveryQueue.enqueue(paymentAttemptId=attempt-id)",
-        "Error Late-payment verification failed (cause=<Error>) {orderId} in latePaymentVerification.startRecoveryIfSettled",
+        "span latePaymentRecoveryQueue.enqueue",
+        "Error Late-payment verification failed (cause=<LatePaymentRecoveryQueueError>) {orderId} in latePaymentVerification.startRecoveryIfSettled",
       ]
     `);
   });
@@ -353,7 +337,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call paymentAttempts.findById(attempt-id)",
       ]
@@ -373,7 +357,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call paymentAttempts.findById(attempt-id)",
       ]
@@ -393,7 +377,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call paymentAttempts.findById(attempt-id)",
       ]
@@ -413,7 +397,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call paymentAttempts.findById(attempt-id)",
       ]
@@ -436,7 +420,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call paymentAttempts.findById(attempt-id)",
         "span NexiPaymentProvider.verify",
@@ -448,7 +432,10 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
   test("reports a failed provider lookup", async () => {
     const { outcome, trace } = await startRecoveryIfSettled(
       settledCollaborators({
-        nexi: { verifyPaymentOutcome: fail(new Error("nexi down")) },
+        nexi: {
+          verifyPaymentOutcome: () =>
+            Effect.fail(new NetworkError({ message: "nexi down" })),
+        },
       }),
       { verificationDeadline: "5 seconds" }
     );
@@ -457,7 +444,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call paymentAttempts.findById(attempt-id)",
         "span NexiPaymentProvider.verify",
@@ -480,7 +467,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call paymentAttempts.findById(attempt-id)",
         "span NexiPaymentProvider.verify",
@@ -501,7 +488,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call paymentAttempts.findById(attempt-id)",
         "span NexiPaymentProvider.verify",
@@ -520,13 +507,13 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call paymentAttempts.findById(attempt-id)",
         "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=29000, currency=EUR, securityToken=security-token, deadline=5 seconds)",
         "Warn Provider payment settled after the local payment attempt became terminal {orderId} in latePaymentVerification.startRecoveryIfSettled",
-        "call recoveries.start(paymentAttemptId=attempt-id, workspaceReservationId=reservation-id, providerOperationId=operation-id, providerStatus=EXECUTED, verifiedPaidAt=<Instant>)",
+        "call recoveries.start(paymentAttemptId=attempt-id, workspaceReservationId=018f0b50-0000-7000-8000-000000000001, providerOperationId=operation-id, providerStatus=EXECUTED, verifiedPaidAt=<Instant>)",
         "call recoveryQueue.enqueue(paymentAttemptId=attempt-id)",
       ]
     `);
@@ -536,8 +523,7 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     const { outcome, trace } = await startRecoveryIfSettled(
       settledCollaborators({
         recoveries: {
-          findByPaymentAttemptId: succeed(null),
-          start: fail(new Error("db down")),
+          start: () => Effect.fail(databaseUnavailable),
         },
       })
     );
@@ -546,14 +532,14 @@ describe("LatePaymentVerificationService.startRecoveryIfSettled trace", () => {
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentVerification.startRecoveryIfSettled",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(018f0b50-0000-7000-8000-000000000001)",
         "call recoveries.findByPaymentAttemptId(attempt-id)",
         "call paymentAttempts.findById(attempt-id)",
         "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=29000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Warn Provider payment settled after the local payment attempt became terminal {orderId} in latePaymentVerification.startRecoveryIfSettled",
-        "call recoveries.start(paymentAttemptId=attempt-id, workspaceReservationId=reservation-id, providerOperationId=operation-id, providerStatus=EXECUTED, verifiedPaidAt=<Instant>)",
-        "Error Late-payment verification failed (cause=<Error>) {orderId} in latePaymentVerification.startRecoveryIfSettled",
+        "call recoveries.start(paymentAttemptId=attempt-id, workspaceReservationId=018f0b50-0000-7000-8000-000000000001, providerOperationId=operation-id, providerStatus=EXECUTED, verifiedPaidAt=<Instant>)",
+        "Error Late-payment verification failed (cause=<EffectDrizzleQueryError>) {orderId} in latePaymentVerification.startRecoveryIfSettled",
       ]
     `);
   });

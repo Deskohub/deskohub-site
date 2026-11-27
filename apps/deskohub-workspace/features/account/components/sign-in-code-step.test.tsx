@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import type { SignInCodeVerification } from "@/features/account/auth-return";
 import { m } from "@/features/i18n";
 import {
@@ -44,16 +45,30 @@ const renderStep = ({
     onUseDifferentEmail: mock(() => undefined),
   } as const;
   const view = render(<SignInCodeStep {...props} requestedAt={requestedAt} />);
-  const input = () =>
-    view.getByLabelText(
+  const input = () => {
+    const element = view.getByLabelText(
       m.accountSignInCodeLabel({}, { locale: stepLocale })
-    ) as HTMLInputElement;
-  const status = () =>
-    view.container.querySelector("#account-sign-in-code-status")!;
-  const resend = () =>
-    view.container.querySelector(
+    );
+    assert(
+      element instanceof HTMLInputElement,
+      "Expected a sign-in code input"
+    );
+    return element;
+  };
+  const status = () => {
+    const element = view.container.querySelector(
+      "#account-sign-in-code-status"
+    );
+    assert(element, "Expected a sign-in code status");
+    return element;
+  };
+  const resend = () => {
+    const element = view.container.querySelector(
       "#account-sign-in-code-resend"
-    ) as HTMLButtonElement;
+    );
+    assert(element instanceof HTMLButtonElement, "Expected a resend button");
+    return element;
+  };
   return { props, view, input, status, resend };
 };
 

@@ -4,7 +4,10 @@ import { describe, expect, mock, test } from "bun:test";
 import { resendSimulatorAddress } from "@deskohub/test-email";
 import { ConfigProvider, Effect, Layer } from "effect";
 import type { Locale } from "@/features/i18n";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 
 const afterCallbacks: (() => unknown)[] = [];
 const resendSends: {
@@ -67,7 +70,7 @@ const uniqueEmail = (label: string) =>
   resendSimulatorAddress("delivered", `${label}-${crypto.randomUUID()}`);
 
 const insertVerifiedUser = (email: string, verified: boolean) =>
-  workspaceFixtures(testDatabase!.db)
+  workspaceFixtures(requireTestDatabase(testDatabase).db)
     .account("magic-link", { email, verified })
     .pipe(
       Effect.map(({ accountId }) => accountId),
@@ -75,7 +78,7 @@ const insertVerifiedUser = (email: string, verified: boolean) =>
     );
 
 const savePreference = async (accountId: string, locale: Locale) => {
-  await testDatabase!.pool.query(
+  await requireTestDatabase(testDatabase).pool.query(
     `update auth."user" set locale = $2 where id = $1`,
     [accountId, locale]
   );
@@ -93,7 +96,7 @@ const requestDelivery = async (
     token: `synthetic-${crypto.randomUUID()}`,
     metadata: signInCode ? { locale, signInCode: true } : { locale },
     ...(signInCode && { code: signInCode.code }),
-  } as Parameters<typeof workspaceSendMagicLink>[0]);
+  });
   const queued = afterCallbacks.slice(callbacksBefore);
   for (const callback of queued) await callback();
   return queued.length;
@@ -148,7 +151,7 @@ describe.skipIf(!testDatabase)(
       expect(queued).toBe(1);
       expect(sentSubjectsFor(email)).toEqual([CS_SUBJECT]);
 
-      const rows = await testDatabase!.pool.query(
+      const rows = await requireTestDatabase(testDatabase).pool.query(
         `select locale from auth."user" where id = $1`,
         [accountId]
       );
@@ -160,14 +163,14 @@ describe.skipIf(!testDatabase)(
       const accountId = await insertVerifiedUser(email, true);
       await savePreference(accountId, "cs-CZ");
 
-      await testDatabase!.pool.query(
+      await requireTestDatabase(testDatabase).pool.query(
         `alter table auth."user" rename column locale to locale_moved`
       );
       try {
         const queued = await requestDelivery(email, "en-US");
         expect(queued).toBe(0);
       } finally {
-        await testDatabase!.pool.query(
+        await requireTestDatabase(testDatabase).pool.query(
           `alter table auth."user" rename column locale_moved to locale`
         );
       }

@@ -4,13 +4,13 @@ import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
 import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
-import type { CustomerAccountId } from "../customer-account";
+import { customerAccountIdSchema } from "../customer-account";
 import {
   asBrowserRequest,
   fakeAccountServiceStores,
 } from "./customer-account-services.test-utils";
 
-const agentAccountId = "agent-account" as CustomerAccountId;
+const agentAccountId = customerAccountIdSchema.make("agent-account");
 
 // The agent's account is linked and active, and the account lock is
 // recorded instead of reaching Postgres.

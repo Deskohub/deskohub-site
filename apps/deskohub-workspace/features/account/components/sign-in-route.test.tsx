@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import type { ReactElement } from "react";
+import { requireElement } from "@/shared/testing/route-element.test-utils";
 import { unsafeReturnTargets } from "@/shared/testing/unsafe-return-targets.test-utils";
 
 const events: string[] = [];
@@ -21,15 +21,12 @@ mock.module("@/features/account/server/account-release-gates.server", () => ({
 const { SignInRouteCard } = await import("./sign-in-route");
 
 const render = async (query: Record<string, string | string[] | undefined>) =>
-  (await SignInRouteCard({
-    locale: "en-US",
-    searchParams: Promise.resolve(query),
-  })) as ReactElement<{
-    readonly locale: string;
-    readonly noLongerWaiting: boolean;
-    readonly passkeysEnabled: boolean;
-    readonly returnTo?: string;
-  }>;
+  requireElement<unknown>(
+    await SignInRouteCard({
+      locale: "en-US",
+      searchParams: Promise.resolve(query),
+    })
+  );
 
 describe("sign-in route card", () => {
   beforeEach(() => {
@@ -69,27 +66,33 @@ describe("sign-in route card", () => {
   test("passes only a same-origin return target on, with its query", async () => {
     const returnTo = "/en-US/reservation?date=2026-10-20&contact=a.b";
 
-    expect((await render({ returnTo })).props.returnTo).toBe(returnTo);
+    expect((await render({ returnTo })).props).toHaveProperty(
+      "returnTo",
+      returnTo
+    );
     expect(
-      (await render({ returnTo: [returnTo, "/en-US/account"] })).props.returnTo
-    ).toBe(returnTo);
+      (await render({ returnTo: [returnTo, "/en-US/account"] })).props
+    ).toHaveProperty("returnTo", returnTo);
     for (const unsafe of unsafeReturnTargets) {
-      expect(
-        (await render({ returnTo: unsafe })).props.returnTo
-      ).toBeUndefined();
+      expect((await render({ returnTo: unsafe })).props).toHaveProperty(
+        "returnTo",
+        undefined
+      );
     }
   });
 
   test("shows the no-longer-waiting notice only for its own notice value", async () => {
     expect(
-      (await render({ notice: "no-longer-waiting" })).props.noLongerWaiting
-    ).toBe(true);
+      (await render({ notice: "no-longer-waiting" })).props
+    ).toHaveProperty("noLongerWaiting", true);
     expect(
       (await render({ notice: ["no-longer-waiting", "other"] })).props
-        .noLongerWaiting
-    ).toBe(true);
+    ).toHaveProperty("noLongerWaiting", true);
     for (const notice of [undefined, "", "other", "NO-LONGER-WAITING"]) {
-      expect((await render({ notice })).props.noLongerWaiting).toBe(false);
+      expect((await render({ notice })).props).toHaveProperty(
+        "noLongerWaiting",
+        false
+      );
     }
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type DotyposCustomer,
+  DotyposCustomerIdSchema,
   DotyposCustomerSchema,
   DotyposRejected,
   DotyposService,
@@ -8,7 +9,7 @@ import {
   DotyposUncertain,
   DotyposVersionConflict,
 } from "@deskohub/dotypos";
-import { Effect, Layer, Logger, Option, Schema } from "effect";
+import { Effect, Layer, Logger, Option, Predicate, Schema } from "effect";
 import { SqlError } from "effect/sql";
 import { customerAccountIdSchema } from "../customer-account";
 import {
@@ -24,6 +25,19 @@ import { CustomerAvatarProviderError } from "./customer-avatar.service";
 import { CustomerDotyposAdapter } from "./customer-dotypos-adapter.service";
 
 const accountId = customerAccountIdSchema.make("auth-user-1");
+const expiredProfile = Schema.decodeSync(DotyposCustomerSchema)({
+  id: "60111",
+  _cloudId: "cloud",
+  firstName: "Ada",
+  lastName: null,
+  email: null,
+  phone: null,
+  points: "0",
+  flags: "0",
+  display: true,
+  deleted: false,
+  expireDate: "2020-01-01T00:00:00Z",
+});
 
 const makeDependencies = (
   overrides: {
@@ -32,7 +46,9 @@ const makeDependencies = (
     readonly expireOutcome?: ReturnType<
       CustomerAccountDeletionDependencies["expireCustomer"]
     >;
-    readonly avatarOutcome?: Effect.Effect<void, unknown>;
+    readonly avatarOutcome?: ReturnType<
+      CustomerAccountDeletionDependencies["destroyAvatar"]
+    >;
     readonly account?: CustomerAccountSectionsFixture;
   } & Partial<CustomerAccountDeletionDependencies> = {}
 ) => {
@@ -54,23 +70,20 @@ const makeDependencies = (
     },
     findLink: () => {
       calls.push("find-link");
+      const link = "link" in overrides ? (overrides.link ?? null) : "60111";
       return Effect.succeed(
-        "link" in overrides ? (overrides.link ?? null) : "60111"
+        link === null ? null : DotyposCustomerIdSchema.make(link)
       );
     },
     expireCustomer: () => {
       calls.push("expire");
-      return (overrides.expireOutcome ??
-        Effect.succeed(Option.some({} as never))) as ReturnType<
-        CustomerAccountDeletionDependencies["expireCustomer"]
-      >;
+      return (
+        overrides.expireOutcome ?? Effect.succeed(Option.some(expiredProfile))
+      );
     },
     destroyAvatar: () => {
       calls.push("destroy-avatar");
-      return (overrides.avatarOutcome ?? Effect.void) as Effect.Effect<
-        void,
-        never
-      >;
+      return overrides.avatarOutcome ?? Effect.void;
     },
     deleteInvitations: () => Effect.void,
     tombstone: () => {
@@ -343,7 +356,11 @@ describe("Customer account deletion", () => {
       const logCodes: unknown[] = [];
       const capturingLogger = Logger.make(({ message }) => {
         const [, annotations] = Array.isArray(message) ? message : [];
-        logCodes.push((annotations as { code?: unknown } | undefined)?.code);
+        logCodes.push(
+          Predicate.isObject(annotations) && "code" in annotations
+            ? annotations.code
+            : undefined
+        );
       });
       const outcome = await Effect.runPromise(
         Effect.gen(function* () {

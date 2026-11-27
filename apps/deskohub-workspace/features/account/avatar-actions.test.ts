@@ -3,11 +3,20 @@ import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { PostHogFeatureFlagEvaluationError } from "@deskohub/analytics-posthog/feature-flags/node";
+import { CloudinaryConfigError } from "@deskohub/cloudinary";
 import { Context, Effect, Layer } from "effect";
 import { WorkspaceFeatureFlagServiceMock } from "@/features/feature-flags/backend/workspace-feature-flag.service.mock";
 import { m } from "@/features/i18n";
 import { mockWorkspaceActionRequest } from "@/shared/testing/workspace-action-request.test-utils";
 import { AccountAvatarReleaseGate } from "./backend/account-release-gates";
+import {
+  CustomerAvatarProviderError,
+  type CustomerAvatarService,
+} from "./backend/customer-avatar.service";
+import {
+  CustomerAvatarRejectedError,
+  type CustomerAvatarRejectionReason,
+} from "./backend/customer-avatar-normalization";
 
 const revalidatePath = mock(
   (_path: string, _type?: "layout" | "page") => undefined
@@ -99,19 +108,21 @@ mock.module("@/features/account/backend/current-customer-account", () => ({
   CurrentCustomerAccount: Standing,
 }));
 
-type AvatarUploadInput = {
-  readonly accountId: string;
-  readonly bytes: Uint8Array;
-  readonly declaredSize: number;
-  readonly declaredMediaType: string;
-};
+type AvatarOperations = Pick<
+  CustomerAvatarService["Service"],
+  "upload" | "remove"
+>;
+type AvatarUploadInput = Parameters<AvatarOperations["upload"]>[1];
 
 type UploadOutcome =
   | {
       readonly status: "uploaded";
       readonly avatar: { url: string; version?: number };
     }
-  | { readonly status: "rejected"; readonly reason: string }
+  | {
+      readonly status: "rejected";
+      readonly reason: CustomerAvatarRejectionReason;
+    }
   | { readonly status: "retryable" };
 
 let uploadCalls: AvatarUploadInput[] = [];
@@ -127,47 +138,49 @@ let uploadOutcome: UploadOutcome = {
 let removeOutcome: { status: "retryable" } | { status: "removed" } = {
   status: "removed",
 };
-const Avatar = Context.Service<Avatar, Record<string, never>>()(
+class Avatar extends Context.Service<Avatar, AvatarOperations>()(
   "@test/AvatarActionsAvatar"
-);
+) {}
 
 const AvatarLayer = Layer.succeed(Avatar, {
-  upload: (accountId: string, input: AvatarUploadInput) =>
-    Effect.suspend(() => {
+  upload: (accountId, input) =>
+    Effect.gen(function* () {
       uploadCalls.push(input);
       uploadAccountIds.push(accountId);
       if (uploadOutcome.status === "uploaded") {
-        return Effect.succeed(uploadOutcome.avatar);
+        return uploadOutcome.avatar;
       }
       if (uploadOutcome.status === "rejected") {
-        return Effect.fail({
-          _tag: "CustomerAvatarRejectedError",
+        return yield* new CustomerAvatarRejectedError({
           reason: uploadOutcome.reason,
         });
       }
-      return Effect.fail({ _tag: "CustomerAvatarProviderError" });
-    }) as never,
-  remove: (accountId: string) =>
+      return yield* new CustomerAvatarProviderError({});
+    }),
+  remove: (accountId) =>
     Effect.suspend(() => {
       removeCalls.push(accountId);
       return removeOutcome.status === "removed"
         ? Effect.succeed(undefined)
-        : Effect.fail({ _tag: "CustomerAvatarProviderError" });
-    }) as never,
+        : Effect.fail(new CustomerAvatarProviderError({}));
+    }),
 });
 
 mock.module("@/features/account/backend/customer-avatar.service", () => ({
   CustomerAvatarService: Avatar,
+  CustomerAvatarProviderError,
 }));
 
-let avatarLive: Layer.Layer<Avatar, unknown> = AvatarLayer;
+let avatarLive: Layer.Layer<Avatar, CloudinaryConfigError> = AvatarLayer;
 Object.defineProperty(Avatar, "Live", { get: () => avatarLive });
 
 /** A media service whose construction fails, as with invalid configuration. */
 const UnconfiguredAvatarLayer = Layer.effect(
   Avatar,
-  Effect.fail({ _tag: "CloudinaryConfigError" })
-) as Layer.Layer<Avatar, unknown>;
+  Effect.fail(
+    new CloudinaryConfigError({ message: "Synthetic configuration failure" })
+  )
+);
 
 const activeSession = {
   accountId: "@test/account-id" as const,
@@ -230,7 +243,7 @@ describe("customer avatar actions", () => {
     });
     expect(uploadCalls).toHaveLength(1);
     expect(uploadAccountIds).toEqual(["@test/account-id"]);
-    expect(uploadCalls[0]!.bytes.byteLength).toBe(pngBytes().byteLength);
+    expect(uploadCalls[0]?.bytes.byteLength).toBe(pngBytes().byteLength);
     expect(revalidatePath).toHaveBeenCalledWith("/en-US/account", "layout");
   });
 

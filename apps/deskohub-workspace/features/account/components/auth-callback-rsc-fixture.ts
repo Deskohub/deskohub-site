@@ -10,7 +10,10 @@ import {
   renderToReadableStream,
 } from "next/dist/compiled/react-server-dom-webpack/server.edge";
 import React, { Suspense } from "react";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import {
+  type CustomerAccountId,
+  customerAccountIdSchema,
+} from "@/features/account/customer-account";
 import {
   encodeAuthCallbackReturn,
   signInCallbackReturnParam,
@@ -21,19 +24,6 @@ type CustomerSession = {
   readonly accountId: CustomerAccountId;
   readonly email: string;
   readonly deletionRequested: boolean;
-};
-
-type Deferred<A> = {
-  readonly promise: Promise<A>;
-  readonly resolve: (value: A | PromiseLike<A>) => void;
-};
-
-const deferred = <A>(): Deferred<A> => {
-  let resolve!: Deferred<A>["resolve"];
-  const promise = new Promise<A>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 };
 
 const timeoutMs = {
@@ -62,12 +52,12 @@ const failureCopy = {
 } as const;
 
 let locale: Locale = "en-US";
-let connectionGate = deferred<void>();
-let connectionStarted = deferred<void>();
-let currentUserReadStarted = deferred<void>();
+let connectionGate = Promise.withResolvers<void>();
+let connectionStarted = Promise.withResolvers<void>();
+let currentUserReadStarted = Promise.withResolvers<void>();
 let currentUserEffect: Effect.Effect<CustomerSession | null, unknown> =
   Effect.succeed(null);
-let pendingSession: Deferred<CustomerSession | null> | undefined;
+let pendingSession: PromiseWithResolvers<CustomerSession | null> | undefined;
 
 const connection = mock(() => {
   connectionStarted.resolve();
@@ -153,16 +143,16 @@ const configure = (options: {
   readonly currentUser: Effect.Effect<CustomerSession | null, unknown>;
 }) => {
   locale = options.locale;
-  connectionGate = deferred<void>();
-  connectionStarted = deferred<void>();
-  currentUserReadStarted = deferred<void>();
+  connectionGate = Promise.withResolvers<void>();
+  connectionStarted = Promise.withResolvers<void>();
+  currentUserReadStarted = Promise.withResolvers<void>();
   currentUserEffect = options.currentUser;
   pendingSession = undefined;
   if (options.connection === "resolved") connectionGate.resolve();
 };
 
 const configurePendingSession = (nextLocale: Locale) => {
-  const sessionGate = deferred<CustomerSession | null>();
+  const sessionGate = Promise.withResolvers<CustomerSession | null>();
   configure({
     connection: "resolved",
     currentUser: Effect.promise(() => sessionGate.promise),
@@ -172,7 +162,9 @@ const configurePendingSession = (nextLocale: Locale) => {
 };
 
 const activeSession = {
-  accountId: "auth-account-callback" as CustomerAccountId,
+  accountId: Schema.decodeSync(customerAccountIdSchema)(
+    "auth-account-callback"
+  ),
   deletionRequested: false,
   email: testEmailAddress("ada"),
 } satisfies CustomerSession;
@@ -449,17 +441,22 @@ describe("auth callback RSC regression", () => {
   );
 
   test("keeps only a same-origin return target on the failure link", async () => {
+    const localTarget = encodeAuthCallbackReturn(
+      "/en-US/admin/invoices?page=2"
+    );
+    const externalTarget = encodeAuthCallbackReturn("//evil.example/admin");
+    if (localTarget === undefined || externalTarget === undefined) {
+      throw new Error("Expected encoded return targets");
+    }
     const kept = await settledOutput("en-US", Effect.succeed(null), {
-      [signInCallbackReturnParam]:
-        encodeAuthCallbackReturn("/en-US/admin/invoices?page=2") ?? "",
+      [signInCallbackReturnParam]: localTarget,
     });
     expect(kept).toContain(
       "/en-US/auth/sign-in?returnTo=%2Fen-US%2Fadmin%2Finvoices%3Fpage%3D2"
     );
 
     const dropped = await settledOutput("en-US", Effect.succeed(null), {
-      [signInCallbackReturnParam]:
-        encodeAuthCallbackReturn("//evil.example/admin") ?? "",
+      [signInCallbackReturnParam]: externalTarget,
     });
     expect(dropped).toContain('"href":"/en-US/auth/sign-in"');
     expect(dropped).not.toContain("/en-US/auth/sign-in?");

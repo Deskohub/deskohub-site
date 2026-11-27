@@ -7,12 +7,13 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
+import type * as AccountActions from "@/features/account/actions";
 import type {
   CustomerInvoiceHistory,
-  CustomerProfileInput,
   CustomerReservationHistory,
 } from "@/features/account/contracts";
 import { type Locale, m } from "@/features/i18n";
@@ -53,12 +54,18 @@ const loadInvoiceHistory = mock(() => loadedInvoiceHistory);
 const signInMagicLink = mock(() => Promise.resolve({ error: null }));
 const getSession = mock(() => Promise.resolve({ data: null, error: null }));
 const refreshAnalyticsAccountIdentity = mock(() => Promise.resolve());
-const acknowledgeSignupReferralNotice = mock(() =>
-  Promise.resolve({ data: { status: "acknowledged" } } as never)
-);
-const completeCustomerProfile = mock((_input: CustomerProfileInput) =>
-  Promise.resolve({ data: { status: "completed" } })
-);
+const acknowledgeSignupReferralNotice = mock<
+  typeof AccountActions.acknowledgeSignupReferralNotice
+>(() => Promise.resolve({ data: { status: "acknowledged" } }));
+const completeCustomerProfile = mock<
+  typeof AccountActions.completeCustomerProfile
+>(() => Promise.resolve({ data: { status: "completed" } }));
+
+type ActionResult<Data> = {
+  readonly data?: Data;
+  readonly serverError?: string;
+  readonly validationErrors?: unknown;
+};
 mock.module("@/features/account/account-exit", () => ({
   beginAccountExit: () => ({ left: () => undefined, stayed: () => undefined }),
   signOutOfAccount: () => Promise.resolve("signed-out"),
@@ -82,33 +89,30 @@ mock.module("next/navigation", () => ({
   useSearchParams: workspaceUseSearchParams,
 }));
 mock.module("@/shared/utils/use-workspace-action", () => ({
-  useWorkspaceAction: (
-    action: (input: never) => Promise<unknown>,
+  useWorkspaceAction: <Input, Data>(
+    action: (input: Input) => Promise<ActionResult<Data>>,
     options?: {
-      readonly onSuccess?: (args: { readonly data?: unknown }) => void;
+      readonly onSuccess?: (args: {
+        readonly data: Data | undefined;
+        readonly input: Input;
+      }) => void;
     }
   ) => {
-    const [result, setResult] = useState<{
-      readonly data?: unknown;
-      readonly serverError?: string;
-      readonly validationErrors?: unknown;
-    }>({});
+    const [result, setResult] = useState<ActionResult<Data>>({});
     const [isExecuting, setExecuting] = useState(false);
     return {
       result,
       isExecuting,
-      execute: (input: never) => {
+      execute: (input: Input) => {
         setExecuting(true);
-        void action(input).then((outcome) => {
+        void action(input).then((nextResult) => {
           setExecuting(false);
-          const nextResult = outcome as {
-            readonly data?: unknown;
-            readonly serverError?: string;
-            readonly validationErrors?: unknown;
-          };
           setResult(nextResult);
-          if (!nextResult.serverError && !nextResult.validationErrors) {
-            options?.onSuccess?.({ data: nextResult.data });
+          if (
+            nextResult.serverError === undefined &&
+            nextResult.validationErrors === undefined
+          ) {
+            options?.onSuccess?.({ data: nextResult.data, input });
           }
         });
       },
@@ -162,11 +166,7 @@ type MarketingManagementInput = {
   readonly context: string;
 };
 
-type LegalActionResult = {
-  readonly data?: { readonly status: string };
-  readonly serverError?: string;
-  readonly validationErrors?: unknown;
-};
+type LegalActionResult = ActionResult<{ readonly status: string }>;
 
 const saveMarketingPreferencesAction = mock(
   (_input: MarketingPreferenceSaveInput): Promise<LegalActionResult> =>
@@ -318,11 +318,9 @@ describe("AccountPage states", () => {
         name: m.accountCompletionTitle({}, en),
       })
     ).toBeTruthy();
-    const email = view.getByLabelText(
-      m.accountProfileEmailLabel({}, en)
-    ) as HTMLInputElement;
-    expect(email.value).toBe(adaAddress);
-    expect(email.readOnly).toBe(true);
+    const email = view.getByLabelText(m.accountProfileEmailLabel({}, en));
+    expect(email).toHaveProperty("value", adaAddress);
+    expect(email).toHaveProperty("readOnly", true);
     expect(
       view.getByLabelText(m.accountProfileFirstNameLabel({}, en))
     ).toBeTruthy();
@@ -544,11 +542,10 @@ describe("AccountPage states", () => {
     completeCustomerProfile.mockImplementationOnce(() =>
       Promise.resolve({
         data: { status: "completed", referral: { status: "applied" } },
-      } as never)
+      })
     );
     const referralCode = parseReferralCode("RFL12345");
     if (referralCode === undefined) throw new Error("invalid referral code");
-    let refreshLinkedAccount!: () => void;
     function ProfileCompletionRefreshJourney() {
       const [state, setState] = useState<CustomerAccountPageState>({
         kind: "completion-required",
@@ -557,8 +554,12 @@ describe("AccountPage states", () => {
         email: adaAddress,
         referralCode,
       });
-      refreshLinkedAccount = () =>
-        setState({ ...linkedState, signupReferral: { status: "applied" } });
+      useEffect(() => {
+        workspaceRouterRefresh.mockImplementation(() => {
+          setState({ ...linkedState, signupReferral: { status: "applied" } });
+          return undefined;
+        });
+      }, []);
 
       return (
         <AccountLayoutShell locale="en-US" signedIn>
@@ -573,19 +574,19 @@ describe("AccountPage states", () => {
 
     const { AccountLayoutShell } = await import("./account-layout-shell");
     const { AccountPage } = await import("./account-page");
-    workspaceRouterRefresh.mockImplementation(() => refreshLinkedAccount());
     const view = render(<ProfileCompletionRefreshJourney />);
-    const field = view.container.querySelector(
-      "#profile-referral-code"
-    ) as HTMLInputElement;
-    expect(field.value).toBe("RFL12345");
+    expect(
+      view.container.querySelector("#profile-referral-code")
+    ).toHaveProperty("value", "RFL12345");
 
     fireEvent.change(
       view.getByLabelText(m.accountProfileFirstNameLabel({}, en)),
       { target: { value: "Ada" } }
     );
+    const form = view.container.querySelector("#account-profile-form");
+    assert(form instanceof HTMLFormElement);
     await act(async () => {
-      fireEvent.submit(view.container.querySelector("#account-profile-form")!);
+      fireEvent.submit(form);
     });
 
     await waitFor(() => {
@@ -617,9 +618,8 @@ describe("AccountPage states", () => {
     completeCustomerProfile.mockImplementationOnce(() =>
       Promise.resolve({
         data: { status: "completed", referral: { status: "pending" } },
-      } as never)
+      })
     );
-    let refreshLinkedAccount!: () => void;
     function PendingCompletionJourney() {
       const [state, setState] = useState<CustomerAccountPageState>({
         kind: "completion-required",
@@ -627,12 +627,16 @@ describe("AccountPage states", () => {
         referralsEnabled: true,
         email: adaAddress,
       });
-      refreshLinkedAccount = () =>
-        setState((current) =>
-          current.kind === "linked"
-            ? linkedState
-            : { ...linkedState, signupReferral: { status: "applied" } }
-        );
+      useEffect(() => {
+        workspaceRouterRefresh.mockImplementation(() => {
+          setState((current) =>
+            current.kind === "linked"
+              ? linkedState
+              : { ...linkedState, signupReferral: { status: "applied" } }
+          );
+          return undefined;
+        });
+      }, []);
 
       return (
         <AccountLayoutShell locale="en-US" signedIn>
@@ -647,17 +651,20 @@ describe("AccountPage states", () => {
 
     const { AccountLayoutShell } = await import("./account-layout-shell");
     const { AccountPage } = await import("./account-page");
-    workspaceRouterRefresh.mockImplementation(() => refreshLinkedAccount());
     const view = render(<PendingCompletionJourney />);
     fireEvent.change(
       view.getByLabelText(m.accountProfileFirstNameLabel({}, en)),
       { target: { value: "Ada" } }
     );
-    fireEvent.change(view.container.querySelector("#profile-referral-code")!, {
+    const referralCode = view.container.querySelector("#profile-referral-code");
+    assert(referralCode instanceof HTMLInputElement);
+    fireEvent.change(referralCode, {
       target: { value: "RFLTYPED1" },
     });
+    const form = view.container.querySelector("#account-profile-form");
+    assert(form instanceof HTMLFormElement);
     await act(async () => {
-      fireEvent.submit(view.container.querySelector("#account-profile-form")!);
+      fireEvent.submit(form);
     });
 
     await waitFor(() => {
@@ -680,7 +687,7 @@ describe("AccountPage states", () => {
     // A later refresh with no stored outcome (it was acknowledged) never
     // brings back the completion's pending feedback.
     await act(async () => {
-      refreshLinkedAccount();
+      workspaceRouterRefresh();
     });
     expect(
       view.queryByText(m.accountProfileReferralPending({}, en))
@@ -927,9 +934,9 @@ describe("AccountPage states", () => {
   test("redirects unauthenticated visitors without loading account data", async () => {
     const originalReplace = window.location.replace;
     const documentNavigations: string[] = [];
-    window.location.replace = ((href: string) => {
-      documentNavigations.push(href);
-    }) as typeof window.location.replace;
+    window.location.replace = (href) => {
+      documentNavigations.push(String(href));
+    };
     const view = await renderState({ kind: "unauthenticated" }).finally(() => {
       window.location.replace = originalReplace;
     });
@@ -1086,13 +1093,13 @@ describe("AccountPage states", () => {
 
     openSection(view, "cs-CZ", m.accountSectionAssistants({}, cs));
 
-    const list = view.container.querySelector<HTMLElement>(
+    const list = view.container.querySelector(
       "ul[aria-labelledby='account-assistants-title']"
     );
-    expect(list).toBeTruthy();
-    expect(within(list!).getByText("Synthetic Assistant")).toBeTruthy();
-    expect(list?.closest("[hidden]")).toBeNull();
-    expect(within(list!).getByRole("button")).toBeTruthy();
+    assert(list instanceof HTMLUListElement);
+    expect(within(list).getByText("Synthetic Assistant")).toBeTruthy();
+    expect(list.closest("[hidden]")).toBeNull();
+    expect(within(list).getByRole("button")).toBeTruthy();
     expect(completion?.closest("[hidden]")).not.toBeNull();
   });
 
@@ -1264,7 +1271,7 @@ describe("AccountPage states", () => {
     });
     const firstName = view.getByLabelText(
       m.accountProfileFirstNameLabel({}, en)
-    ) as HTMLInputElement;
+    );
     fireEvent.change(firstName, { target: { value: "Grace" } });
 
     openSection(view, "en-US", m.accountSectionSecurity({}, en));
@@ -1276,7 +1283,7 @@ describe("AccountPage states", () => {
 
     openSection(view, "en-US", m.accountSectionProfile({}, en));
     expect(firstName.closest("[hidden]")).toBeNull();
-    expect(firstName.value).toBe("Grace");
+    expect(firstName).toHaveProperty("value", "Grace");
   });
 
   test("reads the passkeys afresh when a refresh links the completed account", async () => {

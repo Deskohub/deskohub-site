@@ -3,16 +3,9 @@ import { chromium, type Page, type Request } from "@playwright/test";
 import { withNextAppFixture } from "@/shared/testing/next-app-fixture.test-utils";
 
 const fixtureBrowserTimeoutMs = 15_000;
+const fixtureFirstNavigationTimeoutMs = 45_000;
 const firstSubmittedCode = "SYNTHETIC-ORDINARY-CODE";
 const secondSubmittedCode = "SYNTHETIC-NEXT-CODE";
-type ReactEventHandler = (...args: never[]) => unknown;
-type ReactEventHandlers = {
-  readonly onChange?: ReactEventHandler;
-  readonly onSubmit?: ReactEventHandler;
-};
-type WindowWithDiscountInput = Window & {
-  __discountInput?: Element;
-};
 
 const fixtureFiles = {
   "app/layout.tsx": `
@@ -114,16 +107,16 @@ const waitForReactHandler = async (
   await page.waitForFunction(
     ({ selector: targetSelector, handler: targetHandler }) => {
       const element = document.querySelector(targetSelector);
-      const reactPropsKey = element
-        ? Object.keys(element).find((key) => key.startsWith("__reactProps$"))
-        : undefined;
-      const props = reactPropsKey
-        ? (Reflect.get(element, reactPropsKey) as ReactEventHandlers)
-        : undefined;
-
-      return targetHandler === "onChange"
-        ? props?.onChange !== undefined
-        : props?.onSubmit !== undefined;
+      if (!element) return false;
+      const reactPropsKey = Object.keys(element).find((key) =>
+        key.startsWith("__reactProps$")
+      );
+      if (!reactPropsKey) return false;
+      const props: unknown = Reflect.get(element, reactPropsKey);
+      return (
+        props instanceof Object &&
+        Reflect.get(props, targetHandler) instanceof Function
+      );
     },
     { selector, handler },
     { timeout: fixtureBrowserTimeoutMs }
@@ -227,6 +220,7 @@ test("clears the ordinary code after a fresh referral state in the compiled brow
 
         try {
           await page.goto(`${fixtureUrl}/pay?payState=before-referral`, {
+            timeout: fixtureFirstNavigationTimeoutMs,
             waitUntil: "load",
           });
         } catch (error) {
@@ -262,9 +256,8 @@ test("clears the ordinary code after a fresh referral state in the compiled brow
           "onSubmit"
         );
         await input.fill(firstSubmittedCode);
-        await input.evaluate((element) => {
-          (window as WindowWithDiscountInput).__discountInput = element;
-        });
+        const originalInput = await input.elementHandle();
+        if (!originalInput) throw new Error("Missing discount code input");
 
         await Promise.all([
           page.waitForURL(
@@ -275,24 +268,21 @@ test("clears the ordinary code after a fresh referral state in the compiled brow
         await page.locator('main[data-page-state="after-referral"]').waitFor();
         await page.waitForFunction(
           () => {
-            const input = document.querySelector<HTMLInputElement>(
+            const input = document.querySelector(
               '#checkout-discount-code-form input[name="submittedCode"]'
             );
-            return input !== null && input.value === "";
+            return input instanceof HTMLInputElement && input.value === "";
           },
           undefined,
           { timeout: fixtureBrowserTimeoutMs }
         );
 
-        const sameInputNode = await input.evaluate((element) =>
-          Object.is(
-            element,
-            (window as WindowWithDiscountInput).__discountInput
-          )
+        const sameInputNode = await input.evaluate(
+          (element, original) => element === original,
+          originalInput
         );
-        const inputIsEmpty = await input.evaluate(
-          (element) => (element as HTMLInputElement).value === ""
-        );
+        await originalInput.dispose();
+        const inputIsEmpty = (await input.inputValue()) === "";
         const referralNoticeIsPresent =
           (await page.locator("[data-checkout-referral-applied]").count()) ===
           1;
@@ -303,8 +293,11 @@ test("clears the ordinary code after a fresh referral state in the compiled brow
 
         await input.fill(secondSubmittedCode);
         await Promise.all([
-          page.waitForURL((url) =>
-            url.searchParams.get("payState")?.startsWith("after-second-submit-")
+          page.waitForURL(
+            (url) =>
+              url.searchParams
+                .get("payState")
+                ?.startsWith("after-second-submit-") ?? false
           ),
           input.press("Enter"),
         ]);

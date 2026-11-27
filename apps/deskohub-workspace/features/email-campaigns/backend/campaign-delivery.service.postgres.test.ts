@@ -2,7 +2,9 @@ import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import {
+  DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -198,17 +200,16 @@ describe.skipIf(!testDatabase)(
     const profile = (
       id: DotyposCustomerId,
       overrides: Partial<DotyposCustomer> = {}
-    ) =>
-      ({
-        id,
-        _cloudId: "cloud",
-        email: testEmailAddress(id),
-        points: "0",
-        flags: "0",
-        display: true,
-        deleted: false,
-        ...overrides,
-      }) as DotyposCustomer;
+    ): DotyposCustomer => ({
+      id,
+      _cloudId: DotyposCloudIdSchema.make("cloud"),
+      email: testEmailAddress(id),
+      points: "0",
+      flags: "0",
+      display: true,
+      deleted: false,
+      ...overrides,
+    });
 
     const resend = makeResendEmailProvider({
       apiKey: "re_test",
@@ -505,16 +506,20 @@ describe.skipIf(!testDatabase)(
         `email-campaign:${sendId}:attempt-1:batch-0`,
         `email-campaign:${sendId}:attempt-1:batch-1`,
       ]);
-      const [first] = batchSend.mock.calls[0]![0];
+      const first = batchSend.mock.calls[0]?.[0][0];
+      const [firstCustomerId] = ids;
+      assert(first, "Expected the first batch email");
+      assert(firstCustomerId, "Expected the first seeded customer");
       expect(first).toMatchObject({
-        to: [testEmailAddress(ids[0]!)],
+        to: [testEmailAddress(firstCustomerId)],
         subject: "Novinky",
         headers: { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" },
       });
-      expect(first!.headers!["List-Unsubscribe"]).toMatch(
+      assert(first.headers, "Expected headers on a marketing email");
+      expect(first.headers["List-Unsubscribe"]).toMatch(
         /^<https?:\/\/.+\/api\/email-campaigns\/unsubscribe\?token=.+>$/
       );
-      expect(first!.tags).toEqual(
+      expect(first.tags).toEqual(
         expect.arrayContaining([
           { name: "category", value: "email-campaign" },
           { name: "campaignSendId", value: sendId },
@@ -554,7 +559,9 @@ describe.skipIf(!testDatabase)(
       expect(await consume({ sendId, deliveryAttempt: 1 })).toBe("sent");
 
       expect(batchSend.mock.calls).toHaveLength(1);
-      expect(batchSend.mock.calls[0]![0].map(({ to }) => to)).toEqual([
+      const [call] = batchSend.mock.calls;
+      assert(call, "Expected a batch request");
+      expect(call[0].map(({ to }) => to)).toEqual([
         [testEmailAddress(reachable)],
       ]);
       const { recipients, campaign } = await stored(sendId);
@@ -584,8 +591,9 @@ describe.skipIf(!testDatabase)(
 
       expect(await consume({ sendId, deliveryAttempt: 1 })).toBe("sent");
 
-      const [message] = batchSend.mock.calls[0]![0];
-      expect(message!.headers).toBeUndefined();
+      const message = batchSend.mock.calls[0]?.[0][0];
+      assert(message, "Expected an operational email");
+      expect(message.headers).toBeUndefined();
     });
 
     test("fails the campaign when the provider rejects a batch", async () => {
@@ -790,7 +798,9 @@ describe.skipIf(!testDatabase)(
       expect(await consume({ sendId, deliveryAttempt: 2 })).toBe("sent");
 
       expect(batchSend.mock.calls).toHaveLength(1);
-      const [payload, options] = batchSend.mock.calls[0]!;
+      const [call] = batchSend.mock.calls;
+      assert(call, "Expected the retried batch request");
+      const [payload, options] = call;
       expect(payload.map(({ to }) => to)).toEqual([
         [testEmailAddress(retried)],
       ]);
@@ -966,9 +976,11 @@ describe.skipIf(!testDatabase)(
       batchSend = mock(async (payload, options) => {
         const response = await acceptBatch(payload, options);
         if (response.data) {
+          const [message] = response.data.data;
+          assert(message, "Expected the first accepted email");
           await recordWebhook({
             type: "email.delivered",
-            providerMessageId: response.data.data[0]!.id,
+            providerMessageId: message.id,
             sendId,
             dotyposCustomerId: early,
           });
@@ -1026,7 +1038,9 @@ describe.skipIf(!testDatabase)(
         `email-campaign:${sendId}:attempt-1:batch-0`,
         `email-campaign:${sendId}:attempt-1:batch-1`,
       ]);
-      expect(requestPayloads()[0]).toBe(requestPayloads()[1]!);
+      const [firstPayload, replayPayload] = requestPayloads();
+      assert(replayPayload, "Expected the replayed batch payload");
+      expect(firstPayload).toBe(replayPayload);
       expect(mailed).toHaveLength(101);
       expect(new Set(mailed).size).toBe(101);
       const { batches, campaign } = await stored(sendId);

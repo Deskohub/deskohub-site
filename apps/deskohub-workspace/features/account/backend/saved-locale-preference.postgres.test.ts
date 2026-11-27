@@ -7,7 +7,10 @@ import { Effect } from "effect";
 import { makeAuthDatabase } from "@/db/auth-database-client";
 import { drizzleAuthTables } from "@/db/schema/auth";
 import { env } from "@/env";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   postgresAuthHookServices,
   testAccountDeletion,
@@ -20,6 +23,7 @@ import {
 import { findSavedLocalePreference } from "./saved-locale-preference";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 
 const HOST = "workspace.test";
 const SECRET = Buffer.alloc(48, 47).toString("base64url");
@@ -44,7 +48,7 @@ describe.skipIf(!testDatabase)(
     // skipped without a database.
     const makeAuth = (sentMagicLinks: string[]) =>
       makeWorkspaceAuth({
-        database: drizzleAdapter(makeAuthDatabase(testDatabase!.pool), {
+        database: drizzleAdapter(makeAuthDatabase(database().pool), {
           provider: "pg",
           schema: drizzleAuthTables,
           schemaName: "auth",
@@ -59,7 +63,7 @@ describe.skipIf(!testDatabase)(
           sentMagicLinks.push(data.url);
         },
         reviewAccountCredentials: [],
-        services: postgresAuthHookServices(testDatabase!, {
+        services: postgresAuthHookServices(database(), {
           passkeyFlag: Effect.succeed(false),
           captureLocalePreference: () => Effect.void,
         }),
@@ -69,7 +73,9 @@ describe.skipIf(!testDatabase)(
     const callHandler = (
       auth: ReturnType<typeof makeAuth>,
       path: string,
-      init: RequestInit = {}
+      init: Omit<RequestInit, "headers"> & {
+        headers?: Record<string, string>;
+      } = {}
     ) =>
       auth.handler(
         new Request(`https://${HOST}/api/auth${path}`, {
@@ -78,7 +84,7 @@ describe.skipIf(!testDatabase)(
             origin: `https://${HOST}`,
             host: HOST,
             "x-vercel-forwarded-for": uniqueIp(),
-            ...((init.headers as Record<string, string>) ?? {}),
+            ...init.headers,
           },
         })
       );
@@ -99,25 +105,37 @@ describe.skipIf(!testDatabase)(
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email }),
       });
+      const [magicLink] = sentMagicLinks;
+      if (!magicLink) {
+        throw new Error("Expected sign-in to send a magic link");
+      }
       const verified = await callHandler(
         auth,
-        sentMagicLinks[0]!.slice(`https://${HOST}/api/auth`.length)
+        magicLink.slice(`https://${HOST}/api/auth`.length)
       );
       const cookie = verified.headers
         .getSetCookie()
-        .find((entry) => entry.includes("session_token="))!
-        .split(";")[0]!;
+        .find((entry) => entry.includes("session_token="))
+        ?.split(";")[0];
+      if (!cookie) {
+        throw new Error(
+          "Expected magic-link verification to set a session cookie"
+        );
+      }
       const {
         rows: [user],
-      } = await testDatabase!.pool.query(
+      } = await database().pool.query<{ id: string }>(
         `select id from auth."user" where email = $1`,
         [email]
       );
-      await testDatabase!.pool.query(
+      if (!user) {
+        throw new Error("Expected magic-link verification to create a user");
+      }
+      await database().pool.query(
         `update auth."user" set locale = $2 where id = $1`,
         [user.id, options.locale]
       );
-      return { auth, cookie, accountId: user.id as string };
+      return { auth, cookie, accountId: user.id };
     };
 
     /** The reader over the real Better Auth session read of one request. */
@@ -140,7 +158,7 @@ describe.skipIf(!testDatabase)(
 
     test("reads the session, its account, and the locale preference in one query", async () => {
       const { auth, cookie } = await signIn({ locale: "cs-CZ" });
-      const queries = spyOn(testDatabase!.pool, "query");
+      const queries = spyOn(database().pool, "query");
       try {
         await expect(find(auth, cookie)).resolves.toBe("cs-CZ");
         expect(queries).toHaveBeenCalledTimes(1);
@@ -151,7 +169,7 @@ describe.skipIf(!testDatabase)(
 
     test("keeps the preference of an account pending deletion", async () => {
       const { auth, cookie, accountId } = await signIn({ locale: "cs-CZ" });
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth."user" set deletion_requested_at = now() where id = $1`,
         [accountId]
       );
@@ -167,20 +185,26 @@ describe.skipIf(!testDatabase)(
 
     test("ignores expired, revoked, forged, and unverified sessions", async () => {
       const expired = await signIn({ locale: "cs-CZ" });
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth.session set expires_at = now() - interval '1 minute' where user_id = $1`,
         [expired.accountId]
       );
       const revoked = await signIn({ locale: "cs-CZ" });
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `delete from auth.session where user_id = $1`,
         [revoked.accountId]
       );
       const forged = await signIn({ locale: "cs-CZ" });
       const [name, signedValue] = forged.cookie.split("=");
-      const [token] = decodeURIComponent(signedValue!).split(".");
+      if (!name || !signedValue) {
+        throw new Error("Expected a named session cookie with a signed value");
+      }
+      const [token] = decodeURIComponent(signedValue).split(".");
+      if (!token) {
+        throw new Error("Expected a token in the signed session cookie");
+      }
       const unverified = await signIn({ locale: "cs-CZ" });
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth."user" set email_verified = false where id = $1`,
         [unverified.accountId]
       );

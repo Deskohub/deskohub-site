@@ -65,9 +65,10 @@ export const testPeekedStandings = {
 export type TestPeekedStandingLabel = keyof typeof testPeekedStandings;
 
 /** The labels of `testPeekedStandings`, for `test.each`. */
-export const testPeekedStandingLabels = Object.keys(
-  testPeekedStandings
-) as readonly TestPeekedStandingLabel[];
+export const testPeekedStandingLabels = Object.keys(testPeekedStandings).filter(
+  (name): name is TestPeekedStandingLabel =>
+    Object.hasOwn(testPeekedStandings, name)
+);
 
 /**
  * The standing module answering `peek` with `standing`, or failing it with
@@ -153,7 +154,9 @@ export type TestResolvedStandingLabel = keyof typeof testResolvedStandings;
 /** The labels of `testResolvedStandings`, for `test.each`. */
 export const testResolvedStandingLabels = Object.keys(
   testResolvedStandings
-) as readonly TestResolvedStandingLabel[];
+).filter((name): name is TestResolvedStandingLabel =>
+  Object.hasOwn(testResolvedStandings, name)
+);
 
 type Answer<A> = A | CustomerAccountAccessError;
 

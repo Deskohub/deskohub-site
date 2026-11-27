@@ -7,15 +7,18 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import React, { Activity } from "react";
-import type { CustomerProfileInput } from "@/features/account/contracts";
+import type * as accountActions from "@/features/account/actions";
+import type * as avatarActions from "@/features/account/avatar-actions";
 import { m } from "@/features/i18n";
 import { UnsavedChangesProvider } from "@/shared/components/unsaved-changes-guard";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { getProfileForm, getProfileInput } from "./profile-form.test-utils";
 
 registerWorkspaceComponentTestEnv();
 // @testing-library/react must load after the happy-dom registration, or
@@ -24,50 +27,45 @@ const { act, cleanup, fireEvent, render, waitFor, within } = await import(
   "@testing-library/react"
 );
 
-type ActionResult = {
-  readonly data?: { readonly status?: string };
-  readonly serverError?: string;
-  readonly validationErrors?: {
-    readonly formErrors?: readonly string[];
-    readonly fieldErrors?: Readonly<
-      Record<string, readonly string[] | undefined>
-    >;
-  };
-};
+type UpdateResult = Awaited<
+  ReturnType<typeof accountActions.updateCustomerProfile>
+>;
 
 const routerRefresh = mock(() => undefined);
-const completeCustomerProfile = mock(
-  (): Promise<ActionResult> =>
-    Promise.resolve({ data: { status: "completed" } })
-);
-const updateCustomerProfile = mock(
-  (_input: CustomerProfileInput): Promise<ActionResult> =>
-    Promise.resolve({ data: { status: "updated" } })
+const completeCustomerProfile = mock<
+  typeof accountActions.completeCustomerProfile
+>(() => Promise.resolve({ data: { status: "completed" } }));
+const updateCustomerProfile = mock<typeof accountActions.updateCustomerProfile>(
+  () => Promise.resolve({ data: { status: "updated" } })
 );
 
 mock.module("next/navigation", () => ({
   useRouter: () => ({ refresh: routerRefresh }),
 }));
 
-mock.module("@/features/account/actions", () => ({
-  acknowledgeSignupReferralNotice: mock(() =>
-    Promise.resolve({ data: { status: "acknowledged" } })
-  ),
-  updateLocalePreference: () => Promise.resolve({ data: { status: "saved" } }),
-  lookupAresBusiness: () =>
-    Promise.resolve({ data: { status: "not-found", message: "" } }),
-  completeCustomerProfile,
-  updateCustomerProfile,
-}));
+mock.module(
+  "@/features/account/actions",
+  (): Partial<typeof accountActions> => ({
+    acknowledgeSignupReferralNotice: () =>
+      Promise.resolve({ data: { status: "acknowledged" } }),
+    updateLocalePreference: () =>
+      Promise.resolve({ data: { status: "saved" } }),
+    lookupAresBusiness: () =>
+      Promise.resolve({ data: { status: "not-found", message: "" } }),
+    completeCustomerProfile,
+    updateCustomerProfile,
+  })
+);
 
 // Keeps the browser Effect runtime, which this navigation mock can't load,
 // out of the form.
 mock.module("@/features/account/analytics-customer-link", () => ({
   refreshAnalyticsDotyposCustomerId: () => undefined,
 }));
-mock.module("@/features/account/avatar-actions", () => ({
+mock.module("@/features/account/avatar-actions", (): typeof avatarActions => ({
   removeCustomerAvatar: () => Promise.resolve({ data: { status: "removed" } }),
-  uploadCustomerAvatar: () => Promise.resolve({ data: { status: "removed" } }),
+  uploadCustomerAvatar: () =>
+    Promise.resolve({ data: { status: "retryable" } }),
 }));
 
 const businessProfile = {
@@ -163,10 +161,8 @@ describe("ProfileForm action lifecycle", () => {
   });
 
   test("reveals profile after a billing save reports a phone error and retains drafts", async () => {
-    let resolveUpdate!: (result: ActionResult) => void;
-    const pendingUpdate = new Promise<ActionResult>((resolve) => {
-      resolveUpdate = resolve;
-    });
+    const { promise: pendingUpdate, resolve: resolveUpdate } =
+      Promise.withResolvers<UpdateResult>();
     updateCustomerProfile.mockImplementationOnce(() => pendingUpdate);
 
     const view = render(<ProfileFixture initialSection="billing" />);
@@ -188,15 +184,11 @@ describe("ProfileForm action lifecycle", () => {
       fireEvent.input(view.getByLabelText("Street and number"), {
         target: { value: "Draft Street 2" },
       });
-      expect(
-        (view.getByLabelText("Company name") as HTMLInputElement).value
-      ).toBe("Draft Company");
+      expect(getProfileInput(view, "Company name").value).toBe("Draft Company");
       fireEvent.click(view.getByRole("button", { name: "Profile section" }));
       fireEvent.click(view.getByRole("button", { name: "Billing section" }));
-      expect(
-        (view.getByLabelText("Company name") as HTMLInputElement).value
-      ).toBe("Draft Company");
-      fireEvent.submit(view.container.querySelector("#account-profile-form")!);
+      expect(getProfileInput(view, "Company name").value).toBe("Draft Company");
+      fireEvent.submit(getProfileForm(view));
     });
 
     await waitFor(() => expect(updateCustomerProfile).toHaveBeenCalledTimes(1));
@@ -220,10 +212,8 @@ describe("ProfileForm action lifecycle", () => {
     await waitFor(() =>
       expect(view.getByTestId("active-section").textContent).toBe("profile")
     );
-    expect((view.getByLabelText("First name") as HTMLInputElement).value).toBe(
-      "Grace"
-    );
-    const companyName = view.getByLabelText("Company name") as HTMLInputElement;
+    expect(getProfileInput(view, "First name").value).toBe("Grace");
+    const companyName = getProfileInput(view, "Company name");
     expect(companyName.value).toBe("Draft Company");
     expect(view.getByLabelText("Phone").getAttribute("aria-invalid")).toBe(
       "true"
@@ -235,19 +225,20 @@ describe("ProfileForm action lifecycle", () => {
   });
 
   test("updates the profile display from the submitted identity and retains later drafts", async () => {
-    let resolveUpdate!: (result: ActionResult) => void;
-    const pendingUpdate = new Promise<ActionResult>((resolve) => {
-      resolveUpdate = resolve;
-    });
+    const { promise: pendingUpdate, resolve: resolveUpdate } =
+      Promise.withResolvers<UpdateResult>();
     updateCustomerProfile.mockImplementationOnce(() => pendingUpdate);
 
     const view = render(<ProfileFixture />);
-    const profileScreen = () =>
-      view.container.querySelector(
+    const profileScreen = () => {
+      const element = view.container.querySelector(
         "[data-screen='profile-screen']"
-      ) as HTMLElement;
-    const firstName = view.getByLabelText("First name") as HTMLInputElement;
-    const lastName = view.getByLabelText("Last name") as HTMLInputElement;
+      );
+      assert(element instanceof HTMLElement);
+      return element;
+    };
+    const firstName = getProfileInput(view, "First name");
+    const lastName = getProfileInput(view, "Last name");
 
     expect(within(profileScreen()).getByText("Ada Lovelace")).toBeTruthy();
     expect(
@@ -257,7 +248,7 @@ describe("ProfileForm action lifecycle", () => {
     await act(async () => {
       fireEvent.input(firstName, { target: { value: "Ada" } });
       fireEvent.input(lastName, { target: { value: "Saved" } });
-      fireEvent.submit(view.container.querySelector("#account-profile-form")!);
+      fireEvent.submit(getProfileForm(view));
     });
 
     await waitFor(() => expect(updateCustomerProfile).toHaveBeenCalledTimes(1));
@@ -287,24 +278,25 @@ describe("ProfileForm action lifecycle", () => {
   });
 
   test("keeps the saved profile display identity when the edit save fails", async () => {
-    let resolveUpdate!: (result: ActionResult) => void;
-    const pendingUpdate = new Promise<ActionResult>((resolve) => {
-      resolveUpdate = resolve;
-    });
+    const { promise: pendingUpdate, resolve: resolveUpdate } =
+      Promise.withResolvers<UpdateResult>();
     updateCustomerProfile.mockImplementationOnce(() => pendingUpdate);
 
     const view = render(<ProfileFixture />);
-    const profileScreen = () =>
-      view.container.querySelector(
+    const profileScreen = () => {
+      const element = view.container.querySelector(
         "[data-screen='profile-screen']"
-      ) as HTMLElement;
-    const firstName = view.getByLabelText("First name") as HTMLInputElement;
-    const lastName = view.getByLabelText("Last name") as HTMLInputElement;
+      );
+      assert(element instanceof HTMLElement);
+      return element;
+    };
+    const firstName = getProfileInput(view, "First name");
+    const lastName = getProfileInput(view, "Last name");
 
     await act(async () => {
       fireEvent.input(firstName, { target: { value: "Changed" } });
       fireEvent.input(lastName, { target: { value: "Name" } });
-      fireEvent.submit(view.container.querySelector("#account-profile-form")!);
+      fireEvent.submit(getProfileForm(view));
     });
     await waitFor(() => expect(updateCustomerProfile).toHaveBeenCalledTimes(1));
 
@@ -339,13 +331,16 @@ describe("ProfileForm action lifecycle", () => {
     );
 
     const view = render(<ProfileFixture />);
-    const feedback = () =>
-      view.container.querySelector("#account-profile-feedback") as HTMLElement;
-    const firstName = view.getByLabelText("First name") as HTMLInputElement;
+    const feedback = () => {
+      const element = view.container.querySelector("#account-profile-feedback");
+      assert(element instanceof HTMLElement);
+      return element;
+    };
+    const firstName = getProfileInput(view, "First name");
 
     await act(async () => {
       fireEvent.input(firstName, { target: { value: "Changed" } });
-      fireEvent.submit(view.container.querySelector("#account-profile-form")!);
+      fireEvent.submit(getProfileForm(view));
     });
     await waitFor(() => expect(updateCustomerProfile).toHaveBeenCalledTimes(1));
 
@@ -354,11 +349,9 @@ describe("ProfileForm action lifecycle", () => {
         m.accountProfileError({}, { locale: "en-US" })
       )
     );
-    expect(
-      (
-        view.container.querySelector("#account-profile-submit") as HTMLElement
-      ).hasAttribute("disabled")
-    ).toBe(false);
+    const submit = view.container.querySelector("#account-profile-submit");
+    assert(submit instanceof HTMLButtonElement);
+    expect(submit.disabled).toBe(false);
     expect(firstName.value).toBe("Changed");
     expectDirty();
   });
@@ -380,7 +373,7 @@ describe("ProfileForm action lifecycle", () => {
       fireEvent.input(view.getByLabelText("First name"), {
         target: { value: "Grace" },
       });
-      fireEvent.submit(view.container.querySelector("#account-profile-form")!);
+      fireEvent.submit(getProfileForm(view));
     });
 
     await waitFor(() => expect(updateCustomerProfile).toHaveBeenCalledTimes(1));
@@ -403,10 +396,8 @@ describe("ProfileForm action lifecycle", () => {
   });
 
   test("preserves the full submitted baseline through late edits and Activity hide/show", async () => {
-    let resolveUpdate!: (result: ActionResult) => void;
-    const pendingUpdate = new Promise<ActionResult>((resolve) => {
-      resolveUpdate = resolve;
-    });
+    const { promise: pendingUpdate, resolve: resolveUpdate } =
+      Promise.withResolvers<UpdateResult>();
     updateCustomerProfile.mockImplementationOnce(() => pendingUpdate);
 
     const view = render(<ProfileFixture />);
@@ -435,10 +426,8 @@ describe("ProfileForm action lifecycle", () => {
       fireEvent.input(view.getByLabelText("City"), {
         target: { value: "Brno" },
       });
-      expect(
-        (view.getByLabelText("Company name") as HTMLInputElement).value
-      ).toBe("Draft Company");
-      fireEvent.submit(view.container.querySelector("#account-profile-form")!);
+      expect(getProfileInput(view, "Company name").value).toBe("Draft Company");
+      fireEvent.submit(getProfileForm(view));
     });
 
     await waitFor(() => expect(updateCustomerProfile).toHaveBeenCalledTimes(1));
@@ -474,12 +463,8 @@ describe("ProfileForm action lifecycle", () => {
       fireEvent.click(view.getByRole("button", { name: "Toggle activity" }));
     });
 
-    expect((view.getByLabelText("Phone") as HTMLInputElement).value).toBe(
-      "+420603333444"
-    );
-    expect(
-      (view.getByLabelText("Company name") as HTMLInputElement).value
-    ).toBe("Late Company");
+    expect(getProfileInput(view, "Phone").value).toBe("+420603333444");
+    expect(getProfileInput(view, "Company name").value).toBe("Late Company");
 
     await act(async () => {
       resolveUpdate({ data: { status: "updated" } });
@@ -489,12 +474,8 @@ describe("ProfileForm action lifecycle", () => {
       expect(view.getByText("Profile updated.")).toBeTruthy()
     );
 
-    expect((view.getByLabelText("Phone") as HTMLInputElement).value).toBe(
-      "+420603333444"
-    );
-    expect(
-      (view.getByLabelText("Company name") as HTMLInputElement).value
-    ).toBe("Late Company");
+    expect(getProfileInput(view, "Phone").value).toBe("+420603333444");
+    expect(getProfileInput(view, "Company name").value).toBe("Late Company");
     expect(routerRefresh).not.toHaveBeenCalled();
     expectDirty();
 
@@ -518,25 +499,22 @@ describe("ProfileForm action lifecycle", () => {
 
   test("derives native invalid section priority from the current first invalid field", async () => {
     const view = render(<ProfileFixture initialSection="billing" />);
-    const form = view.container.querySelector(
-      "#account-profile-form"
-    ) as HTMLFormElement;
-    const firstName = view.getByLabelText("First name") as HTMLInputElement;
-    const lastName = view.getByLabelText("Last name") as HTMLInputElement;
-    const phone = view.getByLabelText("Phone") as HTMLInputElement;
-    const companyName = view.getByLabelText("Company name") as HTMLInputElement;
-    const addressLine1 = view.getByLabelText(
-      "Street and number"
-    ) as HTMLInputElement;
-    const panels = [...form.querySelectorAll<HTMLElement>("fieldset > div")];
-    const profilePanel = panels[0];
-    const billingPanel = panels[1];
-    expect(profilePanel?.hidden).toBe(true);
-    expect(billingPanel?.hidden).toBe(false);
+    const form = getProfileForm(view);
+    const firstName = getProfileInput(view, "First name");
+    const lastName = getProfileInput(view, "Last name");
+    const phone = getProfileInput(view, "Phone");
+    const companyName = getProfileInput(view, "Company name");
+    const addressLine1 = getProfileInput(view, "Street and number");
+    const [profilePanel, billingPanel] =
+      form.querySelectorAll("fieldset > div");
+    assert(profilePanel instanceof HTMLDivElement);
+    assert(billingPanel instanceof HTMLDivElement);
+    expect(profilePanel.hidden).toBe(true);
+    expect(billingPanel.hidden).toBe(false);
 
     // happy-dom excludes controls under [hidden] from requestSubmit. Expose
     // the inactive panel so both attempts still use native invalid events.
-    profilePanel!.hidden = false;
+    profilePanel.hidden = false;
 
     await act(async () => {
       fireEvent.input(firstName, { target: { value: "" } });
@@ -557,7 +535,7 @@ describe("ProfileForm action lifecycle", () => {
 
     await act(async () => {
       fireEvent.input(firstName, { target: { value: "Grace" } });
-      billingPanel!.hidden = false;
+      billingPanel.hidden = false;
       form.requestSubmit();
     });
 

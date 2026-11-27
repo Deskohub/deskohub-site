@@ -4,17 +4,21 @@ import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Option } from "effect";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { findActiveCustomerAccountByEmail } from "./customer-account-by-email";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 
 const insertAccount = (input: {
   readonly emailVerified: boolean;
   readonly deletionRequested?: boolean;
 }) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("account-by-email", {
+    workspaceFixtures(database().db).account("account-by-email", {
       verified: input.emailVerified,
       deletionRequested: input.deletionRequested,
     })
@@ -23,7 +27,7 @@ const insertAccount = (input: {
 const find = (email: string) =>
   Effect.runPromise(
     findActiveCustomerAccountByEmail(email).pipe(
-      Effect.provide(testDatabase!.layer)
+      Effect.provide(database().layer)
     )
   );
 

@@ -151,9 +151,9 @@ describe("ReferralScreen", () => {
       const view = render(
         <ReferralScreen locale={locale} referrals={referrals} />
       );
-      const howItWorks = within(
-        view.getAllByRole("region").at(-1) as HTMLElement
-      );
+      const termsRegion = view.getAllByRole("region").at(-1);
+      if (!termsRegion) throw new Error("Missing the referral terms region");
+      const howItWorks = within(termsRegion);
 
       expect(
         howItWorks.getAllByRole("listitem").map((item) => item.textContent)
@@ -204,7 +204,9 @@ describe("ReferralScreen", () => {
         <ReferralScreen locale="en-US" referrals={referrals} />
       );
       const button = view.getByRole("button", { name: copyLabel });
-      const card = within(button.closest("section") as HTMLElement);
+      const section = button.closest("section");
+      if (!section) throw new Error("Missing the referral card");
+      const card = within(section);
 
       await act(async () => {
         fireEvent.click(button);

@@ -40,7 +40,9 @@ const snapshots = {
   malformedOffice: { kind: "office" },
 } as const;
 type Role = keyof typeof snapshots;
-const roles = Object.keys(snapshots) as Role[];
+const roles = Object.keys(snapshots).filter((role): role is Role =>
+  Object.hasOwn(snapshots, role)
+);
 
 /** Replaces the malformed role's snapshot, as only a write outside the encoder could. */
 const malformedOfficeDetails = { kind: "office", seats: "many", dayCount: 2.5 };

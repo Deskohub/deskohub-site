@@ -2,18 +2,21 @@ import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import {
+  AdministrationCampaignAudienceId,
   AutomationFlow,
+  AutomationVersionDetail,
+  AutomationVersionRef,
   OperationNotFound,
   OperationUnavailable,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Result, Schema } from "effect";
-import { campaignIdSchema } from "../../../campaign-identifiers";
 import { stubCampaignPageQueries } from "../../campaign-operation-query.test-utils";
 import {
   activeVersionFixture,
+  automatedCampaignFixture,
+  automationAudienceFixture,
   automationDetailFixture,
   automationFlowFixture,
-  fixtureCampaignId,
 } from "../activation/automation-detail.test-utils";
 import type { AutomatedCampaign } from "../automated-campaign.server";
 import {
@@ -35,7 +38,8 @@ const { loadAutomationRun, loadAutomationRunLog } = await import(
   "./automation-run-log.server"
 );
 
-const campaignId = campaignIdSchema.make(fixtureCampaignId);
+const campaign = automatedCampaignFixture();
+const campaignId = campaign.id;
 const workingFlow = automationFlowFixture();
 /** The flow a published version froze: the working copy minus its wait. */
 const versionFlow = automationFlowFixture({
@@ -43,10 +47,18 @@ const versionFlow = automationFlowFixture({
     ({ id }) => id !== "pause"
   ),
 });
+const publishedVersion = Schema.decodeUnknownSync(AutomationVersionDetail)({
+  ...activeVersionFixture(),
+  flow: Schema.encodeSync(AutomationFlow)(versionFlow),
+  purpose: campaign.purpose,
+  templateKey: campaign.templateKey,
+  content: campaign.content,
+  audienceFilter: { _tag: "Group", operator: "and", filters: [] },
+});
 const automated = (
   automation = automationDetailFixture()
 ): AutomatedCampaign => ({
-  campaign: { id: campaignId } as AutomatedCampaign["campaign"],
+  campaign,
   automation,
 });
 const notFoundSignal = { digest: "NEXT_HTTP_ERROR_FALLBACK;404" };
@@ -63,7 +75,7 @@ beforeEach(() => {
     listAutomationVersions: Effect.succeed([]),
     listAutomationRuns: Effect.succeed({ runs: [], nextCursor: null }),
     getAutomationEngineHealth: Effect.succeed(automationEngineHealthFixture()),
-    getAutomationVersion: Effect.succeed({ flow: versionFlow }),
+    getAutomationVersion: Effect.succeed(publishedVersion),
   };
 });
 
@@ -151,7 +163,10 @@ describe("loadAutomationRunLog", () => {
     expect(log.flow).toEqual(versionFlow);
     expect(
       inputsOf("getAutomationVersion")
-        .map((input) => (input as { versionNumber: number }).versionNumber)
+        .map(
+          (input) =>
+            Schema.decodeUnknownSync(AutomationVersionRef)(input).versionNumber
+        )
         .sort()
     ).toEqual([1, 2]);
   });
@@ -234,7 +249,10 @@ describe("loadAutomationRun", () => {
       })
     );
     port.responses.listCampaignAudiences = Effect.succeed([
-      { id: "regulars", title: "Regulars" },
+      automationAudienceFixture(
+        AdministrationCampaignAudienceId.make("regulars"),
+        "Regulars"
+      ),
     ]);
 
     const record = await loadAutomationRun(campaignId, "run-1");

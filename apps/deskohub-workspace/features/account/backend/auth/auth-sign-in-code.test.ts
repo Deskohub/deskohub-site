@@ -1,22 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import {
   BotDetectedError,
   type VerifyHumanInput,
 } from "@/shared/backend/bot-protection/bot-protection.service";
 import { customerAgentNames } from "@/shared/bot-protection/customer-agents";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
+import { requireTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   buildDatabaseAdapter,
   type CapturedMagicLink,
   callHandler,
   callNativeHandler,
-  cookieJar,
   getSessionCookie,
   makeMemoryTestAuth,
   makeTestAuth,
   realCreateCustomerAccount,
+  sentMagicLink,
+  sessionCookieHeader,
   type TestAuth,
-  type TestAuthOptions,
   testAccountDeletion,
   testDatabase,
   unavailableFlag,
@@ -28,6 +30,8 @@ import {
 } from "./auth-handler.test-utils";
 import { digestVerificationKey, signInEmailLimit } from "./auth-options";
 import { renderMagicLinkEmail } from "./magic-link-email";
+
+const database = () => requireTestDatabase(testDatabase);
 
 /** Every field these tests send, including the ones the guard rejects. */
 type AuthRequestBody = {
@@ -83,6 +87,9 @@ const signInWithCode = (
 
 const wrongCode = (code: string) => (code === "000000" ? "111111" : "000000");
 
+const requireSignInCode = (link: CapturedMagicLink | undefined) =>
+  requireValue(requireValue(link, "sent magic link").code, "sent sign-in code");
+
 describe("verified sign-in gift recording", () => {
   test.each(["link", "code"] as const)(
     "records the durable account and new session time once after %s sign-in",
@@ -101,18 +108,19 @@ describe("verified sign-in gift recording", () => {
       expect((await sendSignInEmail(auth, email)).status).toBe(200);
       expect(signIns).toEqual([]);
 
-      const link = sentLinks[0]!;
+      const link = sentMagicLink(sentLinks);
       const verify = () =>
         method === "link"
           ? verifyMagicLink(auth, link)
-          : signInWithCode(auth, email, link.code!);
+          : signInWithCode(auth, email, requireSignInCode(link));
       const verified = await verify();
       expect(getSessionCookie(verified)).toBeDefined();
+      const session = requireValue(store.session[0], "stored session");
       expect(signIns).toEqual([
         {
-          accountId: store.session[0]!.userId,
+          accountId: session.userId,
           at: Temporal.Instant.fromEpochMilliseconds(
-            store.session[0]!.createdAt.getTime()
+            session.createdAt.getTime()
           ),
         },
       ]);
@@ -132,9 +140,9 @@ describe("verified sign-in gift recording", () => {
     expect(
       (await sendSignInEmail(auth, uniqueEmail("gift-recorder-failed"))).status
     ).toBe(200);
-    const verified = await verifyMagicLink(auth, sentLinks[0]!);
+    const verified = await verifyMagicLink(auth, sentMagicLink(sentLinks));
     expect(verified.status).toBe(302);
-    const cookie = cookieJar(getSessionCookie(verified)!);
+    const cookie = sessionCookieHeader(verified);
     const session = await callHandler(auth, "/get-session", {
       headers: { cookie },
     });
@@ -150,13 +158,26 @@ const expectedSignInBotCheck: VerifyHumanInput = {
   callSite: "account.sign-in",
 };
 
+const decodeAuthError = Schema.decodeUnknownSync(
+  Schema.Struct({ code: Schema.optionalKey(Schema.String) })
+);
+
+const SignInEmailTiming = Schema.Struct({ nextSignInEmailAt: Schema.String });
+const decodeSignInEmail = Schema.decodeUnknownSync(SignInEmailTiming);
+const decodeSignInEmailRefusal = Schema.decodeUnknownSync(
+  Schema.Struct({ ...SignInEmailTiming.fields, code: Schema.String })
+);
+const decodeSessionUser = Schema.decodeUnknownSync(
+  Schema.Struct({ user: Schema.Struct({ id: Schema.String }) })
+);
+
 const errorCode = async (response: Response) =>
-  ((await response.json()) as { readonly code?: string }).code;
+  decodeAuthError(await response.json()).code;
 
 /** Whether the address's one stored code is this code. */
 const isStoredCode = async (email: string, code: string) =>
   (
-    await testDatabase!.pool.query<{ value: string }>(
+    await database().pool.query<{ value: string }>(
       `select value from auth.verification where identifier = $1`,
       [await digestVerificationKey(`sign-in-otp-${email.toLowerCase()}`)]
     )
@@ -164,7 +185,7 @@ const isStoredCode = async (email: string, code: string) =>
 
 const sessionCount = async (email: string) =>
   (
-    await testDatabase!.pool.query(
+    await database().pool.query(
       `select s.id from auth.session s join auth."user" u on u.id = s.user_id
        where u.email = $1`,
       [email.toLowerCase()]
@@ -172,11 +193,12 @@ const sessionCount = async (email: string) =>
   ).rows.length;
 
 type VerificationWrite = "delete" | "updateMany";
+type TestDatabaseAdapterFactory = ReturnType<typeof buildDatabaseAdapter>;
 
 /** The test database adapter, failing chosen verification writes on demand. */
 const failingVerificationWrites = () => {
   const fail = new Set<VerificationWrite>();
-  const database: NonNullable<TestAuthOptions["database"]> = (options) => {
+  const database: TestDatabaseAdapterFactory = (options) => {
     const adapter = buildDatabaseAdapter()(options);
     const failOn =
       <Data extends { readonly model: string }, Result>(
@@ -196,41 +218,42 @@ const failingVerificationWrites = () => {
   return { fail, database };
 };
 
+type VerificationPause = {
+  pauseValue?: string;
+  readonly paused: Promise<void>;
+  readonly resume: () => void;
+};
+
 /**
  * The test database adapter, holding the verification write whose value is
  * `pauseValue` until `resume` is called.
  */
 const pausedVerificationCreate = () => {
-  let signalPaused!: () => void;
-  let resume!: () => void;
-  const paused = new Promise<void>((resolve) => {
-    signalPaused = resolve;
-  });
-  const resumed = new Promise<void>((resolve) => {
-    resume = resolve;
-  });
-  const control = {
-    pauseValue: undefined as string | undefined,
-    paused,
-    resume: () => resume(),
-    database: ((options) => {
+  const paused = Promise.withResolvers<void>();
+  const resumed = Promise.withResolvers<void>();
+  const control: VerificationPause & {
+    readonly database: TestDatabaseAdapterFactory;
+  } = {
+    paused: paused.promise,
+    resume: resumed.resolve,
+    database: (options) => {
       const adapter = buildDatabaseAdapter()(options);
       return {
         ...adapter,
         create: async (data) => {
-          const row = data.data as { readonly value?: unknown };
+          const value: unknown = data.data.value;
           if (
             data.model === "verification" &&
             control.pauseValue !== undefined &&
-            row.value === control.pauseValue
+            value === control.pauseValue
           ) {
-            signalPaused();
-            await resumed;
+            paused.resolve();
+            await resumed.promise;
           }
           return adapter.create(data);
         },
       };
-    }) satisfies NonNullable<TestAuthOptions["database"]>,
+    },
   };
   return control;
 };
@@ -240,18 +263,11 @@ const pausedVerificationCreate = () => {
  * before it can write the value back, until `resume` is called.
  */
 const pausedVerificationConsume = async (auth: TestAuth) => {
-  let signalPaused!: () => void;
-  let resume!: () => void;
-  const paused = new Promise<void>((resolve) => {
-    signalPaused = resolve;
-  });
-  const resumed = new Promise<void>((resolve) => {
-    resume = resolve;
-  });
-  const control = {
-    pauseValue: undefined as string | undefined,
-    paused,
-    resume: () => resume(),
+  const paused = Promise.withResolvers<void>();
+  const resumed = Promise.withResolvers<void>();
+  const control: VerificationPause = {
+    paused: paused.promise,
+    resume: resumed.resolve,
   };
   const { internalAdapter } = await auth.$context;
   const consume =
@@ -259,8 +275,8 @@ const pausedVerificationConsume = async (auth: TestAuth) => {
   internalAdapter.consumeVerificationValue = async (identifier) => {
     const row = await consume(identifier);
     if (control.pauseValue !== undefined && row?.value === control.pauseValue) {
-      signalPaused();
-      await resumed;
+      paused.resolve();
+      await resumed.promise;
     }
     return row;
   };
@@ -280,10 +296,18 @@ const expectOnlyNewestCodeSignsIn = async (
   }
 ) => {
   if (links.older.code !== links.newer.code) {
-    const stale = await signInWithCode(auth, email, links.older.code!);
+    const stale = await signInWithCode(
+      auth,
+      email,
+      requireSignInCode(links.older)
+    );
     expect(await errorCode(stale)).toBe("INVALID_OTP");
   }
-  const fresh = await signInWithCode(auth, email, links.newer.code!);
+  const fresh = await signInWithCode(
+    auth,
+    email,
+    requireSignInCode(links.newer)
+  );
   expect(fresh.status).toBe(200);
   expect(getSessionCookie(fresh)).toBeDefined();
 
@@ -299,7 +323,7 @@ const expectOnlyNewestCodeSignsIn = async (
 
 const verificationIdentifierCount = async (identifier: string) =>
   (
-    await testDatabase!.pool.query(
+    await database().pool.query(
       `select id from auth.verification where identifier = $1`,
       [await digestVerificationKey(identifier)]
     )
@@ -324,7 +348,7 @@ describe("sign-in code gate", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: true, signInCode: false });
     expect(sentLinks).toHaveLength(1);
-    expect(sentLinks[0]!.code).toBeUndefined();
+    expect(sentMagicLink(sentLinks).code).toBeUndefined();
     expect(store.verification).toHaveLength(1);
     expect(botChecks).toBe(1);
   });
@@ -339,7 +363,7 @@ describe("sign-in code gate", () => {
     const response = await sendSignInEmail(auth, uniqueEmail("code-flag-down"));
 
     expect(await response.json()).toEqual({ status: true, signInCode: false });
-    expect(sentLinks[0]!.code).toBeUndefined();
+    expect(sentMagicLink(sentLinks).code).toBeUndefined();
   });
 
   test("fails closed to link-only when the gate itself fails", async () => {
@@ -357,7 +381,7 @@ describe("sign-in code gate", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: true, signInCode: false });
     expect(sentLinks).toHaveLength(1);
-    expect(sentLinks[0]!.code).toBeUndefined();
+    expect(sentMagicLink(sentLinks).code).toBeUndefined();
   });
 
   test("fails closed to link-only when the flag provider can't be built, and the link signs in", async () => {
@@ -375,10 +399,10 @@ describe("sign-in code gate", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: true, signInCode: false });
     expect(sentLinks).toHaveLength(1);
-    expect(sentLinks[0]!.code).toBeUndefined();
+    expect(sentMagicLink(sentLinks).code).toBeUndefined();
     expect(store.verification).toHaveLength(1);
 
-    const verified = await verifyMagicLink(auth, sentLinks[0]!);
+    const verified = await verifyMagicLink(auth, sentMagicLink(sentLinks));
     expect(verified.status).toBe(302);
     expect(getSessionCookie(verified)).toBeDefined();
   });
@@ -396,9 +420,9 @@ describe("sign-in code gate", () => {
 
     await sendSignInEmail(auth, uniqueEmail("code-decided-once"));
     expect(reads).toBe(1);
-    expect(sentLinks[0]!.code).toMatch(/^\d{6}$/);
+    expect(sentMagicLink(sentLinks).code).toMatch(/^\d{6}$/);
 
-    const verified = await verifyMagicLink(auth, sentLinks[0]!);
+    const verified = await verifyMagicLink(auth, sentMagicLink(sentLinks));
     expect(verified.status).toBe(302);
     expect(getSessionCookie(verified)).toBeDefined();
     expect(reads).toBe(1);
@@ -420,8 +444,8 @@ describe("sign-in code gate", () => {
       signInCode: true,
       nextSignInEmailAt: expect.any(String),
     });
-    expect(sentLinks[0]!.code).toMatch(/^\d{6}$/);
-    expect(sentLinks[0]!.url).toContain("/magic-link/verify");
+    expect(sentMagicLink(sentLinks).code).toMatch(/^\d{6}$/);
+    expect(sentMagicLink(sentLinks).url).toContain("/magic-link/verify");
   });
 
   test("answers when the address takes its next email while codes are on", async () => {
@@ -431,10 +455,7 @@ describe("sign-in code gate", () => {
     });
     const email = uniqueEmail("code-next-email");
     const nextEmailAt = async (response: Response) =>
-      Date.parse(
-        ((await response.json()) as { readonly nextSignInEmailAt: string })
-          .nextSignInEmailAt
-      );
+      Date.parse(decodeSignInEmail(await response.json()).nextSignInEmailAt);
 
     const sentFrom = Date.now();
     // The server's instant replaces any the client sends.
@@ -465,15 +486,12 @@ describe("sign-in code gate", () => {
 
     const refused = await sendSignInEmail(auth, email);
     expect(refused.status).toBe(429);
-    const refusal = (await refused.json()) as {
-      readonly code?: string;
-      readonly nextSignInEmailAt?: string;
-    };
+    const refusal = decodeSignInEmailRefusal(await refused.json());
     expect(refusal.code).toBe("SIGN_IN_EMAIL_LIMIT_REACHED");
-    expect(new Date(refusal.nextSignInEmailAt!).toISOString()).toBe(
-      refusal.nextSignInEmailAt!
+    expect(new Date(refusal.nextSignInEmailAt).toISOString()).toBe(
+      refusal.nextSignInEmailAt
     );
-    expect(Date.parse(refusal.nextSignInEmailAt!)).toBe(oldestExpiry);
+    expect(Date.parse(refusal.nextSignInEmailAt)).toBe(oldestExpiry);
   });
 
   test("omits the next email instant with codes off, whatever the client sends", async () => {
@@ -522,7 +540,7 @@ describe("sign-in code gate", () => {
     });
     const email = uniqueEmail("code-fields");
     await sendSignInEmail(auth, email);
-    const code = sentLinks[0]!.code!;
+    const code = requireSignInCode(sentLinks[0]);
 
     for (const extra of [
       { name: "Injected" },
@@ -543,7 +561,7 @@ describe("sign-in code gate", () => {
     const accepted = await signInWithCode(auth, email, code);
     expect(accepted.status).toBe(200);
     expect(store.user).toHaveLength(1);
-    expect(store.user[0]!.name).toBe("");
+    expect(requireValue(store.user[0], "stored user").name).toBe("");
   });
 
   test("BotID-checks magic-link sends regardless of the flag and code sign-in", async () => {
@@ -634,7 +652,7 @@ describe.skipIf(!testDatabase)(
       });
       const response = await nativePost("/sign-in/email-otp", {
         email,
-        otp: sentLinks[0]!.code,
+        otp: sentMagicLink(sentLinks).code,
         callbackURL,
       });
 
@@ -643,11 +661,10 @@ describe.skipIf(!testDatabase)(
       expect(response.headers.get("location")).toBeNull();
       expect(await sessionCount(email)).toBe(1);
       const session = await callNativeHandler(auth, "/get-session", {
-        headers: { cookie: cookieJar(getSessionCookie(response)!) },
+        headers: { cookie: sessionCookieHeader(response) },
       });
-      expect(
-        ((await session.json()) as { user?: { id: string } } | null)?.user?.id
-      ).toBe(await userIdForEmail(email));
+      const userId = requireValue(await userIdForEmail(email), "auth user ID");
+      expect(decodeSessionUser(await session.json()).user.id).toBe(userId);
     });
 
     test("signs in with the code read from the rendered email, as the browser sends it", async () => {
@@ -666,8 +683,8 @@ describe.skipIf(!testDatabase)(
         signInCode: true,
         nextSignInEmailAt: expect.any(String),
       });
-      const [captured] = sentLinks;
-      expect(captured?.metadata).toEqual({
+      const captured = sentMagicLink(sentLinks);
+      expect(captured.metadata).toEqual({
         locale: "cs-CZ",
         signInCode: true,
         nextSignInEmailAt: expect.any(String),
@@ -678,8 +695,8 @@ describe.skipIf(!testDatabase)(
       const { text } = await Effect.runPromise(
         renderMagicLinkEmail({
           email,
-          url: captured!.url,
-          code: captured!.code,
+          url: captured.url,
+          code: captured.code,
           locale: "cs-CZ",
         })
       );
@@ -687,14 +704,14 @@ describe.skipIf(!testDatabase)(
       const response = await signInWithCode(
         auth,
         email,
-        code!.trim(),
+        requireValue(code, "rendered sign-in code").trim(),
         callbackURL
       );
 
       expect(response.status).toBe(200);
       expect(getSessionCookie(response)).toBeDefined();
       expect(await sessionCount(email)).toBe(1);
-      const user = await testDatabase!.pool.query<{ locale: string | null }>(
+      const user = await database().pool.query<{ locale: string | null }>(
         `select locale from auth."user" where email = $1`,
         [email.toLowerCase()]
       );
@@ -712,13 +729,13 @@ describe.skipIf(!testDatabase)(
       const response = await signInWithCode(
         auth,
         email,
-        sentLinks[0]!.code!,
+        requireSignInCode(sentLinks[0]),
         "/cs-CZ/auth/callback"
       );
 
       expect(response.status).toBe(200);
       expect(getSessionCookie(response)).toBeDefined();
-      const user = await testDatabase!.pool.query<{
+      const user = await database().pool.query<{
         locale: string | null;
         email_verified: boolean;
         name: string;
@@ -737,10 +754,14 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("code-ends-link");
 
       await sendSignInEmail(auth, email);
-      const signedIn = await signInWithCode(auth, email, sentLinks[0]!.code!);
+      const signedIn = await signInWithCode(
+        auth,
+        email,
+        requireSignInCode(sentLinks[0])
+      );
       expect(signedIn.status).toBe(200);
 
-      const link = await verifyMagicLink(auth, sentLinks[0]!);
+      const link = await verifyMagicLink(auth, sentMagicLink(sentLinks));
       expect(getSessionCookie(link)).toBeUndefined();
       expect(link.headers.get("location") ?? "").toContain(
         "error=INVALID_TOKEN"
@@ -753,10 +774,14 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("link-ends-code");
 
       await sendSignInEmail(auth, email);
-      const link = await verifyMagicLink(auth, sentLinks[0]!);
+      const link = await verifyMagicLink(auth, sentMagicLink(sentLinks));
       expect(getSessionCookie(link)).toBeDefined();
 
-      const code = await signInWithCode(auth, email, sentLinks[0]!.code!);
+      const code = await signInWithCode(
+        auth,
+        email,
+        requireSignInCode(sentLinks[0])
+      );
       expect(code.status).toBe(400);
       expect(await errorCode(code)).toBe("INVALID_OTP");
       expect(await verificationIdentifierCount(`sign-in-otp-${email}`)).toBe(0);
@@ -769,12 +794,10 @@ describe.skipIf(!testDatabase)(
 
       expect((await sendSignInEmail(auth, email)).status).toBe(200);
       expect((await sendSignInEmail(auth, email)).status).toBe(200);
-      const [first, second] = sentLinks;
-
       expect(await verificationIdentifierCount(`sign-in-otp-${email}`)).toBe(1);
       await expectOnlyNewestCodeSignsIn(auth, email, {
-        older: first!,
-        newer: second!,
+        older: sentMagicLink(sentLinks),
+        newer: sentMagicLink(sentLinks, 1),
       });
     });
 
@@ -793,14 +816,18 @@ describe.skipIf(!testDatabase)(
           1
         );
 
-        const [first, second] = sentLinks;
-        const firstIsNewer = await isStoredCode(email, first!.code!);
+        const first = sentMagicLink(sentLinks);
+        const second = sentMagicLink(sentLinks, 1);
+        const firstIsNewer = await isStoredCode(
+          email,
+          requireSignInCode(first)
+        );
         await expectOnlyNewestCodeSignsIn(
           auth,
           email,
           firstIsNewer
-            ? { older: second!, newer: first! }
-            : { older: first!, newer: second! }
+            ? { older: second, newer: first }
+            : { older: first, newer: second }
         );
       }
     });
@@ -814,14 +841,16 @@ describe.skipIf(!testDatabase)(
         // An existing account: neither path creates the user.
         await sendSignInEmail(auth, email);
         expect(
-          getSessionCookie(await verifyMagicLink(auth, sentLinks[0]!))
+          getSessionCookie(
+            await verifyMagicLink(auth, sentMagicLink(sentLinks))
+          )
         ).toBeDefined();
         await sendSignInEmail(auth, email);
-        const link = sentLinks[1]!;
+        const link = sentMagicLink(sentLinks, 1);
 
         const [linkResponse, codeResponse] = await Promise.all([
           verifyMagicLink(auth, link),
-          signInWithCode(auth, email, link.code!),
+          signInWithCode(auth, email, requireSignInCode(link)),
         ]);
 
         const signedIn = [linkResponse, codeResponse].filter((response) =>
@@ -851,23 +880,28 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("code-restore-race");
 
       await sendSignInEmail(auth, email);
-      const older = sentLinks[0]!;
+      const older = sentMagicLink(sentLinks);
+      const olderCode = requireSignInCode(older);
       // Better Auth consumes the code on a wrong guess and writes it back
       // with one attempt counted; the write-back waits here.
-      restore.pauseValue = `${await digestVerificationKey(older.code!)}:1`;
-      const wrongGuess = signInWithCode(auth, email, wrongCode(older.code!));
+      restore.pauseValue = `${await digestVerificationKey(olderCode)}:1`;
+      const wrongGuess = signInWithCode(auth, email, wrongCode(olderCode));
       await restore.paused;
 
       try {
         await sendSignInEmail(auth, email);
-        const newer = await signInWithCode(auth, email, sentLinks[1]!.code!);
+        const newer = await signInWithCode(
+          auth,
+          email,
+          requireSignInCode(sentLinks[1])
+        );
         expect(getSessionCookie(newer)).toBeDefined();
       } finally {
         restore.resume();
       }
       expect(await errorCode(await wrongGuess)).toBe("INVALID_OTP");
 
-      const stale = await signInWithCode(auth, email, older.code!);
+      const stale = await signInWithCode(auth, email, olderCode);
       expect(await errorCode(stale)).toBe("INVALID_OTP");
       expect(await sessionCount(email)).toBe(1);
 
@@ -885,11 +919,11 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("code-restore-displace");
 
       await sendSignInEmail(auth, email);
-      const older = sentLinks[0]!;
+      const olderCode = requireSignInCode(sentLinks[0]);
       // The wrong guess consumes the older code and waits before Better Auth
       // writes it back, so the write-back lands after the newer email.
-      consume.pauseValue = `${await digestVerificationKey(older.code!)}:0`;
-      const wrongGuess = signInWithCode(auth, email, wrongCode(older.code!));
+      consume.pauseValue = `${await digestVerificationKey(olderCode)}:0`;
+      const wrongGuess = signInWithCode(auth, email, wrongCode(olderCode));
       await consume.paused;
 
       try {
@@ -899,11 +933,15 @@ describe.skipIf(!testDatabase)(
       }
       expect(await errorCode(await wrongGuess)).toBe("INVALID_OTP");
 
-      const newer = await signInWithCode(auth, email, sentLinks[1]!.code!);
+      const newer = await signInWithCode(
+        auth,
+        email,
+        requireSignInCode(sentLinks[1])
+      );
       expect(newer.status).toBe(200);
       expect(getSessionCookie(newer)).toBeDefined();
 
-      const stale = await signInWithCode(auth, email, older.code!);
+      const stale = await signInWithCode(auth, email, olderCode);
       expect(await errorCode(stale)).toBe("INVALID_OTP");
       expect(await sessionCount(email)).toBe(1);
     });
@@ -918,9 +956,9 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("code-restore-skew");
 
       await sendSignInEmail(auth, email);
-      const older = sentLinks[0]!;
-      consume.pauseValue = `${await digestVerificationKey(older.code!)}:0`;
-      const wrongGuess = signInWithCode(auth, email, wrongCode(older.code!));
+      const olderCode = requireSignInCode(sentLinks[0]);
+      consume.pauseValue = `${await digestVerificationKey(olderCode)}:0`;
+      const wrongGuess = signInWithCode(auth, email, wrongCode(olderCode));
       await consume.paused;
 
       try {
@@ -928,7 +966,7 @@ describe.skipIf(!testDatabase)(
         // The instance that issued the newer code runs a minute behind the
         // one that issued the older code, so the older code's write-back is
         // dated after it.
-        await testDatabase!.pool.query(
+        await database().pool.query(
           `update auth.verification
            set created_at = created_at - interval '60 seconds'
            where identifier = $1`,
@@ -939,14 +977,22 @@ describe.skipIf(!testDatabase)(
       }
       expect(await errorCode(await wrongGuess)).toBe("INVALID_OTP");
 
-      const newer = await signInWithCode(auth, email, sentLinks[1]!.code!);
+      const newer = await signInWithCode(
+        auth,
+        email,
+        requireSignInCode(sentLinks[1])
+      );
       expect(await errorCode(newer)).toBe("INVALID_OTP");
-      const stale = await signInWithCode(auth, email, older.code!);
+      const stale = await signInWithCode(auth, email, olderCode);
       expect(await errorCode(stale)).toBe("INVALID_OTP");
       expect(await sessionCount(email)).toBe(0);
 
       await sendSignInEmail(auth, email);
-      const fresh = await signInWithCode(auth, email, sentLinks[2]!.code!);
+      const fresh = await signInWithCode(
+        auth,
+        email,
+        requireSignInCode(sentLinks[2])
+      );
       expect(fresh.status).toBe(200);
       expect(getSessionCookie(fresh)).toBeDefined();
       expect(await sessionCount(email)).toBe(1);
@@ -965,7 +1011,11 @@ describe.skipIf(!testDatabase)(
 
       await sendSignInEmail(auth, email);
       failing.fail.add("updateMany");
-      const code = await signInWithCode(auth, email, sentLinks[0]!.code!);
+      const code = await signInWithCode(
+        auth,
+        email,
+        requireSignInCode(sentLinks[0])
+      );
       failing.fail.clear();
 
       expect(code.status).toBe(500);
@@ -985,11 +1035,15 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("link-revoke-failure");
 
       await sendSignInEmail(auth, email);
-      const code = await signInWithCode(auth, email, sentLinks[0]!.code!);
+      const code = await signInWithCode(
+        auth,
+        email,
+        requireSignInCode(sentLinks[0])
+      );
       expect(getSessionCookie(code)).toBeDefined();
 
       failing.fail.add("delete");
-      const link = await verifyMagicLink(auth, sentLinks[0]!);
+      const link = await verifyMagicLink(auth, sentMagicLink(sentLinks));
       failing.fail.clear();
 
       expect(link.status).toBe(500);
@@ -1017,7 +1071,7 @@ describe.skipIf(!testDatabase)(
       const blocked = await attempt(authB);
       expect(blocked.status).toBe(429);
       expect(blocked.headers.get("x-retry-after")).toBeTruthy();
-      const rateRows = await testDatabase!.pool.query(
+      const rateRows = await database().pool.query(
         `select key from auth.rate_limit where key = $1`,
         [`${ip}|/sign-in/email-otp`]
       );
@@ -1036,7 +1090,7 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("code-attempts");
 
       await sendSignInEmail(auth, email);
-      const code = sentLinks[0]!.code!;
+      const code = requireSignInCode(sentLinks[0]);
 
       for (let attempt = 0; attempt < 5; attempt += 1) {
         const wrong = await signInWithCode(auth, email, wrongCode(code));
@@ -1071,13 +1125,10 @@ describe.skipIf(!testDatabase)(
       }
       const capped = await sendSignInEmail(auth, email.toUpperCase());
       expect(capped.status).toBe(429);
-      const refusal = (await capped.json()) as {
-        readonly code?: string;
-        readonly nextSignInEmailAt?: string;
-      };
+      const refusal = decodeSignInEmailRefusal(await capped.json());
       expect(refusal.code).toBe("SIGN_IN_EMAIL_LIMIT_REACHED");
       // The oldest send's expiry, read back from the database.
-      const nextEmailAt = Date.parse(refusal.nextSignInEmailAt!);
+      const nextEmailAt = Date.parse(refusal.nextSignInEmailAt);
       expect(nextEmailAt).toBeGreaterThanOrEqual(
         sentFrom + signInEmailLimit.window * 1000
       );
@@ -1093,7 +1144,7 @@ describe.skipIf(!testDatabase)(
       );
 
       // Rejected sends don't extend the window; aged-out sends free it.
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth.verification set expires_at = now() - interval '1 second'
          where identifier = $1`,
         [`sign-in-email-${await digestVerificationKey(email.toLowerCase())}`]
@@ -1143,10 +1194,17 @@ describe.skipIf(!testDatabase)(
       const email = uniqueEmail("code-reauth");
 
       await sendSignInEmail(auth, email);
-      const first = await signInWithCode(auth, email, sentLinks[0]!.code!);
-      const staleCookie = cookieJar(getSessionCookie(first)!);
-      const userId = (await userIdForEmail(email.toLowerCase()))!;
-      await testDatabase!.pool.query(
+      const first = await signInWithCode(
+        auth,
+        email,
+        requireSignInCode(sentLinks[0])
+      );
+      const staleCookie = sessionCookieHeader(first);
+      const userId = requireValue(
+        await userIdForEmail(email.toLowerCase()),
+        "auth user ID"
+      );
+      await database().pool.query(
         `update auth.session set created_at = now() - interval '20 minutes' where user_id = $1`,
         [userId]
       );
@@ -1163,9 +1221,9 @@ describe.skipIf(!testDatabase)(
       const reauthenticated = await signInWithCode(
         auth,
         email,
-        sentLinks[1]!.code!
+        requireSignInCode(sentLinks[1])
       );
-      const freshCookie = cookieJar(getSessionCookie(reauthenticated)!);
+      const freshCookie = sessionCookieHeader(reauthenticated);
       const deleted = await postJson(
         auth,
         "/delete-user",

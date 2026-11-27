@@ -1,12 +1,20 @@
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, type Mock, mock, test } from "bun:test";
 import type { GoogleCalendarEvent } from "@deskohub/google-calendar";
 import { testEmailAddress } from "@deskohub/test-email";
 import { type Duration, Effect, Layer, Schema } from "effect";
-import { CheckoutPricingService } from "@/features/checkout/backend/checkout/checkout-pricing.service";
+import {
+  CheckoutPricingService,
+  type ICheckoutPricingService,
+} from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import { CheckoutPricingServiceMock } from "@/features/checkout/backend/checkout/checkout-pricing.service.mock";
+import {
+  checkoutSessionIdSchema,
+  type PaymentAttemptId,
+  paymentAttemptIdSchema,
+} from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import type { CheckoutSummaryChangedKeys } from "@/features/checkout/checkout-summary";
 import {
@@ -22,6 +30,7 @@ import {
 } from "@/features/discounts/contracts";
 import type { Locale } from "@/features/i18n";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { getSlowestSuccessfulCalendarLoad } from "@/shared/backend/config/google-calendar.config.test-utils";
 import {
   withActionDeadline,
@@ -41,13 +50,21 @@ import {
   type SignedPayState,
   sealPayState,
 } from "./pay-state";
+import { getSubmittedCodeMetadata } from "./pay-state-contract";
 import {
   type ClearDiscountCodeResult,
   clearDiscountCodeFromPayState,
   getDiscountCodeChangeDeadline,
 } from "./pay-state-discount-code";
+import {
+  buildPayStateCodeQuote,
+  payStateDiscountOrderFixture,
+} from "./pay-state-discount-code.test-utils";
 import { PayableCheckoutMock } from "./payable-checkout.service.mock";
-import { withoutPayStateHoldExpiry } from "./signed-pay-state.test-utils";
+import {
+  syntheticPayStateOrderId,
+  withoutPayStateHoldExpiry,
+} from "./signed-pay-state.test-utils";
 
 mock.module("server-only", () => ({}));
 
@@ -58,48 +75,24 @@ const payStateHoldExpiresAt = instantStringSchema.make(
 /** The deadline stored with the order, for tokens signed without one. */
 const storedHoldExpiresAt = Temporal.Instant.from("2099-06-01T10:09:30Z");
 
-const reservation = {
-  kind: "cowork" as const,
-  entryTier: "basic" as const,
+const reservation = Schema.decodeSync(normalizedCoworkReservationOrderSchema)({
+  kind: "cowork",
+  entryTier: "basic",
   coffee: false,
   date: "2026-08-04",
   name: "Ada Lovelace",
   email: testEmailAddress("ada"),
   phone: "+420777000111",
-};
-const checkoutSessionId = "checkout-session-id";
+});
+const checkoutSessionId = checkoutSessionIdSchema.make("checkout-session-id");
+const activeAttemptId = paymentAttemptIdSchema.make("attempt-id");
 const code = (value: string) => canonicalPromotionCodeSchema.make(value);
 const submittedCodeDiscountId =
   Schema.decodeUnknownSync(discountIdSchema)("code-discount");
 const referralCode = code("RFL12345");
 
-const money = (value: number) => ({
-  value,
-  exponent: 2,
-  currency: "CZK" as const,
-});
-
 /** The order's price with the entered code: 20% off 350 CZK. */
-const codeQuote = buildCoworkReservationQuote(reservation, {
-  discountQuote: {
-    product: { kind: "cowork", tier: "basic" },
-    discountableSubtotal: money(35_000),
-    discounts: [
-      {
-        discount: {
-          id: submittedCodeDiscountId,
-          label: "Member code",
-          adjustment: { kind: "percentage", basisPoints: 2000 },
-        },
-        subtotalBefore: money(35_000),
-        amount: money(7000),
-        subtotalAfter: money(28_000),
-      },
-    ],
-    totalDiscount: money(7000),
-    discountedSubtotal: money(28_000),
-  },
-});
+const codeQuote = buildPayStateCodeQuote(reservation, submittedCodeDiscountId);
 /** The order's price once the code is removed. */
 const clearedQuote = buildCoworkReservationQuote(reservation);
 const clearedKeys: CheckoutSummaryChangedKeys = {
@@ -124,15 +117,15 @@ const makePayStateToken = async (input?: {
         locale: input?.locale ?? "en-US",
         reservation,
         quote: input?.submittedCode ? codeQuote : clearedQuote,
-        orderId: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
+        orderId: syntheticPayStateOrderId,
         bookedAt: payStateBookedAt,
         holdExpiresAt: payStateHoldExpiresAt,
         checkoutSessionId,
         requestedDiscountCode: input?.requestedDiscountCode,
         referralCode: input?.referralCode,
         changedKeys: input?.changedKeys,
-        ...(input?.submittedCode && {
-          submittedCode: input.submittedCode,
+        ...getSubmittedCodeMetadata({
+          submittedCode: input?.submittedCode,
           submittedCodeDiscountId,
         }),
       },
@@ -167,9 +160,11 @@ type ClearInput = {
   readonly confirmDuration?: Duration.Input;
   readonly locale?: Locale;
   /** Replaces the pricing stub's `clearDiscountCode`. */
-  readonly clearDiscountCode?: ReturnType<typeof mock>;
-  readonly activePaymentAttemptId?: string;
-  readonly activePaymentAttemptIdAfterPricing?: string;
+  readonly clearDiscountCode?: Mock<
+    ICheckoutPricingService["clearDiscountCode"]
+  >;
+  readonly activePaymentAttemptId?: PaymentAttemptId;
+  readonly activePaymentAttemptIdAfterPricing?: PaymentAttemptId;
   /** The live guard read that finds the reservation unpayable, and why. */
   readonly checkoutUnavailable?: {
     readonly at: 1 | 2;
@@ -196,14 +191,14 @@ const prepareClear = (input: ClearInput) => {
           input.activePaymentAttemptId ??
           null)
         : (input.activePaymentAttemptId ?? null);
-    return Effect.succeed({
-      id: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
-      dotyposCustomerId: "customer-id",
-      reservationHoldExpiresAt: storedHoldExpiresAt,
-      activePaymentAttemptId,
-      // Admitting an attempt makes the order's payment pending.
-      paymentState: activePaymentAttemptId === null ? "not_started" : "pending",
-    } as never);
+    return Effect.succeed(
+      payStateDiscountOrderFixture({
+        reservation,
+        bookedAt: Temporal.Instant.from(payStateBookedAt),
+        holdExpiresAt: storedHoldExpiresAt,
+        activePaymentAttemptId,
+      })
+    );
   };
   const confirm = mock((state: SignedPayState) =>
     Effect.sleep(input.confirmDuration ?? 0).pipe(
@@ -486,7 +481,7 @@ describe("clearDiscountCodeFromPayState", () => {
 
       const { result, clearDiscountCode } = await clearSucceeds({
         payStateToken,
-        activePaymentAttemptId: "attempt-id",
+        activePaymentAttemptId: activeAttemptId,
       });
 
       expect(result).toStrictEqual({
@@ -503,7 +498,7 @@ describe("clearDiscountCodeFromPayState", () => {
 
       const { result, confirm, clearDiscountCode } = await clearSucceeds({
         payStateToken,
-        activePaymentAttemptIdAfterPricing: "attempt-id",
+        activePaymentAttemptIdAfterPricing: activeAttemptId,
       });
 
       expect(result).toMatchObject({
@@ -568,7 +563,7 @@ describe("clearDiscountCodeFromPayState", () => {
         const { result } = await clearSucceeds({ payStateToken });
 
         expect((await openFresh(result)).holdExpiresAt).toBe(
-          "2099-06-01T10:09:30.000Z"
+          instantStringSchema.make("2099-06-01T10:09:30.000Z")
         );
       }
     );
@@ -629,7 +624,7 @@ describe("clearDiscountCodeFromPayState", () => {
 
       const { result } = await clearSucceeds({
         payStateToken,
-        activePaymentAttemptId: "attempt-id",
+        activePaymentAttemptId: activeAttemptId,
       });
 
       expect(result).toMatchObject({

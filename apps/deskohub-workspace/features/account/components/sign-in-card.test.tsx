@@ -7,6 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
 import { StrictMode } from "react";
@@ -187,10 +188,23 @@ const storeCodeRequest = (requestedAt: number) => {
   );
 };
 
-const codeInput = (view: ReturnType<typeof render>) =>
-  view.getByLabelText(
-    m.accountSignInCodeLabel({}, { locale })
-  ) as HTMLInputElement;
+const codeInput = (view: ReturnType<typeof render>) => {
+  const input = view.getByLabelText(m.accountSignInCodeLabel({}, { locale }));
+  assert(input instanceof HTMLInputElement, "Expected a sign-in code input");
+  return input;
+};
+
+const signInForm = (root: ParentNode) => {
+  const form = root.querySelector("#account-sign-in-form");
+  assert(form instanceof HTMLFormElement, "Expected the email sign-in form");
+  return form;
+};
+
+const codeResendButton = (view: ReturnType<typeof render>) => {
+  const button = view.container.querySelector("#account-sign-in-code-resend");
+  assert(button instanceof HTMLButtonElement, "Expected a resend button");
+  return button;
+};
 
 const typeCode = async (view: ReturnType<typeof render>) => {
   await act(async () => {
@@ -209,17 +223,13 @@ const submitEmail = async (
     { target: { value: adaAddress } }
   );
   await act(async () => {
-    fireEvent.submit(view.container.querySelector("#account-sign-in-form")!);
+    fireEvent.submit(signInForm(view.container));
   });
 };
 
 /** Renders and lets the browser capability checks settle. */
 const renderSettled = async (ui: Parameters<typeof render>[0]) => {
-  let view: ReturnType<typeof render> | undefined;
-  await act(async () => {
-    view = render(ui);
-  });
-  return view!;
+  return await act(async () => render(ui));
 };
 
 const supportPasskeyAutofill = () => {
@@ -232,9 +242,9 @@ const supportPasskeyAutofill = () => {
 describe("account components", () => {
   beforeEach(() => {
     navigations.length = 0;
-    window.location.replace = ((href: string) => {
-      navigations.push(href);
-    }) as typeof window.location.replace;
+    window.location.replace = (href) => {
+      navigations.push(String(href));
+    };
   });
 
   afterEach(async () => {
@@ -271,20 +281,26 @@ describe("account components", () => {
     await unregisterWorkspaceComponentTestEnv();
   });
 
-  const passwordInput = (view: ReturnType<typeof render>) =>
-    view.container.querySelector(
-      "#account-sign-in-password"
-    ) as HTMLInputElement | null;
+  const passwordInput = (view: ReturnType<typeof render>) => {
+    const field = view.container.querySelector("#account-sign-in-password");
+    assert(field === null || field instanceof HTMLInputElement);
+    return field;
+  };
 
   const submitPassword = async (
     view: ReturnType<typeof render>,
     password: string
   ) => {
-    fireEvent.change(passwordInput(view)!, { target: { value: password } });
+    const input = passwordInput(view);
+    assert(input, "Expected a password input");
+    fireEvent.change(input, { target: { value: password } });
+    const form = view.container.querySelector("#account-sign-in-password-form");
+    assert(
+      form instanceof HTMLFormElement,
+      "Expected the password sign-in form"
+    );
     await act(async () => {
-      fireEvent.submit(
-        view.container.querySelector("#account-sign-in-password-form")!
-      );
+      fireEvent.submit(form);
     });
   };
 
@@ -353,15 +369,11 @@ describe("account components", () => {
     const { SignInCard } = await import("./sign-in-card");
     const markup = renderToStaticMarkup(<SignInCard locale={locale} />);
     const serverDocument = new DOMParser().parseFromString(markup, "text/html");
-    const form = serverDocument.querySelector(
-      "#account-sign-in-form"
-    ) as HTMLFormElement;
-    const email = serverDocument.querySelector(
-      "#account-sign-in-email"
-    ) as HTMLInputElement;
-    const submit = serverDocument.querySelector(
-      "#account-sign-in-submit"
-    ) as HTMLButtonElement;
+    const form = signInForm(serverDocument);
+    const email = serverDocument.querySelector("#account-sign-in-email");
+    const submit = serverDocument.querySelector("#account-sign-in-submit");
+    assert(email instanceof HTMLInputElement, "Expected a sign-in email input");
+    assert(submit instanceof HTMLButtonElement, "Expected a submit button");
 
     expect(form.getAttribute("method")).toBe("post");
     expect(form.hasAttribute("action")).toBe(false);
@@ -479,7 +491,7 @@ describe("account components", () => {
     ).toBe(true);
 
     await act(async () => {
-      fireEvent.submit(view.container.querySelector("#account-sign-in-form")!);
+      fireEvent.submit(signInForm(view.container));
       await Promise.resolve();
     });
     const description = view
@@ -504,7 +516,7 @@ describe("account components", () => {
       }
     );
     await act(async () => {
-      fireEvent.submit(en.container.querySelector("#account-sign-in-form")!);
+      fireEvent.submit(signInForm(en.container));
       await Promise.resolve();
     });
     const enEmail = en.getByLabelText(
@@ -525,7 +537,7 @@ describe("account components", () => {
       }
     );
     await act(async () => {
-      fireEvent.submit(cs.container.querySelector("#account-sign-in-form")!);
+      fireEvent.submit(signInForm(cs.container));
       await Promise.resolve();
     });
 
@@ -546,7 +558,7 @@ describe("account components", () => {
       }
     );
     await act(async () => {
-      fireEvent.submit(view.container.querySelector("#account-sign-in-form")!);
+      fireEvent.submit(signInForm(view.container));
     });
 
     expect(signInMagicLink).toHaveBeenCalledWith(
@@ -600,16 +612,14 @@ describe("account components", () => {
 
     const view = render(card);
     await act(async () => {});
-    const email = (await view.findByDisplayValue(
-      adaAddress
-    )) as HTMLInputElement;
+    const email = await view.findByDisplayValue(adaAddress);
     expect(resolveGiftSignIn).toHaveBeenCalledTimes(1);
     expect(resolveGiftSignIn).toHaveBeenCalledWith({ secret });
     expect(email.getAttribute("value")).toBeNull();
     expect(view.container.innerHTML).not.toContain(adaAddress);
 
     await act(async () => {
-      fireEvent.submit(view.container.querySelector("#account-sign-in-form")!);
+      fireEvent.submit(signInForm(view.container));
     });
     expect(signInMagicLink).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -635,7 +645,8 @@ describe("account components", () => {
     const email = view.getByLabelText(
       m.accountSignInEmailLabel({}, { locale })
     );
-    expect((email as HTMLInputElement).disabled).toBe(false);
+    assert(email instanceof HTMLInputElement, "Expected a sign-in email input");
+    expect(email.disabled).toBe(false);
   });
 
   test("replaces a pending lookup when another gift link opens in the same document", async () => {
@@ -721,7 +732,7 @@ describe("account components", () => {
     );
     await act(async () => {});
     await act(async () => {
-      fireEvent.submit(view.container.querySelector("#account-sign-in-form")!);
+      fireEvent.submit(signInForm(view.container));
     });
 
     const username = view.container.querySelector<HTMLInputElement>(
@@ -734,10 +745,8 @@ describe("account components", () => {
   });
 
   test("sign-in card shows a visible pending submit and sends only once", async () => {
-    let resolveRequest!: (result: { error: null }) => void;
-    const request = new Promise<{ error: null }>((resolve) => {
-      resolveRequest = resolve;
-    });
+    const { promise: request, resolve: resolveRequest } =
+      Promise.withResolvers<AuthResponse>();
     signInMagicLink.mockImplementationOnce(() => request);
     const { SignInCard } = await import("./sign-in-card");
 
@@ -748,7 +757,7 @@ describe("account components", () => {
         target: { value: adaAddress },
       }
     );
-    const form = view.container.querySelector("#account-sign-in-form")!;
+    const form = signInForm(view.container);
 
     await act(async () => {
       fireEvent.submit(form);
@@ -758,7 +767,8 @@ describe("account components", () => {
 
     const submit = view.getByRole("button", {
       name: m.accountSignInSubmitting({}, { locale }),
-    }) as HTMLButtonElement;
+    });
+    assert(submit instanceof HTMLButtonElement, "Expected a submit button");
     expect(submit.disabled).toBe(true);
     expect(submit.getAttribute("aria-busy")).toBe("true");
     expect(submit.querySelector("svg")).toBeTruthy();
@@ -788,7 +798,7 @@ describe("account components", () => {
         target: { value: adaAddress },
       }
     );
-    const form = view.container.querySelector("#account-sign-in-form")!;
+    const form = signInForm(view.container);
 
     await act(async () => {
       fireEvent.submit(form);
@@ -800,7 +810,8 @@ describe("account components", () => {
     ).toBeTruthy();
     const submit = view.getByRole("button", {
       name: m.accountSignInSubmit({}, { locale }),
-    }) as HTMLButtonElement;
+    });
+    assert(submit instanceof HTMLButtonElement, "Expected a submit button");
     expect(submit.disabled).toBe(false);
     expect(submit.getAttribute("aria-busy")).toBeNull();
 
@@ -829,19 +840,17 @@ describe("account components", () => {
       }
     );
     await act(async () => {
-      fireEvent.submit(view.container.querySelector("#account-sign-in-form")!);
+      fireEvent.submit(signInForm(view.container));
     });
 
     expect(
       view.getByText(m.accountSignInRequestFailed({}, { locale }))
     ).toBeTruthy();
-    expect(
-      (
-        view.getByLabelText(
-          m.accountSignInEmailLabel({}, { locale })
-        ) as HTMLInputElement
-      ).value
-    ).toBe(adaAddress);
+    const email = view.getByLabelText(
+      m.accountSignInEmailLabel({}, { locale })
+    );
+    assert(email instanceof HTMLInputElement, "Expected a sign-in email input");
+    expect(email.value).toBe(adaAddress);
   });
 
   test("sign-in card keeps today's link-only state when the email has no code", async () => {
@@ -1209,7 +1218,11 @@ describe("account components", () => {
 
     const emailInput = view.getByLabelText(
       m.accountSignInEmailLabel({}, { locale })
-    ) as HTMLInputElement;
+    );
+    assert(
+      emailInput instanceof HTMLInputElement,
+      "Expected a sign-in email input"
+    );
     expect(emailInput.value).toBe(adaAddress);
     // The activated button is gone; keyboard focus lands in the email field.
     expect(document.activeElement).toBe(emailInput);
@@ -1227,9 +1240,7 @@ describe("account components", () => {
     const { SignInCard } = await import("./sign-in-card");
 
     const view = render(<SignInCard locale={locale} />);
-    const resend = view.container.querySelector<HTMLButtonElement>(
-      "#account-sign-in-code-resend"
-    )!;
+    const resend = codeResendButton(view);
     resend.focus();
     await act(async () => {
       fireEvent.click(resend);
@@ -1247,22 +1258,18 @@ describe("account components", () => {
 
   test("sign-in card does not reopen a cancelled code step after resend resolves", async () => {
     storeCodeRequest(Date.now() - 61 * 1000);
-    let resolveRequest!: (result: AuthResponse) => void;
+    const pendingRequest = Promise.withResolvers<AuthResponse>();
     let requestSettled = false;
-    const request = new Promise<AuthResponse>((resolve) => {
-      resolveRequest = (result) => {
-        requestSettled = true;
-        resolve(result);
-      };
+    const request = pendingRequest.promise.then((result) => {
+      requestSettled = true;
+      return result;
     });
     signInMagicLink.mockImplementationOnce(() => request);
     const { SignInCard } = await import("./sign-in-card");
 
     const view = render(<SignInCard locale={locale} />);
     await act(async () => {
-      fireEvent.click(
-        view.container.querySelector("#account-sign-in-code-resend")!
-      );
+      fireEvent.click(codeResendButton(view));
     });
     expect(signInMagicLink).toHaveBeenCalledTimes(1);
     expect(requestSettled).toBe(false);
@@ -1279,7 +1286,7 @@ describe("account components", () => {
     expect(requestSettled).toBe(false);
 
     await act(async () => {
-      resolveRequest({
+      pendingRequest.resolve({
         data: { status: true, signInCode: true },
         error: null,
       });
@@ -1409,13 +1416,11 @@ describe("account components", () => {
     );
 
     expect(passkeyFetch).not.toHaveBeenCalled();
-    expect(
-      (
-        view.getByRole("button", {
-          name: m.accountSignInPasskey({}, { locale }),
-        }) as HTMLButtonElement
-      ).disabled
-    ).toBe(false);
+    const button = view.getByRole("button", {
+      name: m.accountSignInPasskey({}, { locale }),
+    });
+    assert(button instanceof HTMLButtonElement, "Expected a passkey button");
+    expect(button.disabled).toBe(false);
   });
 
   test("sign-in card keeps quiet when autofill cannot be armed", async () => {
@@ -1445,7 +1450,11 @@ describe("account components", () => {
     );
     const passkeyButton = view.getByRole("button", {
       name: m.accountSignInPasskey({}, { locale }),
-    }) as HTMLButtonElement;
+    });
+    assert(
+      passkeyButton instanceof HTMLButtonElement,
+      "Expected a passkey button"
+    );
     // The autofill request is still waiting for its options.
     expect(passkeyRequestNames()).toEqual(["options"]);
     expect(passkeyButton.disabled).toBe(false);

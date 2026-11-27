@@ -7,6 +7,8 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
+import type * as avatarActions from "@/features/account/avatar-actions";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -17,29 +19,34 @@ const { act, cleanup, fireEvent, render, waitFor } = await import(
   "@testing-library/react"
 );
 
-type ActionResult = {
-  readonly data?: {
-    readonly status: "uploaded" | "removed" | "rejected" | "retryable";
-    readonly avatar?: { readonly url: string; readonly version?: number };
-  };
-  readonly serverError?: string;
-  readonly validationErrors?: unknown;
-};
+type UploadResult = Awaited<
+  ReturnType<typeof avatarActions.uploadCustomerAvatar>
+>;
+type RemoveResult = Awaited<
+  ReturnType<typeof avatarActions.removeCustomerAvatar>
+>;
 
 const routerRefresh = mock(() => undefined);
 
-let uploadResult: () => Promise<ActionResult> = () =>
-  Promise.resolve({ data: { status: "uploaded" } });
-let removeResult: () => Promise<ActionResult> = () =>
+const existingAvatar = {
+  url: "https://res.cloudinary.test/upload/v1/avatars/live",
+  version: 1,
+};
+const defaultUpload: typeof avatarActions.uploadCustomerAvatar = () =>
+  Promise.resolve({ data: { status: "uploaded", avatar: existingAvatar } });
+let uploadResult = defaultUpload;
+let removeResult: typeof avatarActions.removeCustomerAvatar = () =>
   Promise.resolve({ data: { status: "removed" } });
-const removeCustomerAvatar = mock((): Promise<ActionResult> => removeResult());
+const removeCustomerAvatar = mock<typeof avatarActions.removeCustomerAvatar>(
+  (input) => removeResult(input)
+);
 
 mock.module("next/navigation", () => ({
   useRouter: () => ({ refresh: routerRefresh }),
 }));
 
-mock.module("@/features/account/avatar-actions", () => ({
-  uploadCustomerAvatar: () => uploadResult(),
+mock.module("@/features/account/avatar-actions", (): typeof avatarActions => ({
+  uploadCustomerAvatar: (input) => uploadResult(input),
   removeCustomerAvatar,
 }));
 
@@ -49,19 +56,21 @@ const { m } = await import("@/features/i18n");
 const renderControl = (locale: "en-US" | "cs-CZ" = "en-US") =>
   render(
     <AvatarControlForTest
-      avatar={{
-        url: "https://res.cloudinary.test/upload/v1/avatars/live",
-        version: 1,
-      }}
+      avatar={existingAvatar}
       firstName="Ada"
       lastName="Lovelace"
       locale={locale}
     />
   );
 
+const avatarFileInput = (view: ReturnType<typeof renderControl>) => {
+  const input = view.container.querySelector('input[type="file"]');
+  assert(input instanceof HTMLInputElement);
+  return input;
+};
+
 const chooseFile = (view: ReturnType<typeof renderControl>, file: File) => {
-  const input = view.container.querySelector('input[type="file"]')!;
-  fireEvent.change(input, { target: { files: [file] } });
+  fireEvent.change(avatarFileInput(view), { target: { files: [file] } });
 };
 
 describe("AvatarControl failure feedback", () => {
@@ -73,7 +82,7 @@ describe("AvatarControl failure feedback", () => {
 
   afterEach(() => {
     cleanup();
-    uploadResult = () => Promise.resolve({ data: { status: "uploaded" } });
+    uploadResult = defaultUpload;
     removeResult = () => Promise.resolve({ data: { status: "removed" } });
     removeCustomerAvatar.mockClear();
     routerRefresh.mockClear();
@@ -87,8 +96,11 @@ describe("AvatarControl failure feedback", () => {
     uploadResult = () =>
       Promise.resolve({
         data: undefined,
-        validationErrors: { formErrors: ["Choose an image to upload."] },
-      } satisfies ActionResult);
+        validationErrors: {
+          formErrors: ["Choose an image to upload."],
+          fieldErrors: {},
+        },
+      });
 
     const view = renderControl();
     expect(
@@ -270,7 +282,7 @@ describe("AvatarControl failure feedback", () => {
     ).toBeNull();
     const image = view.getByAltText(
       m.accountProfileAvatarAlt({}, { locale: "en-US" })
-    ) as HTMLImageElement;
+    );
     expect(image.getAttribute("src")).toBe(
       "https://res.cloudinary.test/upload/v2/avatars/next"
     );
@@ -284,7 +296,7 @@ describe("AvatarControl failure feedback", () => {
     "keeps the previous image when a %s returns a %s",
     async (operation, failure) => {
       const failedResult = () =>
-        Promise.resolve<ActionResult>(
+        Promise.resolve<UploadResult & RemoveResult>(
           failure === "server error"
             ? { serverError: "Your session has expired. Sign in again." }
             : { data: { status: "retryable" } }
@@ -317,7 +329,7 @@ describe("AvatarControl failure feedback", () => {
       );
       const image = view.getByAltText(
         m.accountProfileAvatarAlt({}, { locale: "en-US" })
-      ) as HTMLImageElement;
+      );
       expect(image.getAttribute("src")).toBe(
         "https://res.cloudinary.test/upload/v1/avatars/live"
       );
@@ -331,17 +343,14 @@ describe("AvatarControl failure feedback", () => {
   );
 
   test("exposes the Czech upload, pending, success, and remove controls accessibly", async () => {
-    let settleUpload: ((result: ActionResult) => void) | undefined;
-    uploadResult = () =>
-      new Promise((resolve) => {
-        settleUpload = resolve;
-      });
+    const upload = Promise.withResolvers<UploadResult>();
+    uploadResult = () => upload.promise;
 
     const view = renderControl("cs-CZ");
     const changeButton = view.getByRole("button", {
       name: m.accountProfileAvatarChange({}, { locale: "cs-CZ" }),
     });
-    const fileInput = view.container.querySelector('input[type="file"]')!;
+    const fileInput = avatarFileInput(view);
 
     expect(changeButton.getAttribute("type")).toBe("button");
     expect(fileInput.getAttribute("accept")).toBe(".jpg,.jpeg,.png,.webp");
@@ -357,19 +366,18 @@ describe("AvatarControl failure feedback", () => {
     expect(view.getByRole("status").textContent).toBe(
       m.accountProfileAvatarUploading({}, { locale: "cs-CZ" })
     );
-    expect(settleUpload).toBeDefined();
     for (const name of [
       m.accountProfileAvatarChange({}, { locale: "cs-CZ" }),
       m.accountProfileAvatarRemove({}, { locale: "cs-CZ" }),
     ]) {
-      expect(
-        (view.getByRole("button", { name }) as HTMLButtonElement).disabled
-      ).toBe(true);
+      const button = view.getByRole("button", { name });
+      assert(button instanceof HTMLButtonElement);
+      expect(button.disabled).toBe(true);
     }
     expect(routerRefresh).not.toHaveBeenCalled();
 
     await act(async () => {
-      settleUpload!({
+      upload.resolve({
         data: {
           status: "uploaded",
           avatar: {
@@ -386,20 +394,16 @@ describe("AvatarControl failure feedback", () => {
     const removeButton = view.getByRole("button", {
       name: m.accountProfileAvatarRemove({}, { locale: "cs-CZ" }),
     });
-    let settleRemove: ((result: ActionResult) => void) | undefined;
-    removeResult = () =>
-      new Promise((resolve) => {
-        settleRemove = resolve;
-      });
+    const removal = Promise.withResolvers<RemoveResult>();
+    removeResult = () => removal.promise;
     await act(async () => {
       fireEvent.click(removeButton);
     });
     expect(view.getByRole("status").textContent).toBe(
       m.accountProfileAvatarRemoving({}, { locale: "cs-CZ" })
     );
-    expect(settleRemove).toBeDefined();
     await act(async () => {
-      settleRemove!({ data: { status: "removed" } });
+      removal.resolve({ data: { status: "removed" } });
     });
     await waitFor(() =>
       expect(view.getByRole("status").textContent).toBe(
@@ -451,9 +455,7 @@ describe("AvatarControl failure feedback", () => {
     await waitFor(() =>
       expect(view.getByRole("status").textContent).toBe("Remove refused.")
     );
-    const input = view.container.querySelector(
-      'input[type="file"]'
-    ) as HTMLInputElement;
+    const input = avatarFileInput(view);
     const pickerClick = mock(() => undefined);
     input.click = pickerClick;
 

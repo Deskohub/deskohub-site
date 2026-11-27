@@ -10,6 +10,7 @@ import {
   type HttpApiEndpoint,
   type HttpApiGroup,
 } from "effect/http-api";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   disabledCustomerAgentClientPaths,
   makeCustomerAgentAuthorizationPlugins,
@@ -40,7 +41,7 @@ type CustomerAuthEndpointName = HttpApiEndpoint.Identifier<
 >;
 
 /** Every contract endpoint and the Better Auth endpoint that serves it. */
-const servingEndpoints = {
+const servingEndpoints: Record<string, AuthEndpoint> = {
   getSession: getSession(),
   signOut,
   updatePasskey: passkeyPlugin.endpoints.updatePasskey,
@@ -81,8 +82,10 @@ describe("CustomerAuthApi against Better Auth", () => {
   test.each(endpoints.map((endpoint) => [endpoint.name, endpoint] as const))(
     "%s uses Better Auth's path and method",
     (name, endpoint) => {
-      const serving: AuthEndpoint =
-        servingEndpoints[name as CustomerAuthEndpointName];
+      const serving = requireValue(
+        servingEndpoints[name],
+        `Better Auth endpoint ${name}`
+      );
 
       expect(endpoint.path).toBe(`${authBasePath}${serving.path}`);
       expect(methodsOf(serving)).toContain(endpoint.method);

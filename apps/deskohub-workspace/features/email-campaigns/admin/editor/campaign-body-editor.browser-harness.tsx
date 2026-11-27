@@ -1,20 +1,26 @@
+import { campaignLocaleSchema } from "@deskohub/workspace-domain/features/email-campaigns/campaign-content";
+import { Schema } from "effect";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Locale } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import { CampaignBodyNode } from "../../body/campaign-body-document";
 import { CampaignBodyEditor } from "./campaign-body-editor";
 
 const mountPoint = document.getElementById("editor-root");
 if (!mountPoint) throw new Error("The editor harness root is missing.");
-const locale = mountPoint.dataset.locale as Locale;
+const locale = Schema.decodeUnknownSync(campaignLocaleSchema)(
+  mountPoint.dataset.locale
+);
+const decodeBody = Schema.decodeUnknownSync(
+  Schema.fromJsonString(CampaignBodyNode)
+);
 
-function ImageEditorHarness() {
-  const [value, setValue] = useState<CampaignBodyNode>(() =>
-    Schema.decodeUnknownSync(CampaignBodyNode)(
-      JSON.parse(mountPoint!.dataset.document!)
-    )
-  );
+function ImageEditorHarness({
+  initialBody,
+}: {
+  initialBody: CampaignBodyNode;
+}) {
+  const [value, setValue] = useState(initialBody);
   const [generation, setGeneration] = useState(0);
   return (
     <RouteLocaleProvider locale={locale}>
@@ -38,11 +44,7 @@ function ImageEditorHarness() {
           <button type="submit">Save fixture</button>
           <button
             onClick={() => {
-              setValue(
-                Schema.decodeUnknownSync(CampaignBodyNode)(
-                  JSON.parse(localStorage.getItem("campaign-body")!)
-                )
-              );
+              setValue(decodeBody(localStorage.getItem("campaign-body")));
               setGeneration((current) => current + 1);
             }}
             type="button"
@@ -62,6 +64,6 @@ function ImageEditorHarness() {
   );
 }
 
-createRoot(mountPoint).render(<ImageEditorHarness />);
-
-import { Schema } from "effect";
+createRoot(mountPoint).render(
+  <ImageEditorHarness initialBody={decodeBody(mountPoint.dataset.document)} />
+);

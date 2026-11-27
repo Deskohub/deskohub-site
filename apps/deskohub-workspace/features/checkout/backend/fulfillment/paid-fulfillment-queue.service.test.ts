@@ -3,8 +3,14 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, mock, test } from "bun:test";
 import { decodeStandardSchema } from "@deskohub/standard-schema";
 import { Effect, Layer, Result } from "effect";
-import type { InvoiceId } from "@/features/accounting/manual-invoice";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import {
+  type InvoiceId,
+  invoiceIdSchema,
+} from "@/features/accounting/manual-invoice";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
 import {
   makeMemoryQueue,
   unavailableQueue,
@@ -25,11 +31,12 @@ import {
 } from "./paid-fulfillment-queue-consumer";
 import { reconcileStalledPaidFulfillments } from "./paid-fulfillment-reconciliation";
 import {
+  type IReservationFulfillment,
   ReservationFulfillment,
   WorkspacePaidFulfillmentError,
 } from "./reservation-fulfillment.service";
 
-const orderId = "reservation-id" as WorkspaceReservationId;
+const orderId = workspaceReservationIdSchema.make("reservation-id");
 
 const heldPaidProgress = {
   paymentState: "paid",
@@ -49,7 +56,7 @@ const fulfillmentFailure = (
 
 const processMessage = (input: {
   readonly message: { readonly orderId: WorkspaceReservationId };
-  readonly run: ReturnType<typeof mock>;
+  readonly run: IReservationFulfillment["run"];
   readonly progressAfter?: Partial<PaidFulfillmentProgress> | null;
 }) =>
   processPaidFulfillmentMessage(input.message).pipe(
@@ -60,7 +67,7 @@ const processMessage = (input: {
         }),
         Layer.mock(FulfillmentLedger, {
           findPaidFulfillmentProgress: mock(() =>
-            Effect.succeed(
+            Effect.succeed<PaidFulfillmentProgress | null>(
               input.progressAfter === null
                 ? null
                 : {
@@ -122,9 +129,11 @@ describe("paid fulfillment queue", () => {
   test("keys a replacement invoice's retry by the invoice it replaces", async () => {
     const queue = makeMemoryQueue();
 
+    const cancelledInvoiceId = invoiceIdSchema.make(crypto.randomUUID());
+
     await enqueue(queue.layer);
-    await enqueue(queue.layer, "cancelled-invoice" as InvoiceId);
-    await enqueue(queue.layer, "cancelled-invoice" as InvoiceId);
+    await enqueue(queue.layer, cancelledInvoiceId);
+    await enqueue(queue.layer, cancelledInvoiceId);
 
     expect(
       queue.published().map(({ message, options }) => ({
@@ -138,7 +147,7 @@ describe("paid fulfillment queue", () => {
       },
       {
         message: { orderId: "reservation-id" },
-        key: "paid-fulfillment:reservation-id:replacing:cancelled-invoice",
+        key: `paid-fulfillment:reservation-id:replacing:${cancelledInvoiceId}`,
       },
     ]);
   });
@@ -380,15 +389,21 @@ describe("paid fulfillment queue", () => {
   test("retries fulfillment for paid orders stalled past the queue's window", async () => {
     const now = Temporal.Instant.from("2026-10-11T06:00:00Z");
     const stalledOrderIds = [
-      "stalled-a",
-      "stalled-b",
-    ] as WorkspaceReservationId[];
+      workspaceReservationIdSchema.make("stalled-a"),
+      workspaceReservationIdSchema.make("stalled-b"),
+    ];
     const selectStalledPaidFulfillments = mock(() =>
       Effect.succeed(stalledOrderIds)
     );
-    const fulfillPaidOrder = mock((orderId: string) =>
+    const fulfillPaidOrder = mock((orderId: WorkspaceReservationId) =>
       orderId === "stalled-a"
-        ? Effect.fail(new Error("dotypos down") as never)
+        ? Effect.fail(
+            new WorkspacePaidFulfillmentError({
+              orderId,
+              failureCode: "dotypos_reservation_failed",
+              message: "dotypos down",
+            })
+          )
         : Effect.void
     );
 
@@ -411,10 +426,9 @@ describe("paid fulfillment queue", () => {
       updatedBefore: Temporal.Instant.from("2026-10-11T05:45:00Z"),
       limit: 25,
     });
-    expect(fulfillPaidOrder.mock.calls.map(([orderId]) => orderId)).toEqual([
-      "stalled-a",
-      "stalled-b",
-    ]);
+    expect(fulfillPaidOrder.mock.calls.map(([orderId]) => orderId)).toEqual(
+      stalledOrderIds
+    );
     expect(result).toEqual({ attempted: 2, failed: 1 });
   });
 

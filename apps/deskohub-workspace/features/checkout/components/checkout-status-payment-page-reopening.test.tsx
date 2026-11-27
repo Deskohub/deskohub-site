@@ -17,9 +17,11 @@ import {
   render,
   waitFor,
 } from "@testing-library/react";
+import type { reopenPaymentPage } from "@/features/checkout/actions/reopen-payment-page";
 import { m } from "@/features/i18n";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
+  type WorkspaceActionExecute,
   workspaceRouterPush,
   workspaceRouterRefresh,
   workspaceUseAction,
@@ -28,6 +30,8 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { checkoutPaymentActionCallbacks } from "./checkout-payment.test-utils";
+import { openTestPaymentWindow } from "./payment-window-fixture";
 
 mock.module("@/features/checkout/actions/reopen-payment-page", () => ({
   reopenPaymentPage: mock(),
@@ -40,15 +44,11 @@ const { CheckoutPaymentWindowCoordinator } = await import(
   "./checkout-payment-window"
 );
 
-type ActionOptions = {
-  readonly onSuccess: (result: { readonly data?: unknown }) => void;
-  readonly onError: (result: {
-    readonly error: { readonly serverError?: string };
-  }) => void;
-  readonly onTransportError: () => void;
-};
+type PaymentActionData = NonNullable<
+  Awaited<ReturnType<typeof reopenPaymentPage>>
+>["data"];
 
-const orderId = "reservation-reopening" as WorkspaceReservationId;
+const orderId = workspaceReservationIdSchema.make("reservation-reopening");
 const gatewayUrl = "https://payments.example.test/hpp/order-page";
 const getStatusOwnerKey = () =>
   `deskohub:checkout-status-owner:${window.location.pathname}`;
@@ -58,10 +58,8 @@ const openPaymentPageError = m.checkoutStatusOpenPaymentPageError(
 );
 
 const renderReopening = ({ isExecuting = false } = {}) => {
-  const execute = mock(
-    (_input: { readonly locale: string; readonly orderId: string }) => undefined
-  );
-  workspaceUseAction.mockReturnValue({ execute, isExecuting } as never);
+  const execute = mock<WorkspaceActionExecute>();
+  workspaceUseAction.mockReturnValue({ execute, isExecuting });
   const view = render(
     <CheckoutStatusPaymentPageReopening
       className="actions"
@@ -71,10 +69,7 @@ const renderReopening = ({ isExecuting = false } = {}) => {
       <a href="/en-US">home</a>
     </CheckoutStatusPaymentPageReopening>
   );
-  const options = workspaceUseAction.mock.calls.at(-1)?.[1] as
-    | ActionOptions
-    | undefined;
-  if (!options) throw new Error("Reopening action options missing");
+  const options = checkoutPaymentActionCallbacks<PaymentActionData>(execute);
   const button = () => {
     const element = view.container.querySelector(
       "#checkout-status-open-payment-page"
@@ -141,11 +136,12 @@ describe("CheckoutStatusPaymentPageReopening", () => {
   });
 
   test("opens the payment page in a detached tab this status tab owns", () => {
-    const paymentWindow = { opener: window };
+    const paymentWindow = openTestPaymentWindow();
     const openWindow = spyOn(window, "open").mockImplementation(
-      () => paymentWindow as Window
+      () => paymentWindow
     );
-    const { options, view } = renderReopening();
+    const { button, options, view } = renderReopening();
+    fireEvent.click(button());
 
     act(() => {
       options.onSuccess({
@@ -165,7 +161,8 @@ describe("CheckoutStatusPaymentPageReopening", () => {
 
   test("sends this tab to the payment page when the browser blocks the new tab", () => {
     spyOn(window, "open").mockReturnValue(null);
-    const { options } = renderReopening();
+    const { button, options } = renderReopening();
+    fireEvent.click(button());
 
     act(() => {
       options.onSuccess({
@@ -181,22 +178,27 @@ describe("CheckoutStatusPaymentPageReopening", () => {
     { state: "closed", reason: "window_elapsed" },
     { state: "closed", reason: "paid" },
     { state: "not_found" },
-  ])("refreshes the status when the page can't open ($state)", (data) => {
-    const openWindow = spyOn(window, "open");
-    const { options, view } = renderReopening();
+  ] as const)(
+    "refreshes the status when the page can't open ($state)",
+    (data) => {
+      const openWindow = spyOn(window, "open");
+      const { button, options, view } = renderReopening();
+      fireEvent.click(button());
 
-    act(() => {
-      options.onSuccess({ data });
-    });
+      act(() => {
+        options.onSuccess({ data });
+      });
 
-    expect(workspaceRouterRefresh).toHaveBeenCalledTimes(1);
-    expect(openWindow).not.toHaveBeenCalled();
-    expect(workspaceRouterPush).not.toHaveBeenCalled();
-    expect(view.getByRole("alert").textContent).toBe("");
-  });
+      expect(workspaceRouterRefresh).toHaveBeenCalledTimes(1);
+      expect(openWindow).not.toHaveBeenCalled();
+      expect(workspaceRouterPush).not.toHaveBeenCalled();
+      expect(view.getByRole("alert").textContent).toBe("");
+    }
+  );
 
   test("shows the action's public failure", () => {
-    const { options, view } = renderReopening();
+    const { button, options, view } = renderReopening();
+    fireEvent.click(button());
 
     act(() => {
       options.onError({ error: { serverError: "Public failure" } });
@@ -206,6 +208,10 @@ describe("CheckoutStatusPaymentPageReopening", () => {
     expect(view.getAllByRole("alert")).toHaveLength(1);
     expect(workspaceRouterRefresh).not.toHaveBeenCalled();
   });
+
+  type ActionOptions = ReturnType<
+    typeof checkoutPaymentActionCallbacks<PaymentActionData>
+  >;
 
   test.each([
     {
@@ -218,10 +224,11 @@ describe("CheckoutStatusPaymentPageReopening", () => {
     },
     {
       name: "a rejected input",
-      fail: (options: ActionOptions) => options.onSuccess({}),
+      fail: (options: ActionOptions) => options.onSuccess({ data: undefined }),
     },
   ])("shows the generic failure after $name", ({ fail }) => {
-    const { options, view } = renderReopening();
+    const { button, options, view } = renderReopening();
+    fireEvent.click(button());
 
     act(() => {
       fail(options);
@@ -232,6 +239,7 @@ describe("CheckoutStatusPaymentPageReopening", () => {
 
   test("clears the failure when the customer tries again", () => {
     const { button, options, view } = renderReopening();
+    fireEvent.click(button());
     act(() => {
       options.onTransportError();
     });
@@ -255,15 +263,16 @@ describe("CheckoutStatusPaymentPageReopening", () => {
       value: { request },
     });
     try {
-      const paymentWindow = { opener: window };
+      const paymentWindow = openTestPaymentWindow();
       const openWindow = spyOn(window, "open").mockImplementation(
-        () => paymentWindow as Window
+        () => paymentWindow
       );
       const closeWindow = spyOn(window, "close");
       render(<CheckoutPaymentWindowCoordinator />);
-      const { options } = renderReopening();
+      const { button, options } = renderReopening();
 
       for (const _attempt of [1, 2]) {
+        fireEvent.click(button());
         act(() => {
           options.onSuccess({
             data: { state: "opened", providerRedirectUrl: gatewayUrl },

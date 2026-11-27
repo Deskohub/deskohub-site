@@ -7,15 +7,20 @@ import {
   NexiService,
   type PaymentVerificationResult,
 } from "@deskohub/nexi";
+import { testEmailAddress } from "@deskohub/test-email";
 import { and, eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { orders, paymentAttempts } from "@/db/schema";
+import { workspaceAccountingSupplier } from "@/features/accounting/accounting-document-snapshot";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import type { OrderId } from "@/features/order";
 import { findOrderKind } from "@/features/order/backend/order-kind";
+import { currencyCZK } from "@/shared/money/currencies";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { CheckoutAnalytics } from "../analytics/checkout-analytics.service";
 import {
   PaymentAttemptRepository,
@@ -30,7 +35,10 @@ import { WebhookEventRepository } from "../repositories/webhook-event.repository
 import { LatePaymentVerificationService } from "./late-payment-verification.service";
 import { NexiWebhookService } from "./nexi-webhook.service";
 import type { AdmittingOrderPaymentHandler } from "./order-payment-handler";
-import { OrderPaymentHandlers } from "./order-payment-handlers.service";
+import {
+  OrderPaymentHandlers,
+  type PaymentAdmissionDetailsFor,
+} from "./order-payment-handlers.service";
 import { PaymentProvidersFromNexi } from "./payment-providers";
 import { PaymentRefundService } from "./payment-refund.service";
 import { startPaymentSession } from "./payment-session";
@@ -55,13 +63,14 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
 
   const fixture = Effect.gen(function* () {
     const { db, transaction } = yield* WorkspaceDatabase;
+    const dotyposCustomerId = DotyposCustomerIdSchema.make(
+      "synthetic-order-buyer"
+    );
     const [order] = yield* db
       .insert(orders)
       .values({
         kind: "pass-purchase",
-        dotyposCustomerId: DotyposCustomerIdSchema.make(
-          "synthetic-order-buyer"
-        ),
+        dotyposCustomerId,
         paymentState: "not_started",
         fulfillmentState: "not_started",
       })
@@ -176,7 +185,11 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
           })
           .where(eq(paymentAttempts.id, id))
           .returning()
-          .pipe(Effect.map(([attempt]) => toPaymentAttempt(attempt!))),
+          .pipe(
+            Effect.map(([attempt]) =>
+              toPaymentAttempt(requireValue(attempt, "updated payment attempt"))
+            )
+          ),
       markPaid: (input) =>
         settlePayment(
           input,
@@ -283,18 +296,47 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
     ).pipe(Layer.provideMerge(dependencies));
 
     const admit = ({ description }: { description: string }) => {
-      const details = {
+      const product = {
+        kind: "entry-pack",
+        size: 5,
+        tier: "open-space",
+      } as const;
+      const serviceDate = plainDateStringSchema.make("2026-01-01");
+      const amount = currencyCZK(29_000);
+      const details: PaymentAdmissionDetailsFor<"pass-purchase"> & {
+        readonly description: string;
+      } = {
         description,
+        approvedAfterAttemptId: null,
+        recordConsent: Effect.void,
         commitment: makeDiscountCommitment({
-          product: { kind: "entry-pack", size: 5, tier: "open-space" },
-          firstServiceDate: "2026-01-01",
+          product,
+          firstServiceDate: serviceDate,
           applications: [],
         }),
+        snapshot: {
+          orderId: order.id,
+          dotyposCustomerId,
+          locale: "en-US",
+          supplier: workspaceAccountingSupplier,
+          buyer: { kind: "person", legalName: "Synthetic Buyer" },
+          billing: { purpose: "personal", invoice: "none" },
+          delivery: { email: testEmailAddress("order-buyer") },
+          product,
+          serviceDate,
+          quote: {
+            product,
+            discountableSubtotal: amount,
+            discountedSubtotal: amount,
+            totalDiscount: currencyCZK(0),
+            discounts: [],
+          },
+        },
       };
       return startPaymentSession({
-        kind: order.kind,
+        kind: "pass-purchase",
         orderId: order.id,
-        amount: { value: 29_000, exponent: 2, currency: "CZK" },
+        amount,
         locale: "en-US",
         correlationId: order.correlationId,
         customer: { name: "Synthetic Buyer" },

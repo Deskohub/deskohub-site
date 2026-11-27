@@ -11,10 +11,8 @@ import {
 } from "@/features/checkout/reservation-quote-office";
 import type { Locale } from "@/features/i18n";
 import { InviteeEmail } from "@/features/office/office-people";
-import {
-  type WorkspaceReservation,
-  WorkspaceReservationRepository,
-} from "@/features/reservation/backend/workspace-reservation.repository";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { payableReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { withCoworkProductFields } from "@/features/reservation/cowork-reservation-product";
 import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/office-reservation";
 import {
@@ -54,24 +52,27 @@ export const makeOfficePayRouteFixture = (
     phone: "+420777000111",
     billing: { purpose: "personal", invoice: "none" },
   });
+  const bookedAt = instantStringSchema.make("2026-06-01T09:58:00Z");
+  const createdAt = Temporal.Instant.from(bookedAt);
   const holdExpiresAt = instantStringSchema.make("2099-06-01T10:08:00Z");
-  const row = withCoworkProductFields({
-    id: orderId,
-    authorAccountId: author,
-    officeContactAttends: options.seatOnly ? null : true,
-    reservationDetails: getStoredWorkspaceReservationDetails(reservation),
-    reservationState: "held",
-    paymentState: "not_started",
-    dotyposReservationId: DotyposReservationIdSchema.make("synthetic-office"),
-    reservationHoldExpiresAt: Temporal.Instant.from(holdExpiresAt),
-  } satisfies Partial<WorkspaceReservation>);
+  const row = withCoworkProductFields(
+    payableReservationFixture({
+      id: orderId,
+      authorAccountId: author,
+      officeContactAttends: options.seatOnly ? null : true,
+      reservationDetails: getStoredWorkspaceReservationDetails(reservation),
+      reservationCreatedAt: createdAt,
+      createdAt,
+      updatedAt: createdAt,
+      dotyposReservationId: DotyposReservationIdSchema.make("synthetic-office"),
+      reservationHoldExpiresAt: Temporal.Instant.from(holdExpiresAt),
+    })
+  );
   let viewer = author;
   const services = Layer.mergeAll(
     TestSealedStateKeys,
     Layer.mock(WorkspaceReservationRepository, {
-      // The guarded lookup reads only the held order fields above.
-      findById: (id) =>
-        Effect.succeed(id === orderId ? (row as WorkspaceReservation) : null),
+      findById: (id) => Effect.succeed(id === orderId ? row : null),
     }),
     Layer.mock(CustomerAuthentication, {
       currentUser: Effect.sync(() => ({
@@ -113,7 +114,7 @@ export const makeOfficePayRouteFixture = (
         reservation,
         quote: options.customizeQuote?.(quote) ?? quote,
         orderId,
-        bookedAt: instantStringSchema.make("2026-06-01T09:58:00Z"),
+        bookedAt,
         holdExpiresAt,
         checkoutSessionId: checkoutSessionIdSchema.make("office-session"),
       });

@@ -1,21 +1,40 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
-import { Effect, Layer } from "effect";
+import {
+  type CreateDotyposReservationInput,
+  DotyposCustomerIdSchema,
+  type DotyposReservationId,
+  DotyposReservationIdSchema,
+  DotyposService,
+  DotyposTableIdSchema,
+} from "@deskohub/dotypos";
+import { Effect, Layer, Schema } from "effect";
 import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
+import type {
+  LatePaymentRecovery,
+  LatePaymentRecoveryState,
+} from "@/db/schema";
+import { accountingDocumentSnapshotSchema } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import {
   makeCoworkInvoiceDocument,
   makeMeetingRoomInvoiceDocument,
 } from "@/features/accounting/invoice.test-utils";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { DiscountClaimError } from "@/features/discounts/errors";
 import {
   WorkspaceAvailabilityService,
   WorkspaceTableUnavailableError,
 } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
+import {
+  dotyposCreatedReservationFixture,
+  dotyposHoldFixture,
+  workspaceReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.service";
 import { UnpaidHoldRelease } from "../holds/unpaid-hold-release.service";
 import {
@@ -34,29 +53,42 @@ import {
 
 type OriginalHoldStatus = "NEW" | "CONFIRMED" | "CANCELLED";
 
-type HarnessReservation = Omit<
-  typeof coworkReservation,
-  "reservationDetails"
-> & {
-  readonly reservationDetails: StoredWorkspaceReservationDetails;
-  readonly reservationState: string;
-  readonly failureCode?: string;
-  readonly reservationHoldExpiresAt: Temporal.Instant;
-  readonly updatedAt: Temporal.Instant;
+const paymentAttemptId = paymentAttemptIdSchema.make("attempt-id");
+const reservationId = workspaceReservationIdSchema.make("reservation-id");
+const originalReservationId = DotyposReservationIdSchema.make(
+  "dotypos-reservation-id"
+);
+const customerId = DotyposCustomerIdSchema.make("dotypos-customer-id");
+const recoveryCreatedAt = Temporal.Instant.from("2026-01-01T00:00:00Z");
+const recovery: LatePaymentRecovery = {
+  paymentAttemptId,
+  workspaceReservationId: reservationId,
+  originalDotyposReservationId: originalReservationId,
+  recoveredDotyposReservationId: null,
+  webhookEventId: null,
+  providerOperationId: null,
+  providerStatus: "EXECUTED",
+  state: "pending",
+  failureCode: null,
+  verifiedPaidAt: recoveryCreatedAt,
+  claimedAt: null,
+  completedAt: null,
+  createdAt: recoveryCreatedAt,
+  updatedAt: recoveryCreatedAt,
 };
 
-const recovery = {
-  paymentAttemptId: "attempt-id",
-  workspaceReservationId: "reservation-id",
-  originalDotyposReservationId: "dotypos-reservation-id",
-};
+type Recoveries = LatePaymentRecoveryRepository["Service"];
+type EnsureAvailable =
+  WorkspaceAvailabilityService["Service"]["ensureAvailable"];
+type AssignTableId =
+  WorkspaceTableAssignmentService["Service"]["assignTableId"];
 
 /**
  * Wires the recovery service to stateful fakes so each test can assert the
  * order in which the original hold is released and the reservation recreated.
  */
 const makeRecoveryHarness = (options: {
-  readonly reservation: HarnessReservation;
+  readonly reservation: ReturnType<typeof workspaceReservationFixture>;
   readonly originalStatus: OriginalHoldStatus;
   /** False when another run holds a fresh processing claim. */
   readonly claimed?: boolean;
@@ -65,22 +97,23 @@ const makeRecoveryHarness = (options: {
   readonly supersededAtSettlement?: boolean;
   /** A replacement an interrupted earlier run already created in Dotypos. */
   readonly resumedReplacementId?: string;
-  readonly ensureAvailable?: () => Effect.Effect<void, unknown>;
-  readonly assignTableId?: () => Effect.Effect<unknown, unknown>;
+  readonly ensureAvailable?: EnsureAvailable;
+  readonly assignTableId?: AssignTableId;
   /** The paid checkout's accounting document; a cowork one by default. */
   readonly invoiceDocument?: ReturnType<typeof makeMeetingRoomInvoiceDocument>;
-  readonly cancelReservation?: () => Effect.Effect<void, unknown>;
-  readonly completeUsingOriginalReservation?: () => Effect.Effect<
-    void,
-    unknown
-  >;
+  readonly completeUsingOriginalReservation?: Recoveries["completeUsingOriginalReservation"];
 }) => {
   const events: string[] = [];
   let reservation = { ...options.reservation };
-  let recoveryState = "pending";
+  let recoveryState: LatePaymentRecoveryState = "pending";
   let settlementAttempted = false;
-  const settleAs = (state: string) =>
-    mock(() =>
+  const settleAs = <Input>(
+    state: Extract<
+      LatePaymentRecoveryState,
+      "recovered" | "refund_required" | "review_required"
+    >
+  ) =>
+    mock((_input: Input) =>
       Effect.sync(() => {
         events.push(
           state === "recovered" ? "completeWithReplacement" : `settle:${state}`
@@ -89,43 +122,46 @@ const makeRecoveryHarness = (options: {
       })
     );
   const spies = {
-    claim: mock(
-      (_input: { readonly staleProcessingBefore: Temporal.Instant }) =>
-        Effect.succeed(
-          (options.claimed === false
-            ? null
-            : { ...recovery, state: "processing" }) as never
-        )
+    claim: mock<Recoveries["claim"]>(() =>
+      Effect.succeed(
+        options.claimed === false ? null : { ...recovery, state: "processing" }
+      )
     ),
-    completeUsingOriginalReservation: mock(() => {
+    completeUsingOriginalReservation: mock<
+      Recoveries["completeUsingOriginalReservation"]
+    >((input) => {
       events.push("completeUsingOriginalReservation");
       return (
-        options.completeUsingOriginalReservation?.() ??
+        options.completeUsingOriginalReservation?.(input) ??
         Effect.sync(() => {
           recoveryState = "recovered";
         })
       );
     }),
     completeWithReplacement: options.supersededAtSettlement
-      ? mock(() => {
+      ? mock<Recoveries["completeWithReplacement"]>(() => {
           events.push("completeWithReplacement");
           settlementAttempted = true;
           return Effect.fail(
             new LatePaymentRecoveryStateError({
               operation: "settle",
-              paymentAttemptId: "attempt-id" as never,
+              paymentAttemptId,
               message: "A newer reservation prevents recovery.",
             })
           );
         })
-      : settleAs("recovered"),
-    requireRefund: settleAs("refund_required"),
-    requireReview: settleAs("review_required"),
+      : settleAs<Parameters<Recoveries["completeWithReplacement"]>[0]>(
+          "recovered"
+        ),
+    requireRefund:
+      settleAs<Parameters<Recoveries["requireRefund"]>[0]>("refund_required"),
+    requireReview:
+      settleAs<Parameters<Recoveries["requireReview"]>[0]>("review_required"),
     claimCancellation: mock(() =>
       Effect.sync(() => {
         events.push("claimCancellation");
         reservation = { ...reservation, reservationState: "cancelling" };
-        return reservation as never;
+        return reservation;
       })
     ),
     markCancelled: mock(() =>
@@ -149,33 +185,38 @@ const makeRecoveryHarness = (options: {
         return options.originalStatus;
       })
     ),
-    cancelReservation: mock((id: string) => {
+    cancelReservation: mock((id: DotyposReservationId) => {
       events.push(`cancelReservation:${id}`);
-      return options.cancelReservation?.() ?? Effect.void;
+      return Effect.void;
     }),
-    ensureAvailable: mock(() => {
+    ensureAvailable: mock<EnsureAvailable>((...args) => {
       events.push("ensureAvailable");
-      return options.ensureAvailable?.() ?? Effect.void;
+      return options.ensureAvailable?.(...args) ?? Effect.void;
     }),
-    assignTableId: mock(() => {
+    assignTableId: mock<AssignTableId>((...args) => {
       events.push("assignTableId");
-      return options.assignTableId?.() ?? Effect.succeed("table-id");
+      return (
+        options.assignTableId?.(...args) ??
+        Effect.succeed(DotyposTableIdSchema.make("table-id"))
+      );
     }),
-    createReservation: mock(() => {
+    createReservation: mock((input: CreateDotyposReservationInput) => {
       events.push("createReservation");
-      return Effect.succeed({ id: "replacement-id" } as never);
+      return Effect.succeed(
+        dotyposCreatedReservationFixture("replacement-id", input)
+      );
     }),
     fulfillPaidOrder: mock(() => {
       events.push("fulfillPaidOrder");
       return Effect.void;
     }),
   };
-  const snapshot = {
+  const snapshot = Schema.decodeUnknownSync(accountingDocumentSnapshotSchema)({
     ...(options.invoiceDocument ?? makeCoworkInvoiceDocument("en-US")),
-    workspaceReservationId: "reservation-id",
-    dotyposReservationId: "dotypos-reservation-id",
-    dotyposCustomerId: "dotypos-customer-id",
-  } as never;
+    workspaceReservationId: reservationId,
+    dotyposReservationId: originalReservationId,
+    dotyposCustomerId: customerId,
+  });
   const layer = LatePaymentRecoveryService.Default.pipe(
     Layer.provide(UnpaidHoldRelease.Default),
     Layer.provide(makeRecordingAdvisoryLock().layer),
@@ -183,7 +224,7 @@ const makeRecoveryHarness = (options: {
       Layer.mergeAll(
         Layer.mock(LatePaymentRecoveryRepository, {
           findByPaymentAttemptId: mock(() =>
-            Effect.sync(() => ({ ...recovery, state: recoveryState }) as never)
+            Effect.sync(() => ({ ...recovery, state: recoveryState }))
           ),
           claim: spies.claim,
           hasNewerActiveReservation: mock(() =>
@@ -192,14 +233,14 @@ const makeRecoveryHarness = (options: {
             )
           ),
           completeUsingOriginalReservation:
-            spies.completeUsingOriginalReservation as never,
-          completeWithReplacement: spies.completeWithReplacement as never,
+            spies.completeUsingOriginalReservation,
+          completeWithReplacement: spies.completeWithReplacement,
           requireRefund: spies.requireRefund,
           requireReview: spies.requireReview,
         }),
         Layer.mock(WorkspaceReservationRepository, {
           hasAttachedOpenSpaceMove: () => Effect.succeed(false),
-          findById: mock(() => Effect.sync(() => reservation as never)),
+          findById: mock(() => Effect.sync(() => reservation)),
           claimCancellation: spies.claimCancellation,
           markCancelled: spies.markCancelled,
           markCancellationFailed: spies.markCancellationFailed,
@@ -208,28 +249,28 @@ const makeRecoveryHarness = (options: {
           find: mock(() => Effect.succeed(snapshot)),
         }),
         Layer.mock(WorkspaceAvailabilityService, {
-          ensureAvailable: spies.ensureAvailable as never,
+          ensureAvailable: spies.ensureAvailable,
         }),
         Layer.mock(DotyposService, {
           getReservationStatus: spies.getReservationStatus,
-          cancelReservation: spies.cancelReservation as never,
+          cancelReservation: spies.cancelReservation,
           listActiveReservationsOverlapping: mock(() =>
             Effect.succeed(
-              (options.resumedReplacementId
+              options.resumedReplacementId
                 ? [
                     {
-                      id: options.resumedReplacementId,
-                      status: "CONFIRMED",
-                      note: "Payment order: reservation-id",
+                      ...dotyposHoldFixture(options.resumedReplacementId),
+                      status: "CONFIRMED" as const,
+                      note: `Payment order: ${reservationId}`,
                     },
                   ]
-                : []) as never
+                : []
             )
           ),
           createReservation: spies.createReservation,
         }),
         Layer.mock(WorkspaceTableAssignmentService, {
-          assignTableId: spies.assignTableId as never,
+          assignTableId: spies.assignTableId,
         }),
         Layer.mock(ReservationFulfillment, {
           run: spies.fulfillPaidOrder,
@@ -241,27 +282,33 @@ const makeRecoveryHarness = (options: {
     Effect.gen(function* () {
       const service = yield* LatePaymentRecoveryService;
       return yield* service.recover({
-        paymentAttemptId: "attempt-id" as never,
+        paymentAttemptId,
       });
     }).pipe(Effect.provide(layer), Effect.result, Effect.runPromise);
   return { events, recover, spies };
 };
 
-const coworkReservation = {
-  id: "reservation-id",
-  activePaymentAttemptId: "attempt-id",
-  dotyposCustomerId: "dotypos-customer-id",
+const coworkReservation = workspaceReservationFixture({
+  id: reservationId,
+  activePaymentAttemptId: paymentAttemptId,
+  dotyposCustomerId: customerId,
+  dotyposReservationId: originalReservationId,
+  paymentState: "pending",
+  fulfillmentState: "not_started",
+  reservationConfirmedAt: null,
+  paidAt: null,
+  fulfilledAt: null,
   reservationDetails: { kind: "cowork", entryTier: "basic", coffee: true },
-};
+});
 
-const expiredHeldReservation = {
+const expiredHeldReservation: typeof coworkReservation = {
   ...coworkReservation,
   reservationState: "held",
   reservationHoldExpiresAt: Temporal.Now.instant().subtract({ minutes: 20 }),
   updatedAt: Temporal.Now.instant().subtract({ minutes: 20 }),
 };
 
-const currentHeldReservation = {
+const currentHeldReservation: typeof coworkReservation = {
   ...coworkReservation,
   reservationState: "held",
   reservationHoldExpiresAt: Temporal.Now.instant().add({ minutes: 5 }),
@@ -461,8 +508,10 @@ describe("LatePaymentRecoveryService with an expired or released hold", () => {
       "fulfillPaidOrder",
     ]);
     // A processing claim only counts as stale once a run could have finished.
-    const staleProcessingBefore =
-      harness.spies.claim.mock.calls[0]?.[0].staleProcessingBefore;
+    const { staleProcessingBefore } = requireValue(
+      harness.spies.claim.mock.calls[0]?.[0],
+      "late-payment recovery claim input"
+    );
     expect(
       Temporal.Now.instant().since(staleProcessingBefore).total("seconds")
     ).toBeGreaterThan(latePaymentRecoveryMaxExecutionSeconds);
@@ -476,7 +525,7 @@ describe("LatePaymentRecoveryService with an expired or released hold", () => {
       completeUsingOriginalReservation: () =>
         Effect.fail(
           new OriginalHoldNotReusableError({
-            paymentAttemptId: "attempt-id" as never,
+            paymentAttemptId,
             message: "The hold reached its reuse margin.",
           })
         ),
@@ -502,7 +551,7 @@ describe("LatePaymentRecoveryService with an expired or released hold", () => {
         Effect.fail(
           new LatePaymentRecoveryStateError({
             operation: "settle",
-            paymentAttemptId: "attempt-id" as never,
+            paymentAttemptId,
             message: "A newer reservation prevents recovery.",
           })
         ),
@@ -617,7 +666,7 @@ describe("LatePaymentRecoveryService settlement decisions", () => {
     const harness = makeRecoveryHarness({
       reservation: {
         ...currentHeldReservation,
-        activePaymentAttemptId: "newer-attempt-id",
+        activePaymentAttemptId: paymentAttemptIdSchema.make("newer-attempt-id"),
       },
       originalStatus: "NEW",
     });
@@ -649,7 +698,7 @@ describe("LatePaymentRecoveryService settlement decisions", () => {
         reservationState: "cancelled",
         reservationHoldExpiresAt: Temporal.Now.instant(),
         updatedAt: Temporal.Now.instant(),
-      } as HarnessReservation,
+      },
       originalStatus: "CANCELLED",
       ensureAvailable: () =>
         Effect.fail(

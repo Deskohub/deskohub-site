@@ -2,15 +2,15 @@ import { testEmailAddress } from "@deskohub/test-email";
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { AresLookupFailure } from "@deskohub/ares";
 import { DotyposUnavailable } from "@deskohub/dotypos";
-import { Context, Effect, Layer } from "effect";
+import { ReferralCode } from "@deskohub/workspace-customer-api/referral-code";
+import { Context, Effect, Layer, Schema } from "effect";
 import { SqlError } from "effect/sql";
+import type { saveAccountLocalePreference } from "@/features/account/backend/customer-locale-preference";
 import { m } from "@/features/i18n";
-import {
-  ReferralError,
-  type ReferralOutage,
-} from "@/features/referrals/contracts";
+import { ReferralError } from "@/features/referrals/contracts";
 import { ReferralService as Referrals } from "@/features/referrals/referral.service";
 import { referralCodeCookieName } from "@/features/referrals/referral-code-cookie";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
@@ -18,13 +18,20 @@ import {
   type InMemoryReferralCookie,
   RememberedReferral,
 } from "@/features/referrals/remembered-referral.service";
+import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
+import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { mockWorkspaceActionRequest } from "@/shared/testing/workspace-action-request.test-utils";
 import {
   CurrentCustomerAccount,
   requireVerifiedIdentity,
 } from "./backend/current-customer-account";
 import type { CustomerAccountSession } from "./backend/customer-authentication.service";
-import { CustomerAccountAccessError } from "./customer-account";
+import { testSessionProfile } from "./backend/customer-authentication.test-utils";
+import {
+  CustomerAccountAccessError,
+  customerAccountIdSchema,
+  type LinkedCustomerAccount,
+} from "./customer-account";
 
 const customerEmail = testEmailAddress("ada");
 const sneakyEmail = testEmailAddress("sneaky");
@@ -56,16 +63,14 @@ mock.module("@/features/account/server/auth.server", () => ({
   },
 }));
 
-type Session = {
-  readonly accountId: "@test/account-id";
-  readonly email: string;
-  readonly deletionRequested: boolean;
-};
-
-let currentUser: Effect.Effect<Session | null, unknown>;
+type SessionRead = Effect.Effect<
+  CustomerAccountSession | null,
+  CustomerAccountAccessError
+>;
+let currentUser: SessionRead;
 const Authentication = Context.Service<
   Authentication,
-  { readonly currentUser: Effect.Effect<Session | null, unknown> }
+  { readonly currentUser: SessionRead }
 >()("@test/ActionsAuthentication");
 Object.assign(Authentication, {
   Default: Layer.effect(
@@ -94,17 +99,7 @@ type ProfileInput = {
   phone?: string;
 };
 
-type Resolution =
-  | {
-      readonly accountId: "@test/account-id";
-      readonly dotyposCustomerId: string;
-    }
-  | { readonly reason: string; readonly linkReason?: string };
-
-let resolve: Effect.Effect<
-  Extract<Resolution, { accountId: string }>,
-  Extract<Resolution, { reason: string }>
->;
+let resolve: Effect.Effect<LinkedCustomerAccount, CustomerAccountAccessError>;
 type SignupIntent = {
   readonly promotionCodeId: string;
   readonly referrerDotyposCustomerId: string;
@@ -220,17 +215,13 @@ mock.module("@/features/account/backend/customer-profile.service", () => ({
 }));
 
 const referralCalls: { op: string; args: unknown }[] = [];
-let availableReferralCode: Effect.Effect<
-  string | undefined,
-  ReferralError | ReferralOutage
+let availableReferralCode: ReturnType<
+  Referrals["Service"]["findAvailableCode"]
 >;
-let referralAcceptance: Effect.Effect<
-  { readonly kind: "accepted" },
-  ReferralError
->;
-let settledReferral: Effect.Effect<boolean, ReferralOutage>;
+let referralAcceptance: ReturnType<Referrals["Service"]["acceptReferral"]>;
+let settledReferral: ReturnType<Referrals["Service"]["hasSettledReferral"]>;
 Object.assign(Referrals, {
-  Live: Layer.succeed(Referrals, {
+  Live: Layer.mock(Referrals, {
     findAvailableCode: (input) => {
       referralCalls.push({ op: "findAvailableCode", args: input });
       return availableReferralCode;
@@ -247,12 +238,16 @@ Object.assign(Referrals, {
 });
 mock.module("@/features/referrals", () => ({ ReferralService: Referrals }));
 
+type ResolvedStanding = Effect.Success<
+  CurrentCustomerAccount["Service"]["resolve"]
+>;
+
 /**
  * The standing the account would report: no session is signed out, and
  * `resolve`'s answer becomes the standing the projection reads back as that
  * same answer (see `linked-customer-account.test.ts`).
  */
-const resolvedStanding = (session: Session) =>
+const resolvedStanding = (session: CustomerAccountSession) =>
   resolve.pipe(
     Effect.map((account) => ({
       kind: "linked" as const,
@@ -261,7 +256,7 @@ const resolvedStanding = (session: Session) =>
       session,
       reviewMarker: "absent" as const,
     })),
-    Effect.catch((failure) => {
+    Effect.catch((failure): Effect.Effect<ResolvedStanding> => {
       const facts = { session, reviewMarker: "absent" as const };
       if (failure.reason === "unauthenticated") {
         return Effect.succeed({ kind: "signed-out" as const });
@@ -279,6 +274,10 @@ const resolvedStanding = (session: Session) =>
       if (failure.linkReason === "deletion-requested") {
         return Effect.succeed({ kind: "deletion-pending" as const, ...facts });
       }
+      assert(
+        failure.linkReason,
+        "Expected a reason for the required account link"
+      );
       return Effect.succeed({
         kind: "support-required" as const,
         reason: failure.linkReason,
@@ -298,11 +297,9 @@ CurrentCustomerAccount.Live = Layer.mock(CurrentCustomerAccount, {
     )
   ),
   requireActive: Effect.suspend(() => currentUser).pipe(
-    Effect.flatMap((session) =>
-      requireVerifiedIdentity(session as CustomerAccountSession | null)
-    )
+    Effect.flatMap(requireVerifiedIdentity)
   ),
-} as never);
+});
 // The remembered code lives in the request's referral cookie.
 const rememberedReferralCookie: InMemoryReferralCookie = {
   get value() {
@@ -321,21 +318,18 @@ RememberedReferral.Cookies = Layer.unwrap(
   )
 );
 
-type PreferenceSave = {
-  readonly accountId: "@test/account-id";
-  readonly locale: "cs-CZ" | "en-US";
-};
-
-let preferenceSaveEffect: Effect.Effect<void, unknown> =
+let preferenceSaveEffect: ReturnType<typeof saveAccountLocalePreference> =
   Effect.succeed(undefined);
-let preferenceSaveCalls: PreferenceSave[] = [];
+let preferenceSaveCalls: Array<{
+  readonly accountId: Parameters<typeof saveAccountLocalePreference>[0];
+  readonly locale: Parameters<typeof saveAccountLocalePreference>[1];
+}> = [];
 
 mock.module("@/features/account/backend/customer-locale-preference", () => ({
-  saveAccountLocalePreference: (accountId: string, locale: string) => {
-    preferenceSaveCalls.push({
-      accountId: accountId as "@test/account-id",
-      locale: locale as "cs-CZ" | "en-US",
-    });
+  saveAccountLocalePreference: (
+    ...[accountId, locale]: Parameters<typeof saveAccountLocalePreference>
+  ) => {
+    preferenceSaveCalls.push({ accountId, locale });
     return preferenceSaveEffect;
   },
 }));
@@ -381,17 +375,20 @@ const syntheticAresCompany = {
 };
 
 const activeSession = {
-  accountId: "@test/account-id" as const,
-  email: customerEmail,
+  accountId: Schema.decodeSync(customerAccountIdSchema)("@test/account-id"),
+  email: Schema.decodeSync(reservationCustomerEmailSchema)(customerEmail),
   deletionRequested: false,
-};
+  ...testSessionProfile,
+} satisfies CustomerAccountSession;
 
 describe("account actions", () => {
   beforeEach(() => {
     profileCalls.length = 0;
     referralCalls.length = 0;
     storedIntent = undefined;
-    availableReferralCode = Effect.succeed("RFL12345");
+    availableReferralCode = Effect.succeed(
+      Schema.decodeSync(ReferralCode)("RFL12345")
+    );
     referralAcceptance = Effect.succeed({ kind: "accepted" });
     settledReferral = Effect.succeed(false);
     rememberedReferralWritable = true;
@@ -403,8 +400,8 @@ describe("account actions", () => {
     );
     currentUser = Effect.succeed(activeSession);
     resolve = Effect.succeed({
-      accountId: "@test/account-id",
-      dotyposCustomerId: "60111",
+      accountId: activeSession.accountId,
+      dotyposCustomerId: Schema.decodeSync(dotyposCustomerIdSchema)("60111"),
     });
     deleteUser = () => Promise.resolve({ success: true });
     preferenceSaveEffect = Effect.succeed(undefined);
@@ -427,10 +424,8 @@ describe("account actions", () => {
 
     expect(result).toEqual({ data: { status: "completed" } });
     expect(profileCalls.map(({ op }) => op)).toEqual(["create"]);
-    expect(profileCalls[0]!.args).toEqual([
-      "@test/account-id",
-      { firstName: "Ada" },
-      undefined,
+    expect(profileCalls.map(({ args }) => args)).toEqual([
+      ["@test/account-id", { firstName: "Ada" }, undefined],
     ]);
     expect(revalidatePath).not.toHaveBeenCalled();
   });
@@ -439,8 +434,10 @@ describe("account actions", () => {
     resolve = Effect.suspend(() =>
       profileCalls.some(({ op }) => op === "create")
         ? Effect.succeed({
-            accountId: "@test/account-id" as const,
-            dotyposCustomerId: "60222",
+            accountId: activeSession.accountId,
+            dotyposCustomerId: Schema.decodeSync(dotyposCustomerIdSchema)(
+              "60222"
+            ),
           })
         : Effect.fail(
             new CustomerAccountAccessError({
@@ -740,10 +737,11 @@ describe("account actions", () => {
   test("rejects an email in the profile input and never forwards profile fields containing one", async () => {
     const { updateCustomerProfile } = await importActions();
 
-    const result = await updateCustomerProfile({
+    const malformedProfile = {
       firstName: "Ada",
       email: sneakyEmail,
-    } as never);
+    };
+    const result = await updateCustomerProfile(malformedProfile);
 
     expect(result.validationErrors).toBeTruthy();
     expect(profileCalls).toHaveLength(0);
@@ -863,7 +861,7 @@ describe("account actions", () => {
 
     expect(result).toEqual({ data: { status: "saved" } });
     expect(preferenceSaveCalls).toEqual([
-      { accountId: "@test/account-id", locale: "cs-CZ" },
+      { accountId: activeSession.accountId, locale: "cs-CZ" },
     ]);
     expect(profileCalls).toHaveLength(0);
     expect(revalidatePath).not.toHaveBeenCalled();
@@ -911,7 +909,7 @@ describe("account actions", () => {
 
     expect(result).toEqual({ data: { status: "deleted" } });
     expect(seen).toHaveLength(1);
-    expect(String(seen[0]!.headers.get("referer"))).toContain("deskohub.test");
+    expect(seen[0]?.headers.get("referer")).toContain("deskohub.test");
     expect(revalidatePath).toHaveBeenCalledWith("/en-US/account", "layout");
   });
 
@@ -1002,8 +1000,8 @@ describe("account ARES business lookup action", () => {
     revalidatePath.mockClear();
     currentUser = Effect.succeed(activeSession);
     resolve = Effect.succeed({
-      accountId: "@test/account-id",
-      dotyposCustomerId: "60111",
+      accountId: activeSession.accountId,
+      dotyposCustomerId: Schema.decodeSync(dotyposCustomerIdSchema)("60111"),
     });
     lookupCalls = [];
     lookupOutcome = Effect.succeed(syntheticAresCompany);

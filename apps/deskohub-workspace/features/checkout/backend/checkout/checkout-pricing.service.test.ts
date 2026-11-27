@@ -12,6 +12,7 @@ import {
   type CanonicalPromotionCode,
   canonicalPromotionCodeSchema,
   type DiscountAdvertisementInput,
+  type DiscountQuote,
   discountAdvertisementQuoteCodec,
   discountIdSchema,
   discountQuoteCodec,
@@ -22,7 +23,10 @@ import {
   PromotionCodeUnavailableError,
 } from "@/features/discounts/errors";
 import type { Locale } from "@/features/i18n";
-import { getCoworkAdvertisedPriceReservation } from "@/features/reservation/cowork-reservation";
+import {
+  getCoworkAdvertisedPriceReservation,
+  normalizedCoworkReservationOrderSchema,
+} from "@/features/reservation/cowork-reservation";
 import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
 import {
   getMeetingRoomAdvertisedPriceReservation,
@@ -38,6 +42,10 @@ import {
   tableReservationOrderSchema,
 } from "@/features/reservation/table-reservation";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
+import {
+  localDateTimeSchema,
+  plainDateStringSchema,
+} from "@/shared/utils/temporal";
 import type {
   CheckoutPricingService as CheckoutPricing,
   ICheckoutPricingService,
@@ -47,6 +55,7 @@ mock.module("server-only", () => ({}));
 
 const { buildAdvertisedPriceState } = await import("./advertised-price-state");
 const { CheckoutPricingService } = await import("./checkout-pricing.service");
+const { decodeSignedPayStatePricing } = await import("./pay-state");
 
 const contact = {
   name: "Ada Lovelace",
@@ -149,20 +158,21 @@ const advertise = (
     Effect.runPromise
   );
 
-const coworkOrder = {
-  kind: "cowork" as const,
-  entryTier: "basic" as const,
+const coworkOrder = Schema.decodeSync(normalizedCoworkReservationOrderSchema)({
+  kind: "cowork",
+  entryTier: "basic",
   coffee: true,
   date: "2099-07-30",
   ...contact,
-};
+});
 
 const meetingRoomOrder = await normalizeMeetingRoomReservationOrder({
   kind: "meeting-room",
   duration: { unit: "hour", amount: 4 },
-  reservationDate: "2099-06-10",
-  startsAt: "2099-06-10T10:00",
-  endsAt: "2099-06-10T14:00",
+  reservationDate: plainDateStringSchema.make("2099-06-10"),
+  startsAt: localDateTimeSchema.make("2099-06-10T10:00"),
+  endsAt: localDateTimeSchema.make("2099-06-10T14:00"),
+  billing: { purpose: "personal", invoice: "none" },
   ...contact,
 }).pipe(Effect.runPromise);
 
@@ -221,7 +231,10 @@ const families = [
     kind: "cowork",
     order: coworkOrder,
     /** The same family with an input that changes the price. */
-    otherOrder: { ...coworkOrder, coffee: false },
+    otherOrder: Schema.decodeSync(normalizedCoworkReservationOrderSchema)({
+      ...coworkOrder,
+      coffee: false,
+    }),
     advertise: (locale: Locale) =>
       advertise({
         reservation: getCoworkAdvertisedPriceReservation(coworkOrder),
@@ -453,10 +466,7 @@ const displayed =
     });
 
 /** A quote with one more 10% discount, such as a customer discount or a code. */
-const withExtraDiscount = (
-  quote: ReturnType<typeof halfOffSale>,
-  label: string
-) => {
+const withExtraDiscount = (quote: DiscountQuote, label: string) => {
   const amount = {
     ...quote.discountedSubtotal,
     value: quote.discountedSubtotal.value / 10,
@@ -861,17 +871,22 @@ describe("CheckoutPricingService.applyDiscountCode", () => {
           (({ baseQuote }) =>
             Effect.succeed(withExtraDiscount(baseQuote, "Member code")))
       );
+      const displayedPricing = await Effect.runPromise(
+        decodeSignedPayStatePricing({
+          reservation: family.order,
+          quote: displayedQuote,
+        })
+      );
       const result = await run(
         CheckoutPricingService.pipe(
           Effect.flatMap((pricing) =>
             pricing.applyDiscountCode({
-              reservation: family.order,
+              ...displayedPricing,
               dotyposCustomerId,
               locale: "en-US",
-              quote: displayedQuote,
               bookedAt,
               submittedCode,
-            } as Parameters<ICheckoutPricingService["applyDiscountCode"]>[0])
+            })
           ),
           Effect.result
         ),
@@ -1013,17 +1028,22 @@ describe("CheckoutPricingService.affirmForPayment", () => {
         value: input.acceptedTotal?.(signedTotal.value) ?? signedTotal.value,
       };
       const affirmDisplayedDiscounts = mock(input.affirmDisplayedDiscounts);
+      const signedPricing = await Effect.runPromise(
+        decodeSignedPayStatePricing({
+          reservation: family.order,
+          quote: signed,
+        })
+      );
       const result = await run(
         CheckoutPricingService.pipe(
           Effect.flatMap((pricing) =>
             pricing.affirmForPayment({
-              reservation: family.order,
+              ...signedPricing,
               dotyposCustomerId,
               locale: "en-US",
-              quote: signed,
               acceptedTotal,
               bookedAt,
-            } as Parameters<ICheckoutPricingService["affirmForPayment"]>[0])
+            })
           ),
           Effect.result
         ),
@@ -1118,16 +1138,21 @@ describe("CheckoutPricingService.affirmForPayment", () => {
 
     test("re-prices for payment without judging the signed price", async () => {
       const signed = (await family.advertise("en-US")).quote;
+      const signedPricing = await Effect.runPromise(
+        decodeSignedPayStatePricing({
+          reservation: family.order,
+          quote: signed,
+        })
+      );
       const result = await run(
         CheckoutPricingService.pipe(
           Effect.flatMap((pricing) =>
             pricing.repriceForPayment({
-              reservation: family.order,
+              ...signedPricing,
               dotyposCustomerId,
               locale: "en-US",
-              quote: signed,
               bookedAt,
-            } as Parameters<ICheckoutPricingService["repriceForPayment"]>[0])
+            })
           )
         ),
         DiscountServiceMock({ affirmDisplayedDiscounts: displayed(noSale) })

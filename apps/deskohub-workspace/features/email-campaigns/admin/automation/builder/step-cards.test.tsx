@@ -7,6 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import {
   AdministrationCampaignDetail,
   automationOneOffCampaignGapMaxDays,
@@ -89,10 +90,13 @@ const renderWait = (
       />
     </RouteLocaleProvider>
   );
-  const mode = (value: WaitStep["wait"]["_tag"]) =>
-    view
+  const mode = (value: WaitStep["wait"]["_tag"]) => {
+    const radio = view
       .getAllByRole("radio")
-      .find((radio) => radio.getAttribute("value") === value) as HTMLElement;
+      .find((candidate) => candidate.getAttribute("value") === value);
+    assert(radio, `Expected the ${value} radio button`);
+    return radio;
+  };
   const count = () =>
     view.queryByRole("spinbutton", {
       name: m.emailAutomationFlowWaitCountLabel({}, { locale }),
@@ -119,8 +123,10 @@ test("a duration wait shows its count and unit, not a calendar", () => {
 test("editing the count keeps the duration's unit", () => {
   const { onChange, count } = renderWait(durationWait);
 
+  const countInput = count();
+  assert(countInput, "Expected the wait count input");
   act(() => {
-    fireEvent.change(count() as HTMLElement, { target: { value: "3" } });
+    fireEvent.change(countInput, { target: { value: "3" } });
   });
 
   expect(onChange.mock.calls).toEqual([
@@ -155,9 +161,9 @@ test("editing the calendar emits the new expression and previews it", () => {
   const { onChange, hours } = renderWait(calendarWait);
 
   act(() => {
-    fireEvent.click(
-      within(hours() as HTMLElement).getByRole("button", { name: "11:00" })
-    );
+    const hoursGroup = hours();
+    assert(hoursGroup, "Expected the calendar hours group");
+    fireEvent.click(within(hoursGroup).getByRole("button", { name: "11:00" }));
   });
 
   const expression = { hours: [10, 11] };
@@ -194,7 +200,8 @@ test("an invalid count is described by its mounted error", () => {
     { ...durationWait, wait: { _tag: "Duration", count: 0, unit: "hour" } },
     (field) => (field === "count" ? "Expected a positive count" : undefined)
   );
-  const count = invalid.count() as HTMLElement;
+  const count = invalid.count();
+  assert(count, "Expected the wait count input");
   expect(count.getAttribute("aria-invalid")).toBe("true");
   const error = invalid.view.getByRole("alert");
   expect(count.getAttribute("aria-describedby")).toBe(error.id);
@@ -266,10 +273,12 @@ const renderSend = (
     view.getByRole("region", {
       name: m.emailAutomationFlowSendPoliciesTitle({}, { locale }),
     });
-  const click = (element: HTMLElement | null) =>
-    act(() => {
-      fireEvent.click(element as HTMLElement);
+  const click = (element: HTMLElement | null) => {
+    assert(element, "Expected a sending policy control");
+    return act(() => {
+      fireEvent.click(element);
     });
+  };
   return { view, onChange, controls, summary, click };
 };
 
@@ -341,8 +350,10 @@ describe("SendStepCard delivery rules", () => {
   test("editing the gap's days keeps the other rules", () => {
     const { onChange, controls } = renderSend(ruledSend);
 
+    const days = controls.gapDays();
+    assert(days, "Expected the campaign gap input");
     act(() => {
-      fireEvent.change(controls.gapDays() as HTMLElement, {
+      fireEvent.change(days, {
         target: { value: "30" },
       });
     });
@@ -373,7 +384,8 @@ describe("SendStepCard delivery rules", () => {
           field === "oneOffCampaignGap.days" ? "Expected 1 to 90" : undefined,
       }
     );
-    const days = controls.gapDays() as HTMLElement;
+    const days = controls.gapDays();
+    assert(days, "Expected the campaign gap input");
     const error = view.getByRole("alert");
 
     expect(days.getAttribute("aria-invalid")).toBe("true");

@@ -10,7 +10,10 @@ import {
 
 mock.module("server-only", () => ({}));
 
-const { PayState, signedPayStateSchema } = await import("./pay-state");
+const { PayState, sealPayState, signedPayStateSchema } = await import(
+  "./pay-state"
+);
+const { buildCheckoutPayPath } = await import("./checkout-pay-url");
 const { openAdvertisedPriceState, sealAdvertisedPriceState } = await import(
   "./advertised-price-state"
 );
@@ -261,80 +264,47 @@ const stableHeldPayStateToken =
 const toJson = <A>(value: A): unknown => JSON.parse(JSON.stringify(value));
 
 describe("Pay state token format", () => {
-  test("issues an agent's stable Pay link to the pinned URL", () => {
-    const pinned =
-      Schema.decodeUnknownSync(signedPayStateSchema)(encodedPayState);
-    const issued = run(
-      PayState.issue(
-        {
-          locale: pinned.locale,
-          reservation: pinned.reservation,
-          quote: pinned.quote,
-          orderId: pinned.orderId,
-          bookedAt: pinned.bookedAt,
-          checkoutSessionId: pinned.checkoutSessionId,
-        } as Parameters<typeof PayState.issue>[0],
-        { stableAt: Temporal.Instant.from(issuedAt.toISOString()) }
-      )
-    );
-    const state = run(PayState.open(issued.payStateToken), {
-      at: beforeExpiry(),
-    });
+  test("reseals an agent's legacy stable Pay link to the pinned URL", () => {
+    const state = run(PayState.open(payStateToken), { at: beforeExpiry() });
+    const token = run(sealPayState(state, { deterministic: true }));
 
-    expect(toJson(state)).toEqual(toJson(pinned));
-    expect(issued.payStateToken).toBe(stablePayStateToken);
-    expect(issued.payUrl).toBe(
+    expect(toJson(state)).toEqual(encodedPayState);
+    expect(token).toBe(stablePayStateToken);
+    expect(
+      buildCheckoutPayPath(state.locale, token, { orderId: state.orderId })
+    ).toBe(
       `/en-US/checkout/pay?payState=${stablePayStateToken}&orderId=golden-order-id`
     );
   });
 
-  test("issues a stable link carrying every signed code to the URL issued before PayState", () => {
-    const pinned = Schema.decodeUnknownSync(signedPayStateSchema)(
-      encodedCarryingPayState
-    );
-    const issued = run(
-      PayState.issue(
-        {
-          locale: pinned.locale,
-          reservation: pinned.reservation,
-          quote: pinned.quote,
-          orderId: pinned.orderId,
-          bookedAt: pinned.bookedAt,
-          checkoutSessionId: pinned.checkoutSessionId,
-          submittedCode: pinned.submittedCode,
-          submittedCodeDiscountId: pinned.submittedCodeDiscountId,
-          requestedDiscountCode: pinned.requestedDiscountCode,
-          referralCode: pinned.referralCode,
-          changedKeys: pinned.changedKeys,
-        } as Parameters<typeof PayState.issue>[0],
-        { stableAt: Temporal.Instant.from(issuedAt.toISOString()) }
-      )
-    );
+  test("reseals a stable link carrying every signed code to the URL issued before PayState", () => {
+    const pinned = run(PayState.open(carryingPayStateToken), {
+      at: beforeExpiry(),
+    });
+    const token = run(sealPayState(pinned, { deterministic: true }));
 
-    expect(issued.payStateToken).toBe(stableCarryingPayStateToken);
-    expect(issued.payUrl).toBe(stableCarryingPayUrl);
+    expect(token).toBe(stableCarryingPayStateToken);
+    expect(
+      buildCheckoutPayPath(pinned.locale, token, { orderId: pinned.orderId })
+    ).toBe(stableCarryingPayUrl);
   });
 
   test("issues a stable link carrying the hold deadline to the URL main issues", () => {
-    const pinned =
-      Schema.decodeUnknownSync(signedPayStateSchema)(encodedHeldPayState);
+    const pinned = run(PayState.open(heldPayStateToken), {
+      at: beforeExpiry(),
+    });
+    const { holdExpiresAt } = pinned;
+    if (holdExpiresAt === undefined) {
+      throw new Error(
+        "Expected the golden Pay state to carry its hold deadline"
+      );
+    }
     const issued = run(
       PayState.issue(
+        { ...pinned, holdExpiresAt },
         {
-          locale: pinned.locale,
-          reservation: pinned.reservation,
-          quote: pinned.quote,
-          orderId: pinned.orderId,
-          bookedAt: pinned.bookedAt,
-          holdExpiresAt: encodedHeldPayState.holdExpiresAt,
-          checkoutSessionId: pinned.checkoutSessionId,
-          submittedCode: pinned.submittedCode,
-          submittedCodeDiscountId: pinned.submittedCodeDiscountId,
-          requestedDiscountCode: pinned.requestedDiscountCode,
-          referralCode: pinned.referralCode,
-          changedKeys: pinned.changedKeys,
-        } as Parameters<typeof PayState.issue>[0],
-        { stableAt: Temporal.Instant.from(issuedAt.toISOString()) }
+          stableAt: Temporal.Instant.from(issuedAt.toISOString()),
+        }
       )
     );
 
@@ -365,9 +335,9 @@ describe("Pay state token format", () => {
   test("opens pinned tokens until they expire", () => {
     for (const token of [payStateToken, stablePayStateToken]) {
       const opened = run(PayState.open(token), { at: beforeExpiry() });
-      expect(Schema.encodeUnknownSync(signedPayStateSchema)(opened)).toEqual(
-        encodedPayState
-      );
+      expect<unknown>(
+        Schema.encodeUnknownSync(signedPayStateSchema)(opened)
+      ).toEqual(encodedPayState);
 
       const expired = run(Effect.result(PayState.open(token)), {
         at: afterExpiry(),

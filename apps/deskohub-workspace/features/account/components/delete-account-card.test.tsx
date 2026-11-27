@@ -7,9 +7,11 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import React from "react";
+import type * as AccountActions from "@/features/account/actions";
 import { type Locale, m } from "@/features/i18n";
 import {
   UnsavedChangesProvider,
@@ -23,14 +25,14 @@ import {
 
 const adaAddress = testEmailAddress("ada");
 
-type ActionResult = {
-  data?: { status?: string };
-  serverError?: string;
-  validationErrors?: unknown;
+type ActionResult<Data> = {
+  readonly data?: Data;
+  readonly serverError?: string;
+  readonly validationErrors?: unknown;
 };
 
-const deleteCustomerAccount = mock(
-  (): Promise<ActionResult> => Promise.resolve({ data: { status: "deleted" } })
+const deleteCustomerAccount = mock<typeof AccountActions.deleteCustomerAccount>(
+  () => Promise.resolve({ data: { status: "deleted" } })
 );
 const analyticsEvents: string[] = [];
 const accountExitLeft = mock(() => {
@@ -77,29 +79,61 @@ mock.module("@/features/account/auth.client", () => ({
   },
 }));
 
-// Mirrors next-safe-action 8 as wrapped by useWorkspaceAction: a thrown
-// (transport) failure settles as "hasErrored" with an empty result and fires
-// both onError (with thrownError) and onTransportError, and reset() discards
-// the outcome of an in-flight request.
+// A thrown action settles with an empty result and reports the transport
+// failure through the configured callback. Reset discards in-flight outcomes.
 mock.module("@/shared/utils/use-workspace-action", () => ({
-  useWorkspaceAction: (
-    action: (input: never) => Promise<unknown>,
+  useWorkspaceAction: <Input, Data>(
+    action: (input: Input) => Promise<ActionResult<Data> | undefined>,
     options?: {
-      readonly onSuccess?: (args: { readonly data?: unknown }) => void;
+      readonly onSuccess?: (args: {
+        readonly data: Data | undefined;
+        readonly input: Input;
+      }) => void;
       readonly onError?: (args: {
-        readonly error: ActionResult & { readonly thrownError?: unknown };
+        readonly error: ActionResult<Data> & { readonly thrownError?: unknown };
+        readonly input: Input;
       }) => void;
       readonly onTransportError?: (args: {
         readonly error: unknown;
-        readonly input: never;
+        readonly input: Input;
       }) => void;
     }
   ) => {
-    const [result, setResult] = React.useState<ActionResult>({});
+    const [result, setResult] = React.useState<ActionResult<Data>>({});
     const [status, setStatus] = React.useState<
       "idle" | "executing" | "hasSucceeded" | "hasErrored"
     >("idle");
     const requestId = React.useRef(0);
+
+    const executeAction = async (input: Input) => {
+      const thisRequestId = ++requestId.current;
+      setStatus("executing");
+      try {
+        const nextResult: ActionResult<Data> = (await action(input)) ?? {};
+        if (thisRequestId !== requestId.current) return;
+        setResult(nextResult);
+        if (
+          nextResult.serverError !== undefined ||
+          nextResult.validationErrors !== undefined
+        ) {
+          setStatus("hasErrored");
+          options?.onError?.({ error: nextResult, input });
+        } else {
+          setStatus("hasSucceeded");
+          options?.onSuccess?.({ data: nextResult.data, input });
+        }
+      } catch (error) {
+        if (thisRequestId !== requestId.current) return;
+        setResult({});
+        setStatus("hasErrored");
+        if (options?.onTransportError) {
+          options.onTransportError({ error, input });
+        } else {
+          options?.onError?.({ error: { thrownError: error }, input });
+        }
+      }
+    };
+
     return {
       result,
       status,
@@ -107,32 +141,8 @@ mock.module("@/shared/utils/use-workspace-action", () => ({
       isExecuting: status === "executing",
       hasSucceeded: status === "hasSucceeded",
       hasErrored: status === "hasErrored",
-      execute: (input: never) => {
-        const thisRequestId = ++requestId.current;
-        setStatus("executing");
-        void action(input)
-          .then((outcome) => {
-            if (thisRequestId !== requestId.current) return;
-            const result = (outcome ?? {}) as ActionResult;
-            setResult(result);
-            if (
-              result.serverError !== undefined ||
-              result.validationErrors !== undefined
-            ) {
-              setStatus("hasErrored");
-              options?.onError?.({ error: result });
-            } else {
-              setStatus("hasSucceeded");
-              options?.onSuccess?.({ data: result.data });
-            }
-          })
-          .catch((error) => {
-            options?.onTransportError?.({ error, input });
-            if (thisRequestId !== requestId.current) return;
-            setResult({});
-            setStatus("hasErrored");
-            options?.onError?.({ error: { thrownError: error } });
-          });
+      execute: (input: Input) => {
+        void executeAction(input);
       },
       reset: () => {
         requestId.current += 1;
@@ -209,8 +219,9 @@ describe("DeleteAccountCard", () => {
     );
     await openDialog(view);
 
-    const confirm = view.getByText("Delete permanently") as HTMLButtonElement;
-    expect(confirm.disabled).toBe(true);
+    expect(
+      view.getByRole("button", { name: "Delete permanently" })
+    ).toHaveProperty("disabled", true);
 
     const checkbox = view.getByLabelText(
       "I understand that my account and every session will be permanently deleted."
@@ -219,8 +230,8 @@ describe("DeleteAccountCard", () => {
       fireEvent.click(checkbox);
     });
     expect(
-      (view.getByText("Delete permanently") as HTMLButtonElement).disabled
-    ).toBe(false);
+      view.getByRole("button", { name: "Delete permanently" })
+    ).toHaveProperty("disabled", false);
 
     expect(view.getByText("Keep account")).toBeTruthy();
   });
@@ -234,10 +245,10 @@ describe("DeleteAccountCard", () => {
 
     let assigned: string | null = null;
     const originalAssign = window.location.assign;
-    window.location.assign = ((href: string) => {
+    window.location.assign = (href) => {
       analyticsEvents.push("navigation");
-      assigned = href;
-    }) as typeof window.location.assign;
+      assigned = String(href);
+    };
 
     const view = render(
       <DeleteAccountCard
@@ -272,9 +283,9 @@ describe("DeleteAccountCard", () => {
 
     let assigned: string | null = null;
     const originalAssign = window.location.assign;
-    window.location.assign = ((href: string) => {
-      assigned = href;
-    }) as typeof window.location.assign;
+    window.location.assign = (href) => {
+      assigned = String(href);
+    };
 
     try {
       const view = render(
@@ -493,9 +504,9 @@ describe("DeleteAccountCard", () => {
     );
     const originalReplace = window.location.replace;
     const navigations: string[] = [];
-    window.location.replace = ((href: string) => {
-      navigations.push(href);
-    }) as typeof window.location.replace;
+    window.location.replace = (href) => {
+      navigations.push(String(href));
+    };
     const { DeleteAccountCard } = await import("./delete-account-card");
 
     const view = render(
@@ -524,9 +535,7 @@ describe("DeleteAccountCard", () => {
       view.getByText(m.accountDeletionReauthCodeTitle({}, { locale: "en-US" }))
     ).toBeTruthy();
     const codeInput = () =>
-      view.getByLabelText(
-        m.accountSignInCodeLabel({}, { locale: "en-US" })
-      ) as HTMLInputElement;
+      view.getByLabelText(m.accountSignInCodeLabel({}, { locale: "en-US" }));
 
     await act(async () => {
       // This file loads React before happy-dom, so typed changes never reach
@@ -632,19 +641,16 @@ describe("DeleteAccountCard", () => {
     );
     // Screen readers announce changes to a region that was already mounted.
     const announcement = linkSent.closest("[aria-live]");
-    expect(announcement).not.toBeNull();
-    expect(liveRegionsBeforeFallback).toContain(announcement as Element);
+    assert(announcement);
+    expect(liveRegionsBeforeFallback).toContain(announcement);
   });
 
   test("keeps the reauthentication request disabled until the link request resolves", async () => {
     deleteCustomerAccount.mockImplementationOnce(() =>
       Promise.resolve({ data: { status: "reauthentication-required" } })
     );
-    let resolveLink!: (result: { error: null }) => void;
-    const pendingLink = new Promise<{ error: null }>((resolve) => {
-      resolveLink = resolve;
-    });
-    signInMagicLink.mockImplementationOnce(() => pendingLink);
+    const pendingLink = Promise.withResolvers<AuthResponse>();
+    signInMagicLink.mockImplementationOnce(() => pendingLink.promise);
     const { DeleteAccountCard } = await import("./delete-account-card");
 
     const view = render(
@@ -675,18 +681,18 @@ describe("DeleteAccountCard", () => {
     expect(dispatchBeforeUnload().defaultPrevented).toBe(true);
     const send = view.getByRole("button", {
       name: "Confirm by email",
-    }) as HTMLButtonElement;
+    });
     await act(async () => {
       fireEvent.click(send);
       await Promise.resolve();
     });
 
-    expect(send.disabled).toBe(true);
+    expect(send).toHaveProperty("disabled", true);
     expect(signInMagicLink).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      resolveLink({ error: null });
-      await pendingLink;
+      pendingLink.resolve({ error: null });
+      await pendingLink.promise;
     });
 
     expect(view.getByText(/a new link is on its way/)).toBeTruthy();
@@ -735,12 +741,10 @@ describe("DeleteAccountCard", () => {
       "We could not send the link. Please try again."
     );
     expect(
-      (
-        view.getByRole("button", {
-          name: "Confirm by email",
-        }) as HTMLButtonElement
-      ).disabled
-    ).toBe(false);
+      view.getByRole("button", {
+        name: "Confirm by email",
+      })
+    ).toHaveProperty("disabled", false);
     expect(view.queryByText(/a new link is on its way/)).toBeNull();
   });
 
@@ -748,12 +752,9 @@ describe("DeleteAccountCard", () => {
     deleteCustomerAccount.mockImplementationOnce(() =>
       Promise.resolve({ data: { status: "reauthentication-required" } })
     );
-    let rejectLink!: (reason: Error) => void;
-    const rejectedLink = new Promise<{ error: null }>((_, reject) => {
-      rejectLink = reject;
-    });
+    const rejectedLink = Promise.withResolvers<AuthResponse>();
     signInMagicLink
-      .mockImplementationOnce(() => rejectedLink)
+      .mockImplementationOnce(() => rejectedLink.promise)
       .mockImplementationOnce(() => Promise.resolve({ error: null }));
     const { DeleteAccountCard } = await import("./delete-account-card");
 
@@ -785,22 +786,22 @@ describe("DeleteAccountCard", () => {
     expect(dispatchBeforeUnload().defaultPrevented).toBe(true);
     const send = view.getByRole("button", {
       name: "Confirm by email",
-    }) as HTMLButtonElement;
+    });
     await act(async () => {
       fireEvent.click(send);
       await Promise.resolve();
     });
-    expect(send.disabled).toBe(true);
+    expect(send).toHaveProperty("disabled", true);
 
     await act(async () => {
-      rejectLink(new Error("provider failure"));
-      await rejectedLink.catch(() => undefined);
+      rejectedLink.reject(new Error("provider failure"));
+      await rejectedLink.promise.catch(() => undefined);
     });
 
     expect(view.getByRole("alert").textContent).toBe(
       "We could not send the link. Please try again."
     );
-    expect(send.disabled).toBe(false);
+    expect(send).toHaveProperty("disabled", false);
     expect(view.getByRole("alert").textContent).not.toContain(
       "provider failure"
     );
@@ -811,7 +812,7 @@ describe("DeleteAccountCard", () => {
 
     expect(signInMagicLink).toHaveBeenCalledTimes(2);
     expect(view.getByText(/a new link is on its way/)).toBeTruthy();
-    expect(send.disabled).toBe(true);
+    expect(send).toHaveProperty("disabled", true);
   });
 
   test("shows the retryable error when the deletion endpoint fails", async () => {
@@ -852,8 +853,8 @@ describe("DeleteAccountCard", () => {
       )
     ).toBeTruthy();
     expect(
-      (view.getByText("Delete permanently") as HTMLButtonElement).disabled
-    ).toBe(false);
+      view.getByRole("button", { name: "Delete permanently" })
+    ).toHaveProperty("disabled", false);
   });
 
   test("reports a refused deletion without offering a retry", async () => {
@@ -888,10 +889,10 @@ describe("DeleteAccountCard", () => {
         .querySelector("[role='dialog'] [aria-live='assertive']")
         ?.textContent?.trim()
     ).toBeTruthy();
-    expect(
-      (document.querySelector("#delete-account-confirm") as HTMLButtonElement)
-        .disabled
-    ).toBe(true);
+    expect(document.querySelector("#delete-account-confirm")).toHaveProperty(
+      "disabled",
+      true
+    );
   });
 
   test("shows an explicit server error while keeping the dialog open", async () => {
@@ -966,12 +967,10 @@ describe("DeleteAccountCard", () => {
     ).toBeTruthy();
     expect(view.queryByText("synthetic transport failure")).toBeNull();
     expect(
-      (
-        view.getByRole("button", {
-          name: m.accountDeletionConfirm({}, { locale: "en-US" }),
-        }) as HTMLButtonElement
-      ).disabled
-    ).toBe(false);
+      view.getByRole("button", {
+        name: m.accountDeletionConfirm({}, { locale: "en-US" }),
+      })
+    ).toHaveProperty("disabled", false);
     expect(view.getByRole("dialog")).toBeTruthy();
     expect(beginAccountExit).toHaveBeenCalledTimes(1);
     expect(accountExitLeft).not.toHaveBeenCalled();
@@ -979,18 +978,18 @@ describe("DeleteAccountCard", () => {
   });
 
   test("ignores close requests while deletion is in flight and still redirects", async () => {
-    let resolveDeletion!: (result: ActionResult) => void;
-    const pendingDeletion = new Promise<ActionResult>((resolve) => {
-      resolveDeletion = resolve;
-    });
-    deleteCustomerAccount.mockImplementationOnce(() => pendingDeletion);
+    const pendingDeletion =
+      Promise.withResolvers<
+        Awaited<ReturnType<typeof deleteCustomerAccount>>
+      >();
+    deleteCustomerAccount.mockImplementationOnce(() => pendingDeletion.promise);
     const { DeleteAccountCard } = await import("./delete-account-card");
 
     let assigned: string | null = null;
     const originalAssign = window.location.assign;
-    window.location.assign = ((href: string) => {
-      assigned = href;
-    }) as typeof window.location.assign;
+    window.location.assign = (href) => {
+      assigned = String(href);
+    };
 
     try {
       const view = render(
@@ -1018,8 +1017,8 @@ describe("DeleteAccountCard", () => {
 
       const cancel = view.getByRole("button", {
         name: m.accountDeletionCancel({}, { locale: "en-US" }),
-      }) as HTMLButtonElement;
-      expect(cancel.disabled).toBe(true);
+      });
+      expect(cancel).toHaveProperty("disabled", true);
 
       await act(async () => {
         fireEvent.keyDown(view.getByRole("dialog"), {
@@ -1031,8 +1030,8 @@ describe("DeleteAccountCard", () => {
       expect(workspaceRouterRefresh).not.toHaveBeenCalled();
 
       await act(async () => {
-        resolveDeletion({ data: { status: "deleted" } });
-        await pendingDeletion;
+        pendingDeletion.resolve({ data: { status: "deleted" } });
+        await pendingDeletion.promise;
       });
 
       expect(accountExitLeft).toHaveBeenCalledTimes(1);
@@ -1089,11 +1088,11 @@ describe("DeleteAccountCard", () => {
   });
 
   test("keeps the deletion confirmation disabled while the request is in flight", async () => {
-    let resolveDeletion!: (result: ActionResult) => void;
-    const pendingDeletion = new Promise<ActionResult>((resolve) => {
-      resolveDeletion = resolve;
-    });
-    deleteCustomerAccount.mockImplementationOnce(() => pendingDeletion);
+    const pendingDeletion =
+      Promise.withResolvers<
+        Awaited<ReturnType<typeof deleteCustomerAccount>>
+      >();
+    deleteCustomerAccount.mockImplementationOnce(() => pendingDeletion.promise);
     const { DeleteAccountCard } = await import("./delete-account-card");
 
     const view = render(
@@ -1114,25 +1113,23 @@ describe("DeleteAccountCard", () => {
 
     const confirm = view.getByRole("button", {
       name: m.accountDeletionConfirm({}, { locale: "en-US" }),
-    }) as HTMLButtonElement;
-    expect(confirm.disabled).toBe(false);
+    });
+    expect(confirm).toHaveProperty("disabled", false);
 
     await act(async () => {
       fireEvent.click(confirm);
     });
-    expect(confirm.disabled).toBe(true);
+    expect(confirm).toHaveProperty("disabled", true);
 
     await act(async () => {
-      resolveDeletion({ data: { status: "failed" } });
-      await pendingDeletion;
+      pendingDeletion.resolve({ data: { status: "failed" } });
+      await pendingDeletion.promise;
     });
     expect(
-      (
-        view.getByRole("button", {
-          name: m.accountDeletionConfirm({}, { locale: "en-US" }),
-        }) as HTMLButtonElement
-      ).disabled
-    ).toBe(false);
+      view.getByRole("button", {
+        name: m.accountDeletionConfirm({}, { locale: "en-US" }),
+      })
+    ).toHaveProperty("disabled", false);
     expect(beginAccountExit).toHaveBeenCalledTimes(1);
     expect(accountExitLeft).not.toHaveBeenCalled();
     expect(accountExitStayed).toHaveBeenCalledTimes(1);
@@ -1157,12 +1154,10 @@ describe("DeleteAccountCard", () => {
       );
     });
     expect(
-      (
-        view.getByRole("button", {
-          name: m.accountDeletionConfirm({}, { locale: "en-US" }),
-        }) as HTMLButtonElement
-      ).disabled
-    ).toBe(false);
+      view.getByRole("button", {
+        name: m.accountDeletionConfirm({}, { locale: "en-US" }),
+      })
+    ).toHaveProperty("disabled", false);
 
     await act(async () => {
       fireEvent.click(
@@ -1173,12 +1168,10 @@ describe("DeleteAccountCard", () => {
     });
     await openDialog(view);
     expect(
-      (
-        view.getByRole("button", {
-          name: m.accountDeletionConfirm({}, { locale: "en-US" }),
-        }) as HTMLButtonElement
-      ).disabled
-    ).toBe(true);
+      view.getByRole("button", {
+        name: m.accountDeletionConfirm({}, { locale: "en-US" }),
+      })
+    ).toHaveProperty("disabled", true);
   });
 
   test("renders the pending-deletion copy while a retryable deletion marker is set", async () => {

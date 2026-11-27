@@ -3,7 +3,10 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { customerAccountIdSchema } from "../customer-account";
 import {
   CustomerAccountRepository,
@@ -11,9 +14,10 @@ import {
 } from "./customer-account.repository";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 
 const isLegacy = async (accountId: string) => {
-  const { rows } = await testDatabase!.pool.query<{ legacy: boolean }>(
+  const { rows } = await database().pool.query<{ legacy: boolean }>(
     "select legacy from customer_accounts where id = $1",
     [accountId]
   );
@@ -26,7 +30,7 @@ describe.skipIf(!testDatabase)(
     test("creates a sign-up's account as a new one", async () => {
       const account = customerAccountIdSchema.make(crypto.randomUUID());
       await Effect.runPromise(
-        ensureCustomerAccount(account).pipe(Effect.provide(testDatabase!.layer))
+        ensureCustomerAccount(account).pipe(Effect.provide(database().layer))
       );
       expect(await isLegacy(account)).toBe(false);
     });
@@ -42,7 +46,7 @@ describe.skipIf(!testDatabase)(
               Layer.provide(
                 Layer.succeed(
                   WorkspaceDatabase,
-                  WorkspaceDatabase.make(testDatabase!.db)
+                  WorkspaceDatabase.make(database().db)
                 )
               )
             )

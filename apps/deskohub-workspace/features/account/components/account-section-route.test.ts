@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { type ReactElement, Suspense } from "react";
+import { ok } from "node:assert/strict";
+import { Schema } from "effect";
+import { isValidElement, type ReactElement, Suspense } from "react";
 import type { AccountPasses } from "@/features/account/account-passes.server";
 import type { AccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
 import { orderIdSchema } from "@/features/order";
+import {
+  renderComponentElement,
+  requireElement,
+} from "@/shared/testing/route-element.test-utils";
 
 const events: string[] = [];
 const notFound = mock(() => {
@@ -114,29 +120,38 @@ const { default: AccountLayout } = await import(
 );
 const { AccountSignInRedirect } = await import("./account-sign-in-redirect");
 
-type SuspendedContent<Props> = ReactElement<{
-  readonly children: ReactElement<Props>;
-  readonly fallback: ReactElement<{ readonly locale?: "en-US" }> | null;
-}>;
+const isProps = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
-const renderSuspended = <Props>(boundary: SuspendedContent<Props>) => {
-  const content = boundary.props.children;
-  const Content = content.type as (props: Props) => Promise<unknown>;
-  return () => Content(content.props);
+const renderSuspended = (boundary: ReactElement) => {
+  ok(boundary.type === Suspense && isProps(boundary.props));
+  const { children, fallback } = boundary.props;
+  ok(isValidElement(children));
+  return {
+    fallback,
+    content: async () => {
+      const output = await renderComponentElement(children);
+      return output === null ? null : requireElement<unknown>(output);
+    },
+  };
 };
 
-const renderSections = () => {
-  const route = AccountSections({ locale: "en-US" }) as SuspendedContent<{
-    readonly locale: "en-US";
-  }>;
-  return { content: renderSuspended(route), route };
-};
+const renderSections = () =>
+  renderSuspended(AccountSections({ locale: "en-US" }));
 
-const renderPathCheck = (section: string) => {
-  const route = AccountSectionPathCheck({
-    section: Promise.resolve(section),
-  }) as SuspendedContent<{ readonly section: Promise<string> }>;
-  return { content: renderSuspended(route), route };
+const renderPathCheck = (section: string) =>
+  renderSuspended(
+    AccountSectionPathCheck({ section: Promise.resolve(section) })
+  );
+
+const loadPageData = async (
+  page: ReactElement | null,
+  name: "loadInvoiceHistory" | "loadPasses"
+) => {
+  ok(page?.type === AccountPage && isProps(page.props));
+  const { props } = page;
+  const load = props[name];
+  ok(load instanceof Function);
+  await load();
 };
 
 describe("customer account route boundary", () => {
@@ -186,11 +201,12 @@ describe("customer account route boundary", () => {
   });
 
   test("loads private account data after connection", async () => {
-    const { content, route } = renderSections();
+    const { content, fallback } = renderSections();
 
-    expect(route.type).toBe(Suspense);
-    expect(route.props.fallback?.type).toBe(AccountContentLoading);
-    expect(route.props.fallback?.props.locale).toBe("en-US");
+    expect(fallback).toMatchObject({
+      type: AccountContentLoading,
+      props: { locale: "en-US" },
+    });
     expect(events).toEqual([]);
 
     const output = await content();
@@ -211,12 +227,10 @@ describe("customer account route boundary", () => {
   });
 
   test("lets the page start loading the invoice history in its locale", async () => {
-    const output = (await renderSections().content()) as ReactElement<{
-      readonly loadInvoiceHistory: () => Promise<unknown>;
-    }>;
+    const output = await renderSections().content();
     loadCustomerInvoiceHistory.mockClear();
 
-    await output.props.loadInvoiceHistory();
+    await loadPageData(output, "loadInvoiceHistory");
 
     expect(loadCustomerInvoiceHistory).toHaveBeenCalledWith("en-US");
   });
@@ -226,12 +240,10 @@ describe("customer account route boundary", () => {
       kind: "completion-required",
     }));
     getRequestPathname.mockImplementation(async () => "/en-US/account/passes");
-    const output = (await renderSections().content()) as ReactElement<{
-      readonly loadPasses: () => Promise<unknown>;
-    }>;
+    const output = await renderSections().content();
 
     expect(loadCustomerAccountPasses).not.toHaveBeenCalled();
-    await output.props.loadPasses();
+    await loadPageData(output, "loadPasses");
     expect(loadCustomerAccountPasses).toHaveBeenCalledWith("en-US");
   });
 
@@ -326,13 +338,8 @@ describe("customer account route boundary", () => {
     expect(await renderPathCheck("passes").content()).toBeNull();
 
     const layout = await AccountLayout({ children: null, modal: null });
-    const renderLayout = renderSuspended(layout);
-    const shell = (await renderLayout()) as ReactElement<{
-      readonly children: readonly ReactElement<{
-        readonly passesEnabled?: boolean;
-      }>[];
-    }>;
-    expect(shell.props.children[0]?.props.passesEnabled).toBe(true);
+    const shell = await renderSuspended(layout).content();
+    expect(shell).toHaveProperty("props.children.0.props.passesEnabled", true);
   });
 
   test("retains the Passes destination when a signed-out subscriber follows a link", async () => {
@@ -361,10 +368,9 @@ describe("customer account route boundary", () => {
   });
 
   test("leaves a released section's path to the sections' account page", async () => {
-    const { content, route } = renderPathCheck("security");
+    const { content, fallback } = renderPathCheck("security");
 
-    expect(route.type).toBe(Suspense);
-    expect(route.props.fallback).toBeNull();
+    expect(fallback).toBeNull();
     expect(await content()).toBeNull();
     expect(events).toEqual(["connection", "passkeys", "referrals", "passes"]);
     expect(loadCustomerAccountPage).not.toHaveBeenCalled();

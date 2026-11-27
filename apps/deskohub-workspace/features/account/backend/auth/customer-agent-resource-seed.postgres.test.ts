@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import { requireTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   callHandler,
   makeTestAuth,
@@ -16,7 +17,8 @@ describe.skipIf(!testDatabase)(
   "customer agent resource seed before the OAuth migration",
   () => {
     test("starts and serves auth while the resource table is missing", async () => {
-      await testDatabase!.pool.query(
+      const { pool } = requireTestDatabase(testDatabase);
+      await pool.query(
         "alter table auth.oauth_resource rename to oauth_resource_pending"
       );
       try {
@@ -27,7 +29,7 @@ describe.skipIf(!testDatabase)(
         const session = await callHandler(auth, "/get-session");
         expect(session.status).toBe(200);
       } finally {
-        await testDatabase!.pool.query(
+        await pool.query(
           "alter table auth.oauth_resource_pending rename to oauth_resource"
         );
       }

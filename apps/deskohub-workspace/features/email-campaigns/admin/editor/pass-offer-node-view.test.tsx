@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { m } from "@/features/administration/i18n";
 import { m as customerMessages } from "@/features/i18n";
 import { unlimitedPassDays } from "@/features/passes/pass-offer";
@@ -52,13 +53,20 @@ const selectCard = async (rendered: Rendered) => {
   act(() => {
     rendered.editor.commands.setNodeSelection(cardPosition);
   });
-  await waitFor(() => expect(editButton(rendered)).not.toBeNull());
+  return waitFor(() => {
+    const button = editButton(rendered);
+    assert(
+      button,
+      "Expected the pass offer edit button after selecting the node."
+    );
+    return button;
+  });
 };
 
 const openEditing = async (rendered: Rendered) => {
-  await selectCard(rendered);
+  const button = await selectCard(rendered);
   await act(async () => {
-    fireEvent.click(editButton(rendered)!);
+    fireEvent.click(button);
   });
   return within(screen.getByRole("dialog"));
 };
@@ -71,6 +79,12 @@ const detailField = (dialog: Scope) =>
   textField(dialog, m.emailCampaignsPassOfferDetailLabel({}, { locale }));
 const choice = (dialog: Scope, name: string) =>
   dialog.queryByRole<HTMLInputElement>("radio", { name });
+
+const clickChoice = async (dialog: Scope, name: string) => {
+  await act(async () => {
+    fireEvent.click(dialog.getByRole("radio", { name }));
+  });
+};
 
 const clickIn = async (dialog: Scope, name: string) => {
   await act(async () => {
@@ -137,11 +151,7 @@ describe("PassOfferNodeView", () => {
 
     expect(choice(dialog, "5")?.checked).toBe(true);
     expect(headlineField(dialog).value).toBe(entryPackCard.headline);
-    await act(async () => {
-      fireEvent.click(
-        choice(dialog, customerMessages.passUnlimited({}, { locale }))!
-      );
-    });
+    await clickChoice(dialog, customerMessages.passUnlimited({}, { locale }));
     expect(choice(dialog, "5")).toBeNull();
     fireEvent.input(headlineField(dialog), {
       target: { value: "  Ušetřete 2 210 Kč  " },
@@ -173,9 +183,7 @@ describe("PassOfferNodeView", () => {
       customerMessages.passUnlimited({}, { locale }),
       customerMessages.passEntryPack({}, { locale }),
     ]) {
-      await act(async () => {
-        fireEvent.click(choice(dialog, product)!);
-      });
+      await clickChoice(dialog, product);
     }
     expect(
       choice(dialog, m.emailCampaignsPassOfferSizeDefault({}, { locale }))
@@ -257,9 +265,7 @@ describe("PassOfferNodeView", () => {
     );
     expect(rendered.changes).toEqual([]);
 
-    await act(async () => {
-      fireEvent.click(choice(dialog, "10")!);
-    });
+    await clickChoice(dialog, "10");
     await clickIn(dialog, m.emailCampaignsPassOfferUpdate({}, { locale }));
 
     await waitFor(() =>
@@ -308,9 +314,7 @@ describe("PassOfferNodeView", () => {
       customerMessages.passUnlimited({}, { locale }),
       customerMessages.passEntryPack({}, { locale }),
     ]) {
-      await act(async () => {
-        fireEvent.click(choice(dialog, product)!);
-      });
+      await clickChoice(dialog, product);
     }
 
     expect(
@@ -342,14 +346,8 @@ describe("PassOfferNodeView", () => {
     await clickIn(dialog, m.emailCampaignsPassOfferUpdate({}, { locale }));
     await waitFor(() => expect(dialog.getByText(productInvalid)).toBeTruthy());
 
-    await act(async () => {
-      fireEvent.click(
-        choice(dialog, customerMessages.passEntryPack({}, { locale }))!
-      );
-    });
-    await act(async () => {
-      fireEvent.click(choice(dialog, "10")!);
-    });
+    await clickChoice(dialog, customerMessages.passEntryPack({}, { locale }));
+    await clickChoice(dialog, "10");
     await clickIn(dialog, m.emailCampaignsPassOfferUpdate({}, { locale }));
 
     await waitFor(() =>

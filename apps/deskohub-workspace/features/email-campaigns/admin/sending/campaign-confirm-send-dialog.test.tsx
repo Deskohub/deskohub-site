@@ -14,9 +14,10 @@ mock.module("../campaign-operations.actions", () => ({
 
 beforeAll(() => {
   registerWorkspaceComponentTestEnv();
-  workspaceUseAction.mockImplementation(
-    () => ({ execute: mock(), isExecuting: false }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute: mock(),
+    isExecuting: false,
+  }));
 });
 
 afterEach(() => {

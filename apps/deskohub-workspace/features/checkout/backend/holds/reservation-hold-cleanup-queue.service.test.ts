@@ -2,56 +2,76 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+  type DotyposService as DotyposServiceTag,
+} from "@deskohub/dotypos";
+import { decodeStandardSchema } from "@deskohub/standard-schema";
 import { Effect, Layer, Logger } from "effect";
 import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
-import type { WorkspaceReservationRow } from "@/db/schema";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
-import type { ReservationHoldCleanupService as ReservationHoldCleanupServiceType } from "./reservation-hold-cleanup.service";
+import type {
+  IWorkspaceReservationRepository,
+  WorkspaceReservation,
+} from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
+import { instantStringSchema } from "@/shared/utils/temporal";
+import type { IReservationHoldCleanupService } from "./reservation-hold-cleanup.service";
+import {
+  type ReservationHoldCleanupSchedulePayload,
+  reservationHoldCleanupTopic,
+} from "./reservation-hold-cleanup-topic";
 
 const now = Temporal.Instant.from("2026-06-01T10:00:00.000Z");
 const expiresAt = Temporal.Instant.from("2026-06-01T10:10:00.000Z");
 const dueNow = Temporal.Instant.from("2026-06-01T10:10:00.000Z");
 
+const orderId = workspaceReservationIdSchema.make("order-id");
+const createdAt = Temporal.Instant.from("2026-06-01T09:55:00.000Z");
+const dotyposReservationId = DotyposReservationIdSchema.make(
+  "dotypos-reservation-id"
+);
+
 const makeReservation = (
-  overrides: Partial<WorkspaceReservationRow> = {}
-): WorkspaceReservationRow =>
-  ({
-    id: "order-id",
-    checkoutSessionKey: "session-key",
-    checkoutAttemptKey: "attempt-key",
-    correlationId: "correlation-id",
-    dotyposCustomerId: "customer-id",
-    dotyposReservationId: "dotypos-reservation-id",
+  overrides: Partial<WorkspaceReservation> = {}
+): WorkspaceReservation =>
+  workspaceReservationFixture({
+    id: orderId,
+    dotyposCustomerId: DotyposCustomerIdSchema.make("customer-id"),
+    dotyposReservationId,
     reservationState: "held",
     paymentState: "not_started",
     fulfillmentState: "not_started",
-    activePaymentAttemptId: null,
+    reservationDetails: { kind: "cowork", entryTier: "basic", coffee: false },
     productTier: "basic",
-    productCoffee: false,
-    productMonitorOption: null,
     locale: "en-US",
     reservationHoldExpiresAt: expiresAt,
-    reservationHoldExpiredAt: null,
-    reservationCreatedAt: Temporal.Instant.from("2026-06-01T09:55:00.000Z"),
+    reservationCreatedAt: createdAt,
     reservationConfirmedAt: null,
-    reservationCancelledAt: null,
     paidAt: null,
     fulfilledAt: null,
-    fulfillmentFailedAt: null,
-    failureCode: null,
-    fulfillmentFailureCode: null,
-    createdAt: Temporal.Instant.from("2026-06-01T09:55:00.000Z"),
-    updatedAt: Temporal.Instant.from("2026-06-01T09:55:00.000Z"),
+    createdAt,
+    updatedAt: createdAt,
     ...overrides,
-  }) as WorkspaceReservationRow;
+  });
+
+const decodePublishedCleanup = (
+  message: ReturnType<typeof reservationHoldCleanupTopic.publication>["message"]
+) =>
+  requireValue(
+    decodeStandardSchema(reservationHoldCleanupTopic.message, message),
+    "valid published cleanup message"
+  );
 
 const runProcessMessage = async (
   message: Parameters<
     typeof import("./reservation-hold-cleanup-queue.service").processReservationHoldCleanupScheduleMessage
   >[0],
   input: {
-    readonly findById?: ReturnType<typeof mock>;
-    readonly cancelOrderHold?: ReturnType<typeof mock>;
+    readonly findById?: IWorkspaceReservationRepository["findById"];
+    readonly cancelOrderHold?: IReservationHoldCleanupService["cancelOrderHold"];
     readonly now?: Temporal.Instant;
   } = {}
 ) => {
@@ -90,7 +110,7 @@ const runProcessMessage = async (
           sweepExpiredHolds: mock(() =>
             Effect.succeed({ cancelled: 0, skipped: 0, failed: 0 })
           ),
-        } satisfies ReservationHoldCleanupServiceType),
+        } satisfies IReservationHoldCleanupService),
         captureLogs
       )
     ),
@@ -108,7 +128,7 @@ const deliverToCleanup = async (
   payload: Parameters<
     typeof import("./reservation-hold-cleanup-queue.service").processReservationHoldCleanupScheduleMessage
   >[0],
-  reservation: WorkspaceReservationRow,
+  reservation: WorkspaceReservation,
   deliveredAt: Temporal.Instant
 ) => {
   const { ReservationHoldCleanupService } = await import(
@@ -134,9 +154,9 @@ const deliverToCleanup = async (
     "../analytics/checkout-analytics.service"
   );
   const { DotyposService } = await import("@deskohub/dotypos");
-  const claimCancellation = mock(() =>
-    Effect.succeed({ ...reservation, reservationState: "cancelling" })
-  );
+  const claimCancellation = mock<
+    IWorkspaceReservationRepository["claimCancellation"]
+  >(() => Effect.succeed({ ...reservation, reservationState: "cancelling" }));
   const lock = makeRecordingAdvisoryLock();
   const result = await processReservationHoldCleanupScheduleMessage(
     payload,
@@ -152,14 +172,14 @@ const deliverToCleanup = async (
               findById: mock(() => Effect.succeed(reservation)),
               claimCancellation,
               markCancelled: mock(() => Effect.void),
-            } as never),
+            }),
             Layer.mock(ProviderPaymentFinalizationService, {}),
             Layer.mock(PaymentLifecycleRepository, {}),
             Layer.mock(CheckoutAnalytics, silentCheckoutAnalytics),
             Layer.mock(DotyposService, {
-              getReservationStatus: mock(() => Effect.succeed("NEW")),
+              getReservationStatus: mock(() => Effect.succeed("NEW" as const)),
               cancelReservation: mock(() => Effect.void),
-            } as never)
+            })
           )
         )
       )
@@ -169,16 +189,16 @@ const deliverToCleanup = async (
   return { result, claimCancellation, lockKeys: lock.entered };
 };
 
-const duePayload = {
+const duePayload: ReservationHoldCleanupSchedulePayload = {
   schemaVersion: 1,
-  orderId: "order-id",
-  reservationHoldExpiresAtIso: expiresAt.toString(),
+  orderId,
+  reservationHoldExpiresAtIso: instantStringSchema.make(expiresAt.toString()),
 };
 // Enqueued at `now`: the hold's ten minutes plus the hour of retries.
 const cleanupDeadline = Temporal.Instant.from("2026-06-01T11:10:00.000Z");
 const scheduledPayload = {
   ...duePayload,
-  cleanupDeadlineIso: cleanupDeadline.toString(),
+  cleanupDeadlineIso: instantStringSchema.make(cleanupDeadline.toString()),
 };
 
 describe("ReservationHoldCleanupScheduleService", () => {
@@ -189,7 +209,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
     } = await import("./reservation-hold-cleanup-topic");
 
     const message = reservationHoldCleanupTopic.publication({
-      orderId: "order-id" as WorkspaceReservationId,
+      orderId,
       reservationHoldExpiresAt: expiresAt,
       now,
     });
@@ -208,7 +228,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
     );
 
     const clamped = reservationHoldCleanupTopic.publication({
-      orderId: "order-id" as WorkspaceReservationId,
+      orderId,
       reservationHoldExpiresAt: Temporal.Instant.from(
         "2026-06-09T10:00:01.000Z"
       ),
@@ -228,7 +248,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
     );
 
     const overdue = reservationHoldCleanupTopic.publication({
-      orderId: "order-id" as WorkspaceReservationId,
+      orderId,
       reservationHoldExpiresAt: now.subtract({ minutes: 5 }),
       now,
     });
@@ -259,7 +279,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
     const enqueue = () =>
       Effect.flatMap(ReservationHoldCleanupScheduleService, (service) =>
         service.enqueueCleanup({
-          orderId: "order-id" as WorkspaceReservationId,
+          orderId,
           reservationHoldExpiresAt: expiresAt,
         })
       ).pipe(
@@ -295,11 +315,6 @@ describe("ReservationHoldCleanupScheduleService", () => {
   });
 
   test("decodes only well-formed messages", async () => {
-    const { reservationHoldCleanupTopic } = await import(
-      "./reservation-hold-cleanup-topic"
-    );
-    const { decodeStandardSchema } = await import("@deskohub/standard-schema");
-
     for (const message of [
       { ...duePayload, schemaVersion: 2 },
       { ...duePayload, orderId: "" },
@@ -338,7 +353,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
 
       expect(delivery.result).toBe("cancelled");
       expect(delivery.cancelOrderHold).toHaveBeenCalledWith({
-        orderId: "order-id",
+        orderId,
         holdExpiresAt: expiresAt,
         checkedAt: deliveredAt,
       });
@@ -395,7 +410,9 @@ describe("ReservationHoldCleanupScheduleService", () => {
 
     const onTime = await deliver({
       ...scheduledPayload,
-      cleanupDeadlineIso: Temporal.Now.instant().add({ hours: 1 }).toString(),
+      cleanupDeadlineIso: instantStringSchema.make(
+        Temporal.Now.instant().add({ hours: 1 }).toString()
+      ),
     });
     expect(onTime._tag).not.toBe("Handled");
     expect(builds).toHaveBeenCalledTimes(1);
@@ -410,12 +427,12 @@ describe("ReservationHoldCleanupScheduleService", () => {
     );
     let builtAt: Temporal.Instant | undefined;
     let checkedAt: Temporal.Instant | undefined;
-    const cancelOrderHold = mock(
-      (input: { readonly checkedAt: Temporal.Instant }) => {
-        checkedAt = input.checkedAt;
-        return Effect.succeed("cancelled" as const);
-      }
-    );
+    const cancelOrderHold = mock<
+      IReservationHoldCleanupService["cancelOrderHold"]
+    >((input) => {
+      checkedAt = input.checkedAt;
+      return Effect.succeed("cancelled" as const);
+    });
     const consume = reservationHoldCleanupConsumer(
       Layer.effect(
         ReservationHoldCleanupService,
@@ -428,7 +445,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
                 sweepExpiredHolds: mock(() =>
                   Effect.succeed({ cancelled: 0, skipped: 0, failed: 0 })
                 ),
-              } satisfies ReservationHoldCleanupServiceType;
+              } satisfies IReservationHoldCleanupService;
             })
           )
         )
@@ -469,7 +486,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
             sweepExpiredHolds: mock(() =>
               Effect.succeed({ cancelled: 0, skipped: 0, failed: 0 })
             ),
-          } satisfies ReservationHoldCleanupServiceType)
+          } satisfies IReservationHoldCleanupService)
         )
       )
     );
@@ -480,7 +497,10 @@ describe("ReservationHoldCleanupScheduleService", () => {
         messageId: "message-id",
         deliveryCount: 1,
         topic: "workspace-reservation-hold-cleanup",
-        payload: { ...duePayload, cleanupDeadlineIso: deadline.toString() },
+        payload: {
+          ...duePayload,
+          cleanupDeadlineIso: instantStringSchema.make(deadline.toString()),
+        },
       },
       "durable"
     ).pipe(Effect.runPromise);
@@ -490,33 +510,29 @@ describe("ReservationHoldCleanupScheduleService", () => {
   });
 
   test("keeps the enqueue clock's full precision in the cleanup deadline", async () => {
-    const { reservationHoldCleanupTopic } = await import(
-      "./reservation-hold-cleanup-topic"
-    );
     const enqueuedAt = Temporal.Instant.from("2026-06-01T10:00:00.123456789Z");
     const { message, options } = reservationHoldCleanupTopic.publication({
-      orderId: "order-id" as WorkspaceReservationId,
+      orderId,
       reservationHoldExpiresAt: expiresAt,
       now: enqueuedAt,
     });
     const retentionEnd = enqueuedAt.add({ seconds: options.retentionSeconds });
 
-    const onTime = await runProcessMessage(message, { now: retentionEnd });
+    const onTime = await runProcessMessage(decodePublishedCleanup(message), {
+      now: retentionEnd,
+    });
     expect(onTime.result).toBe("cancelled");
 
-    const late = await runProcessMessage(message, {
+    const late = await runProcessMessage(decodePublishedCleanup(message), {
       now: retentionEnd.add({ nanoseconds: 1 }),
     });
     expect(late.result).toBe("past_deadline");
   });
 
   test("gives a hold scheduled at the delay cap no late retries", async () => {
-    const { reservationHoldCleanupTopic } = await import(
-      "./reservation-hold-cleanup-topic"
-    );
     const capExpiresAt = now.add({ hours: 7 * 24 });
     const { message } = reservationHoldCleanupTopic.publication({
-      orderId: "order-id" as WorkspaceReservationId,
+      orderId,
       reservationHoldExpiresAt: capExpiresAt,
       now,
     });
@@ -524,10 +540,12 @@ describe("ReservationHoldCleanupScheduleService", () => {
       message.reservationHoldExpiresAtIso
     );
 
-    const onTime = await runProcessMessage(message, { now: capExpiresAt });
+    const onTime = await runProcessMessage(decodePublishedCleanup(message), {
+      now: capExpiresAt,
+    });
     expect(onTime.result).toBe("cancelled");
 
-    const retry = await runProcessMessage(message, {
+    const retry = await runProcessMessage(decodePublishedCleanup(message), {
       now: capExpiresAt.add({ seconds: 1 }),
     });
     expect(retry.result).toBe("past_deadline");
@@ -588,9 +606,9 @@ describe("ReservationHoldCleanupScheduleService", () => {
       );
       expect(delivery.result).toBe("cancelled");
       expect(delivery.claimCancellation).toHaveBeenCalledWith({
-        id: "order-id",
+        id: orderId,
         expectedHold: {
-          dotyposReservationId: "dotypos-reservation-id",
+          dotyposReservationId,
           reservationHoldExpiresAt: expiresAt,
         },
         cause: "hold_expired",
@@ -607,16 +625,13 @@ describe("ReservationHoldCleanupScheduleService", () => {
 
     expect(result.result).toBe("cancelled");
     expect(cancelOrderHold).toHaveBeenCalledWith({
-      orderId: "order-id",
+      orderId,
       holdExpiresAt: expiresAt,
       checkedAt: dueNow,
     });
   });
 
   test("cancels a due hold whose deadline came from the nanosecond clock", async () => {
-    const { reservationHoldCleanupTopic } = await import(
-      "./reservation-hold-cleanup-topic"
-    );
     const { toStoredInstant } = await import("@/db/instant");
     // Temporal.Now has nanoseconds; the reservation row keeps microseconds.
     const clockExpiresAt = Temporal.Instant.from(
@@ -626,7 +641,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
       reservationHoldExpiresAt: toStoredInstant(clockExpiresAt),
     });
     const { message } = reservationHoldCleanupTopic.publication({
-      orderId: "order-id" as WorkspaceReservationId,
+      orderId,
       reservationHoldExpiresAt: clockExpiresAt,
       now,
     });
@@ -635,9 +650,14 @@ describe("ReservationHoldCleanupScheduleService", () => {
     );
 
     for (const payload of [
-      message,
+      decodePublishedCleanup(message),
       // Messages enqueued before the payload was stored-precision.
-      { ...duePayload, reservationHoldExpiresAtIso: clockExpiresAt.toString() },
+      {
+        ...duePayload,
+        reservationHoldExpiresAtIso: instantStringSchema.make(
+          clockExpiresAt.toString()
+        ),
+      },
     ]) {
       const delivery = await deliverToCleanup(
         payload,
@@ -682,7 +702,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
       QueueRedelivery.At({ instant: abandonmentCutoff })
     );
     expect(cancelOrderHold).toHaveBeenCalledWith({
-      orderId: "order-id",
+      orderId,
       holdExpiresAt: expiresAt,
       checkedAt: retryNow,
     });
@@ -747,7 +767,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
     );
 
     const deliver = (
-      getReservationStatus: () => Effect.Effect<unknown, unknown>
+      getReservationStatus: typeof DotyposServiceTag.Service.getReservationStatus
     ) => {
       const cancelReservation = mock(() => Effect.void);
       const markCancellationFailed = mock(() => Effect.void);
@@ -769,14 +789,14 @@ describe("ReservationHoldCleanupScheduleService", () => {
                     )
                   ),
                   markCancellationFailed,
-                } as never),
+                }),
                 Layer.mock(ProviderPaymentFinalizationService, {}),
                 Layer.mock(PaymentLifecycleRepository, {}),
                 Layer.mock(CheckoutAnalytics, silentCheckoutAnalytics),
                 Layer.mock(DotyposService, {
                   getReservationStatus: mock(getReservationStatus),
                   cancelReservation,
-                } as never)
+                })
               )
             )
           )

@@ -6,12 +6,14 @@ import { rm } from "node:fs/promises";
 import { testEmailAddress } from "@deskohub/test-email";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { Schema } from "effect";
 import type { Pool } from "pg";
 import {
   linkMigrationsBefore,
   withScratchDatabase,
   workspaceMigrationsFolder,
 } from "@/db/migration-scratch-database.test-utils";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   buildDatabaseAdapter,
   HOST,
@@ -47,7 +49,7 @@ const migrateAcross = async (
   const earlierMigrations = await linkMigrationsBefore(MIGRATION_DIR);
   try {
     await withScratchDatabase(
-      testDatabaseUrl!,
+      requireValue(testDatabaseUrl, "WORKSPACE_TEST_DATABASE_URL"),
       "oauth_token_consent_binding",
       async (pool) => {
         await migrate(drizzle({ client: pool }), {
@@ -168,12 +170,22 @@ const consentIdsOf = async (pool: Pool, clientId: string) => {
   return result.rows.map((row) => row.consent_id);
 };
 
+const decodeActivity = Schema.decodeUnknownSync(
+  Schema.Struct({ active: Schema.Boolean })
+);
+const decodeTokenError = Schema.decodeUnknownSync(
+  Schema.Struct({ error: Schema.String })
+);
+const decodeAccessToken = Schema.decodeUnknownSync(
+  Schema.Struct({ access_token: Schema.String })
+);
+
 const isActive = async (auth: TestAuth, token: string) =>
-  (
-    (await auth.api.verifyCustomerAgentAccessToken({
+  decodeActivity(
+    await auth.api.verifyCustomerAgentAccessToken({
       body: { token },
       headers: new Headers({ host: HOST }),
-    })) as { readonly active: boolean }
+    })
   ).active;
 
 const refresh = (auth: TestAuth, clientId: string, refreshToken: string) =>
@@ -218,7 +230,7 @@ describe.skipIf(!testDatabaseUrl)(
           expect(await isActive(auth, tokens.access)).toBe(false);
           const refreshed = await refresh(auth, "asks-consent", tokens.refresh);
           expect(refreshed.status).toBe(400);
-          expect(((await refreshed.json()) as { error: string }).error).toBe(
+          expect(decodeTokenError(await refreshed.json()).error).toBe(
             "invalid_grant"
           );
           expect(await consentIdsOf(pool, "asks-consent")).toEqual([]);
@@ -252,9 +264,7 @@ describe.skipIf(!testDatabaseUrl)(
             tokens.refresh
           );
           expect(refreshed.status).toBe(200);
-          const renewed = (await refreshed.json()) as {
-            readonly access_token: string;
-          };
+          const renewed = decodeAccessToken(await refreshed.json());
           expect(await isActive(auth, renewed.access_token)).toBe(true);
         }
       );

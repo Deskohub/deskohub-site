@@ -51,10 +51,15 @@ const renderDialog = (
     return element;
   };
   const confirmButton = () => button("#delete-passkey-confirm");
-  const cancelButton = () =>
-    view.getByRole("button", {
+  const cancelButton = () => {
+    const element = view.getByRole("button", {
       name: m.accountPasskeyDialogCancel({}, { locale }),
-    }) as HTMLButtonElement;
+    });
+    if (!(element instanceof HTMLButtonElement)) {
+      throw new Error("Expected the cancel control to be a button");
+    }
+    return element;
+  };
   const failureShown = () =>
     view.baseElement.textContent?.includes(
       m.accountPasskeyDeleteFailed({}, { locale })

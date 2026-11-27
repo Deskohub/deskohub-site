@@ -1,5 +1,7 @@
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import { CloudinaryConfigError } from "@deskohub/cloudinary";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
+import { ReferralCode } from "@deskohub/workspace-customer-api/referral-code";
 import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -16,13 +18,19 @@ import {
   CustomerAuthentication,
 } from "@/features/account/backend/customer-authentication.service";
 import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
-import { CustomerAvatarService } from "@/features/account/backend/customer-avatar.service";
+import {
+  CustomerAvatarProviderError,
+  CustomerAvatarService,
+} from "@/features/account/backend/customer-avatar.service";
 import { CustomerProfileService } from "@/features/account/backend/customer-profile.service";
 import {
   CustomerAccountAccessError,
-  type CustomerAccountId,
+  customerAccountIdSchema,
+  customerAccountUnavailable,
 } from "@/features/account/customer-account";
 import { releaseGateForRun } from "@/features/feature-flags/backend/release-gate-run";
+import { parseReferralCode } from "@/features/referrals/client";
+import type { IReferralService } from "@/features/referrals/referral.service";
 import { ReferralServiceMock } from "@/features/referrals/referral.service.mock";
 import {
   ReferralReleaseGate,
@@ -39,8 +47,8 @@ import {
 } from "./account-state-capabilities";
 
 const email = testEmailAddress("ada");
-const accountId = "auth-account-1" as CustomerAccountId;
-const linkedCustomer = "60111";
+const accountId = customerAccountIdSchema.make("auth-account-1");
+const linkedCustomer = DotyposCustomerIdSchema.make("60111");
 
 const session = {
   accountId,
@@ -70,22 +78,25 @@ const linked = (
     reviewMarker: "absent" as const,
     account: {
       accountId,
-      dotyposCustomerId: linkedCustomer as DotyposCustomerId,
+      dotyposCustomerId: linkedCustomer,
     },
     autoLinked,
   });
 
-let currentStanding: Effect.Effect<ResolvedStanding, unknown>;
-let profile: Effect.Effect<unknown, unknown>;
-let avatar: Effect.Effect<unknown, unknown>;
-let referralSummary: Effect.Effect<unknown, unknown>;
+let currentStanding: Effect.Effect<
+  ResolvedStanding,
+  CustomerAccountAccessError
+>;
+let profile: ReturnType<CustomerProfileService["Service"]["load"]>;
+let avatar: ReturnType<CustomerAvatarService["Service"]["lookup"]>;
+let referralSummary: ReturnType<IReferralService["getAccountSummary"]>;
 let settled: boolean;
 let clientReferralCode: string | undefined;
 let calls: string[];
 let layerOverrides: Partial<AccountStateLayers>;
 
 const summary = {
-  code: "RFL12345",
+  code: ReferralCode.make("RFL12345"),
   inviteeCount: 0,
   eligibleInviteeCount: 0,
   discount: "0",
@@ -110,16 +121,16 @@ const capabilities = () =>
       currentUser: Effect.succeed(session),
     }),
     currentAccount: Layer.mock(CurrentCustomerAccount, {
-      resolve: Effect.suspend(() => currentStanding) as never,
+      resolve: Effect.suspend(() => currentStanding),
     }),
     profile: Layer.mock(CustomerProfileService, {
-      load: () => profile as never,
+      load: () => profile,
     }),
     avatar: Layer.mock(CustomerAvatarService, {
-      lookup: () => avatar as never,
+      lookup: () => avatar,
     }),
     passkeys: Layer.mock(CustomerPasskeys, {
-      list: record("passkeys")(Effect.succeed([])) as never,
+      list: record("passkeys")(Effect.succeed([])),
     }),
     assistants: Layer.mock(CustomerAgentConnections, {
       list: record("assistants")(Effect.succeed([])),
@@ -128,18 +139,15 @@ const capabilities = () =>
       isReviewAccount: () => Effect.succeed(false),
     }),
     referrals: ReferralServiceMock({
-      getAccountSummary: () => record("summary")(referralSummary) as never,
+      getAccountSummary: () => record("summary")(referralSummary),
       acceptReferral: ({ code }) =>
-        record(`accept ${code}`)(
-          Effect.succeed({ status: "accepted" })
-        ) as never,
+        record(`accept ${code}`)(Effect.succeed({ kind: "accepted" } as const)),
       findAvailableCode: ({ code }) =>
-        record(`find ${code}`)(Effect.succeed(code)) as never,
-      hasSettledReferral: () =>
-        record("settled")(Effect.sync(() => settled)) as never,
+        record(`find ${code}`)(Effect.succeed(parseReferralCode(code))),
+      hasSettledReferral: () => record("settled")(Effect.sync(() => settled)),
     }),
     signupIntents: Layer.mock(ReferralSignupIntentRepository, {
-      find: () => Effect.succeed(undefined) as never,
+      find: () => Effect.succeed(undefined),
     }),
     referralRelease: ReferralReleaseGate.fromDecision(true),
     rememberedReferral: Layer.suspend(() =>
@@ -235,7 +243,7 @@ describe("loadAccountState", () => {
       passkeys: { accountId, passkeys: [] },
       assistants: [],
       referralsEnabled: true,
-      referralCode: "RFL12345",
+      referralCode: summary.code,
     });
     expect(calls).toContain("find RFL12345");
   });
@@ -293,7 +301,9 @@ describe("loadAccountState", () => {
   });
 
   test("keeps the session's sections when the profile can't be read", async () => {
-    profile = Effect.fail(new Error("dotypos down"));
+    profile = Effect.fail(
+      customerAccountUnavailable("dotypos.customer-lookup")
+    );
 
     const { state } = await loadWithWarnings();
 
@@ -307,7 +317,11 @@ describe("loadAccountState", () => {
   });
 
   test("degrades the avatar and referral sections with fixed, cause-free warnings", async () => {
-    avatar = Effect.fail(new Error("private media detail"));
+    avatar = Effect.fail(
+      Object.assign(new CustomerAvatarProviderError({}), {
+        cause: new Error("private media detail"),
+      })
+    );
     referralSummary = Effect.die(new Error("private referral detail"));
 
     const { state, warnings, output } = await loadWithWarnings();
@@ -326,12 +340,16 @@ describe("loadAccountState", () => {
 
   test("degrades only the sections whose capabilities can't be built", async () => {
     layerOverrides = {
-      avatar: Layer.effectDiscard(
-        Effect.fail(new Error("configuration broken"))
-      ) as never,
-      passkeys: Layer.effectDiscard(
+      avatar: Layer.effect(
+        CustomerAvatarService,
+        Effect.fail(
+          new CloudinaryConfigError({ message: "configuration broken" })
+        )
+      ),
+      passkeys: Layer.effect(
+        CustomerPasskeys,
         Effect.die(new Error("module failed to load"))
-      ) as never,
+      ),
     };
 
     const { state, warnings } = await loadWithWarnings();
@@ -373,7 +391,9 @@ describe("loadAccountState", () => {
     layerOverrides = {
       referralRelease: releaseGateForRun(
         {
+          flag: ReferralReleaseGate.flag,
           isOpen: ReferralReleaseGate.isOpen,
+          decision: ReferralReleaseGate.decision,
           fromDecision: ReferralReleaseGate.fromDecision,
           fromEvaluation: ReferralReleaseGate.fromEvaluation,
           Live: ReferralReleaseGate.fromEvaluation(

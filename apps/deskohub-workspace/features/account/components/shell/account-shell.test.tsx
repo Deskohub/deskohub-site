@@ -8,6 +8,7 @@ import {
   spyOn,
   test,
 } from "bun:test";
+import { ok } from "node:assert/strict";
 import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import {
   type AccountSection,
@@ -19,6 +20,9 @@ import {
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
 import { AccountShell, type AccountShellProps } from "./account-shell";
+
+const makeRect = (left: number, right: number) =>
+  new DOMRect(left, 0, right - left, 44);
 
 const sectionKeys: readonly AccountSection[] = [
   "reservations",
@@ -209,11 +213,13 @@ describe("AccountShell", () => {
     for (const section of disabledSections) {
       const mobileButton = mobileNavigation.getByRole("button", {
         name: accountSectionLabel(section, locale),
-      }) as HTMLButtonElement;
+      });
       const desktopButton = getDesktopNavigation(view).getByRole("button", {
         name: accountSectionLabel(section, locale),
-      }) as HTMLButtonElement;
+      });
 
+      ok(mobileButton instanceof HTMLButtonElement);
+      ok(desktopButton instanceof HTMLButtonElement);
       expect(mobileButton.disabled).toBe(true);
       expect(desktopButton.disabled).toBe(true);
       expect(mobileButton.hasAttribute("href")).toBe(false);
@@ -276,10 +282,9 @@ describe("AccountShell", () => {
       configurable: true,
       value: bottomScrollIntoView,
     });
-    const getComputedStyle = spyOn(window, "getComputedStyle").mockReturnValue({
-      position: "sticky",
-      top: "112px",
-    } as CSSStyleDeclaration);
+    aside.style.position = "sticky";
+    aside.style.top = "112px";
+    const getComputedStyle = spyOn(window, "getComputedStyle");
 
     try {
       fireEvent.focus(topTarget);
@@ -316,10 +321,9 @@ describe("AccountShell", () => {
       configurable: true,
       value: scrollIntoView,
     });
-    const getComputedStyle = spyOn(window, "getComputedStyle").mockReturnValue({
-      position: "sticky",
-      top: "112px",
-    } as CSSStyleDeclaration);
+    aside.style.position = "sticky";
+    aside.style.top = "112px";
+    const getComputedStyle = spyOn(window, "getComputedStyle");
 
     try {
       fireEvent.focus(target);
@@ -434,18 +438,6 @@ describe("AccountShell", () => {
       Element.prototype.getBoundingClientRect;
     const originalScrollIntoView = Element.prototype.scrollIntoView;
     const sectionPositions: Record<string, number> = {};
-    const makeRect = (left: number, right: number): DOMRect =>
-      ({
-        bottom: 44,
-        height: 44,
-        left,
-        right,
-        top: 0,
-        width: right - left,
-        x: left,
-        y: 0,
-        toJSON: () => ({}),
-      }) as DOMRect;
 
     Element.prototype.getBoundingClientRect = function () {
       const section = this.getAttribute("data-account-section");
@@ -506,18 +498,6 @@ describe("AccountShell", () => {
     let isVisible = false;
     const activeButtonStart = 262;
     const activeButtonWidth = 173;
-    const makeRect = (left: number, right: number): DOMRect =>
-      ({
-        bottom: 44,
-        height: 44,
-        left,
-        right,
-        top: 0,
-        width: right - left,
-        x: left,
-        y: 0,
-        toJSON: () => ({}),
-      }) as DOMRect;
 
     Element.prototype.getBoundingClientRect = function () {
       if (this.hasAttribute("data-account-mobile-navigation")) {
@@ -578,18 +558,6 @@ describe("AccountShell", () => {
       Element.prototype.getBoundingClientRect;
     const activeButtonStart = 88;
     const activeButtonWidth = 173;
-    const makeRect = (left: number, right: number): DOMRect =>
-      ({
-        bottom: 44,
-        height: 44,
-        left,
-        right,
-        top: 0,
-        width: right - left,
-        x: left,
-        y: 0,
-        toJSON: () => ({}),
-      }) as DOMRect;
 
     Element.prototype.getBoundingClientRect = function () {
       if (this.hasAttribute("data-account-mobile-navigation")) {

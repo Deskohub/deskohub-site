@@ -7,6 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import {
   administrationHref,
   localizeAdministrationHref,
@@ -28,7 +29,6 @@ import {
   audienceDeleteFailureCopy,
   audienceSaveFailureCopy,
 } from "./audience-failure-copy";
-import { newCondition } from "./audience-filter-editing";
 import type { AudienceEditorData } from "./audience-page-data.server";
 
 const navigation = await import("next/navigation");
@@ -82,7 +82,14 @@ const everyone: AudienceFilter = {
 const czechSpeakers: AudienceFilter = {
   _tag: "Group",
   operator: "and",
-  filters: [{ ...newCondition("locale"), value: ["cs-CZ"] } as never],
+  filters: [
+    {
+      _tag: "Condition",
+      attribute: "locale",
+      operator: "anyOf",
+      value: ["cs-CZ"],
+    },
+  ],
 };
 
 const savedAudience = (
@@ -107,17 +114,21 @@ type View = ReturnType<typeof renderEditor>;
 const button = (view: View, name: string) =>
   view.queryByRole("button", { name });
 
-const titleInput = (view: View) =>
-  view.getByRole("textbox", {
+const titleInput = (view: View) => {
+  const input = view.getByRole("textbox", {
     name: m.emailCampaignsAudienceEditorTitleLabel({}, { locale }),
-  }) as HTMLInputElement;
+  });
+  assert(input instanceof HTMLInputElement);
+  return input;
+};
 
-const submitButton = (view: View) =>
-  view
+const submitButton = (view: View) => {
+  const submit = view
     .getAllByRole("button")
-    .find(
-      (candidate) => candidate.getAttribute("type") === "submit"
-    ) as HTMLButtonElement;
+    .find((candidate) => candidate.getAttribute("type") === "submit");
+  assert(submit instanceof HTMLButtonElement);
+  return submit;
+};
 
 const typeTitle = async (view: View, title: string) => {
   await act(async () => {
@@ -308,7 +319,7 @@ describe("audience actions", () => {
   test("restores an archived audience and refreshes", async () => {
     const view = renderEditor(savedAudience({ archived: true }));
     await act(async () => {
-      fireEvent.click(button(view, label.unarchive) as HTMLElement);
+      fireEvent.click(view.getByRole("button", { name: label.unarchive }));
     });
     expect(operations.requests("unarchiveCampaignAudience")).toEqual([
       { operation: "unarchiveCampaignAudience", input: { audienceId } },
@@ -323,14 +334,13 @@ describe("audience actions", () => {
   test("archives the audience once confirmed and refreshes", async () => {
     const view = renderEditor(savedAudience());
     await act(async () => {
-      fireEvent.click(button(view, label.archive) as HTMLElement);
+      fireEvent.click(view.getByRole("button", { name: label.archive }));
     });
     await act(async () => {
       fireEvent.click(
-        button(
-          view,
-          m.emailCampaignsAudienceArchiveConfirm({}, { locale })
-        ) as HTMLElement
+        view.getByRole("button", {
+          name: m.emailCampaignsAudienceArchiveConfirm({}, { locale }),
+        })
       );
     });
     expect(operations.requests("archiveCampaignAudience")).toEqual([
@@ -346,14 +356,13 @@ describe("audience actions", () => {
   test("deletes the audience once confirmed and returns to the list", async () => {
     const view = renderEditor(savedAudience());
     await act(async () => {
-      fireEvent.click(button(view, label.delete) as HTMLElement);
+      fireEvent.click(view.getByRole("button", { name: label.delete }));
     });
     await act(async () => {
       fireEvent.click(
-        button(
-          view,
-          m.emailCampaignsAudienceDeleteConfirm({}, { locale })
-        ) as HTMLElement
+        view.getByRole("button", {
+          name: m.emailCampaignsAudienceDeleteConfirm({}, { locale }),
+        })
       );
     });
     expect(operations.requests("deleteCampaignAudience")).toEqual([
@@ -376,14 +385,13 @@ describe("audience actions", () => {
   test("keeps the delete dialog open with the refusal", async () => {
     const view = renderEditor(savedAudience());
     await act(async () => {
-      fireEvent.click(button(view, label.delete) as HTMLElement);
+      fireEvent.click(view.getByRole("button", { name: label.delete }));
     });
     await act(async () => {
       fireEvent.click(
-        button(
-          view,
-          m.emailCampaignsAudienceDeleteConfirm({}, { locale })
-        ) as HTMLElement
+        view.getByRole("button", {
+          name: m.emailCampaignsAudienceDeleteConfirm({}, { locale }),
+        })
       );
     });
     const failure = {

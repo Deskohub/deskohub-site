@@ -9,7 +9,7 @@ import {
 } from "@deskohub/dotypos";
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { eq } from "drizzle-orm";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   latePaymentRecoveries,
@@ -17,16 +17,19 @@ import {
   teamTableHoldClaims,
   workspaceReservations,
 } from "@/db/schema";
+import { tableAccountingDocumentSnapshotSchema } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { makeCoworkInvoiceDocument } from "@/features/accounting/invoice.test-utils";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { buildTableReservationQuote } from "@/features/checkout/reservation-quote-table";
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { dotyposHoldFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import { dotyposCreatedReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
 import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
 import { TeamTableHoldClaims } from "@/features/team-table/backend/team-table-hold-claims";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   holdPostgresTransaction,
@@ -91,7 +94,7 @@ describe.skipIf(!testDatabase)(
         Layer.mergeAll(
           repositories,
           WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase.databasePool),
-          Layer.mock(DotyposService, dotypos as never),
+          Layer.mock(DotyposService, dotypos),
           Layer.mock(AccountingDocumentSnapshots, {
             find: unreachable("snapshots.find"),
           }),
@@ -143,6 +146,7 @@ describe.skipIf(!testDatabase)(
         testDatabase.db.insert(paymentAttempts).values([
           {
             id: earlier,
+            orderId: standaloneReservationOrderId(reservation.id),
             workspaceReservationId: reservation.id,
             provider: "nexi",
             providerOrderId: NexiOrderIdSchema.make(`order-earlier-${id}`),
@@ -154,6 +158,7 @@ describe.skipIf(!testDatabase)(
           },
           {
             id: newer,
+            orderId: standaloneReservationOrderId(reservation.id),
             workspaceReservationId: reservation.id,
             provider: "nexi",
             providerOrderId: NexiOrderIdSchema.make(`order-newer-${id}`),
@@ -189,7 +194,12 @@ describe.skipIf(!testDatabase)(
           .from(workspaceReservations)
           .where(eq(workspaceReservations.id, reservation.id))
       );
-      return { reservationId: reservation.id, earlier, newer, before: before! };
+      return {
+        reservationId: reservation.id,
+        earlier,
+        newer,
+        before: requireValue(before, "held reservation"),
+      };
     };
 
     const readOrder = async (input: {
@@ -225,10 +235,16 @@ describe.skipIf(!testDatabase)(
           )
       );
       return {
-        reservation: reservation!,
-        earlier: attempts.find(({ id }) => id === input.earlier)!,
-        newer: attempts.find(({ id }) => id === input.newer)!,
-        recovery: recovery!,
+        reservation: requireValue(reservation, "reservation"),
+        earlier: requireValue(
+          attempts.find(({ id }) => id === input.earlier),
+          "earlier payment attempt"
+        ),
+        newer: requireValue(
+          attempts.find(({ id }) => id === input.newer),
+          "newer payment attempt"
+        ),
+        recovery: requireValue(recovery, "late-payment recovery"),
       };
     };
 
@@ -255,7 +271,10 @@ describe.skipIf(!testDatabase)(
       });
       expect(
         after.reservation.reservationHoldExpiresAt?.equals(
-          order.before.reservationHoldExpiresAt!
+          requireValue(
+            order.before.reservationHoldExpiresAt,
+            "original hold expiry"
+          )
         )
       ).toBe(true);
       for (const call of Object.values(dotypos)) {
@@ -284,6 +303,7 @@ describe.skipIf(!testDatabase)(
       await Effect.runPromise(
         testDatabase.db.insert(paymentAttempts).values({
           id: paymentAttemptId,
+          orderId: standaloneReservationOrderId(row.id),
           workspaceReservationId: row.id,
           provider: "nexi",
           providerOrderId: NexiOrderIdSchema.make(`order-${paymentAttemptId}`),
@@ -325,11 +345,19 @@ describe.skipIf(!testDatabase)(
       const quote = await Effect.runPromise(
         buildTableReservationQuote(reservation)
       );
-      const snapshot = {
-        ...makeCoworkInvoiceDocument("en-US").snapshot,
+      const snapshot = Schema.decodeUnknownSync(
+        tableAccountingDocumentSnapshotSchema
+      )({
+        ...makeCoworkInvoiceDocument("en-US"),
+        workspaceReservationId: row.id,
+        dotyposCustomerId: row.dotyposCustomerId,
+        dotyposReservationId: requireValue(
+          row.dotyposReservationId,
+          "original hold ID"
+        ),
         reservation,
         quote,
-      };
+      });
       const providerId = DotyposReservationIdSchema.make("late-team-confirmed");
       const create = mock(
         (
@@ -339,7 +367,8 @@ describe.skipIf(!testDatabase)(
             const [staged] = yield* testDatabase.db
               .select()
               .from(teamTableHoldClaims)
-              .where(eq(teamTableHoldClaims.reservationId, row.id));
+              .where(eq(teamTableHoldClaims.reservationId, row.id))
+              .pipe(Effect.orDie);
             expect(staged).toMatchObject({
               purpose: "late_payment",
               paymentAttemptId,
@@ -355,16 +384,7 @@ describe.skipIf(!testDatabase)(
             expect(input.note).toContain(
               `Team Table hold: ${staged?.generation}`
             );
-            return {
-              ...dotyposHoldFixture(providerId),
-              _customerId: input.customerId,
-              _tableId: input.tableId,
-              startDate: input.startDate.toISOString(),
-              endDate: input.endDate.toISOString(),
-              seats: String(input.seats),
-              status: input.status,
-              note: input.note,
-            };
+            return dotyposCreatedReservationFixture(providerId, input);
           })
       );
       const provider = Layer.mock(DotyposService, {

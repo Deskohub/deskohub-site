@@ -102,8 +102,8 @@ export const automationRunDetailFixture = ({
     customerLifecycle
   );
 
-const zeroCounts = <K extends string>(keys: readonly K[]) =>
-  Object.fromEntries(keys.map((key) => [key, 0])) as Record<K, number>;
+const zeroCounts = (keys: readonly string[]) =>
+  Object.fromEntries<number>(keys.map((key) => [key, 0]));
 
 type Counts<K extends string> = Partial<Record<K, number>>;
 

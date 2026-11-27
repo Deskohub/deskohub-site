@@ -1,37 +1,70 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService, DotyposUnavailable } from "@deskohub/dotypos";
-import { Cause, Effect, Exit, Layer, Predicate } from "effect";
+import {
+  DotyposCustomerIdSchema,
+  type DotyposReservation,
+  DotyposReservationIdSchema,
+  DotyposRuntimeConfigSchema,
+  DotyposService,
+  DotyposTableIdSchema,
+  DotyposUnavailable,
+  type IDotyposService,
+  makeDotyposRuntimeConfigLayer,
+} from "@deskohub/dotypos";
+import { Cause, Effect, Exit, Layer, Predicate, Schema } from "effect";
+import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
+import type {
+  LatePaymentRecovery,
+  LatePaymentRecoveryState,
+} from "@/db/schema";
+import {
+  type AccountingDocumentSnapshot,
+  coworkAccountingDocumentSnapshotSchema,
+  meetingRoomAccountingDocumentSnapshotSchema,
+  officeAccountingDocumentSnapshotSchema,
+} from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import {
   makeCoworkInvoiceDocument,
   makeMeetingRoomInvoiceDocument,
   makeOfficeInvoiceDocument,
 } from "@/features/accounting/invoice.test-utils";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { discountIdSchema } from "@/features/discounts/contracts";
 import { DiscountClaimError } from "@/features/discounts/errors";
 import {
+  type IWorkspaceAvailabilityService,
   WorkspaceAvailabilityService,
   WorkspaceTableUnavailableError,
 } from "@/features/reservation/backend/workspace-availability.service";
 import {
+  type IWorkspaceReservationRepository,
+  type WorkspaceReservation,
   WorkspaceReservationRepository,
   WorkspaceReservationStateError,
 } from "@/features/reservation/backend/workspace-reservation.repository";
+import {
+  dotyposCreatedReservationFixture,
+  dotyposHoldFixture,
+  payableReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
-import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { moneyWithValue } from "@/shared/money/money";
 import {
   type EffectTrace,
   recordEffectTrace,
   startEffectTrace,
 } from "@/shared/testing/effect-trace.test-utils";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.service";
 import { UnpaidHoldRelease } from "../holds/unpaid-hold-release.service";
 import {
+  type ILatePaymentRecoveryRepository,
   LatePaymentRecoveryRepository,
   LatePaymentRecoverySessionTakenError,
   LatePaymentRecoveryStateError,
@@ -39,32 +72,22 @@ import {
 } from "../repositories/late-payment-recovery.repository";
 import { administrationForcedPaymentCancellationFailureCode } from "../repositories/payment-lifecycle.repository";
 import {
+  type IWorkspaceTableAssignmentService,
   TableAssignmentUnavailableError,
   WorkspaceTableAssignmentService,
 } from "../reservation/workspace-table-assignment.service";
 import { LatePaymentRecoveryService } from "./late-payment-recovery.service";
 
-interface Row {
-  readonly id: string;
-  readonly activePaymentAttemptId: string;
-  readonly dotyposCustomerId: string;
-  readonly failureCode: string | null;
-  readonly reservationDetails: StoredWorkspaceReservationDetails;
-  readonly reservationState: string;
-  readonly reservationHoldExpiresAt: Temporal.Instant;
-  readonly updatedAt: Temporal.Instant;
-}
-type Step = () => Effect.Effect<unknown, unknown>;
-
 interface Scenario {
   readonly attachedTableMove?: boolean;
   /** The recovery's stored state; null when no recovery exists. */
-  readonly recoveryState?: string | null;
+  readonly recoveryState?: LatePaymentRecoveryState | null;
   readonly claimed?: boolean;
-  readonly reservation?: Row | null;
+  readonly reservation?: WorkspaceReservation | null;
   /** Overrides each `findById` in turn; later reads use the stateful row. */
-  readonly findByIdSequence?: ReadonlyArray<Row | null>;
-  readonly originalStatus?: string;
+  readonly findByIdSequence?: ReadonlyArray<WorkspaceReservation | null>;
+  readonly originalStatus?: DotyposReservation["status"];
+  readonly getReservationStatus?: IDotyposService["getReservationStatus"];
   /** The original Dotypos reservation's bounds, read for its stay. */
   readonly originalBounds?: {
     readonly startDate: string;
@@ -72,72 +95,140 @@ interface Scenario {
   };
   /** Each `hasNewerActiveReservation` answer in turn; the last one repeats. */
   readonly newerReservation?: ReadonlyArray<boolean>;
-  readonly snapshot?: ReturnType<typeof makeCoworkInvoiceDocument> | null;
+  readonly snapshot?: AccountingDocumentSnapshot | null;
   readonly overlapping?: ReadonlyArray<{
     readonly id: string;
-    readonly status: string;
+    readonly status: "NEW" | "CONFIRMED";
     readonly note: string | null;
   }>;
-  readonly createdId?: string;
+  readonly createReservation?: IDotyposService["createReservation"];
   readonly endsWhileWaitingAt?: Temporal.Instant;
   readonly claimCancellation?: boolean;
-  readonly ensureAvailable?: Step;
-  readonly assignTableId?: Step;
-  readonly cancelReservation?: Step;
-  readonly markCancelled?: (row: { current: Row | null }) => Step;
-  readonly completeUsingOriginalReservation?: Step;
-  readonly completeWithReplacement?: Step;
+  readonly ensureAvailable?: IWorkspaceAvailabilityService["ensureAvailable"];
+  readonly assignTableId?: IWorkspaceTableAssignmentService["assignTableId"];
+  readonly cancelReservation?: IDotyposService["cancelReservation"];
+  readonly markCancelled?: (row: {
+    current: WorkspaceReservation | null;
+  }) => IWorkspaceReservationRepository["markCancelled"];
+  readonly completeUsingOriginalReservation?: ILatePaymentRecoveryRepository["completeUsingOriginalReservation"];
+  readonly completeWithReplacement?: ILatePaymentRecoveryRepository["completeWithReplacement"];
 }
 
-const recoveryRow = {
-  paymentAttemptId: "attempt-id",
-  workspaceReservationId: "reservation-id",
-  originalDotyposReservationId: "dotypos-reservation-id",
+const paymentAttemptId = paymentAttemptIdSchema.make("attempt-id");
+const workspaceReservationId =
+  workspaceReservationIdSchema.make("reservation-id");
+const dotyposReservationId = DotyposReservationIdSchema.make(
+  "dotypos-reservation-id"
+);
+const dotyposCustomerId = DotyposCustomerIdSchema.make("dotypos-customer-id");
+const tableId = DotyposTableIdSchema.make("table-id");
+const startedAt = Temporal.Now.instant();
+
+const dotyposConfig = makeDotyposRuntimeConfigLayer(
+  Schema.decodeUnknownSync(DotyposRuntimeConfigSchema)({
+    apiUrl: "https://dotypos.example.test",
+    apiTimeout: 1000,
+    clientId: "test-client",
+    clientSecret: "test-client-secret",
+    refreshToken: "test-refresh-token",
+    cloudId: "test-cloud",
+    branchId: "test-branch",
+    employeeId: "test-employee",
+    reservationTableIds: [tableId],
+  })
+);
+
+const dotyposResponse = (
+  method: "GET" | "POST",
+  path: string,
+  response: Response
+) => {
+  const fetchFixture = Object.assign(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      const { pathname } = new URL(request.url);
+      if (request.method === "POST" && pathname === "/signin/token") {
+        return Response.json({ accessToken: "test-access-token" });
+      }
+      if (request.method === method && pathname === path) {
+        return response.clone();
+      }
+      throw new Error(
+        `Unexpected Dotypos request: ${request.method} ${pathname}`
+      );
+    },
+    { preconnect: globalThis.fetch.preconnect }
+  );
+  return DotyposService.Live.pipe(
+    Layer.provide(
+      Layer.merge(
+        dotyposConfig,
+        Layer.succeed(FetchHttpClient.Fetch, fetchFixture)
+      )
+    )
+  );
 };
 
-const coworkRow = {
-  id: "reservation-id",
-  activePaymentAttemptId: "attempt-id",
-  dotyposCustomerId: "dotypos-customer-id",
-  failureCode: null,
+const recoveryRow = (state: LatePaymentRecoveryState): LatePaymentRecovery => ({
+  paymentAttemptId,
+  workspaceReservationId,
+  originalDotyposReservationId: dotyposReservationId,
+  state,
+  webhookEventId: null,
+  providerOperationId: null,
+  providerStatus: null,
+  recoveredDotyposReservationId:
+    state === "recovered" ? dotyposReservationId : null,
+  failureCode:
+    state === "refund_required" || state === "review_required"
+      ? "late_payment_fixture_failure"
+      : null,
+  verifiedPaidAt: startedAt,
+  claimedAt: state === "processing" ? startedAt : null,
+  completedAt: state === "pending" || state === "processing" ? null : startedAt,
+  createdAt: startedAt,
+  updatedAt: startedAt,
+});
+
+const expiredHeld = payableReservationFixture({
+  id: workspaceReservationId,
+  activePaymentAttemptId: paymentAttemptId,
+  dotyposReservationId,
+  dotyposCustomerId,
   reservationDetails: { kind: "cowork", entryTier: "basic", coffee: true },
-};
+  productTier: "basic",
+  productCoffee: true,
+  reservationHoldExpiresAt: startedAt.subtract({ minutes: 20 }),
+  updatedAt: startedAt.subtract({ minutes: 20 }),
+});
 
-const expiredHeld: Row = {
-  ...coworkRow,
-  reservationState: "held",
-  reservationHoldExpiresAt: Temporal.Now.instant().subtract({ minutes: 20 }),
-  updatedAt: Temporal.Now.instant().subtract({ minutes: 20 }),
-};
-
-const currentHeld: Row = {
-  ...coworkRow,
-  reservationState: "held",
-  reservationHoldExpiresAt: Temporal.Now.instant().add({ minutes: 5 }),
-  updatedAt: Temporal.Now.instant(),
+const currentHeld: WorkspaceReservation = {
+  ...expiredHeld,
+  reservationHoldExpiresAt: startedAt.add({ minutes: 5 }),
+  updatedAt: startedAt,
 };
 
 const withSnapshotKeys = (
-  document: ReturnType<typeof makeCoworkInvoiceDocument>
-) => ({
+  document: AccountingDocumentSnapshot
+): AccountingDocumentSnapshot => ({
   ...document,
-  workspaceReservationId: "reservation-id",
-  dotyposReservationId: "dotypos-reservation-id",
-  dotyposCustomerId: "dotypos-customer-id",
+  workspaceReservationId,
+  dotyposReservationId,
+  dotyposCustomerId,
 });
 
 const succeed =
   <A>(value: A) =>
   () =>
-    Effect.succeed(value as never);
+    Effect.succeed(value);
 const fail =
   <E>(error: E) =>
   () =>
-    Effect.fail(error as never);
+    Effect.fail(error);
 
 const recoveryStateError = new LatePaymentRecoveryStateError({
   operation: "settle",
-  paymentAttemptId: "attempt-id" as never,
+  paymentAttemptId,
   message: "A newer reservation prevents recovery.",
 });
 
@@ -149,7 +240,7 @@ const discountClaimError = new DiscountClaimError({
 
 const reservationStateError = new WorkspaceReservationStateError({
   operation: "markCancelled",
-  reservationId: "reservation-id" as never,
+  reservationId: workspaceReservationId,
   message: "The reservation is no longer cancelling.",
 });
 
@@ -160,45 +251,47 @@ const reservationStateError = new WorkspaceReservationStateError({
 const recover = async (scenario: Scenario) => {
   const trace: EffectTrace = startEffectTrace();
   const row = {
-    current: (scenario.reservation === undefined
-      ? expiredHeld
-      : scenario.reservation) as Row | null,
+    current:
+      scenario.reservation === undefined ? expiredHeld : scenario.reservation,
   };
   let recoveryState =
     scenario.recoveryState === undefined ? "pending" : scenario.recoveryState;
   const findByIdSequence = [...(scenario.findByIdSequence ?? [])];
   const newerAnswers = [...(scenario.newerReservation ?? [false])];
-  const settleAs = (state: string) => () =>
+  const settleAs = (state: LatePaymentRecoveryState) => () =>
     Effect.sync(() => {
       recoveryState = state;
     });
-  const setRow = (changes: Partial<Row>) => () =>
-    Effect.sync(() => {
-      row.current = { ...row.current, ...changes };
-      return row.current as never;
-    });
+  const setRowState = (
+    reservationState: WorkspaceReservation["reservationState"]
+  ) => {
+    if (row.current !== null) {
+      row.current = { ...row.current, reservationState };
+    }
+  };
   const calls = {
     ensureAvailable: mock(scenario.ensureAvailable ?? succeed(undefined)),
-    createReservation: mock(
-      succeed({ id: scenario.createdId ?? "replacement-id" })
+    createReservation: mock<IDotyposService["createReservation"]>(
+      scenario.createReservation ??
+        ((input) =>
+          Effect.succeed(
+            dotyposCreatedReservationFixture("replacement-id", input)
+          ))
     ),
   };
   const recoveries = trace.recordCalls("recoveries", {
     findByPaymentAttemptId: () =>
-      Effect.sync(
-        () =>
-          (recoveryState === null
-            ? null
-            : { ...recoveryRow, state: recoveryState }) as never
+      Effect.sync(() =>
+        recoveryState === null ? null : recoveryRow(recoveryState)
       ),
     claim: succeed(
-      scenario.claimed === false
-        ? null
-        : { ...recoveryRow, state: "processing" }
+      scenario.claimed === false ? null : recoveryRow("processing")
     ),
     hasNewerActiveReservation: () =>
-      Effect.sync(() =>
-        newerAnswers.length > 1 ? newerAnswers.shift() : newerAnswers[0]
+      Effect.sync(
+        () =>
+          (newerAnswers.length > 1 ? newerAnswers.shift() : newerAnswers[0]) ??
+          false
       ),
     completeUsingOriginalReservation:
       scenario.completeUsingOriginalReservation ?? settleAs("recovered"),
@@ -211,29 +304,41 @@ const recover = async (scenario: Scenario) => {
     hasAttachedOpenSpaceMove: () =>
       Effect.succeed(scenario.attachedTableMove ?? false),
     findById: () =>
-      Effect.sync(() =>
-        findByIdSequence.length > 0
-          ? (findByIdSequence.shift() as never)
-          : (row.current as never)
-      ),
+      Effect.sync(() => {
+        const next = findByIdSequence.shift();
+        return next === undefined ? row.current : next;
+      }),
     claimCancellation:
       scenario.claimCancellation === false
         ? succeed(null)
-        : setRow({ reservationState: "cancelling" }),
+        : () =>
+            Effect.sync(() => {
+              setRowState("cancelling");
+              return row.current;
+            }),
     markCancelled:
       scenario.markCancelled?.(row) ??
-      setRow({ reservationState: "cancelled" }),
-    takeOverStaleCancellation: () => Effect.sync(() => row.current as never),
-    markCancellationFailed: setRow({ reservationState: "cancellation_failed" }),
+      (() => Effect.sync(() => setRowState("cancelled"))),
+    takeOverStaleCancellation: () => Effect.sync(() => row.current),
+    markCancellationFailed: () =>
+      Effect.sync(() => setRowState("cancellation_failed")),
   });
   const dotypos = trace.recordCalls("dotypos", {
-    getReservationStatus: succeed(scenario.originalStatus ?? "NEW"),
+    getReservationStatus:
+      scenario.getReservationStatus ??
+      succeed(scenario.originalStatus ?? "NEW"),
     getReservationWithoutCustomer: succeed({
+      ...dotyposHoldFixture(dotyposReservationId),
       ...scenario.originalBounds,
-      seats: "1",
     }),
     cancelReservation: scenario.cancelReservation ?? succeed(undefined),
-    listActiveReservationsOverlapping: succeed(scenario.overlapping ?? []),
+    listActiveReservationsOverlapping: succeed(
+      scenario.overlapping?.map(({ id, status, note }) => ({
+        ...dotyposHoldFixture(id),
+        status,
+        note,
+      })) ?? []
+    ),
     createReservation: calls.createReservation,
   });
   const snapshot =
@@ -259,7 +364,7 @@ const recover = async (scenario: Scenario) => {
     const service = yield* LatePaymentRecoveryService;
     return yield* recordEffectTrace(
       trace,
-      service.recover({ paymentAttemptId: "attempt-id" as never })
+      service.recover({ paymentAttemptId })
     );
   }).pipe(
     Effect.provide(
@@ -268,8 +373,8 @@ const recover = async (scenario: Scenario) => {
         Layer.provide(advisoryLock),
         Layer.provide(
           Layer.mergeAll(
-            Layer.mock(LatePaymentRecoveryRepository, recoveries as never),
-            Layer.mock(WorkspaceReservationRepository, reservations as never),
+            Layer.mock(LatePaymentRecoveryRepository, recoveries),
+            Layer.mock(WorkspaceReservationRepository, reservations),
             Layer.mock(AccountingDocumentSnapshots, {
               find: trace.recordCalls("snapshots", {
                 find: succeed(snapshot),
@@ -278,13 +383,13 @@ const recover = async (scenario: Scenario) => {
             Layer.mock(WorkspaceAvailabilityService, {
               ensureAvailable: trace.recordCalls("availability", {
                 ensureAvailable: calls.ensureAvailable,
-              }).ensureAvailable as never,
+              }).ensureAvailable,
             }),
-            Layer.mock(DotyposService, dotypos as never),
+            Layer.mock(DotyposService, dotypos),
             Layer.mock(WorkspaceTableAssignmentService, {
               assignTableId: trace.recordCalls("tableAssignments", {
-                assignTableId: scenario.assignTableId ?? succeed("table-id"),
-              }).assignTableId as never,
+                assignTableId: scenario.assignTableId ?? succeed(tableId),
+              }).assignTableId,
             }),
             Layer.mock(ReservationFulfillment, {
               run: trace.recordCalls("fulfillment", {
@@ -419,7 +524,10 @@ describe("LatePaymentRecoveryService.recover settled recoveries", () => {
 
   test("refunds a payment whose attempt was superseded", async () => {
     const { outcome, trace } = await recover({
-      reservation: { ...expiredHeld, activePaymentAttemptId: "newer-attempt" },
+      reservation: {
+        ...expiredHeld,
+        activePaymentAttemptId: paymentAttemptIdSchema.make("newer-attempt"),
+      },
     });
 
     expect(outcome).toBe("refund_required");
@@ -500,14 +608,14 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
   });
 
   test("recreates an overnight Reserved Desk with the stay of its original Dotypos bounds", async () => {
-    const reservedDesk: Row = {
+    const reservedDesk = {
       ...currentHeld,
       reservationDetails: {
         kind: "cowork",
         entryTier: "reserved-desk",
         coffee: true,
       },
-    };
+    } satisfies WorkspaceReservation;
     const recreate = (originalBounds: Scenario["originalBounds"]) =>
       recover({
         reservation: reservedDesk,
@@ -590,7 +698,9 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
   });
 
   test("recreates from a snapshot signed before staff labels with its stored discount label", async () => {
-    const document = makeCoworkInvoiceDocument("de-DE");
+    const document = Schema.decodeUnknownSync(
+      coworkAccountingDocumentSnapshotSchema
+    )(makeCoworkInvoiceDocument("de-DE"));
     const storedLabel = "Sommerrabatt";
     const atPrice = (value: number) =>
       moneyWithValue(value, document.quote.payment.expectedPrice);
@@ -606,7 +716,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
             discounts: [
               {
                 discount: {
-                  id: "summer-sale" as never,
+                  id: discountIdSchema.make("summer-sale"),
                   label: storedLabel,
                   adjustment: { kind: "percentage", basisPoints: 1000 },
                 },
@@ -691,7 +801,7 @@ describe("LatePaymentRecoveryService.recover original hold reuse", () => {
       newerReservation: [false, true],
       completeUsingOriginalReservation: fail(
         new OriginalHoldNotReusableError({
-          paymentAttemptId: "attempt-id" as never,
+          paymentAttemptId,
           message: "The hold reached its reuse margin.",
         })
       ),
@@ -999,10 +1109,30 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
     `);
   });
 
-  test("requires review when the original hold's cancellation is uncertain", async () => {
-    const { outcome, trace } = await recover({ originalStatus: "COMPLETED" });
+  test("retries when Dotypos returns an unsupported original hold status", async () => {
+    const provider = dotyposResponse(
+      "GET",
+      `/clouds/test-cloud/reservations/${dotyposReservationId}`,
+      Response.json({
+        ...dotyposHoldFixture(dotyposReservationId),
+        status: "COMPLETED",
+      })
+    );
+    const { cause, outcome, trace } = await recover({
+      getReservationStatus: (id) =>
+        Effect.flatMap(DotyposService, (dotypos) =>
+          dotypos.getReservationStatus(id)
+        ).pipe(Effect.provide(provider)),
+    });
 
-    expect(outcome).toBe("review_required");
+    expect(outcome).toBe("fail: Late-payment recovery failed.");
+    expect(cause && Cause.squash(cause)).toMatchObject({
+      cause: {
+        _tag: "DotyposRejected",
+        request: "reservation.status",
+        reason: "invalid-response",
+      },
+    });
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentRecovery.recover",
@@ -1015,7 +1145,9 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
         "span unpaidHoldRelease.release",
         "call reservations.findById(reservation-id)",
         "call dotypos.getReservationStatus(dotypos-reservation-id)",
-        "call recoveries.requireReview(paymentAttemptId=attempt-id, workspaceReservationId=reservation-id, failureCode=late_payment_original_cancellation_uncertain, completedAt=<Instant>)",
+        "span getReservationStatus",
+        "span POST",
+        "span GET",
       ]
     `);
   });
@@ -1127,7 +1259,9 @@ describe("LatePaymentRecoveryService.recover original hold release", () => {
     const { outcome, trace } = await recover({
       markCancelled: (row) => () =>
         Effect.suspend(() => {
-          row.current = { ...row.current, reservationState: "cancelled" };
+          if (row.current !== null) {
+            row.current = { ...row.current, reservationState: "cancelled" };
+          }
           return Effect.fail(reservationStateError);
         }),
     });
@@ -1299,7 +1433,9 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
           earlySetup: true,
         },
       },
-      snapshot: makeMeetingRoomInvoiceDocument("cs-CZ"),
+      snapshot: Schema.decodeUnknownSync(
+        meetingRoomAccountingDocumentSnapshotSchema
+      )(makeMeetingRoomInvoiceDocument("cs-CZ")),
     });
 
     expect(outcome).toBe("recovered");
@@ -1347,12 +1483,15 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
   });
 
   test("recreates an office reservation from its snapshot", async () => {
+    const snapshot = Schema.decodeUnknownSync(
+      officeAccountingDocumentSnapshotSchema
+    )(makeOfficeInvoiceDocument("en-US"));
     const { outcome, calls } = await recover({
       reservation: {
         ...expiredHeld,
-        reservationDetails: makeOfficeInvoiceDocument("en-US").reservation,
+        reservationDetails: snapshot.reservation,
       },
-      snapshot: makeOfficeInvoiceDocument("en-US"),
+      snapshot,
     });
 
     expect(outcome).toBe("recovered");
@@ -1453,7 +1592,9 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
 
   test("refunds when the snapshot describes another kind of reservation", async () => {
     const { outcome, trace } = await recover({
-      snapshot: makeMeetingRoomInvoiceDocument("en-US"),
+      snapshot: Schema.decodeUnknownSync(
+        meetingRoomAccountingDocumentSnapshotSchema
+      )(makeMeetingRoomInvoiceDocument("en-US")),
     });
 
     expect(outcome).toBe("refund_required");
@@ -1482,12 +1623,17 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
   });
 
   test("refunds a reservation that already ended", async () => {
-    const document = makeCoworkInvoiceDocument("en-US");
+    const document = Schema.decodeUnknownSync(
+      coworkAccountingDocumentSnapshotSchema
+    )(makeCoworkInvoiceDocument("en-US"));
     const { outcome, trace } = await recover({
       snapshot: {
         ...document,
-        reservation: { ...document.reservation, date: "2020-01-01" },
-      } as never,
+        reservation: {
+          kind: "cowork",
+          date: plainDateStringSchema.make("2020-01-01"),
+        },
+      },
     });
 
     expect(outcome).toBe("refund_required");
@@ -1518,7 +1664,7 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
 
   test("requires review when several replacements carry the recovery marker", async () => {
     const replacement = {
-      status: "CONFIRMED",
+      status: "CONFIRMED" as const,
       note: "Booked online\nPayment order: reservation-id",
     };
     const { outcome, trace } = await recover({
@@ -1793,10 +1939,34 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
     `);
   });
 
-  test("requires review when the created replacement has no ID", async () => {
-    const { outcome, trace } = await recover({ createdId: "" });
+  test("retries when Dotypos returns no ID for a created replacement", async () => {
+    const provider = dotyposResponse(
+      "POST",
+      "/clouds/test-cloud/reservations",
+      Response.json([
+        {
+          ...dotyposHoldFixture("replacement-id"),
+          id: "",
+          status: "CONFIRMED",
+        },
+      ])
+    );
+    const { cause, outcome, trace } = await recover({
+      createReservation: (input) =>
+        Effect.flatMap(DotyposService, (dotypos) =>
+          dotypos.createReservation(input)
+        ).pipe(Effect.provide(provider)),
+    });
 
-    expect(outcome).toBe("review_required");
+    expect(outcome).toBe("fail: Late-payment recovery failed.");
+    expect(cause && Cause.squash(cause)).toMatchObject({
+      cause: {
+        _tag: "DotyposUncertain",
+        request: "reservation.create",
+        reason: "invalid-response",
+        message: "Reservation ID is required",
+      },
+    });
     expect(trace).toMatchInlineSnapshot(`
       [
         "span latePaymentRecovery.recover",
@@ -1833,8 +2003,13 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       Káva: ano
       Cena: 340 Kč)"
       ,
-        "Info Workspace Dotypos reservation creation completed {date,dotyposCustomerId,dotyposReservationId,dotyposReservationStatus,endsAt,entryTier,locale,paymentOrderId,reservationKind,reservationStatus,seats,startsAt,tableId} in createWorkspaceDotyposReservation",
-        "call recoveries.requireReview(paymentAttemptId=attempt-id, workspaceReservationId=reservation-id, failureCode=late_payment_replacement_id_missing, completedAt=<Instant>)",
+        "span createReservation",
+        "Info Dotypos reservation request build started {customerId,date,dotyposCustomerId,endsAt,entryTier,input,locale,paymentOrderId,reservationKind,reservationStatus,seats,startsAt,status,tableId} in createReservation",
+        "Info Dotypos reservation API call started {customerId,date,dotyposCustomerId,endsAt,entryTier,input,locale,paymentOrderId,requestBody,reservationKind,reservationStatus,seats,startsAt,status,tableId} in createReservation",
+        "span dotyposService.createReservation",
+        "span POST",
+        "span POST",
+        "Error Workspace Dotypos reservation creation failed (cause=<DotyposUncertain>) {date,entryTier,locale,paymentOrderId,reservationKind,reservationStatus} in createWorkspaceDotyposReservation",
       ]
     `);
   });

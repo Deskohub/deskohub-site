@@ -14,7 +14,9 @@ import {
   checkoutSessionKeySchema,
 } from "@/features/checkout/checkout-identifiers";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { dotyposCustomerFixture } from "@/shared/testing/dotypos-customer.test-utils";
 import type { WorkspaceReservation } from "./workspace-reservation.repository";
+import type { WorkspaceReservationDetails } from "./workspace-reservation.service";
 
 /**
  * A stored, paid and fulfilled open-space cowork reservation, with
@@ -72,6 +74,36 @@ export const workspaceReservationFixture = (
     productTier: "open-space",
     productCoffee: false,
     productMonitorOption: null,
+    ...overrides,
+  };
+};
+
+/**
+ * A confirmed `WorkspaceReservationDetails` fixture for Workspace reservation tests, with `overrides` applied.
+ */
+export const workspaceReservationDetailsFixture = (
+  overrides: Partial<WorkspaceReservationDetails> = {}
+): WorkspaceReservationDetails => {
+  const reservation = workspaceReservationFixture();
+  const reservedFrom = Temporal.Instant.from("2099-06-01T08:00:00Z");
+  const reservedUntil = Temporal.Instant.from("2099-06-01T16:00:00Z");
+  return {
+    id: reservation.id,
+    dotyposCustomerId: reservation.dotyposCustomerId,
+    authorAccountId: reservation.authorAccountId,
+    reservationDetails: reservation.reservationDetails,
+    locale: reservation.locale,
+    dotyposReservationId: DotyposReservationIdSchema.make(
+      "dotypos-reservation-1"
+    ),
+    customer: dotyposCustomerFixture(
+      overrides.dotyposCustomerId ?? reservation.dotyposCustomerId
+    ),
+    reservedFrom,
+    reservedUntil,
+    providerStatus: "CONFIRMED",
+    seats: 1,
+    placement: {},
     ...overrides,
   };
 };

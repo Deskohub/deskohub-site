@@ -30,11 +30,13 @@ const markup = ({
   readonly routeLocale?: Locale;
   readonly shown: readonly Locale[];
   readonly updating?: boolean;
-}) =>
-  renderToStaticMarkup(
+}) => {
+  const [locale] = shown;
+  if (!locale) throw new Error("Expected at least one preview locale.");
+  return renderToStaticMarkup(
     <RouteLocaleProvider locale={routeLocale}>
       <CampaignInboxPreview
-        locale={shown[0]!}
+        locale={locale}
         locales={shown}
         onLocaleChange={() => undefined}
         placeholder="Synthetic placeholder"
@@ -44,6 +46,7 @@ const markup = ({
       />
     </RouteLocaleProvider>
   );
+};
 
 const openPage = async (body: string) => {
   if (!browser) throw new Error("The preview browser has not been launched.");
@@ -77,10 +80,14 @@ test.skipIf(!chromiumAvailable).each([
           const { left, right, top, bottom } = element.getBoundingClientRect();
           return { left, right, top, bottom };
         };
-        const section = document.querySelector("section")!;
+        const section = document.querySelector("section");
+        const heading = section?.querySelector("h2");
+        if (!section || !heading) {
+          throw new Error("Expected the inbox preview card and heading.");
+        }
         return {
           card: box(section),
-          heading: box(section.querySelector("h2")!),
+          heading: box(heading),
           choices: [...section.querySelectorAll("label")].map(box),
         };
       });
@@ -132,40 +139,46 @@ test.skipIf(!chromiumAvailable).each([...locales])(
         (label) => {
           const failed: string[] = [];
           const mains = [...document.querySelectorAll("main")];
-          const layout = (main: Element) => {
-            const card = main.querySelector("section")!;
+          const layout = (card: Element) => {
+            const header = card.firstElementChild;
+            if (!header) throw new Error("Expected the preview card header.");
             const origin = card.getBoundingClientRect();
             return JSON.stringify(
-              [card.firstElementChild!, ...card.querySelectorAll("label")].map(
-                (element) => {
-                  const box = element.getBoundingClientRect();
-                  return [box.x - origin.x, box.y - origin.y, box.height].map(
-                    Math.round
-                  );
-                }
-              )
+              [header, ...card.querySelectorAll("label")].map((element) => {
+                const box = element.getBoundingClientRect();
+                return [box.x - origin.x, box.y - origin.y, box.height].map(
+                  Math.round
+                );
+              })
             );
           };
           for (let index = 0; index < mains.length; index += 2) {
-            const busy = mains[index]!;
-            const idle = mains[index + 1]!;
+            const busy = mains[index];
+            const idle = mains[index + 1];
+            const busyCard = busy?.querySelector("section");
+            const idleCard = idle?.querySelector("section");
+            if (!busy || !idle || !busyCard || !idleCard) {
+              throw new Error("Expected paired busy and idle preview cards.");
+            }
             const count = index / 2 + 1;
             const text = document.createRange();
             const shownLabel = [...busy.querySelectorAll("span")].find(
               (span) =>
                 span.textContent === label &&
                 span.getBoundingClientRect().width > 1
-            )!;
+            );
+            if (!shownLabel)
+              throw new Error("Expected a visible update label.");
             text.selectNodeContents(shownLabel);
             for (let width = 288; width <= 1100; width += 4) {
               busy.style.width = idle.style.width = `${width}px`;
               const at = `${count} languages at ${width}`;
-              if (layout(busy) !== layout(idle)) failed.push(`moved ${at}`);
+              if (layout(busyCard) !== layout(idleCard)) {
+                failed.push(`moved ${at}`);
+              }
               const inner = text.getBoundingClientRect();
               const outer = shownLabel.getBoundingClientRect();
-              const card = busy
-                .querySelector("section")!
-                .getBoundingClientRect();
+              const card = busyCard.getBoundingClientRect();
               if (
                 inner.left < Math.max(outer.left, card.left) - 0.5 ||
                 inner.right > Math.min(outer.right, card.right) + 0.5

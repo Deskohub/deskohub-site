@@ -9,6 +9,8 @@ const allowedServerImports = new Set([
   "app/api/webhooks/cloudinary/route.ts",
   "app/api/webhooks/cloudinary/route.test.ts",
   "features/account/backend/customer-avatar.service.ts",
+  // The avatar test supplies a mock layer for the Cloudinary service tag.
+  "features/account/backend/customer-avatar.service.test.ts",
   "features/email-campaigns/backend/campaign-image.service.ts",
   "features/email-campaigns/backend/campaign-image.service.test.ts",
   "shared/backend/cloudinary.ts",

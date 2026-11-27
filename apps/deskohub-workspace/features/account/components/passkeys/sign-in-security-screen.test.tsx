@@ -264,9 +264,11 @@ describe("SignInSecurityScreen", () => {
     );
     const input = screen.dialog()?.querySelector("input");
     if (!(input instanceof HTMLInputElement)) throw new Error("No name input");
+    const form = input.form;
+    if (!form) throw new Error("No passkey rename form");
     fireEvent.change(input, { target: { value: "Renamed phone" } });
     await act(async () => {
-      fireEvent.submit(input.form as HTMLFormElement);
+      fireEvent.submit(form);
     });
 
     expect(renamePasskey).toHaveBeenCalledWith(phone.id, "Renamed phone");
