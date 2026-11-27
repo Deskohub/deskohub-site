@@ -90,6 +90,12 @@ export interface IFulfillmentLedger {
     readonly locale: Locale;
     readonly expectedActiveCustomerEmailDeliveryId: EmailDeliveryId | null;
   }) => Effect.Effect<Locale | null, EffectDrizzleQueryError>;
+  /** Retains the first shared table list used by the active delivery generation. */
+  readonly retainActiveCustomerEmailDeliveryOpenSpaceTables: (input: {
+    readonly id: WorkspaceReservationId;
+    readonly tableNames: string;
+    readonly expectedActiveCustomerEmailDeliveryId: EmailDeliveryId | null;
+  }) => Effect.Effect<string | null, EffectDrizzleQueryError>;
   readonly markAwaitingCustomerEmailDelivery: (input: {
     readonly id: WorkspaceReservationId;
     readonly customerEmailDeliveryId: EmailDeliveryId;
@@ -330,6 +336,33 @@ export class FulfillmentLedger extends Context.Service<
           // recorded its accepted send between the claim and this retention.
           return retained?.locale ?? null;
         }),
+        retainActiveCustomerEmailDeliveryOpenSpaceTables: Effect.fn(
+          "workspaceReservations.retainActiveCustomerEmailDeliveryOpenSpaceTables"
+        )(function* (input) {
+          const tableNames =
+            workspaceReservations.activeCustomerEmailDeliveryOpenSpaceTables;
+          const [retained] = yield* db
+            .update(workspaceReservations)
+            .set({
+              activeCustomerEmailDeliveryOpenSpaceTables: sql`coalesce(${tableNames}, ${input.tableNames})`,
+              updatedAt: Temporal.Now.instant(),
+            })
+            .where(
+              and(
+                eq(workspaceReservations.id, input.id),
+                eq(workspaceReservations.paymentState, "paid"),
+                eq(workspaceReservations.fulfillmentState, "processing"),
+                input.expectedActiveCustomerEmailDeliveryId === null
+                  ? isNull(workspaceReservations.activeCustomerEmailDeliveryId)
+                  : eq(
+                      workspaceReservations.activeCustomerEmailDeliveryId,
+                      input.expectedActiveCustomerEmailDeliveryId
+                    )
+              )
+            )
+            .returning({ tableNames });
+          return retained?.tableNames ?? null;
+        }),
         markAwaitingCustomerEmailDelivery: Effect.fn(
           "workspaceReservations.markAwaitingCustomerEmailDelivery"
         )(function* (input) {
@@ -345,6 +378,7 @@ export class FulfillmentLedger extends Context.Service<
               // Recording the accepted send closes its idempotency generation,
               // so the next generation resolves the current preference again.
               activeCustomerEmailDeliveryLocale: null,
+              activeCustomerEmailDeliveryOpenSpaceTables: null,
               updatedAt: Temporal.Now.instant(),
             })
             .where(
@@ -488,6 +522,7 @@ export class FulfillmentLedger extends Context.Service<
                 // Recording the accepted send closes its idempotency generation,
                 // so a later recovery resolves the current preference again.
                 activeCustomerEmailDeliveryLocale: null,
+                activeCustomerEmailDeliveryOpenSpaceTables: null,
                 updatedAt: Temporal.Now.instant(),
               })
               .where(

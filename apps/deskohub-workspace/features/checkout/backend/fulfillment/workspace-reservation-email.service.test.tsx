@@ -273,7 +273,9 @@ const loadOpenSpaceReservationFromSyntheticSnapshot = async () => {
   } as WorkspaceReservation;
   const details = await Effect.gen(function* () {
     const service = yield* WorkspaceReservationService;
-    return yield* service.getReservation("reservation-id");
+    return yield* service.getReservation("reservation-id", {
+      requireOpenSpaceTableNames: true,
+    });
   }).pipe(
     Effect.provide(
       WorkspaceReservationService.Default.pipe(

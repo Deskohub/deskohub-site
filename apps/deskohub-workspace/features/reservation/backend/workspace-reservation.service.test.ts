@@ -101,6 +101,7 @@ const detailsEffect = (input: {
   readonly activeReservations?: readonly Reservation[];
   readonly teamTableIds?: readonly string[];
   readonly overlapFailure?: DotyposUnavailable;
+  readonly requireOpenSpaceTableNames?: boolean;
 }) => {
   const repository = {
     findById: mock(() =>
@@ -138,7 +139,9 @@ const detailsEffect = (input: {
 
   return Effect.gen(function* () {
     const service = yield* WorkspaceReservationService;
-    return yield* service.getReservation("reservation-id");
+    return yield* service.getReservation("reservation-id", {
+      requireOpenSpaceTableNames: input.requireOpenSpaceTableNames ?? false,
+    });
   }).pipe(
     Effect.provide(
       WorkspaceReservationService.Default.pipe(
@@ -276,6 +279,7 @@ describe("WorkspaceReservationService", () => {
           makeDotyposReservation({ id: "team-booking", _tableId: "table-id" }),
         ],
         teamTableIds: ["team-booking"],
+        requireOpenSpaceTableNames: true,
         onProviderRead: (provider) => providerReads.push(provider),
       })
     );
@@ -303,6 +307,7 @@ describe("WorkspaceReservationService", () => {
           },
         }),
         overlapFailure,
+        requireOpenSpaceTableNames: true,
       }).pipe(Effect.flip)
     );
 
@@ -310,6 +315,27 @@ describe("WorkspaceReservationService", () => {
       errorCode: "dotypos_reservation_load_failed",
       cause: overlapFailure,
     });
+  });
+
+  test("loads ordinary Open Space details when the overlap provider is unavailable", async () => {
+    const details = await Effect.runPromise(
+      detailsEffect({
+        workspaceReservation: makeWorkspaceReservation({
+          reservationDetails: {
+            kind: "cowork",
+            entryTier: "open-space",
+            coffee: false,
+          },
+        }),
+        overlapFailure: new DotyposUnavailable({
+          operation: "listActiveReservationsOverlapping",
+          reason: "timeout",
+        }),
+      })
+    );
+
+    expect(details.placement.table).toBeUndefined();
+    expect(details.placement.tableMap).toBeDefined();
   });
 
   test("leaves the seating map out until it is released", async () => {

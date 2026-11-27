@@ -174,10 +174,14 @@ export const workspaceReservations = pgTable(
     activeCustomerEmailDeliveryLocale: text(
       "active_customer_email_delivery_locale"
     ).$type<Locale>(),
+    /** Null before retention. An empty string retains an email with no table list. */
+    activeCustomerEmailDeliveryOpenSpaceTables: text(
+      "active_customer_email_delivery_open_space_tables"
+    ),
     reservationDetails: jsonb("reservation_details").notNull(),
     /**
-     * For an office booked with a people list, whether its contact takes a
-     * seat; null for every other reservation. Kept apart from the invitee
+     * For an Office or Team Table with a people list, whether its contact
+     * takes a seat. Kept apart from the invitee
      * rows, which the retention purge deletes or reduces.
      */
     officeContactAttends: boolean("office_contact_attends"),

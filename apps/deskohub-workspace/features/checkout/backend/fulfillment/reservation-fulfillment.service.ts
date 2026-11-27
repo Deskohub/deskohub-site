@@ -13,6 +13,7 @@ import {
 import { ReservationInvoiceService } from "@/features/accounting/backend/reservation-invoice.service";
 import { WorkspaceCheckoutAccessCodeService } from "@/features/checkout/backend/reservation/access-code.service";
 import type { Locale } from "@/features/i18n";
+import { hasSharedSeating } from "@/features/reservation/backend/customer-reservation-placement";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
 import {
   reservationLogFields,
@@ -582,25 +583,30 @@ export class ReservationFulfillment extends Context.Service<
         readonly orderId: WorkspaceReservationId;
         readonly claimed: WorkspaceReservation;
       }) =>
-        workspaceReservations.getReservation(input.claimed.id).pipe(
-          Effect.tapError((cause) =>
-            Effect.logError("Workspace paid reservation email flow failed", {
-              workspaceReservationId: input.claimed.id,
-              dotyposCustomerId: input.claimed.dotyposCustomerId,
-              cause,
-            })
-          ),
-          // Only a real email failure may later be repaired by a delivered
-          // webhook, so a provider read failure keeps the Dotypos failure
-          // code.
-          Effect.catch((cause) =>
-            failFulfillment({
-              orderId: input.orderId,
-              failureCode: "dotypos_reservation_failed",
-              cause,
-            })
-          )
-        );
+        workspaceReservations
+          .getReservation(input.claimed.id, {
+            requireOpenSpaceTableNames:
+              input.claimed.activeCustomerEmailDeliveryOpenSpaceTables == null,
+          })
+          .pipe(
+            Effect.tapError((cause) =>
+              Effect.logError("Workspace paid reservation email flow failed", {
+                workspaceReservationId: input.claimed.id,
+                dotyposCustomerId: input.claimed.dotyposCustomerId,
+                cause,
+              })
+            ),
+            // Only a real email failure may later be repaired by a delivered
+            // webhook, so a provider read failure keeps the Dotypos failure
+            // code.
+            Effect.catch((cause) =>
+              failFulfillment({
+                orderId: input.orderId,
+                failureCode: "dotypos_reservation_failed",
+                cause,
+              })
+            )
+          );
 
       const issueCustomerAccessCode = (input: {
         readonly orderId: WorkspaceReservationId;
@@ -677,6 +683,57 @@ export class ReservationFulfillment extends Context.Service<
           )
         );
       };
+
+      const retainOpenSpaceTableNames = Effect.fnUntraced(function* (input: {
+        readonly orderId: WorkspaceReservationId;
+        readonly claimed: WorkspaceReservation;
+        readonly reservationForDelivery: WorkspaceReservationDetails;
+      }): Effect.fn.Return<
+        WorkspaceReservationDetails,
+        WorkspacePaidFulfillmentError
+      > {
+        const { claimed, reservationForDelivery } = input;
+        if (!hasSharedSeating(reservationForDelivery.reservationDetails)) {
+          return reservationForDelivery;
+        }
+
+        const { table, ...placement } = reservationForDelivery.placement;
+        // A retry sends the first attempt's table list under the same
+        // idempotency key even when an overlapping Team Table has changed.
+        const tableNames =
+          claimed.activeCustomerEmailDeliveryOpenSpaceTables ??
+          (yield* ledger
+            .retainActiveCustomerEmailDeliveryOpenSpaceTables({
+              id: claimed.id,
+              tableNames: table?.name ?? "",
+              expectedActiveCustomerEmailDeliveryId:
+                claimed.activeCustomerEmailDeliveryId ?? null,
+            })
+            .pipe(
+              Effect.flatMap((retained) =>
+                retained === null
+                  ? Effect.fail(new CustomerEmailDeliveryGenerationClosed())
+                  : Effect.succeed(retained)
+              ),
+              Effect.mapError(
+                (cause) =>
+                  new WorkspacePaidFulfillmentError({
+                    orderId: input.orderId,
+                    failureCode: "fulfillment_email_failed",
+                    message:
+                      "Paid Open Space confirmation table names could not be retained.",
+                    cause,
+                  })
+              )
+            ));
+        return {
+          ...reservationForDelivery,
+          placement: {
+            ...placement,
+            ...(tableNames && { table: { mode: "shared", name: tableNames } }),
+          },
+        };
+      });
 
       const sendCustomerConfirmation = Effect.fnUntraced(function* (input: {
         readonly orderId: WorkspaceReservationId;
@@ -799,9 +856,15 @@ export class ReservationFulfillment extends Context.Service<
           ...input,
           reservationForDelivery,
         });
+        const retainedReservationForDelivery = yield* retainOpenSpaceTableNames(
+          {
+            ...input,
+            reservationForDelivery,
+          }
+        );
         const customerEmailDeliveryId = yield* sendCustomerConfirmation({
           ...input,
-          reservationForDelivery,
+          reservationForDelivery: retainedReservationForDelivery,
           customerEmailLocale,
         });
         yield* Effect.logInfo("Paid reservation email flow succeeded");
