@@ -147,7 +147,14 @@ describe("Team Table booking", () => {
   }
 
   test("hides discovery and rejects direct booking while the release is closed", async () => {
-    const api = makeCustomerApiTestServer();
+    const api = makeCustomerApiTestServer({
+      bookingCatalog: {
+        inventory: Layer.effect(
+          AdvisoryAvailabilityInventory,
+          Effect.die(new Error("Disabled Team Table must not load inventory"))
+        ),
+      },
+    });
     const offerings = await api.handle(customerApiRequest(listOfferings));
     expect(offerings.status).toBe(200);
     expect(await offerings.json()).toMatchObject({ offerings: [] });

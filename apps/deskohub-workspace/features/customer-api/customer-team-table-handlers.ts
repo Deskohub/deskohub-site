@@ -19,9 +19,7 @@ import { Effect, Layer, Option, Schema } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
 import { buildAdvertisedPrice } from "@/features/checkout/backend/checkout/advertised-price.server";
-import { CheckoutPricingService } from "@/features/checkout/backend/checkout/checkout-pricing.service";
-import { getWorkspaceTableProductTitle } from "@/features/checkout/product-catalog.i18n";
-import { getPublicOfferingAdvertisedPrice } from "@/features/checkout/public-offerings";
+import type { CheckoutPricingService } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import type { Locale } from "@/features/i18n";
 import type { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { resolveBookingQuoteSelection } from "@/features/reservation/backend/booking-selection";
@@ -38,17 +36,13 @@ import {
   getBookableDates,
 } from "@/features/reservation/bookable-dates";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
-import {
-  getTableAdvertisedPriceReservation,
-  getTableReservationProductIdentity,
-} from "@/features/reservation/table-reservation";
-import { getTableReservationInterval } from "@/features/reservation/table-reservation-time";
+import { getTableReservationProductIdentity } from "@/features/reservation/table-reservation";
 import {
   getTableAvailabilityQuery,
   getTableSlotsQuery,
 } from "@/features/reservation/workspace-availability";
 import { addAuthorizedReservationInvitees } from "@/features/reservation-invitees/backend/add-reservation-invitees";
-import { loadAdvisoryTeamTableSeatCapacities } from "@/features/team-table/backend/team-table-advisory-capacity";
+import { loadTeamTableOfferings } from "@/features/team-table/backend/team-table-offerings";
 import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { providePerRequest } from "@/shared/backend/provide-per-request";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
@@ -296,39 +290,17 @@ const listOfferings = <E>(
     if (!(yield* TeamTableReleaseGate.isOpen)) {
       return { ...base, offerings: [] } satisfies CustomerTeamTableOfferings;
     }
-    const interval = getTableReservationInterval(
-      base.advertisedOn,
-      "09:00",
-      "10:00"
+    const rows = yield* loadTeamTableOfferings({ advertisedOn, locale }).pipe(
+      Effect.filterOrFail(
+        (rows) => rows.every(({ discountsComplete }) => discountsComplete),
+        () => new SalePricesUnavailable()
+      ),
+      providePerRequest(catalog)
     );
-    if (!interval) return yield* new SalePricesUnavailable();
-
-    const offerings = yield* Effect.gen(function* () {
-      const seats = yield* loadAdvisoryTeamTableSeatCapacities;
-      const pricing = yield* CheckoutPricingService;
-      return yield* Effect.forEach(seats, (seats) => {
-        const reservation = { kind: "table", seats, ...interval } as const;
-        return pricing
-          .quoteAdvertisement({
-            reservation: getTableAdvertisedPriceReservation(reservation),
-            locale,
-          })
-          .pipe(
-            Effect.filterOrFail(
-              ({ discountsComplete }) => discountsComplete,
-              () => new SalePricesUnavailable()
-            ),
-            Effect.map(({ quote: { payment } }) => ({
-              product: getTableReservationProductIdentity(reservation),
-              name: getWorkspaceTableProductTitle(locale),
-              price: payment.undiscountedPrice,
-              advertisedPrice: getPublicOfferingAdvertisedPrice(payment),
-            }))
-          );
-      });
-    }).pipe(providePerRequest(catalog));
-
-    return { ...base, offerings } satisfies CustomerTeamTableOfferings;
+    return {
+      ...base,
+      offerings: rows.map(({ discountsComplete, ...offering }) => offering),
+    } satisfies CustomerTeamTableOfferings;
   });
 
 const quoteTeamTable = Effect.fn("customerApi.getTeamTableQuote")(function* (

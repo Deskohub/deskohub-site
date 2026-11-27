@@ -1271,12 +1271,16 @@ describe("customer MCP route", () => {
     }
     expect(tools[1]?.inputSchema).toMatchObject({
       properties: {
-        family: { enum: ["cowork", "meeting-room", "office"] },
+        family: { enum: ["cowork", "meeting-room", "office", "table"] },
         date: {
           type: "string",
           description: expect.stringContaining("YYYY-MM-DD"),
         },
         seats: expect.objectContaining({ type: "integer" }),
+        end_time: {
+          type: "string",
+          description: expect.stringContaining("Team Table"),
+        },
         duration: { enum: ["hour:1", "hour:4", "day:1"] },
       },
       required: ["family", "date"],
