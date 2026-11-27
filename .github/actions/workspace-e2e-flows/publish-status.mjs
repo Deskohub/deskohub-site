@@ -1226,11 +1226,16 @@ const runPublishStatusWithoutRun = async () => {
       return;
     }
 
+    const defaultFailure = {
+      state: statusState,
+      description: statusDescription,
+      verifyAfterPost: true,
+    };
     await publishWithCasReconcile({
       sha: targetSha,
       prNumber,
       readSnapshot,
-      onBlockedSuccess: { state: statusState, description: statusDescription },
+      onBlockedSuccess: defaultFailure,
       decide: ({
         prOk,
         pr,
@@ -1239,11 +1244,6 @@ const runPublishStatusWithoutRun = async () => {
         deployment,
         hasSingleEligiblePr,
       }) => {
-        const defaultFailure = {
-          state: statusState,
-          description: statusDescription,
-          verifyAfterPost: true,
-        };
         if (!prOk) {
           return defaultFailure;
         }
