@@ -63,7 +63,7 @@ export const entryPackUnavailableAnswer = () =>
   new CustomerSelectionUnavailable({ reason: "availability_changed" });
 
 /** The public error a selection the booking pages wouldn't accept answers with. */
-export const toSelectionRejectionAnswer = <Unavailable>(
+const toSelectionRejectionAnswer = <Unavailable>(
   reason: BookingSelectionRejection,
   offeringUnavailable: () => Unavailable
 ) =>

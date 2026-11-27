@@ -75,7 +75,6 @@ import {
   entryPackUnavailableAnswer,
   requireCustomerTeamTableRelease,
   toBookingSelectionInput,
-  toSelectionRejectionAnswer,
   withEarlySetup,
 } from "./customer-booking-selection";
 import {
@@ -386,8 +385,6 @@ const answerPreparationFailure =
   (failure: PreparationFailure) =>
     Match.value(failure).pipe(
       Match.tagsExhaustive({
-        BookingSelectionRejected: ({ reason }) =>
-          Effect.fail(toSelectionRejectionAnswer(reason, offeringUnavailable)),
         CustomerAccountAccessError: (accessFailure) =>
           Effect.fail(accessFailure).pipe(answerCustomerApiFailure(operation)),
         AdvertisedPriceMismatchError: () =>
@@ -418,10 +415,6 @@ const answerPreparationFailure =
           Effect.fail(
             new CustomerSelectionUnavailable({ reason: "availability_changed" })
           ),
-        TeamTableCapacityChanged: () =>
-          Effect.fail(
-            new CustomerSelectionUnavailable({ reason: "availability_changed" })
-          ),
         OfficeReservationsDisabledError: () =>
           Effect.fail(offeringUnavailable()),
         TeamTableReservationsDisabledError: () =>
@@ -444,6 +437,7 @@ const answerPreparationFailure =
         DiscountAffirmationUnavailableError: retryable(operation),
         DiscountCalculationError: retryable(operation),
         MoneyUnitMismatch: retryable(operation),
+        SchemaError: retryable(operation),
         EffectDrizzleQueryError: retryable(operation),
         SqlError: retryable(operation),
         DotyposUnavailable: retryable(operation),
