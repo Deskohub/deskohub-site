@@ -1222,6 +1222,8 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/checkout/product-catalog.ts",
   "apps/deskohub-workspace/features/checkout/actions/probe.test.ts",
   "apps/deskohub-workspace/features/checkout/backend/analytics/probe.postgres.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/checkout/probe.test.ts",
+  "apps/deskohub-workspace/features/checkout/backend/checkout/testing/probe.fixture.ts",
   "apps/deskohub-workspace/features/checkout/backend/fio/probe.postgres.test.ts",
   "apps/deskohub-workspace/features/checkout/backend/fulfillment/probe.test.ts",
   "apps/deskohub-workspace/features/checkout/backend/fulfillment/testing/probe.fixture.ts",

@@ -4,9 +4,20 @@ import "@/shared/polyfills/temporal";
 import { withReservationPaymentHandlers } from "../payment/order-payment-handlers.test-utils";
 import "@/shared/testing/workspace-test-env";
 
-import { describe, expect, mock, setSystemTime, test } from "bun:test";
 import {
+  describe,
+  expect,
+  type Mock,
+  mock,
+  setSystemTime,
+  test,
+} from "bun:test";
+import {
+  type DotyposConditionalWriteFailure,
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
   DotyposService,
+  DotyposUnavailable,
   dotyposApiTimeoutDefaultMilliseconds,
 } from "@deskohub/dotypos";
 import { ExternalAPIError, NexiService } from "@deskohub/nexi";
@@ -14,7 +25,6 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import {
   type Context,
-  Data,
   Duration,
   Effect,
   Layer,
@@ -28,11 +38,12 @@ import {
   type CustomerAccountSectionsFixture,
   makeCustomerAccountSections,
 } from "@/features/account/backend/customer-account-sections.test-utils";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { makeAccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import {
-  type CustomerAccountId,
-  customerAccountIdSchema,
-} from "@/features/account/customer-account";
-import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+  checkoutSessionIdSchema,
+  paymentAttemptIdSchema,
+} from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import type { CheckoutSummaryChangedKeys } from "@/features/checkout/checkout-summary";
 import type { PaymentReturnTarget } from "@/features/checkout/payment-return-target";
@@ -55,12 +66,22 @@ import {
 } from "@/features/discounts/errors";
 import type { Locale } from "@/features/i18n";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
+import type { IWorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import {
+  dotyposHoldFixture,
+  payableReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
 import {
   type NormalizedCoworkReservationOrder,
   normalizedCoworkReservationOrderSchema,
 } from "@/features/reservation/cowork-reservation";
+import { withCoworkProductFields } from "@/features/reservation/cowork-reservation-product";
 import { normalizedMeetingRoomReservationOrderSchema } from "@/features/reservation/meeting-room-reservation";
 import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/office-reservation";
+import {
+  getStoredWorkspaceReservationDetails,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
 import { reservationOrderSchema } from "@/features/reservation/reservation-order";
 import { getSlowestSuccessfulCalendarLoad } from "@/shared/backend/config/google-calendar.config.test-utils";
 import { getNexiRequestTimeoutMilliseconds } from "@/shared/backend/config/nexi.config";
@@ -69,11 +90,23 @@ import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-uti
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { instantStringSchema } from "@/shared/utils/temporal";
-import type { PaymentAttemptRepository as PaymentAttemptRepositoryType } from "../repositories/payment-attempt.repository";
+import type { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.service";
+import { WorkspacePaidFulfillmentError } from "../fulfillment/reservation-fulfillment.service";
+import { pendingNexiAttemptFixture } from "../holds/reservation-hold-cleanup.test-utils";
+import type {
+  IPaymentAttemptRepository,
+  PaymentAttempt,
+} from "../repositories/payment-attempt.repository";
 import type { IPaymentLifecycleRepository } from "../repositories/payment-lifecycle.repository";
+import { CheckoutError } from "./checkout-error";
+import type {
+  ICheckoutPricingService,
+  PaymentRepricingInput,
+} from "./checkout-pricing.service";
 import {
   CheckoutPricingServiceMock,
   paymentPricingFrom,
+  type RepricedPayment,
 } from "./checkout-pricing.service.mock";
 import { getCheckoutSubmitDeadline } from "./checkout-submit-deadline";
 import {
@@ -86,6 +119,9 @@ import {
   payStateTokenQueryParam,
   sealPayState,
 } from "./pay-state";
+import { getSubmittedCodeMetadata } from "./pay-state-contract";
+import type { PayableReservation } from "./payable-checkout.service";
+import type { PayableCheckoutMock } from "./payable-checkout.service.mock";
 import type { PaymentPageProviderObservation } from "./payment-page-provider-status";
 import { withoutPayStateHoldExpiry } from "./signed-pay-state.test-utils";
 
@@ -108,10 +144,6 @@ const storedHoldExpiresAt = instantStringSchema.make(
 
 const testInstant = (value = "2026-06-01T10:00:00Z") =>
   Temporal.Instant.from(value);
-
-class CheckoutTestFailure extends Data.TaggedError("CheckoutTestFailure")<{
-  readonly message: string;
-}> {}
 
 const reservationData = Schema.decodeUnknownSync(
   normalizedCoworkReservationOrderSchema
@@ -290,11 +322,13 @@ const buildPayStateToken = (input: {
           locale: input.locale ?? "en-US",
           reservation,
           quote: input.quote ?? buildCoworkReservationQuote(reservation),
-          orderId: input.orderId,
+          orderId: workspaceReservationIdSchema.make(input.orderId),
           bookedAt: payStateBookedAt,
           holdExpiresAt: payStateHoldExpiresAt,
-          checkoutSessionId: input.checkoutSessionId ?? "checkout-session-id",
-          ...(input.submittedCode !== undefined && {
+          checkoutSessionId: checkoutSessionIdSchema.make(
+            input.checkoutSessionId ?? "checkout-session-id"
+          ),
+          ...getSubmittedCodeMetadata({
             submittedCode: input.submittedCode,
             submittedCodeDiscountId: application.discount.id,
           }),
@@ -378,12 +412,13 @@ const buildMeetingRoomPayStateToken = (input: {
         locale: "en-US",
         reservation,
         quote: input.quote ?? buildMeetingRoomQuote(undefined, reservation),
-        orderId: input.orderId,
+        orderId: workspaceReservationIdSchema.make(input.orderId),
         bookedAt: payStateBookedAt,
         holdExpiresAt: payStateHoldExpiresAt,
-        checkoutSessionId:
-          input.checkoutSessionId ?? "meeting-room-checkout-session-id",
-        ...(input.submittedCode !== undefined && {
+        checkoutSessionId: checkoutSessionIdSchema.make(
+          input.checkoutSessionId ?? "meeting-room-checkout-session-id"
+        ),
+        ...getSubmittedCodeMetadata({
           submittedCode: input.submittedCode,
           submittedCodeDiscountId: application.discount.id,
         }),
@@ -491,10 +526,12 @@ const buildOfficePayStateToken = (input: {
         locale: "en-US",
         reservation: input.reservation,
         quote,
-        orderId: input.orderId,
+        orderId: workspaceReservationIdSchema.make(input.orderId),
         bookedAt: payStateBookedAt,
         holdExpiresAt: payStateHoldExpiresAt,
-        checkoutSessionId: "office-checkout-session-id",
+        checkoutSessionId: checkoutSessionIdSchema.make(
+          "office-checkout-session-id"
+        ),
         ttlMilliseconds: 10 * 60 * 1000,
       });
       return yield* sealPayState(state);
@@ -507,68 +544,67 @@ const makeAttempt = (input: {
   readonly state?: "created" | "pending" | "failed";
   readonly securityToken?: string | null;
   readonly providerRedirectUrl?: string | null;
-}) => ({
-  id: input.id,
-  workspaceReservationId: input.orderId,
-  provider: "nexi" as const,
+}): PaymentAttempt => ({
+  ...pendingNexiAttemptFixture(
+    workspaceReservationIdSchema.make(input.orderId),
+    paymentAttemptIdSchema.make(input.id),
+    testInstant()
+  ),
   providerOrderId: input.id,
-  state: input.state ?? ("created" as const),
+  state: input.state ?? "created",
+  failureCode: input.state === "failed" ? "nexi_declined" : null,
+  providerOrderCreatedAt: input.providerRedirectUrl ? testInstant() : null,
   amount: money(53_000),
   securityToken: input.securityToken ?? null,
   providerRedirectUrl: input.providerRedirectUrl ?? null,
-  lastWebhookEventId: null,
-  lastProviderOperationId: null,
-  lastProviderStatus: null,
-  failureCode: null,
-  createdAt: testInstant(),
-  updatedAt: testInstant(),
 });
 
-const makeReservation = <Overrides extends object>(
+const storedCustomerId = DotyposCustomerIdSchema.make(
+  "stored-dotypos-customer-id"
+);
+const storedDotyposReservationId = DotyposReservationIdSchema.make(
+  "dotypos-reservation-id"
+);
+
+const makeReservation = (
   orderId: string,
-  overrides?: Overrides
-) => ({
-  id: orderId,
-  authorAccountId: null as CustomerAccountId | null,
-  checkoutSessionKey: "session-key",
-  checkoutAttemptKey: "attempt-key",
-  correlationId: "correlation-id",
-  dotyposCustomerId: "stored-dotypos-customer-id",
-  dotyposReservationId: "dotypos-reservation-id",
-  productTier: reservationData.entryTier,
-  productCoffee: reservationData.coffee,
-  productMonitorOption: reservationData.monitorOption,
-  reservationDetails: {
-    kind: "cowork" as const,
-    entryTier: reservationData.entryTier,
-    coffee: reservationData.coffee,
-    monitorOption: reservationData.monitorOption,
-  },
-  locale: "en-US",
-  reservationState: "held",
-  reservationHoldExpiresAt: testInstant(storedHoldExpiresAt),
-  reservationHoldExpiredAt: null,
-  reservationCreatedAt: testInstant("2026-06-01T10:00:00.000Z"),
-  reservationCancelledAt: null,
-  cancellationClaimedAt: null,
-  holdExpiredAt: null,
-  holdCreationClaimedAt: null,
-  paymentState: "not_started",
-  activePaymentAttemptId: null,
-  failureCode: null,
-  paidAt: null,
-  fulfillmentState: "not_started",
-  fulfillmentClaimedAt: null,
-  fulfilledAt: null,
-  fulfillmentFailedAt: null,
-  fulfillmentFailureCode: null,
-  reservationConfirmedAt: null,
-  createdAt: testInstant(),
-  updatedAt: testInstant(),
-  ...overrides,
-});
+  overrides: Partial<PayableReservation> = {}
+): PayableReservation =>
+  withCoworkProductFields(
+    payableReservationFixture({
+      id: workspaceReservationIdSchema.make(orderId),
+      dotyposCustomerId: storedCustomerId,
+      dotyposReservationId: storedDotyposReservationId,
+      reservationDetails: getStoredWorkspaceReservationDetails(reservationData),
+      locale: "en-US",
+      reservationHoldExpiresAt: testInstant(storedHoldExpiresAt),
+      reservationCreatedAt: testInstant(),
+      createdAt: testInstant(),
+      updatedAt: testInstant(),
+      ...overrides,
+    })
+  );
 
-type CheckoutHarnessOptions<ReservationOverrides extends object> = {
+type Affirm = (
+  input: PaymentRepricingInput
+) => Effect.Effect<
+  RepricedPayment,
+  Effect.Error<ReturnType<ICheckoutPricingService["repriceForPayment"]>>
+>;
+
+type CreateHostedPage = (
+  input: Parameters<NexiService["Service"]["createHostedPaymentPage"]>[0]
+) => Effect.Effect<
+  Omit<
+    Effect.Success<
+      ReturnType<NexiService["Service"]["createHostedPaymentPage"]>
+    >,
+    "orderId"
+  >,
+  Effect.Error<ReturnType<NexiService["Service"]["createHostedPaymentPage"]>>
+>;
+
+type CheckoutHarnessOptions = {
   readonly orderId: string;
   readonly legalConsent?: boolean;
   readonly earlyPerformanceConsent?: boolean;
@@ -580,7 +616,7 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
   readonly submittedCode?: CanonicalPromotionCode;
   readonly requestedDiscountCode?: CanonicalPromotionCode;
   readonly changedKeys?: CheckoutSummaryChangedKeys;
-  readonly reservationOverrides?: ReservationOverrides;
+  readonly reservationOverrides?: Partial<PayableReservation>;
   /**
    * The order as read again under the account lock, when it changed after
    * the payable check: another submission of it started a payment.
@@ -588,15 +624,19 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
   readonly lockedReservationOverrides?: Partial<
     ReturnType<typeof makeReservation>
   >;
-  readonly confirm?: ReturnType<typeof mock>;
+  readonly confirm?: Mock<Parameters<typeof PayableCheckoutMock>[0]>;
   /** How long each default live payable-checkout guard takes. */
   readonly liveGuardDuration?: Duration.Input;
   readonly activeAttempt?: ReturnType<typeof makeAttempt> | null;
-  readonly affirm?: ReturnType<typeof mock>;
-  readonly createPendingProviderAttempt?: ReturnType<typeof mock>;
-  readonly completeInternalPayment?: ReturnType<typeof mock>;
-  readonly createHostedPaymentPage?: ReturnType<typeof mock>;
-  readonly run?: ReturnType<typeof mock>;
+  readonly affirm?: Mock<Affirm>;
+  readonly createPendingProviderAttempt?: Mock<
+    IPaymentLifecycleRepository["createPendingProviderAttempt"]
+  >;
+  readonly completeInternalPayment?: Mock<
+    IPaymentLifecycleRepository["completeInternalPayment"]
+  >;
+  readonly createHostedPaymentPage?: Mock<CreateHostedPage>;
+  readonly run?: Mock<ReservationFulfillment["Service"]["run"]>;
   readonly accountAuthority?: CustomerAccountSectionsFixture;
   readonly returnTarget?: PaymentReturnTarget;
   readonly resumePayment?: "card" | "qr";
@@ -612,9 +652,7 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
   };
 };
 
-const createCheckoutHarness = async <ReservationOverrides extends object>(
-  options: CheckoutHarnessOptions<ReservationOverrides>
-) => {
+const createCheckoutHarness = async (options: CheckoutHarnessOptions) => {
   const locale = options.locale ?? "en-US";
   const { CheckoutService } = await import("./checkout.service");
   const { PayableCheckout } = await import("./payable-checkout.service");
@@ -647,6 +685,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   const attachedAttempt = {
     ...createdAttempt,
     state: "pending" as const,
+    providerOrderCreatedAt: testInstant(),
     securityToken: "provider-security-token",
     providerRedirectUrl: "https://payments.example/hosted",
   };
@@ -676,9 +715,15 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     );
   const fulfillPaidOrder = options.run ?? mock(() => Effect.void);
   const analytics = recordCheckoutAnalytics();
-  const recordLegalEvidence = mock((_input: readonly unknown[]) => Effect.void);
-  const findNewestAttempt = mock(() => Effect.succeed(null));
-  const findAttempt = mock(() => Effect.succeed(options.activeAttempt ?? null));
+  const recordLegalEvidence = mock<
+    typeof LegalEvidenceEventRepository.Service.recordMany
+  >(() => Effect.succeed([]));
+  const findNewestAttempt = mock<
+    IPaymentAttemptRepository["findNewestForReservation"]
+  >(() => Effect.succeed(null));
+  const findAttempt = mock<IPaymentAttemptRepository["findById"]>(() =>
+    Effect.succeed(options.activeAttempt ?? null)
+  );
   const attachHostedPaymentPage = mock(() => Effect.succeed(attachedAttempt));
   const markTerminalForReservation = mock(() =>
     Effect.succeed({
@@ -697,8 +742,17 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     findNewestForReservation: findNewestAttempt,
     findByProviderOrderId: mock(() => Effect.succeed(null)),
     findDisplayableForReservation: mock(() => Effect.succeed(null)),
-  } satisfies PaymentAttemptRepositoryType;
-  const createPendingQrAttempt = mock(() => Effect.succeed(createdAttempt));
+  } satisfies Partial<IPaymentAttemptRepository>;
+  const createPendingQrAttempt = mock<
+    IPaymentLifecycleRepository["createPendingQrAttempt"]
+  >(() =>
+    Effect.succeed({
+      ...createdAttempt,
+      provider: "fio",
+      providerOrderId: "1000000382",
+      state: "pending",
+    })
+  );
   const paymentLifecycle = {
     createPendingQrAttempt,
     createPendingProviderAttempt: (input) =>
@@ -721,15 +775,24 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
       })
     ),
     markTerminal: markTerminalForReservation,
-  } satisfies IPaymentLifecycleRepository;
+  } satisfies Partial<IPaymentLifecycleRepository>;
 
-  const updateReservationDetails = mock((input) =>
-    Effect.succeed({ id: input.id } as never)
-  );
   const reservationRecord = makeReservation(options.orderId, {
     locale,
     ...options.reservationOverrides,
   });
+  const updateReservationDetails = mock<
+    IWorkspaceReservationRepository["updateReservationDetails"]
+  >(({ id, reservationDetails, locale }) =>
+    Effect.succeed(
+      withCoworkProductFields({
+        ...reservationRecord,
+        id,
+        reservationDetails,
+        locale,
+      })
+    )
+  );
   const confirm =
     options.confirm ??
     mock(() =>
@@ -766,11 +829,17 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   const updateReservation = mock(
     (_input: {
       readonly note?: string;
-    }): Effect.Effect<void, CheckoutTestFailure> => Effect.void
+    }): Effect.Effect<void, DotyposConditionalWriteFailure> => Effect.void
   );
   const dotypos = {
-    updateReservation,
-  };
+    updateReservation: (input) =>
+      updateReservation(input).pipe(
+        Effect.as({
+          ...dotyposHoldFixture(input.reservationId),
+          note: input.note,
+        })
+      ),
+  } satisfies Partial<DotyposService["Service"]>;
   const createHostedPaymentPage =
     options.createHostedPaymentPage ??
     mock(() =>
@@ -798,9 +867,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
         commitment: emptyCommitment,
       })
     );
-  const paymentPricing = paymentPricingFrom(
-    (pricingInput) => affirm(pricingInput) as never
-  );
+  const paymentPricing = paymentPricingFrom(affirm);
 
   const accountAuthority = makeCustomerAccountSections(
     options.accountAuthority ?? { session: null }
@@ -842,7 +909,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     if (options.resumePayment) {
       return yield* service.resumeReservationPayment(
         {
-          reservationId: options.orderId,
+          reservationId: reservationRecord.id,
           method: options.resumePayment,
           fio: { accountKey: "receiving-account" },
         },
@@ -883,6 +950,8 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
                     ? {
                         orderId: standaloneReservationOrderId(reservationId),
                         accountKey: "receiving-account",
+                        cardAttemptId: options.activeAttempt?.id ?? null,
+                        qrAttemptId: null,
                         expiresAt:
                           options.publicPaymentExpiresAt ??
                           testInstant(storedHoldExpiresAt),
@@ -897,7 +966,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
                 ),
               findForReservation: () =>
                 Effect.succeed({
-                  orderId: options.orderId,
+                  orderId: createdAttempt.orderId,
                   attemptId: createdAttempt.id,
                   accountKey: "receiving-account",
                   variableSymbol: "1000000382",
@@ -907,7 +976,20 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
             }),
             Layer.mock(AccountingDocumentSnapshots, {
               find: () =>
-                Effect.succeed({ locale, buyer: { legalName: "Ada Example" } }),
+                Effect.succeed(
+                  makeAccountingDocumentSnapshot({
+                    workspaceReservationId: reservationRecord.id,
+                    dotyposReservationId:
+                      reservationRecord.dotyposReservationId,
+                    dotyposCustomerId: reservationRecord.dotyposCustomerId,
+                    locale,
+                    prepared: {
+                      kind: "cowork",
+                      reservation: { ...reservationData, name: "Ada Example" },
+                      quote: buildCoworkReservationQuote(reservationData),
+                    },
+                  })
+                ),
             }),
             Layer.mock(PaymentPageProviderStatus, {
               observe: observePaymentPage,
@@ -994,7 +1076,7 @@ describe("CheckoutService", () => {
       status: "redirect",
     });
     expect(card.createPendingProviderAttempt).toHaveBeenCalledTimes(1);
-    const [admission] = card.createPendingProviderAttempt.mock.calls[0]!;
+    const admission = card.createPendingProviderAttempt.mock.calls[0]?.[0];
     expect(admission).toMatchObject({
       provider: "nexi",
       amount: { value: 12_000, exponent: 2, currency: "CZK" },
@@ -1048,7 +1130,9 @@ describe("CheckoutService", () => {
         },
       })
     );
-    const orderId = "0198c1a2-b791-7532-8ecb-d87424cbaad3";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-b791-7532-8ecb-d87424cbaad3"
+    );
     const activeAttempt = {
       ...makeAttempt({
         id: "active-entry-pack-attempt",
@@ -1101,7 +1185,9 @@ describe("CheckoutService", () => {
       observePaymentPage: input.observe,
       reservationOverrides: {
         paymentState: "pending",
-        activePaymentAttemptId: "attempt-public-card-reservation",
+        activePaymentAttemptId: paymentAttemptIdSchema.make(
+          "attempt-public-card-reservation"
+        ),
       },
     });
 
@@ -1187,7 +1273,9 @@ describe("CheckoutService", () => {
   test.each(["signed checkout", "status"] as const)(
     "checks the activity of a concurrently attached card during %s",
     async (entry) => {
-      const orderId = "0198c1a2-dcf5-7a11-8a92-665b1184ae7b";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-dcf5-7a11-8a92-665b1184ae7b"
+      );
       const accepted = makeAttempt({ orderId, id: "existing-attempt" });
       const harness = await createCheckoutHarness({
         orderId,
@@ -1238,7 +1326,9 @@ describe("CheckoutService", () => {
   ] as const)(
     "a legacy signed submission does not reopen a card page with %s",
     async (_, expiresAt) => {
-      const orderId = "0198c1a2-bb2d-72b0-8482-892150fc34f6";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-bb2d-72b0-8482-892150fc34f6"
+      );
       const attempt = makeAttempt({
         orderId,
         id: "legacy-shared-card",
@@ -1267,7 +1357,9 @@ describe("CheckoutService", () => {
   );
 
   test("a legacy signed submission sees a shared window opened under the account lock", async () => {
-    const orderId = "0198c1a2-2f7c-7471-883f-fb29c9fd496a";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-2f7c-7471-883f-fb29c9fd496a"
+    );
     const attempt = makeAttempt({
       orderId,
       id: "new-shared-card",
@@ -1298,7 +1390,9 @@ describe("CheckoutService", () => {
   test.each(["at entry", "under the account lock"] as const)(
     "a QR selection never opens a pre-release card attempt found %s",
     async (discovery) => {
-      const orderId = "0198c1a2-0f84-714d-81fd-3491555b09b6";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-0f84-714d-81fd-3491555b09b6"
+      );
       const attempt = makeAttempt({
         orderId,
         id: "existing-legacy-card",
@@ -1309,7 +1403,7 @@ describe("CheckoutService", () => {
       const pending = {
         paymentState: "pending",
         activePaymentAttemptId: attempt.id,
-      };
+      } satisfies Partial<PayableReservation>;
       const harness = await createCheckoutHarness({
         orderId,
         startPayment: {
@@ -1331,7 +1425,9 @@ describe("CheckoutService", () => {
   );
 
   test("a real order-bound retry token with a shared window reads no payment attempt", async () => {
-    const orderId = "0198c1a2-0093-7091-88d0-f9cc5757c57b";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-0093-7091-88d0-f9cc5757c57b"
+    );
     const harness = await createCheckoutHarness({
       orderId,
       sharedWindow: "visible",
@@ -1354,7 +1450,9 @@ describe("CheckoutService", () => {
   });
 
   test("a legacy signed submission can still reuse its windowless card session", async () => {
-    const orderId = "0198c1a2-3bb6-7672-8bb9-798e2da0123f";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-3bb6-7672-8bb9-798e2da0123f"
+    );
     const attempt = makeAttempt({
       orderId,
       id: "windowless-card",
@@ -1401,7 +1499,9 @@ describe("CheckoutService", () => {
   test("rejects checkout without early-performance consent on the extended withdrawal date", async () => {
     setSystemTime(new Date("2026-11-28T12:00:00Z"));
     try {
-      const orderId = "0198c1a2-77be-7a82-81e0-62a6cf125055";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-77be-7a82-81e0-62a6cf125055"
+      );
       const reservation = normalizedCoworkReservationOrderSchema.make({
         ...reservationData,
         date: "2026-12-14",
@@ -1441,7 +1541,9 @@ describe("CheckoutService", () => {
       });
 
     test("returns the pending price review first", async () => {
-      const orderId = "0198c1a2-83f1-7cd1-8ecb-40697d5bdc0a";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-83f1-7cd1-8ecb-40697d5bdc0a"
+      );
       const harness = await createCheckoutHarness({
         orderId,
         earlyPerformanceConsent: false,
@@ -1462,7 +1564,9 @@ describe("CheckoutService", () => {
     });
 
     test("returns a repriced order's review first", async () => {
-      const orderId = "0198c1a2-f42a-77e2-881d-1783794909ba";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-f42a-77e2-881d-1783794909ba"
+      );
       const reservation = nearTermReservation();
       const affirm = mock(() =>
         Effect.succeed({
@@ -1530,7 +1634,7 @@ describe("CheckoutService", () => {
         }),
       }),
     ]);
-    const [[recorded]] = harness.recordLegalEvidence.mock.calls;
+    const recorded = harness.recordLegalEvidence.mock.calls[0]?.[0];
     expect(recorded?.[1]).not.toHaveProperty("evidence.acknowledgements");
     expect(harness.createHostedPaymentPage).toHaveBeenCalled();
   });
@@ -1587,7 +1691,7 @@ describe("CheckoutService", () => {
       return Effect.succeed(
         makeAttempt({
           id: "attempt-reservation-provider-inputs",
-          orderId: input.workspaceReservationId,
+          orderId: input.orderId,
         })
       );
     });
@@ -1643,7 +1747,7 @@ describe("CheckoutService", () => {
         Effect.succeed(
           makeAttempt({
             id: "attempt-annotated",
-            orderId: input.workspaceReservationId,
+            orderId: input.orderId,
           })
         )
       );
@@ -1669,8 +1773,13 @@ describe("CheckoutService", () => {
     test("logs the encoded amount and sandbox currency on Nexi creation", async () => {
       const originalOrigin = env.NEXI_API_ORIGIN;
       const originalCurrency = env.NEXI_CHECKOUT_CURRENCY_OVERRIDE;
-      env.NEXI_API_ORIGIN = "https://xpaysandbox.nexigroup.com";
-      env.NEXI_CHECKOUT_CURRENCY_OVERRIDE = "EUR";
+      Object.assign(env, {
+        NEXI_API_ORIGIN: "https://xpaysandbox.nexigroup.com",
+        NEXI_CHECKOUT_CURRENCY_OVERRIDE: "EUR",
+      } satisfies Pick<
+        typeof env,
+        "NEXI_API_ORIGIN" | "NEXI_CHECKOUT_CURRENCY_OVERRIDE"
+      >);
 
       try {
         const harness = await createCheckoutHarness({
@@ -1684,13 +1793,17 @@ describe("CheckoutService", () => {
           expect.objectContaining({ nexiAmount: "53000", nexiCurrency: "EUR" }),
         ]);
       } finally {
-        env.NEXI_API_ORIGIN = originalOrigin;
-        env.NEXI_CHECKOUT_CURRENCY_OVERRIDE = originalCurrency;
+        Object.assign(env, {
+          NEXI_API_ORIGIN: originalOrigin,
+          NEXI_CHECKOUT_CURRENCY_OVERRIDE: originalCurrency,
+        });
       }
     });
 
     test("name a reused active attempt by its identifiers, never its record", async () => {
-      const orderId = "0198c1a2-98c7-7cca-8e8a-4efa31f08fc1";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-98c7-7cca-8e8a-4efa31f08fc1"
+      );
       const activeAttempt = makeAttempt({
         id: "active-attempt-annotated",
         orderId,
@@ -1985,7 +2098,9 @@ describe("CheckoutService", () => {
   );
 
   test("redirects a reusable active attempt before discount affirmation and note refresh", async () => {
-    const orderId = "0198c1a2-f770-7934-8b90-d149e22ea3d7";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-f770-7934-8b90-d149e22ea3d7"
+    );
     const activeAttempt = makeAttempt({
       id: "active-attempt",
       orderId,
@@ -2007,7 +2122,9 @@ describe("CheckoutService", () => {
 
     expect(result).toEqual({
       status: "redirect",
-      orderId: "0198c1a2-f770-7934-8b90-d149e22ea3d7",
+      orderId: workspaceReservationIdSchema.make(
+        "0198c1a2-f770-7934-8b90-d149e22ea3d7"
+      ),
       redirectUrl: "https://payments.example/existing",
       statusUrl:
         "/en-US/reservation/status/0198c1a2-f770-7934-8b90-d149e22ea3d7",
@@ -2023,7 +2140,9 @@ describe("CheckoutService", () => {
   });
 
   test("points a reused hosted payment's return at the app that submitted last", async () => {
-    const orderId = "0198c1a2-66d6-7998-8d99-4aadce3bb967";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-66d6-7998-8d99-4aadce3bb967"
+    );
     const activeAttempt = makeAttempt({
       id: "active-attempt",
       orderId,
@@ -2051,7 +2170,9 @@ describe("CheckoutService", () => {
   });
 
   test("does not reuse an active attempt whose amount differs from the signed summary", async () => {
-    const orderId = "0198c1a2-b2de-7213-8b47-9f2c0c488244";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-b2de-7213-8b47-9f2c0c488244"
+    );
     const activeAttempt = makeAttempt({
       id: "active-attempt",
       orderId,
@@ -2152,7 +2273,9 @@ describe("CheckoutService", () => {
   ] satisfies readonly CheckoutUnavailableReason[])(
     "reports checkout in progress without pricing or provider work when an unpaid order's checkout is unavailable (%s)",
     async (reason) => {
-      const orderId = "0198c1a2-bfd5-7f50-81c4-9a4059801557";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-bfd5-7f50-81c4-9a4059801557"
+      );
       const harness = await createCheckoutHarness({
         orderId,
         confirm: mock(() =>
@@ -2184,7 +2307,9 @@ describe("CheckoutService", () => {
   ])(
     "keeps checkout in progress for a live active attempt without $name",
     async (attemptOverrides) => {
-      const orderId = "0198c1a2-036c-72a8-822b-a9bc0a512336";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-036c-72a8-822b-a9bc0a512336"
+      );
       const activeAttempt = makeAttempt({
         id: "active-attempt",
         orderId,
@@ -2223,7 +2348,9 @@ describe("CheckoutService", () => {
     const harness = await createCheckoutHarness({
       orderId: "0198c1a2-2412-7ef6-88b8-c5ff7ed917d6",
       activeAttempt,
-      reservationOverrides: { activePaymentAttemptId: "active-attempt" },
+      reservationOverrides: {
+        activePaymentAttemptId: paymentAttemptIdSchema.make("active-attempt"),
+      },
     });
 
     const result = await Effect.runPromise(harness.effect);
@@ -2231,7 +2358,9 @@ describe("CheckoutService", () => {
     expect(harness.findAttempt).toHaveBeenCalledWith("active-attempt");
     expect(result).toEqual({
       status: "redirect",
-      orderId: "0198c1a2-2412-7ef6-88b8-c5ff7ed917d6",
+      orderId: workspaceReservationIdSchema.make(
+        "0198c1a2-2412-7ef6-88b8-c5ff7ed917d6"
+      ),
       redirectUrl: "https://payments.example/hosted",
       statusUrl:
         "/en-US/reservation/status/0198c1a2-2412-7ef6-88b8-c5ff7ed917d6",
@@ -2256,7 +2385,9 @@ describe("CheckoutService", () => {
   });
 
   test("returns the payment another submission started while this one waited for the account lock, without new evidence or a second payment", async () => {
-    const orderId = "0198c1a2-1151-7b43-89a4-635edfb15cdb";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-1151-7b43-89a4-635edfb15cdb"
+    );
     const concurrentAttempt = makeAttempt({
       id: "concurrent-attempt",
       orderId,
@@ -2289,7 +2420,9 @@ describe("CheckoutService", () => {
   });
 
   test("fails a Pay state for another locale without reading its reservation", async () => {
-    const orderId = "0198c1a2-91dc-7a36-8f13-467b50a29348";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-91dc-7a36-8f13-467b50a29348"
+    );
     const harness = await createCheckoutHarness({
       orderId,
       locale: "en-US",
@@ -2310,7 +2443,9 @@ describe("CheckoutService", () => {
 
   test("affirms the accepted discounts with the checkout locale, stored customer, and encrypted code", async () => {
     const submittedCode = canonicalCode("CANONICAL-SECRET-CODE");
-    const orderId = "0198c1a2-a06e-7b48-84d2-424d6d256720";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-a06e-7b48-84d2-424d6d256720"
+    );
     const acceptedQuote = buildCoworkReservationQuote(reservationData);
     const affirm = mock(() =>
       Effect.succeed({
@@ -2377,8 +2512,9 @@ describe("CheckoutService", () => {
 
   test("does not apply the sandbox currency override to a lookalike hostname", async () => {
     const originalNexiOrigin = env.NEXI_API_ORIGIN;
-    env.NEXI_API_ORIGIN =
-      "https://xpaysandbox.nexigroup.com.attacker.example/api";
+    Object.assign(env, {
+      NEXI_API_ORIGIN: "https://xpaysandbox.nexigroup.com.attacker.example/api",
+    } satisfies Pick<typeof env, "NEXI_API_ORIGIN">);
 
     try {
       const harness = await createCheckoutHarness({
@@ -2396,7 +2532,7 @@ describe("CheckoutService", () => {
         expect.objectContaining({ currency: "CZK" })
       );
     } finally {
-      env.NEXI_API_ORIGIN = originalNexiOrigin;
+      Object.assign(env, { NEXI_API_ORIGIN: originalNexiOrigin });
     }
   });
 
@@ -2420,7 +2556,9 @@ describe("CheckoutService", () => {
 
     expect(result).toEqual({
       status: "redirect",
-      orderId: "0198c1a2-798d-74a9-84a7-0f1bc035ccf0",
+      orderId: workspaceReservationIdSchema.make(
+        "0198c1a2-798d-74a9-84a7-0f1bc035ccf0"
+      ),
       redirectUrl:
         "/en-US/reservation/status/0198c1a2-798d-74a9-84a7-0f1bc035ccf0?outcome=success",
       paid: true,
@@ -2455,7 +2593,9 @@ describe("CheckoutService", () => {
   });
 
   test("does not complete an internal payment when the live hold changes after checkout preparation", async () => {
-    const orderId = "0198c1a2-29c2-7a90-87ec-2d910d7d9f83";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-29c2-7a90-87ec-2d910d7d9f83"
+    );
     let validationCount = 0;
     const confirm = mock(() => {
       validationCount += 1;
@@ -2491,7 +2631,10 @@ describe("CheckoutService", () => {
       throw new Error("Expected the invalid live hold to reject checkout");
     }
     expect(result.failure._tag).toBe("CheckoutError");
-    expect((result.failure as { cause?: unknown }).cause).toMatchObject({
+    if (!(result.failure instanceof CheckoutError)) {
+      throw new Error("Expected a checkout error.");
+    }
+    expect(result.failure.cause).toMatchObject({
       _tag: "CheckoutUnavailableError",
       orderId,
       reason: "dotypos_not_pending",
@@ -2511,15 +2654,20 @@ describe("CheckoutService", () => {
         commitment: fullyDiscountedCommitment,
       })
     );
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-8a82-7b72-86f9-80df612b1338"
+    );
     const fulfillPaidOrder = mock(() =>
       Effect.fail(
-        new CheckoutTestFailure({
+        new WorkspacePaidFulfillmentError({
+          orderId: workspaceReservationIdSchema.make(orderId),
+          failureCode: "invoice_processing_failed",
           message: "Fulfillment failed after payment committed.",
         })
       )
     );
     const harness = await createCheckoutHarness({
-      orderId: "0198c1a2-8a82-7b72-86f9-80df612b1338",
+      orderId,
       acceptedQuote,
       affirm,
       run: fulfillPaidOrder,
@@ -2545,7 +2693,9 @@ describe("CheckoutService", () => {
 
     expect(result).toEqual({
       status: "redirect",
-      orderId: "0198c1a2-ebb8-74e3-8fa2-76f32e5aed72",
+      orderId: workspaceReservationIdSchema.make(
+        "0198c1a2-ebb8-74e3-8fa2-76f32e5aed72"
+      ),
       redirectUrl:
         "/en-US/reservation/status/0198c1a2-ebb8-74e3-8fa2-76f32e5aed72?outcome=success",
       paid: true,
@@ -2568,7 +2718,9 @@ describe("CheckoutService", () => {
         .add({ days: 1 })
         .toString(),
     });
-    const orderId = "0198c1a2-a219-7f3f-8046-772dc5b1327d";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-a219-7f3f-8046-772dc5b1327d"
+    );
     const harness = await createCheckoutHarness({
       orderId,
       earlyPerformanceConsent: false,
@@ -2596,7 +2748,9 @@ describe("CheckoutService", () => {
   });
 
   test("leads a resubmitted Pay state for an order paid meanwhile to its completed checkout", async () => {
-    const orderId = "0198c1a2-cd20-7caf-8be4-a6f459d2c7dd";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-cd20-7caf-8be4-a6f459d2c7dd"
+    );
     const confirm = mock(() =>
       Effect.fail(
         new CheckoutUnavailableError({
@@ -2662,8 +2816,12 @@ describe("CheckoutService", () => {
         commitment: emptyCommitment,
       })
     );
-    const orderId = "0198c1a2-f3e0-7a84-80ef-fe152a064ba5";
-    const checkoutSessionId = "meeting-room-session-id";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-f3e0-7a84-80ef-fe152a064ba5"
+    );
+    const checkoutSessionId = checkoutSessionIdSchema.make(
+      "meeting-room-session-id"
+    );
     const acceptedQuote = buildMeetingRoomQuote(acceptedDiscountQuote);
     const harness = await createCheckoutHarness({
       orderId,
@@ -2718,7 +2876,9 @@ describe("CheckoutService", () => {
 
   test("allows payment for a started whole day before its end", async () => {
     const wholeDayReservation = buildStartedWholeDayReservation();
-    const orderId = "0198c1a2-df82-7c08-82d5-e86e91799583";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-df82-7c08-82d5-e86e91799583"
+    );
     const quote = buildMeetingRoomQuote(undefined, wholeDayReservation);
     const affirm = mock(() =>
       Effect.succeed({
@@ -2758,7 +2918,9 @@ describe("CheckoutService", () => {
 
   test("rejects payment after a meeting-room reservation ends", async () => {
     const endedReservation = buildEndedMeetingRoomReservation();
-    const orderId = "0198c1a2-43f9-7d31-84e8-9e8bab70f867";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-43f9-7d31-84e8-9e8bab70f867"
+    );
     const quote = buildMeetingRoomQuote(undefined, endedReservation);
     const harness = await createCheckoutHarness({
       orderId,
@@ -2794,7 +2956,9 @@ describe("CheckoutService", () => {
 
   test("rejects payment after an office reservation ends", async () => {
     const endedReservation = buildEndedOfficeReservation();
-    const orderId = "0198c1a2-d9f9-7fb3-81ef-5236d54eaf1f";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-d9f9-7fb3-81ef-5236d54eaf1f"
+    );
     const harness = await createCheckoutHarness({
       orderId,
       payStateToken: buildOfficePayStateToken({
@@ -2829,7 +2993,9 @@ describe("CheckoutService", () => {
       "reserved-desk",
       "2099-06-10"
     );
-    const orderId = "0198c1a2-5d46-7561-87a7-cc0c3ce7ee08";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-5d46-7561-87a7-cc0c3ce7ee08"
+    );
 
     try {
       const harness = await createCheckoutHarness({
@@ -2862,7 +3028,9 @@ describe("CheckoutService", () => {
       "reserved-desk",
       "2099-06-10"
     );
-    const orderId = "0198c1a2-a23b-70bf-809c-e604edc96e04";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-a23b-70bf-809c-e604edc96e04"
+    );
 
     try {
       const harness = await createCheckoutHarness({
@@ -2896,7 +3064,9 @@ describe("CheckoutService", () => {
       "open-space",
       "2099-06-10"
     );
-    const orderId = "0198c1a2-9f8d-7d9e-878a-35285311e01d";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-9f8d-7d9e-878a-35285311e01d"
+    );
 
     try {
       const harness = await createCheckoutHarness({
@@ -2929,7 +3099,9 @@ describe("CheckoutService", () => {
       "reserved-desk",
       "2099-06-10"
     );
-    const orderId = "0198c1a2-1007-7650-822c-f201567a4052";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-1007-7650-822c-f201567a4052"
+    );
     const activeAttempt = {
       ...makeAttempt({
         id: "cowork-active-attempt",
@@ -2981,7 +3153,9 @@ describe("CheckoutService", () => {
       "reserved-desk",
       "2099-06-10"
     );
-    const orderId = "0198c1a2-e669-7a55-8561-6124c9c20348";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-e669-7a55-8561-6124c9c20348"
+    );
     const affirm = mock(() => {
       now = Temporal.Instant.from("2099-06-10T22:00:00Z");
       return Effect.succeed({
@@ -3022,7 +3196,9 @@ describe("CheckoutService", () => {
       "reserved-desk",
       "2099-06-10"
     );
-    const orderId = "0198c1a2-ca48-7390-8c94-2c1e454eee9a";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-ca48-7390-8c94-2c1e454eee9a"
+    );
     let revalidationCount = 0;
     const confirm = mock(() => {
       revalidationCount += 1;
@@ -3080,7 +3256,9 @@ describe("CheckoutService", () => {
         discountQuote: zeroTotalQuote,
       }
     );
-    const orderId = "0198c1a2-e6ac-79d7-8ecd-e17dd99a57d6";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-e6ac-79d7-8ecd-e17dd99a57d6"
+    );
     let revalidationCount = 0;
     const confirm = mock(() => {
       revalidationCount += 1;
@@ -3128,7 +3306,9 @@ describe("CheckoutService", () => {
 
   test("recovers an active provider session after the meeting-room reservation ends", async () => {
     const endedReservation = buildEndedMeetingRoomReservation();
-    const orderId = "0198c1a2-da0d-7c0b-8dc7-fcf158cdc7c9";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-da0d-7c0b-8dc7-fcf158cdc7c9"
+    );
     const quote = buildMeetingRoomQuote(undefined, endedReservation);
     const activeAttempt = {
       ...makeAttempt({
@@ -3186,7 +3366,9 @@ describe("CheckoutService", () => {
       email: testEmailAddressForAda,
       phone: "+420 777 777 777",
     });
-    const orderId = "0198c1a2-10a4-73ba-8520-c07c4c1fc60b";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-10a4-73ba-8520-c07c4c1fc60b"
+    );
     const quote = buildMeetingRoomQuote(undefined, reservation);
     const affirm = mock(() => {
       now = Temporal.Instant.from("2099-06-10T12:00:00.001Z");
@@ -3229,7 +3411,9 @@ describe("CheckoutService", () => {
 
   test("recovers an already-paid whole day after its start", async () => {
     const wholeDayReservation = buildStartedWholeDayReservation();
-    const orderId = "0198c1a2-9cb3-7911-8a33-cb7fb85a0b7d";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-9cb3-7911-8a33-cb7fb85a0b7d"
+    );
     const harness = await createCheckoutHarness({
       orderId,
       payStateToken: buildMeetingRoomPayStateToken({
@@ -3250,7 +3434,9 @@ describe("CheckoutService", () => {
 
     expect(result).toEqual({
       status: "redirect",
-      orderId: "0198c1a2-9cb3-7911-8a33-cb7fb85a0b7d",
+      orderId: workspaceReservationIdSchema.make(
+        "0198c1a2-9cb3-7911-8a33-cb7fb85a0b7d"
+      ),
       redirectUrl:
         "/en-US/reservation/status/0198c1a2-9cb3-7911-8a33-cb7fb85a0b7d?outcome=success",
       paid: true,
@@ -3261,7 +3447,9 @@ describe("CheckoutService", () => {
   });
 
   test("pays an in-flight checkout signed before staff labels without pricing_changed, recording the affirmed staff label", async () => {
-    const orderId = "0198c1a2-a553-7086-8cee-565f617a2093";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-a553-7086-8cee-565f617a2093"
+    );
     const acceptedQuote = buildCoworkReservationQuote(reservationData, {
       discountQuote: discountedQuote,
     });
@@ -3298,7 +3486,7 @@ describe("CheckoutService", () => {
     expect(result.status).toBe("redirect");
     expect(
       harness.createPendingProviderAttempt.mock.calls[0]?.[0].accountingSnapshot
-        .quote.payment.discounts[0]?.discount
+        ?.quote.payment.discounts[0]?.discount
     ).toEqual({ ...application.discount, staffLabel: "Letní sleva" });
   });
 
@@ -3320,7 +3508,9 @@ describe("CheckoutService", () => {
     const acceptedToken = buildPayStateToken({
       orderId: "0198c1a2-a04a-7521-8d79-84c4bca5f2a2",
       quote: acceptedQuote,
-      checkoutSessionId: "reservation-label-edited-session-id",
+      checkoutSessionId: checkoutSessionIdSchema.make(
+        "reservation-label-edited-session-id"
+      ),
     });
     const affirm = mock(() =>
       Effect.succeed({
@@ -3333,7 +3523,9 @@ describe("CheckoutService", () => {
     const harness = await createCheckoutHarness({
       orderId: "0198c1a2-a04a-7521-8d79-84c4bca5f2a2",
       acceptedQuote,
-      checkoutSessionId: "reservation-label-edited-session-id",
+      checkoutSessionId: checkoutSessionIdSchema.make(
+        "reservation-label-edited-session-id"
+      ),
       affirm,
     });
 
@@ -3363,7 +3555,7 @@ describe("CheckoutService", () => {
       "Edited English summer label"
     );
     expect(freshState.checkoutSessionId).toBe(
-      "reservation-label-edited-session-id"
+      checkoutSessionIdSchema.make("reservation-label-edited-session-id")
     );
   });
 
@@ -3548,7 +3740,9 @@ describe("CheckoutService", () => {
 
     expect(result).toEqual({
       status: "redirect",
-      orderId: "0198c1a2-2cfd-770a-8616-e6275dd179d4",
+      orderId: workspaceReservationIdSchema.make(
+        "0198c1a2-2cfd-770a-8616-e6275dd179d4"
+      ),
       redirectUrl: "https://payments.example/hosted",
       statusUrl:
         "/en-US/reservation/status/0198c1a2-2cfd-770a-8616-e6275dd179d4",
@@ -3568,7 +3762,13 @@ describe("CheckoutService", () => {
       orderId: "0198c1a2-cb54-7e02-8fd4-03b393f3ef8a",
     });
     harness.updateReservation.mockImplementation(() =>
-      Effect.fail(new CheckoutTestFailure({ message: "Dotypos update failed" }))
+      Effect.fail(
+        new DotyposUnavailable({
+          operation: "updateReservation",
+          request: "reservation.patch",
+          reason: "transport",
+        })
+      )
     );
 
     const error = await Effect.runPromise(Effect.flip(harness.effect));
@@ -3639,7 +3839,7 @@ describe("CheckoutService", () => {
     const acceptedQuote = buildCoworkReservationQuote(reservationData, {
       discountQuote: discountedQuote,
     });
-    const affirm = mock()
+    const affirm = mock<Affirm>(() => Effect.die("Unexpected pricing call."))
       .mockImplementationOnce(() =>
         Effect.succeed({
           quote: acceptedQuote,
@@ -3706,7 +3906,7 @@ describe("CheckoutService", () => {
     const acceptedQuote = buildCoworkReservationQuote(zeroTotalReservation, {
       discountQuote: zeroTotalQuote,
     });
-    const affirm = mock()
+    const affirm = mock<Affirm>(() => Effect.die("Unexpected pricing call."))
       .mockImplementationOnce(() =>
         Effect.succeed({
           quote: acceptedQuote,
@@ -3748,6 +3948,9 @@ describe("CheckoutService", () => {
     expect(completeInternalPayment).toHaveBeenCalledTimes(1);
     expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
+    if (result.status !== "pricing_changed") {
+      throw new Error("Expected pricing_changed result");
+    }
     const freshToken = new URL(
       result.freshPayUrl,
       "https://deskohub.test"
@@ -3892,7 +4095,9 @@ describe("CheckoutService", () => {
       ).exp;
 
     test("keeps the signed deadline while a pending review moves the token's expiry", async () => {
-      const orderId = "0198c1a2-2bbe-7a5a-8331-107b6fb88a7d";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-2bbe-7a5a-8331-107b6fb88a7d"
+      );
       const payStateToken = buildPayStateToken({
         orderId,
         changedKeys: { sectionKeys: ["total"], itemKeys: ["total:final"] },
@@ -3908,7 +4113,9 @@ describe("CheckoutService", () => {
     });
 
     test("keeps the signed deadline while a repricing moves the token's expiry", async () => {
-      const orderId = "0198c1a2-d876-751b-8c96-e5bec3187e92";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-d876-751b-8c96-e5bec3187e92"
+      );
       const payStateToken = buildPayStateToken({
         orderId,
         quote: buildCoworkReservationQuote(reservationData, {
@@ -3941,7 +4148,7 @@ describe("CheckoutService", () => {
     ] as const)(
       "gives $name of a token signed without the deadline the stored one",
       async ({ changedKeys }) => {
-        const orderId = `reservation-unsigned-hold-deadline-${changedKeys}`;
+        const orderId = crypto.randomUUID();
         const affirm = mock(() =>
           Effect.succeed({
             quote: buildCoworkReservationQuote(reservationData, {
@@ -3980,7 +4187,9 @@ describe("CheckoutService", () => {
 
 describe("a Pay state whose entered code was removed", () => {
   test("asks for the new price to be reviewed, then pays it once accepted", async () => {
-    const orderId = "0198c1a2-c92d-72eb-8070-9af0578034a6";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-c92d-72eb-8070-9af0578034a6"
+    );
     const [
       { clearDiscountCodeFromPayState },
       { acceptPayStatePriceChange },
@@ -4024,7 +4233,7 @@ describe("a Pay state whose entered code was removed", () => {
               }),
           }),
           PayableCheckoutMock(() =>
-            Effect.succeed(makeReservation(orderId) as never)
+            Effect.succeed(makeReservation(orderId))
           ).pipe(Layer.provide(TestSealedStateKeys)),
           tokenStore
         )

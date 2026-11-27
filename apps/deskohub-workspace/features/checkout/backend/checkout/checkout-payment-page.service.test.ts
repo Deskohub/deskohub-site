@@ -2,18 +2,23 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
+import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import { type Duration, Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import type { LatePaymentRecovery } from "@/db/schema";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import {
   type IReservationAuthorizationService,
   ReservationAuthorizationService,
   ReservationAuthorizationUnavailableError,
 } from "@/features/reservation/backend/reservation-authorization.service";
+import { WorkspaceReservationDetailsMalformedError } from "@/features/reservation/backend/stored-reservation-details.server";
 import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
 import {
   type PaymentAttempt,
@@ -29,49 +34,74 @@ import {
   testReservationPaymentWindow,
 } from "./payment-page-provider-status.test-utils";
 
+import {
+  checkoutDotyposReservationId,
+  latePaymentRecoveryFixture,
+  paymentAttemptWithPageFixture,
+} from "./testing/checkout-payment.fixture";
+
 const instant = (value: string) => Temporal.Instant.from(value);
 
 const providerOrderCreatedAt = instant("2026-06-01T10:00:00Z");
 const providerRedirectUrl = "https://sandbox.example/hpp/order-page";
 
-const input = {
-  orderId: "0198c1a2-c6ac-7bc9-83a6-7a5f8af36183",
+const input: PaymentPageReopeningInput = {
+  orderId: workspaceReservationIdSchema.make(
+    "0198c1a2-c6ac-7bc9-83a6-7a5f8af36183"
+  ),
   locale: "cs-CZ",
   accessCookie: "access-cookie",
-} as PaymentPageReopeningInput;
+};
+const attemptId = paymentAttemptIdSchema.make("attempt-reopen");
+const reservationCreatedAt = instant("2026-06-01T09:52:00Z");
 
 const makeReservation = (overrides: Partial<WorkspaceReservation> = {}) =>
-  ({
-    id: "0198c1a2-c6ac-7bc9-83a6-7a5f8af36183",
+  workspaceReservationFixture({
+    id: input.orderId,
+    dotyposReservationId: checkoutDotyposReservationId,
     reservationState: "held",
     // The ten-minute hold from 09:52 expired; the pending provider order
     // keeps it held.
     reservationHoldExpiresAt: instant("2026-06-01T10:02:00Z"),
     paymentState: "pending",
-    activePaymentAttemptId: "attempt-reopen",
+    fulfillmentState: "not_started",
+    activePaymentAttemptId: attemptId,
+    reservationCreatedAt,
+    reservationConfirmedAt: null,
+    paidAt: null,
+    fulfilledAt: null,
+    createdAt: reservationCreatedAt,
+    updatedAt: providerOrderCreatedAt,
     ...overrides,
-  }) as WorkspaceReservation;
+  });
 
-const makeAttempt = (overrides: Partial<PaymentAttempt> = {}) =>
-  ({
-    id: "attempt-reopen",
-    workspaceReservationId: "0198c1a2-c6ac-7bc9-83a6-7a5f8af36183",
-    provider: "nexi",
-    providerOrderId: "provider-order-id",
-    state: "pending",
-    securityToken: "security-token",
+const makeAttempt = (
+  overrides: Partial<Parameters<typeof paymentAttemptWithPageFixture>[0]> = {}
+) =>
+  paymentAttemptWithPageFixture({
+    id: attemptId,
+    reservationId: input.orderId,
     providerRedirectUrl,
     providerOrderCreatedAt,
     createdAt: instant("2026-06-01T09:59:58Z"),
+    updatedAt: providerOrderCreatedAt,
     ...overrides,
-  }) as PaymentAttempt;
+  });
 
-const lateRecovery = (overrides: Partial<LatePaymentRecovery> = {}) =>
-  ({
-    paymentAttemptId: "attempt-older",
-    state: "pending",
-    ...overrides,
-  }) as LatePaymentRecovery;
+const lateRecovery = (state: "pending" | "recovered" = "pending") =>
+  latePaymentRecoveryFixture({
+    paymentAttemptId: paymentAttemptIdSchema.make("attempt-older"),
+    workspaceReservationId: input.orderId,
+    originalDotyposReservationId: checkoutDotyposReservationId,
+    verifiedPaidAt: providerOrderCreatedAt,
+    ...(state === "recovered"
+      ? {
+          state,
+          recoveredDotyposReservationId:
+            DotyposReservationIdSchema.make("dotypos-recovered"),
+        }
+      : { state }),
+  });
 
 type Harness = {
   /** The authorization's answer, or `"unavailable"` when its read fails. */
@@ -98,12 +128,18 @@ const createHarness = (harness: Harness = {}) => {
       ? Effect.fail(
           new ReservationAuthorizationUnavailableError({
             orderId: input.orderId,
-            cause: new Error("read failed") as never,
+            cause: new WorkspaceReservationDetailsMalformedError({
+              reservationId: input.orderId,
+              message: "read failed",
+              cause: new Error("read failed"),
+            }),
           })
         )
       : Effect.succeed(harness.authorized ?? true)
   );
-  const recordPaymentReturnTarget = mock(() => Effect.void);
+  const recordPaymentReturnTarget = mock<
+    WorkspaceReservationRepository["Service"]["recordPaymentReturnTarget"]
+  >(() => Effect.void);
   const findReservation = mock(() =>
     Effect.succeed(
       harness.reservation === undefined
@@ -126,7 +162,7 @@ const createHarness = (harness: Harness = {}) => {
     Layer.provide(provider.layer),
     Layer.provide(
       Layer.mergeAll(
-        Layer.succeed(ReservationAuthorizationService, {
+        Layer.mock(ReservationAuthorizationService, {
           isAuthorized: () =>
             Effect.die("reopening must report a failed read, not deny"),
           authorize,
@@ -210,13 +246,13 @@ describe("CheckoutPaymentPageService.reopen", () => {
     expect(harness.recordPaymentReturnTarget.mock.calls).toEqual([
       [
         {
-          id: "0198c1a2-c6ac-7bc9-83a6-7a5f8af36183",
+          id: input.orderId,
           paymentReturnTarget: "native-app",
         },
       ],
       [
         {
-          id: "0198c1a2-c6ac-7bc9-83a6-7a5f8af36183",
+          id: input.orderId,
           paymentReturnTarget: undefined,
         },
       ],
@@ -364,7 +400,10 @@ describe("CheckoutPaymentPageService.reopen", () => {
 
   test("closes the page of a paid order", async () => {
     const harness = createHarness({
-      reservation: makeReservation({ paymentState: "paid" }),
+      reservation: makeReservation({
+        paymentState: "paid",
+        paidAt: providerOrderCreatedAt,
+      }),
       attempt: makeAttempt({ state: "paid" }),
     });
 
@@ -384,13 +423,13 @@ describe("CheckoutPaymentPageService.reopen", () => {
 
   test("ignores a late payment that recovery already confirmed", async () => {
     const harness = createHarness({
-      latePaymentRecovery: lateRecovery({ state: "recovered" }),
+      latePaymentRecovery: lateRecovery("recovered"),
     });
 
     expect((await harness.reopen()).state).toBe("opened");
   });
 
-  test.each(["cancelled", "expired", "confirmed"] as const)(
+  test.each(["cancelled", "hold_expired", "confirmed"] as const)(
     "closes the page of an order whose hold is %s",
     async (reservationState) => {
       const harness = createHarness({
@@ -425,11 +464,15 @@ describe("CheckoutPaymentPageService.reopen", () => {
     ["no security token", { securityToken: null }],
     [
       "another order",
-      { workspaceReservationId: "0198c1a2-c9f4-79ad-8951-ec189deca046" },
+      {
+        reservationId: workspaceReservationIdSchema.make(
+          "0198c1a2-c9f4-79ad-8951-ec189deca046"
+        ),
+      },
     ],
   ] as const)("closes the page of an attempt with %s", async (_, overrides) => {
     const harness = createHarness({
-      attempt: makeAttempt(overrides as Partial<PaymentAttempt>),
+      attempt: makeAttempt(overrides),
     });
 
     expect(await harness.reopen()).toEqual({

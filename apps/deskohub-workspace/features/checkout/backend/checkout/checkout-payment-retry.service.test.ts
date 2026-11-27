@@ -3,27 +3,48 @@ import { ReservationInvitees } from "@/features/reservation-invitees/backend/res
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+  DotyposService,
+  DotyposUnavailable,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Match, Schema } from "effect";
 import { CustomerAccountLinkRepository } from "@/features/account/backend/customer-account-link.repository";
-import { makeAccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
+import {
+  coworkAccountingDocumentSnapshotSchema,
+  makeAccountingDocumentSnapshot,
+} from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
+import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import {
   canonicalPromotionCodeSchema,
   discountIdSchema,
 } from "@/features/discounts/contracts";
+import { PromotionCodeUnavailableError } from "@/features/discounts/errors";
 import { ReservationAuthorizationService } from "@/features/reservation/backend/reservation-authorization.service";
 import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
+import {
+  dotyposHoldFixture,
+  payableReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
+import { withCoworkProductFields } from "@/features/reservation/cowork-reservation-product";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
-import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
+import {
+  type ReservationBillingSelection,
+  reservationBillingSelectionSchema,
+} from "@/features/reservation/reservation-billing";
+import { dotyposCustomerFixture } from "@/shared/testing/dotypos-customer.test-utils";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { PaymentRetryHoldService } from "../holds/payment-retry-hold.service";
+import { pendingNexiAttemptFixture } from "../holds/reservation-hold-cleanup.test-utils";
 import { AttemptPromotionCodesRepository } from "../repositories/attempt-promotion-codes.repository";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
 import {
@@ -39,6 +60,7 @@ import {
   paymentPricingFrom,
   type RepricedPayment,
 } from "./checkout-pricing.service.mock";
+import type { CoworkDiscountCodePriceInput } from "./cowork-checkout-pricing";
 import { PayState } from "./pay-state";
 import { getPayStateBinding } from "./pay-state-contract";
 import {
@@ -47,28 +69,42 @@ import {
 } from "./payment-retry-provider-check";
 import { PaymentRetryUnavailableError } from "./payment-retry-unavailable";
 
-const orderId = workspaceReservationIdSchema.make("retry-order-id");
+import { latePaymentRecoveryFixture } from "./testing/checkout-payment.fixture";
+
+const orderId = workspaceReservationIdSchema.make(
+  "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5"
+);
+const dotyposReservationId = DotyposReservationIdSchema.make(
+  "dotypos-reservation-id"
+);
+const dotyposCustomerId = DotyposCustomerIdSchema.make("dotypos-customer-id");
 const retriedAttemptId = paymentAttemptIdSchema.make("retried-attempt-id");
 const customerEmail = testEmailAddress("retry-customer");
 const accountEmail = testEmailAddress("retry-account");
-const holdExpiresAt = Temporal.Now.instant().add({ minutes: 10 });
+const now = Temporal.Now.instant();
+const holdExpiresAt = now.add({ minutes: 10 });
 
 const order = { entryTier: "open-space", coffee: true } as const;
 const quote = buildCoworkReservationQuote(order);
+const commitment = makeDiscountCommitment({
+  product: { kind: "cowork", tier: order.entryTier },
+  firstServiceDate: "2099-01-01",
+  applications: [],
+});
 
 const snapshotFor = (input: {
   readonly date?: string;
   readonly deliveryEmail?: string;
   readonly billing?: ReservationBillingSelection;
-}) =>
-  makeAccountingDocumentSnapshot({
+}) => {
+  const snapshot = makeAccountingDocumentSnapshot({
     workspaceReservationId: orderId,
-    dotyposReservationId: "dotypos-reservation-id" as never,
-    dotyposCustomerId: "dotypos-customer-id" as never,
+    dotyposReservationId,
+    dotyposCustomerId,
     locale: "en-US",
     prepared: {
       kind: "cowork",
-      reservation: {
+      reservation: Schema.decodeSync(normalizedCoworkReservationOrderSchema)({
         kind: "cowork",
         ...order,
         date: input.date ?? "2099-01-01",
@@ -76,35 +112,49 @@ const snapshotFor = (input: {
         email: input.deliveryEmail ?? customerEmail,
         phone: "+420700000000",
         billing: input.billing ?? { purpose: "personal", invoice: "none" },
-      },
+      }),
       quote,
-    } as never,
+    },
   });
 
-const row = (overrides: Partial<WorkspaceReservation> = {}) =>
-  ({
-    id: orderId,
-    correlationId: "correlation-id",
-    checkoutSessionKey: "checkout-session-key",
-    authorAccountId: "author-account-id",
-    dotyposCustomerId: "dotypos-customer-id",
-    reservationDetails: { kind: "cowork", ...order },
-    officeContactAttends: null,
-    reservationState: "held",
-    paymentState: "failed",
-    activePaymentAttemptId: retriedAttemptId,
-    reservationHoldExpiresAt: holdExpiresAt,
-    ...overrides,
-  }) as WorkspaceReservation;
+  if (!Schema.is(coworkAccountingDocumentSnapshotSchema)(snapshot)) {
+    throw new Error("Expected a cowork retry snapshot.");
+  }
+  return snapshot;
+};
 
-const attempt = (overrides: Partial<PaymentAttempt> = {}) =>
-  ({
-    id: retriedAttemptId,
-    workspaceReservationId: orderId,
-    state: "failed",
-    providerOrderId: "provider-order-id",
+const row = (
+  overrides: Partial<WorkspaceReservation> = {}
+): WorkspaceReservation =>
+  withCoworkProductFields({
+    ...payableReservationFixture({
+      id: orderId,
+      dotyposReservationId,
+      dotyposCustomerId,
+      reservationDetails: { kind: "cowork", ...order },
+      paymentState: "failed",
+      activePaymentAttemptId: retriedAttemptId,
+      reservationHoldExpiresAt: holdExpiresAt,
+      locale: "en-US",
+    }),
     ...overrides,
-  }) as PaymentAttempt;
+  });
+
+const attempt = (overrides: Partial<PaymentAttempt> = {}): PaymentAttempt => ({
+  ...pendingNexiAttemptFixture(orderId, retriedAttemptId, now),
+  state: "failed",
+  failureCode: "nexi_declined",
+  amount: quote.payment.expectedPrice,
+  ...overrides,
+});
+
+const pendingRecovery = latePaymentRecoveryFixture({
+  paymentAttemptId: retriedAttemptId,
+  workspaceReservationId: orderId,
+  state: "pending",
+  originalDotyposReservationId: dotyposReservationId,
+  verifiedPaidAt: now,
+});
 
 type Harness = {
   readonly authorized?: boolean;
@@ -143,22 +193,31 @@ const runPrepare = (harness: Harness = {}) => {
       }
     )
   );
-  const applyDiscountCode = mock((input: { readonly quote: unknown }) =>
+  const applyDiscountCode = mock((input: CoworkDiscountCodePriceInput) =>
     harness.codeUnavailable
-      ? Effect.fail({ _tag: "PromotionCodeUnavailableError" } as never)
+      ? Effect.fail(
+          new PromotionCodeUnavailableError({
+            reason: "expired",
+            message: "The promotion code has expired.",
+          })
+        )
       : Effect.succeed({
-          status: "affirmed",
+          status: "affirmed" as const,
           priced: {
-            ...(input as object),
+            kind: "cowork" as const,
+            reservation: input.reservation,
+            quote: input.quote,
             submittedCodeDiscountId: discountIdSchema.make("code-discount"),
           },
-        } as never)
+        })
   );
   const pricing = paymentPricingFrom((input) =>
-    Effect.succeed({
-      quote: harness.reprice?.(input.quote as never).quote ?? input.quote,
-      commitment: {},
-    } as never)
+    Effect.succeed(
+      harness.reprice?.(input.quote) ?? {
+        quote: input.quote,
+        commitment,
+      }
+    )
   );
   const layer = CheckoutPaymentRetryService.Default.pipe(
     Layer.provide(
@@ -167,7 +226,7 @@ const runPrepare = (harness: Harness = {}) => {
           authorize: () => Effect.succeed(harness.authorized ?? true),
         }),
         Layer.mock(ReservationInvitees, {
-          findBookedPeople: () => Effect.succeed(Option.none()),
+          findBookedPeople: () => Effect.succeedNone,
         }),
         Layer.mock(WorkspaceReservationRepository, {
           findById: () => Effect.succeed(stored),
@@ -184,7 +243,7 @@ const runPrepare = (harness: Harness = {}) => {
         }),
         Layer.mock(LatePaymentRecoveryRepository, {
           findLatestByWorkspaceReservationId: () =>
-            Effect.succeed(harness.recovery ? ({} as never) : null),
+            Effect.succeed(harness.recovery ? pendingRecovery : null),
         }),
         Layer.mock(AccountingDocumentSnapshots, {
           find: () =>
@@ -219,9 +278,9 @@ const runPrepare = (harness: Harness = {}) => {
             } as const),
         }),
         Layer.mock(DotyposService, {
-          getCustomer: () =>
-            Effect.succeed(
-              Option.some({
+          getCustomer: (id) =>
+            Effect.succeedSome(
+              dotyposCustomerFixture(id, {
                 firstName: "Ada",
                 lastName: "Lovelace",
                 email: harness.customer?.email ?? customerEmail,
@@ -229,15 +288,21 @@ const runPrepare = (harness: Harness = {}) => {
                   harness.customer?.phone === undefined
                     ? "+420700000000"
                     : harness.customer.phone,
-              } as never)
+              })
             ),
-          getReservationWithoutCustomer: () =>
+          getReservationWithoutCustomer: (id) =>
             harness.dotyposBounds
               ? Effect.succeed({
+                  ...dotyposHoldFixture(id),
                   ...harness.dotyposBounds,
-                  seats: "1",
-                } as never)
-              : Effect.fail({ _tag: "DotyposError" } as never),
+                })
+              : Effect.fail(
+                  new DotyposUnavailable({
+                    operation: "getReservationWithoutCustomer",
+                    request: "reservation.get",
+                    reason: "transport",
+                  })
+                ),
         }),
         Layer.mock(PaymentRetryProviderCheck, {
           check: () => Effect.succeed(harness.provider ?? "ended_unpaid"),
@@ -245,7 +310,14 @@ const runPrepare = (harness: Harness = {}) => {
         Layer.mock(PaymentRetryHoldService, { secure }),
         Layer.mock(CheckoutPricingService, {
           ...pricing,
-          applyDiscountCode: applyDiscountCode as never,
+          applyDiscountCode: (input) =>
+            Match.value(input).pipe(
+              Match.when(
+                { reservation: { kind: "cowork" } },
+                applyDiscountCode
+              ),
+              Match.orElse(() => Effect.die("Expected a cowork retry."))
+            ),
         }),
         TestSealedStateKeys
       )
@@ -272,6 +344,8 @@ const openReady = async (preparation: PaymentRetryPreparation) => {
   };
 };
 
+const quoteWithRetiredField = { ...quote, retiredField: true };
+
 describe("CheckoutPaymentRetryService.prepare", () => {
   test("issues an order-bound Pay state on the secured hold, asking for the terms again", async () => {
     const { result, secure } = runPrepare();
@@ -292,7 +366,10 @@ describe("CheckoutPaymentRetryService.prepare", () => {
       email: customerEmail,
       billing: { purpose: "personal", invoice: "none" },
     });
-    expect(Temporal.Instant.from(state.holdExpiresAt!).epochMilliseconds).toBe(
+    if (state.holdExpiresAt === undefined) {
+      throw new Error("The retry Pay state must have a hold deadline.");
+    }
+    expect(Temporal.Instant.from(state.holdExpiresAt).epochMilliseconds).toBe(
       holdExpiresAt.epochMilliseconds
     );
     expect(preparation.checkout.changedKeys).toBeUndefined();
@@ -312,8 +389,8 @@ describe("CheckoutPaymentRetryService.prepare", () => {
               value: signed.payment.expectedPrice.value + 1000,
             },
           },
-        } as never,
-        commitment: {} as never,
+        },
+        commitment,
       }),
     });
     const { preparation, state } = await openReady(await result);
@@ -328,7 +405,9 @@ describe("CheckoutPaymentRetryService.prepare", () => {
     const { state } = await openReady(await result);
 
     expect(applyDiscountCode).toHaveBeenCalledTimes(1);
-    expect(state.submittedCode).toBe("SPRING");
+    expect(state.submittedCode).toBe(
+      canonicalPromotionCodeSchema.make("SPRING")
+    );
     expect(state.changedKeys).toBeUndefined();
   });
 
@@ -359,7 +438,7 @@ describe("CheckoutPaymentRetryService.prepare", () => {
   });
 
   test("keeps the details of an order booked for someone else, invoiced to a company", async () => {
-    const billing = {
+    const billing = Schema.decodeSync(reservationBillingSelectionSchema)({
       purpose: "business",
       invoice: "required",
       buyer: {
@@ -374,7 +453,7 @@ describe("CheckoutPaymentRetryService.prepare", () => {
           country: "CZ",
         },
       },
-    } as const satisfies ReservationBillingSelection;
+    });
     const { result } = runPrepare({ snapshot: snapshotFor({ billing }) });
     const { preparation, state } = await openReady(await result);
 
@@ -394,7 +473,7 @@ describe("CheckoutPaymentRetryService.prepare", () => {
     ],
     [
       "a paid order",
-      { stored: row({ paymentState: "paid" }) },
+      { stored: row({ paymentState: "paid", paidAt: now }) },
       { state: "not_retryable", reason: "paid" },
     ],
     [
@@ -406,7 +485,7 @@ describe("CheckoutPaymentRetryService.prepare", () => {
       "an order whose payment is still under way",
       {
         stored: row({ paymentState: "pending" }),
-        newest: attempt({ state: "pending" }),
+        newest: attempt({ state: "pending", failureCode: null }),
       },
       { state: "not_retryable", reason: "payment_in_progress" },
     ],
@@ -430,7 +509,7 @@ describe("CheckoutPaymentRetryService.prepare", () => {
       {
         snapshot: {
           ...snapshotFor({}),
-          quote: { ...snapshotFor({}).quote, retiredField: true },
+          quote: quoteWithRetiredField,
         },
       },
       { state: "not_retryable", reason: "details_unavailable" },
@@ -498,7 +577,6 @@ describe("CheckoutPaymentRetryService.prepare", () => {
           entryTier: "reserved-desk",
           coffee: true,
         },
-        dotyposReservationId: "dotypos-reservation-id" as never,
       }),
       // Prague winter time (UTC+1): noon on 2099-01-01 to noon on 2099-01-02.
       dotyposBounds: {
@@ -529,7 +607,6 @@ describe("CheckoutPaymentRetryService.prepare", () => {
           entryTier: "reserved-desk",
           coffee: true,
         },
-        dotyposReservationId: "dotypos-reservation-id" as never,
       }),
     });
 

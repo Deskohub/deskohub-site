@@ -1,16 +1,21 @@
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { describe, expect, type Mock, mock, spyOn, test } from "bun:test";
 import type { GoogleCalendarEvent } from "@deskohub/google-calendar";
 import { testEmailAddress } from "@deskohub/test-email";
+import { ReferralCode } from "@deskohub/workspace-customer-api/referral-code";
 import { type Duration, Effect, Layer, Schema } from "effect";
 import { SqlError } from "effect/sql";
 import type { WorkspaceE2EConfig } from "@/e2e/config";
 import { isFreshOwnedPayStateUrl } from "@/e2e/referrals/checkout";
 import { isOwnedReferralCheckoutReviewUrl } from "@/e2e/referrals/checkout-review";
+import { workspaceE2ETimeouts } from "@/e2e/timeouts";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
-import { CheckoutPricingService } from "@/features/checkout/backend/checkout/checkout-pricing.service";
+import {
+  CheckoutPricingService,
+  type ICheckoutPricingService,
+} from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import {
   CheckoutPricingServiceMock,
   paymentPricingFrom,
@@ -25,9 +30,18 @@ import {
   payStateTokenQueryParam,
   type SignedPayState,
   sealPayState,
+  toFreshPayState,
 } from "@/features/checkout/backend/checkout/pay-state";
 import { PayableCheckoutMock } from "@/features/checkout/backend/checkout/payable-checkout.service.mock";
-import { withoutPayStateHoldExpiry } from "@/features/checkout/backend/checkout/signed-pay-state.test-utils";
+import {
+  syntheticPayStateOrderId,
+  withoutPayStateHoldExpiry,
+} from "@/features/checkout/backend/checkout/signed-pay-state.test-utils";
+import {
+  checkoutSessionIdSchema,
+  type PaymentAttemptId,
+  paymentAttemptIdSchema,
+} from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import type { CheckoutSummaryChangedKeys } from "@/features/checkout/checkout-summary";
 import {
@@ -37,6 +51,7 @@ import {
   PromotionCodeUnavailableError,
 } from "@/features/discounts";
 import { calendarSaleDiscountServiceLayer } from "@/features/discounts/calendar-sale.test-utils";
+import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import {
   type CanonicalPromotionCode,
   canonicalPromotionCodeSchema,
@@ -48,11 +63,8 @@ import { ReferralError } from "@/features/referrals/contracts";
 import { WithheldReferralService } from "@/features/referrals/referral.service.mock";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
-import {
-  type WorkspaceReservation,
-  WorkspaceReservationRepository,
-} from "@/features/reservation/backend/workspace-reservation.repository";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { getSlowestSuccessfulCalendarLoad } from "@/shared/backend/config/google-calendar.config.test-utils";
 import {
   SealedStateKeys,
@@ -65,7 +77,16 @@ import {
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
 import { instantStringSchema } from "@/shared/utils/temporal";
+import type {
+  CheckoutReferralResult,
+  ICheckoutReferralService,
+} from "./checkout-referral.service";
+import { getSubmittedCodeMetadata } from "./pay-state-contract";
 import type { ApplyDiscountCodeResult } from "./pay-state-discount-code";
+import {
+  buildPayStateCodeQuote,
+  payStateDiscountOrderFixture,
+} from "./pay-state-discount-code.test-utils";
 
 mock.module("server-only", () => ({}));
 
@@ -76,19 +97,24 @@ const payStateHoldExpiresAt = instantStringSchema.make(
 /** The deadline stored with the order, for tokens signed without one. */
 const storedHoldExpiresAt = Temporal.Instant.from("2099-06-01T10:09:30Z");
 
-const reservation = {
-  kind: "cowork" as const,
-  entryTier: "basic" as const,
+const reservation = Schema.decodeSync(normalizedCoworkReservationOrderSchema)({
+  kind: "cowork",
+  entryTier: "basic",
   coffee: false,
   date: "2026-08-04",
   name: "Ada Lovelace",
   email: testEmailAddress("ada"),
   phone: "+420777000111",
-};
+});
 const quote = buildCoworkReservationQuote(reservation);
-const checkoutSessionId = "checkout-session-id";
+const checkoutSessionId = checkoutSessionIdSchema.make("checkout-session-id");
+const activeAttemptId = paymentAttemptIdSchema.make("attempt-id");
 const submittedCodeDiscountId =
   Schema.decodeUnknownSync(discountIdSchema)("code-discount");
+const appliedQuote = buildPayStateCodeQuote(
+  reservation,
+  submittedCodeDiscountId
+);
 
 /** Code entry's verdict when the displayed price holds and the code applies. */
 const codeApplied = () => ({
@@ -96,7 +122,7 @@ const codeApplied = () => ({
   priced: {
     kind: "cowork" as const,
     reservation,
-    quote,
+    quote: appliedQuote,
     submittedCodeDiscountId,
   },
 });
@@ -124,15 +150,16 @@ const makePayStateToken = async (input?: {
       {
         locale: input?.locale ?? "en-US",
         reservation: input?.funded?.reservation ?? reservation,
-        quote: input?.funded?.quote ?? quote,
-        orderId: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
+        quote:
+          input?.funded?.quote ?? (input?.submittedCode ? appliedQuote : quote),
+        orderId: syntheticPayStateOrderId,
         bookedAt: payStateBookedAt,
         holdExpiresAt: payStateHoldExpiresAt,
         checkoutSessionId,
         requestedDiscountCode: input?.requestedDiscountCode,
         changedKeys: input?.changedKeys,
-        ...(input?.submittedCode && {
-          submittedCode: input.submittedCode,
+        ...getSubmittedCodeMetadata({
+          submittedCode: input?.submittedCode,
           submittedCodeDiscountId,
         }),
       },
@@ -147,18 +174,57 @@ const makePayStateToken = async (input?: {
   );
 };
 
+type ReferralOperations = ReferralServiceTag["Service"];
+
+const issueTestReferralReplacement = ({
+  payStateToken,
+  code,
+}: Pick<
+  Parameters<ICheckoutReferralService["acceptCode"]>[0],
+  "payStateToken" | "code"
+>) =>
+  Effect.gen(function* () {
+    const opened = yield* PayState.open(payStateToken);
+    const referralCode = yield* Schema.decodeUnknownEffect(
+      canonicalPromotionCodeSchema
+    )(code);
+    const issued = yield* PayState.issue({
+      ...opened,
+      holdExpiresAt:
+        opened.holdExpiresAt ??
+        instantStringSchema.make(storedHoldExpiresAt.toString()),
+      submittedCode: undefined,
+      submittedCodeDiscountId: undefined,
+      requestedDiscountCode: undefined,
+      referralCode,
+    });
+    return toFreshPayState(issued);
+  }).pipe(Effect.provide(TestSealedStateKeys), Effect.orDie);
+
+const repriceReferral = () =>
+  Effect.succeed({
+    quote,
+    commitment: makeDiscountCommitment({
+      product: { kind: "cowork", tier: "basic" },
+      firstServiceDate: reservation.date,
+      applications: [],
+    }),
+  });
+
 type SubmissionInput = {
   readonly submittedCode?: string;
-  readonly applyDiscountCode?: ReturnType<typeof mock>;
-  readonly acceptCode?: ReturnType<typeof mock>;
+  readonly applyDiscountCode?: Mock<
+    ICheckoutPricingService["applyDiscountCode"]
+  >;
+  readonly acceptCode?: Mock<ICheckoutReferralService["acceptCode"]>;
   readonly codeKind?: "referral" | "other";
   /** Replaces the code-kind lookup's result. */
-  readonly lookupCodeKind?: ReturnType<typeof mock>;
+  readonly lookupCodeKind?: Mock<ReferralOperations["lookupCodeKind"]>;
   /** Replaces the mocked code-kind lookup. */
   readonly referralService?: Layer.Layer<ReferralServiceTag>;
   readonly payStateToken?: string;
-  readonly activePaymentAttemptId?: string;
-  readonly activePaymentAttemptIdAfterPricing?: string;
+  readonly activePaymentAttemptId?: PaymentAttemptId;
+  readonly activePaymentAttemptIdAfterPricing?: PaymentAttemptId;
   /** The order's payment state while it has an active attempt. */
   readonly activeAttemptPaymentState?: "pending" | "failed";
   readonly checkoutUnavailableAt?: 1 | 2;
@@ -174,10 +240,15 @@ type SubmissionInput = {
    * pricing stubs instead of stubbing `acceptCode`.
    */
   readonly referralAcceptance?: {
-    readonly evaluateCheckoutReferral: ReturnType<typeof mock>;
-    readonly affirmForPayment: ReturnType<typeof mock>;
+    readonly evaluateCheckoutReferral: Mock<
+      ReferralOperations["evaluateCheckoutReferral"]
+    >;
+    readonly repriceForPayment: Mock<Parameters<typeof paymentPricingFrom>[0]>;
     /** The keys acceptance opens and seals with; the test ring by default. */
-    readonly sealedStateKeys?: Layer.Layer<SealedStateKeys>;
+    readonly sealedStateKeys?: Layer.Layer<
+      SealedStateKeys,
+      Layer.Error<typeof TestSealedStateKeys>
+    >;
   };
 };
 
@@ -199,22 +270,15 @@ const prepareSubmission = async (input?: SubmissionInput) => {
           input?.activePaymentAttemptId ??
           null)
         : (input?.activePaymentAttemptId ?? null);
-    return {
-      id: "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5",
-      dotyposCustomerId: "customer-id",
-      reservationHoldExpiresAt: storedHoldExpiresAt,
+    return payStateDiscountOrderFixture({
+      reservation,
+      bookedAt: Temporal.Instant.from(payStateBookedAt),
+      holdExpiresAt: storedHoldExpiresAt,
       activePaymentAttemptId,
-      // Admitting an attempt makes the order's payment pending; a retried
-      // order keeps its ended attempt active with that attempt's state.
-      paymentState:
-        activePaymentAttemptId === null
-          ? "not_started"
-          : (input?.activeAttemptPaymentState ?? "pending"),
-    };
+      activeAttemptPaymentState: input?.activeAttemptPaymentState,
+    });
   };
-  const findReservation = mock(() =>
-    Effect.succeed(getReservation() as WorkspaceReservation)
-  );
+  const findReservation = mock(() => Effect.succeed(getReservation()));
   const confirm = mock((state: SignedPayState) =>
     Effect.sleep(input?.confirmDuration ?? 0).pipe(
       Effect.andThen(() => {
@@ -227,7 +291,7 @@ const prepareSubmission = async (input?: SubmissionInput) => {
                 restartKind: state.reservation.kind,
               })
             )
-          : Effect.succeed(getReservation() as never);
+          : Effect.succeed(getReservation());
       })
     )
   );
@@ -238,18 +302,17 @@ const prepareSubmission = async (input?: SubmissionInput) => {
     mock(() => Effect.succeed({ kind: input?.codeKind ?? "other" } as const));
   const acceptCode =
     input?.acceptCode ??
-    mock(() =>
-      Effect.succeed({
-        status: "accepted" as const,
-        freshPayUrl: "/en-US/checkout/pay?payState=fresh",
-      })
+    mock<ICheckoutReferralService["acceptCode"]>(({ code, payStateToken }) =>
+      issueTestReferralReplacement({ payStateToken, code }).pipe(
+        Effect.map((fresh) => ({ status: "accepted", ...fresh }))
+      )
     );
   const rememberedReferralCookie = {
     value: input?.rememberedReferralCode,
   };
-  const referralService = Layer.succeed(ReferralService, {
+  const referralService = Layer.mock(ReferralService, {
     lookupCodeKind,
-  } as never);
+  });
   const currentAccount = Layer.mock(CurrentCustomerAccount, {});
   const payStateToken =
     input?.payStateToken ??
@@ -270,18 +333,18 @@ const prepareSubmission = async (input?: SubmissionInput) => {
         }),
         input?.referralService ?? referralService,
         input?.referralAcceptance === undefined
-          ? Layer.succeed(CheckoutReferralService, { acceptCode } as never)
+          ? Layer.mock(CheckoutReferralService, { acceptCode })
           : CheckoutReferralService.Default.pipe(
               Layer.provide(
                 Layer.mergeAll(
-                  Layer.succeed(ReferralService, {
+                  Layer.mock(ReferralService, {
                     lookupCodeKind,
                     evaluateCheckoutReferral:
                       input.referralAcceptance.evaluateCheckoutReferral,
-                  } as never),
+                  }),
                   CheckoutPricingServiceMock(
                     paymentPricingFrom(
-                      input.referralAcceptance.affirmForPayment as never
+                      input.referralAcceptance.repriceForPayment
                     )
                   ),
                   PayableCheckoutMock(confirm).pipe(
@@ -362,10 +425,12 @@ describe("applyDiscountCodeToPayState", () => {
       const { quoteCoworkEntryPack } = await import(
         "./cowork-checkout-pricing"
       );
+      const { monitorOption: _monitorOption, ...entryPackReservation } =
+        reservation;
       const funded = await Effect.runPromise(
         quoteCoworkEntryPack({
           reservation: {
-            ...reservation,
+            ...entryPackReservation,
             entryTier: "open-space",
             coffee: true,
           },
@@ -412,8 +477,10 @@ describe("applyDiscountCodeToPayState", () => {
         submittedCode: " rfl12345 ",
         codeKind: "referral",
         rememberedReferralCode: "RFLSHARED",
-        acceptCode: mock(() =>
-          Effect.succeed({ status, freshPayUrl: "/fresh" })
+        acceptCode: mock(({ code, payStateToken }) =>
+          issueTestReferralReplacement({ payStateToken, code }).pipe(
+            Effect.map((fresh) => ({ status, ...fresh }))
+          )
         ),
       });
 
@@ -422,17 +489,21 @@ describe("applyDiscountCodeToPayState", () => {
     }
   );
 
-  test.each(["already_attributed", "ineligible", "unavailable"] as const)(
-    "keeps the stored code when a typed referral is %s",
-    async (status) => {
+  test.each([
+    { status: "already_attributed" },
+    { status: "ineligible" },
+    { status: "unavailable", reason: "code" },
+  ] as const satisfies readonly CheckoutReferralResult[])(
+    "keeps the stored code when a typed referral returns %o",
+    async (rejected) => {
       const scenario = await runSubmission({
         submittedCode: "RFL12345",
         codeKind: "referral",
         rememberedReferralCode: "RFLSHARED",
-        acceptCode: mock(() => Effect.succeed({ status })),
+        acceptCode: mock(() => Effect.succeed(rejected)),
       });
 
-      expect(scenario.result.status).toBe(status);
+      expect(scenario.result.status).toBe(rejected.status);
       expect(scenario.rememberedReferralCookie.value).toBe("RFLSHARED");
     }
   );
@@ -466,30 +537,19 @@ describe("applyDiscountCodeToPayState", () => {
       codeKind: "referral",
       rememberedReferralCode: "RFLSHARED",
       rememberedReferralWritable: false,
-      acceptCode: mock(() =>
-        Effect.succeed({ status: "accepted" as const, freshPayUrl: "/fresh" })
-      ),
     });
 
-    expect(scenario.result).toEqual({
-      status: "accepted",
-      freshPayUrl: "/fresh",
-    });
+    expect(scenario.result.status).toBe("accepted");
+    await expectReplacementFromOneSeal(scenario.result);
     expect(scenario.rememberedReferralCookie.value).toBe("RFLSHARED");
   });
 
   test("routes a referral through explicit acceptance and leaves the ordinary code slot free", async () => {
-    const acceptCode = mock((input: { readonly payStateToken: string }) =>
-      Effect.gen(function* () {
-        const opened = yield* PayState.open(input.payStateToken);
-        const { payUrl } = yield* PayState.issue({
-          ...opened,
-          submittedCode: undefined,
-          submittedCodeDiscountId: undefined,
-          referralCode: canonicalPromotionCodeSchema.make("RFL12345"),
-        });
-        return { status: "accepted" as const, freshPayUrl: payUrl };
-      })
+    const acceptCode = mock<ICheckoutReferralService["acceptCode"]>(
+      ({ code, payStateToken }) =>
+        issueTestReferralReplacement({ payStateToken, code }).pipe(
+          Effect.map((fresh) => ({ status: "accepted", ...fresh }))
+        )
     );
     const referral = await runSubmission({
       submittedCode: "RFL12345",
@@ -537,20 +597,20 @@ describe("applyDiscountCodeToPayState", () => {
   });
 
   test.each([
-    ["unavailable", "unavailable"],
-    ["already_attributed", "referral-already-attributed"],
-    ["ineligible", "referral-ineligible"],
+    [{ status: "unavailable", reason: "code" }, "unavailable"],
+    [{ status: "already_attributed" }, "referral-already-attributed"],
+    [{ status: "ineligible" }, "referral-ineligible"],
   ] as const)(
-    "keeps a %s referral code in the box without promotion pricing",
-    async (status, discountCodeError) => {
-      const acceptCode = mock(() => Effect.succeed({ status }));
+    "keeps a referral code with result %o in the box without promotion pricing",
+    async (rejected, discountCodeError) => {
+      const acceptCode = mock(() => Effect.succeed(rejected));
       const scenario = await runSubmission({
         submittedCode: "rfl12345",
         codeKind: "referral",
         acceptCode,
       });
 
-      expect(scenario.result.status).toBe(status);
+      expect(scenario.result.status).toBe(rejected.status);
       expect(scenario.applyDiscountCode).not.toHaveBeenCalled();
       expect(scenario.confirm).not.toHaveBeenCalled();
       const freshPayUrl =
@@ -618,15 +678,19 @@ describe("applyDiscountCodeToPayState", () => {
       throw new Error("Expected applied result");
     }
 
-    const orderId =
-      "0198c1a2-61c4-7e64-83f3-b3b69dc0dac5" as WorkspaceReservationId;
     const baseUrl = "https://deskohub.test";
     const currentUrl = new URL(scenario.result.freshPayUrl, baseUrl).href;
     const previousUrl = new URL(
-      `/en-US/checkout/pay?payState=${encodeURIComponent(scenario.payStateToken)}&orderId=${orderId}`,
+      `/en-US/checkout/pay?payState=${encodeURIComponent(scenario.payStateToken)}&orderId=${syntheticPayStateOrderId}`,
       baseUrl
     ).href;
-    const config = { baseUrl } as WorkspaceE2EConfig;
+    const config: WorkspaceE2EConfig = {
+      baseUrl,
+      expectedHost: new URL(baseUrl).host,
+      bypassSecret: undefined,
+      paymentProvider: "nexi",
+      timeouts: workspaceE2ETimeouts,
+    };
 
     expect([
       isFreshOwnedPayStateUrl(
@@ -634,13 +698,13 @@ describe("applyDiscountCodeToPayState", () => {
         previousUrl,
         config,
         "en-US",
-        orderId
+        syntheticPayStateOrderId
       ),
       isOwnedReferralCheckoutReviewUrl({
         actualUrl: currentUrl,
         baseUrl,
         expectedUrl: currentUrl,
-        orderId,
+        orderId: syntheticPayStateOrderId,
       }),
     ]).toEqual([true, true]);
   });
@@ -836,7 +900,7 @@ describe("applyDiscountCodeToPayState", () => {
 
   test("applies a new code when the signed state only carries a requested code", async () => {
     const scenario = await runSubmission({
-      requestedDiscountCode: "CAMPAIGN10",
+      requestedDiscountCode: canonicalPromotionCodeSchema.make("CAMPAIGN10"),
     });
 
     expect(scenario.applyDiscountCode).toHaveBeenCalledTimes(1);
@@ -875,7 +939,7 @@ describe("applyDiscountCodeToPayState", () => {
 
   test("does not reprice after a payment attempt has become active", async () => {
     const scenario = await runSubmission({
-      activePaymentAttemptId: "attempt-id",
+      activePaymentAttemptId: activeAttemptId,
     });
 
     expect(scenario.result).toEqual({
@@ -888,7 +952,7 @@ describe("applyDiscountCodeToPayState", () => {
 
   test("reprices an order whose last payment attempt failed, before its retry", async () => {
     const scenario = await runSubmission({
-      activePaymentAttemptId: "attempt-id",
+      activePaymentAttemptId: activeAttemptId,
       activeAttemptPaymentState: "failed",
     });
 
@@ -898,7 +962,7 @@ describe("applyDiscountCodeToPayState", () => {
 
   test("discards a replacement summary when payment starts during repricing", async () => {
     const scenario = await runSubmission({
-      activePaymentAttemptIdAfterPricing: "attempt-id",
+      activePaymentAttemptIdAfterPricing: activeAttemptId,
     });
 
     expect(scenario.result).toEqual({
@@ -985,9 +1049,15 @@ describe("applyDiscountCodeToPayState", () => {
   );
 
   test("returns a referral's own pricing_changed replacement as is", async () => {
+    const payStateToken = await makePayStateToken({
+      changedKeys: { sectionKeys: ["total"], itemKeys: ["total:final"] },
+    });
+    const replacement = await Effect.runPromise(
+      issueTestReferralReplacement({ payStateToken, code: "RFL12345" })
+    );
     const changed = {
       status: "pricing_changed" as const,
-      freshPayUrl: "/en-US/checkout/pay?payState=changed",
+      ...replacement,
     };
     const scenario = await runSubmission({
       submittedCode: "RFL12345",
@@ -1123,7 +1193,9 @@ describe("applyDiscountCodeToPayState", () => {
         {
           submittedCode: "RFL12345",
           codeKind: "referral" as const,
-          acceptCode: mock(() => Effect.succeed({ status: "ineligible" })),
+          acceptCode: mock(() =>
+            Effect.succeed({ status: "ineligible" as const })
+          ),
         },
       ],
     ])(
@@ -1139,7 +1211,7 @@ describe("applyDiscountCodeToPayState", () => {
         });
 
         expect((await openFresh(result)).holdExpiresAt).toBe(
-          "2099-06-01T10:09:30.000Z"
+          instantStringSchema.make("2099-06-01T10:09:30.000Z")
         );
       }
     );
@@ -1233,10 +1305,10 @@ describe("applyDiscountCodeToPayState", () => {
           evaluateCheckoutReferral: mock(() =>
             Effect.succeed({
               kind: "eligible" as const,
-              code: canonicalPromotionCodeSchema.make("RFL12345"),
+              code: ReferralCode.make("RFL12345"),
             })
           ),
-          affirmForPayment: mock(() => Effect.fail(failure())),
+          repriceForPayment: mock(() => Effect.fail(failure())),
         },
       });
 
@@ -1269,20 +1341,18 @@ describe("applyDiscountCodeToPayState", () => {
   ] as const)(
     "tells %s apart: a retry or a correction, without pricing",
     async (_, failure, reason) => {
-      const affirmForPayment = mock(() =>
-        Effect.succeed({ kind: "cowork" as const, reservation, quote })
-      );
+      const repriceForPayment = mock(repriceReferral);
       const scenario = await runSubmission({
         submittedCode: "RFL12345",
         codeKind: "referral",
         referralAcceptance: {
           evaluateCheckoutReferral: mock(() => Effect.fail(failure())),
-          affirmForPayment,
+          repriceForPayment,
         },
       });
 
       expect(scenario.result).toMatchObject({ status: "unavailable", reason });
-      expect(affirmForPayment).not.toHaveBeenCalled();
+      expect(repriceForPayment).not.toHaveBeenCalled();
       await expectReplacementFromOneSeal(scenario.result);
     }
   );
@@ -1291,17 +1361,15 @@ describe("applyDiscountCodeToPayState", () => {
     const evaluateCheckoutReferral = mock(() =>
       Effect.succeed({
         kind: "eligible" as const,
-        code: canonicalPromotionCodeSchema.make("RFL12345"),
+        code: ReferralCode.make("RFL12345"),
       })
     );
-    const affirmForPayment = mock(() =>
-      Effect.succeed({ kind: "cowork" as const, reservation, quote })
-    );
+    const repriceForPayment = mock(repriceReferral);
     const scenario = await runSubmission({
       submittedCode: "RFL12345",
       codeKind: "referral",
-      activePaymentAttemptId: "attempt-id",
-      referralAcceptance: { evaluateCheckoutReferral, affirmForPayment },
+      activePaymentAttemptId: activeAttemptId,
+      referralAcceptance: { evaluateCheckoutReferral, repriceForPayment },
     });
 
     expect(scenario.result).toStrictEqual({
@@ -1311,25 +1379,23 @@ describe("applyDiscountCodeToPayState", () => {
       freshPayUrl: undefined,
     });
     expect(evaluateCheckoutReferral).not.toHaveBeenCalled();
-    expect(affirmForPayment).not.toHaveBeenCalled();
+    expect(repriceForPayment).not.toHaveBeenCalled();
   });
 
   test("discards a referral repricing when a payment attempt starts meanwhile", async () => {
-    const affirmForPayment = mock(() =>
-      Effect.succeed({ kind: "cowork" as const, reservation, quote })
-    );
+    const repriceForPayment = mock(repriceReferral);
     const scenario = await runSubmission({
       submittedCode: "RFL12345",
       codeKind: "referral",
-      activePaymentAttemptIdAfterPricing: "attempt-id",
+      activePaymentAttemptIdAfterPricing: activeAttemptId,
       referralAcceptance: {
         evaluateCheckoutReferral: mock(() =>
           Effect.succeed({
             kind: "eligible" as const,
-            code: canonicalPromotionCodeSchema.make("RFL12345"),
+            code: ReferralCode.make("RFL12345"),
           })
         ),
-        affirmForPayment,
+        repriceForPayment,
       },
     });
 
@@ -1339,7 +1405,7 @@ describe("applyDiscountCodeToPayState", () => {
       checkoutReason: "payment_in_progress",
       freshPayUrl: undefined,
     });
-    expect(affirmForPayment).toHaveBeenCalledTimes(1);
+    expect(repriceForPayment).toHaveBeenCalledTimes(1);
     expect(scenario.confirm).toHaveBeenCalledTimes(2);
   });
 
@@ -1356,7 +1422,12 @@ describe("applyDiscountCodeToPayState", () => {
         ...testKeys.ring,
       ],
     });
-    const acceptReferral = (sealedStateKeys: Layer.Layer<SealedStateKeys>) =>
+    const acceptReferral = (
+      sealedStateKeys: Layer.Layer<
+        SealedStateKeys,
+        Layer.Error<typeof TestSealedStateKeys>
+      >
+    ) =>
       runSubmission({
         submittedCode: "RFL12345",
         codeKind: "referral",
@@ -1364,12 +1435,10 @@ describe("applyDiscountCodeToPayState", () => {
           evaluateCheckoutReferral: mock(() =>
             Effect.succeed({
               kind: "eligible" as const,
-              code: canonicalPromotionCodeSchema.make("RFL12345"),
+              code: ReferralCode.make("RFL12345"),
             })
           ),
-          affirmForPayment: mock(() =>
-            Effect.succeed({ kind: "cowork" as const, reservation, quote })
-          ),
+          repriceForPayment: mock(repriceReferral),
           sealedStateKeys,
         },
       });

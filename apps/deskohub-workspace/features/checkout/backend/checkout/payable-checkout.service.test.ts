@@ -2,23 +2,29 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+  DotyposService,
+} from "@deskohub/dotypos";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
-import type { WorkspaceReservationRow } from "@/db/schema";
 import {
-  type CheckoutSessionKey,
   checkoutSessionIdSchema,
+  checkoutSessionKeySchema,
+  type PaymentAttemptId,
   paymentAttemptIdSchema,
 } from "@/features/checkout/checkout-identifiers";
 import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
-import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import {
+  type WorkspaceReservation,
+  WorkspaceReservationRepository,
+} from "@/features/reservation/backend/workspace-reservation.repository";
+import { payableReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
-import {
-  type PaymentAttempt,
-  PaymentAttemptRepository,
-} from "../repositories/payment-attempt.repository";
+import { pendingNexiAttemptFixture } from "../holds/reservation-hold-cleanup.test-utils";
+import { PaymentAttemptRepository } from "../repositories/payment-attempt.repository";
 import { deriveCheckoutSessionKeys } from "./checkout-lookup-keys.server";
 import {
   CheckoutUnavailableError,
@@ -39,25 +45,27 @@ const storedHoldExpiresAt = Temporal.Instant.from(syntheticHoldExpiresAt);
 // New rows store one of the session's accepted derivations.
 const [checkoutSessionKey] = deriveCheckoutSessionKeys(
   checkoutSessionIdSchema.make("checkout-session-id")
-).pipe(Effect.provide(TestSealedStateKeys), Effect.runSync).accepted as [
-  CheckoutSessionKey,
-];
+).pipe(Effect.provide(TestSealedStateKeys), Effect.runSync).accepted;
 
 const retriedAttemptId = paymentAttemptIdSchema.make("retried-attempt-id");
 
-const row = (overrides: Partial<WorkspaceReservationRow> = {}) =>
-  ({
+const row = (
+  overrides: Partial<WorkspaceReservation> = {}
+): WorkspaceReservation => ({
+  ...payableReservationFixture({
     id: syntheticPayStateOrderId,
+    dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
+    dotyposReservationId: DotyposReservationIdSchema.make(
+      "dotypos-reservation-id"
+    ),
     checkoutSessionKey,
-    checkoutAttemptKey: "checkout-attempt-key",
-    dotyposCustomerId: "dotypos-customer-id",
-    reservationState: "held",
-    paymentState: "not_started",
-    fulfillmentState: "not_started",
-    dotyposReservationId: "dotypos-reservation-id",
     reservationHoldExpiresAt: storedHoldExpiresAt,
-    ...overrides,
-  }) as WorkspaceReservationRow;
+    paidAt: overrides.paymentState === "paid" ? now : null,
+    reservationConfirmedAt:
+      overrides.reservationState === "confirmed" ? now : null,
+  }),
+  ...overrides,
+});
 
 const issueToken = (input?: Parameters<typeof sealSyntheticPayStateToken>[0]) =>
   sealSyntheticPayStateToken({
@@ -80,14 +88,14 @@ const openState = (token: string): Promise<SignedPayState> =>
 const runPayableCheckout = <A, E>(
   use: (payableCheckout: PayableCheckout["Service"]) => Effect.Effect<A, E>,
   input: {
-    readonly stored?: WorkspaceReservationRow | null;
+    readonly stored?: WorkspaceReservation | null;
     /** What the order's row reads as after the first read, if it changes. */
-    readonly storedLater?: WorkspaceReservationRow | null;
-    readonly current?: WorkspaceReservationRow | null;
+    readonly storedLater?: WorkspaceReservation | null;
+    readonly current?: WorkspaceReservation | null;
     readonly dotyposStatus?: "NEW" | "CANCELLED" | "CONFIRMED";
     readonly duringDotyposRead?: Effect.Effect<void>;
     /** The order's newest payment attempt; the retried one by default. */
-    readonly newestAttemptId?: string;
+    readonly newestAttemptId?: PaymentAttemptId;
   } = {}
 ) => {
   const stored = input.stored === undefined ? row() : input.stored;
@@ -102,7 +110,9 @@ const runPayableCheckout = <A, E>(
     })
   );
   const findCurrentByCheckoutSessionKey = mock(() => Effect.succeed(current));
-  const getReservationStatus = mock(() =>
+  const getReservationStatus = mock<
+    DotyposService["Service"]["getReservationStatus"]
+  >(() =>
     (input.duringDotyposRead ?? Effect.void).pipe(
       Effect.as(input.dotyposStatus ?? "NEW")
     )
@@ -118,11 +128,14 @@ const runPayableCheckout = <A, E>(
         Layer.mock(PaymentAttemptRepository, {
           findNewestForReservation: () =>
             Effect.succeed({
-              id: input.newestAttemptId ?? retriedAttemptId,
-              provider: "nexi",
+              ...pendingNexiAttemptFixture(
+                syntheticPayStateOrderId,
+                input.newestAttemptId ?? retriedAttemptId,
+                now
+              ),
               state: "failed",
               failureCode: NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE,
-            } as PaymentAttempt),
+            }),
         }),
         TestSealedStateKeys
       )
@@ -145,7 +158,7 @@ const runPayableCheckout = <A, E>(
 
 const unavailable = (
   reason: CheckoutUnavailableReason,
-  paidOrderId?: WorkspaceReservationRow["id"]
+  paidOrderId?: WorkspaceReservation["id"]
 ) =>
   new CheckoutUnavailableError({
     orderId: syntheticPayStateOrderId,
@@ -172,7 +185,9 @@ describe("PayableCheckout.open", () => {
       dotyposReservationId: "dotypos-reservation-id",
       reservationHoldExpiresAt: storedHoldExpiresAt,
     });
-    expect(getReservationStatus).toHaveBeenCalledWith("dotypos-reservation-id");
+    expect(getReservationStatus).toHaveBeenCalledWith(
+      DotyposReservationIdSchema.make("dotypos-reservation-id")
+    );
   });
 
   test("carries the stored hold deadline for a state signed without one", async () => {
@@ -225,7 +240,12 @@ describe("PayableCheckout.open", () => {
     const payStateToken = await issueToken();
     const { getReservationStatus, result } = runPayableCheckout(
       (checkout) => checkout.open({ payStateToken }),
-      { stored: row({ checkoutSessionKey: "other-session-key" as never }) }
+      {
+        stored: row({
+          checkoutSessionKey:
+            checkoutSessionKeySchema.make("other-session-key"),
+        }),
+      }
     );
 
     const opened = await result;
@@ -301,7 +321,7 @@ describe("PayableCheckout.reconfirm", () => {
       name: "once a later retry's attempt became the order's newest",
       input: {
         stored: row({ activePaymentAttemptId: null }),
-        newestAttemptId: "later-attempt-id",
+        newestAttemptId: paymentAttemptIdSchema.make("later-attempt-id"),
       },
       reason: "retried_attempt_replaced",
     },

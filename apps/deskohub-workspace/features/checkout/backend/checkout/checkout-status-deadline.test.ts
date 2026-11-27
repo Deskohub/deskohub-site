@@ -8,10 +8,12 @@ import { DotyposService } from "@deskohub/dotypos";
 import { Effect, Fiber, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { ReviewSandboxMock } from "@/features/review-accounts/backend/review-sandbox.service.mock";
 import { makeWorkspaceNexiLayer } from "@/shared/backend/config/nexi.config";
@@ -34,6 +36,13 @@ import {
   testReservationPaymentWindow,
 } from "./payment-page-provider-status.test-utils";
 
+import {
+  checkoutDotyposReservationId,
+  paymentAttemptWithPageFixture,
+} from "./testing/checkout-payment.fixture";
+
+import { statusPageAuthorizationFixture } from "./testing/checkout-status.fixture";
+
 mock.module("server-only", () => ({}));
 
 /** The status page route's `maxDuration`. */
@@ -44,44 +53,39 @@ const orderId = workspaceReservationIdSchema.make(
 );
 const createdAt = Temporal.Instant.from("2026-06-01T10:00:00Z");
 
-const pendingReservation = {
+const attemptId = paymentAttemptIdSchema.make("attempt-stalled-nexi");
+
+const pendingReservation = workspaceReservationFixture({
   id: orderId,
-  correlationId: "correlation-id",
-  dotyposCustomerId: "customer-id",
-  dotyposReservationId: "dotypos-reservation-id",
+  dotyposReservationId: checkoutDotyposReservationId,
   reservationDetails: {
     kind: "cowork",
     entryTier: "profi",
     coffee: true,
     monitorOption: "2x27-qhd",
   },
+  productTier: "profi",
+  productCoffee: true,
+  productMonitorOption: "2x27-qhd",
   locale: "en-US",
   reservationState: "held",
   paymentState: "pending",
   fulfillmentState: "not_started",
-  activePaymentAttemptId: "attempt-stalled-nexi",
+  activePaymentAttemptId: attemptId,
+  reservationCreatedAt: createdAt,
+  reservationHoldExpiresAt: createdAt.add({ seconds: 600 }),
+  reservationConfirmedAt: null,
+  paidAt: null,
+  fulfilledAt: null,
   createdAt,
   updatedAt: createdAt,
-};
+});
 
-const pendingAttempt = {
-  orderId,
-  id: "attempt-stalled-nexi",
-  workspaceReservationId: orderId,
-  provider: "nexi" as const,
-  providerOrderId: "provider-order-id",
-  state: "pending" as const,
-  amount: { value: 35_000, exponent: 2, currency: "CZK" },
-  securityToken: "security-token",
-  providerRedirectUrl: "https://provider.example/pay",
-  providerOrderCreatedAt: createdAt,
-  lastWebhookEventId: null,
-  lastProviderOperationId: null,
-  lastProviderStatus: null,
-  failureCode: null,
+const pendingAttempt = paymentAttemptWithPageFixture({
+  id: attemptId,
+  reservationId: orderId,
   createdAt,
-  updatedAt: createdAt,
-};
+});
 
 type ProviderFetch = (
   input: RequestInfo | URL,
@@ -108,16 +112,12 @@ const loadStatusPageOnTestClock = (options: {
   Effect.gen(function* () {
     const checkoutStatus = yield* CheckoutStatusService;
     const page = yield* Effect.forkChild(
-      loadCheckoutStatusPage(
-        checkoutStatus,
-        { isAuthorized: () => Effect.succeed(true) },
-        {
-          locale: "en-US",
-          orderId,
-          requestHeaders: new Headers(),
-          returnOutcome: "success",
-        }
-      ).pipe(Effect.provideService(FetchHttpClient.Fetch, options.fetch))
+      loadCheckoutStatusPage(checkoutStatus, statusPageAuthorizationFixture(), {
+        locale: "en-US",
+        orderId,
+        requestHeaders: new Headers(),
+        returnOutcome: "success",
+      }).pipe(Effect.provideService(FetchHttpClient.Fetch, options.fetch))
     );
     let elapsedSeconds = 0;
     while (
@@ -161,14 +161,17 @@ const loadStatusPageOnTestClock = (options: {
                 Effect.succeed({
                   ...pendingReservation,
                   paymentState: options.paymentState(),
-                } as never),
+                }),
             }),
             Layer.mock(PaymentAttemptRepository, {
-              findById: () =>
-                Effect.succeed({
+              findById: () => {
+                const state = options.paymentState();
+                return Effect.succeed({
                   ...pendingAttempt,
-                  state: options.paymentState(),
-                } as never),
+                  state,
+                  failureCode: state === "expired" ? "payment_expired" : null,
+                });
+              },
               findDisplayableForReservation: () => Effect.succeed(null),
             }),
             Layer.mock(LatePaymentRecoveryRepository, {

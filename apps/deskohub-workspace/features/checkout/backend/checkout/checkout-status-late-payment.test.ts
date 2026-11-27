@@ -3,83 +3,121 @@ import { NoReservationInvitees } from "@/features/reservation-invitees/backend/r
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+  DotyposService,
+  DotyposTableSchema,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import type { LatePaymentRecoveryState } from "@/db/schema";
+import {
+  type PaymentAttemptId,
+  paymentAttemptIdSchema,
+} from "@/features/checkout/checkout-identifiers";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
-import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import {
+  type WorkspaceReservation,
+  WorkspaceReservationRepository,
+} from "@/features/reservation/backend/workspace-reservation.repository";
+import {
+  dotyposHoldFixture,
+  workspaceReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { ReviewSandboxMock } from "@/features/review-accounts/backend/review-sandbox.service.mock";
+import { dotyposCustomerFixture } from "@/shared/testing/dotypos-customer.test-utils";
+import { pendingNexiAttemptFixture } from "../holds/reservation-hold-cleanup.test-utils";
 import { LatePaymentVerificationService } from "../payment/late-payment-verification.service";
 import { ProviderPaymentFinalizationService } from "../payment/provider-payment-finalization.service";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
-import { PaymentAttemptRepository } from "../repositories/payment-attempt.repository";
+import {
+  type PaymentAttempt,
+  PaymentAttemptRepository,
+} from "../repositories/payment-attempt.repository";
 import { CheckoutStatusService } from "./checkout-status.service";
 import {
   observePaymentPagesAs,
   testReservationPaymentWindow,
 } from "./payment-page-provider-status.test-utils";
 
+import { latePaymentRecoveryFixture } from "./testing/checkout-payment.fixture";
+
 const testEmailAddressForLate = testEmailAddress("late");
 
-const instant = (value: string) => Temporal.Instant.from(value);
+const createdAt = Temporal.Instant.from("2026-06-01T10:00:00Z");
+const reservationId = workspaceReservationIdSchema.make(
+  "0198c1a2-4e99-7263-8b3c-c431ca140117"
+);
+const attemptId = paymentAttemptIdSchema.make("late-attempt");
+const oldAttemptId = paymentAttemptIdSchema.make("old-attempt");
+const customerId = DotyposCustomerIdSchema.make("customer-id");
+const originalDotyposReservationId =
+  DotyposReservationIdSchema.make("dotypos-original");
+const confirmedDotyposReservationId =
+  DotyposReservationIdSchema.make("dotypos-confirmed");
 
-const confirmedDotyposReservationId = "dotypos-confirmed";
-
-const reservationFixture = {
-  id: "0198c1a2-4e99-7263-8b3c-c431ca140117",
-  correlationId: "correlation-id",
-  dotyposCustomerId: "customer-id",
-  dotyposReservationId: "dotypos-original",
-  reservationDetails: {
-    kind: "cowork",
-    entryTier: "open-space",
-    coffee: false,
-  },
+const reservationFixture = workspaceReservationFixture({
+  id: reservationId,
+  dotyposCustomerId: customerId,
+  dotyposReservationId: originalDotyposReservationId,
   locale: "en-US",
   reservationState: "cancelled",
   paymentState: "expired",
   fulfillmentState: "not_started",
-  activePaymentAttemptId: "late-attempt",
-  failureCode: null,
-  createdAt: instant("2026-06-01T10:00:00Z"),
-  updatedAt: instant("2026-06-01T10:00:00Z"),
-};
+  activePaymentAttemptId: attemptId,
+  reservationCreatedAt: createdAt,
+  reservationConfirmedAt: null,
+  reservationCancelledAt: createdAt,
+  cancellationCause: "hold_expired",
+  paidAt: null,
+  fulfilledAt: null,
+  createdAt,
+  updatedAt: createdAt,
+});
 
 const paidAttempt = {
-  id: "late-attempt",
-  workspaceReservationId: "0198c1a2-4e99-7263-8b3c-c431ca140117",
-  provider: "nexi",
-  providerOrderId: "provider-order-id",
+  ...pendingNexiAttemptFixture(reservationId, attemptId, createdAt),
   state: "paid",
   refundState: "required",
-  amount: { value: 29_000, exponent: 2, currency: "CZK" },
-  createdAt: instant("2026-06-01T10:00:00Z"),
-  updatedAt: instant("2026-06-01T10:00:00Z"),
-};
+} satisfies PaymentAttempt;
 
-const tables = [
-  {
-    _cloudId: "cloud-id",
-    display: true,
-    enabled: true,
-    id: "open-table",
-    name: "9",
-    locationName: "Open space",
-    tags: ["cowork:open-space"],
-  },
-];
+const openTable = Schema.decodeSync(DotyposTableSchema)({
+  _cloudId: "cloud-id",
+  display: true,
+  enabled: true,
+  id: "open-table",
+  name: "9",
+  locationName: "Open space",
+  tags: ["cowork:open-space"],
+});
 
 const makeHarness = (options: {
-  readonly reservation?: Partial<typeof reservationFixture>;
+  readonly reservation?: Partial<WorkspaceReservation>;
   readonly recovery?: {
     readonly state: LatePaymentRecoveryState;
-    readonly paymentAttemptId?: string;
+    readonly paymentAttemptId?: PaymentAttemptId;
   };
   readonly finalizationResult?: "not_pending" | "paid" | "pending";
 }) => {
+  const recovery = options.recovery;
+  const recoveryRow = recovery
+    ? latePaymentRecoveryFixture({
+        paymentAttemptId: recovery.paymentAttemptId ?? attemptId,
+        workspaceReservationId: reservationId,
+        originalDotyposReservationId,
+        verifiedPaidAt: createdAt,
+        ...(recovery.state === "recovered"
+          ? {
+              state: recovery.state,
+              recoveredDotyposReservationId: confirmedDotyposReservationId,
+            }
+          : { state: recovery.state }),
+      })
+    : null;
   const startRecoveryIfSettled = mock(() =>
     Effect.succeed("recovery_started" as const)
   );
@@ -99,26 +137,17 @@ const makeHarness = (options: {
             Effect.succeed({
               ...reservationFixture,
               ...options.reservation,
-            } as never)
+            })
           ),
         }),
         Layer.mock(PaymentAttemptRepository, {
           findDisplayableForReservation: mock(() =>
-            Effect.succeed(paidAttempt as never)
+            Effect.succeed(paidAttempt)
           ),
         }),
         Layer.mock(LatePaymentRecoveryRepository, {
           findLatestByWorkspaceReservationId: mock(() =>
-            Effect.succeed(
-              (options.recovery
-                ? {
-                    paymentAttemptId: "late-attempt",
-                    workspaceReservationId:
-                      "0198c1a2-4e99-7263-8b3c-c431ca140117",
-                    ...options.recovery,
-                  }
-                : null) as never
-            )
+            Effect.succeed(recoveryRow)
           ),
         }),
         Layer.mock(LatePaymentVerificationService, { startRecoveryIfSettled }),
@@ -126,11 +155,13 @@ const makeHarness = (options: {
           Layer.provideMerge(
             Layer.mock(DotyposService, {
               listActiveReservationsOverlapping: () => Effect.succeed([]),
-              getReservationWithoutCustomer: mock((id) =>
+              getReservationWithoutCustomer: mock<
+                DotyposService["Service"]["getReservationWithoutCustomer"]
+              >((id) =>
                 Effect.succeed({
-                  id,
-                  _customerId: "customer-id",
-                  _tableId: "open-table",
+                  ...dotyposHoldFixture(id),
+                  _customerId: customerId,
+                  _tableId: openTable.id,
                   startDate: "2026-06-20T00:00:00.000+02:00",
                   endDate: "2026-06-20T17:00:00.000+02:00",
                   seats: "1",
@@ -138,21 +169,20 @@ const makeHarness = (options: {
                     id === confirmedDotyposReservationId
                       ? "CONFIRMED"
                       : "CANCELLED",
-                } as never)
+                })
               ),
               getCustomer: mock(() =>
-                Effect.succeed(
-                  Option.some({
-                    id: "customer-id",
+                Effect.succeedSome(
+                  dotyposCustomerFixture(customerId, {
                     email: testEmailAddressForLate,
-                  } as never)
+                  })
                 )
               ),
             })
           )
         ),
         Layer.mock(AdvisoryAvailabilityInventory, {
-          tables: Effect.succeed(tables as never),
+          tables: Effect.succeed([openTable]),
         }),
         SeatingMapReleaseGate.fromDecision(true),
         ReviewSandboxMock({})
@@ -163,7 +193,7 @@ const makeHarness = (options: {
     Effect.gen(function* () {
       const service = yield* CheckoutStatusService;
       return yield* service.getStatus({
-        orderId: "0198c1a2-4e99-7263-8b3c-c431ca140117" as never,
+        orderId: reservationId,
         returnOutcome: "success",
       });
     }).pipe(Effect.provide(layer), Effect.runPromise);
@@ -171,15 +201,16 @@ const makeHarness = (options: {
     Effect.gen(function* () {
       const service = yield* CheckoutStatusService;
       return yield* service.refreshStatus({
-        orderId: "0198c1a2-4e99-7263-8b3c-c431ca140117" as never,
+        orderId: reservationId,
         returnOutcome: "success",
       });
     }).pipe(Effect.provide(layer), Effect.runPromise);
   return { getStatus, refreshStatus, startRecoveryIfSettled };
 };
 
-const refundedReservation = {
+const refundedReservation: Partial<WorkspaceReservation> = {
   paymentState: "paid",
+  paidAt: createdAt,
   fulfillmentState: "not_started",
   failureCode: "late_payment_reservation_unavailable",
 };
@@ -209,7 +240,7 @@ describe("CheckoutStatusService for late payments", () => {
 
   test("shows a late payment awaiting operator review truthfully", async () => {
     const status = await makeHarness({
-      reservation: { paymentState: "paid" },
+      reservation: { paymentState: "paid", paidAt: createdAt },
       recovery: { state: "review_required" },
     }).getStatus();
 
@@ -234,7 +265,12 @@ describe("CheckoutStatusService for late payments", () => {
         dotyposReservationId: confirmedDotyposReservationId,
         reservationState: "confirmed",
         paymentState: "paid",
+        paidAt: createdAt,
+        reservationConfirmedAt: createdAt,
+        reservationCancelledAt: null,
+        cancellationCause: null,
         fulfillmentState: "fulfilled",
+        fulfilledAt: createdAt,
       },
       recovery: { state: "recovered" },
     }).getStatus();
@@ -248,9 +284,14 @@ describe("CheckoutStatusService for late payments", () => {
         dotyposReservationId: confirmedDotyposReservationId,
         reservationState: "confirmed",
         paymentState: "paid",
+        paidAt: createdAt,
+        reservationConfirmedAt: createdAt,
+        reservationCancelledAt: null,
+        cancellationCause: null,
         fulfillmentState: "fulfilled",
+        fulfilledAt: createdAt,
       },
-      recovery: { state: "refund_required", paymentAttemptId: "old-attempt" },
+      recovery: { state: "refund_required", paymentAttemptId: oldAttemptId },
     }).getStatus();
 
     expect(status.status).toBe("fulfilled");
@@ -259,7 +300,7 @@ describe("CheckoutStatusService for late payments", () => {
   test("shows a refund for a superseded attempt when the reservation was not otherwise paid", async () => {
     const status = await makeHarness({
       reservation: { paymentState: "expired" },
-      recovery: { state: "refund_required", paymentAttemptId: "old-attempt" },
+      recovery: { state: "refund_required", paymentAttemptId: oldAttemptId },
     }).getStatus();
 
     expect(status.status).toBe("late_payment_refund");
