@@ -18,10 +18,14 @@ const flowsPublish = resolve(
   import.meta.dir,
   "../../../.github/actions/workspace-e2e-flows/publish-status.mjs"
 );
-const targetStep = findStepByName(
+const resolveTargetStep = findStepByName(
   workflow,
   "Resolve eligible PR and immutable preview"
 );
+const targetStep = resolveTargetStep && {
+  ...resolveTargetStep,
+  env: { ...resolveTargetStep.env, PILOT_PR_NUMBER: "" },
+};
 const statusStep = findStepByName(workflow, "Decide status without an E2E run");
 const finalStep = findStepByName(workflow, "Publish final commit status");
 const publishStep = findStepByName(
