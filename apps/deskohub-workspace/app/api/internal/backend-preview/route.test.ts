@@ -35,6 +35,7 @@ import {
 } from "@/shared/rpc/workspace-backend-preview.server";
 
 const previewApiOrigin = "https://workspace-api-preview-example.run.app";
+const googleProject = "example-sandbox";
 const branch = "feature/preview-generation";
 const branchTag = previewBackendBranchTag(branch);
 const taggedOrigin = taggedCloudRunOrigin(previewApiOrigin, branchTag);
@@ -131,8 +132,7 @@ const previewEnv = {
   WORKSPACE_GCP_PROJECT_NUMBER: "123456789",
   WORKSPACE_WIF_POOL: "workspace-vercel",
   WORKSPACE_WIF_PROVIDER: "vercel",
-  WORKSPACE_FRONTEND_SERVICE_ACCOUNT:
-    "workspace-frontend@example-sandbox.iam.gserviceaccount.com",
+  WORKSPACE_FRONTEND_SERVICE_ACCOUNT: `workspace-frontend@${googleProject}.iam.gserviceaccount.com`,
   VERCEL_GIT_COMMIT_SHA: commitSha,
   VERCEL_DEPLOYMENT_ID: deploymentId,
   VERCEL_GIT_COMMIT_REF: branch,
