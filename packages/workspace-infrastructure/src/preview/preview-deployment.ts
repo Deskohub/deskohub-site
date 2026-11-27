@@ -62,6 +62,15 @@ export type PreviewSnapshot = ReadonlyMap<PreviewRole, PreviewServiceReadback>;
 
 const revisionName = (value: string | undefined) => value?.split("/").at(-1);
 
+export const canResumePreviewSeed = (services: PreviewSnapshot) =>
+  Array.from(services).every(
+    ([role, service]) =>
+      !service.reconciling &&
+      !service.invokerIamDisabled &&
+      !service.labels?.[previewPilotLabel] &&
+      revisionName(service.template?.revision) === previewSeedRevision(role)
+  );
+
 const environmentOf = (service: PreviewServiceReadback) =>
   new Map(
     service.template?.containers[0]?.env?.map((item) => [item.name, item.value])

@@ -176,7 +176,7 @@ export const previewServiceProps = (
     template: {
       revision: target ? previewRevision(role, target) : seed,
       labels,
-      serviceAccount: `workspace-preview-${role === "api" ? "api" : "worker"}-runtime@${previewProject}.iam.gserviceaccount.com`,
+      serviceAccount: `${role === "api" ? "workspace-preview-api-runtime" : "workspace-preview-worker"}@${previewProject}.iam.gserviceaccount.com`,
       scaling: { minInstanceCount: 0, maxInstanceCount: 1 },
       timeout: "60s",
       containers: [
