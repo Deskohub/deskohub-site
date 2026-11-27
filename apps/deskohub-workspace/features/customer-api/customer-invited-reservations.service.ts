@@ -23,6 +23,7 @@ import { getReservationProductName } from "@/features/account/reservation-produc
 import { getWorkspaceTableProductTitle } from "@/features/checkout/product-catalog.i18n";
 import type { Locale } from "@/features/i18n";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
+import { getCustomerReservationPlacement } from "@/features/reservation/backend/customer-reservation-placement";
 import { ReservationAccessService } from "@/features/reservation/backend/reservation-access.service";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
@@ -88,6 +89,12 @@ const makeInvitedReservations = Effect.gen(function* () {
       orders.map(({ providerId }) => providerId)
     );
     const liveById = new Map(live.map((record) => [record.id, record]));
+    const loadTables = yield* Effect.cached(
+      Effect.suspend(() => dotypos.getTables()).pipe(
+        Effect.timeout("8 seconds"),
+        Effect.option
+      )
+    );
     const now = yield* currentInstant;
     const officeProduct = { kind: "office" } as const;
     const officeName = getReservationProductName(officeProduct, locale);
@@ -140,6 +147,7 @@ const makeInvitedReservations = Effect.gen(function* () {
         const product = isTeamTable
           ? {
               kind: "other" as const,
+              family: "table" as const,
               ...(details.seats !== undefined &&
                 details.durationMinutes !== undefined && {
                   teamTable: {
@@ -150,6 +158,24 @@ const makeInvitedReservations = Effect.gen(function* () {
                 }),
             }
           : officeProduct;
+        const tableName =
+          isTeamTable &&
+          today?.state === "available" &&
+          record?.status === "CONFIRMED" &&
+          record._tableId
+            ? Option.getOrUndefined(
+                Option.map(
+                  yield* loadTables,
+                  (tables) =>
+                    getCustomerReservationPlacement({
+                      reservationDetails: details,
+                      dotyposReservation: record,
+                      tables,
+                      seatingMap: false,
+                    }).table?.name
+                )
+              )
+            : undefined;
         return {
           entry: {
             orderId: row.id,
@@ -168,6 +194,7 @@ const makeInvitedReservations = Effect.gen(function* () {
                 code: today.code,
                 accessStartsAt: today.accessStartsAt.toString(),
                 accessEndsAt: today.accessEndsAt.toString(),
+                ...(tableName && { tableName }),
               },
             }),
           } satisfies CustomerInvitedReservation,

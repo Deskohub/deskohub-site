@@ -2,8 +2,10 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  DotyposCloudIdSchema,
   DotyposReservationIdSchema,
   DotyposService,
+  DotyposTableIdSchema,
   DotyposUnavailable,
 } from "@deskohub/dotypos";
 import { EmailServiceError } from "@deskohub/email/backend/service";
@@ -11,7 +13,16 @@ import { IgloohomeDeviceIdSchema } from "@deskohub/igloohome";
 import { testEmailAddress } from "@deskohub/test-email";
 import { NodeCrypto } from "@effect/platform-node";
 import { eq } from "drizzle-orm";
-import { Deferred, Effect, Layer, Option, Redacted, Result } from "effect";
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Redacted,
+  Result,
+} from "effect";
+import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { toStoredInstant } from "@/db/instant";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
@@ -51,8 +62,13 @@ import {
   fixtureReservationAuthorId,
   workspaceFixtures,
 } from "@/shared/testing/workspace-fixtures.test-utils";
-import { waitForAdvisoryLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
+import {
+  holdPostgresTransaction,
+  waitForAdvisoryLockWaiter,
+  waitForPostgresLockWaiter,
+} from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { addAuthorizedReservationInvitees } from "./add-reservation-invitees";
 import { resendAuthorizedReservationInvitation } from "./resend-reservation-invitation";
 import { ReservationInvitations } from "./reservation-invitations.service";
@@ -64,6 +80,7 @@ import {
 import { ReservationInviteeNoticeWorker } from "./reservation-invitee-notice-worker";
 import { ReservationInviteeRetention } from "./reservation-invitee-retention.service";
 import {
+  getBookedPeopleQuery,
   ReservationInvitees,
   recordOfficeInvitees,
   sealOfficePeople,
@@ -665,33 +682,31 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
           )
         )
       );
-    const add = (emails: readonly string[], authorized = true) =>
-      run(
-        addAuthorizedReservationInvitees({
-          orderId: id,
-          locale: "en-US",
-          emails,
-        }).pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              worker,
-              locks,
-              workspace,
-              WorkspaceReservationRepository.Default,
-              WithdrawalRepository.Default,
-              Layer.mock(ReservationAuthorizationService, {
-                authorize: ({ orderId, permission }) =>
-                  Effect.succeed(
-                    authorized &&
-                      orderId === id &&
-                      permission === "add-invitees"
-                  ),
-              })
-            )
-          ),
-          Effect.result
-        )
+    const addEffect = (emails: readonly string[], authorized = true) =>
+      addAuthorizedReservationInvitees({
+        orderId: id,
+        locale: "en-US",
+        emails,
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            worker,
+            locks,
+            workspace,
+            WorkspaceReservationRepository.Default,
+            WithdrawalRepository.Default,
+            Layer.mock(ReservationAuthorizationService, {
+              authorize: ({ orderId, permission }) =>
+                Effect.succeed(
+                  authorized && orderId === id && permission === "add-invitees"
+                ),
+            })
+          )
+        ),
+        Effect.result
       );
+    const add = (emails: readonly string[], authorized = true) =>
+      run(addEffect(emails, authorized));
 
     return {
       id,
@@ -707,17 +722,19 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
       drain,
       resend,
       add,
+      addEffect,
     };
   };
 
   test.each([
     ["with matching stored seats", defaultTableDetails],
     ["without stored seats", { kind: "table" }],
+    ["with fewer stored seats than booked seats", { kind: "table", seats: 2 }],
     ["with more stored seats than booked seats", { kind: "table", seats: 4 }],
   ] as const)(
     "concurrent Team Table invitee additions fill the last booked seat once and notify only the new guest %s",
     async (_scenario, storedTableDetails) => {
-      const { id, add, sent } = await prepareGuestNotices({
+      const { id, add, repository, sent } = await prepareGuestNotices({
         teamTable: true,
         storedTableDetails,
       });
@@ -750,8 +767,41 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
         people.map(({ invitationSendCount }) => invitationSendCount)
       ).toEqual([0, 1]);
       expect(sent).toEqual(["invitation"]);
+
+      const stored = await repository((reservations) =>
+        reservations.findById(id)
+      );
+      if (!stored) throw new Error("expected Team Table order");
+      const booked = await run(
+        ReservationInvitees.use((service) =>
+          service.findBookedPeople(getBookedPeopleQuery(stored))
+        )
+      );
+      expect(booked).toEqual(
+        Option.some({ contactAttends: true, invitees: people })
+      );
     }
   );
+
+  test("keeps the fixed head count check for an Office booker's list", async () => {
+    const { id, repository } = await prepareGuestNotices();
+    await Effect.runPromise(
+      testDatabase.db
+        .update(workspaceReservations)
+        .set({ reservationDetails: { kind: "office", seats: 2, dayCount: 1 } })
+        .where(eq(workspaceReservations.id, id))
+    );
+    const stored = await repository((reservations) =>
+      reservations.findById(id)
+    );
+    if (!stored) throw new Error("expected Office order");
+    const booked = await run(
+      ReservationInvitees.use((service) =>
+        service.findBookedPeople(getBookedPeopleQuery(stored))
+      )
+    );
+    expect(booked).toEqual(Option.none());
+  });
 
   test("refuses to add guests to Office or to someone else's Team Table", async () => {
     const office = await prepareGuestNotices();
@@ -776,6 +826,67 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
       failure: { refusal: { reason: "ended" } },
     });
     expect(table.sent).toEqual([]);
+  });
+
+  test("the provider deadline ends a stalled Team Table read without adding a guest", async () => {
+    const providerStarted = Deferred.makeUnsafe<void>();
+    const { addEffect, id, sent, start } = await prepareGuestNotices({
+      teamTable: true,
+      beforeBookingRead: () =>
+        Deferred.succeed(providerStarted, undefined).pipe(
+          Effect.andThen(Effect.never)
+        ),
+    });
+    const result = await run(
+      Effect.gen(function* () {
+        const adding = yield* Effect.forkChild(
+          addEffect([invitee("provider-timeout")])
+        );
+        yield* Deferred.await(providerStarted);
+        yield* TestClock.adjust("8 seconds");
+        return yield* Fiber.join(adding);
+      }).pipe(atInstant(start))
+    );
+    expect(result).toMatchObject({ failure: { _tag: "TimeoutError" } });
+    const people = await run(
+      ReservationInvitees.use((service) => service.listForReservation(id))
+    );
+    expect(people.map(({ email }) => email)).toEqual([
+      invitee("worker-recovery"),
+    ]);
+    expect(sent).toEqual([]);
+  });
+
+  test("a Team Table invitee insert can finish after the provider deadline", async () => {
+    const { addEffect, id, sent, start } = await prepareGuestNotices({
+      teamTable: true,
+    });
+    // The invitee's foreign key takes a lock on the order during the insert.
+    const holder = await holdPostgresTransaction(
+      testDatabase.pool,
+      "select id from workspace_reservations where id = $1 for update",
+      [id]
+    );
+    const result = await run(
+      Effect.gen(function* () {
+        const adding = yield* Effect.forkChild(
+          addEffect([invitee("slow-insert")])
+        );
+        yield* Effect.promise(() =>
+          waitForPostgresLockWaiter(testDatabase.pool, {
+            condition: "$1::int = any(pg_blocking_pids(pid))",
+            values: [holder.pid],
+            description: "the invitee insert's foreign key lock",
+          })
+        ).pipe(
+          Effect.andThen(TestClock.adjust("8 seconds")),
+          Effect.ensuring(Effect.promise(holder.commit))
+        );
+        return yield* Fiber.join(adding);
+      }).pipe(atInstant(start))
+    );
+    expect(result).toMatchObject({ success: { added: 1 } });
+    expect(sent).toEqual(["invitation"]);
   });
 
   test("an authorized resend delivers an ended office's pending invitation once", async () => {
@@ -1256,8 +1367,9 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
     );
   });
 
-  test("signed-in invitation history includes the matching address and excludes unrelated accounts", async () => {
+  test("signed-in invitation history includes Office and Team Table for the matching address only", async () => {
     const id = await insertReservation();
+    const tableOrderId = await insertReservation();
     await Effect.runPromise(
       testDatabase.db
         .update(workspaceReservations)
@@ -1267,8 +1379,25 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
         })
         .where(eq(workspaceReservations.id, id))
     );
+    const [tableOrder] = await Effect.runPromise(
+      testDatabase.db
+        .update(workspaceReservations)
+        .set({
+          officeContactAttends: true,
+          reservationDetails: defaultTableDetails,
+        })
+        .where(eq(workspaceReservations.id, tableOrderId))
+        .returning({ providerId: workspaceReservations.dotyposReservationId })
+    );
+    if (!tableOrder?.providerId) throw new Error("expected Team Table hold");
+    const providerId = DotyposReservationIdSchema.make(tableOrder.providerId);
+    const assignedTableId = DotyposTableIdSchema.make("invited-team-table");
+    const accessStartsAt = Temporal.Instant.from("2027-01-20T10:15:00Z");
+    const accessEndsAt = accessStartsAt.add({ hours: 1 });
+    const tableCode = "123456";
     const address = invitee("signed-in-history");
     await record(id, { contactAttends: false, invitees: [address] });
+    await record(tableOrderId, { contactAttends: true, invitees: [address] });
     const matched = await Effect.runPromise(fixtures.customerAccount());
     const unrelated = await Effect.runPromise(fixtures.customerAccount());
     const history = (accountId: typeof matched, email: string) =>
@@ -1292,20 +1421,76 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
                     find: () => Effect.succeed(null),
                   }),
                   Layer.mock(ReservationRecords, {
-                    listByIds: () => Effect.succeed([]),
+                    listByIds: (ids) =>
+                      Effect.succeed(
+                        ids.includes(providerId)
+                          ? [
+                              {
+                                id: providerId,
+                                status: "CONFIRMED",
+                                _tableId: assignedTableId,
+                                startDate: accessStartsAt.toString(),
+                                endDate: accessEndsAt.toString(),
+                                seats: "3",
+                              },
+                            ]
+                          : []
+                      ),
                   }),
                   Layer.mock(DotyposService, {
                     getCustomer: () => Effect.succeedNone,
+                    getTables: () =>
+                      Effect.succeed([
+                        {
+                          id: assignedTableId,
+                          _cloudId: DotyposCloudIdSchema.make("fixture"),
+                          name: "Team Table 12",
+                          enabled: true,
+                          display: true,
+                          tags: [],
+                          seats: "3",
+                        },
+                      ]),
                   }),
-                  Layer.mock(ReservationAccessService, {})
+                  Layer.mock(ReservationAccessService, {
+                    getAccessWithLiveRecord: ({ orderId }) => {
+                      expect(orderId).toBe(tableOrderId);
+                      return Effect.succeed({
+                        state: "available",
+                        code: tableCode,
+                        accessStartsAt,
+                        accessEndsAt,
+                        viewer: "invitee",
+                      });
+                    },
+                  })
                 )
               )
             )
-          )
+          ),
+          atInstant(accessStartsAt)
         )
       );
     expect(await history(matched, address)).toMatchObject({
-      current: [{ orderId: id, product: { kind: "office" } }],
+      current: [
+        {
+          orderId: tableOrderId,
+          product: {
+            kind: "other",
+            family: "table",
+            teamTable: defaultTableDetails,
+          },
+          productName: "Team Table",
+          status: "confirmed",
+          todayAccess: {
+            code: tableCode,
+            accessStartsAt: accessStartsAt.toString(),
+            accessEndsAt: accessEndsAt.toString(),
+            tableName: "Team Table 12",
+          },
+        },
+        { orderId: id, product: { kind: "office" } },
+      ],
       past: [],
     });
     expect(

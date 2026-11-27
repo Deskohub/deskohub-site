@@ -90,7 +90,9 @@ export const addAuthorizedReservationInvitees = Effect.fnUntraced(
         if (Option.isSome(withdrawal)) return yield* refuse("not-confirmed");
 
         const workspace = yield* WorkspaceReservationService;
-        const reservation = yield* workspace.getReservation(orderId);
+        const reservation = yield* workspace
+          .getReservation(orderId)
+          .pipe(Effect.timeout("8 seconds"));
         if (reservation.providerStatus !== "CONFIRMED") {
           return yield* refuse("not-confirmed");
         }
@@ -165,7 +167,7 @@ export const addAuthorizedReservationInvitees = Effect.fnUntraced(
             return notices.map(({ id }) => id);
           })
         );
-      }).pipe(Effect.timeout("8 seconds"))
+      })
     );
 
     const notices = yield* ReservationInviteeNoticeWorker;

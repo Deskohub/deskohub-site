@@ -4,7 +4,10 @@ import { HttpApi, type HttpApiGroup, OpenApi } from "effect/http-api";
 import { CustomerBookingSelection } from "./customer-booking-selection";
 import {
   CustomerBookedSelection,
+  CustomerInvitedReservation,
+  CustomerReservationAccess,
   CustomerReservationInvitee,
+  CustomerReservationOrderId,
   CustomerReservationPeople,
   CustomerReservationProduct,
 } from "./customer-reservations-api";
@@ -98,6 +101,46 @@ describe("WorkspaceCustomerApi", () => {
     });
     expect(Schema.decodeUnknownSync(CustomerReservationProduct)(wire)).toEqual(
       product
+    );
+  });
+
+  test("keeps Team Table invitations readable without the optional metadata", () => {
+    const legacyOther = Schema.Struct({ kind: Schema.Literal("other") });
+    const legacyAccess = Schema.Struct({
+      code: CustomerReservationAccess.fields.code,
+      accessStartsAt: CustomerReservationAccess.fields.accessStartsAt,
+      accessEndsAt: CustomerReservationAccess.fields.accessEndsAt,
+    });
+    const legacyInvitation = Schema.Struct({
+      ...CustomerInvitedReservation.fields,
+      product: legacyOther,
+      todayAccess: Schema.optional(legacyAccess),
+    });
+    const accessStartsAt = "2027-01-20T10:15:00Z";
+    const accessEndsAt = "2027-01-20T11:15:00Z";
+    const legacy = {
+      orderId: CustomerReservationOrderId.make("synthetic-team-table-order"),
+      product: { kind: "other" },
+      productName: "Team Table",
+      status: "confirmed",
+      accessStartsAt,
+      accessEndsAt,
+      bookedBy: { name: "Synthetic Booker" },
+      todayAccess: { code: "123456", accessStartsAt, accessEndsAt },
+    } as const;
+    const invitation = {
+      ...legacy,
+      product: {
+        ...legacy.product,
+        family: "table",
+        teamTable: { kind: "table", seats: 3, durationMinutes: 60 },
+      },
+      todayAccess: { ...legacy.todayAccess, tableName: "Team Table 12" },
+    } as const;
+    const wire = Schema.encodeSync(CustomerInvitedReservation)(invitation);
+    expect(Schema.decodeUnknownSync(legacyInvitation)(wire)).toEqual(legacy);
+    expect(Schema.decodeUnknownSync(CustomerInvitedReservation)(wire)).toEqual(
+      invitation
     );
   });
 
