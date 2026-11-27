@@ -3,6 +3,9 @@ import { Context, Option, Schema } from "effect";
 /** The request header that carries the calling `dhw` binary's version. */
 export const dhwVersionHeader = "x-dhw-version";
 
+/** A development or PR build may implement Team Table before release. */
+export const dhwTeamTableHeader = "x-dhw-team-table";
+
 /**
  * A `dhw` version: a semantic version, with build metadata on development
  * and pull-request builds (`1.20.0+pr.12.abc123`).
@@ -15,6 +18,9 @@ export const DhwVersion = Schema.String.check(
   .pipe(Schema.brand("DhwVersion"))
   .annotate({ identifier: "DhwVersion" });
 export type DhwVersion = typeof DhwVersion.Type;
+
+/** The first released binary that decodes Team Table in administration. */
+export const teamTableDhwVersion = DhwVersion.make("1.43.0");
 
 /**
  * The oldest `dhw` allowed to call an endpoint, as an endpoint or group

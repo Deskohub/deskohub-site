@@ -106,6 +106,7 @@ import { invokeAsCliCaller } from "./cli-administration-operations.server";
 import { CliAuthentication } from "./cli-authentication.service";
 import { CliAuthenticationAdmission } from "./cli-authentication-admission.service";
 import {
+  administrationCallerSupportsTeamTable,
   CliClientCompatibilityLive,
   minimumDhwVersions,
 } from "./cli-client-version";
@@ -170,6 +171,9 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
     const authentication = yield* CliAuthentication;
     const discounts = yield* DiscountAdministration;
     const discountOperations = yield* makeDiscountOperations("reservations");
+    const legacyDiscountOperations = yield* makeDiscountOperations(
+      "reservations-before-team-table"
+    );
     const customerDirectory = yield* AdministrationCustomerDirectory;
     const invoices = yield* InvoiceAdministrationService;
     const standaloneAccessCodes = yield* StandaloneAccessCodeAdministration;
@@ -198,8 +202,18 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
       .handle("getReservationActivity", () =>
         administration.loadReservationActivity().pipe(mapServiceFailure)
       )
-      .handle("listReservations", ({ query }) =>
-        administration.listReservations(query).pipe(mapServiceFailure)
+      .handle(
+        "listReservations",
+        Effect.fn(function* ({ query }) {
+          const supportsTeamTable =
+            yield* administrationCallerSupportsTeamTable;
+          return yield* administration
+            .listReservations({
+              ...query,
+              excludedType: supportsTeamTable ? undefined : "table",
+            })
+            .pipe(mapServiceFailure);
+        })
       )
       .handle(
         "getReservationAudit",
@@ -220,23 +234,39 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
           return page;
         })
       )
-      .handle("getReservation", ({ params }) =>
-        administration.loadReservation(params.reservationId).pipe(
-          mapServiceFailure,
-          Effect.flatMap((detail) =>
-            detail
-              ? Effect.succeed({
-                  ...detail,
-                  invoice: detail.invoice && {
-                    ...detail.invoice,
-                    id: AdministrationInvoiceId.make(detail.invoice.id),
-                  },
-                })
-              : new CliResourceNotFound({
-                  message: "The reservation was not found.",
-                })
-          )
-        )
+      .handle(
+        "getReservation",
+        Effect.fn(function* ({ params }) {
+          const detail = yield* administration
+            .loadReservation(params.reservationId)
+            .pipe(mapServiceFailure);
+          if (!detail) {
+            return yield* new CliResourceNotFound({
+              message: "The reservation was not found.",
+            });
+          }
+          const supportsTeamTable =
+            yield* administrationCallerSupportsTeamTable;
+          if (!supportsTeamTable && detail.reservation.type === "table") {
+            return yield* new CliServiceUnavailable({
+              message:
+                "This dhw version cannot read Team Table reservations. Run `dhw update`.",
+            });
+          }
+          return {
+            ...detail,
+            otherCustomerReservations: detail.otherCustomerReservations.filter(
+              ({ type }) => supportsTeamTable || type !== "table"
+            ),
+            sameDateReservations: detail.sameDateReservations.filter(
+              ({ type }) => supportsTeamTable || type !== "table"
+            ),
+            invoice: detail.invoice && {
+              ...detail.invoice,
+              id: AdministrationInvoiceId.make(detail.invoice.id),
+            },
+          };
+        })
       )
       .handle(
         "cancelReservation",
@@ -417,39 +447,67 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
           mapServiceFailure
         )
       )
-      .handle("getCustomer", ({ params }) =>
-        Effect.all(
-          {
-            activity: administration.loadCustomerActivity(params.customerId),
-            profile: discounts
-              .loadCustomerProfile({
-                customerId: params.customerId,
-              })
-              .pipe(
-                Effect.map(toCliCustomerProfile),
-                Effect.catch(() => Effect.succeed(null))
+      .handle(
+        "getCustomer",
+        Effect.fn(function* ({ params }) {
+          const supportsTeamTable =
+            yield* administrationCallerSupportsTeamTable;
+          const { activity, profile } = yield* Effect.all(
+            {
+              activity: administration.loadCustomerActivity(params.customerId),
+              profile: discounts
+                .loadCustomerProfile({
+                  customerId: params.customerId,
+                })
+                .pipe(
+                  Effect.map(toCliCustomerProfile),
+                  Effect.catch(() => Effect.succeed(null))
+                ),
+            },
+            { concurrency: "unbounded" }
+          ).pipe(mapServiceFailure);
+          return {
+            profile,
+            activity: {
+              ...activity,
+              reservations: activity.reservations.filter(
+                ({ type }) => supportsTeamTable || type !== "table"
               ),
-          },
-          { concurrency: "unbounded" }
-        ).pipe(mapServiceFailure)
+            },
+          };
+        })
       )
       .handle("getCustomerReservationActivity", ({ params }) =>
         administration
           .loadCustomerReservationActivity(params.customerId)
           .pipe(mapServiceFailure)
       )
-      .handle("listCustomerReservations", ({ params, query }) =>
-        administration
-          .loadCustomerReservations({
-            customerId: params.customerId,
-            page: query.page,
-          })
-          .pipe(mapServiceFailure)
+      .handle(
+        "listCustomerReservations",
+        Effect.fn(function* ({ params, query }) {
+          const supportsTeamTable =
+            yield* administrationCallerSupportsTeamTable;
+          return yield* administration
+            .loadCustomerReservations({
+              customerId: params.customerId,
+              page: query.page,
+              excludedType: supportsTeamTable ? undefined : "table",
+            })
+            .pipe(mapServiceFailure);
+        })
       )
-      .handle("getDiscountDashboard", () =>
-        discounts
-          .loadDashboard()
-          .pipe(Effect.map(toCliDiscountDashboard), mapServiceFailure)
+      .handle(
+        "getDiscountDashboard",
+        Effect.fn(function* () {
+          const supportsTeamTable =
+            yield* administrationCallerSupportsTeamTable;
+          return yield* discounts.loadDashboard().pipe(
+            Effect.map((dashboard) =>
+              toCliDiscountDashboard(dashboard, supportsTeamTable)
+            ),
+            mapServiceFailure
+          );
+        })
       )
       .handle("listDiscountGroups", () =>
         discounts.listDiscountGroups().pipe(
@@ -631,15 +689,28 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
             .pipe(mapServiceFailure);
         })
       )
-      .handle("mutateDiscounts", ({ payload }) =>
-        invokeAsCliCaller(
-          discountOperations.invoke("mutateDiscounts", payload.mutation),
-          DiscountRequestLedger,
-          (caller) => cliDiscountRequestLedger(ledger, caller, payload)
-        ).pipe(
-          // The endpoint decoded the payload with the strict v1 schema.
-          Effect.catchTag("CliInputInvalid", (invalid) => Effect.die(invalid))
-        )
+      .handle(
+        "mutateDiscounts",
+        Effect.fn(function* ({ payload }) {
+          const supportsTeamTable =
+            yield* administrationCallerSupportsTeamTable;
+          const { mutation } = payload;
+          const targetsTeamTable =
+            mutation.kind === "update-discount" &&
+            mutation.discount.products.some(({ kind }) => kind === "table");
+          const operations =
+            supportsTeamTable || targetsTeamTable
+              ? discountOperations
+              : legacyDiscountOperations;
+          return yield* invokeAsCliCaller(
+            operations.invoke("mutateDiscounts", mutation),
+            DiscountRequestLedger,
+            (caller) => cliDiscountRequestLedger(ledger, caller, payload)
+          ).pipe(
+            // The endpoint decoded the payload with the strict v1 schema.
+            Effect.catchTag("CliInputInvalid", (invalid) => Effect.die(invalid))
+          );
+        })
       )
       .handle(
         "renameSession",
@@ -1031,11 +1102,16 @@ const toCliVoucher = <Voucher extends AdminVoucher>(voucher: Voucher) => ({
   updatedAt: voucher.updatedAt.toString(),
 });
 
-const toCliDiscountDashboard = (dashboard: DiscountAdminDashboard) => ({
+const toCliDiscountDashboard = (
+  dashboard: DiscountAdminDashboard,
+  supportsTeamTable: boolean
+) => ({
   ...dashboard,
   discounts: dashboard.discounts.map((discount) => ({
     ...discount,
-    products: discount.products.filter(isReservationProductTarget),
+    products: discount.products
+      .filter(isReservationProductTarget)
+      .filter(({ kind }) => supportsTeamTable || kind !== "table"),
     createdAt: discount.createdAt.toString(),
     updatedAt: discount.updatedAt.toString(),
   })),

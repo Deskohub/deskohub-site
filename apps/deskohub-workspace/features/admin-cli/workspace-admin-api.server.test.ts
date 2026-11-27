@@ -814,7 +814,7 @@ describe("Workspace Admin API", () => {
     expect(result).toEqual(batch);
   });
 
-  test("returns the reservation targets of a mixed discount in the v1 dashboard", async () => {
+  test("shows Team Table discount targets to assistants and keeps the released CLI view readable", async () => {
     const id = AdministrationStoredDiscountId.make(
       "01980000-0000-7000-8000-000000000001"
     );
@@ -830,6 +830,7 @@ describe("Workspace Admin API", () => {
               products: [
                 { kind: "entry-pack", tier: "reserved-desk", size: 10 },
                 { kind: "cowork", tier: "reserved-desk" },
+                { kind: "table" },
                 { kind: "unlimited" },
               ],
               codeCount: 0,
@@ -849,12 +850,25 @@ describe("Workspace Admin API", () => {
         }),
     });
 
-    const result = await callAdministrationApi(
+    const assistant = await callAdministrationApi(
+      (client) => client.getDiscountDashboard({}),
+      { discounts, channel: assistantChannel }
+    );
+    const legacyCli = await callAdministrationApi(
       (client) => client.getDiscountDashboard({}),
       { discounts }
     );
 
-    expect(result.discounts).toMatchObject([
+    expect(assistant.discounts).toMatchObject([
+      {
+        id,
+        products: [
+          { kind: "cowork", tier: "reserved-desk" },
+          { kind: "table" },
+        ],
+      },
+    ]);
+    expect(legacyCli.discounts).toMatchObject([
       { id, products: [{ kind: "cowork", tier: "reserved-desk" }] },
     ]);
   });
@@ -957,6 +971,52 @@ describe("Workspace Admin API", () => {
           text.includes("select from workspace reservations")
       )
     ).toBe(true);
+  });
+
+  test("excludes Team Table from reservation pagination only for released CLI clients", async () => {
+    const listInputs: unknown[] = [];
+    const page = {
+      items: [],
+      page: 1,
+      pageCount: 1,
+      total: 0,
+      dateFilterUnavailable: false,
+      dateSortUnavailable: false,
+    };
+    const administration = Layer.mock(AdministrationService, {
+      listReservations: (input) =>
+        Effect.sync(() => {
+          listInputs.push(input);
+          return page;
+        }),
+      loadCustomerReservations: (input) =>
+        Effect.sync(() => {
+          listInputs.push(input);
+          return page;
+        }),
+    });
+    const customerId = AdministrationDotyposCustomerId.make("customer-1");
+    await callAdministrationApi(
+      (client) =>
+        Effect.all([
+          client.listReservations({ query: { page: 2 } }),
+          client.listCustomerReservations({
+            params: { customerId },
+            query: { page: 3 },
+          }),
+        ]),
+      { administration }
+    );
+    await callAdministrationApi(
+      (client) => client.listReservations({ query: { type: "table" } }),
+      { administration, channel: assistantChannel }
+    );
+
+    expect(listInputs).toEqual([
+      { page: 2, excludedType: "table" },
+      { customerId, page: 3, excludedType: "table" },
+      { type: "table" },
+    ]);
   });
 
   test("returns invoice creation defaults", async () => {

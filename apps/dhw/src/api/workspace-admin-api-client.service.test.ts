@@ -45,6 +45,7 @@ import {
   CliSessionUnauthorized,
   CliStandaloneAccessCodeCleanupRequired,
   CliStandaloneAccessCodeReconciled,
+  dhwTeamTableHeader,
   dhwVersionHeader,
 } from "@deskohub/workspace-admin-api";
 import { Clock, Duration, Effect, Layer, Redacted, Schema } from "effect";
@@ -387,6 +388,7 @@ describe("WorkspaceAdminApiClient", () => {
         const url = new URL(request.url);
         requests.push({ method: request.method, path: url.pathname });
         clientVersions.push(request.headers.get(dhwVersionHeader));
+        expect(request.headers.get(dhwTeamTableHeader)).toBe("1");
         if (url.pathname.endsWith("/auth")) {
           expect(await request.json()).toEqual({
             challenge,

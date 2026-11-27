@@ -1,15 +1,15 @@
 "use client";
 
-import type {
-  ReservationProductFilterType,
-  ReservationProductPropertyCondition,
+import {
+  CampaignReservationFamily,
+  type ReservationProductFilterType,
+  type ReservationProductPropertyCondition,
 } from "@deskohub/workspace-admin-api";
-import { Match } from "effect";
+import { Match, Schema } from "effect";
 import { ChevronDown, Plus, X } from "lucide-react";
 import { useId } from "react";
 import { m } from "@/features/administration/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
-import type { WorkspaceReservationKind } from "@/features/reservation/reservation-kind";
 import {
   type ReservationProductProperty,
   reservationProductFamilies,
@@ -69,10 +69,7 @@ const countComparison = (condition: ReservationProductPropertyCondition) =>
     Match.exhaustive
   );
 
-const isReservationFamily = (
-  value: string
-): value is WorkspaceReservationKind =>
-  Object.hasOwn(reservationProductFamilies, value);
+const isReservationFamily = Schema.is(CampaignReservationFamily);
 
 /** What a property condition starts as when the operator adds it. */
 const newPropertyCondition = (
@@ -152,9 +149,9 @@ export function ProductFilterControl({
             <SelectItem value={anyProduct}>
               {m.emailCampaignsAudienceProductAny({}, { locale })}
             </SelectItem>
-            {Object.values(reservationProductFamilies).map(({ id }) => (
-              <SelectItem key={id} value={id}>
-                {reservationProductFamilyLabel(id, locale)}
+            {CampaignReservationFamily.literals.map((family) => (
+              <SelectItem key={family} value={family}>
+                {reservationProductFamilyLabel(family, locale)}
               </SelectItem>
             ))}
           </SelectContent>

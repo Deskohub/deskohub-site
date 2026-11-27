@@ -2,10 +2,13 @@ import {
   CliClientCompatibility,
   CliInputInvalid,
   CliServiceUnavailable,
+  CurrentAdministrationCaller,
   DhwVersion,
+  dhwTeamTableHeader,
   dhwVersionHeader,
   MinimumDhwVersion,
   OutdatedDhwRefusal,
+  teamTableDhwVersion,
   WorkspaceAdminApi,
 } from "@deskohub/workspace-admin-api";
 import { Context, Effect, Layer, Match, Option, Schema } from "effect";
@@ -44,6 +47,17 @@ export const cliClientIsAtLeast = (
   clientVersion: CliClientVersion,
   since: DhwVersion
 ): boolean => Option.exists(clientVersion, (version) => gte(version, since));
+
+/** Assistants derive their tools from the current contract. CLI binaries ship theirs. */
+export const administrationCallerSupportsTeamTable = Effect.gen(function* () {
+  const { channel } = yield* CurrentAdministrationCaller;
+  if (channel._tag !== "CliSession") return true;
+  const { headers } = yield* HttpServerRequest.HttpServerRequest;
+  return (
+    headers[dhwTeamTableHeader] === "1" ||
+    cliClientIsAtLeast(readCliClientVersion(headers), teamTableDhwVersion)
+  );
+});
 
 /** An endpoint's annotations over its group's. */
 const endpointAnnotations = (

@@ -36987,8 +36987,7 @@
             "enum": [
               "cowork",
               "meeting-room",
-              "office",
-              "table"
+              "office"
             ]
           },
           "properties": {
