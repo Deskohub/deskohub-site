@@ -1179,6 +1179,10 @@ const productionProbes = [
   "packages/standard-schema/src/probe.cts",
 ];
 const workspaceProductionProbes = [
+  "apps/deskohub-workspace/e2e/cases/probe.ts",
+  "apps/deskohub-workspace/e2e/cases/probe.browser-acceptance.test.ts",
+  "apps/deskohub-workspace/e2e/referrals/probe.ts",
+  "apps/deskohub-workspace/e2e/referrals/probe.test.ts",
   "apps/deskohub-workspace/app/api/probe/route.ts",
   "apps/deskohub-workspace/db/probe.ts",
   "apps/deskohub-workspace/emails/probe.tsx",
@@ -1282,9 +1286,14 @@ const generatedProbes = [
 ];
 const workspaceExemptProbes = [
   "apps/deskohub-workspace/e2e/probe.ts",
+  "apps/deskohub-workspace/e2e/account/probe.test.ts",
   "apps/deskohub-workspace/features/checkout/backend/repositories/generated/probe.ts",
   "apps/deskohub-workspace/features/generated/probe.ts",
   "apps/deskohub-workspace/features/i18n/paraglide/probe.ts",
+];
+const workspaceE2eAllowedProbes = [
+  "apps/deskohub-workspace/e2e/cases/allowed.test.ts",
+  "apps/deskohub-workspace/e2e/referrals/allowed.test.ts",
 ];
 
 const LintReport = Schema.Struct({
@@ -1384,6 +1393,18 @@ test.each([
     ]) {
       writeCase(productionFixture, probe, assertionProbe);
     }
+    for (const probe of workspaceE2eAllowedProbes) {
+      writeCase(
+        productionFixture,
+        probe,
+        [
+          'const defaults = ["fallback"] as const;',
+          "export const config = <const>{ enabled: true };",
+          "export const probe = (input?: string) => input ?? defaults[0];",
+          "",
+        ].join("\n")
+      );
+    }
     // The Workspace lint script resolves the root config through git.
     await runCommand(["git", "init", "--quiet"], { cwd: productionRoot });
     const packageManifest = readJsonFile(
@@ -1404,10 +1425,14 @@ test.each([
       productionRoot,
       await lintProduction(
         productionRoot,
-        "biome lint packages apps/deskohub-workspace"
+        "biome check packages apps/deskohub-workspace"
       ),
       [...productionProbes, ...workspaceProductionProbes],
-      [...generatedProbes, ...workspaceExemptProbes]
+      [
+        ...generatedProbes,
+        ...workspaceExemptProbes,
+        ...workspaceE2eAllowedProbes,
+      ]
     );
     expectAssertionDiagnostics(
       productionRoot,
@@ -1425,7 +1450,7 @@ test.each([
         workspaceManifest.scripts["lint:biome"]
       ),
       workspaceProductionProbes,
-      workspaceExemptProbes
+      [...workspaceExemptProbes, ...workspaceE2eAllowedProbes]
     );
   }
 );

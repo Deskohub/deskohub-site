@@ -23,6 +23,7 @@ import {
   toDiscountDetail,
   waitForAdvertisedCalendarSale,
 } from "./discounts";
+import { makeTestE2EConfig } from "./e2e-fixtures.test-utils";
 
 const chromiumAvailable = await playwrightChromiumAvailable();
 let browser: Browser | undefined;
@@ -123,9 +124,10 @@ test.skipIf(!chromiumAvailable)(
 );
 
 // Short bounds, so a timeout shows within the test.
-const config = {
+const config: WorkspaceE2EConfig = {
+  ...makeTestE2EConfig("https://workspace.example.test"),
   timeouts: { ...workspaceE2ETimeouts, browserAction: 2000 },
-} as WorkspaceE2EConfig;
+};
 
 const assertCalendarDiscountOn = (
   html: string,
@@ -399,13 +401,14 @@ const advertiseCalendarSale = () => {
     drive: ({ openSession }) =>
       waitForAdvertisedCalendarSale({
         config: {
+          ...makeTestE2EConfig(formServer.url.origin),
           timeouts: {
             ...workspaceE2ETimeouts,
             browserAction: 2000,
             calendarSaleAdvertisement: 20_000,
             calendarSaleAdvertisementAttempt: 1500,
           },
-        } as WorkspaceE2EConfig,
+        },
         data: makeCoworkCheckoutData(
           formServer.url.origin,
           "2099-09-01",
@@ -488,14 +491,14 @@ for (const { candidateDates, detail, covered } of [
           browser,
           candidateDates,
           config: {
-            baseUrl: formServer.url.origin,
+            ...makeTestE2EConfig(formServer.url.origin),
             timeouts: {
               ...workspaceE2ETimeouts,
               browserAction: 2000,
               calendarSaleAdvertisement: 2000,
               calendarSaleAdvertisementAttempt: 500,
             },
-          } as WorkspaceE2EConfig,
+          },
         }).pipe(
           Effect.andThen(
             Effect.sync(() => {
@@ -517,9 +520,8 @@ for (const { candidateDates, detail, covered } of [
           );
         }
       }
-      expect(datesRead).toEqual(
-        candidateDates.length ? [candidateDates.toSorted().at(-1)!] : []
-      );
+      const lastDate = candidateDates.toSorted().at(-1);
+      expect(datesRead).toEqual(lastDate === undefined ? [] : [lastDate]);
       expect(methods.every((method) => method === "GET")).toBe(true);
       expect(browser.contexts().length).toBe(contextCount);
     },

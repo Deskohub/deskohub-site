@@ -1,5 +1,5 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
-import { Effect } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { formatDiscountAdjustment } from "@/features/checkout/format-discount-adjustment";
 import { m } from "@/features/i18n";
 import { formatReferralInvitationDiscount } from "@/features/referrals/client";
@@ -45,18 +45,6 @@ const accountReferralVoucherAmount = {
 const ordinaryCodeSlotObservationKey =
   "__deskohubE2EReferralDiscountFormObservation";
 const ordinaryCodeSlotObservationMaximumCount = 9;
-
-type OrdinaryCodeSlotObservation = {
-  readonly formCount: number;
-  readonly namedFieldCount: number;
-  readonly namedInputEmpty: 0 | 1;
-  readonly namedInputEnabled: 0 | 1;
-  readonly namedInputPresent: 0 | 1;
-  readonly selectedFormPresent: 0 | 1;
-  readonly selectedFormVisible: 0 | 1;
-  readonly submitEnabled: 0 | 1;
-  readonly submitPresent: 0 | 1;
-};
 
 export const calculateSingleInviteeReferralDiscount = (
   remainingSubtotal: Money
@@ -162,7 +150,7 @@ export const startPayPage = ({
           { operation: "verify account referral checkout customer" }
         );
       }
-      return payUrl;
+      return { orderId, payUrl };
     }),
     id: `prepare-${stepPrefix}-pay-page`,
     timeoutMs: config.timeouts.checkoutStart,
@@ -239,7 +227,7 @@ const waitForFreshPayStateUrl = ({
     }
   );
 
-export const rejectReferralCode = ({
+export const rejectReferralCode = Effect.fn(function* ({
   browserSession,
   code,
   config,
@@ -258,56 +246,53 @@ export const rejectReferralCode = ({
   readonly orderId: WorkspaceReservationId;
   /** The browser session obtained inside the case step. */
   readonly browserSession: E2EBrowserSession;
-}) =>
-  Effect.gen(function* () {
-    yield* submitDiscountCode({ code, config, session: browserSession });
-    const rejectedUrl = yield* pollUntil(
-      readPageUrl(browserSession).pipe(
-        Effect.map((url) =>
-          url &&
-          isRejectedReferralCodeUrl({
-            baseUrl: config.baseUrl,
-            currentUrl: url,
-            error,
-            locale,
-            orderId,
-            previousUrl: currentPayUrl,
-          })
-            ? url
-            : undefined
-        )
-      ),
-      {
-        intervalMs: workspaceE2EPollIntervalMs.browser,
-        label: "rejected referral code on a re-signed pay state",
-        timeoutMs: config.timeouts.uiTransition,
-      }
-    );
-    yield* browserSession.use(
-      "wait for rejected referral code kept in the field with its alert",
-      (page) =>
-        page.waitForFunction(
-          ({ expectedCode, expectedMessage }) => {
-            const alert = document.querySelector(
-              "#checkout-discount-code-error"
-            );
-            const input = document.querySelector("#checkout-discount-code");
-            return (
-              alert?.getAttribute("role") === "alert" &&
-              alert.textContent?.includes(expectedMessage) === true &&
-              input?.getAttribute("aria-invalid") === "true" &&
-              input instanceof HTMLInputElement &&
-              input.value.toUpperCase() === expectedCode
-            );
-          },
-          { expectedCode: code.toUpperCase(), expectedMessage: message },
-          { timeout: config.timeouts.uiTransition }
-        )
-    );
-    return rejectedUrl;
-  });
+}) {
+  yield* submitDiscountCode({ code, config, session: browserSession });
+  const rejectedUrl = yield* pollUntil(
+    readPageUrl(browserSession).pipe(
+      Effect.map((url) =>
+        url &&
+        isRejectedReferralCodeUrl({
+          baseUrl: config.baseUrl,
+          currentUrl: url,
+          error,
+          locale,
+          orderId,
+          previousUrl: currentPayUrl,
+        })
+          ? url
+          : undefined
+      )
+    ),
+    {
+      intervalMs: workspaceE2EPollIntervalMs.browser,
+      label: "rejected referral code on a re-signed pay state",
+      timeoutMs: config.timeouts.uiTransition,
+    }
+  );
+  yield* browserSession.use(
+    "wait for rejected referral code kept in the field with its alert",
+    (page) =>
+      page.waitForFunction(
+        ({ expectedCode, expectedMessage }) => {
+          const alert = document.querySelector("#checkout-discount-code-error");
+          const input = document.querySelector("#checkout-discount-code");
+          return (
+            alert?.getAttribute("role") === "alert" &&
+            alert.textContent?.includes(expectedMessage) === true &&
+            input?.getAttribute("aria-invalid") === "true" &&
+            input instanceof HTMLInputElement &&
+            input.value.toUpperCase() === expectedCode
+          );
+        },
+        { expectedCode: code.toUpperCase(), expectedMessage: message },
+        { timeout: config.timeouts.uiTransition }
+      )
+  );
+  return rejectedUrl;
+});
 
-export const assertShareLinkReferralApplied = ({
+export const assertShareLinkReferralApplied = Effect.fn(function* ({
   config,
   locale,
   orderId,
@@ -319,33 +304,32 @@ export const assertShareLinkReferralApplied = ({
   readonly orderId: WorkspaceReservationId;
   readonly payUrl: string;
   readonly session: E2EBrowserSession;
-}) =>
-  Effect.gen(function* () {
-    if (
-      !isReferralAppliedPayUrl({
-        baseUrl: config.baseUrl,
-        currentUrl: payUrl,
-        locale,
-        orderId,
-      })
-    ) {
-      return yield* workspaceE2EError(
-        "share-link checkout did not reach a referral-applied pay page",
-        { operation: "verify share-link referral pay page" }
-      );
-    }
-    const message = referralAppliedMessage(locale);
-    yield* session.use("wait for share-link referral applied notice", (page) =>
-      page.waitForFunction(
-        (expectedMessage) =>
-          document
-            .querySelector("[data-checkout-referral-applied]")
-            ?.textContent?.includes(expectedMessage) === true,
-        message,
-        { timeout: config.timeouts.uiTransition }
-      )
+}) {
+  if (
+    !isReferralAppliedPayUrl({
+      baseUrl: config.baseUrl,
+      currentUrl: payUrl,
+      locale,
+      orderId,
+    })
+  ) {
+    return yield* workspaceE2EError(
+      "share-link checkout did not reach a referral-applied pay page",
+      { operation: "verify share-link referral pay page" }
     );
-  });
+  }
+  const message = referralAppliedMessage(locale);
+  yield* session.use("wait for share-link referral applied notice", (page) =>
+    page.waitForFunction(
+      (expectedMessage) =>
+        document
+          .querySelector("[data-checkout-referral-applied]")
+          ?.textContent?.includes(expectedMessage) === true,
+      message,
+      { timeout: config.timeouts.uiTransition }
+    )
+  );
+});
 
 export const assertOrdinaryCodeSlotAvailable = ({
   config,
@@ -451,45 +435,34 @@ const annotateOrdinaryCodeSlotObservation = (session: E2EBrowserSession) =>
       )
   ).pipe(Effect.asVoid);
 
+const CodeSlotCount = Schema.Int.check(
+  Schema.isBetween({
+    minimum: 0,
+    maximum: ordinaryCodeSlotObservationMaximumCount,
+  })
+);
+const CodeSlotFlag = Schema.Literals([0, 1]);
+const OrdinaryCodeSlotObservationSchema = Schema.Struct({
+  formCount: CodeSlotCount,
+  namedFieldCount: CodeSlotCount,
+  selectedFormPresent: CodeSlotFlag,
+  selectedFormVisible: CodeSlotFlag,
+  namedInputPresent: CodeSlotFlag,
+  namedInputEnabled: CodeSlotFlag,
+  namedInputEmpty: CodeSlotFlag,
+  submitPresent: CodeSlotFlag,
+  submitEnabled: CodeSlotFlag,
+});
+
+type OrdinaryCodeSlotObservation =
+  typeof OrdinaryCodeSlotObservationSchema.Type;
+const decodeOrdinaryCodeSlotObservation = Schema.decodeUnknownOption(
+  OrdinaryCodeSlotObservationSchema
+);
 const parseOrdinaryCodeSlotObservation = (
   value: unknown
-): OrdinaryCodeSlotObservation | undefined => {
-  if (typeof value !== "object" || value === null) return undefined;
-  const observation = value as Record<string, unknown>;
-  const isFlag = (candidate: unknown): candidate is 0 | 1 =>
-    candidate === 0 || candidate === 1;
-  const isCount = (candidate: unknown): candidate is number =>
-    typeof candidate === "number" &&
-    Number.isInteger(candidate) &&
-    candidate >= 0 &&
-    candidate <= ordinaryCodeSlotObservationMaximumCount;
-
-  if (
-    !isCount(observation.formCount) ||
-    !isCount(observation.namedFieldCount) ||
-    !isFlag(observation.selectedFormPresent) ||
-    !isFlag(observation.selectedFormVisible) ||
-    !isFlag(observation.namedInputPresent) ||
-    !isFlag(observation.namedInputEnabled) ||
-    !isFlag(observation.namedInputEmpty) ||
-    !isFlag(observation.submitPresent) ||
-    !isFlag(observation.submitEnabled)
-  ) {
-    return undefined;
-  }
-
-  return {
-    formCount: observation.formCount,
-    namedFieldCount: observation.namedFieldCount,
-    selectedFormPresent: observation.selectedFormPresent,
-    selectedFormVisible: observation.selectedFormVisible,
-    namedInputPresent: observation.namedInputPresent,
-    namedInputEnabled: observation.namedInputEnabled,
-    namedInputEmpty: observation.namedInputEmpty,
-    submitPresent: observation.submitPresent,
-    submitEnabled: observation.submitEnabled,
-  };
-};
+): OrdinaryCodeSlotObservation | undefined =>
+  Option.getOrUndefined(decodeOrdinaryCodeSlotObservation(value));
 
 export const assertReferralConfirmationCleared = ({
   config,

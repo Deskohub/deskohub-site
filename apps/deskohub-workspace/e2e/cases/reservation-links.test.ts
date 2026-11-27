@@ -4,11 +4,11 @@ import {
   parseReferralCode,
   referralCodeQueryParam,
 } from "@/features/referrals/client";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { makeUnusableReferralCode } from "../account/referral-fixture";
 import { validateSignedPayUrl } from "./reservation-links";
 
-const signedPayOrderId = "reservation-id" as WorkspaceReservationId;
+const signedPayOrderId = workspaceReservationIdSchema.make("reservation-id");
 
 const makeSignedPayUrl = ({
   includePayState = true,

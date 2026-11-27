@@ -1,22 +1,25 @@
 import "@/shared/polyfills/temporal";
 
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import { promotionCodeIdSchema } from "@deskohub/workspace-domain/features/discounts/persistence-contracts";
 import { type Browser, chromium } from "@playwright/test";
 import { Effect } from "effect";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
-import { WorkspaceE2EHostedPaymentPermitService } from "../coordination/hosted-payment-permit.service";
-import { WorkspaceE2EProviderVerificationPermitService } from "../coordination/provider-verification-permit.service";
-import type { WorkspaceE2EStepRunner } from "../case-runner";
+import * as caseIdentities from "../account/case-identities";
+import * as referralFixture from "../account/referral-fixture";
 import { runBrowserStep } from "../case-runner.browser.test-utils";
 import { makeCoworkCheckoutData } from "../checkout/data";
 import * as payment from "../checkout/payment";
 import * as configuration from "../config";
+import { WorkspaceE2EHostedPaymentPermitService } from "../coordination/hosted-payment-permit.service";
+import { WorkspaceE2EProviderVerificationPermitService } from "../coordination/provider-verification-permit.service";
 import { makeWorkspaceE2EEnvironment } from "../e2e-env";
 import { validE2ERuntimeEnvironment } from "../e2e-env.test-fixture";
 import { workspaceE2EError } from "../errors";
-import { E2EDatabase } from "../integrations/database.service";
 import { workspaceE2ERunIdSchema } from "../run-identifiers";
 import type { WorkspaceE2ECase } from "../types";
+import { unopenedE2EDatabase } from "./e2e-fixtures.test-utils";
 import {
   bindReferralSomeoneElsePaymentCase,
   referralSomeoneElsePaymentCaseId,
@@ -79,10 +82,13 @@ const exerciseReservationStart = async ({
     "submitReservationForPayPage"
   ).mockImplementation(({ session }) =>
     session
-      .evaluate("observe advertised price before submission", () =>
-        (document.getElementById("sale")?.textContent ?? "").includes(
-          "E2E Calendar sale 20%"
-        )
+      .evaluate(
+        "observe advertised price before submission",
+        () =>
+          (document.getElementById("sale")?.textContent ?? "").includes(
+            "E2E Calendar sale 20%"
+          ),
+        undefined
       )
       .pipe(
         Effect.tap((advertised) =>
@@ -92,6 +98,34 @@ const exerciseReservationStart = async ({
         ),
         Effect.andThen(Effect.fail(stopped))
       )
+  );
+  const makeIdentities = caseIdentities.makeWorkspaceE2ECaseIdentities;
+  const identities = spyOn(
+    caseIdentities,
+    "makeWorkspaceE2ECaseIdentities"
+  ).mockImplementation((input) => {
+    const base = makeIdentities(input);
+    return {
+      ...base,
+      createCustomer: () =>
+        Effect.succeed(DotyposCustomerIdSchema.make("referrer")),
+      record: () => Effect.void,
+      seedLinkedAccount: (label) =>
+        Effect.succeed({
+          ...base.describe(label),
+          customerId: DotyposCustomerIdSchema.make("booker"),
+        }),
+      signIn: () => Effect.void,
+    };
+  });
+  const owner = spyOn(
+    referralFixture,
+    "seedWorkspaceE2EReferralOwner"
+  ).mockReturnValue(
+    Effect.succeed({
+      code: "SYNTHETIC_REFERRAL",
+      promotionCodeId: promotionCodeIdSchema.make("referrer-promotion"),
+    })
   );
   const output = spyOn(process.stdout, "write").mockImplementation(() => true);
   try {
@@ -107,17 +141,6 @@ const exerciseReservationStart = async ({
       runId: workspaceE2ERunIdSchema.make("synthetic-advertisement-regression"),
       testCase: planned,
     });
-    const runStep = ((step) => {
-      if (step.id === "seed-synthetic-referrer")
-        return Effect.succeed({
-          code: "SYNTHETIC_REFERRAL",
-          customerId: "referrer",
-        });
-      if (step.id === "seed-synthetic-booker")
-        return Effect.succeed({ customerId: "booker" });
-      if (step.id === "sign-in-synthetic-booker") return Effect.void;
-      return step.execute;
-    }) as WorkspaceE2EStepRunner;
     const result = await runBrowserStep({
       browser,
       prepare: (session) =>
@@ -138,28 +161,36 @@ const exerciseReservationStart = async ({
           });
         }),
       drive: ({ openSeparateSession, openSession }) =>
-        bound.execute({ openSeparateSession, openSession, runStep }).pipe(
-          Effect.provideService(
-            E2EDatabase,
-            E2EDatabase.of({ db: {} as never })
-          ),
-          Effect.provideService(WorkspaceE2EHostedPaymentPermitService, {
-            withPermit: () =>
-              Effect.fail(workspaceE2EError("unexpected payment")),
-          }),
-          Effect.provideService(WorkspaceE2EProviderVerificationPermitService, {
-            withPermit: () =>
-              Effect.fail(
-                workspaceE2EError("unexpected provider verification")
-              ),
+        bound
+          .execute({
+            openSeparateSession,
+            openSession,
+            runStep: (step) => step.execute,
           })
-        ),
+          .pipe(
+            Effect.provide(unopenedE2EDatabase),
+            Effect.provideService(WorkspaceE2EHostedPaymentPermitService, {
+              withPermit: () =>
+                Effect.fail(workspaceE2EError("unexpected payment")),
+            }),
+            Effect.provideService(
+              WorkspaceE2EProviderVerificationPermitService,
+              {
+                withPermit: () =>
+                  Effect.fail(
+                    workspaceE2EError("unexpected provider verification")
+                  ),
+              }
+            )
+          ),
       stepTimeoutMs: 15_000,
     });
     return { loads, submittedWithCalendar, prematureRequests, result };
   } finally {
     submission.mockRestore();
     configured.mockRestore();
+    identities.mockRestore();
+    owner.mockRestore();
     output.mockRestore();
   }
 };

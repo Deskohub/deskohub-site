@@ -13,13 +13,14 @@ import { formatDiscountAdjustment } from "@/features/checkout/format-discount-ad
 import { getWorkspaceProductByTier } from "@/features/checkout/product-catalog";
 import { m } from "@/features/i18n";
 import { formatReferralInvitationDiscount } from "@/features/referrals/client";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { formatMoney, type Money } from "@/shared/money/money";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import { createCensoredOtelSpanExporter } from "../../shared/backend/logging/censorship";
 import { createTracingLive } from "../../shared/backend/observability/telemetry-sinks";
 import { E2EBrowserSession } from "../browser-session";
 import { runE2ECase, type WorkspaceE2EStepRunner } from "../case-runner";
+import { makeTestE2EConfig } from "../cases/e2e-fixtures.test-utils";
 import type { WorkspaceE2EConfig } from "../config";
 import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import { isWorkspaceE2ETimeout, type WorkspaceE2EError } from "../errors";
@@ -58,16 +59,16 @@ afterAll(async () => {
 
 const locale = "en-US";
 const origin = "https://workspace.example.test";
-const orderId = "workspace-reservation-123" as WorkspaceReservationId;
+const orderId = workspaceReservationIdSchema.make("workspace-reservation-123");
 const payUrl = `${origin}/${locale}/checkout/pay?payState=initial&orderId=${orderId}`;
-const config = {
-  baseUrl: origin,
+const config: WorkspaceE2EConfig = {
+  ...makeTestE2EConfig(origin),
   timeouts: {
     ...workspaceE2ETimeouts,
     browserAction: 5000,
     uiTransition: 2000,
   },
-} as WorkspaceE2EConfig;
+};
 const caseId = "referral-checkout";
 const stepId = "referral-checkout-step";
 const ordinaryCodeSlotObservationKey =
@@ -316,7 +317,7 @@ const unreadableObservation = `${ordinaryCodeForm({ inputValue: "SYNTHETIC-PRIVA
 const slowConfig = {
   ...config,
   timeouts: { ...config.timeouts, uiTransition: 30_000 },
-} as WorkspaceE2EConfig;
+};
 
 const assertSlot = (
   body: string,

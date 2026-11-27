@@ -3,7 +3,7 @@ import { AssertionError } from "node:assert";
 import { randomUUID } from "node:crypto";
 import { type Browser, chromium, errors, type Page } from "@playwright/test";
 import { Cause, Effect, Exit, Option } from "effect";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import { verifyReferralScreenIgnoresShareLink } from "../account/referral-review";
 import { E2EBrowserSession } from "../browser-session";
@@ -226,7 +226,7 @@ test.skipIf(!chromiumAvailable)(
   60_000
 );
 
-const orderId = "workspace-reservation-123" as WorkspaceReservationId;
+const orderId = workspaceReservationIdSchema.make("workspace-reservation-123");
 const payUrl = `${origin}/en-US/checkout/pay?payState=initial&orderId=${orderId}`;
 const captureCaseId = "referral-capture";
 const captureStepId = "capture-invitation-applied";
