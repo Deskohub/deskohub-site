@@ -1,6 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   type DotyposCustomer,
@@ -25,7 +26,11 @@ import {
   seedDeliverAutomation,
   seedSendReadyRuns,
 } from "../automation/backend/deliver.test-utils";
-import type { CampaignId, CampaignSendId } from "../campaign-identifiers";
+import {
+  type CampaignId,
+  type CampaignSendId,
+  campaignSendIdSchema,
+} from "../campaign-identifiers";
 import {
   batchSendKinds,
   failureTagOf,
@@ -56,8 +61,8 @@ const pinnedOneOffPayloadHashes = {
 
 /** Fixed sends, so their keys and payloads are fixed too. */
 const oneOffSendIds = {
-  replayed: "019a5c55-0000-7000-8000-000000000101",
-  inFlight: "019a5c55-0000-7000-8000-000000000102",
+  replayed: campaignSendIdSchema.make("019a5c55-0000-7000-8000-000000000101"),
+  inFlight: campaignSendIdSchema.make("019a5c55-0000-7000-8000-000000000102"),
 } as const satisfies Record<keyof typeof pinnedOneOffPayloadHashes, string>;
 
 /**
@@ -226,7 +231,7 @@ describe.skipIf(!database)(
 
       test("an unknown outcome leaves the batch requested, and the next run replays its identical payload under the same key", async () => {
         const sendId = await seedSend({
-          sendId: oneOffSendIds.replayed as CampaignSendId,
+          sendId: oneOffSendIds.replayed,
           recipients: [pinnedCustomer],
         });
         provider.respondWith(() => "accept-lost");
@@ -244,9 +249,8 @@ describe.skipIf(!database)(
         const [first, replay] = requests();
         expect([first?.key, replay?.key]).toEqual([key, key]);
         expect(replay?.payload).toBe(first?.payload);
-        expect(sha256(replay!.payload)).toBe(
-          pinnedOneOffPayloadHashes.replayed
-        );
+        assert(replay, "Expected the replayed batch request");
+        expect(sha256(replay.payload)).toBe(pinnedOneOffPayloadHashes.replayed);
         expect(await storedPayloadHashes(sendId)).toEqual([
           pinnedOneOffPayloadHashes.replayed,
         ]);
@@ -270,7 +274,7 @@ describe.skipIf(!database)(
           "its payload changed",
           async () => {
             profiles = profiles.map((profile) =>
-              deliverProfile(profile.id!, {
+              deliverProfile(profile.id, {
                 email: testEmailAddress(`${profile.id}-new`),
               })
             );
@@ -320,7 +324,7 @@ describe.skipIf(!database)(
 
       test("a batch persisted before a change replays its pinned payload under its key", async () => {
         const sendId = await seedSend({
-          sendId: oneOffSendIds.inFlight as CampaignSendId,
+          sendId: oneOffSendIds.inFlight,
           recipients: [pinnedCustomer],
         });
         // Persisted as a run cut off mid-request left it, its hash pinned.
@@ -335,9 +339,8 @@ describe.skipIf(!database)(
         expect(replay?.key).toBe(
           `email-campaign:${oneOffSendIds.inFlight}:attempt-1:batch-0`
         );
-        expect(sha256(replay!.payload)).toBe(
-          pinnedOneOffPayloadHashes.inFlight
-        );
+        assert(replay, "Expected the replayed batch request");
+        expect(sha256(replay.payload)).toBe(pinnedOneOffPayloadHashes.inFlight);
         expect(await statusesOf(sendId)).toEqual({
           recipients: { [pinnedCustomer]: "sent" },
           batches: ["accepted"],
@@ -378,7 +381,8 @@ describe.skipIf(!database)(
             "select id from email_campaign_sends where campaign_id = $1",
             [seeded.campaignId]
           );
-          return send!.id;
+          assert(send, "Expected a send for the seeded automated campaign");
+          return send.id;
         };
         return { engine, sendOf };
       };
@@ -420,8 +424,9 @@ describe.skipIf(!database)(
         const [first, replay] = engine.resend.requests();
         expect([first?.key, replay?.key]).toEqual([key, key]);
         expect(replay?.payload).toBe(first?.payload);
+        assert(replay, "Expected the replayed batch request");
         expect(await storedPayloadHashes(sendId)).toEqual([
-          sha256(replay!.payload),
+          sha256(replay.payload),
         ]);
         expect(engine.resend.mailed()).toEqual([testEmailAddress(id)]);
         expect(await statusesOf(sendId)).toEqual({
@@ -447,7 +452,7 @@ describe.skipIf(!database)(
           (engine) =>
             engine.dotypos.setCustomers(
               [...engine.dotypos.customers.values()].map((customer) =>
-                deliverProfile(customer.id!, {
+                deliverProfile(customer.id, {
                   email: testEmailAddress(`${customer.id}-new`),
                 })
               )
@@ -540,9 +545,9 @@ describe.skipIf(!database)(
           expect(harness.provider.requests().map(({ key }) => key)).toEqual([
             `email-campaign:${send.sendId}:attempt-1:batch-0`,
           ]);
-          expect(sha256(harness.provider.requests()[0]!.payload)).toBe(
-            persisted.batch.payloadHash
-          );
+          const [request] = harness.provider.requests();
+          assert(request, "Expected the first batch request");
+          expect(sha256(request.payload)).toBe(persisted.batch.payloadHash);
           await harness.settle(persisted.batch, outcomeOf(outcome));
           expect(await statusesOf(send.sendId)).toEqual({
             recipients: { [id]: "sent" },
@@ -603,8 +608,9 @@ describe.skipIf(!database)(
           const [first, replay] = harness.provider.requests();
           expect(replay?.key).toBe(first?.key);
           expect(replay?.payload).toBe(first?.payload);
+          assert(replay, "Expected the replayed batch request");
           expect(await storedPayloadHashes(send.sendId)).toEqual([
-            sha256(replay!.payload),
+            sha256(replay.payload),
           ]);
           expect(harness.provider.mailed()).toEqual([testEmailAddress(id)]);
           await harness.settle(persisted.batch, outcomeOf(replayed));
