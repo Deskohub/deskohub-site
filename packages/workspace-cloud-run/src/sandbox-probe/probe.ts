@@ -15,7 +15,7 @@ import * as Match from "effect/Match";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { WorkspaceServiceRole } from "../service-role";
-import { sha256Hex } from "../sha256";
+import { sha256Hex } from "../sha256.mjs";
 import { ProbeRejected, SandboxProbeRpcs } from "./probe-rpcs";
 
 export type ServiceRole = WorkspaceServiceRole;
