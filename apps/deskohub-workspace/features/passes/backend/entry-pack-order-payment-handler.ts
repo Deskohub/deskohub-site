@@ -70,6 +70,7 @@ import {
   requireFullPassRefund,
   settlePassPurchase,
 } from "./entry-pack-settlement";
+import { readPassEarlyPerformanceConsent } from "./pass-withdrawal-payment";
 import {
   confirmUnlimitedPassDays,
   readPayableUnlimitedHolds,
@@ -502,6 +503,12 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
             snapshot.product.kind === "unlimited"
               ? getUnlimitedPassEndDate(validFrom)
               : getEntryPackEndDate(validFrom, snapshot.product.size);
+          const earlyStartRequested =
+            (yield* readPassEarlyPerformanceConsent(
+              db,
+              orderId,
+              purchase.product
+            )) === true;
           yield* sendEntryPackPurchaseEmail({
             purchase: { ...purchase, holderAccountId, validFrom, validUntil },
             paymentAttemptId: activePaymentAttemptId,
@@ -511,6 +518,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
             invitationSent,
             paidAt,
             invoiceRequested: snapshot.billing.invoice !== "none",
+            earlyStartRequested,
           }).pipe(Effect.provide(sendingServices));
         }
         // Confirmation settled. Any remaining work belongs to the invoice ledger.

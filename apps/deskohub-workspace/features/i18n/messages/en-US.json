@@ -2033,6 +2033,8 @@
   "unlimitedPassStatusPaidTitle": "Your Unlimited pass is paid",
   "unlimitedPassOpenAccess": "See today’s code",
   "unlimitedPassEmailBody": "The dates and space covered by your Unlimited pass are below.",
+  "unlimitedPassEmailOpen": "Open your pass",
+  "unlimitedPassEmailEarlyStart": "You asked for your Unlimited pass to start within the 14-day withdrawal period. If you validly withdraw on or after the start date, we refund a pro-rated part.",
   "unlimitedPassGiftMailTitle": "You received an Unlimited pass at Deskohub Workspace",
   "unlimitedPassGiftMailBody": "Claim your Unlimited pass with the email address below.",
   "entryPackStatusPaidTitle": "Your Entry pack is paid",

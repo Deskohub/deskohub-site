@@ -2012,6 +2012,8 @@
   "unlimitedPassStatusPaidTitle": "Thẻ không giới hạn của bạn đã được thanh toán",
   "unlimitedPassOpenAccess": "Xem mã hôm nay",
   "unlimitedPassEmailBody": "Thời gian và không gian áp dụng cho thẻ không giới hạn của bạn được ghi bên dưới.",
+  "unlimitedPassEmailOpen": "Mở thẻ",
+  "unlimitedPassEmailEarlyStart": "Bạn đã yêu cầu thẻ không giới hạn của mình bắt đầu có hiệu lực trong thời hạn 14 ngày để rút khỏi hợp đồng. Nếu bạn rút khỏi hợp đồng hợp lệ kể từ ngày bắt đầu, chúng tôi sẽ hoàn lại phần tiền theo tỷ lệ.",
   "unlimitedPassGiftMailTitle": "Bạn nhận được thẻ không giới hạn tại Deskohub Workspace",
   "unlimitedPassGiftMailBody": "Hãy nhận thẻ không giới hạn bằng địa chỉ email bên dưới.",
   "entryPackStatusPaidTitle": "Gói lượt vào của bạn đã được thanh toán",

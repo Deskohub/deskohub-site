@@ -85,7 +85,7 @@ export const readPassEarlyPerformanceConsent = Effect.fnUntraced(function* (
         eq(legalEvidenceEvents.accepted, true)
       )
     )
-    .orderBy(desc(legalEvidenceEvents.acceptedAt))
+    .orderBy(desc(legalEvidenceEvents.acceptedAt), desc(legalEvidenceEvents.id))
     .limit(1);
   if (!terms) return undefined;
   return (
