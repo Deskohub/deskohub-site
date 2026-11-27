@@ -389,7 +389,7 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
     );
     fireEvent.click(view.getByRole("button", { name: /continue/i }));
     const alert = await view.findByText(
-      "Your pass can’t cover Nov 2, 2026 in the renewal period."
+      "Your membership can’t cover Nov 2, 2026 during the extension."
     );
     expect(alert.getAttribute("role")).toBe("alert");
     const { searchParams } = checkoutUrl();
@@ -445,7 +445,9 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
     );
     fireEvent.click(view.getByRole("button", { name: /continue/i }));
     await waitFor(() =>
-      expect(view.getByText(/pass can’t cover Nov 2, 2026/i)).toBeDefined()
+      expect(
+        view.getByText(/membership can’t cover these dates: Nov 2, 2026/i)
+      ).toBeDefined()
     );
     expect(requests).toEqual([
       expect.objectContaining({
@@ -1140,7 +1142,7 @@ test("Details cannot hand off another selection while Begin is creating holds", 
   fireEvent.click(submit);
   await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(1));
   expect(
-    view.queryByRole("button", { name: /choose your 30 days/i })
+    view.queryByRole("button", { name: /space and start date/i })
   ).toBeNull();
   expect(
     view.getByRole<HTMLButtonElement>("button", {
@@ -1157,7 +1159,7 @@ test("Details cannot hand off another selection while Begin is creating holds", 
   });
   await waitFor(() =>
     expect(
-      view.getByRole("button", { name: /choose your 30 days/i })
+      view.getByRole("button", { name: /space and start date/i })
     ).toBeDefined()
   );
 });
@@ -1367,7 +1369,7 @@ test("Refresh quote at the predecessor limit clears a voided draft and lets the 
   );
   cutoffReached = true;
   fireEvent.click(view.getByRole("button", { name: /continue/i }));
-  await view.findByText(/pass can’t cover Nov 1, 2026/i);
+  await view.findByText(/membership can’t cover these dates: Nov 1, 2026/i);
   expect(beginCheckout).toHaveBeenLastCalledWith(
     expect.objectContaining({ orderId, supersedeOrderIds: predecessorOrderIds })
   );

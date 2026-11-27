@@ -7,6 +7,7 @@ import type {
   AccountEntryPack,
 } from "@/features/account/account-passes.server";
 import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
+import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import "@/shared/testing/workspace-component-module-mocks";
 import { UnsavedChangesProvider } from "@/shared/components/unsaved-changes-guard";
@@ -20,7 +21,7 @@ import { AccountPassesPanel } from "./account-passes";
 beforeAll(registerWorkspaceComponentTestEnv);
 afterAll(unregisterWorkspaceComponentTestEnv);
 
-test("links to both pass purchases in the localized Passes header", async () => {
+test("links to both purchases in the localized packs and memberships header", async () => {
   const markup = await new Response(
     await renderToReadableStream(
       <UnsavedChangesProvider>
@@ -34,9 +35,12 @@ test("links to both pass purchases in the localized Passes header", async () => 
 
   const document = new DOMParser().parseFromString(markup, "text/html");
   const header = document.querySelector("header");
-  if (!header) throw new Error("Missing Passes header");
+  if (!header) throw new Error("Missing packs and memberships header");
   const actions = within(header);
 
+  expect(
+    actions.getByRole("heading", { name: "Balíčky a členství" })
+  ).toBeTruthy();
   expect(
     actions
       .getByRole("link", { name: "Koupit balíček vstupů" })
@@ -44,7 +48,7 @@ test("links to both pass purchases in the localized Passes header", async () => 
   ).toBe("/cs-CZ/passes/entry-pack");
   expect(
     actions
-      .getByRole("link", { name: "Kupte si neomezené členství" })
+      .getByRole("link", { name: "Kup si neomezené členství" })
       .getAttribute("href")
   ).toBe("/cs-CZ/passes/unlimited");
 });
@@ -147,16 +151,16 @@ test("presents the buyer's order separately from passes they can use", async () 
   expect(markup).toContain(`href="${statusPath}"`);
   expect(markup).toContain("Invitation sent");
   expect(markup).toContain("Not claimed yet");
-  expect(markup).toContain("Unlimited pass</h4>");
+  expect(markup).toContain("Unlimited membership</h4>");
   expect(markup.match(/Resend invitation/g)).toHaveLength(1);
   expect(markup).not.toContain("entries left");
   expect(markup).not.toContain("Book a date");
   expect(markup).not.toContain("/reservation/access/");
   expect(markup).not.toContain("Day 1 of 30");
-  expect(markup).not.toContain("You don’t have any passes yet.");
+  expect(markup).not.toContain(m.accountPassesEmpty({}, { locale: "en-US" }));
 });
 
-test("renders a held Unlimited pass with its assigned desk and purchase date", async () => {
+test("renders a held Unlimited membership with its assigned desk and purchase date", async () => {
   const orderId = orderIdSchema.make(crypto.randomUUID());
   const pass: AccountUnlimitedPass = {
     orderId,
@@ -191,7 +195,7 @@ test("renders a held Unlimited pass with its assigned desk and purchase date", a
   expect(markup).not.toContain("View order status");
 });
 
-test("links a buyer's Unlimited pass cards to their pass order status pages", async () => {
+test("links a buyer's Unlimited membership cards to their order status pages", async () => {
   const activeOrderId = orderIdSchema.make(crypto.randomUUID());
   const upcomingOrderId = orderIdSchema.make(crypto.randomUUID());
   const activeStatusPath = `/en-US/reservation/status/${activeOrderId}`;
@@ -285,9 +289,9 @@ test("shows a lookup failure when Entry Packs loaded empty and Unlimited did not
   ).text();
 
   expect(markup).toContain(
-    "Your Unlimited passes are temporarily unavailable."
+    "Your Unlimited memberships couldn’t be loaded right now."
   );
-  expect(markup).not.toContain("You don’t have any passes yet.");
+  expect(markup).not.toContain(m.accountPassesEmpty({}, { locale: "en-US" }));
 });
 
 test("shows generic gift attribution when there is no buyer name", async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import { Effect } from "effect";
 import { type Locale, locales, m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
@@ -11,6 +12,7 @@ import { getUnlimitedPassEndDate } from "@/features/passes/unlimited-pass";
 import { renderWorkspaceEmail } from "@/shared/backend/email/render-react-email";
 import { currencyCZK } from "@/shared/money/currencies";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
+import { EntryPackGiftInvitationEmail } from "./entry-pack-gift-invitation";
 import { EntryPackPurchaseEmail } from "./entry-pack-purchase";
 
 const orderId = orderIdSchema.make("019ac0e6-f461-77de-9492-26af32cc74a3");
@@ -134,8 +136,8 @@ describe("EntryPackPurchaseEmail", () => {
   test.each([
     {
       locale: "en-US" as const,
-      expectedCta: "Open your pass",
-      forbiddenCta: "Otevřít balíček",
+      expectedCta: "Open membership",
+      forbiddenCta: "Open your pass",
       expectedAmount: "5,990",
     },
     {
@@ -145,7 +147,7 @@ describe("EntryPackPurchaseEmail", () => {
       expectedAmount: "5\u00a0990",
     },
   ])(
-    "renders Unlimited pass receipt in $locale with Unlimited CTA and conditional early-start notice",
+    "renders the Unlimited membership receipt in $locale with the membership CTA and conditional early-start notice",
     async ({ locale, expectedCta, forbiddenCta, expectedAmount }) => {
       const [withEarlyStart, withoutEarlyStart] = await Promise.all([
         renderUnlimitedPassEmail(locale, true),
@@ -184,7 +186,7 @@ describe("EntryPackPurchaseEmail", () => {
   );
 
   test.each(locales)(
-    "renders localized Unlimited pass CTA and early-start notice in %s",
+    "renders the localized Unlimited membership CTA and early-start notice in %s",
     async (locale) => {
       const rendered = await renderUnlimitedPassEmail(locale, true);
       const cta = m.unlimitedPassEmailOpen({}, { locale });
@@ -205,6 +207,62 @@ describe("EntryPackPurchaseEmail", () => {
       expect(rendered.text).toContain(earlyStart);
     }
   );
+});
+
+test("uses membership copy for the gift purchase and invitation", async () => {
+  const orderId = orderIdSchema.make("019ac0e6-f461-77de-9492-26af32cc74a3");
+  const product = { kind: "unlimited", tier: "open-space" } as const;
+  const price = getUnlimitedPassPrice(product);
+  const validFrom = plainDateStringSchema.make("2026-11-18");
+  const gift = {
+    entryCount: null,
+    holderEmail: testEmailAddress("recipient"),
+    locale: "en-US",
+    tier: product.tier,
+    validUntil: getUnlimitedPassEndDate(validFrom),
+  } as const;
+
+  const purchase = await Effect.runPromise(
+    renderWorkspaceEmail(
+      <EntryPackPurchaseEmail
+        {...gift}
+        gift
+        invitationSent
+        invoiceRequested={false}
+        earlyStartRequested={false}
+        orderId={orderId}
+        paidAt={Temporal.Instant.from("2026-11-18T09:30:00Z")}
+        quote={{
+          product,
+          discountableSubtotal: price,
+          discountedSubtotal: price,
+          totalDiscount: currencyCZK(0),
+          discounts: [],
+        }}
+        statusUrl={`https://example.com/en-US/reservation/status/${orderId}`}
+        termsUrl="https://example.com/en-US/terms-and-conditions"
+        validFrom={validFrom}
+      />
+    )
+  );
+  const invitation = await Effect.runPromise(
+    renderWorkspaceEmail(
+      <EntryPackGiftInvitationEmail
+        {...gift}
+        buyerName={null}
+        claimUrl="https://example.com/en-US/account/passes"
+      />
+    )
+  );
+
+  expect(purchase.text).toContain("YOUR UNLIMITED MEMBERSHIP IS PAID");
+  expect(purchase.text).toContain("Open membership");
+  expect(purchase.text).not.toContain("Entry pack");
+  expect(invitation.text).toContain("YOU RECEIVED AN UNLIMITED MEMBERSHIP");
+  expect(invitation.text).toContain("Claim membership");
+  expect(invitation.text).toContain("Valid through");
+  expect(invitation.text).not.toContain("Entry pack");
+  expect(invitation.text).not.toContain("one day at a time");
 });
 
 test("renders the paid coffee price for a pass bought before catalog repricing", async () => {

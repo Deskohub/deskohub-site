@@ -85,8 +85,15 @@ export function EntryPackGiftInvitationEmail({
           : m.passGiftMailBody({ entries, space }, options)}
       </WorkspaceEmailBody>
       <EntryPackEmailCard
-        action={{ label: m.passGiftMailClaim({}, options), url: claimUrl }}
-        dates={m.passGiftMailUseBy({ date: lastDay }, options)}
+        action={{
+          label: (entries === null
+            ? m.unlimitedPassGiftMailClaim
+            : m.passGiftMailClaim)({}, options),
+          url: claimUrl,
+        }}
+        dates={(entries === null
+          ? m.unlimitedPassGiftMailValidUntil
+          : m.passGiftMailUseBy)({ date: lastDay }, options)}
         entryCount={entryCount}
         locale={locale}
         tier={tier}
@@ -112,7 +119,9 @@ export function EntryPackGiftInvitationEmail({
         </WorkspaceEmailNote>
       )}
       <WorkspaceEmailNote>
-        {m.passGiftMailIgnore({ email: holderEmail }, options)}
+        {(entries === null
+          ? m.unlimitedPassGiftMailIgnore
+          : m.passGiftMailIgnore)({ email: holderEmail }, options)}
       </WorkspaceEmailNote>
     </WorkspaceEmailLayout>
   );

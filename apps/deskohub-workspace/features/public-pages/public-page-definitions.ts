@@ -67,12 +67,12 @@ export const publicPageDefinitions: Readonly<
   "/": {
     title: m.landingMetadataTitle,
     description: m.landingMetadataDescription,
-    contentDate: "2026-11-18",
+    contentDate: "2026-11-27",
   },
   "/coworking": {
     title: m.coworkingMetadataTitle,
     description: m.coworkingMetadataDescription,
-    contentDate: "2026-10-25",
+    contentDate: "2026-11-27",
   },
   "/contact": {
     title: m.contactMetadataTitle,
@@ -97,7 +97,7 @@ export const publicPageDefinitions: Readonly<
   "/pricing": {
     title: m.pricingMetadataTitle,
     description: m.pricingMetadataDescription,
-    contentDate: "2026-11-20",
+    contentDate: "2026-11-27",
   },
   "/meeting-room": {
     title: m.meetingRoomMetadataTitle,
@@ -131,7 +131,7 @@ export const publicPageDefinitions: Readonly<
   "/reservation/cowork": {
     title: m.reservationCoworkMetadataTitle,
     description: m.reservationCoworkMetadataDescription,
-    contentDate: "2026-10-25",
+    contentDate: "2026-11-27",
   },
   "/reservation/meeting-room": {
     title: m.reservationMeetingRoomMetadataTitle,

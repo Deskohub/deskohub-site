@@ -3,11 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import workspaceMark from "@/assets/logo/small-bg:dark.svg";
 import { type Locale, m } from "@/features/i18n";
 import { cn, type VariableStyle } from "@/shared/utils";
-import {
-  entryPackOffers,
-  type PassTier,
-  unlimitedPassDays,
-} from "../pass-offer";
+import { entryPackOffers, type PassTier } from "../pass-offer";
 import { formatPassDate, getPassTierName } from "../pass-offer.i18n";
 
 type PassOfferCardProps = {
@@ -276,7 +272,7 @@ export function UnlimitedPassOfferCard({
                 "@max-[380px]:text-[1.65rem] @max-[320px]:text-[1.4rem]"
               )}
             >
-              {m.passUnlimited({}, { locale })}
+              {m.passMembership({}, { locale })}
             </h3>
             <p
               className={cn(
@@ -287,7 +283,7 @@ export function UnlimitedPassOfferCard({
               {
                 {
                   "open-space": m.unlimitedPassOfferTaglineOpenSpace(
-                    { days: unlimitedPassDays },
+                    {},
                     { locale }
                   ),
                   "reserved-desk": m.unlimitedPassOfferTaglineReservedDesk(

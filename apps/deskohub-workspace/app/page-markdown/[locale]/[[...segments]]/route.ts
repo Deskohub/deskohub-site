@@ -1,6 +1,8 @@
 import { Effect } from "effect";
 import { NextResponse } from "next/server";
+import { loadGlobalRelease } from "@/features/feature-flags/backend/global-release.server";
 import { getWorkspaceAlternates, type Locale } from "@/features/i18n";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import { PublishedPublicPagesService } from "@/features/public-pages/backend";
 import {
   decidePublicPageMarkdownReleases,
@@ -62,8 +64,19 @@ export const GET = defineWorkspaceRoute(
         return notFound();
       }
 
-      const markdown = yield* Effect.tryPromise(() =>
-        renderPublicPageMarkdown(page.locale, page.pathname, releases)
+      const markdown = yield* Effect.tryPromise(async () =>
+        renderPublicPageMarkdown(
+          page.locale,
+          page.pathname,
+          page.pathname === "/pricing"
+            ? {
+                ...releases,
+                coworkPassesPublished:
+                  (await loadGlobalRelease(CoworkPassesReleaseGate.flag)) ===
+                  "on",
+              }
+            : releases
+        )
       );
       return new NextResponse(markdown, {
         headers: markdownHeaders(page.locale, page.pathname),

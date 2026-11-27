@@ -57,7 +57,13 @@ const getPurchaseEmailBody = (
   invited: string | false | null | undefined
 ) => {
   const options = { locale: props.locale };
-  if (invited) return m.passGiftMailBuyerInvited({ email: invited }, options);
+  if (invited) {
+    return (
+      unlimited
+        ? m.unlimitedPassGiftMailBuyerInvited
+        : m.passGiftMailBuyerInvited
+    )({ email: invited }, options);
+  }
   if (unlimited) return m.unlimitedPassEmailBody({}, options);
   return props.gift || props.holderEmail
     ? m.passEmailGiftBody({}, options)
@@ -185,7 +191,9 @@ export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
       {invited ? (
         <EntryPackEmailCard
           action={{
-            label: m.passGiftMailBuyerOpen({}, options),
+            label: (unlimited
+              ? m.unlimitedPassEmailOpen
+              : m.passGiftMailBuyerOpen)({}, options),
             url: props.statusUrl,
           }}
           dates={m.passEmailValid({ dates }, options)}

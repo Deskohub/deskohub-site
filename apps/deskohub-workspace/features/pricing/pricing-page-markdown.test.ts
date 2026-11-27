@@ -7,6 +7,8 @@ import {
 import type { PublicOffering } from "@/features/checkout/public-offerings";
 import { advertisedCatalogOfferings } from "@/features/checkout/public-offerings.test-utils";
 import { type Locale, locales, m } from "@/features/i18n";
+import { unlimitedPassOffers } from "@/features/passes/pass-offer";
+import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import { serializeMarkdown } from "@/shared/markdown/markdown";
 import { markdownPlainText } from "@/shared/markdown/markdown.test-utils";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -16,11 +18,13 @@ import { pricingPageMarkdown } from "./pricing-page-markdown";
 
 const renderPricingPage = async (
   locale: Locale,
-  offerings: ReadonlyArray<PublicOffering>
+  offerings: ReadonlyArray<PublicOffering>,
+  coworkPassesPublished = false
 ) =>
   serializeMarkdown(
     await Effect.runPromise(
       pricingPageMarkdown(locale, {
+        coworkPassesPublished,
         isPublished: () => true,
         offerings: Effect.succeed(offerings),
         saleBanner: Effect.succeed(undefined),
@@ -75,5 +79,24 @@ describe.each(locales)("pricingPageMarkdown in %s", (locale) => {
     expect(headings(markdown, 2)).not.toContain(
       getWorkspaceOfficeProductTitle(locale)
     );
+  });
+
+  test("names the membership and prices each tier for its validity period", async () => {
+    const markdown = await renderPricingPage(
+      locale,
+      advertisedCatalogOfferings({ locale }),
+      true
+    );
+    const text = markdownPlainText(markdown);
+
+    expect(headings(markdown, 2)).toContain(m.passUnlimited({}, { locale }));
+    for (const { product, price, validityDays } of unlimitedPassOffers) {
+      const tier = getPassTierName(product.tier, locale);
+      const cadence = m.unlimitedPassDiscoveryPrice(
+        { price: formatMoney(price, locale), days: validityDays },
+        { locale }
+      );
+      expect(text).toContain(`${tier} · ${cadence}`.replace(/\s+/g, " "));
+    }
   });
 });

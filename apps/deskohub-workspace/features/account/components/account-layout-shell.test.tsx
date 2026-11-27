@@ -360,12 +360,14 @@ describe("AccountLayoutShell", () => {
   });
 
   test.each([false, true])(
-    "opens Passes at its path only when the release gate is %s",
+    "opens Packs and memberships at its path only when the release gate is %s",
     (passesEnabled) => {
       pathname = "/en-US/account/passes";
       const view = renderLayout(<p>Page</p>, { passesEnabled });
       const navigation = getDesktopNavigation(view);
-      const passes = navigation.queryByRole("link", { name: "Passes" });
+      const passes = navigation.queryByRole("link", {
+        name: "Packs and memberships",
+      });
 
       if (passesEnabled) {
         expect(passes?.getAttribute("aria-current")).toBe("page");
