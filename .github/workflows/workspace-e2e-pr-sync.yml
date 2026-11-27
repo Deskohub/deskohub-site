@@ -143,12 +143,15 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .workspace-e2e-flows
           persist-credentials: false
-          sparse-checkout: .github/actions/workspace-e2e-flows
+          sparse-checkout: |
+            .github/actions/workspace-e2e-flows
+            .github/actions/workspace-backend-preview
 
       - name: Sync Workspace E2E flows with PR description
         env:
           FLOWS_PUBLISH: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/publish-status.mjs
           GH_TOKEN: ${{ github.token }}
+          PILOT_PR_NUMBER: ${{ vars.WORKSPACE_BACKEND_PREVIEW_PR }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PREVIEW_ENVIRONMENT: 'Preview – deskohub-workspace-site'
         run: |

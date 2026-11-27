@@ -130,6 +130,8 @@ describe("Alchemy beta.87 surface", () => {
   test("pins exact versions and installs exactly them", async () => {
     expect(packageJson.dependencies).toEqual({
       "@alchemy.run/gcp": "2.0.0-beta.87",
+      "@deskohub/workspace-cloud-run": "workspace:*",
+      "@deskohub/workspace-rpc": "workspace:*",
       "@effect/platform-bun": "4.1.4",
       "@effect/platform-node": "4.1.4",
       alchemy: "2.0.0-beta.87",
@@ -692,6 +694,7 @@ describe("Alchemy beta.87 surface", () => {
       image: `europe-west1-docker.pkg.dev/deskohub-ws-sandbox/workspace/workspace@${digest}`,
       env: [
         { name: "WORKSPACE_SERVICE_ROLE", value: "tasks-worker" },
+        { name: "WORKSPACE_DEPLOYMENT_STAGE", value: "sandbox" },
         {
           name: "WORKSPACE_TASKS_AUDIENCE",
           value: tasks.customAudiences?.[0],
@@ -717,6 +720,7 @@ describe("Alchemy beta.87 surface", () => {
     expect(scheduler.template?.containers?.[0]).toMatchObject({
       env: [
         { name: "WORKSPACE_SERVICE_ROLE", value: "scheduler-worker" },
+        { name: "WORKSPACE_DEPLOYMENT_STAGE", value: "sandbox" },
         {
           name: "WORKSPACE_SCHEDULER_AUDIENCE",
           value: scheduler.customAudiences?.[0],

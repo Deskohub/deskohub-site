@@ -837,6 +837,20 @@ proof_pattern() {
   esac
 }
 
+proof_residuals() {
+  local class="$1" pattern="$2" file="$3"
+  case "$class" in
+    run-services)
+      # The backend preview pilot has its own Alchemy state and teardown.
+      grep -E "$pattern" "$file" | grep -Ev '^workspace-(api|tasks|scheduler)-preview$'
+      ;;
+    run-revisions)
+      grep -E "$pattern" "$file" | grep -Ev '^workspace-(api|tasks|scheduler)-preview-(seed|g-[a-f0-9]{16})$'
+      ;;
+    *) grep -E "$pattern" "$file" ;;
+  esac
+}
+
 # ---------------------------------------------------------------- phases
 
 # Before authenticating: mutating modes only on main, only against the
@@ -981,20 +995,23 @@ build_and_push() {
   echo "${key}=${digest}"
 }
 
-# The RPC probe, bundled once by its build script, then built and pushed
-# as v1, v2 and v3 from that bundle.
-phase_images() {
+# Build the same Workspace API source as three release candidates. Archive the
+# checked-out commit, so runner credentials and untracked files stay outside
+# Docker's build context.
+phase_images() (
   run gcloud auth configure-docker "${region}-docker.pkg.dev" --quiet
-  local suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" context version
+  local suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" context version dockerfile
   context="$(mktemp -d)"
-  (cd "$repo_root" && run bun packages/workspace-infrastructure/sandbox-probe/build.ts --outdir "$context") ||
-    fail "the RPC probe bundle failed to build"
+  trap 'rm -rf "${context:?}"' EXIT
+  mkdir "$context/source"
+  run git -C "$repo_root" archive --format=tar --output="$context/source.tar" "$GITHUB_SHA"
+  run tar -xf "$context/source.tar" -C "$context/source"
+  dockerfile="$context/source/apps/deskohub-workspace-api/Dockerfile"
   for version in v1 v2 v3; do
     build_and_push "PROBE_${version^^}_DIGEST" "$probe_image" "probe-${version}-${suffix}" \
-      "${package_dir}/sandbox-probe/Dockerfile" "$context" --build-arg "PROBE_BUILD_VERSION=${version}"
+      "$dockerfile" "$context/source" --target sandbox --build-arg "PROBE_BUILD_VERSION=${version}"
   done
-  rm -rf "${context:?}"
-}
+)
 
 phase_deliver_v1() {
   load_env_file "$digests_file"
@@ -1139,11 +1156,11 @@ run_rpc_probe() {
   trace_id="$(random_hex 16)"
   [[ "$trace_id" =~ ^[0-9a-f]{32}$ && "$trace_id" != "${trace_id//?/0}" ]] || fail "no usable trace ID"
   trace bun scripts/sandbox-rpc-probe.ts --url "$url" --id-token-file "<private token file>" \
-    --marker-file "<private marker file>" --traceparent "00-${trace_id}-<span>-01" --expect-version "$version"
+    --marker-file "<private marker file>" --traceparent "00-${trace_id}-<span>-01" --expect-version "$version" --email-preferences
   if ! $dry_run; then
     (cd "$package_dir" && bun scripts/sandbox-rpc-probe.ts --url "$url" --id-token-file "$id_token_file" \
       --marker-file "$marker_file" --traceparent "00-${trace_id}-$(random_hex 8)-01" \
-      --expect-version "$version") >"${file}.next" || code=$?
+      --expect-version "$version" --email-preferences) >"${file}.next" || code=$?
     if grep -qF -- "$marker" "${file}.next"; then
       rm -f "${file}.next"
       fail "the RPC probe printed the marker"
@@ -1159,12 +1176,13 @@ run_rpc_probe() {
         if .markerSha256 != $sha or .markerMatches != true then "markerSha256 does not match the local hash" else empty end,
         if .failDecoded != "ProbeRejected" then "Probe.fail decoded as \(.failDecoded)" else empty end,
         if ((.countChunks // []) | length) != 3 then "Probe.count yielded \((.countChunks // []) | length) chunks" else empty end,
+        if .emailPreferences != {"opened":true,"rejected":"CampaignUnsubscribeRejected","first":"withdrawn","repeat":"unchanged"} then "email preferences proof incomplete" else empty end,
         ((.failures // [])[] | tostring)
       ] | join("; ")' "$file")"
     [[ "$code" == 0 && -z "$problems" ]] ||
       fail "the RPC probe failed (exit ${code}): ${problems:-see $(basename "$file")}"
   else
-    echo "  expect HTTP 200, ${rpc_content_type}, matching markerSha256, ProbeRejected, 3 chunks, version ${version}" >&2
+    echo "  expect HTTP 200, ${rpc_content_type}, matching markerSha256, ProbeRejected, 3 chunks, version ${version}, fresh preferences grant, typed token rejection, withdrawn and unchanged" >&2
   fi
   if [[ "$label" == primary ]]; then
     # Published together, after the verdict passed.
@@ -1738,7 +1756,7 @@ phase_post_destroy_inventory() {
         continue
       fi
       pattern="$(proof_pattern "$class")"
-      if grep -E "$pattern" "$file" >"${dir}/${class}.residual"; then
+      if proof_residuals "$class" "$pattern" "$file" >"${dir}/${class}.residual"; then
         residual=true
         echo "::error::proof resources remain in ${class}: $(tr '\n' ' ' <"${dir}/${class}.residual")"
       else

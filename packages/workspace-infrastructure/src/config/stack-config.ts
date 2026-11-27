@@ -1,3 +1,4 @@
+import { WorkspaceServiceRole } from "@deskohub/workspace-cloud-run/service-role";
 import * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -68,11 +69,7 @@ export type ServiceAccountEmail = typeof ServiceAccountEmail.Type;
  * A Secret Manager reference. It names a secret and pins one numeric
  * version; the value itself never enters configuration or Alchemy state.
  */
-export const WorkspaceWorkload = Schema.Literals([
-  "api",
-  "tasks-worker",
-  "scheduler-worker",
-]).annotate({
+export const WorkspaceWorkload = WorkspaceServiceRole.annotate({
   identifier: "WorkspaceWorkload",
   description: "One of the three Cloud Run services built from the image.",
 });

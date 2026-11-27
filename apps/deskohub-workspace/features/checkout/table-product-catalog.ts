@@ -1,4 +1,4 @@
-import { tableReservationSlotMinutes } from "@/features/reservation/table-reservation-time";
+import { tableReservationSlotMinutes } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import { currencyCZK } from "@/shared/money/currencies";
 
 export const getTableBaseAmount = (seats: number) => currencyCZK(6_000 * seats);

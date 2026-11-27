@@ -57,6 +57,8 @@ Columns: concept ID(s) | Czech | English | Slovak (gender: m./f./n., pl.) | Note
 | P28 | Wi-Fi | Wi-Fi | **Wi-Fi** (f./n., *pripojenie k Wi-Fi*) | Spelling stays. Wi-Fi password: *heslo k Wi-Fi*. |
 | P30 | člen Workspace | Workspace member | **Účet vo Workspace** | `accountProfileScreenMemberFallback`: a display-name fallback. Slovak *člen* (m.) / *členka* (f.) is gendered and *osoba* reads oddly as a name, so use the neutral thing the name stands for. ✗ *Člen Workspace*, ✗ *Člen/ka*, ✗ *Člen(ka)*, ✗ *Používateľ Workspace* (masculine). |
 | P31, P32, P33 | Deskohub Workspace, Workspace, Deskohub | same | **Deskohub Workspace**, **Workspace** (uninflected), **Deskohub** (inflected) | See the brand inflection rule above. `accountReferralsDiscountInfo` "ve Workspace" → *vo Workspace*. ✗ *ve Workspace*, ✗ *v Workspace*. |
+| P34 | Neomezené členství | Unlimited membership | **Neobmedzené členstvo** | Use the name alone in titles. Put the 30-day period in the price cadence or validity and access details. |
+| P35 | Členství | Membership | **Členstvo** | Short label in purchase comparisons. |
 
 ### R: reservation and time
 

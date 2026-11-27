@@ -1,4 +1,5 @@
 import type { DotyposTable } from "@deskohub/dotypos";
+import { tableReservationSlotMinutes } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import { Result } from "effect";
 import type { InvalidDotyposTableSeats } from "@/features/checkout/backend/reservation/workspace-table-selection";
 import { getOpenSpaceServiceDay } from "@/features/reservation/open-space-hours";
@@ -10,7 +11,6 @@ import type { ReservationInterval } from "@/features/reservation/reservation-int
 import {
   getTableReservationInterval,
   isTableReservationBookable,
-  tableReservationSlotMinutes,
 } from "@/features/reservation/table-reservation-time";
 import type { TableSlotsAvailability } from "@/features/reservation/workspace-availability";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";

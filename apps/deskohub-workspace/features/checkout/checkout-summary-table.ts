@@ -1,5 +1,5 @@
+import { workspaceTableProductIdentitySchema } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import { Array as Arr } from "effect";
-import { workspaceTableProductIdentitySchema } from "@/features/reservation/table-reservation";
 import {
   type CheckoutSummary,
   checkoutSummaryDiscountSchema,

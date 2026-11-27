@@ -1,5 +1,5 @@
+import { workspaceTableProductIdentitySchema } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import { Schema } from "effect";
-import { workspaceTableProductIdentitySchema } from "@/features/reservation/table-reservation";
 import { positiveMoneyCodec } from "@/shared/money/money";
 import {
   checkoutSummaryDiscountSchema,

@@ -1,9 +1,18 @@
-import { Schema } from "effect";
+import {
+  coworkReservationKind,
+  meetingRoomReservationKind,
+  officeReservationKind,
+  tableReservationKind,
+} from "@deskohub/workspace-domain/features/reservation/reservation-kind";
 
-export const coworkReservationKind = "cowork" as const;
-export const meetingRoomReservationKind = "meeting-room" as const;
-export const officeReservationKind = "office" as const;
-export const tableReservationKind = "table" as const;
+export {
+  coworkReservationKind,
+  meetingRoomReservationKind,
+  officeReservationKind,
+  tableReservationKind,
+} from "@deskohub/workspace-domain/features/reservation/reservation-kind";
+
+import { Schema } from "effect";
 
 export const workspaceReservationKindSchema = Schema.Literals([
   coworkReservationKind,

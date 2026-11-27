@@ -11,6 +11,7 @@
     "sandbox-probe/**/*.ts",
     "scripts/**/*.ts",
     "alchemy.run.ts",
+    "backend-preview.alchemy.ts",
     "release.run.ts"
   ]
 }

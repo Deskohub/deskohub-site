@@ -1,3 +1,10 @@
+import { invoiceIdSchema } from "@deskohub/workspace-domain/features/accounting/manual-invoice";
+
+export {
+  type InvoiceId,
+  invoiceIdSchema,
+} from "@deskohub/workspace-domain/features/accounting/manual-invoice";
+
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { BigDecimal, Data, Effect, Schema } from "effect";
 import {
@@ -18,15 +25,6 @@ import {
 } from "@/shared/utils/site-constants";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { invoiceBuyerSchema } from "./billing-identity";
-
-export const invoiceIdSchema = Schema.String.check(Schema.isUUID())
-  .pipe(Schema.brand("InvoiceId"))
-  .annotate({
-    identifier: "InvoiceId",
-    description:
-      "Client-generated invoice id protected by database uniqueness.",
-  });
-export type InvoiceId = typeof invoiceIdSchema.Type;
 
 export const invoiceVariableSymbolSchema = Schema.Trim.check(
   Schema.isPattern(/^\d{1,10}$/)

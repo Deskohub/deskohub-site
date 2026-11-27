@@ -13,25 +13,35 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { eq, sql } from "drizzle-orm";
 import { Data, Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
-import { accountingDocumentSnapshots, paymentAttempts } from "@/db/schema";
+import {
+  accountingDocumentSnapshots,
+  orders,
+  paymentAttempts,
+} from "@/db/schema";
 import {
   type AccountingDocumentSnapshot,
   accountingSnapshotKeyIdSchema,
   coworkAccountingDocumentSnapshotSchema,
   encodeStoredAccountingDocumentSnapshot,
   makeAccountingDocumentSnapshot,
+  type PassPurchaseAccountingSnapshot,
+  storedPassPurchaseAccountingSnapshotSchema,
+  workspaceAccountingSupplier,
 } from "@/features/accounting/accounting-document-snapshot";
 import type { PreparedCustomerQuote } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
+import { orderIdSchema } from "@/features/order";
 import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
-import { moneyWithValue } from "@/shared/money/money";
+import { currencyCZK } from "@/shared/money/currencies";
+import { type Money, moneyWithValue } from "@/shared/money/money";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
   requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import {
   AccountingDocumentSnapshots,
   type AccountingRecordReference,
@@ -214,6 +224,147 @@ const storedRows = async (
 };
 
 class CallerFailure extends Data.TaggedError("CallerFailure") {}
+
+const insertPassAttempt = (amount: Money) =>
+  Effect.gen(function* () {
+    const { db } = yield* WorkspaceTransaction;
+    const orderId = orderIdSchema.make(crypto.randomUUID());
+    const paymentAttemptId = paymentAttemptIdSchema.make(crypto.randomUUID());
+    const dotyposCustomerId = DotyposCustomerIdSchema.make(
+      "synthetic-pass-buyer"
+    );
+    yield* db.insert(orders).values({
+      id: orderId,
+      kind: "pass-purchase",
+      dotyposCustomerId,
+      paymentState: "not_started",
+      fulfillmentState: "not_started",
+    });
+    yield* db.insert(paymentAttempts).values({
+      id: paymentAttemptId,
+      orderId,
+      provider: "nexi",
+      providerOrderId: NexiOrderIdSchema.make(
+        `synthetic-order-${paymentAttemptId}`
+      ),
+      state: "created",
+      amountValue: amount.value,
+      amountExponent: amount.exponent,
+      currency: amount.currency,
+    });
+    const product = { kind: "unlimited", tier: "open-space" } as const;
+    const snapshot = {
+      orderId,
+      dotyposCustomerId,
+      locale: "en-US",
+      supplier: workspaceAccountingSupplier,
+      buyer: { kind: "person", legalName: "Synthetic Pass Buyer" },
+      billing: { purpose: "personal", invoice: "none" },
+      delivery: { email: testEmailAddress("pass-buyer") },
+      product,
+      serviceDate: plainDateStringSchema.make("2026-01-01"),
+      quote: {
+        product,
+        discountableSubtotal: currencyCZK(350_000),
+        discountedSubtotal: currencyCZK(350_000),
+        totalDiscount: currencyCZK(0),
+        discounts: [],
+      },
+    } satisfies PassPurchaseAccountingSnapshot;
+    return {
+      snapshot,
+      paymentAttemptId,
+      orderId,
+      dotyposCustomerId,
+      amount,
+      locale: snapshot.locale,
+    };
+  });
+
+describe("pass purchase accounting snapshots", () => {
+  test("stores the exact coffee amount beside ciphertext older deployments can decode", async () => {
+    const coffeeAmountMinor = 53_000;
+    const { snapshot, paymentAttemptId } = await run(
+      inTransaction(
+        Effect.gen(function* () {
+          const input = yield* insertPassAttempt(currencyCZK(403_000));
+          const snapshots = yield* AccountingDocumentSnapshots;
+          const snapshot = { ...input.snapshot, coffeeAmountMinor };
+          yield* snapshots.recordPassPurchase({ ...input, snapshot });
+          return { snapshot, paymentAttemptId: input.paymentAttemptId };
+        })
+      )
+    );
+    const database = requireTestDatabase(testDatabase);
+    const {
+      rows: [stored],
+    } = await database.pool.query(
+      `select coffee_amount_minor, pgp_sym_decrypt(encrypted_snapshot, $2) as json
+       from accounting_document_snapshots where payment_attempt_id = $1`,
+      [paymentAttemptId, testKey.secret]
+    );
+    assert(stored);
+    expect(stored.coffee_amount_minor).toBe(coffeeAmountMinor);
+    const { coffeeAmountMinor: _, ...facts } = snapshot;
+    expect(JSON.parse(stored.json)).toEqual({
+      ...facts,
+      unlimitedCoffee: true,
+    });
+    expect(
+      await run(
+        AccountingDocumentSnapshots.use((snapshots) =>
+          snapshots.findPassPurchase(paymentAttemptId)
+        )
+      )
+    ).toEqual(snapshot);
+  });
+
+  test("recovers a legacy coffee amount from the recorded payment attempt", async () => {
+    const { snapshot, paymentAttemptId } = await run(
+      inTransaction(insertPassAttempt(currencyCZK(403_000)))
+    );
+    // This row has the exact shape produced before coffee amounts were stored.
+    const legacy = Schema.encodeSync(
+      storedPassPurchaseAccountingSnapshotSchema
+    )({
+      ...snapshot,
+      unlimitedCoffee: true,
+    });
+    await requireTestDatabase(testDatabase).pool.query(
+      `insert into accounting_document_snapshots (payment_attempt_id, key_id, encrypted_snapshot)
+       values ($1, $2, pgp_sym_encrypt($3, $4))`,
+      [paymentAttemptId, testKey.id, JSON.stringify(legacy), testKey.secret]
+    );
+    expect(
+      await run(
+        AccountingDocumentSnapshots.use((snapshots) =>
+          snapshots.findPassPurchase(paymentAttemptId)
+        )
+      )
+    ).toEqual({ ...snapshot, coffeeAmountMinor: 53_000 });
+  });
+
+  test("refuses to record a coffee amount that does not reconcile with the charge", async () => {
+    const result = await run(
+      Effect.result(
+        inTransaction(
+          Effect.gen(function* () {
+            const input = yield* insertPassAttempt(currencyCZK(403_001));
+            const snapshots = yield* AccountingDocumentSnapshots;
+            yield* snapshots.recordPassPurchase({
+              ...input,
+              snapshot: { ...input.snapshot, coffeeAmountMinor: 53_000 },
+            });
+          })
+        )
+      )
+    );
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "AccountingRecordUnavailable", operation: "validate" },
+    });
+  });
+});
 
 describe("AccountingDocumentSnapshots.prepare", () => {
   test("accepts a snapshot that matches its attempt, and record seals it under the active key", async () => {

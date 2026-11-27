@@ -1,10 +1,19 @@
+import {
+  type InvoiceNumber,
+  invoiceNumberSchema,
+} from "@deskohub/workspace-domain/features/accounting/invoice";
+
+export {
+  type InvoiceNumber,
+  invoiceNumberSchema,
+} from "@deskohub/workspace-domain/features/accounting/invoice";
+
 import { Schema } from "effect";
 import { m } from "@/features/i18n";
-import { unlimitedPassCoffeePrice } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
-import { withPassPurchaseAddons } from "@/features/passes/pass-purchase-quote";
+import { withPassPurchaseCoffee } from "@/features/passes/pass-purchase-quote";
 import { workspaceCurrencyCodeSchema } from "@/shared/money/currencies";
-import { moneyToDecimalString } from "@/shared/money/money";
+import { moneyToDecimalString, moneyWithValue } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
   instantStringSchema,
@@ -37,22 +46,6 @@ export {
   type InvoiceBuyer,
   invoiceBuyerSchema,
 } from "./billing-identity";
-
-/**
- * The invoice number is interpolated into the Content-Disposition download
- * filename, so only the characters the numbering generator and legacy
- * numbers use are representable; quotes, separators, and control characters
- * can never break the header.
- */
-export const invoiceNumberSchema = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^[A-Za-z0-9/-]+$/)),
-  Schema.brand("InvoiceNumber")
-).annotate({
-  identifier: "InvoiceNumber",
-  description: "Deskohub invoice number.",
-});
-
-export type InvoiceNumber = typeof invoiceNumberSchema.Type;
 
 const storedInvoiceBillingTextSchema = Schema.Trim.check(Schema.isNonEmpty());
 const storedInvoiceBuyerAddressSchema = Schema.Struct({
@@ -363,7 +356,7 @@ export const makePassPurchaseInvoiceDocument = (input: {
   readonly paidAt: Temporal.Instant;
 }): EntryPackInvoiceDocument => {
   const { source, invoiceNumber } = input;
-  const { locale, quote, product } = source;
+  const { locale, quote, product, coffeeAmountMinor } = source;
   const issuedAt = instantStringSchema.make(
     temporalInstantToIsoString(input.issuedAt)
   );
@@ -410,17 +403,19 @@ export const makePassPurchaseInvoiceDocument = (input: {
         description: discount.label,
         price: moneyToDecimalString({ ...amount, value: -amount.value }),
       })),
-      ...(source.unlimitedCoffee
+      ...(coffeeAmountMinor !== undefined
         ? [
             {
               description: m.checkoutSummaryItemCoffee({}, { locale }),
-              price: moneyToDecimalString(unlimitedPassCoffeePrice),
+              price: moneyToDecimalString(
+                moneyWithValue(coffeeAmountMinor, quote.discountedSubtotal)
+              ),
             },
           ]
         : []),
     ],
     total: moneyToDecimalString(
-      withPassPurchaseAddons(quote.discountedSubtotal, source.unlimitedCoffee)
+      withPassPurchaseCoffee(quote.discountedSubtotal, coffeeAmountMinor)
     ),
     provenance: getInvoiceGenerationProvenance(issuedAt),
   });

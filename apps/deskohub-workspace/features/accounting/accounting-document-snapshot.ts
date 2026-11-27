@@ -1,3 +1,8 @@
+export {
+  type AccountingSnapshotKeyId,
+  accountingSnapshotKeyIdSchema,
+} from "@deskohub/workspace-domain/features/accounting/accounting-document-snapshot";
+
 import {
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -51,17 +56,6 @@ export {
   companyRegistrationIdSchema,
   vatRegistrationIdSchema,
 } from "./billing-identity";
-
-export const accountingSnapshotKeyIdSchema = Schema.NonEmptyString.check(
-  Schema.isPattern(/^[A-Z][A-Z0-9_]{2,31}$/)
-)
-  .pipe(Schema.brand("AccountingSnapshotKeyId"))
-  .annotate({
-    identifier: "AccountingSnapshotKeyId",
-    description: "Identifier selecting an accounting snapshot encryption key.",
-  });
-
-export type AccountingSnapshotKeyId = typeof accountingSnapshotKeyIdSchema.Type;
 
 const accountingBuyerAddressSchema = Schema.Struct({
   line1: Schema.optionalKey(Schema.NonEmptyString),
@@ -176,7 +170,7 @@ export const accountingDocumentSnapshotSchema = Schema.Union([
 export type AccountingDocumentSnapshot =
   typeof accountingDocumentSnapshotSchema.Type;
 
-export const passPurchaseAccountingSnapshotSchema = Schema.Struct({
+const passPurchaseAccountingSnapshotFacts = Schema.Struct({
   orderId: orderIdSchema,
   dotyposCustomerId: accountingDocumentIdentitySchema.fields.dotyposCustomerId,
   locale: accountingDocumentIdentitySchema.fields.locale,
@@ -185,9 +179,20 @@ export const passPurchaseAccountingSnapshotSchema = Schema.Struct({
   billing: reservationBillingSelectionSchema,
   delivery: accountingDocumentDeliverySchema,
   product: Schema.Union([entryPackProductSchema, unlimitedPassProductSchema]),
-  unlimitedCoffee: Schema.optionalKey(Schema.Literal(true)),
   serviceDate: plainDateStringSchema,
   quote: discountQuoteCodec,
+});
+
+export const storedPassPurchaseAccountingSnapshotSchema = Schema.Struct({
+  ...passPurchaseAccountingSnapshotFacts.fields,
+  unlimitedCoffee: Schema.optionalKey(Schema.Literal(true)),
+});
+
+export const passPurchaseAccountingSnapshotSchema = Schema.Struct({
+  ...passPurchaseAccountingSnapshotFacts.fields,
+  coffeeAmountMinor: Schema.optionalKey(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+  ),
 });
 
 export type PassPurchaseAccountingSnapshot =

@@ -56,6 +56,8 @@ Gender: m./f./n., pl. = plural-only. "Forbidden" lists wrong or competing forms,
 | P30 | Člen Workspace | Workspace member | **Профіль Workspace** | Fallback display name (`accountProfileScreenMemberFallback`). Neutral noun instead of a gendered person noun. Forbidden: «Учасник Workspace», «Учасник(-ця)», «Член Workspace». |
 | P31, P33 | Deskohub Workspace; Deskohub | brand | **Deskohub Workspace**; **Deskohub** | Latin, exact capitalisation, never inflected. Attach case to a generic noun: «у коворкінгу Deskohub Workspace», «від команди Deskohub». Forbidden: «Дескохаб», «Deskohubу», «Deskohub-у». |
 | P32 | Workspace (brand) | Workspace | **Workspace** | Short brand. «бронювання у Workspace» is acceptable in short labels. In sentences prefer «у коворкінгу Workspace». Lowercase generic "workspace" = P13. |
+| P34 | Neomezené členství | Unlimited membership | **Необмежене членство** | Use the name alone in titles. Put the 30-day period in the price cadence or validity and access details. |
+| P35 | Členství | Membership | **Членство** | Short label in purchase comparisons. |
 
 ### R · Reservation
 

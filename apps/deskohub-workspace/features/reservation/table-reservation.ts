@@ -1,3 +1,9 @@
+import {
+  tableDurationMinutesSchema,
+  tableSeatsSchema,
+  type WorkspaceTableProductIdentity,
+  workspaceTableProductIdentitySchema,
+} from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import { Schema, SchemaGetter } from "effect";
 import {
   defaultReservationBillingSelection,
@@ -13,36 +19,7 @@ import { tableReservationKind } from "./reservation-kind";
 import {
   getTableReservationDurationMinutes,
   isTableReservationInterval,
-  tableDurationMinutesSchema,
 } from "./table-reservation-time";
-
-export const tableSeatsSchema = Schema.Int.check(Schema.isGreaterThan(0));
-
-export const workspaceTableProductIdentitySchema = Schema.Struct({
-  kind: Schema.Literal(tableReservationKind),
-  seats: tableSeatsSchema,
-  durationMinutes: tableDurationMinutesSchema,
-});
-
-export type WorkspaceTableProductIdentity =
-  typeof workspaceTableProductIdentitySchema.Type;
-
-export const workspaceTableProductTargetSchema = Schema.Struct({
-  kind: workspaceTableProductIdentitySchema.fields.kind,
-});
-
-export const workspaceTableProductKeySchema = Schema.TemplateLiteral([
-  workspaceTableProductIdentitySchema.fields.kind,
-  ":",
-  tableSeatsSchema,
-  ":",
-  tableDurationMinutesSchema,
-]);
-
-export const getWorkspaceTableProductKey = (
-  product: WorkspaceTableProductIdentity
-): typeof workspaceTableProductKeySchema.Type =>
-  `${product.kind}:${product.seats}:${product.durationMinutes}`;
 
 export const tableReservationDetailsSchema = Schema.Struct({
   kind: workspaceTableProductIdentitySchema.fields.kind,

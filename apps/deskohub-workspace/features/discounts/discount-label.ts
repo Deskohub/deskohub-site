@@ -1,19 +1,17 @@
+import {
+  type DiscountLabelLocale,
+  type DiscountLabels,
+  discountLabelLocales,
+} from "@deskohub/workspace-domain/features/discounts/discount-label";
+
+export {
+  type DiscountLabelLocale,
+  type DiscountLabels,
+  discountLabelLocales,
+} from "@deskohub/workspace-domain/features/discounts/discount-label";
+
 import { getLocaleDefinition } from "@deskohub/i18n/locale-registry";
 import type { Locale } from "@/features/i18n";
-
-/**
- * The locales an operator writes a discount's label in. Every other locale
- * reads one of them through its fallback chain (`discountLabelFor`).
- */
-export const discountLabelLocales = [
-  "en-US",
-  "cs-CZ",
-] as const satisfies readonly Locale[];
-
-export type DiscountLabelLocale = (typeof discountLabelLocales)[number];
-
-/** A discount's label in each locale operators write labels in. */
-export type DiscountLabels = Readonly<Record<DiscountLabelLocale, string>>;
 
 const isDiscountLabelLocale = (locale: Locale): locale is DiscountLabelLocale =>
   discountLabelLocales.some((labelLocale) => labelLocale === locale);

@@ -1,6 +1,7 @@
 import "@/shared/polyfills/temporal";
 
 import type { DotyposReservationBooking } from "@deskohub/dotypos";
+import { tableDurationMinutesSchema } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import { Data, Effect, Match, Option, Schema } from "effect";
 import type { AccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
@@ -20,10 +21,7 @@ import { getOfficeReservationSelection } from "@/features/reservation/office-res
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import type { ReservationInterval } from "@/features/reservation/reservation-interval";
-import {
-  getTableReservationDurationMinutes,
-  tableDurationMinutesSchema,
-} from "@/features/reservation/table-reservation-time";
+import { getTableReservationDurationMinutes } from "@/features/reservation/table-reservation-time";
 import {
   instantStringSchema,
   temporalInstantToDate,

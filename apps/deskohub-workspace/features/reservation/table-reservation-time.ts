@@ -1,3 +1,7 @@
+import {
+  tableDurationMinutesSchema,
+  tableReservationSlotMinutes,
+} from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import { Option, Schema } from "effect";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
@@ -11,16 +15,6 @@ import {
   getWorkspaceDate,
 } from "./reservation-date";
 import type { ReservationInterval } from "./reservation-interval-domain";
-
-export const tableReservationSlotMinutes = 15;
-const maximumDurationMinutes = 24 * 60;
-export const tableDurationMinutesSchema = Schema.Int.check(
-  Schema.isBetween({
-    minimum: tableReservationSlotMinutes,
-    maximum: maximumDurationMinutes,
-  }),
-  Schema.isMultipleOf(tableReservationSlotMinutes)
-);
 
 type OpenSpaceHours = Parameters<typeof getOpenSpaceServiceDay>[1];
 const decodeDate = Schema.decodeUnknownOption(plainDateStringSchema);

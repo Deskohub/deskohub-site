@@ -3,6 +3,7 @@ import type {
   DotyposReservationId,
   DotyposReservationInterval,
 } from "@deskohub/dotypos";
+import { tableReservationSlotMinutes } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import {
   Array as Arr,
@@ -67,10 +68,7 @@ import {
   tableReservationKind,
 } from "@/features/reservation/reservation-kind";
 import type { TableReservationDetails } from "@/features/reservation/table-reservation";
-import {
-  isTableReservationInterval,
-  tableReservationSlotMinutes,
-} from "@/features/reservation/table-reservation-time";
+import { isTableReservationInterval } from "@/features/reservation/table-reservation-time";
 import {
   evaluateTeamTableDay,
   planAvailableTeamTable,

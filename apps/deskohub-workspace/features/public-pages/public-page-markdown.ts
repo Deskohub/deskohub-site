@@ -39,6 +39,8 @@ export interface PublicPageMarkdownSources {
    * while a gated page is released, such as a link to it, checks its page.
    */
   readonly isPublished: (pathname: PublicPagePathname) => boolean;
+  /** Whether cowork passes are released for every visitor. */
+  readonly coworkPassesPublished?: boolean;
   /** Every bookable product with its advertised price, in catalog order. */
   readonly offerings: Effect.Effect<ReadonlyArray<PublicOffering>>;
   /** Live configured sizes with their regular rates and optional sale. */

@@ -1,4 +1,5 @@
 import { decodeStandardSchema } from "@deskohub/standard-schema";
+import { tableSeatsSchema } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import { Schema } from "effect";
 import { getTrimmedSearchParam } from "@/features/reservation/reservation-checkout-query";
 import { defineSelectionLink } from "@/features/reservation/selection-link";
@@ -8,7 +9,6 @@ import {
   localTimeSchema,
   plainDateStringSchema,
 } from "@/shared/utils/temporal";
-import { tableSeatsSchema } from "./table-reservation";
 import { getTableReservationInterval } from "./table-reservation-time";
 
 const queryDateSchema = Schema.toStandardSchemaV1(plainDateStringSchema);

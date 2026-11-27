@@ -249,7 +249,7 @@ export const passReminderEmailDocumentFixture = (
             { _tag: "Value" as const, name: "pass", field: ["endsOn"] },
           ]
         : [
-            { _tag: "Text" as const, text: `[${locale}] Pass ends ` },
+            { _tag: "Text" as const, text: `[${locale}] Membership ends ` },
             { _tag: "Value" as const, name: "pass", field: ["endsOn"] },
           ],
     preheader: [
@@ -281,7 +281,7 @@ export const passReminderEmailDocumentFixture = (
               { _tag: "Text" as const, text: ")" },
             ]
           : [
-              { _tag: "Text" as const, text: "Renew starting " },
+              { _tag: "Text" as const, text: "Extend your membership from " },
               {
                 _tag: "Value" as const,
                 name: "pass",
@@ -306,7 +306,10 @@ export const passReminderEmailDocumentFixture = (
       cta_label: [
         {
           _tag: "Text" as const,
-          text: trigger === "entry-pack-expiring" ? "Book a day" : "Renew pass",
+          text:
+            trigger === "entry-pack-expiring"
+              ? "Book a day"
+              : "Extend membership",
         },
       ],
     },

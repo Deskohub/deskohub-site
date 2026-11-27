@@ -1,3 +1,1 @@
-import { sql } from "drizzle-orm";
-
-export const postgresUuidV7 = sql<string>`uuid_generate_v7()::text`;
+export { postgresUuidV7 } from "@deskohub/workspace-backend/db/uuid-v7";

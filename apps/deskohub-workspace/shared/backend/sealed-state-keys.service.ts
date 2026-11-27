@@ -1,16 +1,18 @@
+import {
+  type SealedStateKeyId,
+  sealedStateKeyIdSchema,
+} from "@deskohub/workspace-domain/shared/credentials/sealed-state-key-id";
+
+export {
+  type SealedStateKeyId,
+  sealedStateKeyIdSchema,
+} from "@deskohub/workspace-domain/shared/credentials/sealed-state-key-id";
+
 import { hkdfSync } from "node:crypto";
 import { Context, Effect, Layer, Redacted, Schema } from "effect";
 import { SealedStateTokenError } from "./sealed-state-error";
 
 const keyByteLength = 32;
-
-export const sealedStateKeyIdSchema = Schema.Trim.check(Schema.isNonEmpty())
-  .pipe(Schema.brand("SealedStateKeyId"))
-  .annotate({
-    identifier: "SealedStateKeyId",
-    description: "Identifier selecting a sealed state encryption key.",
-  });
-export type SealedStateKeyId = typeof sealedStateKeyIdSchema.Type;
 
 export type SealedStateKey = {
   readonly kid: SealedStateKeyId;

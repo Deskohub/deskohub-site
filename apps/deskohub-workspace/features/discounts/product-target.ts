@@ -1,17 +1,22 @@
-import { Array as Arr, Match, Schema } from "effect";
+import type { WorkspaceProductTarget } from "@deskohub/workspace-domain/features/discounts/product-target";
+import { workspaceTableProductTargetSchema } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
+
+export {
+  type WorkspaceProductTarget,
+  workspaceProductTargetSchema,
+} from "@deskohub/workspace-domain/features/discounts/product-target";
+
+import { Array as Arr, Match } from "effect";
 import { workspaceCoworkCurrentTiers } from "@/features/checkout/product-catalog";
 import type { WorkspaceProductIdentity } from "@/features/checkout/product-identity";
 import {
   entryPackOffers,
-  entryPackProductSchema,
   getPassProductKey,
   unlimitedPassOffers,
-  unlimitedPassProductSchema,
 } from "@/features/passes/pass-offer";
 import { workspaceCoworkProductTargetSchema } from "@/features/reservation/cowork-reservation-product";
 import { workspaceMeetingRoomProductTargetSchema } from "@/features/reservation/meeting-room-reservation";
 import { workspaceOfficeProductTargetSchema } from "@/features/reservation/office-reservation";
-import { workspaceTableProductTargetSchema } from "@/features/reservation/table-reservation";
 
 const entryPackFamilyTarget = { kind: "entry-pack" } as const;
 const unlimitedFamilyTarget = { kind: "unlimited" } as const;
@@ -20,26 +25,6 @@ export const workspacePassOfferTargets = [
   ...entryPackOffers.map(({ product }) => product),
   ...unlimitedPassOffers.map(({ product }) => product),
 ];
-
-export const workspaceProductTargetSchema = Schema.Union([
-  workspaceCoworkProductTargetSchema,
-  workspaceMeetingRoomProductTargetSchema,
-  workspaceOfficeProductTargetSchema,
-  workspaceTableProductTargetSchema,
-  entryPackProductSchema,
-  Schema.Struct({
-    kind: Schema.Literal("entry-pack"),
-    tier: Schema.optionalKey(Schema.Never),
-    size: Schema.optionalKey(Schema.Never),
-  }),
-  unlimitedPassProductSchema,
-  Schema.Struct({
-    kind: Schema.Literal("unlimited"),
-    tier: Schema.optionalKey(Schema.Never),
-  }),
-]);
-
-export type WorkspaceProductTarget = typeof workspaceProductTargetSchema.Type;
 
 export type WorkspaceProductFamily = WorkspaceProductTarget["kind"];
 

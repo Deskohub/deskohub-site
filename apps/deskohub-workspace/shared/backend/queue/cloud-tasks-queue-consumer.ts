@@ -3,7 +3,7 @@ import "server-only";
 import { Effect, Match, Option, Schema } from "effect";
 import { NextResponse } from "next/server";
 import { env } from "@/env";
-import { cloudTasksInvoker } from "@/shared/backend/google-cloud/google-oidc";
+import { cloudTasksInvoker } from "@/shared/backend/google-cloud/google-invokers";
 import {
   defineServiceRoute,
   requireGoogleInvoker,

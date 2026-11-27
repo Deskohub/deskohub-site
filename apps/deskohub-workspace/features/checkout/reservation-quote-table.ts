@@ -1,13 +1,11 @@
+import {
+  tableDurationMinutesSchema,
+  tableSeatsSchema,
+} from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import { Effect, Schema } from "effect";
 import type { DiscountQuote } from "@/features/discounts/contracts";
-import {
-  type TableReservationDetails,
-  tableSeatsSchema,
-} from "@/features/reservation/table-reservation";
-import {
-  getTableReservationDurationMinutes,
-  tableDurationMinutesSchema,
-} from "@/features/reservation/table-reservation-time";
+import type { TableReservationDetails } from "@/features/reservation/table-reservation";
+import { getTableReservationDurationMinutes } from "@/features/reservation/table-reservation-time";
 import { currencyCZK } from "@/shared/money/currencies";
 import { positiveMoneyCodec } from "@/shared/money/money";
 import { getReservationQuoteFingerprint } from "./reservation-quote-fingerprint";

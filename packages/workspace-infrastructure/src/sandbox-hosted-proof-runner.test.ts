@@ -604,6 +604,35 @@ describe("post-destroy inventory", () => {
     expect(output).toContain("teardown unverified: run-revisions");
   });
 
+  test("keeps the isolated backend preview out of sandbox proof residue", () => {
+    const preview = [
+      listing(
+        "^run services list",
+        "workspace-api-preview\nworkspace-tasks-preview"
+      ),
+      listing(
+        "^run revisions list",
+        "workspace-api-preview-g-abcdef1234567890\nworkspace-scheduler-preview-seed"
+      ),
+      listing("^storage ls -r", emptiedState),
+    ];
+    expect(inventory(preview).exitCode).toBe(0);
+  });
+
+  test("reports a service outside the exact preview inventory", () => {
+    const result = inventory([
+      listing(
+        "^run services list",
+        "workspace-api-preview\nworkspace-api-preview-orphan"
+      ),
+      listing("^storage ls -r", emptiedState),
+    ]);
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain(
+      "proof resources remain in run-services: workspace-api-preview-orphan"
+    );
+  });
+
   test("lists every Compute class across all of the project's scopes", () => {
     const { exitCode, calls } = withProofFakes(
       { rules: [listing("^storage ls -r", emptiedState), ...readableLogging] },
@@ -1925,7 +1954,7 @@ describe("RPC probe", () => {
     );
     expect(call).toMatch(
       new RegExp(
-        `^bun scripts/sandbox-rpc-probe\\.ts --url ${apiUrl} --id-token-file \\S+/api-id-token --marker-file \\S+/marker --traceparent 00-[0-9a-f]{32}-[0-9a-f]{16}-01 --expect-version v1$`
+        `^bun scripts/sandbox-rpc-probe\\.ts --url ${apiUrl} --id-token-file \\S+/api-id-token --marker-file \\S+/marker --traceparent 00-[0-9a-f]{32}-[0-9a-f]{16}-01 --expect-version v1 --email-preferences$`
       )
     );
     const traceparent = call?.match(/00-([0-9a-f]{32})-/)?.[1];
@@ -1964,6 +1993,7 @@ describe("RPC probe", () => {
       [{ markerMatches: false }, "markerSha256 does not match"],
       [{ failDecoded: null }, "Probe.fail decoded as null"],
       [{ countChunks: [0, 1] }, "Probe.count yielded 2 chunks"],
+      [{ emailPreferences: null }, "email preferences proof incomplete"],
       [{ version: "v2" }, "version v2"],
       [{ failures: ["count stream ended early"] }, "count stream ended early"],
     ] as const) {

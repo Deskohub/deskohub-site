@@ -510,7 +510,8 @@ describe.skipIf(!testDatabase)(
       expect(
         (await readPassViews(holder, "2026-03-15T22:59:59Z")).unlimited
       ).toMatchObject([{ status: "upcoming" }]);
-      expect(await readPassViews(holder, firstDay)).toMatchObject({
+      const holderActiveView = await readPassViews(holder, firstDay);
+      expect(holderActiveView).toMatchObject({
         unlimited: [
           {
             status: "active",
@@ -522,6 +523,7 @@ describe.skipIf(!testDatabase)(
         ],
         packs: { held: [], boughtForOthers: [] },
       });
+      expect(holderActiveView.unlimited[0]?.statusPath).toBeUndefined();
       expect(
         (await readPassViews(holder, "2026-04-14T22:00:00Z")).unlimited
       ).toMatchObject([{ status: "expired" }]);
@@ -575,6 +577,7 @@ describe.skipIf(!testDatabase)(
           tier: "Open Space",
           boughtForYou: false,
           period: expect.any(String),
+          statusPath: `/en-US/reservation/status/${passId}`,
           seating: { kind: "shared" },
           status: "active",
           day: 31,
@@ -762,14 +765,22 @@ describe.skipIf(!testDatabase)(
             entriesLeft: 2,
             lastUsableDay: "Feb 29, 2000",
             bookPath: `/en-US/reservation/cowork?pass=${passId}`,
+            statusPath: `/en-US/reservation/status/${passId}`,
           }),
         ],
       });
       expect(expiry).toEqual({
         boughtForOthers: [],
-        held: [expect.objectContaining({ status: "expired" })],
+        held: [
+          expect.objectContaining({
+            status: "expired",
+            statusPath: `/en-US/reservation/status/${passId}`,
+          }),
+        ],
       });
-      expect(JSON.stringify(expiry)).not.toContain(passId);
+      expect(
+        expiry !== "unavailable" ? expiry.held[0]?.bookPath : undefined
+      ).toBeUndefined();
     });
 
     test("tells how each booking was settled, and leaves a refunded order or a released Entry pack claim unsettled", async () => {
@@ -1116,7 +1127,8 @@ describe.skipIf(!testDatabase)(
         `update auth."user" set deletion_requested_at = null where id = $1`,
         [holder]
       );
-      expect(await loadFor(holder)).toEqual({
+      const holderGiftView = await loadFor(holder);
+      expect(holderGiftView).toEqual({
         boughtForOthers: [],
         held: [
           expect.objectContaining({
@@ -1125,6 +1137,11 @@ describe.skipIf(!testDatabase)(
           }),
         ],
       });
+      expect(
+        holderGiftView !== "unavailable"
+          ? holderGiftView.held[0]?.statusPath
+          : undefined
+      ).toBeUndefined();
       await testDatabase!.pool.query(
         `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
         [buyer, uniqueDotyposId()]

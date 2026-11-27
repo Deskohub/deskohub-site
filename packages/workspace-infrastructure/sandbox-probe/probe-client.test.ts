@@ -3,6 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  ProbeRejected,
+  SandboxProbeRpcs,
+} from "@deskohub/workspace-cloud-run/sandbox-probe/rpcs";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as Effect from "effect/Effect";
 import {
@@ -22,7 +26,6 @@ import {
   runSandboxRpcProbe,
   schemaBinaryContentType,
 } from "./probe-client";
-import { ProbeRejected, SandboxProbeRpcs } from "./probe-rpcs";
 import { probeVersion, runWithProbe } from "./probe-server.test-utils";
 
 const marker = "synthetic-probe-marker-41aa";

@@ -2,6 +2,10 @@ import {
   decodeStandardSchema,
   parseStandardSchema,
 } from "@deskohub/standard-schema";
+import {
+  tableReservationSlotMinutes,
+  tableSeatsSchema,
+} from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import { Match, Option, Schema } from "effect";
 import {
   getCoworkTierWorkstationAddon,
@@ -50,8 +54,6 @@ import {
   tableReservationKind,
   workspaceReservationKindSchema,
 } from "@/features/reservation/reservation-kind";
-import { tableSeatsSchema } from "@/features/reservation/table-reservation";
-import { tableReservationSlotMinutes } from "@/features/reservation/table-reservation-time";
 import {
   instantStringSchema,
   isPlainDateString,

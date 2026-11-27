@@ -45,6 +45,7 @@ import { PublishedPublicPagesService } from "./published-public-pages.service";
 export interface PublicPageMarkdownReleases {
   /** The public pages production serves now. */
   readonly publishedPathnames: ReadonlyArray<PublicPagePathname>;
+  readonly coworkPassesPublished?: boolean;
   readonly discountReleaseGates: DiscountReleaseGates;
 }
 
@@ -212,6 +213,7 @@ export const renderFromMarkdownSources = <A>(
 
     const value = yield* render({
       isPublished: (pathname) => releases.publishedPathnames.includes(pathname),
+      coworkPassesPublished: releases.coworkPassesPublished,
       offerings: yield* read(loadMarkdownOfferings(locale, releases)),
       teamTablePrices: yield* read(
         loadMarkdownTeamTablePrices(locale, releases)

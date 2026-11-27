@@ -1,3 +1,4 @@
+import { tableSeatsSchema } from "@deskohub/workspace-domain/features/reservation/table-reservation-product";
 import { Match, Result, Schema } from "effect";
 import type { AdvertisedPriceRequest } from "@/features/checkout/advertised-price";
 import type { CanonicalPromotionCode } from "@/features/discounts";
@@ -14,7 +15,6 @@ import { reservationCustomerSchema } from "@/features/reservation/reservation-co
 import {
   getTableAdvertisedPriceReservation,
   normalizedTableReservationOrderSchema,
-  tableSeatsSchema,
 } from "@/features/reservation/table-reservation";
 import {
   getTableReservationInterval,
