@@ -92,6 +92,51 @@ const moveSource = (
   move,
 });
 
+test("repacking prefers ordinary, then occupied Team Tables, including newly assigned moves", () => {
+  const source = table("source", 4);
+  const empty = table("a-empty", 3);
+  const occupied = table("b-occupied", 3);
+  const ordinary = table("z-ordinary", 1, false);
+  const blockers = [
+    moveSource(source, "one", window),
+    moveSource(source, "two", window),
+  ];
+  const existingHold = {
+    kind: "shared",
+    tableId: occupied.id,
+    interval: window,
+    seats: 1,
+  } satisfies TeamTableBooking;
+  const targetIds = (
+    tables: readonly DotyposTable[],
+    bookings: readonly TeamTableBooking[]
+  ) =>
+    Result.getOrThrow(
+      planTeamTable({ tables, bookings, window, now, seats: 4 })
+    )?.moves.map(({ targetTableId }) => targetTableId);
+
+  expect(
+    targetIds([source, empty, occupied, ordinary], [...blockers, existingHold])
+  ).toEqual([ordinary.id, occupied.id]);
+  expect(
+    targetIds([source, empty, occupied], [...blockers, existingHold])
+  ).toEqual([occupied.id, occupied.id]);
+  const beforeWindow = interval("2026-11-28T09:00Z", "2026-11-28T10:00Z");
+  expect(
+    targetIds(
+      [source, empty, occupied],
+      [
+        moveSource(source, "early", {
+          startsAt: beforeWindow.startsAt,
+          endsAt: window.endsAt,
+        }),
+        moveSource(source, "later", window),
+        { kind: "team-table", tableId: empty.id, interval: beforeWindow },
+      ]
+    )
+  ).toEqual([occupied.id, occupied.id]);
+});
+
 test("backtracks to fit every source over its entire interval and preserves NEW", () => {
   const target = table("team", 4);
   const first = table("a", 1, false);
@@ -221,6 +266,16 @@ test("keeps unverified, expired and non-future blockers on their original table"
     { kind: "shared", tableId: target.id, interval: window, seats: 1 },
     { kind: "unknown", tableId: target.id, interval: window },
     { kind: "unknown", tableId: target.id },
+    moveSource(
+      target,
+      "sub-millisecond-start",
+      interval("2026-11-28T09:00:00.000001Z", "2026-11-28T15:00Z")
+    ),
+    moveSource(
+      target,
+      "sub-millisecond-end",
+      interval("2026-11-28T09:00Z", "2026-11-28T15:00:00.000001Z")
+    ),
     moveSource(target, "expired", window, {
       ...sourceIdentity("expired"),
       origin: "authorized-checkout",

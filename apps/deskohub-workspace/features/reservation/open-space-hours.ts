@@ -10,12 +10,14 @@ import {
 import { getWorkspaceDate } from "./reservation-date";
 
 type OpenSpaceHours = Pick<WorkspaceOpeningHours, "openSpaceUsableUntil">;
+const configuredHours: WorkspaceOpeningHours =
+  workspaceSiteConstants.openingHours;
 const decodeLocalDateTime = Schema.decodeUnknownSync(localDateTimeSchema);
 
 /** Prague-local bounds of an Open Space service date, with an exclusive end. */
 export const getOpenSpaceServiceDay = (
   serviceDate: Temporal.PlainDate,
-  { openSpaceUsableUntil }: OpenSpaceHours = workspaceSiteConstants.openingHours
+  { openSpaceUsableUntil }: OpenSpaceHours = configuredHours
 ) => ({
   startsAt: decodeLocalDateTime(`${serviceDate}T00:00`),
   endsAt: decodeLocalDateTime(
@@ -28,7 +30,7 @@ export const getOpenSpaceServiceDay = (
 export const isOpenSpaceDayCutoffReached = (
   serviceDate: string,
   now: Temporal.Instant = Temporal.Now.instant(),
-  hours: OpenSpaceHours = workspaceSiteConstants.openingHours
+  hours: OpenSpaceHours = configuredHours
 ) => {
   if (hours.openSpaceUsableUntil == null) return false;
 

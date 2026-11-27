@@ -49,7 +49,10 @@ import type {
   ReservationIntervalInput,
 } from "@/features/reservation/reservation-interval-domain";
 import { coworkReservationKind } from "@/features/reservation/reservation-kind";
-import { workspaceSiteConstants } from "@/shared/utils/site-constants";
+import {
+  type WorkspaceOpeningHours,
+  workspaceSiteConstants,
+} from "@/shared/utils/site-constants";
 import {
   instantStringSchema,
   isPlainDateString,
@@ -61,6 +64,7 @@ import {
 const decodeLocalDateTime = Schema.decodeUnknownSync(localDateTimeSchema);
 const decodePlainDate = Schema.decodeUnknownSync(plainDateStringSchema);
 const decodeInstant = Schema.decodeSync(instantStringSchema);
+const openingHours: WorkspaceOpeningHours = workspaceSiteConstants.openingHours;
 
 /**
  * Shared tier-aware cowork interval constructor used by availability,
@@ -151,17 +155,17 @@ export const isCoworkOpenSpaceDayCutoffReached = (input: {
 const getCoworkReservationDateIssues = (data: {
   readonly entryTier: WorkspaceCoworkProductTier;
   readonly date: string;
-}): readonly Schema.FilterIssue[] =>
-  isCoworkOpenSpaceDayCutoffReached(data)
+}): readonly Schema.FilterIssue[] => {
+  const until = openingHours.openSpaceUsableUntil;
+  return until != null && isCoworkOpenSpaceDayCutoffReached(data)
     ? [
         {
           path: ["date"],
-          issue: m.reservationValidationOpenSpaceDayEnded({
-            until: workspaceSiteConstants.openingHours.openSpaceUsableUntil,
-          }),
+          issue: m.reservationValidationOpenSpaceDayEnded({ until }),
         },
       ]
     : [];
+};
 
 const coworkReservationOrderBaseSchema = (defaultPhoneRegion: string) =>
   Schema.Struct({

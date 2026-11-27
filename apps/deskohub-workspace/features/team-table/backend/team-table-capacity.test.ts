@@ -45,15 +45,22 @@ test("derives distinct sizes from enabled and visible Team Tables in Open Space"
       getTeamTableSeatCapacities([
         makeTable("eight", { seats: "8" }),
         ...ignored,
-        makeTable("four-a"),
-        makeTable("four-b"),
+        makeTable("four-a", { seats: "4.0" }),
+        makeTable("four-b", { seats: "4e0" }),
       ])
     )
   ).toEqual([4, 8]);
 });
 
 test("fails discovery when any eligible table has an invalid size", () => {
-  for (const seats of ["", "0", "-1", "1.5", "9007199254740992"]) {
+  for (const seats of [
+    "",
+    "0",
+    "-1",
+    "1.5",
+    "4.0000000000000001",
+    "9007199254740992",
+  ]) {
     expect(
       Effect.runSync(
         Effect.flip(

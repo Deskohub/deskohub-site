@@ -1,5 +1,14 @@
 import type { DotyposTable, DotyposTableId } from "@deskohub/dotypos";
-import { Data, Effect, Match, Result, Schema } from "effect";
+import {
+  BigDecimal,
+  Data,
+  Effect,
+  Match,
+  Option,
+  Result,
+  Schema,
+  SchemaTransformation,
+} from "effect";
 import {
   type WorkspaceCoworkProductTier,
   type WorkspaceProductMonitorOption,
@@ -88,12 +97,22 @@ const tableNameCollator = new Intl.Collator("en", {
   sensitivity: "base",
 });
 
-const workspaceTableSeatCapacitySchema = Schema.NumberFromString.pipe(
-  Schema.check(Schema.isInt(), Schema.isGreaterThan(0))
-).annotate({
-  identifier: "WorkspaceTableSeatCapacity",
-  description: "Positive integer seat capacity configured on a Dotypos table.",
-});
+const workspaceTableSeatCapacitySchema = Schema.String.check(
+  Schema.makeFilter((value) =>
+    Option.exists(BigDecimal.fromString(value.trim()), BigDecimal.isInteger)
+  )
+)
+  .pipe(
+    Schema.decodeTo(
+      Schema.Int.check(Schema.isGreaterThan(0)),
+      SchemaTransformation.numberFromString
+    )
+  )
+  .annotate({
+    identifier: "WorkspaceTableSeatCapacity",
+    description:
+      "Positive integer seat capacity configured on a Dotypos table.",
+  });
 
 export interface WorkspaceTableCandidate {
   readonly table: DotyposTable;
@@ -229,6 +248,14 @@ export const selectWorkspaceTableFromCandidates = (
   );
 
 /** Preserve whole tables for Team Table bookings where solo seating allows. */
+export const getOpenSpaceTablePlacementPriority = (
+  table: DotyposTable,
+  occupied: boolean
+) => {
+  if (!table.tags?.includes(workspaceTableReservationTableTag)) return 0;
+  return occupied ? 1 : 2;
+};
+
 export const selectOpenSpaceTableFromCandidates = (
   candidates: readonly DotyposTable[],
   allTables: readonly DotyposTable[],
@@ -243,11 +270,11 @@ export const selectOpenSpaceTableFromCandidates = (
         occupancyByTableId,
         workspaceBookingSeatCount,
         false,
-        (table) => {
-          if (!table.tags?.includes(workspaceTableReservationTableTag))
-            return 0;
-          return (occupancyByTableId.get(table.id) ?? 0) > 0 ? 1 : 2;
-        }
+        (table) =>
+          getOpenSpaceTablePlacementPriority(
+            table,
+            (occupancyByTableId.get(table.id) ?? 0) > 0
+          )
       )
     )
   );

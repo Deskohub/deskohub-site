@@ -7,6 +7,7 @@ import { Result } from "effect";
 import { workspaceBookingSeatCount } from "@/features/checkout/backend/reservation/workspace-table-occupancy";
 import {
   decodeTableCandidates,
+  getOpenSpaceTablePlacementPriority,
   getWorkspaceTableCandidatesByPredicate,
   type InvalidDotyposTableSeats,
   isWorkspaceCoworkTableCandidate,
@@ -19,15 +20,13 @@ import {
 } from "@/features/reservation/reservation-date";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
+  type InstantInterval,
+  instantIntervalsOverlap,
+  isIncreasingInstantInterval,
   type PlainDate,
   plainDateSpanToInstants,
 } from "@/shared/utils/temporal";
 import { decodeTeamTableCandidates } from "./team-table-capacity";
-
-type BookingInterval = {
-  readonly startsAt: Temporal.Instant;
-  readonly endsAt: Temporal.Instant;
-};
 
 type OpenSpaceMoveSource = {
   readonly reservationId: WorkspaceReservationId;
@@ -51,7 +50,7 @@ type VerifiedOpenSpaceHold = OpenSpaceMoveSource &
 
 type SharedBooking = {
   readonly kind: "shared";
-  readonly interval: BookingInterval;
+  readonly interval: InstantInterval;
   readonly seats: number;
   readonly move?: VerifiedOpenSpaceHold;
 };
@@ -59,8 +58,8 @@ type SharedBooking = {
 /** Unknown ownership or kind can block a table, but cannot authorize a move. */
 export type TeamTableBooking = { readonly tableId: DotyposTableId } & (
   | SharedBooking
-  | { readonly kind: "team-table"; readonly interval: BookingInterval }
-  | { readonly kind: "unknown"; readonly interval?: BookingInterval }
+  | { readonly kind: "team-table"; readonly interval: InstantInterval }
+  | { readonly kind: "unknown"; readonly interval?: InstantInterval }
 );
 
 type TeamTableOpenSpaceMove = OpenSpaceMoveSource & {
@@ -75,17 +74,10 @@ type TeamTablePlan = {
 
 type MovableBooking = SharedBooking & { readonly move: VerifiedOpenSpaceHold };
 
-const isIncreasing = ({ startsAt, endsAt }: BookingInterval) =>
-  Temporal.Instant.compare(startsAt, endsAt) < 0;
-
-const overlaps = (left: BookingInterval, right: BookingInterval) =>
-  Temporal.Instant.compare(left.startsAt, right.endsAt) < 0 &&
-  Temporal.Instant.compare(right.startsAt, left.endsAt) < 0;
-
-const bookingOverlaps = (booking: TeamTableBooking, window: BookingInterval) =>
+const bookingOverlaps = (booking: TeamTableBooking, window: InstantInterval) =>
   !booking.interval ||
-  !isIncreasing(booking.interval) ||
-  overlaps(booking.interval, window);
+  !isIncreasingInstantInterval(booking.interval) ||
+  instantIntervalsOverlap(booking.interval, window);
 
 const isMovableOpenSpace = (
   booking: TeamTableBooking,
@@ -96,7 +88,10 @@ const isMovableOpenSpace = (
     booking.kind !== "shared" ||
     !booking.move ||
     booking.seats !== workspaceBookingSeatCount ||
-    !isIncreasing(booking.interval) ||
+    !isIncreasingInstantInterval(booking.interval) ||
+    // Dotypos creates replacement holds with millisecond precision.
+    booking.interval.startsAt.epochNanoseconds % 1_000_000n !== 0n ||
+    booking.interval.endsAt.epochNanoseconds % 1_000_000n !== 0n ||
     booking.move.serviceDate <= today.toString() ||
     (booking.move.status === "NEW" &&
       Temporal.Instant.compare(booking.move.expiresAt, now) <= 0)
@@ -120,7 +115,7 @@ const canFit = (
     if (!bookingOverlaps(booking, source.interval)) continue;
     if (
       booking.kind !== "shared" ||
-      !isIncreasing(booking.interval) ||
+      !isIncreasingInstantInterval(booking.interval) ||
       !Number.isSafeInteger(booking.seats) ||
       booking.seats <= 0
     )
@@ -174,9 +169,27 @@ const placeOpenSpaceBookings = (
     const { blocker, candidates } = choice;
     const { reservationId, sourceReservationId, serviceDate, status } =
       blocker.move;
-    for (const { table, seatCapacity } of candidates) {
-      const previous = assigned.get(table.id) ?? [];
-      if (!canFit(blocker, seatCapacity, previous)) continue;
+    const ranked = candidates
+      .flatMap(({ table, seatCapacity }) => {
+        const previous = assigned.get(table.id) ?? [];
+        if (!canFit(blocker, seatCapacity, previous)) return [];
+        const occupied = previous.some((booking) =>
+          bookingOverlaps(booking, blocker.interval)
+        );
+        return [
+          {
+            table,
+            previous,
+            priority: getOpenSpaceTablePlacementPriority(table, occupied),
+          },
+        ];
+      })
+      .sort(
+        (left, right) =>
+          left.priority - right.priority ||
+          left.table.id.localeCompare(right.table.id)
+      );
+    for (const { table, previous } of ranked) {
       assigned.set(table.id, [...previous, { ...blocker, tableId: table.id }]);
       moves.push({
         reservationId,
@@ -204,11 +217,11 @@ export const planTeamTable = ({
 }: {
   readonly tables: readonly DotyposTable[];
   readonly bookings: readonly TeamTableBooking[];
-  readonly window: BookingInterval;
+  readonly window: InstantInterval;
   readonly seats: number;
   readonly now: Temporal.Instant;
 }): Result.Result<TeamTablePlan | undefined, InvalidDotyposTableSeats> => {
-  if (!isIncreasing(window)) return Result.succeed(undefined);
+  if (!isIncreasingInstantInterval(window)) return Result.succeed(undefined);
 
   const candidates = decodeTeamTableCandidates(tables);
   if (Result.isFailure(candidates)) return Result.fail(candidates.failure);
@@ -229,7 +242,8 @@ export const planTeamTable = ({
         blockers: holds.filter((hold) => bookingOverlaps(hold, window)),
         alreadyBooked: holds.some(
           (hold) =>
-            hold.kind === "team-table" && overlaps(hold.interval, touchedDays)
+            hold.kind === "team-table" &&
+            instantIntervalsOverlap(hold.interval, touchedDays)
         ),
       };
     })
@@ -260,13 +274,10 @@ export const planTeamTable = ({
     )
   );
   if (Result.isFailure(destinations)) return Result.fail(destinations.failure);
-  const sortedDestinations = destinations.success.toSorted((left, right) =>
-    left.table.id.localeCompare(right.table.id)
-  );
   for (const { tableId, blockers } of repackable) {
     const moves = placeOpenSpaceBookings(
       blockers,
-      sortedDestinations.filter(({ table }) => table.id !== tableId),
+      destinations.success.filter(({ table }) => table.id !== tableId),
       bookingsByTable
     );
     if (moves) return Result.succeed({ tableId, moves });
