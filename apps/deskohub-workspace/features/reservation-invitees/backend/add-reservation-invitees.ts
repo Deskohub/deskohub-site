@@ -74,12 +74,10 @@ export const addAuthorizedReservationInvitees = Effect.fnUntraced(
         if (stored?.reservationDetails.kind !== "table") {
           return yield* refuse("not-found");
         }
-        const { seats } = stored.reservationDetails;
         const contactAttends = stored.officeContactAttends;
         if (
           stored.paymentState !== "paid" ||
           stored.reservationState !== "confirmed" ||
-          seats === undefined ||
           contactAttends === null
         ) {
           return yield* refuse("not-confirmed");
@@ -100,7 +98,10 @@ export const addAuthorizedReservationInvitees = Effect.fnUntraced(
         const guests = yield* ReservationInvitees;
         const existing = yield* guests.listForReservation(orderId);
         if (emails.length === 0) return yield* refuse("invalid-email");
-        if (Number(contactAttends) + existing.length + emails.length > seats) {
+        if (
+          Number(contactAttends) + existing.length + emails.length >
+          reservation.seats
+        ) {
           return yield* refuse("capacity");
         }
 

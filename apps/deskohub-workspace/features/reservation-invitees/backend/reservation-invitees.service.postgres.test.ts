@@ -34,6 +34,7 @@ import { ReservationAccessService } from "@/features/reservation/backend/reserva
 import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/reservation-audit.test-utils";
 import { ReservationAuthorizationService } from "@/features/reservation/backend/reservation-authorization.service";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
+import { StoredReservationDetails } from "@/features/reservation/backend/stored-reservation-details.server";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import {
   type WorkspaceReservationDetails,
@@ -41,6 +42,7 @@ import {
 } from "@/features/reservation/backend/workspace-reservation.service";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
+import type { StoredTableReservationDetails } from "@/features/reservation/table-reservation";
 import { ReservationAccessRepository } from "@/features/reservation-access/backend/reservation-access.repository";
 import { WithdrawalRepository } from "@/features/withdrawal/backend/withdrawal.repository";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
@@ -427,10 +429,17 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
     ]);
   });
 
+  const defaultTableDetails: StoredTableReservationDetails = {
+    kind: "table",
+    seats: 3,
+    durationMinutes: 60,
+  };
+
   const prepareGuestNotices = async ({
     ended = false,
     beforeBookingRead = () => Effect.void,
     teamTable = false,
+    storedTableDetails = defaultTableDetails,
   } = {}) => {
     const start = toStoredInstant(Temporal.Now.instant());
     const tick = (minutes: number) => start.add({ minutes });
@@ -441,12 +450,15 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
       fulfillment: "processing",
     });
     const details = teamTable
-      ? ({ kind: "table", seats: 3, durationMinutes: 60 } as const)
+      ? storedTableDetails
       : ({ kind: "office", seats: 1, dayCount: 1 } as const);
+    const reservationDetails = await Effect.runPromise(
+      StoredReservationDetails.encode(details)
+    );
     await Effect.runPromise(
       testDatabase.db
         .update(workspaceReservations)
-        .set({ officeContactAttends: teamTable, reservationDetails: details })
+        .set({ officeContactAttends: teamTable, reservationDetails })
         .where(eq(workspaceReservations.id, id))
     );
     const address = invitee("worker-recovery");
@@ -534,7 +546,7 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
                 reservedFrom: reservedUntil.subtract({ hours: 24 }),
                 reservedUntil,
                 providerStatus: delivery.providerStatus,
-                seats: details.seats,
+                seats: teamTable ? 3 : 1,
                 placement: {},
               }) satisfies WorkspaceReservationDetails
           )
@@ -698,36 +710,48 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
     };
   };
 
-  test("concurrent Team Table invitee additions fill the last seat only once and send only to the new guest", async () => {
-    const { id, add, sent } = await prepareGuestNotices({ teamTable: true });
-    const candidates = [invitee("last-seat-a"), invitee("last-seat-b")];
-    const results = await Promise.all(candidates.map((email) => add([email])));
-    const admitted = results.flatMap((result, index) =>
-      Result.isSuccess(result) ? [candidates[index]] : []
-    );
-    expect(admitted).toHaveLength(1);
-    expect(results).toContainEqual(
-      expect.objectContaining({ success: { added: 1 } })
-    );
-    expect(results).toContainEqual(
-      expect.objectContaining({
-        failure: expect.objectContaining({ refusal: { reason: "capacity" } }),
-      })
-    );
-    const people = await run(
-      Effect.flatMap(ReservationInvitees, (service) =>
-        service.listForReservation(id)
-      )
-    );
-    expect(people.map(({ email }) => email)).toEqual([
-      invitee("worker-recovery"),
-      ...admitted,
-    ]);
-    expect(
-      people.map(({ invitationSendCount }) => invitationSendCount)
-    ).toEqual([0, 1]);
-    expect(sent).toEqual(["invitation"]);
-  });
+  test.each([
+    ["with matching stored seats", defaultTableDetails],
+    ["without stored seats", { kind: "table" }],
+    ["with more stored seats than booked seats", { kind: "table", seats: 4 }],
+  ] as const)(
+    "concurrent Team Table invitee additions fill the last booked seat once and notify only the new guest %s",
+    async (_scenario, storedTableDetails) => {
+      const { id, add, sent } = await prepareGuestNotices({
+        teamTable: true,
+        storedTableDetails,
+      });
+      const candidates = [invitee("last-seat-a"), invitee("last-seat-b")];
+      const results = await Promise.all(
+        candidates.map((email) => add([email]))
+      );
+      const admitted = results.flatMap((result, index) =>
+        Result.isSuccess(result) ? [candidates[index]] : []
+      );
+      expect(admitted).toHaveLength(1);
+      expect(results).toContainEqual(
+        expect.objectContaining({ success: { added: 1 } })
+      );
+      expect(results).toContainEqual(
+        expect.objectContaining({
+          failure: expect.objectContaining({ refusal: { reason: "capacity" } }),
+        })
+      );
+      const people = await run(
+        Effect.flatMap(ReservationInvitees, (service) =>
+          service.listForReservation(id)
+        )
+      );
+      expect(people.map(({ email }) => email)).toEqual([
+        invitee("worker-recovery"),
+        ...admitted,
+      ]);
+      expect(
+        people.map(({ invitationSendCount }) => invitationSendCount)
+      ).toEqual([0, 1]);
+      expect(sent).toEqual(["invitation"]);
+    }
+  );
 
   test("refuses to add guests to Office or to someone else's Team Table", async () => {
     const office = await prepareGuestNotices();
