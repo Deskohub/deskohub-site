@@ -430,11 +430,12 @@ describe("Workspace RPC HTTP client", () => {
     let minted = 0;
     const evicted: string[] = [];
     const sent: ArrayBuffer[] = [];
-    const server = makeTestServer();
+    const server = makeTestServer(undefined, previewRpcPath);
     try {
       const result = await runClient(
         (client) => client.unsubscribeOneClick(payload),
         async (request) => {
+          expect(new URL(request.url).pathname).toBe(previewRpcPath);
           sent.push(await request.clone().arrayBuffer());
           expect(request.headers.get(generationHeader)).toBe(
             previewHeaders.requestHeaders[generationHeader]
@@ -452,7 +453,7 @@ describe("Workspace RPC HTTP client", () => {
             evicted.push(Redacted.value(token));
           }),
         undefined,
-        previewHeaders
+        { ...previewHeaders, path: previewRpcPath }
       );
       expect(result).toBe("withdrawn");
       expect(evicted).toEqual(["synthetic-id-1"]);
