@@ -3,10 +3,13 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, mock, test } from "bun:test";
 import {
   DotyposRejected,
+  DotyposReservationIdSchema,
   DotyposService,
   DotyposUnavailable,
 } from "@deskohub/dotypos";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Cause, Effect, Exit, Layer } from "effect";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
   type EffectTrace,
   recordEffectTrace,
@@ -20,19 +23,14 @@ const { WorkspaceReservationRepository } = await import(
   "@/features/reservation/backend/workspace-reservation.repository"
 );
 
-type Methods = Record<
-  string,
-  (...args: never[]) => Effect.Effect<unknown, unknown>
->;
-
 const succeed =
-  <A>(value: A) =>
+  <const Value>(value: Value) =>
   () =>
-    Effect.succeed(value as never);
+    Effect.succeed(value);
 const fail =
-  <E>(error: E) =>
+  <Error>(error: Error) =>
   () =>
-    Effect.fail(error as never);
+    Effect.fail(error);
 
 const statusReadUnavailable = new DotyposUnavailable({
   operation: "getReservationStatus",
@@ -48,8 +46,10 @@ const release = async (input: {
   readonly failureCode?:
     | "dotypos_cancel_failed"
     | "checkout_supersession_cancel_failed";
-  readonly reservations?: Methods;
-  readonly dotypos?: Methods;
+  readonly reservations?: Partial<
+    typeof WorkspaceReservationRepository.Service
+  >;
+  readonly dotypos?: Partial<typeof DotyposService.Service>;
 }) => {
   const trace: EffectTrace = startEffectTrace();
   const exit = await Effect.gen(function* () {
@@ -57,9 +57,11 @@ const release = async (input: {
     return yield* recordEffectTrace(
       trace,
       holdRelease.release({
-        reservationId: "reservation-id" as never,
+        reservationId: workspaceReservationIdSchema.make("reservation-id"),
         claimedAt: Temporal.Instant.from("2026-07-01T08:00:00Z"),
-        dotyposReservationId: "dotypos-reservation-id" as never,
+        dotyposReservationId: DotyposReservationIdSchema.make(
+          "dotypos-reservation-id"
+        ),
         liveStatus: input.liveStatus,
         failureCode: input.failureCode ?? "dotypos_cancel_failed",
       })
@@ -190,7 +192,15 @@ describe("DotyposHoldRelease.release", () => {
   test("keeps the Dotypos failure when the failure marker fails too", async () => {
     const { outcome, trace } = await release({
       liveStatus: "require_new",
-      reservations: { markCancellationFailed: fail(new Error("db down")) },
+      reservations: {
+        markCancellationFailed: fail(
+          new EffectDrizzleQueryError({
+            query: "update reservations",
+            params: [],
+            cause: Cause.die(new Error("db down")),
+          })
+        ),
+      },
       dotypos: {
         cancelReservation: fail(
           new DotyposRejected({
@@ -208,7 +218,7 @@ describe("DotyposHoldRelease.release", () => {
         "call dotypos.getReservationStatus(dotypos-reservation-id)",
         "call dotypos.cancelReservation(dotypos-reservation-id)",
         "call reservations.markCancellationFailed(id=reservation-id, claimedAt=<Instant>, failureCode=dotypos_cancel_failed)",
-        "Error Reservation cancellation failure marker failed (orderId=reservation-id, failureCode=dotypos_cancel_failed, cause=<Error>) {} in dotyposHoldRelease.release",
+        "Error Reservation cancellation failure marker failed (orderId=reservation-id, failureCode=dotypos_cancel_failed, cause=<EffectDrizzleQueryError>) {} in dotyposHoldRelease.release",
       ]
     `);
   });

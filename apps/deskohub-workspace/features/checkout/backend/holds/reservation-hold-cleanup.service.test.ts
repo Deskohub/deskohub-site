@@ -3,16 +3,37 @@ import { standaloneReservationOrderId } from "@/features/reservation/reservation
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService, DotyposUnavailable } from "@deskohub/dotypos";
+import { PostHogDistinctId } from "@deskohub/analytics-posthog/identifiers";
+import {
+  DotyposCustomerIdSchema,
+  type DotyposReservationId,
+  DotyposReservationIdSchema,
+  DotyposService,
+  DotyposUnavailable,
+} from "@deskohub/dotypos";
 import { Effect, Layer } from "effect";
 import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
-import type { ProviderPaymentFinalizationService as ProviderPaymentFinalizationServiceType } from "../payment/provider-payment-finalization.service";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import type { IWorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
+import type { IProviderPaymentFinalizationService } from "../payment/provider-payment-finalization.service";
+import {
+  expiredPaymentTransitionFixture,
+  pendingNexiAttemptFixture,
+} from "./reservation-hold-cleanup.test-utils";
 
 /** The deadline every cleanup below was scheduled for, before `checkedAt`. */
 const holdExpiresAt = Temporal.Instant.from("2026-06-02T09:50:00.000Z");
 /** The expired hold the cleanups below find on their order. */
 const dueHold = {
-  dotyposReservationId: "dotypos-reservation-id",
+  dotyposReservationId: DotyposReservationIdSchema.make(
+    "dotypos-reservation-id"
+  ),
   reservationHoldExpiresAt: holdExpiresAt,
 };
 const claimStamp = Temporal.Instant.from("2026-06-02T10:00:00.500Z");
@@ -47,26 +68,33 @@ describe("ReservationHoldCleanupService", () => {
         "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
       );
 
-      const orderId = "0198c1a2-a205-7a6d-8074-1f4a191643f8";
-      const attemptId = "attempt-cleanup-provider-paid";
+      const orderId = workspaceReservationIdSchema.make(
+        "0198c1a2-a205-7a6d-8074-1f4a191643f8"
+      );
+      const attemptId = paymentAttemptIdSchema.make(
+        "attempt-cleanup-provider-paid"
+      );
+      const qrAttemptId = paymentAttemptIdSchema.make("active-qr-attempt");
       const cancelReservation = mock(() => Effect.void);
       const claimCancellation = mock(() => Effect.succeed(null));
       const expirePublicPaymentWindow = mock(() => Effect.succeed(true));
-      const finalization: ProviderPaymentFinalizationServiceType = {
+      const finalization: IProviderPaymentFinalizationService = {
         finalizePendingProviderPayment: mock(() =>
           Effect.succeed(verification)
         ),
       };
       const reservations = {
         findById: mock(() =>
-          Effect.succeed({
-            id: orderId,
-            reservationState: "held",
-            paymentState: "pending",
-            activePaymentAttemptId:
-              window === "shared" ? "active-qr-attempt" : attemptId,
-            ...dueHold,
-          })
+          Effect.succeed(
+            workspaceReservationFixture({
+              id: orderId,
+              reservationState: "held",
+              paymentState: "pending",
+              activePaymentAttemptId:
+                window === "shared" ? qrAttemptId : attemptId,
+              ...dueHold,
+            })
+          )
         ),
         claimCancellation,
         recordHoldCleanupSkipped: mock(() => Effect.void),
@@ -98,11 +126,20 @@ describe("ReservationHoldCleanupService", () => {
                             orderId:
                               standaloneReservationOrderId(reservationId),
                             expiresAt: holdExpiresAt,
+                            accountKey: "account-1",
+                            cardAttemptId: attemptId,
+                            qrAttemptId,
                           }
                         : null
                     ),
                   findCardAttempt: () =>
-                    Effect.succeed({ id: attemptId, state: "pending" }),
+                    Effect.succeed(
+                      pendingNexiAttemptFixture(
+                        orderId,
+                        attemptId,
+                        holdExpiresAt.subtract({ minutes: 10 })
+                      )
+                    ),
                 }),
                 Layer.mock(PaymentLifecycleRepository, {
                   markTerminal: mock(() => Effect.die("not used")),
@@ -149,28 +186,32 @@ describe("ReservationHoldCleanupService", () => {
       "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
     );
 
-    const orderId = "0198c1a2-f317-74b0-8c00-931fc7799e18";
-    const attemptId = "attempt-cleanup-provider-pending";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-f317-74b0-8c00-931fc7799e18"
+    );
+    const attemptId = paymentAttemptIdSchema.make(
+      "attempt-cleanup-provider-pending"
+    );
     const now = Temporal.Instant.from("2026-06-02T10:00:00.000Z");
-    const activeReservation = {
+    const activeReservation = workspaceReservationFixture({
       id: orderId,
       reservationState: "held",
       paymentState: "pending",
       activePaymentAttemptId: attemptId,
       ...dueHold,
-    };
-    const selectExpiredHolds = mock(() =>
-      Effect.succeed([activeReservation] as never)
-    );
+    });
+    const selectExpiredHolds = mock(() => Effect.succeed([activeReservation]));
     const recordHoldCleanupSkipped = mock(() => Effect.void);
     const claimCancellation = mock(() => Effect.die("not used"));
     const cancelReservation = mock(() => Effect.die("not used"));
-    const finalization: ProviderPaymentFinalizationServiceType = {
-      finalizePendingProviderPayment: mock(() => Effect.succeed("pending")),
+    const finalization: IProviderPaymentFinalizationService = {
+      finalizePendingProviderPayment: mock(() =>
+        Effect.succeed("pending" as const)
+      ),
     };
     const reservations = {
       selectExpiredHolds,
-      findById: mock(() => Effect.succeed(activeReservation as never)),
+      findById: mock(() => Effect.succeed(activeReservation)),
       recordHoldCleanupSkipped,
       claimCancellation,
     };
@@ -245,26 +286,32 @@ describe("ReservationHoldCleanupService", () => {
       "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
     );
 
-    const orderId = "0198c1a2-eb5e-70fc-815d-10d00be06855";
-    const attemptId = "attempt-cleanup-abandoned";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-eb5e-70fc-815d-10d00be06855"
+    );
+    const attemptId = paymentAttemptIdSchema.make("attempt-cleanup-abandoned");
     const checkedAt = Temporal.Instant.from("2026-06-02T10:00:00.000Z");
-    const claimed = {
+    const claimed = workspaceReservationFixture({
       id: orderId,
       reservationState: "cancelling",
       paymentState: "expired",
-      dotyposReservationId: "dotypos-reservation-id",
-      dotyposCustomerId: "dotypos-customer-id",
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        "dotypos-reservation-id"
+      ),
+      dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
       updatedAt: claimStamp,
-    };
+    });
     const claimCancellation = mock(() => Effect.succeed(claimed));
     const cancelReservation = mock(() => Effect.void);
     const markCancelled = mock(() => Effect.void);
     const markTerminalForReservation = mock(() =>
-      Effect.succeed({
-        attempt: { id: attemptId, state: "expired" },
-        changed: true,
-        timestamp: Temporal.Now.instant(),
-      })
+      Effect.succeed(
+        expiredPaymentTransitionFixture(
+          orderId,
+          attemptId,
+          Temporal.Now.instant()
+        )
+      )
     );
     const analytics = recordCheckoutAnalytics();
     await Effect.gen(function* () {
@@ -285,19 +332,21 @@ describe("ReservationHoldCleanupService", () => {
                 finalizePendingProviderPayment: mock(() =>
                   Effect.succeed("abandoned" as const)
                 ),
-              } satisfies ProviderPaymentFinalizationServiceType),
+              } satisfies IProviderPaymentFinalizationService),
               Layer.mock(PaymentLifecycleRepository, {
                 markTerminal: markTerminalForReservation,
               }),
               Layer.mock(WorkspaceReservationRepository, {
                 findById: mock(() =>
-                  Effect.succeed({
-                    id: orderId,
-                    reservationState: "held",
-                    paymentState: "pending",
-                    activePaymentAttemptId: attemptId,
-                    ...dueHold,
-                  })
+                  Effect.succeed(
+                    workspaceReservationFixture({
+                      id: orderId,
+                      reservationState: "held",
+                      paymentState: "pending",
+                      activePaymentAttemptId: attemptId,
+                      ...dueHold,
+                    })
+                  )
                 ),
                 claimCancellation,
                 markCancelled,
@@ -361,8 +410,12 @@ describe("ReservationHoldCleanupService", () => {
       "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
     );
 
-    const orderId = "0198c1a2-f317-737f-823d-4c70fc76ec7b";
-    const attemptId = "attempt-cleanup-provider-failed";
+    const orderId = workspaceReservationIdSchema.make(
+      "0198c1a2-f317-737f-823d-4c70fc76ec7b"
+    );
+    const attemptId = paymentAttemptIdSchema.make(
+      "attempt-cleanup-provider-failed"
+    );
     const markTerminalForReservation = mock(() => Effect.die("not used"));
     const claimCancellation = mock(() => Effect.succeed(null));
     const cancelReservation = mock(() => Effect.void);
@@ -381,19 +434,21 @@ describe("ReservationHoldCleanupService", () => {
                 finalizePendingProviderPayment: mock(() =>
                   Effect.succeed("provider_verification_failed" as const)
                 ),
-              } satisfies ProviderPaymentFinalizationServiceType),
+              } satisfies IProviderPaymentFinalizationService),
               Layer.mock(PaymentLifecycleRepository, {
                 markTerminal: markTerminalForReservation,
               }),
               Layer.mock(WorkspaceReservationRepository, {
                 findById: mock(() =>
-                  Effect.succeed({
-                    id: orderId,
-                    reservationState: "held",
-                    paymentState: "pending",
-                    activePaymentAttemptId: attemptId,
-                    ...dueHold,
-                  })
+                  Effect.succeed(
+                    workspaceReservationFixture({
+                      id: orderId,
+                      reservationState: "held",
+                      paymentState: "pending",
+                      activePaymentAttemptId: attemptId,
+                      ...dueHold,
+                    })
+                  )
                 ),
                 claimCancellation,
               }),
@@ -433,35 +488,39 @@ describe("ReservationHoldCleanupService", () => {
 
     // One expired hold per live Dotypos status, and one whose status can't
     // be read. None has a pending payment, so each goes straight to release.
-    const statuses = {
-      "reservation-sweep-new": "NEW",
-      "reservation-sweep-cancelled": "CANCELLED",
-      "0198c1a2-9857-77d2-8d7f-92c5539c944f": "CONFIRMED",
-      "0198c1a2-ff26-7e37-87c0-67407bb1b189": undefined,
-    } as const;
-    type OrderId = keyof typeof statuses;
-    const orderIds = Object.keys(statuses) as OrderId[];
-    const holdOf = (id: OrderId) => `dotypos-${id}`;
-    const orderOf = (id: OrderId) => ({
-      id,
-      reservationState: "held",
-      paymentState: "not_started",
-      activePaymentAttemptId: null,
-      dotyposReservationId: holdOf(id),
-      dotyposCustomerId: "dotypos-customer-id",
-      reservationHoldExpiresAt: holdExpiresAt,
-      updatedAt: claimStamp,
-    });
-    const orderIdOfHold = (hold: string) =>
-      orderIds.find((id) => holdOf(id) === hold)!;
+    const statuses = [
+      ["reservation-sweep-new", "NEW"],
+      ["reservation-sweep-cancelled", "CANCELLED"],
+      ["0198c1a2-9857-77d2-8d7f-92c5539c944f", "CONFIRMED"],
+      ["0198c1a2-ff26-7e37-87c0-67407bb1b189", undefined],
+    ] as const;
+    const holdOf = (id: string) =>
+      DotyposReservationIdSchema.make(`dotypos-${id}`);
+    const orderOf = (id: WorkspaceReservationId) =>
+      workspaceReservationFixture({
+        id,
+        reservationState: "held",
+        paymentState: "not_started",
+        activePaymentAttemptId: null,
+        dotyposReservationId: holdOf(id),
+        dotyposCustomerId: DotyposCustomerIdSchema.make("dotypos-customer-id"),
+        reservationHoldExpiresAt: holdExpiresAt,
+        updatedAt: claimStamp,
+      });
+    const orders = statuses.map(([id]) =>
+      orderOf(workspaceReservationIdSchema.make(id))
+    );
 
     const markCancelled = mock((_: { readonly id: string }) => Effect.void);
-    const markCancellationFailed = mock(
-      (_: { readonly id: string; readonly failureCode: string }) => Effect.void
-    );
-    const cancelReservation = mock((_: string) => Effect.void);
-    const getReservationStatus = mock((hold: string) => {
-      const status = statuses[orderIdOfHold(hold)];
+    const markCancellationFailed = mock<
+      IWorkspaceReservationRepository["markCancellationFailed"]
+    >(() => Effect.void);
+    const cancelReservation = mock((_: DotyposReservationId) => Effect.void);
+    const getReservationStatus = mock((hold: DotyposReservationId) => {
+      const [, status] = requireValue(
+        statuses.find(([id]) => holdOf(id) === hold),
+        "fixture for Dotypos hold"
+      );
       return status
         ? Effect.succeed(status)
         : Effect.fail(
@@ -477,7 +536,7 @@ describe("ReservationHoldCleanupService", () => {
       const cleanup = yield* ReservationHoldCleanupService;
       return yield* cleanup.sweepExpiredHolds({
         now: Temporal.Instant.from("2026-06-02T10:00:00.000Z"),
-        limit: orderIds.length,
+        limit: orders.length,
       });
     }).pipe(
       Effect.provide(
@@ -490,22 +549,22 @@ describe("ReservationHoldCleanupService", () => {
                 finalizePendingProviderPayment: mock(() =>
                   Effect.die("not used")
                 ),
-              } satisfies ProviderPaymentFinalizationServiceType),
+              } satisfies IProviderPaymentFinalizationService),
               Layer.mock(PaymentLifecycleRepository, {
                 markTerminal: mock(() => Effect.die("not used")),
               }),
               Layer.mock(WorkspaceReservationRepository, {
-                selectExpiredHolds: mock(() =>
-                  Effect.succeed(orderIds.map(orderOf) as never)
+                selectExpiredHolds: mock(() => Effect.succeed(orders)),
+                findById: mock((id) =>
+                  Effect.succeed(
+                    orders.find((order) => order.id === id) ?? null
+                  )
                 ),
-                findById: mock((id: string) =>
-                  Effect.succeed(orderOf(id as OrderId) as never)
-                ),
-                claimCancellation: mock((input: { readonly id: string }) =>
+                claimCancellation: mock(({ id }) =>
                   Effect.succeed({
-                    ...orderOf(input.id as OrderId),
-                    reservationState: "cancelling",
-                  } as never)
+                    ...orderOf(id),
+                    reservationState: "cancelling" as const,
+                  })
                 ),
                 markCancelled,
                 markCancellationFailed,
@@ -514,7 +573,7 @@ describe("ReservationHoldCleanupService", () => {
               Layer.mock(DotyposService, {
                 getReservationStatus,
                 cancelReservation,
-              } as never)
+              })
             )
           )
         )
@@ -523,7 +582,7 @@ describe("ReservationHoldCleanupService", () => {
     );
 
     expect(summary).toEqual({ cancelled: 2, skipped: 1, failed: 1 });
-    expect(getReservationStatus).toHaveBeenCalledTimes(orderIds.length);
+    expect(getReservationStatus).toHaveBeenCalledTimes(orders.length);
     expect(cancelReservation.mock.calls).toEqual([
       [holdOf("reservation-sweep-new")],
     ]);
@@ -534,12 +593,16 @@ describe("ReservationHoldCleanupService", () => {
     expect(markCancellationFailed.mock.calls.map(([marker]) => marker)).toEqual(
       [
         {
-          id: "0198c1a2-9857-77d2-8d7f-92c5539c944f",
+          id: workspaceReservationIdSchema.make(
+            "0198c1a2-9857-77d2-8d7f-92c5539c944f"
+          ),
           claimedAt: claimStamp,
           failureCode: "dotypos_cancel_failed",
         },
         {
-          id: "0198c1a2-ff26-7e37-87c0-67407bb1b189",
+          id: workspaceReservationIdSchema.make(
+            "0198c1a2-ff26-7e37-87c0-67407bb1b189"
+          ),
           claimedAt: claimStamp,
           failureCode: "dotypos_cancel_failed",
         },
@@ -549,6 +612,9 @@ describe("ReservationHoldCleanupService", () => {
       analytics.messages
         .filter(({ event }) => event === "reservation abandoned")
         .map(({ distinctId }) => distinctId)
-    ).toEqual(["reservation-sweep-new", "reservation-sweep-cancelled"]);
+    ).toEqual([
+      PostHogDistinctId.make("reservation-sweep-new"),
+      PostHogDistinctId.make("reservation-sweep-cancelled"),
+    ]);
   });
 });
