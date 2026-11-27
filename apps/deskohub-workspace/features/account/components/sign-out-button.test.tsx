@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { useState } from "react";
 import { m } from "@/features/i18n";
@@ -120,9 +121,9 @@ test("rejects a dirty sign-out before auth mutation or navigation", async () => 
   const confirm = mock(() => false);
   window.confirm = confirm;
   let assigned: string | null = null;
-  window.location.assign = ((href: string) => {
-    assigned = href;
-  }) as typeof window.location.assign;
+  window.location.assign = (href) => {
+    assigned = String(href);
+  };
 
   const { SignOutButton } = await import("./sign-out-button");
   const view = render(
@@ -148,19 +149,16 @@ test("rejects a dirty sign-out before auth mutation or navigation", async () => 
 test("allows one unload after deferred sign-out succeeds", async () => {
   const confirm = mock(() => true);
   window.confirm = confirm;
-  let resolveSignOut!: (outcome: SignOutOutcome) => void;
-  const pendingSignOut = new Promise<SignOutOutcome>((resolve) => {
-    resolveSignOut = resolve;
-  });
+  const pendingSignOut = Promise.withResolvers<SignOutOutcome>();
   signOutOfAccount.mockImplementationOnce(() => {
     events.push("sign-out");
-    return pendingSignOut;
+    return pendingSignOut.promise;
   });
   let assigned: string | null = null;
-  window.location.assign = ((href: string) => {
+  window.location.assign = (href) => {
     events.push("navigation");
-    assigned = href;
-  }) as typeof window.location.assign;
+    assigned = String(href);
+  };
 
   const { SignOutButton } = await import("./sign-out-button");
   const view = render(
@@ -181,13 +179,14 @@ test("allows one unload after deferred sign-out succeeds", async () => {
   expect(confirm).toHaveBeenCalledTimes(1);
   expect(events).toEqual(["sign-out"]);
   expect(signOutOfAccount).toHaveBeenCalledTimes(1);
-  expect((button as HTMLButtonElement).disabled).toBe(true);
+  assert(button instanceof HTMLButtonElement, "Expected a sign-out button");
+  expect(button.disabled).toBe(true);
   expect(assigned).toBeNull();
   expect(dispatchBeforeUnload().defaultPrevented).toBe(true);
 
   await act(async () => {
-    resolveSignOut("signed-out");
-    await pendingSignOut;
+    pendingSignOut.resolve("signed-out");
+    await pendingSignOut.promise;
   });
 
   expect(assigned).toBe("/cs-CZ");
@@ -203,9 +202,9 @@ test("does not navigate when sign-out fails", async () => {
   window.confirm = confirm;
   signOutOfAccount.mockImplementationOnce(() => Promise.resolve("failed"));
   let assigned: string | null = null;
-  window.location.assign = ((href: string) => {
-    assigned = href;
-  }) as typeof window.location.assign;
+  window.location.assign = (href) => {
+    assigned = String(href);
+  };
 
   const { SignOutButton } = await import("./sign-out-button");
   const view = render(
@@ -225,7 +224,8 @@ test("does not navigate when sign-out fails", async () => {
 
   expect(signOutOfAccount).toHaveBeenCalledTimes(1);
   expect(assigned).toBeNull();
-  expect((button as HTMLButtonElement).disabled).toBe(false);
+  assert(button instanceof HTMLButtonElement, "Expected a sign-out button");
+  expect(button.disabled).toBe(false);
   expect(view.getByRole("alert").textContent).toBe(
     m.accountSignOutFailed({}, { locale: "en-US" })
   );
@@ -234,7 +234,8 @@ test("does not navigate when sign-out fails", async () => {
   expect(view.getByRole("alert").hasAttribute("aria-live")).toBe(false);
   expect(dispatchBeforeUnload().defaultPrevented).toBe(true);
 
-  const draft = view.getByLabelText("Dirty form") as HTMLInputElement;
+  const draft = view.getByLabelText("Dirty form");
+  assert(draft instanceof HTMLInputElement);
   await act(async () => {
     fireEvent.change(draft, { target: { value: "later draft" } });
   });
@@ -258,9 +259,9 @@ test("retries a failed sign-out and navigates after the next success", async () 
     .mockImplementationOnce(() => Promise.resolve("failed"))
     .mockImplementationOnce(() => Promise.resolve("signed-out"));
   let assigned: string | null = null;
-  window.location.assign = ((href: string) => {
-    assigned = href;
-  }) as typeof window.location.assign;
+  window.location.assign = (href) => {
+    assigned = String(href);
+  };
 
   const { SignOutButton } = await import("./sign-out-button");
   const view = render(
@@ -278,7 +279,8 @@ test("retries a failed sign-out and navigates after the next success", async () 
     await Promise.resolve();
   });
 
-  expect((button as HTMLButtonElement).disabled).toBe(false);
+  assert(button instanceof HTMLButtonElement, "Expected a sign-out button");
+  expect(button.disabled).toBe(false);
   expect(view.getByRole("alert")).toBeTruthy();
   expect(assigned).toBeNull();
 
@@ -289,6 +291,6 @@ test("retries a failed sign-out and navigates after the next success", async () 
 
   expect(signOutOfAccount).toHaveBeenCalledTimes(2);
   expect(assigned).toBe("/en-US");
-  expect((button as HTMLButtonElement).disabled).toBe(true);
+  expect(button.disabled).toBe(true);
   expect(view.queryByRole("alert")).toBeNull();
 });

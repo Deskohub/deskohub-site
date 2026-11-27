@@ -1,12 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import type { CustomerAccountSession } from "@/features/account/backend/customer-authentication.service";
 import {
   CustomerAccountAccessError,
   type CustomerAccountAccessFailure,
-  type CustomerAccountId,
+  customerAccountIdSchema,
 } from "@/features/account/customer-account";
+import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 
 let currentUser: Effect.Effect<
   CustomerAccountSession | null,
@@ -42,12 +43,16 @@ const { readCustomerAgentSession } = await import(
   "./customer-agent-session.server"
 );
 
-const session = (deletionRequested: boolean): CustomerAccountSession =>
-  ({
-    accountId: "account-synthetic-1" as CustomerAccountId,
-    email: testEmailAddress("synthetic.customer"),
-    deletionRequested,
-  }) as CustomerAccountSession;
+const session = (deletionRequested: boolean): CustomerAccountSession => ({
+  accountId: Schema.decodeSync(customerAccountIdSchema)("account-synthetic-1"),
+  email: Schema.decodeSync(reservationCustomerEmailSchema)(
+    testEmailAddress("synthetic.customer")
+  ),
+  deletionRequested,
+  displayName: null,
+  accountCreatedAt: Temporal.Instant.from("2026-11-01T09:00:00Z"),
+  accountUpdatedAt: Temporal.Instant.from("2026-11-02T09:00:00Z"),
+});
 
 const readWith = (
   read: Effect.Effect<CustomerAccountSession | null, CustomerAccountAccessError>

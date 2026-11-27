@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import type { AresBusinessLookupResult } from "@/features/account/actions";
+import type * as accountActions from "@/features/account/actions";
 import { m } from "@/features/i18n";
 import {
   registerWorkspaceComponentTestEnv,
@@ -9,10 +9,9 @@ import {
 registerWorkspaceComponentTestEnv();
 const { act, cleanup, renderHook } = await import("@testing-library/react");
 
-type LookupOutcome = {
-  readonly data?: AresBusinessLookupResult;
-  readonly serverError?: string;
-};
+type LookupOutcome = Awaited<
+  ReturnType<typeof accountActions.lookupAresBusiness>
+>;
 
 const foundCompany = {
   companyName: "Registry Company",
@@ -20,37 +19,31 @@ const foundCompany = {
   city: "Prague",
 };
 
-const lookupAresBusiness = mock(
-  (_input: { readonly ico: string }): Promise<LookupOutcome> =>
-    Promise.resolve({ data: { status: "found", company: foundCompany } })
+const lookupAresBusiness = mock<typeof accountActions.lookupAresBusiness>(() =>
+  Promise.resolve({ data: { status: "found", company: foundCompany } })
 );
 
-mock.module("@/features/account/actions", () => ({
-  acknowledgeSignupReferralNotice: () =>
-    Promise.resolve({ data: { status: "acknowledged" } }),
-  completeCustomerProfile: () =>
-    Promise.resolve({ data: { status: "completed" } }),
-  lookupAresBusiness,
-  updateCustomerProfile: () => Promise.resolve({ data: { status: "updated" } }),
-  updateLocalePreference: () => Promise.resolve({ data: { status: "saved" } }),
-}));
+mock.module(
+  "@/features/account/actions",
+  (): Partial<typeof accountActions> => ({
+    acknowledgeSignupReferralNotice: () =>
+      Promise.resolve({ data: { status: "acknowledged" } }),
+    completeCustomerProfile: () =>
+      Promise.resolve({ data: { status: "completed" } }),
+    lookupAresBusiness,
+    updateCustomerProfile: () =>
+      Promise.resolve({ data: { status: "updated" } }),
+    updateLocalePreference: () =>
+      Promise.resolve({ data: { status: "saved" } }),
+  })
+);
 
 const { useAresBusinessLookup } = await import("./use-ares-business-lookup");
 
 const deferLookup = () => {
-  let settle!: (outcome: LookupOutcome) => void;
-  let fail!: (error: Error) => void;
-  lookupAresBusiness.mockImplementationOnce(
-    () =>
-      new Promise<LookupOutcome>((resolve, reject) => {
-        settle = resolve;
-        fail = reject;
-      })
-  );
-  return {
-    settle: (outcome: LookupOutcome) => settle(outcome),
-    fail: (error: Error) => fail(error),
-  };
+  const { promise, resolve, reject } = Promise.withResolvers<LookupOutcome>();
+  lookupAresBusiness.mockImplementationOnce(() => promise);
+  return { settle: resolve, fail: (error: Error) => reject(error) };
 };
 
 const renderLookup = () =>

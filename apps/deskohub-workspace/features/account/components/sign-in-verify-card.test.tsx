@@ -53,9 +53,9 @@ const originalReplace = window.location.replace;
 
 describe("sign-in verify card", () => {
   beforeEach(() => {
-    window.location.replace = ((href: string) => {
-      navigations.push(href);
-    }) as typeof window.location.replace;
+    window.location.replace = (href) => {
+      navigations.push(String(href));
+    };
   });
 
   afterEach(() => {

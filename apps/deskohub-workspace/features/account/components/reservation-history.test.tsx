@@ -328,8 +328,13 @@ describe("ReservationHistory", () => {
       })
     ).toBeTruthy();
 
-    const group = (id: string) =>
-      view.container.querySelector(`[data-account-reservation-group="${id}"]`)!;
+    const group = (id: string) => {
+      const element = view.container.querySelector(
+        `[data-account-reservation-group="${id}"]`
+      );
+      if (!element) throw new Error(`Missing the ${id} reservation group`);
+      return element;
+    };
 
     expect(group("current").textContent).toContain("1");
     expect(group("past").textContent).toContain("2");
@@ -882,7 +887,8 @@ describe("ReservationHistory", () => {
       });
       const current = view.container.querySelector(
         '[data-account-reservation-group="current"]'
-      )!;
+      );
+      if (!current) throw new Error("Missing the current reservation group");
       const pastRows = view.container.querySelectorAll(
         '[data-account-reservation-group="past"] tbody tr'
       );

@@ -181,20 +181,14 @@ describe("AccountLayoutShell", () => {
 
     for (const section of privateSections) {
       const label = accountSectionLabel(section, "en-US");
-      expect(
-        (
-          getDesktopNavigation(view).getByRole("button", {
-            name: label,
-          }) as HTMLButtonElement
-        ).disabled
-      ).toBe(true);
-      expect(
-        (
-          getMobileNavigation(view).getByRole("button", {
-            name: label,
-          }) as HTMLButtonElement
-        ).disabled
-      ).toBe(true);
+      for (const navigation of [
+        getDesktopNavigation(view),
+        getMobileNavigation(view),
+      ]) {
+        const button = navigation.getByRole("button", { name: label });
+        expect(button).toBeInstanceOf(HTMLButtonElement);
+        expect(button.hasAttribute("disabled")).toBe(true);
+      }
     }
 
     expect(

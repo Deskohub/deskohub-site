@@ -13,12 +13,12 @@ beforeAll(() => {
   registerWorkspaceComponentTestEnv();
   originalAssign = window.location.assign;
   originalReplace = window.location.replace;
-  window.location.assign = ((href: string) => {
+  window.location.assign = (href) => {
     documentNavigations.push(`assign:${href}`);
-  }) as typeof window.location.assign;
-  window.location.replace = ((href: string) => {
+  };
+  window.location.replace = (href) => {
     documentNavigations.push(`replace:${href}`);
-  }) as typeof window.location.replace;
+  };
 });
 
 afterEach(() => {
