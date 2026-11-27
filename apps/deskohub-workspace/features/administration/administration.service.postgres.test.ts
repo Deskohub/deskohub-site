@@ -211,12 +211,14 @@ describe.skipIf(!testDatabase)(
 
     const insertReservation = async ({
       customerId,
+      details = openSpaceDetails,
       fulfillmentState,
       label,
       reservationState,
       updatedAt,
     }: {
       readonly customerId: DotyposCustomerId;
+      readonly details?: StoredWorkspaceReservationDetails;
       readonly fulfillmentState: Exclude<FulfillmentState, "awaiting_delivery">;
       readonly label: string;
       readonly reservationState: ReservationState;
@@ -230,7 +232,7 @@ describe.skipIf(!testDatabase)(
             fulfillment: fulfillmentState,
           },
           customer: customerId,
-          details: openSpaceDetails,
+          details,
           overrides: {
             dotyposReservationId: bookingId(label),
             ...(updatedAt && { updatedAt }),
@@ -2472,6 +2474,7 @@ describe.skipIf(!testDatabase)(
         ids.push(
           await insertReservation({
             customerId,
+            details: index === 0 ? { kind: "office" } : openSpaceDetails,
             fulfillmentState: "fulfilled",
             label: `reservation-pages-${index}`,
             reservationState: "confirmed",
@@ -2493,6 +2496,36 @@ describe.skipIf(!testDatabase)(
       expect(second).toMatchObject({ page: 2, pageCount: 2, total: 11 });
       expect(second?.items.map(({ id }) => id)).toEqual(ids.slice(10));
       expect(beyond?.page).toBe(2);
+
+      const [history, list, conflicting] = await Promise.all([
+        run((administration) =>
+          administration.loadCustomerReservations({
+            customerId,
+            excludedType: "office",
+            page: 2,
+          })
+        ),
+        run((administration) =>
+          administration.listReservations({
+            customerId,
+            excludedType: "office",
+            pageSize: 1,
+          })
+        ),
+        run((administration) =>
+          administration.listReservations({
+            customerId,
+            excludedType: "office",
+            type: "office",
+          })
+        ),
+      ]);
+
+      expect(history).toMatchObject({ page: 1, pageCount: 1, total: 10 });
+      expect(history.items.map(({ id }) => id)).toEqual(ids.slice(1));
+      expect(list).toMatchObject({ page: 1, pageCount: 10, total: 10 });
+      expect(list.items.map(({ type }) => type)).toEqual(["cowork"]);
+      expect(conflicting).toMatchObject({ items: [], total: 0 });
     });
 
     test("pages no reservations for a customer without any", async () => {

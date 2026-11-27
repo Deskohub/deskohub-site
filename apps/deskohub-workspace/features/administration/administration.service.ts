@@ -228,9 +228,19 @@ export type AdministrationReservationListInput = {
 
 type AdministrationSortDirection = "asc" | "desc";
 
-type ReservationListInput = AdministrationReservationListInput & {
-  readonly includePassDays?: boolean;
-  readonly pageSize?: number;
+type ReservationFamilyExclusion = {
+  readonly excludedType?: AdministrationReservationFamily;
+};
+
+type ReservationListInput = AdministrationReservationListInput &
+  ReservationFamilyExclusion & {
+    readonly includePassDays?: boolean;
+    readonly pageSize?: number;
+  };
+
+type CustomerReservationsInput = ReservationFamilyExclusion & {
+  readonly customerId: DotyposCustomerId;
+  readonly page?: number;
 };
 
 /** The list filters and order of a reservation export, which has no pages. */
@@ -1226,6 +1236,13 @@ const reservationTypeSort = sql<string>`case
   else 'Cowork ' || initcap(${StoredReservationDetails.property("cowork", "tier")})
 end`;
 
+const excludeReservationFamily = (
+  family: AdministrationReservationFamily | undefined
+) =>
+  family === undefined
+    ? undefined
+    : sql`${StoredReservationDetails.kind} is distinct from ${family}`;
+
 const getReservationOrderBy = (input: {
   readonly direction?: AdministrationReservationSortDirection;
   readonly sort?: Exclude<AdministrationReservationSort, "date">;
@@ -1515,10 +1532,9 @@ export class AdministrationService extends Context.Service<
       readonly AdministrationCustomerSummary[],
       EffectDrizzleQueryError | AdministrationListSourceUnavailableError
     >;
-    readonly loadCustomerReservations: (input: {
-      readonly customerId: DotyposCustomerId;
-      readonly page?: number;
-    }) => Effect.Effect<
+    readonly loadCustomerReservations: (
+      input: CustomerReservationsInput
+    ) => Effect.Effect<
       AdministrationReservationPage,
       EffectDrizzleQueryError | WorkspaceReservationDetailsMalformedError
     >;
@@ -2041,7 +2057,8 @@ export class AdministrationService extends Context.Service<
       const loadReservationListScope = Effect.fn(
         "AdministrationService.loadReservationListScope"
       )(function* <E = never>(
-        input: AdministrationReservationExportInput,
+        input: AdministrationReservationExportInput &
+          ReservationFamilyExclusion,
         policy: ProviderReadPolicy<E> = degradeProviderRead
       ) {
         const dateRange = getAdministrationReservationDateRange(input);
@@ -2049,9 +2066,12 @@ export class AdministrationService extends Context.Service<
           dateRange,
           policy
         );
-        const conditions: SQL[] = input.includePassDays
-          ? []
-          : [isNull(workspaceReservations.passId)];
+        const conditions: (SQL | undefined)[] = [
+          input.includePassDays
+            ? undefined
+            : isNull(workspaceReservations.passId),
+          excludeReservationFamily(input.excludedType),
+        ];
         if (input.customerId) {
           conditions.push(
             eq(workspaceReservations.dotyposCustomerId, input.customerId)
@@ -2085,7 +2105,7 @@ export class AdministrationService extends Context.Service<
           dateRange,
           dateReservations,
           orderedProviderIds,
-          where: conditions.length > 0 ? and(...conditions) : undefined,
+          where: and(...conditions),
         };
       });
 
@@ -2956,13 +2976,10 @@ export class AdministrationService extends Context.Service<
 
       const loadCustomerReservations = Effect.fn(
         "AdministrationService.loadCustomerReservations"
-      )(function* (input: {
-        readonly customerId: DotyposCustomerId;
-        readonly page?: number;
-      }) {
-        const where = eq(
-          workspaceReservations.dotyposCustomerId,
-          input.customerId
+      )(function* (input: CustomerReservationsInput) {
+        const where = and(
+          eq(workspaceReservations.dotyposCustomerId, input.customerId),
+          excludeReservationFamily(input.excludedType)
         );
         const countRows = yield* db
           .select({ value: count() })
