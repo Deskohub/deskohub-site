@@ -129,7 +129,9 @@ const databaseFailure = new EffectDrizzleQueryError({
 
 const failToEnqueueRecovery: typeof LatePaymentRecoveryQueueService.Service.enqueue =
   (input) =>
-    LatePaymentRecoveryQueueService.use((queue) => queue.enqueue(input)).pipe(
+    Effect.flatMap(LatePaymentRecoveryQueueService, (queue) =>
+      queue.enqueue(input)
+    ).pipe(
       Effect.provide(
         LatePaymentRecoveryQueueService.Default.pipe(
           Layer.provide(
