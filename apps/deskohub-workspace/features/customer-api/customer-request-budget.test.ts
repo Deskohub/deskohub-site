@@ -139,6 +139,7 @@ describe("customer request budget classes", () => {
         getInvoicePdf: "dotypos-read",
         getCorrectiveDocumentPdf: "dotypos-read",
       },
+      teamTable: { getQuote: "dotypos-read" },
     });
   });
 

@@ -15,6 +15,7 @@ import {
   type CheckoutStatusViewModel,
 } from "@/features/checkout/backend/checkout/checkout-status.service";
 import { PayableCheckout } from "@/features/checkout/backend/checkout/payable-checkout.service";
+import { ReservationQuoteError } from "@/features/checkout/reservation-quote-error";
 import { discountAdvertisementQuoteCodec } from "@/features/discounts/contracts";
 import { DiscountServiceMock } from "@/features/discounts/discount.service.mock";
 import { releaseGateForRunOverFlags } from "@/features/feature-flags/backend/release-cohorts.test-utils";
@@ -42,6 +43,7 @@ import {
   expectEachCohortAnsweredAlone,
   inReleaseCohort,
   makeCustomerApiTestServer,
+  readInEachReleaseCohort,
   testCustomerEndpointGuards,
 } from "./customer-api.test-utils";
 import { CustomerCheckoutOperations } from "./customer-checkout-operations.service";
@@ -134,10 +136,20 @@ const pricing = CheckoutPricingService.Default.pipe(
   )
 );
 
+const availabilityWith = (
+  methods: Partial<WorkspaceAvailabilityService["Service"]>
+) =>
+  Layer.mergeAll(
+    TestSealedStateKeys,
+    Layer.mock(PayableCheckout, {}),
+    Layer.mock(WorkspaceAvailabilityService, methods)
+  );
+
 const openCatalog = {
   teamTableRelease: TeamTableReleaseGate.fromDecision(true),
   inventory,
   pricing,
+  availability: availabilityWith({ ensureAvailable: () => Effect.void }),
 };
 
 describe("Team Table booking", () => {
@@ -237,6 +249,24 @@ describe("Team Table booking", () => {
     expect(answers.alone.closed.status).toBe(404);
   });
 
+  test("uses the fixed 503 response for an untagged checkout service error", async () => {
+    const api = makeCustomerApiTestServer({
+      bookingCatalog: openCatalog,
+      bookingCheckout: {
+        inventory,
+        operations: Layer.mock(CustomerCheckoutOperations, {
+          preparePayState: () =>
+            Effect.fail(new ReservationQuoteError({ message: "quote failed" })),
+        }),
+      },
+    });
+    const response = await api.handle(customerApiRequest(bookingCalls[3]));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      _tag: "CustomerServiceUnavailable",
+    });
+  });
+
   test("reads the six-month calendar and exact date's available start/end matrix", async () => {
     const range = getWorkspaceAvailabilityRange(
       getCurrentWorkspaceDate().toString()
@@ -253,51 +283,106 @@ describe("Team Table booking", () => {
         { startTime: "09:00", endTimes: ["09:15", "10:15"] },
       ],
     };
+    const availability = availabilityWith({
+      ensureAvailable: () => Effect.void,
+      getAvailability: ({ query }) =>
+        Effect.sync(() => {
+          expect(query).toEqual({ ...range, kind: "table", seats: 4 });
+          return {
+            ...calendar,
+            reservedDeskWorkstationRequiredDates: [],
+            unavailableCoworkTiers: [],
+            meetingRoomUnavailable: false,
+            officeUnavailable: false,
+            unavailableMonitorOptions: [],
+            notices: [],
+          };
+        }),
+      getTableSlots: ({ query }) =>
+        Effect.sync(() => {
+          expect(query).toEqual({
+            kind: "table",
+            mode: "table-slots",
+            date,
+            seats: 4,
+          });
+          return Schema.decodeUnknownSync(tableSlotsAvailabilitySchema)(slots);
+        }),
+    });
+    const serve = (flags: Parameters<typeof releaseGateForRunOverFlags>[1]) =>
+      makeCustomerApiTestServer({
+        bookingCatalog: {
+          ...openCatalog,
+          availability,
+          teamTableRelease: releaseGateForRunOverFlags(
+            TeamTableReleaseGate,
+            flags
+          ),
+        },
+      });
+    for (const [call, expected] of [
+      [bookingCalls[0], calendar],
+      [bookingCalls[1], slots],
+    ] as const) {
+      const answers = await answerInEachReleaseCohort({
+        serve,
+        send: (cohort) => customerApiRequest(inReleaseCohort(call, cohort)),
+      });
+      expectEachCohortAnsweredAlone(answers);
+      expect(answers.alone.open).toEqual({ status: 200, body: expected });
+      expect(answers.alone.closed.status).toBe(404);
+    }
+    const quoteAnswers = await readInEachReleaseCohort({
+      serve,
+      send: (cohort) =>
+        customerApiRequest(inReleaseCohort(bookingCalls[2], cohort)),
+      answer: async (response) => response.status,
+    });
+    expectEachCohortAnsweredAlone(quoteAnswers);
+    expect(quoteAnswers.alone).toEqual({ open: 200, closed: 404 });
+  });
+
+  test("refuses to sign a quote when live capacity cannot accommodate the exact interval", async () => {
+    const checkedIntervals: unknown[] = [];
     const api = makeCustomerApiTestServer({
       bookingCatalog: {
         ...openCatalog,
-        availability: Layer.mergeAll(
-          TestSealedStateKeys,
-          Layer.mock(PayableCheckout, {}),
-          Layer.mock(WorkspaceAvailabilityService, {
-            getAvailability: ({ query }) =>
-              Effect.sync(() => {
-                expect(query).toEqual({ ...range, kind: "table", seats: 4 });
-                return {
-                  ...calendar,
-                  reservedDeskWorkstationRequiredDates: [],
-                  unavailableCoworkTiers: [],
-                  meetingRoomUnavailable: false,
-                  officeUnavailable: false,
-                  unavailableMonitorOptions: [],
-                  notices: [],
-                };
-              }),
-            getTableSlots: ({ query }) =>
-              Effect.sync(() => {
-                expect(query).toEqual({
-                  kind: "table",
-                  mode: "table-slots",
-                  date,
-                  seats: 4,
-                });
-                return Schema.decodeUnknownSync(tableSlotsAvailabilitySchema)(
-                  slots
-                );
-              }),
-          })
-        ),
+        pricing: Layer.mock(CheckoutPricingService, {
+          quoteAdvertisement: () =>
+            Effect.die("must verify capacity before pricing"),
+        }),
+        availability: availabilityWith({
+          ensureAvailable: (reservation) =>
+            Effect.sync(() => checkedIntervals.push(reservation)).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new WorkspaceTableUnavailableError({
+                    date,
+                    reservation: { kind: "table" },
+                  })
+                )
+              )
+            ),
+        }),
       },
     });
-    const results = await Promise.all(
-      bookingCalls
-        .slice(0, 2)
-        .map((call) => api.handle(customerApiRequest(call)))
-    );
-    expect(results.map((result) => result.status)).toEqual([200, 200]);
-    expect(await Promise.all(results.map((result) => result.json()))).toEqual([
-      calendar,
-      slots,
+
+    const response = await api.handle(customerApiRequest(bookingCalls[2]));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      _tag: "CustomerSelectionUnavailable",
+      reason: "availability_changed",
+    });
+    expect(checkedIntervals).toEqual([
+      {
+        kind: "table",
+        seats: selection.seats,
+        ...getTableReservationInterval(
+          date,
+          selection.startTime,
+          selection.endTime
+        ),
+      },
     ]);
   });
 
