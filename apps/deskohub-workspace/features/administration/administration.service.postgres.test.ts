@@ -2051,7 +2051,7 @@ describe.skipIf(!testDatabase)(
           seats: 6,
           durationMinutes: 60,
         });
-        await insert(favoriteTableCustomerId, "cowork", products.openSpace);
+        await insert(favoriteTableCustomerId, "table-cowork", products.openSpace);
       });
 
       const productsOf = (items: readonly { readonly id: string }[]) =>
