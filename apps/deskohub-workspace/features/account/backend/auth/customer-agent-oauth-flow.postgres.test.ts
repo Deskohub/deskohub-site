@@ -241,8 +241,8 @@ const tokenResponseSchema = Schema.StructWithRest(
     access_token: Schema.String,
     refresh_token: Schema.optionalKey(Schema.String),
     token_type: Schema.String,
-    expires_in: Schema.Number,
-    expires_at: Schema.optionalKey(Schema.Number),
+    expires_in: Schema.Finite,
+    expires_at: Schema.optionalKey(Schema.Finite),
     scope: Schema.optionalKey(Schema.String),
   }),
   [Schema.Record(Schema.String, Schema.Unknown)]
