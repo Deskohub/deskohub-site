@@ -26,9 +26,6 @@ type AssignmentError =
         WorkspaceAvailabilityService["Service"]["getLiveTeamTablePlan"]
       >
     >
-  | Effect.Error<
-      ReturnType<OpenSpaceTableMoves["Service"]["repackInCapacitySection"]>
-    >
   | WorkspaceTableUnavailableError;
 
 /** A capacity assignment that can only run inside the enclosing booking section. */
@@ -96,10 +93,18 @@ export const withTeamTableBookingCapacity = <A, E, R>(
       const fresh = yield* availability.getLiveTeamTablePlan(reservation);
       if (!fresh || needsMoreLocks(fresh)) return yield* unavailable;
 
-      const moved = yield* moves.repackInCapacitySection({
-        ...fresh,
-        interval: reservation,
-      });
+      const moved = yield* moves
+        .repackInCapacitySection({
+          ...fresh,
+          interval: reservation,
+        })
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Team Table repacking needs reconciliation", {
+              cause,
+            }).pipe(Effect.as(false))
+          )
+        );
       if (!moved) return yield* unavailable;
 
       const final = yield* availability.getLiveTeamTablePlan(
