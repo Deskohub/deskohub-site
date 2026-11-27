@@ -89,7 +89,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "7.3 Klient smí PIN kód sdělit pouze osobám oprávněným účastnit se jeho Rezervace, musí jej chránit před dalšími osobami a odpovídá za jeho použití svými hosty. Podezření na zneužití neprodleně oznámí Poskytovateli.",
       "7.4 Klient a jeho hosté jsou povinni dodržovat kapacitu, účel Rezervace, potvrzený čas a Provozní řád. Klient zajistí, aby hosté Prostory opustili nejpozději na konci Rezervace.",
       "7.5 U Týmového stolu používá Klient a jeho hosté společný přístupový PIN kód. Přístupová stránka zobrazuje přesný začátek a konec Rezervace. Zamykací systém může platnost PIN kódu zaokrouhlit tak, že začátek platnosti posune dolů a konec nahoru na celé hodiny. Potvrzená doba užívání se nemění.",
-      "7.6 Klient může na stránce stavu Rezervace Týmového stolu přidávat pozvané osoby až do konce Rezervace. Celkový počet účastníků včetně Klienta, pokud se účastní, nesmí překročit kapacitu stolu. Pozvané osoby mohou přes pozvánku otevřít přístupovou stránku. Po zaplacení a potvrzení Rezervace nelze pozvané osoby odebrat, protože mají přístup ke společnému PIN kódu.",
+      "7.6 Po zaplacení a potvrzení Rezervace Týmového stolu může Klient na stránce jejího stavu přidávat pozvané osoby až do konce Rezervace. Celkový počet účastníků včetně Klienta, pokud se účastní, nesmí překročit kapacitu stolu. Pozvané osoby mohou přes pozvánku otevřít přístupovou stránku. Po zaplacení a potvrzení Rezervace nelze pozvané osoby odebrat, protože mají přístup ke společnému PIN kódu.",
     ],
   },
   {
