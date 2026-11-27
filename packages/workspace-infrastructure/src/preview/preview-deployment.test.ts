@@ -3,11 +3,13 @@ import {
   previewBackendBranchTag,
   taggedCloudRunOrigin,
 } from "@deskohub/workspace-cloud-run/preview-generation";
+import * as Schema from "effect/Schema";
 import {
   canResumePreviewSeed,
-  type PreviewServiceReadback,
+  PreviewServiceReadback,
   previewSnapshotFence,
   requireOwnedServices,
+  resolvePreviewServiceOrigin,
   verifyPreviewRouting,
   versionFromAppliedCandidate,
 } from "./preview-deployment";
@@ -148,6 +150,33 @@ test("rejects a missing tag or a worker destination from a different generation"
       b
     )
   ).toThrow("destination");
+});
+
+test("requires the deterministic worker URL even when Cloud Run reports a hashed primary URI", () => {
+  const role = "tasks-worker";
+  const uri = "https://workspace-tasks-preview-abc123-ew.a.run.app";
+  const service = readback(role, b);
+  const hashedReadback = Schema.decodeSync(PreviewServiceReadback)({
+    ...service,
+    uri,
+    urls: [uri, originFor(role)],
+    trafficStatuses: service.trafficStatuses?.map((entry) =>
+      entry.tag
+        ? { ...entry, uri: taggedCloudRunOrigin(uri, entry.tag) }
+        : entry
+    ),
+  });
+  expect(resolvePreviewServiceOrigin(role, hashedReadback)).toBe(
+    originFor(role)
+  );
+  expect(() => verifyPreviewRouting(role, hashedReadback, b)).not.toThrow();
+
+  const otherProject = {
+    ...hashedReadback,
+    urls: [uri, "https://workspace-tasks-preview-123.europe-west1.run.app"],
+  };
+  expect(resolvePreviewServiceOrigin(role, otherProject)).toBeUndefined();
+  expect(() => verifyPreviewRouting(role, otherProject, b)).toThrow();
 });
 
 test("refuses cleanup or deploy across owners and detects a changed cleanup snapshot", () => {
