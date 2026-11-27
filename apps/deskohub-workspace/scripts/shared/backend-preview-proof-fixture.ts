@@ -4,15 +4,21 @@ import { workflowStepRunId } from "./workflow-step-runner";
 export const previewDigest = (url: string) =>
   createHash("sha256").update(url).digest("hex");
 
+export const backendDeploymentId = "dpl_testPreview";
+export const backendRevision = "workspace-api-preview-g-0123456789abcdef";
+export const backendGeneration = "e".repeat(64);
+
 export function backendPreviewProofFixture(
   pr: number,
   sha: string,
   origin: string
 ) {
   const target = previewDigest(
-    JSON.stringify([String(pr), sha, previewDigest(origin)])
+    JSON.stringify([String(pr), sha, previewDigest(origin), "email-campaigns"])
   ).slice(0, 32);
-  const generation = "f".repeat(32);
+  const generation = previewDigest(
+    JSON.stringify([backendDeploymentId, backendRevision, backendGeneration])
+  ).slice(0, 32);
   const binding = `${target}.${generation}`;
   const id = Number(workflowStepRunId);
   const headSha = "0".repeat(40);

@@ -11,6 +11,7 @@ import {
 } from "../../../packages/workspace-cloud-run/src/preview-identity.mjs";
 import { readValidatedE2EOrigin } from "./e2e-target.mjs";
 import { pilotGenerationKey, pilotTargetKey } from "./run-proof.mjs";
+import { verifyVercel } from "./target.mjs";
 
 const immutableWorkspaceHost =
   /^deskohub-workspace(?:-site)?-[a-z0-9]{9}-[a-z0-9-]+\.vercel\.app$/;
@@ -79,6 +80,17 @@ export async function checkPreviewBinding(input, request = fetch) {
   return { revision, generation };
 }
 
+export async function matchesCompletedPreviewGeneration(target, env, generationKey, request = fetch) {
+  const { deploymentId } = await verifyVercel(target, env, request);
+  const binding = await checkPreviewBinding({
+    origin: target.expectedOrigin,
+    sha: target.sha,
+    bypass: env.VERCEL_AUTOMATION_BYPASS_SECRET,
+  }, request);
+  return binding !== undefined &&
+    pilotGenerationKey(deploymentId, binding.revision, binding.generation) === generationKey;
+}
+
 async function run() {
   const mode = process.argv[2];
   const origin = mode === "confirm"
@@ -115,7 +127,7 @@ async function run() {
     const binding = await checkPreviewBinding(input);
     if (binding) {
       const { revision, generation } = binding;
-      const target = pilotTargetKey(process.env.PR_NUMBER, input.sha, process.env.TARGET_URL_DIGEST);
+      const target = pilotTargetKey(process.env.PR_NUMBER, input.sha, process.env.TARGET_URL_DIGEST, process.env.FLOWS);
       const generationKey = pilotGenerationKey(input.deploymentId, revision, generation);
       await appendFile(process.env.GITHUB_OUTPUT, `revision=${revision}\ngeneration=${generation}\nproof=${target}.${generationKey}\n`);
       return;

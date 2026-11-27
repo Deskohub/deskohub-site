@@ -372,14 +372,12 @@ describe("workspace E2E workflow", () => {
       "cancel-superseded-run": { actions: "write", "pull-requests": "read" },
       "confirm-backend-preview": { contents: "read" },
       "publish-final-status": {
-        actions: "read",
         contents: "read",
         deployments: "read",
         "pull-requests": "read",
         statuses: "write",
       },
       "publish-status-without-run": {
-        actions: "read",
         contents: "read",
         deployments: "read",
         "pull-requests": "read",
@@ -480,12 +478,10 @@ describe("workspace E2E workflow", () => {
     expect(final.env?.BACKEND_PREVIEW_REQUIRED).toBe(
       `\${{ needs.resolve-target.outputs.backend_preview }}`
     );
-    expect(final.env?.TARGET_URL_DIGEST).toBe(
-      `\${{ needs.resolve-target.outputs.url_digest }}`
-    );
-    expect(final.env?.BACKEND_PREVIEW_PROOF).toContain(
+    expect(final.env?.STATUS_STATE).toContain(
       "needs.confirm-backend-preview.result == 'success'"
     );
+    expect(final.env?.TARGET_URL_DIGEST).toBeUndefined();
     expect(withoutRun.env?.BACKEND_PREVIEW_REQUIRED).toBeUndefined();
     expect(JSON.stringify(testJob)).not.toContain("TARGET_URL_DIGEST");
   });
@@ -853,7 +849,6 @@ describe("workspace E2E workflow", () => {
     expect(doc.jobs["publish-final-status"].needs).toEqual([
       "resolve-target",
       "fill-bun-package-cache",
-      "resolve-backend-preview",
       "test-e2e",
       "confirm-backend-preview",
     ]);

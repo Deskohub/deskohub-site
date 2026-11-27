@@ -34,7 +34,6 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { classifyPullRequestTarget } from "../workspace-backend-preview/target.mjs";
-import { pilotRunUrl, pilotTargetKey, verifyPilotRun } from "../workspace-backend-preview/run-proof.mjs";
 import {
   classifyE2EStatusDescription,
   diffFlowIds,
@@ -87,9 +86,7 @@ const RECONCILABLE_NO_RUN_REASONS = new Set([
 const repoSlug = process.env.GITHUB_REPOSITORY ?? "";
 const repoApi = `repos/${repoSlug}`;
 const runUrl = `${process.env.GITHUB_SERVER_URL ?? ""}/${repoSlug}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
-const runAttemptUrl = pilotRunUrl(process.env.GITHUB_RUN_ID, process.env.GITHUB_RUN_ATTEMPT);
 const pilotPrNumber = process.env.PILOT_PR_NUMBER ?? "";
-let currentPilotProof;
 
 const appendSummary = (line) => {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -224,27 +221,7 @@ const readBackendPreviewRequirement = async (prNumber, sha) => {
   }
 };
 
-const hasBackendPreviewProof = ({ deployment, statusesOk, statuses, requireCurrentPilotProof }, sha) => {
-  if (deployment.state !== "success" || !statusesOk) return false;
-  const target = pilotTargetKey(pilotPrNumber, sha, previewUrlDigest(deployment.previewUrl));
-  const proof = currentPilotProof?.target === target
-    ? currentPilotProof.status
-    : requireCurrentPilotProof ? undefined : statuses.find(
-        (status) => status?.context === BACKEND_PREVIEW_CONTEXT
-      );
-  if (proof?.state !== "success" || proof.creator?.login !== "github-actions[bot]") return false;
-  const generation = /\[([0-9a-f]{32})\]$/.exec(proof.description ?? "")?.[1];
-  if (!generation || proof.description !== backendProofDescription(generation)) return false;
-  return verifyPilotRun({
-    targetUrl: proof.target_url,
-    target,
-    generation,
-    currentRun: currentPilotProof ? runAttemptUrl : undefined,
-    read: readPilotRun,
-  });
-};
-
-const backendPreviewBlock = (snapshot, parsedPr, sha) => {
+const backendPreviewBlock = (snapshot, parsedPr) => {
   if (snapshot.backendPreviewRequirement === "not-required") return null;
   if (snapshot.backendPreviewRequirement === "unavailable") {
     return BACKEND_PREVIEW_CLASSIFICATION_UNAVAILABLE;
@@ -255,7 +232,9 @@ const backendPreviewBlock = (snapshot, parsedPr, sha) => {
   if (snapshot.deployment.state !== "success") {
     return BACKEND_PREVIEW_DEPLOYMENT_REQUIRED;
   }
-  return hasBackendPreviewProof(snapshot, sha) ? null : BACKEND_PREVIEW_PROOF_REQUIRED;
+  // A historical result cannot prove that the generation still exists. Only
+  // the trusted completion workflow can supply a fresh verified binding.
+  return snapshot.livePilotProof ? null : BACKEND_PREVIEW_PROOF_REQUIRED;
 };
 
 const PREVIEW_MISMATCH_TAG_PATTERN =
@@ -634,8 +613,7 @@ const publishWithCasReconcile = async ({
     if (backendPreviewRequirement === "pilot-owned") return { skipPost: true };
     const blocked = backendPreviewBlock(
       current,
-      parsePrBodyE2EFlows(String(snapshot.pr?.body ?? "")),
-      sha
+      parsePrBodyE2EFlows(String(snapshot.pr?.body ?? ""))
     );
     if (!blocked) return decision;
     return onBlockedSuccess ?? { state: "failure", description: blocked };
@@ -646,7 +624,7 @@ const publishWithCasReconcile = async ({
   let overrideDecision = null;
 
   for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
-    const rawBefore = pendingSnapshot ?? readSnapshot();
+    const rawBefore = pendingSnapshot ?? (await readSnapshot());
     pendingSnapshot = null;
     const before = {
       ...rawBefore,
@@ -717,7 +695,7 @@ const publishWithCasReconcile = async ({
 
     // Verify linearizability against fresh live state after writing, excluding
     // all tentative posts made by this process.
-    const rawAfter = readSnapshot();
+    const rawAfter = await readSnapshot();
     const after = {
       ...rawAfter,
       statuses: rawAfter.statusesOk
@@ -851,6 +829,80 @@ const publishWithCasReconcile = async ({
   return { state: "failure", description: RACE_FAILURE_DESCRIPTION };
 };
 
+const runPublishCompletedPilot = async () => {
+  const { findPilotRunGeneration, pilotRunUrl, pilotTargetKey } =
+    await import("../workspace-backend-preview/run-proof.mjs");
+  const { matchesCompletedPreviewGeneration } =
+    await import("../workspace-backend-preview/e2e-gate.mjs");
+  if (!/^[1-9][0-9]{0,8}$/.test(pilotPrNumber)) return;
+
+  const initial = fetchPr(pilotPrNumber);
+  if (!initial.ok || !isEligibleInternalPr(initial.data)) return;
+  const sha = initial.data.head.sha;
+  if (!/^[0-9a-f]{40}$/.test(sha)) return;
+  const source = pilotRunUrl(process.env.PILOT_SOURCE_RUN_ID, process.env.PILOT_SOURCE_RUN_ATTEMPT);
+
+  const readSnapshot = async () => {
+    const prRead = fetchPr(pilotPrNumber);
+    const pr = prRead.data;
+    const deployment = fetchDeploymentState(sha);
+    const selection = parsePrBodyE2EFlows(String(pr?.body ?? ""));
+    const snapshot = { prOk: prRead.ok, pr, deployment, statusesOk: false, statuses: [], selection };
+    if (
+      !prRead.ok || !isEligibleInternalPr(pr) || pr.head.sha !== sha ||
+      deployment.state !== "success" ||
+      !selection.ok || !selection.selected.includes(BACKEND_PREVIEW_FLOW)
+    ) return snapshot;
+
+    const target = pilotTargetKey(pilotPrNumber, sha, previewUrlDigest(deployment.previewUrl), selection.flows);
+    const generation = findPilotRunGeneration({ targetUrl: source, target, read: readPilotRun });
+    if (!generation) return snapshot;
+
+    let livePilotProof = false;
+    try {
+      livePilotProof = await matchesCompletedPreviewGeneration({
+        number: Number(pilotPrNumber),
+        sha,
+        expectedOrigin: deployment.previewUrl,
+      }, { ...process.env, GIT_REF: pr.head.ref }, generation);
+    } catch {
+      // A changed or unavailable protected deployment cannot authorize a pass.
+    }
+    return { ...snapshot, generation, livePilotProof };
+  };
+
+  const confirmed = await readSnapshot();
+  if (!confirmed.generation) return;
+
+  const result = await publishWithCasReconcile({
+    sha,
+    prNumber: pilotPrNumber,
+    readSnapshot,
+    decide: ({ backendPreviewRequirement, prOk, pr, selection, livePilotProof, generation }) => {
+      if (backendPreviewRequirement !== "required" || !prOk || !isEligibleInternalPr(pr) || pr.head.sha !== sha || generation !== confirmed.generation) {
+        return { skipPost: true };
+      }
+      return livePilotProof ? {
+        state: "success",
+        description: formatE2EStatusDescription({ kind: "passed", flows: selection.flows }),
+        targetUrl: source,
+      } : {
+        state: "failure",
+        description: BACKEND_PREVIEW_PROOF_REQUIRED,
+        targetUrl: source,
+      };
+    },
+  });
+  if (result.state === "success" || result.state === "failure") {
+    postCommitStatus(sha, {
+      context: BACKEND_PREVIEW_CONTEXT,
+      state: result.state,
+      description: result.state === "success" ? backendProofDescription(confirmed.generation) : BACKEND_PREVIEW_PROOF_REQUIRED,
+      targetUrl: source,
+    });
+  }
+};
+
 const runPublishFinalStatus = async () => {
   const targetSha = process.env.TARGET_SHA ?? "";
   const prNumber = process.env.PR_NUMBER ?? "";
@@ -865,12 +917,21 @@ const runPublishFinalStatus = async () => {
     throw new Error(parsedRunFlows.error);
   }
 
+  if (statusState === "success" && process.env.BACKEND_PREVIEW_REQUIRED === "true") {
+    postCommitStatus(targetSha, {
+      context: "Workspace E2E allocation",
+      state: "success",
+      description: allocationDescription,
+      targetUrl: runUrl,
+    });
+    return;
+  }
+
   const readSnapshot = () => {
     const prRes = prNumber ? fetchPr(prNumber) : { ok: false };
     const statusesRes = fetchCommitStatuses(targetSha);
     const deployment = fetchDeploymentState(targetSha);
     return {
-      requireCurrentPilotProof: Boolean(pilotPrNumber && prNumber === pilotPrNumber),
       prOk: prRes.ok && Boolean(prRes.data),
       pr: prRes.ok ? prRes.data : null,
       statusesOk: statusesRes.ok && Array.isArray(statusesRes.data),
@@ -884,38 +945,6 @@ const runPublishFinalStatus = async () => {
   };
 
   if (statusState === "success") {
-    const deploymentDigest = process.env.TARGET_URL_DIGEST ?? "";
-    const binding = /^([0-9a-f]{32})\.([0-9a-f]{32})$/.exec(process.env.BACKEND_PREVIEW_PROOF ?? "");
-    if (
-      pilotPrNumber &&
-      prNumber === pilotPrNumber &&
-      process.env.BACKEND_PREVIEW_REQUIRED === "true" &&
-      parsedRunFlows.selected.includes(BACKEND_PREVIEW_FLOW) &&
-      /^[0-9a-f]{64}$/.test(deploymentDigest) &&
-      binding
-    ) {
-      const [, target, generation] = binding;
-      if (
-        target === pilotTargetKey(prNumber, targetSha, deploymentDigest) &&
-        verifyPilotRun({ targetUrl: runAttemptUrl, target, generation, currentRun: runAttemptUrl, read: readPilotRun })
-      ) {
-        const description = backendProofDescription(generation);
-        postCommitStatus(targetSha, {
-          context: BACKEND_PREVIEW_CONTEXT,
-          state: "success",
-          description,
-          targetUrl: runAttemptUrl,
-        });
-        // The list can lag a successful status write. Recheck the authenticated
-        // job directly while reconciling the current run's result.
-        currentPilotProof = { target, status: {
-          state: "success",
-          description,
-          creator: { login: "github-actions[bot]" },
-          target_url: runAttemptUrl,
-        } };
-      }
-    }
     await publishWithCasReconcile({
       sha: targetSha,
       prNumber,
@@ -1710,8 +1739,7 @@ const runSyncPrFlows = async () => {
       if (backendPreviewRequirement === "pilot-owned") return { skipPost: true };
       const previewBlock = backendPreviewBlock(
         { backendPreviewRequirement, deployment, statusesOk, statuses },
-        parsedPr,
-        headSha
+        parsedPr
       );
       const backendPreviewRequired = backendPreviewRequirement === "required";
       const missingBackendProof = previewBlock === BACKEND_PREVIEW_PROOF_REQUIRED;
@@ -1873,11 +1901,9 @@ const runSyncPrFlows = async () => {
       }
 
       if (deployment.state === "success") {
-        const dispatchFlows = toCanonicalFlows(
-          backendPreviewRequired
-            ? unionFlowIds(missingReal, [BACKEND_PREVIEW_FLOW])
-            : missingReal
-        );
+        const dispatchFlows = backendPreviewRequired
+          ? requestedFlows
+          : toCanonicalFlows(missingReal);
         if (!dispatchFlows || dispatchFlows === "none") {
           return {
             state: "failure",
@@ -2023,6 +2049,9 @@ const runSyncPrFlows = async () => {
 
 const [mode] = process.argv.slice(2);
 switch (mode) {
+  case "publish-completed-pilot":
+    await runPublishCompletedPilot();
+    break;
   case "publish-final-status":
     await runPublishFinalStatus();
     break;

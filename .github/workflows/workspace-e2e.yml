@@ -328,6 +328,10 @@ jobs:
                          'Add email-campaigns to the pilot E2E flows before dispatch' backend-preview-flow ;;
                   esac
                 done
+                if [[ "$pr_requested_flows" != "$resolved_flows" ]]; then
+                  fail 'The backend pilot run must match the current PR flow selection' \
+                    'Dispatch the backend pilot with the exact flows listed in the PR' backend-preview-flow-mismatch
+                fi
               fi
             fi
             resolved_run_e2e="$(jq -r '.runE2E' <<<"$parsed_flows")"
@@ -658,6 +662,7 @@ jobs:
       - name: Wait for the expected backend revision
         id: gate
         env:
+          FLOWS: ${{ needs.resolve-target.outputs.flows }}
           VERCEL_DEPLOYMENT_ID: ${{ steps.deployment.outputs.deployment_id }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: node .github/actions/workspace-backend-preview/e2e-gate.mjs wait
@@ -1251,7 +1256,7 @@ jobs:
         run: node .github/actions/workspace-backend-preview/e2e-gate.mjs confirm
 
   publish-final-status:
-    needs: [resolve-target, fill-bun-package-cache, resolve-backend-preview, test-e2e, confirm-backend-preview]
+    needs: [resolve-target, fill-bun-package-cache, test-e2e, confirm-backend-preview]
     if: always() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true' && needs.resolve-target.outputs.nightly != 'true'
     concurrency:
       group: workspace-e2e-status-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
@@ -1259,7 +1264,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      actions: read
       contents: read
       deployments: read
       pull-requests: read
@@ -1281,7 +1285,6 @@ jobs:
         env:
           ALLOCATION_SHARD: ${{ needs.test-e2e.outputs.shard }}
           BACKEND_PREVIEW_REQUIRED: ${{ needs.resolve-target.outputs.backend_preview }}
-          BACKEND_PREVIEW_PROOF: ${{ needs.confirm-backend-preview.result == 'success' && needs.resolve-backend-preview.outputs.proof || '' }}
           ALLOCATION_DESCRIPTION: ${{ needs.fill-bun-package-cache.result != 'success' && 'Workspace E2E Bun package cache fill failed' || needs.test-e2e.outputs.shard == '' && 'Workspace E2E shard allocation failed' || needs.test-e2e.outputs.release_outcome == 'success' && 'Workspace E2E shard released' || 'Workspace E2E shard release failed' }}
           FLOWS: ${{ needs.resolve-target.outputs.flows }}
           FLOWS_PUBLISH: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/publish-status.mjs
@@ -1292,7 +1295,6 @@ jobs:
           STATUS_STATE: ${{ needs.test-e2e.result == 'success' && (needs.resolve-target.outputs.backend_preview != 'true' || needs.confirm-backend-preview.result == 'success') && 'success' || 'failure' }}
           SUPERSEDED_DESCRIPTION: Superseded by a newer PR head before E2E finished
           TARGET_SHA: ${{ needs.resolve-target.outputs.sha }}
-          TARGET_URL_DIGEST: ${{ needs.resolve-target.outputs.url_digest }}
         run: |
           set -euo pipefail
           # Publishes 'Protected preview E2E passed' / 'Protected preview E2E failed'
@@ -1316,7 +1318,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      actions: read
       contents: read
       deployments: read
       pull-requests: read
