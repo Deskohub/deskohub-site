@@ -5,19 +5,20 @@ import type {
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer, Option, Schema } from "effect";
-import { WorkspaceTransaction } from "@/db/database.service";
-import { accountingDocumentSnapshots } from "@/db/schema";
+import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
+import { accountingDocumentSnapshots, paymentAttempts } from "@/db/schema";
 import {
   type AccountingDocumentSnapshot,
   accountingDocumentSnapshotSchema,
   encodeStoredAccountingDocumentSnapshot,
   type PassPurchaseAccountingSnapshot,
   passPurchaseAccountingSnapshotSchema,
+  storedPassPurchaseAccountingSnapshotSchema,
 } from "@/features/accounting/accounting-document-snapshot";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
-import { withPassPurchaseAddons } from "@/features/passes/pass-purchase-quote";
+import { withPassPurchaseCoffee } from "@/features/passes/pass-purchase-quote";
 import { findReservationOrderId } from "@/features/reservation/persistence-contracts";
 import { type Money, moneyEquals, sameMoneyUnit } from "@/shared/money/money";
 import {
@@ -110,9 +111,11 @@ const sealedEntryPackSnapshots = sealedAccountingJson({
   table: accountingDocumentSnapshots,
   keyId: accountingDocumentSnapshots.keyId,
   ciphertext: accountingDocumentSnapshots.encryptedSnapshot,
-  plaintext: {},
-  encode: Schema.encodeSync(passPurchaseAccountingSnapshotSchema),
-  schema: passPurchaseAccountingSnapshotSchema,
+  plaintext: {
+    coffeeAmountMinor: accountingDocumentSnapshots.coffeeAmountMinor,
+  },
+  encode: Schema.encodeSync(storedPassPurchaseAccountingSnapshotSchema),
+  schema: storedPassPurchaseAccountingSnapshotSchema,
 });
 
 /** The immutable source snapshot every payment attempt records. */
@@ -123,6 +126,7 @@ export class AccountingDocumentSnapshots extends Context.Service<
   static Default = Layer.effect(
     this,
     Effect.gen(function* () {
+      const { db } = yield* WorkspaceDatabase;
       const snapshots = yield* sealedAccountingDocumentSnapshots;
       const entryPacks = yield* sealedEntryPackSnapshots;
 
@@ -146,8 +150,12 @@ export class AccountingDocumentSnapshots extends Context.Service<
       const findPassPurchase = Effect.fn(
         "AccountingDocumentSnapshots.findPassPurchase"
       )(function* (paymentAttemptId: PaymentAttemptId) {
+        const reference = {
+          type: "paymentAttemptId",
+          id: paymentAttemptId,
+        } as const;
         const opened = yield* entryPacks.open({
-          reference: { type: "paymentAttemptId", id: paymentAttemptId },
+          reference,
           where:
             and(
               eq(
@@ -157,7 +165,35 @@ export class AccountingDocumentSnapshots extends Context.Service<
               isNull(accountingDocumentSnapshots.workspaceReservationId)
             ) ?? sql`false`,
         });
-        return opened?.value ?? null;
+        if (!opened) return null;
+        const { unlimitedCoffee, ...snapshot } = opened.value;
+        const { coffeeAmountMinor } = opened.plaintext;
+        if (!unlimitedCoffee) return snapshot;
+        if (coffeeAmountMinor !== null)
+          return { ...snapshot, coffeeAmountMinor };
+
+        // Older writers stored only the selection. The attempt freezes its charge.
+        const [amount] = yield* db
+          .select({
+            value: paymentAttempts.amountValue,
+            exponent: paymentAttempts.amountExponent,
+            currency: paymentAttempts.currency,
+          })
+          .from(paymentAttempts)
+          .where(eq(paymentAttempts.id, paymentAttemptId));
+        const base = snapshot.quote.discountedSubtotal;
+        if (
+          !amount ||
+          !sameMoneyUnit(amount, base) ||
+          amount.value < base.value
+        ) {
+          return yield* new AccountingRecordUnavailable({
+            operation: "validate",
+            reference,
+            message: "The pass purchase coffee amount cannot be reconciled.",
+          });
+        }
+        return { ...snapshot, coffeeAmountMinor: amount.value - base.value };
       });
 
       const recordPassPurchase = Effect.fn(
@@ -177,21 +213,22 @@ export class AccountingDocumentSnapshots extends Context.Service<
             message:
               "Pass purchase accounting snapshot does not match the payment attempt.",
           });
-        const snapshot = yield* Schema.decodeUnknownEffect(
-          Schema.toType(passPurchaseAccountingSnapshotSchema),
-          { onExcessProperty: "error" }
-        )(input.snapshot).pipe(Effect.mapError(invalid));
+        const { coffeeAmountMinor, ...snapshot } =
+          yield* Schema.decodeUnknownEffect(
+            Schema.toType(passPurchaseAccountingSnapshotSchema),
+            { onExcessProperty: "error" }
+          )(input.snapshot).pipe(Effect.mapError(invalid));
         if (
           snapshot.orderId !== input.orderId ||
           snapshot.dotyposCustomerId !== input.dotyposCustomerId ||
           snapshot.locale !== input.locale ||
-          (snapshot.unlimitedCoffee &&
+          (coffeeAmountMinor !== undefined &&
             (snapshot.product.kind !== "unlimited" ||
               snapshot.product.tier !== "open-space")) ||
           !moneyEquals(
-            withPassPurchaseAddons(
+            withPassPurchaseCoffee(
               snapshot.quote.discountedSubtotal,
-              snapshot.unlimitedCoffee
+              coffeeAmountMinor
             ),
             input.amount
           )
@@ -201,12 +238,16 @@ export class AccountingDocumentSnapshots extends Context.Service<
         const sealer = yield* entryPacks.sealer(reference);
         yield* sealer.seal({
           reference,
-          value: snapshot,
+          value: {
+            ...snapshot,
+            ...(coffeeAmountMinor !== undefined && { unlimitedCoffee: true }),
+          },
           insert: (sealed) =>
             db.insert(accountingDocumentSnapshots).values({
               paymentAttemptId: input.paymentAttemptId,
               keyId: sealed.keyId,
               encryptedSnapshot: sealed.ciphertext,
+              coffeeAmountMinor,
             }),
         });
       });

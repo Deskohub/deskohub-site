@@ -2,7 +2,14 @@ import type { AccountingSnapshotKeyId } from "@deskohub/workspace-domain/feature
 import type { PaymentAttemptId } from "@deskohub/workspace-domain/features/checkout/checkout-identifiers";
 import type { WorkspaceReservationId } from "@deskohub/workspace-domain/features/reservation/persistence-contracts";
 import { sql } from "drizzle-orm";
-import { bytea, check, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+  bytea,
+  check,
+  integer,
+  pgTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 import { instant } from "../instant";
 import { paymentAttempts } from "./payment-attempts";
 import { workspaceReservations } from "./workspace-reservations";
@@ -19,12 +26,17 @@ export const accountingDocumentSnapshots = pgTable(
       .references(() => workspaceReservations.id),
     keyId: text("key_id").notNull().$type<AccountingSnapshotKeyId>(),
     encryptedSnapshot: bytea("encrypted_snapshot").notNull(),
+    coffeeAmountMinor: integer("coffee_amount_minor"),
     createdAt: instant("created_at").notNull().default(sql`now()`),
   },
   (t) => [
     check(
       "accounting_document_snapshots_key_id_check",
       sql`${t.keyId} ~ '^[A-Z][A-Z0-9_]{2,31}$'`
+    ),
+    check(
+      "accounting_document_snapshots_coffee_amount_check",
+      sql`${t.coffeeAmountMinor} IS NULL OR (${t.workspaceReservationId} IS NULL AND ${t.coffeeAmountMinor} >= 0)`
     ),
     uniqueIndex("accounting_document_snapshots_reservation_attempt_idx").on(
       t.workspaceReservationId,
