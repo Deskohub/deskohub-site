@@ -592,6 +592,12 @@
   "reservationMeetingRoomEarlySetupLabel": "Хочу прийти на 15 хвилин раніше, щоб підготуватися",
   "reservationMeetingRoomEarlySetupUnavailable": "Переговорна кімната зайнята безпосередньо перед цим часом.",
   "reservationMeetingRoomEarlySetupError": "Не вдалося перевірити, чи вільна переговорна кімната перед цим часом. Спробуйте пізніше.",
+  "tableInvitationSubject": "{booker} booked a Team Table for you",
+  "tableInvitationHeading": "{booker} booked a Team Table for you on {date}",
+  "tableInviteeCancellationSubject": "The Team Table {booker} booked for you was cancelled",
+  "tableInviteeRestorationSubject": "The Team Table {booker} booked for you is valid again",
+  "tableInviteeRestorationHeading": "The Team Table {booker} booked for you has been restored",
+  "reservationAssignedTableLabel": "Reserved table",
   "reservationOfficeProductTitle": "Приватний офіс",
   "reservationOfficeBasePriceLabel": [
     {

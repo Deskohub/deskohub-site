@@ -592,6 +592,12 @@
   "reservationMeetingRoomEarlySetupLabel": "Chcem prísť o 15 minút skôr a pripraviť sa",
   "reservationMeetingRoomEarlySetupUnavailable": "Zasadacia miestnosť je tesne pred týmto časom obsadená.",
   "reservationMeetingRoomEarlySetupError": "Nepodarilo sa overiť, či je zasadacia miestnosť pred týmto časom voľná. Skús to, prosím, neskôr.",
+  "tableInvitationSubject": "{booker} booked a Team Table for you",
+  "tableInvitationHeading": "{booker} booked a Team Table for you on {date}",
+  "tableInviteeCancellationSubject": "The Team Table {booker} booked for you was cancelled",
+  "tableInviteeRestorationSubject": "The Team Table {booker} booked for you is valid again",
+  "tableInviteeRestorationHeading": "The Team Table {booker} booked for you has been restored",
+  "reservationAssignedTableLabel": "Reserved table",
   "reservationOfficeProductTitle": "Súkromná kancelária",
   "reservationOfficeBasePriceLabel": [
     {

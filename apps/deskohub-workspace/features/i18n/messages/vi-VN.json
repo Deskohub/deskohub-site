@@ -586,6 +586,12 @@
   "reservationMeetingRoomEarlySetupLabel": "Tôi muốn đến sớm 15 phút để chuẩn bị",
   "reservationMeetingRoomEarlySetupUnavailable": "Phòng họp đã kín chỗ ngay trước giờ này.",
   "reservationMeetingRoomEarlySetupError": "Không thể kiểm tra phòng họp có còn trống trước giờ này không. Hãy thử lại sau.",
+  "tableInvitationSubject": "{booker} booked a Team Table for you",
+  "tableInvitationHeading": "{booker} booked a Team Table for you on {date}",
+  "tableInviteeCancellationSubject": "The Team Table {booker} booked for you was cancelled",
+  "tableInviteeRestorationSubject": "The Team Table {booker} booked for you is valid again",
+  "tableInviteeRestorationHeading": "The Team Table {booker} booked for you has been restored",
+  "reservationAssignedTableLabel": "Reserved table",
   "reservationOfficeProductTitle": "Văn phòng riêng",
   "reservationOfficeBasePriceLabel": [
     {

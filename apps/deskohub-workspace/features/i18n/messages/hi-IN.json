@@ -588,6 +588,12 @@
   "reservationMeetingRoomEarlySetupLabel": "मुझे तैयारी के लिए 15 मिनट पहले आना है",
   "reservationMeetingRoomEarlySetupUnavailable": "इस समय से ठीक पहले मीटिंग रूम भरा हुआ है।",
   "reservationMeetingRoomEarlySetupError": "यह जाँचा नहीं जा सका कि इस समय से पहले मीटिंग रूम खाली है या नहीं। कृपया बाद में फिर से कोशिश करें।",
+  "tableInvitationSubject": "{booker} booked a Team Table for you",
+  "tableInvitationHeading": "{booker} booked a Team Table for you on {date}",
+  "tableInviteeCancellationSubject": "The Team Table {booker} booked for you was cancelled",
+  "tableInviteeRestorationSubject": "The Team Table {booker} booked for you is valid again",
+  "tableInviteeRestorationHeading": "The Team Table {booker} booked for you has been restored",
+  "reservationAssignedTableLabel": "Reserved table",
   "reservationOfficeProductTitle": "निजी ऑफ़िस",
   "reservationOfficeBasePriceLabel": [
     {
