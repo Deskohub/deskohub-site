@@ -18,6 +18,7 @@ export const postHogFeatureFlagSnapshot = {
     "overnight_stays": false,
     "referrals": false,
     "seating_map": false,
+    "team_table_page": false,
     "webmcp_site_tools": false,
   },
 } as const satisfies PostHogFeatureFlagSnapshot;
