@@ -123,6 +123,16 @@ const previewHeaders = {
   },
 };
 
+const withPreviewProof = (response: Response) => {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(
+    previewHeaders.expectedResponseHeaders
+  )) {
+    headers.set(name, value);
+  }
+  return new Response(response.body, { status: response.status, headers });
+};
+
 describe("Workspace RPC HTTP client", () => {
   test("accepts the RPC response when both preview headers match", async () => {
     const server = makeTestServer();
@@ -134,17 +144,7 @@ describe("Workspace RPC HTTP client", () => {
             previewHeaders.requestHeaders[generationHeader]
           );
           expect(request.headers.get(revisionHeader)).toBeNull();
-          const response = await server.handler(request);
-          const headers = new Headers(response.headers);
-          for (const [name, value] of Object.entries(
-            previewHeaders.expectedResponseHeaders
-          )) {
-            headers.set(name, value);
-          }
-          return new Response(response.body, {
-            status: response.status,
-            headers,
-          });
+          return withPreviewProof(await server.handler(request));
         },
         undefined,
         undefined,
@@ -423,7 +423,7 @@ describe("Workspace RPC HTTP client", () => {
     expect(Cause.hasDies(exit.cause)).toBe(false);
   });
 
-  test("evicts the rejected token and retries the same one-click request once", async () => {
+  test("evicts a rejected token and retries the same generation and one-click request once", async () => {
     let minted = 0;
     const evicted: string[] = [];
     const sent: ArrayBuffer[] = [];
@@ -433,18 +433,23 @@ describe("Workspace RPC HTTP client", () => {
         (client) => client.unsubscribeOneClick(payload),
         async (request) => {
           sent.push(await request.clone().arrayBuffer());
+          expect(request.headers.get(generationHeader)).toBe(
+            previewHeaders.requestHeaders[generationHeader]
+          );
           if (
             request.headers.get("authorization") === "Bearer synthetic-id-1"
           ) {
             return new Response("rejected", { status: 401 });
           }
-          return server.handler(request);
+          return withPreviewProof(await server.handler(request));
         },
         Effect.sync(() => Redacted.make(`synthetic-id-${++minted}`)),
         (token) =>
           Effect.sync(() => {
             evicted.push(Redacted.value(token));
-          })
+          }),
+        undefined,
+        previewHeaders
       );
       expect(result).toBe("withdrawn");
       expect(evicted).toEqual(["synthetic-id-1"]);
