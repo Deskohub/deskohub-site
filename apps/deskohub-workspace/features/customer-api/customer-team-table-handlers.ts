@@ -28,6 +28,7 @@ import { resolveBookingQuoteSelection } from "@/features/reservation/backend/boo
 import {
   AvailabilityQueryInvalid,
   TeamTableAvailabilityClosed,
+  WorkspaceAvailabilityService,
 } from "@/features/reservation/backend/workspace-availability.service";
 import {
   loadAvailability,
@@ -101,6 +102,7 @@ export const CustomerTeamTableApiHandlers = HttpApiBuilder.group(
     );
     const quoting = Layer.mergeAll(
       catalog,
+      availability,
       sealedStateKeys,
       releases.office,
       releases.overnightStay
@@ -148,7 +150,7 @@ export const CustomerTeamTableApiHandlers = HttpApiBuilder.group(
               },
               replacementToken: headers[customerAvailabilityReplacementHeader],
             }).pipe(
-              Effect.provide(availability),
+              providePerRequest(availability),
               answerTeamTableAvailabilityFailure(
                 "customerApi.getTeamTableAvailability"
               )
@@ -175,7 +177,7 @@ export const CustomerTeamTableApiHandlers = HttpApiBuilder.group(
               query: slots.value,
               replacementToken: headers[customerAvailabilityReplacementHeader],
             }).pipe(
-              Effect.provide(availability),
+              providePerRequest(availability),
               answerTeamTableAvailabilityFailure(
                 "customerApi.getTeamTableSlots"
               )
@@ -348,6 +350,9 @@ const quoteTeamTable = Effect.fn("customerApi.getTeamTableQuote")(function* (
   if (reservation.kind !== "table") {
     return yield* new CustomerBookingSelectionInvalid({ field: "family" });
   }
+  const availability = yield* WorkspaceAvailabilityService;
+  yield* availability.ensureAvailable(reservation);
+
   const advertised = yield* buildAdvertisedPrice(resolved.request).pipe(
     Effect.filterOrFail(
       ({ discountsComplete }) => discountsComplete,

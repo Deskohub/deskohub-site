@@ -167,7 +167,8 @@ export const customerRequestBudgetClasses = {
     listOfferings: "catalog-read",
     getAvailability: "catalog-read",
     getSlots: "catalog-read",
-    getQuote: "catalog-read",
+    // Quoting an exact interval reads live capacity before signing.
+    getQuote: "dotypos-read",
     createCheckout: "dotypos-mutation",
     getStatus: "account-read",
     addInvitees: "dotypos-mutation",

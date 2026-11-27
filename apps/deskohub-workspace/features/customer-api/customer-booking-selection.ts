@@ -15,6 +15,10 @@ import {
   type BookingSelectionRejection,
   type QuoteSelection,
 } from "@/features/reservation/backend/booking-selection";
+import {
+  TeamTableAvailabilityClosed,
+  WorkspaceTableUnavailableError,
+} from "@/features/reservation/backend/workspace-availability.service";
 import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import {
@@ -101,6 +105,7 @@ const answerSelectionFailure =
         ): Effect.Effect<
           never,
           | ReturnType<typeof toSelectionRejectionAnswer<Unavailable>>
+          | Unavailable
           | CustomerSelectionUnavailable
           | Extract<E, CustomerBookingSelectionInvalid>
           | CustomerSessionApiFailure<
@@ -109,6 +114,8 @@ const answerSelectionFailure =
                 | BookingSelectionRejected
                 | CustomerBookingSelectionInvalid
                 | EntryPackUnavailableError
+                | TeamTableAvailabilityClosed
+                | WorkspaceTableUnavailableError
               >
             >
         > => {
@@ -118,6 +125,14 @@ const answerSelectionFailure =
             );
           if (failure instanceof EntryPackUnavailableError)
             return Effect.fail(entryPackUnavailableAnswer());
+          if (failure instanceof TeamTableAvailabilityClosed)
+            return Effect.fail(offeringUnavailable());
+          if (failure instanceof WorkspaceTableUnavailableError)
+            return Effect.fail(
+              new CustomerSelectionUnavailable({
+                reason: "availability_changed",
+              })
+            );
           if (isSelectionInvalid(failure)) return Effect.fail(failure);
           return Effect.fail(failure).pipe(answerSessionApiFailure(operation));
         }
