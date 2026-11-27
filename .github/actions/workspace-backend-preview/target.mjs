@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { backendGenerationRequired } from "./paths.mjs";
 
@@ -11,6 +12,7 @@ const workflowPath = ".github/workflows/workspace-backend-preview.yml";
 const teamId = "team_MgMQ4MEWijWnYa1R48C2JU5e";
 const projectId = "prj_7FliQBcbBiBwGaO2JLrigicnXCRd";
 const deploymentEnvironment = "Preview – deskohub-workspace-site";
+const approvalEnvironment = "workspace-backend-preview";
 
 const shaPattern = /^[0-9a-f]{40}$/;
 const prNumberPattern = /^[1-9][0-9]{0,8}$/;
@@ -18,6 +20,19 @@ const deploymentPattern = /^dpl_[A-Za-z0-9]{1,64}$/;
 const branchIdPattern = /^br-[a-z0-9-]{1,70}$/;
 const branchRefPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const projectIdPattern = /^[a-z][a-z0-9-]{0,98}[a-z0-9]$/;
+const reservedRefs = new Set([
+  "main",
+  "HEAD",
+  "e2e/nightly",
+  "AUTO_MERGE",
+  "BISECT_HEAD",
+  "CHERRY_PICK_HEAD",
+  "FETCH_HEAD",
+  "MERGE_HEAD",
+  "ORIG_HEAD",
+  "REBASE_HEAD",
+  "REVERT_HEAD",
+]);
 const protectionScopes = new Set([
   "all",
   "all_except_custom_domains",
@@ -75,6 +90,8 @@ function canonicalRef(ref) {
   return (
     typeof ref === "string" &&
     branchRefPattern.test(ref) &&
+    !reservedRefs.has(ref) &&
+    !ref.startsWith("refs/") &&
     spawnSync("git", ["check-ref-format", `refs/heads/${ref}`], {
       stdio: "ignore",
     }).status === 0
@@ -103,6 +120,71 @@ async function readJson(response, provider) {
     `${provider} did not return the expected record.`,
   );
   return response.json();
+}
+
+export async function verifyApproval(env, request = fetch) {
+  requireCondition(
+    env.GH_TOKEN && /^[1-9][0-9]{0,18}$/.test(env.GITHUB_RUN_ID),
+    "The trusted workflow run and its GitHub token are required.",
+  );
+  const get = async (path) =>
+    readJson(await github(path, env.GH_TOKEN, request), "GitHub");
+  const [environment, reviews] = await Promise.all([
+    get(`environments/${approvalEnvironment}`),
+    get(`actions/runs/${env.GITHUB_RUN_ID}/approvals`),
+  ]);
+  const reviewers = environment.protection_rules?.find(
+    (rule) => rule.type === "required_reviewers",
+  )?.reviewers;
+  requireCondition(
+    environment.name === approvalEnvironment &&
+      Number.isSafeInteger(environment.id) &&
+      Array.isArray(reviewers) &&
+      Array.isArray(reviews) &&
+      reviews.some(
+        (review) =>
+          review.state === "approved" &&
+          review.user?.type === "User" &&
+          reviewers.some(
+            (entry) =>
+              entry.type === "User" && entry.reviewer?.id === review.user.id,
+          ) &&
+          review.environments?.some(
+            (entry) =>
+              entry.id === environment.id && entry.name === approvalEnvironment,
+          ),
+      ),
+    "The pilot requires a recorded approval by a configured environment owner.",
+  );
+}
+
+async function* githubPages(path, token, request) {
+  const separator = path.includes("?") ? "&" : "?";
+  const pageSize = 100;
+  for (let page = 1; page <= 100; page += 1) {
+    const response = await github(
+      `${path}${separator}per_page=${pageSize}&page=${page}`,
+      token,
+      request,
+    );
+    const values = await readJson(response, "GitHub");
+    requireCondition(
+      Array.isArray(values) && values.length <= pageSize,
+      "GitHub returned an invalid deployment page.",
+    );
+    // The URL in a Link header can use GitHub's numeric repository route.
+    // Request the next page through the fixed original endpoint instead.
+    const hasNext = /;\s*rel="next"/.test(response.headers.get("link") ?? "");
+    requireCondition(
+      !hasNext || values.length === pageSize,
+      "GitHub returned an incomplete deployment page.",
+    );
+    yield* values;
+    if (!hasNext && values.length < pageSize) return;
+  }
+  throw new PreviewError(
+    "GitHub did not return a complete deployment history.",
+  );
 }
 
 export async function pullRequestTarget(
@@ -237,6 +319,7 @@ export async function verifyVercel(target, env, request = fetch) {
       deployment.readyState === "READY" &&
       deployment.gitSource?.type === "github" &&
       String(deployment.gitSource.repoId) === String(repositoryId) &&
+      (deployment.gitSource.prId ?? target.number) === target.number &&
       deployment.gitSource.ref === env.GIT_REF &&
       deployment.gitSource.sha === target.sha &&
       typeof deployment.url === "string" &&
@@ -271,18 +354,12 @@ export async function verifyVercel(target, env, request = fetch) {
   const query = new URLSearchParams({
     sha: target.sha,
     environment: deploymentEnvironment,
-    per_page: "100",
   });
-  const records = await readJson(
-    await github(`deployments?${query}`, env.GH_TOKEN, request),
-    "GitHub",
-  );
-  requireCondition(
-    Array.isArray(records),
-    "GitHub did not return the preview deployment list.",
-  );
-  let recorded = false;
-  for (const record of records) {
+  for await (const record of githubPages(
+    `deployments?${query}`,
+    env.GH_TOKEN,
+    request,
+  )) {
     if (
       record.creator?.login !== "vercel[bot]" ||
       record.sha !== target.sha ||
@@ -290,39 +367,33 @@ export async function verifyVercel(target, env, request = fetch) {
       !Number.isSafeInteger(record.id)
     )
       continue;
-    const statuses = await readJson(
-      await github(
-        `deployments/${record.id}/statuses?per_page=100`,
-        env.GH_TOKEN,
-        request,
-      ),
-      "GitHub",
-    );
-    recorded =
-      Array.isArray(statuses) &&
-      statuses.some(
-        (status) =>
-          status.creator?.login === "vercel[bot]" &&
-          status.state === "success" &&
-          [origin, `${origin}/`].includes(status.environment_url),
+    let latest;
+    for await (const status of githubPages(
+      `deployments/${record.id}/statuses`,
+      env.GH_TOKEN,
+      request,
+    )) {
+      if (status.creator?.login !== "vercel[bot]") continue;
+      requireCondition(
+        Number.isSafeInteger(status.id) &&
+          Number.isFinite(Date.parse(status.created_at)),
+        "GitHub returned an invalid Vercel deployment status.",
       );
-    if (recorded) break;
+      if (
+        !latest ||
+        Date.parse(status.created_at) > Date.parse(latest.created_at) ||
+        (status.created_at === latest.created_at && status.id > latest.id)
+      )
+        latest = status;
+    }
+    if (
+      latest?.state === "success" &&
+      [origin, `${origin}/`].includes(latest.environment_url)
+    )
+      return;
   }
-  requireCondition(
-    recorded,
-    "The exact Vercel preview has no successful GitHub deployment record.",
-  );
-
-  // Project settings do not rule out an exception for an individual host.
-  // Probe without credentials and never follow a deployment response redirect.
-  const probe = await request(`${origin}/`, {
-    method: "HEAD",
-    redirect: "manual",
-    signal: AbortSignal.timeout(15_000),
-  });
-  requireCondition(
-    probe.status === 401,
-    "The immutable preview did not require authentication.",
+  throw new PreviewError(
+    "The exact Vercel preview has no current successful GitHub deployment record.",
   );
 }
 
@@ -351,19 +422,48 @@ export async function verifyNeon(env, request = fetch) {
   );
   requireCondition(
     branch?.id === APPROVED_NEON_BRANCH_ID &&
+      branch.project_id === NEON_PROJECT_ID &&
       branch.name === `preview/${env.GIT_REF}` &&
       branch.default === false &&
       branch.primary !== true &&
       branchIdPattern.test(branch.parent_id),
     "Neon did not return the approved non-default preview branch.",
   );
-  return branch.id;
+  const { endpoints } = await neon(
+    `${project}/branches/${branch.id}/endpoints`,
+    NEON_API_KEY,
+    request,
+  );
+  requireCondition(
+    Array.isArray(endpoints),
+    "Neon did not return the preview branch endpoints.",
+  );
+  const writers = endpoints.filter(
+    (endpoint) => endpoint.type === "read_write",
+  );
+  const endpoint = writers[0];
+  requireCondition(
+    writers.length === 1 &&
+      endpoint.branch_id === branch.id &&
+      endpoint.project_id === NEON_PROJECT_ID &&
+      /^ep-[a-z0-9-]+$/.test(endpoint.id) &&
+      typeof endpoint.host === "string" &&
+      endpoint.host.startsWith(`${endpoint.id}.`) &&
+      /^[a-z0-9.-]+\.neon\.tech$/.test(endpoint.host),
+    "Neon did not return a unique read-write endpoint for the approved preview branch.",
+  );
+  return {
+    branchId: branch.id,
+    endpointId: endpoint.id,
+    pooledHost: endpoint.host.replace(".", "-pooler."),
+  };
 }
 
 export async function pooledNeonUrl(env, request = fetch) {
-  const branchId = await verifyNeon(env, request);
+  const { branchId, endpointId, pooledHost } = await verifyNeon(env, request);
   const query = new URLSearchParams({
     branch_id: branchId,
+    endpoint_id: endpointId,
     database_name: "neondb",
     role_name: "neondb_owner",
     pooled: "true",
@@ -380,7 +480,7 @@ export async function pooledNeonUrl(env, request = fetch) {
   const url = new URL(uri);
   requireCondition(
     ["postgres:", "postgresql:"].includes(url.protocol) &&
-      /^ep-[a-z0-9-]+-pooler\.[a-z0-9.-]+\.neon\.tech$/.test(url.hostname) &&
+      url.hostname === pooledHost &&
       url.username === "neondb_owner" &&
       url.password &&
       url.pathname === "/neondb" &&
@@ -389,6 +489,24 @@ export async function pooledNeonUrl(env, request = fetch) {
     "Neon returned an invalid pooled connection URI.",
   );
   return { branchId, uri };
+}
+
+export function stageNeonConnection(uri, env, log = console.log) {
+  const password = new URL(uri).password;
+  for (const value of new Set([uri, password, decodeURIComponent(password)])) {
+    log(
+      `::add-mask::${value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}`,
+    );
+  }
+  const directory = mkdtempSync(join(env.RUNNER_TEMP, "workspace-neon-"));
+  const file = join(directory, "connection");
+  try {
+    writeFileSync(file, uri, { mode: 0o600, flag: "wx" });
+    appendFileSync(env.GITHUB_OUTPUT, `database_file=${file}\n`);
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function mainCommand(command, env) {
@@ -408,6 +526,9 @@ async function mainCommand(command, env) {
         );
       }
       break;
+    case "approval":
+      await verifyApproval(env);
+      break;
     case "resolve": {
       const ref = await pullRequestTarget(target, env, fetch, true);
       appendFileSync(env.GITHUB_OUTPUT, `head_ref=${ref}\n`);
@@ -423,13 +544,8 @@ async function mainCommand(command, env) {
       await verifyNeon(env);
       break;
     case "neon": {
-      const { branchId, uri } = await pooledNeonUrl(env);
-      console.log(`::add-mask::${branchId}`);
-      console.log(`::add-mask::${uri.replaceAll("%", "%25")}`);
-      appendFileSync(
-        env.GITHUB_OUTPUT,
-        `branch_id=${branchId}\ndatabase_url=${uri}\n`,
-      );
+      const { uri } = await pooledNeonUrl(env);
+      stageNeonConnection(uri, env);
       break;
     }
     default:

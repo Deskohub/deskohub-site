@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { backendGenerationRequired } from "./paths.mjs";
 import {
   dispatchTarget,
   pooledNeonUrl,
   pullRequestTarget,
+  stageNeonConnection,
+  verifyApproval,
   verifyVercel,
 } from "./target.mjs";
 
@@ -25,6 +30,7 @@ const env = {
     "Deskohub/deskohub-site/.github/workflows/workspace-backend-preview.yml@refs/heads/main",
   GITHUB_WORKFLOW_SHA: "a".repeat(40),
   GITHUB_SHA: "a".repeat(40),
+  GITHUB_RUN_ID: "89",
   PREVIEW_OPERATION: "deploy",
   PR_NUMBER: "45",
   PILOT_PR_NUMBER: "45",
@@ -106,6 +112,73 @@ test("includes provider packages and root build inputs in the shared classifier"
     "patches/name.patch",
   ])
     assert.equal(backendGenerationRequired([path]), true);
+  for (const paths of [
+    [],
+    [""],
+    ["/packages/file"],
+    ["apps/deskohub-workspace/../file"],
+    ["apps\\file"],
+  ]) {
+    assert.throws(
+      () => backendGenerationRequired(paths),
+      /canonical changed paths/,
+    );
+  }
+});
+
+test("serializes every pilot operation without replacing a pending cleanup or saving a cache", () => {
+  const yaml = readFileSync(
+    new URL("../../workflows/workspace-backend-preview.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(yaml, /^cache-mode: read$/m);
+  assert.match(
+    yaml,
+    /^concurrency:\n {2}group: workspace-backend-preview\n {2}cancel-in-progress: false\n {2}queue: max\n/m,
+  );
+  assert.match(
+    yaml,
+    /if: always\(\) && steps\.lease\.outcome != '' && steps\.lease\.outcome != 'skipped'/,
+  );
+});
+
+test("requires recorded approval by an individual configured for the exact environment", async () => {
+  const approvalEnvironment = { id: 9, name: "workspace-backend-preview" };
+  const reviewer = { type: "User", id: 7 };
+  const rules = [
+    { type: "required_reviewers", reviewers: [{ type: "User", reviewer }] },
+  ];
+  const approval = {
+    state: "approved",
+    user: reviewer,
+    environments: [approvalEnvironment],
+  };
+  const request =
+    ({ protection_rules = rules, reviews = [approval] } = {}) =>
+    async (input) => {
+      const path = new URL(input).pathname;
+      if (path.endsWith("/environments/workspace-backend-preview")) {
+        return Response.json({ ...approvalEnvironment, protection_rules });
+      }
+      assert.ok(path.endsWith("/actions/runs/89/approvals"));
+      return Response.json(reviews);
+    };
+  await verifyApproval(env, request());
+  for (const change of [
+    { protection_rules: [] },
+    { reviews: [] },
+    { reviews: [{ ...approval, state: "rejected" }] },
+    { reviews: [{ ...approval, user: { ...reviewer, id: 8 } }] },
+    {
+      reviews: [
+        { ...approval, environments: [{ ...approvalEnvironment, id: 10 }] },
+      ],
+    },
+  ])
+    await assert.rejects(
+      verifyApproval(env, request(change)),
+      /recorded approval/,
+    );
 });
 
 test("requires a complete path list and counts both sides of renames", async () => {
@@ -174,6 +247,8 @@ test("rejects stale, fork, draft and bot heads for deploy", async () => {
     { head: { ...pr.head, sha: "c".repeat(40) } },
     { head: { ...pr.head, repo: { ...repository, id: 1 } } },
     { base: { ...pr.base, ref: "release" } },
+    { head: { ...pr.head, ref: "HEAD" } },
+    { head: { ...pr.head, ref: "e2e/nightly" } },
     { draft: true },
     { state: "closed" },
     { user: { login: "bot[bot]", type: "Bot" } },
@@ -230,9 +305,11 @@ const deploymentEnvironment = "Preview – deskohub-workspace-site";
 function vercel({
   record = deployment,
   settings = project,
-  status = 401,
   registered = true,
   alias,
+  paginate = false,
+  incomplete = false,
+  newerState,
 } = {}) {
   return async (input, options) => {
     const url = new URL(input);
@@ -251,35 +328,46 @@ function vercel({
       assert.equal(url.pathname, `/v9/projects/${projectId}`);
       return Response.json(settings);
     }
-    if (url.origin === "https://api.github.com") {
-      assert.equal(options.headers.Authorization, `Bearer ${env.GH_TOKEN}`);
-      if (url.pathname.endsWith("/deployments")) {
-        assert.equal(url.searchParams.get("sha"), sha);
-        return Response.json([
-          {
-            id: 67,
-            creator: { login: "vercel[bot]" },
-            sha,
-            environment: deploymentEnvironment,
+    assert.equal(url.origin, "https://api.github.com");
+    assert.equal(options.headers.Authorization, `Bearer ${env.GH_TOKEN}`);
+    assert.equal(url.searchParams.get("per_page"), "100");
+    if (paginate && url.searchParams.get("page") === "1") {
+      return Response.json(
+        Array.from({ length: incomplete ? 99 : 100 }, (_, id) => ({ id })),
+        {
+          headers: {
+            link: '<https://api.github.com/repositories/1015951989/fixed?page=2>; rel="next"',
           },
-        ]);
-      }
-      assert.ok(url.pathname.endsWith("/deployments/67/statuses"));
+        },
+      );
+    }
+    assert.equal(url.searchParams.get("page"), paginate ? "2" : "1");
+    if (url.pathname.endsWith("/deployments")) {
+      assert.equal(url.searchParams.get("sha"), sha);
       return Response.json([
         {
+          id: 67,
           creator: { login: "vercel[bot]" },
-          state: "success",
-          environment_url: registered
-            ? `https://${host}`
-            : "https://other.vercel.app",
+          sha,
+          environment: deploymentEnvironment,
         },
       ]);
     }
-    assert.equal(url.origin, `https://${host}`);
-    assert.equal(options.method, "HEAD");
-    assert.equal(options.redirect, "manual");
-    assert.equal(options.headers, undefined);
-    return new Response(null, { status });
+    assert.ok(url.pathname.endsWith("/deployments/67/statuses"));
+    const status = {
+      id: 89,
+      created_at: "2026-11-27T00:00:00Z",
+      creator: { login: "vercel[bot]" },
+      state: "success",
+      environment_url: registered
+        ? `https://${host}`
+        : "https://other.vercel.app",
+    };
+    return Response.json(
+      newerState
+        ? [status, { ...status, id: 90, state: newerState }]
+        : [status],
+    );
   };
 }
 
@@ -331,9 +419,26 @@ test("matches the exact READY, protected Vercel Git preview by ID, project, repo
     verifyVercel(target, previewEnv, vercel({ registered: false })),
     /deployment record/,
   );
+});
+
+test("finds the exact deployment and status on later pages and rejects a superseded success", async () => {
+  const previewEnv = { ...env, GIT_REF: ref };
+  await verifyVercel(target, previewEnv, vercel({ paginate: true }));
   await assert.rejects(
-    verifyVercel(target, previewEnv, vercel({ status: 200 })),
-    /require authentication/,
+    verifyVercel(
+      target,
+      previewEnv,
+      vercel({ paginate: true, incomplete: true }),
+    ),
+    /incomplete deployment page/,
+  );
+  await assert.rejects(
+    verifyVercel(
+      target,
+      previewEnv,
+      vercel({ paginate: true, newerState: "inactive" }),
+    ),
+    /current successful/,
   );
 });
 
@@ -348,36 +453,51 @@ test("resolves only the approved non-default Neon branch and its pooled URI", as
     NEON_PROJECT_ID: "preview-project",
     NEON_API_KEY: "stub-neon-key",
   };
-  const request = (change) => async (input, options) => {
-    const url = new URL(input);
-    assert.equal(url.origin, "https://console.neon.tech");
-    assert.equal(
-      options.headers.Authorization,
-      `Bearer ${previewEnv.NEON_API_KEY}`,
-    );
-    if (url.pathname.endsWith(`/branches/${branchId}`)) {
-      return Response.json({
-        branch: {
-          id: branchId,
-          name: `preview/${ref}`,
-          default: false,
-          primary: false,
-          parent_id: "br-main",
-          ...change,
-        },
-      });
-    }
-    assert.ok(url.pathname.endsWith("/connection_uri"));
-    assert.equal(url.searchParams.get("branch_id"), branchId);
-    assert.equal(url.searchParams.get("pooled"), "true");
-    return Response.json({ uri });
+  const endpointId = "ep-preview";
+  const endpoint = {
+    id: endpointId,
+    type: "read_write",
+    branch_id: branchId,
+    project_id: previewEnv.NEON_PROJECT_ID,
+    host: "ep-preview.eu-west-1.aws.neon.tech",
   };
+  const request =
+    (change, endpoints = [endpoint], connectionUri = uri) =>
+    async (input, options) => {
+      const url = new URL(input);
+      assert.equal(url.origin, "https://console.neon.tech");
+      assert.equal(
+        options.headers.Authorization,
+        `Bearer ${previewEnv.NEON_API_KEY}`,
+      );
+      if (url.pathname.endsWith(`/branches/${branchId}`)) {
+        return Response.json({
+          branch: {
+            id: branchId,
+            project_id: previewEnv.NEON_PROJECT_ID,
+            name: `preview/${ref}`,
+            default: false,
+            primary: false,
+            parent_id: "br-main",
+            ...change,
+          },
+        });
+      }
+      if (url.pathname.endsWith(`/branches/${branchId}/endpoints`))
+        return Response.json({ endpoints });
+      assert.ok(url.pathname.endsWith("/connection_uri"));
+      assert.equal(url.searchParams.get("branch_id"), branchId);
+      assert.equal(url.searchParams.get("endpoint_id"), endpointId);
+      assert.equal(url.searchParams.get("pooled"), "true");
+      return Response.json({ uri: connectionUri });
+    };
   assert.deepEqual(await pooledNeonUrl(previewEnv, request()), {
     branchId,
     uri,
   });
   for (const change of [
     { id: "br-other" },
+    { project_id: "other-project" },
     { name: "preview/other" },
     { default: true },
     { primary: true },
@@ -387,5 +507,51 @@ test("resolves only the approved non-default Neon branch and its pooled URI", as
       pooledNeonUrl(previewEnv, request(change)),
       /approved non-default/,
     );
+  }
+  await assert.rejects(
+    pooledNeonUrl(
+      previewEnv,
+      request({}, [{ ...endpoint, type: "read_only" }]),
+    ),
+    /unique read-write/,
+  );
+  await assert.rejects(
+    pooledNeonUrl(previewEnv, request({}, [endpoint, endpoint])),
+    /unique read-write/,
+  );
+  await assert.rejects(
+    pooledNeonUrl(
+      previewEnv,
+      request({}, [endpoint], uri.replace("ep-preview", "ep-other")),
+    ),
+    /invalid pooled/,
+  );
+});
+
+test("writes the masked pooled URI only to a private file", () => {
+  const directory = mkdtempSync(join(tmpdir(), "workspace-neon-test-"));
+  const output = join(directory, "output");
+  const uri =
+    "postgresql://neondb_owner:stub%2Fsecret@ep-preview-pooler.test.neon.tech/neondb";
+  const logs = [];
+  try {
+    stageNeonConnection(
+      uri,
+      { RUNNER_TEMP: directory, GITHUB_OUTPUT: output },
+      (command) => logs.push(command),
+    );
+    const line = readFileSync(output, "utf8");
+    assert.match(line, /^database_file=[^\n]+\n$/);
+    assert.ok(!line.includes("stub"));
+    const file = line.trim().slice("database_file=".length);
+    assert.equal(readFileSync(file, "utf8"), uri);
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    assert.deepEqual(logs, [
+      `::add-mask::${uri.replace("%", "%25")}`,
+      "::add-mask::stub%252Fsecret",
+      "::add-mask::stub/secret",
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });

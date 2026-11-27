@@ -23,17 +23,18 @@ on:
         required: false
 
 permissions: {}
+cache-mode: read
 
 concurrency:
   group: workspace-backend-preview
   cancel-in-progress: false
+  queue: max
 
 env:
   PREVIEW_OPERATION: ${{ inputs.operation }}
   PR_NUMBER: ${{ inputs.pr_number }}
   GIT_SHA: ${{ inputs.head_sha }}
   VERCEL_DEPLOYMENT_ID: ${{ inputs.vercel_deployment_id }}
-  PILOT_PR_NUMBER: ${{ vars.WORKSPACE_BACKEND_PREVIEW_PR }}
 
 jobs:
   resolve:
@@ -45,6 +46,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    env:
+      PILOT_PR_NUMBER: ${{ vars.WORKSPACE_BACKEND_PREVIEW_PR }}
     outputs:
       head_ref: ${{ steps.target.outputs.head_ref }}
     steps:
@@ -105,6 +108,8 @@ jobs:
           retention-days: 1
 
   apply:
+    name: >-
+      ${{ format('{0} PR #{1} {2} at {3}', inputs.operation, inputs.pr_number, needs.resolve.outputs.head_ref, inputs.head_sha) }}
     needs: [resolve, build]
     if: >-
       !cancelled() && needs.resolve.result == 'success' &&
@@ -121,8 +126,9 @@ jobs:
       id-token: write
     env:
       GIT_REF: ${{ needs.resolve.outputs.head_ref }}
+      PILOT_PR_NUMBER: ${{ vars.WORKSPACE_BACKEND_PREVIEW_APPROVED_PR }}
       APPROVED_NEON_BRANCH_ID: ${{ vars.WORKSPACE_BACKEND_PREVIEW_NEON_BRANCH_ID }}
-      NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+      NEON_PROJECT_ID: ${{ vars.WORKSPACE_BACKEND_PREVIEW_NEON_PROJECT_ID }}
       PREVIEW_SIGNING_SECRET_VERSION: ${{ vars.WORKSPACE_BACKEND_PREVIEW_SIGNING_SECRET_VERSION }}
       GOOGLE_PROJECT_ID: deskohub-workspace-sandbox
     steps:
@@ -138,6 +144,7 @@ jobs:
           set -euo pipefail
           [[ "$(git rev-parse HEAD)" == "$GITHUB_WORKFLOW_SHA" ]]
           node .github/actions/workspace-backend-preview/target.mjs config
+          node .github/actions/workspace-backend-preview/target.mjs approval
           node .github/actions/workspace-backend-preview/target.mjs recheck
       - name: Verify the exact protected Vercel preview
         if: inputs.operation == 'deploy'
@@ -169,9 +176,11 @@ jobs:
           tar -xOzf "$tool_dir/crane.tar.gz" crane > "$tool_dir/crane"
           chmod 700 "$tool_dir/crane"
           printf 'path=%s/crane\n' "$tool_dir" >> "$GITHUB_OUTPUT"
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: Set up the verified Bun release without a cache write
+        uses: ./.github/actions/setup-bun
         with:
           bun-version: 1.4.4
+          bun-sha256: bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c
       - name: Install dependencies from the reviewed lockfile
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Acquire the Workspace preview branch lease
@@ -235,9 +244,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GOOGLE_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
           IMAGE_REF: ${{ steps.publish.outputs.image_ref }}
-          NEON_BRANCH_ID: ${{ steps.neon.outputs.branch_id }}
-          PREVIEW_DATABASE_URL: ${{ steps.neon.outputs.database_url }}
-        run: bun packages/workspace-infrastructure/scripts/backend-preview.ts deploy
+          NEON_BRANCH_ID: ${{ vars.WORKSPACE_BACKEND_PREVIEW_NEON_BRANCH_ID }}
+          DATABASE_FILE: ${{ steps.neon.outputs.database_file }}
+        run: |
+          set -euo pipefail
+          PREVIEW_DATABASE_URL="$(< "$DATABASE_FILE")"
+          export PREVIEW_DATABASE_URL
+          bun packages/workspace-infrastructure/scripts/backend-preview.ts deploy
       - name: Clean up the closed pilot PR generation
         if: inputs.operation == 'cleanup'
         timeout-minutes: 15
@@ -246,8 +259,13 @@ jobs:
           GOOGLE_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
           NEON_BRANCH_ID: ${{ vars.WORKSPACE_BACKEND_PREVIEW_NEON_BRANCH_ID }}
         run: bun packages/workspace-infrastructure/scripts/backend-preview.ts cleanup
+      - name: Remove the temporary Neon connection file
+        if: always() && steps.neon.outputs.database_file != ''
+        env:
+          DATABASE_FILE: ${{ steps.neon.outputs.database_file }}
+        run: rm -f -- "$DATABASE_FILE"
       - name: Release the Workspace preview branch lease
-        if: always() && steps.lease.outputs.shard != ''
+        if: always() && steps.lease.outcome != '' && steps.lease.outcome != 'skipped'
         uses: ./.github/actions/workspace-e2e-allocation
         with:
           mode: release
