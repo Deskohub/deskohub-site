@@ -231,13 +231,20 @@ export const WorkspaceLockSections = {
       .sort(Order.String)
       .map(reservationOrderSection);
     const account = options?.authorAccountId
-      ? [customerAccountSection(options.authorAccountId)]
-      : [];
-    return holdSections(
-      firstOrder
-        ? [firstOrder, ...remainingOrders, ...account, first, ...rest]
-        : [...account, first, ...rest]
-    );
+      ? customerAccountSection(options.authorAccountId)
+      : undefined;
+    if (firstOrder) {
+      return holdSections([
+        firstOrder,
+        ...remainingOrders,
+        ...(account ? [account] : []),
+        first,
+        ...rest,
+      ]);
+    }
+    return account
+      ? holdSections([account, first, ...rest])
+      : holdSections([first, ...rest]);
   },
   unlimitedGiftCustomer: (holder: CustomerAccountId) =>
     holdSection({
