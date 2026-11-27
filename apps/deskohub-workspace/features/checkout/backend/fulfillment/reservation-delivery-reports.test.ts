@@ -1,7 +1,9 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
+import { EmailDeliveryIdSchema } from "@deskohub/email";
 import { Effect, Layer } from "effect";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { ingestDeliveryReport } from "@/shared/backend/email/delivery-reports";
 import {
   resendEmailEvent,
@@ -74,11 +76,13 @@ const ingest = (input: {
   };
 };
 
-const reportedDelivery = {
-  deliveryId: "resend-email-id",
+const reportedDelivery: ReservationAccessDeliveryReport = {
+  deliveryId: EmailDeliveryIdSchema.make("resend-email-id"),
   outcome: "delivered",
   occurredAt: Temporal.Instant.from("2026-01-01T12:05:00.000Z"),
-  accessEmail: { reservationId: "reservation-id" },
+  accessEmail: {
+    reservationId: workspaceReservationIdSchema.make("reservation-id"),
+  },
 };
 
 describe("customer access delivery reports", () => {
@@ -92,9 +96,7 @@ describe("customer access delivery reports", () => {
 
     expect(result).toEqual({ status: "processed" });
     expect(recordDelivery).toHaveBeenCalledTimes(1);
-    expect(recordDelivery.mock.calls[0]?.[0]).toEqual(
-      reportedDelivery as never
-    );
+    expect(recordDelivery.mock.calls[0]?.[0]).toEqual(reportedDelivery);
   });
 
   test.each(["email.failed", "email.bounced"])(
@@ -110,7 +112,7 @@ describe("customer access delivery reports", () => {
       expect(recordDelivery.mock.calls[0]?.[0]).toEqual({
         ...reportedDelivery,
         outcome: "failed",
-      } as never);
+      });
     }
   );
 
@@ -132,10 +134,10 @@ describe("customer access delivery reports", () => {
 
       expect(result).toEqual({ status: "ignored", reason: "unrelated_email" });
       expect(recordDelivery.mock.calls[0]?.[0]).toEqual({
-        deliveryId: "resend-email-id",
+        deliveryId: reportedDelivery.deliveryId,
         outcome: "failed",
         occurredAt: Temporal.Instant.from("2026-01-01T12:05:00.000Z"),
-      } as never);
+      });
     }
   );
 
@@ -296,7 +298,8 @@ describe("customer access delivery reports", () => {
             new ReservationDeliveryReportError({
               reason,
               message: "synthetic",
-              workspaceReservationId: "reservation-id" as never,
+              workspaceReservationId:
+                workspaceReservationIdSchema.make("reservation-id"),
               cause,
             })
           ),

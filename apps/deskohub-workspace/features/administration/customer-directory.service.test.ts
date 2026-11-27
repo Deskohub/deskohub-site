@@ -11,8 +11,8 @@ import {
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { Effect, Layer, Logger, Option, Result } from "effect";
+import { dotyposCustomerFixture } from "@/shared/testing/dotypos-customer.test-utils";
 import { AdministrationCustomerDirectory } from "./customer-directory.service";
-import { dotyposCustomerFixture } from "./customer-directory.test-utils";
 import {
   degradeProviderRead,
   failProviderRead,

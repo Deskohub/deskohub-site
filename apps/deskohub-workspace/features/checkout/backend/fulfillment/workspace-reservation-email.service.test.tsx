@@ -3,12 +3,16 @@ import { NoReservationInvitations } from "@/features/reservation-invitees/backen
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
-import type {
-  Customer,
-  Reservation as DotyposReservation,
-  Table as DotyposTable,
-} from "@deskohub/dotypos/generated";
+import assert from "node:assert/strict";
+import {
+  DotyposCloudIdSchema,
+  DotyposCustomerIdSchema,
+  DotyposReservationIdSchema,
+  DotyposReservationSchema,
+  DotyposService,
+  DotyposTableIdSchema,
+  DotyposTableSchema,
+} from "@deskohub/dotypos";
 import {
   EmailDeliveryIdSchema,
   type EmailMessage,
@@ -21,24 +25,29 @@ import type {
 } from "@deskohub/email/backend/service";
 import { testEmailAddress } from "@deskohub/test-email";
 import { getQueriesForElement } from "@testing-library/react";
-import { Context, Effect, Layer, Logger, Option } from "effect";
+import { Effect, Layer, Logger, Option, Schema } from "effect";
 import type { ReservationAuthor } from "@/features/account/backend/reservation-author-directory.service";
-import { type Locale, m } from "@/features/i18n";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { isLocale, type Locale, m } from "@/features/i18n";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
-import {
-  type WorkspaceReservation,
-  WorkspaceReservationRepository,
-} from "@/features/reservation/backend/workspace-reservation.repository";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import {
   type WorkspaceReservationDetails,
   WorkspaceReservationService,
 } from "@/features/reservation/backend/workspace-reservation.service";
+import {
+  workspaceReservationDetailsFixture,
+  workspaceReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceDefaultFromAddress } from "@/shared/backend/config/email.config";
+import { dotyposCustomerFixture } from "@/shared/testing/dotypos-customer.test-utils";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
 import { workspaceSiteConstants } from "@/shared/utils";
+import { fulfillmentReservationId } from "./reservation-fulfillment.test-utils";
 import type { IWorkspaceReservationEmailService } from "./workspace-reservation-email.service";
 
 const customerAddress = testEmailAddress("customer");
@@ -55,44 +64,24 @@ type TestCustomerEmailLocale =
 
 let customerEmailLocaleOutcome:
   | TestCustomerEmailLocale
-  | { readonly kind: "read-error"; readonly code: string } = { kind: "guest" };
+  | {
+      readonly kind: "read-error";
+      readonly code: "customer-email-locale.read";
+    } = { kind: "guest" };
 const customerEmailLocaleReads: string[] = [];
 
-const TestCustomerEmailLocaleService = Context.Service<
-  TestCustomerEmailLocaleService,
-  {
-    readonly byDotyposCustomer: (
-      dotyposCustomerId: string
-    ) => Effect.Effect<
-      TestCustomerEmailLocale,
-      { readonly code: "customer-email-locale.read" }
-    >;
-  }
->()("@test/CustomerEmailLocaleService");
-interface TestCustomerEmailLocaleService {
-  readonly _: never;
-}
-Object.assign(TestCustomerEmailLocaleService, {
-  Default: Layer.succeed(TestCustomerEmailLocaleService, {
-    byDotyposCustomer: (dotyposCustomerId) => {
-      customerEmailLocaleReads.push(dotyposCustomerId);
-      const outcome = customerEmailLocaleOutcome;
-      return outcome.kind === "read-error"
-        ? Effect.fail({ code: outcome.code as "customer-email-locale.read" })
-        : Effect.succeed(outcome);
-    },
-  }),
-  Live: Layer.succeed(TestCustomerEmailLocaleService, {
-    byDotyposCustomer: () => Effect.succeed({ kind: "guest" }),
-  }),
+const { CustomerEmailLocaleService, CustomerEmailLocaleReadError } =
+  await import("@/features/account/backend/customer-email-locale.service");
+
+const customerEmailLocaleLayer = Layer.mock(CustomerEmailLocaleService, {
+  byDotyposCustomer: (dotyposCustomerId) => {
+    customerEmailLocaleReads.push(dotyposCustomerId);
+    const outcome = customerEmailLocaleOutcome;
+    return outcome.kind === "read-error"
+      ? Effect.fail(new CustomerEmailLocaleReadError({ code: outcome.code }))
+      : Effect.succeed(outcome);
+  },
 });
-const { isCustomerOwnAuthor } = await import(
-  "@/features/account/backend/reservation-author-directory.service"
-);
-mock.module("@/features/account", () => ({
-  CustomerEmailLocaleService: TestCustomerEmailLocaleService,
-  isCustomerOwnAuthor,
-}));
 
 // The paid-fulfillment send path must never fetch the location map: fresh
 // attachment bytes per attempt would break same-key idempotent retries. Track
@@ -109,39 +98,38 @@ mock.module("osm", () => ({
   }),
 }));
 
-const customer: Customer = {
-  _cloudId: "customer-id",
+const customerId = DotyposCustomerIdSchema.make("dotypos-customer-id");
+const dotyposReservationId = DotyposReservationIdSchema.make(
+  "dotypos-reservation-id"
+);
+const authorAccountId = customerAccountIdSchema.make("author-account-id");
+const customer = dotyposCustomerFixture(customerId, {
   firstName: "Ada",
   lastName: "Lovelace",
   companyName: null,
   email: customerAddress,
   phone: null,
-  points: null,
-  flags: "0",
-  display: true,
-  deleted: false,
-};
+});
 
 const makeReservation = (
-  overrides: Partial<WorkspaceReservationDetails>
-): WorkspaceReservationDetails => ({
-  id: "reservation-id",
-  dotyposCustomerId: "dotypos-customer-id",
-  authorAccountId: null,
-  dotyposReservationId: "dotypos-reservation-id",
-  reservationDetails: {
-    kind: "cowork",
-    entryTier: "basic",
-    coffee: false,
-  },
-  locale: "en-US",
-  providerStatus: "CONFIRMED",
-  customer,
-  reservedFrom: Temporal.Instant.from("2026-06-12T07:00:00Z"),
-  reservedUntil: Temporal.Instant.from("2026-06-12T11:00:00Z"),
-  seats: 1,
-  placement: {},
-  ...overrides,
+  overrides: Partial<WorkspaceReservationDetails> & { readonly locale?: Locale }
+) => ({
+  ...workspaceReservationDetailsFixture({
+    id: fulfillmentReservationId,
+    dotyposCustomerId: customerId,
+    authorAccountId,
+    dotyposReservationId,
+    reservationDetails: {
+      kind: "cowork",
+      entryTier: "basic",
+      coffee: false,
+    },
+    customer,
+    reservedFrom: Temporal.Instant.from("2026-06-12T07:00:00Z"),
+    reservedUntil: Temporal.Instant.from("2026-06-12T11:00:00Z"),
+    ...overrides,
+  }),
+  locale: overrides.locale ?? "en-US",
 });
 
 const sentResult = (id: string): EmailSendResult => ({
@@ -154,6 +142,9 @@ const sentResult = (id: string): EmailSendResult => ({
 const sendPaidReservationEmail = async (
   reservation: WorkspaceReservationDetails
 ) => {
+  const { locale } = reservation;
+  assert(isLocale(locale), "Expected a supported reservation locale");
+
   const { EmailConfigTag, EmailServiceTag } = await import(
     "@deskohub/email/backend/service"
   );
@@ -188,8 +179,9 @@ const sendPaidReservationEmail = async (
     await Effect.gen(function* () {
       const service = yield* WorkspaceReservationEmailService;
       yield* service.sendPaidReservationEmails({
+        author: null,
         reservation,
-        customerEmailLocale: reservation.locale,
+        customerEmailLocale: locale,
       });
     }).pipe(
       Effect.provide(
@@ -200,7 +192,7 @@ const sendPaidReservationEmail = async (
               Layer.succeed(EmailServiceTag, emailService),
               Layer.succeed(EmailConfigTag, emailConfig),
               WorkspaceCheckoutNetworkDetailsService.Default,
-              TestCustomerEmailLocaleService.Default
+              customerEmailLocaleLayer
             )
           )
         )
@@ -230,38 +222,38 @@ const renderEmailHtml = (html: string) => {
   return getQueriesForElement(container);
 };
 
-const makeOpenSpaceSnapshotTable = (
-  name: string,
-  index: number
-): DotyposTable => ({
-  _cloudId: "synthetic-cloud-id",
-  id: `synthetic-table-${index}`,
-  name,
-  display: true,
-  enabled: true,
-  locationName: "Main room",
-  seats: "2",
-  tags: ["cowork:open-space"],
-});
+const makeOpenSpaceSnapshotTable = (name: string, index: number) =>
+  Schema.decodeSync(DotyposTableSchema)({
+    _cloudId: "synthetic-cloud-id",
+    id: `synthetic-table-${index}`,
+    name,
+    display: true,
+    enabled: true,
+    locationName: "Main room",
+    seats: "2",
+    tags: ["cowork:open-space"],
+  });
 
 const loadOpenSpaceReservationFromSyntheticSnapshot = async () => {
   const providerReads: string[] = [];
   const names = ["9", "10", "11", "12", "15", "16", "wallee", "gromice"];
   const tables = names.map(makeOpenSpaceSnapshotTable);
-  const dotyposReservation: DotyposReservation = {
+  const teamBookingId = DotyposReservationIdSchema.make("team-booking-12");
+  const dotyposReservation = Schema.decodeSync(DotyposReservationSchema)({
+    id: dotyposReservationId,
     _branchId: "synthetic-branch-id",
     _cloudId: "synthetic-cloud-id",
-    _customerId: "customer-id",
+    _customerId: customerId,
     _tableId: "assigned-only-sentinel-raw-table-id",
     startDate: "2026-06-12T07:00:00.000Z",
     endDate: "2026-06-12T11:00:00.000Z",
     seats: "1",
     status: "CONFIRMED",
-  };
-  const workspaceReservation = {
-    id: "reservation-id",
-    dotyposCustomerId: "dotypos-customer-id",
-    dotyposReservationId: "dotypos-reservation-id",
+  });
+  const workspaceReservation = workspaceReservationFixture({
+    id: fulfillmentReservationId,
+    dotyposCustomerId: customerId,
+    dotyposReservationId,
     reservationState: "confirmed",
     paymentState: "paid",
     reservationDetails: {
@@ -270,10 +262,10 @@ const loadOpenSpaceReservationFromSyntheticSnapshot = async () => {
       coffee: false,
     },
     locale: "en-US",
-  } as WorkspaceReservation;
+  });
   const details = await Effect.gen(function* () {
     const service = yield* WorkspaceReservationService;
-    return yield* service.getReservation("reservation-id", {
+    return yield* service.getReservation(workspaceReservation.id, {
       requireOpenSpaceTableNames: true,
     });
   }).pipe(
@@ -284,7 +276,7 @@ const loadOpenSpaceReservationFromSyntheticSnapshot = async () => {
             Layer.mock(WorkspaceReservationRepository, {
               findById: mock(() => Effect.succeed(workspaceReservation)),
               selectTeamTableDotyposReservationIds: () =>
-                Effect.succeed(["team-booking-12"]),
+                Effect.succeed([teamBookingId]),
               selectExpiredHoldDotyposReservationIds: () => Effect.succeed([]),
             }),
             Layer.mock(DotyposService, {
@@ -306,8 +298,8 @@ const loadOpenSpaceReservationFromSyntheticSnapshot = async () => {
                 return Effect.succeed([
                   {
                     ...dotyposReservation,
-                    id: "team-booking-12",
-                    _tableId: "synthetic-table-3",
+                    id: teamBookingId,
+                    _tableId: DotyposTableIdSchema.make("synthetic-table-3"),
                     startDate: "2026-06-12T08:00:00.000Z",
                     endDate: "2026-06-12T10:00:00.000Z",
                   },
@@ -415,7 +407,9 @@ describe("Open Space customer reservation emails", () => {
     ]);
     expect(message.html).toContain("Tables");
     expect(message.text).toContain("Tables");
-    expect(getHtmlParagraphTexts(message.html)).toContain(expectedTableNames);
+    expect(
+      getHtmlParagraphTexts(requireValue(message.html, "customer email HTML"))
+    ).toContain(expectedTableNames);
     expect(getTextValueAfterLabel(message.text ?? "", "Tables")).toBe(
       expectedTableNames
     );
@@ -572,6 +566,7 @@ describe("workspace reservation email details", () => {
       await Effect.gen(function* () {
         const service = yield* WorkspaceReservationEmailService;
         yield* service.sendPaidReservationEmails({
+          author: null,
           reservation,
           customerEmailLocale: "en-US",
         });
@@ -585,7 +580,7 @@ describe("workspace reservation email details", () => {
                 Layer.succeed(EmailServiceTag, emailService),
                 Layer.succeed(EmailConfigTag, emailConfig),
                 WorkspaceCheckoutNetworkDetailsService.Default,
-                TestCustomerEmailLocaleService.Default
+                customerEmailLocaleLayer
               )
             )
           )
@@ -668,12 +663,12 @@ describe("sendPaidReservationEmails internal notification failure", () => {
       placement: {
         table: { mode: "assigned", name: "12" },
         tableMap: {
-          assignedTableId: "desk-12",
+          assignedTableId: DotyposTableIdSchema.make("desk-12"),
           roomName: "Main room",
           tables: [
             {
-              _cloudId: "cloud-id",
-              id: "desk-12",
+              _cloudId: DotyposCloudIdSchema.make("cloud-id"),
+              id: DotyposTableIdSchema.make("desk-12"),
               name: "12",
               locationName: "Main room",
               positionX: "40",
@@ -720,6 +715,7 @@ describe("sendPaidReservationEmails internal notification failure", () => {
     const customerDeliveryId = await Effect.gen(function* () {
       const service = yield* WorkspaceReservationEmailService;
       return yield* service.sendPaidReservationEmails({
+        author: null,
         reservation,
         customerEmailLocale: reservation.locale,
       });
@@ -732,7 +728,7 @@ describe("sendPaidReservationEmails internal notification failure", () => {
               Layer.succeed(EmailServiceTag, emailService),
               Layer.succeed(EmailConfigTag, emailConfig),
               WorkspaceCheckoutNetworkDetailsService.Default,
-              TestCustomerEmailLocaleService.Default
+              customerEmailLocaleLayer
             )
           )
         )
@@ -908,8 +904,10 @@ describe("sendPaidReservationEmails author confirmation", () => {
     overrides: Partial<Extract<ReservationAuthor, { kind: "active" }>> = {}
   ): ReservationAuthor => ({
     kind: "active",
-    accountId: "author-account-id",
-    dotyposCustomerId: "author-dotypos-customer-id",
+    accountId: authorAccountId,
+    dotyposCustomerId: DotyposCustomerIdSchema.make(
+      "author-dotypos-customer-id"
+    ),
     email: authorAddress,
     locale: "cs-CZ",
     ...overrides,
@@ -978,7 +976,7 @@ describe("sendPaidReservationEmails author confirmation", () => {
               Layer.succeed(EmailServiceTag, emailService),
               Layer.succeed(EmailConfigTag, emailConfig),
               WorkspaceCheckoutNetworkDetailsService.Default,
-              TestCustomerEmailLocaleService.Default
+              customerEmailLocaleLayer
             )
           )
         )
@@ -999,7 +997,7 @@ describe("sendPaidReservationEmails author confirmation", () => {
 
   test("sends only the customer and staff emails for the customer's own booking", async () => {
     const sent = await sendWithAuthor({
-      author: activeAuthor({ dotyposCustomerId: "dotypos-customer-id" }),
+      author: activeAuthor({ dotyposCustomerId: customerId }),
     });
 
     expect(sent.tags).toEqual([
@@ -1010,7 +1008,7 @@ describe("sendPaidReservationEmails author confirmation", () => {
 
   test("sends no author confirmation for a deleted author or an authorless reservation", async () => {
     for (const author of [
-      { kind: "deleted", accountId: "author-account-id" } as const,
+      { kind: "deleted", accountId: authorAccountId } as const,
       null,
     ]) {
       const sent = await sendWithAuthor({ author });
@@ -1205,6 +1203,7 @@ describe("sendPaidReservationEmails idempotency", () => {
       await Effect.gen(function* () {
         const service = yield* WorkspaceReservationEmailService;
         yield* service.sendPaidReservationEmails({
+          author: null,
           reservation,
           customerEmailLocale: "en-US",
           customerEmailIdempotencyKey: createCustomerEmailInitialIdempotencyKey(
@@ -1220,7 +1219,7 @@ describe("sendPaidReservationEmails idempotency", () => {
                 Layer.succeed(EmailServiceTag, emailService),
                 Layer.succeed(EmailConfigTag, emailConfig),
                 WorkspaceCheckoutNetworkDetailsService.Default,
-                TestCustomerEmailLocaleService.Default
+                customerEmailLocaleLayer
               )
             )
           )
@@ -1295,6 +1294,7 @@ describe("sendPaidReservationEmails idempotent retry stability", () => {
         Effect.gen(function* () {
           const service = yield* WorkspaceReservationEmailService;
           yield* service.sendPaidReservationEmails({
+            author: null,
             reservation,
             customerEmailLocale: "en-US",
             customerEmailIdempotencyKey: idempotencyKey,
@@ -1308,7 +1308,7 @@ describe("sendPaidReservationEmails idempotent retry stability", () => {
                   Layer.succeed(EmailServiceTag, emailService),
                   Layer.succeed(EmailConfigTag, emailConfig),
                   WorkspaceCheckoutNetworkDetailsService.Default,
-                  TestCustomerEmailLocaleService.Default
+                  customerEmailLocaleLayer
                 )
               )
             )
@@ -1346,9 +1346,14 @@ describe("sendPaidReservationEmails idempotent retry stability", () => {
     const secondQr = secondCustomer?.attachments?.find(
       (attachment) => attachment.filename === "workspace-wifi-qr.png"
     );
-    expect(
-      Buffer.compare(firstQr?.content as Buffer, secondQr?.content as Buffer)
-    ).toBe(0);
+    const firstQrBytes = firstQr?.content;
+    const secondQrBytes = secondQr?.content;
+    assert(Buffer.isBuffer(firstQrBytes), "Expected the first Wi-Fi QR buffer");
+    assert(
+      Buffer.isBuffer(secondQrBytes),
+      "Expected the second Wi-Fi QR buffer"
+    );
+    expect(Buffer.compare(firstQrBytes, secondQrBytes)).toBe(0);
     expect(
       firstCustomer?.attachments?.map((attachment) => attachment.filename)
     ).toEqual(["workspace-wifi-qr.png"]);
@@ -1403,6 +1408,7 @@ describe("sendPaidReservationEmails reservation access capability", () => {
     await Effect.gen(function* () {
       const service = yield* WorkspaceReservationEmailService;
       yield* service.sendPaidReservationEmails({
+        author: null,
         reservation,
         customerEmailLocale: "cs-CZ",
       });
@@ -1415,7 +1421,7 @@ describe("sendPaidReservationEmails reservation access capability", () => {
               Layer.succeed(EmailServiceTag, emailService),
               Layer.succeed(EmailConfigTag, emailConfig),
               WorkspaceCheckoutNetworkDetailsService.Default,
-              TestCustomerEmailLocaleService.Default
+              customerEmailLocaleLayer
             )
           )
         )
@@ -1529,6 +1535,7 @@ describe("sendPaidReservationEmails reservation access capability", () => {
       const service = yield* WorkspaceReservationEmailService;
       for (const reservation of reservations) {
         yield* service.sendPaidReservationEmails({
+          author: null,
           reservation,
           customerEmailLocale: reservation.locale,
         });
@@ -1542,7 +1549,7 @@ describe("sendPaidReservationEmails reservation access capability", () => {
               Layer.succeed(EmailServiceTag, emailService),
               Layer.succeed(EmailConfigTag, emailConfig),
               WorkspaceCheckoutNetworkDetailsService.Default,
-              TestCustomerEmailLocaleService.Default
+              customerEmailLocaleLayer
             )
           )
         )
@@ -1715,7 +1722,7 @@ const runCustomerNoticeScenario = async (
                 Layer.succeed(EmailServiceTag, emailService),
                 Layer.succeed(EmailConfigTag, emailConfig),
                 WorkspaceCheckoutNetworkDetailsService.Default,
-                TestCustomerEmailLocaleService.Default
+                customerEmailLocaleLayer
               )
             )
           )
@@ -1745,11 +1752,11 @@ describe("reservation customer email language", () => {
 
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
-        const emailLocale = yield* TestCustomerEmailLocaleService;
+        const emailLocale = yield* CustomerEmailLocaleService;
         return yield* createCustomerEmailLocaleResolver(emailLocale)(
           reservation
         );
-      }).pipe(Effect.provide(TestCustomerEmailLocaleService.Default))
+      }).pipe(Effect.provide(customerEmailLocaleLayer))
     );
     return { exit, reads: customerEmailLocaleReads };
   };

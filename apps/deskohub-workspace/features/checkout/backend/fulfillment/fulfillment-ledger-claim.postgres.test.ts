@@ -10,6 +10,7 @@ import {
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   connectWorkspacePostgresTestDatabase,
@@ -31,7 +32,7 @@ const postgresDatabase = await connectWorkspacePostgresTestDatabase();
 describe.skipIf(!postgresDatabase)(
   "FulfillmentLedger paid fulfillment claim on Postgres",
   () => {
-    const postgres = postgresDatabase as WorkspacePostgresTestDatabase;
+    let postgres: WorkspacePostgresTestDatabase;
     let reservations: IWorkspaceReservationRepository;
     let ledger: IFulfillmentLedger;
     const fixtureReservationIds: WorkspaceReservationId[] = [];
@@ -66,6 +67,7 @@ describe.skipIf(!postgresDatabase)(
         );
 
     beforeAll(async () => {
+      postgres = requireValue(postgresDatabase, "Workspace test Postgres");
       [reservations, ledger] = await Effect.runPromise(
         Effect.gen(function* () {
           return [

@@ -18,10 +18,12 @@ import {
   type WorkspaceReservationDetails,
   WorkspaceReservationDetailsError,
 } from "@/features/reservation/backend/workspace-reservation.service";
-import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import {
+  workspaceReservationDetailsFixture,
+  workspaceReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
-import { workspaceReservationDetailsFixture } from "./administration-database.test-utils";
 
 const testActor = {
   source: "admin-ui",

@@ -4,7 +4,7 @@ import {
   DotyposCustomerIdSchema,
 } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import { dotyposCustomerFixture } from "./customer-directory.test-utils";
+import { dotyposCustomerFixture } from "@/shared/testing/dotypos-customer.test-utils";
 import {
   describeAdministrationCustomer,
   nameAdministrationCustomer,
