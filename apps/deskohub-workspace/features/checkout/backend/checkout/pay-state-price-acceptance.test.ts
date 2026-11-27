@@ -3,11 +3,11 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
 import { Effect, Layer } from "effect";
-import {
-  type WorkspaceReservation,
-  WorkspaceReservationRepository,
-} from "@/features/reservation/backend/workspace-reservation.repository";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { payableReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import type { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
+import { instantStringSchema } from "@/shared/utils/temporal";
 import { buildCheckoutPayPath } from "./checkout-pay-url";
 import { PayState } from "./pay-state";
 import { acceptPayStatePriceChange } from "./pay-state-price-acceptance";
@@ -15,17 +15,25 @@ import {
   sealSyntheticPayStateToken,
   syntheticChangedKeys,
   syntheticHoldExpiresAt,
+  syntheticPayStateOrderId,
 } from "./signed-pay-state.test-utils";
 
 /** The deadline stored with the order, for tokens signed without one. */
 const storedHoldExpiresAt = Temporal.Instant.from("2099-07-01T10:09:30Z");
-const findReservation = mock(() =>
-  Effect.succeed({
-    reservationHoldExpiresAt: storedHoldExpiresAt,
-  } as WorkspaceReservation)
+const findReservation = mock<
+  WorkspaceReservationRepository["Service"]["findById"]
+>(() =>
+  Effect.succeed(
+    payableReservationFixture({
+      id: syntheticPayStateOrderId,
+      reservationHoldExpiresAt: storedHoldExpiresAt,
+    })
+  )
 );
 
-const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+const run = <A, E>(
+  effect: Effect.Effect<A, E, SealedStateKeys | WorkspaceReservationRepository>
+) =>
   Effect.runPromise(
     effect.pipe(
       Effect.provide(
@@ -36,10 +44,11 @@ const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
           })
         )
       )
-    ) as Effect.Effect<A, E>
+    )
   );
-const runFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  run(Effect.flip(effect));
+const runFailure = <A, E>(
+  effect: Effect.Effect<A, E, SealedStateKeys | WorkspaceReservationRepository>
+) => run(Effect.flip(effect));
 
 describe("acceptPayStatePriceChange", () => {
   test("continues a price review with the same order and quote, without its changed keys", async () => {
@@ -92,7 +101,9 @@ describe("acceptPayStatePriceChange", () => {
     );
     const continued = await run(PayState.open(accepted.payStateToken));
 
-    expect(continued.holdExpiresAt).toBe("2099-07-01T10:09:30.000Z");
+    expect(continued.holdExpiresAt).toBe(
+      instantStringSchema.make("2099-07-01T10:09:30.000Z")
+    );
   });
 
   test("returns a state without a price review unchanged", async () => {

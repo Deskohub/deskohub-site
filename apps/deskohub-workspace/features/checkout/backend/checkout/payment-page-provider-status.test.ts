@@ -3,7 +3,13 @@ import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { type NexiOrder, NexiService } from "@deskohub/nexi";
+import {
+  NetworkError,
+  NexiCorrelationIdSchema,
+  type NexiOrder,
+  NexiOrderIdSchema,
+  NexiService,
+} from "@deskohub/nexi";
 import { Effect, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import {
@@ -11,28 +17,35 @@ import {
   PaymentPageProviderStatus,
 } from "./payment-page-provider-status";
 
-const reservation = { correlationId: "correlation-id" } as never;
-const attempt = {
-  provider: "nexi",
-  providerOrderId: "provider-order-id",
-} as never;
+const reservation = {
+  correlationId: NexiCorrelationIdSchema.make("correlation-id"),
+};
+const providerOrderId = NexiOrderIdSchema.make("provider-order-id");
 
-const observeWith = (getOrder: ReturnType<typeof mock>) =>
+const observeWith = (
+  getOrder: NexiService["Service"]["getOrder"],
+  orderId: string | null = providerOrderId
+) =>
   PaymentPageProviderStatus.pipe(
-    Effect.flatMap((status) => status.observe({ attempt, reservation })),
+    Effect.flatMap((status) =>
+      status.observe({
+        attempt: { provider: "nexi", providerOrderId: orderId },
+        reservation,
+      })
+    ),
     Effect.provide(
       PaymentPageProviderStatus.Default.pipe(
         Layer.provide(
           PaymentProvidersFromNexi.pipe(
-            Layer.provide(Layer.mock(NexiService, { getOrder } as never))
+            Layer.provide(Layer.mock(NexiService, { getOrder }))
           )
         )
       )
     )
   );
 
-const order = (overrides: Partial<NexiOrder> = {}) => ({
-  orderId: "provider-order-id",
+const order = (overrides: Partial<NexiOrder> = {}): NexiOrder => ({
+  orderId: providerOrderId,
   operations: [],
   ...overrides,
 });
@@ -72,7 +85,9 @@ describe("PaymentPageProviderStatus.observe", () => {
   });
 
   test("reads a failed lookup as unknown", async () => {
-    const getOrder = mock(() => Effect.fail(new Error("nexi down")));
+    const getOrder = mock(() =>
+      Effect.fail(new NetworkError({ message: "nexi down" }))
+    );
 
     expect(await Effect.runPromise(observeWith(getOrder))).toBe("unknown");
   });
@@ -92,24 +107,7 @@ describe("PaymentPageProviderStatus.observe", () => {
   test("asks nothing for an attempt without a provider order", async () => {
     const getOrder = mock(() => Effect.succeed(order()));
 
-    const observation = await PaymentPageProviderStatus.pipe(
-      Effect.flatMap((status) =>
-        status.observe({
-          attempt: { provider: "nexi", providerOrderId: null } as never,
-          reservation,
-        })
-      ),
-      Effect.provide(
-        PaymentPageProviderStatus.Default.pipe(
-          Layer.provide(
-            PaymentProvidersFromNexi.pipe(
-              Layer.provide(Layer.mock(NexiService, { getOrder } as never))
-            )
-          )
-        )
-      ),
-      Effect.runPromise
-    );
+    const observation = await Effect.runPromise(observeWith(getOrder, null));
 
     expect(observation).toBe("unknown");
     expect(getOrder).not.toHaveBeenCalled();

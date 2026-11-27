@@ -4,11 +4,12 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, mock, test } from "bun:test";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Cause, Effect, Layer } from "effect";
-import type { CustomerAccountId } from "@/features/account/customer-account";
 import {
-  type WorkspaceReservation,
-  WorkspaceReservationRepository,
-} from "@/features/reservation/backend/workspace-reservation.repository";
+  type CustomerAccountId,
+  customerAccountIdSchema,
+} from "@/features/account/customer-account";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { payableReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { requirePayStateAuthor } from "./pay-state-author";
 import {
@@ -16,8 +17,8 @@ import {
   syntheticPayStateOrderId,
 } from "./signed-pay-state.test-utils";
 
-const author = "author-account" as CustomerAccountId;
-const otherAccount = "other-account" as CustomerAccountId;
+const author = customerAccountIdSchema.make("author-account");
+const otherAccount = customerAccountIdSchema.make("other-account");
 
 const runCheck = async (input: {
   readonly accountId: CustomerAccountId;
@@ -48,10 +49,12 @@ const runCheck = async (input: {
 
 const storedOrder = (authorAccountId: CustomerAccountId) =>
   mock(() =>
-    Effect.succeed({
-      id: syntheticPayStateOrderId,
-      authorAccountId,
-    } as WorkspaceReservation)
+    Effect.succeed(
+      payableReservationFixture({
+        id: syntheticPayStateOrderId,
+        authorAccountId,
+      })
+    )
   );
 
 describe("requirePayStateAuthor", () => {

@@ -9,21 +9,20 @@ import {
 import { loadAuthorizedCheckoutStatus } from "./authorized-checkout-status";
 import {
   CheckoutStatusService,
-  type CheckoutStatusViewModel,
   type ICheckoutStatusService,
 } from "./checkout-status.service";
+
+import {
+  failedCheckoutStatusRead,
+  fulfilledCheckoutStatus,
+} from "./testing/checkout-status-fixture";
 
 const input = {
   accessCookie: "access-cookie",
   locale: "cs-CZ",
-  orderId: "order-id",
+  orderId: fulfilledCheckoutStatus.orderId,
   returnOutcome: "success",
 } as const;
-const fulfilledStatus = {
-  orderId: input.orderId,
-  status: "fulfilled",
-} as CheckoutStatusViewModel;
-
 const load = (
   checkoutStatus: ICheckoutStatusService,
   isAuthorized: IReservationAuthorizationService["isAuthorized"]
@@ -33,22 +32,22 @@ const load = (
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(CheckoutStatusService, checkoutStatus),
-          Layer.succeed(ReservationAuthorizationService, { isAuthorized })
+          Layer.mock(ReservationAuthorizationService, { isAuthorized })
         )
       )
     )
   );
 
 test("answers the refreshed status of an order the visitor may see", async () => {
-  const refreshStatus = mock(() => Effect.succeed(fulfilledStatus));
-  const getStatus = mock(() =>
-    Effect.fail(new Error("must not read"))
-  ) as ICheckoutStatusService["getStatus"];
+  const refreshStatus = mock(() => Effect.succeed(fulfilledCheckoutStatus));
+  const getStatus = mock<ICheckoutStatusService["getStatus"]>(() =>
+    failedCheckoutStatusRead("must not read")
+  );
   const isAuthorized = mock(() => Effect.succeed(true));
 
   const result = await load({ getStatus, refreshStatus }, isAuthorized);
 
-  expect(result).toBe(fulfilledStatus);
+  expect(result).toBe(fulfilledCheckoutStatus);
   expect(refreshStatus).toHaveBeenCalledWith({
     orderId: input.orderId,
     returnOutcome: input.returnOutcome,
@@ -63,17 +62,17 @@ test("answers the refreshed status of an order the visitor may see", async () =>
 });
 
 test("falls back to the local status when the refresh fails", async () => {
-  const refreshStatus = mock(() =>
-    Effect.fail(new Error("refresh read failed"))
-  ) as ICheckoutStatusService["refreshStatus"];
-  const getStatus = mock(() => Effect.succeed(fulfilledStatus));
+  const refreshStatus = mock<ICheckoutStatusService["refreshStatus"]>(() =>
+    failedCheckoutStatusRead("refresh read failed")
+  );
+  const getStatus = mock(() => Effect.succeed(fulfilledCheckoutStatus));
 
   const result = await load(
     { getStatus, refreshStatus },
     mock(() => Effect.succeed(true))
   );
 
-  expect(result).toBe(fulfilledStatus);
+  expect(result).toBe(fulfilledCheckoutStatus);
   expect(refreshStatus).toHaveBeenCalledTimes(1);
   expect(getStatus).toHaveBeenCalledWith({
     orderId: input.orderId,
@@ -82,12 +81,12 @@ test("falls back to the local status when the refresh fails", async () => {
 });
 
 test("answers not found without reading the status of an order the visitor may not see", async () => {
-  const refreshStatus = mock(() =>
-    Effect.fail(new Error("must not refresh"))
-  ) as ICheckoutStatusService["refreshStatus"];
-  const getStatus = mock(() =>
-    Effect.fail(new Error("must not read"))
-  ) as ICheckoutStatusService["getStatus"];
+  const refreshStatus = mock<ICheckoutStatusService["refreshStatus"]>(() =>
+    failedCheckoutStatusRead("must not refresh")
+  );
+  const getStatus = mock<ICheckoutStatusService["getStatus"]>(() =>
+    failedCheckoutStatusRead("must not read")
+  );
 
   const result = await load(
     { getStatus, refreshStatus },

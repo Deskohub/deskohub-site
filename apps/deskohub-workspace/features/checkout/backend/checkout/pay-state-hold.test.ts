@@ -3,11 +3,13 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
 import { Effect, Layer } from "effect";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import {
-  type WorkspaceReservation,
-  WorkspaceReservationRepository,
-} from "@/features/reservation/backend/workspace-reservation.repository";
+  payableReservationFixture,
+  workspaceReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
+import { instantStringSchema } from "@/shared/utils/temporal";
 import { PayState } from "./pay-state";
 import {
   getPayStateHoldExpiresAt,
@@ -21,13 +23,20 @@ import {
 } from "./signed-pay-state.test-utils";
 
 const storedDeadline = Temporal.Instant.from("2099-07-01T10:09:30Z");
+const signedStoredDeadline = instantStringSchema.make(
+  "2099-07-01T10:09:30.000Z"
+);
 
 const storedReservation = (reservationHoldExpiresAt: Temporal.Instant | null) =>
   mock(() =>
-    Effect.succeed({
-      id: syntheticPayStateOrderId,
-      reservationHoldExpiresAt,
-    } as WorkspaceReservation)
+    Effect.succeed(
+      reservationHoldExpiresAt === null
+        ? workspaceReservationFixture({ id: syntheticPayStateOrderId })
+        : payableReservationFixture({
+            id: syntheticPayStateOrderId,
+            reservationHoldExpiresAt,
+          })
+    )
   );
 
 const withReservations = (
@@ -66,7 +75,7 @@ describe("getPayStateHoldExpiresAt", () => {
       getPayStateHoldExpiresAt(state, {
         reservationHoldExpiresAt: storedDeadline,
       })
-    ).toBe("2099-07-01T10:09:30.000Z");
+    ).toBe(signedStoredDeadline);
   });
 });
 
@@ -95,7 +104,7 @@ describe("loadPayStateHoldExpiry", () => {
     );
 
     expect(findById).toHaveBeenCalledWith(syntheticPayStateOrderId);
-    expect(held.holdExpiresAt).toBe("2099-07-01T10:09:30.000Z");
+    expect(held.holdExpiresAt).toBe(signedStoredDeadline);
   });
 
   test("refuses a state whose reservation is gone or has no deadline", async () => {
