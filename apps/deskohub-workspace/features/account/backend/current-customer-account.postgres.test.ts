@@ -1,7 +1,12 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
-import type { DotyposCustomerId } from "@deskohub/dotypos";
+import {
+  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+  DotyposUnavailable,
+} from "@deskohub/dotypos";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Cause, Effect, Exit, Layer } from "effect";
 import { SqlError } from "effect/sql";
 import { redirect } from "next/navigation";
@@ -46,9 +51,9 @@ describe.skipIf(!suiteDatabase)(
     afterAll(() => suiteDatabase.close());
 
     const uniqueDotyposId = () =>
-      `${Math.floor(Math.random() * 900_000) + 100_000}${Math.floor(
-        Math.random() * 900
-      )}` as DotyposCustomerId;
+      DotyposCustomerIdSchema.make(
+        `${Math.floor(Math.random() * 900_000) + 100_000}${Math.floor(Math.random() * 900)}`
+      );
 
     type Seeded = {
       readonly accountId: CustomerAccountId;
@@ -98,7 +103,9 @@ describe.skipIf(!suiteDatabase)(
     const makeCurrentAccount = (options: {
       readonly sessions: readonly SessionAnswer[];
       readonly match?: ExactEmailCustomerMatch;
-      readonly reactivation?: Effect.Effect<void, never>;
+      readonly reactivation?: ReturnType<
+        CustomerDotyposAdapter["Service"]["reactivateCustomer"]
+      >;
       readonly reviewAccounts?: Layer.Layer<ReviewAccounts>;
       /** Stands in for the link repository the standing reads directly. */
       readonly links?: Layer.Layer<CustomerAccountLinkRepository>;
@@ -214,12 +221,23 @@ describe.skipIf(!suiteDatabase)(
         "select count(*)::int as count from referral_attributions where invited_dotypos_customer_id = $1",
         [customerId]
       );
-      return intents.rows[0]!.count + attributions.rows[0]!.count;
+      const [intentCount] = intents.rows;
+      const [attributionCount] = attributions.rows;
+      if (!intentCount || !attributionCount) {
+        throw new Error("Expected both referral row counts");
+      }
+      return intentCount.count + attributionCount.count;
     };
 
     const failingReviewMarker = ReviewAccountsMock({
       isReviewAccount: () =>
-        Effect.fail(new Error("review marker read failed")) as never,
+        Effect.fail(
+          new EffectDrizzleQueryError({
+            query: "select review marker",
+            params: undefined,
+            cause: new Error("review marker read failed"),
+          })
+        ),
     });
 
     describe("before the account is known", () => {
@@ -497,7 +515,12 @@ describe.skipIf(!suiteDatabase)(
         const { layer } = makeCurrentAccount({
           sessions: [session],
           match: { kind: "matched", state: "expired", customerId },
-          reactivation: Effect.fail(new Error("reactivation failed")) as never,
+          reactivation: Effect.fail(
+            new DotyposUnavailable({
+              operation: "reactivateCustomer",
+              reason: "transport",
+            })
+          ),
         });
 
         const resolved = await resolve(layer);
@@ -746,7 +769,7 @@ describe.skipIf(!suiteDatabase)(
                     [account.accountId]
                   )
                 );
-                return { held, standing, granted: locks.rows[0]!.granted };
+                return { held, standing, granted: locks.rows[0]?.granted };
               }),
               { recheck: "active" }
             );

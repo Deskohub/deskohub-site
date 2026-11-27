@@ -84,9 +84,13 @@ describe("requireLinkedCustomerAccount", () => {
       const exit = await run(testResolvedStandings[label]);
 
       if (expected instanceof CustomerAccountAccessError) {
-        expect(facts(failureOf(exit) as CustomerAccountAccessError)).toEqual(
-          facts(expected)
-        );
+        const failure = failureOf(exit);
+        if (!(failure instanceof CustomerAccountAccessError)) {
+          throw new Error("Expected an account access failure", {
+            cause: failure,
+          });
+        }
+        expect(facts(failure)).toEqual(facts(expected));
       } else {
         expect(exit).toEqual(Exit.succeed(expected));
       }

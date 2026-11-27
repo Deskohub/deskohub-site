@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type DotyposCustomer,
   type DotyposCustomerProfile,
+  DotyposCustomerSchema,
   type DotyposCustomerWriteRecord,
   DotyposService,
   DotyposUnavailable,
@@ -10,16 +11,16 @@ import {
   FindCustomerResult,
 } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import type { CustomerProfileSave } from "../contracts";
 import { CustomerDotyposAdapter } from "./customer-dotypos-adapter.service";
 
 const customerEmail = testEmailAddress("ada");
 
 const makeCustomer = (
-  overrides: Partial<DotyposCustomer> = {}
+  overrides: Partial<typeof DotyposCustomerSchema.Encoded> = {}
 ): DotyposCustomer =>
-  ({
+  Schema.decodeUnknownSync(DotyposCustomerSchema)({
     id: "60111",
     _cloudId: "cloud",
     firstName: "Ada",
@@ -32,7 +33,7 @@ const makeCustomer = (
     deleted: false,
     expireDate: null,
     ...overrides,
-  }) as DotyposCustomer;
+  });
 
 /** A customer as a create may return it, without the id Dotypos assigned. */
 const createdCustomerWithoutId = (): DotyposCustomerWriteRecord => {
@@ -375,9 +376,7 @@ describe("CustomerDotyposAdapter", () => {
 
       expect(result).toMatchObject({ _tag: "Success" });
       if (result._tag === "Success") {
-        expect(Option.isNone(result.success as Option.Option<unknown>)).toBe(
-          true
-        );
+        expect(result.success).toEqual(Option.none());
       }
     });
 

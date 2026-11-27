@@ -25,6 +25,7 @@ import {
 import {
   connectWorkspacePostgresTestDatabase,
   createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type CustomerAccountId,
@@ -44,6 +45,7 @@ import {
 } from "./customer-invoice.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 // Issued invoices are immutable, so the retention test issues its own into a
 // database no other suite lists invoices from.
 const invoiceDatabase = await createWorkspacePostgresSuiteDatabase(
@@ -72,7 +74,7 @@ const expireCustomer = (customerId: DotyposCustomerId) =>
 
 const insertAuthUser = (id: CustomerAccountId, email: string) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("deletion", {
+    workspaceFixtures(database().db).account("deletion", {
       id,
       email,
       verified: false,
@@ -80,7 +82,7 @@ const insertAuthUser = (id: CustomerAccountId, email: string) =>
   );
 
 const insertLink = async (account: string, dotyposCustomerId: string) => {
-  await testDatabase!.pool.query(
+  await database().pool.query(
     `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
     [account, dotyposCustomerId]
   );
@@ -88,8 +90,8 @@ const insertLink = async (account: string, dotyposCustomerId: string) => {
 
 /** The tombstone's deletion instant, null while active, undefined when absent. */
 const readDeletedAt = async (account: CustomerAccountId) => {
-  const [row] = await testDatabase!.db
-    .select({ deletedAt: customerAccounts.deletedAt })
+  const [row] = await database()
+    .db.select({ deletedAt: customerAccounts.deletedAt })
     .from(customerAccounts)
     .where(eq(customerAccounts.id, account))
     .pipe(Effect.runPromise);
@@ -107,9 +109,7 @@ const unreadSession = Layer.succeed(CustomerAuthentication, {
  * lock unless a test makes it unreachable.
  */
 const makeRepositoryLayer = (
-  sectionLock = WorkspaceDatabaseAdvisoryLock.makeLayer(
-    testDatabase!.databasePool
-  )
+  sectionLock = WorkspaceDatabaseAdvisoryLock.makeLayer(database().databasePool)
 ) => {
   const repositories = Layer.mergeAll(
     CustomerAccountLinkRepository.Default,
@@ -118,11 +118,8 @@ const makeRepositoryLayer = (
   ).pipe(
     Layer.provide(
       Layer.mergeAll(
-        Layer.succeed(
-          WorkspaceDatabase,
-          WorkspaceDatabase.make(testDatabase!.db)
-        ),
-        WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase!.databasePool)
+        Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(database().db)),
+        WorkspaceDatabaseAdvisoryLock.makeLayer(database().databasePool)
       )
     )
   );
@@ -178,7 +175,7 @@ describe.skipIf(!testDatabase)(
         `destroy-avatar:${account}`,
       ]);
 
-      const marker = await testDatabase!.pool.query(
+      const marker = await database().pool.query(
         `select deletion_requested_at from auth."user" where id = $1`,
         [account]
       );
@@ -190,7 +187,7 @@ describe.skipIf(!testDatabase)(
       const layer = makeRepositoryLayer();
       const account = customerAccountIdSchema.make(uniqueId());
       await Effect.runPromise(
-        workspaceFixtures(testDatabase!.db).account("del-review", {
+        workspaceFixtures(database().db).account("del-review", {
           id: account,
           verified: false,
           review: true,
@@ -226,7 +223,7 @@ describe.skipIf(!testDatabase)(
 
       expect(outcome._tag).toBe("ReviewAccountDeletionRefusedError");
       expect(providerCalls).toEqual([]);
-      const marker = await testDatabase!.pool.query(
+      const marker = await database().pool.query(
         `select deletion_requested_at from auth."user" where id = $1`,
         [account]
       );
@@ -265,13 +262,13 @@ describe.skipIf(!testDatabase)(
 
       expect(outcome._tag).toBe("Failure");
 
-      const marker = await testDatabase!.pool.query(
+      const marker = await database().pool.query(
         `select deletion_requested_at from auth."user" where id = $1`,
         [account]
       );
       expect(marker.rows[0]?.deletion_requested_at).not.toBeNull();
 
-      const link = await testDatabase!.pool.query(
+      const link = await database().pool.query(
         `select dotypos_customer_id from customer_accounts where id = $1`,
         [account]
       );
@@ -343,7 +340,7 @@ describe.skipIf(!testDatabase)(
           cause: { code: "account-link.lock" },
         });
         expect(providerCalls).toEqual([]);
-        const marker = await testDatabase!.pool.query(
+        const marker = await database().pool.query(
           `select deletion_requested_at from auth."user" where id = $1`,
           [account]
         );
@@ -361,7 +358,7 @@ describe.skipIf(!testDatabase)(
       await insertAuthUser(account, testEmailAddress(`del-${account}`));
       await insertLink(account, dotyposCustomerId);
       const { id: reservationId } = await Effect.runPromise(
-        workspaceFixtures(testDatabase!.db).reservation({
+        workspaceFixtures(database().db).reservation({
           stage: { reservation: "draft" },
           customer: dotyposCustomerId,
           author: account,
@@ -390,39 +387,36 @@ describe.skipIf(!testDatabase)(
         );
         const deletedAt = await readDeletedAt(account);
         // Better Auth removes the identity rows once the hook succeeds.
-        await testDatabase!.pool.query(
-          `delete from auth."user" where id = $1`,
-          [account]
-        );
+        await database().pool.query(`delete from auth."user" where id = $1`, [
+          account,
+        ]);
 
-        const kept = await testDatabase!.pool.query(
+        const kept = await database().pool.query(
           `select author_account_id from workspace_reservations where id = $1`,
           [reservationId]
         );
         expect(kept.rows).toEqual([{ author_account_id: account }]);
         expect(deletedAt).not.toBeNull();
         expect(await readDeletedAt(account)).toEqual(deletedAt);
-        const link = await testDatabase!.pool.query(
+        const link = await database().pool.query(
           `select dotypos_customer_id from customer_accounts where id = $1`,
           [account]
         );
         expect(link.rows).toEqual([{ dotypos_customer_id: null }]);
         await expect(
-          testDatabase!.pool.query(
-            `delete from customer_accounts where id = $1`,
-            [account]
-          )
+          database().pool.query(`delete from customer_accounts where id = $1`, [
+            account,
+          ])
         ).rejects.toMatchObject({ code: "23001" });
       } finally {
-        await testDatabase!.pool.query(
+        await database().pool.query(
           `delete from workspace_reservations where id = $1`,
           [reservationId]
         );
-        await testDatabase!.pool.query(
-          `delete from auth."user" where id = $1`,
-          [account]
-        );
-        await testDatabase!.pool.query(
+        await database().pool.query(`delete from auth."user" where id = $1`, [
+          account,
+        ]);
+        await database().pool.query(
           `delete from customer_accounts where id = $1`,
           [account]
         );
@@ -434,7 +428,7 @@ describe.skipIf(!testDatabase)(
       const account = customerAccountIdSchema.make(uniqueId());
       const dotyposCustomerId = syntheticDotyposCustomerId("deletion");
       await Effect.runPromise(
-        workspaceFixtures(testDatabase!.db).customerAccount({
+        workspaceFixtures(database().db).customerAccount({
           id: account,
           linkedCustomer: dotyposCustomerId,
         })
@@ -455,7 +449,7 @@ describe.skipIf(!testDatabase)(
       await tombstoneAt("2026-10-17T11:00:00Z");
 
       expect(await readDeletedAt(account)).toBe("2026-10-17T10:00:00Z");
-      const row = await testDatabase!.pool.query<{
+      const row = await database().pool.query<{
         dotypos_customer_id: string | null;
       }>("select dotypos_customer_id from customer_accounts where id = $1", [
         account,
@@ -474,6 +468,7 @@ describe.skipIf(!invoiceDatabase)(
     };
 
     const makeLayer = () => {
+      const { layer, databasePool } = requireTestDatabase(invoiceDatabase);
       const accountingKeys = Layer.succeed(
         AccountingSnapshotKeyService,
         AccountingSnapshotKeyService.of({
@@ -482,15 +477,15 @@ describe.skipIf(!invoiceDatabase)(
         })
       );
       const storage = Layer.mergeAll(
-        invoiceDatabase!.layer,
-        WorkspaceDatabaseAdvisoryLock.makeLayer(invoiceDatabase!.databasePool),
+        layer,
+        WorkspaceDatabaseAdvisoryLock.makeLayer(databasePool),
         accountingKeys
       );
       const repositories = Layer.mergeAll(
         CustomerAccountLinkRepository.Default,
         CustomerAccountRepository.Default,
         ReviewAccounts.Default,
-        testAccountingStorage(invoiceDatabase!.layer, accountingKeys)
+        testAccountingStorage(layer, accountingKeys)
       ).pipe(Layer.provideMerge(storage));
       return Layer.mergeAll(
         repositories,
@@ -502,7 +497,8 @@ describe.skipIf(!invoiceDatabase)(
 
     test("keeps the customer's issued invoice and denies the deleted account access to it", async () => {
       const layer = makeLayer();
-      const fixtures = workspaceFixtures(invoiceDatabase!.db);
+      const { db, pool } = requireTestDatabase(invoiceDatabase);
+      const fixtures = workspaceFixtures(db);
       const dotyposCustomerId = syntheticDotyposCustomerId("deleted-invoices");
       const { accountId: account } = await Effect.runPromise(
         fixtures.account("deleted-invoices", {
@@ -564,10 +560,7 @@ describe.skipIf(!invoiceDatabase)(
         })
       );
       // Better Auth removes the identity rows once the hook succeeds.
-      await invoiceDatabase!.pool.query(
-        `delete from auth."user" where id = $1`,
-        [account]
-      );
+      await pool.query(`delete from auth."user" where id = $1`, [account]);
 
       const retained = await run(
         Effect.flatMap(InvoiceRepository, (invoices) =>

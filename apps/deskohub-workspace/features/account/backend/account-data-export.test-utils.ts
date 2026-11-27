@@ -1,8 +1,10 @@
 import {
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
+  DotyposUnavailable,
 } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Data, Effect, Layer } from "effect";
 import { InvoiceRepository } from "@/features/accounting/backend/invoice.repository";
 import { InvoiceEmailDeliveryRepository } from "@/features/accounting/backend/invoice-email-delivery.repository";
@@ -90,28 +92,35 @@ type OwnerAnswers = {
   >;
 };
 
-/**
- * A source's failure that stands for any failure in its owner's error
- * channel: the export maps every one of them alike, except an exceeded read
- * limit, which a test fails with `ReadLimitExceededError` itself.
- */
+/** Requested by the route tests to fail an owner read with a synthetic cause. */
 export class SyntheticSourceFailure extends Data.TaggedError(
   "SyntheticSourceFailure"
 ) {}
 
-/**
- * What every source of the account data export answers. Each read is an
- * Effect a test may replace, such as with a `SyntheticSourceFailure` or an
- * oversized list.
- */
-export type AccountDataExportSources = {
-  readonly [Source in keyof OwnerAnswers]: OwnerAnswers[Source] extends Effect.Effect<
-    infer A,
-    infer E
-  >
-    ? Effect.Effect<A, E | SyntheticSourceFailure>
-    : never;
+type WithSyntheticFailure<A> = Effect.Effect<
+  Effect.Success<A>,
+  Effect.Error<A> | SyntheticSourceFailure
+>;
+
+/** What every source of the account data export answers, at read time. */
+export type AccountDataExportSources = Omit<
+  OwnerAnswers,
+  "profile" | "payments"
+> & {
+  readonly profile: WithSyntheticFailure<OwnerAnswers["profile"]>;
+  readonly payments: WithSyntheticFailure<OwnerAnswers["payments"]>;
 };
+
+export const unreadableExportQuery = (cause: unknown) =>
+  new EffectDrizzleQueryError({ query: "select", params: [], cause });
+
+export const unreadableExportProfile = (cause: unknown) =>
+  new DotyposUnavailable({
+    operation: "getCustomer",
+    request: "customer.get",
+    reason: "server",
+    cause,
+  });
 
 /** One source read as the export made it: the source's name and its input. */
 export type AccountDataExportRead = {
@@ -399,55 +408,88 @@ export const fakeAccountDataExportSources = (
   reads: AccountDataExportRead[]
 ) => {
   const read =
-    <K extends keyof AccountDataExportSources>(source: K) =>
+    <A, E>(
+      source: keyof AccountDataExportSources,
+      answer: () => Effect.Effect<A, E>
+    ) =>
     (input?: string | object) =>
-      // The owner's interface has no `SyntheticSourceFailure`; it stands for
-      // a failure the interface does declare.
       Effect.suspend(() => {
         reads.push(input === undefined ? { source } : { source, input });
-        return sources()[source];
-      }) as OwnerAnswers[K];
+        return answer();
+      });
   return Layer.mergeAll(
     Layer.mock(CurrentCustomerAccount, {
-      resolve: read("resolve")(),
-      requireActive: read("session")(),
+      resolve: read("resolve", () => sources().resolve)(),
+      requireActive: read("session", () => sources().session)(),
     }),
     Layer.mock(CustomerAccountLinkRepository, {
-      findActivityState: read("activity"),
+      findActivityState: read("activity", () => sources().activity),
     }),
     Layer.mock(CustomerDotyposAdapter, {
-      readCustomerProfile: read("profile"),
+      readCustomerProfile: read("profile", () =>
+        sources().profile.pipe(
+          Effect.catchTag("SyntheticSourceFailure", (cause) =>
+            Effect.fail(unreadableExportProfile(cause))
+          )
+        )
+      ),
     }),
     Layer.mock(WorkspaceReservationRepository, {
-      listForCustomer: read("workspaceReservations"),
+      listForCustomer: read(
+        "workspaceReservations",
+        () => sources().workspaceReservations
+      ),
     }),
     Layer.mock(CustomerBookedReservations, {
-      listForCustomer: read("bookedReservations"),
+      listForCustomer: read(
+        "bookedReservations",
+        () => sources().bookedReservations
+      ),
     }),
     Layer.mock(PaymentAttemptRepository, {
-      listForReservations: read("payments"),
+      listForReservations: read("payments", () =>
+        sources().payments.pipe(
+          Effect.catchTag("SyntheticSourceFailure", (cause) =>
+            Effect.fail(unreadableExportQuery(cause))
+          )
+        )
+      ),
     }),
     Layer.mock(LatePaymentRecoveryRepository, {
-      listForReservations: read("latePaymentRecoveries"),
+      listForReservations: read(
+        "latePaymentRecoveries",
+        () => sources().latePaymentRecoveries
+      ),
     }),
     Layer.mock(DiscountApplicationRepository, {
-      listForReservations: read("discountApplications"),
+      listForReservations: read(
+        "discountApplications",
+        () => sources().discountApplications
+      ),
     }),
     Layer.mock(InvoiceRepository, {
-      listMetadataForCustomer: read("invoices"),
+      listMetadataForCustomer: read("invoices", () => sources().invoices),
     }),
     Layer.mock(InvoiceEmailDeliveryRepository, {
-      listForCustomer: read("invoiceDeliveries"),
+      listForCustomer: read(
+        "invoiceDeliveries",
+        () => sources().invoiceDeliveries
+      ),
     }),
-    Layer.mock(MarketingConsentLedger, { find: read("marketingConsent") }),
+    Layer.mock(MarketingConsentLedger, {
+      find: read("marketingConsent", () => sources().marketingConsent),
+    }),
     Layer.mock(LegalEvidenceEventRepository, {
-      listForReservations: read("legalEvidenceEvents"),
+      listForReservations: read(
+        "legalEvidenceEvents",
+        () => sources().legalEvidenceEvents
+      ),
     }),
     Layer.mock(ReservationAccessRepository, {
-      listForReservations: read("accessGrants"),
+      listForReservations: read("accessGrants", () => sources().accessGrants),
     }),
     Layer.mock(WithdrawalRepository, {
-      listRecordsForAccount: read("withdrawals"),
+      listRecordsForAccount: read("withdrawals", () => sources().withdrawals),
     })
   );
 };

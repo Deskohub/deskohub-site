@@ -1,8 +1,13 @@
+import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
+import { ReferralCode } from "@deskohub/workspace-customer-api/referral-code";
 import "@/shared/testing/workspace-test-env";
 
 import { expect, mock, test } from "bun:test";
 import { Context, Effect, Layer, Option } from "effect";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
+import type { IWorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
+import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 
 // Served outside Next.js, a request never reaches Next's request APIs or the
 // Next.js edge's gates, which decide through React `cache` and a nested
@@ -23,9 +28,10 @@ mock.module("@/features/feature-flags/backend/release-gate.server", () => ({
 // PostHog answers from each request's own headers, so a decision shared
 // across requests would show.
 const evaluations: string[] = [];
-class RequestFeatureFlags extends Context.Service<RequestFeatureFlags>()(
-  "@deskohub-workspace/feature-flags/WorkspaceFeatureFlagService"
-) {}
+class RequestFeatureFlags extends Context.Service<
+  RequestFeatureFlags,
+  IWorkspaceFeatureFlagService
+>()("@deskohub-workspace/feature-flags/WorkspaceFeatureFlagService") {}
 const { currentRequestHeaders, withWorkspaceRequestContext } = await import(
   "@/shared/backend/workspace-request-context"
 );
@@ -36,6 +42,7 @@ mock.module(
       Default: Layer.succeed(RequestFeatureFlags, {
         isEnabled: (key: string) =>
           currentRequestHeaders.pipe(
+            Effect.orDie,
             Effect.map((headers) => {
               evaluations.push(`${headers.get("x-test-request")} ${key}`);
               return (headers.get("x-test-flags") ?? "")
@@ -47,7 +54,7 @@ mock.module(
           Effect.die("account state is never stored; it reads isOpen"),
         evaluateFlags: () => Effect.die("not used by release gates"),
         constantValue: () => Effect.succeed(Option.none()),
-      } as never),
+      }),
     }),
   })
 );
@@ -63,6 +70,9 @@ const { CurrentCustomerAccount } = await import(
 );
 const { CustomerAuthentication } = await import(
   "@/features/account/backend/customer-authentication.service"
+);
+const { testSessionProfile } = await import(
+  "./customer-authentication.test-utils"
 );
 const { CustomerAvatarService } = await import(
   "@/features/account/backend/customer-avatar.service"
@@ -85,37 +95,39 @@ const { accountStateCapabilitiesForRun } = await import(
 const { loadAccountState } = await import("./account-state");
 
 const requestName = currentRequestHeaders.pipe(
+  Effect.orDie,
   Effect.map((headers) => headers.get("x-test-request") ?? "missing")
+);
+
+const requestSession = requestName.pipe(
+  Effect.map((name) => ({
+    accountId: customerAccountIdSchema.make(`account-${name}`),
+    email: reservationCustomerEmailSchema.make(testEmailAddress(name)),
+    deletionRequested: false,
+    ...testSessionProfile,
+  }))
 );
 
 /** The account services over fakes that answer for each request's session. */
 const services = {
   authentication: Layer.mock(CustomerAuthentication, {
-    currentUser: requestName.pipe(
-      Effect.map((name) => ({
-        accountId: `account-${name}`,
-        email: testEmailAddress(name),
-        deletionRequested: false,
-      }))
-    ) as never,
+    currentUser: requestSession,
   }),
   currentAccount: Layer.mock(CurrentCustomerAccount, {
-    resolve: requestName.pipe(
-      Effect.map((name) => ({
-        kind: "linked",
-        session: {
-          accountId: `account-${name}`,
-          email: testEmailAddress(name),
-          deletionRequested: false,
-        },
-        reviewMarker: "absent",
+    resolve: requestSession.pipe(
+      Effect.map((session) => ({
+        kind: "linked" as const,
+        session,
+        reviewMarker: "absent" as const,
         account: {
-          accountId: `account-${name}`,
-          dotyposCustomerId: `customer-${name}`,
+          accountId: session.accountId,
+          dotyposCustomerId: DotyposCustomerIdSchema.make(
+            `customer-${session.accountId}`
+          ),
         },
         autoLinked: false,
       }))
-    ) as never,
+    ),
   }),
   profile: Layer.mock(CustomerProfileService, {
     load: () =>
@@ -124,7 +136,7 @@ const services = {
         lastName: "Lovelace",
         phone: null,
         billing: null,
-      }) as never,
+      }),
   }),
   avatar: Layer.mock(CustomerAvatarService, {
     lookup: () => Effect.succeed(null),
@@ -139,16 +151,16 @@ const services = {
   referrals: ReferralServiceMock({
     getAccountSummary: () =>
       Effect.succeed({
-        code: "RFL12345",
+        code: ReferralCode.make("RFL12345"),
         inviteeCount: 0,
         eligibleInviteeCount: 0,
         discount: "0",
         savings: [],
-      }) as never,
+      }),
     hasSettledReferral: () => Effect.succeed(true),
   }),
   signupIntents: Layer.mock(ReferralSignupIntentRepository, {
-    find: () => Effect.succeed(undefined) as never,
+    find: () => Effect.succeed(undefined),
   }),
 };
 

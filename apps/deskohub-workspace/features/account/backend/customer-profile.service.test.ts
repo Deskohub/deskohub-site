@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
 import { SqlError } from "effect/sql";
 import { NoReviewAccounts } from "@/features/review-accounts/backend/review-accounts.repository.mock";
-import type { CustomerAccountAccessError } from "../customer-account";
 import type { CustomerAccountActivityState } from "./customer-account-link.repository";
 import { CustomerAccountLinkRepository } from "./customer-account-link.repository";
 import { CustomerAccountSections } from "./customer-account-sections";
@@ -197,7 +196,7 @@ describe("CustomerProfileService", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.reason).toBe("link-required");
       expect(error.linkReason).toBe("deletion-requested");
     }
@@ -215,7 +214,7 @@ describe("CustomerProfileService", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.reason).toBe("unauthenticated");
     }
     expect(layers.calls).not.toContain("update-profile");
@@ -380,7 +379,7 @@ describe("CustomerProfileService", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.reason).toBe("link-required");
       expect(error.linkReason).toBe("claimed");
     }
