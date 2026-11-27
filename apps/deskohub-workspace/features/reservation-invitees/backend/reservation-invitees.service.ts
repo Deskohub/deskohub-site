@@ -73,7 +73,7 @@ interface SealedInvitee {
 }
 
 /**
- * Who is coming to an office, sealed for the draft transaction that records
+ * Who is coming to a reservation, sealed for the transaction that records
  * it beside the reservation row: `contactAttends` goes on the reservation,
  * each invitee becomes a row.
  */
@@ -85,7 +85,7 @@ export interface SealedOfficePeople {
 
 /**
  * Seals a validated people list under the active key. `accessEndsAt` is the
- * end of the office's last booked day; the address is kept 30 days past it.
+ * end of the booking's access; the address is kept 30 days past it.
  */
 export const sealOfficePeople = Effect.fn("reservationInvitees.seal")(
   function* (people: ValidOfficePeople, accessEndsAt: Temporal.Instant) {
@@ -106,28 +106,30 @@ export const sealOfficePeople = Effect.fn("reservationInvitees.seal")(
 );
 
 /**
- * Inserts a draft's invitee rows in the caller's transaction, in list order.
+ * Inserts invitee rows in the caller's transaction, in list order.
  * The statement binds the address and its key, so it runs untraced and a
  * failure leaves with its parameters censored.
  */
 export const recordOfficeInvitees = Effect.fnUntraced(function* (
   reservationId: WorkspaceReservationId,
-  people: SealedOfficePeople
+  people: SealedOfficePeople,
+  firstPosition = 0
 ) {
-  if (people.invitees.length === 0) return;
+  if (people.invitees.length === 0) return [];
   const { db } = yield* WorkspaceTransaction;
-  yield* db
+  return yield* db
     .insert(reservationInvitees)
     .values(
       people.invitees.map((invitee, position) => ({
         workspaceReservationId: reservationId,
-        position,
+        position: firstPosition + position,
         keyId: invitee.keyId,
         encryptedEmail: invitee.encryptedEmail,
         emailLookupKey: invitee.emailLookupKey,
         retainUntil: people.retainUntil,
       }))
     )
+    .returning({ id: reservationInvitees.id })
     .pipe(
       Effect.withTracerEnabled(false),
       Effect.mapError(censorDatabaseQueryError)
@@ -179,16 +181,18 @@ export const getBookedPeopleQuery = (reservation: {
   readonly id: WorkspaceReservationId;
   readonly officeContactAttends: boolean | null;
   readonly reservationDetails: StoredWorkspaceReservationDetails;
-}) => ({
-  id: reservation.id,
-  officeContactAttends: reservation.officeContactAttends,
-  seats:
-    reservation.reservationDetails.kind === "office"
-      ? reservation.reservationDetails.seats
-      : undefined,
-});
+}) => {
+  const details = reservation.reservationDetails;
+  return {
+    id: reservation.id,
+    officeContactAttends: reservation.officeContactAttends,
+    ...(details.kind === "office" || details.kind === "table"
+      ? { kind: details.kind, seats: details.seats }
+      : { seats: undefined }),
+  };
+};
 
-/** Who is coming to a booked office, as its booker sees them. */
+/** Who is coming to a reservation, as its booker sees them. */
 export interface BookedOfficePeople {
   readonly contactAttends: boolean;
   readonly invitees: ReadonlyArray<
@@ -207,6 +211,7 @@ export interface IReservationInvitees {
     readonly id: WorkspaceReservationId;
     readonly officeContactAttends: boolean | null;
     readonly seats: number | undefined;
+    readonly kind?: "office" | "table";
   }) => Effect.Effect<
     Option.Option<BookedOfficePeople>,
     ReservationInviteeStorageError
@@ -436,7 +441,7 @@ export class ReservationInvitees extends Context.Service<
         );
 
       return ReservationInvitees.of({
-        findBookedPeople: ({ id, officeContactAttends, seats }) =>
+        findBookedPeople: ({ id, officeContactAttends, seats, kind }) =>
           officeContactAttends === null || seats === undefined
             ? Effect.succeed(Option.none())
             : listForReservation(id).pipe(
@@ -445,6 +450,7 @@ export class ReservationInvitees extends Context.Service<
                     contactAttends: officeContactAttends,
                     seats,
                     invitees,
+                    kind,
                   })
                 )
               ),

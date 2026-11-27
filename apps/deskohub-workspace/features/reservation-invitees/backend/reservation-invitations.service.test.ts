@@ -152,6 +152,34 @@ describe("ReservationInvitations", () => {
     expect(message.html).not.toContain("invitationToken=");
   });
 
+  test.each(["invitation", "cancellation", "restoration"] as const)(
+    "names the assigned Team Table in its %s email",
+    async (kind) => {
+      const message = await run((invitations) =>
+        invitations.renderNotice({
+          reservation: {
+            ...reservation,
+            reservationDetails: {
+              kind: "table",
+              seats: 3,
+              durationMinutes: 30,
+            },
+            reservedFrom: Temporal.Instant.from("2026-11-18T12:15:00Z"),
+            reservedUntil: Temporal.Instant.from("2026-11-18T12:45:00Z"),
+            placement: { table: { mode: "assigned", name: "Blue Table" } },
+          },
+          invitee: invitee(kind),
+          kind,
+          noticeId: "team-table-notice",
+          restoredAccess: "link",
+        })
+      );
+      expect(message.subject).toContain("Team Table");
+      expect(message.text).toContain("Blue Table");
+      expect(message.text).toMatch(/1:15.*1:45/);
+    }
+  );
+
   test.each([
     { restoredAccess: "link", codeIssued: false },
     { restoredAccess: "issued", codeIssued: true },

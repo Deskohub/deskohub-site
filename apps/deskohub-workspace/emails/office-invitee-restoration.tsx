@@ -29,13 +29,15 @@ export const officeInviteeRestorationEmailSubject = ({
   locale,
   reservation,
 }: Pick<OfficeInviteeRestorationEmailProps, "locale" | "reservation">) =>
-  m.officeInviteeRestorationSubject(
+  (reservation.teamTable
+    ? m.tableInviteeRestorationSubject
+    : m.officeInviteeRestorationSubject)(
     { booker: reservation.bookedBy },
     { locale }
   );
 
 /**
- * Tells an invited person that the cancelled office they were invited to is
+ * Tells an invited person that the cancelled reservation they were invited to is
  * valid again, with their personal access page when the booking has time left.
  */
 export function OfficeInviteeRestorationEmail(
@@ -49,7 +51,9 @@ export function OfficeInviteeRestorationEmail(
       preview={officeInviteeRestorationEmailSubject(props)}
     >
       <WorkspaceEmailHeading>
-        {m.officeInviteeRestorationHeading(
+        {(reservation.teamTable
+          ? m.tableInviteeRestorationHeading
+          : m.officeInviteeRestorationHeading)(
           { booker: reservation.bookedBy },
           { locale }
         )}

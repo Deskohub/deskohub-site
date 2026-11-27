@@ -51,7 +51,10 @@ export const resendAuthorizedReservationInvitation = Effect.fn(
     Effect.gen(function* () {
       const reservations = yield* WorkspaceReservationRepository;
       const stored = yield* reservations.findById(orderId);
-      if (stored?.reservationDetails.kind !== "office") {
+      if (
+        stored?.reservationDetails.kind !== "office" &&
+        stored?.reservationDetails.kind !== "table"
+      ) {
         return yield* new InvitationResendRefused({
           refusal: { reason: "not-found" },
         });

@@ -23,13 +23,15 @@ export const officeInviteeCancellationEmailSubject = ({
   locale,
   reservation,
 }: OfficeInviteeCancellationEmailProps) =>
-  m.officeInviteeCancellationSubject(
+  (reservation.teamTable
+    ? m.tableInviteeCancellationSubject
+    : m.officeInviteeCancellationSubject)(
     { booker: reservation.bookedBy },
     { locale }
   );
 
 /**
- * Tells an invited person that the office they were invited to was
+ * Tells an invited person that the reservation they were invited to was
  * cancelled and their door code no longer works. Payment and refunds are
  * the booker's, so it never mentions them.
  */

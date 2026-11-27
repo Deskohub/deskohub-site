@@ -379,7 +379,7 @@ const implementation = Effect.gen(function* () {
   const invitees = yield* ReservationInvitees;
 
   // Who is coming is extra detail: a status still answers without it.
-  const loadOfficePeople = Effect.fnUntraced(function* (
+  const loadReservationPeople = Effect.fnUntraced(function* (
     reservation: WorkspaceReservation,
     loadDotyposReservation: Effect.Effect<ReservationRecord | undefined>
   ) {
@@ -864,8 +864,9 @@ const implementation = Effect.gen(function* () {
                     refreshed,
                     loadDotyposReservation
                   ),
-                  reservation.reservationDetails.kind === "office"
-                    ? loadOfficePeople(reservation, loadDotyposReservation)
+                  reservation.reservationDetails.kind === "office" ||
+                  reservation.reservationDetails.kind === "table"
+                    ? loadReservationPeople(reservation, loadDotyposReservation)
                     : Effect.succeed(Option.none()),
                 ],
                 { concurrency }

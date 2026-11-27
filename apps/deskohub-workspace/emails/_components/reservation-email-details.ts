@@ -3,6 +3,7 @@ import {
   getWorkspaceOfficeProductTitle,
   getWorkspaceProductMonitorTitle,
   getWorkspaceProductTierTitle,
+  getWorkspaceTableProductTitle,
 } from "@/features/checkout/product-catalog.i18n";
 import { type Locale, m } from "@/features/i18n";
 import type { WorkspaceReservationDetails } from "@/features/reservation/backend/workspace-reservation.service";
@@ -15,6 +16,7 @@ import {
 import {
   formatReservationDisplayDate,
   formatReservationDisplayDateRange,
+  formatReservationDisplayDateTimeRange,
 } from "@/features/reservation/reservation-date";
 import type { WorkspaceEmailDetail } from "../workspace-email-detail";
 
@@ -136,7 +138,7 @@ export interface ReservationEmailPeople {
   readonly invitees: readonly string[];
 }
 
-const officePeopleDetail = (
+const reservationPeopleDetail = (
   people: ReservationEmailPeople,
   locale: Locale
 ): WorkspaceEmailDetail => {
@@ -181,11 +183,30 @@ const productDetails = (
           ),
         },
         people
-          ? officePeopleDetail(people, locale)
+          ? reservationPeopleDetail(people, locale)
           : {
               label: m.reservationEmailSeatsLabel({}, { locale }),
               value: String(reservation.seats),
             },
+      ],
+      table: () => [
+        {
+          label: m.reservationEmailReservationLabel({}, { locale }),
+          value: getWorkspaceTableProductTitle(locale),
+        },
+        {
+          label: m.reservationEmailTimeLabel({}, { locale }),
+          value: formatReservationDisplayDateTimeRange(
+            reservation.reservedFrom,
+            reservation.reservedUntil,
+            locale
+          ),
+        },
+        {
+          label: m.reservationEmailSeatsLabel({}, { locale }),
+          value: String(reservation.seats),
+        },
+        ...(people ? [reservationPeopleDetail(people, locale)] : []),
       ],
     })
   );
@@ -197,7 +218,7 @@ const productDetails = (
 export const reservationEmailDetails = (
   reservation: ReservationEmailReservation,
   locale: Locale,
-  /** Who is coming, for an office booked with a people list. */
+  /** Who is coming, when the booking has a people list. */
   people?: ReservationEmailPeople
 ): WorkspaceEmailDetail[] => [
   ...productDetails(reservation, locale, people),
