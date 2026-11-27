@@ -238,6 +238,7 @@ const loadOpenSpaceReservationFromSyntheticSnapshot = async () => {
   const providerReads: string[] = [];
   const names = ["9", "10", "11", "12", "15", "16", "wallee", "gromice"];
   const tables = names.map(makeOpenSpaceSnapshotTable);
+  const teamBookingId = DotyposReservationIdSchema.make("team-booking-12");
   const dotyposReservation = Schema.decodeSync(DotyposReservationSchema)({
     id: dotyposReservationId,
     _branchId: "synthetic-branch-id",
@@ -275,7 +276,7 @@ const loadOpenSpaceReservationFromSyntheticSnapshot = async () => {
             Layer.mock(WorkspaceReservationRepository, {
               findById: mock(() => Effect.succeed(workspaceReservation)),
               selectTeamTableDotyposReservationIds: () =>
-                Effect.succeed(["team-booking-12"]),
+                Effect.succeed([teamBookingId]),
               selectExpiredHoldDotyposReservationIds: () => Effect.succeed([]),
             }),
             Layer.mock(DotyposService, {
@@ -297,8 +298,8 @@ const loadOpenSpaceReservationFromSyntheticSnapshot = async () => {
                 return Effect.succeed([
                   {
                     ...dotyposReservation,
-                    id: "team-booking-12",
-                    _tableId: "synthetic-table-3",
+                    id: teamBookingId,
+                    _tableId: DotyposTableIdSchema.make("synthetic-table-3"),
                     startDate: "2026-06-12T08:00:00.000Z",
                     endDate: "2026-06-12T10:00:00.000Z",
                   },
