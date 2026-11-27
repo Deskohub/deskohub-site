@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { effectSchemaResolver } from "@deskohub/effect-schema-resolver";
-import { parsePhoneNumber } from "@deskohub/phone-number";
-import { Option } from "effect";
+import { phoneNumberSchema } from "@deskohub/phone-number";
+import { Schema } from "effect";
 import type { CustomerProfile } from "@/features/account/contracts";
 import { type Locale, m } from "@/features/i18n";
 import {
@@ -37,7 +37,10 @@ const errorsOf = async (schema: FormSchema, formValues: ProfileFormValues) =>
   );
 
 const profilePhone = "+420601111222";
-const decodedPhone = Option.getOrThrow(parsePhoneNumber(profilePhone, "CZ"));
+// Validate the expected E.164 value without using the form's parser.
+const expectedPhone = Schema.decodeUnknownSync(
+  Schema.toType(phoneNumberSchema("CZ"))
+)(profilePhone);
 
 const businessProfile: CustomerProfile = {
   firstName: "Ada",
@@ -118,7 +121,7 @@ describe("profileFormSchema", () => {
     expect(result.values).toStrictEqual({
       firstName: "Grace",
       lastName: undefined,
-      phone: decodedPhone,
+      phone: expectedPhone,
       billing: {
         kind: "business",
         addressLine1: "Original Street 1",
@@ -142,7 +145,7 @@ describe("profileFormSchema", () => {
     expect(result.values).toStrictEqual({
       firstName: "Ada",
       lastName: "Lovelace",
-      phone: decodedPhone,
+      phone: expectedPhone,
       billing: {
         kind: "personal",
         addressLine1: "Original Street 1",
@@ -163,7 +166,7 @@ describe("profileFormSchema", () => {
     expect(result.values).toStrictEqual({
       firstName: "Ada",
       lastName: "Lovelace",
-      phone: decodedPhone,
+      phone: expectedPhone,
     });
   });
 
@@ -201,7 +204,7 @@ describe("completionFormSchema", () => {
     expect(result.values).toStrictEqual({
       firstName: "Ada",
       lastName: "Lovelace",
-      phone: decodedPhone,
+      phone: expectedPhone,
       referralCode: "FRIEND10",
       prefilledReferralCode: "FRIEND10",
     });
@@ -215,7 +218,7 @@ describe("completionFormSchema", () => {
     expect(result.values).toStrictEqual({
       firstName: "Ada",
       lastName: "Lovelace",
-      phone: decodedPhone,
+      phone: expectedPhone,
     });
   });
 
