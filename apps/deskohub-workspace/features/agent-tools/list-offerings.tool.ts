@@ -8,6 +8,7 @@ import {
 import { type Locale, m } from "@/features/i18n";
 import { getShareableReservationUrl } from "@/features/reservation/backend/shareable-reservation-url";
 import { getMeetingRoomReservationDurationKey } from "@/features/reservation/meeting-room-reservation-duration";
+import { loadTeamTableOfferings } from "@/features/team-table/backend/team-table-offerings";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
   agentToolLocaleField,
@@ -53,14 +54,26 @@ export const listOfferingsTool = defineAgentTool({
 export const loadAgentOfferings = Effect.fn("agentTools.loadOfferings")(
   (locale: Locale) =>
     loadPublicOfferings(locale).pipe(
-      Effect.flatMap((listing) =>
-        Effect.forEach(listing.offerings, toAgentOffering, {
-          concurrency: "unbounded",
-        }).pipe(
+      Effect.flatMap(({ advertisedOn, offerings: publicOfferings }) =>
+        Effect.all(
+          {
+            otherOfferings: Effect.forEach(publicOfferings, toAgentOffering, {
+              concurrency: "unbounded",
+            }),
+            tableOfferings: loadAgentTeamTableOfferings({
+              advertisedOn,
+              locale,
+            }),
+          },
+          { concurrency: "unbounded" }
+        ).pipe(
           Effect.map(
-            (offerings): Omit<ListOfferingsResult, "business"> => ({
-              advertised_on: listing.advertisedOn.toString(),
-              offerings,
+            ({
+              otherOfferings,
+              tableOfferings,
+            }): Omit<ListOfferingsResult, "business"> => ({
+              advertised_on: advertisedOn.toString(),
+              offerings: [...otherOfferings, ...tableOfferings],
             })
           )
         )
@@ -129,20 +142,50 @@ const toAgentOffering = (offering: PublicOffering) =>
             add_ons: [],
             reservation_url: reservationUrl,
           }),
-          table: (table): AgentOffering => ({
-            family: "table",
-            seats: table.seats,
-            duration_minutes: table.durationMinutes,
-            ...getOfferingCopy(table),
-            price: toAgentToolMoney(table.price),
-            price_unit: "booking",
-            ...getAdvertisedPrice(table),
-            add_ons: [],
-            reservation_url: reservationUrl,
-          }),
         })
       )
     )
+  );
+
+const loadAgentTeamTableOfferings = ({
+  advertisedOn,
+  locale,
+}: {
+  readonly advertisedOn: Temporal.PlainDate;
+  readonly locale: Locale;
+}) =>
+  loadTeamTableOfferings({ advertisedOn, locale }).pipe(
+    Effect.flatMap((rows) =>
+      Effect.forEach(
+        rows.filter((row) => row.discountsComplete),
+        ({ product, name, price, advertisedPrice }) =>
+          getShareableReservationUrl({
+            kind: product.kind,
+            seats: product.seats,
+          }).pipe(
+            Effect.map(
+              (reservationUrl): AgentOffering => ({
+                family: product.kind,
+                seats: product.seats,
+                duration_minutes: product.durationMinutes,
+                name,
+                description: m.agentToolTeamTableDescription({}, { locale }),
+                usage: m.agentToolTeamTableUsage({}, { locale }),
+                price: toAgentToolMoney(price),
+                price_unit: "booking",
+                ...getAdvertisedPrice({ advertisedPrice }),
+                add_ons: [],
+                reservation_url: reservationUrl,
+              })
+            )
+          ),
+        { concurrency: "unbounded" }
+      )
+    ),
+    Effect.tapError(() =>
+      Effect.logWarning("Team Table offerings unavailable for customer agents")
+    ),
+    Effect.orElseSucceed(() => [])
   );
 
 const getOfferingCopy = ({

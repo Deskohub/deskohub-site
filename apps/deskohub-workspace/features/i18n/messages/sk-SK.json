@@ -1499,6 +1499,8 @@
   "agentToolAvailabilityAdvisoryNote": "Dostupnosť je odhad z nedávnych údajov. Potvrdí sa až pri rezervácii na webe.",
   "agentToolQuoteNote": "Toto je aktuálna cena za výber. Web ju potvrdí pri dokončení rezervácie.",
   "agentToolBookingHandoff": "Rezervácia sa vytvára na webe. Otvor odkaz na rezerváciu, vyber podrobnosti a dokonči ju tam.",
+  "agentToolTeamTableDescription": "Celý stôl v otvorenom priestore pre tvoju skupinu.",
+  "agentToolTeamTableUsage": "Rezervácie po 15 minútach, najviac na 24 hodín a počas prevádzkových hodín otvoreného priestoru.",
   "agentToolErrorProfileIncomplete": "Najprv dokonči profil na webe: na stránke účtu doplň meno a telefón a potom to skús znova.",
   "agentToolErrorSelectionUnavailable": "Tento výber už nie je voľný. Over dostupnosť a vyber inú možnosť.",
   "agentToolErrorReservationConflict": "Rezerváciu sa teraz nedá začať, pretože sa už spracúva. Skús to o minútu znova.",
