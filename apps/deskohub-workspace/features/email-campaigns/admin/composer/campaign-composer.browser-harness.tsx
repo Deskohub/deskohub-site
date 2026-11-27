@@ -1,8 +1,10 @@
+import { EmailId } from "@deskohub/workspace-admin-api";
+import { Schema } from "effect";
 import { createRoot } from "react-dom/client";
 import { AdminShell } from "@/features/administration/admin-shell";
 import { AdministrationPage } from "@/features/administration/components";
-import type { Locale } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
+import { locales } from "@/features/i18n/routing";
 import { CampaignComposer } from "./campaign-composer";
 import { newCampaignComposerFields } from "./campaign-composer-fields";
 
@@ -12,8 +14,12 @@ if (!mountPoint) {
   throw new Error("The campaign composer browser harness root is missing.");
 }
 
+const locale = Schema.decodeUnknownSync(Schema.Literals(locales))(
+  mountPoint.dataset.locale
+);
+
 createRoot(mountPoint).render(
-  <RouteLocaleProvider locale={mountPoint.dataset.locale as Locale}>
+  <RouteLocaleProvider locale={locale}>
     <AdminShell breadcrumb={null} localeSwitcher={null}>
       <AdministrationPage>
         <CampaignComposer
@@ -38,5 +44,3 @@ createRoot(mountPoint).render(
     </AdminShell>
   </RouteLocaleProvider>
 );
-
-import { EmailId } from "@deskohub/workspace-admin-api";

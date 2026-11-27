@@ -30,10 +30,19 @@ registerWorkspaceComponentTestEnv();
 
 const { RecipientPreviewPage } = await import("./recipient-preview-page");
 
-const campaign = {
+const campaign: RecipientPreview["campaign"] = {
   id: campaignId,
   title: "Autumn newsletter",
-} as RecipientPreview["campaign"];
+  purpose: "marketing",
+  templateKey: "workspace",
+  delivery: "once",
+  status: "draft",
+  audienceId: null,
+  locales: [],
+  createdAt: "2026-10-01T08:00:00Z",
+  updatedAt: "2026-10-01T08:00:00Z",
+  content: {},
+};
 const customerId = (id: string) => AdministrationDotyposCustomerId.make(id);
 const email = (id: string) => testEmailAddress(`recipient-preview-page-${id}`);
 const audience = {
