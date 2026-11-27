@@ -37,6 +37,7 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
   readonly gift?: boolean;
   readonly invitationSent?: boolean;
   readonly invoiceRequested: boolean;
+  readonly earlyStartRequested: boolean;
 }) {
   const { purchase, buyer } = input;
   const { locale, id } = purchase;
@@ -71,6 +72,7 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
           .href
       }
       invoiceRequested={input.invoiceRequested}
+      earlyStartRequested={input.earlyStartRequested}
       coffeeAmountMinor={input.price.coffeeAmountMinor}
       accessUrl={accessUrl}
     />

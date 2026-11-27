@@ -1,22 +1,26 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
+import { type Locale, locales, m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import {
   getEntryPackPrice,
   getEntryPackValidity,
+  getUnlimitedPassPrice,
 } from "@/features/passes/pass-offer";
+import { getUnlimitedPassEndDate } from "@/features/passes/unlimited-pass";
 import { renderWorkspaceEmail } from "@/shared/backend/email/render-react-email";
 import { currencyCZK } from "@/shared/money/currencies";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { EntryPackPurchaseEmail } from "./entry-pack-purchase";
 
-test("renders the buyer-only order link, consent terms and pack amount", async () => {
-  const orderId = orderIdSchema.make("019ac0e6-f461-77de-9492-26af32cc74a3");
-  const paidAt = Temporal.Instant.from("2026-11-18T09:30:00Z");
+const orderId = orderIdSchema.make("019ac0e6-f461-77de-9492-26af32cc74a3");
+const paidAt = Temporal.Instant.from("2026-11-18T09:30:00Z");
+
+const renderEntryPackEmail = (locale: Locale, earlyStartRequested: boolean) => {
   const product = { kind: "entry-pack", tier: "open-space", size: 10 } as const;
-  const statusUrl = `https://example.com/en-US/reservation/status/${orderId}`;
-  const termsUrl = "https://example.com/en-US/terms-and-conditions";
-  const { html, text } = await Effect.runPromise(
+  const statusUrl = `https://example.com/${locale}/reservation/status/${orderId}`;
+  const termsUrl = `https://example.com/${locale}/terms-and-conditions`;
+  return Effect.runPromise(
     renderWorkspaceEmail(
       <EntryPackPurchaseEmail
         orderId={orderId}
@@ -24,7 +28,7 @@ test("renders the buyer-only order link, consent terms and pack amount", async (
         tier={product.tier}
         entryCount={product.size}
         {...getEntryPackValidity(paidAt, product.size)}
-        locale="en-US"
+        locale={locale}
         quote={{
           product,
           discountableSubtotal: getEntryPackPrice(product),
@@ -34,16 +38,173 @@ test("renders the buyer-only order link, consent terms and pack amount", async (
         }}
         holderEmail={null}
         invoiceRequested
+        earlyStartRequested={earlyStartRequested}
         statusUrl={statusUrl}
         termsUrl={termsUrl}
       />
     )
+  ).then((rendered) => ({ ...rendered, statusUrl, termsUrl }));
+};
+
+const renderUnlimitedPassEmail = (
+  locale: Locale,
+  earlyStartRequested: boolean
+) => {
+  const product = { kind: "unlimited", tier: "reserved-desk" } as const;
+  const validFrom = plainDateStringSchema.make("2026-11-20");
+  const validUntil = getUnlimitedPassEndDate(validFrom);
+  const statusUrl = `https://example.com/${locale}/reservation/status/${orderId}`;
+  const accessUrl = `https://example.com/${locale}/reservation/access/${orderId}`;
+  const termsUrl = `https://example.com/${locale}/terms-and-conditions`;
+  return Effect.runPromise(
+    renderWorkspaceEmail(
+      <EntryPackPurchaseEmail
+        orderId={orderId}
+        paidAt={paidAt}
+        tier={product.tier}
+        entryCount={null}
+        validFrom={validFrom}
+        validUntil={validUntil}
+        locale={locale}
+        quote={{
+          product,
+          discountableSubtotal: getUnlimitedPassPrice(product),
+          discountedSubtotal: getUnlimitedPassPrice(product),
+          totalDiscount: currencyCZK(0),
+          discounts: [],
+        }}
+        holderEmail={null}
+        invoiceRequested
+        earlyStartRequested={earlyStartRequested}
+        statusUrl={statusUrl}
+        accessUrl={accessUrl}
+        termsUrl={termsUrl}
+      />
+    )
+  ).then((rendered) => ({ ...rendered, statusUrl, accessUrl, termsUrl }));
+};
+
+describe("EntryPackPurchaseEmail", () => {
+  test.each([
+    {
+      locale: "en-US" as const,
+      expectedCta: "Open your pass",
+      expectedAmount: "2,190",
+    },
+    {
+      locale: "cs-CZ" as const,
+      expectedCta: "Otevřít balíček",
+      expectedAmount: "2\u00a0190",
+    },
+  ])(
+    "renders Entry pack receipt in $locale with pack CTA and conditional early-start notice",
+    async ({ locale, expectedCta, expectedAmount }) => {
+      const [withEarlyStart, withoutEarlyStart] = await Promise.all([
+        renderEntryPackEmail(locale, true),
+        renderEntryPackEmail(locale, false),
+      ]);
+      const packEarlyStart = m.passEmailEarlyStart({}, { locale });
+      const unlimitedEarlyStart = m.unlimitedPassEmailEarlyStart(
+        {},
+        { locale }
+      );
+      const refundTerms = m.passEmailRefundTerms({}, { locale });
+
+      expect(withEarlyStart.html).toContain(
+        `href="${withEarlyStart.statusUrl}"`
+      );
+      expect(withEarlyStart.html).toContain(
+        `href="${withEarlyStart.termsUrl}"`
+      );
+      expect(withEarlyStart.html).not.toContain("/reservation/access/");
+      expect(withEarlyStart.html).toContain(expectedCta);
+      expect(withEarlyStart.text).toContain(orderId);
+      expect(withEarlyStart.text).toContain(expectedAmount);
+      expect(withEarlyStart.text).toContain(packEarlyStart);
+      expect(withEarlyStart.text).not.toContain(unlimitedEarlyStart);
+      expect(withEarlyStart.text).toContain(refundTerms);
+
+      expect(withoutEarlyStart.html).toContain(expectedCta);
+      expect(withoutEarlyStart.text).not.toContain(packEarlyStart);
+      expect(withoutEarlyStart.text).not.toContain(unlimitedEarlyStart);
+      expect(withoutEarlyStart.text).toContain(refundTerms);
+    }
   );
-  expect(html).toContain(`href="${statusUrl}"`);
-  expect(html).toContain(`href="${termsUrl}"`);
-  expect(html).not.toContain("/reservation/access/");
-  expect(text).toContain(orderId);
-  expect(text).toContain("2,190");
+
+  test.each([
+    {
+      locale: "en-US" as const,
+      expectedCta: "Open your pass",
+      forbiddenCta: "Otevřít balíček",
+      expectedAmount: "5,990",
+    },
+    {
+      locale: "cs-CZ" as const,
+      expectedCta: "Otevřít členství",
+      forbiddenCta: "Otevřít balíček",
+      expectedAmount: "5\u00a0990",
+    },
+  ])(
+    "renders Unlimited pass receipt in $locale with Unlimited CTA and conditional early-start notice",
+    async ({ locale, expectedCta, forbiddenCta, expectedAmount }) => {
+      const [withEarlyStart, withoutEarlyStart] = await Promise.all([
+        renderUnlimitedPassEmail(locale, true),
+        renderUnlimitedPassEmail(locale, false),
+      ]);
+      const packEarlyStart = m.passEmailEarlyStart({}, { locale });
+      const unlimitedEarlyStart = m.unlimitedPassEmailEarlyStart(
+        {},
+        { locale }
+      );
+      const refundTerms = m.passEmailRefundTerms({}, { locale });
+
+      expect(withEarlyStart.html).toContain(
+        `href="${withEarlyStart.statusUrl}"`
+      );
+      expect(withEarlyStart.html).toContain(
+        `href="${withEarlyStart.accessUrl}"`
+      );
+      expect(withEarlyStart.html).toContain(
+        `href="${withEarlyStart.termsUrl}"`
+      );
+      expect(withEarlyStart.html).toContain(expectedCta);
+      expect(withEarlyStart.html).not.toContain(forbiddenCta);
+      expect(withEarlyStart.text).toContain(orderId);
+      expect(withEarlyStart.text).toContain(expectedAmount);
+      expect(withEarlyStart.text).toContain(unlimitedEarlyStart);
+      expect(withEarlyStart.text).not.toContain(packEarlyStart);
+      expect(withEarlyStart.text).toContain(refundTerms);
+
+      expect(withoutEarlyStart.html).toContain(expectedCta);
+      expect(withoutEarlyStart.html).not.toContain(forbiddenCta);
+      expect(withoutEarlyStart.text).not.toContain(unlimitedEarlyStart);
+      expect(withoutEarlyStart.text).not.toContain(packEarlyStart);
+      expect(withoutEarlyStart.text).toContain(refundTerms);
+    }
+  );
+
+  test.each(locales)(
+    "renders localized Unlimited pass CTA and early-start notice in %s",
+    async (locale) => {
+      const rendered = await renderUnlimitedPassEmail(locale, true);
+      const cta = m.unlimitedPassEmailOpen({}, { locale });
+      const earlyStart = m.unlimitedPassEmailEarlyStart({}, { locale });
+      const englishCta = m.unlimitedPassEmailOpen({}, { locale: "en-US" });
+      const englishEarlyStart = m.unlimitedPassEmailEarlyStart(
+        {},
+        { locale: "en-US" }
+      );
+
+      expect(cta).not.toBe("");
+      expect(earlyStart).not.toBe("");
+      if (locale !== "en-US") {
+        expect(cta).not.toBe(englishCta);
+        expect(earlyStart).not.toBe(englishEarlyStart);
+      }
+      expect(rendered.html).toContain(cta);
+      expect(rendered.text).toContain(earlyStart);
+    }
+  );
 });
 
 test("renders the paid coffee price for a pass bought before catalog repricing", async () => {
@@ -67,6 +228,7 @@ test("renders the paid coffee price for a pass bought before catalog repricing",
         }}
         holderEmail={null}
         invoiceRequested={false}
+        earlyStartRequested={false}
         statusUrl="https://example.com/status"
         termsUrl="https://example.com/terms"
         coffeeAmountMinor={53_000}

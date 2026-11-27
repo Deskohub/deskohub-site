@@ -2033,6 +2033,8 @@
   "unlimitedPassStatusPaidTitle": "Dein unbegrenzter Pass ist bezahlt",
   "unlimitedPassOpenAccess": "Heutigen Code anzeigen",
   "unlimitedPassEmailBody": "Unten findest du den Zeitraum und den Bereich deines unbegrenzten Passes.",
+  "unlimitedPassEmailOpen": "Pass öffnen",
+  "unlimitedPassEmailEarlyStart": "Du hast verlangt, dass dein unbegrenzter Pass innerhalb der 14-tägigen Widerrufsfrist beginnt. Bei einem wirksamen Widerruf ab dem Startdatum erstatten wir den anteiligen Betrag.",
   "unlimitedPassGiftMailTitle": "Du hast einen unbegrenzten Pass für Deskohub Workspace erhalten",
   "unlimitedPassGiftMailBody": "Löse deinen unbegrenzten Pass mit der unten angegebenen E-Mail-Adresse ein.",
   "entryPackStatusPaidTitle": "Dein Eintrittspaket ist bezahlt",

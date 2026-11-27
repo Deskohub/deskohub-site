@@ -34,6 +34,7 @@ export type EntryPackPurchaseEmailProps = {
   readonly gift?: boolean;
   readonly invitationSent?: boolean;
   readonly invoiceRequested: boolean;
+  readonly earlyStartRequested: boolean;
   readonly locale: Locale;
   readonly statusUrl: string;
   readonly accessUrl?: string;
@@ -50,9 +51,108 @@ export const entryPackPurchaseEmailSubject = ({
     ? m.unlimitedPassStatusPaidTitle({}, { locale })
     : m.passEmailSubject({}, { locale });
 
+const getPurchaseEmailBody = (
+  props: Pick<EntryPackPurchaseEmailProps, "gift" | "holderEmail" | "locale">,
+  unlimited: boolean,
+  invited: string | false | null | undefined
+) => {
+  const options = { locale: props.locale };
+  if (invited) return m.passGiftMailBuyerInvited({ email: invited }, options);
+  if (unlimited) return m.unlimitedPassEmailBody({}, options);
+  return props.gift || props.holderEmail
+    ? m.passEmailGiftBody({}, options)
+    : m.passEmailSelfBody({}, options);
+};
+
+const getPurchaseEmailOpenLabel = (unlimited: boolean, locale: Locale) =>
+  unlimited
+    ? m.unlimitedPassEmailOpen({}, { locale })
+    : m.passEmailOpen({}, { locale });
+
+const getPurchaseEmailEarlyStartNotice = ({
+  unlimited,
+  earlyStartRequested,
+  locale,
+}: {
+  readonly unlimited: boolean;
+  readonly earlyStartRequested: boolean;
+  readonly locale: Locale;
+}) => {
+  if (!earlyStartRequested) return undefined;
+  return unlimited
+    ? m.unlimitedPassEmailEarlyStart({}, { locale })
+    : m.passEmailEarlyStart({}, { locale });
+};
+
+const getPurchaseEmailPriceDetails = (
+  props: Pick<
+    EntryPackPurchaseEmailProps,
+    "locale" | "quote" | "coffeeAmountMinor"
+  >,
+  product: string
+) => {
+  const { locale, quote, coffeeAmountMinor } = props;
+  const options = { locale };
+  const money = (amount: DiscountQuote["discountedSubtotal"]) =>
+    formatMoney(amount, locale);
+  const total = withPassPurchaseCoffee(
+    quote.discountedSubtotal,
+    coffeeAmountMinor
+  );
+  return [
+    { label: product, value: money(quote.discountableSubtotal) },
+    ...quote.discounts.map(({ discount, amount }) => ({
+      label: discount.label,
+      value: `−${money(amount)}`,
+    })),
+    ...(coffeeAmountMinor !== undefined
+      ? [
+          {
+            label: m.checkoutSummaryItemCoffee({}, options),
+            value: money(
+              moneyWithValue(coffeeAmountMinor, quote.discountedSubtotal)
+            ),
+          },
+        ]
+      : []),
+    {
+      label:
+        total.value === 0
+          ? m.checkoutSummarySectionTotal({}, options)
+          : m.passEmailPaidByCard({}, options),
+      value: money(total),
+    },
+  ];
+};
+
+const getPurchaseEmailOrderDetails = ({
+  locale,
+  orderId,
+  holderEmail,
+  paidAt,
+}: Pick<
+  EntryPackPurchaseEmailProps,
+  "locale" | "orderId" | "holderEmail" | "paidAt"
+>) => {
+  const options = { locale };
+  return [
+    { label: m.checkoutSummarySectionOrder({}, options), value: orderId },
+    ...(holderEmail
+      ? [{ label: m.passEmailFor({}, options), value: holderEmail }]
+      : []),
+    {
+      label: m.passEmailPaidOn({}, options),
+      value: formatInstantDateTime({
+        instant: paidAt,
+        locale,
+        timeZone: workspaceSiteConstants.location.timeZone,
+      }),
+    },
+  ];
+};
+
 export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
-  const { locale, orderId, paidAt, quote, holderEmail, coffeeAmountMinor } =
-    props;
+  const { locale, holderEmail } = props;
   const options = { locale };
   const title = entryPackPurchaseEmailSubject(props);
   const unlimited = props.entryCount === null;
@@ -64,30 +164,22 @@ export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
       ? null
       : m.passEntryCount({ count: props.entryCount }, options);
   const invited = props.invitationSent && holderEmail;
-  const packBody =
-    props.gift || holderEmail
-      ? m.passEmailGiftBody({}, options)
-      : m.passEmailSelfBody({}, options);
-  const paidBody = unlimited ? m.unlimitedPassEmailBody({}, options) : packBody;
+  const earlyStartNotice = getPurchaseEmailEarlyStartNotice({
+    unlimited,
+    earlyStartRequested: props.earlyStartRequested,
+    locale,
+  });
   const dates = formatPlainDateRange({
     start: Temporal.PlainDate.from(props.validFrom),
     end: Temporal.PlainDate.from(props.validUntil).subtract({ days: 1 }),
     locale,
   });
-  const money = (amount: DiscountQuote["discountedSubtotal"]) =>
-    formatMoney(amount, locale);
-  const total = withPassPurchaseCoffee(
-    quote.discountedSubtotal,
-    coffeeAmountMinor
-  );
 
   return (
     <WorkspaceEmailLayout locale={locale} preview={title}>
       <WorkspaceEmailHeading>{title}</WorkspaceEmailHeading>
       <WorkspaceEmailBody>
-        {invited
-          ? m.passGiftMailBuyerInvited({ email: invited }, options)
-          : paidBody}
+        {getPurchaseEmailBody(props, unlimited, invited)}
       </WorkspaceEmailBody>
 
       {invited ? (
@@ -109,7 +201,7 @@ export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
               href={props.statusUrl}
               style={{ backgroundColor: "#00df99", color: "#00024f" }}
             >
-              {m.passEmailOpen({}, options)}
+              {getPurchaseEmailOpenLabel(unlimited, locale)}
             </Link>
           </Section>
           <Section className="border-t-4 border-aquamarine bg-[#e9fff6] px-5 py-5 text-center">
@@ -136,52 +228,14 @@ export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
       )}
 
       <WorkspaceEmailDetails
-        details={[
-          { label: product, value: money(quote.discountableSubtotal) },
-          ...quote.discounts.map(({ discount, amount }) => ({
-            label: discount.label,
-            value: `−${money(amount)}`,
-          })),
-          ...(coffeeAmountMinor !== undefined
-            ? [
-                {
-                  label: m.checkoutSummaryItemCoffee({}, options),
-                  value: money(
-                    moneyWithValue(coffeeAmountMinor, quote.discountedSubtotal)
-                  ),
-                },
-              ]
-            : []),
-          {
-            label:
-              total.value === 0
-                ? m.checkoutSummarySectionTotal({}, options)
-                : m.passEmailPaidByCard({}, options),
-            value: money(total),
-          },
-        ]}
+        details={getPurchaseEmailPriceDetails(props, product)}
       />
 
-      <WorkspaceEmailDetails
-        details={[
-          { label: m.checkoutSummarySectionOrder({}, options), value: orderId },
-          ...(holderEmail
-            ? [{ label: m.passEmailFor({}, options), value: holderEmail }]
-            : []),
-          {
-            label: m.passEmailPaidOn({}, options),
-            value: formatInstantDateTime({
-              instant: paidAt,
-              locale,
-              timeZone: workspaceSiteConstants.location.timeZone,
-            }),
-          },
-        ]}
-      />
+      <WorkspaceEmailDetails details={getPurchaseEmailOrderDetails(props)} />
 
       <Section className="mt-6 rounded-2xl bg-cream px-5 py-4">
         <Text className="m-0 text-[14px] leading-[23px] text-navy">
-          {!unlimited && `${m.passEmailEarlyStart({}, options)} `}
+          {earlyStartNotice && `${earlyStartNotice} `}
           <Link href={props.termsUrl} style={{ color: "#00024f" }}>
             {m.passEmailRefundTerms({}, options)}
           </Link>

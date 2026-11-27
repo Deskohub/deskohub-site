@@ -2033,6 +2033,8 @@
   "unlimitedPassStatusPaidTitle": "आपके असीमित पास का भुगतान हो गया है",
   "unlimitedPassOpenAccess": "आज का कोड देखें",
   "unlimitedPassEmailBody": "आपके असीमित पास की तारीखें और स्थान नीचे दिए गए हैं।",
+  "unlimitedPassEmailOpen": "अपना पास खोलें",
+  "unlimitedPassEmailEarlyStart": "आपने अनुरोध किया था कि आपका असीमित पास अनुबंध से हटने की 14 दिन की अवधि के भीतर शुरू हो। शुरुआत की तारीख़ या उसके बाद अनुबंध से वैध रूप से हटने पर, हम आनुपातिक राशि लौटाएँगे।",
   "unlimitedPassGiftMailTitle": "आपको Deskohub Workspace का असीमित पास मिला है",
   "unlimitedPassGiftMailBody": "नीचे दिए गए ईमेल पते से अपना असीमित पास स्वीकार करें।",
   "entryPackStatusPaidTitle": "आपके प्रवेश पैक का भुगतान हो गया है",

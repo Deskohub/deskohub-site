@@ -2075,6 +2075,8 @@
   "unlimitedPassStatusPaidTitle": "Váš neobmedzený pas je zaplatený",
   "unlimitedPassOpenAccess": "Zobraziť dnešný kód",
   "unlimitedPassEmailBody": "Nižšie nájdete termín a priestor, na ktoré sa vzťahuje váš neobmedzený pas.",
+  "unlimitedPassEmailOpen": "Otvoriť pas",
+  "unlimitedPassEmailEarlyStart": "Požiadali ste, aby platnosť vášho neobmedzeného pasu začala počas 14-dňovej lehoty na odstúpenie. Pri platnom odstúpení v deň začiatku alebo neskôr vám vrátime pomernú časť.",
   "unlimitedPassGiftMailTitle": "Dostali ste neobmedzený pas do Deskohub Workspace",
   "unlimitedPassGiftMailBody": "Prijmite neobmedzený pas pomocou e-mailovej adresy uvedenej nižšie.",
   "entryPackStatusPaidTitle": "Tvoj balík vstupov je zaplatený",
