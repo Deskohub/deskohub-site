@@ -491,7 +491,7 @@ describe.skipIf(!testDatabase)(
       });
       expect(createdCustomers).toHaveLength(1);
       const customerId = await requireLinkedCustomer(accountId);
-      expect(customerId).toBe(createdCustomers[0]);
+      expect(createdCustomers[0]).toBe(customerId);
       expect(await readReferrer(customerId)).toBe(winningReferrer.customerId);
       expect(await readIntentCodes(accountId)).toEqual([]);
     });
@@ -838,9 +838,10 @@ describe.skipIf(!testDatabase)(
       );
 
       const winners = settled.filter(({ won }) => won);
-      expect(winners.map(({ outcome }) => outcome)).toEqual([
-        (await readStoredOutcome(account.accountId))?.outcome,
-      ]);
+      expect(winners).toHaveLength(1);
+      expect((await readStoredOutcome(account.accountId))?.outcome).toBe(
+        winners[0]?.outcome
+      );
     });
 
     test("keeps the intent while a payment is pending and settles it as not eligible once that payment is paid", async () => {

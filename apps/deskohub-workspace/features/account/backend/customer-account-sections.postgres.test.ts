@@ -382,7 +382,7 @@ describe.skipIf(!suiteDatabase)(
           accountId: account.accountId,
           email: account.email,
         });
-        expect(held.email).toBe(await loginEmail(account.accountId));
+        expect(await loginEmail(account.accountId)).toBe(held.email);
         expect(reads.session).toBe(1);
       });
 

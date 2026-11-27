@@ -118,7 +118,7 @@ const readReferrer = async (invitedCustomerId: DotyposCustomerId) => {
 };
 
 const pastReservationEnd = Temporal.Now.instant().subtract({ hours: 24 });
-const pastReservation = Schema.decodeUnknownSync(DotyposReservationSchema)({
+const pastReservation = Schema.decodeSync(DotyposReservationSchema)({
   id: `reservation-${uniqueId()}`,
   _branchId: "branch",
   _cloudId: "cloud",

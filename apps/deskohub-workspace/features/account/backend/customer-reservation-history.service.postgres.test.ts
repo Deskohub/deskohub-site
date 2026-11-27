@@ -205,12 +205,9 @@ const makeHistoryLayer = (
                   reservations
                     .filter(
                       (reservation) =>
-                        (!filter.customerId ||
-                          !reservation._customerId ||
-                          reservation._customerId === filter.customerId) &&
-                        (!filter.ids ||
-                          (reservation.id !== undefined &&
-                            filter.ids.includes(reservation.id)))
+                        !filter.customerId ||
+                        !reservation._customerId ||
+                        reservation._customerId === filter.customerId
                     )
                     .toSorted((a, b) =>
                       (b.startDate ?? "").localeCompare(a.startDate ?? "")
@@ -241,27 +238,22 @@ const makeHistoryLayer = (
                 );
               },
               getCustomersByIds: (ids) => {
-                options.customerReads?.push([...ids]);
-                return (
-                  options.failNames
-                    ? Effect.fail(
-                        new DotyposUnavailable({
-                          operation: "getCustomersByIds",
-                          reason: "server",
-                        })
-                      )
-                    : Effect.succeed(
-                        (options.customers ?? []).filter(
-                          (customer) => customer.id && ids.includes(customer.id)
-                        )
-                      )
-                ).pipe(
-                  Effect.flatMap((records) =>
-                    makeInMemoryDotypos({
-                      customers: records,
-                    }).service.getCustomersByIds(ids)
-                  )
+                const customerIds = [...ids];
+                options.customerReads?.push(customerIds);
+                if (options.failNames) {
+                  return Effect.fail(
+                    new DotyposUnavailable({
+                      operation: "getCustomersByIds",
+                      reason: "server",
+                    })
+                  );
+                }
+                const customers = (options.customers ?? []).filter(
+                  (customer) => customer.id && customerIds.includes(customer.id)
                 );
+                return makeInMemoryDotypos({
+                  customers,
+                }).service.getCustomersByIds(customerIds);
               },
             })
           )
@@ -301,7 +293,7 @@ describe.skipIf(!testDatabase)(
   () => {
     test("blocks reservation history for a deletion marker or a removed account", async () => {
       const account = customerAccountIdSchema.make(uniqueId());
-      const dotyposCustomerId = uniqueDotyposId();
+      const dotyposCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
       await insertAuthUser(account, testEmailAddress(`h-${account}`));
       await database().pool.query(
         `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
