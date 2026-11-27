@@ -10,6 +10,7 @@ import {
 import { findStepByName, parseWorkflow } from "./shared/workflow-contract";
 import {
   createWorkflowStepRunner,
+  fakeGh,
   type GhFixtures,
   workflowStepRepository as repository,
 } from "./shared/workflow-step-runner";
@@ -171,6 +172,17 @@ const pilotFixtures = (
   };
 };
 const proofFixture = backendPreviewProofFixture(prNumber, headSha, previewUrl);
+const sourcePending = {
+  context: "Workspace E2E",
+  creator: { login: "github-actions[bot]" },
+  description: "Protected preview E2E is running [flows: email-campaigns]",
+  state: "pending",
+  target_url: `https://github.com/Deskohub/deskohub-site/${proofFixture.runPath}`,
+};
+const newerPending = {
+  ...sourcePending,
+  target_url: "https://github.com/Deskohub/deskohub-site/actions/runs/999999",
+};
 const backendProof = (login = "github-actions[bot]") => ({
   ...proofFixture.status,
   creator: { login },
@@ -225,6 +237,8 @@ const runCompletedPilotPublisher = ({
   conclusion = "success",
   jobs = proofFixture.jobs.jobs,
   live = "current",
+  statuses = [sourcePending],
+  newerRunAfterWrite = false,
 } = {}) => {
   const stubFetch = `
 const team = "team_MgMQ4MEWijWnYa1R48C2JU5e";
@@ -277,6 +291,8 @@ globalThis.fetch = async (input) => {
         conclusion: conclusion === "in_progress" ? null : conclusion,
       },
       [proofFixture.jobsPath]: { jobs },
+      [`commits/${headSha}/statuses`]: statuses,
+      "newer-pending": [newerPending],
       [`statuses/${headSha}`]: {},
     },
     {
@@ -287,7 +303,18 @@ globalThis.fetch = async (input) => {
       PILOT_SOURCE_RUN_ATTEMPT: "1",
       VERCEL_TOKEN: "synthetic-vercel-fixture",
       VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-preview-fixture",
-    }
+    },
+    newerRunAfterWrite
+      ? {
+          "gh-fixture-api": fakeGh,
+          gh: `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"/statuses/${headSha} -f state=success -f context=Workspace E2E -f "* ]]; then
+  cp "$GH_FIXTURES/newer-pending.json" "$GH_FIXTURES/commits_${headSha}_statuses.json"
+fi
+exec gh-fixture-api "$@"`,
+        }
+      : {}
   );
 };
 
@@ -357,6 +384,28 @@ describe("Workspace E2E backend proof publishers", () => {
       "state=success -f context=Workspace backend preview"
     );
     expect(posts[1]).toContain(`description=${backendProof().description}`);
+    expect(posts[0]).toContain(`target_url=${sourcePending.target_url}`);
+    expect(posts[1]).toContain(`target_url=${proofFixture.status.target_url}`);
+  });
+
+  test("does not overwrite pending coverage owned by a different E2E run", async () => {
+    const { calls, result } = await runCompletedPilotPublisher({
+      statuses: [newerPending, sourcePending],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(statusPosts(calls)).toEqual([]);
+  });
+
+  test("restores the newer run's pending status if it appears after a pilot pass write", async () => {
+    const { calls, result } = await runCompletedPilotPublisher({
+      newerRunAfterWrite: true,
+    });
+    expect(result.exitCode).toBe(0);
+    const posts = statusPosts(calls);
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).toContain("state=success -f context=Workspace E2E");
+    expect(posts[1]).toContain("state=pending -f context=Workspace E2E");
+    expect(posts[1]).toContain(`target_url=${newerPending.target_url}`);
   });
 
   test.each(["failure", "cancelled", "in_progress"])(
