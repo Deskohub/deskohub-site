@@ -2016,6 +2016,7 @@
   "unlimitedPassGiftMailTitle": "Bạn được tặng gói thành viên không giới hạn",
   "unlimitedPassGiftMailBody": "Hãy dùng địa chỉ email bên dưới để nhận gói thành viên không giới hạn tại Deskohub Workspace.",
   "unlimitedPassEmailOpen": "Mở gói thành viên",
+  "unlimitedPassEmailEarlyStart": "Bạn đã yêu cầu gói thành viên không giới hạn của mình bắt đầu có hiệu lực trong thời hạn 14 ngày để rút khỏi hợp đồng. Nếu bạn rút khỏi hợp đồng hợp lệ kể từ ngày bắt đầu, chúng tôi sẽ hoàn lại phần tiền theo tỷ lệ.",
   "unlimitedPassGiftMailClaim": "Nhận gói thành viên",
   "unlimitedPassGiftMailValidUntil": "Có hiệu lực đến hết ngày {date}",
   "unlimitedPassGiftMailBuyerInvited": "Chúng tôi đã gửi lời mời đến {email}. Người nhận có thể dùng địa chỉ này để nhận gói thành viên.",

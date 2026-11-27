@@ -1,5 +1,6 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { within } from "@testing-library/react";
 import { renderToReadableStream } from "react-dom/server";
 import type {
   AccountBoughtPass,
@@ -10,8 +11,47 @@ import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import "@/shared/testing/workspace-component-module-mocks";
 import { UnsavedChangesProvider } from "@/shared/components/unsaved-changes-guard";
+import {
+  registerWorkspaceComponentTestEnv,
+  unregisterWorkspaceComponentTestEnv,
+} from "@/shared/testing/workspace-component-test-env";
 import { maskEmailAddress } from "@/shared/utils";
 import { AccountPassesPanel } from "./account-passes";
+
+beforeAll(registerWorkspaceComponentTestEnv);
+afterAll(unregisterWorkspaceComponentTestEnv);
+
+test("links to both purchases in the localized packs and memberships header", async () => {
+  const markup = await new Response(
+    await renderToReadableStream(
+      <UnsavedChangesProvider>
+        <AccountPassesPanel
+          locale="cs-CZ"
+          packs={Promise.resolve({ held: [], boughtForOthers: [] })}
+        />
+      </UnsavedChangesProvider>
+    )
+  ).text();
+
+  const document = new DOMParser().parseFromString(markup, "text/html");
+  const header = document.querySelector("header");
+  if (!header) throw new Error("Missing packs and memberships header");
+  const actions = within(header);
+
+  expect(
+    actions.getByRole("heading", { name: "Balíčky a členství" })
+  ).toBeTruthy();
+  expect(
+    actions
+      .getByRole("link", { name: "Koupit balíček vstupů" })
+      .getAttribute("href")
+  ).toBe("/cs-CZ/passes/entry-pack");
+  expect(
+    actions
+      .getByRole("link", { name: "Kup si neomezené členství" })
+      .getAttribute("href")
+  ).toBe("/cs-CZ/passes/unlimited");
+});
 
 test("shows the purchase date and balance, and links only the bookable pack", async () => {
   const syntheticPackId = "fixture-holder-pack";
@@ -111,7 +151,7 @@ test("presents the buyer's order separately from passes they can use", async () 
   expect(markup).toContain(`href="${statusPath}"`);
   expect(markup).toContain("Invitation sent");
   expect(markup).toContain("Not claimed yet");
-  expect(markup).toContain("Unlimited membership");
+  expect(markup).toContain("Unlimited membership</h4>");
   expect(markup.match(/Resend invitation/g)).toHaveLength(1);
   expect(markup).not.toContain("entries left");
   expect(markup).not.toContain("Book a date");

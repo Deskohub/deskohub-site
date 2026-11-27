@@ -2079,6 +2079,7 @@
   "unlimitedPassGiftMailTitle": "Ви отримали необмежене членство в подарунок",
   "unlimitedPassGiftMailBody": "Активуйте необмежене членство в Deskohub Workspace за адресою електронної пошти, яку наведено нижче.",
   "unlimitedPassEmailOpen": "Відкрити членство",
+  "unlimitedPassEmailEarlyStart": "На ваше прохання необмежене членство має початися в межах 14-денного строку для відмови від договору. У разі правомірної відмови в день початку або пізніше ми повернемо пропорційну частину коштів.",
   "unlimitedPassGiftMailClaim": "Активувати членство",
   "unlimitedPassGiftMailValidUntil": "Діє до {date} включно",
   "unlimitedPassGiftMailBuyerInvited": "Ми надіслали запрошення на {email}. Отримувач може активувати членство за цією адресою.",

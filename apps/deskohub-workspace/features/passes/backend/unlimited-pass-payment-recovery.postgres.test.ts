@@ -56,6 +56,8 @@ import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { DiscountService } from "@/features/discounts/discount.service";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
+import { m } from "@/features/i18n";
+import { getPaymentSubmitLegalEvidence } from "@/features/legal/payment-submit-evidence";
 import { orderIdSchema } from "@/features/order";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
@@ -1486,3 +1488,147 @@ it("reconciles only the service dates after access ends on a withdrawn pass", as
     }).pipe(Effect.provide(servicesFor(provider.service)))
   );
 });
+
+for (const earlyStartConsent of [true, false] as const) {
+  it(`fulfills an Unlimited purchase email with the early-start notice only when legal evidence records it (${earlyStartConsent})`, async () => {
+    const now = Temporal.Now.instant();
+    const locale = "cs-CZ" as const;
+    const buyerEmail = testEmailAddress(
+      `unlimited-early-start-${earlyStartConsent ? "yes" : "no"}`
+    );
+    const delivered: Array<{ html?: string; text?: string }> = [];
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db, transaction } = yield* WorkspaceDatabase;
+        const accountId = customerAccountIdSchema.make(crypto.randomUUID());
+        yield* db.insert(customerAccounts).values({ id: accountId });
+        yield* db.insert(authUser).values({
+          id: accountId,
+          name: "Synthetic Buyer",
+          email: buyerEmail,
+          emailVerified: true,
+        });
+
+        const start = getCurrentWorkspaceDate(now).add({
+          days: earlyStartConsent ? 2 : 20,
+        });
+        const purchase = yield* transaction(
+          recordUnlimitedPassOrder({
+            orderId: orderIdSchema.make(crypto.randomUUID()),
+            locale,
+            buyer: { accountId, customerId },
+            holder: { accountId, customerId },
+            createdAt: now,
+            selection: { startDate: date(start), tier: "reserved-desk" },
+            quote: {
+              product: { kind: "unlimited", tier: "reserved-desk" },
+              discountableSubtotal: price,
+              discountedSubtotal: price,
+              totalDiscount: currencyCZK(0),
+              discounts: [],
+            },
+            days: Array.from({ length: unlimitedPassDays }, (_, offset) => ({
+              serviceDate: date(start.add({ days: offset })),
+              tableId,
+            })),
+          })
+        );
+
+        const evidence = yield* LegalEvidenceEventRepository;
+        yield* evidence.recordMany(
+          Object.values(
+            getPaymentSubmitLegalEvidence({
+              acceptedAt: now.toString(),
+              locale,
+              earlyPerformanceConsent: earlyStartConsent,
+              ...(earlyStartConsent && {
+                unlimitedPassEarlyStartRequested: true,
+              }),
+            })
+          ).map((record) => ({ orderId: purchase.id, evidence: record }))
+        );
+
+        const attemptId = yield* recordAttempt(purchase.id, "paid", now);
+        yield* createUnlimitedPassHolds(purchase);
+        yield* db
+          .update(orders)
+          .set({
+            paymentState: "paid",
+            activePaymentAttemptId: attemptId,
+            paidAt: now,
+          })
+          .where(eq(orders.id, purchase.id));
+        yield* settlePassPurchase(purchase.id);
+        yield* confirmUnlimitedPassDays(purchase);
+        yield* settlePassPurchase(purchase.id, attemptId);
+
+        const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
+          purchase.quote
+        );
+        const handler = yield* makeEntryPackOrderPaymentHandler.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(AccountingDocumentSnapshots, {
+                findPassPurchase: () =>
+                  Effect.succeed({
+                    orderId: purchase.id,
+                    dotyposCustomerId: customerId,
+                    locale,
+                    serviceDate: purchase.validFrom,
+                    supplier: workspaceAccountingSupplier,
+                    buyer: { kind: "person", legalName: "Synthetic Buyer" },
+                    billing: defaultReservationBillingSelection,
+                    delivery: { email: buyerEmail },
+                    product: { kind: "unlimited", tier: "reserved-desk" },
+                    quote,
+                  }),
+              }),
+              Layer.mock(EmailConfigTag, {
+                defaultFrom: { email: testEmailAddress("pass-sender") },
+              }),
+              Layer.mock(EmailServiceTag, {
+                send: (message) =>
+                  Effect.sync(() => {
+                    delivered.push({ html: message.html, text: message.text });
+                    return {
+                      id: EmailDeliveryIdSchema.make(crypto.randomUUID()),
+                      status: "sent" as const,
+                      provider: "fixture",
+                      timestamp: new Date(now.epochMilliseconds),
+                    };
+                  }),
+              }),
+              Layer.mock(InvoiceRepository, {
+                issueEntryPack: () => Effect.succeed(null),
+              })
+            )
+          )
+        );
+
+        yield* handler.fulfill(purchase.id);
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            servicesFor(provider.service),
+            LegalEvidenceEventRepository.Default.pipe(
+              Layer.provide(requireTestDatabase(database).layer)
+            )
+          )
+        )
+      )
+    );
+
+    expect(delivered).toHaveLength(1);
+    const [message] = delivered;
+    expect(message?.html).toContain(m.unlimitedPassEmailOpen({}, { locale }));
+    expect(message?.html).not.toContain(m.passEmailOpen({}, { locale }));
+    expect(message?.text).not.toContain(m.passEmailEarlyStart({}, { locale }));
+    const unlimitedEarlyStart = m.unlimitedPassEmailEarlyStart({}, { locale });
+    if (earlyStartConsent) {
+      expect(message?.text).toContain(unlimitedEarlyStart);
+    } else {
+      expect(message?.text).not.toContain(unlimitedEarlyStart);
+    }
+  });
+}

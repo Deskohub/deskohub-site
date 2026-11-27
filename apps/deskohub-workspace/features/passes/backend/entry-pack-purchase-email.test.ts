@@ -11,6 +11,7 @@ import { Effect, Layer, Schema } from "effect";
 import type { passPurchases } from "@/db/schema";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import { moneyCodec } from "@/shared/money/money";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
@@ -63,7 +64,10 @@ test("emails the holder capability for a self-purchase and buyer status for a gi
     giftClaimedAt: null,
   };
 
-  const renderConfirmation = async (holderAccountId: typeof buyerAccountId) => {
+  const renderConfirmation = async (
+    holderAccountId: typeof buyerAccountId,
+    earlyStartRequested = true
+  ) => {
     const gift = holderAccountId !== buyerAccountId;
     const messages: EmailMessage[] = [];
     await Effect.runPromise(
@@ -79,6 +83,7 @@ test("emails the holder capability for a self-purchase and buyer status for a gi
         gift,
         invitationSent: gift,
         invoiceRequested: false,
+        earlyStartRequested,
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -140,6 +145,10 @@ test("emails the holder capability for a self-purchase and buyer status for a gi
   const retry = await renderConfirmation(buyerAccountId);
   expect(retry.idempotencyKey).toBe(self.idempotencyKey);
   expect(retry.html?.includes(href)).toBe(true);
+  const earlyStart = m.unlimitedPassEmailEarlyStart({}, { locale: "en-US" });
+  expect(self.text).toContain(earlyStart);
+  const withoutEarlyStart = await renderConfirmation(buyerAccountId, false);
+  expect(withoutEarlyStart.text).not.toContain(earlyStart);
   const gift = await renderConfirmation(giftHolder);
   expect(gift.html).toContain(`/en-US/reservation/status/${id}`);
   expect(gift.html).not.toContain(accessPath);

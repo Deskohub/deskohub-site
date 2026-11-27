@@ -2037,6 +2037,7 @@
   "unlimitedPassGiftMailTitle": "You received an Unlimited membership",
   "unlimitedPassGiftMailBody": "Claim your Unlimited membership at Deskohub Workspace with the email address below.",
   "unlimitedPassEmailOpen": "Open membership",
+  "unlimitedPassEmailEarlyStart": "You asked for your Unlimited membership to start within the 14-day withdrawal period. If you validly withdraw on or after the start date, we refund a pro-rated part.",
   "unlimitedPassGiftMailClaim": "Claim membership",
   "unlimitedPassGiftMailValidUntil": "Valid through {date}",
   "unlimitedPassGiftMailBuyerInvited": "We sent an invitation to {email}. The recipient can claim the membership with that address.",

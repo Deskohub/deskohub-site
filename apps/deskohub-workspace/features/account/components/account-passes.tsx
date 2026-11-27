@@ -1,4 +1,4 @@
-import { CalendarPlus, Gift, Ticket } from "lucide-react";
+import { CalendarPlus, Gift, InfinityIcon, Ticket } from "lucide-react";
 import { Suspense, use } from "react";
 import type {
   AccountBoughtPass,
@@ -13,7 +13,10 @@ import { AccountUnlimitedPassCard } from "@/features/account/components/account-
 import { AccountSectionPanel } from "@/features/account/components/shell/account-section-panel";
 import { type Locale, m } from "@/features/i18n";
 import { EntryPackMeter } from "@/features/passes/components/entry-pack-meter";
-import { entryPackCheckoutPath } from "@/features/passes/routes";
+import {
+  entryPackCheckoutPath,
+  unlimitedPassCheckoutPath,
+} from "@/features/passes/routes";
 import { GuardedLink } from "@/shared/components/guarded-link";
 import { Button } from "@/shared/components/ui/button";
 import { Skeleton } from "@/shared/components/ui/skeleton";
@@ -35,12 +38,20 @@ export function AccountPassesPanel({
   return (
     <AccountSectionPanel
       actions={
-        <Button asChild size="sm" variant="secondary" wrap>
-          <GuardedLink href={`/${locale}${entryPackCheckoutPath}`}>
-            <Ticket aria-hidden="true" className="size-4 shrink-0" />
-            {m.entryPackCheckoutTitle({}, { locale })}
-          </GuardedLink>
-        </Button>
+        <div className="flex flex-col items-start gap-2 @xl:flex-row">
+          <Button asChild size="sm" variant="secondary" wrap>
+            <GuardedLink href={`/${locale}${entryPackCheckoutPath}`}>
+              <Ticket aria-hidden="true" className="size-4 shrink-0" />
+              {m.entryPackCheckoutTitle({}, { locale })}
+            </GuardedLink>
+          </Button>
+          <Button asChild size="sm" variant="secondary" wrap>
+            <GuardedLink href={`/${locale}${unlimitedPassCheckoutPath}`}>
+              <InfinityIcon aria-hidden="true" className="size-4 shrink-0" />
+              {m.unlimitedPassCheckoutTitle({}, { locale })}
+            </GuardedLink>
+          </Button>
+        </div>
       }
       title={m.accountSectionPasses({}, { locale })}
       titleId="account-passes-title"

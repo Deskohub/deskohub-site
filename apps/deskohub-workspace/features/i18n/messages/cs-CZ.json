@@ -2058,6 +2058,7 @@
   "unlimitedPassGiftMailTitle": "Máš dárek: Neomezené členství",
   "unlimitedPassGiftMailBody": "Neomezené členství v Deskohub Workspace si vyzvedni pomocí e-mailové adresy uvedené níže.",
   "unlimitedPassEmailOpen": "Otevřít členství",
+  "unlimitedPassEmailEarlyStart": "Na tvoji žádost má neomezené členství začít během 14denní lhůty pro odstoupení. Při platném odstoupení v den začátku nebo později ti vrátíme poměrnou část platby.",
   "unlimitedPassGiftMailClaim": "Převzít členství",
   "unlimitedPassGiftMailValidUntil": "Platí do {date} včetně",
   "unlimitedPassGiftMailBuyerInvited": "Pozvánka je na cestě na {email}. Příjemce si může členství vyzvednout pomocí této adresy.",

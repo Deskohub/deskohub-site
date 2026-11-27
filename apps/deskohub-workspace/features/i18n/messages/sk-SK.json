@@ -2079,6 +2079,7 @@
   "unlimitedPassGiftMailTitle": "Máš darček: Neobmedzené členstvo",
   "unlimitedPassGiftMailBody": "Neobmedzené členstvo v Deskohub Workspace si vyzdvihni pomocou e-mailovej adresy uvedenej nižšie.",
   "unlimitedPassEmailOpen": "Otvoriť členstvo",
+  "unlimitedPassEmailEarlyStart": "Na tvoju žiadosť sa má neobmedzené členstvo začať počas 14-dňovej lehoty na odstúpenie. Pri platnom odstúpení v deň začiatku alebo neskôr ti vrátime pomernú časť platby.",
   "unlimitedPassGiftMailClaim": "Prevziať členstvo",
   "unlimitedPassGiftMailValidUntil": "Platí do {date} vrátane",
   "unlimitedPassGiftMailBuyerInvited": "Pozvánka je na ceste na {email}. Príjemca si môže členstvo vyzdvihnúť pomocou tejto adresy.",

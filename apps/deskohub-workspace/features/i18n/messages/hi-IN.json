@@ -2037,6 +2037,7 @@
   "unlimitedPassGiftMailTitle": "आपको असीमित सदस्यता उपहार में मिली है",
   "unlimitedPassGiftMailBody": "नीचे दिए गए ईमेल पते से Deskohub Workspace की असीमित सदस्यता स्वीकार करें।",
   "unlimitedPassEmailOpen": "सदस्यता खोलें",
+  "unlimitedPassEmailEarlyStart": "आपने अनुरोध किया था कि आपकी असीमित सदस्यता अनुबंध से हटने की 14 दिन की अवधि के भीतर शुरू हो। शुरुआत की तारीख़ या उसके बाद अनुबंध से वैध रूप से हटने पर, हम आनुपातिक राशि लौटाएँगे।",
   "unlimitedPassGiftMailClaim": "सदस्यता स्वीकार करें",
   "unlimitedPassGiftMailValidUntil": "{date} तक मान्य",
   "unlimitedPassGiftMailBuyerInvited": "हमने {email} पर आमंत्रण भेज दिया है। पाने वाला इस पते से सदस्यता स्वीकार कर सकता है।",

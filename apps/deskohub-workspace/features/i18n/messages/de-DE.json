@@ -2037,6 +2037,7 @@
   "unlimitedPassGiftMailTitle": "Du hast eine unbegrenzte Mitgliedschaft geschenkt bekommen",
   "unlimitedPassGiftMailBody": "Löse deine unbegrenzte Mitgliedschaft im Deskohub Workspace mit der unten angegebenen E-Mail-Adresse ein.",
   "unlimitedPassEmailOpen": "Mitgliedschaft öffnen",
+  "unlimitedPassEmailEarlyStart": "Du hast verlangt, dass deine unbegrenzte Mitgliedschaft innerhalb der 14-tägigen Widerrufsfrist beginnt. Bei einem wirksamen Widerruf ab dem Startdatum erstatten wir den anteiligen Betrag.",
   "unlimitedPassGiftMailClaim": "Mitgliedschaft einlösen",
   "unlimitedPassGiftMailValidUntil": "Gültig bis einschließlich {date}",
   "unlimitedPassGiftMailBuyerInvited": "Wir haben eine Einladung an {email} geschickt. Mit dieser Adresse kann die beschenkte Person die Mitgliedschaft einlösen.",

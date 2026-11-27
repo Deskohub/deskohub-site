@@ -1,7 +1,12 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
-import { type Command, githubIssueTracker } from "./github";
+import {
+  type Command,
+  GitHubIdentityError,
+  githubIssueTracker,
+  resolveIssuePoolGitHub,
+} from "./github";
 import { collectNightlyE2E } from "./nightly";
 import { IssuePool, runIssuePool } from "./pool";
 import { collectPostHog, collectVercelFeedback } from "./sources";
@@ -85,13 +90,13 @@ async function main(): Promise<void> {
       "max-issues": { type: "string", default: "3" },
       "max-workers": { type: "string", default: "2" },
       project: { type: "string", default: process.cwd() },
+      "reporter-id": { type: "string" },
       state: { type: "string" },
       t3: { type: "string", default: "t3" },
       "vercel-fetch-script": { type: "string" },
     },
   });
   const { apply, project, state, t3 } = values;
-  const repo = "totalolage/deskohub-site";
   const vercelFetchScript = values["vercel-fetch-script"];
   if (!vercelFetchScript || (apply && !state)) {
     throw new ConfigurationError(
@@ -100,26 +105,30 @@ async function main(): Promise<void> {
   }
   const maxNewIssues = positiveInteger(values["max-issues"], "--max-issues");
   const maxNewWorkers = positiveInteger(values["max-workers"], "--max-workers");
+  const configuredReporter = values["reporter-id"];
+  const reporterId =
+    configuredReporter === undefined
+      ? undefined
+      : positiveInteger(configuredReporter, "--reporter-id");
+  const github = await resolveIssuePoolGitHub(run, reporterId);
+  const { repo } = github;
   if (apply && state) {
     await mkdir(dirname(state), { recursive: true, mode: 0o700 });
     await run("git", ["-C", project, "fetch", "origin", "main"]);
   }
 
-  const [collectorResults, reporter, maintainer, legacyFeedbackClaimed] =
-    await Promise.all([
-      Promise.allSettled([
-        collectPostHog(run),
-        collectVercelFeedback(
-          run,
-          vercelFetchScript,
-          join(project, "apps", "deskohub-workspace")
-        ),
-        collectNightlyE2E(run, repo),
-      ]),
-      run("gh", ["api", "user", "--jq", ".id"]),
-      run("gh", ["api", `repos/${repo}`, "--jq", ".owner.id"]),
-      legacyVercelOwnership(project),
-    ]);
+  const [collectorResults, legacyFeedbackClaimed] = await Promise.all([
+    Promise.allSettled([
+      collectPostHog(run),
+      collectVercelFeedback(
+        run,
+        vercelFetchScript,
+        join(project, "apps", "deskohub-workspace")
+      ),
+      collectNightlyE2E(run, repo),
+    ]),
+    legacyVercelOwnership(project),
+  ]);
   const [posthog, vercel, nightly] = collectorResults;
   const failedSources = [
     ...(posthog.status === "rejected" ? ["posthog"] : []),
@@ -132,13 +141,8 @@ async function main(): Promise<void> {
     ...(nightly.status === "fulfilled" ? nightly.value : []),
   ];
   const tracker = githubIssueTracker({
-    repo,
+    ...github,
     run,
-    reporterId: positiveInteger(reporter.trim(), "GitHub reporter ID"),
-    maintainerId: positiveInteger(
-      maintainer.trim(),
-      "GitHub repository owner ID"
-    ),
     legacyFeedbackClaimed,
   });
   const runner = t3WorkerRunner({ executable: t3, project, repo, run });
@@ -179,7 +183,9 @@ async function main(): Promise<void> {
 
 await main().catch((error: unknown) => {
   console.error(
-    error instanceof ConfigurationError || error instanceof CommandFailure
+    error instanceof ConfigurationError ||
+      error instanceof CommandFailure ||
+      error instanceof GitHubIdentityError
       ? error.message
       : "Issue pool pass failed"
   );
