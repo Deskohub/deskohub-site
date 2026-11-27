@@ -257,6 +257,7 @@ test("clears the ordinary code after a fresh referral state in the compiled brow
         );
         await input.fill(firstSubmittedCode);
         const originalInput = await input.elementHandle();
+        if (!originalInput) throw new Error("Missing discount code input");
 
         await Promise.all([
           page.waitForURL(
