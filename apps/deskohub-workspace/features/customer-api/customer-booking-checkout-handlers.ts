@@ -394,7 +394,7 @@ const answerPreparationFailure =
   <Unavailable>(operation: string, offeringUnavailable: () => Unavailable) =>
   (failure: PreparationFailure) =>
     Match.value(failure).pipe(
-      Match.tagsExhaustive({
+      Match.tags({
         CustomerAccountAccessError: (accessFailure) =>
           Effect.fail(accessFailure).pipe(answerCustomerApiFailure(operation)),
         AdvertisedPriceMismatchError: () =>
@@ -440,32 +440,9 @@ const answerPreparationFailure =
           ),
         EntryPackUnavailableError: () =>
           Effect.fail(entryPackUnavailableAnswer()),
-        // An unknown or unreadable discount is retried, never answered as a
-        // changed price.
-        PromotionCodeUnavailableError: retryable(operation),
-        DiscountProviderError: retryable(operation),
-        DiscountAffirmationUnavailableError: retryable(operation),
-        DiscountCalculationError: retryable(operation),
-        MoneyUnitMismatch: retryable(operation),
-        SchemaError: retryable(operation),
-        EffectDrizzleQueryError: retryable(operation),
-        SqlError: retryable(operation),
-        DotyposUnavailable: retryable(operation),
-        DotyposRejected: retryable(operation),
-        DotyposUncertain: retryable(operation),
-        DotyposVersionConflict: retryable(operation),
-        MissingDotyposId: retryable(operation),
-        WorkspaceReservationDetailsMalformedError: retryable(operation),
-        WorkspaceReservationStateError: retryable(operation),
-        AvailabilityQueryInvalid: retryable(operation),
-        GoogleCalendarAPIError: retryable(operation),
-        GoogleCalendarConfigError: retryable(operation),
-        SharedSnapshotLoadFailure: retryable(operation),
-        InvalidDotyposTableSeats: retryable(operation),
-        TableAssignmentUnconfigured: retryable(operation),
-        MarketingConsentUnavailable: retryable(operation),
-        CheckoutServicesUnavailable: retryable(operation),
-      })
+      }),
+      // An unreadable discount or other service failure can be retried.
+      Match.orElse(retryable(operation))
     );
 
 /**
