@@ -8,14 +8,20 @@ import {
   expect,
   test,
 } from "bun:test";
-import { type DotyposCustomerId, DotyposUnavailable } from "@deskohub/dotypos";
+import {
+  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+  DotyposUnavailable,
+} from "@deskohub/dotypos";
 import { mapSupportedLocales } from "@deskohub/i18n/locale-registry";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { temporalInstantToIsoString } from "@/shared/utils/temporal";
 import { seedPublishedEmail } from "../../backend/email-campaigns.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
+import { automationRunIdSchema } from "../automation-identifiers";
 import {
   databaseInstant,
   makeAutomationEngineScenario,
@@ -30,6 +36,18 @@ const database = await createWorkspacePostgresSuiteDatabase(
   "automation_send_policies"
 );
 afterAll(() => database?.close());
+
+const decodeSendPolicyRun = Schema.decodeUnknownSync(
+  Schema.Struct({
+    id: automationRunIdSchema,
+    dotypos_customer_id: DotyposCustomerIdSchema,
+    status: Schema.String,
+    phase: Schema.NullOr(Schema.String),
+    outcome: Schema.NullOr(Schema.String),
+    outcome_reason: Schema.NullOr(Schema.String),
+    due_at: Schema.NullOr(Schema.Union([Schema.Date, Schema.String])),
+  })
+);
 
 describe.skipIf(!database)(
   "a Send's delivery policies end to end",
@@ -102,17 +120,18 @@ describe.skipIf(!database)(
 
     /** The campaign's runs in the order they started. */
     const runsOf = async (campaignId: CampaignId) =>
-      (await read.runs(campaignId))
-        .toSorted((a, b) => (iso(a.started_at)! < iso(b.started_at)! ? -1 : 1))
-        .map((run) => ({
-          id: run.id as string,
-          customer: run.dotypos_customer_id as DotyposCustomerId,
-          status: run.status as string,
-          phase: run.phase as string | null,
-          outcome: run.outcome as string | null,
-          reason: run.outcome_reason as string | null,
+      (await read.runs(campaignId)).map((row) => {
+        const run = decodeSendPolicyRun(row);
+        return {
+          id: run.id,
+          customer: run.dotypos_customer_id,
+          status: run.status,
+          phase: run.phase,
+          outcome: run.outcome,
+          reason: run.outcome_reason,
           dueAt: iso(run.due_at),
-        }));
+        };
+      });
 
     const claimsOf = async (campaignId: CampaignId) =>
       (await read.claims(campaignId)).map((claim) => ({
@@ -211,13 +230,15 @@ describe.skipIf(!database)(
           { status: "ended", outcome: "sent", reason: null },
           { status: "ended", outcome: "skipped", reason: "already-sent-once" },
         ]);
-        expect(await timelineOf(second!.id)).toContainEqual({
+        const firstRun = requireValue(first, "first run");
+        const secondRun = requireValue(second, "second run");
+        expect(await timelineOf(secondRun.id)).toContainEqual({
           kind: "skipped",
           detail: { reason: "already-sent-once" },
         });
         expect(mailed()).toEqual([emailOf(customer)]);
         expect(await claimsOf(campaignId)).toEqual([
-          { customer, runId: first!.id },
+          { customer, runId: firstRun.id },
         ]);
         // The skipped run never held a recipient.
         expect(
@@ -227,7 +248,7 @@ describe.skipIf(!database)(
         await expect(
           pool.query(
             "insert into email_campaign_automation_customer_claims (campaign_id, dotypos_customer_id, run_id) values ($1, $2, $3)",
-            [campaignId, customer, second!.id]
+            [campaignId, customer, secondRun.id]
           )
         ).rejects.toThrow(/duplicate key/);
       });
@@ -242,7 +263,7 @@ describe.skipIf(!database)(
         expect(first).toMatchObject({ status: "ended", outcome: "sent" });
         // Every send claims, with the policy or not.
         expect(await claimsOf(campaignId)).toEqual([
-          { customer, runId: first!.id },
+          { customer, runId: requireValue(first, "first run").id },
         ]);
         // As a run from before claims existed, it holds none.
         await pool.query(
@@ -297,7 +318,7 @@ describe.skipIf(!database)(
                 retaken = true;
                 await pool.query(
                   "insert into email_campaign_automation_customer_claims (campaign_id, dotypos_customer_id, run_id) values ($1, $2, $3)",
-                  [campaignId, customer, sent!.id]
+                  [campaignId, customer, requireValue(sent, "sent run").id]
                 );
               })
         );
@@ -328,7 +349,7 @@ describe.skipIf(!database)(
         );
         await pool.query(
           "update email_campaign_automation_runs set send_id = null where id = $1",
-          [sent!.id]
+          [requireValue(sent, "sent run").id]
         );
         // Mid-fetch, another transaction takes the claim and holds it
         // uncommitted: the commit's verdict can't see it, and its claim
@@ -342,7 +363,7 @@ describe.skipIf(!database)(
                 await blocker.query("begin");
                 await blocker.query(
                   "insert into email_campaign_automation_customer_claims (campaign_id, dotypos_customer_id, run_id) values ($1, $2, $3)",
-                  [campaignId, customer, sent!.id]
+                  [campaignId, customer, requireValue(sent, "sent run").id]
                 );
                 const { rows } = await blocker.query(
                   "select pg_backend_pid() as pid"
@@ -382,7 +403,7 @@ describe.skipIf(!database)(
         expect(mailed()).toEqual([emailOf(customer)]);
         expect(await read.sends(campaignId)).toHaveLength(1);
         expect(await claimsOf(campaignId)).toEqual([
-          { customer, runId: sent!.id },
+          { customer, runId: requireValue(sent, "sent run").id },
         ]);
       });
 
@@ -396,7 +417,10 @@ describe.skipIf(!database)(
         scenario.resend.respondWith(() => "accept");
         // The replay can't reproduce the payload the provider may have taken.
         scenario.dotypos.customers.set(customer, {
-          ...scenario.dotypos.customers.get(customer)!,
+          ...requireValue(
+            scenario.dotypos.customers.get(customer),
+            `profile for ${customer}`
+          ),
           email: testEmailAddress(`${customer.slice(-40)}-moved`),
         });
         await scenario.tick(start.add({ minutes: 10 }));
@@ -407,7 +431,7 @@ describe.skipIf(!database)(
           outcome: "unconfirmed",
         });
         expect(await claimsOf(campaignId)).toEqual([
-          { customer, runId: uncertain!.id },
+          { customer, runId: requireValue(uncertain, "uncertain run").id },
         ]);
 
         await book(customer, "once-uncertain-second", start.add({ hours: 1 }));
@@ -441,7 +465,7 @@ describe.skipIf(!database)(
         const runs = await runsOf(campaignId);
         expect(runs.map((run) => run.outcome)).toEqual(["failed", "sent"]);
         expect(await claimsOf(campaignId)).toEqual([
-          { customer, runId: runs[1]!.id },
+          { customer, runId: requireValue(runs[1], "second run").id },
         ]);
         expect(mailed()).toEqual([emailOf(customer)]);
       });
@@ -460,7 +484,10 @@ describe.skipIf(!database)(
         expect(await claimsOf(campaignId)).toEqual([]);
 
         scenario.dotypos.customers.set(customer, {
-          ...scenario.dotypos.customers.get(customer)!,
+          ...requireValue(
+            scenario.dotypos.customers.get(customer),
+            `profile for ${customer}`
+          ),
           email: emailOf(customer),
         });
         await book(customer, "once-skipped-second", start.add({ hours: 1 }));
@@ -518,7 +545,9 @@ describe.skipIf(!database)(
           phase: "waiting",
           dueAt: gapEnd,
         });
-        expect(await timelineOf(run!.id)).toContainEqual({
+        expect(
+          await timelineOf(requireValue(run, "campaign run").id)
+        ).toContainEqual({
           kind: "deferred",
           detail: {
             cause: "one-off-campaign-gap",
@@ -577,7 +606,7 @@ describe.skipIf(!database)(
           dueAt: "2026-11-05T09:00:00Z",
         });
         expect(
-          (await timelineOf(run!.id))
+          (await timelineOf(requireValue(run, "campaign run").id))
             .filter((entry) => entry.kind === "deferred")
             .map((entry) => entry.detail)
         ).toEqual([
@@ -671,7 +700,9 @@ describe.skipIf(!database)(
         const recheck = start.add({ minutes: 15 }).toString();
         const [run] = await runsOf(campaignId);
         expect(run).toMatchObject({ phase: "waiting", dueAt: recheck });
-        expect(await timelineOf(run!.id)).toContainEqual({
+        expect(
+          await timelineOf(requireValue(run, "campaign run").id)
+        ).toContainEqual({
           kind: "deferred",
           detail: {
             cause: "one-off-campaign-gap",

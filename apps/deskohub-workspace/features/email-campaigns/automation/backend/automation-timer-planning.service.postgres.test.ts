@@ -29,10 +29,10 @@ import { AutomationTimerPlanning } from "./automation-timer-planning.service";
  * Timer planning reads every waiting run, so the suite runs on a database of
  * its own.
  */
-const database = await createWorkspacePostgresSuiteDatabase(
+const postgres = await createWorkspacePostgresSuiteDatabase(
   "automation_timer_planning"
 );
-afterAll(() => database?.close());
+afterAll(() => postgres?.close());
 const customer = testCustomerId(`automation-timers-${crypto.randomUUID()}`);
 
 /** Monday 2026-10-19 12:00 Prague (CEST). */
@@ -50,8 +50,8 @@ const everyone = {
   filters: [],
 } as const;
 
-describe.skipIf(!database)("AutomationTimerPlanning on Postgres", () => {
-  const postgres = database!;
+describe.skipIf(!postgres)("AutomationTimerPlanning on Postgres", () => {
+  if (!postgres) return;
   const campaignIds: CampaignId[] = [];
   const layer = Layer.suspend(() =>
     AutomationTimerPlanning.Default.pipe(Layer.provide(postgres.layer))

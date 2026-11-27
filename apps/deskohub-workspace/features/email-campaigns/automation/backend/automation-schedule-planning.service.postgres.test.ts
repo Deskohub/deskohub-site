@@ -1,12 +1,13 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import type {
-  AutomationFlow,
-  CalendarExpression,
+import {
+  type AutomationFlow,
+  AutomationStepId,
+  type CalendarExpression,
 } from "@deskohub/workspace-admin-api";
 import { eq, isNull } from "drizzle-orm";
-import { Data, Effect, Layer } from "effect";
+import { Data, Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
   emailCampaignAutomations as automationsTable,
@@ -23,7 +24,6 @@ import {
   seedAutomationVersion,
 } from "../../backend/email-campaigns.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
-import type { AutomationStepId } from "../automation-identifiers";
 import {
   entryEngineLayer,
   makeEngineDotypos,
@@ -59,9 +59,11 @@ const fireAt = (daysAgo: number, hourUtc = 8) =>
     `2026-10-${String(19 - daysAgo).padStart(2, "0")}T${String(hourUtc).padStart(2, "0")}:00:00Z`
   );
 
+const sendStep = AutomationStepId.make("send");
+
 const scheduleFlow = (calendar: CalendarExpression): AutomationFlow => ({
   trigger: { _tag: "Schedule", calendar },
-  steps: [{ _tag: "Send", id: "send" as AutomationStepId }],
+  steps: [{ _tag: "Send", id: sendStep }],
 });
 
 class RolledBack extends Data.TaggedError("RolledBack")<{
@@ -132,13 +134,16 @@ describe.skipIf(!database)("schedule fires on Postgres", () => {
       )
     ).rows;
 
-  const nextFireOf = async (campaignId: CampaignId) =>
-    (
-      await pool.query(
-        "select to_char(next_fire_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as next from email_campaign_automations where campaign_id = $1",
-        [campaignId]
-      )
-    ).rows[0].next as string | null;
+  const decodeNextFire = Schema.decodeUnknownSync(
+    Schema.Struct({ next: Schema.NullOr(Schema.String) })
+  );
+  const nextFireOf = async (campaignId: CampaignId) => {
+    const { rows } = await pool.query(
+      "select to_char(next_fire_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as next from email_campaign_automations where campaign_id = $1",
+      [campaignId]
+    );
+    return decodeNextFire(rows[0]).next;
+  };
 
   const receiptsOf = async (campaignId: CampaignId) =>
     (
@@ -280,7 +285,7 @@ describe.skipIf(!database)("schedule fires on Postgres", () => {
             value: 0,
           },
         ],
-      } as AudienceFilter,
+      },
     });
     const mailed = await fixtures.addCustomer("this-mailed");
     const fresh = await fixtures.addCustomer("this-fresh");

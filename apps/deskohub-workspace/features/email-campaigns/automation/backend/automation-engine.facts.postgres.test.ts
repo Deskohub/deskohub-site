@@ -3,15 +3,18 @@ import "@/shared/testing/workspace-test-env";
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
-  type DotyposCustomer,
   type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+  DotyposDiscountGroupIdSchema,
   DotyposUnavailable,
 } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
+import { Array as Arr, Schema } from "effect";
 import * as workspaceSchema from "@/db/schema";
 import * as authSchema from "@/db/schema/auth";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type { AudienceFilter } from "../../audience-filter";
 import type { CampaignId } from "../../campaign-identifiers";
@@ -59,11 +62,15 @@ const eventTimeColumns = new Set([
   "email_campaign_automation_preview_rows.trigger_at",
 ]);
 
+const fireChunkCustomers = Schema.decodeUnknownSync(
+  Schema.Array(DotyposCustomerIdSchema)
+);
+
 /** What the test seeded in Dotypos, as the at-rest scan looks for it. */
 const seeded = {
   profileValues: new Set<string>(),
   emails: new Set<string>(),
-  visitTimes: [] as Temporal.Instant[],
+  visitTimes: Arr.empty<Temporal.Instant>(),
 };
 
 const sha256Digests = (email: string) =>
@@ -175,7 +182,9 @@ describe.skipIf(!database)("automation facts at rest (§5.13)", async () => {
       note: `Poznámka ${run} ${label}`,
       internalNote: `Interní ${run} ${label}`,
       tags: [`tag-${run}-${label}`, `tag-${run}-shared`],
-      _discountGroupId: `discount-${run}-${label}`,
+      _discountGroupId: DotyposDiscountGroupIdSchema.make(
+        `discount-${run}-${label}`
+      ),
     };
     seeded.emails.add(profile.email);
     for (const profileValue of Object.values(profile).flat()) {
@@ -187,7 +196,7 @@ describe.skipIf(!database)("automation facts at rest (§5.13)", async () => {
       profile: {
         ...profile,
         tags: [...profile.tags, ...(options.tags ?? [])],
-      } as Partial<DotyposCustomer>,
+      },
     });
   };
 
@@ -353,23 +362,25 @@ describe.skipIf(!database)("automation facts at rest (§5.13)", async () => {
 
   test("no profile value, email hash or Dotypos time is at rest", async () => {
     // The scan recognises what it looks for.
-    const [visitAt] = seeded.visitTimes;
-    expect(leaksIn(JSON.stringify({ at: visitAt!.toString() }))).not.toEqual(
-      []
-    );
+    const visitAt = requireValue(seeded.visitTimes[0], "seeded visit time");
+    expect(leaksIn(JSON.stringify({ at: visitAt.toString() }))).not.toEqual([]);
     expect(
       leaksIn(
-        visitAt!
-          .toZonedDateTimeISO("Europe/Prague")
-          .toPlainDateTime()
-          .toString()
+        visitAt.toZonedDateTimeISO("Europe/Prague").toPlainDateTime().toString()
       )
     ).not.toEqual([]);
-    expect(leaksIn(JSON.stringify([visitAt!.epochMilliseconds]))).not.toEqual(
+    expect(leaksIn(JSON.stringify([visitAt.epochMilliseconds]))).not.toEqual(
       []
     );
-    const [email] = seeded.emails;
-    expect(leaksIn(sha256Digests(email!)[1])).not.toEqual([]);
+    const email = requireValue(
+      seeded.emails.values().next().value,
+      "seeded email"
+    );
+    const digest = requireValue(
+      sha256Digests(email)[1],
+      "normalized email digest"
+    );
+    expect(leaksIn(digest)).not.toEqual([]);
     expect(
       leaksIn(JSON.stringify({ tags: [`TAG-${run}-SHARED`] }))
     ).not.toEqual([]);
@@ -411,7 +422,7 @@ describe.skipIf(!database)("automation facts at rest (§5.13)", async () => {
       }),
       { at: activatedAt, audienceFilter: taggedAudience }
     );
-    const tagged = new Set<string>();
+    const tagged = new Set<DotyposCustomerId>();
     for (let index = 0; index < 120; index += 1) {
       const label = `chunked-${String(index).padStart(2, "0")}`;
       const id = await customer(label, { tags: [tag] });
@@ -424,23 +435,24 @@ describe.skipIf(!database)("automation facts at rest (§5.13)", async () => {
       .filter((unit) => unit.kind === "fire-chunk")
       .map((unit) => ({
         id: unit.id,
-        tagged: (unit.subject.customerIds as string[]).filter((id) =>
+        tagged: fireChunkCustomers(unit.subject.customerIds).filter((id) =>
           tagged.has(id)
         ),
       }))
       .filter((chunk) => chunk.tagged.length > 0);
     expect(chunks.length).toBeGreaterThanOrEqual(2);
-    const [first, second] = chunks as [
-      (typeof chunks)[number],
-      (typeof chunks)[number],
-    ];
-    const entered = first.tagged[0]!;
-    const untagged = second.tagged[0]!;
+    const first = requireValue(chunks[0], "first tagged chunk");
+    const second = requireValue(chunks[1], "second tagged chunk");
+    const entered = requireValue(first.tagged[0], "first chunk customer");
+    const untagged = requireValue(second.tagged[0], "second chunk customer");
 
     expect((await scenario.process(first.id, fireAt)).outcome).toBe("done");
     for (const id of [entered, untagged]) {
-      const profile = scenario.dotypos.customers.get(id as DotyposCustomerId)!;
-      scenario.dotypos.customers.set(id as DotyposCustomerId, {
+      const profile = requireValue(
+        scenario.dotypos.customers.get(id),
+        `profile for ${id}`
+      );
+      scenario.dotypos.customers.set(id, {
         ...profile,
         tags: (profile.tags ?? []).filter((value) => value !== tag),
       });
@@ -466,7 +478,11 @@ describe.skipIf(!database)("automation facts at rest (§5.13)", async () => {
       )
     ).toEqual([]);
     // Its other tagged customers still entered.
-    expect(await runsOf(campaignId, second.tagged.at(-1)!)).toHaveLength(1);
+    const lastTagged = requireValue(
+      second.tagged.at(-1),
+      "last second-chunk customer"
+    );
+    expect(await runsOf(campaignId, lastTagged)).toHaveLength(1);
     await archive(campaignId, progress.at);
   });
 

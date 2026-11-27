@@ -2,6 +2,8 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  DotyposBranchIdSchema,
+  DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -19,12 +21,14 @@ import type {
   AudienceCondition,
   AudienceFilter,
 } from "@/features/email-campaigns/audience-filter";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   AudienceFactSource,
   audienceEvaluationAt,
 } from "../../backend/audience-evaluation-context";
+import { campaignAudienceIdSchema } from "../../campaign-identifiers";
 import type { AutomationConditionAudienceMissing } from "../errors";
 import { AutomationEvaluationFacts } from "./automation-evaluation-facts.service";
 
@@ -35,17 +39,19 @@ const runId = crypto.randomUUID();
 const customerId = (label: string) =>
   DotyposCustomerIdSchema.make(`automation-facts-${runId}-${label}`);
 
-const customer = (id: DotyposCustomerId, tags: readonly string[] = []) =>
-  ({
-    id,
-    _cloudId: "automation-facts-cloud",
-    firstName: "Test",
-    points: "0",
-    flags: "0",
-    display: true,
-    deleted: false,
-    tags,
-  }) as DotyposCustomer;
+const customer = (
+  id: DotyposCustomerId,
+  tags: readonly string[] = []
+): DotyposCustomer => ({
+  id,
+  _cloudId: DotyposCloudIdSchema.make("automation-facts-cloud"),
+  firstName: "Test",
+  points: "0",
+  flags: "0",
+  display: true,
+  deleted: false,
+  tags,
+});
 
 type SeedReservation = {
   readonly label: string;
@@ -80,11 +86,16 @@ const insertReservations = async (
   );
   return rows.map((row, index) => {
     insertedIds.push(row.id);
-    const start = reservations[index]!.startsAt ?? now.subtract({ hours: 240 });
+    const start =
+      requireValue(reservations[index], "reservation fixture").startsAt ??
+      now.subtract({ hours: 240 });
     return {
-      id: row.dotyposReservationId!,
-      _branchId: "automation-facts-branch",
-      _cloudId: "automation-facts-cloud",
+      id: requireValue(
+        row.dotyposReservationId,
+        "seeded Dotypos reservation ID"
+      ),
+      _branchId: DotyposBranchIdSchema.make("automation-facts-branch"),
+      _cloudId: DotyposCloudIdSchema.make("automation-facts-cloud"),
       _customerId: row.dotyposCustomerId,
       startDate: start.toString(),
       endDate: start.add({ hours: 2 }).toString(),
@@ -214,8 +225,9 @@ describe.skipIf(!testDatabase)(
           .values({ title: `Automation facts ${runId}`, filter })
           .returning({ id: emailCampaignAudiences.id })
       );
-      audienceIds.push(audience!.id);
-      return audience!.id;
+      const audienceId = requireValue(audience, "inserted audience").id;
+      audienceIds.push(audienceId);
+      return audienceId;
     };
 
     afterAll(async () => {
@@ -297,8 +309,9 @@ describe.skipIf(!testDatabase)(
         ],
       });
 
-      const missingAudienceId =
-        `automation-facts-missing-${runId}` as typeof audienceId;
+      const missingAudienceId = campaignAudienceIdSchema.make(
+        `automation-facts-missing-${runId}`
+      );
       const missingCondition: AutomationConditionFilter = {
         _tag: "InAudience",
         audienceId: missingAudienceId,
@@ -323,7 +336,10 @@ describe.skipIf(!testDatabase)(
       const customers = [customerId("cost-a"), customerId("cost-b")];
       const reservations = Array.from({ length: 120 }, (_, index) => ({
         label: `cost-${index}`,
-        customer: customers[index % customers.length]!,
+        customer: requireValue(
+          customers[index % customers.length],
+          "fixture customer"
+        ),
       }));
       await insertReservations(testDatabase.db, reservationIds, reservations);
       const dotypos = makeDotypos({});
@@ -346,29 +362,31 @@ describe.skipIf(!testDatabase)(
     });
 
     test("packs ordered customers by cost and the 100-customer limit", async () => {
-      const [a, b, c, d, unconfirmed] = ["a", "b", "c", "d", "unconfirmed"].map(
-        (label) => customerId(`pack-${label}`)
-      );
+      const a = customerId("pack-a");
+      const b = customerId("pack-b");
+      const c = customerId("pack-c");
+      const d = customerId("pack-d");
+      const unconfirmed = customerId("pack-unconfirmed");
       const reservations = [
         ...Array.from({ length: 600 }, (_, index) => ({
           label: `pack-a-${index}`,
-          customer: a!,
+          customer: a,
         })),
         ...Array.from({ length: 5 }, (_, index) => ({
           label: `pack-b-${index}`,
-          customer: b!,
+          customer: b,
         })),
         ...Array.from({ length: 800 }, (_, index) => ({
           label: `pack-c-${index}`,
-          customer: c!,
+          customer: c,
         })),
         ...Array.from({ length: 2 }, (_, index) => ({
           label: `pack-d-${index}`,
-          customer: d!,
+          customer: d,
         })),
         ...Array.from({ length: 60 }, (_, index) => ({
           label: `pack-unconfirmed-${index}`,
-          customer: unconfirmed!,
+          customer: unconfirmed,
           state: "unconfirmed" as const,
         })),
       ];
@@ -377,15 +395,15 @@ describe.skipIf(!testDatabase)(
       const reads = { profiles: true, visits: true } as const;
       const chunks = await run(
         Effect.flatMap(AutomationEvaluationFacts, (facts) =>
-          facts.pack({ reads, customers: [a!, b!, c!, d!] })
+          facts.pack({ reads, customers: [a, b, c, d] })
         ),
         dotypos.layer
       );
 
       expect(chunks).toEqual([
-        { customers: [a!, b!], requestCost: 8 },
-        { customers: [c!], requestCost: 9 },
-        { customers: [d!], requestCost: 2 },
+        { customers: [a, b], requestCost: 8 },
+        { customers: [c], requestCost: 9 },
+        { customers: [d], requestCost: 2 },
       ]);
       expect(
         chunks.every(
@@ -394,16 +412,16 @@ describe.skipIf(!testDatabase)(
             (requestCost <= 8 || (unit.length === 1 && requestCost === 9))
         )
       ).toBe(true);
-      expect(chunks[1]).toEqual({ customers: [c!], requestCost: 9 });
+      expect(chunks[1]).toEqual({ customers: [c], requestCost: 9 });
 
       const noConfirmedBookings = await run(
         Effect.flatMap(AutomationEvaluationFacts, (facts) =>
-          facts.pack({ reads, customers: [unconfirmed!] })
+          facts.pack({ reads, customers: [unconfirmed] })
         ),
         dotypos.layer
       );
       expect(noConfirmedBookings).toEqual([
-        { customers: [unconfirmed!], requestCost: 1 },
+        { customers: [unconfirmed], requestCost: 1 },
       ]);
 
       const profileOnlyCustomers = Array.from({ length: 120 }, (_, index) =>
@@ -438,12 +456,17 @@ describe.skipIf(!testDatabase)(
     });
 
     test("fetches profiles and visits through their ID operations", async () => {
-      const customers = ["one", "two", "three"].map((label) =>
-        customerId(`fetch-${label}`)
-      );
+      const customers = [
+        customerId("fetch-one"),
+        customerId("fetch-two"),
+        customerId("fetch-three"),
+      ] as const;
       const reservations = Array.from({ length: 51 }, (_, index) => ({
         label: `fetch-${index}`,
-        customer: customers[index % customers.length]!,
+        customer: requireValue(
+          customers[index % customers.length],
+          "fixture customer"
+        ),
       }));
       const dotyposReservations = await insertReservations(
         testDatabase.db,
@@ -451,7 +474,7 @@ describe.skipIf(!testDatabase)(
         reservations
       );
       const dotypos = makeDotypos({
-        customers: [customer(customers[0]!), customer(customers[1]!)],
+        customers: [customer(customers[0]), customer(customers[1])],
         reservations: dotyposReservations,
       });
       const facts = await run(
@@ -468,12 +491,12 @@ describe.skipIf(!testDatabase)(
       expect(dotypos.calls.getReservationsByIds).toBe(1);
       expect(AudienceFactSource.$is("Fetched")(facts)).toBe(true);
       if (AudienceFactSource.$is("Fetched")(facts)) {
-        expect(Option.getOrThrow(facts.profiles).has(customers[0]!)).toBe(true);
-        expect(Option.getOrThrow(facts.profiles).has(customers[1]!)).toBe(true);
-        expect(Option.getOrThrow(facts.profiles).has(customers[2]!)).toBe(
-          false
-        );
-        expect([...Option.getOrThrow(facts.visits).keys()]).toEqual(customers);
+        expect(Option.getOrThrow(facts.profiles).has(customers[0])).toBe(true);
+        expect(Option.getOrThrow(facts.profiles).has(customers[1])).toBe(true);
+        expect(Option.getOrThrow(facts.profiles).has(customers[2])).toBe(false);
+        expect([...Option.getOrThrow(facts.visits).keys()]).toEqual([
+          ...customers,
+        ]);
       }
     });
 

@@ -16,6 +16,7 @@ import type {
   CampaignAudienceId,
   CampaignId,
 } from "@/features/email-campaigns/campaign-identifiers";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import type { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type { AutomationPreviewId } from "../automation-identifiers";
@@ -86,8 +87,9 @@ export const automationLifecycleTestKit = (
         .values({ title: `Automation ${runId}`, filter })
         .returning({ id: emailCampaignAudiences.id })
     );
-    audienceIds.push(audience!.id);
-    return audience!.id;
+    const audienceId = requireValue(audience, "inserted audience").id;
+    audienceIds.push(audienceId);
+    return audienceId;
   };
 
   /** A draft automation with an audience and, optionally, a saved flow. */
@@ -149,7 +151,7 @@ export const automationLifecycleTestKit = (
         input.status === "running" ? null : options.now.toString(),
       ]
     );
-    return rows[0]!.id;
+    return requireValue(rows[0], "inserted preview").id;
   };
 
   /**

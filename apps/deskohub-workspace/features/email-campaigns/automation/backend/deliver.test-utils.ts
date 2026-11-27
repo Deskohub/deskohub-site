@@ -1,11 +1,14 @@
-import type {
-  DotyposCustomer,
-  DotyposCustomerId,
-  DotyposReservation,
+import {
+  DotyposBranchIdSchema,
+  DotyposCloudIdSchema,
+  type DotyposCustomer,
+  type DotyposCustomerId,
+  type DotyposReservation,
 } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   type AutomationFlowType as AutomationFlow,
+  AutomationStepId,
   AutomationFlow as automationFlowContractSchema,
   type EmailId,
   type EmailVersionId,
@@ -17,6 +20,7 @@ import {
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import type { WorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
@@ -26,10 +30,7 @@ import {
 } from "../../backend/email-campaigns.test-utils";
 import type { CampaignPurpose } from "../../body/campaign-content";
 import type { CampaignId } from "../../campaign-identifiers";
-import type {
-  AutomationRunId,
-  AutomationVersionId,
-} from "../automation-identifiers";
+import type { AutomationVersionId } from "../automation-identifiers";
 import type { AutomationTriggerKind } from "../automation-states";
 import {
   type AutomationScenarioServices,
@@ -54,14 +55,14 @@ export const deliverProfile = (
 ) =>
   ({
     id,
-    _cloudId: "cloud",
+    _cloudId: DotyposCloudIdSchema.make("cloud"),
     email: testEmailAddress(id),
     points: "0",
     flags: "0",
     display: true,
     deleted: false,
     ...overrides,
-  }) as DotyposCustomer;
+  }) satisfies DotyposCustomer;
 
 const decodeFlow = Schema.decodeUnknownSync(automationFlowContractSchema);
 
@@ -146,7 +147,7 @@ export const seedSendReadyRuns = async (
           triggerPassId: run.triggerPassId ?? null,
           passReminderContext: run.passReminderContext ?? null,
           status: "active" as const,
-          stepId: (input.stepId ?? "send") as never,
+          stepId: AutomationStepId.make(input.stepId ?? "send"),
           phase: "ready" as const,
           stepEnteredAt: input.at,
           dueAt: input.at,
@@ -154,7 +155,7 @@ export const seedSendReadyRuns = async (
       )
       .returning({ id: emailCampaignAutomationRuns.id })
   );
-  return inserted.map(({ id }) => id as AutomationRunId);
+  return inserted.map(({ id }) => id);
 };
 
 /** A Workspace-booked reservation and its live Dotypos visit. */
@@ -197,12 +198,21 @@ export const seedDeliverReservations = async (
       }))
     )
   );
-  const ids = new Map(rows.map((row, index) => [visits[index]!.label, row.id]));
-  const dotypos = visits.map(
-    (visit, index): DotyposReservation => ({
-      id: rows[index]!.dotyposReservationId!,
-      _branchId: "deliver-branch" as DotyposReservation["_branchId"],
-      _cloudId: "deliver-cloud" as DotyposReservation["_cloudId"],
+  const storedVisits = visits.map((visit, index) => ({
+    visit,
+    reservation: requireValue(rows[index], `reservation for ${visit.label}`),
+  }));
+  const ids = new Map(
+    storedVisits.map(({ visit, reservation }) => [visit.label, reservation.id])
+  );
+  const dotypos = storedVisits.map(
+    ({ visit, reservation }): DotyposReservation => ({
+      id: requireValue(
+        reservation.dotyposReservationId,
+        "Dotypos reservation ID"
+      ),
+      _branchId: DotyposBranchIdSchema.make("deliver-branch"),
+      _cloudId: DotyposCloudIdSchema.make("deliver-cloud"),
       _customerId: visit.customer,
       startDate: visit.startsAt.toString(),
       endDate: visit.endsAt.toString(),

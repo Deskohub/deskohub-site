@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { deleteAutomatedCampaigns } from "../../backend/email-campaigns.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
@@ -27,12 +28,13 @@ afterAll(() => database?.close());
 
 const startedAt = Temporal.Instant.from("2026-10-19T10:00:00Z");
 const runKey = crypto.randomUUID().slice(0, 8);
-const customerIds = (label: string, count: number) =>
-  Array.from({ length: count }, (_, index) =>
-    DotyposCustomerIdSchema.make(
-      `plan-${runKey}-${label}-${String(index).padStart(3, "0")}`
-    )
+const customerId = (label: string, index: number) =>
+  DotyposCustomerIdSchema.make(
+    `plan-${runKey}-${label}-${String(index).padStart(3, "0")}`
   );
+
+const customerIds = (label: string, count: number) =>
+  Array.from({ length: count }, (_, index) => customerId(label, index));
 
 describe.skipIf(!database)(
   "AutomationSendPlanning on disposable Postgres",
@@ -125,7 +127,7 @@ describe.skipIf(!database)(
         const { rows } = await pool.query<{ count: number }>(
           "select count(*)::int as count from email_campaign_automation_work_units where kind = 'deliver' and status in ('enqueued', 'claimed')"
         );
-        inFlight.push(rows[0]!.count);
+        inFlight.push(requireValue(rows[0], "in-flight unit count").count);
       });
 
       await engine.planOnly(startedAt);
@@ -185,7 +187,7 @@ describe.skipIf(!database)(
       const reading = await seedAutomation();
       const cancellations = await seedAutomation();
       const runs = kinds.map((triggerKind, index) => ({
-        customer: customers[index]!,
+        customer: requireValue(customers[index], "fixture customer"),
         triggerKind,
         reservationId: ids.get(String(index)),
       }));
@@ -245,21 +247,23 @@ describe.skipIf(!database)(
         "update email_campaigns set status = 'paused' where id = $1",
         [paused.campaignId]
       );
-      const [ready, elsewhere, waiting] = customerIds("scope", 3);
+      const ready = customerId("scope", 0);
+      const elsewhere = customerId("scope", 1);
+      const waiting = customerId("scope", 2);
       await seedSendReadyRuns(db, {
         ...active,
-        runs: [{ customer: ready! }],
+        runs: [{ customer: ready }],
         at: startedAt,
       });
       await seedSendReadyRuns(db, {
         ...active,
-        runs: [{ customer: elsewhere! }],
+        runs: [{ customer: elsewhere }],
         at: startedAt,
         stepId: "wait",
       });
       const [deferred] = await seedSendReadyRuns(db, {
         ...active,
-        runs: [{ customer: waiting! }],
+        runs: [{ customer: waiting }],
         at: startedAt,
       });
       await pool.query(
@@ -268,7 +272,7 @@ describe.skipIf(!database)(
       );
       await seedSendReadyRuns(db, {
         ...paused,
-        runs: [{ customer: ready! }],
+        runs: [{ customer: ready }],
         at: startedAt,
       });
 
@@ -278,7 +282,7 @@ describe.skipIf(!database)(
       });
       expect(await unitsOf(paused.campaignId)).toEqual([]);
       const [unit] = await unitsOf(active.campaignId);
-      expect(unit!.run_ids).toHaveLength(1);
+      expect(unit?.run_ids).toHaveLength(1);
     });
   }
 );

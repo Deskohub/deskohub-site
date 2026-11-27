@@ -1,12 +1,16 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import type { AutomationFlow } from "@deskohub/workspace-admin-api";
+import {
+  type AutomationFlow,
+  AutomationStepId,
+} from "@deskohub/workspace-admin-api";
 import { Effect } from "effect";
 import {
   customerEvents,
   emailCampaignAutomationRuns as runs,
 } from "@/db/schema";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   holdPostgresTransaction,
@@ -23,7 +27,6 @@ import {
 import type { CampaignId } from "../../campaign-identifiers";
 import type {
   AutomationRunId,
-  AutomationStepId,
   AutomationVersionId,
 } from "../automation-identifiers";
 import type { AutomationTriggerKind } from "../automation-states";
@@ -47,9 +50,11 @@ afterAll(() => database?.close());
 const now = Temporal.Instant.from("2026-10-19T10:00:00Z");
 const prefix = `intake-planning-${crypto.randomUUID()}`;
 
+const sendStep = AutomationStepId.make("send");
+
 const flowOf = (trigger: AutomationFlow["trigger"]): AutomationFlow => ({
   trigger,
-  steps: [{ _tag: "Send", id: "send" as AutomationStepId }],
+  steps: [{ _tag: "Send", id: sendStep }],
 });
 
 describe.skipIf(!database)("AutomationIntakePlanning on Postgres", () => {
@@ -145,7 +150,7 @@ describe.skipIf(!database)("AutomationIntakePlanning on Postgres", () => {
           triggerAt: input.triggerAt,
           triggerReservationId: input.reservationId,
           status: state,
-          stepId: "send" as AutomationStepId,
+          stepId: sendStep,
           stepEnteredAt: input.triggerAt,
           ...(state === "active" && {
             phase: "waiting" as const,
@@ -159,7 +164,7 @@ describe.skipIf(!database)("AutomationIntakePlanning on Postgres", () => {
         })
         .returning({ id: runs.id })
     );
-    return run!.id;
+    return requireValue(run, "inserted run").id;
   };
 
   const runStates = async (runIds: readonly AutomationRunId[]) => {
@@ -192,7 +197,7 @@ describe.skipIf(!database)("AutomationIntakePlanning on Postgres", () => {
     ) =>
       insertRun({
         campaignId,
-        versionId: versionId as AutomationVersionId,
+        versionId,
         customer: dotyposCustomerId,
         triggerKind,
         triggerAt,
@@ -249,7 +254,7 @@ describe.skipIf(!database)("AutomationIntakePlanning on Postgres", () => {
     });
     const booked = await insertRun({
       campaignId,
-      versionId: versionId as AutomationVersionId,
+      versionId,
       customer,
       triggerKind: "reservation-booked",
       triggerAt: now.subtract({ hours: 1 }),
@@ -294,7 +299,7 @@ describe.skipIf(!database)("AutomationIntakePlanning on Postgres", () => {
     });
     const booked = await insertRun({
       campaignId,
-      versionId: versionId as AutomationVersionId,
+      versionId,
       customer,
       triggerKind: "reservation-booked",
       triggerAt: now.subtract({ hours: 1 }),
@@ -354,7 +359,7 @@ describe.skipIf(!database)("AutomationIntakePlanning on Postgres", () => {
       const { customer, reservationId } = await reservationOf(label);
       const runId = await insertRun({
         campaignId,
-        versionId: versionId as AutomationVersionId,
+        versionId,
         customer,
         triggerKind: "reservation-cancelled",
         triggerAt: cancelledAt,
@@ -438,13 +443,13 @@ describe.skipIf(!database)("AutomationIntakePlanning on Postgres", () => {
         db.insert(runs).values(
           withRuns.map(({ id, customer }) => ({
             campaignId,
-            versionId: versionId as AutomationVersionId,
+            versionId,
             dotyposCustomerId: customer,
             triggerKind: "reservation-booked" as const,
             triggerAt: now.subtract({ hours: 1 }),
             triggerReservationId: id,
             status: "active" as const,
-            stepId: "send" as AutomationStepId,
+            stepId: sendStep,
             phase: "waiting" as const,
             stepEnteredAt: now.subtract({ hours: 1 }),
             dueAt: now.add({ hours: 1 }),

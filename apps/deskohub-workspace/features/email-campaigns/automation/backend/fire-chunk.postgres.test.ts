@@ -3,15 +3,17 @@ import "@/shared/testing/workspace-test-env";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import type {
-  AutomationFlow,
-  CalendarExpression,
+import {
+  type AutomationFlowType as AutomationFlow,
+  AutomationStepId,
+  type CalendarExpressionType as CalendarExpression,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Schema } from "effect";
 import {
   emailCampaignAutomationScheduleFires as fires,
   emailCampaignAutomationWorkUnits as units,
 } from "@/db/schema";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   deleteAutomatedCampaigns,
@@ -20,10 +22,6 @@ import {
   seedAutomationVersion,
 } from "../../backend/email-campaigns.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
-import type {
-  AutomationStepId,
-  AutomationVersionId,
-} from "../automation-identifiers";
 import { automationWorkUnitPriorities } from "../automation-work-units";
 import {
   entryEngineLayer,
@@ -58,7 +56,7 @@ const tomorrow = Temporal.Instant.from("2026-10-20T08:00:00Z");
 
 const scheduleFlow: AutomationFlow = {
   trigger: { _tag: "Schedule", calendar: tenOClock },
-  steps: [{ _tag: "Send", id: "send" as AutomationStepId }],
+  steps: [{ _tag: "Send", id: AutomationStepId.make("send") }],
 };
 
 describe.skipIf(!database)("fire-chunk units on Postgres", () => {
@@ -87,14 +85,14 @@ describe.skipIf(!database)("fire-chunk units on Postgres", () => {
       purpose: "marketing",
     });
     campaignIds.push(campaignId);
-    const versionId = (await seedAutomationVersion(db, {
+    const versionId = await seedAutomationVersion(db, {
       campaignId,
       purpose: "marketing",
       ...(input.flow === "undecodable"
         ? { trigger: scheduleFlow.trigger }
         : { flow: input.flow ?? scheduleFlow }),
       activatedAt: now.subtract({ hours: 240 }),
-    })) as AutomationVersionId;
+    });
     await seedAutomation(db, {
       campaignId,
       activeVersionId: versionId,
@@ -174,13 +172,15 @@ describe.skipIf(!database)("fire-chunk units on Postgres", () => {
       )
     ).rows.map((row) => [row.dedup_key, row.disposition]);
 
-  const nextFireOf = async (campaignId: CampaignId) =>
-    (
-      await pool.query(
-        "select (extract(epoch from next_fire_at) * 1000)::bigint::text as next_ms from email_campaign_automations where campaign_id = $1",
-        [campaignId]
-      )
-    ).rows[0].next_ms as string | null;
+  const nextFireOf = async (campaignId: CampaignId) => {
+    const { rows } = await pool.query<{ next_ms: unknown }>(
+      "select (extract(epoch from next_fire_at) * 1000)::bigint::text as next_ms from email_campaign_automations where campaign_id = $1",
+      [campaignId]
+    );
+    return Schema.decodeUnknownSync(Schema.NullOr(Schema.String))(
+      requireValue(rows[0], "schedule automation").next_ms
+    );
+  };
 
   test("counts each chunk, and the last one enters the fire, advances next_fire_at and plans the next fire", async () => {
     const alice = await fixtures.addCustomer("counters-alice");
@@ -190,7 +190,7 @@ describe.skipIf(!database)("fire-chunk units on Postgres", () => {
       chunks: [[alice], [bob]],
     });
 
-    await process(unitIds[0]!);
+    await process(requireValue(unitIds[0]));
 
     expect(await fireRows(campaignId)).toEqual([
       {
@@ -205,7 +205,7 @@ describe.skipIf(!database)("fire-chunk units on Postgres", () => {
       String(yesterday.epochMilliseconds)
     );
 
-    await process(unitIds[1]!);
+    await process(requireValue(unitIds[1]));
 
     const [entered, next] = await fireRows(campaignId);
     expect(entered).toEqual({
@@ -219,8 +219,11 @@ describe.skipIf(!database)("fire-chunk units on Postgres", () => {
     expect(await nextFireOf(campaignId)).toBe(String(today.epochMilliseconds));
     expect(await receiptsOf(campaignId)).toEqual(
       [alice, bob]
-        .map((customer) => [scheduleDedupKey(yesterday, customer), "started"])
-        .toSorted(([left], [right]) => left!.localeCompare(right!))
+        .map((customer): [string, string] => [
+          scheduleDedupKey(yesterday, customer),
+          "started",
+        ])
+        .toSorted(([left], [right]) => left.localeCompare(right))
     );
   });
 
@@ -233,10 +236,10 @@ describe.skipIf(!database)("fire-chunk units on Postgres", () => {
       chunks: [[alice, bob]],
     });
 
-    await process(unitIds[0]!);
+    await process(requireValue(unitIds[0]));
 
     // Neither has reserved, so the lower customer id is the recipient.
-    const recipient = [alice, bob].toSorted()[0]!;
+    const recipient = requireValue([alice, bob].toSorted()[0]);
     expect(await receiptsOf(campaignId)).toEqual([
       [scheduleDedupKey(today, recipient), "started"],
     ]);
@@ -257,7 +260,7 @@ describe.skipIf(!database)("fire-chunk units on Postgres", () => {
     });
     dotypos.resetCalls();
 
-    const outcome = await process(unitIds[0]!);
+    const outcome = await process(requireValue(unitIds[0]));
 
     expect(outcome).toBe("done");
     expect(dotypos.calls.getCustomersByIds).toBe(0);
@@ -288,8 +291,8 @@ describe.skipIf(!database)("fire-chunk units on Postgres", () => {
       chunks: [[alice], [bob]],
       deadlineMisses: 3,
     });
-    const expiring = unitIds[0]!;
-    const sibling = unitIds[1]!;
+    const expiring = requireValue(unitIds[0]);
+    const sibling = requireValue(unitIds[1]);
     // Fails the unit's `done` settlement after its expiry ran.
     const fault = `fail_settlement_${crypto.randomUUID().replaceAll("-", "")}`;
     try {
@@ -349,9 +352,15 @@ describe.skipIf(!database)("fire-chunk units on Postgres", () => {
     });
     expect(await receiptsOf(campaignId)).toEqual(
       [
-        [scheduleDedupKey(yesterday, alice), "failed"],
-        [scheduleDedupKey(yesterday, bob), "started"],
-      ].toSorted(([left], [right]) => left!.localeCompare(right!))
+        [scheduleDedupKey(yesterday, alice), "failed"] satisfies [
+          string,
+          string,
+        ],
+        [scheduleDedupKey(yesterday, bob), "started"] satisfies [
+          string,
+          string,
+        ],
+      ].toSorted(([left], [right]) => left.localeCompare(right))
     );
   });
 
@@ -363,7 +372,7 @@ describe.skipIf(!database)("fire-chunk units on Postgres", () => {
       flow: "undecodable",
     });
 
-    await process(unitIds[0]!);
+    await process(requireValue(unitIds[0]));
 
     const [failed, next] = await fireRows(campaignId);
     expect(failed).toMatchObject({ fireAt: yesterday, status: "failed" });
@@ -382,7 +391,7 @@ describe.skipIf(!database)("fire-chunk units on Postgres", () => {
       [campaignId]
     );
 
-    const outcome = await process(unitIds[0]!);
+    const outcome = await process(requireValue(unitIds[0]));
 
     expect(outcome).toBe("dropped");
     expect(await receiptsOf(campaignId)).toEqual([]);

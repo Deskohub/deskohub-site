@@ -11,9 +11,10 @@ import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
 import { makeEmailProviderFake } from "@deskohub/email/testing";
 import { resendSimulatorAddress, testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { customerMarketingConsents } from "@/db/schema";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { campaignDeliveryTestLayer } from "../../backend/campaign-delivery.test-utils";
 import { CampaignEmailConfig } from "../../backend/campaign-email.config";
@@ -80,7 +81,9 @@ describe.skipIf(!testDatabase)(
           })
         )
       ).pipe(Layer.provideMerge(testDatabase.layer));
-      const read = new Map(profiles.map((profile) => [profile.id!, profile]));
+      const read = new Map(
+        profiles.map((profile) => [requireValue(profile.id), profile])
+      );
 
       /**
        * Persists an automated send of the version to `recipients`, submits
@@ -247,12 +250,22 @@ describe.skipIf(!testDatabase)(
       expect(requests.map(({ key }) => key)).toEqual([
         `email-campaign:${sendId}:attempt-1:batch-0`,
       ]);
-      expect(requests[0]!.payload).toContain("Verze jedna");
-      expect(requests[0]!.payload).not.toContain("Rozpracovan");
+      const { payload } = requireValue(requests[0], "batch request");
+      expect(payload).toContain("Verze jedna");
+      expect(payload).not.toContain("Rozpracovan");
+      const [message] = Schema.decodeUnknownSync(
+        Schema.fromJsonString(
+          Schema.NonEmptyArray(
+            Schema.Struct({
+              headers: Schema.Struct({
+                "List-Unsubscribe": Schema.optionalKey(Schema.String),
+              }),
+            })
+          )
+        )
+      )(payload);
       // The version's marketing purpose, not the campaign's own.
-      expect(
-        JSON.parse(requests[0]!.payload)[0].headers["List-Unsubscribe"]
-      ).toBeDefined();
+      expect(message.headers["List-Unsubscribe"]).toBeDefined();
       expect(provider.mailed()).toEqual([testEmailAddress(inside)]);
       const { recipients, campaign, batches } = await stored(sendId);
       expect(
