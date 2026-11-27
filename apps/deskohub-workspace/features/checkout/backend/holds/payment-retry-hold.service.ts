@@ -1,7 +1,7 @@
 import "@/shared/polyfills/temporal";
 
 import { DotyposService } from "@deskohub/dotypos";
-import { Context, Effect, Layer, Predicate } from "effect";
+import { Context, Effect, Layer, Option, Predicate, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
@@ -20,12 +20,24 @@ import {
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { getReservationHoldExpiresAt } from "@/features/reservation/reservation-hold-deadline";
 import { hasReservationIntervalEnded } from "@/features/reservation/reservation-interval";
+import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
+import {
+  readDisplacedTeamTableHold,
+  type TeamTableBookingCapacity,
+  TeamTableBookingCapacityLive,
+  type TeamTablePaymentCapacity,
+  withTeamTablePaymentCapacity,
+} from "@/features/team-table/backend/team-table-booking-capacity";
+import { TeamTableHoldClaims } from "@/features/team-table/backend/team-table-hold-claims";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { VercelQueuePublisher } from "@/shared/backend/queue/vercel-queue-publisher";
 import { currentInstant } from "@/shared/utils/temporal";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
 import { PaymentAttemptRepository } from "../repositories/payment-attempt.repository";
-import { withWorkspaceReservationCapacity } from "../reservation/dotypos-reservation.adapter";
+import {
+  formatWorkspaceReservationNote,
+  withWorkspaceReservationCapacity,
+} from "../reservation/dotypos-reservation.adapter";
 import {
   findOrderDotyposReservations,
   type RecreatedReservation,
@@ -193,6 +205,7 @@ const bookAgain = Effect.fnUntraced(function* (input: {
   readonly order: WorkspaceReservation;
   readonly request: PaymentRetryHoldRequest;
   readonly now: Temporal.Instant;
+  readonly teamCapacity?: TeamTablePaymentCapacity;
 }) {
   const { order, request } = input;
   const interval = yield* getWorkspaceReservationInterval(
@@ -202,67 +215,131 @@ const bookAgain = Effect.fnUntraced(function* (input: {
     return refused("not_retryable");
   }
   const reservationHoldExpiresAt = getReservationHoldExpiresAt(input.now);
-  const result = yield* withWorkspaceReservationCapacity(
-    interval,
-    Effect.gen(function* () {
-      if (hasReservationIntervalEnded(interval, yield* currentInstant)) {
-        return refused("not_retryable");
-      }
-      // Only a NEW reservation an interrupted earlier retry of this order created
-      // is taken over; a confirmed one, or more than one, is left alone.
+  const book = Effect.fnUntraced(function* (
+    capacity?: TeamTableBookingCapacity
+  ) {
+    if (hasReservationIntervalEnded(interval, yield* currentInstant)) {
+      return refused("not_retryable");
+    }
+
+    const reservation = request.recreated.reservation;
+    const claims = yield* Effect.serviceOption(TeamTableHoldClaims);
+    const team = yield* Effect.gen(function* () {
+      if (reservation.kind !== "table" || !capacity || Option.isNone(claims))
+        return undefined;
+      return yield* claims.value.create({
+        reservationId: order.id,
+        customerId: order.dotyposCustomerId,
+        reservation,
+        owner: {
+          purpose: "payment_retry",
+          paymentAttemptId: request.retriedAttemptId,
+        },
+        releasedReservationId: order.dotyposReservationId ?? undefined,
+        assign: capacity.assignTableId,
+        note: formatWorkspaceReservationNote({
+          paymentOrderId: order.id,
+          checkoutDetails: request.recreated.checkoutDetails,
+          reservation,
+        }),
+      });
+    });
+    if (reservation.kind === "table" && (!team || team.kind === "pending"))
+      return refused("release_in_progress");
+
+    const settled = yield* Effect.gen(function* () {
+      if (team?.kind === "released") return null;
+      if (team?.kind === "active")
+        return { id: team.record.id, resumed: team.resumed };
+      // Only a NEW reservation an interrupted retry created is taken over.
       const found = yield* findOrderDotyposReservations({
         orderId: order.id,
         interval,
       });
-      if (found.length > 1 || found.some(({ status }) => status !== "NEW")) {
-        return refused("changed");
-      }
-      const settled = yield* resumeOrCreateOrderDotyposReservation({
+      if (found.length > 1 || found.some(({ status }) => status !== "NEW"))
+        return "changed" as const;
+      return yield* resumeOrCreateOrderDotyposReservation({
         order,
         recreated: request.recreated,
         found,
         status: "NEW",
       });
-      if (!settled) return { kind: "spot_unavailable" } as const;
+    });
+    if (settled === "changed") return refused("changed");
+    if (!settled) return { kind: "spot_unavailable" } as const;
 
-      const reservations = yield* WorkspaceReservationRepository;
-      const attached = yield* reservations
-        .attachRetryHold({
-          id: order.id,
-          retriedAttemptId: request.retriedAttemptId,
-          dotyposReservationId: settled.id,
-          reservationHoldExpiresAt,
-        })
-        .pipe(
-          Effect.catchTags({
-            EntryPackUnavailableError: () =>
-              Effect.succeed("entry_pack_unavailable" as const),
-            WorkspaceReservationSessionTakenError: () =>
-              Effect.succeed("session_taken" as const),
-          })
-        );
-      if (
-        !attached ||
-        attached === "entry_pack_unavailable" ||
-        attached === "session_taken"
-      ) {
-        // The order lock gives this run ownership of an earlier NEW hold when
-        // the Entry pack can no longer attach it. Other races retain the
-        // existing behavior for resumed holds.
-        if (!settled.resumed || attached) {
-          const dotypos = yield* DotyposService;
-          yield* dotypos.cancelReservation(settled.id);
+    const reservations = yield* WorkspaceReservationRepository;
+    const attachResult = yield* reservations
+      .attachRetryHold({
+        id: order.id,
+        retriedAttemptId: request.retriedAttemptId,
+        dotyposReservationId: settled.id,
+        reservationHoldExpiresAt,
+      })
+      .pipe(
+        Effect.catchTags({
+          EntryPackUnavailableError: () =>
+            Effect.succeed("entry_pack_unavailable" as const),
+          WorkspaceReservationSessionTakenError: () =>
+            Effect.succeed("session_taken" as const),
+        }),
+        Effect.result
+      );
+    const compensate = () =>
+      team?.kind === "active" && Option.isSome(claims)
+        ? claims.value.compensateReplacement(
+            team.claim,
+            order.dotyposCustomerId,
+            team.record,
+            input.now
+          )
+        : Effect.succeed(false);
+    if (Result.isFailure(attachResult)) {
+      if (team?.kind === "active" && Option.isSome(claims)) {
+        const persisted = yield* reservations.findById(order.id);
+        if (
+          persisted?.dotyposReservationId === settled.id &&
+          persisted.reservationState === "held"
+        ) {
+          yield* claims.value.attached(team.claim, settled.id, input.now);
+          return {
+            kind: "reacquired",
+            reservation: persisted,
+          } satisfies PaymentRetryHold;
         }
-        return attached === "entry_pack_unavailable"
-          ? ({ kind: "spot_unavailable" } as const)
-          : refused("changed");
+        yield* compensate();
       }
-      return {
-        kind: "reacquired",
-        reservation: attached,
-      } satisfies PaymentRetryHold;
-    })
-  );
+      return yield* attachResult.failure;
+    }
+    const attached = attachResult.success;
+    if (
+      !attached ||
+      attached === "entry_pack_unavailable" ||
+      attached === "session_taken"
+    ) {
+      // The order lock gives this run ownership of an earlier NEW hold when
+      // the Entry pack can no longer attach it. Other races retain the
+      // existing behavior for resumed holds.
+      if (team?.kind === "active") {
+        yield* compensate();
+      } else if (!settled.resumed || attached) {
+        const dotypos = yield* DotyposService;
+        yield* dotypos.cancelReservation(settled.id);
+      }
+      return attached === "entry_pack_unavailable"
+        ? ({ kind: "spot_unavailable" } as const)
+        : refused("changed");
+    }
+    if (team?.kind === "active" && Option.isSome(claims))
+      yield* claims.value.attached(team.claim, settled.id, input.now);
+    return {
+      kind: "reacquired",
+      reservation: attached,
+    } satisfies PaymentRetryHold;
+  });
+  const result = yield* input.teamCapacity
+    ? input.teamCapacity.withCapacity(book)
+    : withWorkspaceReservationCapacity(interval, book());
   if (result.kind === "reacquired") {
     // The periodic recovery finds an expired hold if its job was not scheduled.
     yield* enqueueReservationHoldCleanup({
@@ -273,58 +350,93 @@ const bookAgain = Effect.fnUntraced(function* (input: {
   return result;
 });
 
+const secureOrder = Effect.fnUntraced(function* (
+  request: PaymentRetryHoldRequest,
+  teamCapacity?: TeamTablePaymentCapacity
+) {
+  const reservations = yield* WorkspaceReservationRepository;
+  const recoveries = yield* LatePaymentRecoveryRepository;
+  const attempts = yield* PaymentAttemptRepository;
+  const now = yield* currentInstant;
+  const order = yield* reservations.findById(request.orderId);
+  const newestAttemptId = (yield* attempts.findNewestForReservation(
+    request.orderId
+  ))?.id;
+  if (
+    !order ||
+    !isRetriedOrder(order, request.retriedAttemptId, newestAttemptId)
+  ) {
+    return refused("not_retryable");
+  }
+  const recovery = yield* recoveries.findLatestByWorkspaceReservationId(
+    order.id
+  );
+  if (recovery) return refused("not_retryable");
+
+  const entryClaim = yield* reservations.findEntryPackClaim(order.id);
+  if (entryClaim && !(yield* CoworkPassesReleaseGate.isOpen)) {
+    return { kind: "spot_unavailable" } as const;
+  }
+
+  const kept = yield* keepLiveHold({
+    order,
+    retriedAttemptId: request.retriedAttemptId,
+    now,
+  });
+  if (kept) return kept;
+  if (yield* reservations.hasAttachedOpenSpaceMove(order.id)) {
+    return refused("release_in_progress");
+  }
+
+  const releaseRefusal = yield* releaseOwnHold(order);
+  if (releaseRefusal) return releaseRefusal;
+
+  const released = yield* reservations.findById(order.id);
+  if (
+    !released ||
+    !isRetriedOrder(released, request.retriedAttemptId, newestAttemptId) ||
+    !isReacquirable(released)
+  ) {
+    return refused("not_retryable");
+  }
+  return yield* bookAgain({ order: released, request, now, teamCapacity });
+});
+
 const secure = Effect.fn("PaymentRetryHoldService.secure")(
   function* (request: PaymentRetryHoldRequest) {
+    const reservation = request.recreated.reservation;
+    if (reservation.kind !== "table") {
+      return yield* WorkspaceLockSections.reservationOrder(request.orderId)(
+        secureOrder(request)
+      );
+    }
+    const moves = yield* Effect.serviceOption(OpenSpaceTableMoves);
+    if (Option.isNone(moves)) return { kind: "spot_unavailable" } as const;
     const reservations = yield* WorkspaceReservationRepository;
-    const recoveries = yield* LatePaymentRecoveryRepository;
-    const attempts = yield* PaymentAttemptRepository;
-    const now = yield* currentInstant;
-    const order = yield* reservations.findById(request.orderId);
-    const newestAttemptId = (yield* attempts.findNewestForReservation(
-      request.orderId
-    ))?.id;
-    if (
-      !order ||
-      !isRetriedOrder(order, request.retriedAttemptId, newestAttemptId)
-    ) {
-      return refused("not_retryable");
-    }
-    const recovery = yield* recoveries.findLatestByWorkspaceReservationId(
-      order.id
+    return yield* withTeamTablePaymentCapacity(
+      {
+        reservation,
+        orderId: request.orderId,
+        lookupDisplacedHold: reservations
+          .findById(request.orderId)
+          .pipe(
+            Effect.flatMap((order) =>
+              !order || !releasableHoldStates.has(order.reservationState)
+                ? Effect.succeed(undefined)
+                : readDisplacedTeamTableHold(order)
+            )
+          ),
+      },
+      (scope) => secureOrder(request, scope)
+    ).pipe(
+      Effect.provideService(OpenSpaceTableMoves, moves.value),
+      Effect.catchTag("WorkspaceTableUnavailableError", () =>
+        Effect.succeed({ kind: "spot_unavailable" } as const)
+      )
     );
-    if (recovery) return refused("not_retryable");
-
-    const entryClaim = yield* reservations.findEntryPackClaim(order.id);
-    if (entryClaim && !(yield* CoworkPassesReleaseGate.isOpen)) {
-      return { kind: "spot_unavailable" } as const;
-    }
-
-    const kept = yield* keepLiveHold({
-      order,
-      retriedAttemptId: request.retriedAttemptId,
-      now,
-    });
-    if (kept) return kept;
-    if (yield* reservations.hasAttachedOpenSpaceMove(order.id)) {
-      return refused("release_in_progress");
-    }
-
-    const releaseRefusal = yield* releaseOwnHold(order);
-    if (releaseRefusal) return releaseRefusal;
-
-    const released = yield* reservations.findById(order.id);
-    if (
-      !released ||
-      !isRetriedOrder(released, request.retriedAttemptId, newestAttemptId) ||
-      !isReacquirable(released)
-    ) {
-      return refused("not_retryable");
-    }
-    return yield* bookAgain({ order: released, request, now });
   },
   (effect, request) =>
     effect.pipe(
-      WorkspaceLockSections.reservationOrder(request.orderId),
       Effect.scoped,
       Effect.tap((result) =>
         Effect.logInfo("Payment retry hold decided", {
@@ -391,14 +503,32 @@ export class PaymentRetryHoldService extends Context.Service<
       const context = Context.pick(...retryHoldCapabilities)(
         yield* Effect.context<RetryHoldCapabilities>()
       );
+      const optional = yield* Effect.all({
+        moves: Effect.serviceOption(OpenSpaceTableMoves),
+        claims: Effect.serviceOption(TeamTableHoldClaims),
+      });
+      const provider = Option.isSome(optional.moves)
+        ? Context.add(context, OpenSpaceTableMoves, optional.moves.value)
+        : context;
+      const services = Option.isSome(optional.claims)
+        ? Context.add(provider, TeamTableHoldClaims, optional.claims.value)
+        : provider;
       return PaymentRetryHoldService.of({
         secure: (request) =>
-          secure(request).pipe(Effect.provideContext(context)),
+          secure(request).pipe(Effect.provideContext(services)),
       });
     })
   );
 
   static Live = this.Default.pipe(
+    Layer.provide(TeamTableBookingCapacityLive),
+    Layer.provide(
+      TeamTableHoldClaims.Default.pipe(
+        Layer.provide(
+          Layer.merge(WorkspaceDatabase.Default, WorkspaceDotyposLayer)
+        )
+      )
+    ),
     Layer.provide(CoworkPassesReleaseGateForRun),
     Layer.provide(UnpaidHoldRelease.Default),
     Layer.provide(

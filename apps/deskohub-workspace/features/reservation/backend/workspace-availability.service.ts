@@ -221,7 +221,8 @@ export interface IWorkspaceAvailabilityService {
   /** Check live inventory, optionally verifying one exact empty table. */
   readonly getLiveTeamTablePlan: (
     reservation: TableReservationDetails,
-    exactTableId?: TeamTablePlan["tableId"]
+    exactTableId?: TeamTablePlan["tableId"],
+    options?: TeamTablePlanOptions
   ) => Effect.Effect<TeamTablePlan | undefined, AvailabilityError>;
   /**
    * Advisory meeting-room calendar: for each purchasable length the dates
@@ -267,6 +268,11 @@ type TableSlotsRequest = {
   readonly occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion;
 };
 
+type TeamTablePlanOptions = {
+  readonly displacedHoldIds?: readonly DotyposReservationId[];
+  readonly forExistingOrder?: true;
+};
+
 type MeetingRoomUnavailableDatesRequest = {
   readonly query: MeetingRoomUnavailableDatesQuery;
   readonly occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion;
@@ -287,6 +293,7 @@ const implementation = Effect.gen(function* () {
         /** The consecutive dates the inventory snapshot covers. */
         readonly dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>;
         readonly occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion;
+        readonly displacedHoldIds?: readonly DotyposReservationId[];
         readonly allowPassDayMove?: boolean;
         readonly loadTeamTableBookings?: boolean;
       }
@@ -339,21 +346,19 @@ const implementation = Effect.gen(function* () {
       const expiredDotyposReservationIds =
         yield* Effect.fromResult(expiredIdsRead);
       const { reservations } = observations;
-      const replacementReservationId =
-        input.occupancyExclusion?.dotyposReservationId;
-      const replacementIsPending = reservations.some(
-        (reservation) =>
-          reservation.id === replacementReservationId &&
-          reservation.status === "NEW"
+      const requestedExclusions = new Set(input.displacedHoldIds);
+      if (input.occupancyExclusion)
+        requestedExclusions.add(input.occupancyExclusion.dotyposReservationId);
+      const pendingExclusions = new Set(
+        reservations
+          .filter(
+            ({ id, status }) => status === "NEW" && requestedExclusions.has(id)
+          )
+          .map(({ id }) => id)
       );
       const activeReservations = excludeDotyposReservationsById<
         DotyposReservation | ReservationRecord
-      >(reservations, [
-        ...expiredDotyposReservationIds,
-        ...(replacementIsPending && replacementReservationId
-          ? [replacementReservationId]
-          : []),
-      ]);
+      >(reservations, [...expiredDotyposReservationIds, ...pendingExclusions]);
       const movablePassDays =
         input.allowPassDayMove &&
         observations.passDayIntents.some(
@@ -382,13 +387,15 @@ const implementation = Effect.gen(function* () {
 
       const capacityClaims = {
         passDayIntents: observations.passDayIntents,
-        localTableClaims: replacementIsPending
-          ? localTableClaims.filter(
-              (claim) =>
-                !isTeamTableCapacityClaim(claim) ||
-                claim.reservationId !== replacementReservationId
-            )
-          : localTableClaims,
+        localTableClaims:
+          pendingExclusions.size > 0
+            ? localTableClaims.filter(
+                (claim) =>
+                  !isTeamTableCapacityClaim(claim) ||
+                  !claim.reservationId ||
+                  !pendingExclusions.has(claim.reservationId)
+              )
+            : localTableClaims,
       };
       const teamTableBookings =
         input.loadTeamTableBookings && Option.isSome(teamTableInventory)
@@ -559,13 +566,15 @@ const implementation = Effect.gen(function* () {
   const loadTeamTableAvailability = Effect.fnUntraced(function* (
     inventory: AvailabilityInventory,
     dates: Arr.NonEmptyReadonlyArray<Temporal.PlainDate>,
-    occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion
+    occupancyExclusion?: WorkspaceAvailabilityOccupancyExclusion,
+    displacedHoldIds?: readonly DotyposReservationId[]
   ) {
     const { tables, teamTableBookings, limitations } = yield* loadInventory(
       inventory,
       {
         dates,
         occupancyExclusion,
+        displacedHoldIds,
         loadTeamTableBookings: true,
       }
     );
@@ -639,9 +648,12 @@ const implementation = Effect.gen(function* () {
     "workspaceAvailability.getLiveTeamTablePlan"
   )(function* (
     reservation: TableReservationDetails,
-    exactTableId?: TeamTablePlan["tableId"]
+    exactTableId?: TeamTablePlan["tableId"],
+    options?: TeamTablePlanOptions
   ) {
-    yield* requireTeamTable();
+    if (!options?.forExistingOrder) yield* requireTeamTable();
+    if (Option.isNone(teamTableInventory))
+      return yield* new TeamTableAvailabilityClosed();
     if (!isTableReservationInterval(reservation)) {
       return yield* new AvailabilityQueryInvalid({
         message: "Invalid Team Table interval",
@@ -654,7 +666,9 @@ const implementation = Effect.gen(function* () {
     ];
     const inventory = yield* loadTeamTableAvailability(
       providerInventory,
-      dates
+      dates,
+      undefined,
+      options?.displacedHoldIds
     );
     return yield* Effect.fromResult(
       planAvailableTeamTable(

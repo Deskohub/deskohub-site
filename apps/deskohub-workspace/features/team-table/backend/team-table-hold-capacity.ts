@@ -1,4 +1,14 @@
-import { and, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  or,
+  sql,
+} from "drizzle-orm";
 import { Effect } from "effect";
 import type { WorkspaceDatabaseClient } from "@/db/database.service";
 import { teamTableHoldClaims, workspaceReservations } from "@/db/schema";
@@ -37,14 +47,29 @@ export const loadTeamTableHoldCapacity = Effect.fnUntraced(function* (
         lt(teamTableHoldClaims.startsAt, endsAt),
         gt(teamTableHoldClaims.endsAt, startsAt),
         gt(teamTableHoldClaims.endsAt, now),
+        isNull(teamTableHoldClaims.retiredAt),
         or(
+          and(
+            inArray(teamTableHoldClaims.purpose, [
+              "payment_retry",
+              "late_payment",
+            ]),
+            isNull(teamTableHoldClaims.attachedAt)
+          ),
+          isNotNull(teamTableHoldClaims.cancelRequestedAt),
           eq(workspaceReservations.reservationState, "creating_hold"),
+          and(
+            eq(workspaceReservations.reservationState, "hold_expired"),
+            isNull(workspaceReservations.dotyposReservationId)
+          ),
           and(
             sql`${workspaceReservations.dotyposReservationId} = any(${teamTableHoldClaims.providerReservationIds})`,
             or(
               inArray(workspaceReservations.reservationState, [
                 "confirmed",
+                "confirming",
                 "cancelling",
+                "cancellation_failed",
               ]),
               and(
                 eq(workspaceReservations.reservationState, "held"),
@@ -56,9 +81,12 @@ export const loadTeamTableHoldCapacity = Effect.fnUntraced(function* (
       )
     );
   return claims.map(
-    ({ claim, reservationId }) =>
+    ({ claim }) =>
       ({
-        reservationId,
+        reservationId:
+          claim.providerReservationIds?.length === 1
+            ? (claim.providerReservationIds[0] ?? null)
+            : null,
         generation: null,
         tableId: claim.tableId,
         startsAt: claim.startsAt.epochMilliseconds,

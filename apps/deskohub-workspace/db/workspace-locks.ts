@@ -202,6 +202,17 @@ export const WorkspaceLockSections = {
    */
   reservationOrder: (orderId: WorkspaceReservationId) =>
     holdSection(reservationOrderSection(orderId)),
+  reservationOrders: (
+    target: WorkspaceReservationId,
+    sources: readonly WorkspaceReservationId[]
+  ) => {
+    const others = [...new Set(sources)].filter((id) => id !== target);
+    const first = reservationOrderSection(target);
+    const ordered = [...others.map(reservationOrderSection), first].sort(
+      (left, right) => Order.String(left.pair[1], right.pair[1])
+    );
+    return holdSections([ordered[0] ?? first, ...ordered.slice(1)]);
+  },
   unlimitedPassRecovery: (orderId: OrderId) =>
     holdSection({
       name: "unlimitedPassRecovery",
@@ -218,6 +229,7 @@ export const WorkspaceLockSections = {
     options?: {
       readonly movedReservations?: readonly WorkspaceReservationId[];
       readonly authorAccountId?: CustomerAccountId;
+      readonly sourceAccountIds?: readonly CustomerAccountId[];
     }
   ) => {
     const [first, ...rest] = Array.from(new Set(dates.map(String)))
@@ -233,20 +245,26 @@ export const WorkspaceLockSections = {
     )
       .sort(Order.String)
       .map(reservationOrderSection);
-    const account = options?.authorAccountId
-      ? customerAccountSection(options.authorAccountId)
-      : undefined;
+    const accounts = Array.from(
+      new Set([
+        ...(options?.authorAccountId ? [options.authorAccountId] : []),
+        ...(options?.sourceAccountIds ?? []),
+      ])
+    )
+      .sort(Order.String)
+      .map(customerAccountSection);
     if (firstOrder) {
       return holdSections([
         firstOrder,
         ...remainingOrders,
-        ...(account ? [account] : []),
+        ...accounts,
         first,
         ...rest,
       ]);
     }
+    const [account, ...remainingAccounts] = accounts;
     return account
-      ? holdSections([account, first, ...rest])
+      ? holdSections([account, ...remainingAccounts, first, ...rest])
       : holdSections([first, ...rest]);
   },
   unlimitedGiftCustomer: (holder: CustomerAccountId) =>

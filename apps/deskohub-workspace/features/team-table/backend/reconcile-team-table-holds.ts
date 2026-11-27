@@ -1,19 +1,17 @@
-import { DotyposService } from "@deskohub/dotypos";
-import { and, eq, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { teamTableHoldClaims, workspaceReservations } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
-import { formatPaymentOrderLine } from "@/features/checkout/backend/reservation/order-reservation-note";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { getTouchedWorkspaceDateBounds } from "@/features/reservation/reservation-date";
 import {
-  getPlainDatesBetween,
-  temporalInstantToDate,
-} from "@/shared/utils/temporal";
+  getTouchedWorkspaceDateBounds,
+  getWorkspaceDate,
+} from "@/features/reservation/reservation-date";
+import { getPlainDatesBetween } from "@/shared/utils/temporal";
 import { TeamTableHoldClaims } from "./team-table-hold-claims";
 
-/** Retire unpaid Team Table holds whose create outcome was uncertain. */
+/** Close expired checkout attempts and retire their generation's provider hold. */
 export const reconcileTeamTableHolds = Effect.fn("reconcileTeamTableHolds")(
   function* ({
     now,
@@ -22,75 +20,125 @@ export const reconcileTeamTableHolds = Effect.fn("reconcileTeamTableHolds")(
     readonly now: Temporal.Instant;
     readonly limit: number;
   }) {
-    const { db, transaction } = yield* WorkspaceDatabase;
-    const dotypos = yield* DotyposService;
+    const { db } = yield* WorkspaceDatabase;
     const reservations = yield* WorkspaceReservationRepository;
     const claims = yield* TeamTableHoldClaims;
     const selected = yield* db
       .select({
+        id: workspaceReservations.id,
         claim: teamTableHoldClaims,
         authorAccountId: workspaceReservations.authorAccountId,
       })
-      .from(teamTableHoldClaims)
-      .innerJoin(
-        workspaceReservations,
+      .from(workspaceReservations)
+      .leftJoin(
+        teamTableHoldClaims,
         eq(workspaceReservations.id, teamTableHoldClaims.reservationId)
       )
       .where(
-        and(
-          eq(workspaceReservations.reservationState, "creating_hold"),
-          lte(workspaceReservations.reservationHoldExpiresAt, now)
+        or(
+          and(
+            lte(workspaceReservations.reservationHoldExpiresAt, now),
+            isNull(workspaceReservations.dotyposReservationId),
+            or(
+              and(
+                eq(workspaceReservations.reservationState, "creating_hold"),
+                sql`${workspaceReservations.reservationDetails}->>'kind' = 'table'`
+              ),
+              and(
+                eq(workspaceReservations.reservationState, "hold_expired"),
+                eq(teamTableHoldClaims.purpose, "checkout")
+              )
+            )
+          ),
+          and(
+            isNull(teamTableHoldClaims.retiredAt),
+            isNotNull(teamTableHoldClaims.cancelRequestedAt)
+          ),
+          and(
+            inArray(teamTableHoldClaims.purpose, [
+              "payment_retry",
+              "late_payment",
+            ]),
+            isNull(teamTableHoldClaims.attachedAt),
+            isNull(teamTableHoldClaims.retiredAt),
+            lte(teamTableHoldClaims.endsAt, now)
+          )
         )
       )
       .orderBy(
         sql`${teamTableHoldClaims.checkedAt} asc nulls first`,
-        teamTableHoldClaims.reservationId
+        workspaceReservations.id
       )
       .limit(limit);
-    for (const { claim, authorAccountId } of selected) {
-      const id = claim.reservationId;
-      const dates = getTouchedWorkspaceDateBounds(claim);
+    for (const { id, claim, authorAccountId } of selected) {
+      const dates = claim ? getTouchedWorkspaceDateBounds(claim) : null;
       const retire = Effect.gen(function* () {
         const row = yield* reservations.findById(id);
+        const fresh = yield* claims.find(id);
+        if (!row || fresh?.generation !== claim?.generation) return;
+        const expiredCheckout =
+          (!fresh || fresh.purpose === "checkout") &&
+          !row.dotyposReservationId &&
+          (row.reservationState === "creating_hold" ||
+            row.reservationState === "hold_expired") &&
+          row.reservationHoldExpiresAt !== null &&
+          Temporal.Instant.compare(row.reservationHoldExpiresAt, now) <= 0;
+        if (expiredCheckout) yield* claims.expireCheckout(id, now);
+        if (!fresh) return;
+        // A crash after the local attach may leave only its provider id
+        // recorded. That committed attachment supersedes cancellation.
         if (
-          row?.reservationState !== "creating_hold" ||
-          !row.reservationHoldExpiresAt ||
-          Temporal.Instant.compare(row.reservationHoldExpiresAt, now) > 0
-        )
+          row.dotyposReservationId &&
+          fresh.providerReservationIds?.includes(row.dotyposReservationId) &&
+          (row.reservationState === "held" ||
+            row.reservationState === "confirming" ||
+            row.reservationState === "confirmed")
+        ) {
+          yield* claims.attached(fresh, row.dotyposReservationId, now);
           return;
+        }
+        const ended = Temporal.Instant.compare(fresh.endsAt, now) <= 0;
+        if (!expiredCheckout && !fresh.cancelRequestedAt && !ended) return;
         yield* db
           .update(teamTableHoldClaims)
           .set({ checkedAt: now })
           .where(eq(teamTableHoldClaims.reservationId, id));
-        const record = yield* claims.recover(id, row.dotyposCustomerId);
-        if (record) {
-          yield* dotypos.setReservationStatusIfMatches({
-            reservationId: record.id,
-            expectedBooking: {
-              customerId: row.dotyposCustomerId,
-              tableId: claim.tableId,
-              seats: claim.seats,
-              startDate: temporalInstantToDate(claim.startsAt),
-              endDate: temporalInstantToDate(claim.endsAt),
-            },
-            expectedNoteLine: formatPaymentOrderLine(id),
-            expectedCurrentStatus: "NEW",
-            status: "CANCELLED",
-          });
-        } else if (Temporal.Instant.compare(claim.endsAt, now) > 0) {
-          // An absent or ambiguous provider receipt still might occupy the
-          // interval. Keep its capacity until the interval ends.
+
+        const receipt = yield* claims.inspect(fresh, row.dotyposCustomerId);
+        let cancelledId =
+          receipt.kind === "cancelled" ? receipt.record.id : undefined;
+        if (receipt.kind === "active") {
+          const expected =
+            fresh.purpose === "late_payment" ? "CONFIRMED" : "NEW";
+          if (receipt.record.status !== expected) {
+            if (!ended) return;
+          } else {
+            if (
+              !(yield* claims.cancel(
+                fresh,
+                row.dotyposCustomerId,
+                receipt.record
+              ))
+            )
+              return;
+            cancelledId = receipt.record.id;
+          }
+        } else if (receipt.kind === "absent") {
+          cancelledId = fresh.providerReservationIds?.[0];
+        } else if (receipt.kind === "unresolved" && !ended) {
           return;
         }
-        yield* transaction(
-          claims
-            .clear(id)
-            .pipe(Effect.andThen(reservations.releaseHoldCreation(id)))
-        );
+        if (fresh.purpose === "checkout") {
+          yield* claims.finishCheckout(fresh, now, cancelledId);
+        } else {
+          yield* claims.retire(fresh, now);
+        }
       });
       yield* WorkspaceLockSections.reservationCapacity(
-        getPlainDatesBetween(dates.first, dates.last),
-        { movedReservations: [id], ...(authorAccountId && { authorAccountId }) }
+        dates
+          ? getPlainDatesBetween(dates.first, dates.last)
+          : [getWorkspaceDate(now)],
+        { movedReservations: [id], authorAccountId }
       )(retire).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("Team Table hold needs reconciliation", { cause })

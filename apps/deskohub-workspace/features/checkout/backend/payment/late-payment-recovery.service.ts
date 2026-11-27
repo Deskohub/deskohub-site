@@ -5,7 +5,7 @@ import {
   type DotyposReservationId,
   DotyposService,
 } from "@deskohub/dotypos";
-import { Context, Data, Effect, Layer, Predicate } from "effect";
+import { Context, Data, Effect, Layer, Option, Predicate } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import type { LatePaymentRecovery } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
@@ -21,6 +21,17 @@ import {
   hasReservationIntervalEnded,
   type ReservationInterval,
 } from "@/features/reservation/reservation-interval";
+import { OpenSpaceTableMoves } from "@/features/team-table/backend/open-space-table-moves";
+import {
+  readDisplacedTeamTableHold,
+  type TeamTableBookingCapacity,
+  type TeamTablePaymentCapacity,
+  withTeamTablePaymentCapacity,
+} from "@/features/team-table/backend/team-table-booking-capacity";
+import {
+  type TeamTableHoldClaim,
+  TeamTableHoldClaims,
+} from "@/features/team-table/backend/team-table-hold-claims";
 import { currentInstant } from "@/shared/utils/temporal";
 import { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.service";
 import {
@@ -32,7 +43,10 @@ import {
   LatePaymentRecoveryRepository,
 } from "../repositories/late-payment-recovery.repository";
 import { administrationForcedPaymentCancellationFailureCode } from "../repositories/payment-lifecycle.repository";
-import { withWorkspaceReservationCapacity } from "../reservation/dotypos-reservation.adapter";
+import {
+  formatWorkspaceReservationNote,
+  withWorkspaceReservationCapacity,
+} from "../reservation/dotypos-reservation.adapter";
 import {
   findOrderCoworkStay,
   findOrderDotyposReservations,
@@ -49,6 +63,11 @@ export const latePaymentRecoveryMaxExecutionSeconds = 5 * 60;
 const recoveryClaimTimeout = Temporal.Duration.from({
   seconds: latePaymentRecoveryMaxExecutionSeconds + 60,
 });
+
+type TeamReplacement = {
+  readonly claim: TeamTableHoldClaim;
+  readonly record: DotyposReservation;
+};
 
 type LatePaymentRecoveryOutcome =
   | "ignored"
@@ -130,6 +149,31 @@ export class LatePaymentRecoveryService extends Context.Service<
       const tableAssignments = yield* WorkspaceTableAssignmentService;
       const fulfillment = yield* ReservationFulfillment;
       const advisoryLock = yield* WorkspaceDatabaseAdvisoryLock;
+      const moves = Option.getOrUndefined(
+        yield* Effect.serviceOption(OpenSpaceTableMoves)
+      );
+      const claims = Option.getOrUndefined(
+        yield* Effect.serviceOption(TeamTableHoldClaims)
+      );
+      const compensateTeamReplacement = Effect.fnUntraced(function* (input: {
+        readonly paymentAttemptId: PaymentAttemptId;
+        readonly reservation: WorkspaceReservation;
+        readonly team: TeamReplacement;
+      }) {
+        if (
+          !claims ||
+          !(yield* claims.compensateReplacement(
+            input.team.claim,
+            input.reservation.dotyposCustomerId,
+            input.team.record,
+            yield* currentInstant
+          ))
+        )
+          return yield* retryLater(
+            input.paymentAttemptId,
+            "A Team Table replacement cancellation is unresolved."
+          );
+      });
 
       const settleRefund = (input: {
         readonly paymentAttemptId: PaymentAttemptId;
@@ -274,11 +318,54 @@ export class LatePaymentRecoveryService extends Context.Service<
       // A replacement from an interrupted earlier run already passed the
       // availability check and table assignment before it was created; null
       // when a new one can no longer be provided.
-      const resumeOrCreateReplacement = Effect.fnUntraced(function* (input: {
-        readonly reservation: WorkspaceReservation;
-        readonly recreated: RecreatedReservation;
-        readonly replacements: readonly DotyposReservation[];
-      }) {
+      const resumeOrCreateReplacement = Effect.fnUntraced(function* (
+        input: {
+          readonly paymentAttemptId: PaymentAttemptId;
+          readonly reservation: WorkspaceReservation;
+          readonly recreated: RecreatedReservation;
+          readonly replacements: readonly DotyposReservation[];
+        },
+        capacity?: TeamTableBookingCapacity
+      ) {
+        const selected = input.recreated.reservation;
+        if (selected.kind === "table") {
+          if (!claims || !capacity)
+            return yield* retryLater(
+              input.paymentAttemptId,
+              "Team Table capacity is unavailable for recovery."
+            );
+          const created = yield* claims.create({
+            reservationId: input.reservation.id,
+            customerId: input.reservation.dotyposCustomerId,
+            reservation: selected,
+            owner: {
+              purpose: "late_payment",
+              paymentAttemptId: input.paymentAttemptId,
+            },
+            releasedReservationId:
+              input.reservation.dotyposReservationId ?? undefined,
+            assign: capacity.assignTableId,
+            note: formatWorkspaceReservationNote({
+              paymentOrderId: input.reservation.id,
+              checkoutDetails: input.recreated.checkoutDetails,
+              reservation: selected,
+            }),
+          });
+          if (created.kind === "pending")
+            return yield* retryLater(
+              input.paymentAttemptId,
+              "The Team Table replacement receipt is unresolved."
+            );
+          if (created.kind === "released") {
+            yield* claims.retire(created.claim, yield* currentInstant);
+            return null;
+          }
+          return {
+            replacementId: created.record.id,
+            replacementState: "confirmed" as const,
+            team: { claim: created.claim, record: created.record },
+          };
+        }
         const settled = yield* resumeOrCreateOrderDotyposReservation({
           order: input.reservation,
           recreated: input.recreated,
@@ -311,6 +398,7 @@ export class LatePaymentRecoveryService extends Context.Service<
         readonly reservation: WorkspaceReservation;
         readonly replacementId: DotyposReservationId | undefined;
         readonly replacementState: "confirmed" | "held";
+        readonly team?: TeamReplacement;
       }) {
         const { reservation } = input;
         if (!input.replacementId) {
@@ -322,9 +410,10 @@ export class LatePaymentRecoveryService extends Context.Service<
 
         const confirmedReplacementId = input.replacementId;
         const compensateReplacement = (failureCode: string) =>
-          dotypos
-            .cancelReservation(confirmedReplacementId)
-            .pipe(Effect.andThen(refundRecovery(input, failureCode)));
+          (input.team
+            ? compensateTeamReplacement({ ...input, team: input.team })
+            : dotypos.cancelReservation(confirmedReplacementId)
+          ).pipe(Effect.andThen(refundRecovery(input, failureCode)));
         yield* recoveries
           .completeWithReplacement({
             paymentAttemptId: input.paymentAttemptId,
@@ -351,7 +440,28 @@ export class LatePaymentRecoveryService extends Context.Service<
                 compensateReplacement("late_payment_discount_unavailable"),
               EntryPackUnavailableError: () =>
                 compensateReplacement("late_payment_entry_pack_unavailable"),
-            })
+            }),
+            Effect.catch(
+              Effect.fnUntraced(function* (cause) {
+                if (input.team && claims) {
+                  const latest = yield* recoveries.findByPaymentAttemptId(
+                    input.paymentAttemptId
+                  );
+                  if (latest?.state === "recovered") return;
+                  const claim = yield* claims.find(reservation.id);
+                  if (
+                    claim?.generation === input.team.claim.generation &&
+                    !claim?.cancelRequestedAt
+                  ) {
+                    yield* compensateTeamReplacement({
+                      ...input,
+                      team: input.team,
+                    });
+                  }
+                }
+                return yield* Effect.fail(cause);
+              })
+            )
           );
         const settled = yield* recoveries.findByPaymentAttemptId(
           input.paymentAttemptId
@@ -359,6 +469,12 @@ export class LatePaymentRecoveryService extends Context.Service<
         if (settled?.state === "refund_required") {
           return "refund_required" as const;
         }
+        if (input.team && claims && settled?.state === "recovered")
+          yield* claims.attached(
+            input.team.claim,
+            confirmedReplacementId,
+            yield* currentInstant
+          );
         yield* fulfillment.run(reservation.id);
         return "recovered" as const;
       });
@@ -376,6 +492,7 @@ export class LatePaymentRecoveryService extends Context.Service<
         readonly reservation: WorkspaceReservation;
         readonly originalDotyposReservationId: DotyposReservationId;
         readonly newerReservation: boolean;
+        readonly teamCapacity?: TeamTablePaymentCapacity;
       }) {
         const recreated = yield* findRecreatedReservation(input);
         if (!recreated) {
@@ -392,10 +509,13 @@ export class LatePaymentRecoveryService extends Context.Service<
           return yield* refundRecovery(input, "late_payment_reservation_ended");
         }
 
-        const replacements = yield* findRecoveryReplacements({
-          reservation: input.reservation,
-          interval,
-        });
+        const replacements =
+          recreated.reservation.kind === "table"
+            ? []
+            : yield* findRecoveryReplacements({
+                reservation: input.reservation,
+                interval,
+              });
         if (replacements.length > 1) {
           return yield* reviewRecovery(
             input,
@@ -404,24 +524,65 @@ export class LatePaymentRecoveryService extends Context.Service<
         }
 
         if (input.newerReservation) {
+          if (recreated.reservation.kind === "table" && claims) {
+            const claim = yield* claims.find(input.reservation.id);
+            if (
+              claim?.purpose === "late_payment" &&
+              claim.paymentAttemptId === input.paymentAttemptId
+            ) {
+              const receipt = yield* claims.inspect(
+                claim,
+                input.reservation.dotyposCustomerId
+              );
+              if (receipt.kind === "unresolved")
+                return yield* retryLater(
+                  input.paymentAttemptId,
+                  "The superseded Team Table replacement is unresolved."
+                );
+              if (receipt.kind === "active")
+                yield* compensateTeamReplacement({
+                  ...input,
+                  team: { claim, record: receipt.record },
+                });
+              else yield* claims.retire(claim, yield* currentInstant);
+            }
+          }
           return yield* refundNewerReservation({ ...input, replacements });
         }
 
-        const replacement = yield* withWorkspaceReservationCapacity(
-          interval,
-          Effect.gen(function* () {
-            if (
-              replacements.length === 0 &&
-              hasReservationIntervalEnded(interval, yield* currentInstant)
-            ) {
-              return "ended" as const;
-            }
-            return yield* resumeOrCreateReplacement({
+        const book = Effect.fnUntraced(function* (
+          capacity?: TeamTableBookingCapacity
+        ) {
+          if (
+            replacements.length === 0 &&
+            hasReservationIntervalEnded(interval, yield* currentInstant)
+          )
+            return "ended" as const;
+          return yield* resumeOrCreateReplacement(
+            {
+              paymentAttemptId: input.paymentAttemptId,
               reservation: input.reservation,
               recreated,
               replacements,
-            });
-          })
+            },
+            capacity
+          );
+        });
+        const replacement = yield* (
+          input.teamCapacity
+            ? input.teamCapacity
+                .withCapacity(book)
+                .pipe(
+                  Effect.provideService(
+                    WorkspaceDatabaseAdvisoryLock,
+                    advisoryLock
+                  )
+                )
+            : withWorkspaceReservationCapacity(interval, book())
+        ).pipe(
+          Effect.catchTag("WorkspaceTableUnavailableError", () =>
+            Effect.succeed(null)
+          )
         );
         if (replacement === "ended") {
           return yield* refundRecovery(input, "late_payment_reservation_ended");
@@ -526,6 +687,7 @@ export class LatePaymentRecoveryService extends Context.Service<
       const recoverClaimedReservation = Effect.fnUntraced(function* (input: {
         readonly claimed: LatePaymentRecovery;
         readonly reservation: WorkspaceReservation;
+        readonly teamCapacity?: TeamTablePaymentCapacity;
       }) {
         const { claimed, reservation } = input;
         let newerReservation = yield* recoveries.hasNewerActiveReservation(
@@ -572,6 +734,7 @@ export class LatePaymentRecoveryService extends Context.Service<
           reservation: released,
           originalDotyposReservationId: claimed.originalDotyposReservationId,
           newerReservation,
+          teamCapacity: input.teamCapacity,
         });
       });
 
@@ -580,6 +743,7 @@ export class LatePaymentRecoveryService extends Context.Service<
       const recoverClaimed = Effect.fnUntraced(function* (input: {
         readonly paymentAttemptId: PaymentAttemptId;
         readonly workspaceReservationId: WorkspaceReservationId;
+        readonly teamCapacity?: TeamTablePaymentCapacity;
       }) {
         if (
           yield* reservations.hasAttachedOpenSpaceMove(
@@ -623,7 +787,11 @@ export class LatePaymentRecoveryService extends Context.Service<
           );
         }
 
-        return yield* recoverClaimedReservation({ claimed, reservation });
+        return yield* recoverClaimedReservation({
+          claimed,
+          reservation,
+          teamCapacity: input.teamCapacity,
+        });
       });
 
       const recover = Effect.fn("latePaymentRecovery.recover")(
@@ -635,13 +803,55 @@ export class LatePaymentRecoveryService extends Context.Service<
           if (settled) return settled;
           if (!current) return "ignored" as const;
 
+          const orderId = current.workspaceReservationId;
+          const order =
+            moves && claims ? yield* reservations.findById(orderId) : null;
+          if (order?.reservationDetails.kind === "table" && moves && claims) {
+            const recreated = yield* findRecreatedReservation({
+              paymentAttemptId: input.paymentAttemptId,
+              reservation: order,
+              originalDotyposReservationId:
+                current.originalDotyposReservationId,
+            });
+            if (recreated?.reservation.kind === "table") {
+              return yield* withTeamTablePaymentCapacity(
+                {
+                  orderId,
+                  reservation: recreated.reservation,
+                  lookupDisplacedHold: reservations
+                    .findById(orderId)
+                    .pipe(
+                      Effect.flatMap((row) =>
+                        row?.reservationState === "held"
+                          ? readDisplacedTeamTableHold(row)
+                          : Effect.succeed(undefined)
+                      )
+                    ),
+                },
+                (teamCapacity) =>
+                  recoverClaimed({
+                    ...input,
+                    workspaceReservationId: orderId,
+                    teamCapacity,
+                  })
+              ).pipe(
+                Effect.provide(
+                  Layer.mergeAll(
+                    Layer.succeed(WorkspaceDatabaseAdvisoryLock, advisoryLock),
+                    Layer.succeed(WorkspaceAvailabilityService, availability),
+                    Layer.succeed(WorkspaceReservationRepository, reservations),
+                    Layer.succeed(DotyposService, dotypos),
+                    Layer.succeed(OpenSpaceTableMoves, moves)
+                  )
+                )
+              );
+            }
+          }
           return yield* recoverClaimed({
             ...input,
-            workspaceReservationId: current.workspaceReservationId,
+            workspaceReservationId: orderId,
           }).pipe(
-            WorkspaceLockSections.reservationOrder(
-              current.workspaceReservationId
-            ),
+            WorkspaceLockSections.reservationOrder(orderId),
             Effect.provideService(WorkspaceDatabaseAdvisoryLock, advisoryLock)
           );
         }
