@@ -778,6 +778,23 @@ jobs:
             .github/actions/setup-bun
             .github/actions/restore-playwright-webkit
             packages/workspace-cloud-run/src
+            packages/workspace-domain/src/shared/credentials
+
+      - name: Validate the backend preview signer
+        if: needs.resolve-target.outputs.backend_preview == 'true'
+        working-directory: .workspace-e2e-coordinator
+        env:
+          BETTER_AUTH_SECRETS: ${{ secrets.WORKSPACE_BACKEND_PREVIEW_BETTER_AUTH_SECRETS }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { parseBetterAuthSecrets } from './packages/workspace-domain/src/shared/credentials/versioned-secrets.ts';
+
+          const result = parseBetterAuthSecrets(process.env.BETTER_AUTH_SECRETS);
+          if (result.kind === 'invalid') {
+            console.error('Workspace backend preview signer is invalid.', result.message);
+            process.exitCode = 1;
+          }
+          NODE
 
       - name: Select preferred date shard
         id: preferred-shard
@@ -1045,7 +1062,7 @@ jobs:
         env:
           TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-          WORKSPACE_E2E_BETTER_AUTH_SECRETS: ${{ secrets.WORKSPACE_E2E_BETTER_AUTH_SECRETS }}
+          WORKSPACE_E2E_BETTER_AUTH_SECRETS: ${{ secrets[needs.resolve-target.outputs.backend_preview == 'true' && 'WORKSPACE_BACKEND_PREVIEW_BETTER_AUTH_SECRETS' || 'WORKSPACE_E2E_BETTER_AUTH_SECRETS'] }}
           WORKSPACE_E2E_BACKEND_PREVIEW_REVISION: ${{ needs.resolve-backend-preview.outputs.revision }}
           WORKSPACE_E2E_CRON_SECRET: ${{ secrets.WORKSPACE_E2E_CRON_SECRET }}
           WORKSPACE_E2E_FLOWS: ${{ needs.resolve-target.outputs.flows }}
