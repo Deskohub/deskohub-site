@@ -221,7 +221,7 @@ const readBackendPreviewRequirement = async (prNumber, sha) => {
   }
 };
 
-const backendPreviewBlock = (snapshot, parsedPr) => {
+const backendPreviewBlock = (snapshot, parsedPr, hasLiveProof = false) => {
   if (snapshot.backendPreviewRequirement === "not-required") return null;
   if (snapshot.backendPreviewRequirement === "unavailable") {
     return BACKEND_PREVIEW_CLASSIFICATION_UNAVAILABLE;
@@ -234,7 +234,7 @@ const backendPreviewBlock = (snapshot, parsedPr) => {
   }
   // A historical result cannot prove that the generation still exists. Only
   // the trusted completion workflow can supply a fresh verified binding.
-  return snapshot.livePilotProof ? null : BACKEND_PREVIEW_PROOF_REQUIRED;
+  return hasLiveProof ? null : BACKEND_PREVIEW_PROOF_REQUIRED;
 };
 
 const PREVIEW_MISMATCH_TAG_PATTERN =
@@ -642,9 +642,14 @@ const publishWithCasReconcile = async ({
       return decision;
     }
     if (backendPreviewRequirement === "pilot-owned") return { skipPost: true };
+    const hasLiveProof = Boolean(
+      current.liveGeneration &&
+        current.liveGeneration === decision.verifiedGeneration
+    );
     const blocked = backendPreviewBlock(
       current,
-      parsePrBodyE2EFlows(String(snapshot.pr?.body ?? ""))
+      parsePrBodyE2EFlows(String(snapshot.pr?.body ?? "")),
+      hasLiveProof
     );
     if (!blocked) return decision;
     return onBlockedSuccess ?? { state: "failure", description: blocked };
@@ -914,19 +919,7 @@ const runPublishCompletedPilot = async () => {
     } catch {
       // A changed or unavailable protected deployment cannot authorize a pass.
     }
-    const { sourceFound, later } = readPilotStatusOrder(snapshot.statuses, sourceRun, selection.selected);
-    const laterGeneration = later?.state === "success" && liveGeneration
-      ? findPilotRunGeneration({ targetUrl: later.target_url, target, read: readPilotRun, followLatest: true })
-      : undefined;
-    const laterVerified = Boolean(laterGeneration && laterGeneration === liveGeneration);
-    return {
-      ...snapshot,
-      generation,
-      sourceFound,
-      later,
-      laterVerified,
-      livePilotProof: laterVerified || liveGeneration === generation,
-    };
+    return { ...snapshot, target, generation, liveGeneration };
   };
 
   const confirmed = await readSnapshot();
@@ -936,8 +929,24 @@ const runPublishCompletedPilot = async () => {
     sha,
     prNumber: pilotPrNumber,
     readSnapshot,
-    decide: ({ backendPreviewRequirement, prOk, pr, selection, livePilotProof, generation, statusesOk, statuses, sourceFound, later, laterVerified }) => {
-      if (backendPreviewRequirement !== "required" || !prOk || !isEligibleInternalPr(pr) || pr.head.sha !== sha || generation !== confirmed.generation) {
+    decide: ({
+      backendPreviewRequirement,
+      prOk,
+      pr,
+      selection,
+      liveGeneration,
+      target,
+      generation,
+      statusesOk,
+      statuses,
+    }) => {
+      if (
+        backendPreviewRequirement !== "required" ||
+        !prOk ||
+        !isEligibleInternalPr(pr) ||
+        pr.head.sha !== sha ||
+        generation !== confirmed.generation
+      ) {
         return { skipPost: true };
       }
       if (!statusesOk) {
@@ -956,6 +965,11 @@ const runPublishCompletedPilot = async () => {
           restorePendingTargetUrl: pending.targetUrl,
         };
       }
+      const { sourceFound, later } = readPilotStatusOrder(
+        statuses,
+        sourceRun,
+        selection.selected
+      );
       if (!sourceFound) return { skipPost: true };
       const failedProof = {
         state: "failure",
@@ -964,10 +978,17 @@ const runPublishCompletedPilot = async () => {
         verifyAfterPost: true,
       };
       if (later?.state === "success") {
-        if (laterVerified) {
+        const laterGeneration = findPilotRunGeneration({
+          targetUrl: later.target_url,
+          target,
+          read: readPilotRun,
+          followLatest: true,
+        });
+        if (laterGeneration && laterGeneration === liveGeneration) {
           return {
             skipPost: true,
             satisfiedSuccess: true,
+            verifiedGeneration: laterGeneration,
             reinstateDecision: {
               state: "success",
               description: later.description,
@@ -987,10 +1008,11 @@ const runPublishCompletedPilot = async () => {
           },
         };
       }
-      return livePilotProof ? {
+      return liveGeneration === generation ? {
         state: "success",
         description: formatE2EStatusDescription({ kind: "passed", flows: selection.flows }),
         targetUrl: sourceRun,
+        verifiedGeneration: generation,
       } : failedProof;
     },
   });

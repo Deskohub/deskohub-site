@@ -255,6 +255,7 @@ const runCompletedPilotPublisher = ({
   statusesInitiallyUnavailable = false,
   statusesAfterWrite = [newerPending, sourcePending],
   laterSuccessVerified = false,
+  failureDuringRestore = false,
 } = {}) => {
   const liveGeneration =
     live === "changed" ? "1".repeat(64) : backendGeneration;
@@ -330,6 +331,12 @@ globalThis.fetch = async (input) => {
       },
       [`commits/${headSha}/statuses`]: statuses,
       "newer-status": statusesAfterWrite,
+      "after-restore": [
+        { ...laterSuccess, id: 400 },
+        newerFailure,
+        laterSuccess,
+        sourcePending,
+      ],
       [`statuses/${headSha}`]: { id: 400 },
     },
     {
@@ -350,7 +357,11 @@ if [[ ${statusesInitiallyUnavailable ? "true" : "false"} == true && "$*" == *"/c
   exit 1
 fi
 if [[ "$*" == *"/statuses/${headSha} -f state="*" -f context=Workspace E2E -f "* ]]; then
-  cp "$GH_FIXTURES/newer-status.json" "$GH_FIXTURES/commits_${headSha}_statuses.json"
+  if [[ ${failureDuringRestore ? "true" : "false"} == true && "$*" == *" -f target_url=${laterSuccess.target_url}" ]]; then
+    cp "$GH_FIXTURES/after-restore.json" "$GH_FIXTURES/commits_${headSha}_statuses.json"
+  else
+    cp "$GH_FIXTURES/newer-status.json" "$GH_FIXTURES/commits_${headSha}_statuses.json"
+  fi
   touch "$GH_FIXTURES/pending-arrived"
 fi
 exec gh-fixture-api "$@"`,
@@ -526,6 +537,25 @@ describe("Workspace E2E backend proof publishers", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(statusPosts(calls)).toEqual([]);
+  });
+
+  test("ignores its own restoration when a newer failure appears in the same status read", async () => {
+    const { calls, result } = await runCompletedPilotPublisher({
+      live: "changed",
+      newerRunAfterWrite: true,
+      statusesAfterWrite: [laterSuccess, sourcePending],
+      laterSuccessVerified: true,
+      failureDuringRestore: true,
+    });
+    expect(result.exitCode).toBe(0);
+    const posts = statusPosts(calls);
+    expect(posts).toHaveLength(3);
+    expect(posts[0]).toContain(`target_url=${sourcePending.target_url}`);
+    expect(posts[1]).toContain("state=success -f context=Workspace E2E");
+    expect(posts[1]).toContain(`target_url=${laterSuccess.target_url}`);
+    expect(posts[2]).toContain("state=failure -f context=Workspace E2E");
+    expect(posts[2]).toContain(`description=${newerFailure.description}`);
+    expect(posts[2]).toContain(`target_url=${newerFailure.target_url}`);
   });
 
   test("restores ownership even when both failure status descriptions match", async () => {
