@@ -183,6 +183,11 @@ const newerPending = {
   ...sourcePending,
   target_url: "https://github.com/Deskohub/deskohub-site/actions/runs/999999",
 };
+const newerFailure = {
+  ...newerPending,
+  state: "failure",
+  description: "Protected preview E2E failed [flows: email-campaigns]",
+};
 const backendProof = (login = "github-actions[bot]") => ({
   ...proofFixture.status,
   creator: { login },
@@ -240,6 +245,7 @@ const runCompletedPilotPublisher = ({
   statuses = [sourcePending],
   newerRunAfterWrite = false,
   statusesInitiallyUnavailable = false,
+  statusAfterWrite = newerPending,
 } = {}) => {
   const stubFetch = `
 const team = "team_MgMQ4MEWijWnYa1R48C2JU5e";
@@ -293,7 +299,7 @@ globalThis.fetch = async (input) => {
       },
       [proofFixture.jobsPath]: { jobs },
       [`commits/${headSha}/statuses`]: statuses,
-      "newer-pending": [newerPending],
+      "newer-status": [statusAfterWrite, sourcePending],
       [`statuses/${headSha}`]: {},
     },
     {
@@ -314,7 +320,7 @@ if [[ ${statusesInitiallyUnavailable ? "true" : "false"} == true && "$*" == *"/c
   exit 1
 fi
 if [[ "$*" == *"/statuses/${headSha} -f state="*" -f context=Workspace E2E -f "* ]]; then
-  cp "$GH_FIXTURES/newer-pending.json" "$GH_FIXTURES/commits_${headSha}_statuses.json"
+  cp "$GH_FIXTURES/newer-status.json" "$GH_FIXTURES/commits_${headSha}_statuses.json"
   touch "$GH_FIXTURES/pending-arrived"
 fi
 exec gh-fixture-api "$@"`,
@@ -399,6 +405,38 @@ describe("Workspace E2E backend proof publishers", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(statusPosts(calls)).toEqual([]);
+  });
+
+  test("ignores a delayed completion when a failure follows its pending status", async () => {
+    const { calls, result } = await runCompletedPilotPublisher({
+      statuses: [newerFailure, sourcePending],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(statusPosts(calls)).toEqual([]);
+  });
+
+  test("uses current proof to resolve a failure that predates the source run", async () => {
+    const { calls, result } = await runCompletedPilotPublisher({
+      statuses: [sourcePending, newerFailure],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(statusPosts(calls)[0]).toContain(
+      "state=success -f context=Workspace E2E"
+    );
+  });
+
+  test("restores a foreign failure if it interleaves with pilot status publication", async () => {
+    const { calls, result } = await runCompletedPilotPublisher({
+      newerRunAfterWrite: true,
+      statusAfterWrite: newerFailure,
+    });
+    expect(result.exitCode).toBe(0);
+    const posts = statusPosts(calls);
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).toContain("state=success -f context=Workspace E2E");
+    expect(posts[1]).toContain("state=failure -f context=Workspace E2E");
+    expect(posts[1]).toContain(`description=${newerFailure.description}`);
+    expect(posts[1]).toContain(`target_url=${newerFailure.target_url}`);
   });
 
   test.each([

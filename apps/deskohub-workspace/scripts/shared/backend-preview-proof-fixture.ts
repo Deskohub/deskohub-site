@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { workflowStepRunId } from "./workflow-step-runner";
 
-export const previewDigest = (url: string) =>
+const previewDigest = (url: string) =>
   createHash("sha256").update(url).digest("hex");
 
 export const backendDeploymentId = "dpl_testPreview";

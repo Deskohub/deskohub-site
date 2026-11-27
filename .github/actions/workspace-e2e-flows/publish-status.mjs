@@ -514,6 +514,23 @@ const findForeignActiveRun = (summary, selection, ownerUrl) =>
       run.flows.some((flow) => selection.includes(flow))
   );
 
+const readPilotStatusOrder = (statuses, sourceRun) => {
+  const relevant = statuses.filter(
+    (status) => status?.context === "Workspace E2E" &&
+      status.creator?.login === "github-actions[bot]"
+  );
+  // GitHub lists the newest statuses first. The source pending write precedes
+  // its test and gives us the boundary for later failures on this same SHA.
+  const source = relevant.findIndex(
+    (status) => status.state === "pending" && status.target_url === sourceRun
+  );
+  const failure = source < 0 ? undefined : relevant.slice(0, source).find(
+    (status) => (status.state === "failure" || status.state === "error") &&
+      status.target_url !== sourceRun
+  );
+  return { sourceFound: source >= 0, failure };
+};
+
 /**
  * Filters a carried flow set against head-SHA failures and active reruns so an
  * outgoing `same-tree-passed` status never advertises a flow that failed or is
@@ -916,6 +933,18 @@ const runPublishCompletedPilot = async () => {
           restorePendingTargetUrl: pending.targetUrl,
         };
       }
+      const { sourceFound, failure } = readPilotStatusOrder(statuses, sourceRun);
+      if (failure) {
+        return {
+          skipPost: true,
+          undoDecision: {
+            state: failure.state,
+            description: failure.description || BACKEND_PREVIEW_PROOF_REQUIRED,
+            targetUrl: failure.target_url || sourceRun,
+          },
+        };
+      }
+      if (!sourceFound) return { skipPost: true };
       return livePilotProof ? {
         state: "success",
         description: formatE2EStatusDescription({ kind: "passed", flows: selection.flows }),
@@ -928,7 +957,10 @@ const runPublishCompletedPilot = async () => {
       };
     },
   });
-  if (result.state === "success" || result.state === "failure") {
+  if (
+    (result.state === "success" || result.state === "failure") &&
+    (!result.targetUrl || result.targetUrl === sourceRun)
+  ) {
     postCommitStatus(sha, {
       context: BACKEND_PREVIEW_CONTEXT,
       state: result.state,
