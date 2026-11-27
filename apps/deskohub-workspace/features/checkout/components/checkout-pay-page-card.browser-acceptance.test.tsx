@@ -100,7 +100,12 @@ test.skipIf(!chromiumAvailable)(
         await page.evaluate(() => document.fonts.ready);
         await page.locator("button img").evaluateAll(async (images) => {
           await Promise.all(
-            images.map((image) => (image as HTMLImageElement).decode())
+            images.map((image) => {
+              if (!(image instanceof HTMLImageElement)) {
+                throw new Error("Expected a pay button image");
+              }
+              return image.decode();
+            })
           );
         });
         for (const width of viewportWidths) {

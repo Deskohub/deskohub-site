@@ -283,7 +283,10 @@ describe("CheckoutDiscountCodeForm", () => {
           { locale }
         )
       );
-      const codeInput = view.getByRole("textbox") as HTMLInputElement;
+      const codeInput = view.getByRole("textbox");
+      if (!(codeInput instanceof HTMLInputElement)) {
+        throw new Error("Expected the discount code input");
+      }
       expect(codeInput.name).toBe("submittedCode");
       expect(codeInput.disabled).toBe(false);
       expect(

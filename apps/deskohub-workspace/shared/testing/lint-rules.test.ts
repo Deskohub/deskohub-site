@@ -1234,6 +1234,8 @@ const workspaceProductionProbes = [
   "apps/deskohub-workspace/features/checkout/backend/reservation/probe.test.ts",
   "apps/deskohub-workspace/features/checkout/backend/reservation/testing/probe.fixture.ts",
   "apps/deskohub-workspace/features/checkout/checkout-quote.test.ts",
+  "apps/deskohub-workspace/features/checkout/components/probe.browser.test.tsx",
+  "apps/deskohub-workspace/features/checkout/components/testing/probe.fixture.ts",
   "apps/deskohub-workspace/features/checkout/workspace-table-map.test.ts",
 ];
 const generatedProbes = [
@@ -1244,7 +1246,6 @@ const generatedProbes = [
 const workspaceExemptProbes = [
   "apps/deskohub-workspace/e2e/probe.ts",
   "apps/deskohub-workspace/features/checkout/probe.test.ts",
-  "apps/deskohub-workspace/features/checkout/components/probe.test.tsx",
   "apps/deskohub-workspace/features/checkout/backend/repositories/generated/probe.ts",
   "apps/deskohub-workspace/features/checkout/probe.postgres.test.ts",
   "apps/deskohub-workspace/features/checkout/probe.spec.ts",
