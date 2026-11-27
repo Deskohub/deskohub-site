@@ -4,7 +4,7 @@ import {
   CustomerRateLimited,
   CustomerServiceUnavailable,
   type CustomerSession,
-  type WorkspaceCustomerApi,
+  type WorkspaceCustomerApiWithTeamTable,
 } from "@deskohub/workspace-customer-api";
 import { Duration, Effect, Match } from "effect";
 import type { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
@@ -30,7 +30,10 @@ export type CustomerRequestBudgetClass =
   | "dotypos-mutation";
 
 type CustomerApiGroup =
-  typeof WorkspaceCustomerApi extends HttpApi.HttpApi<infer _Id, infer Groups>
+  typeof WorkspaceCustomerApiWithTeamTable extends HttpApi.HttpApi<
+    infer _Id,
+    infer Groups
+  >
     ? Groups
     : never;
 
@@ -159,6 +162,15 @@ export const customerRequestBudgetClasses = {
     submitCheckout: "dotypos-mutation",
     // Reseals the signed checkout state only.
     acceptCheckoutPriceChange: "workspace-only",
+  },
+  teamTable: {
+    listOfferings: "catalog-read",
+    getAvailability: "catalog-read",
+    getSlots: "catalog-read",
+    getQuote: "catalog-read",
+    createCheckout: "dotypos-mutation",
+    getStatus: "account-read",
+    addInvitees: "dotypos-mutation",
   },
 } as const satisfies CustomerApiEndpointClassification;
 

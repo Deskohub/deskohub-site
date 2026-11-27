@@ -11,6 +11,7 @@ import {
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { OvernightStayReleaseGate } from "@/features/reservation/backend/overnight-stay-release-gate";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import {
   CheckoutServicesUnavailable,
   CustomerCheckoutOperations,
@@ -39,7 +40,8 @@ const runOperations = <A, E>(
               CustomerReferralUpdates.fromClient(undefined),
               ReferralReleaseGate.fromDecision(false),
               OfficeReleaseGate.fromDecision(false),
-              OvernightStayReleaseGate.fromDecision(false)
+              OvernightStayReleaseGate.fromDecision(false),
+              TeamTableReleaseGate.fromDecision(false)
             )
           )
         )

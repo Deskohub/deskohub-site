@@ -9,6 +9,7 @@ import { ReferralReleaseGateForRun } from "@/features/referrals/referral-release
 import { SharedAvailabilityInventoryLive } from "@/features/reservation/backend/availability-inventory-cache.server";
 import { OvernightStayReleaseGateForRun } from "@/features/reservation/backend/overnight-stay-release-gate-run";
 import { WorkspaceAvailabilityLoaderLive } from "@/features/reservation/backend/workspace-availability-loader";
+import { TeamTableReleaseGateForRun } from "@/features/team-table/backend/team-table-release-gate-run";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 
 const liveCatalogLayers = {
@@ -29,6 +30,7 @@ const liveCatalogLayers = {
     CurrentCustomerAccount.ForProvidedAuthentication,
     WorkspaceDatabase.Default
   ),
+  teamTableRelease: TeamTableReleaseGateForRun,
   /**
    * The release gates, each decided once per build, so an endpoint that
    * reads one builds it per request.

@@ -51,8 +51,12 @@ export const CustomerCheckoutSummaryItem = Schema.Struct({
   discounts: Schema.optionalKey(Schema.Array(CustomerCheckoutSummaryDiscount)),
   /** Office product line only: the days booked. */
   dayCount: Schema.optionalKey(Schema.Int),
-  /** Office product line only: the seats booked. */
+  /** Office and Team Table product lines: the seats booked. */
   seats: Schema.optionalKey(Schema.Int),
+  /** Team Table product line only: base fee for all the booked seats. */
+  baseAmount: Schema.optionalKey(Money),
+  /** Team Table product line only: usage fee for the full booked interval. */
+  usageAmount: Schema.optionalKey(Money),
   /** Office product line only: the office access part of `amount`. */
   accessAmount: Schema.optionalKey(Money),
   /**
