@@ -22,15 +22,16 @@ export function isGitHubRepositorySlug(value: string): boolean {
   );
 }
 
-function isGitHubId(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-}
-
 function githubApi(run: Command, args: readonly string[], input?: string) {
   return run("gh", ["api", ...args, "--hostname", "github.com"], input);
 }
 
-export async function resolveIssuePoolGitHub(run: Command) {
+export class GitHubIdentityError extends Error {}
+
+export async function resolveIssuePoolGitHub(
+  run: Command,
+  reporterId = deskohubMaintainerId
+) {
   const [repository, reporter] = await Promise.all([
     githubApi(run, [`repos/${deskohubRepository}`]),
     githubApi(run, ["user", "--jq", ".id"]),
@@ -46,21 +47,22 @@ export async function resolveIssuePoolGitHub(run: Command) {
     typeof repo !== "string" ||
     !isGitHubRepositorySlug(repo)
   ) {
-    throw new Error("Unexpected GitHub issue pool repository identity");
+    throw new GitHubIdentityError(
+      "Unexpected GitHub issue pool repository identity"
+    );
   }
-  const reporterId: unknown = JSON.parse(reporter);
-  if (!isGitHubId(reporterId)) {
-    throw new Error("Invalid GitHub issue pool reporter ID");
-  }
-
   const owner = metadata.owner;
-  if (owner?.type === "User" && isGitHubId(owner.id)) {
-    return { repo, reporterId, maintainerId: owner.id };
+  if (owner?.type !== "Organization" || owner.id !== deskohubOrganizationId) {
+    throw new GitHubIdentityError(
+      "The GitHub issue pool repository must be owned by the Deskohub organization"
+    );
   }
-  if (owner?.type === "Organization" && owner.id === deskohubOrganizationId) {
-    return { repo, reporterId, maintainerId: deskohubMaintainerId };
+  if (reporter.trim() !== String(reporterId)) {
+    throw new GitHubIdentityError(
+      "The authenticated GitHub account does not match the configured issue pool reporter ID"
+    );
   }
-  throw new Error("Unexpected GitHub issue pool repository owner");
+  return { repo, reporterId, maintainerId: deskohubMaintainerId };
 }
 
 interface RestIssue {

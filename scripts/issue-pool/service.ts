@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import {
   type Command,
+  GitHubIdentityError,
   githubIssueTracker,
   resolveIssuePoolGitHub,
 } from "./github";
@@ -89,6 +90,7 @@ async function main(): Promise<void> {
       "max-issues": { type: "string", default: "3" },
       "max-workers": { type: "string", default: "2" },
       project: { type: "string", default: process.cwd() },
+      "reporter-id": { type: "string" },
       state: { type: "string" },
       t3: { type: "string", default: "t3" },
       "vercel-fetch-script": { type: "string" },
@@ -103,7 +105,12 @@ async function main(): Promise<void> {
   }
   const maxNewIssues = positiveInteger(values["max-issues"], "--max-issues");
   const maxNewWorkers = positiveInteger(values["max-workers"], "--max-workers");
-  const github = await resolveIssuePoolGitHub(run);
+  const configuredReporter = values["reporter-id"];
+  const reporterId =
+    configuredReporter === undefined
+      ? undefined
+      : positiveInteger(configuredReporter, "--reporter-id");
+  const github = await resolveIssuePoolGitHub(run, reporterId);
   const { repo } = github;
   if (apply && state) {
     await mkdir(dirname(state), { recursive: true, mode: 0o700 });
@@ -176,7 +183,9 @@ async function main(): Promise<void> {
 
 await main().catch((error: unknown) => {
   console.error(
-    error instanceof ConfigurationError || error instanceof CommandFailure
+    error instanceof ConfigurationError ||
+      error instanceof CommandFailure ||
+      error instanceof GitHubIdentityError
       ? error.message
       : "Issue pool pass failed"
   );

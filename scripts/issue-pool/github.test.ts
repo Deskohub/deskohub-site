@@ -73,7 +73,8 @@ test("uses the canonical slug and a human maintainer for the transferred reposit
     githubIdentityFixture({
       ...transferredRepository,
       full_name: "Deskohub/renamed-site",
-    })
+    }),
+    reporter.id
   );
   let posts = 0;
   const tracker = githubIssueTracker({
@@ -110,7 +111,8 @@ test("uses the canonical slug and a human maintainer for the transferred reposit
 
 test("accepts the human maintainer's org issue and reply while rejecting other authors", async () => {
   const identity = await resolveIssuePoolGitHub(
-    githubIdentityFixture(transferredRepository)
+    githubIdentityFixture(transferredRepository),
+    reporter.id
   );
   const comments = [
     { id: 1, user: reporter, body: worker },
@@ -157,15 +159,11 @@ test("accepts the human maintainer's org issue and reply while rejecting other a
   expect(await tracker.pendingReply(32)).toBeNull();
 });
 
-test("uses the repository owner as maintainer for a personal repository", async () => {
+test("uses Filip as the default reporter on the host", async () => {
   const identity = await resolveIssuePoolGitHub(
-    githubIdentityFixture({
-      ...transferredRepository,
-      full_name: "maintainer/deskohub-site",
-      owner: { id: maintainer.id, type: "User" },
-    })
+    githubIdentityFixture(transferredRepository, filip.id)
   );
-  expect(identity.maintainerId).toBe(maintainer.id);
+  expect(identity.reporterId).toBe(filip.id);
 });
 
 test.each([
@@ -173,19 +171,31 @@ test.each([
   { ...transferredRepository, full_name: "Deskohub/../elsewhere" },
   { ...transferredRepository, owner: { id: 42, type: "Organization" } },
   { ...transferredRepository, owner: { id: 42, type: "Bot" } },
-  { ...transferredRepository, owner: { id: 0, type: "User" } },
+  {
+    ...transferredRepository,
+    full_name: "maintainer/deskohub-site",
+    owner: { id: maintainer.id, type: "User" },
+  },
   null,
 ])("rejects unexpected GitHub repository identity %j", async (repository) => {
   await expect(
-    resolveIssuePoolGitHub(githubIdentityFixture(repository))
+    resolveIssuePoolGitHub(githubIdentityFixture(repository, filip.id))
   ).rejects.toThrow();
 });
 
-test("fails closed when the authenticated reporter is missing", async () => {
-  await expect(
-    resolveIssuePoolGitHub(githubIdentityFixture(transferredRepository, null))
-  ).rejects.toThrow("Invalid GitHub issue pool reporter ID");
-});
+test.each([null, outsider.id])(
+  "fails closed for an unexpected authenticated reporter %j",
+  async (authenticatedId) => {
+    await expect(
+      resolveIssuePoolGitHub(
+        githubIdentityFixture(transferredRepository, authenticatedId),
+        reporter.id
+      )
+    ).rejects.toThrow(
+      "The authenticated GitHub account does not match the configured issue pool reporter ID"
+    );
+  }
+);
 
 test("fails closed when GitHub refuses the repository lookup", async () => {
   const denied = new Error("GitHub repository lookup failed");
