@@ -32,7 +32,7 @@ import type { ReservationInterval } from "@/features/reservation/reservation-int
 import { getPlainDatesBetween } from "@/shared/utils/temporal";
 import { unlimitedPassDays } from "../pass-offer";
 import {
-  getBookingsWithPassDayIntents,
+  getBookingsWithCapacityClaims,
   observePassDayInventory,
 } from "./pass-day-capacity-bookings";
 
@@ -90,10 +90,10 @@ const loadUnlimitedInventory = Effect.fn("loadUnlimitedInventory")(function* (
   const last = Arr.lastNonEmpty(dates);
   // Read intents before the provider list so a concurrent attach cannot
   // disappear between a stale provider list and a later local-state read.
-  const intents = yield* workspaceReservations.selectPendingPassDayCapacity({
-    first,
-    last,
-  });
+  const [intents, openSpaceMoveClaims] = yield* Effect.all([
+    workspaceReservations.selectPendingPassDayCapacity({ first, last }),
+    workspaceReservations.selectOpenSpaceMoveCapacity({ first, last }),
+  ]);
 
   const reads = yield* Effect.all(
     {
@@ -132,9 +132,9 @@ const loadUnlimitedInventory = Effect.fn("loadUnlimitedInventory")(function* (
     closedDates: getFullyOccupiedCalendarDates(
       yield* Effect.fromResult(reads.limitations)
     ),
-    bookings: getBookingsWithPassDayIntents(
+    bookings: getBookingsWithCapacityClaims(
       excludeDotyposReservationsById(observations.reservations, expiredIds),
-      observations.passDayIntents,
+      { passDayIntents: observations.passDayIntents, openSpaceMoveClaims },
       supersedeOrderId
     ),
   };

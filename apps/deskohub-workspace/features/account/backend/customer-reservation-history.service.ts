@@ -19,6 +19,7 @@ import { Context, Effect, Layer, Option } from "effect";
 import type { SqlError } from "effect/sql";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
+  openSpaceTableMoves,
   passEntryClaims,
   paymentAttempts,
   unlimitedPassDayMoves,
@@ -351,11 +352,13 @@ const relateReservations = ({
   rows,
   sources,
   movedPassDayIds,
+  stagedOpenSpaceHoldIds,
 }: {
   readonly account: ReservationHistoryAccount;
   readonly rows: readonly ReservationRow[];
   readonly sources: ReservationSources;
   readonly movedPassDayIds: ReadonlySet<DotyposReservationId>;
+  readonly stagedOpenSpaceHoldIds: ReadonlySet<DotyposReservationId>;
 }): readonly HistoryEntry[] => {
   const rowsByReservationId = new Map(
     rows.flatMap((row) =>
@@ -370,7 +373,10 @@ const relateReservations = ({
       if (
         row?.unlimitedPassDay ||
         reservation.unlimitedPassDay ||
-        movedPassDayIds.has(reservation.id)
+        movedPassDayIds.has(reservation.id) ||
+        (!row &&
+          (reservation.openSpaceMoveReplacement ||
+            stagedOpenSpaceHoldIds.has(reservation.id)))
       )
         return [];
       return [
@@ -793,6 +799,38 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
         Effect.orElseSucceed(() => new Map<DotyposCustomerId, string>())
       );
 
+  const readStagedOpenSpaceHoldIds = Effect.fnUntraced(function* ({
+    sources,
+  }: {
+    readonly sources: ReservationSources;
+  }) {
+    const ids = mergeReservations(sources.own, sources.bookedForOthers).map(
+      ({ id }) => id
+    );
+    if (ids.length === 0) return new Set<DotyposReservationId>();
+    const rows = yield* db
+      .select({
+        source: openSpaceTableMoves.sourceReservationId,
+        target: openSpaceTableMoves.targetReservationId,
+        ambiguous: openSpaceTableMoves.ambiguousReservationIds,
+      })
+      .from(openSpaceTableMoves)
+      .where(
+        or(
+          inArray(openSpaceTableMoves.sourceReservationId, ids),
+          inArray(openSpaceTableMoves.targetReservationId, ids),
+          arrayOverlaps(openSpaceTableMoves.ambiguousReservationIds, ids)
+        )
+      );
+    return new Set(
+      rows.flatMap(({ source, target, ambiguous }) => [
+        source,
+        ...(target ? [target] : []),
+        ...(ambiguous ?? []),
+      ])
+    );
+  });
+
   const readAccess = ({
     entries,
     locale,
@@ -849,6 +887,7 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
       Effect.bind("rows", selectReservationRows),
       Effect.bind("sources", readReservationSources),
       Effect.bind("movedPassDayIds", readMovedPassDayIds),
+      Effect.bind("stagedOpenSpaceHoldIds", readStagedOpenSpaceHoldIds),
       Effect.let("entries", relateReservations),
       Effect.bind("lookups", (input) =>
         Effect.all(

@@ -34,6 +34,7 @@ import {
   customerEvents,
   fioPaymentSettlements,
   latePaymentRecoveries,
+  openSpaceTableMoves,
   orders,
   type PaymentAttemptRow,
   passEntryClaims,
@@ -106,6 +107,7 @@ import {
   requireWithinReadLimit,
 } from "@/shared/backend/read-limit";
 import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
+import type { OpenSpaceMoveCapacityClaim } from "./open-space-move-capacity";
 import { supersedableReservationPaymentStates } from "./reservation-supersession";
 import {
   StoredReservationDetails,
@@ -502,6 +504,7 @@ export interface IWorkspaceReservationRepository {
   >;
   readonly claimRequestedCancellation: (input: {
     readonly id: WorkspaceReservationId;
+    readonly expectedDotyposReservationId?: DotyposReservationId;
     readonly cause: RequestedCancellationCause;
     readonly entryPackWithdrawal?: EntryPackWithdrawalCancellation;
     readonly pendingPaymentCancellation?: {
@@ -677,6 +680,13 @@ export interface IWorkspaceReservationRepository {
     readonly last: Temporal.PlainDate;
   }) => Effect.Effect<
     readonly PendingPassDayCapacity[],
+    EffectDrizzleQueryError
+  >;
+  readonly selectOpenSpaceMoveCapacity: (input: {
+    readonly first: Temporal.PlainDate;
+    readonly last: Temporal.PlainDate;
+  }) => Effect.Effect<
+    readonly OpenSpaceMoveCapacityClaim[],
     EffectDrizzleQueryError
   >;
   /**
@@ -902,6 +912,12 @@ const recordRequestedCancellationClaim = Effect.fnUntraced(function* (
     .where(
       and(
         eq(workspaceReservations.id, input.id),
+        input.expectedDotyposReservationId === undefined
+          ? undefined
+          : eq(
+              workspaceReservations.dotyposReservationId,
+              input.expectedDotyposReservationId
+            ),
         or(
           inArray(workspaceReservations.reservationState, [
             "held",
@@ -2425,6 +2441,45 @@ export class WorkspaceReservationRepository extends Context.Service<
         }),
         recordAmbiguousPassDayHolds: (holds) =>
           recordAmbiguousPassDayHolds(db, holds),
+        selectOpenSpaceMoveCapacity: Effect.fn(
+          "workspaceReservations.selectOpenSpaceMoveCapacity"
+        )(function* ({ first, last }) {
+          const rows = yield* db
+            .select({
+              generation: openSpaceTableMoves.generation,
+              attachedAt: openSpaceTableMoves.attachedAt,
+              sourceReservationId: openSpaceTableMoves.sourceReservationId,
+              sourceTableId: openSpaceTableMoves.sourceTableId,
+              targetReservationId: openSpaceTableMoves.targetReservationId,
+              targetTableId: openSpaceTableMoves.targetTableId,
+              startsAt: openSpaceTableMoves.startsAt,
+              endsAt: openSpaceTableMoves.endsAt,
+            })
+            .from(openSpaceTableMoves)
+            .where(
+              and(
+                isNull(openSpaceTableMoves.settledAt),
+                isNotNull(openSpaceTableMoves.attemptedAt),
+                gte(
+                  openSpaceTableMoves.serviceDate,
+                  plainDateStringSchema.make(first.toString())
+                ),
+                lte(
+                  openSpaceTableMoves.serviceDate,
+                  plainDateStringSchema.make(last.toString())
+                )
+              )
+            );
+          return rows.map((row) => ({
+            generation: row.attachedAt ? null : row.generation,
+            tableId: row.attachedAt ? row.sourceTableId : row.targetTableId,
+            reservationId: row.attachedAt
+              ? row.sourceReservationId
+              : row.targetReservationId,
+            startsAt: row.startsAt.epochMilliseconds,
+            endsAt: row.endsAt.epochMilliseconds,
+          }));
+        }),
         selectPendingPassDayCapacity: Effect.fn(
           "workspaceReservations.selectPendingPassDayCapacity"
         )(function* ({ first, last }) {
@@ -2450,6 +2505,17 @@ export class WorkspaceReservationRepository extends Context.Service<
                 isNull(unlimitedPassDayMoves.settledAt)
               )
             );
+          const pendingOpenSpaceMove = db
+            .select({
+              id: openSpaceTableMoves.generation,
+            })
+            .from(openSpaceTableMoves)
+            .where(
+              and(
+                eq(openSpaceTableMoves.reservationId, workspaceReservations.id),
+                isNull(openSpaceTableMoves.settledAt)
+              )
+            );
           const passDays = db
             .select({
               passId: passPurchases.id,
@@ -2466,6 +2532,7 @@ export class WorkspaceReservationRepository extends Context.Service<
               providerReservationId: workspaceReservations.dotyposReservationId,
               movableReservationId: sql<WorkspaceReservationId | null>`case when
                 ${movablePassDay} and not exists (${pendingMove})
+                and not exists (${pendingOpenSpaceMove})
                 then ${workspaceReservations.id} end`.as(
                 "movable_reservation_id"
               ),

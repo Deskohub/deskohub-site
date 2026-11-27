@@ -28,7 +28,7 @@ import {
   CoworkPassesReleaseGateForRun,
 } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
-  getBookingsWithPassDayIntents,
+  getBookingsWithCapacityClaims,
   observePassDayInventory,
 } from "@/features/passes/backend/pass-day-capacity-bookings";
 import { findMovablePassDays } from "@/features/passes/backend/pass-day-move-plan";
@@ -256,15 +256,16 @@ const implementation = Effect.gen(function* () {
       const last = Arr.lastNonEmpty(input.dates);
       // The provider can list a hold as soon as it is attached. Read its
       // local intent first so it is visible on at least one side of the handover.
-      const passDayIntents =
-        yield* workspaceReservations.selectPendingPassDayCapacity({
-          first,
-          last,
-        });
+      const [passDayIntents, openSpaceMoveClaims] = yield* Effect.all([
+        workspaceReservations.selectPendingPassDayCapacity({ first, last }),
+        workspaceReservations.selectOpenSpaceMoveCapacity({ first, last }),
+      ]);
       // The shared snapshot omits notes and customer links. A live read is
       // needed to match these intents to provider holds without counting both.
       const reservationInventory =
-        passDayIntents.length > 0 ? providerInventory : inventory;
+        passDayIntents.length > 0 || openSpaceMoveClaims.length > 0
+          ? providerInventory
+          : inventory;
       const readReservations: Effect.Effect<
         readonly (DotyposReservation | ReservationRecord)[],
         AvailabilityInventoryError
@@ -340,10 +341,10 @@ const implementation = Effect.gen(function* () {
 
       return {
         tables,
-        bookings: getBookingsWithPassDayIntents(
-          activeReservations,
-          observations.passDayIntents
-        ),
+        bookings: getBookingsWithCapacityClaims(activeReservations, {
+          passDayIntents: observations.passDayIntents,
+          openSpaceMoveClaims,
+        }),
         limitations,
         movablePassDays,
       };

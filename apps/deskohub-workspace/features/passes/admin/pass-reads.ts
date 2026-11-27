@@ -32,7 +32,6 @@ import { passEntryClaims } from "@/db/schema/pass-entry-claims";
 import { passPurchases } from "@/db/schema/pass-purchases";
 import { paymentAttempts } from "@/db/schema/payment-attempts";
 import { reservationAccessGrants } from "@/db/schema/reservation-access-grants";
-import { unlimitedPassDayMoves } from "@/db/schema/unlimited-pass-day-moves";
 import { workspaceReservations } from "@/db/schema/workspace-reservations";
 import { AdministrationCustomerDirectory } from "@/features/administration/customer-directory.service";
 import {
@@ -44,6 +43,7 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import type { Money } from "@/shared/money/money";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
+import { passDayMoveJournal } from "../backend/pass-day-move-journal";
 import {
   type AdminPassListInput,
   type AdminPassPage,
@@ -454,6 +454,7 @@ export const readAdminPass = Effect.fn("administration.readAdminPass")(
     );
     if (!row) return null;
     const party = yield* passParties([row]);
+    const moveJournal = passDayMoveJournal(db);
     const [attempts, consent, withdrawals, claims, days, moves] =
       yield* Effect.all(
         [
@@ -542,24 +543,24 @@ export const readAdminPass = Effect.fn("administration.readAdminPass")(
             ),
           db
             .select({
-              id: unlimitedPassDayMoves.generation,
+              id: moveJournal.generation,
               date: workspaceReservations.serviceDate,
-              sourceTableId: unlimitedPassDayMoves.sourceTableId,
-              targetTableId: unlimitedPassDayMoves.targetTableId,
-              requestedAt: unlimitedPassDayMoves.requestedAt,
-              attachedAt: unlimitedPassDayMoves.attachedAt,
-              ambiguousAt: unlimitedPassDayMoves.ambiguousAt,
-              settledAt: unlimitedPassDayMoves.settledAt,
+              sourceTableId: moveJournal.sourceTableId,
+              targetTableId: moveJournal.targetTableId,
+              requestedAt: moveJournal.requestedAt,
+              attachedAt: moveJournal.attachedAt,
+              ambiguousAt: moveJournal.ambiguousAt,
+              settledAt: moveJournal.settledAt,
             })
-            .from(unlimitedPassDayMoves)
+            .from(moveJournal)
             .innerJoin(
               workspaceReservations,
-              eq(workspaceReservations.id, unlimitedPassDayMoves.reservationId)
+              eq(workspaceReservations.id, moveJournal.reservationId)
             )
             .where(eq(workspaceReservations.passId, passId))
             .orderBy(
-              desc(unlimitedPassDayMoves.requestedAt),
-              desc(unlimitedPassDayMoves.generation)
+              desc(moveJournal.requestedAt),
+              desc(moveJournal.generation)
             ),
         ],
         { concurrency: 3 }

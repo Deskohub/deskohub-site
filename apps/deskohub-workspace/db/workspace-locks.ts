@@ -48,6 +48,12 @@ const passPurchaseFulfillmentSection = (orderId: OrderId) => ({
   pair: ["pass-purchase-fulfillment", orderId] as const,
 });
 
+const reservationOrderSection = (orderId: WorkspaceReservationId) => ({
+  name: "reservationOrder",
+  rank: 5,
+  pair: ["reservation-order", orderId] as const,
+});
+
 /** Takes two existing section keys together without another pool permit. */
 export const holdCustomerAccountAndPassPurchase = (
   accountId: CustomerAccountId,
@@ -194,11 +200,7 @@ export const WorkspaceLockSections = {
    * inside this one.
    */
   reservationOrder: (orderId: WorkspaceReservationId) =>
-    holdSection({
-      name: "reservationOrder",
-      rank: 5,
-      pair: ["reservation-order", orderId],
-    }),
+    holdSection(reservationOrderSection(orderId)),
   unlimitedPassRecovery: (orderId: OrderId) =>
     holdSection({
       name: "unlimitedPassRecovery",
@@ -207,8 +209,11 @@ export const WorkspaceLockSections = {
     }),
   customerAccount: (accountId: CustomerAccountId) =>
     holdSection(customerAccountSection(accountId)),
-  /** All local dates touched by a booking, inside its account section if any. */
-  reservationCapacity: (dates: readonly Temporal.PlainDate[]) => {
+  /** All local dates touched by a booking, and any order holds it is to move. */
+  reservationCapacity: (
+    dates: readonly Temporal.PlainDate[],
+    movedReservations: readonly WorkspaceReservationId[] = []
+  ) => {
     const [first, ...rest] = Array.from(new Set(dates.map(String)))
       .sort(Order.String)
       .map((date) => ({
@@ -217,7 +222,16 @@ export const WorkspaceLockSections = {
         pair: ["reservation-capacity", date] as const,
       }));
     if (!first) throw new Error("Reservation capacity locks require a date");
-    return holdSections([first, ...rest]);
+    const [firstOrder, ...remainingOrders] = Array.from(
+      new Set(movedReservations)
+    )
+      .sort(Order.String)
+      .map(reservationOrderSection);
+    return holdSections(
+      firstOrder
+        ? [firstOrder, ...remainingOrders, first, ...rest]
+        : [first, ...rest]
+    );
   },
   unlimitedGiftCustomer: (holder: CustomerAccountId) =>
     holdSection({

@@ -11,7 +11,7 @@ import { workspaceStatementConcurrency } from "@/db/database.service";
 import { workspaceProductMonitorOptionTableTags } from "@/features/checkout/product-catalog";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
-  getBookingsWithPassDayIntents,
+  getBookingsWithCapacityClaims,
   observePassDayInventory,
 } from "@/features/passes/backend/pass-day-capacity-bookings";
 import {
@@ -248,8 +248,10 @@ export class WorkspaceTableAssignmentService extends Context.Service<
         });
         // Read local intents before provider reservations so an attaching
         // pass day remains visible on at least one side of the handover.
-        const passDayIntents =
-          yield* workspaceReservations.selectPendingPassDayCapacity(dates);
+        const [passDayIntents, openSpaceMoveClaims] = yield* Effect.all([
+          workspaceReservations.selectPendingPassDayCapacity(dates),
+          workspaceReservations.selectOpenSpaceMoveCapacity(dates),
+        ]);
         const concurrency = yield* workspaceStatementConcurrency;
         const reads = yield* Effect.all(
           {
@@ -280,6 +282,7 @@ export class WorkspaceTableAssignmentService extends Context.Service<
         const observations = yield* Effect.fromResult(reads.observations);
         return {
           ...observations,
+          openSpaceMoveClaims,
           tables: yield* Effect.fromResult(reads.tables),
           expiredDotyposReservationIds: yield* Effect.fromResult(
             reads.expiredDotyposReservationIds
@@ -331,10 +334,7 @@ export class WorkspaceTableAssignmentService extends Context.Service<
               "occupancyByTableId",
               ({ activeReservations, occupancyWindow, inventory }) =>
                 getTableBookingOccupancyById(
-                  getBookingsWithPassDayIntents(
-                    activeReservations,
-                    inventory.passDayIntents
-                  ),
+                  getBookingsWithCapacityClaims(activeReservations, inventory),
                   occupancyWindow
                 )
             ),
@@ -417,10 +417,7 @@ export class WorkspaceTableAssignmentService extends Context.Service<
                   full.reservations,
                   full.expiredDotyposReservationIds
                 );
-                const bookings = getBookingsWithPassDayIntents(
-                  active,
-                  full.passDayIntents
-                );
+                const bookings = getBookingsWithCapacityClaims(active, full);
                 const candidates = yield* Effect.fromResult(
                   decodeTableCandidates(
                     getWorkspaceTableCandidatesByPredicate(
@@ -473,10 +470,7 @@ export class WorkspaceTableAssignmentService extends Context.Service<
                   ),
                   refreshed.tables,
                   getTableBookingOccupancyById(
-                    getBookingsWithPassDayIntents(
-                      remaining,
-                      refreshed.passDayIntents
-                    ),
+                    getBookingsWithCapacityClaims(remaining, refreshed),
                     occupancyWindow
                   ),
                   seats,
@@ -540,10 +534,7 @@ export class WorkspaceTableAssignmentService extends Context.Service<
                 ]
           );
           const occupancyByTableId = getTableBookingOccupancyById(
-            getBookingsWithPassDayIntents(
-              otherReservations,
-              inventory.passDayIntents
-            ),
+            getBookingsWithCapacityClaims(otherReservations, inventory),
             booking.value
           );
           const seatCapacity = yield* getWorkspaceTableSeatCapacity(table);

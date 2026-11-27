@@ -29,8 +29,8 @@ import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   createWorkspaceDotyposReservation,
   formatWorkspaceReservationNote,
-  noteNamesPaymentOrder,
 } from "./dotypos-reservation.adapter";
+import { noteNamesPaymentOrder } from "./order-reservation-note";
 import {
   type WorkspaceTableAssignmentReservation,
   WorkspaceTableAssignmentService,

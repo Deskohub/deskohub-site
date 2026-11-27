@@ -7,6 +7,10 @@ import {
   workspaceBookingSeatCount,
 } from "@/features/checkout/backend/reservation/workspace-table-occupancy";
 import type { OrderId } from "@/features/order";
+import {
+  getUnobservedOpenSpaceMoveBookings,
+  type OpenSpaceMoveCapacityClaim,
+} from "@/features/reservation/backend/open-space-move-capacity";
 import type { ReservationRecord } from "@/features/reservation/backend/reservation-record";
 import type {
   PendingPassDayCapacity,
@@ -19,6 +23,22 @@ import { matchesUnlimitedPassDayHold } from "./unlimited-pass-dotypos-holds";
 
 type CapacityReservation = ReservationRecord &
   Pick<DotyposReservation, "_customerId" | "note">;
+
+export const getBookingsWithCapacityClaims = (
+  records: readonly CapacityReservation[],
+  claims: {
+    readonly passDayIntents: readonly PendingPassDayCapacity[];
+    readonly openSpaceMoveClaims: readonly OpenSpaceMoveCapacityClaim[];
+  },
+  supersedeOrderId?: OrderId
+): readonly TableBooking[] => [
+  ...getBookingsWithPassDayIntents(
+    records,
+    claims.passDayIntents,
+    supersedeOrderId
+  ),
+  ...getUnobservedOpenSpaceMoveBookings(claims.openSpaceMoveClaims, records),
+];
 
 const providerHold = ({
   passId,

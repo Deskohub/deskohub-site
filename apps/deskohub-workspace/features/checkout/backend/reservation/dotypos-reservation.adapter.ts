@@ -33,6 +33,7 @@ import {
   getPlainDatesBetween,
   temporalInstantToDate,
 } from "@/shared/utils/temporal";
+import { formatPaymentOrderLine } from "./order-reservation-note";
 import {
   getWorkspaceReservationInterval,
   getWorkspaceReservationSeats,
@@ -145,30 +146,6 @@ export const createWorkspaceDotyposReservation: (
       })
     )
 );
-
-/**
- * The note line naming the payment order. Late-payment recovery finds the
- * Dotypos reservations a payment order created by it.
- */
-const formatPaymentOrderLine = (paymentOrderId: WorkspaceReservationId) =>
-  `Platební objednávka: ${paymentOrderId}`;
-
-/** Notes written before staff notes were Czech name the order in English. */
-const formatLegacyPaymentOrderLine = (paymentOrderId: WorkspaceReservationId) =>
-  `Payment order: ${paymentOrderId}`;
-
-/** Whether a Dotypos reservation note names the given payment order. */
-export const noteNamesPaymentOrder = (
-  note: string | null | undefined,
-  paymentOrderId: WorkspaceReservationId
-) => {
-  const lines = note?.split("\n") ?? [];
-
-  return (
-    lines.includes(formatPaymentOrderLine(paymentOrderId)) ||
-    lines.includes(formatLegacyPaymentOrderLine(paymentOrderId))
-  );
-};
 
 /**
  * The note staff read on the Dotypos reservation. It is written in the staff

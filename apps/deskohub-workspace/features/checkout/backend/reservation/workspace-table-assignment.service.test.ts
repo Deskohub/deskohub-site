@@ -175,6 +175,7 @@ const makeAssignmentLayer = (
           listReservations: () => Effect.succeed([...dotyposReservations]),
         }),
         Layer.mock(WorkspaceReservationRepository, {
+          selectOpenSpaceMoveCapacity: () => Effect.succeed([]),
           selectPendingPassDayCapacity: () => Effect.succeed([]),
           selectExpiredHoldDotyposReservationIds: () =>
             Effect.succeed(

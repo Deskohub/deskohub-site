@@ -755,10 +755,11 @@ export const verifyReservationStatusTransition = (
   {
     status,
     expectedNoteLine,
+    expectedCurrentStatus,
     reservationId,
   }: Pick<
     SetMatchingDotyposReservationStatusInput,
-    "status" | "expectedNoteLine" | "reservationId"
+    "status" | "expectedNoteLine" | "expectedCurrentStatus" | "reservationId"
   >
 ): Effect.Effect<Option.Option<DotyposReservation>, DotyposVersionConflict> => {
   if (
@@ -770,6 +771,9 @@ export const verifyReservationStatusTransition = (
   }
   if (
     reservation.status === "CANCELLED" ||
+    (expectedCurrentStatus !== undefined &&
+      reservation.status !== status &&
+      reservation.status !== expectedCurrentStatus) ||
     !matchesReservationBooking(reservation, {
       reservationId,
       expectedBooking: booking,

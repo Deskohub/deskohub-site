@@ -3,11 +3,12 @@ import {
   type DotyposReservationId,
   DotyposService,
 } from "@deskohub/dotypos";
-import { and, asc, eq, gt, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, notExists } from "drizzle-orm";
 import { Context, Effect, Layer, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
+  openSpaceTableMoves,
   orders,
   passPurchases,
   unlimitedPassDayMoves,
@@ -29,7 +30,7 @@ import { getCoworkReservationInterval } from "@/features/reservation/cowork-rese
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 import { movablePassDay } from "./movable-pass-day";
-import { getBookingsWithPassDayIntents } from "./pass-day-capacity-bookings";
+import { getBookingsWithCapacityClaims } from "./pass-day-capacity-bookings";
 import type { MovablePassDay, PassDayMovePlan } from "./pass-day-move-plan";
 import {
   createUnlimitedPassDayHold,
@@ -90,7 +91,21 @@ const makePassDayMoves = Effect.gen(function* () {
             plainDateStringSchema.make(getWorkspaceDate(now).toString())
           ),
           eq(workspaceReservations.dotyposReservationId, sourceReservationId),
-          movablePassDay
+          movablePassDay,
+          notExists(
+            db
+              .select({ id: openSpaceTableMoves.generation })
+              .from(openSpaceTableMoves)
+              .where(
+                and(
+                  eq(
+                    openSpaceTableMoves.reservationId,
+                    workspaceReservations.id
+                  ),
+                  isNull(openSpaceTableMoves.settledAt)
+                )
+              )
+          )
         )
       );
 
@@ -263,10 +278,11 @@ const makePassDayMoves = Effect.gen(function* () {
     move: Move & { readonly targetReservationId: DotyposReservationId }
   ) {
     const { day } = expectedHold(key, move, "target");
-    const claims = yield* reservations.selectPendingPassDayCapacity({
-      first: day.serviceDate,
-      last: day.serviceDate,
-    });
+    const dates = { first: day.serviceDate, last: day.serviceDate };
+    const [claims, openSpaceMoveClaims] = yield* Effect.all([
+      reservations.selectPendingPassDayCapacity(dates),
+      reservations.selectOpenSpaceMoveCapacity(dates),
+    ]);
     const window = getOccupancyWindow(day.interval);
     const { tables, records, expired } = yield* Effect.all({
       tables: dotypos.getTables(),
@@ -307,16 +323,19 @@ const makePassDayMoves = Effect.gen(function* () {
     const capacity = decodeTableSeatCapacity(table);
     if (Result.isFailure(capacity)) return "taken" as const;
     const excluded = new Set([...expired, move.targetReservationId]);
-    const bookings = getBookingsWithPassDayIntents(
+    const bookings = getBookingsWithCapacityClaims(
       records.filter(({ id }) => !excluded.has(id)),
-      claims.filter(
-        (claim) =>
-          !(
-            claim.moveClaim &&
-            claim.passId === key.passId &&
-            claim.holdGeneration === move.generation
-          )
-      )
+      {
+        passDayIntents: claims.filter(
+          (claim) =>
+            !(
+              claim.moveClaim &&
+              claim.passId === key.passId &&
+              claim.holdGeneration === move.generation
+            )
+        ),
+        openSpaceMoveClaims,
+      }
     );
     return hasCandidateCapacity(
       [{ table, seatCapacity: capacity.success }],

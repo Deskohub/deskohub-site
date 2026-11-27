@@ -855,6 +855,7 @@ describe.skipIf(!postgresDatabase)(
                     listLimitations: () => Effect.succeed([]),
                   }),
                   Layer.mock(WorkspaceReservationRepository, {
+                    selectOpenSpaceMoveCapacity: () => Effect.succeed([]),
                     selectPendingPassDayCapacity: () =>
                       Effect.sync(() =>
                         bareDeskAvailable ? [] : [pendingDay]
