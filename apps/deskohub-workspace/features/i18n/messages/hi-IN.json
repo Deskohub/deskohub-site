@@ -714,6 +714,7 @@
   "reservationTableInventoryError": "टेबल के आकार लोड नहीं हो सके। दोबारा कोशिश करने के लिए पेज रीफ़्रेश करें।",
   "reservationTableNoSizes": "अभी बुकिंग के लिए कोई टीम टेबल उपलब्ध नहीं है।",
   "reservationTableRestoredPastDate": "बुकिंग की पिछली तारीख बीत चुकी है। नई तारीख और समय चुनें।",
+  "reservationTableRestoredSizeUnavailable": "पहले चुना गया टेबल का आकार अब उपलब्ध नहीं है। कोई दूसरा आकार चुनें।",
   "reservationTablePeopleOverCapacity": "टेबल पर सभी के लिए जगह नहीं है। आगे बढ़ने के लिए किसी को हटाएँ।",
   "reservationTableMetadataDescription": "प्राग के Deskohub Workspace में अपने समूह के लिए टीम टेबल बुक करें। टेबल का आकार चुनें और 15 मिनट के अंतराल पर बुक करें।",
   "landingOfferingTeamTableText": "ओपन स्पेस में अपने समूह के लिए पूरी टेबल बुक करें। टेबल का आकार चुनें और 15 मिनट के अंतराल पर बुक करें।",

@@ -1,4 +1,8 @@
-import { getTableReservationInterval } from "@/features/reservation/table-reservation-time";
+import {
+  getTableReservationInterval,
+  isTableReservationBookable,
+  isTableReservationSlotTime,
+} from "@/features/reservation/table-reservation-time";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 
 export type TableBookingSelection = {
@@ -11,11 +15,12 @@ export type TableBookingSelection = {
 type TableBookingWindow = {
   readonly today: string;
   readonly capacities: readonly number[];
+  readonly now?: Temporal.Instant;
 };
 
 export const getTableBookingSelection = (
   linked: Partial<TableBookingSelection>,
-  { today, capacities }: TableBookingWindow
+  { today, capacities, now = Temporal.Now.instant() }: TableBookingWindow
 ): TableBookingSelection => {
   const { from, to } = getWorkspaceAvailabilityRange(today);
   const seats =
@@ -28,14 +33,18 @@ export const getTableBookingSelection = (
       : today;
   const startTime =
     (linked.seats === undefined || linked.seats === seats) &&
-    linked.date === date
-      ? (linked.startTime ?? "")
+    linked.date === date &&
+    linked.startTime &&
+    isTableReservationSlotTime(linked.startTime)
+      ? linked.startTime
       : "";
-  const endTime =
-    linked.endTime &&
-    getTableReservationInterval(date, startTime, linked.endTime)
-      ? linked.endTime
-      : "";
+  const interval = linked.endTime
+    ? getTableReservationInterval(date, startTime, linked.endTime)
+    : null;
+  if (interval && !isTableReservationBookable(interval, now)) {
+    return { seats, date, startTime: "", endTime: "" };
+  }
+  const endTime = interval ? (linked.endTime ?? "") : "";
   return { seats, date, startTime, endTime };
 };
 

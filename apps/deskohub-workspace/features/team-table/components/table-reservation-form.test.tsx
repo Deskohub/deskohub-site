@@ -6,6 +6,7 @@ import { getTableCheckoutSummary } from "@/features/checkout/checkout-summary-ta
 import { buildTableReservationQuote } from "@/features/checkout/reservation-quote-table";
 import { m } from "@/features/i18n";
 import { mockCheckoutEmailVerification } from "@/features/reservation/components/use-checkout-email-verification.test-utils";
+import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney } from "@/shared/money/money";
 import { stubFetch } from "@/shared/testing/fetch-stub.test-utils";
@@ -20,9 +21,8 @@ mockCheckoutEmailVerification();
 workspaceUseAction.mockReturnValue({
   executeAsync: async () => ({}),
 });
-const { cleanup, fireEvent, render, screen, waitFor, within } = await import(
-  "@testing-library/react"
-);
+const { act, cleanup, fireEvent, render, screen, waitFor, within } =
+  await import("@testing-library/react");
 mock.module("@/features/cookie-consent", () => ({
   useVisitorConsent: () => false,
   visitorConsent: { accepts: () => false },
@@ -59,11 +59,11 @@ const { TableReservationForm, TableReservationFormUnavailable } = await import(
 );
 
 const locale = "en-US";
-const today = "2026-11-27";
-const date = "2026-12-01";
+const today = getCurrentWorkspaceDate();
+const date = today.add({ days: 2 }).toString();
 const fetchBefore = globalThis.fetch;
 const queries = new QueryClient({
-  defaultOptions: { queries: { retry: false } },
+  defaultOptions: { queries: { retryDelay: 0 } },
 });
 
 afterEach(() => {
@@ -74,10 +74,12 @@ afterEach(() => {
 afterAll(unregisterWorkspaceComponentTestEnv);
 
 test("offers live starts and only the ends for the selected start, and reprices a changed span", async () => {
+  let failSlots = false;
   globalThis.fetch = stubFetch(async (input) => {
     const url = new URL(String(input), "https://workspace.example");
     const { searchParams } = url;
     if (searchParams.get("mode") === "table-slots") {
+      if (failSlots) return new Response(null, { status: 503 });
       const seats = Number(searchParams.get("seats"));
       const entries =
         seats === 4
@@ -97,8 +99,8 @@ test("offers live starts and only the ends for the selected start, and reprices 
       });
     }
     return Response.json({
-      from: today,
-      to: "2027-05-27",
+      from: today.toString(),
+      to: today.add({ months: 6 }).toString(),
       unavailableDates: [],
       reservedDeskWorkstationRequiredDates: [],
       unavailableCoworkTiers: [],
@@ -128,7 +130,8 @@ test("offers live starts and only the ends for the selected start, and reprices 
         initialAdvertisedPrices={[]}
         initialAvailability={[]}
         locale={locale}
-        today={today}
+        priorDateUnavailable
+        today={today.toString()}
       />
     </QueryClientProvider>
   );
@@ -164,6 +167,23 @@ test("offers live starts and only the ends for the selected start, and reprices 
     ).toBeDefined();
     expect(end.hasAttribute("disabled")).toBe(true);
   });
+
+  failSlots = true;
+  await act(async () => {
+    await queries.invalidateQueries({
+      queryKey: ["workspace-availability", "table-slots"],
+    });
+  });
+  expect(
+    (await screen.findAllByText(m.reservationAvailabilityError({}, { locale })))
+      .length
+  ).toBeGreaterThan(0);
+  expect(
+    screen.queryByText(m.reservationTableUnavailable({}, { locale }))
+  ).toBeNull();
+  expect(
+    screen.getByText(m.reservationTableRestoredPastDate({}, { locale }))
+  ).toBeDefined();
 });
 
 test("shows the appropriate degraded state without booking fields", () => {

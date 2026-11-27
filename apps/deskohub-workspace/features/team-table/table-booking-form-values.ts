@@ -11,13 +11,16 @@ import {
   reservationBillingSelectionInputSchema,
 } from "@/features/reservation/reservation-billing";
 import { reservationCustomerSchema } from "@/features/reservation/reservation-contact";
-import { hasReservationIntervalEnded } from "@/features/reservation/reservation-interval";
 import {
   getTableAdvertisedPriceReservation,
   normalizedTableReservationOrderSchema,
   tableSeatsSchema,
 } from "@/features/reservation/table-reservation";
-import { getTableReservationInterval } from "@/features/reservation/table-reservation-time";
+import {
+  getTableReservationInterval,
+  isTableReservationBookable,
+  isTableReservationSlotTime,
+} from "@/features/reservation/table-reservation-time";
 import type { TableBookingSelection } from "./table-booking-selection";
 
 export const tableBookingFormSchema = (locale: Locale) =>
@@ -38,7 +41,7 @@ export const tableBookingFormSchema = (locale: Locale) =>
           issue: m.reservationTableChooseDate({}, { locale }),
         };
       }
-      if (!startTime) {
+      if (!isTableReservationSlotTime(startTime)) {
         return {
           path: ["startTime"],
           issue: m.reservationTableStartRequired({}, { locale }),
@@ -52,7 +55,7 @@ export const tableBookingFormSchema = (locale: Locale) =>
         };
       }
       return (
-        !hasReservationIntervalEnded(interval) || {
+        isTableReservationBookable(interval, Temporal.Now.instant()) || {
           path: ["startTime"],
           issue: m.reservationValidationTableEnded({}, { locale }),
         }
@@ -118,7 +121,11 @@ export const getTableBookingPriceRequest = (
 ) => {
   if (!seats) return undefined;
   const interval = getTableReservationInterval(date, startTime, endTime);
-  if (!interval) return undefined;
+  if (
+    !interval ||
+    !isTableReservationBookable(interval, Temporal.Now.instant())
+  )
+    return undefined;
   return {
     locale,
     ...(submittedCode && { submittedCode }),

@@ -714,6 +714,7 @@
   "reservationTableInventoryError": "Table sizes couldn't be loaded. Reload the page to try again.",
   "reservationTableNoSizes": "No Team Tables are available to book right now.",
   "reservationTableRestoredPastDate": "The original booking date has passed. Choose a new date and time.",
+  "reservationTableRestoredSizeUnavailable": "The original table size is no longer offered. Choose another size.",
   "reservationTablePeopleOverCapacity": "There aren't enough seats for everyone. Remove someone to continue.",
   "reservationTableMetadataDescription": "Reserve a Team Table for your group at Deskohub Workspace in Prague. Choose a table size and book in 15-minute increments.",
   "landingOfferingTeamTableText": "Reserve a whole table in Open Space for your group. Choose a table size and book in 15-minute increments.",

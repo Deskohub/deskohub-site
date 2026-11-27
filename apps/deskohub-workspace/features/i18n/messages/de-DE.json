@@ -714,6 +714,7 @@
   "reservationTableInventoryError": "Die Tischgrößen konnten nicht geladen werden. Lade die Seite neu, um es erneut zu versuchen.",
   "reservationTableNoSizes": "Zurzeit kannst du keinen Teamtisch buchen.",
   "reservationTableRestoredPastDate": "Das ursprüngliche Buchungsdatum ist vorbei. Wähle ein neues Datum und eine neue Uhrzeit.",
+  "reservationTableRestoredSizeUnavailable": "Die ursprüngliche Tischgröße wird nicht mehr angeboten. Wähle eine andere Größe.",
   "reservationTablePeopleOverCapacity": "Am Tisch sind zu wenige Plätze. Entferne jemanden, um fortzufahren.",
   "reservationTableMetadataDescription": "Buche einen Teamtisch für deine Gruppe im Deskohub Workspace in Prag. Wähle die Tischgröße und buche in 15-Minuten-Schritten.",
   "landingOfferingTeamTableText": "Buche einen ganzen Tisch im Open Space für deine Gruppe. Wähle die Tischgröße und buche in 15-Minuten-Schritten.",

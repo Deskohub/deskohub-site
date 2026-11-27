@@ -360,10 +360,11 @@ const getCheckoutSelectionPath = (
   locale: Locale,
   pathname: PublicPagePathname,
   searchParams: SearchParamsRecord,
-  keepCheckoutContact = false
+  { keepCheckoutContact = false, keepPayState = true } = {}
 ) => {
   const params = toURLSearchParams(searchParams);
   if (!keepCheckoutContact) params.delete(checkoutContactQueryParam);
+  if (!keepPayState) params.delete(payStateTokenQueryParam);
   params.delete(reservationCheckoutStepQueryParam);
   const search = params.toString();
   return `/${locale}${pathname}${search ? `?${search}` : ""}`;
@@ -435,6 +436,10 @@ async function ReservationPageRequestContent<
   const resolvedSearchParams = await searchParams;
 
   return runWithRequestLocale(async (locale) => {
+    const payStateToken = getSearchParam(
+      resolvedSearchParams,
+      payStateTokenQueryParam
+    );
     const checkoutContactToken = getSearchParam(
       resolvedSearchParams,
       checkoutContactQueryParam
@@ -451,17 +456,29 @@ async function ReservationPageRequestContent<
     // The restore, contact, account, and page data loads are independent.
     const [restoredReservation, checkoutContact, checkoutAccount, pageData] =
       await Promise.all([
-        loadRestoredReservation(
-          getSearchParam(resolvedSearchParams, payStateTokenQueryParam),
-          locale,
-          definition.kind
-        ).pipe(runWorkspaceEffect(`reservation.${definition.kind}.load-state`)),
+        loadRestoredReservation(payStateToken, locale, definition.kind).pipe(
+          runWorkspaceEffect(`reservation.${definition.kind}.load-state`)
+        ),
         loadCheckoutContact(checkoutContactToken, locale).pipe(
           runWorkspaceEffect(`reservation.${definition.kind}.load-contact`)
         ),
         loadReservationCheckoutAccount(definition.kind),
         definition.loadPageData(),
       ]);
+
+    if (definition.kind === "table" && payStateToken && !restoredReservation) {
+      // A fresh form must not carry an unverified hold through sign-in.
+      redirect(
+        getCheckoutSelectionPath(
+          locale,
+          definition.pathname,
+          resolvedSearchParams,
+          {
+            keepPayState: false,
+          }
+        )
+      );
+    }
 
     const contactMatchesAccount =
       checkoutContact !== undefined &&
@@ -508,7 +525,7 @@ async function ReservationPageRequestContent<
           locale,
           definition.pathname,
           resolvedSearchParams,
-          contactMatchesAccount
+          { keepCheckoutContact: contactMatchesAccount }
         )
       );
     }

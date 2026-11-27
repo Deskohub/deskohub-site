@@ -710,6 +710,7 @@
   "reservationTableInventoryError": "Không tải được kích cỡ bàn. Hãy tải lại trang để thử lại.",
   "reservationTableNoSizes": "Hiện không có bàn nhóm nào để đặt.",
   "reservationTableRestoredPastDate": "Ngày đặt bàn ban đầu đã qua. Hãy chọn ngày và giờ mới.",
+  "reservationTableRestoredSizeUnavailable": "Kích cỡ bàn ban đầu không còn trong danh sách. Hãy chọn kích cỡ khác.",
   "reservationTablePeopleOverCapacity": "Bàn không đủ chỗ cho cả nhóm. Hãy bỏ bớt người để tiếp tục.",
   "reservationTableMetadataDescription": "Đặt bàn nhóm tại Deskohub Workspace ở Praha. Chọn kích cỡ bàn và đặt theo từng khoảng 15 phút.",
   "landingOfferingTeamTableText": "Đặt nguyên một bàn trong không gian mở cho nhóm của bạn. Chọn kích cỡ bàn và đặt theo từng khoảng 15 phút.",

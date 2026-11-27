@@ -8,6 +8,7 @@ import { makeOfficePayRouteFixture } from "@/features/checkout/backend/checkout/
 import { checkoutSessionIdSchema } from "@/features/checkout/checkout-identifiers";
 import type { PublicPriceListOffering } from "@/features/checkout/public-offerings";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
+import { buildTableReservationQuote } from "@/features/checkout/reservation-quote-table";
 import type { CoworkCustomerPasses } from "@/features/cowork/backend/cowork-customer-passes";
 import {
   getCoworkBookingPasses,
@@ -24,12 +25,15 @@ import {
   type NormalizedCoworkReservationOrder,
   normalizedCoworkReservationOrderSchema,
 } from "@/features/reservation/cowork-reservation";
+import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import type {
   CustomerLastReservationForKind,
   ReservationCheckoutAccount,
 } from "@/features/reservation/reservation-existing-customer";
+import { normalizedTableReservationOrderSchema } from "@/features/reservation/table-reservation";
 import type { PreloadedWorkspaceAvailability } from "@/features/reservation/workspace-availability";
 import { getOfficeAvailabilityQuery } from "@/features/reservation/workspace-availability";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import {
   renderComponentElement,
   requireElement,
@@ -86,6 +90,12 @@ mock.module("@/features/office/backend/office-release-gate.server", () => ({
     Effect.promise(isOfficePageEnabled)
   ),
 }));
+mock.module(
+  "@/features/public-pages/backend/team-table-public-release.server",
+  () => ({
+    TeamTableReleaseGateRequest: TeamTableReleaseGate.fromDecision(true),
+  })
+);
 beforeEach(() => {
   officePageEnabled = true;
   draftCookies.clear();
@@ -840,6 +850,53 @@ test("restores the office people from Pay for its author only", async () => {
   expect(
     family.renderForm.mock.calls.at(-1)?.[0].checkoutOfficeSelection
   ).toBeUndefined();
+});
+
+test("starts a clean Team Table booking before an unverified Pay edit can carry its draft into sign-in", async () => {
+  const reservation = normalizedTableReservationOrderSchema.make({
+    kind: "table",
+    seats: 6,
+    startsAt: "2099-06-20T07:00:00Z",
+    endsAt: "2099-06-20T08:00:00Z",
+    name: "Ada Lovelace",
+    email: testEmailAddressForAda,
+    phone: "+420777000111",
+    billing: defaultReservationBillingSelection,
+  });
+  const token = await Effect.runPromise(
+    Effect.gen(function* () {
+      const quote = yield* buildTableReservationQuote(reservation);
+      const state = yield* buildSignedPayState({
+        locale: "en-US",
+        reservation,
+        quote,
+        orderId: "unverified-table-order",
+        bookedAt: payStateBookedAt,
+        holdExpiresAt: instantStringSchema.make("2099-06-01T10:08:00Z"),
+        checkoutSessionId: "table-session",
+      });
+      return yield* sealPayState(state);
+    }).pipe(Effect.provide(TestSealedStateKeys))
+  );
+  const family = {
+    ...createPreloadFreeFamily(),
+    kind: "table" as const,
+    pathname: "/reservation/table" as const,
+  };
+  const definition = createReservationPage(family);
+  const page = await definition.Page({
+    searchParams: Promise.resolve({
+      payState: token,
+      contact: "unverified-contact",
+      step: "contact",
+      seats: "4",
+    }),
+  });
+
+  await expect(renderContent(page)).rejects.toThrow(
+    "redirect to /en-US/reservation/table?seats=4"
+  );
+  expect(family.renderForm).not.toHaveBeenCalled();
 });
 
 describe("the reservation page recipe", () => {

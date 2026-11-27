@@ -722,6 +722,7 @@
   "reservationTableInventoryError": "Veľkosti stolov sa nepodarilo načítať. Skús znova načítať stránku.",
   "reservationTableNoSizes": "Žiadny tímový stôl sa teraz nedá rezervovať.",
   "reservationTableRestoredPastDate": "Pôvodný dátum rezervácie už uplynul. Vyber nový dátum a čas.",
+  "reservationTableRestoredSizeUnavailable": "Pôvodná veľkosť stola už nie je v ponuke. Vyber inú veľkosť.",
   "reservationTablePeopleOverCapacity": "Pri stole nie je miesto pre všetkých. Pred pokračovaním niekoho odober.",
   "reservationTableMetadataDescription": "Rezervuj si v Deskohub Workspace v Prahe celý stôl pre svoju skupinu. Vyber si veľkosť stola a čas po 15 minútach.",
   "landingOfferingTeamTableText": "Rezervuj celý stôl v otvorenom priestore pre svoju skupinu. Vyber veľkosť stola a čas po 15 minútach.",

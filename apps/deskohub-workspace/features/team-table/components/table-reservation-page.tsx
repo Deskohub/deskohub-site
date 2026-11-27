@@ -74,12 +74,17 @@ export const tableReservationPage = createReservationPage({
     });
     if (!booked) return { kind: "ended" };
     const restored = tableSelectionLink.restore(booked, searchParams);
+    const capacities = pageData ?? [];
+    const restoredSize = restored.seats ?? reservation.seats;
+    const selection = getTableBookingSelection(restored, { capacities, today });
     return {
       kind: "restored",
       values: {
-        ...getTableBookingSelection(restored, {
-          capacities: pageData ?? [],
-          today,
+        ...selection,
+        ...(!capacities.includes(restoredSize) && {
+          seats: 0,
+          startTime: "",
+          endTime: "",
         }),
         priorDateUnavailable:
           restored.date !== undefined && restored.date < today,

@@ -44,12 +44,16 @@ export const getTableReservationDurationMinutes = ({
     Temporal.Instant.from(startsAt).epochMilliseconds) /
   60_000;
 
-const isSlotBoundary = (time: Temporal.PlainDateTime) =>
+const isSlotBoundary = (time: Temporal.PlainDateTime | Temporal.PlainTime) =>
   time.minute % tableReservationSlotMinutes === 0 &&
   time.second === 0 &&
   time.millisecond === 0 &&
   time.microsecond === 0 &&
   time.nanosecond === 0;
+
+export const isTableReservationSlotTime = (time: string) =>
+  Option.isSome(decodeTime(time)) &&
+  isSlotBoundary(Temporal.PlainTime.from(time));
 
 export const isTableReservationInterval = (
   interval: ReservationInterval,

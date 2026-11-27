@@ -42,6 +42,7 @@ import { tableSelectionLink } from "@/features/reservation/table-selection-link"
 import {
   getTableAvailabilityQuery,
   getTableSlotsQuery,
+  getWorkspaceAvailabilityRange,
 } from "@/features/reservation/workspace-availability";
 import { tableSlotsQueryOptions } from "@/features/reservation/workspace-availability-client";
 import {
@@ -176,32 +177,39 @@ export function TableReservationForm({
   useReservationSelectionUrl(tableSelectionLink, selection);
 
   const capacityOptions = capacities.map(String);
-  const calendarQuery = getTableAvailabilityQuery({ today, seats });
+  const hasSize = seats > 0;
+  const calendarQuery = hasSize
+    ? getTableAvailabilityQuery({ today, seats })
+    : undefined;
   const calendar = useReservationAvailability(calendarQuery, {
     initialAvailability,
     replacementToken,
   });
   const unavailableDates = new Set(calendar.availability?.unavailableDates);
   const dateUnavailable = unavailableDates.has(date);
-  const slotsQuery = dateUnavailable
-    ? undefined
-    : Option.getOrUndefined(getTableSlotsQuery(selection));
+  const slotsQuery =
+    !hasSize || dateUnavailable
+      ? undefined
+      : Option.getOrUndefined(getTableSlotsQuery(selection));
   const slots = useQuery(
     tableSlotsQueryOptions({ query: slotsQuery, replacementToken })
   );
+  const slotAvailability = slots.isError ? undefined : slots.data;
   const { startTimes, endTimes } = getTableBookingTimes(
-    slots.isError ? undefined : slots.data,
+    slotAvailability,
     selection
   );
   const slotUnavailable =
-    Boolean(slots.data) &&
+    Boolean(slotAvailability) &&
     (startTimes.length === 0 ||
       (startTime !== "" && !startTimes.includes(startTime)) ||
       (endTime !== "" && !endTimes.includes(endTime)));
+  const slotsRetrying = slots.isError && slots.isFetching;
   const isPending =
-    calendar.isPending || Boolean(slotsQuery && slots.isPending);
-  const isError = calendar.isError || slots.isError;
-  const isUnavailable = dateUnavailable || slotUnavailable;
+    calendar.isPending ||
+    Boolean(slotsQuery && (slots.isPending || slotsRetrying));
+  const isError = calendar.isError || (slots.isError && !slotsRetrying);
+  const isUnavailable = !isError && (dateUnavailable || slotUnavailable);
   const availability = getReservationCheckoutAvailability({
     isError,
     isPending,
@@ -210,11 +218,6 @@ export function TableReservationForm({
       ? { date, reservation: { kind: "table" } }
       : undefined,
   });
-  const notice =
-    availability.unavailableMessage ??
-    (priorDateUnavailable && !startTime
-      ? m.reservationTableRestoredPastDate({}, { locale })
-      : undefined);
 
   const request = getTableBookingPriceRequest(selection, {
     locale,
@@ -338,6 +341,16 @@ export function TableReservationForm({
         )}
       />
 
+      {!hasSize && (
+        <p className="text-sm text-navy-blue/72">
+          {m.reservationTableRestoredSizeUnavailable({}, { locale })}
+        </p>
+      )}
+      {priorDateUnavailable && !startTime && (
+        <p className="text-sm text-navy-blue/72">
+          {m.reservationTableRestoredPastDate({}, { locale })}
+        </p>
+      )}
       <div className="grid gap-4 sm:grid-cols-3">
         <FormField
           control={form.control}
@@ -349,9 +362,12 @@ export function TableReservationForm({
               </ReservationFormLabel>
               <ReservationFormDateInput
                 {...field}
+                disabled={!hasSize}
                 label={m.reservationDateLabel({}, { locale })}
                 locale={locale}
-                maximum={calendarQuery.to}
+                maximum={
+                  calendarQuery?.to ?? getWorkspaceAvailabilityRange(today).to
+                }
                 minimum={today}
                 onChange={(value) => {
                   if (value === field.value) return;
@@ -399,26 +415,30 @@ export function TableReservationForm({
           )}
         />
       </div>
-      <p className="text-sm text-navy-blue/72 empty:hidden" role="status">
-        {isPending ? m.reservationAvailabilityLoading({}, { locale }) : notice}
+      <p className="text-sm text-navy-blue/72 empty:sr-only" role="status">
+        {isPending
+          ? m.reservationAvailabilityLoading({}, { locale })
+          : availability.unavailableMessage}
       </p>
-      <FormField
-        control={form.control}
-        name="people"
-        render={({ field, fieldState }) => (
-          <OfficePeopleField
-            contact={email ? { name, email } : undefined}
-            error={fieldState.error?.message}
-            inputRef={field.ref}
-            labelId={peopleLabelId}
-            locale={locale}
-            onChange={field.onChange}
-            people={field.value}
-            seatCapacity={seats}
-          />
-        )}
-      />
-      <div className="empty:hidden" role="status">
+      {hasSize && (
+        <FormField
+          control={form.control}
+          name="people"
+          render={({ field, fieldState }) => (
+            <OfficePeopleField
+              contact={email ? { name, email } : undefined}
+              error={fieldState.error?.message}
+              inputRef={field.ref}
+              labelId={peopleLabelId}
+              locale={locale}
+              onChange={field.onChange}
+              people={field.value}
+              seatCapacity={seats}
+            />
+          )}
+        />
+      )}
+      <div className="empty:sr-only" role="status">
         {selectedPrice && (
           <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 text-navy-blue">
             <dt>{m.invoiceTableBaseLineLabel({}, { locale })}</dt>

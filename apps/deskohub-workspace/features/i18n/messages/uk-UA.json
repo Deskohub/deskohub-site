@@ -722,6 +722,7 @@
   "reservationTableInventoryError": "Не вдалося завантажити розміри столів. Оновіть сторінку, щоб спробувати ще раз.",
   "reservationTableNoSizes": "Зараз немає командних столів, доступних для бронювання.",
   "reservationTableRestoredPastDate": "Попередня дата бронювання вже минула. Виберіть нову дату і час.",
+  "reservationTableRestoredSizeUnavailable": "Попереднього розміру стола більше немає в пропозиції. Виберіть інший розмір.",
   "reservationTablePeopleOverCapacity": "За столом бракує місць. Видаліть когось зі списку, щоб продовжити.",
   "reservationTableMetadataDescription": "Забронюйте командний стіл для своєї групи в Deskohub Workspace у Празі. Виберіть розмір стола й час із кроком 15 хвилин.",
   "landingOfferingTeamTableText": "Забронюйте цілий стіл у відкритому просторі для своєї групи. Виберіть розмір стола й час із кроком 15 хвилин.",
