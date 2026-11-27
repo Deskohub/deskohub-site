@@ -253,7 +253,7 @@ export async function getAnalyticsPreference(
 }
 `;
 
-const fixtureMarketingActionError =
+const fixtureUnavailableActionMessage =
   "Unavailable in account continuity fixture: backend action was not executed.";
 
 const fixtureMarketingActions = `
@@ -263,7 +263,7 @@ type UnavailableActionResult = {
   readonly serverError: string;
 };
 
-const unavailableMessage = "${fixtureMarketingActionError}";
+const unavailableMessage = "${fixtureUnavailableActionMessage}";
 
 export async function saveMarketingPreferencesAction(
   _input: unknown
@@ -377,6 +377,15 @@ export async function loadCustomerAccountPasses() {
 
 export async function loadCustomerAccountUnlimitedPasses() {
   return [];
+}
+`;
+
+// The fixture has no memberships with automatic renewal.
+const fixtureUnlimitedAutoRenewalActions = `
+"use server";
+
+export async function cancelAccountUnlimitedAutoRenewal(_input: unknown) {
+  return { serverError: "${fixtureUnavailableActionMessage}" };
 }
 `;
 
@@ -546,6 +555,8 @@ const writeFixture = async (
         ? 'localePath + "/consent-waypoint"'
         : 'localePath + "/contact"'
     ),
+    "fixture/unlimited-auto-renewal-actions.ts":
+      fixtureUnlimitedAutoRenewalActions,
     "fixture/workspace-effect.ts": fixtureWorkspaceEffect,
     "instrumentation.ts": "export function register() {}",
     "next.config.mjs": nextConfig,
@@ -591,6 +602,9 @@ const writeFixture = async (
         ],
         "@/features/account/account-unlimited-passes.server": [
           "./fixture/account-passes.server.ts",
+        ],
+        "@/features/account/unlimited-auto-renewal-actions": [
+          "./fixture/unlimited-auto-renewal-actions.ts",
         ],
         "@/features/account/backend/customer-authentication.service": [
           "./fixture/customer-authentication.service.ts",
