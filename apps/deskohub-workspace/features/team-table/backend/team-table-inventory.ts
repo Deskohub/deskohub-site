@@ -140,17 +140,20 @@ const makeInventory = Effect.gen(function* () {
             .select({
               row: {
                 id: workspaceReservations.id,
-                dotyposReservationId: workspaceReservations.dotyposReservationId,
+                dotyposReservationId:
+                  workspaceReservations.dotyposReservationId,
                 dotyposCustomerId: workspaceReservations.dotyposCustomerId,
                 reservationDetails: workspaceReservations.reservationDetails,
                 passId: workspaceReservations.passId,
                 serviceDate: workspaceReservations.serviceDate,
                 passDayTableId: workspaceReservations.passDayTableId,
-                passDayHoldGeneration: workspaceReservations.passDayHoldGeneration,
+                passDayHoldGeneration:
+                  workspaceReservations.passDayHoldGeneration,
                 reservationState: workspaceReservations.reservationState,
                 paymentState: workspaceReservations.paymentState,
                 fulfillmentState: workspaceReservations.fulfillmentState,
-                reservationHoldExpiresAt: workspaceReservations.reservationHoldExpiresAt,
+                reservationHoldExpiresAt:
+                  workspaceReservations.reservationHoldExpiresAt,
               },
               claim: {
                 status: passEntryClaims.status,
