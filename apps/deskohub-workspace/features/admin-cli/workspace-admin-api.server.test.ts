@@ -93,6 +93,7 @@ import {
 import { administrationHref } from "@/features/administration/administration-href";
 import { AdministrationCustomerDirectory } from "@/features/administration/customer-directory.service";
 import { UnusedAdministrationCustomerDirectory } from "@/features/administration/customer-directory.test-utils";
+import { loadFixtureReservation } from "@/features/administration/fixtures";
 import {
   ReservationAccessAdministration,
   ReservationAccessAdministrationError,
@@ -814,7 +815,7 @@ describe("Workspace Admin API", () => {
     expect(result).toEqual(batch);
   });
 
-  test("returns the reservation targets of a mixed discount in the v1 dashboard", async () => {
+  test("shows Team Table discount targets to assistants and keeps the released CLI view readable", async () => {
     const id = AdministrationStoredDiscountId.make(
       "01980000-0000-7000-8000-000000000001"
     );
@@ -830,6 +831,7 @@ describe("Workspace Admin API", () => {
               products: [
                 { kind: "entry-pack", tier: "reserved-desk", size: 10 },
                 { kind: "cowork", tier: "reserved-desk" },
+                { kind: "table" },
                 { kind: "unlimited" },
               ],
               codeCount: 0,
@@ -849,12 +851,25 @@ describe("Workspace Admin API", () => {
         }),
     });
 
-    const result = await callAdministrationApi(
+    const assistant = await callAdministrationApi(
+      (client) => client.getDiscountDashboard({}),
+      { discounts, channel: assistantChannel }
+    );
+    const legacyCli = await callAdministrationApi(
       (client) => client.getDiscountDashboard({}),
       { discounts }
     );
 
-    expect(result.discounts).toMatchObject([
+    expect(assistant.discounts).toMatchObject([
+      {
+        id,
+        products: [
+          { kind: "cowork", tier: "reserved-desk" },
+          { kind: "table" },
+        ],
+      },
+    ]);
+    expect(legacyCli.discounts).toMatchObject([
       { id, products: [{ kind: "cowork", tier: "reserved-desk" }] },
     ]);
   });
@@ -957,6 +972,84 @@ describe("Workspace Admin API", () => {
           text.includes("select from workspace reservations")
       )
     ).toBe(true);
+  });
+
+  test("excludes Team Table from reservation pagination only for released CLI clients", async () => {
+    const listInputs: unknown[] = [];
+    const page = {
+      items: [],
+      page: 1,
+      pageCount: 1,
+      total: 0,
+      dateFilterUnavailable: false,
+      dateSortUnavailable: false,
+    };
+    const administration = Layer.mock(AdministrationService, {
+      listReservations: (input) =>
+        Effect.sync(() => {
+          listInputs.push(input);
+          return page;
+        }),
+      loadCustomerReservations: (input) =>
+        Effect.sync(() => {
+          listInputs.push(input);
+          return page;
+        }),
+    });
+    const customerId = AdministrationDotyposCustomerId.make("customer-1");
+    await callAdministrationApi(
+      (client) =>
+        Effect.all([
+          client.listReservations({ query: { page: 2 } }),
+          client.listCustomerReservations({
+            params: { customerId },
+            query: { page: 3 },
+          }),
+        ]),
+      { administration }
+    );
+    await callAdministrationApi(
+      (client) => client.listReservations({ query: { type: "table" } }),
+      { administration, channel: assistantChannel }
+    );
+
+    expect(listInputs).toEqual([
+      { page: 2, excludedType: "table" },
+      { customerId, page: 3, excludedType: "table" },
+      { type: "table" },
+    ]);
+  });
+
+  test("offers a dhw update when a released CLI requests a Team Table detail", async () => {
+    const fixture = loadFixtureReservation("0198-admin-fixture-attention");
+    if (!fixture) throw new Error("Missing reservation fixture");
+    const administration = Layer.mock(AdministrationService, {
+      loadReservation: () =>
+        Effect.succeed({
+          ...fixture,
+          reservation: {
+            ...fixture.reservation,
+            type: "table",
+            typeLabel: "Team Table",
+            product: { kind: "table" },
+          },
+        }),
+    });
+    const params = { reservationId: fixture.reservation.id };
+    const refusal = await callAdministrationApi(
+      (client) => client.getReservation({ params }).pipe(Effect.flip),
+      { administration }
+    );
+    expect(refusal).toBeInstanceOf(CliServiceUnavailable);
+    expect(refusal).toMatchObject({
+      message:
+        "This dhw version cannot read Team Table reservations. Run `dhw update`.",
+    });
+    const detail = await callAdministrationApi(
+      (client) => client.getReservation({ params }),
+      { administration, channel: assistantChannel }
+    );
+    expect(detail.reservation.type).toBe("table");
   });
 
   test("returns invoice creation defaults", async () => {
@@ -1629,6 +1722,41 @@ describe("Workspace Admin API", () => {
       mutation,
       recovery: discountMutationRecovery,
     });
+  });
+
+  test("selects the discount replacement scope the caller supports", async () => {
+    const scopes: unknown[] = [];
+    const discounts = Layer.mock(DiscountAdministration, {
+      updateDiscount: (_input, scope) =>
+        Effect.sync(() => {
+          scopes.push(scope);
+        }),
+    });
+    const payload = {
+      requestId: CliMutationRequestId.make(
+        "01980000-0000-7000-8000-000000000012"
+      ),
+      mutation: {
+        kind: "update-discount",
+        discount: {
+          id: AdministrationStoredDiscountId.make(
+            "01980000-0000-7000-8000-000000000001"
+          ),
+          labels: { "cs-CZ": "Léto", "en-US": "Summer" },
+          adjustment: { kind: "percentage", basisPoints: 1000 },
+          products: [{ kind: "cowork" }],
+        },
+      },
+    } as const;
+
+    for (const channel of [sessionChannel, assistantChannel]) {
+      await callAdministrationApi(
+        (client) => client.mutateDiscounts({ payload }),
+        { discounts, channel }
+      );
+    }
+
+    expect(scopes).toEqual(["reservations-before-team-table", "reservations"]);
   });
 
   test("passes a code update's service dates through and rejects ones the service refuses", async () => {

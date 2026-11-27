@@ -1,4 +1,5 @@
 {
+  "dhwTeamTableHeader": "x-dhw-team-table",
   "dhwVersionHeader": "x-dhw-version",
   "groups": {
     "cli": {
@@ -1346,7 +1347,8 @@
                       "enum": [
                         "cowork",
                         "meeting-room",
-                        "office"
+                        "office",
+                        "table"
                       ]
                     },
                     {
@@ -1462,7 +1464,8 @@
                 "enum": [
                   "cowork",
                   "meeting-room",
-                  "office"
+                  "office",
+                  "table"
                 ]
               },
               "required": false
@@ -1585,7 +1588,8 @@
                               "enum": [
                                 "cowork",
                                 "meeting-room",
-                                "office"
+                                "office",
+                                "table"
                               ]
                             },
                             "typeLabel": {
@@ -2530,7 +2534,8 @@
                             "enum": [
                               "cowork",
                               "meeting-room",
-                              "office"
+                              "office",
+                              "table"
                             ]
                           },
                           "typeLabel": {
@@ -3915,7 +3920,8 @@
                               "enum": [
                                 "cowork",
                                 "meeting-room",
-                                "office"
+                                "office",
+                                "table"
                               ]
                             },
                             "typeLabel": {
@@ -4343,7 +4349,8 @@
                               "enum": [
                                 "cowork",
                                 "meeting-room",
-                                "office"
+                                "office",
+                                "table"
                               ]
                             },
                             "typeLabel": {
@@ -10190,7 +10197,8 @@
                                   "enum": [
                                     "cowork",
                                     "meeting-room",
-                                    "office"
+                                    "office",
+                                    "table"
                                   ]
                                 },
                                 "typeLabel": {
@@ -11313,7 +11321,8 @@
                               "enum": [
                                 "cowork",
                                 "meeting-room",
-                                "office"
+                                "office",
+                                "table"
                               ]
                             },
                             "typeLabel": {
@@ -11940,6 +11949,21 @@
                                         "type": "string",
                                         "enum": [
                                           "office"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "kind"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "table"
                                         ]
                                       }
                                     },
@@ -17880,6 +17904,21 @@
                                             "kind"
                                           ],
                                           "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "table"
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "kind"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       ]
                                     }
@@ -17938,6 +17977,21 @@
                                             "type": "string",
                                             "enum": [
                                               "office"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "kind"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "table"
                                             ]
                                           }
                                         },
@@ -18153,6 +18207,21 @@
                                             "kind"
                                           ],
                                           "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "table"
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "kind"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       ]
                                     }
@@ -18211,6 +18280,21 @@
                                             "type": "string",
                                             "enum": [
                                               "office"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "kind"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "table"
                                             ]
                                           }
                                         },
@@ -18575,6 +18659,21 @@
                                                     "kind"
                                                   ],
                                                   "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "table"
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind"
+                                                  ],
+                                                  "additionalProperties": false
                                                 }
                                               ]
                                             }
@@ -18633,6 +18732,21 @@
                                                     "type": "string",
                                                     "enum": [
                                                       "office"
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind"
+                                                ],
+                                                "additionalProperties": false
+                                              },
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "kind": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "table"
                                                     ]
                                                   }
                                                 },
@@ -18990,6 +19104,21 @@
                                                     "kind"
                                                   ],
                                                   "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "table"
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind"
+                                                  ],
+                                                  "additionalProperties": false
                                                 }
                                               ]
                                             }
@@ -19048,6 +19177,21 @@
                                                     "type": "string",
                                                     "enum": [
                                                       "office"
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind"
+                                                ],
+                                                "additionalProperties": false
+                                              },
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "kind": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "table"
                                                     ]
                                                   }
                                                 },
@@ -28052,12 +28196,12 @@
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
-                          "skipped": {
+                          "unavailable": {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
-                          "unavailable": {
+                          "skipped": {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991

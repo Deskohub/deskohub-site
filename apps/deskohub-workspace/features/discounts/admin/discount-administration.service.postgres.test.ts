@@ -147,7 +147,7 @@ describe.skipIf(!testDatabase)(
     const uniqueSuffix = () =>
       crypto.randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase();
 
-    test("a v1 discount update preserves pass targets while the Workspace form can replace them", async () => {
+    test("discount updates replace only the targets supported by the caller", async () => {
       const label = `Synthetic mixed discount ${uniqueSuffix()}`;
       labels.push(label);
 
@@ -164,7 +164,7 @@ describe.skipIf(!testDatabase)(
           } satisfies WorkspaceProductTarget;
           const id = yield* administration.createDiscount({
             ...definition,
-            products: [{ kind: "office" }, passTarget],
+            products: [{ kind: "office" }, { kind: "table" }, passTarget],
           });
           const readTargets = () =>
             administration
@@ -177,6 +177,11 @@ describe.skipIf(!testDatabase)(
               );
           yield* administration.updateDiscount(
             { id, ...definition, products: [{ kind: "meeting-room" }] },
+            "reservations-before-team-table"
+          );
+          const afterLegacy = yield* readTargets();
+          yield* administration.updateDiscount(
+            { id, ...definition, products: [{ kind: "office" }] },
             "reservations"
           );
           const afterV1 = yield* readTargets();
@@ -185,13 +190,27 @@ describe.skipIf(!testDatabase)(
             ...definition,
             products: [{ kind: "cowork" }],
           });
-          return { afterV1, afterWorkspaceForm: yield* readTargets() };
+          return {
+            afterLegacy,
+            afterV1,
+            afterWorkspaceForm: yield* readTargets(),
+          };
         })
       );
 
       if (result._tag === "Failure") throw result.failure;
+      expect(result.success.afterLegacy).toHaveLength(3);
+      expect(result.success.afterLegacy).toContainEqual({ kind: "table" });
+      expect(result.success.afterLegacy).toContainEqual({
+        kind: "meeting-room",
+      });
+      expect(result.success.afterLegacy).toContainEqual({
+        kind: "entry-pack",
+        tier: "open-space",
+        size: 10,
+      });
       expect(result.success.afterV1).toHaveLength(2);
-      expect(result.success.afterV1).toContainEqual({ kind: "meeting-room" });
+      expect(result.success.afterV1).toContainEqual({ kind: "office" });
       expect(result.success.afterV1).toContainEqual({
         kind: "entry-pack",
         tier: "open-space",

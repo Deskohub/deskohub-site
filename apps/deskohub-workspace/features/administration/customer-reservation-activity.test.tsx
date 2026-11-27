@@ -21,6 +21,7 @@ const activity = {
   dates: [
     { category: "meeting-room", count: 1, date: "2026-02-03" },
     { category: "office", count: 4, date: "2026-02-10" },
+    { category: "table", count: 1, date: "2026-02-11" },
   ],
 } as const;
 
@@ -39,7 +40,7 @@ describe("CustomerReservationActivity", () => {
     expect(
       view.getByRole("heading", { name: "Aktivita rezervací" })
     ).toBeDefined();
-    expect(view.getByText("5 rezervací za posledních 365 dní")).toBeDefined();
+    expect(view.getByText("6 rezervací za posledních 365 dní")).toBeDefined();
     expect(
       view.getByText(
         `${formatAdministrationPlainDate("2026-02-10", "cs-CZ")}: 4 rezervace`
@@ -51,6 +52,7 @@ describe("CustomerReservationActivity", () => {
     expect(
       view.getByText(m.reservationTierMeetingRoomTitle({}, { locale: "cs-CZ" }))
     ).toBeDefined();
+    expect(view.getByText("Týmový stůl")).toBeDefined();
     expect(view.getByText("po")).toBeDefined();
     expect(view.getByText("úno")).toBeDefined();
   });
