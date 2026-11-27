@@ -305,7 +305,7 @@ export function PassPurchaseSummaryItem({
   value,
 }: {
   readonly label: string;
-  readonly value: string;
+  readonly value: ReactNode;
 }) {
   return (
     <div>
