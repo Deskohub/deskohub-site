@@ -1,15 +1,19 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
-import { cache, Suspense } from "react";
-import { loadCustomerAccountPasses } from "@/features/account/account-passes.server";
-import { loadCustomerAccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
+import { Suspense } from "react";
+import { loadAccountPassSection } from "@/features/account/account-pass-section.server";
 import { AccountContentLoading } from "@/features/account/components/account-loading";
 import { AccountPage } from "@/features/account/components/account-page";
+import { AccountSignInRedirect } from "@/features/account/components/account-sign-in-redirect";
+import { AccountUnlimitedRenewalUnavailable } from "@/features/account/components/account-unlimited-pass";
 import { loadCustomerInvoiceHistory } from "@/features/account/invoice-history.server";
 import { loadCustomerAccountPage } from "@/features/account/page-data.server";
 import { getAccountPageTitle } from "@/features/account/page-title";
-import { findAccountSectionOfPathname } from "@/features/account/routes";
+import {
+  findAccountSectionOfPathname,
+  getAccountSectionPath,
+} from "@/features/account/routes";
 import {
   isAccountPageSection,
   isAccountSectionReleased,
@@ -67,7 +71,20 @@ async function AccountSectionsContent({ locale }: { readonly locale: Locale }) {
     loadCustomerAccountPage(),
     loadAccountPassSection(locale, purchasesEnabled),
   ]);
-  if (section === "passes" && !loadPasses) notFound();
+  if (section === "passes") {
+    if (state.kind === "unauthenticated") {
+      return (
+        <AccountSignInRedirect
+          locale={locale}
+          returnTo={getAccountSectionPath(locale, "passes")}
+        />
+      );
+    }
+    if (state.kind === "unavailable") {
+      return <AccountUnlimitedRenewalUnavailable locale={locale} />;
+    }
+    if (!loadPasses) notFound();
+  }
 
   return (
     <AccountPage
@@ -108,11 +125,14 @@ async function AccountSectionPathCheckContent({
   const name = await section;
   const purchasesEnabled = await checkAccountSectionRelease(name);
   if (name === "passes" && !purchasesEnabled) {
-    const { loadPasses } = await loadAccountPassSection(
-      await getRequestLocale(),
-      false
-    );
-    if (!loadPasses) notFound();
+    const state = await loadCustomerAccountPage();
+    if (state.kind !== "unauthenticated" && state.kind !== "unavailable") {
+      const { loadPasses } = await loadAccountPassSection(
+        await getRequestLocale(),
+        false
+      );
+      if (!loadPasses) notFound();
+    }
   }
 
   return null;
@@ -136,39 +156,3 @@ async function checkAccountSectionRelease(section: string | undefined) {
   }
   return passesEnabled;
 }
-
-const loadAccountPassSection = cache(
-  async (locale: Locale, purchasesEnabled: boolean) => {
-    const loadPasses = () => loadCustomerAccountPasses(locale);
-    if (purchasesEnabled) {
-      return {
-        loadPasses,
-        unlimitedPasses: await loadCustomerAccountUnlimitedPasses(locale),
-      };
-    }
-
-    const state = await loadCustomerAccountPage();
-    if (
-      state.kind === "unauthenticated" ||
-      state.kind === "unavailable" ||
-      state.kind === "deletion-pending"
-    ) {
-      return { unlimitedPasses: [] };
-    }
-
-    const [packs, unlimitedPasses] = await Promise.all([
-      loadPasses(),
-      loadCustomerAccountUnlimitedPasses(locale),
-    ]);
-    if (
-      unlimitedPasses === "unavailable" ||
-      unlimitedPasses.length > 0 ||
-      packs === "unavailable" ||
-      packs.held.length > 0 ||
-      packs.boughtForOthers.length > 0
-    ) {
-      return { loadPasses, unlimitedPasses };
-    }
-    return { unlimitedPasses };
-  }
-);

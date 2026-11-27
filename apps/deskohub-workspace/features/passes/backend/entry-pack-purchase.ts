@@ -327,9 +327,14 @@ export const beginEntryPackPurchase = Effect.fn("beginEntryPackPurchase")(
   }
 );
 
-export const getEntryPackPaymentDisclosure = (locale: Locale) => ({
+export const getEntryPackPaymentDisclosure = (
+  locale: Locale,
+  earlyStartRequired = true
+) => ({
   documents: getPaymentSubmitLegalDocuments(locale),
-  earlyStartRequest: m.passEarlyStartConsent({}, { locale }),
+  ...(earlyStartRequired && {
+    earlyStartRequest: m.passEarlyStartConsent({}, { locale }),
+  }),
 });
 
 const readOwnedPurchaseOrder = Effect.fn("readOwnedEntryPackPurchaseOrder")(
@@ -669,7 +674,7 @@ const prepareEntryPackPaymentConsent = Effect.fn(
     return yield* new EntryPackPurchaseError({
       reason: "terms-changed",
       locale: locale,
-      ...(productKind === "unlimited" && { earlyStartRequired }),
+      earlyStartRequired,
       ...(renewal && { renewal }),
     });
   }

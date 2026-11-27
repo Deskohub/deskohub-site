@@ -312,7 +312,10 @@ async function EntryPackPageContent({
                 lastUsableDate: getEntryPackLastUsableDate(
                   draft.validUntil
                 ).toString(),
-                disclosure: getEntryPackPaymentDisclosure(draft.locale),
+                disclosure: getEntryPackPaymentDisclosure(
+                  draft.locale,
+                  draft.billing.purpose === "personal"
+                ),
                 ...(draft.kind === "retry" && {
                   priorPaymentAttemptId: draft.priorPaymentAttemptId,
                 }),

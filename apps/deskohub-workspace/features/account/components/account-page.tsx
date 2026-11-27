@@ -75,7 +75,7 @@ export function AccountPage({
           state,
           locale,
           unlimitedPasses,
-          entryPacks
+          passPurchasesEnabled ? entryPacks : undefined
         )}
       />
     </>

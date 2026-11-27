@@ -241,7 +241,10 @@ const purchaseFailure = <A, E, R>(
                 status: "terms_changed" as const,
                 disclosure:
                   product === "entry-pack"
-                    ? getEntryPackPaymentDisclosure(locale)
+                    ? getEntryPackPaymentDisclosure(
+                        locale,
+                        earlyStartRequired ?? false
+                      )
                     : getUnlimitedPassPaymentDisclosure(
                         locale,
                         earlyStartRequired ?? false,

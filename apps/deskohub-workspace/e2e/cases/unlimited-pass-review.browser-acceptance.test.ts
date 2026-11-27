@@ -330,6 +330,10 @@ test.skipIf(!chromiumAvailable)(
       });
       await review.captureWorkspace(page, "choose-renewal");
       await review.captureWorkspace(page, "pay-unchecked");
+      const discountCode = page.getByRole("textbox", { name: "Discount code" });
+      await discountCode.fill("synthetic discount code");
+      await discountCode.blur();
+      await review.captureWorkspace(page, "pay-accepted");
       expect(review.missingShots()).not.toContainEqual(
         expect.objectContaining({ shot: "choose-renewal" })
       );
@@ -343,6 +347,13 @@ test.skipIf(!chromiumAvailable)(
         );
         const pay = sharp(
           join(directory, `unlimited-cs-CZ-pay-unchecked-${width}.png`)
+        );
+        const filledPay = sharp(
+          join(directory, `unlimited-cs-CZ-pay-accepted-${width}.png`)
+        );
+        const discountField = { left: 43, top: 84, width: 135, height: 24 };
+        expect(await filledPay.extract(discountField).raw().toBuffer()).toEqual(
+          await pay.clone().extract(discountField).raw().toBuffer()
         );
         const pixel = (
           png: ReturnType<typeof sharp>,

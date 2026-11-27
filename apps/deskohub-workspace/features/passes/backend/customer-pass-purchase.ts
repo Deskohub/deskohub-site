@@ -4,11 +4,13 @@ import { Effect, Option, Schema } from "effect";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import type { CustomerAccountSession } from "@/features/account/backend/customer-authentication.service";
 import type { CustomerProfileSave } from "@/features/account/contracts";
+import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import type { CanonicalPromotionCode } from "@/features/discounts/contracts";
 import { normalizeSubmittedPromotionCode } from "@/features/discounts/promotion-code";
 import type { Locale } from "@/features/i18n";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { findOrderKind } from "@/features/order/backend/order-kind";
+import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { currentInstant, type PlainDate } from "@/shared/utils/temporal";
@@ -69,14 +71,18 @@ const readPaymentDisclosure = Effect.fn("passes.readPaymentDisclosure")(
   function* (
     product: PassPurchaseProduct["kind"],
     locale: Locale,
-    validFrom: PlainDate
+    validFrom: PlainDate,
+    purpose: ReservationBillingSelection["purpose"] = "personal"
   ) {
-    if (product === "entry-pack") return getEntryPackPaymentDisclosure(locale);
+    if (product === "entry-pack") {
+      return getEntryPackPaymentDisclosure(locale, purpose === "personal");
+    }
     return getUnlimitedPassPaymentDisclosure(
       locale,
       unlimitedPassRequiresEarlyStart(
         validFrom,
-        getCurrentWorkspaceDate(yield* currentInstant)
+        getCurrentWorkspaceDate(yield* currentInstant),
+        purpose
       )
     );
   }
@@ -364,7 +370,10 @@ export const payPurchase = Effect.fn("passes.payPurchase")(
               status: "terms_changed" as const,
               disclosure:
                 input.productKind === "entry-pack"
-                  ? getEntryPackPaymentDisclosure(error.locale)
+                  ? getEntryPackPaymentDisclosure(
+                      error.locale,
+                      error.earlyStartRequired ?? false
+                    )
                   : getUnlimitedPassPaymentDisclosure(
                       error.locale,
                       error.earlyStartRequired ?? false
@@ -403,6 +412,14 @@ export const purchaseStatus = Effect.fn("passes.purchaseStatus")(function* (
       status: "checking" as const,
     };
   }
+  const documents = yield* AccountingDocumentSnapshots;
+  const snapshot = yield* documents.findPassPurchase(
+    result.priorPaymentAttemptId
+  );
+  if (!snapshot) {
+    const { priorPaymentAttemptId: _, ...status } = result;
+    return status;
+  }
   const { purchase } = current;
   const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
     purchase.quote
@@ -413,7 +430,8 @@ export const purchaseStatus = Effect.fn("passes.purchaseStatus")(function* (
     disclosure: yield* readPaymentDisclosure(
       product,
       purchase.locale,
-      purchase.validFrom
+      purchase.validFrom,
+      snapshot.billing.purpose
     ),
   };
 });

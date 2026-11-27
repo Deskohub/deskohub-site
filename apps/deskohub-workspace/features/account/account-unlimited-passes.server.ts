@@ -73,12 +73,9 @@ export const loadAccountUnlimitedPasses = Effect.fn(
 )(function* (locale: Locale) {
   const account = yield* CurrentCustomerAccount;
   const standing = yield* account.peek;
-  if (
-    (standing.kind !== "linked" && standing.kind !== "unlinked") ||
-    standing.reviewMarker !== "absent"
-  ) {
-    return [];
-  }
+  if (standing.kind === "unavailable") return "unavailable" as const;
+  if (standing.kind !== "linked" && standing.kind !== "unlinked") return [];
+  if (standing.reviewMarker === "unreadable") return "unavailable" as const;
 
   const { accountId, verifiedSignInAt } = standing.session;
   yield* recoverEntryPackGiftClaims(accountId, verifiedSignInAt);

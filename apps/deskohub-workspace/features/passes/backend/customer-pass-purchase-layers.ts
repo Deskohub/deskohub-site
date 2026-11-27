@@ -44,6 +44,15 @@ const availability = Layer.mergeAll(
 
 const begin = Layer.mergeAll(buyerCheckout, availability);
 
+const accountingSnapshots = AccountingDocumentSnapshots.Default.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      WorkspaceDatabase.Default,
+      AccountingSnapshotKeyService.Default
+    )
+  )
+);
+
 /** Purchase dependencies that use the authentication supplied by the caller. */
 export const customerPassPurchaseLayers = {
   begin,
@@ -52,14 +61,7 @@ export const customerPassPurchaseLayers = {
   availability,
   payment: Layer.mergeAll(
     buyerCheckout,
-    AccountingDocumentSnapshots.Default.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          WorkspaceDatabase.Default,
-          AccountingSnapshotKeyService.Default
-        )
-      )
-    ),
+    accountingSnapshots,
     OrderPaymentHandlers.Live,
     LatePaymentVerificationService.Live,
     LegalEvidenceEventRepository.Live,
@@ -69,6 +71,7 @@ export const customerPassPurchaseLayers = {
   ),
   status: Layer.mergeAll(
     WorkspaceDatabase.Default,
+    accountingSnapshots,
     WorkspaceFeatureFlagService.Default,
     ProviderPaymentFinalizationService.Live,
     LatePaymentVerificationService.Live

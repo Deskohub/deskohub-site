@@ -613,14 +613,15 @@ export function makeUnlimitedPassReviewCapture({
         ],
         // Full-page captures include the offscreen skip link and place a fixed
         // header at the current viewport offset. Keep the header at the top of
-        // the chooser, and redact any typed code without painting its field.
+        // the page, and redact any typed code without painting its field.
         style: `
           a[href="#main-content"]:not(:focus-visible) { visibility: hidden; }
           input[name="discountCode"] {
+            color: transparent;
             -webkit-text-fill-color: transparent;
             caret-color: transparent;
           }
-          ${shot === "choose-renewal" ? "header.fixed { position: absolute; }" : ""}
+          header.fixed { position: absolute; }
         `,
         ...(shot === "terms" && {
           section: page
