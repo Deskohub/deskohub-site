@@ -3,10 +3,7 @@ import { DotyposUncertain } from "@deskohub/dotypos";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Cause, Effect } from "effect";
 import { SqlError } from "effect/sql";
-import {
-  type CustomerAccountAccessError,
-  customerAccountIdSchema,
-} from "../customer-account";
+import { customerAccountIdSchema } from "../customer-account";
 import { CustomerAccountSections } from "./customer-account-sections";
 import {
   sectionAccountId as accountId,
@@ -122,7 +119,7 @@ const expectUnavailable = (
 ) => {
   expect(outcome._tag).toBe("Failure");
   if (outcome._tag === "Failure") {
-    const error = outcome.failure as CustomerAccountAccessError;
+    const error = outcome.failure;
     expect(error.reason).toBe("unavailable");
     expect(error.cause?.code).toBe(code);
     expect(JSON.stringify(error)).not.toContain("synthetic");
@@ -169,7 +166,7 @@ const expectAccessError = async (
 ) => {
   expect(outcome._tag).toBe("Failure");
   if (outcome._tag === "Failure") {
-    const error = outcome.failure as CustomerAccountAccessError;
+    const error = outcome.failure;
     expect(error.reason).toBe(reason);
     expect(error.linkReason).toBe(linkReason);
   }

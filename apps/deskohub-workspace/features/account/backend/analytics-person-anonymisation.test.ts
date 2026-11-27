@@ -168,7 +168,7 @@ const makeAnonymisation = ({
 
 /** Runs the work scheduled after the response, as Next does once it is sent. */
 const sendResponse = async () => {
-  const scheduled = request.after.mock.calls as [() => unknown][];
+  const scheduled = request.after.mock.calls;
   for (const [callback] of scheduled) await callback();
 };
 

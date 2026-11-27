@@ -354,12 +354,9 @@ const makeLayer = (namespace: Option.Option<string>) =>
   );
 
 const runWith = <A, E>(
-  effect: Effect.Effect<A, E, never>,
+  effect: Effect.Effect<A, E, CustomerAvatarService>,
   namespace: Option.Option<string> = Option.some("avatars/test")
-) =>
-  Effect.runPromise(
-    Effect.provide(effect, makeLayer(namespace)) as Effect.Effect<A, E>
-  );
+) => Effect.runPromise(Effect.provide(effect, makeLayer(namespace)));
 
 const pngBytes = (width: number, height: number) =>
   sharp({
@@ -482,7 +479,8 @@ const retainStaging = async () => {
       avatars.upload(accountId, uploadInput(bytes)).pipe(Effect.result)
     )
   );
-  const stagedId = [...storedAssets][0]!;
+  const [stagedId] = storedAssets;
+  if (stagedId === undefined) throw new Error("Expected a staged avatar");
   expect(stagedId.startsWith("avatars/test-staging/acct-avatar-1/")).toBe(true);
   clearCalls();
   return stagedId;
@@ -507,13 +505,11 @@ describe("CustomerAvatarService", () => {
       "upload",
       "rename",
     ]);
-    const search = calls[1]!;
-    const upload = calls[2]!;
-    const rename = calls[3]!;
+    const [, search, upload, rename] = calls;
     if (
-      search.op === "search" &&
-      upload.op === "upload" &&
-      rename.op === "rename"
+      search?.op === "search" &&
+      upload?.op === "upload" &&
+      rename?.op === "rename"
     ) {
       expect(search.folder).toBe("avatars/test-staging/acct-avatar-1");
       expect(upload.folder).toBe("avatars/test-staging/acct-avatar-1");
@@ -528,7 +524,7 @@ describe("CustomerAvatarService", () => {
       ),
       version: 99,
     });
-    expect((outcome as { url: string }).url).toContain("v99/");
+    expect(outcome.url).toContain("v99/");
   });
 
   test("normalizes the upload to bounded metadata-free WebP before staging", async () => {
@@ -737,7 +733,7 @@ describe("CustomerAvatarService", () => {
     // staging, two ambiguous rename attempts are followed by reconciliation.
     expect(ops).toEqual(["get", "search", "upload", "rename", "rename", "get"]);
     expect(storedAssets.size).toBe(1);
-    expect([...storedAssets][0]!.startsWith("avatars/test-staging/")).toBe(
+    expect([...storedAssets][0]?.startsWith("avatars/test-staging/")).toBe(
       true
     );
   });
@@ -785,7 +781,7 @@ describe("CustomerAvatarService", () => {
       (call): call is Extract<CloudinaryCall, { op: "destroy" }> =>
         call.op === "destroy"
     );
-    expect(destroys[0]!.publicId).toBe("avatars/test/acct-avatar-1");
+    expect(destroys[0]?.publicId).toBe("avatars/test/acct-avatar-1");
     expect(calls[1]).toEqual({
       op: "delete-prefix",
       prefix: "avatars/test-staging/acct-avatar-1/",

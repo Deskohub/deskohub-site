@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Logger } from "effect";
+import { Effect, Logger, Schema } from "effect";
 import { RequestHeadersError } from "@/shared/backend/utils/request-headers";
-import type { CustomerAccountAccessError } from "../customer-account";
 import {
   CustomerAuthentication,
   type CustomerAuthenticationEnvironment,
@@ -62,10 +62,10 @@ describe("CustomerAuthentication session adapter", () => {
     expect(outcome._tag).toBe("Success");
     if (outcome._tag === "Success") {
       const session = outcome.success;
-      expect(session).not.toBeNull();
-      expect(session!.accountId).toBe("auth-user-1");
-      expect(session!.email).toBe(customerEmail);
-      expect(session!.deletionRequested).toBe(false);
+      assert(session);
+      expect(session.accountId).toBe("auth-user-1");
+      expect(session.email).toBe(customerEmail);
+      expect(session.deletionRequested).toBe(false);
     }
   });
 
@@ -76,8 +76,9 @@ describe("CustomerAuthentication session adapter", () => {
 
     expect(outcome._tag).toBe("Success");
     if (outcome._tag === "Success") {
-      expect(outcome.success!.deletionRequested).toBe(true);
-      expect(Object.keys(outcome.success!).sort()).toEqual([
+      assert(outcome.success);
+      expect(outcome.success.deletionRequested).toBe(true);
+      expect(Object.keys(outcome.success).sort()).toEqual([
         "accountCreatedAt",
         "accountId",
         "accountUpdatedAt",
@@ -99,14 +100,13 @@ describe("CustomerAuthentication session adapter", () => {
 
     expect(outcome._tag).toBe("Success");
     if (outcome._tag === "Success") {
-      expect(outcome.success!.displayName).toBe("Ada Lovelace");
-      expect(outcome.success!.accountCreatedAt).toBeInstanceOf(
-        Temporal.Instant
-      );
-      expect(outcome.success!.accountCreatedAt.toString()).toBe(
+      assert(outcome.success);
+      expect(outcome.success.displayName).toBe("Ada Lovelace");
+      expect(outcome.success.accountCreatedAt).toBeInstanceOf(Temporal.Instant);
+      expect(outcome.success.accountCreatedAt.toString()).toBe(
         "2026-01-05T09:00:00Z"
       );
-      expect(outcome.success!.accountUpdatedAt.toString()).toBe(
+      expect(outcome.success.accountUpdatedAt.toString()).toBe(
         "2026-03-07T10:30:00.25Z"
       );
     }
@@ -117,7 +117,8 @@ describe("CustomerAuthentication session adapter", () => {
 
     expect(outcome._tag).toBe("Success");
     if (outcome._tag === "Success") {
-      expect(outcome.success!.displayName).toBe(" Ada ");
+      assert(outcome.success);
+      expect(outcome.success.displayName).toBe(" Ada ");
     }
   });
 
@@ -131,7 +132,7 @@ describe("CustomerAuthentication session adapter", () => {
 
       expect(outcome._tag).toBe("Failure");
       if (outcome._tag === "Failure") {
-        const error = outcome.failure as CustomerAccountAccessError;
+        const error = outcome.failure;
         expect(error.reason).toBe("unavailable");
         expect(error.cause?.code).toBe("authentication.session");
       }
@@ -144,7 +145,8 @@ describe("CustomerAuthentication session adapter", () => {
 
       expect(outcome._tag).toBe("Success");
       if (outcome._tag === "Success") {
-        expect(outcome.success!.displayName).toBeNull();
+        assert(outcome.success);
+        expect(outcome.success.displayName).toBeNull();
       }
     }
   });
@@ -155,7 +157,8 @@ describe("CustomerAuthentication session adapter", () => {
 
       expect(outcome._tag).toBe("Success");
       if (outcome._tag === "Success") {
-        expect(outcome.success!.localePreference).toBe(locale);
+        assert(outcome.success);
+        expect(outcome.success.localePreference).toBe(locale);
       }
     }
   });
@@ -166,8 +169,9 @@ describe("CustomerAuthentication session adapter", () => {
 
       expect(outcome._tag).toBe("Success");
       if (outcome._tag === "Success") {
-        expect(outcome.success!.localePreference).toBeUndefined();
-        expect(Object.keys(outcome.success!)).not.toContain("localePreference");
+        assert(outcome.success);
+        expect(outcome.success.localePreference).toBeUndefined();
+        expect(Object.keys(outcome.success)).not.toContain("localePreference");
       }
     }
   });
@@ -177,7 +181,7 @@ describe("CustomerAuthentication session adapter", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as { reason?: string };
+      const error = outcome.failure;
       expect(error.reason).toBe("unverified-email");
     }
   });
@@ -186,17 +190,13 @@ describe("CustomerAuthentication session adapter", () => {
     const blankId = await runDecode(sessionFor({ id: "   " }));
     expect(blankId._tag).toBe("Failure");
     if (blankId._tag === "Failure") {
-      expect((blankId.failure as { reason?: string }).reason).toBe(
-        "unauthenticated"
-      );
+      expect(blankId.failure.reason).toBe("unauthenticated");
     }
 
     const invalidEmail = await runDecode(sessionFor({ email: "not-an-email" }));
     expect(invalidEmail._tag).toBe("Failure");
     if (invalidEmail._tag === "Failure") {
-      expect((invalidEmail.failure as { reason?: string }).reason).toBe(
-        "unauthenticated"
-      );
+      expect(invalidEmail.failure.reason).toBe("unauthenticated");
     }
   });
 });
@@ -220,23 +220,25 @@ const runCurrentUser = (environment: CustomerAuthenticationEnvironment) =>
  * The exact annotation shape the fail-closed warning emits — the concrete
  * owner of every key the phase assertions read.
  */
-type CapturedFailureWarningAnnotations = {
-  readonly diagnostic?: string;
-  readonly stage?: string;
-  readonly category?: string;
-  readonly nextCode?: string;
-};
+const CapturedFailureWarningAnnotations = Schema.Struct({
+  diagnostic: Schema.optionalKey(Schema.String),
+  stage: Schema.optionalKey(Schema.String),
+  category: Schema.optionalKey(Schema.String),
+  nextCode: Schema.optionalKey(Schema.String),
+});
 
 const capturedWarnings: {
   readonly message: string;
-  readonly annotations: CapturedFailureWarningAnnotations;
+  readonly annotations: typeof CapturedFailureWarningAnnotations.Type;
 }[] = [];
 
 const capturingLogger = Logger.make((options) => {
   const [message, annotations] = Array.isArray(options.message)
     ? [
         String(options.message[0]),
-        (options.message[1] ?? {}) as CapturedFailureWarningAnnotations,
+        Schema.decodeUnknownSync(CapturedFailureWarningAnnotations)(
+          options.message[1] ?? {}
+        ),
       ]
     : [String(options.message), {}];
   capturedWarnings.push({ message, annotations });
@@ -279,7 +281,7 @@ describe("CustomerAuthentication environment classification", () => {
     });
     expect(absent._tag).toBe("Failure");
     if (absent._tag === "Failure") {
-      const error = absent.failure as CustomerAccountAccessError;
+      const error = absent.failure;
       expect(error.reason).toBe("not-configured");
     }
 
@@ -289,7 +291,7 @@ describe("CustomerAuthentication environment classification", () => {
     });
     expect(blank._tag).toBe("Failure");
     if (blank._tag === "Failure") {
-      const error = blank.failure as CustomerAccountAccessError;
+      const error = blank.failure;
       expect(error.reason).toBe("not-configured");
     }
 
@@ -308,7 +310,7 @@ describe("CustomerAuthentication environment classification", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.reason).toBe("unavailable");
       expect(error.cause?.code).toBe("authentication.session");
     }
@@ -366,7 +368,7 @@ describe("CustomerAuthentication session-read failure diagnostics", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.reason).toBe("unavailable");
       expect(error.cause?.code).toBe("authentication.session");
       expect(error.diagnostic).toBe("authentication.session.rate-limited");
@@ -384,7 +386,7 @@ describe("CustomerAuthentication session-read failure diagnostics", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.reason).toBe("unavailable");
       expect(error.cause?.code).toBe("authentication.session");
       expect(error.diagnostic).toBe("authentication.session.api-error");
@@ -399,7 +401,7 @@ describe("CustomerAuthentication session-read failure diagnostics", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.reason).toBe("unavailable");
       expect(error.cause?.code).toBe("authentication.session");
       expect(error.diagnostic).toBe("authentication.session.request-context");
@@ -413,7 +415,7 @@ describe("CustomerAuthentication session-read failure diagnostics", () => {
     );
     expect(byMessage._tag).toBe("Failure");
     if (byMessage._tag === "Failure") {
-      expect((byMessage.failure as CustomerAccountAccessError).diagnostic).toBe(
+      expect(byMessage.failure.diagnostic).toBe(
         "authentication.session.request-context"
       );
     }
@@ -426,7 +428,7 @@ describe("CustomerAuthentication session-read failure diagnostics", () => {
     const byCode = await runRejectedSessionRead(coded);
     expect(byCode._tag).toBe("Failure");
     if (byCode._tag === "Failure") {
-      expect((byCode.failure as CustomerAccountAccessError).diagnostic).toBe(
+      expect(byCode.failure.diagnostic).toBe(
         "authentication.session.request-context"
       );
     }
@@ -439,7 +441,7 @@ describe("CustomerAuthentication session-read failure diagnostics", () => {
     );
     expect(bare._tag).toBe("Failure");
     if (bare._tag === "Failure") {
-      expect((bare.failure as CustomerAccountAccessError).diagnostic).toBe(
+      expect(bare.failure.diagnostic).toBe(
         "authentication.session.unclassified"
       );
     }
@@ -452,7 +454,7 @@ describe("CustomerAuthentication session-read failure diagnostics", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.reason).toBe("unavailable");
       expect(error.cause?.code).toBe("authentication.session");
       expect(error.diagnostic).toBe("authentication.session.unclassified");
@@ -495,7 +497,11 @@ describe("CustomerAuthentication authority-read phase diagnostics", () => {
     });
   };
 
-  const lastWarning = () => capturedWarnings.at(-1)!;
+  const lastWarning = () => {
+    const warning = capturedWarnings.at(-1);
+    assert(warning, "Expected a session read warning");
+    return warning;
+  };
 
   test("reads the phases in the original order: auth-import, request-headers, get-session", async () => {
     capturedWarnings.length = 0;
@@ -540,16 +546,16 @@ describe("CustomerAuthentication authority-read phase diagnostics", () => {
     expect(Object.isFrozen(frozen)).toBe(true);
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.reason).toBe("unavailable");
       expect(error.diagnostic).toBe("authentication.session.request-context");
     }
     const warning = lastWarning();
     expect(warning.annotations.stage).toBe("request-headers");
     expect(warning.annotations.nextCode).toBe("E251");
-    expect(
-      (frozen as { readonly __NEXT_ERROR_CODE?: unknown }).__NEXT_ERROR_CODE
-    ).toBe("E251");
+    expect("__NEXT_ERROR_CODE" in frozen && frozen.__NEXT_ERROR_CODE).toBe(
+      "E251"
+    );
   });
 
   test("attributes a rejected primitive as unknown category without carrying it", async () => {
@@ -559,7 +565,7 @@ describe("CustomerAuthentication authority-read phase diagnostics", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.reason).toBe("unavailable");
       expect(error.diagnostic).toBe("authentication.session.unclassified");
     }
@@ -585,7 +591,7 @@ describe("CustomerAuthentication authority-read phase diagnostics", () => {
     });
     expect(direct._tag).toBe("Failure");
     if (direct._tag === "Failure") {
-      const error = direct.failure as CustomerAccountAccessError;
+      const error = direct.failure;
       expect(error.reason).toBe("unavailable");
       expect(error.cause?.code).toBe("authentication.session");
       expect(error.diagnostic).toBe("authentication.session.request-context");
@@ -597,7 +603,7 @@ describe("CustomerAuthentication authority-read phase diagnostics", () => {
     });
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.diagnostic).toBe("authentication.session.request-context");
     }
     const warning = lastWarning();
@@ -616,7 +622,7 @@ describe("CustomerAuthentication authority-read phase diagnostics", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.reason).toBe("unavailable");
       expect(error.diagnostic).toBe("authentication.session.unclassified");
     }
@@ -647,7 +653,7 @@ describe("CustomerAuthentication authority-read phase diagnostics", () => {
 
     expect(outcome._tag).toBe("Failure");
     if (outcome._tag === "Failure") {
-      const error = outcome.failure as CustomerAccountAccessError;
+      const error = outcome.failure;
       expect(error.diagnostic).toBe("authentication.session.rate-limited");
     }
     const warning = lastWarning();
