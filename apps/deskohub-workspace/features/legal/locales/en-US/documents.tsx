@@ -92,7 +92,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "7.3 The Client may disclose the PIN Code only to people authorized to attend the Booking, must protect it from everyone else, and is responsible for its use by the Client's guests. Suspected misuse must be reported to the Provider without delay.",
       "7.4 The Client and guests must observe the capacity, Booking purpose, confirmed time, and House Rules. The Client must ensure that guests leave the Premises by the end of the Booking.",
       "7.5 For Team Table, the Client and their guests share one Access PIN Code. The access page shows the exact start and end of the Booking. The lock system may round the start of PIN validity down to a whole hour and the end up to a whole hour. The confirmed period of use stays the same.",
-      "7.6 The total number of people attending, including the Client if they attend, must stay within the table's seat capacity. Invitees can open the access page from their invitation. Once the Booking is paid and confirmed, invitees cannot be removed because they have access to the shared PIN.",
+      "7.6 The Client may add invitees on the Team Table Booking status page until the Booking ends. The total number of people attending, including the Client if they attend, must stay within the table's seat capacity. Invitees can open the access page from their invitation. Once the Booking is paid and confirmed, invitees cannot be removed because they have access to the shared PIN.",
     ],
   },
   {

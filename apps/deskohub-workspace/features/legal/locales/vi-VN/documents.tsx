@@ -91,7 +91,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "7.3 Khách hàng chỉ được cho những người có quyền tham gia Đặt chỗ của mình biết mã PIN, phải bảo vệ mã khỏi những người khác và chịu trách nhiệm về việc khách của mình sử dụng mã. Khách hàng thông báo ngay cho Bên Cung cấp khi nghi ngờ mã bị lạm dụng.",
       "7.4 Khách hàng và khách của Khách hàng có nghĩa vụ tuân thủ sức chứa, mục đích của Đặt chỗ, thời gian đã xác nhận và Nội quy. Khách hàng bảo đảm rằng khách của mình rời khỏi Mặt bằng chậm nhất khi Đặt chỗ kết thúc.",
       "7.5 Khi đặt Bàn nhóm, Khách hàng và khách đi cùng dùng chung một Mã PIN Ra vào. Trang truy cập hiển thị chính xác thời điểm bắt đầu và kết thúc đặt chỗ. Hệ thống khóa có thể làm tròn thời điểm bắt đầu hiệu lực của mã PIN xuống giờ tròn và thời điểm hết hiệu lực lên giờ tròn. Thời gian sử dụng đã xác nhận không thay đổi.",
-      "7.6 Tổng số người tham dự, kể cả Khách hàng nếu có tham dự, không được vượt quá số chỗ ngồi của bàn. Người được mời có thể mở trang truy cập từ lời mời. Sau khi đặt chỗ đã được thanh toán và xác nhận, không thể xóa người được mời vì họ đã có quyền truy cập mã PIN dùng chung.",
+      "7.6 Khách hàng có thể thêm người được mời trên trang trạng thái đặt Bàn nhóm cho đến khi hết thời gian đặt chỗ. Tổng số người tham dự, kể cả Khách hàng nếu có tham dự, không được vượt quá số chỗ ngồi của bàn. Người được mời có thể mở trang truy cập từ lời mời. Sau khi đặt chỗ đã được thanh toán và xác nhận, không thể xóa người được mời vì họ đã có quyền truy cập mã PIN dùng chung.",
     ],
   },
   {

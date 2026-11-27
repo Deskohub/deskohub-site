@@ -16,7 +16,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "en-US",
     documentKey: "terms-and-conditions",
-    version: "73265b936f8cafee216a8d7eec114ddb7f0f8cc4b278e047c6a3eb8819d5a723",
+    version: "803f7af249ee0d80db0d5db25eeb346bff0e4a761d808bd2123eb4a12ca955ae",
   },
   {
     locale: "en-US",
@@ -41,7 +41,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "cs-CZ",
     documentKey: "terms-and-conditions",
-    version: "83e339664fc4f925678dc2bd725ec092e88cfd61e523568295503255be458afc",
+    version: "c94d0f3b689eda41ee42dd2690a8d9a31be132670bd2cf9796779015727e969e",
   },
   {
     locale: "cs-CZ",
@@ -66,7 +66,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "de-DE",
     documentKey: "terms-and-conditions",
-    version: "0815b22ffbd7d5fadd1b049acafe1bf6a082b6e4eb4c3010c8e5ef54aa065d5c",
+    version: "763c562394ddc27591ae4833ec90a5bb778ead01913149014212aa9a09c7330d",
   },
   {
     locale: "de-DE",
@@ -91,7 +91,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "uk-UA",
     documentKey: "terms-and-conditions",
-    version: "ce83a730358b6edfcc6f7d4cc379b5f9e39898cca1d0d46150cf46c3023d00e1",
+    version: "59f7a3533003fb485b67476931943ccef5f56eb20610e7c18f8944a89d98fc10",
   },
   {
     locale: "uk-UA",
@@ -116,7 +116,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "sk-SK",
     documentKey: "terms-and-conditions",
-    version: "570f14eeb939a2a2d4a0a13263d5720f3a3e689e08af0ddbd6ce4ad7fe12a3bf",
+    version: "09cef9958abba81c63c1d108167f53367a48643f2e3e0586946db90e9213f92a",
   },
   {
     locale: "sk-SK",
@@ -141,7 +141,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "vi-VN",
     documentKey: "terms-and-conditions",
-    version: "32689338cccd887eb31dbb3e88d88fdc5d5dd272f89fb758b4a81063b27157ce",
+    version: "b7a3cb6e21226e74087ace7ce1f07f72b305a04e41872dc175ffb5135d6abe0b",
   },
   {
     locale: "vi-VN",
