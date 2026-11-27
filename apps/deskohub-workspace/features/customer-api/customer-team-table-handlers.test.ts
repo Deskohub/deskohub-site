@@ -10,7 +10,6 @@ import {
   testPeekedStandings,
 } from "@/features/account/backend/current-customer-account.test-utils";
 import { CustomerReservationHistoryWithAccessService } from "@/features/account/backend/customer-reservation-history-with-access.service";
-import { workspaceReservationDetailsFixture } from "@/features/administration/administration-database.test-utils";
 import { CheckoutPricingService } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import {
   CheckoutStatusService,
@@ -30,7 +29,10 @@ import {
 } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
-import { workspaceReservationFixture } from "@/features/reservation/backend/workspace-reservation.test-utils";
+import {
+  workspaceReservationDetailsFixture,
+  workspaceReservationFixture,
+} from "@/features/reservation/backend/workspace-reservation.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getTableReservationInterval } from "@/features/reservation/table-reservation-time";
