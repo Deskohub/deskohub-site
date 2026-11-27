@@ -21,7 +21,7 @@ const connectionOverrides = new Set([
  * @param {string} connectionString
  */
 export const previewDatabaseEndpoint = (connectionString) => {
-  const url = URL.parse(connectionString);
+  const url = URL.canParse(connectionString) ? new URL(connectionString) : undefined;
   if (
     !url ||
     !["postgres:", "postgresql:"].includes(url.protocol) ||
