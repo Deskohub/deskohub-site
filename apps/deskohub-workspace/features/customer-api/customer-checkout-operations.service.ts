@@ -30,6 +30,7 @@ import {
 } from "@/features/reservation/backend/reservation-booking.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { ReservationInvitees } from "@/features/reservation-invitees/backend/reservation-invitees.service";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import {
   failuresAsDefects,
@@ -141,6 +142,10 @@ export class CustomerCheckoutOperations extends Context.Service<
           OvernightStayReleaseGate,
           yield* OvernightStayReleaseGate
         ),
+        teamTable: Layer.succeed(
+          TeamTableReleaseGate,
+          yield* TeamTableReleaseGate
+        ),
       };
       const { remembered } = yield* CustomerReferralUpdates;
 
@@ -161,7 +166,8 @@ export class CustomerCheckoutOperations extends Context.Service<
           Layer.mergeAll(
             releases.referral,
             releases.office,
-            releases.overnightStay
+            releases.overnightStay,
+            releases.teamTable
           )
         ),
         Layer.provide(WorkspaceDatabase.Default)

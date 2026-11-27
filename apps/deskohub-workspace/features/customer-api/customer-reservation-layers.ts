@@ -10,6 +10,7 @@ import { ReferralReleaseGateForRun } from "@/features/referrals/referral-release
 import { ReservationAccessService } from "@/features/reservation/backend/reservation-access.service";
 import { ReservationAuthorizationService } from "@/features/reservation/backend/reservation-authorization.service";
 import { ReservationWithdrawalAvailability } from "@/features/reservation/backend/reservation-withdrawals";
+import { addReservationInviteesServices } from "@/features/reservation-invitees/backend/add-reservation-invitees";
 import { resendReservationInvitationServices } from "@/features/reservation-invitees/backend/resend-reservation-invitation";
 import { WithdrawalRepository } from "@/features/withdrawal/backend/withdrawal.repository";
 import { WithdrawalService } from "@/features/withdrawal/backend/withdrawal.service";
@@ -65,6 +66,7 @@ export type CustomerReservationServiceLayers = {
   >;
   readonly invitedReservations: typeof CustomerInvitedReservationsService.withAccess;
   readonly invitationResend: typeof resendReservationInvitationServices;
+  readonly invitationAdd: typeof addReservationInviteesServices;
   /** Order statuses, refreshed as the status page refreshes them. */
   readonly checkoutStatus: Layer.Layer<
     CheckoutStatusService,
@@ -153,6 +155,7 @@ export class CustomerReservationLayers extends Context.Service<
     authorization: ReservationAuthorizationService.ForProvidedAuthentication,
     invitedReservations: CustomerInvitedReservationsService.withAccess,
     invitationResend: resendReservationInvitationServices,
+    invitationAdd: addReservationInviteesServices,
     checkoutStatus: CheckoutStatusService.Live,
     paymentPage: CheckoutPaymentPageService.withAuthorization,
     paymentRetry: (authorization) =>

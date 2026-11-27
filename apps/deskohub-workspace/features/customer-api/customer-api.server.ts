@@ -1,6 +1,6 @@
 import "server-only";
 
-import { WorkspaceCustomerApi } from "@deskohub/workspace-customer-api";
+import { WorkspaceCustomerApiWithTeamTable } from "@deskohub/workspace-customer-api";
 import { Layer } from "effect";
 import { HttpRouter } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
@@ -28,6 +28,7 @@ import {
 } from "./customer-request-checks";
 import { CustomerReservationsApiHandlers } from "./customer-reservation-handlers";
 import { CustomerReservationLayers } from "./customer-reservation-layers";
+import { CustomerTeamTableApiHandlers } from "./customer-team-table-handlers";
 
 /**
  * The customer API's HTTP app: every group's handlers behind the origin
@@ -41,7 +42,7 @@ import { CustomerReservationLayers } from "./customer-reservation-layers";
  */
 export const makeWorkspaceCustomerApiLayer = () =>
   Layer.mergeAll(
-    HttpApiBuilder.layer(WorkspaceCustomerApi).pipe(
+    HttpApiBuilder.layer(WorkspaceCustomerApiWithTeamTable).pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.fresh(CustomerAccountApiHandlers),
@@ -49,7 +50,8 @@ export const makeWorkspaceCustomerApiLayer = () =>
           Layer.fresh(CustomerBookingApiHandlers),
           Layer.fresh(CustomerInvoicesApiHandlers),
           Layer.fresh(CustomerCompaniesApiHandlers),
-          Layer.fresh(CustomerPassApiHandlers)
+          Layer.fresh(CustomerPassApiHandlers),
+          Layer.fresh(CustomerTeamTableApiHandlers)
         )
       ),
       Layer.provide(

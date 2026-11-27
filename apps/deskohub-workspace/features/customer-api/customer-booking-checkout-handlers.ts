@@ -3,6 +3,7 @@ import "server-only";
 
 import {
   type CreateCustomerCheckout,
+  type CreateCustomerTeamTableCheckout,
   CurrentCustomerSession,
   CustomerAccountLinkRequired,
   CustomerBookingSelectionInvalid,
@@ -20,6 +21,7 @@ import {
   CustomerOfferingUnavailable,
   CustomerQuoteExpired,
   CustomerSelectionUnavailable,
+  CustomerTeamTableUnavailable,
   customerReferralCodeHeader,
   type SubmitCustomerCheckout,
 } from "@deskohub/workspace-customer-api";
@@ -64,12 +66,16 @@ import {
   answerCustomerApiFailure,
   answerUnavailable,
 } from "./customer-api-failure";
+import { CustomerBookingCatalogLayers } from "./customer-booking-catalog-layers";
 import { CustomerBookingCheckoutLayers } from "./customer-booking-checkout-layers";
 import type { CustomerBookingHandlers } from "./customer-booking-endpoint";
 import {
   answerBookingSelectionFailure,
+  answerTeamTableSelectionFailure,
   entryPackUnavailableAnswer,
+  requireCustomerTeamTableRelease,
   toBookingSelectionInput,
+  toSelectionRejectionAnswer,
   withEarlySetup,
 } from "./customer-booking-selection";
 import {
@@ -114,38 +120,7 @@ export const handleCustomerBookingCheckout = <R>(
   handlers: CustomerBookingHandlers<R>
 ) =>
   Effect.gen(function* () {
-    const { operations, checkout, inventory, passes, releases } =
-      yield* CustomerBookingCheckoutLayers;
-    // The authentication the session middleware read the request through,
-    // which the operations read the session through.
-    const authentication = Layer.succeed(
-      CustomerAuthentication,
-      yield* CustomerAuthentication
-    );
-
-    /**
-     * One request's services: its release gates, decided once and shared
-     * by the selection, the operations and the referral record, which the
-     * operations close over.
-     */
-    const forRequest = <A, E, R>(
-      referralCode: string | undefined,
-      services: Layer.Layer<A, E, R>
-    ) =>
-      Layer.mergeAll(
-        operations.pipe(Layer.provide(authentication)),
-        inventory,
-        services
-      ).pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(
-            CustomerReferralUpdates.fromClient(referralCode),
-            releases.referral,
-            releases.office,
-            releases.overnightStay
-          )
-        )
-      );
+    const { forRequest, checkout, passes } = yield* checkoutRequestLayers;
 
     return handlers
       .handle("createCheckout", ({ payload, headers }) => {
@@ -157,7 +132,15 @@ export const handleCustomerBookingCheckout = <R>(
           : Effect.void;
         return passRelease.pipe(
           Effect.andThen(
-            createCheckout(payload).pipe(
+            resolveCheckoutSelection(payload).pipe(
+              answerBookingSelectionFailure("customerApi.createCheckout"),
+              Effect.flatMap((selection) =>
+                createCheckout(
+                  payload,
+                  selection,
+                  () => new CustomerOfferingUnavailable({ family: "office" })
+                )
+              ),
               providePerRequest(
                 forRequest(headers[customerReferralCodeHeader], Layer.empty)
               )
@@ -216,32 +199,101 @@ export const handleCustomerBookingCheckout = <R>(
 
 // createCheckout
 
+/** The release decisions and account services shared by a checkout request. */
+const checkoutRequestLayers = Effect.gen(function* () {
+  const { operations, checkout, inventory, passes, releases } =
+    yield* CustomerBookingCheckoutLayers;
+  const { teamTableRelease } = yield* CustomerBookingCatalogLayers;
+  const authentication = Layer.succeed(
+    CustomerAuthentication,
+    yield* CustomerAuthentication
+  );
+  const forRequest = <A, E, R>(
+    referralCode: string | undefined,
+    services: Layer.Layer<A, E, R>
+  ) =>
+    Layer.mergeAll(
+      operations.pipe(Layer.provide(authentication)),
+      inventory,
+      services
+    ).pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(
+          CustomerReferralUpdates.fromClient(referralCode),
+          releases.referral,
+          releases.office,
+          releases.overnightStay,
+          teamTableRelease
+        )
+      )
+    );
+  return { forRequest, checkout, passes, teamTableRelease };
+});
+
+export const customerTeamTableCheckout = Effect.gen(function* () {
+  const { forRequest, teamTableRelease } = yield* checkoutRequestLayers;
+  const operation = "customerApi.createTeamTableCheckout";
+  return (
+    payload: CreateCustomerTeamTableCheckout,
+    referralCode: string | undefined
+  ) =>
+    requireCustomerTeamTableRelease.pipe(
+      Effect.andThen(
+        resolveCheckoutSelection(payload).pipe(
+          answerTeamTableSelectionFailure(operation),
+          Effect.flatMap((selection) =>
+            createCheckout(
+              payload,
+              selection,
+              () => new CustomerTeamTableUnavailable()
+            )
+          ),
+          providePerRequest(forRequest(referralCode, Layer.empty))
+        )
+      ),
+      providePerRequest(teamTableRelease),
+      withDeadline(operation, getPreparePayStateDeadline(env.VERCEL_ENV))
+    );
+});
+
+const resolveCheckoutSelection = Effect.fn(
+  "customerApi.resolveCheckoutSelection"
+)(function* (
+  payload: CreateCustomerCheckout | CreateCustomerTeamTableCheckout
+) {
+  const now = yield* currentInstant;
+  const selection = yield* toBookingSelectionInput(payload.selection);
+  return yield* resolveBookingQuoteSelection({
+    selection,
+    locale: payload.locale,
+    now,
+  });
+});
+
 /**
  * Holds a quoted selection the way the agent tools' `start_reservation`
  * does: resolved as the booking pages accept it, decoded into the booking
  * form's input, and prepared with the site's services.
  */
-const createCheckout = Effect.fn("customerApi.createCheckout")(function* (
-  payload: CreateCustomerCheckout
+const createCheckout = Effect.fn("customerApi.createCheckout")(function* <
+  Unavailable,
+>(
+  payload: CreateCustomerCheckout | CreateCustomerTeamTableCheckout,
+  selection: QuoteSelection,
+  offeringUnavailable: () => Unavailable
 ) {
   const operation = "customerApi.createCheckout";
-  const now = yield* currentInstant;
-  const selection = yield* toBookingSelectionInput(payload.selection).pipe(
-    Effect.flatMap((input) =>
-      resolveBookingQuoteSelection({
-        selection: input,
-        locale: payload.locale,
-        now,
-      })
-    ),
-    answerBookingSelectionFailure(operation)
+  const reservation = yield* withEarlySetup(
+    selection,
+    "earlySetup" in payload ? payload.earlySetup : undefined
   );
-  const reservation = yield* withEarlySetup(selection, payload.earlySetup);
   const input = yield* toPreparationInput(payload, reservation);
   const operations = yield* CustomerCheckoutOperations;
   const prepared = yield* operations
     .preparePayState(input)
-    .pipe(Effect.catch(answerPreparationFailure(operation)));
+    .pipe(
+      Effect.catch(answerPreparationFailure(operation, offeringUnavailable))
+    );
 
   return yield* toCheckoutStart(prepared);
 });
@@ -253,7 +305,7 @@ const createCheckout = Effect.fn("customerApi.createCheckout")(function* (
  * the client can't name one.
  */
 const toPreparationInput = (
-  payload: CreateCustomerCheckout,
+  payload: CreateCustomerCheckout | CreateCustomerTeamTableCheckout,
   reservation: QuoteSelection["reservation"]
 ) =>
   Schema.decodeEffect(preparePayStateInputSchema)({
@@ -263,9 +315,10 @@ const toPreparationInput = (
     advertisedPriceToken: payload.advertisedPriceToken,
     ...(payload.marketingConsent === true && { marketingConsent: true }),
     ...(payload.bookingFor === "self" && { customer: "account" }),
-    ...(payload.selection.funding && {
-      entryPackId: payload.selection.funding.passId,
-    }),
+    ...("funding" in payload.selection &&
+      payload.selection.funding && {
+        entryPackId: payload.selection.funding.passId,
+      }),
     reservation: {
       ...reservation,
       name: payload.contact.name,
@@ -329,9 +382,12 @@ const toOfficePeopleAnswer = (rejection: OfficePeopleRejection) =>
   );
 
 const answerPreparationFailure =
-  (operation: string) => (failure: PreparationFailure) =>
+  <Unavailable>(operation: string, offeringUnavailable: () => Unavailable) =>
+  (failure: PreparationFailure) =>
     Match.value(failure).pipe(
       Match.tagsExhaustive({
+        BookingSelectionRejected: ({ reason }) =>
+          Effect.fail(toSelectionRejectionAnswer(reason, offeringUnavailable)),
         CustomerAccountAccessError: (accessFailure) =>
           Effect.fail(accessFailure).pipe(answerCustomerApiFailure(operation)),
         AdvertisedPriceMismatchError: () =>
@@ -362,8 +418,15 @@ const answerPreparationFailure =
           Effect.fail(
             new CustomerSelectionUnavailable({ reason: "availability_changed" })
           ),
+        TeamTableCapacityChanged: () =>
+          Effect.fail(
+            new CustomerSelectionUnavailable({ reason: "availability_changed" })
+          ),
         OfficeReservationsDisabledError: () =>
-          Effect.fail(new CustomerOfferingUnavailable({ family: "office" })),
+          Effect.fail(offeringUnavailable()),
+        TeamTableReservationsDisabledError: () =>
+          Effect.fail(offeringUnavailable()),
+        TeamTableAvailabilityClosed: () => Effect.fail(offeringUnavailable()),
         OvernightStayUnavailableError: () =>
           Effect.fail(new CustomerBookingSelectionInvalid({ field: "stay" })),
         ReservationIntervalValidationError: () =>
@@ -386,6 +449,7 @@ const answerPreparationFailure =
         DotyposUnavailable: retryable(operation),
         DotyposRejected: retryable(operation),
         DotyposUncertain: retryable(operation),
+        DotyposVersionConflict: retryable(operation),
         MissingDotyposId: retryable(operation),
         WorkspaceReservationDetailsMalformedError: retryable(operation),
         WorkspaceReservationStateError: retryable(operation),
@@ -769,6 +833,7 @@ const answerSubmissionFailure =
       Match.whenOr(
         "meeting_room_reservation_ended",
         "office_reservation_ended",
+        "table_reservation_ended",
         "cowork_reservation_ended",
         () => reservationEnded
       ),

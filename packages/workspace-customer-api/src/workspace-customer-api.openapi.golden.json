@@ -5070,6 +5070,793 @@
           "required": true
         }
       }
+    },
+    "/api/customer/booking/team-table/offerings": {
+      "get": {
+        "tags": ["teamTable"],
+        "operationId": "teamTable.listOfferings",
+        "parameters": [
+          {
+            "name": "locale",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerLocale"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "CustomerTeamTableOfferings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerTeamTableOfferings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customer/booking/team-table/availability": {
+      "get": {
+        "tags": ["teamTable"],
+        "operationId": "teamTable.getAvailability",
+        "parameters": [
+          {
+            "name": "x-deskohub-workspace-replacement",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "seats",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerPlainDate"
+            },
+            "required": false
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerPlainDate"
+            },
+            "required": false
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "CustomerTeamTableCalendar",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerTeamTableCalendar"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "CustomerBookingSelectionInvalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerBookingSelectionInvalidEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerTeamTableUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerTeamTableUnavailableEncoded"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "CustomerBookingDateOutOfRange",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerBookingDateOutOfRangeEncoded"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customer/booking/team-table/slots": {
+      "get": {
+        "tags": ["teamTable"],
+        "operationId": "teamTable.getSlots",
+        "parameters": [
+          {
+            "name": "x-deskohub-workspace-replacement",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerPlainDate"
+            },
+            "required": true
+          },
+          {
+            "name": "seats",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "CustomerTeamTableSlots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerTeamTableSlots"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "CustomerBookingSelectionInvalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerBookingSelectionInvalidEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerTeamTableUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerTeamTableUnavailableEncoded"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "CustomerBookingDateOutOfRange",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerBookingDateOutOfRangeEncoded"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customer/booking/team-table/quote": {
+      "get": {
+        "tags": ["teamTable"],
+        "operationId": "teamTable.getQuote",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerPlainDate"
+            },
+            "required": true
+          },
+          {
+            "name": "startTime",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerTeamTableTime"
+            },
+            "required": true
+          },
+          {
+            "name": "endTime",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerTeamTableTime"
+            },
+            "required": true
+          },
+          {
+            "name": "seats",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerLocale"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "CustomerTeamTableQuote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerTeamTableQuote"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "CustomerBookingSelectionInvalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerBookingSelectionInvalidEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerTeamTableUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerTeamTableUnavailableEncoded"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CustomerSelectionUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSelectionUnavailableEncoded"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "CustomerBookingDateOutOfRange",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerBookingDateOutOfRangeEncoded"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customer/booking/team-table/checkouts": {
+      "post": {
+        "tags": ["teamTable"],
+        "operationId": "teamTable.createCheckout",
+        "parameters": [
+          {
+            "name": "x-deskohub-referral-code",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "required": false
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "CustomerCheckoutStart",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerCheckoutStart"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "CustomerBookingSelectionInvalid | CustomerCheckoutDetailsInvalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CustomerBookingSelectionInvalidEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CustomerCheckoutDetailsInvalidEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerTeamTableUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerTeamTableUnavailableEncoded"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CustomerSelectionUnavailable | CustomerQuoteExpired | CustomerAccountLinkRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CustomerSelectionUnavailableEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CustomerQuoteExpiredEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CustomerAccountLinkRequiredEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "CustomerBookingDateOutOfRange",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerBookingDateOutOfRangeEncoded"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCustomerTeamTableCheckout"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/api/customer/reservations/{orderId}/team-table/status": {
+      "get": {
+        "tags": ["teamTable"],
+        "operationId": "teamTable.getStatus",
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerReservationOrderId"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "CustomerTeamTableStatus",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerTeamTableStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerReservationNotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerReservationNotFoundEncoded"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customer/reservations/{orderId}/invitations": {
+      "post": {
+        "tags": ["teamTable"],
+        "operationId": "teamTable.addInvitees",
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerReservationOrderId"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "added": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["added"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerReservationNotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerReservationNotFoundEncoded"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CustomerTeamTableInvitationRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerTeamTableInvitationRejectedEncoded"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "locale": {
+                    "$ref": "#/components/schemas/CustomerLocale"
+                  },
+                  "emails": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 255
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": ["locale", "emails"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
     }
   },
   "components": {
@@ -7099,6 +7886,12 @@
           },
           "monitorOption": {
             "$ref": "#/components/schemas/CustomerMonitorOption"
+          },
+          "baseAmount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "usageAmount": {
+            "$ref": "#/components/schemas/Money"
           }
         },
         "required": ["key", "amount"],
@@ -8206,6 +8999,9 @@
           "accessEndsAt": {
             "type": "string",
             "description": "ISO 8601 instant."
+          },
+          "tableName": {
+            "type": "string"
           }
         },
         "required": ["code", "accessStartsAt", "accessEndsAt"],
@@ -9225,6 +10021,9 @@
               "kind": {
                 "type": "string",
                 "enum": ["other"]
+              },
+              "teamTable": {
+                "$ref": "#/components/schemas/CustomerTeamTableProduct"
               }
             },
             "required": ["kind"],
@@ -11093,6 +11892,462 @@
           "vatId"
         ],
         "additionalProperties": false
+      },
+      "CustomerTeamTableInvitationRejectedEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["CustomerTeamTableInvitationRejected"]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "not-confirmed",
+              "ended",
+              "invalid-email",
+              "duplicate",
+              "capacity"
+            ]
+          }
+        },
+        "required": ["_tag", "reason"],
+        "additionalProperties": false
+      },
+      "CustomerTeamTableStatus": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "$ref": "#/components/schemas/CustomerReservationOrderId"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["table"]
+          },
+          "status": {
+            "$ref": "#/components/schemas/CustomerOrderStatus"
+          },
+          "paymentStatus": {
+            "$ref": "#/components/schemas/CustomerOrderPaymentStatus"
+          },
+          "fulfillmentStatus": {
+            "$ref": "#/components/schemas/CustomerOrderFulfillmentStatus"
+          },
+          "reservationCancelled": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "enum": [true]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewSandbox": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "enum": [true]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paymentPageReopenable": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "enum": [true]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "startsAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO 8601 instant."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "endsAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO 8601 instant."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "setupStartsAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "ISO 8601 instant."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "withdrawal": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "submittedAt": {
+                    "type": "string",
+                    "description": "ISO 8601 instant."
+                  },
+                  "refundAmount": {
+                    "$ref": "#/components/schemas/Money"
+                  }
+                },
+                "required": ["submittedAt", "refundAmount"],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "people": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomerReservationPeople"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "product": {
+            "$ref": "#/components/schemas/CustomerTeamTableProduct"
+          },
+          "tableName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "kind",
+          "status",
+          "paymentStatus",
+          "fulfillmentStatus"
+        ],
+        "additionalProperties": false
+      },
+      "CustomerTeamTableProduct": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["table"]
+          },
+          "seats": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "durationMinutes": {
+            "type": "integer",
+            "minimum": 15,
+            "maximum": 1440,
+            "multipleOf": 15
+          }
+        },
+        "required": ["kind", "seats", "durationMinutes"],
+        "additionalProperties": false
+      },
+      "CustomerTeamTableUnavailableEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["CustomerTeamTableUnavailable"]
+          }
+        },
+        "required": ["_tag"],
+        "additionalProperties": false
+      },
+      "CreateCustomerTeamTableCheckout": {
+        "type": "object",
+        "properties": {
+          "locale": {
+            "$ref": "#/components/schemas/CustomerLocale"
+          },
+          "checkoutSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "checkoutAttemptId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "advertisedPriceToken": {
+            "type": "string",
+            "minLength": 1
+          },
+          "selection": {
+            "$ref": "#/components/schemas/CustomerTeamTableSelection"
+          },
+          "bookingFor": {
+            "type": "string",
+            "enum": ["self", "someone-else"]
+          },
+          "contact": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 255
+              },
+              "email": {
+                "type": "string",
+                "maxLength": 255
+              },
+              "phone": {
+                "type": "string",
+                "maxLength": 32
+              }
+            },
+            "required": ["name", "email", "phone"],
+            "additionalProperties": false
+          },
+          "billing": {
+            "$ref": "#/components/schemas/CustomerCheckoutBilling"
+          },
+          "marketingConsent": {
+            "type": "boolean"
+          },
+          "people": {
+            "$ref": "#/components/schemas/CustomerOfficePeople"
+          }
+        },
+        "required": [
+          "locale",
+          "checkoutSessionId",
+          "checkoutAttemptId",
+          "advertisedPriceToken",
+          "selection",
+          "bookingFor",
+          "contact",
+          "billing"
+        ],
+        "additionalProperties": false
+      },
+      "CustomerTeamTableSelection": {
+        "type": "object",
+        "properties": {
+          "family": {
+            "type": "string",
+            "enum": ["table"]
+          },
+          "date": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "startTime": {
+            "$ref": "#/components/schemas/CustomerTeamTableTime"
+          },
+          "endTime": {
+            "$ref": "#/components/schemas/CustomerTeamTableTime"
+          },
+          "seats": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": ["family", "date", "startTime", "endTime", "seats"],
+        "additionalProperties": false
+      },
+      "CustomerTeamTableTime": {
+        "type": "string"
+      },
+      "CustomerTeamTableQuote": {
+        "type": "object",
+        "properties": {
+          "family": {
+            "type": "string",
+            "enum": ["table"]
+          },
+          "total": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "regularPrice": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "discount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "quotedAt": {
+            "type": "string",
+            "description": "ISO 8601 instant."
+          },
+          "summary": {
+            "$ref": "#/components/schemas/CustomerCheckoutSummary"
+          },
+          "advertisedPriceToken": {
+            "type": "string"
+          },
+          "product": {
+            "$ref": "#/components/schemas/CustomerTeamTableProduct"
+          }
+        },
+        "required": [
+          "family",
+          "total",
+          "regularPrice",
+          "discount",
+          "quotedAt",
+          "summary",
+          "advertisedPriceToken",
+          "product"
+        ],
+        "additionalProperties": false
+      },
+      "CustomerTeamTableSlots": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "seats": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "slotMinutes": {
+            "type": "number",
+            "enum": [15]
+          },
+          "usableFrom": {
+            "$ref": "#/components/schemas/CustomerTeamTableTime"
+          },
+          "usableUntil": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomerTeamTableTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "availableStarts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerTeamTableTime"
+            }
+          },
+          "availableEndsByStart": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "startTime": {
+                  "$ref": "#/components/schemas/CustomerTeamTableTime"
+                },
+                "endTimes": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CustomerTeamTableTime"
+                  }
+                }
+              },
+              "required": ["startTime", "endTimes"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "date",
+          "seats",
+          "slotMinutes",
+          "usableFrom",
+          "usableUntil",
+          "availableStarts",
+          "availableEndsByStart"
+        ],
+        "additionalProperties": false
+      },
+      "CustomerTeamTableCalendar": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "to": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "seats": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "unavailableDates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerPlainDate"
+            }
+          }
+        },
+        "required": ["from", "to", "seats", "unavailableDates"],
+        "additionalProperties": false
+      },
+      "CustomerTeamTableOfferings": {
+        "type": "object",
+        "properties": {
+          "advertisedOn": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "bookableDates": {
+            "$ref": "#/components/schemas/CustomerBookableDates"
+          },
+          "offerings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "product": {
+                  "$ref": "#/components/schemas/CustomerTeamTableProduct"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "price": {
+                  "$ref": "#/components/schemas/Money"
+                },
+                "advertisedPrice": {
+                  "$ref": "#/components/schemas/CustomerAdvertisedPrice"
+                }
+              },
+              "required": ["product", "name", "price", "advertisedPrice"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["advertisedOn", "bookableDates", "offerings"],
+        "additionalProperties": false
       }
     },
     "securitySchemes": {}
@@ -11116,6 +12371,9 @@
     },
     {
       "name": "passes"
+    },
+    {
+      "name": "teamTable"
     }
   ]
 }
