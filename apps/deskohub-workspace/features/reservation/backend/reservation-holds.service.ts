@@ -1168,7 +1168,21 @@ const findSessionHoldToSupersede = Effect.fnUntraced(function* (
   let checkoutSessionId = input.checkoutSessionId;
   while (true) {
     const attemptKeys = yield* getDraftAttemptKeys(input, checkoutSessionId);
-    if (yield* reservations.findByAttemptKeys(attemptKeys.accepted)) return;
+    const existingAttempt = yield* reservations.findByAttemptKeys(
+      attemptKeys.accepted
+    );
+    if (existingAttempt) {
+      // Pending provider receipt recovery belongs to draft preparation.
+      if (isHoldTransitionPending(existingAttempt)) return;
+      const next = yield* continueExistingAttempt(
+        input.checkoutAttemptId,
+        checkoutSessionId,
+        existingAttempt
+      );
+      if (next.kind === "prepared") return;
+      checkoutSessionId = next.checkoutSessionId;
+      continue;
+    }
 
     const { current } = yield* readCurrentDraftSession(
       reservations,
@@ -1330,7 +1344,7 @@ const findSettledAttemptReservation = Effect.fnUntraced(function* (
 
 /** Resumes the attempt's own reservation, rotates past it, or refuses it. */
 const continueExistingAttempt = Effect.fnUntraced(function* (
-  request: ReservationDraftRequest,
+  checkoutAttemptId: CheckoutAttemptId,
   checkoutSessionId: CheckoutSessionId,
   existingAttempt: WorkspaceReservation
 ) {
@@ -1354,7 +1368,7 @@ const continueExistingAttempt = Effect.fnUntraced(function* (
   if (mustRotateCheckoutSession(existingAttempt)) {
     return yield* rotateCheckoutSession({
       checkoutSessionId,
-      checkoutAttemptId: request.checkoutAttemptId,
+      checkoutAttemptId,
       reservation: existingAttempt,
     });
   }
@@ -1572,7 +1586,7 @@ const prepareDraftInSession = Effect.fnUntraced(function* (
   );
   if (existingAttempt) {
     return yield* continueExistingAttempt(
-      request,
+      request.checkoutAttemptId,
       checkoutSessionId,
       existingAttempt
     );

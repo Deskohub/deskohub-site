@@ -578,9 +578,12 @@ describe.skipIf(!postgresDatabase)(
       }
     );
 
-    test.each(["original", "rotated"] as const)(
+    test.each(["original", "rotated", "rotated back to original"] as const)(
       "protects the superseded Team Table in the %s session until the replacement is available under lock",
       async (session) => {
+        const rotates = session !== "original";
+        const originalDate =
+          session === "rotated back to original" ? "2099-06-11" : "2099-06-09";
         const author = await newAuthor();
         const sourceAuthor = await newAuthor();
         const sourceOrder = await Effect.runPromise(
@@ -675,10 +678,9 @@ describe.skipIf(!postgresDatabase)(
           );
           return {
             ...base,
-            checkout:
-              session === "rotated"
-                ? base.checkout
-                : { ...base.checkout, attemptId: newAttemptId() },
+            checkout: rotates
+              ? base.checkout
+              : { ...base.checkout, attemptId: newAttemptId() },
             reservation: ordered,
             checkoutDetails: getTableCheckoutDetails({
               locale: "en-US",
@@ -689,10 +691,14 @@ describe.skipIf(!postgresDatabase)(
           } satisfies HoldRequest;
         };
         let originalOrderId: string | undefined;
-        if (session === "rotated") {
+        if (rotates) {
           await holds.holdForAttempt({
-            ...(await tableRequest("2099-06-09")),
-            teamTableCapacity: { assignTableId: Effect.succeed(tableId) },
+            ...(await tableRequest(originalDate)),
+            teamTableCapacity: {
+              assignTableId: Effect.succeed(
+                DotyposTableIdSchema.make("original-payment-table")
+              ),
+            },
           });
           originalOrderId = requireValue((await rowsOf(author))[0]).id;
           await setPaymentState(originalOrderId, "pending");
@@ -701,7 +707,7 @@ describe.skipIf(!postgresDatabase)(
           ...(await tableRequest("2099-06-10")),
           recheckTeamTableAuthority: Effect.void,
         });
-        if (session === "rotated") {
+        if (rotates) {
           expect(previous).toMatchObject({
             kind: "created",
             checkoutSessionId: promoteCheckoutAttemptToSessionId(
@@ -771,6 +777,7 @@ describe.skipIf(!postgresDatabase)(
         expect(await holds.holdForAttempt(replacement)).toMatchObject({
           kind: "created",
         });
+        expect(dotypos.cancelReservation).toHaveBeenCalledTimes(1);
         expect(dotypos.cancelReservation).toHaveBeenCalledWith(oldProviderId);
         const rows = await rowsOf(author);
         expect(
