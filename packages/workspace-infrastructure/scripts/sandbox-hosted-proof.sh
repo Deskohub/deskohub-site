@@ -837,6 +837,17 @@ proof_pattern() {
   esac
 }
 
+proof_residuals() {
+  local class="$1" pattern="$2" file="$3"
+  case "$class" in
+    run-services | run-revisions)
+      # The backend preview pilot has its own Alchemy state and teardown.
+      grep -E "$pattern" "$file" | grep -Ev '^workspace-(api|tasks-worker|scheduler-worker)-preview(-|$)'
+      ;;
+    *) grep -E "$pattern" "$file" ;;
+  esac
+}
+
 # ---------------------------------------------------------------- phases
 
 # Before authenticating: mutating modes only on main, only against the
@@ -1742,7 +1753,7 @@ phase_post_destroy_inventory() {
         continue
       fi
       pattern="$(proof_pattern "$class")"
-      if grep -E "$pattern" "$file" >"${dir}/${class}.residual"; then
+      if proof_residuals "$class" "$pattern" "$file" >"${dir}/${class}.residual"; then
         residual=true
         echo "::error::proof resources remain in ${class}: $(tr '\n' ' ' <"${dir}/${class}.residual")"
       else

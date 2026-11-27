@@ -9,7 +9,7 @@
     "./sandbox-probe/email-preferences": "./src/sandbox-probe/email-preferences-rpcs.ts",
     "./sandbox-probe/rpcs": "./src/sandbox-probe/probe-rpcs.ts",
     "./service-role": "./src/service-role.ts",
-    "./sha256": "./src/sha256.ts"
+    "./sha256": "./src/sha256.mjs"
   },
   "scripts": {
     "lint": "biome check .",
