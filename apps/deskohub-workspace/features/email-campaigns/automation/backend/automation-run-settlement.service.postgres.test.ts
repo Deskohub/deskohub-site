@@ -15,6 +15,7 @@ import type {
   CampaignSendId,
 } from "@/features/email-campaigns/campaign-identifiers";
 import type { CampaignRecipientStatus } from "@/features/email-campaigns/campaign-states";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { AutomationRunSettlement } from "./automation-run-settlement.service";
 
@@ -91,7 +92,10 @@ describe.skipIf(!testDatabase)(
         ...input,
         purpose: "marketing",
         recipients: input.recipients.map((recipient, index) => ({
-          dotyposCustomerId: customers[index]!,
+          dotyposCustomerId: requireValue(
+            customers[index],
+            "recipient customer"
+          ),
           status:
             recipient.skipReason === undefined ? recipient.status : "pending",
         })),
@@ -202,16 +206,24 @@ describe.skipIf(!testDatabase)(
       await settle(settled.sendId);
 
       const runs = await runsOf(settled.sendId);
-      expect(runs[settled.customers[0]!]).toMatchObject({
+      expect(
+        runs[requireValue(settled.customers[0], "sent recipient")]
+      ).toMatchObject({
         status: "ended",
         outcome: "sent",
       });
-      expect(runs[settled.customers[1]!]).toMatchObject({
+      expect(
+        runs[requireValue(settled.customers[1], "pending recipient")]
+      ).toMatchObject({
         status: "sending",
         outcome: null,
         timeline: [],
       });
-      expect((await runsOf(other.sendId))[other.customers[0]!]).toMatchObject({
+      expect(
+        (await runsOf(other.sendId))[
+          requireValue(other.customers[0], "recipient of another send")
+        ]
+      ).toMatchObject({
         status: "sending",
         timeline: [],
       });
@@ -228,7 +240,11 @@ describe.skipIf(!testDatabase)(
       await settle(sendId);
       await settle(sendId);
 
-      expect((await runsOf(sendId))[customers[0]!]).toMatchObject({
+      expect(
+        (await runsOf(sendId))[
+          requireValue(customers[0], "delivered recipient")
+        ]
+      ).toMatchObject({
         outcome: "sent",
         timeline: [{ kind: "sent" }],
       });

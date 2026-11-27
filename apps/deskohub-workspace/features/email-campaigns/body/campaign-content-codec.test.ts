@@ -7,6 +7,7 @@ import { type CampaignId, campaignIdSchema } from "../campaign-identifiers";
 import {
   type CampaignBodyDocument,
   campaignBodyDocument,
+  UnfinishedCampaignBodyDocument,
 } from "./campaign-body-document";
 import type {
   CampaignLocaleContent,
@@ -403,7 +404,9 @@ describe("readCampaignDraftContent", () => {
     ],
   ])("accepts %s that saving refuses", async (_name, node) => {
     const bodyDocument = document(node);
-    const markdown = writeMarkdown(bodyDocument as never);
+    const markdown = writeMarkdown(
+      Schema.decodeUnknownSync(UnfinishedCampaignBodyDocument)(bodyDocument)
+    );
 
     const draft = await Effect.runPromise(
       readCampaignDraftContent({
@@ -423,10 +426,12 @@ describe("readCampaignDraftContent", () => {
   test("keeps a button's unfinished label and URL", async () => {
     const read = await readDraftMarkdown(
       writeMarkdown(
-        document({
-          type: "ctaButton",
-          attrs: { label: "", href: null },
-        }) as never
+        Schema.decodeUnknownSync(UnfinishedCampaignBodyDocument)(
+          document({
+            type: "ctaButton",
+            attrs: { label: "", href: null },
+          })
+        )
       )
     );
 

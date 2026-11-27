@@ -1,6 +1,10 @@
 import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
-import type { DotyposCustomer, DotyposCustomerId } from "@deskohub/dotypos";
+import {
+  DotyposCloudIdSchema,
+  type DotyposCustomer,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Option } from "effect";
@@ -10,29 +14,33 @@ import { readAutomationCustomerContacts } from "./automation-customer-contacts";
 const customer = (
   id: string,
   fields: Partial<DotyposCustomer> = {}
-): DotyposCustomer =>
-  ({
-    id,
-    firstName: "Synthetic",
-    lastName: id,
-    email: testEmailAddress(id),
-    phone: "+420 600 000 000",
-    deleted: false,
-    ...fields,
-  }) as DotyposCustomer;
+): DotyposCustomer => ({
+  id: DotyposCustomerIdSchema.make(id),
+  _cloudId: DotyposCloudIdSchema.make("automation-contacts-cloud"),
+  firstName: "Synthetic",
+  lastName: id,
+  email: testEmailAddress(id),
+  phone: "+420 600 000 000",
+  deleted: false,
+  display: true,
+  points: "0",
+  flags: "0",
+  ...fields,
+});
 
 const read = (customers: readonly DotyposCustomer[]) =>
   Effect.runPromise(
-    readAutomationCustomerContacts(
-      customers.map(({ id }) => id as DotyposCustomerId)
-    ).pipe(Effect.provide(makeInMemoryDotypos({ customers }).layer))
+    readAutomationCustomerContacts(customers.map(({ id }) => id)).pipe(
+      Effect.provide(makeInMemoryDotypos({ customers }).layer)
+    )
   ).then(Option.getOrThrow);
 
 describe("readAutomationCustomerContacts", () => {
   test("reads an active customer's name, email and lifecycle", async () => {
-    const contacts = await read([customer("customer-active")]);
+    const active = customer("customer-active");
+    const contacts = await read([active]);
 
-    expect(contacts.get("customer-active" as DotyposCustomerId)).toEqual({
+    expect(contacts.get(active.id)).toEqual({
       name: "Synthetic customer-active",
       email: testEmailAddress("customer-active"),
       lifecycle: "active",

@@ -2,11 +2,12 @@ import {
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
 } from "@deskohub/dotypos";
-import type {
-  AutomationConditionFilter,
-  AutomationFlowType as AutomationFlow,
-  AutomationStepType as AutomationStep,
-  AutomationWaitType as AutomationWait,
+import {
+  type AutomationConditionFilter,
+  type AutomationFlowType as AutomationFlow,
+  type AutomationStepType as AutomationStep,
+  AutomationStepId,
+  type AutomationWaitType as AutomationWait,
 } from "@deskohub/workspace-admin-api";
 import { asc, eq, inArray } from "drizzle-orm";
 import { Effect } from "effect";
@@ -18,6 +19,7 @@ import {
   emailCampaignAutomations,
   emailCampaigns,
 } from "@/db/schema";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   seedAutomatedCampaign,
   seedAutomation,
@@ -26,29 +28,29 @@ import {
 import type { CampaignId } from "../../campaign-identifiers";
 import type {
   AutomationRunId,
-  AutomationStepId,
   AutomationVersionId,
   AutomationWorkUnitId,
 } from "../automation-identifiers";
 import type { AutomationRunPhase } from "../automation-states";
 
-/** A step id as flows spell it. */
-const stepId = (id: string) => id as AutomationStepId;
-
 export const waitStep = (id: string, wait: AutomationWait): AutomationStep => ({
   _tag: "Wait",
-  id: stepId(id),
+  id: AutomationStepId.make(id),
   wait,
 });
 
 export const conditionStep = (
   id: string,
   filter: AutomationConditionFilter
-): AutomationStep => ({ _tag: "Condition", id: stepId(id), filter });
+): AutomationStep => ({
+  _tag: "Condition",
+  id: AutomationStepId.make(id),
+  filter,
+});
 
 const sendStep = (id = "send"): AutomationStep => ({
   _tag: "Send",
-  id: stepId(id),
+  id: AutomationStepId.make(id),
 });
 
 /** A decodable flow: an account-created trigger and `steps`, ending in `send`. */
@@ -146,7 +148,7 @@ export const seedAutomationRun = async (
         triggerKind: "account-created",
         triggerAt: input.triggerAt ?? input.stepEnteredAt,
         status: "active",
-        stepId: stepId(input.stepId),
+        stepId: AutomationStepId.make(input.stepId),
         phase: input.phase,
         stepEnteredAt: input.stepEnteredAt,
         dueAt: input.dueAt,
@@ -154,7 +156,7 @@ export const seedAutomationRun = async (
       })
       .returning({ id: emailCampaignAutomationRuns.id })
   );
-  return run!.id;
+  return requireValue(run, "inserted automation run").id;
 };
 
 export const readAutomationRun = async (
@@ -167,7 +169,7 @@ export const readAutomationRun = async (
       .from(emailCampaignAutomationRuns)
       .where(eq(emailCampaignAutomationRuns.id, runId))
   );
-  return run!;
+  return requireValue(run, `automation run ${runId}`);
 };
 
 /** The run's timeline, oldest first, without sequence numbers; `at` as ISO text. */

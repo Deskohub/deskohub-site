@@ -8,8 +8,9 @@ import {
   expect,
   test,
 } from "bun:test";
-import { Effect, Fiber, Result } from "effect";
+import { Effect, Fiber, Result, Schema } from "effect";
 import { TestClock } from "effect/testing";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   holdPostgresTransaction,
   waitForPostgresLockWaiter,
@@ -17,9 +18,10 @@ import {
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type { AudienceFilter } from "../../audience-filter";
 import type { CampaignId } from "../../campaign-identifiers";
-import type {
-  AutomationVersionId,
-  AutomationWorkUnitId,
+import {
+  type AutomationWorkUnitId,
+  automationVersionIdSchema,
+  automationWorkUnitIdSchema,
 } from "../automation-identifiers";
 import { automationTickAtOrBefore } from "../automation-ticks";
 import type { AutomationWorkUnitKind } from "../automation-work-units";
@@ -44,6 +46,9 @@ const database = await createWorkspacePostgresSuiteDatabase(
   "automation_engine_interleaving"
 );
 afterAll(() => database?.close());
+
+const decodeVersionId = Schema.decodeUnknownSync(automationVersionIdSchema);
+const decodeUnitId = Schema.decodeUnknownSync(automationWorkUnitIdSchema);
 
 /** Tuesday 13 October 2026, 08:00 in Prague: every automation activates then. */
 const start = Temporal.Instant.from("2026-10-13T06:00:00Z");
@@ -335,7 +340,7 @@ describe.skipIf(!database)(
       const automation = await read.automation(campaignId);
       return {
         campaignId,
-        versionId: automation.active_version_id as AutomationVersionId,
+        versionId: decodeVersionId(automation?.active_version_id),
       };
     };
 
@@ -348,7 +353,7 @@ describe.skipIf(!database)(
         (unit) => unit.kind === kind
       );
       expect(units.map((unit) => unit.status)).toEqual(["enqueued"]);
-      return units[0]!.id as AutomationWorkUnitId;
+      return decodeUnitId(requireValue(units[0], `enqueued ${kind} unit`).id);
     };
 
     /** A Workspace booking two days ahead, with its live Dotypos visit. */
@@ -389,7 +394,7 @@ describe.skipIf(!database)(
         customer,
         eventId,
         at,
-        unitId: rows[0]!.id,
+        unitId: requireValue(rows[0], "enqueued intake unit").id,
       };
     };
 
@@ -451,8 +456,11 @@ describe.skipIf(!database)(
         campaignId,
         customer,
         reservation,
-        runId: runId!,
-        email: scenario.dotypos.customers.get(customer)!.email!,
+        runId: requireValue(runId, "send-ready run ID"),
+        email: requireValue(
+          scenario.dotypos.customers.get(customer)?.email,
+          `email for ${customer}`
+        ),
       };
     };
 
@@ -517,9 +525,12 @@ describe.skipIf(!database)(
           // An intake unit serves every automation, so pausing one doesn't
           // mark it: its commit sees the pause under the lock (§5.4).
           expect(outcome).toBe("done");
-          const [event] = await read.events([eventId]);
-          expect(event!.automation_processed_at).not.toBeNull();
-          expect(event!.automation_unit_id).toBeNull();
+          const event = requireValue(
+            (await read.events([eventId]))[0],
+            `customer event ${eventId}`
+          );
+          expect(event.automation_processed_at).not.toBeNull();
+          expect(event.automation_unit_id).toBeNull();
           await scenario.plan(at.add({ minutes: 1 }));
           if (order === "lock-wait") {
             expect(await runStates(campaignId)).toEqual([readyToSend]);
@@ -527,7 +538,10 @@ describe.skipIf(!database)(
               (await read.receipts(campaignId)).map((r) => r.disposition)
             ).toEqual(["started"]);
             // Frozen: no deliver unit plans its send while paused.
-            expect((await read.runs(campaignId))[0]!.work_unit_id).toBeNull();
+            expect(
+              requireValue((await read.runs(campaignId))[0], "frozen run")
+                .work_unit_id
+            ).toBeNull();
           } else {
             expect(await read.runs(campaignId)).toEqual([]);
             expect(await read.receipts(campaignId)).toEqual([]);
@@ -553,7 +567,10 @@ describe.skipIf(!database)(
             expect(outcome).toBe("done");
             expect(fires.map((fire) => fire.status)).toEqual(["entered"]);
             expect(await runStates(campaignId)).toEqual([readyToSend]);
-            expect((await read.runs(campaignId))[0]!.work_unit_id).toBeNull();
+            expect(
+              requireValue((await read.runs(campaignId))[0], "frozen run")
+                .work_unit_id
+            ).toBeNull();
             expect((await read.automation(campaignId)).next_fire_at).toBeNull();
           } else {
             expect(outcome).toBe("dropped");
@@ -589,7 +606,10 @@ describe.skipIf(!database)(
             expect(outcome).toBe("dropped");
             expect(await read.sends(campaignId)).toEqual([]);
             expect(await runStates(campaignId)).toEqual([readyToSend]);
-            expect((await read.runs(campaignId))[0]!.work_unit_id).toBeNull();
+            expect(
+              requireValue((await read.runs(campaignId))[0], "frozen run")
+                .work_unit_id
+            ).toBeNull();
             expect(mailedTo(email)).toBe(0);
           }
         });
@@ -705,13 +725,15 @@ describe.skipIf(!database)(
         ).rows;
 
       /** A unit's row. */
-      const unitRow = async (unitId: AutomationWorkUnitId) =>
-        (
-          await pool.query(
-            "select * from email_campaign_automation_work_units where id = $1",
-            [unitId]
-          )
-        ).rows[0]!;
+      const unitRow = async (unitId: AutomationWorkUnitId) => {
+        const {
+          rows: [unit],
+        } = await pool.query(
+          "select * from email_campaign_automation_work_units where id = $1",
+          [unitId]
+        );
+        return requireValue(unit, `work unit ${unitId}`);
+      };
 
       /**
        * The intake unit planned at `when` for a fresh booking of `campaignId`,
@@ -735,7 +757,7 @@ describe.skipIf(!database)(
           "select id from email_campaign_automation_work_units where kind = 'intake' and subject->'eventIds' ? $1",
           [eventId]
         );
-        return rows[0]!.id;
+        return requireValue(rows[0], "competing intake unit").id;
       };
 
       for (const order of orders) {
@@ -781,7 +803,9 @@ describe.skipIf(!database)(
             marked ? [] : [endedAs("archived")]
           );
           // The settling commit handed the slot to the competitor.
-          expect((await inFlight()).map(({ id }) => id)).toEqual([competitor!]);
+          expect((await inFlight()).map(({ id }) => id)).toEqual([
+            requireValue(competitor, "competing work unit ID"),
+          ]);
         });
       }
 
@@ -841,11 +865,14 @@ describe.skipIf(!database)(
               expect(unit.cancel_requested_at).toBeNull();
               const next = await readyToSendRun(`submitting-${order}-next`);
               await deliverSlot.plan(at.add({ minutes: 1 }));
-              const [planned] = (await read.units(next.campaignId)).filter(
-                (u) => u.kind === "deliver"
+              const planned = requireValue(
+                (await read.units(next.campaignId)).find(
+                  (u) => u.kind === "deliver"
+                ),
+                "competing deliver unit"
               );
-              competitor = planned!.id;
-              expect(planned!.status).toBe("planned");
+              competitor = planned.id;
+              expect(planned.status).toBe("planned");
               expect(
                 (await inFlight()).filter(({ kind }) => kind === "deliver")
               ).toEqual([{ id: submitting.unitId, kind: "deliver" }]);
@@ -862,7 +889,12 @@ describe.skipIf(!database)(
           expect(mailedTo(submitting.email)).toBe(1);
           expect(
             (await inFlight()).filter(({ kind }) => kind === "deliver")
-          ).toEqual([{ id: competitor!, kind: "deliver" }]);
+          ).toEqual([
+            {
+              id: requireValue(competitor, "competing work unit ID"),
+              kind: "deliver",
+            },
+          ]);
         });
       }
     });
@@ -903,7 +935,10 @@ describe.skipIf(!database)(
                 `crashed-${operation}-${crash.split(" ")[0]}-${order}`
               );
               await crashDeliver(unitId, crash);
-              const [send] = await read.sends(campaignId);
+              const send = requireValue(
+                (await read.sends(campaignId))[0],
+                "crashed deliver unit send"
+              );
               const lifecycleOperation =
                 operation === "pause" ? pause(campaignId) : archive(campaignId);
               const reapedAt = at.add({ minutes: 6 });
@@ -912,11 +947,14 @@ describe.skipIf(!database)(
               if (order === "commit-between") {
                 // The operation lands while the consumer is dead.
                 await lifecycleOperation();
-                const [unit] = (await read.units(campaignId)).filter(
-                  (u) => u.id === unitId
+                const unit = requireValue(
+                  (await read.units(campaignId)).find(
+                    (row) => row.id === unitId
+                  ),
+                  "crashed deliver unit"
                 );
-                expect(unit!.status).toBe("claimed");
-                expect(unit!.cancel_requested_at).toBeNull();
+                expect(unit.status).toBe("claimed");
+                expect(unit.cancel_requested_at).toBeNull();
                 await scenario.plan(reapedAt);
                 outcome = (await scenario.process(unitId, reapedAt)).outcome;
               } else {
@@ -933,11 +971,12 @@ describe.skipIf(!database)(
               }
 
               expect(outcome).toBe("done");
-              const [unit] = (await read.units(campaignId)).filter(
-                (u) => u.id === unitId
+              const unit = requireValue(
+                (await read.units(campaignId)).find((row) => row.id === unitId),
+                "crashed deliver unit"
               );
-              expect(unit!.cancel_requested_at).toBeNull();
-              expect(unit!.enqueue_generation).toBe(1);
+              expect(unit.cancel_requested_at).toBeNull();
+              expect(unit.enqueue_generation).toBe(1);
               expect(
                 scenario.resend
                   .requests()
@@ -945,7 +984,7 @@ describe.skipIf(!database)(
                   .map(({ key }) => key)
               ).toEqual(
                 Array(crash === "before submitting" ? 1 : 2).fill(
-                  `email-campaign:${send!.id}:attempt-1:batch-0`
+                  `email-campaign:${send.id}:attempt-1:batch-0`
                 )
               );
               expect(mailedTo(email)).toBe(1);
@@ -1082,7 +1121,7 @@ describe.skipIf(!database)(
             }),
           });
           const outcome = await raceUnit({
-            unitId: intake[0]!.id,
+            unitId: requireValue(intake[0], "intake unit for both events").id,
             campaignId,
             order,
             at: plannedAt,
@@ -1094,13 +1133,18 @@ describe.skipIf(!database)(
           await scenario.tick(plannedAt.add({ minutes: 2 }));
 
           const automation = await read.automation(campaignId);
-          const v2 = automation.active_version_id as AutomationVersionId;
+          const v2 = decodeVersionId(automation?.active_version_id);
           expect(v2).not.toBe(v1);
           const { rows: versions } = await pool.query(
             "select activated_at from email_campaign_automation_versions where id = $1",
             [v2]
           );
-          const v2ActivatedAt = databaseInstant(versions[0]!.activated_at)!;
+          const v2ActivatedAt = requireValue(
+            databaseInstant(
+              requireValue(versions[0], "second version").activated_at
+            ),
+            "second version activation time"
+          );
           const runs = await read.runs(campaignId);
           for (const occurrence of [early, late]) {
             const run = runs.find(
@@ -1145,8 +1189,9 @@ describe.skipIf(!database)(
             settled: async () => (await read.fires(campaignId)).length >= 4,
           });
 
-          const v2 = (await read.automation(campaignId))
-            .active_version_id as AutomationVersionId;
+          const v2 = decodeVersionId(
+            (await read.automation(campaignId))?.active_version_id
+          );
           expect(
             (await read.fires(campaignId)).map((fire) => ({
               at: databaseInstant(fire.fire_at)?.toString(),
@@ -1278,9 +1323,11 @@ describe.skipIf(!database)(
               step_id: "wednesday",
               phase: "waiting",
             });
-            expect(databaseInstant(run!.due_at)?.toString()).toBe(
-              nextWednesday.toString()
-            );
+            expect(
+              databaseInstant(
+                requireValue(run, "waiting run").due_at
+              )?.toString()
+            ).toBe(nextWednesday.toString());
           }
         });
       }
@@ -1410,7 +1457,10 @@ describe.skipIf(!database)(
                and e.id = $1`,
             [eventId]
           );
-          const { unitId, accountId } = rows[0]!;
+          const { unitId, accountId } = requireValue(
+            rows[0],
+            "intake unit and account"
+          );
           const marking = [
             "update customer_accounts set legacy = true where id = $1",
             [accountId],
@@ -1433,9 +1483,12 @@ describe.skipIf(!database)(
           });
 
           expect(outcome).toBe("done");
-          const [event] = await read.events([eventId]);
-          expect(event!.automation_processed_at).not.toBeNull();
-          expect(event!.automation_unit_id).toBeNull();
+          const event = requireValue(
+            (await read.events([eventId]))[0],
+            `customer event ${eventId}`
+          );
+          expect(event.automation_processed_at).not.toBeNull();
+          expect(event.automation_unit_id).toBeNull();
           const receipts = await read.receipts(campaignId);
           if (order === "lock-wait") {
             expect(receipts.map((r) => r.disposition)).toEqual(["started"]);
@@ -1622,10 +1675,8 @@ describe.skipIf(!database)(
            returning id`,
           [start.toString()]
         );
-        const [held, free] = seeded.map(({ id }) => id) as [
-          AutomationWorkUnitId,
-          AutomationWorkUnitId,
-        ];
+        const held = requireValue(seeded[0], "held intake unit").id;
+        const free = requireValue(seeded[1], "free intake unit").id;
         const statusOf = async (unitId: AutomationWorkUnitId) =>
           (
             await pool.query<{ status: string }>(

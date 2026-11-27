@@ -3,11 +3,16 @@ import "@/shared/testing/workspace-test-env";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect } from "effect";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { Effect, Schema } from "effect";
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type { AudienceFilter } from "../../audience-filter";
 import type { CampaignId } from "../../campaign-identifiers";
+import { automationRunIdSchema } from "../automation-identifiers";
 import {
   databaseInstant,
   makeAutomationEngineScenario,
@@ -25,6 +30,18 @@ afterAll(() => database?.close());
 
 const prague = "Europe/Prague";
 const cowork = { family: "cowork", properties: [] } as const;
+
+const readRepeatVisitRun = Schema.decodeUnknownSync(
+  Schema.Struct({
+    id: automationRunIdSchema,
+    trigger_reservation_id: workspaceReservationIdSchema,
+    status: Schema.String,
+    outcome: Schema.NullOr(Schema.String),
+    outcome_reason: Schema.NullOr(Schema.String),
+    due_at: Schema.Union([Schema.Date, Schema.String, Schema.Null]),
+  })
+);
+const readClaimRunId = Schema.decodeUnknownSync(automationRunIdSchema);
 
 /** A second paid day visit to the coworking space within 60 days. */
 const repeatDayVisits: AudienceFilter = {
@@ -178,14 +195,17 @@ describe.skipIf(!database)(
 
     /** The campaign's runs in the order they started. */
     const runsOf = async (campaignId: CampaignId) =>
-      (await read.runs(campaignId)).map((run) => ({
-        id: run.id as string,
-        reservation: run.trigger_reservation_id as WorkspaceReservationId,
-        status: run.status as string,
-        outcome: run.outcome as string | null,
-        reason: run.outcome_reason as string | null,
-        dueAt: iso(run.due_at),
-      }));
+      (await read.runs(campaignId)).map((row) => {
+        const run = readRepeatVisitRun(row);
+        return {
+          id: run.id,
+          reservation: run.trigger_reservation_id,
+          status: run.status,
+          outcome: run.outcome,
+          reason: run.outcome_reason,
+          dueAt: iso(run.due_at),
+        };
+      });
 
     /** Each run's trigger reservation with how it ended. */
     const outcomesOf = async (campaignId: CampaignId) =>
@@ -208,7 +228,9 @@ describe.skipIf(!database)(
       );
 
     const claimHolders = async (campaignId: CampaignId) =>
-      (await read.claims(campaignId)).map((claim) => claim.run_id as string);
+      (await read.claims(campaignId)).map((claim) =>
+        readClaimRunId(claim.run_id)
+      );
 
     /** Whether the campaign has a persisted delivery batch. */
     const batchPersisted = async (campaignId: CampaignId) =>
@@ -253,7 +275,9 @@ describe.skipIf(!database)(
       ]);
       expect(mailed()).toEqual([emailOf(customer)]);
       const runs = await runsOf(campaignId);
-      expect(await claimHolders(campaignId)).toEqual([runs[1]!.id]);
+      expect(await claimHolders(campaignId)).toEqual([
+        requireValue(runs[1]).id,
+      ]);
     });
 
     test("a first visit alone sends nothing", async () => {
@@ -383,7 +407,7 @@ describe.skipIf(!database)(
       // One intake unit took both finishes.
       expect(finishes).toHaveLength(2);
       expect(intakes).toHaveLength(1);
-      expect(intakes[0]!.eventIds).toEqual(
+      expect(requireValue(intakes[0]).eventIds).toEqual(
         expect.arrayContaining(finishes.map((event) => event.id))
       );
       expect(await dispositions(campaignId)).toEqual({
@@ -432,7 +456,9 @@ describe.skipIf(!database)(
         [[day.reservationId, pack.reservationId, overnight.reservationId]]
       );
       const finishOf = (reservationId: WorkspaceReservationId) =>
-        finishes.find((event) => event.reservation === reservationId)!.id;
+        requireValue(
+          finishes.find((event) => event.reservation === reservationId)
+        ).id;
       const { rows: intakes } = await pool.query<{ eventIds: string[] }>(
         `select subject->'eventIds' as "eventIds" from email_campaign_automation_work_units
           where kind = 'intake' and subject->'eventIds' ?| $1`,
@@ -446,7 +472,7 @@ describe.skipIf(!database)(
         true,
       ]);
       expect(intakes).toHaveLength(1);
-      expect(intakes[0]!.eventIds.toSorted()).toEqual(
+      expect(requireValue(intakes[0]).eventIds.toSorted()).toEqual(
         [
           finishOf(day.reservationId),
           finishOf(overnight.reservationId),
@@ -624,7 +650,9 @@ describe.skipIf(!database)(
           outcome: "sent",
         });
         expect(mailed()).toEqual([emailOf(customer)]);
-        expect(await claimHolders(campaignId)).toEqual([runs[2]!.id]);
+        expect(await claimHolders(campaignId)).toEqual([
+          requireValue(runs[2]).id,
+        ]);
       }
     );
 
@@ -650,13 +678,13 @@ describe.skipIf(!database)(
       scenario.resend.respondWith(() => "accept");
       // The replay can't reproduce the payload the provider may have taken.
       scenario.dotypos.customers.set(customer, {
-        ...scenario.dotypos.customers.get(customer)!,
+        ...requireValue(scenario.dotypos.customers.get(customer)),
         email: testEmailAddress(`${customer.slice(-40)}-moved`),
       });
 
       await settle(finishedAt, second.endsAt.add({ hours: 6 }));
 
-      const uncertain = (await runsOf(campaignId))[1]!;
+      const uncertain = requireValue((await runsOf(campaignId))[1]);
       expect(uncertain).toMatchObject({
         reservation: second.reservationId,
         status: "ended",

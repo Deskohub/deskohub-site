@@ -4,6 +4,7 @@ import "@/shared/testing/workspace-test-env";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
   DotyposUnavailable,
@@ -11,12 +12,13 @@ import {
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import type { AutomationConditionFilter } from "@deskohub/workspace-admin-api";
 import { eq, inArray } from "drizzle-orm";
-import { Effect, Layer, Result } from "effect";
+import { Array as Arr, Effect, Layer, Result, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import {
   emailCampaignAudiences,
   emailCampaignAutomationWorkUnits as units,
 } from "@/db/schema";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { canonicalJson } from "@/shared/utils/canonical-json";
 import type { AudienceCondition, AudienceFilter } from "../../audience-filter";
@@ -33,6 +35,7 @@ import type {
 } from "../automation-identifiers";
 import { AutomationConditionEvaluation } from "./automation-condition-evaluation.service";
 import { AutomationConditionPlanning } from "./automation-condition-planning.service";
+import { conditionSubjectSchema } from "./automation-condition-units";
 import { automationEngineTestLayer } from "./automation-engine.test-utils";
 import { AutomationEvaluationFacts } from "./automation-evaluation-facts.service";
 import { AutomationPlanner } from "./automation-planner.service";
@@ -119,14 +122,14 @@ const filterHash = (filter: AudienceFilter) =>
 const profile = (id: DotyposCustomerId, tags: readonly string[]) =>
   ({
     id,
-    _cloudId: "automation-condition-unit-cloud",
+    _cloudId: DotyposCloudIdSchema.make("automation-condition-unit-cloud"),
     firstName: "Test",
     points: "0",
     flags: "0",
     display: true,
     deleted: false,
     tags,
-  }) as DotyposCustomer;
+  }) satisfies DotyposCustomer;
 
 describe.skipIf(!database)("condition units on Postgres", () => {
   if (!database) return;
@@ -135,7 +138,7 @@ describe.skipIf(!database)("condition units on Postgres", () => {
   const audienceIds: CampaignAudienceId[] = [];
   const dotypos = {
     failing: false,
-    profiles: [] as DotyposCustomer[],
+    profiles: Arr.empty<DotyposCustomer>(),
     profilePages: 0,
   };
 
@@ -250,9 +253,9 @@ describe.skipIf(!database)("condition units on Postgres", () => {
     options: { readonly unknown?: readonly string[] } = {}
   ) => {
     const ids = labels.map(customer);
-    const known = ids.filter(
-      (_, index) => !options.unknown?.includes(labels[index]!)
-    );
+    const known = labels
+      .filter((label) => !options.unknown?.includes(label))
+      .map(customer);
     customerIds.push(...known);
     if (known.length > 0) await seedKnownCustomers(database.db, known);
     const runIds: AutomationRunId[] = [];
@@ -278,8 +281,8 @@ describe.skipIf(!database)("condition units on Postgres", () => {
         .values({ title: `Condition unit ${crypto.randomUUID()}`, filter })
         .returning({ id: emailCampaignAudiences.id })
     );
-    audienceIds.push(audience!.id);
-    return audience!.id;
+    audienceIds.push(requireValue(audience).id);
+    return requireValue(audience).id;
   };
 
   const editAudience = (
@@ -354,7 +357,7 @@ describe.skipIf(!database)("condition units on Postgres", () => {
     });
     for (const runId of runIds) {
       expect((await readAutomationRun(database.db, runId)).workUnitId).toBe(
-        planned!.id
+        requireValue(planned).id
       );
     }
 
@@ -390,12 +393,12 @@ describe.skipIf(!database)("condition units on Postgres", () => {
 
     // A duplicate delivery of the settled unit decides nothing again.
     engine.queue.redeliver({
-      unitId: planned!.id,
+      unitId: requireValue(planned).id,
       idempotencyKey: "duplicate",
     });
     await engine.drain(at.add({ seconds: 6 }));
     expect(
-      await readAutomationRunTimeline(database.db, runIds[0]!)
+      await readAutomationRunTimeline(database.db, requireValue(runIds[0]))
     ).toHaveLength(2);
     expect(
       (await engine.plan(at.add({ minutes: 1 }))).conditions.runsPlanned
@@ -421,10 +424,9 @@ describe.skipIf(!database)("condition units on Postgres", () => {
   const chainOf = async (campaignId: CampaignId) =>
     Object.fromEntries(
       (await unitsOf(campaignId)).map((unit) => {
-        const subject = unit.subject as {
-          readonly stepId: string;
-          readonly chainedSteps?: number;
-        };
+        const subject = Schema.decodeUnknownSync(conditionSubjectSchema)(
+          unit.subject
+        );
         return [subject.stepId, subject.chainedSteps ?? 0];
       })
     );
@@ -501,14 +503,16 @@ describe.skipIf(!database)("condition units on Postgres", () => {
     const drainedAt = at.add({ seconds: 5 });
     await engine.drain(drainedAt);
 
-    expect(await readAutomationRun(database.db, runId!)).toMatchObject({
+    expect(
+      await readAutomationRun(database.db, requireValue(runId))
+    ).toMatchObject({
       status: "ended",
       outcome: "condition-failed",
       stepId: "check-3",
       workUnitId: null,
     });
     expect(
-      (await readAutomationRunTimeline(database.db, runId!)).map(
+      (await readAutomationRunTimeline(database.db, requireValue(runId))).map(
         ({ kind, stepId }) => [kind, stepId]
       )
     ).toEqual([
@@ -528,12 +532,17 @@ describe.skipIf(!database)("condition units on Postgres", () => {
     // As if the unit ended a chain already as deep as the cap allows.
     await database.pool.query(
       "update email_campaign_automation_work_units set subject = subject || $1::jsonb where id = $2",
-      [JSON.stringify({ chainedSteps: maxChainedSteps }), planned!.id]
+      [
+        JSON.stringify({ chainedSteps: maxChainedSteps }),
+        requireValue(planned).id,
+      ]
     );
     await engine.drain(at.add({ seconds: 5 }));
 
     expect(await unitsOf(seeded.campaignId)).toHaveLength(1);
-    expect(await readAutomationRun(database.db, runId!)).toMatchObject({
+    expect(
+      await readAutomationRun(database.db, requireValue(runId))
+    ).toMatchObject({
       status: "active",
       stepId: "check-2",
       phase: "ready",
@@ -563,13 +572,17 @@ describe.skipIf(!database)("condition units on Postgres", () => {
     const savedAudiences = [
       { audienceId, filterHash: filterHash(englishOnly) },
     ];
-    expect(await readAutomationRun(database.db, known!)).toMatchObject({
+    expect(
+      await readAutomationRun(database.db, requireValue(known))
+    ).toMatchObject({
       status: "ended",
       outcome: "condition-failed",
       stepId: "check",
       workUnitId: null,
     });
-    expect(await readAutomationRunTimeline(database.db, known!)).toEqual([
+    expect(
+      await readAutomationRunTimeline(database.db, requireValue(known))
+    ).toEqual([
       {
         kind: "condition-failed",
         stepId: "check",
@@ -578,7 +591,9 @@ describe.skipIf(!database)("condition units on Postgres", () => {
       },
     ]);
     // Workspace doesn't know this customer: unknown, so it can't pass.
-    expect(await readAutomationRunTimeline(database.db, unknown!)).toEqual([
+    expect(
+      await readAutomationRunTimeline(database.db, requireValue(unknown))
+    ).toEqual([
       {
         kind: "condition-failed",
         stepId: "check",
@@ -603,7 +618,9 @@ describe.skipIf(!database)("condition units on Postgres", () => {
       runsEnded: 1,
     });
     expect(await unitsOf(seeded.campaignId)).toEqual([]);
-    expect(await readAutomationRun(database.db, runId!)).toMatchObject({
+    expect(
+      await readAutomationRun(database.db, requireValue(runId))
+    ).toMatchObject({
       status: "ended",
       outcome: "failed",
       outcomeReason: "evaluation-unavailable",
@@ -622,7 +639,9 @@ describe.skipIf(!database)("condition units on Postgres", () => {
       "done",
     ]);
 
-    expect(await readAutomationRun(database.db, runId!)).toMatchObject({
+    expect(
+      await readAutomationRun(database.db, requireValue(runId))
+    ).toMatchObject({
       status: "ended",
       outcome: "failed",
       outcomeReason: "evaluation-unavailable",
@@ -645,7 +664,9 @@ describe.skipIf(!database)("condition units on Postgres", () => {
     await engine.drain();
 
     expect(dotypos.profilePages).toBe(1);
-    expect(await readAutomationRunTimeline(database.db, runId!)).toEqual([
+    expect(
+      await readAutomationRunTimeline(database.db, requireValue(runId))
+    ).toEqual([
       {
         kind: "condition-failed",
         stepId: "check",
@@ -668,26 +689,35 @@ describe.skipIf(!database)("condition units on Postgres", () => {
     expect(planned?.requestCost).toBe(1);
 
     for (const when of [at, at.add({ hours: 1 }), at.add({ hours: 23 })]) {
-      expect(await engine.process(planned!.id, when)).toBe("redelivered");
+      expect(await engine.process(requireValue(planned).id, when)).toBe(
+        "redelivered"
+      );
       const [unit] = await unitsOf(seeded.campaignId);
       expect(unit).toMatchObject({
         status: "enqueued",
         lastErrorCode: "dotypos-unavailable",
       });
-      expect(await readAutomationRun(database.db, runId!)).toMatchObject({
+      expect(
+        await readAutomationRun(database.db, requireValue(runId))
+      ).toMatchObject({
         status: "active",
         phase: "ready",
-        workUnitId: planned!.id,
+        workUnitId: requireValue(planned).id,
       });
     }
     const pagesBeforeExpiry = dotypos.profilePages;
 
     expect(
-      await engine.process(planned!.id, at.add({ hours: 24, minutes: 1 }))
+      await engine.process(
+        requireValue(planned).id,
+        at.add({ hours: 24, minutes: 1 })
+      )
     ).toBe("done");
 
     expect(dotypos.profilePages).toBe(pagesBeforeExpiry);
-    expect(await readAutomationRun(database.db, runId!)).toMatchObject({
+    expect(
+      await readAutomationRun(database.db, requireValue(runId))
+    ).toMatchObject({
       status: "ended",
       outcome: "failed",
       outcomeReason: "evaluation-unavailable",
@@ -708,7 +738,9 @@ describe.skipIf(!database)("condition units on Postgres", () => {
     await engine.drain();
 
     expect(dotypos.profilePages).toBe(0);
-    expect(await readAutomationRun(database.db, runId!)).toMatchObject({
+    expect(
+      await readAutomationRun(database.db, requireValue(runId))
+    ).toMatchObject({
       status: "ended",
       outcome: "failed",
       outcomeReason: "evaluation-unavailable",
@@ -728,13 +760,17 @@ describe.skipIf(!database)("condition units on Postgres", () => {
     expect((await engine.drain()).map(({ outcome }) => outcome)).toEqual([
       "dropped",
     ]);
-    expect(await readAutomationRun(database.db, runId!)).toMatchObject({
+    expect(
+      await readAutomationRun(database.db, requireValue(runId))
+    ).toMatchObject({
       status: "active",
       stepId: "check",
       phase: "ready",
       workUnitId: null,
     });
-    expect(await readAutomationRunTimeline(database.db, runId!)).toEqual([]);
+    expect(
+      await readAutomationRunTimeline(database.db, requireValue(runId))
+    ).toEqual([]);
 
     const resumedAt = at.add({ minutes: 5 });
     await setAutomationLifecycle(database.db, seeded.campaignId, {
@@ -744,7 +780,9 @@ describe.skipIf(!database)("condition units on Postgres", () => {
     expect((await engine.plan(resumedAt)).conditions.runsPlanned).toBe(1);
     await engine.drain(resumedAt);
 
-    expect(await readAutomationRun(database.db, runId!)).toMatchObject({
+    expect(
+      await readAutomationRun(database.db, requireValue(runId))
+    ).toMatchObject({
       stepId: "delay",
       phase: "waiting",
     });

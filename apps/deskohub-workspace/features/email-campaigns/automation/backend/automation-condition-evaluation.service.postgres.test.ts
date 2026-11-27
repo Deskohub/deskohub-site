@@ -2,6 +2,8 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  DotyposBranchIdSchema,
+  DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -13,6 +15,7 @@ import type { AutomationConditionFilter } from "@deskohub/workspace-admin-api";
 import { eq } from "drizzle-orm";
 import { Cause, Effect, Exit, Layer, Option } from "effect";
 import { emailCampaignAudiences, emailCampaigns } from "@/db/schema";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import type { AudienceCondition, AudienceFilter } from "../../audience-filter";
@@ -41,17 +44,19 @@ const runId = crypto.randomUUID();
 const customerId = (label: string) =>
   DotyposCustomerIdSchema.make(`automation-condition-${runId}-${label}`);
 
-const customer = (id: DotyposCustomerId, tags: readonly string[] = []) =>
-  ({
-    id,
-    _cloudId: "automation-condition-cloud",
-    firstName: "Test",
-    points: "0",
-    flags: "0",
-    display: true,
-    deleted: false,
-    tags,
-  }) as DotyposCustomer;
+const customer = (
+  id: DotyposCustomerId,
+  tags: readonly string[] = []
+): DotyposCustomer => ({
+  id,
+  _cloudId: DotyposCloudIdSchema.make("automation-condition-cloud"),
+  firstName: "Test",
+  points: "0",
+  flags: "0",
+  display: true,
+  deleted: false,
+  tags,
+});
 
 type SeedReservation = {
   readonly label: string;
@@ -89,16 +94,23 @@ describe.skipIf(!testDatabase)(
       );
       return rows.map((row, index) => {
         const startsAt =
-          reservations[index]!.startsAt ?? now.subtract({ hours: 240 });
+          requireValue(reservations[index], "reservation fixture").startsAt ??
+          now.subtract({ hours: 240 });
         reservationIds.push(row.id);
+        const dotyposReservationId = requireValue(
+          row.dotyposReservationId,
+          "seeded Dotypos reservation ID"
+        );
         return {
           workspaceReservationId: row.id,
-          dotyposReservationId: row.dotyposReservationId!,
+          dotyposReservationId,
           customerId: row.dotyposCustomerId,
           visit: {
-            id: row.dotyposReservationId!,
-            _branchId: "automation-condition-branch",
-            _cloudId: "automation-condition-cloud",
+            id: dotyposReservationId,
+            _branchId: DotyposBranchIdSchema.make(
+              "automation-condition-branch"
+            ),
+            _cloudId: DotyposCloudIdSchema.make("automation-condition-cloud"),
             _customerId: row.dotyposCustomerId,
             startDate: startsAt.toString(),
             endDate: startsAt.add({ hours: 2 }).toString(),
@@ -231,8 +243,9 @@ describe.skipIf(!testDatabase)(
           .values({ title: `${title} ${runId}`, filter })
           .returning({ id: emailCampaignAudiences.id })
       );
-      audienceIds.push(audience!.id);
-      return audience!.id;
+      const audienceId = requireValue(audience, "inserted audience").id;
+      audienceIds.push(audienceId);
+      return audienceId;
     };
 
     const planAndFetchEvaluate = async (input: {
@@ -289,19 +302,17 @@ describe.skipIf(!testDatabase)(
     });
 
     test("evaluates saved audience membership in both directions", async () => {
-      const [member, nonmember] = [
-        customerId("membership-vip"),
-        customerId("membership-gold"),
-      ];
+      const member = customerId("membership-vip");
+      const nonmember = customerId("membership-gold");
       const seeded = await insertReservations([
-        { label: "membership-vip", customer: member! },
-        { label: "membership-gold", customer: nonmember! },
+        { label: "membership-vip", customer: member },
+        { label: "membership-gold", customer: nonmember },
       ]);
       const audienceId = await insertAudience("VIP", tagged("VIP"));
       const dotypos = makeDotypos({
-        customers: [customer(member!, ["VIP"]), customer(nonmember!, ["GOLD"])],
+        customers: [customer(member, ["VIP"]), customer(nonmember, ["GOLD"])],
       });
-      const ids = [member!, nonmember!];
+      const ids = [member, nonmember];
 
       const inResult = await planAndFetchEvaluate({
         condition: inAudience(audienceId, "in"),
@@ -314,10 +325,10 @@ describe.skipIf(!testDatabase)(
         dotypos,
       });
 
-      expect(inResult.decisions.get(member!)?.outcome).toBe("match");
-      expect(inResult.decisions.get(nonmember!)?.outcome).toBe("noMatch");
-      expect(notInResult.decisions.get(member!)?.outcome).toBe("noMatch");
-      expect(notInResult.decisions.get(nonmember!)?.outcome).toBe("match");
+      expect(inResult.decisions.get(member)?.outcome).toBe("match");
+      expect(inResult.decisions.get(nonmember)?.outcome).toBe("noMatch");
+      expect(notInResult.decisions.get(member)?.outcome).toBe("noMatch");
+      expect(notInResult.decisions.get(nonmember)?.outcome).toBe("match");
       expect(seeded).toHaveLength(2);
     });
 
@@ -344,8 +355,14 @@ describe.skipIf(!testDatabase)(
         dotypos,
       });
 
-      const firstDecision = first.decisions.get(known)!;
-      const secondDecision = second.decisions.get(known)!;
+      const firstDecision = requireValue(
+        first.decisions.get(known),
+        "decision before filter edit"
+      );
+      const secondDecision = requireValue(
+        second.decisions.get(known),
+        "decision after filter edit"
+      );
       expect(firstDecision.outcome).toBe("match");
       expect(secondDecision.outcome).toBe("noMatch");
       expect(firstDecision.savedAudiences[0]?.filterHash).toMatch(
@@ -457,20 +474,18 @@ describe.skipIf(!testDatabase)(
     });
 
     test("uses the trigger window for last-visit conditions", async () => {
-      const [recent, old] = [
-        customerId("trigger-recent"),
-        customerId("trigger-old"),
-      ];
+      const recent = customerId("trigger-recent");
+      const old = customerId("trigger-old");
       const triggerAt = Temporal.Instant.from("2026-10-10T10:00:00Z");
       const seeded = await insertReservations([
         {
           label: "trigger-recent",
-          customer: recent!,
+          customer: recent,
           startsAt: triggerAt.subtract({ hours: 336 }),
         },
         {
           label: "trigger-old",
-          customer: old!,
+          customer: old,
           startsAt: Temporal.Instant.from("2026-08-10T10:00:00Z"),
         },
       ]);
@@ -479,7 +494,10 @@ describe.skipIf(!testDatabase)(
         trigger: Option.some({
           kind: "reservation-finished",
           at: triggerAt,
-          reservationId: Option.some(seeded[0]!.workspaceReservationId),
+          reservationId: Option.some(
+            requireValue(seeded[0], "trigger reservation")
+              .workspaceReservationId
+          ),
         }),
       };
       const result = await planAndFetchEvaluate({
@@ -489,15 +507,15 @@ describe.skipIf(!testDatabase)(
           count: 1,
           unit: "month",
         }),
-        customers: [recent!, old!],
+        customers: [recent, old],
         context: triggerContext,
         dotypos: makeDotypos({
           reservations: seeded.map(({ visit }) => visit),
         }),
       });
 
-      expect(result.decisions.get(recent!)?.outcome).toBe("match");
-      expect(result.decisions.get(old!)?.outcome).toBe("noMatch");
+      expect(result.decisions.get(recent)?.outcome).toBe("match");
+      expect(result.decisions.get(old)?.outcome).toBe("noMatch");
     });
 
     test("resolves This campaign email counts against the evaluation campaign", async () => {
@@ -514,10 +532,11 @@ describe.skipIf(!testDatabase)(
           })
           .returning({ id: emailCampaigns.id })
       );
-      campaignIds.push(campaign!.id);
+      const campaignId = requireValue(campaign, "inserted campaign").id;
+      campaignIds.push(campaignId);
       const campaignContext: AudienceEvaluationContext = {
         ...context,
-        campaignId: Option.some(campaign!.id),
+        campaignId: Option.some(campaignId),
       };
       const condition: AutomationConditionFilter = {
         attribute: "campaignEmailCount",

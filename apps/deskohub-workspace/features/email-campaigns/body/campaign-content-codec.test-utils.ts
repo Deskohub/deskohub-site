@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import type { CampaignBodyDocument } from "./campaign-body-document";
 import { readCampaignContent } from "./campaign-content-codec";
 
@@ -9,5 +10,9 @@ export const markdownCampaignBody = (
   Effect.runPromise(
     readCampaignContent({
       "cs-CZ": { subject: "", preheader: "", bodyMarkdown },
-    }).pipe(Effect.map((content) => content["cs-CZ"]!.body))
+    }).pipe(
+      Effect.map(
+        (content) => requireValue(content["cs-CZ"], "cs-CZ content").body
+      )
+    )
   );

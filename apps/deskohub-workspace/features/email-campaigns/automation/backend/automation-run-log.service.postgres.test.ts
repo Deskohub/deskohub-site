@@ -2,6 +2,7 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
+  DotyposCloudIdSchema,
   type DotyposCustomer,
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
@@ -11,14 +12,14 @@ import {
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { testEmailAddress } from "@deskohub/test-email";
-import type { AutomationRunListInputType as AutomationRunListInput } from "@deskohub/workspace-admin-api";
-import { sql } from "drizzle-orm";
-import { Effect, type Layer } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
 import {
-  emailCampaignAutomationRunEvents,
-  emailCampaignAutomationRuns,
-} from "@/db/schema";
+  type AutomationRunListInputType as AutomationRunListInput,
+  AutomationStepId,
+} from "@deskohub/workspace-admin-api";
+import { sql } from "drizzle-orm";
+import { Effect, type Layer, Schema } from "effect";
+import { WorkspaceDatabase } from "@/db/database.service";
+import { emailCampaignAutomationRuns } from "@/db/schema";
 import {
   deleteAutomatedCampaigns,
   deleteCampaigns,
@@ -26,12 +27,16 @@ import {
   seedAutomationVersion,
   seedCampaignSend,
 } from "@/features/email-campaigns/backend/email-campaigns.test-utils";
-import type { CampaignId } from "@/features/email-campaigns/campaign-identifiers";
+import {
+  type CampaignId,
+  campaignIdSchema,
+} from "@/features/email-campaigns/campaign-identifiers";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
-import type {
-  AutomationRunId,
-  AutomationStepId,
-  AutomationVersionId,
+import {
+  type AutomationRunId,
+  type AutomationVersionId,
+  automationRunIdSchema,
 } from "../automation-identifiers";
 import type { AutomationRunOutcome } from "../automation-states";
 import {
@@ -49,7 +54,7 @@ afterAll(() => testDatabase?.close());
 const suite = crypto.randomUUID().slice(0, 8);
 const customerId = (name: string) =>
   DotyposCustomerIdSchema.make(`automation-run-log-${suite}-${name}`);
-const stepId = (id: string) => id as AutomationStepId;
+const stepId = (id: string) => AutomationStepId.make(id);
 
 const startedAt = Temporal.Instant.from("2026-10-19T08:00:00Z");
 const minutes = (count: number) => startedAt.add({ minutes: count });
@@ -60,7 +65,9 @@ type SeededRunState =
   | {
       readonly status: "ended";
       readonly outcome: AutomationRunOutcome;
-      readonly reason?: string;
+      readonly reason?: NonNullable<
+        (typeof emailCampaignAutomationRuns.$inferInsert)["outcomeReason"]
+      >;
     };
 
 const kindCheck = "email_campaign_automation_run_events_kind_check";
@@ -85,13 +92,13 @@ const profile = (
 ) =>
   ({
     id,
-    _cloudId: "automation-run-log-cloud",
+    _cloudId: DotyposCloudIdSchema.make("automation-run-log-cloud"),
     points: "0",
     flags: "0",
     display: true,
     deleted: false,
     ...fields,
-  }) as DotyposCustomer;
+  }) satisfies DotyposCustomer;
 
 describe.skipIf(!testDatabase)(
   "automation run log on disposable Postgres",
@@ -175,13 +182,13 @@ describe.skipIf(!testDatabase)(
               ? { phase: state.phase, dueAt: input.startedAt.add({ hours: 1 }) }
               : {
                   outcome: state.outcome,
-                  outcomeReason: (state.reason ?? null) as never,
+                  outcomeReason: state.reason ?? null,
                   endedAt: input.startedAt.add({ minutes: 30 }),
                 }),
           })
           .returning({ id: emailCampaignAutomationRuns.id })
       );
-      return row!.id;
+      return requireValue(row).id;
     };
 
     let seeded: Awaited<ReturnType<typeof seedLog>>;
@@ -252,18 +259,29 @@ describe.skipIf(!testDatabase)(
     /** Newest first: by start, then by id among runs that started together. */
     const newestFirst = (ids: readonly AutomationRunId[]) => {
       const [r0, r1, r2, r3, r4, r5, r6] = ids;
-      const [tiedFirst, tiedSecond] = [r5!, r6!].sort().reverse();
-      return [tiedFirst!, tiedSecond!, r4!, r3!, r2!, r1!, r0!];
+      const [tiedFirst, tiedSecond] = [requireValue(r5), requireValue(r6)]
+        .sort()
+        .reverse();
+      return [
+        requireValue(tiedFirst),
+        requireValue(tiedSecond),
+        requireValue(r4),
+        requireValue(r3),
+        requireValue(r2),
+        requireValue(r1),
+        requireValue(r0),
+      ];
     };
 
     beforeAll(async () => {
       seeded = await seedLog();
-      const result = await pool.query(
+      const { rows } = await pool.query<{ definition: unknown }>(
         "select pg_get_constraintdef(oid) as definition from pg_constraint where conname = $1",
         [kindCheck]
       );
-      kindCheckDefinition = (result as { rows: { definition: string }[] })
-        .rows[0]!.definition;
+      kindCheckDefinition = Schema.decodeUnknownSync(Schema.String)(
+        requireValue(rows[0], "timeline event kind constraint").definition
+      );
     });
 
     afterAll(async () => {
@@ -283,11 +301,27 @@ describe.skipIf(!testDatabase)(
         );
 
       expect(await listed({})).toEqual(newestFirst(ids));
-      expect(await listed({ state: "active" })).toEqual([r4!, r2!]);
-      expect(await listed({ stepId: "s1" })).toEqual([r3!, r2!, r0!]);
-      expect(await listed({ outcome: "sent" })).toEqual([r6!, r0!]);
-      expect(await listed({ versionNumber: 1 })).toEqual([r2!, r1!, r0!]);
-      expect(await listed({ customerId: customerId("r3") })).toEqual([r3!]);
+      expect(await listed({ state: "active" })).toEqual([
+        requireValue(r4),
+        requireValue(r2),
+      ]);
+      expect(await listed({ stepId: "s1" })).toEqual([
+        requireValue(r3),
+        requireValue(r2),
+        requireValue(r0),
+      ]);
+      expect(await listed({ outcome: "sent" })).toEqual([
+        requireValue(r6),
+        requireValue(r0),
+      ]);
+      expect(await listed({ versionNumber: 1 })).toEqual([
+        requireValue(r2),
+        requireValue(r1),
+        requireValue(r0),
+      ]);
+      expect(await listed({ customerId: customerId("r3") })).toEqual([
+        requireValue(r3),
+      ]);
       expect(
         await listed({ state: "ended", stepId: "s2", versionNumber: 2 })
       ).toEqual(newestFirst(ids).filter((id) => id === r5 || id === r6));
@@ -300,8 +334,8 @@ describe.skipIf(!testDatabase)(
         page.runs.map((summary) => [summary.runId, summary])
       );
 
-      expect(byId.get(ids[4]!)).toEqual({
-        runId: ids[4]!,
+      expect(byId.get(requireValue(ids[4]))).toEqual({
+        runId: requireValue(ids[4]),
         campaignId,
         versionNumber: 2,
         customerId: customerId("r4"),
@@ -321,7 +355,7 @@ describe.skipIf(!testDatabase)(
         startedAt: minutes(4).toString(),
         endedAt: null,
       });
-      expect(byId.get(ids[1]!)).toMatchObject({
+      expect(byId.get(requireValue(ids[1]))).toMatchObject({
         versionNumber: 1,
         state: "ended",
         phase: null,
@@ -358,18 +392,20 @@ describe.skipIf(!testDatabase)(
         state: { status: "ended", outcome: "sent" },
       });
       const pages = [first];
-      while (pages.at(-1)!.nextCursor !== null) {
-        const cursor = pages.at(-1)!.nextCursor!;
-        pages.push(
-          await run((log) => log.listRuns({ campaignId, limit: 2, cursor }))
+      let page = first;
+      while (page.nextCursor !== null) {
+        const cursor = page.nextCursor;
+        page = await run((log) =>
+          log.listRuns({ campaignId, limit: 2, cursor })
         );
+        pages.push(page);
       }
 
       const tied = ids.slice(0, 3).sort().reverse();
       expect(pages.map((page) => page.runs.length)).toEqual([2, 2, 1]);
       expect(
         pages.flatMap((page) => page.runs.map(({ runId }) => runId))
-      ).toEqual([ids[4]!, ids[3]!, ...tied]);
+      ).toEqual([requireValue(ids[4]), requireValue(ids[3]), ...tied]);
     });
 
     test("rejects a cursor it didn't issue", async () => {
@@ -395,7 +431,7 @@ describe.skipIf(!testDatabase)(
         recipients: [],
       });
       oneOffIds.push(oneOffId);
-      const unknownId = crypto.randomUUID() as CampaignId;
+      const unknownId = campaignIdSchema.make(crypto.randomUUID());
 
       for (const operation of ["listRuns", "getRunStats"] as const) {
         expect(
@@ -420,14 +456,16 @@ describe.skipIf(!testDatabase)(
       expect(
         (
           await failure((log) =>
-            log.getRun({ runId: crypto.randomUUID() as AutomationRunId })
+            log.getRun({
+              runId: automationRunIdSchema.make(crypto.randomUUID()),
+            })
           )
         )._tag
       ).toBe("AutomationRunNotFound");
     });
 
     test("reads a timeline in sequence, unreadable entries as generic ones", async () => {
-      const runId = seeded.ids[4]!;
+      const runId = requireValue(seeded.ids[4]);
       const at = (minute: number) => minutes(4).add({ minutes: minute });
       const dueAt = minutes(4).add({ hours: 1 }).toString();
       await Effect.runPromise(
@@ -440,54 +478,18 @@ describe.skipIf(!testDatabase)(
                   `alter table email_campaign_automation_run_events drop constraint ${kindCheck}`
                 )
               );
-              yield* db.insert(emailCampaignAutomationRunEvents).values([
-                {
-                  runId,
-                  sequence: 4,
-                  kind: "rerouted" as never,
-                  stepId: stepId("s2"),
-                  at: at(3),
-                  detail: { toStepId: "s3" } as never,
-                },
-                {
-                  runId,
-                  sequence: 2,
-                  kind: "condition-passed",
-                  stepId: stepId("s1"),
-                  at: at(1),
-                },
-                {
-                  runId,
-                  sequence: 1,
-                  kind: "started",
-                  stepId: null,
-                  at: at(0),
-                },
-                {
-                  runId,
-                  sequence: 3,
-                  kind: "waiting",
-                  stepId: stepId("s2"),
-                  at: at(2),
-                  detail: { dueAt },
-                },
-                {
-                  runId,
-                  sequence: 5,
-                  kind: "waiting",
-                  stepId: stepId("s2"),
-                  at: at(4),
-                  detail: { dueAt: 5 } as never,
-                },
-                {
-                  runId,
-                  sequence: 6,
-                  kind: "woke",
-                  stepId: stepId("s2"),
-                  at: at(5),
-                  detail: sql`'"oops"'::jsonb` as never,
-                },
-              ]);
+              // Write the wire values directly so malformed details reach the reader.
+              yield* db.execute(sql`
+                insert into email_campaign_automation_run_events
+                  (run_id, sequence, kind, step_id, at, detail)
+                values
+                  (${runId}, 4, 'rerouted', 's2', ${at(3).toString()}, '{"toStepId":"s3"}'::jsonb),
+                  (${runId}, 2, 'condition-passed', 's1', ${at(1).toString()}, default),
+                  (${runId}, 1, 'started', null, ${at(0).toString()}, default),
+                  (${runId}, 3, 'waiting', 's2', ${at(2).toString()}, ${JSON.stringify({ dueAt })}::jsonb),
+                  (${runId}, 5, 'waiting', 's2', ${at(4).toString()}, '{"dueAt":5}'::jsonb),
+                  (${runId}, 6, 'woke', 's2', ${at(5).toString()}, '"oops"'::jsonb)
+              `);
               yield* db.execute(
                 sql.raw(
                   `alter table email_campaign_automation_run_events add constraint ${kindCheck} ${kindCheckDefinition} not valid`
@@ -696,7 +698,9 @@ describe.skipIf(!testDatabase)(
               anaFirstName = "Anna";
             });
             const second = yield* log.listRuns({ campaignId });
-            const detail = yield* log.getRun({ runId: runIds.get("ana-0")! });
+            const detail = yield* log.getRun({
+              runId: requireValue(runIds.get("ana-0")),
+            });
             return [first, second, detail] as const;
           }),
         dotypos
@@ -717,18 +721,21 @@ describe.skipIf(!testDatabase)(
         [customerId("ana")],
       ]);
 
-      const tables = (await pool.query(
+      const { rows: tables } = await pool.query<{ table_name: unknown }>(
         "select table_name from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE'"
-      )) as { rows: { table_name: string }[] };
-      for (const { table_name } of tables.rows) {
-        const found = (await pool.query(
+      );
+      const readTableName = Schema.decodeUnknownSync(Schema.String);
+      const readCount = Schema.decodeUnknownSync(Schema.Int);
+      for (const row of tables) {
+        const table_name = readTableName(row.table_name);
+        const { rows: counts } = await pool.query<{ rows: unknown }>(
           `select count(*)::int as rows from "${table_name}" as t where t::text ilike $1 or t::text ilike $2`,
           [`%${anaEmail}%`, `%${anaLastName}%`]
-        )) as { rows: { rows: number }[] };
-        expect({ table_name, rows: found.rows[0]!.rows }).toEqual({
-          table_name,
-          rows: 0,
-        });
+        );
+        const rows = readCount(
+          requireValue(counts[0], "table match count").rows
+        );
+        expect({ table_name, rows }).toEqual({ table_name, rows: 0 });
       }
     });
 
@@ -756,7 +763,7 @@ describe.skipIf(!testDatabase)(
         unavailable
       );
       const detail = await run(
-        (log) => log.getRun({ runId: seeded.ids[0]! }),
+        (log) => log.getRun({ runId: requireValue(seeded.ids[0]) }),
         unavailable
       );
 
@@ -786,7 +793,7 @@ describe.skipIf(!testDatabase)(
         ids.push(
           await seedRun({
             campaignId,
-            versionId: versionIds[index % 2],
+            versionId: versionIds[index % 2 === 0 ? 0 : 1],
             customer: `skip-${index}`,
             step: state.step,
             startedAt: minutes(index),
@@ -800,19 +807,22 @@ describe.skipIf(!testDatabase)(
           page.runs.map(({ runId }) => runId)
         );
 
-      expect(await listed({ skipReason: "missing-email" })).toEqual([s1!, s0!]);
+      expect(await listed({ skipReason: "missing-email" })).toEqual([
+        requireValue(s1),
+        requireValue(s0),
+      ]);
       expect(
         await listed({ skipReason: "missing-email", outcome: "skipped" })
-      ).toEqual([s1!, s0!]);
+      ).toEqual([requireValue(s1), requireValue(s0)]);
       expect(
         await listed({ skipReason: "missing-email", outcome: "failed" })
       ).toEqual([]);
       expect(
         await listed({ skipReason: "consent-withdrawn", stepId: "s2" })
-      ).toEqual([s2!]);
+      ).toEqual([requireValue(s2)]);
       expect(
         await listed({ skipReason: "missing-email", versionNumber: 1 })
-      ).toEqual([s0!]);
+      ).toEqual([requireValue(s0)]);
       expect(await listed({ skipReason: "invalid-email" })).toEqual([]);
 
       const stats = await run((log) => log.getRunStats({ campaignId }));

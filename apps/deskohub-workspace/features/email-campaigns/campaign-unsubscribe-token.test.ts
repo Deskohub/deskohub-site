@@ -3,7 +3,7 @@ import { createHmac } from "node:crypto";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { Effect, Option } from "effect";
 import type { SignedClaimsKeyRing } from "@/shared/backend/signed-claims";
-import type { CampaignSendId } from "./campaign-identifiers";
+import { campaignSendIdSchema } from "./campaign-identifiers";
 import {
   type CampaignUnsubscribeRecipient,
   openCampaignUnsubscribeToken,
@@ -13,7 +13,7 @@ import {
 const currentKey = Buffer.alloc(32, 1);
 const previousKey = Buffer.alloc(32, 2);
 const recipient = {
-  sendId: "send-1" as CampaignSendId,
+  sendId: campaignSendIdSchema.make("send-1"),
   dotyposCustomerId: DotyposCustomerIdSchema.make("42"),
 };
 

@@ -3,7 +3,7 @@ import {
   type CampaignEmailSourceType,
   makeAudienceFilterSchemas,
 } from "@deskohub/workspace-admin-api";
-import { Effect, Option, Result, Schema } from "effect";
+import { Effect, Layer, Option, Result, Schema } from "effect";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -19,8 +19,11 @@ import {
   sourcedResolvers,
 } from "./audience-attribute-extension.typecheck";
 import { audienceFactKey, countFactRequest } from "./audience-filter";
-import type { AudienceResolution } from "./backend/audience-attribute-resolvers";
-import { audienceEvaluationAt } from "./backend/audience-evaluation-context";
+import {
+  AudienceScope,
+  audienceEvaluationAt,
+} from "./backend/audience-evaluation-context";
+import { CampaignCandidateRepository } from "./backend/campaign-candidate.repository";
 import { campaignIdSchema } from "./campaign-identifiers";
 import { datePeriodBounds } from "./date-period";
 
@@ -104,10 +107,19 @@ describe("a count attribute added as one catalogue entry and its resolver", () =
       datePeriodBounds(condition.params.period, context)
     );
     const counts = await Effect.runPromise(
-      extendedResolvers.giftCardCount.count(
-        { params: request.condition.params, inContext: request.inContext },
-        {} as AudienceResolution
-      )
+      Effect.gen(function* () {
+        const candidates = yield* CampaignCandidateRepository;
+        return yield* extendedResolvers.giftCardCount.count(
+          { params: request.condition.params, inContext: request.inContext },
+          {
+            candidates,
+            scope: AudienceScope.All(),
+            visitsIn: () => Effect.die("Unexpected visit lookup"),
+            visitEndsIn: () => Effect.die("Unexpected visit end lookup"),
+            pastVisits: () => Effect.die("Unexpected past visit lookup"),
+          }
+        );
+      }).pipe(Effect.provide(Layer.mock(CampaignCandidateRepository, {})))
     );
     expect([...counts.values()]).toEqual([3]);
   });

@@ -8,14 +8,14 @@ import {
   unavailableQueue,
 } from "@/shared/backend/queue/memory-queue.test-utils";
 import type { QueuePublisher } from "@/shared/backend/queue/queue-publisher";
-import type { AutomationWorkUnitId } from "../automation-identifiers";
+import { automationWorkUnitIdSchema } from "../automation-identifiers";
 import {
   AutomationUnitQueue,
   automationUnitTopic,
 } from "./automation-unit-queue.service";
 import type { EnqueuedAutomationUnit } from "./automation-unit-slots";
 
-const unitId = "unit-1" as AutomationWorkUnitId;
+const unitId = automationWorkUnitIdSchema.make("unit-1");
 
 const enqueue = (
   queue: Layer.Layer<QueuePublisher>,

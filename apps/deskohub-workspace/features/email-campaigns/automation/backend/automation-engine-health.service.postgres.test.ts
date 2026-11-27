@@ -20,6 +20,7 @@ import {
 } from "@/features/email-campaigns/backend/email-campaigns.test-utils";
 import type { CampaignId } from "@/features/email-campaigns/campaign-identifiers";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { seedAutomationUnit } from "./automation-engine.test-utils";
@@ -466,7 +467,10 @@ describe.skipIf(!testDatabase)(
           dotyposCustomerId: DotyposCustomerIdSchema.make(
             `engine-health-${suite}-backlog`
           ),
-          workspaceReservationId: reservationId!,
+          workspaceReservationId: requireValue(
+            reservationId,
+            "backlogged reservation"
+          ),
         })
       );
       await unit({

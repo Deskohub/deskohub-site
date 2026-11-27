@@ -3,7 +3,10 @@ import { Option } from "effect";
 import { type Locale, locales } from "@/features/i18n";
 import type { AudienceFilter } from "./audience-filter";
 import { campaignContentFixture } from "./backend/email-campaigns.test-utils";
-import type { CampaignLocalizedContent } from "./body/campaign-content";
+import type {
+  CampaignLocaleContent,
+  CampaignLocalizedContent,
+} from "./body/campaign-content";
 import {
   campaignContentCoversAudience,
   campaignContentForRecipient,
@@ -120,8 +123,8 @@ describe("campaignContentCoversAudience", () => {
 });
 
 describe("campaign content locales", () => {
-  const czech = campaignContentFixture("Ahoj")["cs-CZ"]!;
-  const english = campaignContentFixture("Hello")["cs-CZ"]!;
+  const czech = campaignContentFixture("Ahoj")["cs-CZ"];
+  const english = campaignContentFixture("Hello")["cs-CZ"];
   const bilingual: CampaignLocalizedContent = {
     "cs-CZ": czech,
     "en-US": english,
@@ -154,7 +157,7 @@ describe("campaign content locales", () => {
 });
 
 describe("campaignContentForRecipient", () => {
-  const variant = (text: string) => campaignContentFixture(text)["cs-CZ"]!;
+  const variant = (text: string) => campaignContentFixture(text)["cs-CZ"];
   const czech = variant("Ahoj");
   const english = variant("Hello");
   const german = variant("Hallo");
@@ -162,7 +165,7 @@ describe("campaignContentForRecipient", () => {
   const slovak = variant("Ahoj SK");
   const vietnamese = variant("Xin chao");
   const hindi = variant("Namaste");
-  const everyLocale: CampaignLocalizedContent = {
+  const everyLocale = {
     "cs-CZ": czech,
     "en-US": english,
     "de-DE": german,
@@ -170,7 +173,7 @@ describe("campaignContentForRecipient", () => {
     "sk-SK": slovak,
     "vi-VN": vietnamese,
     "hi-IN": hindi,
-  };
+  } satisfies Record<Locale, CampaignLocaleContent>;
   const chosenLocale = (
     content: CampaignLocalizedContent,
     recipientLocale: Locale
@@ -180,7 +183,7 @@ describe("campaignContentForRecipient", () => {
     for (const locale of locales) {
       expect(campaignContentForRecipient(everyLocale, locale)).toEqual({
         locale,
-        content: everyLocale[locale]!,
+        content: everyLocale[locale],
       });
     }
   });

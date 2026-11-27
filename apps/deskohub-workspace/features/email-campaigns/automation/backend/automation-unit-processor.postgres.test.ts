@@ -8,6 +8,7 @@ import {
   emailCampaigns,
   emailCampaignAutomationWorkUnits as units,
 } from "@/db/schema";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import {
   holdPostgresTransaction,
   waitForAdvisoryLockWaiter,
@@ -62,10 +63,10 @@ import {
  * Settling a unit promotes planned units of any automation into free slots,
  * so the suite runs on a database of its own.
  */
-const database = await createWorkspacePostgresSuiteDatabase(
+const postgres = await createWorkspacePostgresSuiteDatabase(
   "automation_unit_processor"
 );
-afterAll(() => database?.close());
+afterAll(() => postgres?.close());
 const startedAt = Temporal.Instant.from("2026-10-19T10:00:00Z");
 
 type EngineLayer = ReturnType<typeof automationEngineTestLayer>;
@@ -115,8 +116,8 @@ const makeGate = () => {
   };
 };
 
-describe.skipIf(!database)("automation unit processor", () => {
-  const postgres = database!;
+describe.skipIf(!postgres)("automation unit processor", () => {
+  if (!postgres) return;
   const campaignIds: Array<CampaignId> = [];
 
   const seed = (input: Parameters<typeof seedAutomationUnit>[1]) =>
@@ -126,7 +127,7 @@ describe.skipIf(!database)("automation unit processor", () => {
     const [unit] = await Effect.runPromise(
       postgres.db.select().from(units).where(eq(units.id, unitId))
     );
-    return unit!;
+    return requireValue(unit, "stored work unit");
   };
 
   const statuses = async (unitIds: ReadonlyArray<AutomationWorkUnitId>) => {
@@ -152,8 +153,9 @@ describe.skipIf(!database)("automation unit processor", () => {
         })
         .returning({ id: emailCampaigns.id })
     );
-    campaignIds.push(campaign!.id);
-    return campaign!.id;
+    const campaignId = requireValue(campaign, "inserted campaign").id;
+    campaignIds.push(campaignId);
+    return campaignId;
   };
 
   beforeEach(async () => {
@@ -948,10 +950,10 @@ describe.skipIf(!database)("automation unit processor", () => {
   });
 });
 
-describe.skipIf(!database)(
+describe.skipIf(!postgres)(
   "settling a unit releases its runs for replanning",
   () => {
-    const postgres = database!;
+    if (!postgres) return;
     const campaignIds: Array<CampaignId> = [];
     const customer = testCustomerId(
       `automation-release-${crypto.randomUUID()}`
@@ -1126,7 +1128,7 @@ describe.skipIf(!database)(
       const [unit] = await Effect.runPromise(
         postgres.db.select().from(units).where(eq(units.id, unitId))
       );
-      return unit!;
+      return requireValue(unit, "stored work unit");
     };
   }
 );

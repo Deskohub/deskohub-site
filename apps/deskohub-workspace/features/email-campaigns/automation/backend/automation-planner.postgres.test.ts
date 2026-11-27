@@ -11,6 +11,7 @@ import {
   emailCampaignAutomationWorkUnits as units,
 } from "@/db/schema";
 import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   holdPostgresTransaction,
@@ -37,9 +38,9 @@ import { makeAutomationUnitQueueFake } from "./automation-unit-queue.test-utils"
  * The engine plans over whole tables, so the suite runs on a database of
  * its own.
  */
-const database =
+const postgres =
   await createWorkspacePostgresSuiteDatabase("automation_planner");
-afterAll(() => database?.close());
+afterAll(() => postgres?.close());
 const startedAt = Temporal.Instant.from("2026-10-19T10:00:00Z");
 
 type EngineLayer = ReturnType<typeof automationEngineTestLayer>;
@@ -55,8 +56,8 @@ const plan = (layer: EngineLayer, at = startedAt) =>
     )
   );
 
-describe.skipIf(!database)("automation planner", () => {
-  const postgres = database!;
+describe.skipIf(!postgres)("automation planner", () => {
+  if (!postgres) return;
   const campaignIds: Array<CampaignId> = [];
   const accountIds: Array<string> = [];
 
@@ -285,7 +286,8 @@ describe.skipIf(!database)("automation planner", () => {
         })
         .returning({ id: emailCampaigns.id })
     );
-    campaignIds.push(campaign!.id);
+    const campaignId = requireValue(campaign, "inserted campaign").id;
+    campaignIds.push(campaignId);
 
     await postgres.pool.query(
       `insert into email_campaign_automation_work_units
@@ -305,7 +307,7 @@ describe.skipIf(!database)("automation planner", () => {
         .insert(emailCampaignAutomationPreviews)
         .values(
           [25, 23].map((hours) => ({
-            campaignId: campaign!.id,
+            campaignId,
             draftHash: `draft-${hours}`,
             kind: "replay" as const,
             status: "completed" as const,
@@ -334,7 +336,7 @@ describe.skipIf(!database)("automation planner", () => {
             dotyposCustomerId: dotyposCustomerIdSchema.make(
               `housekeeping-${index}`
             ),
-            customerAccountId: accounts[index]!,
+            customerAccountId: requireValue(accounts[index], "fixture account"),
           }))
         )
         .returning({ id: customerEvents.id })
@@ -363,7 +365,9 @@ describe.skipIf(!database)("automation planner", () => {
           )
         )
     );
-    expect(remainingPreviews).toEqual([{ id: previews[1]!.id }]);
+    expect(remainingPreviews).toEqual([
+      { id: requireValue(previews[1], "retained preview fixture").id },
+    ]);
     const remainingEvents = await Effect.runPromise(
       postgres.db
         .select({ id: customerEvents.id })
@@ -375,7 +379,9 @@ describe.skipIf(!database)("automation planner", () => {
           )
         )
     );
-    expect(remainingEvents).toEqual([{ id: events[1]!.id }]);
+    expect(remainingEvents).toEqual([
+      { id: requireValue(events[1], "retained event fixture").id },
+    ]);
   });
 
   test("tops up to K and records the plan summary", async () => {
