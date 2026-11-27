@@ -151,12 +151,14 @@ export const addAuthorizedReservationInvitees = Effect.fnUntraced(
             const notices = yield* db
               .insert(reservationInviteeNotices)
               .values(
-                inserted.map(({ id }) => ({
-                  inviteeId: id,
-                  kind: "invitation",
-                  occurredAt,
-                  nextAttemptAt: occurredAt,
-                }))
+                inserted.map<typeof reservationInviteeNotices.$inferInsert>(
+                  ({ id }) => ({
+                    inviteeId: id,
+                    kind: "invitation",
+                    occurredAt,
+                    nextAttemptAt: occurredAt,
+                  })
+                )
               )
               .returning({ id: reservationInviteeNotices.id });
             return notices.map(({ id }) => id);
