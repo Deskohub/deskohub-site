@@ -2,16 +2,16 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, setSystemTime, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { Effect, Layer, Option, type Schema } from "effect";
+import { customerAgentClientIdSchema } from "@deskohub/workspace-domain/features/account/customer-agent-client";
+import { Effect, Layer, Option, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { AccountRoleGrants } from "@/features/administrators/backend/account-role-grants.service";
 import { AdministratorAgentAuthorization } from "@/features/administrators/backend/administrator-agent-authorization.service";
 import { AdministratorRoster } from "@/features/administrators/backend/administrator-roster.service";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import {
-  type CustomerAccountId,
-  customerAccountIdSchema,
-} from "../../customer-account";
+import { requireTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { customerAccountIdSchema } from "../../customer-account";
 import {
   customerAgentAuthorizePath,
   resolveCustomerAgentConnectStep,
@@ -101,7 +101,10 @@ const makePkce = async () => {
 const request = (
   auth: TestAuth,
   path: string,
-  init: RequestInit & { readonly cookie?: string } = {}
+  init: Omit<RequestInit, "headers"> & {
+    readonly cookie?: string;
+    readonly headers?: Record<string, string>;
+  } = {}
 ) => {
   const { cookie, ...rest } = init;
   return auth.handler(
@@ -111,7 +114,7 @@ const request = (
         origin: ORIGIN,
         "x-vercel-forwarded-for": uniqueIp(),
         ...(cookie && { cookie }),
-        ...((rest.headers as Record<string, string>) ?? {}),
+        ...rest.headers,
       },
     })
   );
@@ -137,12 +140,20 @@ const signIn = async (auth: TestAuth, sentLinks: CapturedMagicLink[]) => {
   await signInForMagicLink(auth, email);
   const link = sentLinks[before];
   expect(link?.email).toBe(email);
-  const verified = await verifyMagicLink(auth, link!);
+  const verified = await verifyMagicLink(
+    auth,
+    requireValue(link, "captured magic link")
+  );
   const setCookie = getSessionCookie(verified);
   expect(setCookie).toBeDefined();
   const accountId = await userIdForEmail(email);
   expect(accountId).toBeDefined();
-  return { cookie: cookieJar(setCookie!), accountId: accountId! };
+  return {
+    cookie: cookieJar(requireValue(setCookie, "session cookie")),
+    accountId: customerAccountIdSchema.make(
+      requireValue(accountId, "customer account ID")
+    ),
+  };
 };
 
 type AuthorizationRequest = {
@@ -215,18 +226,49 @@ const answerConsent = async (
     accept ? { accept, scope } : { accept }
   );
   expect(response.status).toBe(200);
-  const body = (await response.json()) as { redirect: boolean; url: string };
+  const body = decodeConsentResponse(await response.json());
   expect(body.redirect).toBe(true);
   return new URL(body.url);
 };
 
-type TokenResponse = {
-  readonly access_token: string;
-  readonly refresh_token?: string;
-  readonly token_type: string;
-  readonly expires_in: number;
-  readonly scope?: string;
-};
+const decodeConsentResponse = Schema.decodeUnknownSync(
+  Schema.Struct({ redirect: Schema.Boolean, url: Schema.String })
+);
+
+// Replay checks compare the whole response except for the remaining lifetime.
+const tokenResponseSchema = Schema.StructWithRest(
+  Schema.Struct({
+    access_token: Schema.String,
+    refresh_token: Schema.optionalKey(Schema.String),
+    token_type: Schema.String,
+    expires_in: Schema.Number,
+    expires_at: Schema.optionalKey(Schema.Number),
+    scope: Schema.optionalKey(Schema.String),
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)]
+);
+type TokenResponse = typeof tokenResponseSchema.Type;
+
+const decodeTokenResponse = Schema.decodeUnknownSync(tokenResponseSchema);
+const readTokenResponse = async (response: Response) =>
+  decodeTokenResponse(await response.json());
+
+const decodeTokenError = Schema.decodeUnknownSync(
+  Schema.Struct({ error: Schema.String })
+);
+const readTokenError = async (response: Response) =>
+  decodeTokenError(await response.json());
+
+const decodeTokenClaims = Schema.decodeUnknownSync(
+  Schema.Struct({
+    active: Schema.Boolean,
+    aud: Schema.optionalKey(
+      Schema.Union([Schema.String, Schema.Array(Schema.String)])
+    ),
+    sub: Schema.optionalKey(Schema.String),
+    client_id: Schema.optionalKey(Schema.String),
+  })
+);
 
 const requestToken = (auth: TestAuth, form: Record<string, string>) =>
   request(auth, "/oauth2/token", {
@@ -330,11 +372,16 @@ const findClientOnServer = (auth: TestAuth, clientId: string) =>
 
 /** Serves each agent's metadata document from one transport. */
 const serveAgents =
-  (...agents: ReadonlyArray<ReturnType<typeof makeAgent>>) =>
+  (
+    ...agents: readonly [
+      ReturnType<typeof makeAgent>,
+      ...ReturnType<typeof makeAgent>[],
+    ]
+  ) =>
   (input: RequestInfo | URL) => {
     const url = input instanceof Request ? input.url : String(input);
     const agent =
-      agents.find((candidate) => candidate.clientId === url) ?? agents[0]!;
+      agents.find((candidate) => candidate.clientId === url) ?? agents[0];
     return agent.clientMetadataTransport(input);
   };
 
@@ -393,7 +440,7 @@ const receivedCode = (
   return {
     clientId: agent.clientId,
     redirectUri: agent.redirectUri,
-    code: callback.searchParams.get("code")!,
+    code: requireValue(callback.searchParams.get("code"), "authorization code"),
     verifier,
   };
 };
@@ -438,7 +485,7 @@ const allowConsent = async (
     )
   );
   expect(response.status).toBe(200);
-  return (await response.json()) as TokenResponse;
+  return await readTokenResponse(response);
 };
 
 /**
@@ -481,7 +528,7 @@ const listConnections = (auth: TestAuth, cookie: string) => {
 };
 
 const userExists = async (userId: string) => {
-  const result = await testDatabase!.pool.query(
+  const result = await requireTestDatabase(testDatabase).pool.query(
     `select 1 from auth."user" where id = $1`,
     [userId]
   );
@@ -494,7 +541,10 @@ const tokenDigest = (token: string) =>
 
 /** Every token value and refresh replay response persisted for an account. */
 const storedTokenMaterial = async (userId: string) => {
-  const result = await testDatabase!.pool.query(
+  const result = await requireTestDatabase(testDatabase).pool.query<{
+    readonly token: string | null;
+    readonly rotation_replay_response: string | null;
+  }>(
     `select token, null as rotation_replay_response
        from auth.oauth_access_token where user_id = $1
      union all
@@ -502,22 +552,21 @@ const storedTokenMaterial = async (userId: string) => {
        from auth.oauth_refresh_token where user_id = $1`,
     [userId]
   );
-  return result.rows as ReadonlyArray<{
-    readonly token: string | null;
-    readonly rotation_replay_response: string | null;
-  }>;
+  return result.rows;
 };
 
 /** How many access and refresh tokens an account holds for one client. */
 const countClientTokens = async (userId: string, clientId: string) => {
-  const result = await testDatabase!.pool.query(
+  const result = await requireTestDatabase(testDatabase).pool.query<{
+    count: number;
+  }>(
     `select (select count(*)::int from auth.oauth_access_token
               where user_id = $1 and client_id = $2)
           + (select count(*)::int from auth.oauth_refresh_token
               where user_id = $1 and client_id = $2) as count`,
     [userId, clientId]
   );
-  return result.rows[0]!.count as number;
+  return requireValue(result.rows[0], "count row").count;
 };
 
 /** The encrypted refresh replay responses still stored for an account. */
@@ -537,7 +586,7 @@ const runAuthCleanup = (now: Date) =>
           Layer.provide(
             Layer.succeed(
               WorkspaceDatabase,
-              WorkspaceDatabase.make(testDatabase!.db)
+              WorkspaceDatabase.make(requireTestDatabase(testDatabase).db)
             )
           )
         )
@@ -546,11 +595,12 @@ const runAuthCleanup = (now: Date) =>
   );
 
 const countRows = async (table: string, userId: string) => {
-  const result = await testDatabase!.pool.query(
-    `select count(*)::int as count from auth.${table} where user_id = $1`,
-    [userId]
-  );
-  return result.rows[0]!.count as number;
+  const result = await requireTestDatabase(testDatabase).pool.query<{
+    count: number;
+  }>(`select count(*)::int as count from auth.${table} where user_id = $1`, [
+    userId,
+  ]);
+  return requireValue(result.rows[0], "count row").count;
 };
 
 /**
@@ -559,7 +609,7 @@ const countRows = async (table: string, userId: string) => {
  * and dates the account's consent a minute before the code.
  */
 const unbindPendingCode = async (userId: string) => {
-  const unbound = await testDatabase!.pool.query(
+  const unbound = await requireTestDatabase(testDatabase).pool.query(
     `update auth.verification
         set value = (value::jsonb - 'consentId')::text
       where case when value like '{"type":%'
@@ -570,7 +620,7 @@ const unbindPendingCode = async (userId: string) => {
     [userId]
   );
   expect(unbound.rowCount).toBe(1);
-  const dated = await testDatabase!.pool.query(
+  const dated = await requireTestDatabase(testDatabase).pool.query(
     `update auth.oauth_consent
         set created_at = created_at - interval '1 minute'
       where user_id = $1`,
@@ -603,31 +653,26 @@ const makeInterleavingDatabase = () => {
   return {
     database: (options: Parameters<typeof base>[0]) => {
       const adapter = base(options);
-      const findOne = async (input: Parameters<typeof adapter.findOne>[0]) => {
-        await beforeCall("findOne", input.model);
-        return adapter.findOne(input);
-      };
-      const create = async (input: Parameters<typeof adapter.create>[0]) => {
-        await beforeCall("create", input.model);
-        return adapter.create(input);
-      };
-      const remove = async (input: Parameters<typeof adapter.delete>[0]) => {
-        await beforeCall("delete", input.model);
-        return adapter.delete(input);
-      };
-      const removeMany = async (
-        input: Parameters<typeof adapter.deleteMany>[0]
-      ) => {
-        await beforeCall("deleteMany", input.model);
-        return adapter.deleteMany(input);
-      };
-      return {
+      const interleaved: typeof adapter = {
         ...adapter,
-        findOne: findOne as typeof adapter.findOne,
-        create: create as typeof adapter.create,
-        delete: remove as typeof adapter.delete,
-        deleteMany: removeMany as typeof adapter.deleteMany,
+        async findOne(input) {
+          await beforeCall("findOne", input.model);
+          return adapter.findOne(input);
+        },
+        async create(input) {
+          await beforeCall("create", input.model);
+          return adapter.create(input);
+        },
+        async delete(input) {
+          await beforeCall("delete", input.model);
+          return adapter.delete(input);
+        },
+        async deleteMany(input) {
+          await beforeCall("deleteMany", input.model);
+          return adapter.deleteMany(input);
+        },
       };
+      return interleaved;
     },
     /** Runs `step` before the next `call` on `model`, which then goes on. */
     before: (call: Call, model: string, step: () => Promise<unknown>) => {
@@ -752,7 +797,7 @@ describe.skipIf(!testDatabase)(
       );
       expect(client._tag === "Success" && client.success).toEqual(
         Option.some({
-          clientId: agent.clientId as never,
+          clientId: customerAgentClientIdSchema.make(agent.clientId),
           name: CLIENT_NAME,
           host: "client.example",
         })
@@ -770,7 +815,7 @@ describe.skipIf(!testDatabase)(
       // a request that carries only the agent's access token.
       expect(await findClientOnServer(auth, agent.clientId)).toEqual(
         Option.some({
-          clientId: agent.clientId as never,
+          clientId: customerAgentClientIdSchema.make(agent.clientId),
           name: CLIENT_NAME,
           host: "client.example",
         })
@@ -796,11 +841,11 @@ describe.skipIf(!testDatabase)(
       const tokenResponse = await exchangeCode(auth, {
         clientId: agent.clientId,
         redirectUri: agent.redirectUri,
-        code: code!,
+        code: requireValue(code, "authorization code"),
         verifier: pkce.verifier,
       });
       expect(tokenResponse.status).toBe(200);
-      const tokens = (await tokenResponse.json()) as TokenResponse;
+      const tokens = await readTokenResponse(tokenResponse);
       expect(tokens.token_type.toLowerCase()).toBe("bearer");
       expect(tokens.access_token.split(".")).toHaveLength(1);
       expect(tokens.refresh_token).toBeTruthy();
@@ -810,15 +855,12 @@ describe.skipIf(!testDatabase)(
 
       // f. The server-only check reports the token's subject, client, and
       // audience.
-      const claims = (await auth.api.verifyCustomerAgentAccessToken({
-        body: { token: tokens.access_token },
-        headers: new Headers({ host: HOST }),
-      })) as {
-        readonly active: boolean;
-        readonly aud?: string | ReadonlyArray<string>;
-        readonly sub?: string;
-        readonly client_id?: string;
-      };
+      const claims = decodeTokenClaims(
+        await auth.api.verifyCustomerAgentAccessToken({
+          body: { token: tokens.access_token },
+          headers: new Headers({ host: HOST }),
+        })
+      );
       expect(claims.active).toBe(true);
       expect([claims.aud].flat()).toContain(RESOURCE);
       expect(claims.sub).toBe(customer.accountId);
@@ -832,18 +874,16 @@ describe.skipIf(!testDatabase)(
       );
       expect(granted._tag).toBe("Success");
       if (granted._tag === "Success") {
-        expect(granted.success.grant.accountId).toBe(
-          customer.accountId as CustomerAccountId
+        expect(granted.success.grant.accountId).toBe(customer.accountId);
+        expect(granted.success.grant.clientId).toBe(
+          customerAgentClientIdSchema.make(agent.clientId)
         );
-        expect(granted.success.grant.clientId).toBe(agent.clientId as never);
         expect([...granted.success.grant.scopes].sort()).toEqual([
           "offerings:read",
           "reservations:create",
           "reservations:read",
         ]);
-        expect(granted.success.session.accountId).toBe(
-          customer.accountId as CustomerAccountId
-        );
+        expect(granted.success.session.accountId).toBe(customer.accountId);
         expect(granted.success.session.deletionRequested).toBe(false);
       }
       expect(
@@ -860,11 +900,11 @@ describe.skipIf(!testDatabase)(
       const refreshed = await requestToken(auth, {
         grant_type: "refresh_token",
         client_id: agent.clientId,
-        refresh_token: tokens.refresh_token!,
+        refresh_token: requireValue(tokens.refresh_token, "refresh token"),
         resource: RESOURCE,
       });
       expect(refreshed.status).toBe(200);
-      const renewed = (await refreshed.json()) as TokenResponse;
+      const renewed = await readTokenResponse(refreshed);
       expect(renewed.access_token).not.toBe(tokens.access_token);
       expect(
         (await authorizeToken(authorityOver(auth), renewed.access_token))._tag
@@ -877,21 +917,22 @@ describe.skipIf(!testDatabase)(
       expect(stored.map(({ token }) => token).sort()).toEqual(
         [
           tokens.access_token,
-          tokens.refresh_token!,
+          requireValue(tokens.refresh_token, "refresh token"),
           renewed.access_token,
-          renewed.refresh_token!,
+          requireValue(renewed.refresh_token, "refresh token"),
         ]
           .map(tokenDigest)
           .sort()
       );
       const replays = await storedReplays(customer.accountId);
       expect(replays).toHaveLength(1);
-      expect(() => JSON.parse(replays[0]!)).toThrow();
+      const replay = requireValue(replays[0], "stored replay");
+      expect(() => JSON.parse(replay)).toThrow();
       for (const token of [
         tokens.access_token,
-        tokens.refresh_token!,
+        requireValue(tokens.refresh_token, "refresh token"),
         renewed.access_token,
-        renewed.refresh_token!,
+        requireValue(renewed.refresh_token, "refresh token"),
       ]) {
         expect(replays[0]).not.toContain(token);
       }
@@ -913,7 +954,7 @@ describe.skipIf(!testDatabase)(
       const replayed = await exchangeCode(auth, {
         clientId: agent.clientId,
         redirectUri: agent.redirectUri,
-        code: code!,
+        code: requireValue(code, "authorization code"),
         verifier: pkce.verifier,
       });
       expect(replayed.status).toBe(400);
@@ -938,9 +979,11 @@ describe.skipIf(!testDatabase)(
           refresh_token: refreshToken,
           resource: RESOURCE,
         });
-      const refreshed = await refresh(tokens.refresh_token!);
+      const refreshed = await refresh(
+        requireValue(tokens.refresh_token, "refresh token")
+      );
       expect(refreshed.status).toBe(200);
-      const renewed = (await refreshed.json()) as TokenResponse;
+      const renewed = await readTokenResponse(refreshed);
 
       const refreshedAt = Date.now();
 
@@ -948,16 +991,17 @@ describe.skipIf(!testDatabase)(
       // same tokens, with `expires_in` counted down, and the grant stays.
       setSystemTime(new Date(refreshedAt + 10_000));
       try {
-        const repeated = await refresh(tokens.refresh_token!);
+        const repeated = await refresh(
+          requireValue(tokens.refresh_token, "refresh token")
+        );
         expect(repeated.status).toBe(200);
-        const replayed = (await repeated.json()) as TokenResponse & {
-          readonly expires_at: number;
-        };
+        const replayed = await readTokenResponse(repeated);
         const { expires_in: renewedExpiresIn, ...renewedTokens } = renewed;
         const { expires_in: replayedExpiresIn, ...replayedTokens } = replayed;
         expect(replayedTokens).toEqual(renewedTokens);
         expect(replayedExpiresIn).toBe(
-          replayed.expires_at - Math.floor((refreshedAt + 10_000) / 1000)
+          requireValue(replayed.expires_at, "token expiration") -
+            Math.floor((refreshedAt + 10_000) / 1000)
         );
         expect(replayedExpiresIn).toBeLessThan(renewedExpiresIn);
       } finally {
@@ -979,12 +1023,15 @@ describe.skipIf(!testDatabase)(
         )
       );
       try {
-        const reused = await refresh(tokens.refresh_token!);
-        expect(reused.status).toBe(400);
-        expect(((await reused.json()) as { error: string }).error).toBe(
-          "invalid_grant"
+        const reused = await refresh(
+          requireValue(tokens.refresh_token, "refresh token")
         );
-        expect((await refresh(renewed.refresh_token!)).status).toBe(400);
+        expect(reused.status).toBe(400);
+        expect((await readTokenError(reused)).error).toBe("invalid_grant");
+        expect(
+          (await refresh(requireValue(renewed.refresh_token, "refresh token")))
+            .status
+        ).toBe(400);
         expect(
           await failureReasonOf(authorityOver(auth), renewed.access_token)
         ).toBe("invalid-token");
@@ -1028,15 +1075,16 @@ describe.skipIf(!testDatabase)(
       const foreign = await exchangeCode(auth, {
         clientId: agent.clientId,
         redirectUri: agent.redirectUri,
-        code: callback.searchParams.get("code")!,
+        code: requireValue(
+          callback.searchParams.get("code"),
+          "authorization code"
+        ),
         verifier: pkce.verifier,
         resource: "https://elsewhere.example/api/mcp",
       });
 
       expect(foreign.status).toBe(400);
-      expect(((await foreign.json()) as { error: string }).error).toBe(
-        "invalid_target"
-      );
+      expect((await readTokenError(foreign)).error).toBe("invalid_target");
     });
 
     test("asks a signed-in customer to sign in again for prompt=login, and resumes after it", async () => {
@@ -1161,7 +1209,7 @@ describe.skipIf(!testDatabase)(
       const auth = makeTestAuth({ sentLinks });
       const administrator = await signIn(auth, sentLinks);
       const redirectUri = `https://preregistered.example/${crypto.randomUUID()}/callback`;
-      const registered = (await auth.api.adminCreateOAuthClient({
+      const registered = await auth.api.adminCreateOAuthClient({
         headers: new Headers({ cookie: administrator.cookie, host: HOST }),
         body: {
           client_name: "Pre-registered Agent",
@@ -1170,7 +1218,7 @@ describe.skipIf(!testDatabase)(
           grant_types: ["authorization_code", "refresh_token"],
           response_types: ["code"],
         },
-      })) as { client_id: string; client_secret?: string };
+      });
       expect(registered.client_id).toBeTruthy();
       expect(registered.client_secret).toBeUndefined();
 
@@ -1196,11 +1244,14 @@ describe.skipIf(!testDatabase)(
       const tokenResponse = await exchangeCode(auth, {
         clientId: registered.client_id,
         redirectUri,
-        code: callback.searchParams.get("code")!,
+        code: requireValue(
+          callback.searchParams.get("code"),
+          "authorization code"
+        ),
         verifier: pkce.verifier,
       });
       expect(tokenResponse.status).toBe(200);
-      const tokens = (await tokenResponse.json()) as TokenResponse;
+      const tokens = await readTokenResponse(tokenResponse);
 
       const granted = await authorizeToken(
         authorityOver(auth),
@@ -1209,11 +1260,9 @@ describe.skipIf(!testDatabase)(
       expect(granted._tag).toBe("Success");
       if (granted._tag === "Success") {
         expect(granted.success.grant.clientId).toBe(
-          registered.client_id as never
+          customerAgentClientIdSchema.make(registered.client_id)
         );
-        expect(granted.success.grant.accountId).toBe(
-          customer.accountId as CustomerAccountId
-        );
+        expect(granted.success.grant.accountId).toBe(customer.accountId);
       }
     });
 
@@ -1242,9 +1291,11 @@ describe.skipIf(!testDatabase)(
 
       // A refresh just before disconnecting leaves a replay copy on the
       // rotated token for the reuse window.
-      const rotated = await refresh(disconnecting.refresh_token!);
+      const rotated = await refresh(
+        requireValue(disconnecting.refresh_token, "refresh token")
+      );
       expect(rotated.status).toBe(200);
-      const renewed = (await rotated.json()) as TokenResponse;
+      const renewed = await readTokenResponse(rotated);
       expect(await storedReplays(customer.accountId)).toHaveLength(1);
 
       // The account page lists both assistants, named from their metadata
@@ -1274,7 +1325,10 @@ describe.skipIf(!testDatabase)(
           ],
         },
       ]);
-      const connection = listed.find(({ name }) => name === CLIENT_NAME)!;
+      const connection = requireValue(
+        listed.find(({ name }) => name === CLIENT_NAME),
+        "agent connection"
+      );
       expect(Date.parse(connection.connectedAt)).not.toBeNaN();
 
       // Another customer can't disconnect it.
@@ -1305,8 +1359,17 @@ describe.skipIf(!testDatabase)(
           "invalid-token"
         );
       }
-      expect((await refresh(disconnecting.refresh_token!)).status).toBe(400);
-      expect((await refresh(renewed.refresh_token!)).status).toBe(400);
+      expect(
+        (
+          await refresh(
+            requireValue(disconnecting.refresh_token, "refresh token")
+          )
+        ).status
+      ).toBe(400);
+      expect(
+        (await refresh(requireValue(renewed.refresh_token, "refresh token")))
+          .status
+      ).toBe(400);
       expect(await storedReplays(customer.accountId)).toEqual([]);
 
       // The customer's other assistant and the neighbour's grant to the same
@@ -1384,9 +1447,12 @@ describe.skipIf(!testDatabase)(
         "asks"
       );
 
-      const connection = (await listConnections(auth, customer.cookie)).find(
-        ({ name }) => name === CLIENT_NAME
-      )!;
+      const connection = requireValue(
+        (await listConnections(auth, customer.cookie)).find(
+          ({ name }) => name === CLIENT_NAME
+        ),
+        "agent connection"
+      );
       const disconnected = await request(auth, "/oauth2/delete-consent", {
         method: "POST",
         cookie: customer.cookie,
@@ -1397,9 +1463,7 @@ describe.skipIf(!testDatabase)(
 
       const refused = await exchangeCode(auth, firstPending);
       expect(refused.status).toBe(400);
-      expect(((await refused.json()) as { error: string }).error).toBe(
-        "invalid_grant"
-      );
+      expect((await readTokenError(refused)).error).toBe("invalid_grant");
       expect(await countClientTokens(customer.accountId, agent.clientId)).toBe(
         0
       );
@@ -1419,9 +1483,7 @@ describe.skipIf(!testDatabase)(
       );
       const stale = await exchangeCode(auth, secondPending);
       expect(stale.status).toBe(400);
-      expect(((await stale.json()) as { error: string }).error).toBe(
-        "invalid_grant"
-      );
+      expect((await readTokenError(stale)).error).toBe("invalid_grant");
       expect(await countClientTokens(customer.accountId, agent.clientId)).toBe(
         0
       );
@@ -1455,9 +1517,7 @@ describe.skipIf(!testDatabase)(
 
       const refused = await exchangeCode(auth, unbound);
       expect(refused.status).toBe(400);
-      expect(((await refused.json()) as { error: string }).error).toBe(
-        "invalid_grant"
-      );
+      expect((await readTokenError(refused)).error).toBe("invalid_grant");
       expect(await countClientTokens(customer.accountId, agent.clientId)).toBe(
         0
       );
@@ -1465,7 +1525,7 @@ describe.skipIf(!testDatabase)(
 
       const tokens = await exchangeCode(auth, bound);
       expect(tokens.status).toBe(200);
-      const { access_token } = (await tokens.json()) as TokenResponse;
+      const { access_token } = await readTokenResponse(tokens);
       expect(await failureReasonOf(authorityOver(auth), access_token)).toBe(
         "Success"
       );
@@ -1496,9 +1556,7 @@ describe.skipIf(!testDatabase)(
 
       const refused = await exchangeCode(auth, pending);
       expect(refused.status).toBe(400);
-      expect(((await refused.json()) as { error: string }).error).toBe(
-        "invalid_grant"
-      );
+      expect((await readTokenError(refused)).error).toBe("invalid_grant");
       expect(await countClientTokens(customer.accountId, agent.clientId)).toBe(
         0
       );
@@ -1510,7 +1568,7 @@ describe.skipIf(!testDatabase)(
     // for, so only the coverage check keeps the code from redeeming.
     test("refuses a code whose consent no longer grants one of its scopes", () =>
       expectRefusedAfterNarrowing((accountId) =>
-        testDatabase!.pool.query(
+        requireTestDatabase(testDatabase).pool.query(
           `update auth.oauth_consent
               set scopes = array_remove(scopes, $2)
             where user_id = $1 and $2 = any(scopes)`,
@@ -1520,7 +1578,7 @@ describe.skipIf(!testDatabase)(
 
     test("refuses a code whose consent no longer covers its resource", () =>
       expectRefusedAfterNarrowing((accountId) =>
-        testDatabase!.pool.query(
+        requireTestDatabase(testDatabase).pool.query(
           `update auth.oauth_consent
               set resources = array_remove(resources, $2)
             where user_id = $1 and $2 = any(resources)`,
@@ -1556,7 +1614,9 @@ describe.skipIf(!testDatabase)(
           resource: RESOURCE,
           ...form,
         });
-      const disconnect = (id = connection!.id) =>
+      const disconnect = (
+        id = requireValue(connection, "agent connection").id
+      ) =>
         request(auth, "/oauth2/delete-consent", {
           method: "POST",
           cookie: customer.cookie,
@@ -1581,7 +1641,9 @@ describe.skipIf(!testDatabase)(
           expect(await failureReasonOf(authorityOver(auth), access_token)).toBe(
             "invalid-token"
           );
-          expect((await refresh(refresh_token!)).status).toBe(400);
+          expect(
+            (await refresh(requireValue(refresh_token, "refresh token"))).status
+          ).toBe(400);
         }
       };
       const authorize = () =>
@@ -1645,7 +1707,7 @@ describe.skipIf(!testDatabase)(
       expect(response.status).toBe(200);
       await disconnected;
       expect(await countRows("oauth_consent", race.accountId)).toBe(0);
-      return (await response.json()) as TokenResponse;
+      return await readTokenResponse(response);
     };
 
     // Guards the Workspace oauth-provider patch: a refresh token references
@@ -1657,11 +1719,11 @@ describe.skipIf(!testDatabase)(
         expect((await race.disconnect()).status).toBe(200);
       });
 
-      const rotated = await race.refresh(race.tokens.refresh_token!);
-      expect(rotated.status).toBe(400);
-      expect(((await rotated.json()) as { error: string }).error).toBe(
-        "invalid_grant"
+      const rotated = await race.refresh(
+        requireValue(race.tokens.refresh_token, "refresh token")
       );
+      expect(rotated.status).toBe(400);
+      expect((await readTokenError(rotated)).error).toBe("invalid_grant");
       await race.expectRevoked([race.tokens]);
     });
 
@@ -1685,13 +1747,17 @@ describe.skipIf(!testDatabase)(
           })
       );
 
-      rotated = race.refresh(race.tokens.refresh_token!);
+      rotated = race.refresh(
+        requireValue(race.tokens.refresh_token, "refresh token")
+      );
       const response = await rotated;
       expect(response.status).toBe(200);
-      expect((await disconnected!).status).toBe(200);
+      expect(
+        (await requireValue(disconnected, "disconnected grant")).status
+      ).toBe(200);
       await race.expectRevoked([
         race.tokens,
-        (await response.json()) as TokenResponse,
+        await readTokenResponse(response),
       ]);
     });
 
@@ -1707,9 +1773,7 @@ describe.skipIf(!testDatabase)(
 
       const exchanged = await race.exchange(pending);
       expect(exchanged.status).toBe(400);
-      expect(((await exchanged.json()) as { error: string }).error).toBe(
-        "invalid_grant"
-      );
+      expect((await readTokenError(exchanged)).error).toBe("invalid_grant");
       await race.expectRevoked([race.tokens]);
     });
 
@@ -1745,14 +1809,20 @@ describe.skipIf(!testDatabase)(
         const race = await connectForRace();
         const renewed = await refreshDuringDisconnect(
           race,
-          race.tokens.refresh_token!
+          requireValue(race.tokens.refresh_token, "refresh token")
         );
         const reconnected = await race.reconnect();
 
         expect(
           await failureReasonOf(authorityOver(race.auth), renewed.access_token)
         ).toBe("invalid-token");
-        expect((await race.refresh(renewed.refresh_token!)).status).toBe(400);
+        expect(
+          (
+            await race.refresh(
+              requireValue(renewed.refresh_token, "refresh token")
+            )
+          ).status
+        ).toBe(400);
         expect(
           (
             await authorizeToken(
@@ -1793,8 +1863,8 @@ describe.skipIf(!testDatabase)(
           const [connection] = await listConnections(race.auth, race.cookie);
           const renewed = await refreshDuringDisconnect(
             race,
-            connected.refresh_token!,
-            connection!.id
+            requireValue(connected.refresh_token, "refresh token"),
+            requireValue(connection, "agent connection").id
           );
           revoked = [connected, renewed];
         });
@@ -1811,7 +1881,10 @@ describe.skipIf(!testDatabase)(
           expect(
             await failureReasonOf(authorityOver(race.auth), access_token)
           ).toBe("invalid-token");
-          expect((await race.refresh(refresh_token!)).status).toBe(400);
+          expect(
+            (await race.refresh(requireValue(refresh_token, "refresh token")))
+              .status
+          ).toBe(400);
         }
         expect(
           (
@@ -1839,11 +1912,11 @@ describe.skipIf(!testDatabase)(
         reconnected = await race.reconnect();
       });
 
-      const rotated = await race.refresh(race.tokens.refresh_token!);
-      expect(rotated.status).toBe(400);
-      expect(((await rotated.json()) as { error: string }).error).toBe(
-        "invalid_grant"
+      const rotated = await race.refresh(
+        requireValue(race.tokens.refresh_token, "refresh token")
       );
+      expect(rotated.status).toBe(400);
+      expect((await readTokenError(rotated)).error).toBe("invalid_grant");
       expect(
         await failureReasonOf(
           authorityOver(race.auth),
@@ -1854,7 +1927,7 @@ describe.skipIf(!testDatabase)(
         (
           await authorizeToken(
             authorityOver(race.auth),
-            reconnected!.access_token
+            requireValue(reconnected, "reconnected token response").access_token
           )
         )._tag
       ).toBe("Success");
@@ -1867,27 +1940,30 @@ describe.skipIf(!testDatabase)(
     // because it no longer asks for offline access.
     test("refuses a refresh without offline access that a disconnect and a new connection overtake", async () => {
       const race = await connectForRace();
-      const narrowedResponse = await race.refresh(race.tokens.refresh_token!, {
-        scope: "offerings:read reservations:read reservations:create",
-      });
+      const narrowedResponse = await race.refresh(
+        requireValue(race.tokens.refresh_token, "refresh token"),
+        {
+          scope: "offerings:read reservations:read reservations:create",
+        }
+      );
       expect(narrowedResponse.status).toBe(200);
-      const narrowed = (await narrowedResponse.json()) as TokenResponse;
+      const narrowed = await readTokenResponse(narrowedResponse);
       let reconnected: TokenResponse | undefined;
       race.interleaving.before("findOne", "user", async () => {
         expect((await race.disconnect()).status).toBe(200);
         reconnected = await race.reconnect();
       });
 
-      const refreshed = await race.refresh(narrowed.refresh_token!);
-      expect(refreshed.status).toBe(400);
-      expect(((await refreshed.json()) as { error: string }).error).toBe(
-        "invalid_grant"
+      const refreshed = await race.refresh(
+        requireValue(narrowed.refresh_token, "refresh token")
       );
+      expect(refreshed.status).toBe(400);
+      expect((await readTokenError(refreshed)).error).toBe("invalid_grant");
       expect(
         (
           await authorizeToken(
             authorityOver(race.auth),
-            reconnected!.access_token
+            requireValue(reconnected, "reconnected token response").access_token
           )
         )._tag
       ).toBe("Success");
@@ -1905,9 +1981,7 @@ describe.skipIf(!testDatabase)(
 
       const exchanged = await race.exchange(pending);
       expect(exchanged.status).toBe(400);
-      expect(((await exchanged.json()) as { error: string }).error).toBe(
-        "invalid_grant"
-      );
+      expect((await readTokenError(exchanged)).error).toBe("invalid_grant");
       await race.expectRevoked([race.tokens]);
     });
 
@@ -1916,11 +1990,13 @@ describe.skipIf(!testDatabase)(
     // the refresh reuse window, and presenting it deletes it.
     test("refuses and deletes tokens that reference no consent", async () => {
       const race = await connectForRace();
-      const rotated = await race.refresh(race.tokens.refresh_token!);
+      const rotated = await race.refresh(
+        requireValue(race.tokens.refresh_token, "refresh token")
+      );
       expect(rotated.status).toBe(200);
-      const renewed = (await rotated.json()) as TokenResponse;
+      const renewed = await readTokenResponse(rotated);
       for (const table of ["oauth_access_token", "oauth_refresh_token"]) {
-        await testDatabase!.pool.query(
+        await requireTestDatabase(testDatabase).pool.query(
           `update auth.${table} set consent_id = null where user_id = $1`,
           [race.accountId]
         );
@@ -1930,14 +2006,20 @@ describe.skipIf(!testDatabase)(
         await failureReasonOf(authorityOver(race.auth), renewed.access_token)
       ).toBe("invalid-token");
       expect(await countRows("oauth_access_token", race.accountId)).toBe(1);
-      const replayed = await race.refresh(race.tokens.refresh_token!);
-      expect(replayed.status).toBe(400);
-      expect(((await replayed.json()) as { error: string }).error).toBe(
-        "invalid_grant"
+      const replayed = await race.refresh(
+        requireValue(race.tokens.refresh_token, "refresh token")
       );
+      expect(replayed.status).toBe(400);
+      expect((await readTokenError(replayed)).error).toBe("invalid_grant");
       expect(await countRows("oauth_access_token", race.accountId)).toBe(0);
       expect(await countRows("oauth_refresh_token", race.accountId)).toBe(1);
-      expect((await race.refresh(renewed.refresh_token!)).status).toBe(400);
+      expect(
+        (
+          await race.refresh(
+            requireValue(renewed.refresh_token, "refresh token")
+          )
+        ).status
+      ).toBe(400);
       expect(await countRows("oauth_refresh_token", race.accountId)).toBe(0);
       expect(await listConnections(race.auth, race.cookie)).toHaveLength(1);
     });
@@ -1947,7 +2029,7 @@ describe.skipIf(!testDatabase)(
     // doesn't keep it connected.
     test("disconnects an assistant whose consent was recorded twice", async () => {
       const race = await connectForRace();
-      await testDatabase!.pool.query(
+      await requireTestDatabase(testDatabase).pool.query(
         `insert into auth.oauth_consent
            (id, client_id, user_id, reference_id, resources,
             requested_user_info_claims, scopes, created_at, updated_at)
@@ -1987,23 +2069,26 @@ describe.skipIf(!testDatabase)(
         consentPage,
         true
       );
-      const tokens = (await (
+      const tokens = await readTokenResponse(
         await exchangeCode(auth, {
           clientId: agent.clientId,
           redirectUri: agent.redirectUri,
-          code: callback.searchParams.get("code")!,
+          code: requireValue(
+            callback.searchParams.get("code"),
+            "authorization code"
+          ),
           verifier: pkce.verifier,
         })
-      ).json()) as TokenResponse;
+      );
       // A refresh leaves an encrypted replay response on the rotated token.
       const refreshed = await requestToken(auth, {
         grant_type: "refresh_token",
         client_id: agent.clientId,
-        refresh_token: tokens.refresh_token!,
+        refresh_token: requireValue(tokens.refresh_token, "refresh token"),
         resource: RESOURCE,
       });
       expect(refreshed.status).toBe(200);
-      const renewed = (await refreshed.json()) as TokenResponse;
+      const renewed = await readTokenResponse(refreshed);
       expect(
         (await authorizeToken(authorityOver(auth), renewed.access_token))._tag
       ).toBe("Success");
@@ -2080,7 +2165,7 @@ describe.skipIf(!testDatabase)(
       );
       expect(client._tag === "Success" && client.success).toEqual(
         Option.some({
-          clientId: testAgentId as never,
+          clientId: customerAgentClientIdSchema.make(testAgentId),
           name: customerAgentTestClientMetadata.client_name,
           host: "workspace.deskohub.cz",
         })
@@ -2242,16 +2327,22 @@ const directoryClientNames: ReadonlyArray<DirectoryClientName> = [
   "Claude Code on 127.0.0.1",
 ];
 
+const decodeIssuerMetadata = Schema.decodeUnknownSync(
+  Schema.Struct({
+    issuer: Schema.String,
+    authorization_response_iss_parameter_supported: Schema.optionalKey(
+      Schema.Boolean
+    ),
+  })
+);
+
 /** The issuer the authorization-server metadata advertises. */
 const discoveredIssuer = async (auth: TestAuth) => {
   const response = await auth.handler(
     new Request(`${ORIGIN}/.well-known/oauth-authorization-server/api/auth`)
   );
   expect(response.status).toBe(200);
-  const metadata = (await response.json()) as {
-    readonly issuer: string;
-    readonly authorization_response_iss_parameter_supported?: boolean;
-  };
+  const metadata = decodeIssuerMetadata(await response.json());
   expect(metadata.authorization_response_iss_parameter_supported).toBe(true);
   return metadata.issuer;
 };
@@ -2308,7 +2399,7 @@ describe.skipIf(!testDatabase)(
         );
         expect(listed._tag === "Success" && listed.success).toEqual(
           Option.some({
-            clientId: client.clientId as never,
+            clientId: customerAgentClientIdSchema.make(client.clientId),
             name: client.clientName,
             host: client.host,
           })
@@ -2329,26 +2420,23 @@ describe.skipIf(!testDatabase)(
           await client.authenticate({
             grant_type: "authorization_code",
             client_id: client.clientId,
-            code: code!,
+            code: requireValue(code, "authorization code"),
             code_verifier: pkce.verifier,
             redirect_uri: client.redirectUri,
             resource: RESOURCE,
           })
         );
         expect(tokenResponse.status).toBe(200);
-        const tokens = (await tokenResponse.json()) as TokenResponse;
+        const tokens = await readTokenResponse(tokenResponse);
         expect(tokens.refresh_token).toBeTruthy();
 
         // The requested resource, the MCP server, is the token's audience.
-        const claims = (await auth.api.verifyCustomerAgentAccessToken({
-          body: { token: tokens.access_token },
-          headers: new Headers({ host: HOST }),
-        })) as {
-          readonly active: boolean;
-          readonly aud?: string | ReadonlyArray<string>;
-          readonly sub?: string;
-          readonly client_id?: string;
-        };
+        const claims = decodeTokenClaims(
+          await auth.api.verifyCustomerAgentAccessToken({
+            body: { token: tokens.access_token },
+            headers: new Headers({ host: HOST }),
+          })
+        );
         expect(claims.active).toBe(true);
         expect([claims.aud].flat()).toContain(RESOURCE);
         expect(claims.sub).toBe(customer.accountId);
@@ -2362,12 +2450,12 @@ describe.skipIf(!testDatabase)(
           await client.authenticate({
             grant_type: "refresh_token",
             client_id: client.clientId,
-            refresh_token: tokens.refresh_token!,
+            refresh_token: requireValue(tokens.refresh_token, "refresh token"),
             resource: RESOURCE,
           })
         );
         expect(refreshed.status).toBe(200);
-        const renewed = (await refreshed.json()) as TokenResponse;
+        const renewed = await readTokenResponse(refreshed);
         expect(
           (await authorizeToken(authorityOver(auth), renewed.access_token))._tag
         ).toBe("Success");
@@ -2510,7 +2598,7 @@ describe.skipIf(!testDatabase)(
         };
       };
       const errorOf = async (response: Response) =>
-        ((await response.json()) as { readonly error: string }).error;
+        (await readTokenError(response)).error;
 
       const unsigned = await requestToken(auth, await authorizeCode());
       expect(unsigned.status).toBe(400);
@@ -2666,7 +2754,7 @@ const grantCarriesAdministration = async (auth: TestAuth, token: string) => {
 /** Grants the administrator role to a signed-in test account. */
 const grantAdministrator = (accountId: string) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).grantRole(
+    workspaceFixtures(requireTestDatabase(testDatabase).db).grantRole(
       customerAccountIdSchema.make(accountId),
       "administrator"
     )
@@ -2687,7 +2775,7 @@ const revokeAdministrator = (accountId: string) =>
       Effect.provide(
         AdministratorRoster.Default.pipe(
           Layer.provideMerge(AccountRoleGrants.Default),
-          Layer.provide(testDatabase!.layer)
+          Layer.provide(requireTestDatabase(testDatabase).layer)
         )
       )
     )
@@ -2715,7 +2803,9 @@ const administrationAccessOf = (auth: TestAuth, accessToken: string) =>
           Layer.provideMerge(
             Layer.mergeAll(
               CustomerAgentAuthorization.fromAuthority(authorityOver(auth)),
-              AccountRoleGrants.Default.pipe(Layer.provide(testDatabase!.layer))
+              AccountRoleGrants.Default.pipe(
+                Layer.provide(requireTestDatabase(testDatabase).layer)
+              )
             )
           )
         )
@@ -2771,7 +2861,7 @@ const connectAskingEverything = async (
     )
   );
   expect(exchanged.status).toBe(200);
-  return (await exchanged.json()) as TokenResponse;
+  return await readTokenResponse(exchanged);
 };
 
 const refreshWith = (
@@ -2806,7 +2896,7 @@ describe.skipIf(!testDatabase)(
       expect(ordinary.scope?.split(" ")).not.toContain("passes:manage");
 
       // A client registered before pass permissions has the previous capabilities.
-      await testDatabase!.pool.query(
+      await requireTestDatabase(testDatabase).pool.query(
         "update auth.oauth_client set scopes = $2 where client_id = $1",
         [agent.clientId, ALL_SCOPES.split(" ")]
       );
@@ -2841,7 +2931,7 @@ describe.skipIf(!testDatabase)(
         )
       );
       expect(upgraded.status).toBe(200);
-      const passToken = ((await upgraded.json()) as TokenResponse).access_token;
+      const passToken = (await readTokenResponse(upgraded)).access_token;
       expect(
         await authorizeToken(authorityOver(auth), passToken)
       ).toMatchObject({
@@ -2920,8 +3010,13 @@ describe.skipIf(!testDatabase)(
         body: JSON.stringify({ ...login, callbackURL: "/en-US/auth/callback" }),
       });
       expect(signedIn.status).toBe(200);
-      const cookie = cookieJar(getSessionCookie(signedIn)!);
-      const accountId = (await userIdForEmail(login.email))!;
+      const cookie = cookieJar(
+        requireValue(getSessionCookie(signedIn), "session cookie")
+      );
+      const accountId = requireValue(
+        await userIdForEmail(login.email),
+        "customer account ID"
+      );
       await grantAdministrator(accountId);
       const { response } = await authorizeRequest(auth, cookie, agent, {
         scope: ALL_SCOPES,
@@ -3028,7 +3123,13 @@ describe.skipIf(!testDatabase)(
         "invalid-token"
       );
       expect(
-        (await refreshWith(auth, agent, tokens.refresh_token!)).status
+        (
+          await refreshWith(
+            auth,
+            agent,
+            requireValue(tokens.refresh_token, "refresh token")
+          )
+        ).status
       ).toBe(400);
 
       // Without the consent on record, a silent re-authorization can't
@@ -3070,7 +3171,7 @@ describe.skipIf(!testDatabase)(
         )
       );
       expect(reconnected.status).toBe(200);
-      const customerTokens = (await reconnected.json()) as TokenResponse;
+      const customerTokens = await readTokenResponse(reconnected);
       expect(customerTokens.scope?.split(" ")).not.toContain("administration");
 
       // A later re-authorization the customer-only consent covers gets no
@@ -3088,7 +3189,7 @@ describe.skipIf(!testDatabase)(
         );
         expect(exchanged.status).toBe(200);
         expect(
-          ((await exchanged.json()) as TokenResponse).scope?.split(" ")
+          (await readTokenResponse(exchanged)).scope?.split(" ")
         ).not.toContain("administration");
       }
     });
@@ -3119,7 +3220,13 @@ describe.skipIf(!testDatabase)(
       );
 
       expect(
-        (await refreshWith(auth, agent, administering.refresh_token!)).status
+        (
+          await refreshWith(
+            auth,
+            agent,
+            requireValue(administering.refresh_token, "refresh token")
+          )
+        ).status
       ).toBe(400);
       expect(
         await administrationAccessOf(auth, administering.access_token)
@@ -3132,13 +3239,13 @@ describe.skipIf(!testDatabase)(
       const refreshed = await refreshWith(
         auth,
         agent,
-        customerOnly.refresh_token!
+        requireValue(customerOnly.refresh_token, "refresh token")
       );
       expect(refreshed.status).toBe(200);
       expect(
         await administrationAccessOf(
           auth,
-          ((await refreshed.json()) as TokenResponse).access_token
+          (await readTokenResponse(refreshed)).access_token
         )
       ).toBe("missing-scope");
     });
@@ -3208,7 +3315,7 @@ describe.skipIf(!testDatabase)(
       );
       const consentPage = redirectOf(response);
       // The consent is recorded; the authorization it resumes then fails.
-      await testDatabase!.pool.query(
+      await requireTestDatabase(testDatabase).pool.query(
         `update auth.oauth_client set disabled = true where client_id = $1`,
         [agent.clientId]
       );
@@ -3218,7 +3325,7 @@ describe.skipIf(!testDatabase)(
         scope: AGENT_SCOPE,
       });
       // Enabled again, so only the cleanup can refuse the earlier tokens.
-      await testDatabase!.pool.query(
+      await requireTestDatabase(testDatabase).pool.query(
         `update auth.oauth_client set disabled = false where client_id = $1`,
         [agent.clientId]
       );
@@ -3227,7 +3334,13 @@ describe.skipIf(!testDatabase)(
         await administrationAccessOf(auth, administering.access_token)
       ).toBe("invalid-token");
       expect(
-        (await refreshWith(auth, agent, administering.refresh_token!)).status
+        (
+          await refreshWith(
+            auth,
+            agent,
+            requireValue(administering.refresh_token, "refresh token")
+          )
+        ).status
       ).toBe(400);
     });
 
@@ -3248,7 +3361,7 @@ describe.skipIf(!testDatabase)(
       );
       // A consent narrowed without the narrowing cleanup, as before this
       // release.
-      await testDatabase!.pool.query(
+      await requireTestDatabase(testDatabase).pool.query(
         `update auth.oauth_consent
             set scopes = array_remove(scopes, 'administration')
           where user_id = $1`,
@@ -3258,7 +3371,13 @@ describe.skipIf(!testDatabase)(
       await revokeAdministrator(administrator.accountId);
 
       expect(
-        (await refreshWith(auth, agent, administering.refresh_token!)).status
+        (
+          await refreshWith(
+            auth,
+            agent,
+            requireValue(administering.refresh_token, "refresh token")
+          )
+        ).status
       ).toBe(400);
       expect(
         await administrationAccessOf(auth, administering.access_token)
@@ -3285,13 +3404,17 @@ describe.skipIf(!testDatabase)(
 
       // The grant goes without the cleanup, as when a consent check that
       // passed just before the revocation records its consent after it.
-      await testDatabase!.pool.query(
+      await requireTestDatabase(testDatabase).pool.query(
         `delete from account_role_grants where account_id = $1`,
         [administrator.accountId]
       );
-      const refreshed = await refreshWith(auth, agent, tokens.refresh_token!);
+      const refreshed = await refreshWith(
+        auth,
+        agent,
+        requireValue(tokens.refresh_token, "refresh token")
+      );
       expect(refreshed.status).toBe(200);
-      const renewed = (await refreshed.json()) as TokenResponse;
+      const renewed = await readTokenResponse(refreshed);
 
       expect(renewed.scope?.split(" ")).toContain("administration");
       expect(await administrationAccessOf(auth, renewed.access_token)).toBe(
@@ -3326,7 +3449,9 @@ describe.skipIf(!testDatabase)(
           ALL_SCOPES
         );
 
-        await testDatabase!.pool.query(update, [administrator.accountId]);
+        await requireTestDatabase(testDatabase).pool.query(update, [
+          administrator.accountId,
+        ]);
 
         expect(await administrationAccessOf(auth, tokens.access_token)).toBe(
           "account-unavailable"
@@ -3355,7 +3480,9 @@ describe.skipIf(!testDatabase)(
         method: "POST",
         cookie: administrator.cookie,
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: connection!.id }),
+        body: JSON.stringify({
+          id: requireValue(connection, "agent connection").id,
+        }),
       });
       expect(disconnected.status).toBe(200);
 
@@ -3381,7 +3508,7 @@ describe.skipIf(!testDatabase)(
         cookie: customer.cookie,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          id: connection!.id,
+          id: requireValue(connection, "agent connection").id,
           update: { scopes: ALL_SCOPES.split(" ") },
         }),
       });
@@ -3400,7 +3527,7 @@ describe.skipIf(!testDatabase)(
       const administrator = await signIn(auth, sentLinks);
       await grantAdministrator(administrator.accountId);
       const redirectUri = `https://preregistered.example/${crypto.randomUUID()}/callback`;
-      const registered = (await auth.api.adminCreateOAuthClient({
+      const registered = await auth.api.adminCreateOAuthClient({
         headers: new Headers({ cookie: administrator.cookie, host: HOST }),
         body: {
           client_name: "First-party Agent",
@@ -3410,7 +3537,7 @@ describe.skipIf(!testDatabase)(
           response_types: ["code"],
           skip_consent: true,
         },
-      })) as { client_id: string };
+      });
       const client = { clientId: registered.client_id, redirectUri };
 
       // By name, or through an omitted scope that defaults to every scope.
@@ -3451,12 +3578,15 @@ describe.skipIf(!testDatabase)(
       expect(callback.searchParams.get("code")).toBeTruthy();
       const exchanged = await exchangeCode(auth, {
         ...client,
-        code: callback.searchParams.get("code")!,
+        code: requireValue(
+          callback.searchParams.get("code"),
+          "authorization code"
+        ),
         verifier: pkce.verifier,
       });
       expect(exchanged.status).toBe(200);
       expect(
-        ((await exchanged.json()) as TokenResponse).scope?.split(" ")
+        (await readTokenResponse(exchanged)).scope?.split(" ")
       ).not.toContain("administration");
     });
 
@@ -3477,7 +3607,7 @@ describe.skipIf(!testDatabase)(
       );
       const consentPage = redirectOf(response);
       expect(consentPage.pathname).toBe("/auth/consent");
-      await testDatabase!.pool.query(
+      await requireTestDatabase(testDatabase).pool.query(
         `update auth.oauth_client set skip_consent = true where client_id = $1`,
         [agent.clientId]
       );

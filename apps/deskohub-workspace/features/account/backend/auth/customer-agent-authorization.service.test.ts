@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { customerAgentClientIdSchema } from "@deskohub/workspace-domain/features/account/customer-agent-client";
 import type { User } from "better-auth";
 import { Effect, Option } from "effect";
+import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { censorLogValue } from "@/shared/backend/logging/censorship";
-import type { CustomerAccountId } from "../../customer-account";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
+import { customerAccountIdSchema } from "../../customer-account";
 import { CustomerAuthentication } from "../customer-authentication.service";
 import {
   type CustomerAgentAuthority,
@@ -14,28 +17,29 @@ import {
 } from "./customer-agent-authorization.service";
 
 const RESOURCE = "https://workspace.test/api/mcp";
-const CLIENT_ID = "https://client.example/agent.json";
-const ACCOUNT_ID = "account-1";
+const CLIENT_ID = customerAgentClientIdSchema.make(
+  "https://client.example/agent.json"
+);
+const ACCOUNT_ID = customerAccountIdSchema.make("account-1");
 const TOKEN = "agent-access-token";
 const customerEmail = testEmailAddress("agent-customer");
 
 /** The Workspace columns on the identity row beyond Better Auth's own. */
-type UserRowFields = Partial<User> & {
+type UserRow = User & {
   readonly deletionRequestedAt?: Date | null;
   readonly locale?: string | null;
 };
 
-const userRow = (fields: UserRowFields = {}) =>
-  ({
-    id: ACCOUNT_ID,
-    name: "",
-    email: customerEmail,
-    emailVerified: true,
-    image: null,
-    createdAt: new Date("2026-10-01T00:00:00Z"),
-    updatedAt: new Date("2026-10-01T00:00:00Z"),
-    ...fields,
-  }) as User;
+const userRow = (fields: Partial<UserRow> = {}): UserRow => ({
+  id: ACCOUNT_ID,
+  name: "",
+  email: customerEmail,
+  emailVerified: true,
+  image: null,
+  createdAt: new Date("2026-10-01T00:00:00Z"),
+  updatedAt: new Date("2026-10-01T00:00:00Z"),
+  ...fields,
+});
 
 /** Introspection claims as the provider reports them. */
 type AccessTokenClaims = {
@@ -119,8 +123,8 @@ describe("CustomerAgentAuthorization.authorize", () => {
 
     expect(outcome._tag).toBe("Success");
     if (outcome._tag !== "Success") return;
-    expect(outcome.success.accountId).toBe(ACCOUNT_ID as CustomerAccountId);
-    expect(outcome.success.clientId).toBe(CLIENT_ID as never);
+    expect(outcome.success.accountId).toBe(ACCOUNT_ID);
+    expect(outcome.success.clientId).toBe(CLIENT_ID);
     expect([...outcome.success.scopes].sort()).toEqual([
       "offerings:read",
       "reservations:create",
@@ -325,10 +329,13 @@ describe("CustomerAgentAuthorization.currentUser", () => {
 
     expect(outcome._tag).toBe("Success");
     if (outcome._tag !== "Success") return;
-    const { accountCreatedAt, accountUpdatedAt, ...session } = outcome.success!;
+    const { accountCreatedAt, accountUpdatedAt, ...session } = requireValue(
+      outcome.success,
+      "customer session"
+    );
     expect(session).toEqual({
-      accountId: ACCOUNT_ID as CustomerAccountId,
-      email: customerEmail as never,
+      accountId: ACCOUNT_ID,
+      email: reservationCustomerEmailSchema.make(customerEmail),
       deletionRequested: false,
       displayName: null,
       localePreference: "cs-CZ",
@@ -402,7 +409,7 @@ describe("customerAuthenticationForAgent", () => {
 
     expect(outcome._tag).toBe("Success");
     if (outcome._tag === "Success") {
-      expect(outcome.success?.accountId).toBe(ACCOUNT_ID as CustomerAccountId);
+      expect(outcome.success?.accountId).toBe(ACCOUNT_ID);
     }
     expect(validated).toEqual([TOKEN]);
   });
