@@ -59,6 +59,8 @@ Gender: m./f.; pl. = plural form. “Forbidden” lists wrong or competing forms
 | P30 | Člen Workspace | Workspace member | **Workspace प्रोफ़ाइल** | Fallback display name (`accountProfileScreenMemberFallback`). Forbidden: “Workspace सदस्य” (masc. agreement follows), “सदस्य/सदस्या”. |
 | P31, P33 | Deskohub Workspace; Deskohub | brand | **Deskohub Workspace**; **Deskohub** | Latin, exact capitalisation. Hindi postpositions attach after a space: “Deskohub Workspace में”, “Deskohub की ओर से”. Forbidden: “डेस्कोहब”, “Deskohub-में”. |
 | P32 | Workspace (brand) | Workspace | **Workspace** | Short brand: “Workspace में बुकिंग”. Lowercase generic “workspace” = P13. |
+| P34 | Neomezené členství | Unlimited membership | **असीमित सदस्यता** | Use the name alone in titles. Put the 30-day period in the price cadence or validity and access details. |
+| P35 | Členství | Membership | **सदस्यता** | Short label in purchase comparisons. |
 
 ### R · Reservation
 

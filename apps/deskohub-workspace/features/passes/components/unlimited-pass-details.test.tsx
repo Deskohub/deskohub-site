@@ -49,8 +49,8 @@ test("itemizes the Open Space pass and paid coffee before the total", () => {
   expect(view.getByText("Open Space")).toBeDefined();
   expect(view.getByText("Jul 30, 2099")).toBeDefined();
   expect(
-    view.getByText("Unlimited pass", { selector: "dt" }).nextElementSibling
-      ?.textContent
+    view.getByText("Unlimited membership", { selector: "dt" })
+      .nextElementSibling?.textContent
   ).toMatch(/^CZK\s3,490$/);
   expect(
     view.getByText("Coffee for 30 days").nextElementSibling?.textContent

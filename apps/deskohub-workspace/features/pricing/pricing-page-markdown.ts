@@ -1,6 +1,8 @@
 import { Effect } from "effect";
 import { publicOfferingsMarkdown } from "@/features/checkout/public-offerings-markdown";
 import { type Locale, m } from "@/features/i18n";
+import { unlimitedPassOffers } from "@/features/passes/pass-offer";
+import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import type { PublicPageMarkdownSources } from "@/features/public-pages/public-page-markdown";
 import {
   type MarkdownBlocks,
@@ -9,6 +11,7 @@ import {
   markdownListItem,
   markdownParagraph,
 } from "@/shared/markdown/markdown";
+import { formatMoney } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { getPriceFamilies } from "./price-family";
 
@@ -18,7 +21,7 @@ import { getPriceFamilies } from "./price-family";
  */
 export const pricingPageMarkdown = (
   locale: Locale,
-  { offerings }: PublicPageMarkdownSources
+  { coworkPassesPublished, offerings }: PublicPageMarkdownSources
 ): Effect.Effect<MarkdownBlocks> => {
   const { address } = workspaceSiteConstants.location;
   const { openSpaceUsableUntil } = workspaceSiteConstants.openingHours;
@@ -38,9 +41,27 @@ export const pricingPageMarkdown = (
       markdownListItem(m.pricingOpeningHoursCodeAccess({}, { locale })),
     ]),
     ...getPriceFamilies(loaded, locale).flatMap(
-      ({ title, offerings: rows }) => [
+      ({ kind, title, offerings: rows }) => [
         markdownHeading(2, title),
         publicOfferingsMarkdown(rows, locale),
+        ...(kind === "cowork" && coworkPassesPublished
+          ? [
+              markdownHeading(2, m.passUnlimited({}, { locale })),
+              markdownParagraph(m.unlimitedPassDiscoveryIntro({}, { locale })),
+              markdownList(
+                unlimitedPassOffers.map(({ product, price, validityDays }) =>
+                  markdownListItem(
+                    getPassTierName(product.tier, locale),
+                    " · ",
+                    m.unlimitedPassDiscoveryPrice(
+                      { price: formatMoney(price, locale), days: validityDays },
+                      { locale }
+                    )
+                  )
+                )
+              ),
+            ]
+          : []),
       ]
     ),
     markdownHeading(2, m.contactAddressLabel({}, { locale })),

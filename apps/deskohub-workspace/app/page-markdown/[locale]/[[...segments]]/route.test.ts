@@ -4,7 +4,8 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Effect, Layer } from "effect";
 import { advertisedCatalogOfferings } from "@/features/checkout/public-offerings.test-utils";
 import { DiscountReleaseGateService } from "@/features/discounts/discount-release-gate.service";
-import type { Locale } from "@/features/i18n";
+import type { GlobalRelease } from "@/features/feature-flags/backend/global-release";
+import { type Locale, m } from "@/features/i18n";
 import { getLegalDocument } from "@/features/legal/content";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
 import { PublishedPublicPagesService } from "@/features/public-pages/backend";
@@ -17,6 +18,11 @@ import { publicPageMarkdown } from "@/features/public-pages/public-page-markdown
 // Outside a Next.js render there is no cache to configure.
 const nextCache = await import("next/cache");
 mock.module("next/cache", () => ({ ...nextCache, cacheLife: () => {} }));
+
+let coworkPassesRelease: GlobalRelease = "off";
+mock.module("@/features/feature-flags/backend/global-release.server", () => ({
+  loadGlobalRelease: () => Promise.resolve(coworkPassesRelease),
+}));
 
 // The FAQ's occupancy loader has its own tests; keep this one off Dotypos.
 mock.module("@/features/faq/backend/faq-occupancy.server", () => ({
@@ -69,6 +75,7 @@ const { GET } = await import("./route");
 
 beforeEach(() => {
   publishedPages = publicPages;
+  coworkPassesRelease = "off";
 });
 
 const getMarkdown = (locale: string, segments?: ReadonlyArray<string>) =>
@@ -114,6 +121,22 @@ describe("public page Markdown route", () => {
       const document = getLegalDocument(locale, "privacy-policy");
 
       expect(await response.text()).toStartWith(`# ${document.title}\n`);
+    }
+  );
+
+  test.each(["on", "off", "undecided"] as const)(
+    "includes the membership price only when its global release is on (%s)",
+    async (release) => {
+      coworkPassesRelease = release;
+      const locale = "cs-CZ";
+      const response = await getMarkdown(locale, ["pricing"]);
+      const markdown = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(markdown.includes(m.passUnlimited({}, { locale }))).toBe(
+        release === "on"
+      );
+      expect(markdown.includes("/ 30 dní")).toBe(release === "on");
     }
   );
 

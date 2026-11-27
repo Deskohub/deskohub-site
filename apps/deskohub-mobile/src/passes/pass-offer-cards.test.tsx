@@ -91,7 +91,13 @@ test("the offers open with a dotted rule and a heading only screen readers read"
     ({ props }) => props.role === "heading"
   );
   expect(headings).toHaveLength(1);
-  expect(textOf(headings[0] as ReactElement<HostProps>)).not.toBe("");
+  expect(textOf(headings[0] as ReactElement<HostProps>)).toBe(
+    "Packs and memberships"
+  );
+  const labels = findAll(tree, "Text").map(textOf);
+  expect(labels).toContain("Unlimited membership");
+  expect(labels).toContain("Open Space access for 30 days");
+  expect(labels).toContain("Choose membership");
   expect(links(tree)).toHaveLength(2);
 });
 

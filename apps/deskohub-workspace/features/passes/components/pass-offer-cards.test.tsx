@@ -69,6 +69,7 @@ test("the Unlimited credential shows its issuer, foil, mark and the expiry it de
     "/en-US/passes/unlimited?tier=reserved-desk"
   );
   expect(link.textContent).toContain(m.workspaceTitle({}, { locale }));
+  expect(link.textContent).toContain(m.passMembership({}, { locale }));
   expect(link.querySelector("[data-foil-stripe]")).not.toBeNull();
   expect(link.querySelector("[data-workspace-mark]")).not.toBeNull();
   const time = link.querySelector("time");
@@ -93,7 +94,7 @@ test("the Unlimited tagline follows the tier", () => {
     return text;
   };
   expect(tagline("open-space")).toBe(
-    m.unlimitedPassOfferTaglineOpenSpace({ days: 30 }, { locale })
+    m.unlimitedPassOfferTaglineOpenSpace({}, { locale })
   );
   expect(tagline("reserved-desk-workstation")).toBe(
     m.unlimitedPassOfferTaglineReservedDesk({}, { locale })

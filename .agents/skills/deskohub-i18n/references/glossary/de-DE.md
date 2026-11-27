@@ -40,6 +40,8 @@ Columns: **ID(s)** = master ids; **German** gives article and plural (Pl.) for n
 | P29 | monitor | monitor | der Monitor (Pl. -e) | not: Bildschirm. |
 | P30 | člen Workspace | Workspace member | das Workspace-Mitglied | Fallback display name `accountProfileScreenMemberFallback`. Mitglied is grammatically neuter, so it needs no gender marking. not: Workspace-Mitglied:in, Mitglied/in, Nutzer. |
 | P31, P32, P33 | Deskohub Workspace; Workspace (brand); Deskohub | brands | Deskohub Workspace; Workspace; Deskohub | Never translate, inflect or add a genitive -s. Attach grammar to a preposition or noun: „bei Deskohub Workspace“, „im Workspace“ (dative, fine for either gender), „das Team von Deskohub“. Avoid accusative/genitive with the bare brand. Compound only one-word brands with a hyphen (Deskohub-Team); for the two-word brand rephrase („dein Konto bei Deskohub Workspace“, not Deskohub-Workspace-Konto). |
+| P34 | Neomezené členství | Unlimited membership | **Unbegrenzte Mitgliedschaft** | Use the name alone in titles. Put the 30-day period in the price cadence or validity and access details. |
+| P35 | Členství | Membership | **Mitgliedschaft** | Short label in purchase comparisons. |
 
 ## R: reservation
 

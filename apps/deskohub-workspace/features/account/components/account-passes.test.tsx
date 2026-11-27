@@ -101,7 +101,7 @@ test("presents the buyer's order separately from passes they can use", async () 
   expect(markup).toContain(`href="${statusPath}"`);
   expect(markup).toContain("Invitation sent");
   expect(markup).toContain("Not claimed yet");
-  expect(markup).toContain("Unlimited pass");
+  expect(markup).toContain("Unlimited membership");
   expect(markup.match(/Resend invitation/g)).toHaveLength(1);
   expect(markup).not.toContain("entries left");
   expect(markup).not.toContain("Book a date");
@@ -190,7 +190,7 @@ test("shows a lookup failure when Entry Packs loaded empty and Unlimited did not
   ).text();
 
   expect(markup).toContain(
-    "Your Unlimited passes are temporarily unavailable."
+    "Your Unlimited memberships couldn’t be loaded right now."
   );
   expect(markup).not.toContain("You don’t have any passes yet.");
 });

@@ -62,7 +62,7 @@ test("submits the gift holder independently of the authenticated buyer", async (
   fireEvent.click(gift);
   expect(
     view.getByText(
-      "We email them an invitation once you’ve paid. They claim it with their email. Only they can use the pass."
+      "After you pay, we email the recipient an invitation. Only they can claim and use the gift with their email address."
     )
   ).toBeDefined();
   fireEvent.change(view.getByLabelText(fieldName), {

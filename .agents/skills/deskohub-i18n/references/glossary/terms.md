@@ -45,6 +45,8 @@ Columns:
 | P31 | C | Deskohub Workspace | Deskohub Workspace | `cust:workspaceTitle` | Full brand name. Never translated or inflected. |
 | P32 | C | Workspace | Workspace | `cust:accountReferralsDiscountInfo` | Short brand name, uninflected in Czech ("ve Workspace"). |
 | P33 | C | Deskohub | Deskohub | `cust:marketingPreferencesFormRowDescription` | Brand. Czech inflects it (Deskohubu, Deskohubem). |
+| P34 | C | Neomezené členství | Unlimited membership | `cust:passUnlimited`, `mobile:passes_unlimited` | One purchase covers 30 calendar days. Put the duration in the price cadence or access details. Eligible holders can buy an extension separately. |
+| P35 | C | Členství | Membership | `cust:passMembership` | Short label when comparing daily bookings, entry packs and memberships. |
 
 ## R: Reservation
 

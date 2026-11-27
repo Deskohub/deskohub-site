@@ -199,7 +199,9 @@ describe("PricingPage", () => {
     if (!section) throw new Error("Expected the Unlimited pass price section");
 
     expect(section.previousElementSibling?.id).toBe("pricing-entry-packs");
-    expect(section.querySelector("h2")?.textContent).toBe("Unlimited pass");
+    expect(section.querySelector("h2")?.textContent).toBe(
+      "Unlimited membership"
+    );
     const price = (amount: number) => formatMoney(currencyCZK(amount), locale);
     const rows = [...section.querySelectorAll("li")];
     expect(rows).toHaveLength(3);
@@ -217,7 +219,7 @@ describe("PricingPage", () => {
         `/en-US/passes/unlimited?tier=${offer.tier}`
       );
       expect(link?.getAttribute("aria-label")).toBe(
-        `Buy an Unlimited pass (${row.querySelector("h3")?.textContent})`
+        `Buy Unlimited membership (${row.querySelector("h3")?.textContent})`
       );
     }
     expect(isCoworkPassesPageOpenAfterConnection).not.toHaveBeenCalled();

@@ -86,14 +86,18 @@ export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
       <WorkspaceEmailHeading>{title}</WorkspaceEmailHeading>
       <WorkspaceEmailBody>
         {invited
-          ? m.passGiftMailBuyerInvited({ email: invited }, options)
+          ? (unlimited
+              ? m.unlimitedPassGiftMailBuyerInvited
+              : m.passGiftMailBuyerInvited)({ email: invited }, options)
           : paidBody}
       </WorkspaceEmailBody>
 
       {invited ? (
         <EntryPackEmailCard
           action={{
-            label: m.passGiftMailBuyerOpen({}, options),
+            label: (unlimited
+              ? m.unlimitedPassEmailOpen
+              : m.passGiftMailBuyerOpen)({}, options),
             url: props.statusUrl,
           }}
           dates={m.passEmailValid({ dates }, options)}
@@ -109,7 +113,10 @@ export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
               href={props.statusUrl}
               style={{ backgroundColor: "#00df99", color: "#00024f" }}
             >
-              {m.passEmailOpen({}, options)}
+              {(unlimited ? m.unlimitedPassEmailOpen : m.passEmailOpen)(
+                {},
+                options
+              )}
             </Link>
           </Section>
           <Section className="border-t-4 border-aquamarine bg-[#e9fff6] px-5 py-5 text-center">
