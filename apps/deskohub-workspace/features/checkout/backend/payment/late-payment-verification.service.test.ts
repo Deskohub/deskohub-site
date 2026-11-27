@@ -1,89 +1,61 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { NexiService, type PaymentVerificationResult } from "@deskohub/nexi";
+import { NexiService } from "@deskohub/nexi";
 import { Effect, Layer } from "effect";
+import type { LatePaymentRecoveryState, PaymentState } from "@/db/schema";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
 import { PaymentAttemptRepository } from "../repositories/payment-attempt.repository";
 import { LatePaymentRecoveryQueueService } from "./late-payment-recovery-queue.service";
 import { LatePaymentVerificationService } from "./late-payment-verification.service";
+import {
+  expiredAttempt,
+  expiredReservation,
+  orderId,
+  recoveryFixture,
+  verification,
+} from "./late-payment-verification.test-utils";
 import { withReservationPaymentHandlers } from "./order-payment-handlers.test-utils";
 import { PaymentProvidersFromNexi } from "./payment-providers";
 
-const expiredReservation = {
-  id: "reservation-id",
-  correlationId: "correlation-id",
-  paymentState: "expired",
-  fulfillmentState: "not_started",
-  activePaymentAttemptId: "attempt-id",
-};
-
-const expiredAttempt = {
-  orderId: "reservation-id",
-  id: "attempt-id",
-  workspaceReservationId: "reservation-id",
-  provider: "nexi" as const,
-  providerOrderId: "provider-order-id",
-  state: "expired" as const,
-  amount: { value: 29_000, exponent: 2, currency: "CZK" },
-  securityToken: "security-token",
-};
-
-const verification = (
-  status: PaymentVerificationResult["status"],
-  mismatches: PaymentVerificationResult["mismatches"] = []
-): PaymentVerificationResult => ({
-  status,
-  provider: {
-    orderId: "provider-order-id",
-    operationId: "operation-id",
-    operationCount: 1,
-    amount: "29000",
-    currency: "CZK",
-    orderStatus: status === "success" ? "EXECUTED" : "DECLINED",
-    captureExecuted: status === "success",
-  },
-  mismatches,
-});
-
 const makeHarness = (options: {
-  readonly reservation?: { readonly paymentState: string };
-  readonly existingRecovery?: { readonly state: string };
-  readonly verification?: PaymentVerificationResult;
+  readonly paymentState?: PaymentState;
+  readonly existingRecoveryState?: LatePaymentRecoveryState;
+  readonly verification?: ReturnType<typeof verification>;
 }) => {
   const spies = {
-    start: mock(() => Effect.succeed({} as never)),
-    enqueue: mock(() => Effect.void),
-    verifyPaymentOutcome: mock(() =>
-      Effect.succeed(options.verification ?? verification("success"))
+    start: mock<LatePaymentRecoveryRepository["Service"]["start"]>((input) =>
+      Effect.succeed(recoveryFixture(input))
+    ),
+    enqueue: mock<LatePaymentRecoveryQueueService["Service"]["enqueue"]>(
+      () => Effect.void
+    ),
+    verifyPaymentOutcome: mock<NexiService["Service"]["verifyPaymentOutcome"]>(
+      () => Effect.succeed(options.verification ?? verification("success"))
     ),
   };
   const layer = LatePaymentVerificationService.Default.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(WorkspaceReservationRepository, {
-          findById: mock(() =>
+          findById: () =>
             Effect.succeed({
               ...expiredReservation,
-              ...options.reservation,
-            } as never)
-          ),
+              paymentState:
+                options.paymentState ?? expiredReservation.paymentState,
+            }),
         }),
         Layer.mock(PaymentAttemptRepository, {
-          findById: mock(() => Effect.succeed(expiredAttempt as never)),
+          findById: () => Effect.succeed(expiredAttempt),
         }),
         Layer.mock(LatePaymentRecoveryRepository, {
-          findByPaymentAttemptId: mock(() =>
+          findByPaymentAttemptId: () =>
             Effect.succeed(
-              (options.existingRecovery
-                ? {
-                    ...options.existingRecovery,
-                    createdAt: Temporal.Now.instant(),
-                  }
-                : null) as never
-            )
-          ),
+              options.existingRecoveryState
+                ? recoveryFixture({ state: options.existingRecoveryState })
+                : null
+            ),
           start: spies.start,
         }),
         Layer.mock(LatePaymentRecoveryQueueService, {
@@ -92,7 +64,7 @@ const makeHarness = (options: {
         PaymentProvidersFromNexi.pipe(
           Layer.provide(
             Layer.mock(NexiService, {
-              verifyPaymentOutcome: spies.verifyPaymentOutcome as never,
+              verifyPaymentOutcome: spies.verifyPaymentOutcome,
             })
           )
         )
@@ -102,9 +74,7 @@ const makeHarness = (options: {
   const run = () =>
     Effect.gen(function* () {
       const service = yield* LatePaymentVerificationService;
-      return yield* service.startRecoveryIfSettled({
-        orderId: "reservation-id" as never,
-      });
+      return yield* service.startRecoveryIfSettled({ orderId });
     }).pipe(Effect.provide(layer), Effect.runPromise);
   return { run, spies };
 };
@@ -127,7 +97,7 @@ describe("LatePaymentVerificationService", () => {
     expect(harness.spies.start).toHaveBeenCalledWith(
       expect.objectContaining({
         paymentAttemptId: "attempt-id",
-        workspaceReservationId: "reservation-id",
+        workspaceReservationId: orderId,
         providerOperationId: "operation-id",
         providerStatus: "EXECUTED",
       })
@@ -179,16 +149,16 @@ describe("LatePaymentVerificationService", () => {
   });
 
   test("does not query Nexi again once recovery has started", async () => {
-    const harness = makeHarness({ existingRecovery: { state: "processing" } });
+    const harness = makeHarness({ existingRecoveryState: "processing" });
 
     expect(await harness.run()).toBe("recovery_started");
     expect(harness.spies.verifyPaymentOutcome).not.toHaveBeenCalled();
     expect(harness.spies.start).not.toHaveBeenCalled();
   });
 
-  for (const paymentState of ["not_started", "pending", "paid"]) {
+  for (const paymentState of ["not_started", "pending", "paid"] as const) {
     test(`ignores a ${paymentState} reservation`, async () => {
-      const harness = makeHarness({ reservation: { paymentState } });
+      const harness = makeHarness({ paymentState });
 
       expect(await harness.run()).toBe("not_applicable");
       expect(harness.spies.verifyPaymentOutcome).not.toHaveBeenCalled();

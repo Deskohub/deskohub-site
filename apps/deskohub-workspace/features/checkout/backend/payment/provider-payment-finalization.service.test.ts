@@ -1,10 +1,7 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import type {
-  NexiService as NexiServiceTag,
-  PaymentVerificationResult,
-} from "@deskohub/nexi";
+import type { NexiService as NexiServiceTag } from "@deskohub/nexi";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Effect, Layer } from "effect";
 import { PaidFulfillmentQueueError } from "../fulfillment/paid-fulfillment-queue.service";
@@ -12,13 +9,28 @@ import {
   type IReservationFulfillment,
   ReservationFulfillment,
 } from "../fulfillment/reservation-fulfillment.service";
-import type { PaymentAttemptRepository as PaymentAttemptRepositoryType } from "../repositories/payment-attempt.repository";
 import {
   type IPaymentLifecycleRepository,
   PaymentLifecycleRepository,
 } from "../repositories/payment-lifecycle.repository";
+import {
+  type NexiVerification,
+  nexiVerificationFixture,
+} from "./nexi-verification.test-utils";
 import { withReservationPaymentHandlers } from "./order-payment-handlers.test-utils";
 import { PaymentProvidersFromNexi } from "./payment-providers";
+import type { ProviderPaymentFinalizationResult } from "./provider-payment-finalization.service";
+import {
+  attemptCreatedAt,
+  orderId,
+  paidReservation,
+  paymentAttemptId,
+  pendingAttempt,
+  pendingReservation,
+  providerOrderId,
+  reservationId,
+  unattachedAttempt,
+} from "./provider-payment-finalization.test-utils";
 
 type NexiServiceType = typeof NexiServiceTag.Service;
 
@@ -37,72 +49,13 @@ const paidFulfillmentLayer = (
     Effect.die("not used")
 ) => Layer.mock(ReservationFulfillment, { run: fulfillPaidOrder });
 
-const paidNotStartedReservation = {
-  id: "reservation-id",
-  correlationId: "correlation-id",
-  paymentState: "paid",
-  fulfillmentState: "not_started",
-  activePaymentAttemptId: "attempt-id",
-};
-
-const pendingReservation = {
-  ...paidNotStartedReservation,
-  paymentState: "pending",
-};
-
-const pendingAttempt = {
-  orderId: "reservation-id",
-  id: "attempt-id",
-  workspaceReservationId: "reservation-id",
-  provider: "nexi" as const,
-  providerOrderId: "provider-order-id",
-  state: "pending" as const,
-  amount: {
-    value: 35_000,
-    exponent: 2,
-    currency: "CZK",
-  },
-  securityToken: "security-token",
-  providerRedirectUrl: "https://provider.example/pay",
-  providerOrderCreatedAt: Temporal.Instant.from("2026-06-01T10:00:00Z"),
-  lastWebhookEventId: null,
-  lastProviderOperationId: null,
-  lastProviderStatus: null,
-  failureCode: null,
-  createdAt: Temporal.Now.instant(),
-  updatedAt: Temporal.Now.instant(),
-};
-
-const buildVerification = (
-  status: PaymentVerificationResult["status"]
-): PaymentVerificationResult => ({
-  status,
-  provider: {
-    orderId: "provider-order-id",
-    operationId: "operation-id",
-    operationCount: 1,
-    amount: "35000",
-    currency: "CZK",
-    orderStatus: status === "failure" ? "DECLINED" : "EXECUTED",
-    captureExecuted: status === "success",
-  },
-  mismatches: [],
+const emptyPendingVerification = nexiVerificationFixture("pending", {
+  operationId: undefined,
+  operationCount: 0,
+  authorizedAmount: "0",
+  capturedAmount: "0.00",
+  orderStatus: "PENDING",
 });
-
-const emptyPendingVerification: PaymentVerificationResult = {
-  status: "pending",
-  provider: {
-    orderId: "provider-order-id",
-    operationCount: 0,
-    amount: "35000",
-    currency: "CZK",
-    authorizedAmount: "0",
-    capturedAmount: "0.00",
-    orderStatus: "PENDING",
-    captureExecuted: false,
-  },
-  mismatches: [],
-};
 
 describe("ProviderPaymentFinalizationService", () => {
   for (const fulfillmentState of [
@@ -131,16 +84,14 @@ describe("ProviderPaymentFinalizationService", () => {
 
       const enqueue = mock(() => Effect.void);
       const reservations = {
-        findById: mock(() =>
-          Effect.succeed({ ...paidNotStartedReservation, fulfillmentState })
-        ),
+        findById: mock(() => Effect.succeed(paidReservation(fulfillmentState))),
       };
 
       const result = await Effect.gen(function* () {
         const service = yield* ProviderPaymentFinalizationService;
         return yield* service.finalizePendingProviderPayment({
-          orderId: "reservation-id",
-          paymentAttemptId: "attempt-id",
+          orderId,
+          paymentAttemptId,
         });
       }).pipe(
         Effect.provide(
@@ -150,14 +101,11 @@ describe("ProviderPaymentFinalizationService", () => {
                 Layer.mock(WorkspaceReservationRepository, reservations),
                 paidFulfillmentLayer(),
                 Layer.mock(PaidFulfillmentQueueService, { enqueue }),
-                Layer.mock(
-                  PaymentAttemptRepository,
-                  {} as PaymentAttemptRepositoryType
-                ),
+                Layer.mock(PaymentAttemptRepository, {}),
                 paymentLifecycleLayer(),
                 recordCheckoutAnalytics().layer,
                 PaymentProvidersFromNexi.pipe(
-                  Layer.provide(Layer.mock(NexiService, {} as NexiServiceType))
+                  Layer.provide(Layer.mock(NexiService, {}))
                 )
               ).pipe(withReservationPaymentHandlers)
             )
@@ -171,7 +119,7 @@ describe("ProviderPaymentFinalizationService", () => {
         fulfillmentState === "not_started" ||
         fulfillmentState === "processing"
       ) {
-        expect(enqueue).toHaveBeenCalledWith({ orderId: "reservation-id" });
+        expect(enqueue).toHaveBeenCalledWith({ orderId });
       } else {
         expect(enqueue).not.toHaveBeenCalled();
       }
@@ -200,8 +148,8 @@ describe("ProviderPaymentFinalizationService", () => {
     const result = await Effect.gen(function* () {
       const service = yield* ProviderPaymentFinalizationService;
       return yield* service.finalizePendingProviderPayment({
-        orderId: "reservation-id",
-        paymentAttemptId: "attempt-id",
+        orderId,
+        paymentAttemptId,
       });
     }).pipe(
       Effect.provide(
@@ -209,7 +157,9 @@ describe("ProviderPaymentFinalizationService", () => {
           Layer.provide(
             Layer.mergeAll(
               Layer.mock(WorkspaceReservationRepository, {
-                findById: mock(() => Effect.succeed(paidNotStartedReservation)),
+                findById: mock(() =>
+                  Effect.succeed(paidReservation("not_started"))
+                ),
               }),
               paidFulfillmentLayer(fulfillPaidOrder),
               Layer.mock(PaidFulfillmentQueueService, {
@@ -220,14 +170,11 @@ describe("ProviderPaymentFinalizationService", () => {
                     })
                   ),
               }),
-              Layer.mock(
-                PaymentAttemptRepository,
-                {} as PaymentAttemptRepositoryType
-              ),
+              Layer.mock(PaymentAttemptRepository, {}),
               paymentLifecycleLayer(),
               recordCheckoutAnalytics().layer,
               PaymentProvidersFromNexi.pipe(
-                Layer.provide(Layer.mock(NexiService, {} as NexiServiceType))
+                Layer.provide(Layer.mock(NexiService, {}))
               )
             ).pipe(withReservationPaymentHandlers)
           )
@@ -237,7 +184,7 @@ describe("ProviderPaymentFinalizationService", () => {
     );
 
     expect(result).toBe("paid");
-    expect(fulfillPaidOrder).toHaveBeenCalledWith("reservation-id");
+    expect(fulfillPaidOrder).toHaveBeenCalledWith(reservationId);
   });
 
   test("does not retry fulfillment after a paid reservation has failed fulfillment", async () => {
@@ -260,19 +207,14 @@ describe("ProviderPaymentFinalizationService", () => {
 
     const enqueue = mock(() => Effect.void);
     const reservations = {
-      findById: mock(() =>
-        Effect.succeed({
-          ...paidNotStartedReservation,
-          fulfillmentState: "failed",
-        })
-      ),
+      findById: mock(() => Effect.succeed(paidReservation("failed"))),
     };
 
     const result = await Effect.gen(function* () {
       const service = yield* ProviderPaymentFinalizationService;
       return yield* service.finalizePendingProviderPayment({
-        orderId: "reservation-id",
-        paymentAttemptId: "attempt-id",
+        orderId,
+        paymentAttemptId,
       });
     }).pipe(
       Effect.provide(
@@ -282,14 +224,11 @@ describe("ProviderPaymentFinalizationService", () => {
               Layer.mock(WorkspaceReservationRepository, reservations),
               paidFulfillmentLayer(),
               Layer.mock(PaidFulfillmentQueueService, { enqueue }),
-              Layer.mock(
-                PaymentAttemptRepository,
-                {} as PaymentAttemptRepositoryType
-              ),
+              Layer.mock(PaymentAttemptRepository, {}),
               paymentLifecycleLayer(),
               recordCheckoutAnalytics().layer,
               PaymentProvidersFromNexi.pipe(
-                Layer.provide(Layer.mock(NexiService, {} as NexiServiceType))
+                Layer.provide(Layer.mock(NexiService, {}))
               )
             ).pipe(withReservationPaymentHandlers)
           )
@@ -346,23 +285,21 @@ describe("ProviderPaymentFinalizationService", () => {
       const enqueue = mock(() => Effect.void);
       const paymentAttempts = {
         findById: mock(() => Effect.succeed(pendingAttempt)),
-        markPaidForReservation,
-        markTerminalForReservation,
       };
       const reservations = {
         findById: mock(() => Effect.succeed(pendingReservation)),
       };
       const nexi = {
         verifyPaymentOutcome: mock(() =>
-          Effect.succeed(buildVerification(scenario.verificationStatus))
+          Effect.succeed(nexiVerificationFixture(scenario.verificationStatus))
         ),
       };
 
       const result = await Effect.gen(function* () {
         const service = yield* ProviderPaymentFinalizationService;
         return yield* service.finalizePendingProviderPayment({
-          orderId: "reservation-id",
-          paymentAttemptId: "attempt-id",
+          orderId,
+          paymentAttemptId,
           webhookEventId: "event-id",
         });
       }).pipe(
@@ -391,7 +328,7 @@ describe("ProviderPaymentFinalizationService", () => {
 
       expect(result).toBe(scenario.expected);
       expect(nexi.verifyPaymentOutcome).toHaveBeenCalledWith({
-        orderId: "provider-order-id",
+        orderId: providerOrderId,
         correlationId: "correlation-id",
         amount: "35000",
         currency: "EUR",
@@ -401,20 +338,20 @@ describe("ProviderPaymentFinalizationService", () => {
       if (scenario.expected === "paid") {
         expect(markPaidForReservation).toHaveBeenCalledWith(
           expect.objectContaining({
-            id: "attempt-id",
-            orderId: "reservation-id",
+            id: paymentAttemptId,
+            orderId,
             webhookEventId: "event-id",
           })
         );
         expect(enqueue).toHaveBeenCalledWith({
-          orderId: "reservation-id",
+          orderId,
         });
         expect(markTerminalForReservation).not.toHaveBeenCalled();
       } else {
         expect(markTerminalForReservation).toHaveBeenCalledWith(
           expect.objectContaining({
-            id: "attempt-id",
-            orderId: "reservation-id",
+            id: paymentAttemptId,
+            orderId,
             state: "failed",
             failureCode: "nexi_payment_failed",
             webhookEventId: "event-id",
@@ -471,14 +408,19 @@ describe("ProviderPaymentFinalizationService", () => {
         },
         expected: "pending",
       },
-    ] as const;
+    ] satisfies ReadonlyArray<{
+      name: string;
+      checkedAt: Temporal.Instant;
+      verification: NexiVerification;
+      expected: ProviderPaymentFinalizationResult;
+    }>;
 
     for (const scenario of scenarios) {
       const result = await Effect.gen(function* () {
         const service = yield* ProviderPaymentFinalizationService;
         return yield* service.finalizePendingProviderPayment({
-          orderId: "reservation-id",
-          paymentAttemptId: "attempt-id",
+          orderId,
+          paymentAttemptId,
           abandonmentCheckedAt: scenario.checkedAt,
         });
       }).pipe(
@@ -544,8 +486,8 @@ describe("ProviderPaymentFinalizationService", () => {
     const result = await Effect.gen(function* () {
       const service = yield* ProviderPaymentFinalizationService;
       return yield* service.finalizePendingProviderPayment({
-        orderId: "reservation-id",
-        paymentAttemptId: "attempt-id",
+        orderId,
+        paymentAttemptId,
       });
     }).pipe(
       Effect.provide(
@@ -570,7 +512,7 @@ describe("ProviderPaymentFinalizationService", () => {
                 Layer.provide(
                   Layer.mock(NexiService, {
                     verifyPaymentOutcome: mock(() =>
-                      Effect.succeed(buildVerification("success"))
+                      Effect.succeed(nexiVerificationFixture("success"))
                     ),
                   })
                 )
@@ -602,25 +544,19 @@ describe("ProviderPaymentFinalizationService", () => {
     const { recordCheckoutAnalytics } = await import(
       "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
     );
-    const { NexiService } = await import("@deskohub/nexi");
+    const { NetworkError, NexiService } = await import("@deskohub/nexi");
 
     const markPaidForReservation = mock(() => Effect.die("not used"));
     const markTerminalForReservation = mock(() => Effect.die("not used"));
     const verifyPaymentOutcome = mock(() =>
-      Effect.fail(
-        new EffectDrizzleQueryError({
-          query: "nexi.verifyPaymentOutcome",
-          params: [],
-          cause: "nexi down",
-        })
-      )
+      Effect.fail(new NetworkError({ message: "nexi down" }))
     );
 
     const result = await Effect.gen(function* () {
       const service = yield* ProviderPaymentFinalizationService;
       return yield* service.finalizePendingProviderPayment({
-        orderId: "reservation-id",
-        paymentAttemptId: "attempt-id",
+        orderId,
+        paymentAttemptId,
       });
     }).pipe(
       Effect.provide(
@@ -658,7 +594,7 @@ describe("ProviderPaymentFinalizationService", () => {
 
     expect(result).toBe("provider_verification_failed");
     expect(verifyPaymentOutcome).toHaveBeenCalledWith({
-      orderId: "provider-order-id",
+      orderId: providerOrderId,
       correlationId: "correlation-id",
       amount: "35000",
       currency: "EUR",
@@ -673,21 +609,14 @@ describe("ProviderPaymentFinalizationService unattached provider sessions", () =
   // Hosted payment page creation timed out or failed ambiguously: the attempt
   // never received a hosted page or security token, so no customer could
   // have been sent to pay it.
-  const attemptCreatedAt = Temporal.Instant.from("2026-06-01T10:00:00Z");
-  const unattachedAttempt = {
-    ...pendingAttempt,
-    state: "created" as const,
-    securityToken: null,
-    providerRedirectUrl: null,
-    providerOrderCreatedAt: null,
-    createdAt: attemptCreatedAt,
-  };
   const afterCutoff = attemptCreatedAt.add({ minutes: 30 });
 
   const finalizeUnattached = async (input: {
     readonly abandonmentCheckedAt?: Temporal.Instant;
-    readonly getOrder?: ReturnType<typeof mock>;
-    readonly markTerminal?: ReturnType<typeof mock>;
+    readonly getOrder?: ReturnType<typeof mock<NexiServiceType["getOrder"]>>;
+    readonly markTerminal?: ReturnType<
+      typeof mock<IPaymentLifecycleRepository["markTerminal"]>
+    >;
   }) => {
     const { ProviderPaymentFinalizationService } = await import(
       "./provider-payment-finalization.service"
@@ -708,9 +637,7 @@ describe("ProviderPaymentFinalizationService unattached provider sessions", () =
 
     const getOrder =
       input.getOrder ??
-      mock(() =>
-        Effect.succeed({ orderId: "provider-order-id", operations: [] })
-      );
+      mock(() => Effect.succeed({ orderId: providerOrderId, operations: [] }));
     const markTerminal =
       input.markTerminal ??
       mock(() =>
@@ -725,8 +652,8 @@ describe("ProviderPaymentFinalizationService unattached provider sessions", () =
     const result = await Effect.gen(function* () {
       const service = yield* ProviderPaymentFinalizationService;
       return yield* service.finalizePendingProviderPayment({
-        orderId: "reservation-id",
-        paymentAttemptId: "attempt-id",
+        orderId,
+        paymentAttemptId,
         ...(input.abandonmentCheckedAt && {
           abandonmentCheckedAt: input.abandonmentCheckedAt,
         }),
@@ -803,12 +730,12 @@ describe("ProviderPaymentFinalizationService unattached provider sessions", () =
 
     expect(result).toBe("terminal");
     expect(getOrder).toHaveBeenCalledWith({
-      orderId: "provider-order-id",
+      orderId: providerOrderId,
       correlationId: "correlation-id",
     });
     expect(markTerminal).toHaveBeenCalledWith({
-      id: "attempt-id",
-      orderId: "reservation-id",
+      id: paymentAttemptId,
+      orderId,
       state: "failed",
       failureCode: "nexi_hpp_create_unconfirmed",
       providerStatus: "hpp_create_unconfirmed",
@@ -821,7 +748,7 @@ describe("ProviderPaymentFinalizationService unattached provider sessions", () =
       abandonmentCheckedAt: afterCutoff,
       getOrder: mock(() =>
         Effect.succeed({
-          orderId: "provider-order-id",
+          orderId: providerOrderId,
           authorizedAmount: "0",
           capturedAmount: "0",
           operations: [],
@@ -838,7 +765,7 @@ describe("ProviderPaymentFinalizationService unattached provider sessions", () =
       abandonmentCheckedAt: afterCutoff,
       getOrder: mock(() =>
         Effect.succeed({
-          orderId: "provider-order-id",
+          orderId: providerOrderId,
           operations: [{ operationType: "AUTHORIZATION" }],
         })
       ),
@@ -871,7 +798,10 @@ describe("ProviderPaymentFinalizationService unattached provider sessions", () =
         Effect.fail(
           new PaymentLifecycleStateError({
             operation: "markTerminal",
-            paymentReference: { type: "paymentAttemptId", id: "attempt-id" },
+            paymentReference: {
+              type: "paymentAttemptId",
+              id: paymentAttemptId,
+            },
             message: "Only a created attempt can fail an unattached session.",
           })
         )

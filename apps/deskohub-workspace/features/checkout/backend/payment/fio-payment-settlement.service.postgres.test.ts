@@ -8,8 +8,12 @@ import {
 } from "@/db/schema";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { standaloneReservationOrderId } from "@/features/reservation/reservation-order-id.test-utils";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { FioAccounts } from "../fio/fio-accounts.service";
 import {
   PaidFulfillmentQueueError,
@@ -28,6 +32,7 @@ const database = await createWorkspacePostgresSuiteDatabase("fio_settlement");
 afterAll(() => database?.close());
 
 const accountKey = "settlement-test-account";
+const account = { accountNumber: "1234567890", bankCode: "2010" };
 const movement = {
   accountKey,
   movementId: "foreign-credit",
@@ -49,7 +54,7 @@ const runSettlement = <A, E>(
   >,
   fulfillmentQueue: Partial<PaidFulfillmentQueueService["Service"]> = {}
 ) => {
-  const databaseLayer = database!.layer;
+  const databaseLayer = requireTestDatabase(database).layer;
   return Effect.runPromise(
     effect.pipe(
       Effect.provide(
@@ -65,13 +70,13 @@ const runSettlement = <A, E>(
                   key === accountKey
                     ? {
                         accountKey,
-                        account: {
-                          accountNumber: "1234567890",
-                          bankCode: "2010",
-                        },
+                        account,
                         readToken: Redacted.make("synthetic-fio-token"),
                       }
                     : undefined,
+                getDefaultReceivingAccount: () => ({ accountKey, ...account }),
+                getReceivingAccountDisplay: (key) =>
+                  key === accountKey ? { accountKey, ...account } : undefined,
               }),
               QrPaymentRepository.Default.pipe(Layer.provide(databaseLayer)),
               PaymentLifecycleRepository.Default.pipe(
@@ -338,9 +343,10 @@ describe.skipIf(!database)("verified Fio movement ingress", () => {
           )
         ).toBe(true);
 
-        const refund = linked.find(
-          (row) => row.movementId === "duplicate-credit"
-        )!;
+        const refund = requireValue(
+          linked.find((row) => row.movementId === "duplicate-credit"),
+          "duplicate credit"
+        );
         const refundedAt = credit.observedAt.add({ hours: 1 });
         yield* settlements.markManualRefunded(refund.id, refundedAt);
         const recordedRefund = yield* settlements.markManualRefunded(
@@ -357,7 +363,7 @@ describe.skipIf(!database)("verified Fio movement ingress", () => {
 });
 
 const createQrReservation = () => {
-  const db = database!.db;
+  const db = requireTestDatabase(database).db;
   return Effect.runPromise(
     Effect.gen(function* () {
       const reservation = yield* workspaceFixtures(db).reservation({
@@ -366,7 +372,7 @@ const createQrReservation = () => {
       });
       const orderId = standaloneReservationOrderId(reservation.id);
       const variableSymbol = "1234567890";
-      const [attempt] = yield* db
+      const [insertedAttempt] = yield* db
         .insert(paymentAttempts)
         .values({
           orderId,
@@ -379,14 +385,15 @@ const createQrReservation = () => {
           amountExponent: 2,
         })
         .returning();
+      const attempt = requireValue(insertedAttempt, "inserted Fio attempt");
       yield* db
         .update(workspaceReservations)
-        .set({ activePaymentAttemptId: attempt!.id })
+        .set({ activePaymentAttemptId: attempt.id })
         .where(eq(workspaceReservations.id, reservation.id));
       yield* db.insert(reservationPaymentWindows).values({
         orderId,
         accountKey,
-        qrAttemptId: attempt!.id,
+        qrAttemptId: attempt.id,
         expiresAt: movement.observedAt.add({ minutes: 30 }),
       });
       return { orderId, variableSymbol };

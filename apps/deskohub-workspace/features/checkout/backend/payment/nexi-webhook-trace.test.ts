@@ -2,14 +2,29 @@ import { PaymentProvidersFromNexi } from "./payment-providers";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
-import { NexiService, type PaymentVerificationResult } from "@deskohub/nexi";
-import { Cause, Effect, Exit, Layer, Predicate } from "effect";
-import type { PaymentAttemptState, WebhookEventState } from "@/db/schema";
+import { NetworkError, NexiService } from "@deskohub/nexi";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
+import { Cause, Effect, Exit, Layer, Predicate, type Schema } from "effect";
+import type { PaymentAttemptState } from "@/db/schema";
+import {
+  QueueMessageSendError,
+  QueuePublisher,
+} from "@/shared/backend/queue/queue-publisher";
 import {
   type EffectTrace,
   recordEffectTrace,
   startEffectTrace,
 } from "@/shared/testing/effect-trace.test-utils";
+import {
+  type NexiVerification,
+  nexiVerificationFixture,
+} from "./nexi-verification.test-utils";
+import {
+  nexiWebhookAttemptFixture,
+  nexiWebhookEventFixture,
+  nexiWebhookRecoveryFixture,
+  nexiWebhookReservationFixture,
+} from "./nexi-webhook.test-utils";
 import { withReservationPaymentHandlers } from "./order-payment-handlers.test-utils";
 
 mock.module("server-only", () => ({}));
@@ -24,7 +39,7 @@ const { CheckoutAnalytics } = await import(
 const { silentCheckoutAnalytics } = await import(
   "../analytics/checkout-analytics.service.mock"
 );
-const { ReservationFulfillment } = await import(
+const { ReservationFulfillment, WorkspacePaidFulfillmentError } = await import(
   "../fulfillment/reservation-fulfillment.service"
 );
 const { LatePaymentRecoveryRepository } = await import(
@@ -45,23 +60,28 @@ const { WebhookEventRepository } = await import(
 const { LatePaymentRecoveryQueueService } = await import(
   "./late-payment-recovery-queue.service"
 );
-const { PaymentRefundService } = await import("./payment-refund.service");
-
-type Methods = Record<
-  string,
-  (...args: never[]) => Effect.Effect<unknown, unknown>
->;
+const { PaymentRefundReconciliationError, PaymentRefundService } = await import(
+  "./payment-refund.service"
+);
 
 interface Collaborators {
-  readonly webhookEvents?: Methods;
-  readonly paymentAttempts?: Methods;
-  readonly paymentLifecycle?: Methods;
-  readonly reservations?: Methods;
-  readonly nexi?: Methods;
-  readonly fulfillment?: Methods;
-  readonly latePaymentRecoveries?: Methods;
-  readonly latePaymentRecoveryQueue?: Methods;
-  readonly paymentRefunds?: Methods;
+  readonly webhookEvents?: Partial<typeof WebhookEventRepository.Service>;
+  readonly paymentAttempts?: Partial<typeof PaymentAttemptRepository.Service>;
+  readonly paymentLifecycle?: Partial<
+    typeof PaymentLifecycleRepository.Service
+  >;
+  readonly reservations?: Partial<
+    typeof WorkspaceReservationRepository.Service
+  >;
+  readonly nexi?: Partial<typeof NexiService.Service>;
+  readonly fulfillment?: Partial<typeof ReservationFulfillment.Service>;
+  readonly latePaymentRecoveries?: Partial<
+    typeof LatePaymentRecoveryRepository.Service
+  >;
+  readonly latePaymentRecoveryQueue?: Partial<
+    typeof LatePaymentRecoveryQueueService.Service
+  >;
+  readonly paymentRefunds?: Partial<typeof PaymentRefundService.Service>;
 }
 
 const payload = {
@@ -77,81 +97,60 @@ const payload = {
   },
 };
 
-interface Notification {
-  readonly eventId?: string;
-  readonly securityToken?: string;
-  readonly operation: Partial<typeof payload.operation>;
-}
-
 const refundPayload = {
   ...payload,
   operation: { ...payload.operation, operationType: "REFUND" },
 };
 
-const createdAt = Temporal.Instant.from("2026-06-01T10:00:00Z");
-
-const pendingAttempt = {
-  orderId: "reservation-id" as never,
-  orderKind: "reservation" as const,
-  isSharedWindowCard: false,
-  id: "attempt-id",
-  workspaceReservationId: "reservation-id",
-  provider: "nexi",
-  providerOrderId: "provider-order-id",
-  state: "pending",
-  amount: { value: 35_000, exponent: 2, currency: "CZK" },
-  securityToken: "security-token",
-  createdAt,
-  updatedAt: createdAt,
-};
-
-const expiredAttempt = { ...pendingAttempt, state: "expired" };
-
-const reservation = { id: "reservation-id", correlationId: "correlation-id" };
-
-const verification = (
-  status: PaymentVerificationResult["status"],
-  overrides: Partial<PaymentVerificationResult["provider"]> = {},
-  mismatches: PaymentVerificationResult["mismatches"] = []
-): PaymentVerificationResult => ({
-  status,
-  provider: {
-    orderId: "provider-order-id",
-    operationId: "operation-id",
-    operationCount: 1,
-    amount: "35000",
-    currency: "CZK",
-    orderStatus: status === "success" ? "EXECUTED" : "DECLINED",
-    captureExecuted: status === "success",
-    ...overrides,
-  },
-  mismatches,
-});
-
-const receivedEvent = (state: WebhookEventState) => ({
-  id: "webhook-row-id",
-  eventId: "event-id",
-  state,
-});
+const pendingAttempt = nexiWebhookAttemptFixture();
+const expiredAttempt = { ...pendingAttempt, state: "expired" as const };
+const reservation = nexiWebhookReservationFixture();
 
 const transition = (changed: boolean, state: PaymentAttemptState) => ({
   attempt: { ...pendingAttempt, state },
   changed,
-  timestamp: createdAt,
+  timestamp: pendingAttempt.createdAt,
 });
 
 const succeed =
-  <A>(value: A) =>
+  <const A>(value: A) =>
   () =>
-    Effect.succeed(value as never);
+    Effect.succeed(value);
 const fail =
   <E>(error: E) =>
   () =>
-    Effect.fail(error as never);
+    Effect.fail(error);
+
+const databaseFailure = new EffectDrizzleQueryError({
+  query: "webhook test query",
+  params: [],
+  cause: Cause.die(new Error("db down")),
+});
+
+const failToEnqueueRecovery: typeof LatePaymentRecoveryQueueService.Service.enqueue =
+  (input) =>
+    Effect.flatMap(LatePaymentRecoveryQueueService, (queue) =>
+      queue.enqueue(input)
+    ).pipe(
+      Effect.provide(
+        LatePaymentRecoveryQueueService.Default.pipe(
+          Layer.provide(
+            Layer.mock(QueuePublisher, {
+              publish: fail(
+                new QueueMessageSendError({
+                  topic: "workspace-late-payment-recovery",
+                  cause: new Error("queue down"),
+                })
+              ),
+            })
+          )
+        )
+      )
+    );
 
 const paymentLifecycleStateError = new PaymentLifecycleStateError({
   operation: "markTerminal",
-  paymentReference: { paymentAttemptId: "attempt-id" } as never,
+  paymentReference: { type: "paymentAttemptId", id: pendingAttempt.id },
   message: "The payment attempt is no longer pending.",
 });
 
@@ -161,7 +160,7 @@ const paidCollaborators = (overrides: Collaborators = {}): Collaborators => ({
   webhookEvents: {
     insertReceived: succeed({
       status: "inserted",
-      event: receivedEvent("received"),
+      event: nexiWebhookEventFixture("received"),
     }),
     claimRetry: succeed("claimed"),
     linkPaymentAttempt: succeed(undefined),
@@ -178,7 +177,7 @@ const paidCollaborators = (overrides: Collaborators = {}): Collaborators => ({
     ...overrides.reservations,
   },
   nexi: {
-    verifyPaymentOutcome: succeed(verification("success")),
+    verifyPaymentOutcome: succeed(nexiVerificationFixture("success")),
     ...overrides.nexi,
   },
   paymentLifecycle: {
@@ -191,7 +190,7 @@ const paidCollaborators = (overrides: Collaborators = {}): Collaborators => ({
     ...overrides.fulfillment,
   },
   latePaymentRecoveries: {
-    start: succeed({}),
+    start: succeed(nexiWebhookRecoveryFixture()),
     ...overrides.latePaymentRecoveries,
   },
   latePaymentRecoveryQueue: {
@@ -199,14 +198,14 @@ const paidCollaborators = (overrides: Collaborators = {}): Collaborators => ({
     ...overrides.latePaymentRecoveryQueue,
   },
   paymentRefunds: {
-    reconcileAttempt: succeed({ status: "reconciled" }),
+    reconcileAttempt: succeed("recorded"),
     ...overrides.paymentRefunds,
   },
 });
 
 /** Collaborators of a webhook whose Nexi verification reports `status`. */
 const verifiedCollaborators = (
-  result: PaymentVerificationResult,
+  result: NexiVerification,
   overrides: Collaborators = {}
 ) =>
   paidCollaborators({
@@ -246,11 +245,13 @@ const describeExit = (exit: Exit.Exit<unknown, unknown>) => {
 
 const processNotification = async (
   collaborators: Collaborators,
-  notification: Notification = payload
+  notification: Schema.Json = payload
 ) => {
   const trace: EffectTrace = startEffectTrace();
-  const record = (service: string, methods: Methods | undefined) =>
-    trace.recordCalls(service, methods ?? {});
+  const record = <Methods extends object>(
+    service: string,
+    methods: Methods | undefined
+  ) => trace.recordCalls(service, methods ?? {});
   const exit = await Effect.gen(function* () {
     const service = yield* NexiWebhookService;
     return yield* recordEffectTrace(
@@ -340,7 +341,7 @@ describe("NexiWebhookService.processNotification trace", () => {
   test("fails when the event can't be recorded", async () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
-        webhookEvents: { insertReceived: fail(new Error("db down")) },
+        webhookEvents: { insertReceived: fail(databaseFailure) },
       })
     );
 
@@ -353,7 +354,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook processing started {provider} in nexiWebhook.processNotification",
         "Info Nexi webhook notification decoded {eventId,operationId,operationResult,operationType,provider,providerOrderId} in nexiWebhook.processNotification",
         "call webhookEvents.insertReceived(provider=nexi, eventId=event-id, providerOrderId=provider-order-id, receivedAt=<Instant>)",
-        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_transition_failed","_tag":"NexiWebhookProcessingError","message":"Nexi webhook event could not be recorded.","cause":"Error"}",
+        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_transition_failed","_tag":"NexiWebhookProcessingError","message":"Nexi webhook event could not be recorded.","cause":"EffectDrizzleQueryError"}",
       ]
     `);
   });
@@ -364,7 +365,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         webhookEvents: {
           insertReceived: succeed({
             status: "duplicate",
-            event: receivedEvent("processed"),
+            event: nexiWebhookEventFixture("processed"),
           }),
         },
       })
@@ -390,7 +391,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         webhookEvents: {
           insertReceived: succeed({
             status: "duplicate",
-            event: receivedEvent("failed"),
+            event: nexiWebhookEventFixture("failed"),
           }),
           claimRetry: succeed("processed"),
         },
@@ -418,7 +419,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         webhookEvents: {
           insertReceived: succeed({
             status: "duplicate",
-            event: receivedEvent("failed"),
+            event: nexiWebhookEventFixture("failed"),
           }),
           claimRetry: succeed("claimed"),
         },
@@ -440,7 +441,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,retryClaim,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,retryClaim,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,retryClaim,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,retryClaim,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,retryClaim,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -451,10 +452,10 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,retryClaim,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,retryClaim,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook paid transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,retryClaim,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markPaid(id=attempt-id, orderId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
+        "call paymentLifecycle.markPaid(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
         "call checkoutAnalytics.paymentCompleted(attempt=<Object>, timestamp=<Instant>)",
         "Info Nexi webhook payment attempt marked paid {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,retryClaim,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call fulfillment.run(reservation-id)",
+        "call fulfillment.run(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Info Nexi webhook paid order fulfilled {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,retryClaim,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
         "Info Nexi webhook event marked processed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,retryClaim,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -470,9 +471,9 @@ describe("NexiWebhookService.processNotification trace", () => {
         webhookEvents: {
           insertReceived: succeed({
             status: "duplicate",
-            event: receivedEvent("received"),
+            event: nexiWebhookEventFixture("received"),
           }),
-          claimRetry: fail(new Error("db down")),
+          claimRetry: fail(databaseFailure),
         },
       })
     );
@@ -488,7 +489,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "call webhookEvents.insertReceived(provider=nexi, eventId=event-id, providerOrderId=provider-order-id, receivedAt=<Instant>)",
         "Info Nexi webhook event recorded {eventId,operationId,operationResult,operationType,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.claimRetry(type=eventId, provider=nexi, eventId=event-id)",
-        "fail {"errorCode":"nexi_webhook_transition_failed","_tag":"NexiWebhookProcessingError","message":"Nexi webhook processing failed.","cause":"Error"}",
+        "fail {"errorCode":"nexi_webhook_transition_failed","_tag":"NexiWebhookProcessingError","message":"Nexi webhook processing failed.","cause":"EffectDrizzleQueryError"}",
       ]
     `);
   });
@@ -496,7 +497,7 @@ describe("NexiWebhookService.processNotification trace", () => {
   test("fails when the payment attempt can't be loaded", async () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
-        paymentAttempts: { findByProviderOrderId: fail(new Error("db down")) },
+        paymentAttempts: { findByProviderOrderId: fail(databaseFailure) },
       })
     );
 
@@ -509,7 +510,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "call webhookEvents.insertReceived(provider=nexi, eventId=event-id, providerOrderId=provider-order-id, receivedAt=<Instant>)",
         "Info Nexi webhook event recorded {eventId,operationId,operationResult,operationType,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call paymentAttempts.findByProviderOrderId(nexi; provider-order-id)",
-        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_unknown_order","_tag":"NexiWebhookProcessingError","message":"Payment attempt could not be loaded for Nexi webhook.","cause":"Error"}",
+        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_unknown_order","_tag":"NexiWebhookProcessingError","message":"Payment attempt could not be loaded for Nexi webhook.","cause":"EffectDrizzleQueryError"}",
       ]
     `);
   });
@@ -564,7 +565,7 @@ describe("NexiWebhookService.processNotification trace", () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
         paymentAttempts: { findByProviderOrderId: succeed(null) },
-        webhookEvents: { markFailed: fail(new Error("db down")) },
+        webhookEvents: { markFailed: fail(databaseFailure) },
       })
     );
 
@@ -580,7 +581,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Debug Nexi webhook payment attempt lookup completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Warn Nexi webhook referenced unknown payment attempt {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markFailed(type=eventId, provider=nexi, eventId=event-id, errorCode=nexi_webhook_unknown_order)",
-        "Error Nexi webhook failed-state marker failed (identity=<Object>, errorCode=nexi_webhook_unknown_order, cause=<Error>) {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
+        "Error Nexi webhook failed-state marker failed (identity=<Object>, errorCode=nexi_webhook_unknown_order, cause=<EffectDrizzleQueryError>) {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_unknown_order","_tag":"NexiWebhookProcessingError","message":"Nexi webhook referenced an unknown payment attempt."}",
       ]
     `);
@@ -589,7 +590,7 @@ describe("NexiWebhookService.processNotification trace", () => {
   test("continues when the payment attempt link fails", async () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
-        webhookEvents: { linkPaymentAttempt: fail(new Error("db down")) },
+        webhookEvents: { linkPaymentAttempt: fail(databaseFailure) },
       })
     );
 
@@ -605,9 +606,9 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Debug Nexi webhook payment attempt lookup completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
-        "Warn Nexi webhook payment attempt link failed (eventId=event-id, paymentAttemptId=attempt-id, providerOrderId=provider-order-id, cause=<Error>) {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
+        "Warn Nexi webhook payment attempt link failed (eventId=event-id, paymentAttemptId=attempt-id, providerOrderId=provider-order-id, cause=<EffectDrizzleQueryError>) {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -618,10 +619,10 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook paid transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markPaid(id=attempt-id, orderId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
+        "call paymentLifecycle.markPaid(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
         "call checkoutAnalytics.paymentCompleted(attempt=<Object>, timestamp=<Instant>)",
         "Info Nexi webhook payment attempt marked paid {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call fulfillment.run(reservation-id)",
+        "call fulfillment.run(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Info Nexi webhook paid order fulfilled {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
         "Info Nexi webhook event marked processed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -634,7 +635,7 @@ describe("NexiWebhookService.processNotification trace", () => {
   test("fails when the reservation can't be loaded", async () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
-        reservations: { findById: fail(new Error("db down")) },
+        reservations: { findById: fail(databaseFailure) },
       })
     );
 
@@ -651,8 +652,8 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
-        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_unknown_order","_tag":"NexiWebhookProcessingError","message":"Payment order could not be loaded for Nexi webhook.","cause":"Error"}",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
+        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_unknown_order","_tag":"NexiWebhookProcessingError","message":"Payment order could not be loaded for Nexi webhook.","cause":"EffectDrizzleQueryError"}",
       ]
     `);
   });
@@ -675,7 +676,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Warn Nexi webhook referenced an unknown payment order {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markFailed(type=eventId, provider=nexi, eventId=event-id, errorCode=nexi_webhook_unknown_order)",
@@ -705,7 +706,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -736,7 +737,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -747,10 +748,10 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook paid transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markPaid(id=attempt-id, orderId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
+        "call paymentLifecycle.markPaid(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
         "call checkoutAnalytics.paymentCompleted(attempt=<Object>, timestamp=<Instant>)",
         "Info Nexi webhook payment attempt marked paid {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call fulfillment.run(reservation-id)",
+        "call fulfillment.run(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Info Nexi webhook paid order fulfilled {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
         "Info Nexi webhook event marked processed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -789,7 +790,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -829,7 +830,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -859,7 +860,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -877,7 +878,14 @@ describe("NexiWebhookService.processNotification trace", () => {
   test("marks the event failed when refund reconciliation fails", async () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
-        paymentRefunds: { reconcileAttempt: fail(new Error("nexi down")) },
+        paymentRefunds: {
+          reconcileAttempt: fail(
+            new PaymentRefundReconciliationError({
+              message: "Nexi refund reconciliation failed.",
+              cause: new Error("nexi down"),
+            })
+          ),
+        },
       }),
       refundPayload
     );
@@ -897,14 +905,14 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook refund reconciliation started {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call paymentRefunds.reconcileAttempt(attempt=<Object>, correlationId=correlation-id)",
         "call webhookEvents.markFailed(type=eventId, provider=nexi, eventId=event-id, errorCode=nexi_webhook_refund_reconciliation_failed)",
-        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_refund_reconciliation_failed","_tag":"NexiWebhookProcessingError","message":"Nexi refund could not be reconciled.","cause":"Error"}",
+        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_refund_reconciliation_failed","_tag":"NexiWebhookProcessingError","message":"Nexi refund could not be reconciled.","cause":"PaymentRefundReconciliationError"}",
       ]
     `);
   });
@@ -936,7 +944,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -952,7 +960,11 @@ describe("NexiWebhookService.processNotification trace", () => {
   test("marks the event failed when provider verification fails", async () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
-        nexi: { verifyPaymentOutcome: fail(new Error("nexi down")) },
+        nexi: {
+          verifyPaymentOutcome: fail(
+            new NetworkError({ message: "nexi down" })
+          ),
+        },
       })
     );
 
@@ -971,7 +983,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -987,7 +999,7 @@ describe("NexiWebhookService.processNotification trace", () => {
 
   test("marks the event failed on a verification mismatch", async () => {
     const { outcome, trace } = await processNotification(
-      verifiedCollaborators(verification("success", {}, ["amount"]))
+      verifiedCollaborators(nexiVerificationFixture("success", {}, ["amount"]))
     );
 
     expect(outcome).toMatchObject({
@@ -1005,7 +1017,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1041,7 +1053,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1052,10 +1064,10 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook paid transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markPaid(id=attempt-id, orderId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
+        "call paymentLifecycle.markPaid(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
         "call checkoutAnalytics.paymentCompleted(attempt=<Object>, timestamp=<Instant>)",
         "Info Nexi webhook payment attempt marked paid {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call fulfillment.run(reservation-id)",
+        "call fulfillment.run(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Info Nexi webhook paid order fulfilled {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
         "Info Nexi webhook event marked processed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1085,7 +1097,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1096,9 +1108,9 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook paid transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markPaid(id=attempt-id, orderId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
+        "call paymentLifecycle.markPaid(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
         "Info Nexi webhook payment attempt marked paid {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call fulfillment.run(reservation-id)",
+        "call fulfillment.run(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Info Nexi webhook paid order fulfilled {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
         "Info Nexi webhook event marked processed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1111,7 +1123,7 @@ describe("NexiWebhookService.processNotification trace", () => {
   test("fails when the paid transition fails", async () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
-        paymentLifecycle: { markPaid: fail(new Error("db down")) },
+        paymentLifecycle: { markPaid: fail(databaseFailure) },
       })
     );
 
@@ -1130,7 +1142,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1141,8 +1153,8 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook paid transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markPaid(id=attempt-id, orderId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
-        "fail {"errorCode":"nexi_webhook_transition_failed","_tag":"NexiWebhookProcessingError","message":"Nexi webhook processing failed.","cause":"Error"}",
+        "call paymentLifecycle.markPaid(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
+        "fail {"errorCode":"nexi_webhook_transition_failed","_tag":"NexiWebhookProcessingError","message":"Nexi webhook processing failed.","cause":"EffectDrizzleQueryError"}",
       ]
     `);
   });
@@ -1150,7 +1162,15 @@ describe("NexiWebhookService.processNotification trace", () => {
   test("marks the event failed when fulfillment fails", async () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
-        fulfillment: { run: fail(new Error("dotypos down")) },
+        fulfillment: {
+          run: fail(
+            new WorkspacePaidFulfillmentError({
+              orderId: reservation.id,
+              failureCode: "dotypos_reservation_failed",
+              message: "dotypos down",
+            })
+          ),
+        },
       })
     );
 
@@ -1169,7 +1189,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1180,12 +1200,12 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook paid transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markPaid(id=attempt-id, orderId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
+        "call paymentLifecycle.markPaid(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
         "call checkoutAnalytics.paymentCompleted(attempt=<Object>, timestamp=<Instant>)",
         "Info Nexi webhook payment attempt marked paid {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call fulfillment.run(reservation-id)",
+        "call fulfillment.run(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "call webhookEvents.markFailed(type=eventId, provider=nexi, eventId=event-id, errorCode=nexi_webhook_fulfillment_failed)",
-        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_fulfillment_failed","_tag":"NexiWebhookProcessingError","message":"Paid order fulfillment failed.","cause":"Error"}",
+        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_fulfillment_failed","_tag":"NexiWebhookProcessingError","message":"Paid order fulfillment failed.","cause":"WorkspacePaidFulfillmentError"}",
       ]
     `);
   });
@@ -1193,7 +1213,7 @@ describe("NexiWebhookService.processNotification trace", () => {
   test("fails when the processed marker fails", async () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
-        webhookEvents: { markProcessed: fail(new Error("db down")) },
+        webhookEvents: { markProcessed: fail(databaseFailure) },
       })
     );
 
@@ -1212,7 +1232,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1223,13 +1243,13 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook paid transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markPaid(id=attempt-id, orderId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
+        "call paymentLifecycle.markPaid(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, paidAt=<Instant>)",
         "call checkoutAnalytics.paymentCompleted(attempt=<Object>, timestamp=<Instant>)",
         "Info Nexi webhook payment attempt marked paid {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call fulfillment.run(reservation-id)",
+        "call fulfillment.run(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Info Nexi webhook paid order fulfilled {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
-        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_transition_failed","_tag":"NexiWebhookProcessingError","message":"Nexi webhook event could not be marked processed.","cause":"Error"}",
+        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_transition_failed","_tag":"NexiWebhookProcessingError","message":"Nexi webhook event could not be marked processed.","cause":"EffectDrizzleQueryError"}",
       ]
     `);
   });
@@ -1254,7 +1274,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1264,8 +1284,8 @@ describe("NexiWebhookService.processNotification trace", () => {
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "Warn Nexi payment settled after the local payment attempt became terminal (eventId=event-id, paymentAttemptId=attempt-id, paymentAttemptState=expired, providerOrderId=provider-order-id, orderId=reservation-id) {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call latePaymentRecoveries.start(paymentAttemptId=attempt-id, workspaceReservationId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, verifiedPaidAt=<Instant>)",
+        "Warn Nexi payment settled after the local payment attempt became terminal (eventId=event-id, paymentAttemptId=attempt-id, paymentAttemptState=expired, providerOrderId=provider-order-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5) {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
+        "call latePaymentRecoveries.start(paymentAttemptId=attempt-id, workspaceReservationId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, verifiedPaidAt=<Instant>)",
         "call latePaymentRecoveryQueue.enqueue(paymentAttemptId=attempt-id)",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
         "Info Nexi webhook event marked processed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1279,7 +1299,7 @@ describe("NexiWebhookService.processNotification trace", () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
         paymentAttempts: { findByProviderOrderId: succeed(expiredAttempt) },
-        latePaymentRecoveries: { start: fail(new Error("db down")) },
+        latePaymentRecoveries: { start: fail(databaseFailure) },
       })
     );
 
@@ -1298,7 +1318,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1308,10 +1328,10 @@ describe("NexiWebhookService.processNotification trace", () => {
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "Warn Nexi payment settled after the local payment attempt became terminal (eventId=event-id, paymentAttemptId=attempt-id, paymentAttemptState=expired, providerOrderId=provider-order-id, orderId=reservation-id) {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call latePaymentRecoveries.start(paymentAttemptId=attempt-id, workspaceReservationId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, verifiedPaidAt=<Instant>)",
+        "Warn Nexi payment settled after the local payment attempt became terminal (eventId=event-id, paymentAttemptId=attempt-id, paymentAttemptState=expired, providerOrderId=provider-order-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5) {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
+        "call latePaymentRecoveries.start(paymentAttemptId=attempt-id, workspaceReservationId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, verifiedPaidAt=<Instant>)",
         "call webhookEvents.markFailed(type=eventId, provider=nexi, eventId=event-id, errorCode=nexi_webhook_late_payment_recovery_failed)",
-        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_late_payment_recovery_failed","_tag":"NexiWebhookProcessingError","message":"Nexi late-payment recovery could not be started.","cause":"Error"}",
+        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_late_payment_recovery_failed","_tag":"NexiWebhookProcessingError","message":"Nexi late-payment recovery could not be started.","cause":"EffectDrizzleQueryError"}",
       ]
     `);
   });
@@ -1320,7 +1340,7 @@ describe("NexiWebhookService.processNotification trace", () => {
     const { outcome, trace } = await processNotification(
       paidCollaborators({
         paymentAttempts: { findByProviderOrderId: succeed(expiredAttempt) },
-        latePaymentRecoveryQueue: { enqueue: fail(new Error("queue down")) },
+        latePaymentRecoveryQueue: { enqueue: failToEnqueueRecovery },
       })
     );
 
@@ -1339,7 +1359,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1349,18 +1369,19 @@ describe("NexiWebhookService.processNotification trace", () => {
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "Warn Nexi payment settled after the local payment attempt became terminal (eventId=event-id, paymentAttemptId=attempt-id, paymentAttemptState=expired, providerOrderId=provider-order-id, orderId=reservation-id) {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call latePaymentRecoveries.start(paymentAttemptId=attempt-id, workspaceReservationId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, verifiedPaidAt=<Instant>)",
+        "Warn Nexi payment settled after the local payment attempt became terminal (eventId=event-id, paymentAttemptId=attempt-id, paymentAttemptState=expired, providerOrderId=provider-order-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5) {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
+        "call latePaymentRecoveries.start(paymentAttemptId=attempt-id, workspaceReservationId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, verifiedPaidAt=<Instant>)",
         "call latePaymentRecoveryQueue.enqueue(paymentAttemptId=attempt-id)",
+        "span latePaymentRecoveryQueue.enqueue",
         "call webhookEvents.markFailed(type=eventId, provider=nexi, eventId=event-id, errorCode=nexi_webhook_late_payment_recovery_failed)",
-        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_late_payment_recovery_failed","_tag":"NexiWebhookProcessingError","message":"Nexi late-payment recovery could not be started.","cause":"Error"}",
+        "fail {"eventId":"event-id","orderId":"provider-order-id","errorCode":"nexi_webhook_late_payment_recovery_failed","_tag":"NexiWebhookProcessingError","message":"Nexi late-payment recovery could not be started.","cause":"LatePaymentRecoveryQueueError"}",
       ]
     `);
   });
 
   test("marks a declined payment failed and captures the failure", async () => {
     const { outcome, trace } = await processNotification(
-      verifiedCollaborators(verification("failure"))
+      verifiedCollaborators(nexiVerificationFixture("failure"))
     );
 
     expect(outcome).toMatchObject({ status: "accepted" });
@@ -1376,7 +1397,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1387,7 +1408,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook terminal transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,failureKind,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,terminalState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markTerminal(id=attempt-id, orderId=reservation-id, state=failed, failureCode=nexi_payment_failed, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=DECLINED)",
+        "call paymentLifecycle.markTerminal(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, state=failed, failureCode=nexi_payment_failed, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=DECLINED)",
         "call checkoutAnalytics.paymentFailed(attempt=<Object>, failureReason=nexi_payment_failed, timestamp=<Instant>)",
         "Info Nexi webhook payment attempt marked terminal {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,failureKind,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,terminalState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
@@ -1401,7 +1422,7 @@ describe("NexiWebhookService.processNotification trace", () => {
   test("marks a cancelled payment cancelled and captures abandonment", async () => {
     const { outcome, trace } = await processNotification(
       verifiedCollaborators(
-        verification("failure", { orderStatus: "CANCELED" }),
+        nexiVerificationFixture("failure", { orderStatus: "CANCELED" }),
         {
           paymentLifecycle: {
             markTerminal: succeed(transition(true, "cancelled")),
@@ -1423,7 +1444,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1434,7 +1455,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook terminal transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,failureKind,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,terminalState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markTerminal(id=attempt-id, orderId=reservation-id, state=cancelled, failureCode=nexi_payment_failed, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=CANCELED)",
+        "call paymentLifecycle.markTerminal(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, state=cancelled, failureCode=nexi_payment_failed, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=CANCELED)",
         "call checkoutAnalytics.paymentAbandoned(attempt=<Object>, timestamp=<Instant>)",
         "Info Nexi webhook payment attempt marked terminal {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,failureKind,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,terminalState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
@@ -1448,7 +1469,7 @@ describe("NexiWebhookService.processNotification trace", () => {
   test("skips the lifecycle event for an unchanged terminal transition", async () => {
     const { outcome, trace } = await processNotification(
       verifiedCollaborators(
-        verification("failure", { orderStatus: "EXPIRED" }),
+        nexiVerificationFixture("failure", { orderStatus: "EXPIRED" }),
         {
           paymentLifecycle: {
             markTerminal: succeed(transition(false, "expired")),
@@ -1470,7 +1491,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1481,7 +1502,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook terminal transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,failureKind,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,terminalState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markTerminal(id=attempt-id, orderId=reservation-id, state=expired, failureCode=nexi_payment_failed, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXPIRED)",
+        "call paymentLifecycle.markTerminal(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, state=expired, failureCode=nexi_payment_failed, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXPIRED)",
         "Info Nexi webhook payment attempt marked terminal {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,failureKind,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,terminalState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
         "Info Nexi webhook event marked processed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,failureKind,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,terminalState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1493,7 +1514,7 @@ describe("NexiWebhookService.processNotification trace", () => {
 
   test("accepts a terminal transition that no longer applies", async () => {
     const { outcome, trace } = await processNotification(
-      verifiedCollaborators(verification("failure"), {
+      verifiedCollaborators(nexiVerificationFixture("failure"), {
         paymentLifecycle: { markTerminal: fail(paymentLifecycleStateError) },
       })
     );
@@ -1511,7 +1532,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1522,7 +1543,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook terminal transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,failureKind,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,terminalState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markTerminal(id=attempt-id, orderId=reservation-id, state=failed, failureCode=nexi_payment_failed, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=DECLINED)",
+        "call paymentLifecycle.markTerminal(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, state=failed, failureCode=nexi_payment_failed, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=DECLINED)",
         "Warn Nexi webhook terminal transition no longer applies (cause=<PaymentLifecycleStateError>) {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,failureKind,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,terminalState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment attempt marked terminal {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,failureKind,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,terminalState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
@@ -1535,8 +1556,8 @@ describe("NexiWebhookService.processNotification trace", () => {
 
   test("fails when the terminal transition fails otherwise", async () => {
     const { outcome, trace } = await processNotification(
-      verifiedCollaborators(verification("failure"), {
-        paymentLifecycle: { markTerminal: fail(new Error("db down")) },
+      verifiedCollaborators(nexiVerificationFixture("failure"), {
+        paymentLifecycle: { markTerminal: fail(databaseFailure) },
       })
     );
 
@@ -1555,7 +1576,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1566,15 +1587,15 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment verification completed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,providerOrderStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook provider metadata resolved {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook terminal transition started {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,failureKind,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,terminalState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call paymentLifecycle.markTerminal(id=attempt-id, orderId=reservation-id, state=failed, failureCode=nexi_payment_failed, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=DECLINED)",
-        "fail {"errorCode":"nexi_webhook_transition_failed","_tag":"NexiWebhookProcessingError","message":"Nexi webhook processing failed.","cause":"Error"}",
+        "call paymentLifecycle.markTerminal(id=attempt-id, orderId=0198c1a2-61c4-7e64-83f3-b3b69dc0dac5, state=failed, failureCode=nexi_payment_failed, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=DECLINED)",
+        "fail {"errorCode":"nexi_webhook_transition_failed","_tag":"NexiWebhookProcessingError","message":"Nexi webhook processing failed.","cause":"EffectDrizzleQueryError"}",
       ]
     `);
   });
 
   test("accepts a pending verification without a payment transition", async () => {
     const { outcome, trace } = await processNotification(
-      verifiedCollaborators(verification("pending"))
+      verifiedCollaborators(nexiVerificationFixture("pending"))
     );
 
     expect(outcome).toMatchObject({ status: "accepted" });
@@ -1590,7 +1611,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
@@ -1611,7 +1632,7 @@ describe("NexiWebhookService.processNotification trace", () => {
 
   test("accepts a pending verification of a terminal attempt without recovery", async () => {
     const { outcome, trace } = await processNotification(
-      verifiedCollaborators(verification("pending"), {
+      verifiedCollaborators(nexiVerificationFixture("pending"), {
         paymentAttempts: { findByProviderOrderId: succeed(expiredAttempt) },
       })
     );
@@ -1629,7 +1650,7 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Info Nexi webhook payment attempt resolved {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.linkPaymentAttempt(type=eventId, provider=nexi, eventId=event-id, paymentAttemptId=attempt-id)",
         "Debug Nexi webhook payment attempt link completed {eventId,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,provider,providerOrderId,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
-        "call reservations.findById(reservation-id)",
+        "call reservations.findById(0198c1a2-61c4-7e64-83f3-b3b69dc0dac5)",
         "Debug Nexi webhook payment order lookup completed {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook payment order resolved {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Debug Nexi webhook security token checked {activePaymentAttemptId,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOrderId,reservationId,reservationState,tokenCheckStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
