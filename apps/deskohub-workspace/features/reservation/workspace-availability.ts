@@ -47,12 +47,16 @@ import {
   coworkReservationKind,
   meetingRoomReservationKind,
   officeReservationKind,
+  tableReservationKind,
   workspaceReservationKindSchema,
 } from "@/features/reservation/reservation-kind";
+import { tableSeatsSchema } from "@/features/reservation/table-reservation";
+import { tableReservationSlotMinutes } from "@/features/reservation/table-reservation-time";
 import {
   instantStringSchema,
   isPlainDateString,
   localDateTimeSchema,
+  localTimeSchema,
   type PlainDate,
   plainDateStringSchema,
 } from "@/shared/utils/temporal";
@@ -93,6 +97,38 @@ const officeWorkspaceAvailabilityQuerySchema = Schema.Struct({
   seats: Schema.optional(officeSeatsSchema),
 });
 
+export type TableWorkspaceAvailabilityQuery = {
+  readonly kind: typeof tableReservationKind;
+  readonly from: string;
+  readonly to: string;
+  readonly seats: number;
+};
+
+const tableSlotsMode = "table-slots";
+const tableSlotsQuerySchema = Schema.Struct({
+  kind: Schema.Literal(tableReservationKind),
+  mode: Schema.Literal(tableSlotsMode),
+  date: plainDateStringSchema,
+  seats: tableSeatsSchema,
+});
+export type TableSlotsQuery = typeof tableSlotsQuerySchema.Type;
+
+export const tableSlotsAvailabilitySchema = Schema.Struct({
+  date: plainDateStringSchema,
+  seats: tableSeatsSchema,
+  slotMinutes: Schema.Literal(tableReservationSlotMinutes),
+  usableFrom: localTimeSchema,
+  usableUntil: Schema.NullOr(localTimeSchema),
+  availableStarts: Schema.Array(localTimeSchema),
+  availableEndsByStart: Schema.Array(
+    Schema.Struct({
+      startTime: localTimeSchema,
+      endTimes: Schema.Array(localTimeSchema),
+    })
+  ),
+});
+export type TableSlotsAvailability = typeof tableSlotsAvailabilitySchema.Type;
+
 /**
  * The availability query mode that lists every free meeting-room start on one
  * date instead of checking one interval across a date range.
@@ -126,18 +162,22 @@ export type CoworkWorkspaceAvailabilitySelectionQuery = Omit<
 export type WorkspaceAvailabilityQuery =
   | CoworkWorkspaceAvailabilitySelectionQuery
   | MeetingRoomWorkspaceAvailabilityQuery
-  | OfficeWorkspaceAvailabilityQuery;
+  | OfficeWorkspaceAvailabilityQuery
+  | TableWorkspaceAvailabilityQuery;
 
 export type WorkspaceAvailabilityUnavailableTarget =
   | WorkspaceCoworkAvailabilityTarget
   | WorkspaceMeetingRoomProductTarget
-  | WorkspaceOfficeProductTarget;
+  | WorkspaceOfficeProductTarget
+  | { readonly kind: typeof tableReservationKind };
 
 export const workspaceAvailabilityKeys = {
   availability: (query: WorkspaceAvailabilityQuery) =>
     ["workspace-availability", query] as const,
   meetingRoomStartTimes: (query: MeetingRoomStartTimesQuery | undefined) =>
     ["workspace-availability", "meeting-room-start-times", query] as const,
+  tableSlots: (query: TableSlotsQuery | undefined) =>
+    ["workspace-availability", tableSlotsMode, query] as const,
 };
 
 const workspaceAvailabilityNoticeSchema = Schema.Struct({
@@ -502,6 +542,61 @@ const decodeMeetingRoomStartTimesQuery = Schema.decodeUnknownOption(
   meetingRoomStartTimesQuerySchema
 );
 
+export const getTableAvailabilityQuery = ({
+  today,
+  seats,
+}: {
+  readonly today: string;
+  readonly seats: number;
+}): TableWorkspaceAvailabilityQuery => ({
+  kind: tableReservationKind,
+  ...getWorkspaceAvailabilityRange(today),
+  seats,
+});
+
+export const getTableSlotsQuery = ({
+  date,
+  seats,
+}: {
+  readonly date: string;
+  readonly seats: number;
+}) =>
+  decodeTableSlotsQuery({
+    kind: tableReservationKind,
+    mode: tableSlotsMode,
+    date,
+    seats,
+  });
+
+const decodeTableSlotsQuery = Schema.decodeUnknownOption(tableSlotsQuerySchema);
+const decodeTableSeatsParam = Schema.decodeUnknownOption(
+  Schema.NumberFromString.pipe(Schema.decodeTo(tableSeatsSchema))
+);
+
+export const isTableSlotsRequest = (params: URLSearchParams) =>
+  params.get("mode")?.trim() === tableSlotsMode;
+
+export const parseTableSlotsQuery = (params: URLSearchParams) =>
+  decodeTableSlotsQuery({
+    kind: params.get("kind")?.trim(),
+    mode: params.get("mode")?.trim(),
+    date: params.get("date")?.trim(),
+    seats: Option.getOrUndefined(
+      decodeTableSeatsParam(params.get("seats")?.trim())
+    ),
+  });
+
+const tableSlotsStandardSchema = Schema.toStandardSchemaV1(
+  tableSlotsAvailabilitySchema
+);
+
+export const parseTableSlotsResponse = <T>(value: T): TableSlotsAvailability =>
+  parseStandardSchema(
+    tableSlotsStandardSchema,
+    value,
+    "Invalid Team Table slots response"
+  );
+
 /**
  * The start-times query a request names, or none when its kind, date, or
  * duration is missing or invalid. Unlike date-range availability it has no
@@ -668,6 +763,17 @@ export const parseWorkspaceAvailabilityQuery = (
         ...(seats && { seats }),
       });
     }),
+    Match.when("table", () =>
+      Option.map(
+        decodeTableSeatsParam(searchParams.get("seats")?.trim()),
+        (seats): TableWorkspaceAvailabilityQuery => ({
+          kind: tableReservationKind,
+          from,
+          to,
+          seats,
+        })
+      )
+    ),
     Match.exhaustive
   );
 };
