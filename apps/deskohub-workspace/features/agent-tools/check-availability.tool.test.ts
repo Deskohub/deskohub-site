@@ -1,7 +1,11 @@
 import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
-import { Effect, type Schema } from "effect";
+import { Effect, Layer, type Schema } from "effect";
 import { m } from "@/features/i18n";
+import {
+  TeamTableAvailabilityClosed,
+  WorkspaceAvailabilityService,
+} from "@/features/reservation/backend/workspace-availability.service";
 import { meetingRoomSelectionLink } from "@/features/reservation/meeting-room-selection-link";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { checkAvailabilityResultSchema } from "./check-availability.schema";
@@ -50,6 +54,24 @@ describe("check_availability", () => {
     expect(failure.details).toEqual({ code: "unsupported_family" });
     expect(services.snapshotReads).toEqual([]);
     expect(services.dotyposRequests).toEqual([]);
+  });
+
+  test("reports Team Table as unsupported when the availability gate closes", async () => {
+    const services = makeAgentToolTestServices({ teamTableEnabled: true });
+    const failure = await checkAvailabilityTool
+      .call({ family: "table", date: workspaceDateFromToday(1), seats: 4 })
+      .pipe(
+        Effect.flip,
+        Effect.provide(
+          Layer.mock(WorkspaceAvailabilityService, {
+            getTableSlots: () => Effect.fail(new TeamTableAvailabilityClosed()),
+          })
+        ),
+        Effect.provide(services.layer),
+        Effect.runPromise
+      );
+
+    expect(failure.details).toEqual({ code: "unsupported_family" });
   });
 
   test("lists Team Table start and end choices and checks an exact quarter-hour interval", async () => {

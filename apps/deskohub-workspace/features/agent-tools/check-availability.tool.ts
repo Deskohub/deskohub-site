@@ -172,7 +172,11 @@ const checkTable = Effect.fn("agentTools.checkTableAvailability")(function* ({
       query,
     })
     .pipe(
-      Effect.mapError(AgentToolError.unavailable("availability_unavailable"))
+      Effect.mapError((cause) =>
+        cause._tag === "TeamTableAvailabilityClosed"
+          ? AgentToolError.unsupportedFamily()
+          : AgentToolError.unavailable("availability_unavailable")(cause)
+      )
     );
   const interval =
     startTime !== undefined && endTime !== undefined

@@ -183,6 +183,9 @@ const toStartReservationError = (
     Match.tag("WorkspaceTableUnavailableError", (cause) =>
       AgentToolError.refused("selection_unavailable")(cause)
     ),
+    Match.tag("TableAssignmentUnavailableError", (cause) =>
+      AgentToolError.refused("selection_unavailable")(cause)
+    ),
     Match.tag("EntryPackUnavailableError", (cause) =>
       AgentToolError.refused("selection_unavailable")(cause)
     ),
@@ -205,6 +208,9 @@ const toStartReservationError = (
       AgentToolError.unsupportedFamily()
     ),
     Match.tag("TeamTableReservationsDisabledError", () =>
+      AgentToolError.unsupportedFamily()
+    ),
+    Match.tag("TeamTableAvailabilityClosed", () =>
       AgentToolError.unsupportedFamily()
     ),
     Match.tag("OvernightStayUnavailableError", () =>

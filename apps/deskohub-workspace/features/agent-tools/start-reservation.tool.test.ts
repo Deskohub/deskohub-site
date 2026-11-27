@@ -213,7 +213,9 @@ describe("start_reservation", () => {
 
   test.each([
     ["WorkspaceTableUnavailableError", "selection_unavailable"],
+    ["TableAssignmentUnavailableError", "selection_unavailable"],
     ["TeamTableReservationsDisabledError", "unsupported_family"],
+    ["TeamTableAvailabilityClosed", "unsupported_family"],
   ])("maps %s after a Team Table quote", async (_tag, code) => {
     prepared = { fail: { _tag } };
 
