@@ -1473,7 +1473,8 @@ export class AdministrationService extends Context.Service<
       | AdministrationListSourceUnavailableError
     >;
     readonly loadReservation: (
-      id: WorkspaceReservationId
+      id: WorkspaceReservationId,
+      relatedReservations?: ReservationFamilyExclusion
     ) => Effect.Effect<
       AdministrationReservationDetail | null,
       EffectDrizzleQueryError | WorkspaceReservationDetailsMalformedError
@@ -1539,7 +1540,8 @@ export class AdministrationService extends Context.Service<
       EffectDrizzleQueryError | WorkspaceReservationDetailsMalformedError
     >;
     readonly loadCustomerActivity: (
-      customerId: DotyposCustomerId
+      customerId: DotyposCustomerId,
+      options?: ReservationFamilyExclusion
     ) => Effect.Effect<
       AdministrationCustomerActivity,
       EffectDrizzleQueryError | WorkspaceReservationDetailsMalformedError
@@ -2236,7 +2238,8 @@ export class AdministrationService extends Context.Service<
        */
       const loadSameDateRows = Effect.fnUntraced(function* (
         row: SafeReservationRow,
-        liveReservation: DotyposReservation | null
+        liveReservation: DotyposReservation | null,
+        excludedType: AdministrationReservationFamily | undefined
       ) {
         if (!liveReservation) return [];
         const date = getReservationDate(
@@ -2257,7 +2260,13 @@ export class AdministrationService extends Context.Service<
           .select(safeReservationSelection)
           .from(workspaceReservations)
           .where(
-            inArray(workspaceReservations.dotyposReservationId, reservationIds)
+            and(
+              inArray(
+                workspaceReservations.dotyposReservationId,
+                reservationIds
+              ),
+              excludeReservationFamily(excludedType)
+            )
           )
           .orderBy(desc(workspaceReservations.updatedAt))
           .limit(4)
@@ -2303,7 +2312,10 @@ export class AdministrationService extends Context.Service<
 
       const loadReservation = Effect.fn(
         "AdministrationService.loadReservation"
-      )(function* (id: WorkspaceReservationId) {
+      )(function* (
+        id: WorkspaceReservationId,
+        relatedReservations?: ReservationFamilyExclusion
+      ) {
         const [reservationRow] = yield* db
           .select({
             ...safeReservationSelection,
@@ -2431,7 +2443,8 @@ export class AdministrationService extends Context.Service<
                     workspaceReservations.dotyposCustomerId,
                     row.dotyposCustomerId
                   ),
-                  sql`${workspaceReservations.id} <> ${row.id}`
+                  sql`${workspaceReservations.id} <> ${row.id}`,
+                  excludeReservationFamily(relatedReservations?.excludedType)
                 )
               )
               .orderBy(desc(workspaceReservations.updatedAt))
@@ -2441,7 +2454,11 @@ export class AdministrationService extends Context.Service<
           { concurrency: 9 }
         );
 
-        const sameDateRows = yield* loadSameDateRows(row, live.reservation);
+        const sameDateRows = yield* loadSameDateRows(
+          row,
+          live.reservation,
+          relatedReservations?.excludedType
+        );
 
         const { otherCustomerReservations, sameDateReservations } =
           yield* Effect.all(
@@ -3011,6 +3028,7 @@ export class AdministrationService extends Context.Service<
         "AdministrationService.loadCustomerActivity"
       )(function* <E = never>(
         customerId: DotyposCustomerId,
+        options?: ReservationFamilyExclusion,
         policy: ProviderReadPolicy<E> = degradeProviderRead
       ) {
         const { attemptRowsWithSentinel, marketingConsentRows, recentRows } =
@@ -3019,7 +3037,12 @@ export class AdministrationService extends Context.Service<
               recentRows: db
                 .select(safeReservationSelection)
                 .from(workspaceReservations)
-                .where(eq(workspaceReservations.dotyposCustomerId, customerId))
+                .where(
+                  and(
+                    eq(workspaceReservations.dotyposCustomerId, customerId),
+                    excludeReservationFamily(options?.excludedType)
+                  )
+                )
                 .orderBy(desc(workspaceReservations.updatedAt))
                 .limit(customerActivityReservationLimit + 1)
                 .pipe(Effect.flatMap(StoredReservationDetails.decodeRows)),
@@ -3565,7 +3588,9 @@ export class AdministrationService extends Context.Service<
         loadCustomerActivity,
         loadCustomerActivityStrict: Effect.fn(
           "AdministrationService.loadCustomerActivityStrict"
-        )((customerId) => loadCustomerActivity(customerId, failProviderRead)),
+        )((customerId) =>
+          loadCustomerActivity(customerId, undefined, failProviderRead)
+        ),
         loadCustomerReservationActivity,
         loadReservationActivity,
         listOrders: paymentAdministration.listOrders,

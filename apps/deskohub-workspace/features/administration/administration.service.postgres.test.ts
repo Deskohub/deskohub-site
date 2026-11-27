@@ -2051,7 +2051,11 @@ describe.skipIf(!testDatabase)(
           seats: 6,
           durationMinutes: 60,
         });
-        await insert(favoriteTableCustomerId, "table-cowork", products.openSpace);
+        await insert(
+          favoriteTableCustomerId,
+          "table-cowork",
+          products.openSpace
+        );
       });
 
       const productsOf = (items: readonly { readonly id: string }[]) =>
@@ -2307,32 +2311,56 @@ describe.skipIf(!testDatabase)(
       const loadDetail = (
         reservationId: WorkspaceReservationId,
         label: string,
-        listReservations: DotyposServiceOverrides["listReservations"]
+        listReservations: DotyposServiceOverrides["listReservations"],
+        excludedType?: "table"
       ) =>
-        run((administration) => administration.loadReservation(reservationId), {
-          getReservation: () =>
-            Effect.succeed(
-              Option.some({
-                customer: null,
-                reservation: liveBooking(label, makeCustomerId(label)),
-              })
-            ),
-          getTables: () =>
-            Effect.succeed([{ id: "table-desk", name: "Desk 4" }]),
-          listReservations,
-        });
+        run(
+          (administration) =>
+            administration.loadReservation(reservationId, { excludedType }),
+          {
+            getReservation: () =>
+              Effect.succeed(
+                Option.some({
+                  customer: null,
+                  reservation: liveBooking(label, makeCustomerId(label)),
+                })
+              ),
+            getTables: () =>
+              Effect.succeed([{ id: "table-desk", name: "Desk 4" }]),
+            listReservations,
+          }
+        );
 
       test("lists the other Workspace reservations Dotypos books on the same date", async () => {
         const reservationId = await insertBooked("same-date-own");
         const sameDateId = await insertBooked("same-date-other");
 
-        const detail = await loadDetail(reservationId, "same-date-own", () =>
+        const tableLabel = "same-date-table";
+        const tableId = await insertReservation({
+          customerId: makeCustomerId(tableLabel),
+          details: { kind: "table", seats: 4, durationMinutes: 60 },
+          fulfillmentState: "fulfilled",
+          label: tableLabel,
+          reservationState: "confirmed",
+        });
+        const listReservations = () =>
           Effect.succeed([
             liveBooking("same-date-own", makeCustomerId("same-date-own")),
             liveBooking("same-date-other", makeCustomerId("same-date-other")),
+            liveBooking(tableLabel, makeCustomerId(tableLabel)),
             // A booking Workspace doesn't hold lists nothing.
             liveBooking("same-date-walk-in", makeCustomerId("walk-in")),
-          ])
+          ]);
+        const detail = await loadDetail(
+          reservationId,
+          "same-date-own",
+          listReservations
+        );
+        const legacyDetail = await loadDetail(
+          reservationId,
+          "same-date-own",
+          listReservations,
+          "table"
         );
 
         expect(detail?.booking).toMatchObject({
@@ -2340,7 +2368,10 @@ describe.skipIf(!testDatabase)(
           tableName: "Desk 4",
           linkedReservation: { id: reservationId },
         });
-        expect(detail?.sameDateReservations.map(({ id }) => id)).toEqual([
+        expect(detail?.sameDateReservations.map(({ id }) => id).sort()).toEqual(
+          [sameDateId, tableId].sort()
+        );
+        expect(legacyDetail?.sameDateReservations.map(({ id }) => id)).toEqual([
           sameDateId,
         ]);
       });

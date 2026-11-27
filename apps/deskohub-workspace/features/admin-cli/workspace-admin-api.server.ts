@@ -237,16 +237,18 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
       .handle(
         "getReservation",
         Effect.fn(function* ({ params }) {
+          const supportsTeamTable =
+            yield* administrationCallerSupportsTeamTable;
           const detail = yield* administration
-            .loadReservation(params.reservationId)
+            .loadReservation(params.reservationId, {
+              excludedType: supportsTeamTable ? undefined : "table",
+            })
             .pipe(mapServiceFailure);
           if (!detail) {
             return yield* new CliResourceNotFound({
               message: "The reservation was not found.",
             });
           }
-          const supportsTeamTable =
-            yield* administrationCallerSupportsTeamTable;
           if (!supportsTeamTable && detail.reservation.type === "table") {
             return yield* new CliServiceUnavailable({
               message:
@@ -255,12 +257,6 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
           }
           return {
             ...detail,
-            otherCustomerReservations: detail.otherCustomerReservations.filter(
-              ({ type }) => supportsTeamTable || type !== "table"
-            ),
-            sameDateReservations: detail.sameDateReservations.filter(
-              ({ type }) => supportsTeamTable || type !== "table"
-            ),
             invoice: detail.invoice && {
               ...detail.invoice,
               id: AdministrationInvoiceId.make(detail.invoice.id),
@@ -452,9 +448,11 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
         Effect.fn(function* ({ params }) {
           const supportsTeamTable =
             yield* administrationCallerSupportsTeamTable;
-          const { activity, profile } = yield* Effect.all(
+          return yield* Effect.all(
             {
-              activity: administration.loadCustomerActivity(params.customerId),
+              activity: administration.loadCustomerActivity(params.customerId, {
+                excludedType: supportsTeamTable ? undefined : "table",
+              }),
               profile: discounts
                 .loadCustomerProfile({
                   customerId: params.customerId,
@@ -466,15 +464,6 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
             },
             { concurrency: "unbounded" }
           ).pipe(mapServiceFailure);
-          return {
-            profile,
-            activity: {
-              ...activity,
-              reservations: activity.reservations.filter(
-                ({ type }) => supportsTeamTable || type !== "table"
-              ),
-            },
-          };
         })
       )
       .handle("getCustomerReservationActivity", ({ params }) =>
