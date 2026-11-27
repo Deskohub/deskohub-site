@@ -11,6 +11,7 @@ import {
   previewPilotLabel,
   previewRevision,
   previewSeedRevision,
+  previewServiceOrigin,
   previewTargetGeneration,
   previewTrafficTag,
   previewWorkerTag,
@@ -30,6 +31,7 @@ const Environment = Schema.Struct({
 });
 export const PreviewServiceReadback = Schema.Struct({
   uri: Schema.optional(Schema.String),
+  urls: Schema.optional(Schema.Array(Schema.String)),
   labels: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   reconciling: Schema.optional(Schema.Boolean),
   invokerIamDisabled: Schema.optional(Schema.Boolean),
@@ -61,6 +63,16 @@ export type PreviewServiceReadback = typeof PreviewServiceReadback.Type;
 export type PreviewSnapshot = ReadonlyMap<PreviewRole, PreviewServiceReadback>;
 
 const revisionName = (value: string | undefined) => value?.split("/").at(-1);
+
+export const resolvePreviewServiceOrigin = (
+  role: PreviewRole,
+  service: PreviewServiceReadback | undefined
+) => {
+  const origin = previewServiceOrigin(role);
+  return service?.uri === origin || service?.urls?.includes(origin)
+    ? origin
+    : undefined;
+};
 
 export const canResumePreviewSeed = (services: PreviewSnapshot) =>
   Array.from(services).every(
@@ -158,7 +170,11 @@ export const verifyPreviewRouting = (
   const traffic = service?.trafficStatuses ?? [];
   const [defaultTraffic] = traffic.filter((entry) => (entry.percent ?? 0) > 0);
   const [taggedTraffic] = traffic.filter((entry) => entry.tag === tag);
-  const tagOrigin = service?.uri && taggedCloudRunOrigin(service.uri, tag);
+  const origin = resolvePreviewServiceOrigin(role, service);
+  const deterministicTagOrigin = origin && taggedCloudRunOrigin(origin, tag);
+  const taggedUri = taggedTraffic?.uri;
+  const reportedTagOrigin =
+    service?.uri && taggedCloudRunOrigin(service.uri, tag);
   const container = service?.template?.containers[0];
   const databaseReference = container?.env?.find(
     (item) => item.name === "DATABASE_URL"
@@ -179,8 +195,9 @@ export const verifyPreviewRouting = (
     revisionName(defaultTraffic.revision) !== previewSeedRevision(role) ||
     taggedTraffic?.percent ||
     revisionName(taggedTraffic?.revision) !== revision ||
-    !tagOrigin ||
-    tagOrigin !== taggedTraffic?.uri
+    !deterministicTagOrigin ||
+    !taggedUri ||
+    (taggedUri !== deterministicTagOrigin && taggedUri !== reportedTagOrigin)
   ) {
     throw new Error(
       `Generation did not converge on the ${role} preview service`
