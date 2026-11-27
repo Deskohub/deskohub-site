@@ -120,7 +120,7 @@ export const publicPageDefinitions: Readonly<
     description: m.ttrpgRoomMetadataDescription,
     contentDate: "2026-10-25",
   },
-  "/terms-and-conditions": legalPage("terms-and-conditions", "2026-11-18"),
+  "/terms-and-conditions": legalPage("terms-and-conditions", "2026-11-27"),
   "/privacy-policy": legalPage("privacy-policy", "2026-11-18"),
   "/cookie-policy": legalPage("cookie-policy", "2026-11-19"),
   "/operating-rules": legalPage("operating-rules", "2026-08-12"),

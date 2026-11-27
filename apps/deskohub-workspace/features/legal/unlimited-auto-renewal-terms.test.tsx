@@ -60,7 +60,11 @@ describe.each([
       const canonical: CanonicalSections = JSON.parse(
         getCanonicalLegalDocument(served)
       );
-      expect(served.updatedAt).not.toBe(published.updatedAt);
+      if (key === documentKey) {
+        expect(served.updatedAt).toBe(published.updatedAt);
+      } else {
+        expect(served.updatedAt).not.toBe(published.updatedAt);
+      }
       expect(served.translationNotice).toBe(published.translationNotice);
       const site = renderToStaticMarkup(
         <LegalPage locale={locale} documentKey={key} />
@@ -128,6 +132,15 @@ describe.each([
     );
     expect(markdownPlainText(markdown).match(/^16\.\d+(?= )/gm)).toEqual(
       Array.from({ length: 9 }, (_, index) => `16.${index + 1}`)
+    );
+    const plainText = markdownPlainText(markdown);
+    expect(plainText).not.toContain("16.11");
+    expect(
+      plainText.split("\n").find((line) => line.startsWith("9.7 "))
+    ).toContain(
+      locale === "en-US"
+        ? "A valid statutory withdrawal also stops automatic renewal."
+        : "Platným odstoupením podle zákona se také ukončí automatické obnovování."
     );
     const getOrderClause = (document: ReturnType<typeof getLegalDocument>) => {
       const canonical: CanonicalSections = JSON.parse(

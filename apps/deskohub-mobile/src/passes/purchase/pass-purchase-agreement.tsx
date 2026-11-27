@@ -23,12 +23,14 @@ export const hasPassLegalDocuments = (
 
 export function PassPurchaseAgreement({
   disclosure,
+  showEarlyStart = true,
   checked,
   disabled,
   onToggle,
   locale,
 }: {
   readonly disclosure: CustomerPassPurchaseDisclosure;
+  readonly showEarlyStart?: boolean;
   readonly checked: boolean;
   readonly disabled: boolean;
   readonly onToggle: () => void;
@@ -61,7 +63,7 @@ export function PassPurchaseAgreement({
     );
   };
   const sentence = m.booking_checkout_legal_consent({}, { locale });
-  const earlyStart = disclosure.earlyStartRequest;
+  const earlyStart = showEarlyStart ? disclosure.earlyStartRequest : undefined;
   return (
     <View style={styles.agreement}>
       <Pressable

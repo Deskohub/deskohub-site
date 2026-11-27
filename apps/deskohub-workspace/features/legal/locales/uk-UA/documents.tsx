@@ -802,7 +802,7 @@ const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "18 листопада 2026 р.",
+    updatedAt: "27 листопада 2026 р.",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {

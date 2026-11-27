@@ -57,6 +57,7 @@ export const passPeriodLabel = (
 
 export function PassPurchaseReview({
   quote,
+  showEarlyStart,
   recipient,
   buyer,
   checked,
@@ -67,6 +68,7 @@ export function PassPurchaseReview({
   locale,
 }: {
   readonly quote: CustomerPassPurchase;
+  readonly showEarlyStart: boolean;
   readonly recipient: string | undefined;
   readonly buyer: string;
   readonly checked: boolean;
@@ -184,6 +186,7 @@ export function PassPurchaseReview({
       />
       <PassPurchaseAgreement
         disclosure={disclosure}
+        showEarlyStart={showEarlyStart}
         checked={checked}
         disabled={busy}
         onToggle={onToggle}

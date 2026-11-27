@@ -161,7 +161,7 @@ const termsAndConditionsSections = (
         : "9.5 Vzor oznámení: „Oznamuji, že odstupuji od smlouvy na tuto Službu: [popis a číslo Rezervace], objednanou dne [datum]. Jméno a příjmení Spotřebitele: [doplnit]. Adresa Spotřebitele: [doplnit]. Datum: [doplnit]. Podpis pouze při listinném podání.“ Použití vzoru není povinné.",
       "9.6 Práva podle tohoto článku náleží pouze Spotřebiteli a platí vedle případných výhodnějších storno podmínek uvedených v souhrnu objednávky nebo individuální nabídce.",
       includesUnlimitedAutoRenewal
-        ? "9.7 Spotřebitel, který platně odstoupí po výslovné žádosti o zahájení plnění před uplynutím lhůty pro odstoupení, uhradí poměrnou část ceny jen při splnění zákonných podmínek. U balíčku vstupů Poskytovatel vrátí skutečně zaplacenou cenu vynásobenou počtem nevyužitých vstupů a vydělenou celkovým počtem vstupů v balíčku. Za využité se počítají předchozí návštěvy a vstup rezervovaný na den odstoupení. Pozdější Rezervace se zruší a tyto vstupy se počítají jako nevyužité. U členství Unlimited Poskytovatel vrátí skutečně zaplacenou cenu za období vynásobenou počtem nevyužitých kalendářních dnů podle pražského času a vydělenou 30. Pokud už poskytování služby začalo, Spotřebitel má přístup ještě do konce dne odstoupení. Tento den se počítá jako využitý. V obou případech se vracená částka zaokrouhlí dolů na celé koruny."
+        ? "9.7 Spotřebitel, který platně odstoupí po výslovné žádosti o zahájení plnění před uplynutím lhůty pro odstoupení, uhradí poměrnou část ceny jen při splnění zákonných podmínek. U balíčku vstupů Poskytovatel vrátí skutečně zaplacenou cenu vynásobenou počtem nevyužitých vstupů a vydělenou celkovým počtem vstupů v balíčku. Za využité se počítají předchozí návštěvy a vstup rezervovaný na den odstoupení. Pozdější Rezervace se zruší a tyto vstupy se počítají jako nevyužité. U členství Unlimited Poskytovatel vrátí skutečně zaplacenou cenu za období vynásobenou počtem nevyužitých kalendářních dnů podle pražského času a vydělenou 30. Pokud už poskytování služby začalo, Spotřebitel má přístup ještě do konce dne odstoupení. Tento den se počítá jako využitý. V obou případech se vracená částka zaokrouhlí dolů na celé koruny. Platným odstoupením podle zákona se také ukončí automatické obnovování."
         : "9.7 Odstoupí-li Spotřebitel platně od smlouvy o nákupu balíčku vstupů poté, co požádal o jeho okamžité využití, a jsou-li splněny zákonné podmínky pro úhradu poměrné části ceny, vrátí Poskytovatel skutečně zaplacenou cenu vynásobenou počtem nevyužitých vstupů a vydělenou celkovým počtem vstupů v balíčku, zaokrouhlenou dolů na celé koruny. Za využité se považují vstupy za předchozí návštěvy a vstup rezervovaný na den odstoupení. Rezervace na pozdější dny se zruší a tyto vstupy se považují za nevyužité.",
     ],
   },
@@ -178,7 +178,7 @@ const termsAndConditionsSections = (
     body: [
       "11.1 Poskytovatel odpovídá za řádné poskytnutí potvrzené Služby a za újmu v rozsahu stanoveném právními předpisy. Nic v těchto VOP nevylučuje ani neomezuje odpovědnost, kterou nelze platně vyloučit, ani zákonná práva Spotřebitele.",
       includesUnlimitedAutoRenewal
-        ? "11.2 Klient odpovídá za svou podnikatelskou činnost a vlastní data a přiměřeně zabezpečí věci, které do Prostor přinese. Kdy může věci ponechat na přiděleném vyhrazeném místě, stanoví bod 16.11 a Provozní řád. Poskytovatel odpovídá za ztrátu nebo poškození věcí v rozsahu stanoveném právními předpisy."
+        ? "11.2 Klient odpovídá za svou podnikatelskou činnost a vlastní data a přiměřeně zabezpečí věci, které do Prostor přinese. Kdy může věci ponechat na přiděleném vyhrazeném místě, stanoví bod 16.8 a Provozní řád. Poskytovatel odpovídá za ztrátu nebo poškození věcí v rozsahu stanoveném právními předpisy."
         : "11.2 Klient odpovídá za svou podnikatelskou činnost, vlastní data a věci vnesené do Prostor. Poskytovatel odpovídá za ztrátu nebo poškození věci pouze v rozsahu stanoveném právními předpisy; Klient proto nenechává věci bez dozoru a přiměřeně je zabezpečí.",
       "11.3 Poskytovatel neodpovídá za překážku vzniklou nezávisle na jeho vůli, kterou nemohl rozumně předvídat ani odvrátit. Trvá-li taková překážka nebo dočasná nedostupnost tak, že podstatná část potvrzené Služby nemůže být poskytnuta, postupuje se podle článku 6.4.",
       "11.4 Vůči Klientovi, který není Spotřebitelem, Poskytovatel v maximálním rozsahu dovoleném zákonem neodpovídá za nepřímou újmu, ušlý zisk nebo ztrátu dat, pokud je nezpůsobil úmyslně nebo z hrubé nedbalosti.",
@@ -788,9 +788,7 @@ const membershipLegalDocuments = (includesUnlimitedAutoRenewal: boolean) => ({
     ],
   },
   "terms-and-conditions": {
-    updatedAt: includesUnlimitedAutoRenewal
-      ? unlimitedAutoRenewalRevisionDate
-      : "18. listopadu 2026",
+    updatedAt: "27. listopadu 2026",
     sections: termsAndConditionsSections(includesUnlimitedAutoRenewal),
   },
   "operating-rules": {

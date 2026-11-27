@@ -565,6 +565,9 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
             invitationSent,
             paidAt,
             invoiceRequested: snapshot.billing.invoice !== "none",
+            entryPackEarlyStartRequested:
+              snapshot.product.kind === "entry-pack" &&
+              snapshot.billing.purpose === "personal",
           }).pipe(Effect.provide(sendingServices));
         }
         // Confirmation settled. Any remaining work belongs to the invoice ledger.

@@ -823,7 +823,7 @@ const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "18. November 2026",
+    updatedAt: "27. November 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {

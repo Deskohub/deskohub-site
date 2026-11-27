@@ -45,6 +45,7 @@ const reviewText = (quote: CustomerPassPurchase) =>
     hostTree(
       elementTree(PassPurchaseReview, {
         quote,
+        showEarlyStart: true,
         recipient: undefined,
         buyer: "Test Buyer",
         checked: false,

@@ -35,6 +35,7 @@ export type EntryPackPurchaseEmailProps = {
   readonly gift?: boolean;
   readonly invitationSent?: boolean;
   readonly invoiceRequested: boolean;
+  readonly entryPackEarlyStartRequested: boolean;
   readonly locale: Locale;
   readonly statusUrl: string;
   readonly accessUrl?: string;
@@ -179,7 +180,9 @@ export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
 
       <Section className="mt-6 rounded-2xl bg-cream px-5 py-4">
         <Text className="m-0 text-[14px] leading-[23px] text-navy">
-          {!unlimited && `${m.passEmailEarlyStart({}, options)} `}
+          {!unlimited &&
+            props.entryPackEarlyStartRequested &&
+            `${m.passEmailEarlyStart({}, options)} `}
           <Link href={props.termsUrl} style={{ color: "#00024f" }}>
             {m.passEmailRefundTerms({}, options)}
           </Link>

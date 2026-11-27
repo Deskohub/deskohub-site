@@ -78,6 +78,7 @@ test("emails the holder capability for a self-purchase and buyer status for a gi
         gift,
         invitationSent: gift,
         invoiceRequested: false,
+        entryPackEarlyStartRequested: false,
       }).pipe(
         Effect.provide(
           Layer.mergeAll(

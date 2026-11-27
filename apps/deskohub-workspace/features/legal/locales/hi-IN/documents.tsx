@@ -740,7 +740,7 @@ const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "18 नवंबर 2026",
+    updatedAt: "27 नवंबर 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {

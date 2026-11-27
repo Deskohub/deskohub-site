@@ -811,7 +811,7 @@ const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "18 tháng 11, 2026",
+    updatedAt: "27 tháng 11, 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {

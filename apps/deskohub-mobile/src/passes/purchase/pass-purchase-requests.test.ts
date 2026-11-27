@@ -190,7 +190,6 @@ describe("pass Pay approval", () => {
         { key: "terms-and-conditions", hash: "terms-hash" },
         { key: "operating-rules", hash: "rules-hash" },
       ],
-      unlimitedEarlyStartAccepted: true,
       displayedPriceFingerprint: "a".repeat(64),
       billing,
       returnTarget: "native-app",
@@ -199,6 +198,10 @@ describe("pass Pay approval", () => {
 
   test("only affirms early Unlimited start when the server disclosed it", () => {
     const billing = { purpose: "personal" as const, invoice: "none" as const };
+    expect(passPaymentPayload(quote, billing, "web-app")).toHaveProperty(
+      "unlimitedEarlyStartAccepted",
+      true
+    );
     expect(
       passPaymentPayload(
         { ...quote, disclosure: { documents: quote.disclosure.documents } },

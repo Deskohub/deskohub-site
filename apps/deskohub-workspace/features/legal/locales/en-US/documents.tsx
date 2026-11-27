@@ -162,7 +162,7 @@ const termsAndConditionsSections = (
         : "9.5 Model notice: “I hereby give notice that I withdraw from my contract for the following Service: [description and Booking number], ordered on [date]. Consumer name: [complete]. Consumer address: [complete]. Date: [complete]. Signature only if submitted on paper.” Use of the model is optional.",
       "9.6 The rights in this article apply only to a Consumer and operate alongside any more favorable cancellation terms stated in the order summary or individual offer.",
       includesUnlimitedAutoRenewal
-        ? "9.7 A Consumer who validly withdraws after requesting early performance pays a proportionate part of the price only if the statutory conditions are met. For an Entry pack, the Provider refunds the price actually paid multiplied by the number of unused entries and divided by the total number of entries in the pack. Past visits and an entry booked for the day of withdrawal count as used. Later Bookings are cancelled and those entries count as unused. For an Unlimited membership, the Provider refunds the price actually paid for the period multiplied by the number of unused calendar days in Prague and divided by 30. If service has started, the Consumer keeps access through the day of withdrawal. That day counts as used. Both calculations round the refund down to whole Czech koruna."
+        ? "9.7 A Consumer who validly withdraws after requesting early performance pays a proportionate part of the price only if the statutory conditions are met. For an Entry pack, the Provider refunds the price actually paid multiplied by the number of unused entries and divided by the total number of entries in the pack. Past visits and an entry booked for the day of withdrawal count as used. Later Bookings are cancelled and those entries count as unused. For an Unlimited membership, the Provider refunds the price actually paid for the period multiplied by the number of unused calendar days in Prague and divided by 30. If service has started, the Consumer keeps access through the day of withdrawal. That day counts as used. Both calculations round the refund down to whole Czech koruna. A valid statutory withdrawal also stops automatic renewal."
         : "9.7 If a Consumer validly withdraws from an Entry pack purchase after requesting immediate use and the statutory conditions for a proportional charge are met, the refund is the price actually paid multiplied by the number of unused entries and divided by the total number of entries in the pack, rounded down to whole Czech koruna. Entries for past visits and an entry booked for the day of withdrawal count as used. Bookings for later dates are cancelled and those entries count as unused.",
     ],
   },
@@ -179,7 +179,7 @@ const termsAndConditionsSections = (
     body: [
       "11.1 The Provider is responsible for properly supplying the confirmed Service and for harm to the extent required by law. Nothing in these GTC excludes or limits liability that cannot validly be excluded or a Consumer's statutory rights.",
       includesUnlimitedAutoRenewal
-        ? "11.2 The Client is responsible for their business activities and data and should secure belongings they bring. Section 16.11 and the House Rules explain when belongings may be left at an assigned Reserved Desk. The Provider remains responsible for lost or damaged belongings to the extent required by law."
+        ? "11.2 The Client is responsible for their business activities and data and should secure belongings they bring. Section 16.8 and the House Rules explain when belongings may be left at an assigned Reserved Desk. The Provider remains responsible for lost or damaged belongings to the extent required by law."
         : "11.2 The Client is responsible for the Client's business activities, data, and items brought into the Premises. The Provider is liable for loss of or damage to an item only to the extent required by law; the Client should therefore not leave items unattended and should secure them appropriately.",
       "11.3 The Provider is not liable for an obstacle beyond its control that it could not reasonably foresee or prevent. If such an obstacle or temporary unavailability prevents a material part of the confirmed Service from being supplied, Article 6.4 applies.",
       "11.4 To the maximum extent permitted by law, the Provider is not liable to a Client who is not a Consumer for indirect loss, loss of profit, or loss of data unless caused intentionally or by gross negligence.",
@@ -783,9 +783,7 @@ const membershipLegalDocuments = (includesUnlimitedAutoRenewal: boolean) => ({
     ],
   },
   "terms-and-conditions": {
-    updatedAt: includesUnlimitedAutoRenewal
-      ? unlimitedAutoRenewalRevisionDate
-      : "18 November 2026",
+    updatedAt: "27 November 2026",
     sections: termsAndConditionsSections(includesUnlimitedAutoRenewal),
   },
   "operating-rules": {
