@@ -141,6 +141,9 @@ jobs:
       - name: Lint the Workspace API
         run: bun turbo lint --filter=deskohub-workspace-api
 
+      - name: Test the Workspace API preview generation guard
+        run: bun test apps/deskohub-workspace-api/src/routes.test.ts
+
       - name: Smoke test the Workspace API proof image under Node 24
         timeout-minutes: 5
         run: bash apps/deskohub-workspace-api/test-image.sh

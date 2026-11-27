@@ -71,6 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
+      backend_preview: ${{ steps.target.outputs.backend_preview }}
       deployment: ${{ steps.target.outputs.deployment }}
       eligible: ${{ steps.target.outputs.eligible }}
       flows: ${{ steps.target.outputs.flows }}
@@ -93,7 +94,9 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .workspace-e2e-flows
           persist-credentials: false
-          sparse-checkout: .github/actions/workspace-e2e-flows
+          sparse-checkout: |
+            .github/actions/workspace-e2e-flows
+            .github/actions/workspace-backend-preview
 
       - name: Resolve eligible PR and immutable preview
         id: target
@@ -106,6 +109,7 @@ jobs:
           # Only workspace-e2e-nightly.yml moves this branch, to a commit of
           # main whose Workspace preview it waits for.
           NIGHTLY_BRANCH: e2e/nightly
+          PILOT_PR_NUMBER: ${{ vars.WORKSPACE_BACKEND_PREVIEW_PR }}
           TARGET_DEPLOYMENT: ${{ github.event_name == 'workflow_dispatch' && 'success' || github.event.client_payload.state.type }}
           TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.event.client_payload.git.ref }}
           TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.event.client_payload.git.sha }}
@@ -306,6 +310,25 @@ jobs:
             fi
 
             resolved_flows="$(jq -r '.flows' <<<"$parsed_flows")"
+            if [[ -n "$PILOT_PR_NUMBER" && "$pr_number" == "$PILOT_PR_NUMBER" ]]; then
+              backend_preview="$(PR_NUMBER="$pr_number" node \
+                .workspace-e2e-flows/.github/actions/workspace-backend-preview/e2e-target.mjs classify)" || \
+                fail 'Could not classify the pilot PR paths' 'Workspace E2E could not verify backend preview eligibility' backend-preview-paths
+              echo "backend_preview=$backend_preview" >> "$GITHUB_OUTPUT"
+              if [[ "$backend_preview" == true ]]; then
+                if [[ "$TARGET_DEPLOYMENT" == skipped ]]; then
+                  fail 'The backend pilot needs an exact frontend deployment' \
+                    'Deploy the exact protected Vercel preview before running the backend pilot' backend-preview-skipped
+                fi
+                for selection in "$pr_requested_flows" "$resolved_flows"; do
+                  case ",$selection," in
+                    ',all,' | *,email-campaigns,*) ;;
+                    *) fail 'The backend pilot needs the email-campaigns E2E flow' \
+                         'Add email-campaigns to the pilot E2E flows before dispatch' backend-preview-flow ;;
+                  esac
+                done
+              fi
+            fi
             resolved_run_e2e="$(jq -r '.runE2E' <<<"$parsed_flows")"
             resolved_install_webkit="$(jq -r '.installWebkit' <<<"$parsed_flows")"
             {
@@ -589,9 +612,51 @@ jobs:
           path: ~/.bun/install/cache
           key: ${{ steps.bun-cache.outputs.cache-primary-key }}
 
+  resolve-backend-preview:
+    needs: resolve-target
+    if: needs.resolve-target.outputs.backend_preview == 'true' && needs.resolve-target.outputs.deployment == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    environment: workspace-checkout-e2e
+    outputs:
+      deployment_id: ${{ steps.deployment.outputs.deployment_id }}
+      revision: ${{ steps.gate.outputs.revision }}
+    env:
+      WORKSPACE_E2E_BASE_URL: ${{ needs.resolve-target.outputs.url }}
+      TARGET_SHA: ${{ needs.resolve-target.outputs.sha }}
+      TARGET_REF: ${{ needs.resolve-target.outputs.head_ref }}
+    steps:
+      - name: Check out the reviewed backend gate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/workspace-backend-preview
+            packages/workspace-cloud-run/src
+      - name: Verify the exact protected Vercel deployment
+        id: deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERCEL_TOKEN: ${{ secrets.WORKSPACE_E2E_VERCEL_TOKEN }}
+        run: node .github/actions/workspace-backend-preview/e2e-target.mjs deployment
+      # Deployment also takes the preview database lease. Wait before E2E
+      # acquires it, then recheck under the lease before touching the database.
+      - name: Wait for the expected backend revision
+        id: gate
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: node .github/actions/workspace-backend-preview/e2e-gate.mjs wait
+
   test-e2e:
-    needs: [resolve-target, fill-bun-package-cache]
-    if: needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true'
+    needs: [resolve-target, fill-bun-package-cache, resolve-backend-preview]
+    if: >-
+      !cancelled() && needs.resolve-target.result == 'success' &&
+      needs.fill-bun-package-cache.result == 'success' &&
+      needs.resolve-target.outputs.eligible == 'true' &&
+      needs.resolve-target.outputs.deployment == 'success' &&
+      needs.resolve-target.outputs.run_e2e == 'true' &&
+      (needs.resolve-target.outputs.backend_preview != 'true' || needs.resolve-backend-preview.result == 'success')
     # Keyed by PR and SHA, so only a duplicate run for the same SHA cancels
     # this one. Runs for different SHAs never cancel each other: a run can
     # resolve its head as current, stall, and reach this job after a newer
@@ -690,8 +755,10 @@ jobs:
           sparse-checkout: |
             .github/actions/workspace-e2e-allocation
             .github/actions/workspace-e2e-flows
+            .github/actions/workspace-backend-preview
             .github/actions/setup-bun
             .github/actions/restore-playwright-webkit
+            packages/workspace-cloud-run/src
 
       - name: Select preferred date shard
         id: preferred-shard
@@ -806,11 +873,9 @@ jobs:
         if: needs.resolve-target.outputs.install_webkit == 'true' || steps.flow-support.outputs.supported != 'true'
         uses: ./.workspace-e2e-coordinator/.github/actions/restore-playwright-webkit
 
-      - name: Install repository dependencies
-        run: bun install --frozen-lockfile
-
       - name: Resolve Neon branch backing the preview
         id: preview-database
+        working-directory: .workspace-e2e-coordinator
         env:
           HEAD_REF: ${{ needs.resolve-target.outputs.head_ref }}
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
@@ -856,7 +921,7 @@ jobs:
             echo "The integration-created Neon preview branch was not found" >&2
             exit 1
           fi
-          echo "Matched immutable preview to Neon branch $branch_name ($branch_id)"
+          echo "Matched the immutable preview to its integration-created Neon branch"
 
           direct_url="$("$neonctl" connection-string "$branch_id" \
             --project-id "$NEON_PROJECT_ID" \
@@ -878,6 +943,27 @@ jobs:
             echo "direct_url=$direct_url"
             echo "pooled_url=$pooled_url"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Verify the backend generation under the preview lease
+        if: needs.resolve-target.outputs.backend_preview == 'true'
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          TARGET_REF: ${{ needs.resolve-target.outputs.head_ref }}
+          VERCEL_DEPLOYMENT_ID: ${{ needs.resolve-backend-preview.outputs.deployment_id }}
+          BACKEND_PREVIEW_REVISION: ${{ needs.resolve-backend-preview.outputs.revision }}
+          BACKEND_PREVIEW_DATABASE_URL: ${{ steps.preview-database.outputs.direct_url }}
+          APPROVED_NEON_BRANCH_ID: ${{ vars.WORKSPACE_BACKEND_PREVIEW_NEON_BRANCH_ID }}
+          RESOLVED_NEON_BRANCH_ID: ${{ steps.preview-database.outputs.branch_id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$APPROVED_NEON_BRANCH_ID" || "$APPROVED_NEON_BRANCH_ID" != "$RESOLVED_NEON_BRANCH_ID" ]]; then
+            echo 'The pilot Neon branch changed before E2E' >&2
+            exit 1
+          fi
+          node .workspace-e2e-coordinator/.github/actions/workspace-backend-preview/e2e-gate.mjs verify
+
+      - name: Install repository dependencies
+        run: bun install --frozen-lockfile
 
       - name: Migrate preview database
         working-directory: apps/deskohub-workspace
@@ -940,6 +1026,7 @@ jobs:
           TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           WORKSPACE_E2E_BETTER_AUTH_SECRETS: ${{ secrets.WORKSPACE_E2E_BETTER_AUTH_SECRETS }}
+          WORKSPACE_E2E_BACKEND_PREVIEW_REVISION: ${{ needs.resolve-backend-preview.outputs.revision }}
           WORKSPACE_E2E_CRON_SECRET: ${{ secrets.WORKSPACE_E2E_CRON_SECRET }}
           WORKSPACE_E2E_FLOWS: ${{ needs.resolve-target.outputs.flows }}
           # Set only for a validated nightly target that asked for them.
@@ -1117,7 +1204,7 @@ jobs:
           done
 
   publish-final-status:
-    needs: [resolve-target, fill-bun-package-cache, test-e2e]
+    needs: [resolve-target, fill-bun-package-cache, resolve-backend-preview, test-e2e]
     if: always() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true' && needs.resolve-target.outputs.nightly != 'true'
     concurrency:
       group: workspace-e2e-status-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
@@ -1143,7 +1230,7 @@ jobs:
         if: always()
         env:
           ALLOCATION_SHARD: ${{ needs.test-e2e.outputs.shard }}
-          ALLOCATION_DESCRIPTION: ${{ needs.fill-bun-package-cache.result != 'success' && 'Workspace E2E Bun package cache fill failed' || needs.test-e2e.outputs.shard == '' && 'Workspace E2E shard allocation failed' || needs.test-e2e.outputs.release_outcome == 'success' && 'Workspace E2E shard released' || 'Workspace E2E shard release failed' }}
+          ALLOCATION_DESCRIPTION: ${{ needs.resolve-target.outputs.backend_preview == 'true' && needs.resolve-backend-preview.result != 'success' && 'Workspace backend preview generation was unavailable' || needs.fill-bun-package-cache.result != 'success' && 'Workspace E2E Bun package cache fill failed' || needs.test-e2e.outputs.shard == '' && 'Workspace E2E shard allocation failed' || needs.test-e2e.outputs.release_outcome == 'success' && 'Workspace E2E shard released' || 'Workspace E2E shard release failed' }}
           FLOWS: ${{ needs.resolve-target.outputs.flows }}
           FLOWS_PUBLISH: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/publish-status.mjs
           GH_TOKEN: ${{ github.token }}
