@@ -3,7 +3,6 @@ import { type Browser, chromium } from "@playwright/test";
 import { Effect } from "effect";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import { runBrowserStep } from "../case-runner.browser.test-utils";
-import type { HostedProviderSessionRow } from "../integrations/database";
 import { workspaceE2ETimeouts } from "../timeouts";
 import {
   leaveNexiPageForMockFallback,
@@ -100,7 +99,7 @@ const retireHostedDocument = (
               denial === "unmatched session"
                 ? `${hostedUrl}-unmatched`
                 : hostedUrl,
-          } as HostedProviderSessionRow,
+          },
           session,
           statusPageUrl,
           timeouts: workspaceE2ETimeouts,

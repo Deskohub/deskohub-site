@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import type {
   WorkspaceCoworkCurrentTier,
@@ -48,6 +48,32 @@ import {
 import { assert, log } from "../runtime";
 import type { CheckoutData, CheckoutFlow } from "../types";
 import { toReservationStep } from "./reservation-form-preparation";
+
+const decodeAvailabilityDates = Schema.decodeUnknownOption(
+  Schema.Struct({ unavailableDates: Schema.Array(Schema.Unknown) })
+);
+const decodeOfficeAvailability = Schema.decodeUnknownOption(
+  Schema.Struct({ officeUnavailable: Schema.Boolean })
+);
+const decodeMeetingRoomAvailability = Schema.decodeUnknownOption(
+  Schema.Struct({ meetingRoomUnavailable: Schema.Boolean })
+);
+const isString = Schema.is(Schema.String);
+
+const requireAvailabilityField = <A>(
+  decoded: Option.Option<A>,
+  field: string
+) =>
+  Option.getOrThrowWith(
+    decoded,
+    () => new Error(`availability response missing ${field}`)
+  );
+
+const parseUnavailableDates = (availability: unknown) =>
+  requireAvailabilityField(
+    decodeAvailabilityDates(availability),
+    "unavailableDates"
+  ).unavailableDates.filter(isString);
 
 export type MeetingRoomCheckoutSlot = {
   readonly date: string;
@@ -400,26 +426,14 @@ export const loadAvailableCoworkDates = (
       )
     );
 
-    const availability = (yield* response.json.pipe(
+    const availability = yield* response.json.pipe(
       Effect.mapError((cause) =>
         toWorkspaceE2EError("read workspace availability response", cause)
       )
-    )) as {
-      readonly unavailableDates?: unknown;
-    };
+    );
     const unavailable = yield* tryWorkspaceE2ESync(
       "parse workspace availability dates",
-      () => {
-        assert(
-          Array.isArray(availability.unavailableDates),
-          "availability response missing unavailableDates"
-        );
-        return new Set(
-          availability.unavailableDates.filter(
-            (date): date is string => typeof date === "string"
-          )
-        );
-      }
+      () => new Set(parseUnavailableDates(availability))
     );
 
     const allocatedDates: string[] = [];
@@ -575,7 +589,7 @@ export const selectAvailableMeetingRoomSlots = (
           slots.every((slot) => slot !== undefined),
           "meeting-room checkout slot selection incomplete"
         );
-        return slots as readonly MeetingRoomCheckoutSlot[];
+        return slots;
       }
     );
   });
@@ -709,29 +723,20 @@ export const loadOfficeAvailability = (
           })
       )
     );
-    const availability = (yield* response.json.pipe(
+    const availability = yield* response.json.pipe(
       Effect.mapError((cause) =>
         toWorkspaceE2EError("read office availability response", cause)
       )
-    )) as {
-      readonly officeUnavailable?: unknown;
-      readonly unavailableDates?: unknown;
-    };
+    );
 
     return yield* tryWorkspaceE2ESync("parse office availability", () => {
-      assert(
-        typeof availability.officeUnavailable === "boolean",
-        "availability response missing officeUnavailable"
-      );
-      assert(
-        Array.isArray(availability.unavailableDates),
-        "availability response missing unavailableDates"
+      const { officeUnavailable } = requireAvailabilityField(
+        decodeOfficeAvailability(availability),
+        "officeUnavailable"
       );
       return {
-        officeUnavailable: availability.officeUnavailable,
-        unavailableDates: availability.unavailableDates.filter(
-          (date): date is string => typeof date === "string"
-        ),
+        officeUnavailable,
+        unavailableDates: parseUnavailableDates(availability),
       };
     });
   });
@@ -794,29 +799,20 @@ export const loadMeetingRoomAvailability = (
           )
       )
     );
-    const availability = (yield* response.json.pipe(
+    const availability = yield* response.json.pipe(
       Effect.mapError((cause) =>
         toWorkspaceE2EError("read meeting-room availability response", cause)
       )
-    )) as {
-      readonly meetingRoomUnavailable?: unknown;
-      readonly unavailableDates?: unknown;
-    };
+    );
 
     return yield* tryWorkspaceE2ESync("parse meeting-room availability", () => {
-      assert(
-        typeof availability.meetingRoomUnavailable === "boolean",
-        "availability response missing meetingRoomUnavailable"
-      );
-      assert(
-        Array.isArray(availability.unavailableDates),
-        "availability response missing unavailableDates"
+      const { meetingRoomUnavailable } = requireAvailabilityField(
+        decodeMeetingRoomAvailability(availability),
+        "meetingRoomUnavailable"
       );
       return {
-        meetingRoomUnavailable: availability.meetingRoomUnavailable,
-        unavailableDates: availability.unavailableDates.filter(
-          (date): date is string => typeof date === "string"
-        ),
+        meetingRoomUnavailable,
+        unavailableDates: parseUnavailableDates(availability),
       };
     });
   });

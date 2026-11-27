@@ -1,3 +1,5 @@
+import { Predicate } from "effect";
+
 // Nexi hosted-field API calls (card data, state, validate-and-pay) that the
 // hosted payment page makes on its own origin. This module stays free of
 // runner imports so the Playwright runtime can classify responses too.
@@ -157,10 +159,10 @@ export const formatNexiBuildFailureLine = ({
 const nexiBuildFailureLinePattern = new RegExp(
   `^${nexiBuildFailureLinePrefix} (\\d{3}) ([a-z-]+) ([A-Z0-9_,]+)$`
 );
-const nexiBuildEndpointNames = new Set<string>([
+const nexiBuildEndpointNames: readonly NexiBuildEndpoint[] = [
   ...nexiBuildEndpoints.map(([, endpoint]) => endpoint),
   "other",
-]);
+];
 
 export const parseNexiBuildFailures = (
   networkLog: string
@@ -168,7 +170,8 @@ export const parseNexiBuildFailures = (
   networkLog.split("\n").flatMap((line) => {
     const match = line.trim().match(nexiBuildFailureLinePattern);
     if (!match?.[1] || !match[2] || !match[3]) return [];
-    if (!nexiBuildEndpointNames.has(match[2])) return [];
+    const endpoint = nexiBuildEndpointNames.find((name) => name === match[2]);
+    if (endpoint === undefined) return [];
     const codes = match[3]
       .split(",")
       .filter(
@@ -179,7 +182,7 @@ export const parseNexiBuildFailures = (
       ? [
           {
             codes,
-            endpoint: match[2] as NexiBuildEndpoint,
+            endpoint,
             status: Number(match[1]),
           },
         ]
@@ -210,6 +213,4 @@ const codeValue = (value: unknown, pattern: RegExp): string[] =>
   typeof value === "string" && pattern.test(value) ? [value] : [];
 
 const asRecord = (value: unknown) =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  Predicate.isObject(value) ? value : undefined;

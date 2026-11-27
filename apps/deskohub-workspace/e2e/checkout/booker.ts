@@ -53,12 +53,12 @@ export const workspaceE2ECheckoutBookerCaseIds: readonly WorkspaceE2ECaseId[] =
   workspaceE2ECaseIds.filter(
     (caseId) =>
       !isWorkspaceE2EReferralCaseId(caseId) &&
-      !(signedOutCaseIds as readonly string[]).includes(caseId) &&
-      !(ownIdentityCaseIds as readonly string[]).includes(caseId)
+      !signedOutCaseIds.some((signedOut) => signedOut === caseId) &&
+      !ownIdentityCaseIds.some((ownIdentity) => ownIdentity === caseId)
   );
 
 const isCheckoutBookerCaseId = (caseId: string) =>
-  (workspaceE2ECheckoutBookerCaseIds as readonly string[]).includes(caseId);
+  workspaceE2ECheckoutBookerCaseIds.some((id) => id === caseId);
 
 /**
  * The booker's closed recipient label. Case ids are too long for an email
@@ -83,11 +83,11 @@ const accountBookingFlows = new Map(
 );
 
 /** Signs the planned case in as its own seeded booker before it runs. */
-export const bindWorkspaceE2ECheckoutBooker: WorkspaceE2ECaseBinder = async ({
+export const bindWorkspaceE2ECheckoutBooker = async ({
   environment,
   runId,
   testCase,
-}) => {
+}: Omit<Parameters<WorkspaceE2ECaseBinder>[0], "browser">) => {
   if (!isCheckoutBookerCaseId(testCase.id)) return testCase;
   const config = getConfig(environment);
   const datasourceConfig = getDatasourceConfig(environment);

@@ -24,7 +24,40 @@ import type {
   CheckoutRow,
   WorkspaceE2ECaseContext,
 } from "../types";
-import { withWorkspaceE2ELocalReservationFixture } from "./local-reservation-fixture";
+import {
+  type WorkspaceE2ELocalReservationFixture,
+  withWorkspaceE2ELocalReservationFixture,
+} from "./local-reservation-fixture";
+
+type ReservationStatusIsolationInput = {
+  readonly config: WorkspaceE2EConfig;
+  readonly customerId: DotyposCustomerId;
+  readonly data: Pick<CheckoutData, "locale">;
+  readonly orderId: WorkspaceReservationId;
+} & Pick<WorkspaceE2ECaseContext, "openSeparateSession" | "openSession">;
+
+type PaidSupportReservationRow = Pick<
+  CheckoutRow,
+  | "reservation_id"
+  | "dotypos_customer_id"
+  | "payment_state"
+  | "fulfillment_state"
+>;
+
+export type ReservationStatusIsolationDatabase<R> = {
+  readonly readRow: (
+    orderId: WorkspaceReservationId
+  ) => Effect.Effect<
+    PaidSupportReservationRow | undefined,
+    WorkspaceE2EError,
+    R
+  >;
+  readonly withLocalReservation: (
+    use: (
+      fixture: WorkspaceE2ELocalReservationFixture
+    ) => Effect.Effect<void, WorkspaceE2EError>
+  ) => Effect.Effect<void, WorkspaceE2EError, R>;
+};
 
 const makeReservationStatusUrl = (
   config: WorkspaceE2EConfig,
@@ -135,7 +168,7 @@ const assertPaidSupportReservationRow = ({
 }: {
   readonly customerId: DotyposCustomerId;
   readonly orderId: WorkspaceReservationId;
-  readonly row: CheckoutRow | undefined;
+  readonly row: PaidSupportReservationRow | undefined;
 }) =>
   tryWorkspaceE2ESync(
     "assert paid reservation status isolation database state",
@@ -348,22 +381,17 @@ const signedOutBrowser = (
  * the booking session reads its own order and nothing else, and a signed-out
  * visitor of the same status link is sent to sign in.
  */
-export const assertReservationStatusIsolation = ({
-  config,
-  customerId,
-  data,
-  openSeparateSession,
-  openSession,
-  orderId,
-}: {
-  readonly config: WorkspaceE2EConfig;
-  readonly customerId: DotyposCustomerId;
-  readonly data: Pick<CheckoutData, "locale">;
-  readonly orderId: WorkspaceReservationId;
-} & Pick<
-  WorkspaceE2ECaseContext,
-  "openSeparateSession" | "openSession"
->): Effect.Effect<void, WorkspaceE2EError, E2EDatabase> =>
+export const assertReservationStatusIsolation = <R>(
+  {
+    config,
+    customerId,
+    data,
+    openSeparateSession,
+    openSession,
+    orderId,
+  }: ReservationStatusIsolationInput,
+  { readRow, withLocalReservation }: ReservationStatusIsolationDatabase<R>
+): Effect.Effect<void, WorkspaceE2EError, R> =>
   Effect.gen(function* () {
     addRedaction(customerId, true);
     addRedaction(orderId, true);
@@ -384,10 +412,10 @@ export const assertReservationStatusIsolation = ({
       timeoutMs: config.timeouts.browserNavigation,
     });
 
-    const row = yield* readCheckoutRow(orderId);
+    const row = yield* readRow(orderId);
     yield* assertPaidSupportReservationRow({ customerId, orderId, row });
 
-    yield* withWorkspaceE2ELocalReservationFixture((localFixture) => {
+    yield* withLocalReservation((localFixture) => {
       addRedaction(localFixture.customerId, true);
       addRedaction(localFixture.reservationId, true);
       const otherStatusUrl = makeReservationStatusUrl(
@@ -455,30 +483,13 @@ export const assertReservationStatusIsolation = ({
     log("Reservation status isolation validated");
   });
 
-export const reservationStatusIsolationStep = ({
-  config,
-  customerId,
-  data,
-  openSeparateSession,
-  openSession,
-  orderId,
-}: {
-  readonly config: WorkspaceE2EConfig;
-  readonly customerId: DotyposCustomerId;
-  readonly data: Pick<CheckoutData, "locale">;
-  readonly orderId: WorkspaceReservationId;
-} & Pick<
-  WorkspaceE2ECaseContext,
-  "openSeparateSession" | "openSession"
->): WorkspaceE2EStep<void, E2EDatabase> => ({
-  execute: assertReservationStatusIsolation({
-    config,
-    customerId,
-    data,
-    openSeparateSession,
-    openSession,
-    orderId,
+export const reservationStatusIsolationStep = (
+  input: ReservationStatusIsolationInput
+): WorkspaceE2EStep<void, E2EDatabase> => ({
+  execute: assertReservationStatusIsolation<E2EDatabase>(input, {
+    readRow: readCheckoutRow,
+    withLocalReservation: withWorkspaceE2ELocalReservationFixture,
   }),
   id: "assert-reservation-status-isolation",
-  timeoutMs: config.timeouts.datasource,
+  timeoutMs: input.config.timeouts.datasource,
 });

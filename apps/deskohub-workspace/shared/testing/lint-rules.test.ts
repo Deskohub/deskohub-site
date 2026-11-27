@@ -1181,6 +1181,11 @@ const productionProbes = [
 const workspaceProductionProbes = [
   "apps/deskohub-workspace/e2e/cases/probe.ts",
   "apps/deskohub-workspace/e2e/cases/probe.browser-acceptance.test.ts",
+  "apps/deskohub-workspace/e2e/checkout/probe.ts",
+  "apps/deskohub-workspace/e2e/checkout/probe.browser-acceptance.test.ts",
+  "apps/deskohub-workspace/e2e/playwright-checkout/probe.ts",
+  "apps/deskohub-workspace/e2e/playwright-checkout/probe.pw.ts",
+  "apps/deskohub-workspace/e2e/playwright-checkout/probe.test.ts",
   "apps/deskohub-workspace/e2e/referrals/probe.ts",
   "apps/deskohub-workspace/e2e/referrals/probe.test.ts",
   "apps/deskohub-workspace/app/api/probe/route.ts",
@@ -1293,6 +1298,8 @@ const workspaceExemptProbes = [
 ];
 const workspaceE2eAllowedProbes = [
   "apps/deskohub-workspace/e2e/cases/allowed.test.ts",
+  "apps/deskohub-workspace/e2e/checkout/allowed.browser-acceptance.test.ts",
+  "apps/deskohub-workspace/e2e/playwright-checkout/allowed.pw.ts",
   "apps/deskohub-workspace/e2e/referrals/allowed.test.ts",
 ];
 

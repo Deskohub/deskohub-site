@@ -6,15 +6,19 @@ import { Effect } from "effect";
 import { workspaceReservations } from "@/db/schema";
 import { customerAccounts } from "@/db/schema/customer-accounts";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { requireValue } from "@/shared/testing/require-value.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { E2EDatabase } from "../integrations/database.service";
 import { withWorkspaceE2ELocalReservationFixture } from "./local-reservation-fixture";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
 const readReservation = (id: WorkspaceReservationId) =>
-  testDatabase!.db
-    .select()
+  requireTestDatabase(testDatabase)
+    .db.select()
     .from(workspaceReservations)
     .where(eq(workspaceReservations.id, id));
 
@@ -22,16 +26,17 @@ describe.skipIf(!testDatabase)(
   "Local reservation fixture on disposable Postgres",
   () => {
     test("seeds an expired hold authored by a new account and deletes it", async () => {
+      const { db } = requireTestDatabase(testDatabase);
       const { fixture, row } = await withWorkspaceE2ELocalReservationFixture(
         (fixture) =>
           readReservation(fixture.reservationId).pipe(
-            Effect.map(([row]) => ({ fixture, row }))
+            Effect.map(([row]) => ({
+              fixture,
+              row: requireValue(row, "seeded reservation"),
+            }))
           )
       ).pipe(
-        Effect.provideService(
-          E2EDatabase,
-          E2EDatabase.of({ db: testDatabase!.db })
-        ),
+        Effect.provideService(E2EDatabase, E2EDatabase.of({ db })),
         Effect.runPromise
       );
 
@@ -53,15 +58,15 @@ describe.skipIf(!testDatabase)(
         },
         locale: "en-US",
       });
-      expect(String(row?.reservationHoldExpiredAt)).toBe(
-        String(row?.reservationCreatedAt)
+      expect(String(row.reservationHoldExpiredAt)).toBe(
+        String(row.reservationCreatedAt)
       );
 
-      expect(row?.authorAccountId).toStartWith("e2e-reservation-author-");
-      const [author] = await testDatabase!.db
+      expect(row.authorAccountId).toStartWith("e2e-reservation-author-");
+      const [author] = await db
         .select({ dotyposCustomerId: customerAccounts.dotyposCustomerId })
         .from(customerAccounts)
-        .where(eq(customerAccounts.id, row!.authorAccountId))
+        .where(eq(customerAccounts.id, row.authorAccountId))
         .pipe(Effect.runPromise);
       expect(author).toEqual({ dotyposCustomerId: null });
 
