@@ -1,3 +1,13 @@
+import {
+  type CustomerAgentClientId,
+  customerAgentClientIdSchema,
+} from "@deskohub/workspace-domain/features/account/customer-agent-client";
+
+export {
+  type CustomerAgentClientId,
+  customerAgentClientIdSchema,
+} from "@deskohub/workspace-domain/features/account/customer-agent-client";
+
 import type { User as BetterAuthUser } from "better-auth";
 import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { type AgentScope, isAgentScope } from "../../agent-scopes";
@@ -12,16 +22,6 @@ import {
   CustomerAuthentication,
   decodeCustomerAccountSession,
 } from "../customer-authentication.service";
-
-export const customerAgentClientIdSchema = Schema.NonEmptyString.pipe(
-  Schema.brand("CustomerAgentClientId")
-).annotate({
-  identifier: "CustomerAgentClientId",
-  description:
-    "OAuth client ID of a customer's AI agent: its Client ID Metadata Document URL.",
-});
-
-export type CustomerAgentClientId = typeof customerAgentClientIdSchema.Type;
 
 /**
  * What a verified agent access token lets the agent do: act for one customer

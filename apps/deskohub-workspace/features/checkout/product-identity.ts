@@ -1,34 +1,25 @@
+import type { workspaceProductIdentitySchema } from "@deskohub/workspace-domain/features/checkout/product-identity";
+
+export { workspaceProductIdentitySchema } from "@deskohub/workspace-domain/features/checkout/product-identity";
+
 import { Match, Schema } from "effect";
 import {
   entryPackProductKeySchema,
-  entryPackProductSchema,
   getPassProductKey,
   unlimitedPassProductKeySchema,
-  unlimitedPassProductSchema,
 } from "@/features/passes/pass-offer";
 import {
   getWorkspaceCoworkProductKey,
-  workspaceCoworkProductIdentitySchema,
   workspaceCoworkProductKeySchema,
 } from "@/features/reservation/cowork-reservation-product";
 import {
   getWorkspaceMeetingRoomProductKey,
-  workspaceMeetingRoomProductIdentitySchema,
   workspaceMeetingRoomProductKeySchema,
 } from "@/features/reservation/meeting-room-reservation";
 import {
   getWorkspaceOfficeProductKey,
-  workspaceOfficeProductIdentitySchema,
   workspaceOfficeProductKeySchema,
 } from "@/features/reservation/office-reservation";
-
-export const workspaceProductIdentitySchema = Schema.Union([
-  workspaceCoworkProductIdentitySchema,
-  workspaceMeetingRoomProductIdentitySchema,
-  workspaceOfficeProductIdentitySchema,
-  entryPackProductSchema,
-  unlimitedPassProductSchema,
-]);
 
 export type WorkspaceProductIdentity =
   typeof workspaceProductIdentitySchema.Type;

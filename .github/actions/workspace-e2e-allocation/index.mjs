@@ -17160,7 +17160,7 @@ var fetch = /* @__PURE__ */ make26((request, url, signal, fiber) => {
   return send(undefined);
 });
 var layer3 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
-// db/postgres-connection-url.ts
+// ../../packages/workspace-backend/src/db/postgres-connection-url.ts
 var normalizePostgresConnectionUrl = (connectionString) => {
   const url = new URL(connectionString);
   const sslMode = url.searchParams.get("sslmode");
@@ -17169,7 +17169,6 @@ var normalizePostgresConnectionUrl = (connectionString) => {
   }
   return url.toString();
 };
-
 // e2e/coordination/allocation.ts
 var allocationPoolName = "dotypos-sandbox";
 var supportedAllocationConcurrency = 3;

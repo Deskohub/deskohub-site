@@ -1,3 +1,13 @@
+import {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@deskohub/workspace-domain/features/reservation/persistence-contracts";
+
+export {
+  type WorkspaceReservationId,
+  workspaceReservationIdSchema,
+} from "@deskohub/workspace-domain/features/reservation/persistence-contracts";
+
 import { Match, type Option, Schema } from "effect";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import type { NormalizedCoworkReservationOrder } from "@/features/reservation/cowork-reservation";
@@ -43,17 +53,6 @@ export const getStoredWorkspaceReservationDetails = (
       office: getStoredOfficeReservationDetails,
     })
   );
-
-export const workspaceReservationIdSchema = Schema.NonEmptyString.pipe(
-  Schema.brand("WorkspaceReservationId")
-).annotate({
-  identifier: "WorkspaceReservationId",
-  description: "Opaque identifier for a persisted workspace reservation.",
-});
-
-export type WorkspaceReservationId = Schema.Schema.Type<
-  typeof workspaceReservationIdSchema
->;
 
 /**
  * The ID of the order a standalone reservation is mirrored into, read from the

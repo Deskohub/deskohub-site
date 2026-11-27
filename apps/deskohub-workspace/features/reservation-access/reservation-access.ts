@@ -1,25 +1,15 @@
 import type { AlgoPin } from "@deskohub/igloohome";
-import { Schema } from "effect";
+import type {
+  ReservationAccessGrantId,
+  ReservationAccessGrantState,
+} from "@deskohub/workspace-domain/features/reservation-access/reservation-access";
 
-export const reservationAccessGrantIdSchema = Schema.NonEmptyString.pipe(
-  Schema.brand("ReservationAccessGrantId")
-).annotate({
-  identifier: "ReservationAccessGrantId",
-  description: "Opaque identifier for a reservation access issuance ledger.",
-});
-export type ReservationAccessGrantId =
-  typeof reservationAccessGrantIdSchema.Type;
-
-export const reservationAccessGrantStates = [
-  "pending",
-  "provisioning",
-  "issued",
-  "expired",
-  "uncertain",
-  "failed",
-] as const;
-export type ReservationAccessGrantState =
-  (typeof reservationAccessGrantStates)[number];
+export {
+  type ReservationAccessGrantId,
+  type ReservationAccessGrantState,
+  reservationAccessGrantIdSchema,
+  reservationAccessGrantStates,
+} from "@deskohub/workspace-domain/features/reservation-access/reservation-access";
 
 export const reservationAccessProvisioningStaleAfterMilliseconds = 60_000;
 

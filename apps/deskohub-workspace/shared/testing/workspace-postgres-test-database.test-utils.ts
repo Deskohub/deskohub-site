@@ -1,4 +1,4 @@
-import { fileURLToPath } from "node:url";
+import { workspaceMigrationsFolder } from "@deskohub/workspace-backend/db/migrations-folder";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import {
@@ -71,9 +71,7 @@ const connectWorkspacePostgres = async (
 
   try {
     await migrate(drizzle({ client: pool }), {
-      migrationsFolder: fileURLToPath(
-        new URL("../../db/migrations", import.meta.url)
-      ),
+      migrationsFolder: workspaceMigrationsFolder,
     });
   } catch (cause) {
     return failClosed("migration failed", cause);

@@ -12,7 +12,9 @@ import * as FileSystem from "effect/FileSystem";
 import { FetchHttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import { runEmailPreferencesProbe } from "../sandbox-probe/email-preferences-client";
 import {
   runSandboxRpcProbe,
   setupFailureVerdict,
@@ -31,6 +33,7 @@ const ProbeArguments = Schema.Struct({
     Schema.isPattern(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/)
   ),
   "expect-version": Schema.optionalKey(Schema.String),
+  "email-preferences": Schema.optionalKey(Schema.Boolean),
 });
 
 class ProbeInputEmpty extends Schema.TaggedError<ProbeInputEmpty>()(
@@ -60,6 +63,7 @@ const probeTarget = Effect.gen(function* () {
         "marker-file": { type: "string" },
         traceparent: { type: "string" },
         "expect-version": { type: "string" },
+        "email-preferences": { type: "boolean" },
       },
     })
   );
@@ -70,6 +74,7 @@ const probeTarget = Effect.gen(function* () {
     marker: yield* readValueFile("--marker-file", options["marker-file"]),
     traceparent: options.traceparent,
     expectVersion: options["expect-version"],
+    emailPreferences: options["email-preferences"] ?? false,
   };
 });
 
@@ -87,7 +92,28 @@ const probe = probeTarget.pipe(
           )
         )
       ),
-    onSuccess: runSandboxRpcProbe,
+    onSuccess: (target) =>
+      runSandboxRpcProbe(target).pipe(
+        Effect.flatMap((verdict) =>
+          target.emailPreferences && verdict.ok
+            ? runEmailPreferencesProbe(target).pipe(
+                Effect.map(
+                  Result.match({
+                    onSuccess: (emailPreferences) => ({
+                      ...verdict,
+                      emailPreferences,
+                    }),
+                    onFailure: (failure) => ({
+                      ...verdict,
+                      ok: false,
+                      failures: [...verdict.failures, failure],
+                    }),
+                  })
+                )
+              )
+            : Effect.succeed(verdict)
+        )
+      ),
   }),
   Effect.tap((verdict) => Console.log(JSON.stringify(verdict))),
   Effect.flatMap((verdict) =>

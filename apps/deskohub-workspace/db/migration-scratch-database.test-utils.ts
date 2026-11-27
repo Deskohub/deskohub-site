@@ -1,14 +1,11 @@
 import { mkdtemp, readdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { workspaceMigrationsFolder } from "@deskohub/workspace-backend/db/migrations-folder";
 import { Pool } from "pg";
 import { createScratchPostgresDatabase } from "@/shared/testing/postgres-scratch-database.test-utils";
 
-/** The Workspace Drizzle migrations. */
-export const workspaceMigrationsFolder = fileURLToPath(
-  new URL("./migrations", import.meta.url)
-);
+export { workspaceMigrationsFolder } from "@deskohub/workspace-backend/db/migrations-folder";
 
 /**
  * Links every migration that precedes `migration` into a scratch folder, so

@@ -1,5 +1,7 @@
-import { Schema } from "effect";
-import { workspaceProductMonitorOptions } from "@/features/checkout/product-catalog";
+import type { unlimitedPassSelectionSchema } from "@deskohub/workspace-domain/features/passes/unlimited-pass";
+
+export { unlimitedPassSelectionSchema } from "@deskohub/workspace-domain/features/passes/unlimited-pass";
+
 import { getLastConsumerWithdrawalDate } from "@/features/legal/early-performance";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
@@ -8,22 +10,6 @@ import { type Money, sameMoneyUnit } from "@/shared/money/money";
 import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
 import type { PassStatus } from "./pass";
 import { unlimitedPassDays } from "./pass-offer";
-
-const periodFields = { startDate: plainDateStringSchema };
-
-export const unlimitedPassSelectionSchema = Schema.Union([
-  Schema.Struct({
-    ...periodFields,
-    tier: Schema.Literal("open-space"),
-    coffee: Schema.Boolean,
-  }),
-  Schema.Struct({ ...periodFields, tier: Schema.Literal("reserved-desk") }),
-  Schema.Struct({
-    ...periodFields,
-    tier: Schema.Literal("reserved-desk-workstation"),
-    monitorOption: Schema.Literals(workspaceProductMonitorOptions),
-  }),
-]);
 
 export type UnlimitedPassSelection = typeof unlimitedPassSelectionSchema.Type;
 

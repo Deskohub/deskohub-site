@@ -511,6 +511,19 @@ const clientGraph = await runtimeImportGraph(
   { isReference: (sourceText) => hasDirective("use server", sourceText) }
 );
 const clientModules = new Set(clientGraph.modules);
+
+test("Workspace client bundles never load the backend package", () => {
+  expect(
+    clientGraph.modules.filter((path) =>
+      path.startsWith("../../packages/workspace-backend/")
+    )
+  ).toEqual([]);
+  expect(
+    clientGraph.packages.filter((specifier) =>
+      /^@deskohub\/workspace-backend(?:\/|$)/.test(specifier)
+    )
+  ).toEqual([]);
+});
 /** Workspace package modules the browser bundles, which `sources` lacks. */
 const clientPackageSources = new Map(
   await Promise.all(

@@ -1,46 +1,18 @@
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import { makePassChangeSchema } from "@deskohub/workspace-domain/features/passes/admin/pass-change";
+
+export {
+  passGrantSelectionSchema,
+  refundValueSchema,
+} from "@deskohub/workspace-domain/features/passes/admin/pass-change";
+
 import { Schema } from "effect";
-import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { orderIdSchema } from "@/features/order";
-import { plainDateStringSchema } from "@/shared/utils/temporal";
-import { entryPackProductSchema } from "../pass-offer";
-import { unlimitedPassSelectionSchema } from "../unlimited-pass";
+
+export const passChangeSchema = makePassChangeSchema(DotyposCustomerIdSchema);
+export type PassChange = typeof passChangeSchema.Type;
 
 export const passChangeRequestIdSchema = Schema.String.check(Schema.isUUID());
-
-export const refundValueSchema = Schema.Int.check(
-  Schema.isBetween({ minimum: 0, maximum: 2_147_483_647 })
-);
-
-export const passGrantSelectionSchema = Schema.Union([
-  entryPackProductSchema,
-  unlimitedPassSelectionSchema,
-]);
-
-export const passChangeSchema = Schema.TaggedUnion({
-  grant: {
-    holderAccountId: customerAccountIdSchema,
-    selection: passGrantSelectionSchema,
-  },
-  validity: {
-    expectedValidUntil: plainDateStringSchema,
-    lastDay: plainDateStringSchema,
-    refundValue: refundValueSchema,
-  },
-  cancel: {
-    expectedValidUntil: plainDateStringSchema,
-    refundValue: refundValueSchema,
-    sendCancellationEmail: Schema.Boolean,
-  },
-  reassign: {
-    expectedHolderAccountId: customerAccountIdSchema,
-    expectedHolderVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-    holderAccountId: customerAccountIdSchema,
-    holderCustomerId: Schema.optionalKey(DotyposCustomerIdSchema),
-  },
-});
-
-export type PassChange = Schema.Schema.Type<typeof passChangeSchema>;
 
 const passChangeRequestSchema = Schema.Struct({
   requestId: passChangeRequestIdSchema,

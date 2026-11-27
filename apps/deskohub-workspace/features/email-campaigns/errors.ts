@@ -1,5 +1,4 @@
 import { Data, type Schema } from "effect";
-import type { BetterAuthSecretsMessage } from "@/features/account/backend/auth/auth-secrets";
 import type { Locale } from "@/features/i18n";
 import type { AudienceFilterUses } from "./audience-filter-usage";
 import type { InvalidCampaignBody } from "./body/invalid-campaign-body";
@@ -183,11 +182,7 @@ export class CampaignConfirmationRejected extends Data.TaggedError(
  * `BETTER_AUTH_SECRETS` holds no valid signing secret to key the
  * confirmation-code hashes and unsubscribe tokens with.
  */
-export class CampaignSigningKeyInvalid extends Data.TaggedError(
-  "CampaignSigningKeyInvalid"
-)<{
-  readonly message: BetterAuthSecretsMessage;
-}> {}
+export { CampaignSigningKeyInvalid } from "@deskohub/workspace-domain/features/email-campaigns/campaign-token-errors";
 
 /**
  * Recipients couldn't be resolved because a source was unavailable. The
@@ -300,6 +295,3 @@ export class CampaignEmailNotConfigured extends Data.TaggedError(
 }> {}
 
 /** An unsubscribe link token is malformed, forged, or names no recipient. */
-export class CampaignUnsubscribeTokenInvalid extends Data.TaggedError(
-  "CampaignUnsubscribeTokenInvalid"
-) {}
