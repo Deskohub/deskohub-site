@@ -107,6 +107,7 @@ const e2eEnvironmentSchema = Schema.Struct({
   USER: optionalNonEmptyString,
   VERCEL_AUTOMATION_BYPASS_SECRET: optionalNonEmptyString,
   WORKSPACE_E2E_BETTER_AUTH_SECRETS: optionalNonEmptyString,
+  WORKSPACE_E2E_BACKEND_PREVIEW_REVISION: optionalNonEmptyString,
   WORKSPACE_E2E_CRON_SECRET: optionalNonEmptyString,
   WORKSPACE_E2E_VERCEL_TOKEN: optionalNonEmptyString,
   WORKSPACE_E2E_VERCEL_PROJECT: optionalNonEmptyString,
@@ -172,6 +173,8 @@ export const makeE2EEnvironment = (
         runtimeEnvironment.VERCEL_AUTOMATION_BYPASS_SECRET,
       WORKSPACE_E2E_BETTER_AUTH_SECRETS:
         runtimeEnvironment.WORKSPACE_E2E_BETTER_AUTH_SECRETS,
+      WORKSPACE_E2E_BACKEND_PREVIEW_REVISION:
+        runtimeEnvironment.WORKSPACE_E2E_BACKEND_PREVIEW_REVISION,
       WORKSPACE_E2E_CRON_SECRET: runtimeEnvironment.WORKSPACE_E2E_CRON_SECRET,
       WORKSPACE_E2E_VERCEL_TOKEN: runtimeEnvironment.WORKSPACE_E2E_VERCEL_TOKEN,
       WORKSPACE_E2E_VERCEL_PROJECT:

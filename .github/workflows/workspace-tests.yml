@@ -141,6 +141,9 @@ jobs:
       - name: Lint the Workspace API
         run: bun turbo lint --filter=deskohub-workspace-api
 
+      - name: Test the Workspace API preview generation guard
+        run: bun test apps/deskohub-workspace-api/src/routes.test.ts
+
       - name: Test backend preview workflow validation
         env:
           PYTHONDONTWRITEBYTECODE: "1"

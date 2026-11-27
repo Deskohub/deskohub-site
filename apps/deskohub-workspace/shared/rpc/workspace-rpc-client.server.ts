@@ -10,13 +10,19 @@ import {
   makeWorkspaceRpcClient,
 } from "@deskohub/workspace-rpc";
 import { getVercelOidcToken } from "@vercel/oidc";
-import { Config, Effect, Layer, Option, Schema } from "effect";
+import { Config, Effect, Layer, Option, type Redacted, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { cookieStoreFromHeader } from "posthog-node";
 import { env } from "@/env";
 import { resolveWorkspaceLocale } from "@/features/i18n/locale-resolution";
 import { shareAcrossRequests } from "@/shared/backend/share-across-requests";
 import { trustedClientAddressHeaders } from "@/shared/deployment/trusted-client-address";
+import {
+  PreviewBackendUnavailable,
+  previewBackendTarget,
+  type WorkspacePreviewBinding,
+  withPreviewBackendDeadline,
+} from "./workspace-backend-preview.server";
 
 const httpsOrigin = Schema.String.check(
   Schema.makeFilter(
@@ -49,33 +55,31 @@ const rpcConfig = Config.all({
 
 const unavailable = () => new BackendUnavailable({ reason: "authorization" });
 
-const workspaceRpcTransport = shareAcrossRequests(
-  Layer.unwrap(
-    Effect.gen(function* () {
-      const { audience, projectNumber, pool, provider, serviceAccount } =
-        yield* Effect.mapError(rpcConfig, unavailable);
-      const tokens = yield* GoogleIdToken;
-      const identity = {
-        serviceAccount,
-        audience,
-        workloadIdentityProvider: `//iam.googleapis.com/projects/${projectNumber}/locations/global/workloadIdentityPools/${pool}/providers/${provider}`,
-      };
-      return layerWorkspaceRpcProtocol({
-        url: audience,
-        authorization: tokens
-          .get({
-            ...identity,
-            getSubjectToken: () => getVercelOidcToken(),
-          })
-          .pipe(Effect.mapError(unavailable)),
-        invalidateAuthorization: (token) => tokens.evict(identity, token),
-      });
-    })
-  ).pipe(
-    Layer.provide(GoogleIdToken.Default),
-    Layer.provide(FetchHttpClient.layer)
-  )
+const googleIdTokens = shareAcrossRequests(
+  GoogleIdToken.Default.pipe(Layer.provide(FetchHttpClient.layer))
 );
+
+export const authenticatedWorkspaceBackend = Effect.gen(function* () {
+  const { audience, projectNumber, pool, provider, serviceAccount } =
+    yield* Effect.mapError(rpcConfig, unavailable);
+  const tokens = yield* GoogleIdToken;
+  const identity = {
+    serviceAccount,
+    audience,
+    workloadIdentityProvider: `//iam.googleapis.com/projects/${projectNumber}/locations/global/workloadIdentityPools/${pool}/providers/${provider}`,
+  };
+  return {
+    audience,
+    authorization: tokens
+      .get({
+        ...identity,
+        getSubjectToken: () => getVercelOidcToken(),
+      })
+      .pipe(Effect.mapError(unavailable)),
+    invalidateAuthorization: (token: Redacted.Redacted<string>) =>
+      tokens.evict(identity, token),
+  };
+}).pipe(Effect.provide(googleIdTokens));
 
 export const workspaceRpcCaller = (request: Request): AnonymousCaller => {
   const { headers } = request;
@@ -105,17 +109,38 @@ export const workspaceRpcCaller = (request: Request): AnonymousCaller => {
 /** Each inbound request gets its own client scope and caller headers. */
 export const withWorkspaceRpcClient = <A, E>(
   caller: AnonymousCaller,
+  preview: WorkspacePreviewBinding | undefined,
   use: (
     client: Effect.Success<ReturnType<typeof makeWorkspaceRpcClient>>
   ) => Effect.Effect<A, E>
-) =>
-  makeWorkspaceRpcClient().pipe(
-    Effect.flatMap(use),
-    Effect.scoped,
-    Effect.provide(
-      Layer.merge(workspaceRpcTransport, layerCallerContextClient(caller))
-    ),
+) => {
+  const call = Effect.gen(function* () {
+    const { audience, ...auth } = yield* authenticatedWorkspaceBackend;
+    const target = preview
+      ? yield* previewBackendTarget(audience, preview)
+      : { url: audience };
+    const transport = layerWorkspaceRpcProtocol({ ...target, ...auth }).pipe(
+      Layer.provide(FetchHttpClient.layer)
+    );
+    return yield* makeWorkspaceRpcClient().pipe(
+      Effect.flatMap(use),
+      Effect.scoped,
+      Effect.provide(Layer.merge(transport, layerCallerContextClient(caller)))
+    );
+  }).pipe(
     Effect.catchDefect(() =>
       Effect.fail(new BackendUnavailable({ reason: "protocol" }))
     )
   );
+  return preview
+    ? withPreviewBackendDeadline(
+        call.pipe(
+          Effect.mapError((error) =>
+            error instanceof BackendUnavailable
+              ? new PreviewBackendUnavailable()
+              : error
+          )
+        )
+      )
+    : call;
+};

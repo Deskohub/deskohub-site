@@ -28,6 +28,7 @@ mock.module("@vercel/oidc", () => ({
 }));
 
 const { GET, POST } = await import("./route");
+const { GET: probe } = await import("../../internal/backend-preview/route");
 
 let completeWithdrawal = Promise.resolve();
 let onWithdrawalStarted = () => {};
@@ -82,6 +83,7 @@ const originalFetch = globalThis.fetch;
 beforeAll(() => {
   Object.assign(process.env, {
     WORKSPACE_EMAIL_PREFERENCES_TRANSPORT: "rpc",
+    VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-preview-bypass",
     WORKSPACE_API_ORIGIN: apiOrigin,
     WORKSPACE_GCP_PROJECT_NUMBER: "123456789",
     WORKSPACE_WIF_POOL: "workspace-vercel",
@@ -115,6 +117,7 @@ beforeAll(() => {
 afterAll(async () => {
   globalThis.fetch = originalFetch;
   delete process.env.WORKSPACE_EMAIL_PREFERENCES_TRANSPORT;
+  delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
   delete process.env.WORKSPACE_API_ORIGIN;
   delete process.env.WORKSPACE_GCP_PROJECT_NUMBER;
   delete process.env.WORKSPACE_WIF_POOL;
@@ -230,3 +233,19 @@ test.each([403, 200])(
     }
   }
 );
+
+test("hides the backend preview probe on a non-preview deployment", async () => {
+  requests = [];
+  const response = await probe(
+    new Request(
+      "https://workspace.deskohub.test/api/internal/backend-preview",
+      {
+        headers: { "x-vercel-protection-bypass": "synthetic-preview-bypass" },
+      }
+    )
+  );
+
+  expect(response.status).toBe(404);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(requests).toHaveLength(0);
+});

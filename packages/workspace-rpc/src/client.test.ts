@@ -52,12 +52,13 @@ const handlers = EmailPreferencesRpcs.of({
 });
 
 const makeTestServer = (
-  testHandlers = EmailPreferencesRpcs.toLayer(handlers)
+  testHandlers = EmailPreferencesRpcs.toLayer(handlers),
+  path: `/${string}` = "/rpc"
 ) =>
   HttpRouter.toWebHandler(
     RpcServer.layerHttp({
       group: EmailPreferencesRpcs,
-      path: "/rpc",
+      path,
       protocol: "http",
       disableFatalDefects: true,
     }).pipe(
@@ -82,7 +83,11 @@ const runClient = <A, E>(
   invalidateAuthorization: (
     token: Redacted.Redacted<string>
   ) => Effect.Effect<void> = () => Effect.void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  transportOptions?: Pick<
+    Parameters<typeof layerWorkspaceRpcProtocol>[0],
+    "path" | "requestHeaders" | "expectedResponseHeaders"
+  >
 ) => {
   const fetchStub = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) =>
@@ -93,6 +98,7 @@ const runClient = <A, E>(
     url: "https://workspace.invalid/",
     authorization,
     invalidateAuthorization,
+    ...transportOptions,
   }).pipe(Layer.provide(FetchHttpClient.layer));
   return Effect.runPromise(
     makeWorkspaceRpcClient().pipe(
@@ -108,8 +114,100 @@ const runClient = <A, E>(
 };
 
 const rpcContentType = "application/vnd.effect.rpc+schema-binary";
+const generationHeader = "x-deskohub-preview-generation";
+const revisionHeader = "x-deskohub-backend-revision";
+const previewHeaders = {
+  requestHeaders: { [generationHeader]: "synthetic-generation-a" },
+  expectedResponseHeaders: {
+    [generationHeader]: "synthetic-generation-a",
+    [revisionHeader]: "synthetic-revision-a",
+  },
+};
+const previewRpcPath = "/rpc/preview";
+
+const withPreviewProof = (response: Response) => {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(
+    previewHeaders.expectedResponseHeaders
+  )) {
+    headers.set(name, value);
+  }
+  return new Response(response.body, { status: response.status, headers });
+};
 
 describe("Workspace RPC HTTP client", () => {
+  test("accepts the RPC response when both preview headers match", async () => {
+    const server = makeTestServer(undefined, previewRpcPath);
+    try {
+      const result = await runClient(
+        (client) => client.openPreferences(payload),
+        async (request) => {
+          expect(new URL(request.url).pathname).toBe(previewRpcPath);
+          expect(request.headers.get(generationHeader)).toBe(
+            previewHeaders.requestHeaders[generationHeader]
+          );
+          expect(request.headers.get(revisionHeader)).toBeNull();
+          return withPreviewProof(await server.handler(request));
+        },
+        undefined,
+        undefined,
+        undefined,
+        { ...previewHeaders, path: previewRpcPath }
+      );
+      expect(result).toEqual(grant);
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  for (const responseHeaders of [
+    { [revisionHeader]: "synthetic-revision-a" },
+    {
+      ...previewHeaders.expectedResponseHeaders,
+      [generationHeader]: "synthetic-generation-b",
+    },
+    {
+      ...previewHeaders.expectedResponseHeaders,
+      [revisionHeader]: "synthetic-revision-b",
+    },
+    {
+      ...previewHeaders.expectedResponseHeaders,
+      [generationHeader]: "synthetic-generation-a, synthetic-generation-a",
+    },
+  ]) {
+    test(`rejects preview response headers ${JSON.stringify(responseHeaders)} before decoding`, async () => {
+      let cancelled = false;
+      let pulled = false;
+      const failure = await runClient(
+        (client) => Effect.flip(client.unsubscribeOneClick(payload)),
+        () =>
+          new Response(
+            new ReadableStream(
+              {
+                pull() {
+                  pulled = true;
+                },
+                cancel() {
+                  cancelled = true;
+                },
+              },
+              { highWaterMark: 0 }
+            ),
+            { headers: { "content-type": rpcContentType, ...responseHeaders } }
+          ),
+        undefined,
+        undefined,
+        undefined,
+        previewHeaders
+      );
+      expect(failure).toEqual(
+        new BackendUnavailable({ reason: "protocol", status: 200 })
+      );
+      expect(cancelled).toBe(true);
+      expect(pulled).toBe(false);
+    });
+  }
+
   test("sends a plain RPC URL and transports only validated caller metadata and token payloads", async () => {
     const server = makeTestServer();
     try {
@@ -328,28 +426,34 @@ describe("Workspace RPC HTTP client", () => {
     expect(Cause.hasDies(exit.cause)).toBe(false);
   });
 
-  test("evicts the rejected token and retries the same one-click request once", async () => {
+  test("evicts a rejected token and retries the same generation and one-click request once", async () => {
     let minted = 0;
     const evicted: string[] = [];
     const sent: ArrayBuffer[] = [];
-    const server = makeTestServer();
+    const server = makeTestServer(undefined, previewRpcPath);
     try {
       const result = await runClient(
         (client) => client.unsubscribeOneClick(payload),
         async (request) => {
+          expect(new URL(request.url).pathname).toBe(previewRpcPath);
           sent.push(await request.clone().arrayBuffer());
+          expect(request.headers.get(generationHeader)).toBe(
+            previewHeaders.requestHeaders[generationHeader]
+          );
           if (
             request.headers.get("authorization") === "Bearer synthetic-id-1"
           ) {
             return new Response("rejected", { status: 401 });
           }
-          return server.handler(request);
+          return withPreviewProof(await server.handler(request));
         },
         Effect.sync(() => Redacted.make(`synthetic-id-${++minted}`)),
         (token) =>
           Effect.sync(() => {
             evicted.push(Redacted.value(token));
-          })
+          }),
+        undefined,
+        { ...previewHeaders, path: previewRpcPath }
       );
       expect(result).toBe("withdrawn");
       expect(evicted).toEqual(["synthetic-id-1"]);
