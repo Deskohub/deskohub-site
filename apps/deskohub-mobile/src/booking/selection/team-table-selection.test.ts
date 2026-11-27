@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import type {
   CustomerTeamTableCalendar,
   CustomerTeamTableSlots,
@@ -100,10 +101,10 @@ describe("teamTableSelection", () => {
     const people = {
       contactAttends: true,
       invitees: [
-        "one@example.test",
-        "two@example.test",
-        "three@example.test",
-        "four@example.test",
+        testEmailAddress("one"),
+        testEmailAddress("two"),
+        testEmailAddress("three"),
+        testEmailAddress("four"),
       ],
     };
     const restored = openingTeamTableDraft(

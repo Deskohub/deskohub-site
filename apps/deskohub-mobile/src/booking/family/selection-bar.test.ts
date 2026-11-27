@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import type {
   CustomerBookingQuote,
   CustomerTeamTableQuote,
@@ -95,7 +96,10 @@ describe("selectionBar", () => {
         ],
       },
     };
-    const people = { contactAttends: false, invitees: ["guest@example.test"] };
+    const people = {
+      contactAttends: false,
+      invitees: [testEmailAddress("guest")],
+    };
     const read = {
       kind: "loaded",
       value: tableQuote,

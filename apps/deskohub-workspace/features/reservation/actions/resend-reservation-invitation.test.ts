@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
 import { getReservationAccessCookieName } from "@/features/reservation/backend/reservation-access-cookie";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
@@ -124,7 +125,7 @@ test("the invitation Server Action returns ISO instants and a generic denial", a
 
 test("the add-invitees Server Action passes the order-scoped booker cookie", async () => {
   owner = true;
-  const input = { orderId, emails: ["synthetic-invitee@deskohub.test"] };
+  const input = { orderId, emails: [testEmailAddress("synthetic-invitee")] };
   expect(await addReservationInvitees(input)).toEqual({
     status: "added",
     added: 1,
