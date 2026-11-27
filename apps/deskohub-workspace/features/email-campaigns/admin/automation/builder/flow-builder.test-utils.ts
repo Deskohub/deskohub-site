@@ -1,25 +1,32 @@
 import { mock } from "bun:test";
+import assert from "node:assert/strict";
 import { AutomationFlow } from "@deskohub/workspace-admin-api";
 import { Result, Schema } from "effect";
 import { act } from "react";
 import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 
-type CampaignOperationRequest = {
-  readonly operation: string;
-  readonly input: unknown;
-};
+const CampaignOperationRequest = Schema.Struct({
+  operation: Schema.String,
+  input: Schema.Unknown,
+});
+const readCampaignOperationRequest = Schema.decodeUnknownSync(
+  CampaignOperationRequest
+);
 
 /** Every campaign operation the builder's stubbed action hooks ran. */
 const campaignOperationRequests = mock(
-  (_request: CampaignOperationRequest) => undefined
+  (_request: typeof CampaignOperationRequest.Type) => undefined
 );
 
 /** Stubs the action hook under `useCampaignOperation`; nothing reaches the port. */
 export const stubCampaignOperations = () => {
   campaignOperationRequests.mockClear();
-  workspaceUseAction.mockImplementation(
-    () => ({ execute: campaignOperationRequests, isExecuting: false }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute: (request) => {
+      campaignOperationRequests(readCampaignOperationRequest(request));
+    },
+    isExecuting: false,
+  }));
 };
 
 /** Restores the shared action hook stub once a suite is done. */
@@ -36,7 +43,8 @@ export const campaignOperationInputs = (operation: string) =>
  * Opens a Radix dropdown menu from the keyboard. A native event, so this
  * module doesn't load React DOM before the test registers the DOM.
  */
-export const openMenu = async (trigger: HTMLElement) => {
+export const openMenu = async (trigger: HTMLElement | null) => {
+  assert(trigger, "Expected a menu trigger");
   await act(async () => {
     trigger.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true })

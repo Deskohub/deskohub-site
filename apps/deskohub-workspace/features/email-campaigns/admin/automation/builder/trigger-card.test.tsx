@@ -104,9 +104,10 @@ const expectReservationEvent = (
 ) => {
   expect(calls).toHaveLength(1);
   const [next] = calls[0] ?? [];
-  expect(
-    reservationKinds.map((kind) => eventTriggerTags[kind] as string)
-  ).toContain(next?._tag);
+  const reservationTags: readonly string[] = reservationKinds.map(
+    (kind) => eventTriggerTags[kind]
+  );
+  expect(reservationTags).toContain(next?._tag);
   expect(Object.keys(next ?? {})).toEqual(["_tag"]);
 };
 

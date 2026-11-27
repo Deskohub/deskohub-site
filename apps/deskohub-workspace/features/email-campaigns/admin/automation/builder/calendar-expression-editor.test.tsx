@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import assert from "node:assert/strict";
 import type { CalendarExpressionType as CalendarExpression } from "@deskohub/workspace-admin-api";
 import { m } from "@/features/administration/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
@@ -45,7 +46,12 @@ const renderEditor = (
   );
   const minutes = () => view.getByRole("group", { name: partName("minutes") });
   const quarters = () => within(minutes()).getAllByRole("button");
-  return { view, onChange, minutes, quarters };
+  const quarter = (index: number) => {
+    const button = quarters()[index];
+    assert(button, `Expected quarter-hour button ${index}`);
+    return button;
+  };
+  return { view, onChange, minutes, quarters, quarter };
 };
 
 describe("schedule minutes", () => {
@@ -61,36 +67,39 @@ describe("schedule minutes", () => {
     [1, [15, 30]],
     [3, [30, 45]],
   ])("pressing quarter %i beside :30 chooses minutes %p", (index, minutes) => {
-    const { onChange, quarters } = renderEditor({ minutes: [30], hours: [9] });
+    const { onChange, quarter } = renderEditor({ minutes: [30], hours: [9] });
 
     act(() => {
-      fireEvent.click(quarters()[index] as HTMLElement);
+      fireEvent.click(quarter(index));
     });
 
     expect(onChange.mock.calls).toEqual([[{ minutes, hours: [9] }]]);
   });
 
   test("releasing a chosen quarter removes its minute", () => {
-    const { onChange, quarters } = renderEditor({
+    const { onChange, quarter } = renderEditor({
       minutes: [0, 30],
       hours: [9],
     });
 
     act(() => {
-      fireEvent.click(quarters()[2] as HTMLElement);
+      fireEvent.click(quarter(2));
     });
 
     expect(onChange.mock.calls).toEqual([[{ minutes: [0], hours: [9] }]]);
   });
 
   test("keeps the last chosen quarter from being released", () => {
-    const { onChange, quarters } = renderEditor({ minutes: [15], hours: [9] });
+    const { onChange, quarter, quarters } = renderEditor({
+      minutes: [15],
+      hours: [9],
+    });
 
     expect(
       quarters().map((quarter) => quarter.hasAttribute("disabled"))
     ).toEqual([false, true, false, false]);
     act(() => {
-      fireEvent.click(quarters()[1] as HTMLElement);
+      fireEvent.click(quarter(1));
     });
     expect(onChange).not.toHaveBeenCalled();
   });
@@ -119,7 +128,8 @@ describe("schedule minutes", () => {
       { minutesError: refusal }
     );
 
-    const minutesRow = minutes().closest("li") as HTMLElement;
+    const minutesRow = minutes().closest("li");
+    assert(minutesRow, "Expected the minutes row");
     const alert = within(minutesRow).getByRole("alert");
     expect(alert.textContent).toBe(refusal);
     expect(minutes().getAttribute("aria-describedby")).toBe(alert.id);
@@ -131,7 +141,8 @@ describe("schedule minutes", () => {
   test("leave the minutes row's alert empty without a refusal", () => {
     const { view, minutes } = renderEditor({ minutes: [0], hours: [9] });
 
-    const minutesRow = minutes().closest("li") as HTMLElement;
+    const minutesRow = minutes().closest("li");
+    assert(minutesRow, "Expected the minutes row");
     expect(within(minutesRow).getByRole("alert").textContent).toBe("");
     expect(minutes().hasAttribute("aria-describedby")).toBe(false);
     expect(
@@ -168,13 +179,13 @@ describe("wait minutes", () => {
   });
 
   test("keep typed minutes while the quarter hours change", () => {
-    const { onChange, quarters } = renderEditor(
+    const { onChange, quarter } = renderEditor(
       { minutes: [0, 7], hours: [9] },
       { usage: "wait" }
     );
 
     act(() => {
-      fireEvent.click(quarters()[1] as HTMLElement);
+      fireEvent.click(quarter(1));
     });
 
     expect(onChange.mock.calls).toEqual([
@@ -238,8 +249,9 @@ describe("calendar parts", () => {
     });
 
     const [remove] = view.getAllByRole("button", { name: removePart("hours") });
+    assert(remove, "Expected the remove-hours button");
     act(() => {
-      fireEvent.click(remove as HTMLElement);
+      fireEvent.click(remove);
     });
 
     expect(onChange.mock.calls).toEqual([[{ weekdays: ["monday"] }]]);
@@ -370,8 +382,9 @@ describe("part values", () => {
     const [hoursPart] = view.getAllByRole("combobox", {
       name: m.emailAutomationFlowCalendarPartLabel({}, { locale }),
     });
+    assert(hoursPart, "Expected the hours combobox");
     await act(async () => {
-      fireEvent.keyDown(hoursPart as HTMLElement, { key: "Enter" });
+      fireEvent.keyDown(hoursPart, { key: "Enter" });
     });
     const weekdays = await view.findByRole("option", {
       name: partName("weekdays"),

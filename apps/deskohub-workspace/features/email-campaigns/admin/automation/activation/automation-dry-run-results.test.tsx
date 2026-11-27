@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import type {
   AdministrationCampaignContent,
@@ -250,7 +251,8 @@ describe("AutomationDryRunResults", () => {
     );
     const firesList = view.getByText(
       m.emailAutomationActivationNextFiresTitle({}, { locale })
-    ).nextElementSibling as HTMLElement;
+    ).nextElementSibling;
+    assert(firesList instanceof HTMLElement, "Expected the next fires list");
 
     expect(
       within(firesList)

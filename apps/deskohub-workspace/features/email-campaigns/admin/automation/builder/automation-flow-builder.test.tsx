@@ -7,6 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import {
   AdministrationCampaignDetail,
   AdministrationCampaignId,
@@ -84,9 +85,12 @@ const laterWait: FlowStepValue = {
 };
 const send: FlowStepValue = { _tag: "Send", id: "send" };
 
+const readSavedSteps = Schema.decodeUnknownSync(
+  Schema.Struct({ flow: Schema.Struct({ steps: Schema.Unknown }) })
+);
 const savedSteps = () =>
   campaignOperationInputs("updateAutomationFlow").map(
-    (input) => (input as { flow: { steps: unknown } }).flow.steps
+    (input) => readSavedSteps(input).flow.steps
   );
 
 const renderBuilder = (
@@ -174,8 +178,10 @@ describe("insert points", () => {
     expect(items).toHaveLength(2);
     for (const index of [0, 1]) {
       if (index > 0) await openMenu(trigger);
+      const item = view.getAllByRole("menuitem")[index];
+      assert(item, `Expected menu item ${index}`);
       act(() => {
-        fireEvent.click(view.getAllByRole("menuitem")[index] as HTMLElement);
+        fireEvent.click(item);
       });
     }
 
@@ -191,7 +197,7 @@ describe("insert points", () => {
       send,
     ]);
 
-    await openMenu(insertPoint(1) as HTMLElement);
+    await openMenu(insertPoint(1));
     select(menuItem(m.emailAutomationFlowInsertCondition({}, { locale })));
 
     expect(stepMenu(condition, 1)).not.toBeNull();
@@ -212,7 +218,7 @@ describe("step menus", () => {
   test("can't move the first step up", async () => {
     const { stepMenu, menuItem } = renderBuilder([condition, wait, send]);
 
-    await openMenu(stepMenu(condition, 1) as HTMLElement);
+    await openMenu(stepMenu(condition, 1));
 
     expect(
       isDisabled(menuItem(m.emailAutomationFlowStepMoveUp({}, { locale })))
@@ -228,7 +234,7 @@ describe("step menus", () => {
   test("can't move the step before the send past it", async () => {
     const { stepMenu, menuItem } = renderBuilder([condition, wait, send]);
 
-    await openMenu(stepMenu(wait, 2) as HTMLElement);
+    await openMenu(stepMenu(wait, 2));
 
     expect(
       isDisabled(menuItem(m.emailAutomationFlowStepMoveUp({}, { locale })))
@@ -241,7 +247,7 @@ describe("step menus", () => {
   test("can't move a lone step either way", async () => {
     const { stepMenu, menuItem } = renderBuilder([wait, send]);
 
-    await openMenu(stepMenu(wait, 1) as HTMLElement);
+    await openMenu(stepMenu(wait, 1));
 
     expect(
       isDisabled(menuItem(m.emailAutomationFlowStepMoveUp({}, { locale })))
@@ -258,7 +264,7 @@ describe("step menus", () => {
       send,
     ]);
 
-    await openMenu(stepMenu(condition, 1) as HTMLElement);
+    await openMenu(stepMenu(condition, 1));
     select(menuItem(m.emailAutomationFlowStepMoveDown({}, { locale })));
 
     expect(stepMenu(wait, 1)).not.toBeNull();
@@ -272,7 +278,7 @@ describe("step menus", () => {
       send,
     ]);
 
-    await openMenu(stepMenu(condition, 1) as HTMLElement);
+    await openMenu(stepMenu(condition, 1));
     select(menuItem(m.emailAutomationFlowStepDelete({}, { locale })));
 
     expect(stepMenu(wait, 1)).not.toBeNull();
@@ -287,7 +293,7 @@ describe("step menus", () => {
       send,
     ]);
 
-    await openMenu(stepMenu(laterWait, 2) as HTMLElement);
+    await openMenu(stepMenu(laterWait, 2));
     select(menuItem(m.emailAutomationFlowStepMoveUp({}, { locale })));
     await save();
 
@@ -301,7 +307,7 @@ describe("step menus", () => {
       send,
     ]);
 
-    await openMenu(stepMenu(laterWait, 2) as HTMLElement);
+    await openMenu(stepMenu(laterWait, 2));
     select(menuItem(m.emailAutomationFlowStepDelete({}, { locale })));
     await save();
 
@@ -313,14 +319,12 @@ test("switching the trigger saves the steps unchanged", async () => {
   const steps = [wait, send];
   const { view, save } = renderBuilder(steps);
 
+  const schedule = view
+    .getAllByRole("radio")
+    .find((radio) => radio.getAttribute("value") === "schedule");
+  assert(schedule, "Expected the schedule trigger");
   act(() => {
-    fireEvent.click(
-      view
-        .getAllByRole("radio")
-        .find(
-          (radio) => radio.getAttribute("value") === "schedule"
-        ) as HTMLElement
-    );
+    fireEvent.click(schedule);
   });
   await save();
 
@@ -336,9 +340,10 @@ test("switching the trigger saves the steps unchanged", async () => {
 });
 
 test("lock the flow while a save is in flight", () => {
-  workspaceUseAction.mockImplementation(
-    () => ({ execute: mock(), isExecuting: true }) as never
-  );
+  workspaceUseAction.mockImplementation(() => ({
+    execute: mock(),
+    isExecuting: true,
+  }));
   const { view } = renderBuilder([wait, send]);
 
   expect(view.container.querySelector("fieldset")?.disabled).toBe(true);

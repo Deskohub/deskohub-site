@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { describeCalendarWaitTarget } from "../../calendar-expression-phrases";
@@ -20,8 +21,8 @@ const durationWaits = [
   { unit: "month", catalog: m.emailAutomationRunsStepWaitMonths },
 ] as const;
 
-const durationWaitStep = (unit: (typeof durationWaits)[number]["unit"]) =>
-  automationFlowFixture({
+const durationWaitStep = (unit: (typeof durationWaits)[number]["unit"]) => {
+  const [step] = automationFlowFixture({
     steps: [
       {
         _tag: "Wait",
@@ -30,13 +31,17 @@ const durationWaitStep = (unit: (typeof durationWaits)[number]["unit"]) =>
       },
       { _tag: "Send", id: "send" },
     ],
-  }).steps[0]!;
+  }).steps;
+  assert(step, "Expected the duration wait step");
+  return step;
+};
 
 describe("automationStepKindLabel", () => {
   test("matches the catalog for conditions, sends, and every duration unit", () => {
     const flow = automationFlowFixture();
-    const condition = flow.steps.find((step) => step._tag === "Condition")!;
-    const send = flow.steps.find((step) => step._tag === "Send")!;
+    const condition = flow.steps.find((step) => step._tag === "Condition");
+    const send = flow.steps.find((step) => step._tag === "Send");
+    assert(condition && send, "Expected the condition and send steps");
 
     for (const locale of locales) {
       expect(automationStepKindLabel(condition, locale)).toBe(
@@ -55,7 +60,7 @@ describe("automationStepKindLabel", () => {
       });
       expect(new Set(durationLabels).size).toBe(durationWaits.length);
 
-      const calendarWait = automationFlowFixture({
+      const [calendarWait] = automationFlowFixture({
         steps: [
           {
             _tag: "Wait",
@@ -64,7 +69,8 @@ describe("automationStepKindLabel", () => {
           },
           { _tag: "Send", id: "send" },
         ],
-      }).steps[0]!;
+      }).steps;
+      assert(calendarWait, "Expected the calendar wait step");
       const calendarLabel = automationStepKindLabel(calendarWait, locale);
       const target = describeCalendarWaitTarget(calendarExpression, locale);
 

@@ -1,4 +1,8 @@
 import {
+  type AdministrationCampaignAudience,
+  type AdministrationCampaignAudienceId,
+  type AdministrationCampaignDetail,
+  AdministrationCampaignId,
   AutomationDetail,
   AutomationFlow,
 } from "@deskohub/workspace-admin-api";
@@ -6,6 +10,35 @@ import { Schema } from "effect";
 
 /** The campaign every automation fixture belongs to. */
 export const fixtureCampaignId = "synthetic-automation";
+
+export const automationAudienceFixture = (
+  id: AdministrationCampaignAudienceId,
+  title: string,
+  archivedAt: string | null = null
+): AdministrationCampaignAudience => ({
+  id,
+  title,
+  filter: { _tag: "Group", operator: "and", filters: [] },
+  archivedAt,
+  createdAt: "2026-08-01T08:00:00.000Z",
+  updatedAt: archivedAt ?? "2026-08-01T08:00:00.000Z",
+});
+
+export const automatedCampaignFixture = (
+  title = "Synthetic automated campaign"
+): AdministrationCampaignDetail => ({
+  id: AdministrationCampaignId.make(fixtureCampaignId),
+  title,
+  purpose: "marketing",
+  templateKey: "workspace",
+  delivery: "automated",
+  status: "draft",
+  audienceId: null,
+  locales: ["en-US"],
+  createdAt: "2026-10-01T08:00:00.000Z",
+  updatedAt: "2026-10-01T08:00:00.000Z",
+  content: {},
+});
 
 /**
  * A flow of a condition on saved audience `regulars`, a two-day wait and the

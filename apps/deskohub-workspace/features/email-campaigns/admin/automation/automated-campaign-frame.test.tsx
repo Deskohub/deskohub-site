@@ -19,10 +19,10 @@ import {
 } from "@/shared/testing/workspace-component-test-env";
 import {
   activeVersionFixture,
+  automatedCampaignFixture,
   automationDetailFixture,
   fixtureCampaignId,
 } from "./activation/automation-detail.test-utils";
-import type { AutomatedCampaign } from "./automated-campaign.server";
 
 const locale = "en-US";
 
@@ -52,10 +52,7 @@ const renderFrame = async (
       {
         await AutomatedCampaignFrame({
           automated: {
-            campaign: {
-              id: fixtureCampaignId,
-              title,
-            } as AutomatedCampaign["campaign"],
+            campaign: automatedCampaignFixture(title),
             automation,
           },
           section,
@@ -77,9 +74,10 @@ const sectionLinks = (view: Awaited<ReturnType<typeof renderFrame>>) =>
 describe("AutomatedCampaignFrame", () => {
   beforeEach(() => {
     workspaceUseAction.mockReset();
-    workspaceUseAction.mockImplementation(
-      () => ({ execute: mock(), isExecuting: false }) as never
-    );
+    workspaceUseAction.mockImplementation(() => ({
+      execute: mock(),
+      isExecuting: false,
+    }));
   });
   afterEach(() => cleanup());
   afterAll(() => unregisterWorkspaceComponentTestEnv());

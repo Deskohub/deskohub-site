@@ -8,6 +8,7 @@ import {
   spyOn,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import type {
   AutomationDetail,
   AutomationDryRun,
@@ -15,15 +16,18 @@ import type {
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { m } from "@/features/administration/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
-import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
+import {
+  type WorkspaceActionExecute,
+  workspaceUseAction,
+} from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
 import { describeCampaignOperationFailure } from "../../campaign-operation-failure";
-import type { AutomatedCampaign } from "../automated-campaign.server";
 import {
   activeVersionFixture,
+  automatedCampaignFixture,
   automationDetailFixture,
   fixtureCampaignId,
 } from "./automation-detail.test-utils";
@@ -52,7 +56,7 @@ registerWorkspaceComponentTestEnv();
 
 const { AutomationPreviewPage } = await import("./automation-preview-page");
 
-const execute = mock();
+const execute = mock<WorkspaceActionExecute>();
 const label = {
   activate: m.emailAutomationActivationActivate({}, { locale }),
   publish: m.emailAutomationActivationPublish({}, { locale }),
@@ -66,7 +70,7 @@ const renderPage = async (automation: AutomationDetail) =>
       {
         await AutomationPreviewPage({
           automated: {
-            campaign: { content: {} } as AutomatedCampaign["campaign"],
+            campaign: automatedCampaignFixture(),
             automation,
           },
         })
@@ -97,9 +101,10 @@ describe("AutomationPreviewPage activation gate", () => {
     loadAutomationDryRun.mockReset();
     loadAutomationDryRun.mockImplementation(async () => undefined);
     workspaceUseAction.mockReset();
-    workspaceUseAction.mockImplementation(
-      () => ({ execute, isExecuting: false }) as never
-    );
+    workspaceUseAction.mockImplementation(() => ({
+      execute,
+      isExecuting: false,
+    }));
   });
   afterEach(() => cleanup());
   afterAll(() => unregisterWorkspaceComponentTestEnv());
@@ -138,7 +143,7 @@ describe("AutomationPreviewPage activation gate", () => {
     expect(shown.polling).toBeNull();
     expect(view.getByRole("status").textContent).not.toBe("");
 
-    fireEvent.click(shown.activate as HTMLElement);
+    fireEvent.click(view.getByRole("button", { name: label.activate }));
     expect(execute).toHaveBeenCalledWith({
       operation: "activateAutomation",
       input: { campaignId: fixtureCampaignId, previewId: "preview-ready" },
@@ -384,7 +389,8 @@ describe("AutomationPreviewPage activation gate", () => {
         activation: { ...running, unitsDone: 0, unitsTotal: 0 },
       })
     );
-    const bar = controls(view).progress?.firstElementChild as HTMLElement;
+    const bar = view.getByRole("progressbar").firstElementChild;
+    assert(bar instanceof HTMLElement, "Expected a progress indicator");
 
     expect(bar.style.width).toBe("0%");
     expect(view.getByRole("status").textContent).toBe(
@@ -396,7 +402,8 @@ describe("AutomationPreviewPage activation gate", () => {
     const view = await renderPage(
       automationDetailFixture({ activation: running })
     );
-    const bar = controls(view).progress?.firstElementChild as HTMLElement;
+    const bar = view.getByRole("progressbar").firstElementChild;
+    assert(bar instanceof HTMLElement, "Expected a progress indicator");
 
     expect(bar.style.width).toBe("30%");
   });
