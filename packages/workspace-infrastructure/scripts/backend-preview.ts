@@ -14,6 +14,7 @@ import {
   type PreviewSnapshot,
   previewSnapshotFence,
   requireOwnedServices,
+  resolvePreviewServiceOrigin,
   verifyPreviewRouting,
   versionFromAppliedCandidate,
 } from "../src/preview/preview-deployment";
@@ -370,7 +371,10 @@ const deploy = async (pilot: Pilot) => {
   await checkPilotHead(pilot, "open");
   const services = await readSnapshot();
   requireOwnedServices(services, pilot.pr, pilot.neonBranch);
-  const workerBaseOrigin = services.get("tasks-worker")?.uri;
+  const workerBaseOrigin = resolvePreviewServiceOrigin(
+    "tasks-worker",
+    services.get("tasks-worker")
+  );
   const databaseUrl = process.env.PREVIEW_DATABASE_URL;
   if (
     services.size !== previewRoles.length ||

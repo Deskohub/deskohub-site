@@ -9,6 +9,7 @@ import { sha256Hex } from "@deskohub/workspace-cloud-run/sha256";
 import * as Schema from "effect/Schema";
 
 export const previewProject = "deskohub-workspace-sandbox";
+const previewProjectNumber = "759037106024";
 export const previewRegion = "europe-west1";
 export const previewStateBucket = `${previewProject}-backend-preview-state`;
 export const previewStage = "preview";
@@ -27,6 +28,9 @@ export const previewServices = {
 } as const;
 
 export type PreviewRole = keyof typeof previewServices;
+export const previewServiceOrigin = (role: PreviewRole) =>
+  `https://${previewServices[role]}-${previewProjectNumber}.${previewRegion}.run.app`;
+
 export const previewRoles = [
   "tasks-worker",
   "scheduler-worker",
@@ -56,11 +60,7 @@ export const PreviewCandidate = Schema.Struct({
   neonBranch: PreviewNeonBranchId,
   image: PreviewImage,
   signingVersion: PreviewNumber,
-  workerBaseOrigin: Schema.String.check(
-    Schema.makeFilter(
-      (origin) => taggedCloudRunOrigin(origin, "main") !== undefined
-    )
-  ),
+  workerBaseOrigin: Schema.Literal(previewServiceOrigin("tasks-worker")),
 });
 export const PreviewTarget = Schema.Struct({
   ...PreviewCandidate.fields,
