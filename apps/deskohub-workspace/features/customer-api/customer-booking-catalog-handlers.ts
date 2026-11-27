@@ -11,6 +11,7 @@ import {
 } from "@deskohub/workspace-customer-api";
 import { Data, Effect, Layer, Match, Option, Struct } from "effect";
 import { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
+import type { AdvertisedPrice } from "@/features/checkout/advertised-price";
 import { buildAdvertisedPrice } from "@/features/checkout/backend/checkout/advertised-price.server";
 import { loadPublicOfferings } from "@/features/checkout/backend/checkout/public-offerings";
 import { getMeetingRoomCheckoutSummary } from "@/features/checkout/checkout-summary-meeting-room";
@@ -73,7 +74,9 @@ import { toCustomerCheckoutSummary } from "./customer-checkout-summary";
  * booking pages still show them; the API answers unavailable instead, so a
  * client retries rather than starting checkout from a price that changes.
  */
-class SalePricesUnavailable extends Data.TaggedError("SalePricesUnavailable") {}
+export class SalePricesUnavailable extends Data.TaggedError(
+  "SalePricesUnavailable"
+) {}
 
 /** The booking catalog's endpoints, which a booking reads before checkout. */
 export type CustomerBookingCatalogEndpointName =
@@ -111,6 +114,7 @@ export const handleCustomerBookingCatalog = <R>(
       sealedStateKeys,
       entryPackQuote,
       releases,
+      teamTableRelease,
     } = yield* CustomerBookingCatalogLayers;
     const authentication = Layer.succeed(
       CustomerAuthentication,
@@ -133,7 +137,11 @@ export const handleCustomerBookingCatalog = <R>(
      * What a quote reads beyond the offerings: the keys that seal it for the
      * checkout it starts.
      */
-    const quoting = Layer.mergeAll(offerings, sealedStateKeys);
+    const quoting = Layer.mergeAll(
+      offerings,
+      sealedStateKeys,
+      teamTableRelease
+    );
 
     return handlers
       .handle("listOfferings", ({ query: { locale } }) =>
@@ -275,7 +283,9 @@ const quoteSelection = Effect.fn("customerApi.quoteSelection")(function* (
           () => new SalePricesUnavailable()
         )
       );
-  const { payment } = advertised.quote;
+  if (advertised.kind === "table") {
+    return yield* new CustomerBookingSelectionInvalid({ field: "family" });
+  }
   const summary =
     advertised.kind === "meeting-room" && reservation.kind === "meeting-room"
       ? getMeetingRoomCheckoutSummary(advertised.quote, reservation)
@@ -283,14 +293,29 @@ const quoteSelection = Effect.fn("customerApi.quoteSelection")(function* (
 
   return {
     family: advertised.kind,
+    ...customerQuoteFields(advertised, now, summary),
+  } satisfies CustomerBookingQuote;
+});
+
+/** The common priced checkout details of a customer quote. */
+export const customerQuoteFields = (
+  advertised: Pick<
+    AdvertisedPrice,
+    "advertisedPriceToken" | "quote" | "summary"
+  >,
+  now: Temporal.Instant,
+  summary = advertised.summary
+) => {
+  const { payment } = advertised.quote;
+  return {
     total: payment.expectedPrice,
     regularPrice: payment.undiscountedPrice,
     discount: getReservationQuoteDiscount(payment),
     quotedAt: now.toString(),
     summary: toCustomerCheckoutSummary(summary),
     advertisedPriceToken: advertised.advertisedPriceToken,
-  } satisfies CustomerBookingQuote;
-});
+  };
+};
 
 /**
  * An overnight availability query is invalid while overnight stays are not

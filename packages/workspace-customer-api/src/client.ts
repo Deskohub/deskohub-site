@@ -2,7 +2,10 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 import { CustomerAuthApi } from "./customer-auth-api";
 import { customerApiClientHeader } from "./customer-session";
-import { WorkspaceCustomerApi } from "./workspace-customer-api";
+import {
+  WorkspaceCustomerApi,
+  WorkspaceCustomerApiWithTeamTable,
+} from "./workspace-customer-api";
 
 export { customerApiClientHeader } from "./customer-session";
 
@@ -42,6 +45,15 @@ export const makeWorkspaceCustomerApiClient = (
   options: CustomerApiClientOptions
 ) =>
   HttpApiClient.make(WorkspaceCustomerApi, {
+    baseUrl: options.baseUrl,
+    transformClient: clientTransform(options),
+  });
+
+/** A typed client that includes Team Table discovery, booking and management. */
+export const makeWorkspaceCustomerApiClientWithTeamTable = (
+  options: CustomerApiClientOptions
+) =>
+  HttpApiClient.make(WorkspaceCustomerApiWithTeamTable, {
     baseUrl: options.baseUrl,
     transformClient: clientTransform(options),
   });

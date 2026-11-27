@@ -16,8 +16,11 @@ import {
   type CustomerReservationAccess,
   type CustomerReservationHistory,
   CustomerReservationNotFound,
+  type CustomerReservationOrderId,
   type CustomerReservationSummary,
   CustomerSessionRequired,
+  CustomerTeamTableProduct,
+  type CustomerTeamTableStatus,
   CustomerWithdrawalNameRequired,
   type CustomerWithdrawalQuote,
   type CustomerWithdrawalReceipt,
@@ -25,7 +28,7 @@ import {
   CustomerWithdrawalRefused,
   WorkspaceCustomerApi,
 } from "@deskohub/workspace-customer-api";
-import { Effect, Layer, Match, Option } from "effect";
+import { Effect, Layer, Match, Option, Schema } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import {
   currentReservationHistoryAccount,
@@ -53,7 +56,10 @@ import {
   ReservationAccessService,
   type ReservationAccessViewModel,
 } from "@/features/reservation/backend/reservation-access.service";
+import type { ReservationAuthorizationService } from "@/features/reservation/backend/reservation-authorization.service";
 import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
+import { tableReservationDetailsSchema } from "@/features/reservation/table-reservation";
+import { getTableReservationDurationMinutes } from "@/features/reservation/table-reservation-time";
 import { resendAuthorizedReservationInvitation } from "@/features/reservation-invitees/backend/resend-reservation-invitation";
 import {
   type ContractWithdrawal,
@@ -89,7 +95,10 @@ import {
 import { toCustomerCheckout } from "./customer-checkout-view";
 import { answerFileDownload } from "./customer-file-download";
 import { CustomerInvitedReservationsService } from "./customer-invited-reservations.service";
-import { CustomerReservationLayers } from "./customer-reservation-layers";
+import {
+  CustomerReservationLayers,
+  type CustomerReservationServiceLayers,
+} from "./customer-reservation-layers";
 
 /**
  * The reservations group's handlers. Each endpoint builds its operation's
@@ -220,28 +229,11 @@ export const CustomerReservationsApiHandlers = HttpApiBuilder.group(
         // The withdrawal record is read beside the status, so it adds no
         // wait; an order the account may not see drops it unanswered.
         .handle("getReservationStatus", ({ params: { orderId } }) =>
-          Effect.all(
-            [
-              loadAuthorizedCheckoutStatus({
-                includeSupportContact: false,
-                orderId,
-                locale: defaultLocale,
-                returnOutcome: "unknown",
-              }),
-              Effect.flatMap(WithdrawalRepository, (withdrawals) =>
-                withdrawals.findByContract({ kind: "reservation", id: orderId })
-              ),
-            ],
-            { concurrency: "unbounded" }
+          readCustomerReservationStatus(
+            orderId,
+            reservations,
+            authorization
           ).pipe(
-            providePerRequest(
-              Layer.mergeAll(
-                reservations.checkoutStatus,
-                reservations.withdrawalRecords,
-                authorization
-              )
-            ),
-            runToCompletion,
             answerSessionApiFailure("customerApi.getReservationStatus"),
             Effect.flatMap(([state, withdrawal]) =>
               answerOrderState(state, withdrawal)
@@ -508,9 +500,16 @@ const answerReservationHistory = (history: ReservationHistoryRecord) =>
 
 /** A history entry's product, with a cowork booking's stay. */
 const answerReservationProduct = (
-  reservation: Pick<ReservationSummaryRecord, "endsAt" | "product" | "startsAt">
+  reservation: Pick<
+    ReservationSummaryRecord,
+    "endsAt" | "product" | "seats" | "startsAt"
+  >
 ): CustomerReservationSummary["product"] => {
   const { product } = reservation;
+  if (product.kind === "table") {
+    const teamTable = teamTableProduct(reservation);
+    return { kind: "other", ...(teamTable && { teamTable }) };
+  }
   const stay = getReservationSummaryStay(reservation);
   return product.kind === "cowork" && stay ? { ...product, stay } : product;
 };
@@ -539,7 +538,7 @@ const answerReservationSummary = ({
   ...(workspaceReservationId && { orderId: workspaceReservationId }),
   ...(reviewSandbox && { reviewSandbox }),
   ...(party && { party }),
-  product: answerReservationProduct({ product, startsAt, endsAt }),
+  product: answerReservationProduct({ product, seats, startsAt, endsAt }),
   startsAt,
   endsAt,
   ...(setupStartsAt && { setupStartsAt }),
@@ -581,21 +580,24 @@ const answerBookedSelection = ({
     monitorOption,
   },
   earlySetup,
-}: RebookingSelection): CustomerBookedSelection => ({
-  selection: {
-    family,
-    date,
-    ...(endDate !== undefined && { endDate }),
-    ...(startTime !== undefined && { startTime }),
-    ...(duration !== undefined && { duration }),
-    ...(seats !== undefined && { seats }),
-    ...(tier !== undefined && { tier }),
-    ...(stay !== undefined && { stay }),
-    ...(coffee !== undefined && { coffee }),
-    ...(monitorOption !== undefined && { monitorOption }),
-  },
-  ...(earlySetup && { earlySetup }),
-});
+}: RebookingSelection): CustomerBookedSelection | undefined =>
+  family === "table"
+    ? undefined
+    : {
+        selection: {
+          family,
+          date,
+          ...(endDate !== undefined && { endDate }),
+          ...(startTime !== undefined && { startTime }),
+          ...(duration !== undefined && { duration }),
+          ...(seats !== undefined && { seats }),
+          ...(tier !== undefined && { tier }),
+          ...(stay !== undefined && { stay }),
+          ...(coffee !== undefined && { coffee }),
+          ...(monitorOption !== undefined && { monitorOption }),
+        },
+        ...(earlySetup && { earlySetup }),
+      };
 
 /** Where the space is, from the site's own location constants. */
 const establishment: CustomerEstablishment = {
@@ -607,6 +609,57 @@ const establishment: CustomerEstablishment = {
   mapUrl: workspaceGoogleMapUrl,
 };
 
+/** The signed-in status refresh and the order's recorded withdrawal. */
+export const readCustomerReservationStatus = <E>(
+  orderId: CustomerReservationOrderId,
+  reservations: CustomerReservationServiceLayers,
+  authorization: Layer.Layer<ReservationAuthorizationService, E>
+) =>
+  Effect.all(
+    [
+      loadAuthorizedCheckoutStatus({
+        includeSupportContact: false,
+        orderId,
+        locale: defaultLocale,
+        returnOutcome: "unknown",
+      }),
+      Effect.flatMap(WithdrawalRepository, (withdrawals) =>
+        withdrawals.findByContract({ kind: "reservation", id: orderId })
+      ),
+    ],
+    { concurrency: "unbounded" }
+  ).pipe(
+    providePerRequest(
+      Layer.mergeAll(
+        reservations.checkoutStatus,
+        reservations.withdrawalRecords,
+        authorization
+      )
+    ),
+    runToCompletion
+  );
+
+const isTeamTableProduct = Schema.is(CustomerTeamTableProduct);
+const decodeTableDetails = Schema.decodeUnknownOption(
+  tableReservationDetailsSchema
+);
+
+/** Older records can lack a readable size or interval. */
+const teamTableProduct = (details: {
+  readonly seats?: number | null;
+  readonly startsAt: string | null;
+  readonly endsAt: string | null;
+}) =>
+  decodeTableDetails({ ...details, kind: "table" }).pipe(
+    Option.map((reservation) => ({
+      kind: reservation.kind,
+      seats: reservation.seats,
+      durationMinutes: getTableReservationDurationMinutes(reservation),
+    })),
+    Option.filter(isTeamTableProduct),
+    Option.getOrUndefined
+  );
+
 /**
  * An order the account may see, as the contract carries its status, with
  * the customer's withdrawal from it when there is one.
@@ -614,86 +667,112 @@ const establishment: CustomerEstablishment = {
 const answerOrderState = (
   state: CheckoutStatusViewModel,
   withdrawal: Option.Option<ContractWithdrawal>
-) =>
-  Match.value(state).pipe(
-    Match.when({ status: "not_found" }, () =>
-      Effect.fail(new CustomerReservationNotFound())
-    ),
-    Match.orElse(
-      ({
-        orderId,
-        kind,
-        status,
-        paymentStatus,
-        fulfillmentStatus,
-        reviewSandbox,
-        paymentPageReopenable,
-        summary,
-        bookedSelection,
-        ...reservation
-      }) =>
-        Effect.succeed<CustomerOrderState>({
-          orderId,
-          kind,
-          status: status === "reservation_cancelled" ? "cancelled" : status,
-          paymentStatus,
-          fulfillmentStatus,
-          ...(status === "reservation_cancelled" && {
-            reservationCancelled: true,
-          }),
-          ...(reviewSandbox && { reviewSandbox }),
-          ...(paymentPageReopenable && { paymentPageReopenable }),
-          ...(summary && {
-            startsAt: summary.reservedFrom.toString(),
-            endsAt: summary.reservedUntil.toString(),
-            ...("setupFrom" in summary &&
-              summary.setupFrom && {
-                setupStartsAt: summary.setupFrom.toString(),
+) => {
+  if (state.status === "not_found" || state.kind === "table") {
+    return Effect.fail(new CustomerReservationNotFound());
+  }
+
+  const { kind, bookedSelection } = state;
+  return Effect.succeed<CustomerOrderState>({
+    ...customerOrderStateFields(state, withdrawal),
+    kind,
+    ...(bookedSelection && {
+      bookedSelection: answerBookedSelection(bookedSelection),
+    }),
+  });
+};
+
+export const answerTeamTableOrderState = (
+  state: CheckoutStatusViewModel,
+  withdrawal: Option.Option<ContractWithdrawal>
+) => {
+  if (state.status === "not_found" || state.kind !== "table") {
+    return Effect.fail(new CustomerReservationNotFound());
+  }
+
+  const product =
+    state.summary &&
+    teamTableProduct({
+      seats: state.summary.seats,
+      startsAt: state.summary.reservedFrom.toString(),
+      endsAt: state.summary.reservedUntil.toString(),
+    });
+
+  return Effect.succeed<CustomerTeamTableStatus>({
+    ...customerOrderStateFields(state, withdrawal),
+    kind: state.kind,
+    ...(product && { product }),
+    ...(state.table && { tableName: state.table.name }),
+  });
+};
+
+const customerOrderStateFields = (
+  {
+    orderId,
+    status,
+    paymentStatus,
+    fulfillmentStatus,
+    reviewSandbox,
+    paymentPageReopenable,
+    summary,
+    ...reservation
+  }: Exclude<CheckoutStatusViewModel, { status: "not_found" }>,
+  withdrawal: Option.Option<ContractWithdrawal>
+): Omit<CustomerOrderState, "kind" | "bookedSelection"> => ({
+  orderId,
+  status: status === "reservation_cancelled" ? "cancelled" : status,
+  paymentStatus,
+  fulfillmentStatus,
+  ...(status === "reservation_cancelled" && {
+    reservationCancelled: true,
+  }),
+  ...(reviewSandbox && { reviewSandbox }),
+  ...(paymentPageReopenable && { paymentPageReopenable }),
+  ...(summary && {
+    startsAt: summary.reservedFrom.toString(),
+    endsAt: summary.reservedUntil.toString(),
+    ...("setupFrom" in summary &&
+      summary.setupFrom && {
+        setupStartsAt: summary.setupFrom.toString(),
+      }),
+    total: {
+      value: summary.price.value,
+      exponent: summary.price.exponent,
+      currency: summary.price.currency,
+    },
+  }),
+  ...("people" in reservation &&
+    reservation.people && {
+      people: {
+        contactAttends: reservation.people.contactAttends,
+        resendable: Option.isNone(withdrawal) && reservation.people.resendable,
+        invitees: reservation.people.invitees.map(
+          ({ id, email, invitationSentAt, resendAvailableAt }) => ({
+            id,
+            email,
+            invitationSentAt: invitationSentAt?.toString() ?? null,
+            ...(Option.isNone(withdrawal) &&
+              resendAvailableAt && {
+                resendAvailableAt: resendAvailableAt.toString(),
               }),
-            total: {
-              value: summary.price.value,
-              exponent: summary.price.exponent,
-              currency: summary.price.currency,
-            },
-          }),
-          ...("people" in reservation &&
-            reservation.people && {
-              people: {
-                contactAttends: reservation.people.contactAttends,
-                resendable:
-                  Option.isNone(withdrawal) && reservation.people.resendable,
-                invitees: reservation.people.invitees.map(
-                  ({ id, email, invitationSentAt, resendAvailableAt }) => ({
-                    id,
-                    email,
-                    invitationSentAt: invitationSentAt?.toString() ?? null,
-                    ...(Option.isNone(withdrawal) &&
-                      resendAvailableAt && {
-                        resendAvailableAt: resendAvailableAt.toString(),
-                      }),
-                  })
-                ),
-              },
-            }),
-          ...(bookedSelection && {
-            bookedSelection: answerBookedSelection(bookedSelection),
-          }),
-          ...Option.match(withdrawal, {
-            onNone: () => ({}),
-            onSome: ({ submittedAt, refundAmount }) => ({
-              withdrawal: {
-                submittedAt: submittedAt.toString(),
-                refundAmount: {
-                  value: refundAmount.value,
-                  exponent: refundAmount.exponent,
-                  currency: refundAmount.currency,
-                },
-              },
-            }),
-          }),
-        })
-    )
-  );
+          })
+        ),
+      },
+    }),
+  ...Option.match(withdrawal, {
+    onNone: () => ({}),
+    onSome: ({ submittedAt, refundAmount }) => ({
+      withdrawal: {
+        submittedAt: submittedAt.toString(),
+        refundAmount: {
+          value: refundAmount.value,
+          exponent: refundAmount.exponent,
+          currency: refundAmount.currency,
+        },
+      },
+    }),
+  }),
+});
 
 /** The payment page to open again, or why the order has none. */
 const answerPaymentPage = (reopening: PaymentPageReopening) =>
@@ -771,11 +850,12 @@ const toPaymentRetryBilling = (
 const answerReservationAccess = (access: ReservationAccessViewModel) =>
   Match.value(access).pipe(
     Match.discriminatorsExhaustive("state")({
-      available: ({ code, accessStartsAt, accessEndsAt }) =>
+      available: ({ code, accessStartsAt, accessEndsAt, teamTable }) =>
         Effect.succeed<CustomerReservationAccess>({
           code,
           accessStartsAt: accessStartsAt.toString(),
           accessEndsAt: accessEndsAt.toString(),
+          ...(teamTable?.name && { tableName: teamTable.name }),
         }),
       invalid_link: () => Effect.fail(new CustomerReservationNotFound()),
       unavailable: ({ reason }) =>
