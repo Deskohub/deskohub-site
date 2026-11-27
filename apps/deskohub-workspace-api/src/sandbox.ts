@@ -27,6 +27,7 @@ import { WorkspaceContainerTelemetryLive } from "@deskohub/workspace-telemetry";
 import { Config, Effect, Layer, Schema } from "effect";
 import { RpcServer } from "effect/rpc";
 import { runWorkspaceServer, WorkspaceHttpServer } from "./http-server";
+import { rejectPreviewGeneration } from "./routes";
 import { workspaceRpcOptions } from "./rpc-options";
 
 const fixtureHandlers = SandboxEmailPreferencesRpcs.toLayer(
@@ -63,7 +64,7 @@ const rpcRoutes = RpcServer.layerHttp({
       fixtureHandlers
     )
   ),
-  Layer.provide(WorkspaceBackendLive)
+  Layer.provide(Layer.merge(WorkspaceBackendLive, rejectPreviewGeneration))
 );
 
 const sandbox = Layer.unwrap(
