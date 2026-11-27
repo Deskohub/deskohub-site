@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { PostHogFeatureFlagEvaluationError } from "@deskohub/analytics-posthog/feature-flags/node";
 import {
   type DotyposCustomerId,
+  DotyposCustomerIdSchema,
   DotyposService,
   DotyposUnavailable,
 } from "@deskohub/dotypos";
@@ -29,7 +30,10 @@ import { ReferralSignupIntentRepository } from "@/features/referrals/signup-inte
 import { NoReviewAccounts } from "@/features/review-accounts/backend/review-accounts.repository.mock";
 import { connectUnreachableWorkspaceDatabase } from "@/shared/testing/unreachable-workspace-database.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type CustomerAccountId,
   customerAccountIdSchema,
@@ -54,11 +58,12 @@ import {
 } from "./signup-referral";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const getTestDatabase = () => requireTestDatabase(testDatabase);
 const uniqueId = () => crypto.randomUUID();
 const uniqueDotyposId = () =>
-  `${Math.floor(Math.random() * 900_000) + 100_000}${Math.floor(
-    Math.random() * 900
-  )}` as DotyposCustomerId;
+  DotyposCustomerIdSchema.make(
+    `${Math.floor(Math.random() * 900_000) + 100_000}${Math.floor(Math.random() * 900)}`
+  );
 const uniqueCode = () =>
   `RFL${uniqueId().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
 
@@ -67,7 +72,7 @@ const insertAuthUser = (
   linkedCustomer?: DotyposCustomerId
 ) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("profile-completion", {
+    workspaceFixtures(getTestDatabase().db).account("profile-completion", {
       id: accountId,
       email: testEmailAddress(accountId),
       verified: false,
@@ -82,8 +87,8 @@ const insertReferrer = async () => {
   await insertAuthUser(accountId, customerId);
   const code = uniqueCode();
   const [promotion] = await Effect.runPromise(
-    testDatabase!.db
-      .insert(promotionCodes)
+    getTestDatabase()
+      .db.insert(promotionCodes)
       .values({
         kind: "referral",
         code: canonicalPromotionCodeSchema.make(code),
@@ -91,17 +96,20 @@ const insertReferrer = async () => {
       })
       .returning({ id: promotionCodes.id })
   );
+  if (!promotion) {
+    throw new Error("Expected the referrer's promotion to be created");
+  }
   await Effect.runPromise(
-    testDatabase!.db.insert(referralCodes).values({
-      promotionCodeId: promotion!.id,
+    getTestDatabase().db.insert(referralCodes).values({
+      promotionCodeId: promotion.id,
       referrerDotyposCustomerId: customerId,
     })
   );
-  return { customerId, code, promotionCodeId: promotion!.id };
+  return { customerId, code, promotionCodeId: promotion.id };
 };
 
 const disableCode = async (promotionCodeId: string) => {
-  await testDatabase!.pool.query(
+  await getTestDatabase().pool.query(
     "update promotion_codes set enabled = false where id = $1",
     [promotionCodeId]
   );
@@ -114,16 +122,27 @@ const newAccount = async () => {
 };
 
 const readLinkedCustomer = async (accountId: CustomerAccountId) => {
-  const result = await testDatabase!.pool.query<{
-    dotypos_customer_id: DotyposCustomerId;
+  const result = await getTestDatabase().pool.query<{
+    dotypos_customer_id: string | null;
   }>("select dotypos_customer_id from customer_accounts where id = $1", [
     accountId,
   ]);
-  return result.rows[0]?.dotypos_customer_id;
+  const customerId = result.rows[0]?.dotypos_customer_id;
+  return customerId == null
+    ? customerId
+    : DotyposCustomerIdSchema.make(customerId);
+};
+
+const requireLinkedCustomer = async (accountId: CustomerAccountId) => {
+  const customerId = await readLinkedCustomer(accountId);
+  if (customerId == null) {
+    throw new Error("Expected a linked Dotypos customer after completion");
+  }
+  return customerId;
 };
 
 const readReferrer = async (invitedCustomerId: DotyposCustomerId) => {
-  const result = await testDatabase!.pool.query<{
+  const result = await getTestDatabase().pool.query<{
     referrer_dotypos_customer_id: string;
   }>(
     "select referrer_dotypos_customer_id from referral_attributions where invited_dotypos_customer_id = $1",
@@ -134,7 +153,7 @@ const readReferrer = async (invitedCustomerId: DotyposCustomerId) => {
 
 /** Codes still waiting to be recorded; a settled intent no longer counts. */
 const readIntentCodes = async (accountId: CustomerAccountId) => {
-  const result = await testDatabase!.pool.query<{
+  const result = await getTestDatabase().pool.query<{
     promotion_code_id: string;
   }>(
     "select promotion_code_id from referral_signup_intents where customer_account_id = $1 and settled_at is null",
@@ -144,7 +163,7 @@ const readIntentCodes = async (accountId: CustomerAccountId) => {
 };
 
 const readStoredOutcome = async (accountId: CustomerAccountId) => {
-  const result = await testDatabase!.pool.query<{
+  const result = await getTestDatabase().pool.query<{
     outcome: string | null;
     settled_at: Date | null;
     acknowledged_at: Date | null;
@@ -156,7 +175,7 @@ const readStoredOutcome = async (accountId: CustomerAccountId) => {
 };
 
 const countAttributions = async (invitedCustomerId: DotyposCustomerId) => {
-  const result = await testDatabase!.pool.query<{ count: string }>(
+  const result = await getTestDatabase().pool.query<{ count: string }>(
     "select count(*) from referral_attributions where invited_dotypos_customer_id = $1",
     [invitedCustomerId]
   );
@@ -181,7 +200,10 @@ const passGate = (gate: Gate | undefined) =>
     : Effect.void;
 
 const databaseLayer = () =>
-  Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(testDatabase!.db));
+  Layer.succeed(
+    WorkspaceDatabase,
+    WorkspaceDatabase.make(getTestDatabase().db)
+  );
 
 /**
  * The real link repository, advisory locks, intent repository, and referral
@@ -214,7 +236,7 @@ const completionLayer = (options: {
     options.featureFlag ??
     ReferralReleaseGate.fromDecision(options.referralsEnabled ?? true);
   const lock = WorkspaceDatabaseAdvisoryLock.makeLayer(
-    testDatabase!.databasePool
+    getTestDatabase().databasePool
   );
   const links = CustomerAccountLinkRepository.Default.pipe(
     Layer.provide(database)
@@ -273,7 +295,7 @@ const completionLayer = (options: {
                   })
                 )
               : Effect.succeed([]),
-        } as Partial<DotyposService["Service"]>)
+        })
       )
     )
   );
@@ -326,7 +348,7 @@ const completeWithStoredIntent = async (code: string) => {
     status: "completed",
     referral: { status: "pending" },
   });
-  const customerId = (await readLinkedCustomer(accountId))!;
+  const customerId = await requireLinkedCustomer(accountId);
   return { accountId, customerId };
 };
 
@@ -379,7 +401,7 @@ const startPayment = async (
 ) => {
   const lifecycle = await paymentLifecycle();
   const reservation = await Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).reservation({
+    workspaceFixtures(getTestDatabase().db).reservation({
       stage: { reservation: "held" },
       customer: customerId,
     })
@@ -425,8 +447,8 @@ describe.skipIf(!testDatabase)(
         status: "completed",
         referral: { status: "applied" },
       });
-      const customerId = await readLinkedCustomer(accountId);
-      expect(await readReferrer(customerId!)).toBe(referrer.customerId);
+      const customerId = await requireLinkedCustomer(accountId);
+      expect(await readReferrer(customerId)).toBe(referrer.customerId);
       expect(await readIntentCodes(accountId)).toEqual([]);
     });
 
@@ -453,7 +475,7 @@ describe.skipIf(!testDatabase)(
           )
         );
         yield* Effect.promise(() =>
-          waitForAccountAdvisoryLockWait(testDatabase!.pool, accountId)
+          waitForAccountAdvisoryLockWait(getTestDatabase().pool, accountId)
         );
         yield* Deferred.succeed(createGate.release, undefined);
         return [yield* Fiber.join(first), yield* Fiber.join(second)] as const;
@@ -468,9 +490,9 @@ describe.skipIf(!testDatabase)(
         referral: { status: "not-applied", reason: "already-referred" },
       });
       expect(createdCustomers).toHaveLength(1);
-      const customerId = await readLinkedCustomer(accountId);
+      const customerId = await requireLinkedCustomer(accountId);
       expect(customerId).toBe(createdCustomers[0]);
-      expect(await readReferrer(customerId!)).toBe(winningReferrer.customerId);
+      expect(await readReferrer(customerId)).toBe(winningReferrer.customerId);
       expect(await readIntentCodes(accountId)).toEqual([]);
     });
 
@@ -489,13 +511,13 @@ describe.skipIf(!testDatabase)(
         // The link and intent are committed and the account lock released.
         yield* Deferred.await(recordGate.entered);
         const customerId = yield* Effect.promise(() =>
-          readLinkedCustomer(accountId)
+          requireLinkedCustomer(accountId)
         );
         const checkout = yield* Effect.flatMap(ReferralService, (referrals) =>
           referrals.acceptReferral({
             code: checkoutReferrer.code,
             customerAccountId: accountId,
-            dotyposCustomerId: customerId!,
+            dotyposCustomerId: customerId,
           })
         ).pipe(Effect.provide(completionLayer({ accountId })));
         yield* Deferred.succeed(recordGate.release, undefined);
@@ -507,8 +529,8 @@ describe.skipIf(!testDatabase)(
         status: "completed",
         referral: { status: "not-applied", reason: "already-referred" },
       });
-      const customerId = await readLinkedCustomer(accountId);
-      expect(await readReferrer(customerId!)).toBe(checkoutReferrer.customerId);
+      const customerId = await requireLinkedCustomer(accountId);
+      expect(await readReferrer(customerId)).toBe(checkoutReferrer.customerId);
       expect(await readIntentCodes(accountId)).toEqual([]);
     });
 
@@ -528,15 +550,15 @@ describe.skipIf(!testDatabase)(
         status: "completed",
         referral: { status: "pending" },
       });
-      const customerId = await readLinkedCustomer(accountId);
-      expect(await readReferrer(customerId!)).toBeUndefined();
+      const customerId = await requireLinkedCustomer(accountId);
+      expect(await readReferrer(customerId)).toBeUndefined();
       expect(await readIntentCodes(accountId)).toEqual([
         referrer.promotionCodeId,
       ]);
 
       const retried = await recordSignupReferral({
         accountId,
-        dotyposCustomerId: customerId!,
+        dotyposCustomerId: customerId,
       }).pipe(
         withinLockBudget,
         Effect.provide(completionLayer({ accountId })),
@@ -544,7 +566,7 @@ describe.skipIf(!testDatabase)(
       );
 
       expect(retried).toEqual({ status: "applied" });
-      expect(await readReferrer(customerId!)).toBe(referrer.customerId);
+      expect(await readReferrer(customerId)).toBe(referrer.customerId);
       expect(await readIntentCodes(accountId)).toEqual([]);
     });
 
@@ -816,10 +838,9 @@ describe.skipIf(!testDatabase)(
       );
 
       const winners = settled.filter(({ won }) => won);
-      expect(winners).toHaveLength(1);
-      expect(await readStoredOutcome(account.accountId)).toMatchObject({
-        outcome: winners[0]!.outcome,
-      });
+      expect(winners.map(({ outcome }) => outcome)).toEqual([
+        (await readStoredOutcome(account.accountId))?.outcome,
+      ]);
     });
 
     test("keeps the intent while a payment is pending and settles it as not eligible once that payment is paid", async () => {
@@ -897,8 +918,8 @@ describe.skipIf(!testDatabase)(
       const referrer = await insertReferrer();
       const account = await completeWithStoredIntent(referrer.code);
       const [ownCode] = await Effect.runPromise(
-        testDatabase!.db
-          .insert(promotionCodes)
+        getTestDatabase()
+          .db.insert(promotionCodes)
           .values({
             kind: "referral",
             code: canonicalPromotionCodeSchema.make(uniqueCode()),
@@ -906,17 +927,20 @@ describe.skipIf(!testDatabase)(
           })
           .returning({ id: promotionCodes.id })
       );
+      if (!ownCode) {
+        throw new Error("Expected the customer's promotion to be created");
+      }
       await Effect.runPromise(
-        testDatabase!.db.insert(referralCodes).values({
-          promotionCodeId: ownCode!.id,
+        getTestDatabase().db.insert(referralCodes).values({
+          promotionCodeId: ownCode.id,
           referrerDotyposCustomerId: account.customerId,
         })
       );
       await Effect.runPromise(
-        testDatabase!.db.insert(referralAttributions).values({
+        getTestDatabase().db.insert(referralAttributions).values({
           invitedDotyposCustomerId: referrer.customerId,
           referrerDotyposCustomerId: account.customerId,
-          promotionCodeId: ownCode!.id,
+          promotionCodeId: ownCode.id,
         })
       );
 
@@ -949,8 +973,8 @@ describe.skipIf(!testDatabase)(
         status: "completed",
         referral: { status: "not-applied", reason: "code-unusable" },
       });
-      const customerId = await readLinkedCustomer(accountId);
-      expect(await readReferrer(customerId!)).toBeUndefined();
+      const customerId = await requireLinkedCustomer(accountId);
+      expect(await readReferrer(customerId)).toBeUndefined();
       expect(await readIntentCodes(accountId)).toEqual([]);
     });
 
@@ -970,9 +994,9 @@ describe.skipIf(!testDatabase)(
 
       expect(outcome).toMatchObject({ status: "completed" });
       expect(outcome).not.toHaveProperty("referral");
-      const customerId = await readLinkedCustomer(accountId);
+      const customerId = await requireLinkedCustomer(accountId);
       expect(customerId).toBeDefined();
-      expect(await readReferrer(customerId!)).toBeUndefined();
+      expect(await readReferrer(customerId)).toBeUndefined();
       expect(await readIntentCodes(accountId)).toEqual([]);
     });
 
@@ -1017,10 +1041,10 @@ describe.skipIf(!testDatabase)(
           status: "completed",
           account: expect.objectContaining({ accountId }),
         });
-        const customerId = await readLinkedCustomer(accountId);
+        const customerId = await requireLinkedCustomer(accountId);
         expect(customerId).toBeDefined();
         expect(await readStoredOutcome(accountId)).toBeUndefined();
-        expect(await countAttributions(customerId!)).toBe(0);
+        expect(await countAttributions(customerId)).toBe(0);
       }
     });
   }

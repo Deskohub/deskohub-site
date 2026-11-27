@@ -8,7 +8,10 @@ import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { rejectCustomerEventInserts } from "@/shared/backend/customer-events/customer-event-outbox.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type CustomerAccountId,
   customerAccountIdSchema,
@@ -17,23 +20,21 @@ import { CustomerAccountRepository } from "./customer-account.repository";
 import { CustomerAccountLinkRepository } from "./customer-account-link.repository";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 
 const makeRepositoryLayer = () =>
   CustomerAccountLinkRepository.Default.pipe(
     Layer.provide(
       Layer.mergeAll(
-        Layer.succeed(
-          WorkspaceDatabase,
-          WorkspaceDatabase.make(testDatabase!.db)
-        ),
-        WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase!.databasePool)
+        Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(database().db)),
+        WorkspaceDatabaseAdvisoryLock.makeLayer(database().databasePool)
       )
     )
   );
 
 const insertAuthUser = (id: CustomerAccountId, email: string) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("account-link", {
+    workspaceFixtures(database().db).account("account-link", {
       id,
       email,
       verified: false,
@@ -155,7 +156,7 @@ describe.skipIf(!testDatabase)(
         );
       }
 
-      await testDatabase!.pool.query(`delete from auth."user" where id = $1`, [
+      await database().pool.query(`delete from auth."user" where id = $1`, [
         account,
       ]);
 
@@ -199,14 +200,14 @@ describe.skipIf(!testDatabase)(
               Layer.provide(
                 Layer.succeed(
                   WorkspaceDatabase,
-                  WorkspaceDatabase.make(testDatabase!.db)
+                  WorkspaceDatabase.make(database().db)
                 )
               )
             )
           )
         )
       );
-      await testDatabase!.pool.query(`delete from auth."user" where id = $1`, [
+      await database().pool.query(`delete from auth."user" where id = $1`, [
         account,
       ]);
 
@@ -218,7 +219,7 @@ describe.skipIf(!testDatabase)(
       const dotyposCustomerId = uniqueDotyposId();
       await insertAuthUser(account, testEmailAddress(`r-${account}`));
       const cleanup = await rejectCustomerEventInserts(
-        testDatabase!.pool,
+        database().pool,
         `new.dotypos_customer_id = '${dotyposCustomerId}'`
       );
       const result = await Effect.runPromise(
@@ -282,7 +283,7 @@ describe.skipIf(!testDatabase)(
       // #764 linked the silent login to its customer; its owner then
       // verifies it and completes the profile.
       await Effect.runPromise(
-        workspaceFixtures(testDatabase!.db).account("account-link", {
+        workspaceFixtures(database().db).account("account-link", {
           id: account,
           email: testEmailAddress(`l-${account}`),
           legacy: true,
@@ -311,7 +312,7 @@ describe.skipIf(!testDatabase)(
       // #764 made the silent login but lost the link to a conflict; once the
       // customer is free, its owner signs in and claims it.
       await insertAuthUser(account, testEmailAddress(`u-${account}`));
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update customer_accounts set legacy = true where id = $1`,
         [account]
       );
@@ -386,7 +387,7 @@ describe.skipIf(!testDatabase)(
             Layer.mergeAll(
               layer,
               CustomerAccountRepository.Default.pipe(
-                Layer.provide(testDatabase!.layer)
+                Layer.provide(database().layer)
               )
             )
           )
@@ -405,7 +406,7 @@ describe.skipIf(!testDatabase)(
 );
 
 async function accountCreatedEvents(accountId: string) {
-  const { rows } = await testDatabase!.pool.query<{
+  const { rows } = await database().pool.query<{
     dotypos_customer_id: string;
     occurred_at: string;
   }>(
@@ -417,15 +418,19 @@ async function accountCreatedEvents(accountId: string) {
 }
 
 async function accountCreatedAt(accountId: string) {
-  const { rows } = await testDatabase!.pool.query<{ created_at: string }>(
+  const { rows } = await database().pool.query<{ created_at: string }>(
     "select created_at from customer_accounts where id = $1",
     [accountId]
   );
-  return rows[0]!.created_at;
+  const [account] = rows;
+  if (!account) {
+    throw new Error("Expected a customer account with a creation date");
+  }
+  return account.created_at;
 }
 
 async function accountDotyposCustomerId(accountId: string) {
-  const { rows } = await testDatabase!.pool.query<{
+  const { rows } = await database().pool.query<{
     dotypos_customer_id: string | null;
   }>("select dotypos_customer_id from customer_accounts where id = $1", [
     accountId,
@@ -442,7 +447,7 @@ function uniqueDotyposId() {
 }
 
 async function accountColumn(accountId: string, dotyposCustomerId: string) {
-  await testDatabase!.pool.query(
+  await database().pool.query(
     "update customer_accounts set dotypos_customer_id = $2 where id = $1",
     [accountId, dotyposCustomerId]
   );

@@ -38,7 +38,10 @@ import {
   type ReservationFixtureStage,
   workspaceFixtures,
 } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { temporalInstantToIsoString } from "@/shared/utils/temporal";
 import {
@@ -50,6 +53,7 @@ import { CustomerReservationHistoryWithAccessService } from "./customer-reservat
 import { ReservationAuthorDirectory } from "./reservation-author-directory.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 
 const uniqueDotyposId = () =>
   `${Math.floor(Math.random() * 900000) + 100000}${Math.floor(
@@ -57,7 +61,7 @@ const uniqueDotyposId = () =>
   )}`;
 
 const testDatabaseLayer = () =>
-  Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(testDatabase!.db));
+  Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(database().db));
 
 const accessCode = ["fixture", "door"].join("-");
 
@@ -91,7 +95,7 @@ const paidConfirmed: ReservationFixtureStage = {
 const seedAccount = async (bookings: readonly Booking[]) => {
   const accountId = customerAccountIdSchema.make(crypto.randomUUID());
   const customerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
-  const fixtures = workspaceFixtures(testDatabase!.db);
+  const fixtures = workspaceFixtures(database().db);
   await Effect.runPromise(
     fixtures.account("history", {
       id: accountId,
@@ -189,9 +193,7 @@ const makeHistory = (input: {
           Layer.provide(
             Layer.mergeAll(
               testDatabaseLayer(),
-              WorkspaceDatabaseAdvisoryLock.makeLayer(
-                testDatabase!.databasePool
-              )
+              WorkspaceDatabaseAdvisoryLock.makeLayer(database().databasePool)
             )
           )
         )
@@ -296,10 +298,14 @@ describe.skipIf(!testDatabase)(
 
       for (const label of ["started", "later-today"]) {
         const entry = entryOf(entries, seeded.orders.get(label));
+        const { accessStartsAt, accessEndsAt } = entry;
+        if (!accessStartsAt || !accessEndsAt) {
+          throw new Error(`Expected an access window for ${label}`);
+        }
         expect(entry.todayAccess).toEqual({
           code: accessCode,
-          accessStartsAt: entry.accessStartsAt!,
-          accessEndsAt: entry.accessEndsAt!,
+          accessStartsAt,
+          accessEndsAt,
         });
       }
       for (const label of ["tomorrow", "ended", "cancelled"]) {
@@ -417,7 +423,7 @@ describe.skipIf(!testDatabase)(
 
     test("shows a review account's sandbox with names and selections but never a code", async () => {
       const seeded = await seedAccount([]);
-      await testDatabase!.pool.query(
+      await database().pool.query(
         // A review account never has a Dotypos customer.
         "update customer_accounts set review = true, dotypos_customer_id = null where id = $1",
         [seeded.accountId]

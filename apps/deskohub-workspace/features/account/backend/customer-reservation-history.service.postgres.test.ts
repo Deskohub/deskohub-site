@@ -35,7 +35,10 @@ import {
   type ReservationFixtureStage,
   workspaceFixtures,
 } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { maskEmailAddress } from "@/shared/utils";
 import {
   type CustomerAccountId,
@@ -55,6 +58,7 @@ import {
 } from "./reservation-author-directory.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 
 const uniqueId = () => crypto.randomUUID();
 const uniqueDotyposId = () =>
@@ -93,7 +97,7 @@ const makeDotyposCustomer = (
 
 const insertAuthUser = (id: CustomerAccountId, email: string) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("history", {
+    workspaceFixtures(database().db).account("history", {
       id,
       email,
       verified: false,
@@ -105,7 +109,7 @@ const insertCustomerAccount = async (input: {
   readonly deleted?: boolean;
   readonly dotyposCustomerId?: DotyposCustomerId;
 }) => {
-  const fixtures = workspaceFixtures(testDatabase!.db);
+  const fixtures = workspaceFixtures(database().db);
   if (input.deleted) {
     await Effect.runPromise(
       fixtures.customerAccount({
@@ -134,7 +138,7 @@ const insertWorkspaceReservation = async (input: {
   readonly details?: StoredWorkspaceReservationDetails;
 }) => {
   await Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).reservation({
+    workspaceFixtures(database().db).reservation({
       stage: input.stage ?? { reservation: "confirmed" },
       customer: input.dotyposCustomerId,
       author: input.authorAccountId,
@@ -148,7 +152,7 @@ const insertWorkspaceReservation = async (input: {
 };
 
 const testDatabaseLayer = () =>
-  Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(testDatabase!.db));
+  Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(database().db));
 
 /**
  * Stands in for Dotypos: a reservation without a customer belongs to every
@@ -259,7 +263,7 @@ const makeHistoryLayer = (
                   )
                 );
               },
-            } as Partial<DotyposService["Service"]>)
+            })
           )
         ),
         options.failAuthors
@@ -282,11 +286,9 @@ const makeHistoryLayer = (
             Layer.mergeAll(
               Layer.succeed(
                 WorkspaceDatabase,
-                WorkspaceDatabase.make(testDatabase!.db)
+                WorkspaceDatabase.make(database().db)
               ),
-              WorkspaceDatabaseAdvisoryLock.makeLayer(
-                testDatabase!.databasePool
-              )
+              WorkspaceDatabaseAdvisoryLock.makeLayer(database().databasePool)
             )
           )
         )
@@ -301,7 +303,7 @@ describe.skipIf(!testDatabase)(
       const account = customerAccountIdSchema.make(uniqueId());
       const dotyposCustomerId = uniqueDotyposId();
       await insertAuthUser(account, testEmailAddress(`h-${account}`));
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
         [account, dotyposCustomerId]
       );
@@ -322,29 +324,26 @@ describe.skipIf(!testDatabase)(
       const active = await runLoad();
       expect(active._tag).toBe("Success");
 
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth."user" set deletion_requested_at = now() where id = $1`,
         [account]
       );
       const marked = await runLoad();
       expect(marked._tag).toBe("Failure");
       if (marked._tag === "Failure") {
-        const error = marked.failure as {
-          reason?: string;
-          linkReason?: string;
-        };
-        expect(error.reason).toBe("link-required");
-        expect(error.linkReason).toBe("deletion-requested");
+        expect(marked.failure).toMatchObject({
+          reason: "link-required",
+          linkReason: "deletion-requested",
+        });
       }
 
-      await testDatabase!.pool.query(`delete from auth."user" where id = $1`, [
+      await database().pool.query(`delete from auth."user" where id = $1`, [
         account,
       ]);
       const removed = await runLoad();
       expect(removed._tag).toBe("Failure");
       if (removed._tag === "Failure") {
-        const error = removed.failure as { reason?: string };
-        expect(error.reason).toBe("unauthenticated");
+        expect(removed.failure).toMatchObject({ reason: "unauthenticated" });
       }
     });
 
@@ -362,16 +361,16 @@ describe.skipIf(!testDatabase)(
       for (const accountId of [buyer, holder]) {
         await insertAuthUser(accountId, testEmailAddress(`h-${accountId}`));
       }
-      await testDatabase!.pool.query(
+      await database().pool.query(
         "update customer_accounts set dotypos_customer_id = $2 where id = $1",
         [holder, dotyposCustomerId]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
          values ($1, 'pass-purchase', $2, 'paid', 'not_started', '2026-03-15T10:00:00Z')`,
         [passId, dotyposCustomerId]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into pass_purchases
            (id, buyer_account_id, holder_account_id, product, tier, unlimited_coffee,
             status, valid_from, valid_until, quote, locale, created_at)
@@ -379,7 +378,7 @@ describe.skipIf(!testDatabase)(
             'active', '2026-03-16', '2026-04-15', '{}', 'en-US', now())`,
         [passId, buyer, holder]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into workspace_reservations
            (checkout_attempt_key, dotypos_customer_id, author_account_id,
             dotypos_reservation_id, reservation_state, payment_state, fulfillment_state, paid_at,
@@ -388,7 +387,7 @@ describe.skipIf(!testDatabase)(
             '2026-03-15T10:00:00Z', '{}', 'en-US', $4, '2026-03-16', '9')`,
         [dotyposCustomerId, buyer, attachedDay, passId]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into unlimited_pass_day_moves
            (generation, reservation_id, customer_id, source_reservation_id, source_table_id,
             target_reservation_id, target_table_id, requested_at, checked_at, attached_at, settled_at)
@@ -396,7 +395,7 @@ describe.skipIf(!testDatabase)(
          from workspace_reservations where pass_id = $4`,
         [dotyposCustomerId, replacedDay, attachedDay, passId]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into unlimited_pass_day_moves
            (generation, reservation_id, customer_id, source_reservation_id, source_table_id,
             target_table_id, requested_at, checked_at, ambiguous_at, ambiguous_reservation_ids)
@@ -503,7 +502,7 @@ describe.skipIf(!testDatabase)(
         unlimited: [],
         packs: { held: [], boughtForOthers: [] },
       });
-      await testDatabase!.pool.query(
+      await database().pool.query(
         "update pass_purchases set gift_claimed_at = $2 where id = $1",
         [passId, firstDay]
       );
@@ -527,7 +526,7 @@ describe.skipIf(!testDatabase)(
       expect(
         (await readPassViews(holder, "2026-04-14T22:00:00Z")).unlimited
       ).toMatchObject([{ status: "expired" }]);
-      await testDatabase!.pool.query(
+      await database().pool.query(
         "update pass_purchases set status = 'withdrawn', access_ends_on = '2026-03-17' where id = $1",
         [passId]
       );
@@ -540,28 +539,28 @@ describe.skipIf(!testDatabase)(
         (await readPassViews(holder, "2026-03-16T23:00:00Z")).unlimited
       ).toMatchObject([{ status: "ended" }]);
 
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update orders set payment_state = 'complimentary', paid_at = null,
           fulfillment_state = 'processing' where id = $1`,
         [passId]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update pass_purchases set status = 'pending_payment', access_ends_on = null,
           valid_until = '2026-04-17', gift_claimed_at = null where id = $1`,
         [passId]
       );
       expect((await readPassViews(holder, firstDay)).unlimited).toEqual([]);
 
-      await testDatabase!.pool.query(
+      await database().pool.query(
         "update orders set fulfillment_state = 'fulfilled', fulfilled_at = $2 where id = $1",
         [passId, firstDay]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         "update pass_purchases set status = 'active' where id = $1",
         [passId]
       );
       expect((await readPassViews(holder, firstDay)).unlimited).toEqual([]);
-      await testDatabase!.pool.query(
+      await database().pool.query(
         "update pass_purchases set gift_claimed_at = $2 where id = $1",
         [passId, firstDay]
       );
@@ -612,7 +611,7 @@ describe.skipIf(!testDatabase)(
         DotyposReservationIdSchema.make(`dotypos-${uniqueId()}`);
 
       await insertAuthUser(account, testEmailAddress(`h-${account}`));
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
         [account, dotyposCustomerId]
       );
@@ -630,18 +629,18 @@ describe.skipIf(!testDatabase)(
       });
 
       const passId = uniqueId();
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
          values ($1, 'pass-purchase', $2, 'paid', 'not_started', '2000-01-01T00:00:00Z')`,
         [passId, dotyposCustomerId]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into pass_purchases
            (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
          values ($1, $2, $2, 'entry-pack', 'open-space', 5, 'active', '2000-01-01', '2000-03-01', '{}', 'en-US', now())`,
         [passId, account]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into pass_entry_claims (reservation_id, pass_id, date, status)
          values ($1, $3, '2000-01-01', 'consumed'), ($2, $3, '2000-01-04', 'consumed')`,
         [matchedWorkspaceReservationId, foreignWorkspaceReservationId, passId]
@@ -716,7 +715,7 @@ describe.skipIf(!testDatabase)(
           authorAccountId: account,
         });
       }
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into pass_entry_claims (reservation_id, pass_id, date, status)
          values ($1, $3, '2000-01-02', 'reserved'), ($2, $3, '2000-01-03', 'released')`,
         [reservedEntry, releasedEntry, passId]
@@ -787,7 +786,7 @@ describe.skipIf(!testDatabase)(
       const account = customerAccountIdSchema.make(uniqueId());
       const dotyposCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
       await insertAuthUser(account, testEmailAddress(`p-${account}`));
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
         [account, dotyposCustomerId]
       );
@@ -858,7 +857,7 @@ describe.skipIf(!testDatabase)(
         }
       ) => {
         const attemptId = uniqueId();
-        await testDatabase!.pool.query(
+        await database().pool.query(
           `insert into payment_attempts
              (id, workspace_reservation_id, order_id, provider, provider_order_id, state, amount_value, amount_exponent, currency)
            values ($1, $2, $2, $3, $4, 'paid', $5, 2, 'CZK')`,
@@ -870,13 +869,13 @@ describe.skipIf(!testDatabase)(
             attempt.amount,
           ]
         );
-        await testDatabase!.pool.query(
+        await database().pool.query(
           `update workspace_reservations set active_payment_attempt_id = $1 where id = $2`,
           [attemptId, reservationId]
         );
         const { refund } = attempt;
         if (refund) {
-          await testDatabase!.pool.query(
+          await database().pool.query(
             `update payment_attempts
                set refund_state = $2, refund_target_value = $3,
                  refunded_amount_value = $4,
@@ -937,18 +936,18 @@ describe.skipIf(!testDatabase)(
       });
 
       const passId = uniqueId();
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
          values ($1, 'pass-purchase', $2, 'paid', 'not_started', '2000-01-01T00:00:00Z')`,
         [passId, dotyposCustomerId]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into pass_purchases
            (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
          values ($1, $2, $2, 'entry-pack', 'open-space', 5, 'active', '2000-01-01', '2000-03-01', '{}', 'en-US', now())`,
         [passId, account]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into pass_entry_claims (reservation_id, pass_id, date, status)
          values ($1, $5, '2000-01-03', 'consumed'), ($2, $5, '2000-01-10', 'consumed'),
            ($3, $5, '2000-01-11', 'released'), ($4, $5, '2000-01-12', 'released')`,
@@ -1029,19 +1028,19 @@ describe.skipIf(!testDatabase)(
       await insertAuthUser(buyer, buyerEmail);
       await insertAuthUser(holder, holderEmail);
       await insertAuthUser(other, testEmailAddress(`other-${other}`));
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth."user" set name = 'Old Auth Name' where id = $1`,
         [buyer]
       );
       const giftId = uniqueId();
       const unpaidId = uniqueId();
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
          values ($1, 'pass-purchase', $3, 'paid', 'not_started', now()),
                 ($2, 'pass-purchase', $3, 'not_started', 'not_started', null)`,
         [giftId, unpaidId, uniqueDotyposId()]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `insert into pass_purchases
            (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
          values ($1, $3, $4, 'entry-pack', 'open-space', 5, 'active', '2026-01-01', '2099-01-01', '{}', 'en-US', now()),
@@ -1109,7 +1108,7 @@ describe.skipIf(!testDatabase)(
         ],
       });
       expect(JSON.stringify(buyerView)).not.toContain(holderEmail);
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth."user" set deletion_requested_at = now() where id = $1`,
         [holder]
       );
@@ -1123,7 +1122,7 @@ describe.skipIf(!testDatabase)(
           }),
         ],
       });
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth."user" set deletion_requested_at = null where id = $1`,
         [holder]
       );
@@ -1142,7 +1141,7 @@ describe.skipIf(!testDatabase)(
           ? holderGiftView.held[0]?.statusPath
           : undefined
       ).toBeUndefined();
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
         [buyer, uniqueDotyposId()]
       );
@@ -1158,11 +1157,11 @@ describe.skipIf(!testDatabase)(
       expect(await loadFor(other)).toEqual({ boughtForOthers: [], held: [] });
 
       profileLastName = buyerEmail;
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update pass_purchases set gift_issued_at = now() where id = $1`,
         [giftId]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `with attempt as (
            insert into payment_attempts
              (order_id, provider, state, amount_value, amount_exponent, currency)
@@ -1173,7 +1172,7 @@ describe.skipIf(!testDatabase)(
          where orders.id = $1`,
         [giftId]
       );
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth."user" set email_verified = true where id = $1`,
         [holder]
       );
@@ -1215,7 +1214,7 @@ describe.skipIf(!testDatabase)(
       expect(await loadFor(holder)).toMatchObject({
         held: [{ gift: { buyerName: "Pat Example" } }],
       });
-      await testDatabase!.pool.query(
+      await database().pool.query(
         `update auth."user" set deletion_requested_at = now() where id = $1`,
         [buyer]
       );
@@ -1302,7 +1301,13 @@ describe.skipIf(!testDatabase)(
       }
       return {
         account: { accountId: account, dotyposCustomerId: customerId },
-        ids: (key: (typeof seeded)[number]["key"]) => ids.get(key)!,
+        ids: (key: (typeof seeded)[number]["key"]) => {
+          const reservation = ids.get(key);
+          if (!reservation) {
+            throw new Error(`Expected the ${key} reservation fixture`);
+          }
+          return reservation;
+        },
         reservations,
         customers: [
           makeDotyposCustomer(bookedForCustomerId, "Karla", "Ukázková"),

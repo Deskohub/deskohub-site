@@ -4,11 +4,12 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
 import {
   type DotyposCustomerId,
+  DotyposCustomerIdSchema,
   type DotyposReservation,
-  type DotyposReservationId,
+  DotyposReservationSchema,
   DotyposService,
 } from "@deskohub/dotypos";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
@@ -22,7 +23,10 @@ import { parseReferralCode } from "@/features/referrals/client";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { NoReviewAccounts } from "@/features/review-accounts/backend/review-accounts.repository.mock";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import {
+  connectWorkspacePostgresTestDatabase,
+  requireTestDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   type CustomerAccountId,
   customerAccountIdSchema,
@@ -36,11 +40,12 @@ import { testSessionProfile } from "./customer-authentication.test-utils";
 import { CustomerDotyposAdapter } from "./customer-dotypos-adapter.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
+const database = () => requireTestDatabase(testDatabase);
 const uniqueId = () => crypto.randomUUID();
 const uniqueDotyposId = () =>
-  `${Math.floor(Math.random() * 900_000) + 100_000}${Math.floor(
-    Math.random() * 900
-  )}` as DotyposCustomerId;
+  DotyposCustomerIdSchema.make(
+    `${Math.floor(Math.random() * 900_000) + 100_000}${Math.floor(Math.random() * 900)}`
+  );
 const uniqueCode = () =>
   `RFL${uniqueId().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
 
@@ -49,7 +54,7 @@ const insertAuthUser = (
   linkedCustomer?: DotyposCustomerId
 ) =>
   Effect.runPromise(
-    workspaceFixtures(testDatabase!.db).account("auto-linked-referral", {
+    workspaceFixtures(database().db).account("auto-linked-referral", {
       id: accountId,
       email: testEmailAddress(accountId),
       verified: false,
@@ -61,7 +66,7 @@ const insertLink = async (
   accountId: CustomerAccountId,
   customerId: DotyposCustomerId
 ) => {
-  await testDatabase!.pool.query(
+  await database().pool.query(
     `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
     [accountId, customerId]
   );
@@ -72,8 +77,8 @@ const insertReferralCode = async (
 ): Promise<{ readonly code: string; readonly promotionCodeId: string }> => {
   const code = uniqueCode();
   const [promotion] = await Effect.runPromise(
-    testDatabase!.db
-      .insert(promotionCodes)
+    database()
+      .db.insert(promotionCodes)
       .values({
         kind: "referral",
         code: canonicalPromotionCodeSchema.make(code),
@@ -81,13 +86,16 @@ const insertReferralCode = async (
       })
       .returning({ id: promotionCodes.id })
   );
+  if (!promotion) {
+    throw new Error("Expected the referral promotion to be created");
+  }
   await Effect.runPromise(
-    testDatabase!.db.insert(referralCodes).values({
-      promotionCodeId: promotion!.id,
+    database().db.insert(referralCodes).values({
+      promotionCodeId: promotion.id,
       referrerDotyposCustomerId: referrerCustomerId,
     })
   );
-  return { code, promotionCodeId: promotion!.id };
+  return { code, promotionCodeId: promotion.id };
 };
 
 /** An active referrer: an auth account linked to a customer with a code. */
@@ -100,7 +108,7 @@ const insertReferrer = async () => {
 };
 
 const readReferrer = async (invitedCustomerId: DotyposCustomerId) => {
-  const result = await testDatabase!.pool.query<{
+  const result = await database().pool.query<{
     referrer_dotypos_customer_id: string;
   }>(
     "select referrer_dotypos_customer_id from referral_attributions where invited_dotypos_customer_id = $1",
@@ -109,11 +117,16 @@ const readReferrer = async (invitedCustomerId: DotyposCustomerId) => {
   return result.rows[0]?.referrer_dotypos_customer_id;
 };
 
-const pastReservation = {
-  id: `reservation-${uniqueId()}` as DotyposReservationId,
+const pastReservationEnd = Temporal.Now.instant().subtract({ hours: 24 });
+const pastReservation = Schema.decodeUnknownSync(DotyposReservationSchema)({
+  id: `reservation-${uniqueId()}`,
+  _branchId: "branch",
+  _cloudId: "cloud",
+  startDate: pastReservationEnd.subtract({ hours: 1 }).toString(),
+  endDate: pastReservationEnd.toString(),
+  seats: "1",
   status: "CONFIRMED",
-  endDate: Temporal.Now.instant().subtract({ hours: 24 }).toString(),
-} as DotyposReservation;
+});
 
 /**
  * Runs the account page's sign-in sequence against the real link repository
@@ -129,10 +142,10 @@ const signIn = (input: {
 }) => {
   const databaseLayer = Layer.succeed(
     WorkspaceDatabase,
-    WorkspaceDatabase.make(testDatabase!.db)
+    WorkspaceDatabase.make(database().db)
   );
   const lockLayer = WorkspaceDatabaseAdvisoryLock.makeLayer(
-    testDatabase!.databasePool
+    database().databasePool
   );
   const linksLayer = CustomerAccountLinkRepository.Default.pipe(
     Layer.provide(databaseLayer)
@@ -199,7 +212,7 @@ const signIn = (input: {
               Layer.mock(DotyposService, {
                 listReservations: () =>
                   Effect.succeed(input.reservations ?? []),
-              } as Partial<DotyposService["Service"]>)
+              })
             )
           )
         )
@@ -311,7 +324,7 @@ describe.skipIf(!testDatabase)(
       const sharedReferrer = await insertReferrer();
       const invitee = await newInvitee();
       await Effect.runPromise(
-        testDatabase!.db.insert(referralAttributions).values({
+        database().db.insert(referralAttributions).values({
           invitedDotyposCustomerId: invitee.customerId,
           referrerDotyposCustomerId: originalReferrer.customerId,
           promotionCodeId: originalReferrer.promotionCodeId,

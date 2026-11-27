@@ -125,7 +125,7 @@ describe.skipIf(!suiteDatabase)(
         `select pg_try_advisory_xact_lock(hashtext('customer-account'), hashtext($1)) as free`,
         [accountId]
       );
-      return rows[0]!.free;
+      return rows[0]?.free;
     };
     const freeElsewhere = (accountId: CustomerAccountId) =>
       Effect.promise(() => freeElsewhereNow(accountId));
@@ -146,7 +146,7 @@ describe.skipIf(!suiteDatabase)(
               and objsubid = 2`,
           [accountId]
         );
-        return rows[0]!;
+        return rows[0];
       });
 
     /** A defect whose report contains `fragment`. */
@@ -252,9 +252,8 @@ describe.skipIf(!suiteDatabase)(
       });
 
       test("a nested section for another account takes its own lock in ascending key order", async () => {
-        const [first, second] = (
-          await Promise.all([seedAccount(), seedAccount()])
-        ).sort((a, b) => (a.accountId < b.accountId ? -1 : 1));
+        const [a, b] = await Promise.all([seedAccount(), seedAccount()]);
+        const [first, second] = a.accountId < b.accountId ? [a, b] : [b, a];
         const { layer } = makeSections(null);
 
         const outcome = await run(
@@ -262,22 +261,22 @@ describe.skipIf(!suiteDatabase)(
           Effect.gen(function* () {
             const { withActiveAccount } = yield* sections;
             return yield* withActiveAccount(
-              first!.accountId,
+              first.accountId,
               Effect.gen(function* () {
                 const inner = yield* withActiveAccount(
-                  second!.accountId,
+                  second.accountId,
                   Effect.all({
                     held: Effect.service(HeldCustomerAccount),
-                    firstFree: freeElsewhere(first!.accountId),
-                    secondFree: freeElsewhere(second!.accountId),
+                    firstFree: freeElsewhere(first.accountId),
+                    secondFree: freeElsewhere(second.accountId),
                   }),
                   { recheck: "active" }
                 );
                 return {
                   inner,
                   outerHeld: yield* HeldCustomerAccount,
-                  firstFreeAfterInner: yield* freeElsewhere(first!.accountId),
-                  secondFreeAfterInner: yield* freeElsewhere(second!.accountId),
+                  firstFreeAfterInner: yield* freeElsewhere(first.accountId),
+                  secondFreeAfterInner: yield* freeElsewhere(second.accountId),
                 };
               }),
               { recheck: "active" }
@@ -285,20 +284,19 @@ describe.skipIf(!suiteDatabase)(
           })
         );
 
-        expect(outcome.inner.held.accountId).toBe(second!.accountId);
+        expect(outcome.inner.held.accountId).toBe(second.accountId);
         expect(outcome.inner.firstFree).toBe(false);
         expect(outcome.inner.secondFree).toBe(false);
-        expect(outcome.outerHeld.accountId).toBe(first!.accountId);
+        expect(outcome.outerHeld.accountId).toBe(first.accountId);
         expect(outcome.firstFreeAfterInner).toBe(false);
         expect(outcome.secondFreeAfterInner).toBe(true);
-        expect(await freeElsewhereNow(first!.accountId)).toBe(true);
-        expect(await freeElsewhereNow(second!.accountId)).toBe(true);
+        expect(await freeElsewhereNow(first.accountId)).toBe(true);
+        expect(await freeElsewhereNow(second.accountId)).toBe(true);
       });
 
       test("a nested section for another account on a descending key is an ordering defect", async () => {
-        const [first, second] = (
-          await Promise.all([seedAccount(), seedAccount()])
-        ).sort((a, b) => (a.accountId < b.accountId ? -1 : 1));
+        const [a, b] = await Promise.all([seedAccount(), seedAccount()]);
+        const [first, second] = a.accountId < b.accountId ? [a, b] : [b, a];
         const { layer } = makeSections(null);
         let innerRan = false;
 
@@ -306,9 +304,9 @@ describe.skipIf(!suiteDatabase)(
           Effect.gen(function* () {
             const { withActiveAccount } = yield* sections;
             return yield* withActiveAccount(
-              second!.accountId,
+              second.accountId,
               withActiveAccount(
-                first!.accountId,
+                first.accountId,
                 Effect.sync(() => {
                   innerRan = true;
                 }),
@@ -321,8 +319,8 @@ describe.skipIf(!suiteDatabase)(
 
         expect(dies(exit, "out of section order")).toBe(true);
         expect(innerRan).toBe(false);
-        expect(await freeElsewhereNow(first!.accountId)).toBe(true);
-        expect(await freeElsewhereNow(second!.accountId)).toBe(true);
+        expect(await freeElsewhereNow(first.accountId)).toBe(true);
+        expect(await freeElsewhereNow(second.accountId)).toBe(true);
       });
     });
 
@@ -384,7 +382,7 @@ describe.skipIf(!suiteDatabase)(
           accountId: account.accountId,
           email: account.email,
         });
-        expect(held.email).toBe((await loginEmail(account.accountId))!);
+        expect(held.email).toBe(await loginEmail(account.accountId));
         expect(reads.session).toBe(1);
       });
 
