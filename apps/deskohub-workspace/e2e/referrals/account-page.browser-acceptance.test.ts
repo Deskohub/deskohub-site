@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { type Browser, chromium } from "@playwright/test";
-import { Deferred, Effect, Exit, Fiber, Scope } from "effect";
+import { Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import { E2EBrowserSession } from "../browser-session";
 import { runE2ECase } from "../case-runner";
@@ -10,6 +10,8 @@ import {
   failedStepAnnotation,
   runBrowserStep,
 } from "../case-runner.browser.test-utils";
+import type { PageEvaluation } from "../cases/e2e-fixtures.test-utils";
+import { makeTestE2EConfig } from "../cases/e2e-fixtures.test-utils";
 import type { WorkspaceE2EConfig } from "../config";
 import type { WorkspaceE2EError } from "../errors";
 import { assert } from "../runtime";
@@ -48,8 +50,8 @@ afterAll(async () => {
 
 const origin = "https://workspace.example.test";
 // Short bounds, so a timeout shows within the test.
-const config = {
-  baseUrl: origin,
+const config: WorkspaceE2EConfig = {
+  ...makeTestE2EConfig(origin),
   timeouts: {
     ...workspaceE2ETimeouts,
     browserAction: 1000,
@@ -57,7 +59,7 @@ const config = {
     datasource: 500,
     uiTransition: 1000,
   },
-} as WorkspaceE2EConfig;
+};
 
 const { completionTitle } = toProfileCompletionFormQuery("");
 const elementId = (selector: string) => selector.replace(/^#/, "");
@@ -93,17 +95,14 @@ const runAccountStep = <A>(
 
 const evaluateOn = async <Arg>(
   html: string,
-  condition: (arg: Arg) => unknown,
+  condition: PageEvaluation<Arg, unknown>,
   arg: Arg
 ) => {
   assert(browser, "Chromium is not running");
   const page = await browser.newPage();
   try {
     await page.setContent(html);
-    return await page.evaluate(
-      condition as (arg: unknown) => unknown,
-      arg as unknown
-    );
+    return await page.evaluate(condition, arg);
   } finally {
     await page.close();
   }
@@ -319,12 +318,14 @@ const profileForm = ({
 const account = { name: "Synthetic Referral", phone: "+420 700 000 000" };
 
 const readSubmissions = (session: E2EBrowserSession) =>
-  session.evaluate(
-    "read profile submissions",
-    () => Reflect.get(window, "submissions") as unknown[],
-    undefined,
-    { timeoutMs: 5000 }
-  );
+  session
+    .evaluate(
+      "read profile submissions",
+      () => ("submissions" in window ? window.submissions : undefined),
+      undefined,
+      { timeoutMs: 5000 }
+    )
+    .pipe(Effect.map(Schema.decodeUnknownSync(Schema.Array(Schema.Unknown))));
 
 test.skipIf(!chromiumAvailable)(
   "completes the profile through its visible fields and submits it once",
@@ -376,7 +377,7 @@ test.skipIf(!chromiumAvailable)(
       },
     ];
     for (const { form, label, submissions } of cases) {
-      let submitted: unknown[] | undefined;
+      let submitted: readonly unknown[] | undefined;
       const result = await runAccountStep(
         form,
         ({ session }) => completeReferralProfile(session, config, account),

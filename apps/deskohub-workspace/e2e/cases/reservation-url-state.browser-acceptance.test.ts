@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
+import type { PageEvaluation } from "./e2e-fixtures.test-utils";
 import {
   areOfficePricesReady,
   hasOfficeContactAlone,
@@ -25,12 +26,12 @@ afterAll(async () => {
 /** What the in-page `read` returns for `html` and `arg`. */
 const readOn = async <Arg, A>(
   html: string,
-  read: (arg: Arg) => A,
+  read: PageEvaluation<Arg, A>,
   arg: Arg
 ) => {
   if (!page) throw new Error("Chromium is not running");
   await page.setContent(html);
-  return page.evaluate(read as (arg: unknown) => A, arg);
+  return page.evaluate(read, arg);
 };
 
 const coffee = '[data-cowork-optional-addon-toggle="coffee"] [role="switch"]';

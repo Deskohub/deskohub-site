@@ -1,16 +1,20 @@
 import { expect, test } from "bun:test";
-import { Effect, Exit } from "effect";
-import type { WorkspaceE2EStepRunner } from "../case-runner";
+import { Effect, Exit, Layer } from "effect";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { makeCoworkCheckoutData } from "../checkout/data";
 import { preparedReservationForm } from "../checkout/reservation-form-preparation";
-import type { WorkspaceE2EConfig } from "../config";
 import { makeWorkspaceE2EHostedPaymentPermitRecorder } from "../coordination/hosted-payment-permit.service.mock";
 import { workspaceE2EError } from "../errors";
-import { workspaceE2ETimeouts } from "../timeouts";
-import type {
-  CheckoutData,
-  CheckoutFlowState,
-  PaymentTerminalScenario,
-} from "../types";
+import type { CheckoutFlowState, PaymentTerminalScenario } from "../types";
+import {
+  fixtureStep,
+  hostedCheckoutRow,
+  type ObservedStep,
+} from "./checkout.test-utils";
+import {
+  makeTestE2EConfig,
+  unopenedE2EDatabase,
+} from "./e2e-fixtures.test-utils";
 import { assertPaymentTerminalPath } from "./payment-terminal";
 
 const injectedFailure: PaymentTerminalScenario = {
@@ -37,41 +41,61 @@ const runUntilStatusPage = async (scenario: PaymentTerminalScenario) => {
     readonly hosted: boolean;
     readonly id: string;
   }> = [];
-  const orderId = "019f7082-1bec-7ab4-8fcd-2f0fdfd9dd71";
+  const orderId = workspaceReservationIdSchema.make(
+    "019f7082-1bec-7ab4-8fcd-2f0fdfd9dd71"
+  );
   const stop = workspaceE2EError("stop after the terminal status page");
-  const runStep = ((step) => {
-    observedSteps.push({
-      permit: step.permit,
-      hosted: hostedPaymentPermit.isHolding(),
-      id: step.id,
-    });
-    if (step.id === "prepare-checkout-pay-page") return Effect.succeed(orderId);
-    if (step.id === "start-checkout-payment")
-      return Effect.succeed({ provider: "nexi" });
-    if (step.id === "read-provider-session-row")
-      return Effect.succeed({ provider: "nexi" });
-    return step.id === "assert-failed-status-page"
-      ? Effect.fail(stop)
-      : Effect.void;
-  }) as WorkspaceE2EStepRunner;
-  const data = {} as CheckoutData;
+  const observe = ({ id, permit }: ObservedStep) => {
+    observedSteps.push({ permit, hosted: hostedPaymentPermit.isHolding(), id });
+  };
+  const check = fixtureStep(observe, (id) =>
+    id === "assert-failed-status-page" ? Effect.fail(stop) : Effect.void
+  );
+  const config = makeTestE2EConfig("https://workspace.example.test");
+  const data = makeCoworkCheckoutData(config.baseUrl, "2099-09-01");
   const state: CheckoutFlowState = { data };
 
   const exit = await Effect.runPromiseExit(
-    assertPaymentTerminalPath({
-      config: { timeouts: workspaceE2ETimeouts } as WorkspaceE2EConfig,
-      data,
-      openSession: Effect.fail(
-        workspaceE2EError("the step contract test opens no browser session")
-      ),
-      runStep,
-      scenario,
-      state,
-      preparation: preparedReservationForm,
-    }).pipe(Effect.provide(hostedPaymentPermit.layer)) as Effect.Effect<
-      void,
-      typeof stop
-    >
+    assertPaymentTerminalPath(
+      {
+        config,
+        data,
+        openSession: Effect.fail(
+          workspaceE2EError("the step contract test opens no browser session")
+        ),
+        runStep: (step) => step.execute,
+        scenario,
+        state,
+        preparation: preparedReservationForm,
+      },
+      {
+        check,
+        preparePayPage: fixtureStep(observe, () => Effect.succeed(orderId)),
+        startHostedPayment: fixtureStep(observe, () =>
+          Effect.succeed("nexi" as const)
+        ),
+        hostedPayment: {
+          check,
+          open: fixtureStep(observe, () =>
+            Effect.succeed({
+              provider: "nexi" as const,
+              complete: () => Effect.void,
+              restart: () =>
+                Effect.die(new Error("unexpected checkout restart")),
+            })
+          ),
+          read: fixtureStep(observe, () =>
+            Effect.succeed(
+              hostedCheckoutRow("terminal-attempt", "nexi-terminal-order")
+            )
+          ),
+        },
+      }
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(unopenedE2EDatabase, hostedPaymentPermit.layer)
+      )
+    )
   );
 
   expect(Exit.isFailure(exit)).toBe(true);

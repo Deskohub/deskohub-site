@@ -9,6 +9,7 @@ import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney } from "@/shared/money/money";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 import type { CheckoutData } from "../types";
+import type { PageEvaluation } from "./e2e-fixtures.test-utils";
 import {
   isAppliedZeroTotalPaySummary,
   isDiscountListedOnce,
@@ -35,24 +36,24 @@ afterAll(async () => {
 /** Whether the in-page `check` accepts `html` for `arg`. */
 const holdsOn = async <Arg>(
   html: string,
-  check: (arg: Arg) => boolean,
+  check: PageEvaluation<Arg, boolean>,
   arg: Arg
 ) => {
   if (!page) throw new Error("Chromium is not running");
   await page.setContent(html);
-  return page.evaluate(check as (arg: unknown) => boolean, arg);
+  return page.evaluate(check, arg);
 };
 
 const enData = {
   locale: "en-US",
   meetingRoom: { duration: { unit: "hour", amount: 1 } },
-} as CheckoutData;
+} satisfies Parameters<typeof toSelectedDurationZeroPrice>[0];
 const csData = {
   locale: "cs-CZ",
   meetingRoom: { duration: { unit: "hour", amount: 1 } },
-} as CheckoutData;
+} satisfies Parameters<typeof toSelectedDurationZeroPrice>[0];
 
-const zeroText = (data: CheckoutData) =>
+const zeroText = (data: Pick<CheckoutData, "locale">) =>
   formatMoney(currencyCZK(0), data.locale);
 
 test.skipIf(!chromiumAvailable)(

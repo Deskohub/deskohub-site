@@ -124,7 +124,7 @@ browserTest("rejects a return to another order", async () => {
     drive: ({ session }) =>
       assertReturnedTerminalStatusPage({
         orderId,
-        scenario: getPaymentTerminalScenarios()[0]!,
+        scenario: getPaymentTerminalScenarios()[0],
         session,
         timeouts,
       }),
@@ -140,7 +140,7 @@ browserTest("fails terminal copy that never offers a retry", async () => {
     drive: ({ session }) =>
       assertReturnedTerminalStatusPage({
         orderId,
-        scenario: getPaymentTerminalScenarios()[0]!,
+        scenario: getPaymentTerminalScenarios()[0],
         session,
         timeouts,
       }),

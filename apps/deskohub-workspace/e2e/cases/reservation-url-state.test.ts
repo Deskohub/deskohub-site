@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import "@/shared/polyfills/temporal";
 import { Effect } from "effect";
 import { getMeetingRoomReservationInterval } from "@/features/reservation/meeting-room-reservation-time";
-import type { DatasourceConfig, WorkspaceE2EConfig } from "../config";
+import { getDatasourceConfig, type WorkspaceE2EConfig } from "../config";
+import { makeTestE2EEnvironment } from "../e2e-env.test-fixture";
 import {
   isWorkspaceE2EOfficeCaseId,
   workspaceE2ENonPaymentCaseIds,
@@ -124,7 +125,7 @@ const makeCases = (withOffice: boolean) =>
         paymentProvider: "nexi",
         timeouts: workspaceE2ETimeouts,
       } satisfies WorkspaceE2EConfig,
-      datasourceConfig: {} as DatasourceConfig,
+      datasourceConfig: getDatasourceConfig(makeTestE2EEnvironment()),
       preparation: {
         discounts: {
           availableBasicDates: ["2099-08-03"],

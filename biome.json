@@ -117,6 +117,8 @@
       "includes": [
         "apps/deskohub-workspace/**",
         "!apps/deskohub-workspace/e2e/**",
+        "apps/deskohub-workspace/e2e/cases/**",
+        "apps/deskohub-workspace/e2e/referrals/**",
         "!**/generated/**",
         "!**/paraglide/**"
       ],

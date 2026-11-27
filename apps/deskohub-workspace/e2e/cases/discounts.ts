@@ -373,8 +373,12 @@ export const makeDiscountE2ECases = ({
       const state = trackCheckoutState(flowStates, scenario.data);
       cases.push({
         checkoutStates: [state],
-        execute: ({ openSeparateSession, openSession, runStep }) =>
-          Effect.gen(function* () {
+        execute: Effect.fn(
+          function* ({
+            openSeparateSession,
+            openSession,
+            runStep,
+          }: WorkspaceE2ECaseContext) {
             yield* runStep({
               execute: prepareDotyposCustomerDiscount(
                 datasourceConfig,
@@ -397,12 +401,12 @@ export const makeDiscountE2ECases = ({
               openSession,
               state,
             });
-          }).pipe(
-            Effect.provideService(HttpClient.HttpClient, httpClient),
-            Effect.mapError((cause) =>
-              toWorkspaceE2EError(`run ${scenario.id} checkout e2e case`, cause)
-            )
-          ),
+          },
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.mapError((cause) =>
+            toWorkspaceE2EError(`run ${scenario.id} checkout e2e case`, cause)
+          )
+        ),
         id: `checkout-${scenario.id}`,
         timeoutMs: config.timeouts.checkoutCase,
       });
@@ -1436,7 +1440,7 @@ const discountCheckoutFlow = (id: string) => ({
 /**
  * Asserts each discount through the pay page's discount tooltip.
  */
-export const assertDisplayedDiscounts = ({
+export const assertDisplayedDiscounts = Effect.fn(function* ({
   config,
   discounts,
   session,
@@ -1446,78 +1450,77 @@ export const assertDisplayedDiscounts = ({
   readonly discounts: readonly ExpectedDiscountApplication[];
   readonly session: E2EBrowserSession;
   readonly timeoutMs?: number;
-}): Effect.Effect<void, WorkspaceE2EError> =>
-  Effect.suspend(() => {
-    let stage:
-      | "react-handler"
-      | "scroll-trigger"
-      | "blur-trigger"
-      | "focus-trigger"
-      | "detail" = "react-handler";
-    let detailIndex = 0;
-    let currentDetail: DiscountDetail | undefined;
-    return Effect.gen(function* () {
-      yield* waitForReactHandler(session, discountDetailsTrigger, "onFocus", {
-        timeoutMs,
-      });
-      stage = "scroll-trigger";
-      yield* scrollIntoView(session, discountDetailsTrigger, {
-        timeoutMs: config.timeouts.browserAction,
-      });
-      stage = "blur-trigger";
-      yield* session.use("focus browser element", async (page) => {
-        const trigger = page
-          .locator(discountDetailsTrigger)
-          .filter({ visible: true });
-        await trigger.blur({ timeout: config.timeouts.browserAction });
-        stage = "focus-trigger";
-        await trigger.focus({ timeout: config.timeouts.browserAction });
-      });
-      for (const discount of discounts) {
-        stage = "detail";
-        detailIndex += 1;
-        currentDetail = toDiscountDetail(discount);
-        yield* waitForPageCondition(
-          session,
-          `${discount.label} discount detail`,
-          isDiscountDetailShown,
-          currentDetail,
-          { timeoutMs }
-        );
-      }
-    }).pipe(
-      // An outer step deadline interrupts the wait before its own timeout.
-      Effect.onError(() =>
-        Effect.sync(() =>
-          log(
-            `DISCOUNT_WAIT stage=${stage} detail_index=${detailIndex} detail_count=${discounts.length}`
-          )
-        ).pipe(
-          Effect.andThen(() =>
-            currentDetail
-              ? session
-                  .evaluate(
-                    "observe failed discount detail",
-                    observeDiscountDetail,
-                    currentDetail,
-                    { timeoutMs: config.timeouts.browserAction }
-                  )
-                  .pipe(
-                    Effect.tap((observation) =>
-                      Effect.sync(() =>
-                        log(
-                          `DISCOUNT_DETAIL triggers=${observation.triggers} visible_triggers=${observation.visibleTriggers} first_visible=${observation.firstVisible} first_linked=${observation.firstLinked} first_label=${observation.firstLabel} first_adjustment=${observation.firstAdjustment} visible_linked=${observation.visibleLinked} visible_label=${observation.visibleLabel} visible_adjustment=${observation.visibleAdjustment} body_label=${observation.bodyLabel}`
-                        )
+}) {
+  let stage:
+    | "react-handler"
+    | "scroll-trigger"
+    | "blur-trigger"
+    | "focus-trigger"
+    | "detail" = "react-handler";
+  let detailIndex = 0;
+  let currentDetail: DiscountDetail | undefined;
+  yield* Effect.gen(function* () {
+    yield* waitForReactHandler(session, discountDetailsTrigger, "onFocus", {
+      timeoutMs,
+    });
+    stage = "scroll-trigger";
+    yield* scrollIntoView(session, discountDetailsTrigger, {
+      timeoutMs: config.timeouts.browserAction,
+    });
+    stage = "blur-trigger";
+    yield* session.use("focus browser element", async (page) => {
+      const trigger = page
+        .locator(discountDetailsTrigger)
+        .filter({ visible: true });
+      await trigger.blur({ timeout: config.timeouts.browserAction });
+      stage = "focus-trigger";
+      await trigger.focus({ timeout: config.timeouts.browserAction });
+    });
+    for (const discount of discounts) {
+      stage = "detail";
+      detailIndex += 1;
+      currentDetail = toDiscountDetail(discount);
+      yield* waitForPageCondition(
+        session,
+        `${discount.label} discount detail`,
+        isDiscountDetailShown,
+        currentDetail,
+        { timeoutMs }
+      );
+    }
+  }).pipe(
+    // An outer step deadline interrupts the wait before its own timeout.
+    Effect.onError(() =>
+      Effect.sync(() =>
+        log(
+          `DISCOUNT_WAIT stage=${stage} detail_index=${detailIndex} detail_count=${discounts.length}`
+        )
+      ).pipe(
+        Effect.andThen(() =>
+          currentDetail
+            ? session
+                .evaluate(
+                  "observe failed discount detail",
+                  observeDiscountDetail,
+                  currentDetail,
+                  { timeoutMs: config.timeouts.browserAction }
+                )
+                .pipe(
+                  Effect.tap((observation) =>
+                    Effect.sync(() =>
+                      log(
+                        `DISCOUNT_DETAIL triggers=${observation.triggers} visible_triggers=${observation.visibleTriggers} first_visible=${observation.firstVisible} first_linked=${observation.firstLinked} first_label=${observation.firstLabel} first_adjustment=${observation.firstAdjustment} visible_linked=${observation.visibleLinked} visible_label=${observation.visibleLabel} visible_adjustment=${observation.visibleAdjustment} body_label=${observation.bodyLabel}`
                       )
-                    ),
-                    Effect.ignore
-                  )
-              : Effect.void
-          )
+                    )
+                  ),
+                  Effect.ignore
+                )
+            : Effect.void
         )
       )
-    );
-  });
+    )
+  );
+});
 
 /** The control whose tooltip details the checkout's discounts. */
 const discountDetailsTrigger = "[data-checkout-discount-details]";

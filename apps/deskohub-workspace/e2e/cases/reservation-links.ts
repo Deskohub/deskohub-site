@@ -818,7 +818,9 @@ const formatZeroTotalAdjustment = (locale: Locale) =>
 const zeroTotalMoneyText = (locale: Locale) =>
   formatMoney(currencyCZK(0), locale);
 
-export const toAppliedZeroTotalPaySummary = (data: CheckoutData) => ({
+export const toAppliedZeroTotalPaySummary = (
+  data: Pick<CheckoutData, "locale">
+) => ({
   appliedMessage: appliedDiscountMessage(data.locale),
   totalLabel: m.checkoutSummaryItemTotal({}, { locale: data.locale }),
   zeroTotal: zeroTotalMoneyText(data.locale),
@@ -894,7 +896,13 @@ export const isDiscountListedOnce = (
   return matches.length === 1;
 };
 
-export const toSelectedDurationZeroPrice = (data: CheckoutData) => {
+export const toSelectedDurationZeroPrice = (data: {
+  readonly locale: CheckoutData["locale"];
+  readonly meetingRoom?: Pick<
+    NonNullable<CheckoutData["meetingRoom"]>,
+    "duration"
+  >;
+}) => {
   assert(data.meetingRoom, "reservation-link checkout interval missing");
   return {
     discountedPriceText: m.checkoutSummaryDiscountedPrice(
