@@ -2,6 +2,7 @@ import { expect, mock, test } from "bun:test";
 import { Effect, Layer } from "effect";
 import { getReservationAccessCookieName } from "@/features/reservation/backend/reservation-access-cookie";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { InvitationAddRefused } from "@/features/reservation-invitees/backend/add-reservation-invitees";
 import { InvitationResendRefused } from "@/features/reservation-invitees/backend/reservation-invitations.service";
 
 mock.module("server-only", () => ({}));
@@ -69,11 +70,30 @@ mock.module(
   })
 );
 
+const add = mock((input: { readonly accessCookie?: string }) =>
+  input.accessCookie === ownerCookie
+    ? Effect.succeed({ added: 1 })
+    : Effect.fail(
+        new InvitationAddRefused({ refusal: { reason: "not-found" } })
+      )
+);
+mock.module(
+  "@/features/reservation-invitees/backend/add-reservation-invitees",
+  () => ({
+    addAuthorizedReservationInvitees: add,
+    addReservationInviteesServices: Layer.empty,
+    InvitationAddRefused,
+  })
+);
+
+const { addReservationInvitees } = await import("./add-reservation-invitees");
+
 const { resendReservationInvitation } = await import(
   "./resend-reservation-invitation"
 );
 
 test("the invitation Server Action returns ISO instants and a generic denial", async () => {
+  owner = true;
   const input = { orderId, inviteeId };
   expect(await resendReservationInvitation(input)).toEqual({
     status: "sent",
@@ -99,5 +119,25 @@ test("the invitation Server Action returns ISO instants and a generic denial", a
     ...input,
     locale: "en-US",
     accessCookie: undefined,
+  });
+});
+
+test("the add-invitees Server Action passes the order-scoped booker cookie", async () => {
+  owner = true;
+  const input = { orderId, emails: ["synthetic-invitee@deskohub.test"] };
+  expect(await addReservationInvitees(input)).toEqual({
+    status: "added",
+    added: 1,
+  });
+  expect(add).toHaveBeenCalledWith({
+    ...input,
+    locale: "en-US",
+    accessCookie: ownerCookie,
+  });
+
+  owner = false;
+  expect(await addReservationInvitees(input)).toEqual({
+    status: "refused",
+    reason: "not-found",
   });
 });
