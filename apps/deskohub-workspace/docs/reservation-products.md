@@ -1,6 +1,6 @@
 # Workspace reservation products
 
-Workspace offers three reservation families: cowork, meeting room, and office. Each family owns its selection rules, availability, customer summary, and product identity; checkout must not treat one family as the default for another.
+Workspace offers cowork, meeting room, and office reservations. Team Table is a planned reservation family. Each family has its own selection rules, availability, customer summary, and product identity. Checkout applies the rules of the selected family.
 
 ## Opening hours
 
@@ -110,6 +110,28 @@ Office price is calculated per selected day from the daily office access price p
 
 The office is exclusive for the complete selected date range. Any existing occupancy makes it unavailable, regardless of unused seat capacity.
 
+## Team Table (planned)
+
+A Team Table reservation gives one group exclusive use of a table for the booked interval. The group chooses a table size from the seat capacities of enabled, visible Team Tables configured in Dotypos. Workspace checks availability and assigns a table of exactly the selected size.
+
+Starts and ends fall on Prague-local 15-minute boundaries. A booking lasts 15 minutes to 24 elapsed hours and must fit within the same usable hours as Open Space. With the current cutoff, a booking must end by 17:00 on its start date. When Open Space is available around the clock, a booking may cross midnight as long as the full interval fits the applicable hours.
+
+The booking calendar covers six months. A customer can book for today, and can submit and pay after the start, while the exclusive end is still in the future and a table is available. The table is held from the booked start until the exclusive end. Team Table checkout offers neither early setup nor a coffee add-on.
+
+Checkout and invoices show two price lines. The base charge is CZK 60 per seat. The time charge is CZK 20 per seat per hour, billed at CZK 5 per seat for every 15-minute slot in the booking. Both charges use the selected table size and are discountable. Public prices show the base and hourly amounts for each bookable table size.
+
+Team Table becomes bookable when its reservation flow is complete and its release switch is on. While the switch is off, booking surfaces hide the offer and refuse new Team Table selections and bookings.
+
+### Shared tables and reassignment
+
+Workspace assigns Open Space bookings to tables outside the Team Table pool first. Within the Team Table pool, it fills tables already in use before assigning an empty table. An active Team Table hold or confirmed booking blocks all Open Space and Team Table use of its table for the booked interval.
+
+For Team Table, Workspace prefers a table that needs no moves. Among equally suitable tables, it prefers one with a non-overlapping Team Table booking on a Prague date the request touches, before using a table with no Team Table bookings on those dates.
+
+To make room on a future Prague date, Workspace can reassign unseated Open Space holds for paid single-day bookings, Entry Pack visits, and Unlimited Pass days. Each hold needs room at a different Open Space table for its entire reserved interval. Workspace can move several holds to free one table. Today's bookings, Reserved Desk bookings, and bookings without a matching Workspace record stay in place.
+
+Availability includes a Team Table slot only when a table is clear or every blocker can be moved. Checkout checks live availability again and places the Team Table hold only after the moves have cleared its table. Reassignment preserves the Open Space booking, payment, and door code.
+
 ## Cross-family rules
 
 - The customer confirmation email contains a protected link to the dedicated reservation access page, never the door PIN itself. Once an authorized paid, locally and live-confirmed reservation has an issued PIN, the access page displays it together with the exact reservation access span, including any selected early setup. Igloohome's programmed AlgoPIN bounds alone determine when the lock accepts the code; there is no local display time gate, and display never extends the reserved use of the space. Payment redirects and fulfillment recovery remain on the separate reservation status page.
@@ -128,3 +150,10 @@ pairs remain separate. Nonnumeric names follow in provider order. For example,
 omits the table block and never falls back to an assigned table ID. Reserved
 Desk, other reservation families, and historical cowork tiers retain assigned-
 table email behavior.
+
+With Team Table, Open Space confirmation, preview, and retry emails will omit
+tables held by active Team Table bookings that overlap the Open Space booking's
+usable interval. Active bookings include unexpired holds and confirmed bookings.
+If the overlap check fails, fulfillment will retry the confirmation. Status and
+on-site views will omit the list while the check is unavailable. Team Table
+confirmation emails, status pages, and access pages will name the assigned table.
