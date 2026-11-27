@@ -36,6 +36,12 @@ const legalDocumentKeys = [
   "marketing-communications",
 ] as const satisfies ReadonlyArray<LegalDocumentKey>;
 
+const teamTableLegalPages = [
+  "/terms-and-conditions",
+  "/privacy-policy",
+  "/operating-rules",
+] as const;
+
 // The legal pages print their date in each locale's long form; English uses
 // the day-first form.
 const dateFormatLocale = (locale: Locale) =>
@@ -75,8 +81,7 @@ describe("public page content dates", () => {
         const scheduledLegalRevision =
           isoDate === contentDate &&
           isoDate === "2026-12-01" &&
-          (pathname === "/terms-and-conditions" ||
-            pathname === "/operating-rules");
+          teamTableLegalPages.some((page) => page === pathname);
         if (!scheduledLegalRevision) {
           expect(Temporal.PlainDate.compare(date, today)).toBeLessThanOrEqual(
             0
@@ -86,7 +91,7 @@ describe("public page content dates", () => {
     }
   });
 
-  test.each(["/terms-and-conditions", "/operating-rules"] as const)(
+  test.each(teamTableLegalPages)(
     "date %s in every locale by the Team Table revision",
     (pathname) => {
       for (const locale of locales) {

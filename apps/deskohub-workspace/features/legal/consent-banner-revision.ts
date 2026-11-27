@@ -25,43 +25,43 @@ export const consentBannerDocumentVersions: Readonly<
 > = {
   "en-US": {
     "privacy-policy":
-      "3f36b29f196c659d2672472007e43f35dc08ff0b16a1ff09af1a50326c4dd3f8",
+      "7ca3873ddc2c9bd6977fb9aa3968098fffc64557c728b653b2ff029068bf4d92",
     "cookie-policy":
       "2f705c21210f6fc44919ba388ddf4456abad86fa88dee41a25d87df7c0f42033",
   },
   "cs-CZ": {
     "privacy-policy":
-      "06ef7eccee6ae782d255f20318a23487b3a6919d9abf6da1310aa0c4355ffaba",
+      "fbe427f73353085e6a227fae7031c61be1c99de52ecfe2a31dd0ec22d1fbddb8",
     "cookie-policy":
       "8aa600ff58b9d8d896dbe63f55b98774211ea53d031e8021815916b9b11957b6",
   },
   "de-DE": {
     "privacy-policy":
-      "12971bc012fa60f835e50ebfa162649dd15138ab5cdcb75f90c9f6cc0e439fb5",
+      "210b477d135610028fc1684644d53adc27cbaf96613f6ecf1e47a5f4d826a204",
     "cookie-policy":
       "c1754e2cda352680810ee0826c73ad6149b37b3d9ce2d89b1c9f7ebef49b3934",
   },
   "uk-UA": {
     "privacy-policy":
-      "5e2fb2f96c5600e33892e1a8d6b348fab61fcfc94c552529c2ab19466c6c932e",
+      "5b1da49fd89873cf665b7edf27a637b5280f118af6f6098ffca7591289259ca6",
     "cookie-policy":
       "46d2f95acd2e8de5cd0a4fc0bb62aea6ac9475357228f44d9b071194ced0ed5b",
   },
   "sk-SK": {
     "privacy-policy":
-      "b5f247ecb4e7311ee0847aaf5f141310cd1ff37a34b87e2ca6fc792b7d8f32a3",
+      "f464b6cbc710bdd8836f2e24a2ff06e7a06d79b08b18b86610db9a7c3654f610",
     "cookie-policy":
       "39dd69f612391cf5f4a62a11de40e45270ce12dd3c59ab98e5811533bd3b561b",
   },
   "vi-VN": {
     "privacy-policy":
-      "b2a920b3aeca14d6321ef1bfa0f762076ccf365bb483664a19f8f26c753912fc",
+      "431ae005187d8f28439b3d0d61d994b20b599e91ad1634c92fa6833c673e9bb2",
     "cookie-policy":
       "45b40480e12b3e026438562a8263bfb64f5804a257c669e65ce9c85c59deef9e",
   },
   "hi-IN": {
     "privacy-policy":
-      "feeaa3947ca6aeca453a0c49ff09cff76c7d48fd381b5521ac3d51fa65614330",
+      "890971196d692443d93fa70acd612bdf695a3a1d19960a795426865b2e2f8526",
     "cookie-policy":
       "1a1525e0af085f8817a19e2108f592ae8213e6427676c1947a5c3002c9f0b9bb",
   },

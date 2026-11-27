@@ -314,7 +314,7 @@ const operatingRulesSections: LegalSection[] = [
 
 const legalDocuments = {
   "privacy-policy": {
-    updatedAt: "18. November 2026",
+    updatedAt: "1. Dezember 2026",
     sections: [
       {
         heading: "1. Verantwortlicher",
@@ -353,9 +353,11 @@ const legalDocuments = {
           </>,
           <>
             Die E-Mail-Adresse einer eingeladenen Person erhalten wir von dem
-            Kunden, der das private Büro reserviert hat. Wir verwenden sie, um
-            die Einladung und Mitteilungen zu Änderungen der Reservierung zu
-            senden und der eingeladenen Person Zugang zum Büro zu ermöglichen.
+            Kunden, der ein privates Büro oder einen Teamtisch reserviert hat.
+            Wir verwenden die Adresse, um die Einladung und Mitteilungen zu
+            Änderungen der Reservierung, einschließlich ihrer Stornierung oder
+            Wiederherstellung, zu senden und der eingeladenen Person den
+            gemeinsamen Zutritt für diese Reservierung zu ermöglichen.
             Rechtsgrundlage ist unser berechtigtes Interesse daran, eingeladenen
             Personen die Nutzung der Reservierung zu ermöglichen und sie über
             deren Status zu informieren. Wir speichern die Adresse bis 30 Tage

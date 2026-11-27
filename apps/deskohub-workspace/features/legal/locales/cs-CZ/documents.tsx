@@ -308,7 +308,7 @@ const operatingRulesSections: LegalSection[] = [
 
 export const legalDocuments = {
   "privacy-policy": {
-    updatedAt: "18. listopadu 2026",
+    updatedAt: "1. prosince 2026",
     sections: [
       {
         heading: "1. Správce",
@@ -345,10 +345,11 @@ export const legalDocuments = {
             nebo pracovní stanice.
           </>,
           <>
-            E-mailovou adresu osoby pozvané do soukromé kanceláře získáváme od
-            zákazníka, který kancelář rezervoval. Používáme ji k zaslání
-            pozvánky a zpráv o změnách této rezervace a k tomu, aby pozvaná
-            osoba mohla využít přístup do kanceláře. Právním základem je náš
+            E-mailovou adresu pozvané osoby získáváme od zákazníka, který
+            rezervoval soukromou kancelář nebo Týmový stůl. Adresu používáme k
+            zaslání pozvánky a zpráv o změnách rezervace, včetně jejího zrušení
+            nebo obnovení, a k tomu, aby pozvaná osoba mohla využít sdílený
+            přístup do prostor v rámci rezervace. Právním základem je náš
             oprávněný zájem umožnit pozvaným osobám využít rezervaci a
             informovat je o jejím stavu. Adresu uchováváme do 30 dnů po skončení
             přístupu. Pokud adresa patří k zákaznickému účtu nebo evidovanému
