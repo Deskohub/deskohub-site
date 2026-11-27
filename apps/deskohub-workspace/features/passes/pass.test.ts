@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import {
   getWorkspaceProductTargetsCovering,
   workspaceProductTargetMatches,
   workspaceProductTargetSchema,
 } from "@/features/discounts/product-target";
 import { currencyCZK } from "@/shared/money/currencies";
+import { canHolderViewPassOrderStatus } from "./backend/pass-order-status-access";
 import { getEntryPackWithdrawalRefund } from "./pass";
 import {
   entryPackOffers,
@@ -95,5 +97,86 @@ describe("Entry pack withdrawal", () => {
         unusedEntries: 6,
       })
     ).toThrow(RangeError);
+  });
+});
+
+describe("pass order status viewer access", () => {
+  const buyer = customerAccountIdSchema.make(crypto.randomUUID());
+  const recipient = customerAccountIdSchema.make(crypto.randomUUID());
+  const claimedAt = Temporal.Instant.from("2026-11-20T12:00:00Z");
+
+  test("allows buyers and claimed fulfilled complimentary holders, but denies paid gift recipients", () => {
+    expect(
+      canHolderViewPassOrderStatus(
+        {
+          buyerAccountId: buyer,
+          paymentState: "paid",
+          fulfillmentState: "fulfilled",
+          status: "active",
+          giftClaimedAt: null,
+        },
+        buyer
+      )
+    ).toBe(true);
+    expect(
+      canHolderViewPassOrderStatus(
+        {
+          buyerAccountId: buyer,
+          paymentState: "paid",
+          fulfillmentState: "fulfilled",
+          status: "active",
+          giftClaimedAt: claimedAt,
+        },
+        recipient
+      )
+    ).toBe(false);
+    expect(
+      canHolderViewPassOrderStatus(
+        {
+          buyerAccountId: buyer,
+          paymentState: "complimentary",
+          fulfillmentState: "fulfilled",
+          status: "active",
+          giftClaimedAt: claimedAt,
+        },
+        recipient
+      )
+    ).toBe(true);
+    expect(
+      canHolderViewPassOrderStatus(
+        {
+          buyerAccountId: buyer,
+          paymentState: "complimentary",
+          fulfillmentState: "fulfilled",
+          status: "active",
+          giftClaimedAt: null,
+        },
+        recipient
+      )
+    ).toBe(false);
+    expect(
+      canHolderViewPassOrderStatus(
+        {
+          buyerAccountId: buyer,
+          paymentState: "complimentary",
+          fulfillmentState: "fulfilled",
+          status: "active",
+          giftClaimedAt: null,
+        },
+        buyer
+      )
+    ).toBe(true);
+    expect(
+      canHolderViewPassOrderStatus(
+        {
+          buyerAccountId: buyer,
+          paymentState: "complimentary",
+          fulfillmentState: "processing",
+          status: "pending_payment",
+          giftClaimedAt: claimedAt,
+        },
+        buyer
+      )
+    ).toBe(false);
   });
 });
