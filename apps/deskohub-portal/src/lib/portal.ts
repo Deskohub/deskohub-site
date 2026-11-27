@@ -20,7 +20,10 @@ export function getLocalizedPortalUrl(locale: Locale) {
   return `${portalOrigin}/${locale}/`;
 }
 
-export function getPortalMetadata(locale: Locale): PortalMetadata {
+export function getPortalMetadata(
+  locale: Locale,
+  { barClosed }: { barClosed: boolean }
+): PortalMetadata {
   return {
     alternateDefaultUrl: `${portalOrigin}/`,
     alternates: locales.map((alternateLocale) => ({
@@ -29,7 +32,9 @@ export function getPortalMetadata(locale: Locale): PortalMetadata {
     })),
     canonicalUrl: getLocalizedPortalUrl(locale),
     lang: locale,
-    metaDescription: m.portalMetaDescription({}, { locale }),
+    metaDescription: barClosed
+      ? m.portalMetaDescriptionBarClosed({}, { locale })
+      : m.portalMetaDescription({}, { locale }),
     title: m.portalTitle({}, { locale }),
   };
 }
