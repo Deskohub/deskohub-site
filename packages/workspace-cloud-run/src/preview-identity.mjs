@@ -8,6 +8,14 @@ export const cloudRunRevisionHeader = "x-deskohub-cloud-run-revision";
 export const previewBackendBranchTag = (branch) =>
   `b-${sha256Hex(branch).slice(0, 12)}`;
 
+const connectionOverrides = new Set([
+  "dbname",
+  "host",
+  "hostaddr",
+  "options",
+  "port",
+]);
+
 /**
  * Comparison key for the direct and pooled URLs on the same Neon endpoint.
  * @param {string} connectionString
@@ -17,9 +25,13 @@ export const previewDatabaseEndpoint = (connectionString) => {
   if (
     !url ||
     !["postgres:", "postgresql:"].includes(url.protocol) ||
+    (url.port !== "" && url.port !== "5432") ||
     !/^ep-[a-z0-9-]+\.[a-z0-9.-]+\.neon\.tech$/.test(url.hostname) ||
     !/^\/[^/]+$/.test(url.pathname)
   ) {
+    return undefined;
+  }
+  if (Array.from(url.searchParams.keys()).some((key) => connectionOverrides.has(key.toLowerCase()))) {
     return undefined;
   }
   const endpoint = url.hostname.replace(/-pooler\./, ".");

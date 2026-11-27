@@ -22,8 +22,8 @@ export const previewImageRepository = `${previewRegion}-docker.pkg.dev/${preview
 
 export const previewServices = {
   api: "workspace-api-preview",
-  "tasks-worker": "workspace-tasks-worker-preview",
-  "scheduler-worker": "workspace-scheduler-worker-preview",
+  "tasks-worker": "workspace-tasks-preview",
+  "scheduler-worker": "workspace-scheduler-preview",
 } as const;
 
 export type PreviewRole = keyof typeof previewServices;

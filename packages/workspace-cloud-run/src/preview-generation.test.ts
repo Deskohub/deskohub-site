@@ -21,6 +21,9 @@ test("derives a deterministic tag and keeps the base service as the audience", (
     taggedCloudRunOrigin("https://workspace-api-preview.example.com", tag)
   ).toBeUndefined();
   expect(taggedCloudRunOrigin(origin, "../bad")).toBeUndefined();
+  expect(
+    taggedCloudRunOrigin(`https://${"a".repeat(53)}.run.app`, tag)
+  ).toBeUndefined();
 });
 
 test("binds both Neon URL formats to one endpoint without credential material", () => {
@@ -40,6 +43,13 @@ test("binds both Neon URL formats to one endpoint without credential material", 
   expect(
     previewDatabaseEndpoint("postgresql://localhost/neondb")
   ).toBeUndefined();
+  for (const key of ["dbname", "host", "hostaddr", "options", "port"]) {
+    expect(
+      previewDatabaseEndpoint(
+        `postgresql://ep-test.${domain}/neondb?${key}=other`
+      )
+    ).toBeUndefined();
+  }
 });
 
 test("changes the generation for every immutable preview identity component", () => {

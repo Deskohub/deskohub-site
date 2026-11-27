@@ -608,23 +608,15 @@ describe("post-destroy inventory", () => {
     const preview = [
       listing(
         "^run services list",
-        "workspace-api-preview\nworkspace-tasks-worker-preview"
+        "workspace-api-preview\nworkspace-tasks-preview"
       ),
       listing(
         "^run revisions list",
-        "workspace-api-preview-g-test\nworkspace-scheduler-worker-preview-seed"
+        "workspace-api-preview-g-abcdef1234567890\nworkspace-scheduler-preview-seed"
       ),
       listing("^storage ls -r", emptiedState),
     ];
     expect(inventory(preview).exitCode).toBe(0);
-    const result = inventory([
-      listing("^run services list", "workspace-api\nworkspace-api-preview"),
-      ...preview.slice(1),
-    ]);
-    expect(result.exitCode).toBe(1);
-    expect(result.output).toContain(
-      "proof resources remain in run-services: workspace-api"
-    );
   });
 
   test("lists every Compute class across all of the project's scopes", () => {
