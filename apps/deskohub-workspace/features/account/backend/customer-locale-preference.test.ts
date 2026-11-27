@@ -35,7 +35,7 @@ const save = async (
 ) => {
   const sections = makeCustomerAccountSections(fixture);
   const writes: (readonly unknown[])[] = [];
-  const execute: SqlConnection.Connection["execute"] = (_sql, params) =>
+  const execute = (_sql: string, params: readonly unknown[]) =>
     options.writeFails
       ? Effect.fail(
           new SqlError.SqlError({

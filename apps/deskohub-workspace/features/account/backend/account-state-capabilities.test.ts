@@ -42,6 +42,7 @@ mock.module(
       Default: Layer.succeed(RequestFeatureFlags, {
         isEnabled: (key: string) =>
           currentRequestHeaders.pipe(
+            Effect.orDie,
             Effect.map((headers) => {
               evaluations.push(`${headers.get("x-test-request")} ${key}`);
               return (headers.get("x-test-flags") ?? "")
@@ -94,6 +95,7 @@ const { accountStateCapabilitiesForRun } = await import(
 const { loadAccountState } = await import("./account-state");
 
 const requestName = currentRequestHeaders.pipe(
+  Effect.orDie,
   Effect.map((headers) => headers.get("x-test-request") ?? "missing")
 );
 

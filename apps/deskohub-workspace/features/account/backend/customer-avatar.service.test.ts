@@ -354,7 +354,11 @@ const makeLayer = (namespace: Option.Option<string>) =>
   );
 
 const runWith = <A, E>(
-  effect: Effect.Effect<A, E, CustomerAvatarService>,
+  effect: Effect.Effect<
+    A,
+    E,
+    Context.Service.Identifier<typeof CustomerAvatarService>
+  >,
   namespace: Option.Option<string> = Option.some("avatars/test")
 ) => Effect.runPromise(Effect.provide(effect, makeLayer(namespace)));
 

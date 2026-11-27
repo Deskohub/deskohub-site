@@ -243,7 +243,7 @@ describe("loadAccountState", () => {
       passkeys: { accountId, passkeys: [] },
       assistants: [],
       referralsEnabled: true,
-      referralCode: "RFL12345",
+      referralCode: summary.code,
     });
     expect(calls).toContain("find RFL12345");
   });
@@ -391,7 +391,9 @@ describe("loadAccountState", () => {
     layerOverrides = {
       referralRelease: releaseGateForRun(
         {
+          flag: ReferralReleaseGate.flag,
           isOpen: ReferralReleaseGate.isOpen,
+          decision: ReferralReleaseGate.decision,
           fromDecision: ReferralReleaseGate.fromDecision,
           fromEvaluation: ReferralReleaseGate.fromEvaluation,
           Live: ReferralReleaseGate.fromEvaluation(
