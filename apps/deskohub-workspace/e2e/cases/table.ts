@@ -38,6 +38,7 @@ import {
 } from "../integrations/dotypos";
 import { pollUntil } from "../polling";
 import { isPreviewPageAvailable } from "../preview-readiness";
+import { bindCheckoutContact } from "../referrals/checkout";
 import { assert, log, parseUrl } from "../runtime";
 import {
   getWorkspaceE2ETableStatusAddedInvitee,
@@ -151,17 +152,23 @@ export const makeTableE2ECases = ({
     if (!preparation) return [];
 
     const httpClient = yield* HttpClient.HttpClient;
-    const data = makeTableCheckoutData(
+    const initialData = makeTableCheckoutData(
       config.baseUrl,
       preparation.slot,
       "table-paid"
     );
-    const state = trackCheckoutState(flowStates, data);
-    const checkoutInvitees = data.table?.checkoutInvitees ?? [];
     const addedInvitee = getWorkspaceE2ETableStatusAddedInvitee();
 
-    return [
-      {
+    const makeTablePaidCase = (
+      data: CheckoutData,
+      state: CheckoutFlowState
+    ): WorkspaceE2ECase => {
+      const checkoutInvitees = data.table?.checkoutInvitees ?? [];
+      return {
+        bindAccountContact: (contact) => {
+          const boundData = bindCheckoutContact(data, contact);
+          return makeTablePaidCase(boundData, { data: boundData });
+        },
         checkoutStates: [state],
         execute: ({ openSeparateSession, openSession, runStep }) =>
           executeCheckoutFlow({
@@ -220,8 +227,11 @@ export const makeTableE2ECases = ({
           ),
         id: "checkout-table-paid",
         timeoutMs: config.timeouts.checkoutCase,
-      },
-    ];
+      };
+    };
+
+    const initialState = trackCheckoutState(flowStates, initialData);
+    return [makeTablePaidCase(initialData, initialState)];
   });
 
 const assertTablePayPage = (

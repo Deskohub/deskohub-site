@@ -161,6 +161,14 @@ export type WorkspaceE2ECaseContext = {
 };
 
 export type WorkspaceE2ECase = {
+  /**
+   * Rebinds the case to book as the signed-in checkout booker's own account,
+   * so post-fulfillment customer views (such as Door Access) authorize the
+   * same browser session without switching to someone-else mode.
+   */
+  readonly bindAccountContact?: (
+    contact: Pick<CheckoutData, "email" | "name" | "phone">
+  ) => WorkspaceE2ECase;
   readonly checkoutStates: readonly CheckoutFlowState[];
   readonly id: string;
   readonly timeoutMs: number;
