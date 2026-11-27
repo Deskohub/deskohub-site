@@ -16,7 +16,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "en-US",
     documentKey: "terms-and-conditions",
-    version: "0b13e610d7da263934d4c3675b76fea627dbdb58827534ca3103371083f63600",
+    version: "2f7edd6f477c4f99d86bbc1322458dbcc3ef0d7ae6ac259e379a9bed8455d121",
   },
   {
     locale: "en-US",
@@ -41,7 +41,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "cs-CZ",
     documentKey: "terms-and-conditions",
-    version: "0dd6539a5a1a854727756fb30e5eb531d02395716f3c25e7adcb0f14700190b8",
+    version: "2ba9f277f8797bf8a5d198b94af93e1d01516c83236570b96f30d6153d47f6ca",
   },
   {
     locale: "cs-CZ",
