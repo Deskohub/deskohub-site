@@ -292,7 +292,7 @@ export type AdministrationReservationSummary = {
    */
   readonly setupStartsAt: string | null;
   readonly date: string | null;
-  readonly type: "cowork" | "meeting-room" | "office";
+  readonly type: WorkspaceReservationKind;
   readonly product: AdministrationReservationProduct;
   /** The English product name the administration API shows. */
   readonly typeLabel: string;
@@ -443,8 +443,9 @@ const customerReservationActivityCategoryPriority = {
   "cowork-basic": 0,
   "cowork-plus": 1,
   "cowork-profi": 2,
-  "meeting-room": 3,
-  office: 4,
+  table: 3,
+  "meeting-room": 4,
+  office: 5,
 } satisfies Record<AdministrationCustomerReservationActivityCategory, number>;
 
 type AdministrationDiscountApplication = {
@@ -776,7 +777,11 @@ const getFavoriteReservationProduct = (
     | { readonly kind: string | null; readonly tier: string | null }
     | undefined
 ): AdministrationReservationProduct | null => {
-  if (row?.kind === "meeting-room" || row?.kind === "office") {
+  if (
+    row?.kind === "meeting-room" ||
+    row?.kind === "office" ||
+    row?.kind === "table"
+  ) {
     return { kind: row.kind };
   }
   return row?.tier && isWorkspaceCoworkProductTier(row.tier)
@@ -791,6 +796,7 @@ const getFavoriteProductLabel = (
     | undefined
 ): string | null => {
   if (row?.kind === "meeting-room") return "Meeting Room";
+  if (row?.kind === "table") return "Team Table";
   return row?.tier
     ? `Cowork ${row.tier[0]?.toUpperCase()}${row.tier.slice(1)}`
     : null;
@@ -820,6 +826,7 @@ const getReservationTypeLabel = (
 ) => {
   if (row.reservationDetails.kind === "meeting-room") return "Meeting Room";
   if (row.reservationDetails.kind === "office") return "Private Office";
+  if (row.reservationDetails.kind === "table") return "Team Table";
   return getWorkspaceProductByTier(row.reservationDetails.entryTier).label;
 };
 
@@ -1214,6 +1221,8 @@ end`;
 const reservationTypeSort = sql<string>`case
   when ${StoredReservationDetails.kind} = 'meeting-room'
     then 'Meeting Room'
+  when ${StoredReservationDetails.kind} = 'table'
+    then 'Team Table'
   else 'Cowork ' || initcap(${StoredReservationDetails.property("cowork", "tier")})
 end`;
 
