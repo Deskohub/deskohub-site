@@ -86,6 +86,7 @@ jobs:
       status_reason: ${{ steps.status-without-run.outputs.reason }}
       status_state: ${{ steps.status-without-run.outputs.state }}
       url: ${{ steps.target.outputs.url }}
+      url_digest: ${{ steps.target.outputs.url_digest }}
     steps:
       # Only the workflow commit's flow parser is checked out, never PR code.
       - name: Checkout E2E flow parser
@@ -403,6 +404,10 @@ jobs:
           fi
 
           echo "url=$normalized_url" >> "$GITHUB_OUTPUT"
+          if [[ "${backend_preview:-}" == true ]]; then
+            url_digest="$(printf '%s' "$normalized_url" | sha256sum | cut -d ' ' -f 1)"
+            echo "url_digest=$url_digest" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Decide status without an E2E run
         id: status-without-run
@@ -622,7 +627,7 @@ jobs:
       deployment_id: ${{ steps.deployment.outputs.deployment_id }}
       revision: ${{ steps.gate.outputs.revision }}
     env:
-      WORKSPACE_E2E_BASE_URL: ${{ needs.resolve-target.outputs.url }}
+      TARGET_URL_DIGEST: ${{ needs.resolve-target.outputs.url_digest }}
       TARGET_SHA: ${{ needs.resolve-target.outputs.sha }}
       TARGET_REF: ${{ needs.resolve-target.outputs.head_ref }}
     steps:

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import {
   backendRevisionHeader,
@@ -9,6 +10,7 @@ import {
   previewRuntimeGeneration,
 } from "../../../packages/workspace-cloud-run/src/preview-identity.mjs";
 import { checkPreviewBinding } from "./e2e-gate.mjs";
+import { originFromE2EEvent } from "./e2e-target.mjs";
 
 const input = {
   origin: "https://deskohub-workspace-site-abcdef123-synthetic.vercel.app",
@@ -71,4 +73,16 @@ test("only the gate outside the lease retries a missing generation", async () =>
   await assert.rejects(checkPreviewBinding({ ...input, origin: "https://different.test" }, async () => {
     assert.fail("A foreign origin received the bypass secret");
   }), /protected exact-SHA preview/);
+});
+
+test("loads the protected origin from the event using the validated digest", () => {
+  const digest = createHash("sha256").update(input.origin).digest("hex");
+  assert.equal(originFromE2EEvent({ inputs: { url: `${input.origin}/` } }, {
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    TARGET_URL_DIGEST: digest,
+  }), input.origin);
+  assert.throws(() => originFromE2EEvent({ client_payload: { url: "https://example.test" } }, {
+    GITHUB_EVENT_NAME: "repository_dispatch",
+    TARGET_URL_DIGEST: digest,
+  }), /does not match the validated E2E deployment/);
 });

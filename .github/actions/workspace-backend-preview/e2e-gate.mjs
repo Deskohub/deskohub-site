@@ -1,4 +1,5 @@
-import { appendFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   backendRevisionHeader,
@@ -76,8 +77,11 @@ export async function checkPreviewBinding(input, request = fetch) {
 
 async function run() {
   const mode = process.argv[2];
+  const origin = mode === "wait" && process.env.RUNNER_TEMP
+    ? await readFile(join(process.env.RUNNER_TEMP, "workspace-backend-preview-origin"), "utf8")
+    : process.env.WORKSPACE_E2E_BASE_URL;
   const input = {
-    origin: process.env.WORKSPACE_E2E_BASE_URL,
+    origin,
     bypass: process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
     sha: process.env.TARGET_SHA,
     ref: process.env.TARGET_REF,
