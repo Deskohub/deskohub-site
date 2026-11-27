@@ -14,6 +14,7 @@ import {
 import type { FulfillmentState, PaymentState } from "@/db/schema";
 import { checkoutStatusTraits } from "@/features/checkout/checkout-status-kind";
 import { getPaymentAttemptAbandonmentCutoff } from "@/features/checkout/provider-order-abandonment";
+import { canAddOfficePerson } from "@/features/office/office-people";
 import { isEndedUnpaidPaymentState } from "@/features/order";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { SharedAvailabilityInventoryLive } from "@/features/reservation/backend/availability-inventory-cache.server";
@@ -175,6 +176,8 @@ type CheckoutTableStatusViewModel = CheckoutReservationStatusViewModelBase & {
   readonly kind: "table";
   readonly summary?: CheckoutTableStatusSummary;
   readonly people?: ReservationPeopleView;
+  /** The exclusive end of the booking while the booker can add an invitee. */
+  readonly inviteeAdditionEndsAt?: Temporal.Instant;
 };
 
 type CheckoutStatusNotFoundViewModel = CheckoutStatusViewModelBase & {
@@ -425,15 +428,28 @@ const implementation = Effect.gen(function* () {
           }).pipe(Effect.as(Option.none()))
         )
       );
-    if (Option.isNone(booked)) return Option.none<ReservationPeopleView>();
-    const resendable =
+    if (Option.isNone(booked)) return undefined;
+    const confirmed =
       reservation.paymentState === "paid" &&
-      reservation.reservationState === "confirmed" &&
-      (yield* loadDotyposReservation)?.status === "CONFIRMED";
+      reservation.reservationState === "confirmed";
+    const record = confirmed ? yield* loadDotyposReservation : undefined;
+    const resendable = record?.status === "CONFIRMED";
     const now = yield* currentInstant;
-    return Option.some(
-      toReservationPeopleView(booked.value, { now, resendable })
-    );
+    const people = toReservationPeopleView(booked.value, { now, resendable });
+
+    if (reservation.reservationDetails.kind === "table" && resendable) {
+      const { interval, seats } = decodeBookedReservation(record);
+      if (
+        Option.isSome(interval) &&
+        Option.isSome(seats) &&
+        canAddOfficePerson(people, seats.value) &&
+        Temporal.Instant.compare(now, interval.value.endsAt) < 0
+      ) {
+        return { people, inviteeAdditionEndsAt: interval.value.endsAt };
+      }
+    }
+
+    return { people };
   });
 
   /** Shares the live reservation read between the status and its summary. */
@@ -881,7 +897,7 @@ const implementation = Effect.gen(function* () {
           statusKind,
           paymentPageReopenable,
           supportContactPrefill,
-          people,
+          reservationPeople,
         },
         reconstruction,
         retrySelection,
@@ -889,7 +905,7 @@ const implementation = Effect.gen(function* () {
         Effect.all(
           [
             Effect.gen(function* () {
-              const [status, people] = yield* Effect.all(
+              const [status, reservationPeople] = yield* Effect.all(
                 [
                   resolveStatusKind(
                     reservation,
@@ -899,17 +915,17 @@ const implementation = Effect.gen(function* () {
                   reservation.reservationDetails.kind === "office" ||
                   reservation.reservationDetails.kind === "table"
                     ? loadReservationPeople(reservation, loadDotyposReservation)
-                    : Effect.succeed(Option.none()),
+                    : Effect.undefined,
                 ],
                 { concurrency }
               );
               const supportContactPrefill =
                 (input.includeSupportContact ?? true) &&
                 (checkoutStatusTraits[status.statusKind].showsCustomerContact ||
-                  Option.isSome(people))
+                  reservationPeople !== undefined)
                   ? yield* loadSupportContactPrefill(reservation)
                   : undefined;
-              return { ...status, people, supportContactPrefill };
+              return { ...status, reservationPeople, supportContactPrefill };
             }),
             reconstructSummary(reservation, loadDotyposReservation).pipe(
               Effect.timeoutOrElse({
@@ -985,10 +1001,7 @@ const implementation = Effect.gen(function* () {
       const result: CheckoutReservationStatusViewModel = {
         ...resultBase,
         ...reconstruction.reservation,
-        ...Option.match(people, {
-          onNone: () => ({}),
-          onSome: (found) => ({ people: found }),
-        }),
+        ...reservationPeople,
       };
 
       yield* Effect.annotateLogsScoped({

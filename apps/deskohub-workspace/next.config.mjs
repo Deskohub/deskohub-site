@@ -154,6 +154,16 @@ const nextConfig = {
         permanent: true,
       },
       {
+        source: "/prices",
+        destination: "/pricing",
+        permanent: true,
+      },
+      {
+        source: `/:locale(${localeRedirectPattern})/prices`,
+        destination: "/:locale/pricing",
+        permanent: true,
+      },
+      {
         source: "/bar",
         destination: "https://www.deskohub.cz",
         permanent: true,

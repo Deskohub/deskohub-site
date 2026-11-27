@@ -1,5 +1,8 @@
 import { type Locale, m } from "@/features/i18n";
-import { getOfficeReservationPath } from "@/features/reservation/routes";
+import {
+  getOfficeReservationPath,
+  getReservationStartPath,
+} from "@/features/reservation/routes";
 
 export const siteHeaderSectionIds = {
   overview: "overview",
@@ -13,6 +16,7 @@ type SiteHeaderMenuItemId =
   | "coworking"
   | "meetingRoom"
   | "office"
+  | "teamTable"
   | "pricing"
   | "gallery"
   | "team"
@@ -58,6 +62,11 @@ export const createSiteHeaderLinks = (
       id: "office",
       label: m.landingNavPrivateOffice({}, { locale }),
       href: getOfficeReservationPath(locale),
+    },
+    {
+      id: "teamTable",
+      label: m.reservationTableProductTitle({}, { locale }),
+      href: getReservationStartPath(locale, "table"),
     },
     {
       id: "pricing",

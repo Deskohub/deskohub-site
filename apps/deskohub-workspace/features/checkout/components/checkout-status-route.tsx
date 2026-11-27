@@ -33,6 +33,7 @@ import { orderIdSchema } from "@/features/order/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { loadEntryPackStatusPage } from "@/features/passes/backend/entry-pack-status";
 import { EntryPackStatusPage } from "@/features/passes/components/entry-pack-status-page";
+import { addReservationInvitees } from "@/features/reservation/actions/add-reservation-invitees";
 import { resendReservationInvitation } from "@/features/reservation/actions/resend-reservation-invitation";
 import { readReservationAccessCookie } from "@/features/reservation/backend/reservation-access-cookie";
 import { ReservationAuthorizationService } from "@/features/reservation/backend/reservation-authorization.service";
@@ -284,7 +285,14 @@ async function renderReservationStatus({
           Boolean(paymentMethods) ||
           checkoutStatusTraits[status.status].autoRefresh
         }
-        refreshAt={paymentMethods?.expiresAt}
+        refreshAt={
+          paymentMethods?.expiresAt ??
+          (status.status !== "not_found" &&
+          status.kind === "table" &&
+          withdrawal.status !== "withdrawn"
+            ? status.inviteeAdditionEndsAt?.toString()
+            : undefined)
+        }
       />
       <CheckoutStatusReferralCodeSettlement
         status={status.status}
@@ -293,6 +301,7 @@ async function renderReservationStatus({
         })}
       />
       <CheckoutStatusPage
+        addInvitees={addReservationInvitees}
         locale={locale}
         paymentMethods={
           paymentMethods && {

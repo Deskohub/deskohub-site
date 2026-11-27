@@ -8,7 +8,10 @@ import {
 import type { Locale } from "@/features/i18n";
 import { m } from "@/features/i18n";
 import type { ReservationAccessViewModel } from "@/features/reservation/backend/reservation-access.service";
-import { formatReservationDisplayDateTime } from "@/features/reservation/reservation-date";
+import {
+  formatReservationDisplayDateTime,
+  formatReservationDisplayDateTimeRange,
+} from "@/features/reservation/reservation-date";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { Button } from "@/shared/components/ui/button";
 import { ReservationAccessAddress } from "./reservation-access-address";
@@ -31,6 +34,19 @@ function formatAccessWindow(
   access: Extract<ReservationAccessViewModel, { state: "available" }>,
   locale: Locale
 ) {
+  if (access.teamTable) {
+    return m.reservationAccessTeamTableBookedFor(
+      {
+        period: formatReservationDisplayDateTimeRange(
+          access.accessStartsAt,
+          access.accessEndsAt,
+          locale
+        ),
+      },
+      { locale }
+    );
+  }
+
   const days = access.accessDays;
   if (!days) {
     return m.reservationAccessLead(

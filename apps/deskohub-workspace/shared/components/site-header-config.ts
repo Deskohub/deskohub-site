@@ -9,6 +9,7 @@ import { type Locale, m } from "@/features/i18n";
 import { languageNames } from "@/features/i18n/language-labels";
 import { isMeetingRoomPageEnabled } from "@/features/meeting-room/backend/meeting-room-release-gate.server";
 import { isOfficePageEnabled } from "@/features/office/backend/office-release-gate.server";
+import { isTeamTablePageEnabled } from "@/features/public-pages/backend/team-table-public-release.server";
 import { getCoworkReservationPath } from "@/features/reservation/routes";
 import {
   createSiteHeaderLinks,
@@ -42,15 +43,18 @@ export const getSiteHeaderAccessibilityLabels = (locale: Locale) => ({
 });
 
 export async function getSiteHeaderConfig(locale: Locale) {
-  const [meetingRoomPageEnabled, officePageEnabled] = await Promise.all([
-    isMeetingRoomPageEnabled(),
-    isOfficePageEnabled(),
-  ]);
+  const [meetingRoomPageEnabled, officePageEnabled, teamTablePageEnabled] =
+    await Promise.all([
+      isMeetingRoomPageEnabled(),
+      isOfficePageEnabled(),
+      isTeamTablePageEnabled(),
+    ]);
 
   return createSiteHeaderConfig(locale, {
     disabledMenuItems: {
       meetingRoom: !meetingRoomPageEnabled,
       office: !officePageEnabled,
+      teamTable: !teamTablePageEnabled,
     },
   });
 }

@@ -36,6 +36,10 @@ import { formatMoney } from "@/shared/money/money";
 import { CheckoutFlowLayout } from "./checkout-flow-layout";
 import type { CheckoutQrPayment } from "./checkout-qr-payment-details";
 import {
+  type AddCheckoutStatusInvitee,
+  CheckoutStatusAddInviteeForm,
+} from "./checkout-status-add-invitee-form";
+import {
   type CheckoutStatusCopy,
   getCheckoutStatusCopy,
 } from "./checkout-status-copy";
@@ -52,6 +56,7 @@ import { CheckoutStatusPaymentRetry } from "./checkout-status-payment-retry";
 import { WorkspaceTableMapView } from "./workspace-table-map-view";
 
 type CheckoutStatusPageProps = {
+  readonly addInvitees?: AddCheckoutStatusInvitee;
   readonly locale: Locale;
   readonly paymentMethods?: {
     readonly continuePaymentAction: ContinueCheckoutPaymentAction;
@@ -272,6 +277,7 @@ const getReservationAccessHref = (
     : undefined;
 
 export function CheckoutStatusPage({
+  addInvitees,
   locale,
   paymentMethods,
   presentation = "page",
@@ -314,31 +320,50 @@ export function CheckoutStatusPage({
   const reservationPeople = status.status !== "not_found" &&
     (status.kind === "office" || status.kind === "table") &&
     status.people && (
-      <OfficeStatusPeopleList
-        changeHref={
-          status.kind === "office"
-            ? getPeopleChangeContactHref(status, locale)
-            : undefined
-        }
-        contact={status.supportContactPrefill}
-        locale={locale}
-        orderId={status.orderId}
-        people={{
-          contactAttends: status.people.contactAttends,
-          invitees: status.people.invitees.map(
-            ({ id, email, resendAvailableAt }) => ({
-              id,
-              email,
-              resendAvailableAt: withdrawn
-                ? undefined
-                : resendAvailableAt?.toString(),
-            })
-          ),
-        }}
-        resendInvitation={
-          !withdrawn && status.people.resendable ? resendInvitation : undefined
-        }
-      />
+      <>
+        <OfficeStatusPeopleList
+          changeHref={
+            status.kind === "office"
+              ? getPeopleChangeContactHref(status, locale)
+              : undefined
+          }
+          contact={status.supportContactPrefill}
+          locale={locale}
+          orderId={status.orderId}
+          people={{
+            contactAttends: status.people.contactAttends,
+            invitees: status.people.invitees.map(
+              ({ id, email, resendAvailableAt }) => ({
+                id,
+                email,
+                resendAvailableAt: withdrawn
+                  ? undefined
+                  : resendAvailableAt?.toString(),
+              })
+            ),
+          }}
+          resendInvitation={
+            !withdrawn && status.people.resendable
+              ? resendInvitation
+              : undefined
+          }
+        />
+        {!withdrawn && status.kind === "table" && status.people.resendable && (
+          <>
+            <p className="mt-3 text-sm font-normal leading-6 text-navy-blue/64">
+              {m.checkoutStatusTableInviteeRemovalNote({}, { locale })}
+            </p>
+            {addInvitees && (
+              <CheckoutStatusAddInviteeForm
+                addInvitees={addInvitees}
+                canAdd={status.inviteeAdditionEndsAt !== undefined}
+                locale={locale}
+                orderId={status.orderId}
+              />
+            )}
+          </>
+        )}
+      </>
     );
   const summaryPresentation = getSummaryPresentation(
     status,
@@ -568,7 +593,10 @@ function CheckoutStatusReservationDetails({
               <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-navy-blue/52">
                 {
                   {
-                    assigned: m.checkoutEmailTableNumberLabel({}, { locale }),
+                    assigned:
+                      status.kind === "table"
+                        ? m.reservationAssignedTableLabel({}, { locale })
+                        : m.checkoutEmailTableNumberLabel({}, { locale }),
                     shared: m.checkoutEmailTablesLabel({}, { locale }),
                   }[status.table.mode]
                 }

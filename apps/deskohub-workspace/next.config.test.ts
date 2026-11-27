@@ -21,6 +21,19 @@ const resolveHeaders = async (path: string) =>
 const resolveReferrerPolicy = async (path: string) =>
   (await resolveHeaders(path)).get("referrer-policy");
 
+test("redirects the prices alias to the canonical price list with locale and query intact", async () => {
+  for (const prefix of ["", "/cs-CZ", "/en-US"]) {
+    const response = await unstable_getResponseFromNextConfig({
+      url: `https://workspace.example${prefix}/prices?source=booking`,
+      nextConfig,
+    });
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe(
+      `https://workspace.example${prefix}/pricing?source=booking`
+    );
+  }
+});
+
 const originTrialTokensBefore = process.env.WEBMCP_ORIGIN_TRIAL_TOKENS;
 
 afterEach(() => {

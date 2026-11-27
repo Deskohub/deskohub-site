@@ -13,6 +13,8 @@ import {
   publicPages,
 } from "@/features/public-pages/public-page-definitions";
 import { publicPageMarkdown } from "@/features/public-pages/public-page-markdown";
+import { markdownPlainText } from "@/shared/markdown/markdown.test-utils";
+import { currencyCZK } from "@/shared/money/currencies";
 
 // Outside a Next.js render there is no cache to configure.
 const nextCache = await import("next/cache");
@@ -38,6 +40,15 @@ mock.module("@/features/checkout/backend/checkout/public-offerings", () => ({
         }),
         complete: true,
       };
+    }),
+}));
+mock.module("@/features/pricing/backend/team-table-price-list.server", () => ({
+  loadTeamTablePriceList: () =>
+    Effect.succeed({
+      prices: [
+        { seats: 6, base: currencyCZK(36_000), hourly: currencyCZK(12_000) },
+      ],
+      complete: true,
     }),
 }));
 
@@ -142,6 +153,21 @@ describe("public page Markdown route", () => {
     expect(response.headers.get("content-type") ?? "").not.toContain(
       "markdown"
     );
+  });
+
+  test("the released Team Table route serves its rates and the closed route returns 404", async () => {
+    const segments = ["reservation", "table"];
+    const open = await getMarkdown("en-US", segments);
+
+    expect(open.status).toBe(200);
+    expect(markdownPlainText(await open.text())).toContain(
+      "Table for 6 · CZK 360 to reserve + CZK 120/hour"
+    );
+
+    publishedPages = publicPages.filter(
+      ({ pathname }) => pathname !== "/reservation/table"
+    );
+    expect((await getMarkdown("en-US", segments)).status).toBe(404);
   });
 
   test.each([

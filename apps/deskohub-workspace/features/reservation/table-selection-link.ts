@@ -27,7 +27,7 @@ type TableSelection = {
 export const tableSelectionLink = defineSelectionLink({
   kind: "table",
   params: ["date", "seats", "startTime", "endTime"],
-  read: (searchParams: SupportedSearchParams) => ({
+  read: (searchParams: SupportedSearchParams): TableSelection => ({
     date: decodeStandardSchema(
       queryDateSchema,
       getTrimmedSearchParam(searchParams, "date")
@@ -46,10 +46,10 @@ export const tableSelectionLink = defineSelectionLink({
     ),
   }),
   write: ({ date, seats, startTime, endTime }: TableSelection) => ({
-    date,
-    seats: seats?.toString(),
-    startTime,
-    endTime,
+    date: date || undefined,
+    seats: seats ? String(seats) : undefined,
+    startTime: startTime || undefined,
+    endTime: endTime || undefined,
   }),
   fromStored: ({
     reservedFrom,

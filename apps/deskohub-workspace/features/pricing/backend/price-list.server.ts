@@ -11,12 +11,20 @@ import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend";
 import type { Locale } from "@/features/i18n";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
+import { SharedAvailabilityInventoryLive } from "@/features/reservation/backend/availability-inventory-cache.server";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { readSharedSnapshot } from "@/shared/backend/shared-snapshot";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
+import type { TeamTablePrice } from "../team-table-price";
+import { loadTeamTablePriceList } from "./team-table-price-list.server";
+
+type PriceList = {
+  readonly offerings: ReadonlyArray<PublicPriceListOffering>;
+  readonly teamTablePrices: ReadonlyArray<TeamTablePrice>;
+};
 
 /** The price list every visitor gets, and whether a visitor's may differ. */
-export type SharedPriceList = {
-  readonly offerings: ReadonlyArray<PublicPriceListOffering>;
+export type SharedPriceList = PriceList & {
   /**
    * True when a release gate the list reads is decided per visitor, or the
    * list is incomplete, so a visitor's own list may differ.
@@ -43,9 +51,10 @@ const incompletePriceListLife = { stale: 300, revalidate: 1, expire: 300 };
  */
 const decideSharedReleases = Effect.gen(function* () {
   const featureFlags = yield* WorkspaceFeatureFlagService;
-  const [office, calendarSales, customerDiscounts, discountCodes] =
+  const [office, teamTable, calendarSales, customerDiscounts, discountCodes] =
     yield* Effect.all([
       featureFlags.constantValue("office_page"),
+      featureFlags.constantValue("team_table_page"),
       featureFlags.constantValue("calendar_sales"),
       featureFlags.constantValue("customer_discounts"),
       featureFlags.constantValue("discount_codes"),
@@ -55,6 +64,7 @@ const decideSharedReleases = Effect.gen(function* () {
 
   return {
     officeOpen: decided(office),
+    teamTableOpen: decided(teamTable),
     discountReleaseGates: {
       calendarSales: decided(calendarSales),
       customerDiscounts: decided(customerDiscounts),
@@ -62,6 +72,7 @@ const decideSharedReleases = Effect.gen(function* () {
     },
     variesByVisitor: [
       office,
+      teamTable,
       calendarSales,
       customerDiscounts,
       discountCodes,
@@ -75,25 +86,46 @@ const withoutReferrals = Layer.provideMerge(
   ReferralReleaseGate.fromDecision(false)
 );
 
+const loadPriceList = (locale: Locale) =>
+  Effect.all(
+    {
+      catalog: loadPublicPriceList(locale),
+      tables: loadTeamTablePriceList(locale),
+    },
+    { concurrency: "unbounded" }
+  ).pipe(
+    Effect.map(({ catalog, tables }) => ({
+      offerings: catalog.offerings,
+      teamTablePrices: tables.prices,
+      complete: catalog.complete && tables.complete,
+    })),
+    Effect.provide(SharedAvailabilityInventoryLive)
+  );
+
+const catalogFallback = (locale: Locale): PriceList => ({
+  offerings: getPublicCatalogOfferings({ locale }),
+  teamTablePrices: [],
+});
+
 const loadSharedOfferings = Effect.fn("pricing.loadSharedOfferings")(function* (
   locale: Locale
 ) {
-  const { officeOpen, discountReleaseGates, variesByVisitor } =
+  const { officeOpen, teamTableOpen, discountReleaseGates, variesByVisitor } =
     yield* decideSharedReleases;
-  const { offerings, complete } = yield* loadPublicPriceList(locale).pipe(
+  const priceList = yield* loadPriceList(locale).pipe(
     Effect.provide(
       Layer.mergeAll(
         CheckoutPricingService.withDiscountReleaseGates(
           discountReleaseGates
         ).pipe(withoutReferrals),
-        OfficeReleaseGate.fromDecision(officeOpen)
+        OfficeReleaseGate.fromDecision(officeOpen),
+        TeamTableReleaseGate.fromDecision(teamTableOpen)
       )
     )
   );
   return {
-    offerings,
-    variesByVisitor: variesByVisitor || !complete,
-    complete,
+    ...priceList,
+    variesByVisitor: variesByVisitor || !priceList.complete,
   } satisfies SharedPriceList;
 });
 
@@ -101,7 +133,7 @@ const loadSharedOfferings = Effect.fn("pricing.loadSharedOfferings")(function* (
  * Every bookable product at its advertised price, read without the request
  * so the page prerenders it: agents that read only the visible static HTML
  * find every price. Advertised prices read only the anonymous Calendar
- * sales; no Dotypos customer is resolved and no availability is read.
+ * sales. Team Table reads configured capacities from the shared inventory.
  *
  * `minutes` keeps a complete list in the route's App Shell, which needs a
  * `stale` of at least five minutes, while it still revalidates every minute.
@@ -125,7 +157,7 @@ export async function loadSharedPriceList(
       failure: {
         failureCode: "pricing.shared_price_list.load_failed",
         fallback: (): SharedPriceList => ({
-          offerings: getPublicCatalogOfferings({ locale }),
+          ...catalogFallback(locale),
           variesByVisitor: true,
           complete: false,
         }),
@@ -137,7 +169,8 @@ export async function loadSharedPriceList(
 
 const VisitorPriceListLive = Layer.mergeAll(
   CheckoutPricingService.Live.pipe(withoutReferrals),
-  OfficeReleaseGate.Live
+  OfficeReleaseGate.Live,
+  TeamTableReleaseGate.Live
 );
 
 /**
@@ -145,14 +178,11 @@ const VisitorPriceListLive = Layer.mergeAll(
  * that cannot start still renders the catalog prices, without the office,
  * whose release gate is then unknown.
  */
-export const loadVisitorPriceList = (
-  locale: Locale
-): Promise<ReadonlyArray<PublicPriceListOffering>> =>
-  loadPublicPriceList(locale).pipe(
-    Effect.map(({ offerings }) => offerings),
+export const loadVisitorPriceList = (locale: Locale): Promise<PriceList> =>
+  loadPriceList(locale).pipe(
     Effect.provide(VisitorPriceListLive),
     runWorkspaceEffectOrElse("pricing.price-list.load", {
       failureCode: "pricing.price_list.load_failed",
-      orElse: () => getPublicCatalogOfferings({ locale }),
+      orElse: () => catalogFallback(locale),
     })
   );

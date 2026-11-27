@@ -11,7 +11,10 @@ import { type PublicPagePathname, publicPagePathnames } from "./public-pages";
 // modules.
 
 /** Release gate that decides whether production serves a gated page. */
-export type PublicPageReleaseGate = "meeting-room-page" | "office-page";
+export type PublicPageReleaseGate =
+  | "meeting-room-page"
+  | "office-page"
+  | "team-table-page";
 
 export interface PublicPageDefinition {
   /**
@@ -67,7 +70,7 @@ export const publicPageDefinitions: Readonly<
   "/": {
     title: m.landingMetadataTitle,
     description: m.landingMetadataDescription,
-    contentDate: "2026-11-18",
+    contentDate: "2026-11-27",
   },
   "/coworking": {
     title: m.coworkingMetadataTitle,
@@ -97,7 +100,7 @@ export const publicPageDefinitions: Readonly<
   "/pricing": {
     title: m.pricingMetadataTitle,
     description: m.pricingMetadataDescription,
-    contentDate: "2026-11-20",
+    contentDate: "2026-11-27",
   },
   "/meeting-room": {
     title: m.meetingRoomMetadataTitle,
@@ -143,6 +146,12 @@ export const publicPageDefinitions: Readonly<
     description: m.reservationOfficeMetadataDescription,
     contentDate: "2026-11-18",
     releaseGate: "office-page",
+  },
+  "/reservation/table": {
+    title: m.reservationTableProductTitle,
+    description: m.reservationTableMetadataDescription,
+    contentDate: "2026-11-27",
+    releaseGate: "team-table-page",
   },
 };
 

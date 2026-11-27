@@ -277,23 +277,23 @@ export const loadRestoredReservation = Effect.fn(
   // The token opens only for this family; another family restores nothing.
   if (!isReservationForKind(reservation, kind)) return undefined;
 
-  const officeSelection =
-    payState.reservation.kind === "office"
-      ? Option.getOrUndefined(
-          yield* findCheckoutOfficeSelectionForVisitor({
-            payStateToken: token,
-            locale,
-          }).pipe(
-            Effect.provide(checkoutOfficeSelectionForVisitorServices),
-            Effect.orElseSucceed(() => Option.none())
-          )
+  const usesPeopleSelection =
+    payState.reservation.kind === "office" ||
+    payState.reservation.kind === "table";
+  const officeSelection = usesPeopleSelection
+    ? Option.getOrUndefined(
+        yield* findCheckoutOfficeSelectionForVisitor({
+          payStateToken: token,
+          locale,
+        }).pipe(
+          Effect.provide(checkoutOfficeSelectionForVisitorServices),
+          Effect.orElseSucceed(() => Option.none())
         )
-      : undefined;
+      )
+    : undefined;
 
-  // Opening a new form without a verified selection keeps it from replacing
-  // an office hold whose guest list is unreadable or belongs to someone else.
-  if (payState.reservation.kind === "office" && !officeSelection)
-    return undefined;
+  // A new form cannot replace a hold whose guest list it cannot verify.
+  if (usesPeopleSelection && !officeSelection) return undefined;
 
   return {
     checkoutSessionId: payState.checkoutSessionId,
@@ -467,14 +467,18 @@ async function ReservationPageRequestContent<
       checkoutContact !== undefined &&
       getCheckoutAccountEmail(checkoutAccount)?.toLowerCase() ===
         checkoutContact.email.toLowerCase();
+    const usesPeopleSelection =
+      definition.kind === "office" || definition.kind === "table";
     let checkoutOfficeSelection: CheckoutOfficeSelection | undefined;
     if (checkoutContact?.officeSelectionId) {
-      if (definition.kind === "office" && contactMatchesAccount) {
+      if (usesPeopleSelection && contactMatchesAccount) {
         checkoutOfficeSelection = await loadCheckoutOfficeSelection(
           checkoutContact.officeSelectionId
         ).pipe(
           Effect.provide(SealedStateKeys.Default),
-          runWorkspaceEffect("reservation.office.load-checkout-selection")
+          runWorkspaceEffect(
+            `reservation.${definition.kind}.load-checkout-selection`
+          )
         );
       }
       if (!checkoutOfficeSelection) {
@@ -488,7 +492,7 @@ async function ReservationPageRequestContent<
         );
       }
     } else if (
-      definition.kind === "office" &&
+      usesPeopleSelection &&
       checkoutContactToken &&
       (!contactMatchesAccount ||
         getReservationCheckoutStep(
@@ -639,7 +643,7 @@ const loadReservationPageContent = Effect.fn("reservationPage.loadContent")(
       });
     const checkoutCustomer =
       seededCustomer.status === "profile-missing" &&
-      definition.kind === "office" &&
+      (definition.kind === "office" || definition.kind === "table") &&
       !request.checkoutOfficeSelection
         ? { ...seededCustomer, continuesCheckout: false }
         : seededCustomer;

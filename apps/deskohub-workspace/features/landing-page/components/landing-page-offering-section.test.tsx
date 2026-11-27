@@ -43,6 +43,11 @@ mock.module(
 
 const isMeetingRoomPageEnabled = mock();
 const isOfficePageEnabled = mock();
+const isTeamTablePageEnabled = mock();
+mock.module(
+  "@/features/public-pages/backend/team-table-public-release.server",
+  () => ({ isTeamTablePageEnabled })
+);
 
 const meetingRoomPageReleaseGate = await import(
   "@/features/meeting-room/backend/meeting-room-release-gate.server"
@@ -65,10 +70,15 @@ const { LandingPageOfferingSection } = await import(
 
 const renderSection = async (
   locale: (typeof locales)[number],
-  flags: { readonly meetingRoomPage: boolean; readonly officePage: boolean }
+  flags: {
+    readonly meetingRoomPage: boolean;
+    readonly officePage: boolean;
+    readonly teamTablePage?: boolean;
+  }
 ) => {
   isMeetingRoomPageEnabled.mockResolvedValue(flags.meetingRoomPage);
   isOfficePageEnabled.mockResolvedValue(flags.officePage);
+  isTeamTablePageEnabled.mockResolvedValue(flags.teamTablePage ?? false);
   const { prelude } = await prerender(
     await LandingPageOfferingSection({ locale })
   );
@@ -87,6 +97,16 @@ const hrefs = (container: HTMLElement) =>
   Array.from(container.querySelectorAll("a"), (link) =>
     link.getAttribute("href")
   );
+
+test("links the localized Team Table booking page only while released", async () => {
+  const closed = { meetingRoomPage: false, officePage: false };
+  const route = "/en-US/reservation/table";
+
+  expect(hrefs(await renderSection("en-US", closed))).not.toContain(route);
+  const open = await renderSection("en-US", { ...closed, teamTablePage: true });
+  expect(hrefs(open)).toContain(route);
+  expect(open.textContent).toContain("Book a Team Table");
+});
 
 beforeAll(registerWorkspaceComponentTestEnv);
 afterAll(unregisterWorkspaceComponentTestEnv);

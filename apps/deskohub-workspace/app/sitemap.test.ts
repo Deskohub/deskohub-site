@@ -109,6 +109,20 @@ describe("sitemap.xml", () => {
     expect(urls).not.toContain(`${origin}/en-US/reservation/office`);
   });
 
+  test("lists localized Team Table URLs only while its page is published", async () => {
+    const published = (await productionSitemap()).map(({ url }) => url);
+    const closed = publicPages.filter(
+      ({ pathname }) => pathname !== "/reservation/table"
+    );
+    const unpublished = (await productionSitemap(closed)).map(({ url }) => url);
+
+    for (const locale of locales) {
+      const url = `${origin}/${locale}/reservation/table`;
+      expect(published).toContain(url);
+      expect(unpublished).not.toContain(url);
+    }
+  });
+
   test("fails, instead of leaving out a published page, while PostHog can't decide its gate", async () => {
     gatesUnavailable = true;
     try {

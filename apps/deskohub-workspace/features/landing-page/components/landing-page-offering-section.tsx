@@ -11,9 +11,11 @@ import { isMeetingRoomPageEnabled } from "@/features/meeting-room/backend/meetin
 import { isOfficePageEnabled } from "@/features/office/backend/office-release-gate.server";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { PassProductMarks } from "@/features/passes/components/pass-product-marks";
+import { isTeamTablePageEnabled } from "@/features/public-pages/backend/team-table-public-release.server";
 import {
   getCoworkReservationPath,
   getMeetingRoomReservationPath,
+  getReservationStartPath,
 } from "@/features/reservation/routes";
 import { Container } from "@/shared/components/container";
 import { Button } from "@/shared/components/ui/button";
@@ -28,10 +30,12 @@ export async function LandingPageOfferingSection({
 }: {
   locale: Locale;
 }) {
-  const [meetingRoomPageEnabled, officePageEnabled] = await Promise.all([
-    isMeetingRoomPageEnabled(),
-    isOfficePageEnabled(),
-  ]);
+  const [meetingRoomPageEnabled, officePageEnabled, teamTablePageEnabled] =
+    await Promise.all([
+      isMeetingRoomPageEnabled(),
+      isOfficePageEnabled(),
+      isTeamTablePageEnabled(),
+    ]);
   const localePath = `/${locale}`;
 
   return (
@@ -105,6 +109,21 @@ export async function LandingPageOfferingSection({
                 </div>
               </OfferingActions>
             </OfferingRow>
+
+            {teamTablePageEnabled && (
+              <OfferingRow
+                title={m.reservationTableProductTitle({}, { locale })}
+              >
+                <p>{m.landingOfferingTeamTableText({}, { locale })}</p>
+                <OfferingActions>
+                  <Button asChild size="lg" caps>
+                    <Link href={getReservationStartPath(locale, "table")}>
+                      {m.landingOfferingTeamTableBookingLink({}, { locale })}
+                    </Link>
+                  </Button>
+                </OfferingActions>
+              </OfferingRow>
+            )}
 
             <OfferingRow title={getWorkspaceMeetingRoomProductTitle(locale)}>
               <p>{m.landingOfferingMeetingRoomText({}, { locale })}</p>

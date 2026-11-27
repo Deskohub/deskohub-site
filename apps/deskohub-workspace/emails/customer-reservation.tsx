@@ -76,6 +76,7 @@ const headingDate = ({
 export function CustomerReservationEmail(props: CustomerReservationEmailProps) {
   const { locale, reservation, accessUrl, invoiceUrl, network, people } = props;
   const { table } = reservation.placement;
+  const { reservationDetails } = reservation;
 
   return (
     <WorkspaceEmailLayout
@@ -95,6 +96,10 @@ export function CustomerReservationEmail(props: CustomerReservationEmailProps) {
           url: accessUrl,
         }}
         locale={locale}
+        openSpace={
+          reservationDetails.kind === "cowork" &&
+          reservationDetails.entryTier === "open-space"
+        }
         {...(table && { table })}
       />
       <ReservationEmailLocationPanel locale={locale} />

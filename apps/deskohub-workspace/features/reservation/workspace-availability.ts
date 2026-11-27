@@ -176,6 +176,8 @@ export const workspaceAvailabilityKeys = {
     ["workspace-availability", query] as const,
   meetingRoomStartTimes: (query: MeetingRoomStartTimesQuery | undefined) =>
     ["workspace-availability", "meeting-room-start-times", query] as const,
+  tableSlots: (query: TableSlotsQuery | undefined) =>
+    ["workspace-availability", "table-slots", query] as const,
 };
 
 const workspaceAvailabilityNoticeSchema = Schema.Struct({
@@ -567,6 +569,9 @@ export const getTableSlotsQuery = ({
   });
 
 const decodeTableSlotsQuery = Schema.decodeUnknownOption(tableSlotsQuerySchema);
+export const parseTableSlotsResponse = Schema.decodeUnknownSync(
+  tableSlotsAvailabilitySchema
+);
 const decodeTableSeatsParam = Schema.decodeUnknownOption(
   Schema.NumberFromString.pipe(Schema.decodeTo(tableSeatsSchema))
 );

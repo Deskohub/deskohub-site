@@ -12,7 +12,6 @@ import {
   test,
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CheckoutStatusViewModel } from "@/features/checkout/backend/checkout";
@@ -32,6 +31,11 @@ import {
 } from "@/shared/testing/workspace-component-test-env";
 
 const testEmailAddressForAda = testEmailAddress("ada");
+
+registerWorkspaceComponentTestEnv();
+const { act, cleanup, fireEvent, render } = await import(
+  "@testing-library/react"
+);
 
 type CapturedLink = {
   readonly href: string;
@@ -61,7 +65,7 @@ mock.module("next/link", () => ({
   },
 }));
 
-const { workspaceUseAction } = await import(
+const { workspaceRouterRefresh, workspaceUseAction } = await import(
   "@/shared/testing/workspace-component-module-mocks"
 );
 mock.module("@/features/checkout/actions/reopen-payment-page", () => ({
@@ -798,6 +802,7 @@ describe("CheckoutStatusPage", () => {
     }));
     const view = render(
       <CheckoutStatusPage
+        addInvitees={mock(async () => ({ status: "added", added: 1 }))}
         locale="en-US"
         resendInvitation={resendInvitation}
         status={{
@@ -836,6 +841,7 @@ describe("CheckoutStatusPage", () => {
     );
 
     const people = view.container.querySelector("[data-office-status-people]");
+    expect(view.queryByRole("button", { name: "Add invitee" })).toBeNull();
     expect(people?.textContent).toContain(
       m.checkoutStatusPeopleContact(
         { name: "Alex Sample" },
@@ -914,6 +920,134 @@ describe("CheckoutStatusPage", () => {
         )
         .getAttribute("role")
     ).toBe("status");
+  });
+
+  describe("confirmed Team Table invitees", () => {
+    const reservedFrom = Temporal.Instant.from("2026-11-18T08:15:00Z");
+    const reservedUntil = Temporal.Instant.from("2026-11-18T09:45:00Z");
+    const status = {
+      ...baseStatus,
+      kind: "table",
+      table: { mode: "assigned", name: "Open Space 4" },
+      summary: {
+        kind: "table",
+        reservedFrom,
+        reservedUntil,
+        seats: 2,
+        durationMinutes: 90,
+        price: { value: 18_000, exponent: 2, currency: "CZK" },
+      },
+      people: { contactAttends: true, invitees: [], resendable: true },
+    } as const satisfies CheckoutStatusViewModel;
+
+    test("adds one invitee in place, refreshes the list and preserves feedback when full", async () => {
+      const email = InviteeEmail.make(testEmailAddress("team-table-guest"));
+      const addInvitees = mock(async () => ({
+        status: "added" as const,
+        added: 1,
+      }));
+      workspaceRouterRefresh.mockClear();
+      const view = render(
+        <CheckoutStatusPage
+          addInvitees={addInvitees}
+          locale="en-US"
+          status={{ ...status, inviteeAdditionEndsAt: reservedUntil }}
+        />
+      );
+
+      expect(view.getByText("Reserved table")).toBeDefined();
+      expect(view.getByText("Open Space 4")).toBeDefined();
+      expect(view.getByText(/Nov 18, 2026.*9:15.*10:45/)).toBeDefined();
+      expect(
+        view.getByText(
+          "Invitees have access to the shared door PIN, so they can't be removed."
+        )
+      ).toBeDefined();
+
+      const form = view.getByRole("form", { name: "Add invitee" });
+      const input = view.getByRole("textbox", { name: "Email address" });
+      await act(async () => {
+        fireEvent.input(input, { target: { value: "invalid" } });
+        fireEvent.submit(form);
+      });
+      expect(addInvitees).not.toHaveBeenCalled();
+      expect(view.getByRole("alert").textContent).toBe(
+        "Enter a full email address."
+      );
+      await act(async () => {
+        fireEvent.input(input, { target: { value: email } });
+        fireEvent.submit(form);
+      });
+      expect(addInvitees).toHaveBeenCalledWith({
+        orderId: status.orderId,
+        emails: [email],
+      });
+      expect(workspaceRouterRefresh).toHaveBeenCalledTimes(1);
+      expect(input).toHaveProperty("value", "");
+
+      view.rerender(
+        <CheckoutStatusPage
+          addInvitees={addInvitees}
+          locale="en-US"
+          status={{
+            ...status,
+            people: {
+              ...status.people,
+              invitees: [
+                {
+                  id: reservationInviteeIdSchema.make("team-table-guest"),
+                  email,
+                  invitationSentAt: null,
+                },
+              ],
+            },
+          }}
+        />
+      );
+      expect(view.getByText(email)).toBeDefined();
+      expect(
+        view.getByText(`${email} was added to the reservation.`)
+      ).toBeDefined();
+      expect(view.queryByRole("button", { name: "Add invitee" })).toBeNull();
+      expect(view.queryByRole("button", { name: /remove/i })).toBeNull();
+    });
+
+    test("keeps the list read-only after the booking ends", () => {
+      const view = render(
+        <CheckoutStatusPage
+          addInvitees={mock()}
+          locale="en-US"
+          status={status}
+        />
+      );
+      expect(view.getByText("Who is coming")).toBeDefined();
+      expect(view.queryByRole("form", { name: "Add invitee" })).toBeNull();
+    });
+
+    test("keeps the address so a booker can recover from a refused submission", async () => {
+      const email = testEmailAddress("team-table-duplicate");
+      const addInvitees = mock(async () => ({
+        status: "refused" as const,
+        reason: "duplicate" as const,
+      }));
+      const view = render(
+        <CheckoutStatusPage
+          addInvitees={addInvitees}
+          locale="en-US"
+          status={{ ...status, inviteeAdditionEndsAt: reservedUntil }}
+        />
+      );
+      const form = view.getByRole("form", { name: "Add invitee" });
+      const input = view.getByRole("textbox", { name: "Email address" });
+      await act(async () => {
+        fireEvent.input(input, { target: { value: email } });
+        fireEvent.submit(form);
+      });
+      expect(view.getByRole("alert").textContent).toBe(
+        "This email is already on the list."
+      );
+      expect(input).toHaveProperty("value", email);
+    });
   });
 
   test("links the completed order step to the cowork repeat start as a raw document anchor", () => {

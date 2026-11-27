@@ -1246,6 +1246,76 @@ describe("CheckoutStatusService", () => {
       }
     );
 
+    test.each([
+      { offset: -1, contactAttends: true, seats: 3, canAdd: true },
+      { offset: 0, contactAttends: true, seats: 3, canAdd: false },
+      { offset: -1, contactAttends: true, seats: 2, canAdd: false },
+      { offset: -1, contactAttends: false, seats: 2, canAdd: true },
+    ])(
+      "checks Team Table add eligibility at end offset $offset with $seats live seats and contact attending $contactAttends",
+      async ({ offset, contactAttends, seats, canAdd }) => {
+        const start = testInstant("2026-06-20T12:15:00Z");
+        const end = testInstant("2026-06-20T12:45:00Z");
+        const dotypos = makeDotypos({
+          getReservationWithoutCustomer: mock(() =>
+            Effect.succeed({
+              id: "dotypos-reservation-id",
+              _customerId: "customer-id",
+              startDate: start.toString(),
+              endDate: end.toString(),
+              seats: String(seats),
+              status: "CONFIRMED",
+            })
+          ),
+        });
+        const email = InviteeEmail.make(testEmailAddress("status-table-guest"));
+        const invitees = Layer.mock(ReservationInvitees, {
+          findBookedPeople: ({ id }) =>
+            Effect.succeed(
+              Option.some({
+                contactAttends,
+                invitees: [
+                  {
+                    id: reservationInviteeIdSchema.make("table-guest"),
+                    reservationId: id,
+                    position: 0,
+                    email,
+                    lastInvitationSentAt: paidAt,
+                    invitationSendCount: 1,
+                  },
+                ],
+              })
+            ),
+        });
+        const status = await getPaidStatus(
+          end.add({ milliseconds: offset }),
+          {
+            reservationDetails: {
+              kind: "table",
+              seats: 4,
+              durationMinutes: 30,
+            },
+            officeContactAttends: contactAttends,
+            reservationState: "confirmed",
+            fulfillmentState: "fulfilled",
+            fulfilledAt: paidAt,
+          },
+          { dotypos, invitees, webAuthorized: true, refreshedAs: "terminal" }
+        );
+
+        expect(status).toMatchObject({
+          kind: "table",
+          people: { contactAttends, resendable: true, invitees: [{ email }] },
+        });
+        if (status.status === "not_found" || status.kind !== "table") {
+          throw new Error("Expected the Team Table status");
+        }
+        expect(status.inviteeAdditionEndsAt?.toString()).toBe(
+          canAdd ? end.toString() : undefined
+        );
+      }
+    );
+
     test("skips the contact read for a caller that never shows it", async () => {
       const dotypos = makeContactDotypos();
 
