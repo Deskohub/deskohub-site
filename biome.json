@@ -147,6 +147,7 @@
         "!apps/deskohub-workspace/features/{account,email-campaigns}/**/*.fixture.tsx",
         "!apps/deskohub-workspace/features/{account,email-campaigns}/**/*.fixture.mts",
         "!apps/deskohub-workspace/features/{account,email-campaigns}/**/*.fixture.cts",
+        "apps/deskohub-workspace/features/account/*",
         "!**/generated/**",
         "!**/paraglide/**"
       ],

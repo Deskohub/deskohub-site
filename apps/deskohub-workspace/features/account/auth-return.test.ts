@@ -204,12 +204,12 @@ describe("account auth return lifecycle", () => {
     getSession.mockImplementation(() =>
       Promise.resolve({ data: null, error: null })
     );
-    window.location.replace = ((href: string) => {
+    window.location.replace = (href) => {
       events.push(`replace:${href}`);
-    }) as typeof window.location.replace;
-    window.focus = (() => {
+    };
+    window.focus = () => {
       events.push("focus");
-    }) as typeof window.focus;
+    };
   });
 
   afterEach(() => {
@@ -507,9 +507,9 @@ describe("account auth return lifecycle", () => {
       session: { createdAt: new Date() },
       user: { emailVerified: true },
     });
-    window.location.replace = (() => {
+    window.location.replace = () => {
       throw new Error("navigation blocked");
-    }) as typeof window.location.replace;
+    };
     const lifecycle = authReturn.createAuthReturnLifecycle({
       locale: "en-US",
     });
