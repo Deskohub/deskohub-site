@@ -1,4 +1,5 @@
 const frontendOnlyPrefix = "apps/deskohub-workspace/";
+const frontendManifest = `${frontendOnlyPrefix}package.json`;
 
 // The production image builds from the repository root and uses Turbo's
 // transitive workspace closure. Unknown paths must require a generation.
@@ -18,5 +19,7 @@ export function backendGenerationRequired(changedPaths) {
   ) {
     throw new TypeError("Expected a complete list of canonical changed paths.");
   }
-  return changedPaths.some((path) => !path.startsWith(frontendOnlyPrefix));
+  return changedPaths.some(
+    (path) => path === frontendManifest || !path.startsWith(frontendOnlyPrefix),
+  );
 }

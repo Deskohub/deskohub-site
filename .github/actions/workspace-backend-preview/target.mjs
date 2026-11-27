@@ -46,6 +46,13 @@ function requireCondition(condition, message) {
   if (!condition) throw new PreviewError(message);
 }
 
+function requireFirstAttempt(env) {
+  requireCondition(
+    env.GITHUB_RUN_ATTEMPT === "1",
+    "Start a fresh workflow dispatch for every pilot attempt.",
+  );
+}
+
 export function dispatchTarget(env) {
   requireCondition(
     env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
@@ -59,6 +66,7 @@ export function dispatchTarget(env) {
       env.GITHUB_WORKFLOW_SHA === env.GITHUB_SHA,
     "Expected the reviewed preview workflow on protected main.",
   );
+  requireFirstAttempt(env);
   const { PREVIEW_OPERATION, PR_NUMBER, GIT_SHA, VERCEL_DEPLOYMENT_ID } = env;
   requireCondition(
     PREVIEW_OPERATION === "deploy" || PREVIEW_OPERATION === "cleanup",
@@ -123,6 +131,8 @@ async function readJson(response, provider) {
 }
 
 export async function verifyApproval(env, request = fetch) {
+  // GitHub approval history is scoped to the run, with no attempt identifier.
+  requireFirstAttempt(env);
   requireCondition(
     env.GH_TOKEN && /^[1-9][0-9]{0,18}$/.test(env.GITHUB_RUN_ID),
     "The trusted workflow run and its GitHub token are required.",

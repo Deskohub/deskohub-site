@@ -31,6 +31,7 @@ const env = {
   GITHUB_WORKFLOW_SHA: "a".repeat(40),
   GITHUB_SHA: "a".repeat(40),
   GITHUB_RUN_ID: "89",
+  GITHUB_RUN_ATTEMPT: "1",
   PREVIEW_OPERATION: "deploy",
   PR_NUMBER: "45",
   PILOT_PR_NUMBER: "45",
@@ -87,6 +88,7 @@ test("requires a protected main dispatch by the fixed repository for the configu
     { GITHUB_REF: "refs/heads/feat/wrong" },
     { GITHUB_WORKFLOW_REF: `${env.GITHUB_WORKFLOW_REF}-wrong` },
     { GITHUB_WORKFLOW_SHA: sha },
+    { GITHUB_RUN_ATTEMPT: "2" },
     { GIT_SHA: sha.slice(0, 12) },
     { PILOT_PR_NUMBER: "" },
     { PR_NUMBER: "46" },
@@ -103,6 +105,7 @@ test("includes provider packages and root build inputs in the shared classifier"
   );
   for (const path of [
     "apps/deskohub-workspace-api/Dockerfile",
+    "apps/deskohub-workspace/package.json",
     "packages/dotypos/src/client.ts",
     "packages/new/package.json",
     "bun.lock",
@@ -164,6 +167,10 @@ test("requires recorded approval by an individual configured for the exact envir
       return Response.json(reviews);
     };
   await verifyApproval(env, request());
+  await assert.rejects(
+    verifyApproval({ ...env, GITHUB_RUN_ATTEMPT: "2" }, request()),
+    /fresh workflow dispatch/,
+  );
   for (const change of [
     { protection_rules: [] },
     { reviews: [] },
