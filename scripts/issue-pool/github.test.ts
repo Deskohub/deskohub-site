@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { githubIssueTracker } from "./github";
+import {
+  type Command,
+  githubIssueTracker,
+  resolveIssuePoolGitHub,
+} from "./github";
 import { nightlyRunMarker } from "./nightly-evidence";
 
 const report =
@@ -8,6 +12,13 @@ const worker = "<!-- t3-worker-thread:worker-id -->";
 const reporter = { id: 101, login: "pool-reporter" };
 const maintainer = { id: 102, login: "maintainer" };
 const outsider = { id: 800, login: "pool-reporter" };
+const organization = { id: 361691508, type: "Organization" };
+const filip = { id: 41711263, login: "totalolage" };
+const transferredRepository = {
+  id: 1015951989,
+  full_name: "Deskohub/deskohub-site",
+  owner: organization,
+};
 const defaults = {
   repo: "owner/repository",
   reporterId: reporter.id,
@@ -43,6 +54,159 @@ const ownership = (
       },
     },
   });
+
+function githubIdentityFixture(
+  repository: unknown,
+  reporterId: unknown = reporter.id
+): Command {
+  return async (command, args) => {
+    expect(command).toBe("gh");
+    expect(args).toContain("github.com");
+    if (args.includes("user")) return JSON.stringify(reporterId);
+    expect(args).toContain("repos/Deskohub/deskohub-site");
+    return JSON.stringify(repository);
+  };
+}
+
+test("uses the canonical slug and a human maintainer for the transferred repository", async () => {
+  const identity = await resolveIssuePoolGitHub(
+    githubIdentityFixture({
+      ...transferredRepository,
+      full_name: "Deskohub/renamed-site",
+    }),
+    reporter.id
+  );
+  let posts = 0;
+  const tracker = githubIssueTracker({
+    ...identity,
+    legacyFeedbackClaimed: () => false,
+    async run(command, args, input) {
+      expect(command).toBe("gh");
+      if (args.includes("graphql")) {
+        expect(args).toContain("owner=Deskohub");
+        expect(args).toContain("name=renamed-site");
+        return ownership(filip.id);
+      }
+      const endpoint = "repos/Deskohub/renamed-site/issues/32/comments";
+      if (args.includes("POST")) {
+        expect(args).toContain(endpoint);
+        expect(input && JSON.parse(input)).toEqual({
+          body: `Assigned to T3 worker \`worker-id\`.\n\n${worker}`,
+        });
+        posts += 1;
+        return "{}";
+      }
+      expect(args).toContain(`${endpoint}?per_page=100`);
+      return JSON.stringify([
+        posts ? [{ id: 1, user: reporter, body: worker }] : [],
+      ]);
+    },
+  });
+
+  await tracker.recordWorker(32, "worker-id");
+  await tracker.recordWorker(32, "worker-id");
+  expect(posts).toBe(1);
+  expect(await tracker.hasOwner(32)).toBe(true);
+});
+
+test("accepts the human maintainer's org issue and reply while rejecting other authors", async () => {
+  const identity = await resolveIssuePoolGitHub(
+    githubIdentityFixture(transferredRepository),
+    reporter.id
+  );
+  const comments = [
+    { id: 1, user: reporter, body: worker },
+    { id: 2, user: reporter, body: "<!-- posthog-agent:human-needed -->" },
+    { id: 3, user: organization, body: "An organization reply" },
+    { id: 4, user: outsider, body: "An outside reply" },
+    { id: 5, user: reporter, body: "A reporter reply" },
+    { id: 6, user: filip, body: "The human answer" },
+    { id: 7, user: outsider, body: "<!-- t3-worker-thread:forged -->" },
+  ];
+  let issueAuthor = filip.id;
+  const tracker = githubIssueTracker({
+    ...identity,
+    legacyFeedbackClaimed: () => false,
+    async run(_command, args) {
+      if (args.includes("graphql")) return ownership(issueAuthor);
+      if (
+        args.includes(
+          "repos/Deskohub/deskohub-site/issues?state=all&per_page=100"
+        )
+      ) {
+        return JSON.stringify([
+          [filip, reporter, organization, outsider].map((user, index) => ({
+            ...restIssue,
+            number: restIssue.number + index,
+            user,
+          })),
+        ]);
+      }
+      expect(args).toContain(
+        "repos/Deskohub/deskohub-site/issues/32/comments?per_page=100"
+      );
+      return JSON.stringify([comments]);
+    },
+  });
+
+  expect((await tracker.list()).map(({ number }) => number)).toEqual([32, 33]);
+  expect(await tracker.pendingReply(32)).toEqual({
+    commentId: 6,
+    threadId: "worker-id",
+    message: "The human answer",
+  });
+  issueAuthor = outsider.id;
+  expect(await tracker.pendingReply(32)).toBeNull();
+});
+
+test("uses Filip as the default reporter on the host", async () => {
+  const identity = await resolveIssuePoolGitHub(
+    githubIdentityFixture(transferredRepository, filip.id)
+  );
+  expect(identity.reporterId).toBe(filip.id);
+});
+
+test.each([
+  { ...transferredRepository, id: 42 },
+  { ...transferredRepository, full_name: "Deskohub/../elsewhere" },
+  { ...transferredRepository, owner: { id: 42, type: "Organization" } },
+  { ...transferredRepository, owner: { id: 42, type: "Bot" } },
+  {
+    ...transferredRepository,
+    full_name: "maintainer/deskohub-site",
+    owner: { id: maintainer.id, type: "User" },
+  },
+  null,
+])("rejects unexpected GitHub repository identity %j", async (repository) => {
+  await expect(
+    resolveIssuePoolGitHub(githubIdentityFixture(repository, filip.id))
+  ).rejects.toThrow();
+});
+
+test.each([null, outsider.id])(
+  "fails closed for an unexpected authenticated reporter %j",
+  async (authenticatedId) => {
+    await expect(
+      resolveIssuePoolGitHub(
+        githubIdentityFixture(transferredRepository, authenticatedId),
+        reporter.id
+      )
+    ).rejects.toThrow(
+      "The authenticated GitHub account does not match the configured issue pool reporter ID"
+    );
+  }
+);
+
+test("fails closed when GitHub refuses the repository lookup", async () => {
+  const denied = new Error("GitHub repository lookup failed");
+  await expect(
+    resolveIssuePoolGitHub(async (_command, args) => {
+      if (args.includes("user")) return JSON.stringify(reporter.id);
+      expect(args).toContain("repos/Deskohub/deskohub-site");
+      throw denied;
+    })
+  ).rejects.toBe(denied);
+});
 
 test("ignores forged collector markers and labels on issues from untrusted authors", async () => {
   const tracker = githubIssueTracker({
