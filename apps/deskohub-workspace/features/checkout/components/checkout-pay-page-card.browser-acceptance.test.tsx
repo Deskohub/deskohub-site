@@ -181,6 +181,9 @@ test.skipIf(!chromiumAvailable)(
           expect(buttons).toHaveLength(6);
           // The pending button shows no icon.
           const [pay, retry, , largePay, qr, card] = buttons;
+          if (!pay || !retry || !largePay || !qr || !card) {
+            throw new Error("Missing checkout pay buttons");
+          }
           expect(qr.payment).toBe("qr");
           expect(card.payment).toBe("card");
           for (const [button, imageWidth] of [

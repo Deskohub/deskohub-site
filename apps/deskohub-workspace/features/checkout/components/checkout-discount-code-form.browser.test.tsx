@@ -292,8 +292,11 @@ test("clears the ordinary code after a fresh referral state in the compiled brow
 
         await input.fill(secondSubmittedCode);
         await Promise.all([
-          page.waitForURL((url) =>
-            url.searchParams.get("payState")?.startsWith("after-second-submit-")
+          page.waitForURL(
+            (url) =>
+              url.searchParams
+                .get("payState")
+                ?.startsWith("after-second-submit-") ?? false
           ),
           input.press("Enter"),
         ]);
