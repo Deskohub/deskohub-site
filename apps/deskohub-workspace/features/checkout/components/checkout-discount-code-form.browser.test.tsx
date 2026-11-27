@@ -3,6 +3,7 @@ import { chromium, type Page, type Request } from "@playwright/test";
 import { withNextAppFixture } from "@/shared/testing/next-app-fixture.test-utils";
 
 const fixtureBrowserTimeoutMs = 15_000;
+const fixtureFirstNavigationTimeoutMs = 45_000;
 const firstSubmittedCode = "SYNTHETIC-ORDINARY-CODE";
 const secondSubmittedCode = "SYNTHETIC-NEXT-CODE";
 
@@ -219,6 +220,7 @@ test("clears the ordinary code after a fresh referral state in the compiled brow
 
         try {
           await page.goto(`${fixtureUrl}/pay?payState=before-referral`, {
+            timeout: fixtureFirstNavigationTimeoutMs,
             waitUntil: "load",
           });
         } catch (error) {
