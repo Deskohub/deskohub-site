@@ -40,6 +40,11 @@ import { WorkspaceReservationRepository } from "@/features/reservation/backend/w
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { ReservationInvitees } from "@/features/reservation-invitees/backend/reservation-invitees.service";
 import { ReviewSandbox } from "@/features/review-accounts/backend/review-sandbox.service";
+import {
+  getUnclassifiedTeamTableBookings,
+  TeamTableInventory,
+} from "@/features/team-table/backend/team-table-inventory";
+import { TeamTableReleaseGate } from "@/features/team-table/backend/team-table-release-gate";
 import { moneyWithValue } from "@/shared/money/money";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import { connectUnreachableWorkspaceDatabase } from "@/shared/testing/unreachable-workspace-database.test-utils";
@@ -221,11 +226,15 @@ export const makeAgentToolTestServices = ({
   tables = agentToolTestTables,
   occupancy = [],
   officeEnabled = true,
+  teamTableEnabled = false,
+  teamTableSizes = [],
   saleBasisPoints,
 }: {
   readonly tables?: readonly DotyposTable[];
   readonly occupancy?: readonly ReservationRecord[];
   readonly officeEnabled?: boolean;
+  readonly teamTableEnabled?: boolean;
+  readonly teamTableSizes?: readonly number[];
   readonly saleBasisPoints?: number;
 } = {}) => {
   const dotyposRequests: string[] = [];
@@ -251,7 +260,16 @@ export const makeAgentToolTestServices = ({
   const advisoryInventory = Layer.succeed(AdvisoryAvailabilityInventory, {
     tables: Effect.sync(() => {
       snapshotReads.push("tables");
-      return tables;
+      return [
+        ...tables,
+        ...teamTableSizes.map((seats, index) =>
+          makeTestTable({
+            id: `table-${index}`,
+            tags: ["cowork:open-space", "reservation:table"],
+            seats: String(seats),
+          })
+        ),
+      ];
     }),
     listActiveReservationsOverlapping: () =>
       Effect.sync(() => {
@@ -265,12 +283,17 @@ export const makeAgentToolTestServices = ({
       }),
   });
   const officeFlag = OfficeReleaseGate.fromDecision(officeEnabled);
+  const tableGate = TeamTableReleaseGate.fromDecision(teamTableEnabled);
 
   const layer = Layer.mergeAll(
     WorkspaceAvailabilityService.Default.pipe(
       Layer.provide(
         Layer.mergeAll(
           advisoryInventory,
+          tableGate,
+          Layer.succeed(TeamTableInventory, (records, claims) =>
+            Effect.succeed(getUnclassifiedTeamTableBookings(records, claims))
+          ),
           unreachableDotypos,
           Layer.succeed(GoogleCalendarWorkspaceLimitationsService, {
             listLimitations: () => Effect.succeed([]),
@@ -292,6 +315,7 @@ export const makeAgentToolTestServices = ({
       )
     ),
     officeFlag,
+    tableGate,
     OvernightStayReleaseGate.fromDecision(false),
     TestSealedStateKeys
   );

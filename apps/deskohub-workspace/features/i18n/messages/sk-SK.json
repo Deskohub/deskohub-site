@@ -1564,9 +1564,14 @@
   "bookingWidgetTierLabel": "Typ miesta",
   "bookingWidgetDateLabel": "Dátum",
   "bookingWidgetStartTimeLabel": "Čas začiatku",
+  "bookingWidgetEndTimeLabel": "Čas konca",
+  "bookingWidgetTableSizeLabel": "Veľkosť stola",
+  "bookingWidgetFindTimes": "Nájsť voľné časy",
+  "bookingWidgetNextDayTime": "{time} nasledujúci deň",
   "bookingWidgetFirstDayLabel": "Prvý deň",
   "bookingWidgetPricePerDay": "{price} za deň",
   "bookingWidgetPricePerBooking": "{price} za rezerváciu",
+  "bookingWidgetPriceForOneHour": "{price} za hodinu pri stole",
   "bookingWidgetCheck": "Overiť dostupnosť a cenu",
   "bookingWidgetChecking": "Overujeme dostupnosť a cenu.",
   "bookingWidgetAvailable": "Vyzerá to, že je voľné.",
@@ -1595,6 +1600,8 @@
   "bookingWidgetDateRequired": "Vyber dátum.",
   "bookingWidgetDatePassed": "Vyber dnešok alebo neskorší dátum.",
   "bookingWidgetStartTimeRequired": "Vyber čas začiatku.",
+  "bookingWidgetEndTimeRequired": "Vyber čas konca.",
+  "bookingWidgetTableSizeRequired": "Vyber ponúkanú veľkosť stola.",
   "bookingWidgetDayCountRange": [
     {
       "declarations": ["input max", "local maxPlural = max: plural"],

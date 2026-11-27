@@ -11,6 +11,20 @@ export const getQuoteResultSchema = Schema.Struct({
   discount: agentToolMoneySchema.annotate({
     description: "Anonymous sale discount included in total; zero without one.",
   }),
+  lines: Schema.optionalKey(
+    Schema.Tuple([
+      Schema.Struct({
+        type: Schema.Literal("table-base"),
+        seats: Schema.Int,
+        amount: agentToolMoneySchema,
+      }),
+      Schema.Struct({
+        type: Schema.Literal("table-usage"),
+        duration_minutes: Schema.Int,
+        amount: agentToolMoneySchema,
+      }),
+    ]).annotate({ description: "Team Table charges before any discount." })
+  ),
   quoted_at: Schema.String,
   note: Schema.String,
   reservation_url: Schema.String,

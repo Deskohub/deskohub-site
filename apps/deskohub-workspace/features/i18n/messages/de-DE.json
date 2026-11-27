@@ -1538,9 +1538,14 @@
   "bookingWidgetTierLabel": "Platzart",
   "bookingWidgetDateLabel": "Datum",
   "bookingWidgetStartTimeLabel": "Anfangszeit",
+  "bookingWidgetEndTimeLabel": "Endzeit",
+  "bookingWidgetTableSizeLabel": "Tischgröße",
+  "bookingWidgetFindTimes": "Freie Zeiten finden",
+  "bookingWidgetNextDayTime": "{time} am nächsten Tag",
   "bookingWidgetFirstDayLabel": "Erster Tag",
   "bookingWidgetPricePerDay": "{price} pro Tag",
   "bookingWidgetPricePerBooking": "{price} pro Reservierung",
+  "bookingWidgetPriceForOneHour": "{price} für eine Stunde",
   "bookingWidgetCheck": "Verfügbarkeit und Preis prüfen",
   "bookingWidgetChecking": "Wir prüfen Verfügbarkeit und Preis.",
   "bookingWidgetAvailable": "Sieht so aus, als wäre es frei.",
@@ -1569,6 +1574,8 @@
   "bookingWidgetDateRequired": "Wähle ein Datum.",
   "bookingWidgetDatePassed": "Wähle heute oder ein späteres Datum.",
   "bookingWidgetStartTimeRequired": "Wähle eine Anfangszeit.",
+  "bookingWidgetEndTimeRequired": "Wähle eine Endzeit.",
+  "bookingWidgetTableSizeRequired": "Wähle eine verfügbare Tischgröße.",
   "bookingWidgetDayCountRange": [
     {
       "declarations": ["input max", "local maxPlural = max: plural"],

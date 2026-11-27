@@ -2169,7 +2169,7 @@ describe("customer MCP route for administration tools", () => {
 });
 
 describe("customer MCP route booking view", () => {
-  const bookingViewUri = "ui://dh-workspace/booking-v2.html";
+  const bookingViewUri = "ui://dh-workspace/booking-v3.html";
   const viewMimeType = "text/html;profile=mcp-app";
 
   beforeEach(() => {
@@ -2627,7 +2627,7 @@ describe("customer MCP route per client", () => {
     const { result } = await readJsonRpc(
       await postRpc(
         "resources/read",
-        { uri: "ui://dh-workspace/booking-v2.html" },
+        { uri: "ui://dh-workspace/booking-v3.html" },
         chatGpt
       )
     );

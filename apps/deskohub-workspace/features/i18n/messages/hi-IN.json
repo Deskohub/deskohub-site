@@ -1538,9 +1538,14 @@
   "bookingWidgetTierLabel": "सीट का प्रकार",
   "bookingWidgetDateLabel": "तारीख़",
   "bookingWidgetStartTimeLabel": "शुरुआत का समय",
+  "bookingWidgetEndTimeLabel": "समाप्ति का समय",
+  "bookingWidgetTableSizeLabel": "टेबल का आकार",
+  "bookingWidgetFindTimes": "उपलब्ध समय खोजें",
+  "bookingWidgetNextDayTime": "अगले दिन {time}",
   "bookingWidgetFirstDayLabel": "पहला दिन",
   "bookingWidgetPricePerDay": "{price} प्रति दिन",
   "bookingWidgetPricePerBooking": "{price} प्रति बुकिंग",
+  "bookingWidgetPriceForOneHour": "एक घंटे की बुकिंग के लिए {price}",
   "bookingWidgetCheck": "उपलब्धता और कीमत जाँचें",
   "bookingWidgetChecking": "उपलब्धता और कीमत की जाँच हो रही है।",
   "bookingWidgetAvailable": "लगता है कि जगह खाली है।",
@@ -1569,6 +1574,8 @@
   "bookingWidgetDateRequired": "तारीख़ चुनें।",
   "bookingWidgetDatePassed": "आज की या उसके बाद की तारीख़ चुनें।",
   "bookingWidgetStartTimeRequired": "शुरुआत का समय चुनें।",
+  "bookingWidgetEndTimeRequired": "समाप्ति का समय चुनें।",
+  "bookingWidgetTableSizeRequired": "उपलब्ध आकारों में से एक चुनें।",
   "bookingWidgetDayCountRange": [
     {
       "declarations": ["input max", "local maxPlural = max: plural"],
