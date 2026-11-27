@@ -1,3 +1,5 @@
+import "@/shared/polyfills/temporal";
+
 import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import type { LatePaymentRecovery, WebhookEvent } from "@/db/schema";
 import {

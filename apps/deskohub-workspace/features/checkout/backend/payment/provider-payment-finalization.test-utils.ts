@@ -1,3 +1,5 @@
+import "@/shared/polyfills/temporal";
+
 import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
 import { NexiOrderIdSchema } from "@deskohub/nexi";
