@@ -8,6 +8,7 @@ import {
   mock,
   test,
 } from "bun:test";
+import assert from "node:assert/strict";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   act,
@@ -17,6 +18,7 @@ import {
   render,
   waitFor,
 } from "@testing-library/react";
+import type * as accountActions from "@/features/account/actions";
 import { type Locale, m } from "@/features/i18n";
 import { Input } from "@/shared/components/ui/input";
 import {
@@ -27,20 +29,21 @@ import type { ProfileScreenProps } from "./profile-screen";
 
 let ProfileScreen: (props: ProfileScreenProps) => React.ReactNode;
 
-type LanguageActionResult = {
-  readonly data?: { readonly status?: string };
-  readonly serverError?: string;
-};
+type LanguageActionResult = Awaited<
+  ReturnType<typeof accountActions.updateLocalePreference>
+>;
 
 // The real shared locale switch runs; only its Server Action is replaced.
-const updateLocalePreference = mock(
-  (_input: { locale: Locale }): Promise<LanguageActionResult> =>
-    Promise.resolve({ data: { status: "saved" } })
-);
+const updateLocalePreference = mock<
+  typeof accountActions.updateLocalePreference
+>(() => Promise.resolve({ data: { status: "saved" } }));
 
-mock.module("@/features/account/actions", () => ({
-  updateLocalePreference,
-}));
+mock.module(
+  "@/features/account/actions",
+  (): Partial<typeof accountActions> => ({
+    updateLocalePreference,
+  })
+);
 
 registerWorkspaceComponentTestEnv();
 ({ ProfileScreen } = await import("./profile-screen"));
@@ -139,8 +142,10 @@ describe("ProfileScreen", () => {
     expect(window.location.pathname).toBe("/en-US/account/profile");
     // The control shows the choice and stays locked while the switch runs.
     expect(chosenLabel).not.toBe("");
-    expect(languageTrigger(view).textContent).toContain(chosenLabel);
-    expect((languageTrigger(view) as HTMLButtonElement).disabled).toBe(true);
+    const trigger = languageTrigger(view);
+    assert(trigger instanceof HTMLButtonElement);
+    expect(trigger.textContent).toContain(chosenLabel);
+    expect(trigger.disabled).toBe(true);
 
     await act(async () => {
       saved.resolve({ data: { status: "saved" } });
@@ -174,7 +179,8 @@ describe("ProfileScreen", () => {
         </ProfileScreen>
       </form>
     );
-    const form = view.getByTestId("profile-form") as HTMLFormElement;
+    const form = view.getByTestId("profile-form");
+    assert(form instanceof HTMLFormElement);
 
     expect(languageTrigger(view).getAttribute("type")).toBe("button");
     expect([...new FormData(form).keys()]).not.toContain("language");

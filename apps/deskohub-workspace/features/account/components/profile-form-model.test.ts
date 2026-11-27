@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { effectSchemaResolver } from "@deskohub/effect-schema-resolver";
-import type { ResolverOptions } from "react-hook-form";
+import { parsePhoneNumber } from "@deskohub/phone-number";
+import { Option } from "effect";
 import type { CustomerProfile } from "@/features/account/contracts";
 import { type Locale, m } from "@/features/i18n";
 import {
@@ -26,7 +27,7 @@ const resolve = (schema: FormSchema, formValues: ProfileFormValues) =>
   effectSchemaResolver(schema)(formValues, undefined, {
     fields: {},
     shouldUseNativeValidation: false,
-  } as ResolverOptions<ProfileFormValues>);
+  });
 
 const errorsOf = async (schema: FormSchema, formValues: ProfileFormValues) =>
   Object.fromEntries(
@@ -35,10 +36,13 @@ const errorsOf = async (schema: FormSchema, formValues: ProfileFormValues) =>
     )
   );
 
+const profilePhone = "+420601111222";
+const decodedPhone = Option.getOrThrow(parsePhoneNumber(profilePhone, "CZ"));
+
 const businessProfile: CustomerProfile = {
   firstName: "Ada",
   lastName: "Lovelace",
-  phone: "+420601111222",
+  phone: profilePhone,
   billing: {
     kind: "business",
     addressLine1: "Original Street 1",
@@ -78,7 +82,7 @@ describe("profileFormDefaults", () => {
       country: "CZ",
       firstName: "Ada",
       lastName: "Lovelace",
-      phone: "+420601111222",
+      phone: profilePhone,
       referralCode: "FRIEND10",
       vatId: "",
       zip: "11000",
@@ -114,7 +118,7 @@ describe("profileFormSchema", () => {
     expect(result.values).toStrictEqual({
       firstName: "Grace",
       lastName: undefined,
-      phone: "+420601111222",
+      phone: decodedPhone,
       billing: {
         kind: "business",
         addressLine1: "Original Street 1",
@@ -138,7 +142,7 @@ describe("profileFormSchema", () => {
     expect(result.values).toStrictEqual({
       firstName: "Ada",
       lastName: "Lovelace",
-      phone: "+420601111222",
+      phone: decodedPhone,
       billing: {
         kind: "personal",
         addressLine1: "Original Street 1",
@@ -159,7 +163,7 @@ describe("profileFormSchema", () => {
     expect(result.values).toStrictEqual({
       firstName: "Ada",
       lastName: "Lovelace",
-      phone: "+420601111222",
+      phone: decodedPhone,
     });
   });
 
@@ -197,7 +201,7 @@ describe("completionFormSchema", () => {
     expect(result.values).toStrictEqual({
       firstName: "Ada",
       lastName: "Lovelace",
-      phone: "+420601111222",
+      phone: decodedPhone,
       referralCode: "FRIEND10",
       prefilledReferralCode: "FRIEND10",
     });
@@ -211,7 +215,7 @@ describe("completionFormSchema", () => {
     expect(result.values).toStrictEqual({
       firstName: "Ada",
       lastName: "Lovelace",
-      phone: "+420601111222",
+      phone: decodedPhone,
     });
   });
 
@@ -252,12 +256,15 @@ describe("completionFormSchema", () => {
 
 describe("field index", () => {
   test.each(
-    allFields.map((field) => [
-      field,
-      ["firstName", "lastName", "phone", "referralCode"].includes(field)
-        ? "profile"
-        : "billing",
-    ])
+    allFields.map(
+      (field) =>
+        [
+          field,
+          ["firstName", "lastName", "phone", "referralCode"].includes(field)
+            ? "profile"
+            : "billing",
+        ] as const
+    )
   )("places %s in the %s section", (field, section) => {
     expect(profileFormSectionOf(field)).toBe(section);
   });
