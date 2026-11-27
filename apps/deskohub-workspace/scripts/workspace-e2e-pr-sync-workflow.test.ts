@@ -188,6 +188,14 @@ const newerFailure = {
   state: "failure",
   description: "Protected preview E2E failed [flows: email-campaigns]",
 };
+const laterSuccessfulRun = 1_000_000;
+const laterSuccess = {
+  ...sourcePending,
+  id: 301,
+  state: "success",
+  description: "Protected preview E2E passed [flows: email-campaigns]",
+  target_url: `https://github.com/Deskohub/deskohub-site/actions/runs/${laterSuccessfulRun}`,
+};
 const backendProof = (login = "github-actions[bot]") => ({
   ...proofFixture.status,
   creator: { login },
@@ -245,7 +253,8 @@ const runCompletedPilotPublisher = ({
   statuses = [sourcePending],
   newerRunAfterWrite = false,
   statusesInitiallyUnavailable = false,
-  statusAfterWrite = newerPending,
+  statusesAfterWrite = [newerPending, sourcePending],
+  laterSuccessVerified = false,
 } = {}) => {
   const stubFetch = `
 const team = "team_MgMQ4MEWijWnYa1R48C2JU5e";
@@ -298,9 +307,22 @@ globalThis.fetch = async (input) => {
         conclusion: conclusion === "in_progress" ? null : conclusion,
       },
       [proofFixture.jobsPath]: { jobs },
+      [`actions/runs/${laterSuccessfulRun}`]: {
+        ...proofFixture.run,
+        id: laterSuccessfulRun,
+        run_attempt: 2,
+      },
+      [`actions/runs/${laterSuccessfulRun}/attempts/2/jobs`]: {
+        jobs: laterSuccessVerified
+          ? proofFixture.jobs.jobs.map((job) => ({
+              ...job,
+              run_id: laterSuccessfulRun,
+            }))
+          : [],
+      },
       [`commits/${headSha}/statuses`]: statuses,
-      "newer-status": [statusAfterWrite, sourcePending],
-      [`statuses/${headSha}`]: {},
+      "newer-status": statusesAfterWrite,
+      [`statuses/${headSha}`]: { id: 400 },
     },
     {
       ...pilotEnv,
@@ -428,7 +450,7 @@ describe("Workspace E2E backend proof publishers", () => {
   test("restores a foreign failure if it interleaves with pilot status publication", async () => {
     const { calls, result } = await runCompletedPilotPublisher({
       newerRunAfterWrite: true,
-      statusAfterWrite: newerFailure,
+      statusesAfterWrite: [newerFailure, sourcePending],
     });
     expect(result.exitCode).toBe(0);
     const posts = statusPosts(calls);
@@ -437,6 +459,68 @@ describe("Workspace E2E backend proof publishers", () => {
     expect(posts[1]).toContain("state=failure -f context=Workspace E2E");
     expect(posts[1]).toContain(`description=${newerFailure.description}`);
     expect(posts[1]).toContain(`target_url=${newerFailure.target_url}`);
+  });
+
+  test.each([
+    { initialState: "failure", statusesInitiallyUnavailable: true },
+    { initialState: "success", statusesInitiallyUnavailable: false },
+  ])(
+    "repairs a tentative $initialState with the newest verified success above an older failure",
+    async ({ initialState, statusesInitiallyUnavailable }) => {
+      const { calls, result } = await runCompletedPilotPublisher({
+        newerRunAfterWrite: true,
+        statusesInitiallyUnavailable,
+        statusesAfterWrite: [laterSuccess, newerFailure, sourcePending],
+        laterSuccessVerified: true,
+      });
+      expect(result.exitCode).toBe(0);
+      const posts = statusPosts(calls);
+      expect(posts).toHaveLength(2);
+      expect(posts[0]).toContain(
+        `state=${initialState} -f context=Workspace E2E`
+      );
+      expect(posts[1]).toContain("state=success -f context=Workspace E2E");
+      expect(posts[1]).toContain(`description=${laterSuccess.description}`);
+      expect(posts[1]).toContain(`target_url=${laterSuccess.target_url}`);
+    }
+  );
+
+  test("does not restore a newer mutable success without its matching trusted job", async () => {
+    const { calls, result } = await runCompletedPilotPublisher({
+      statuses: [laterSuccess, newerFailure, sourcePending],
+    });
+    expect(result.exitCode).toBe(0);
+    const posts = statusPosts(calls);
+    expect(posts).toHaveLength(2);
+    expect(posts.every((post) => post.includes("state=failure"))).toBe(true);
+  });
+
+  test("restores ownership even when both failure status descriptions match", async () => {
+    const later = {
+      ...newerFailure,
+      description:
+        "Run email-campaigns E2E against this Workspace backend preview",
+    };
+    const { calls, result } = await runCompletedPilotPublisher({
+      live: "gone",
+      newerRunAfterWrite: true,
+      statusesAfterWrite: [later, sourcePending],
+    });
+    expect(result.exitCode).toBe(0);
+    const posts = statusPosts(calls);
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).toContain(`description=${later.description}`);
+    expect(posts[0]).toContain(`target_url=${sourcePending.target_url}`);
+    expect(posts[1]).toContain(`description=${later.description}`);
+    expect(posts[1]).toContain(`target_url=${later.target_url}`);
+  });
+
+  test("requires source pending history to order the completed pilot", async () => {
+    const { calls, result } = await runCompletedPilotPublisher({
+      statuses: [],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(statusPosts(calls)).toEqual([]);
   });
 
   test.each([

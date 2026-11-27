@@ -55,5 +55,5 @@ export function backendPreviewProofFixture(
     target_url: `https://github.com/Deskohub/deskohub-site/${runPath}/attempts/1`,
     state: "success",
   };
-  return { status, binding, run, jobs, runPath, jobsPath };
+  return { status, run, jobs, runPath, jobsPath };
 }

@@ -514,21 +514,27 @@ const findForeignActiveRun = (summary, selection, ownerUrl) =>
       run.flows.some((flow) => selection.includes(flow))
   );
 
-const readPilotStatusOrder = (statuses, sourceRun) => {
+const readPilotStatusOrder = (statuses, sourceRun, selection) => {
   const relevant = statuses.filter(
     (status) => status?.context === "Workspace E2E" &&
       status.creator?.login === "github-actions[bot]"
   );
   // GitHub lists the newest statuses first. The source pending write precedes
-  // its test and gives us the boundary for later failures on this same SHA.
+  // its test and gives us the boundary for later results on this same SHA.
   const source = relevant.findIndex(
     (status) => status.state === "pending" && status.target_url === sourceRun
   );
-  const failure = source < 0 ? undefined : relevant.slice(0, source).find(
-    (status) => (status.state === "failure" || status.state === "error") &&
-      status.target_url !== sourceRun
-  );
-  return { sourceFound: source >= 0, failure };
+  const later = source < 0 ? undefined : relevant.slice(0, source).find((status) => {
+    if (status.target_url === sourceRun) return false;
+    const verdict = classifyE2EStatusDescription(status.description);
+    if (status.state === "success") {
+      return verdict.kind === "passed" &&
+        selection.every((flow) => verdict.selected.includes(flow));
+    }
+    return (status.state === "failure" || status.state === "error") &&
+      (!verdict.selected?.length || verdict.selected.some((flow) => selection.includes(flow)));
+  });
+  return { sourceFound: source >= 0, later };
 };
 
 /**
@@ -743,7 +749,8 @@ const publishWithCasReconcile = async ({
       sameDeployment &&
       !verifyDecision.skipPost &&
       verifyDecision.state === decision.state &&
-      verifyDecision.description === decision.description
+      verifyDecision.description === decision.description &&
+      (verifyDecision.targetUrl || runUrl) === postTargetUrl
     ) {
       return decision;
     }
@@ -791,8 +798,11 @@ const publishWithCasReconcile = async ({
     // concurrent pass landed). When a tentative failure overwrote a concurrent
     // success, reinstate that success and CAS-verify it on the next attempt.
     if (verifyDecision.skipPost) {
+      const sameSuccessOwner = decision.state === "success" &&
+        (!verifyDecision.reinstateDecision?.targetUrl ||
+          verifyDecision.reinstateDecision.targetUrl === postTargetUrl);
       if (
-        decision.state === "success" &&
+        sameSuccessOwner &&
         verifyDecision.satisfiedSuccess === true &&
         after.prOk &&
         (after.deployment.state === "success" ||
@@ -801,7 +811,7 @@ const publishWithCasReconcile = async ({
         return decision;
       }
       if (
-        decision.state !== "success" &&
+        !sameSuccessOwner &&
         verifyDecision.satisfiedSuccess === true &&
         verifyDecision.reinstateDecision &&
         after.prOk &&
@@ -815,7 +825,8 @@ const publishWithCasReconcile = async ({
       if (verifyDecision.undoDecision) {
         if (
           verifyDecision.undoDecision.state === decision.state &&
-          verifyDecision.undoDecision.description === decision.description
+          verifyDecision.undoDecision.description === decision.description &&
+          (verifyDecision.undoDecision.targetUrl || runUrl) === postTargetUrl
         ) {
           return decision;
         }
@@ -857,7 +868,7 @@ const publishWithCasReconcile = async ({
 const runPublishCompletedPilot = async () => {
   const { findPilotRunGeneration, pilotRunUrl, pilotTargetKey } =
     await import("../workspace-backend-preview/run-proof.mjs");
-  const { matchesCompletedPreviewGeneration } =
+  const { readCompletedPreviewGeneration } =
     await import("../workspace-backend-preview/e2e-gate.mjs");
   if (!/^[1-9][0-9]{0,8}$/.test(pilotPrNumber)) return;
 
@@ -893,17 +904,17 @@ const runPublishCompletedPilot = async () => {
     const generation = findPilotRunGeneration({ targetUrl: source, target, read: readPilotRun });
     if (!generation) return snapshot;
 
-    let livePilotProof = false;
+    let liveGeneration;
     try {
-      livePilotProof = await matchesCompletedPreviewGeneration({
+      liveGeneration = await readCompletedPreviewGeneration({
         number: Number(pilotPrNumber),
         sha,
         expectedOrigin: deployment.previewUrl,
-      }, { ...process.env, GIT_REF: pr.head.ref }, generation);
+      }, { ...process.env, GIT_REF: pr.head.ref });
     } catch {
       // A changed or unavailable protected deployment cannot authorize a pass.
     }
-    return { ...snapshot, generation, livePilotProof };
+    return { ...snapshot, target, generation, liveGeneration, livePilotProof: liveGeneration === generation };
   };
 
   const confirmed = await readSnapshot();
@@ -913,7 +924,7 @@ const runPublishCompletedPilot = async () => {
     sha,
     prNumber: pilotPrNumber,
     readSnapshot,
-    decide: ({ backendPreviewRequirement, prOk, pr, selection, livePilotProof, generation, statusesOk, statuses }) => {
+    decide: ({ backendPreviewRequirement, prOk, pr, selection, livePilotProof, liveGeneration, target, generation, statusesOk, statuses }) => {
       if (backendPreviewRequirement !== "required" || !prOk || !isEligibleInternalPr(pr) || pr.head.sha !== sha || generation !== confirmed.generation) {
         return { skipPost: true };
       }
@@ -933,28 +944,49 @@ const runPublishCompletedPilot = async () => {
           restorePendingTargetUrl: pending.targetUrl,
         };
       }
-      const { sourceFound, failure } = readPilotStatusOrder(statuses, sourceRun);
-      if (failure) {
-        return {
-          skipPost: true,
-          undoDecision: {
-            state: failure.state,
-            description: failure.description || BACKEND_PREVIEW_PROOF_REQUIRED,
-            targetUrl: failure.target_url || sourceRun,
-          },
-        };
-      }
+      const { sourceFound, later } = readPilotStatusOrder(statuses, sourceRun, selection.selected);
       if (!sourceFound) return { skipPost: true };
-      return livePilotProof ? {
-        state: "success",
-        description: formatE2EStatusDescription({ kind: "passed", flows: selection.flows }),
-        targetUrl: sourceRun,
-      } : {
+      const failedProof = {
         state: "failure",
         description: BACKEND_PREVIEW_PROOF_REQUIRED,
         targetUrl: sourceRun,
         verifyAfterPost: true,
       };
+      if (later?.state === "success") {
+        const laterGeneration = findPilotRunGeneration({
+          targetUrl: later.target_url,
+          target,
+          read: readPilotRun,
+          followLatest: true,
+        });
+        if (laterGeneration && laterGeneration === liveGeneration) {
+          return {
+            skipPost: true,
+            satisfiedSuccess: true,
+            reinstateDecision: {
+              state: "success",
+              description: later.description,
+              targetUrl: later.target_url,
+            },
+          };
+        }
+        return failedProof;
+      }
+      if (later) {
+        return {
+          skipPost: true,
+          undoDecision: {
+            state: later.state,
+            description: later.description || BACKEND_PREVIEW_PROOF_REQUIRED,
+            targetUrl: later.target_url || sourceRun,
+          },
+        };
+      }
+      return livePilotProof ? {
+        state: "success",
+        description: formatE2EStatusDescription({ kind: "passed", flows: selection.flows }),
+        targetUrl: sourceRun,
+      } : failedProof;
     },
   });
   if (

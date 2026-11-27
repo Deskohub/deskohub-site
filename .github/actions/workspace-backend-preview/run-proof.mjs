@@ -31,16 +31,19 @@ export function pilotGenerationKey(deploymentId, revision, generation) {
 
 export const pilotRunUrl = (runId, attempt) => `${workspaceRuns}/${runId}/attempts/${attempt}`;
 
-export function findPilotRunGeneration({ targetUrl, target, read }) {
-  const runUrl = /^https:\/\/github\.com\/Deskohub\/deskohub-site\/actions\/runs\/([1-9][0-9]{0,14})\/attempts\/([1-9][0-9]{0,14})$/.exec(targetUrl ?? "");
+export function findPilotRunGeneration({ targetUrl, target, read, followLatest = false }) {
+  const runUrl = /^https:\/\/github\.com\/Deskohub\/deskohub-site\/actions\/runs\/([1-9][0-9]{0,14})(?:\/attempts\/([1-9][0-9]{0,14}))?$/.exec(targetUrl ?? "");
   if (!runUrl || !/^[0-9a-f]{32}$/.test(target)) return undefined;
 
-  const [, runId, attempt] = runUrl;
+  const [, runId, requestedAttempt] = runUrl;
+  if (!requestedAttempt && !followLatest) return undefined;
   const path = `repos/Deskohub/deskohub-site/actions/runs/${runId}`;
   const run = read(path);
+  const attempt = String(run?.run_attempt ?? "");
   if (
     String(run?.id) !== runId ||
-    String(run.run_attempt) !== attempt ||
+    !integer.test(attempt) ||
+    (requestedAttempt && attempt !== requestedAttempt) ||
     run.repository?.id !== repositoryId ||
     run.repository?.owner?.id !== ownerId ||
     run.head_repository?.id !== repositoryId ||
